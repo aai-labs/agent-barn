@@ -5,7 +5,7 @@ import { useDebouncedValue } from "@tanstack/react-pacer";
 import { SearchIcon, XIcon } from "@/components/icons";
 import { ConfirmationDialog } from "@/components/confirmation-dialog";
 import { useSkills } from "@/features/skills/hooks/use-skills";
-import { SkillSourceBadge } from "@/features/skills/components/skill-drawer";
+import { SkillSourceBadge } from "@/features/skills/components/skill-source-badge";
 import { SKILL_PROVIDER_LABELS } from "@/features/skills/utils";
 import {
   Tooltip,

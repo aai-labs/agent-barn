@@ -206,6 +206,7 @@ def build_openclaw_config_overlay_discord(
     allowed_channel_ids: list[str] | None = None,
     allowed_user_ids: list[str] | None = None,
     allowed_role_ids: list[str] | None = None,
+    allow_all_users: bool = True,
     home_channel_id: str | None = None,
     require_mention: bool = True,
     group_policy: str = "allowlist",
@@ -215,9 +216,9 @@ def build_openclaw_config_overlay_discord(
         channel_id: {"enabled": True, "requireMention": require_mention} for channel_id in (allowed_channel_ids or [])
     }
     guild_rule: dict = {"requireMention": require_mention}
-    if allowed_user_ids:
+    if not allow_all_users and allowed_user_ids:
         guild_rule["users"] = allowed_user_ids
-    if allowed_role_ids:
+    if not allow_all_users and allowed_role_ids:
         guild_rule["roles"] = allowed_role_ids
     if channel_rules:
         guild_rule["channels"] = channel_rules
@@ -265,6 +266,7 @@ def build_config_map(
     openclaw_config_overlay: dict | None = None,
     aai_cli_config_toml: str | None = None,
     aai_cli_setup_sh: str | None = None,
+    gog_setup_sh: str | None = None,
     skills_json: str | None = None,
 ) -> client.V1ConfigMap:
     data = {
@@ -289,6 +291,8 @@ def build_config_map(
         data["aai-cli-config.toml"] = aai_cli_config_toml
     if aai_cli_setup_sh is not None:
         data["aai-cli-setup.sh"] = aai_cli_setup_sh
+    if gog_setup_sh is not None:
+        data["gog-setup.sh"] = gog_setup_sh
     if skills_json is not None:
         data["skills.json"] = skills_json
     return client.V1ConfigMap(

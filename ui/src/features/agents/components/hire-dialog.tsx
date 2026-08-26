@@ -136,6 +136,7 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
   const [discordApplicationId, setDiscordApplicationId] = useState("");
   const [discordGuildIds, setDiscordGuildIds] = useState("");
   const [discordChannelIds, setDiscordChannelIds] = useState("");
+  const [discordAllowAllUsers, setDiscordAllowAllUsers] = useState(true);
   const [discordAllowedUserIds, setDiscordAllowedUserIds] = useState("");
   const [discordAllowedRoleIds, setDiscordAllowedRoleIds] = useState("");
   const [discordHomeChannelId, setDiscordHomeChannelId] = useState("");
@@ -167,6 +168,7 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
   const progressRef = useRef(0);
   const apiDoneRef = useRef(false);
   const errorRef = useRef(false);
+  const discordCompletionReportedRef = useRef(false);
 
   const effectiveTemplate = selectedTemplate;
   const { versions, isLoading: versionsLoading } = useTemplateVersions(
@@ -279,6 +281,16 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
       setDiscordTokenError("Bot token is required.");
       return;
     }
+    if (
+      !discordAllowAllUsers
+      && !discordAllowedUserIds.split(",").some((id) => id.trim())
+      && !discordAllowedRoleIds.split(",").some((id) => id.trim())
+    ) {
+      setDiscordTokenError(
+        "Add at least one allowed operator or role, or turn on Allow all users.",
+      );
+      return;
+    }
     setStep("details");
   }
 
@@ -320,6 +332,7 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
                 discordBotToken,
                 discordGuildIds: discordGuildIds.split(",").map((id) => id.trim()).filter(Boolean),
                 discordAllowedChannelIds: discordChannelIds.split(",").map((id) => id.trim()).filter(Boolean),
+                discordAllowAllUsers,
                 discordAllowedUserIds: discordAllowedUserIds.split(",").map((id) => id.trim()).filter(Boolean),
                 discordAllowedRoleIds: discordAllowedRoleIds.split(",").map((id) => id.trim()).filter(Boolean),
                 ...(discordHomeChannelId.trim() ? { discordHomeChannelId: discordHomeChannelId.trim() } : {}),
@@ -354,7 +367,20 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
     return () => clearInterval(id);
   }, [provisioning]);
 
+  useEffect(() => {
+    if (
+      platform !== "discord"
+      || provisioning
+      || !createdAgent
+      || discordCompletionReportedRef.current
+    ) return;
+    discordCompletionReportedRef.current = true;
+    onHired({ name, role: roleLabel });
+  }, [createdAgent, name, onHired, platform, provisioning, roleLabel]);
+
   if (!provisioning && createdAgent) {
+    if (platform === "discord") return null;
+
     if (platform === "telegram") {
       return (
         <DialogShell shadeClick={undefined}>
@@ -465,7 +491,7 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
             Hiring {name}…
           </h2>
           <p className="text-sm mb-8" style={{ color: "var(--ink-3)" }}>
-            A few moments — provisioning, installing skills, connecting to {platform === "telegram" ? "Telegram" : "Slack"}.
+            A few moments — provisioning, installing skills, connecting to {platform === "slack" ? "Slack" : platform === "telegram" ? "Telegram" : "Discord"}.
           </p>
           <div className="w-full max-w-sm mb-8">
             <div className="w-full h-1.5 rounded-full overflow-hidden" style={{ background: "var(--bg-soft)" }}>
@@ -614,10 +640,12 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
             onGuildIdsChange={setDiscordGuildIds}
             channelIds={discordChannelIds}
             onChannelIdsChange={setDiscordChannelIds}
+            allowAllUsers={discordAllowAllUsers}
+            onAllowAllUsersChange={(value) => { setDiscordAllowAllUsers(value); setDiscordTokenError(null); }}
             allowedUserIds={discordAllowedUserIds}
-            onAllowedUserIdsChange={setDiscordAllowedUserIds}
+            onAllowedUserIdsChange={(value) => { setDiscordAllowedUserIds(value); setDiscordTokenError(null); }}
             allowedRoleIds={discordAllowedRoleIds}
-            onAllowedRoleIdsChange={setDiscordAllowedRoleIds}
+            onAllowedRoleIdsChange={(value) => { setDiscordAllowedRoleIds(value); setDiscordTokenError(null); }}
             homeChannelId={discordHomeChannelId}
             onHomeChannelIdChange={setDiscordHomeChannelId}
             showToken={showDiscordToken}

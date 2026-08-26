@@ -7,13 +7,42 @@ import { TokenInput } from "./hire-dialog-primitives";
 import { AgentConfigurationSection } from "./agent-configuration-section";
 import { useAgentApplyAndRestart } from "../hooks/use-agent-apply-and-restart";
 import { useUpdateAgent } from "../hooks/use-update-agent";
-import type { Agent } from "../schemas";
+import { useValidateIntegration } from "../hooks/use-validate-integration";
+import type { Agent, IntegrationValidationResult } from "../schemas";
 import {
   coerceBooleanFields,
   expandGithubContent,
   hasIncompleteIntegration,
   type IntegrationDraft,
 } from "../integrations";
+
+function ValidationDetails({
+  result,
+  error,
+}: {
+  result?: IntegrationValidationResult;
+  error?: string;
+}) {
+  if (!result && !error) return null;
+
+  return (
+    <div className="flex flex-col gap-1 text-[0.76rem]" style={{ color: "var(--ink-3)" }}>
+      {error && <span style={{ color: "var(--err)" }}>{error}</span>}
+      {result && (
+        <>
+          <span>
+            Status: {result.validationStatus}
+            {result.validationIdentity ? ` · ${result.validationIdentity}` : ""}
+          </span>
+          {result.validationError && <span style={{ color: "var(--err)" }}>{result.validationError}</span>}
+          {result.missingScopes.length > 0 && (
+            <span>Missing scopes: {result.missingScopes.join(", ")}</span>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
 
 export function AgentKeysSettings({
   agent,
@@ -27,6 +56,10 @@ export function AgentKeysSettings({
   onEdit: () => void;
 }) {
   const updateAgent = useUpdateAgent();
+  const validateIntegration = useValidateIntegration();
+  const [validationResults, setValidationResults] = useState<Record<string, IntegrationValidationResult>>({});
+  const [validationErrors, setValidationErrors] = useState<Record<string, string>>({});
+  const [validatingProvider, setValidatingProvider] = useState<string | null>(null);
   const [slackAppToken, setSlackAppToken] = useState("");
   const [slackBotToken, setSlackBotToken] = useState("");
   const [teamsAppId, setTeamsAppId] = useState("");
@@ -52,6 +85,31 @@ export function AgentKeysSettings({
   );
   const hasIntegrationChanges = secretDrafts.length > 0 || removedProviders.length > 0;
   const hasChanges = hasPlatformChanges || hasIntegrationChanges;
+
+  function validate(provider: string) {
+    setValidatingProvider(provider);
+    setValidationErrors((current) => {
+      const next = { ...current };
+      delete next[provider];
+      return next;
+    });
+    validateIntegration.mutate(
+      { agentId: agent.id, provider },
+      {
+        onSuccess: ({ provider: validatedProvider, result }) => {
+          setValidationResults((current) => ({ ...current, [validatedProvider]: result }));
+          setValidatingProvider(null);
+        },
+        onError: (error) => {
+          setValidationErrors((current) => ({
+            ...current,
+            [provider]: error instanceof Error ? error.message : "Validation failed",
+          }));
+          setValidatingProvider(null);
+        },
+      },
+    );
+  }
 
   async function applyChanges() {
     if (!hasChanges || hasIncompleteIntegration(secretDrafts)) return;
@@ -160,9 +218,24 @@ export function AgentKeysSettings({
           </div>
           {configuredSecrets.length > 0 ? (
             configuredSecrets.map((secret) => (
-              <div key={secret.provider} className="flex items-center justify-between gap-3 rounded-xl px-3.5 py-3" style={{ border: "1px solid var(--line)" }}>
-                <span className="font-medium text-[0.86rem]" style={{ color: "var(--ink-2)" }}>{secret.secretName}</span>
-                <span className="text-[0.78rem]" style={{ color: "var(--ink-4)" }}>{secret.sharedCredentialName ? `Shared · ${secret.sharedCredentialName}` : "Configured · value hidden"}</span>
+              <div key={secret.provider} className="flex flex-col gap-2 rounded-xl px-3.5 py-3" style={{ border: "1px solid var(--line)" }}>
+                <div className="flex items-center justify-between gap-3">
+                  <span className="font-medium text-[0.86rem]" style={{ color: "var(--ink-2)" }}>{secret.secretName}</span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[0.78rem]" style={{ color: "var(--ink-4)" }}>{secret.sharedCredentialName ? `Shared · ${secret.sharedCredentialName}` : "Configured · value hidden"}</span>
+                    {canEdit && (
+                      <button
+                        type="button"
+                        className="af-btn af-btn-sm af-btn-ghost"
+                        onClick={() => validate(secret.provider)}
+                        disabled={validatingProvider === secret.provider}
+                      >
+                        {validatingProvider === secret.provider ? "Validating…" : "Validate"}
+                      </button>
+                    )}
+                  </div>
+                </div>
+                <ValidationDetails result={validationResults[secret.provider]} error={validationErrors[secret.provider]} />
               </div>
             ))
           ) : (
@@ -229,12 +302,27 @@ export function AgentKeysSettings({
             {configuredSecrets.map((secret) => {
               const removed = removedProviders.includes(secret.provider);
               return (
-                <div key={secret.provider} className="flex items-center justify-between gap-3 rounded-xl px-3.5 py-3" style={{ border: removed ? "1px dashed var(--line)" : "1px solid var(--line)", opacity: removed ? 0.55 : 1 }}>
-                  <div>
-                    <div className="font-medium text-[0.86rem]" style={{ color: "var(--ink-2)" }}>{secret.secretName}</div>
-                    <div className="text-[0.76rem]" style={{ color: "var(--ink-4)" }}>{removed ? "Will be removed" : secret.sharedCredentialName ? `Shared · ${secret.sharedCredentialName}` : "Value hidden"}</div>
+                <div key={secret.provider} className="flex flex-col gap-2 rounded-xl px-3.5 py-3" style={{ border: removed ? "1px dashed var(--line)" : "1px solid var(--line)", opacity: removed ? 0.55 : 1 }}>
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <div className="font-medium text-[0.86rem]" style={{ color: "var(--ink-2)" }}>{secret.secretName}</div>
+                      <div className="text-[0.76rem]" style={{ color: "var(--ink-4)" }}>{removed ? "Will be removed" : secret.sharedCredentialName ? `Shared · ${secret.sharedCredentialName}` : "Value hidden"}</div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {canEdit && (
+                        <button
+                          type="button"
+                          className="af-btn af-btn-sm af-btn-ghost"
+                          onClick={() => validate(secret.provider)}
+                          disabled={removed || validatingProvider === secret.provider}
+                        >
+                          {validatingProvider === secret.provider ? "Validating…" : "Validate"}
+                        </button>
+                      )}
+                      <button type="button" className="af-btn af-btn-sm af-btn-ghost" onClick={() => setRemovedProviders((current) => removed ? current.filter((provider) => provider !== secret.provider) : [...current, secret.provider])}>{removed ? "Undo" : "Remove"}</button>
+                    </div>
                   </div>
-                  <button type="button" className="af-btn af-btn-sm af-btn-ghost" onClick={() => setRemovedProviders((current) => removed ? current.filter((provider) => provider !== secret.provider) : [...current, secret.provider])}>{removed ? "Undo" : "Remove"}</button>
+                  <ValidationDetails result={validationResults[secret.provider]} error={validationErrors[secret.provider]} />
                 </div>
               );
             })}

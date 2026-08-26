@@ -12,6 +12,7 @@ from injector import inject, singleton
 
 from api.core.config import Config
 from api.domains.agents.aai_cli_artifacts import (
+    PROFILE_SLUGS,
     build_config_toml,
     build_env,
     build_integrations_policy_md,
@@ -20,7 +21,7 @@ from api.domains.agents.aai_cli_artifacts import (
     build_tool_context_md,
     provider_secrets_map,
 )
-from api.domains.agents.aai_cli_skills import build_skills_manifest_from_zips
+from api.domains.agents.aai_cli_skills import build_skills_manifest
 from api.domains.agents.authorization import AgentAuthorization
 from api.domains.agents.builders import (
     build_config_map,
@@ -46,6 +47,7 @@ from api.domains.agents.builders import (
 )
 from api.domains.agents.error_messages import friendly_k8s_error, friendly_pod_reason
 from api.domains.agents.exceptions import BotTokenConflictHTTPException
+from api.domains.agents.gog_artifacts import build_gog_env, build_gog_policy_md, build_gog_setup_sh
 from api.domains.agents.models import (
     PROVIDER_DISPLAY_NAMES,
     Agent,
@@ -88,11 +90,11 @@ from api.domains.agents.models import (
     AgentUpdate,
     ConfluenceContent,
     FirecrawlContent,
-    GmailContent,
-    GoogleSheetsContent,
+    GoogleWorkspaceContent,
     JiraContent,
     PairRequest,
     SecretProvider,
+    SkillVersionPin,
     compute_bot_token_hash,
     decrypt_content,
     encrypt_content,
@@ -107,7 +109,7 @@ from api.domains.agents.repository import AgentRepository
 from api.domains.agents.runtime_policy import build_chat_commands_policy_md, build_role_scope_policy_md
 from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.token_service import SlackConfigTokenService
-from api.domains.events import EventDeliveryDispatcher, resolve_actor_identity
+from api.domains.events import ActorIdentity, ActorIdentityType, EventDeliveryDispatcher, resolve_actor_identity
 from api.domains.events.catalog import (
     AGENT_SECRET_ADDED,
     AGENT_SECRET_UPDATED,
@@ -117,7 +119,7 @@ from api.domains.events.catalog import (
 from api.domains.organizations.lookup import OrganizationLookupService
 from api.domains.rbac.catalog import PermissionKey
 from api.domains.shared_credentials.repository import SharedCredentialRepository
-from api.domains.skills.models import Skill
+from api.domains.skills.models import PinnedSkill, Skill, derive_tools_pointer
 from api.domains.skills.repository import SkillRepository
 from api.domains.templates.models import AgentTemplate, PlatformTemplate, TemplateRead
 from api.domains.templates.renderer import render_template
@@ -202,6 +204,7 @@ _DISCORD_CONFIG_FIELDS = frozenset(
         "discord_allowed_channel_ids",
         "discord_allowed_user_ids",
         "discord_allowed_role_ids",
+        "discord_allow_all_users",
         "discord_home_channel_id",
         "discord_require_mention",
         "discord_group_policy",
@@ -326,7 +329,7 @@ class AgentService:
 
     @staticmethod
     def _build_skill_pointers(skills: list[Skill]) -> str:
-        return "".join(s.tools_pointer for s in skills if s.tools_pointer)
+        return "".join(derive_tools_pointer(s) for s in skills)
 
     def _auto_attached_aai_cli_skills(
         self,
@@ -403,6 +406,84 @@ class AgentService:
             skills.append(skill)
         return skills
 
+    def _resolve_skill_pins(
+        self,
+        skill_ids: list[UUID],
+        pins: list[SkillVersionPin],
+        current_skill_ids: set[UUID],
+        removed_skill_ids: list[UUID],
+        org_id: UUID,
+    ) -> list[SkillVersionPin]:
+        """Resolve every agent assignment to an explicit pinned version.
+
+        Added skills pin to a requested version when given, else to the skill's
+        latest at apply time. Existing skills can be re-pinned through the same
+        ``pins`` list. Every pin must reference a skill the agent ends up with,
+        and the requested version must exist (it can later be deleted only after
+        no agent pins it, so a valid pin never dangles from version deletion).
+        """
+        overlap = set(skill_ids) & set(removed_skill_ids)
+        if overlap:
+            ids = ", ".join(str(skill_id) for skill_id in sorted(overlap, key=str))
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Skill ID(s) cannot be both added and removed: {ids}",
+            )
+
+        pin_map: dict[UUID, SkillVersionPin] = {}
+        for pin in pins:
+            if pin.skill_id in pin_map:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Duplicate skill version pin for skill {pin.skill_id}",
+                )
+            pin_map[pin.skill_id] = pin
+        remaining_ids = current_skill_ids - set(removed_skill_ids)
+        allowed_ids = remaining_ids | set(skill_ids)
+        extras = set(pin_map) - allowed_ids
+        if extras:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Skill version pins must reference a skill the agent ends up with",
+            )
+
+        requested_ids = set(skill_ids) | set(pin_map)
+        if requested_ids:
+            accessible_ids = {skill.id for skill in self.skill_repository.find_accessible_for_org(org_id)}
+            inaccessible_ids = requested_ids - accessible_ids
+            if inaccessible_ids:
+                skill_id = min(inaccessible_ids, key=str)
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Skill {skill_id} not found",
+                )
+
+        resolved: list[SkillVersionPin] = []
+        resolved_ids: set[UUID] = set()
+        for skill_id in dict.fromkeys(skill_ids):
+            pin = pin_map.get(skill_id)
+            if pin is None:
+                latest = self.skill_repository.get_latest_version(skill_id)
+                pin = SkillVersionPin(skill_id=skill_id, version=latest.version if latest else 1)
+            else:
+                if self.skill_repository.get_version(skill_id, pin.version) is None:
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail=f"Version {pin.version} not found for skill {skill_id}",
+                    )
+            resolved.append(pin)
+            resolved_ids.add(skill_id)
+        for pin in pins:
+            if pin.skill_id in current_skill_ids and pin.skill_id not in resolved_ids:
+                if self.skill_repository.get_version(pin.skill_id, pin.version) is None:
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail=f"Version {pin.version} not found for skill {pin.skill_id}",
+                    )
+                resolved.append(pin)
+                resolved_ids.add(pin.skill_id)
+        return resolved
+
     def _validate_skill_update(
         self,
         agent: Agent,
@@ -460,7 +541,7 @@ class AgentService:
         telegram_config: AgentTelegramConfig | None = None,
         discord_config: AgentDiscordConfig | None = None,
         secrets: list[AgentSecret] | None = None,
-        skills: list[Skill] | None = None,
+        skills: list[PinnedSkill] | None = None,
         required_skill_map: dict[UUID, str | None] | None = None,
         allowed_actions: list[PermissionKey] | None = None,
         template_key: str = "",
@@ -487,11 +568,17 @@ class AgentService:
                 read.shared_credential_id = sc.id
                 read.shared_credential_name = sc.name
             secrets_read.append(read)
-        assigned_ids = {skill.id for skill in (skills or [])}
+        assigned_ids = {pinned.skill.id for pinned in (skills or [])}
         req_ids = effective_required_ids(required_skill_map or {}, assigned_ids)
         skills_read = [
-            AgentAssignedSkillRead.model_validate(skill).model_copy(update={"required": skill.id in req_ids})
-            for skill in (skills or [])
+            AgentAssignedSkillRead.model_validate(
+                {
+                    **pinned.skill.model_dump(),
+                    "version": pinned.version,
+                    "required": pinned.skill.id in req_ids,
+                }
+            )
+            for pinned in (skills or [])
         ]
         webhook_url = (
             f"{self.config.api_external_url}/api/v1/webhooks/teams/{agent.id}/messages"
@@ -537,7 +624,10 @@ class AgentService:
         elif agent.platform == AgentPlatform.DISCORD:
             discord_config = self.repository.get_discord_config(agent.id)
         secrets = self.repository.get_secrets_for_agent(agent.id)
-        skills = [s for _, s in self.skill_repository.get_agent_skills_with_details(agent.id)]
+        skills = [
+            PinnedSkill(skill=s, version=row.pinned_version)
+            for row, s in self.skill_repository.get_agent_skills_with_details(agent.id)
+        ]
         template = self.template_repository.get_pinned_template(agent)
         required_map = self.template_repository.get_required_skill_map_for(template) if template else {}
         allowed_actions = self.authorization.allowed_actions(context, [agent])[agent.id]
@@ -667,6 +757,12 @@ class AgentService:
                     detail=f"At least one of these template skills must be included in skill_ids: {', '.join(names)}",
                 )
 
+        # Preflight skill version pins before any persistence so an invalid pin
+        # (nonexistent version, pin for a skill not in the request) is rejected
+        # atomically rather than after the agent, configs, and secrets are saved.
+        resolved_pins = self._resolve_skill_pins(data.skill_ids, data.skill_versions, set(), [], org_id)
+        resolved_pin_by_skill_id = {pin.skill_id: pin for pin in resolved_pins}
+
         # The creator always gets an explicit Owner AgentAccess row, even if they
         # currently have implicit full access as an Org Owner/Admin: it's what keeps
         # them able to manage the Agent if they're later demoted to Member (see
@@ -756,6 +852,7 @@ class AgentService:
                 allowed_channel_ids=data.discord_allowed_channel_ids,
                 allowed_user_ids=data.discord_allowed_user_ids,
                 allowed_role_ids=data.discord_allowed_role_ids,
+                allow_all_users=data.discord_allow_all_users,
                 home_channel_id=data.discord_home_channel_id,
                 require_mention=data.discord_require_mention,
                 group_policy=data.discord_group_policy,
@@ -854,7 +951,19 @@ class AgentService:
             secrets.append(slack_secret)
 
         if skills_to_assign:
-            self.repository.save_skills([AgentSkill(agent_id=agent.id, skill_id=s.id) for s in skills_to_assign])
+            self.repository.save_skills(
+                [
+                    AgentSkill(
+                        agent_id=agent.id,
+                        skill_id=s.id,
+                        pinned_version=resolved_pin_by_skill_id[s.id].version,
+                    )
+                    for s in skills_to_assign
+                ]
+            )
+        skills_read_versions = [
+            PinnedSkill(skill=s, version=resolved_pin_by_skill_id[s.id].version) for s in skills_to_assign
+        ]
 
         self.event_delivery_dispatcher.enqueue_immediate(created_delivery_ids + secret_delivery_ids)
 
@@ -868,7 +977,7 @@ class AgentService:
             telegram_config,
             discord_config,
             secrets,
-            skills_to_assign,
+            skills_read_versions,
             required_map,
             allowed_actions,
             template_key=template.template_key,
@@ -1471,7 +1580,7 @@ class AgentService:
         telegram_configs = self.repository.get_telegram_configs_for_agents(agent_ids)
         discord_configs = self.repository.get_discord_configs_for_agents(agent_ids)
         secrets_by_agent = self.repository.get_secrets_for_agents(agent_ids)
-        skills_by_agent = self.skill_repository.get_skills_for_agents(agent_ids)
+        skills_by_agent = self.skill_repository.get_skills_for_agents_with_versions(agent_ids)
 
         req_maps_by_agent = self.template_repository.get_required_skill_map_for_agents(agents)
         pin_info = self.template_repository.get_pinned_template_info_for_agents(agents)
@@ -1556,6 +1665,15 @@ class AgentService:
                     detail=f"Cannot set {label} fields on a {agent.platform.title()} agent",
                 )
 
+        # Preflight skill version pins before any persistence (template re-pin,
+        # config updates, secret updates) so an invalid pin is rejected atomically
+        # rather than after config/secrets are already saved.
+        current_skill_rows = self.repository.get_skills_for_agent(agent.id)
+        current_skill_ids = {row.skill_id for row in current_skill_rows}
+        resolved_skill_pins = self._resolve_skill_pins(
+            data.skill_ids, data.skill_versions, current_skill_ids, data.removed_skill_ids, org_id
+        )
+
         # Re-pin the agent to a different template (key, version). The model
         # validator guarantees both keys appear together.
         effective_template = None
@@ -1590,7 +1708,7 @@ class AgentService:
         )
         if required_map:
             standalone_ids, required_groups = split_requirements(required_map)
-            existing_skill_ids = {s.id for _, s in self.skill_repository.get_agent_skills_with_details(agent.id)}
+            existing_skill_ids = current_skill_ids
             effective_skill_ids = (existing_skill_ids | set(data.skill_ids)) - set(data.removed_skill_ids)
             # Block removal of required skills.
             if data.removed_skill_ids:
@@ -1734,12 +1852,25 @@ class AgentService:
                     discord_config.allowed_user_ids = updated["discord_allowed_user_ids"]
                 if "discord_allowed_role_ids" in updated:
                     discord_config.allowed_role_ids = updated["discord_allowed_role_ids"]
+                if "discord_allow_all_users" in updated:
+                    discord_config.allow_all_users = updated["discord_allow_all_users"]
                 if "discord_home_channel_id" in updated:
                     discord_config.home_channel_id = updated["discord_home_channel_id"]
                 if "discord_require_mention" in updated:
                     discord_config.require_mention = updated["discord_require_mention"]
                 if "discord_group_policy" in updated:
                     discord_config.group_policy = updated["discord_group_policy"]
+                if (
+                    not discord_config.allow_all_users
+                    and not any(value.strip() for value in discord_config.allowed_user_ids)
+                    and not any(value.strip() for value in discord_config.allowed_role_ids)
+                ):
+                    raise HTTPException(
+                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                        detail=(
+                            "Discord access requires at least one allowed user or role when allow all users is disabled"
+                        ),
+                    )
                 self.repository.save_discord_config(discord_config)
 
         # Validate skills accessibility and secret coverage
@@ -1858,11 +1989,14 @@ class AgentService:
                         actor_display=secret_actor_display,
                     )
 
-        # Apply skill changes
+        # Apply skill changes (pins were preflighted before persistence above)
         for skill_id in data.removed_skill_ids:
             self.repository.remove_skill(agent.id, skill_id)
-        for skill_id in dict.fromkeys(data.skill_ids):
-            self.repository.add_skill(agent.id, skill_id)
+        for pin in resolved_skill_pins:
+            if pin.skill_id in current_skill_ids:
+                self.repository.re_pin_skill(agent.id, pin.skill_id, pin.version)
+            else:
+                self.repository.add_skill(agent.id, pin.skill_id, pinned_version=pin.version)
 
         # Keep the aai-cli Slack Agent Secret in sync with the gateway bot token:
         # write/refresh it whenever a remaining skill requires it (covers skill add
@@ -1936,12 +2070,17 @@ class AgentService:
         return self._get_agent_read(update_result.agent, context)
 
     def start_agent(self, agent_id: UUID, context: CurrentUserContext) -> AgentRead:
-        org_id = self._org_id(context)
+        agent = self.authorization.require_action(context, agent_id, PermissionKey.AGENT_LIFECYCLE_MANAGE)
+        started = self._start_agent_unchecked(agent, resolve_actor_identity(context, agent.organization_id))
+        return self._get_agent_read(started, context)
+
+    def _start_agent_unchecked(self, agent: Agent, actor: ActorIdentity) -> Agent:
+        """Start a known Agent after its caller has established authority."""
+        agent_id = agent.id
+        org_id = agent.organization_id
         # Stamped as Service labels for monitoring; resolved here (not in the
         # route) so every start path labels agents consistently.
         org_name = self.organization_lookup.get_name(org_id)
-        agent = self.authorization.require_action(context, agent_id, PermissionKey.AGENT_LIFECYCLE_MANAGE)
-
         if agent.status == AgentStatus.RUNNING:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -1995,7 +2134,7 @@ class AgentService:
                 agent.last_error = reason
                 agent.status = AgentStatus.ERROR
                 self.repository.save(agent)
-                return self._get_agent_read(agent, context)
+                return agent
 
             if slack_config.channel_ids:
                 self._join_public_channels(bot_token, slack_config.channel_ids)
@@ -2116,7 +2255,7 @@ class AgentService:
                 agent.last_error = reason
                 agent.status = AgentStatus.ERROR
                 self.repository.save(agent)
-                return self._get_agent_read(agent, context)
+                return agent
 
             service = build_service(agent.id, org_id, ns, org_name=org_name, agent_name=agent.name)
 
@@ -2204,6 +2343,7 @@ class AgentService:
                     discord_config.allowed_channel_ids,
                     discord_config.allowed_user_ids,
                     discord_config.allowed_role_ids,
+                    discord_config.allow_all_users,
                     discord_config.home_channel_id,
                     discord_config.guild_ids,
                 )
@@ -2218,6 +2358,7 @@ class AgentService:
                     allowed_channel_ids=discord_config.allowed_channel_ids,
                     allowed_user_ids=discord_config.allowed_user_ids,
                     allowed_role_ids=discord_config.allowed_role_ids,
+                    allow_all_users=discord_config.allow_all_users,
                     home_channel_id=discord_config.home_channel_id,
                     require_mention=discord_config.require_mention,
                     group_policy=str(discord_config.group_policy),
@@ -2251,25 +2392,42 @@ class AgentService:
             assert ciphertext is not None
             decrypted[provider] = decrypt_content(provider, ciphertext, key)
         self._backfill_google_client_credentials(decrypted)
-        for google_provider in (SecretProvider.GMAIL, SecretProvider.GOOGLE_SHEETS):
-            content = decrypted.get(google_provider)
-            if not isinstance(content, (GmailContent, GoogleSheetsContent)):
-                continue
-            if not content.client_id or not content.client_secret:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=(
-                        f"{PROVIDER_DISPLAY_NAMES[google_provider]} is missing a client id/secret "
-                        "and Google OAuth is not configured on this server. Reconnect via "
-                        "Authenticate with Google, or configure google_cloud_client_id/secret."
-                    ),
-                )
+        # Only google_workspace is materialized. The retired per-service Google providers
+        # and their rows were deleted by migration; affected agents must reconnect through
+        # Google Workspace.
+        gws_content = decrypted.get(SecretProvider.GOOGLE_WORKSPACE)
+        if isinstance(gws_content, GoogleWorkspaceContent) and (
+            not gws_content.client_id or not gws_content.client_secret
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"{PROVIDER_DISPLAY_NAMES[SecretProvider.GOOGLE_WORKSPACE]} is missing a client id/secret "
+                    "and Google OAuth is not configured on this server. Reconnect via "
+                    "Authenticate with Google, or configure google_cloud_client_id/secret."
+                ),
+            )
         store = {p: c for p, c in decrypted.items() if p.value in provider_secrets_map}
         aai_home = "/opt/data" if agent.agent_type == AgentType.HERMES else "/home/node"
-        aai_config_toml = build_config_toml(decrypted, home_dir=aai_home) if decrypted else None
-        aai_setup_sh = build_setup_sh(list(store), home_dir=aai_home) if decrypted else None
+        # Gated on providers that actually get an aai-cli profile: an agent whose only
+        # integrations are profile-less (google_workspace, firecrawl) would otherwise get
+        # a config.toml holding nothing but the store header.
+        has_aai_profiles = bool(decrypted.keys() & set(PROFILE_SLUGS))
+        aai_config_toml = build_config_toml(decrypted, home_dir=aai_home) if has_aai_profiles else None
+        aai_setup_sh = build_setup_sh(list(store), home_dir=aai_home) if has_aai_profiles else None
         if store:
             secret.string_data.update(build_env(store))
+
+        # gog (Google Workspace) — its own CLI with its own on-disk state, rebuilt from
+        # this secret on every boot. GOG_HOME is deliberately the container filesystem,
+        # not the PVC that aai_home points at for Hermes.
+        gog_setup_sh = None
+        if isinstance(gws_content, GoogleWorkspaceContent):
+            gog_home_dir = "/home/hermes" if agent.agent_type == AgentType.HERMES else "/home/node"
+            secret.string_data.update(
+                build_gog_env(gws_content, gog_home_dir, secrets.token_urlsafe(32)),
+            )
+            gog_setup_sh = build_gog_setup_sh()
 
         fc_content = decrypted.get(SecretProvider.FIRECRAWL)
         fc_api_key = (
@@ -2327,7 +2485,33 @@ class AgentService:
             set(decrypted.keys()),
             {s.id for s in assigned_skills},
         )
-        skills_json = build_skills_manifest_from_zips(mounted_skills) if mounted_skills else None
+        skills_json = None
+        if mounted_skills:
+            pinned_by_id = {s.id: SkillVersionPin(skill_id=s.id, version=row.pinned_version) for row, s in agent_skills}
+            # Explicitly assigned skills mount their pinned version; implicit
+            # aai-cli mounts resolve to the built-in's latest.
+            pins_to_mount: list[SkillVersionPin] = []
+            for skill in mounted_skills:
+                pin = pinned_by_id.get(skill.id)
+                if pin is None:
+                    latest = self.skill_repository.get_latest_version(skill.id)
+                    pin = SkillVersionPin(skill_id=skill.id, version=latest.version if latest else 1)
+                pins_to_mount.append(pin)
+            files_by_skill = self.skill_repository.get_files_for_skill_versions(pins_to_mount)
+            for pin in pins_to_mount:
+                if pin.skill_id not in files_by_skill:
+                    logger.warning(
+                        "Agent %s skill %s pinned version %s has no files; the version may have been removed",
+                        agent.id,
+                        pin.skill_id,
+                        pin.version,
+                    )
+            skills_json, collisions = build_skills_manifest(mounted_skills, files_by_skill)
+            for collision in collisions:
+                # Two skills claiming one workspace path: the loser's file is silently
+                # absent for the agent, so surface it rather than letting the agent
+                # fail to find documentation it was told exists.
+                logger.warning("Agent %s skill file collision: %s", agent.id, collision)
         tools_md = rendered.tools_md + self._build_skill_pointers(mounted_skills) + build_tool_context_md(decrypted)
         # AGENTS.md is auto-loaded into the startup prompt by both runtimes, so the
         # --profile mapping + no-fallback policy is appended here (not just to TOOLS.md).
@@ -2337,9 +2521,12 @@ class AgentService:
         # Credential-free tools ride in their own block: the integrations policy is built
         # from configured secrets, so a tool with no provider would otherwise be invisible
         # in the auto-loaded prompt no matter that its skill is mounted.
+        # gog gets its own block: the aai-cli one insists on --profile and on aai-cli
+        # being the only route to its integrations, neither of which is true of gog.
         agents_md = (
             rendered.agents_md
             + build_integrations_policy_md(decrypted)
+            + build_gog_policy_md(gws_content if isinstance(gws_content, GoogleWorkspaceContent) else None)
             + build_local_tools_policy_md(s.name for s in mounted_skills)
             + build_chat_commands_policy_md()
             + build_role_scope_policy_md()
@@ -2361,6 +2548,7 @@ class AgentService:
                 hermes_config=hermes_cfg,
                 aai_cli_config_toml=aai_config_toml,
                 aai_cli_setup_sh=aai_setup_sh,
+                gog_setup_sh=gog_setup_sh,
                 skills_json=skills_json,
                 platform=str(agent.platform),
             )
@@ -2380,6 +2568,7 @@ class AgentService:
                 openclaw_config_overlay=overlay,
                 aai_cli_config_toml=aai_config_toml,
                 aai_cli_setup_sh=aai_setup_sh,
+                gog_setup_sh=gog_setup_sh,
                 skills_json=skills_json,
             )
 
@@ -2410,12 +2599,12 @@ class AgentService:
         result = self.repository.save_with_lifecycle_event(
             agent,
             event_name=AGENT_STARTED,
-            actor=resolve_actor_identity(context, org_id),
+            actor=actor,
             previous_status=previous_status,
             new_status=AgentStatus.RUNNING.value,
         )
         self.event_delivery_dispatcher.enqueue_immediate(result.delivery_ids)
-        return self._get_agent_read(result.agent, context)
+        return result.agent
 
     def get_agent_logs(
         self,
@@ -2528,11 +2717,16 @@ class AgentService:
 
     def stop_agent(self, agent_id: UUID, context: CurrentUserContext) -> AgentRead:
         agent = self.authorization.require_action(context, agent_id, PermissionKey.AGENT_LIFECYCLE_MANAGE)
+        stopped = self._stop_agent_unchecked(agent, resolve_actor_identity(context, agent.organization_id))
+        return self._get_agent_read(stopped, context)
+
+    def _stop_agent_unchecked(self, agent: Agent, actor: ActorIdentity) -> Agent:
+        """Stop a known Agent after its caller has established authority."""
 
         if agent.status != AgentStatus.RUNNING:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail=f"Agent {agent_id} is not running",
+                detail=f"Agent {agent.id} is not running",
             )
 
         previous_status = agent.status.value
@@ -2547,12 +2741,39 @@ class AgentService:
         result = self.repository.save_with_lifecycle_event(
             agent,
             event_name=AGENT_STOPPED,
-            actor=resolve_actor_identity(context, agent.organization_id),
+            actor=actor,
             previous_status=previous_status,
             new_status=AgentStatus.STOPPED.value,
         )
         self.event_delivery_dispatcher.enqueue_immediate(result.delivery_ids)
-        return self._get_agent_read(result.agent, context)
+        return result.agent
+
+    def rebuild_running_agents_for_maintenance(
+        self, *, apply: bool
+    ) -> tuple[list[Agent], list[tuple[Agent, Exception]]]:
+        """Sequentially rebuild running Agent workloads for an operator maintenance task.
+
+        This is intentionally an operator-only seam used by the cutover CLI; no HTTP
+        route exposes this cross-Organization lifecycle authority.
+        """
+        agents = self.repository.find_all_running()
+        if not apply:
+            return agents, []
+        actor = ActorIdentity(type=ActorIdentityType.SYSTEM, id="agent-maintenance")
+        restarted: list[Agent] = []
+        failures: list[tuple[Agent, Exception]] = []
+        for agent in agents:
+            try:
+                stopped = self._stop_agent_unchecked(agent, actor)
+                started = self._start_agent_unchecked(stopped, actor)
+                if started.status != AgentStatus.RUNNING:
+                    failures.append((agent, RuntimeError(f"restart completed with status {started.status.value}")))
+                    continue
+                restarted.append(started)
+            except Exception as exc:
+                logger.exception("Maintenance rebuild failed for agent %s", agent.id)
+                failures.append((agent, exc))
+        return restarted, failures
 
     def count_active_agents(self, organization_id: UUID) -> int:
         """Number of non-deleted agents in an org. Used by other domains (e.g. org
@@ -2771,13 +2992,10 @@ class AgentService:
 
     def _backfill_google_client_credentials(self, decrypted: dict[SecretProvider, Any]) -> None:
         """Secrets created via the Google OAuth flow store only the refresh token; inject
-        the app-owned client id/secret from config. Backfill only when empty so legacy
-        secrets (which carry their own client the refresh token was issued under) keep
-        working."""
-        for provider in (SecretProvider.GMAIL, SecretProvider.GOOGLE_SHEETS):
-            content = decrypted.get(provider)
-            if not isinstance(content, (GmailContent, GoogleSheetsContent)):
-                continue
+        the app-owned client id/secret from config. Backfill only when empty so a
+        user-supplied client (the one the refresh token was issued under) keeps working."""
+        content = decrypted.get(SecretProvider.GOOGLE_WORKSPACE)
+        if isinstance(content, GoogleWorkspaceContent):
             if not content.client_id:
                 content.client_id = self.config.google_cloud_client_id
             if not content.client_secret:

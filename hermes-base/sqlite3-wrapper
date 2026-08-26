@@ -1,0 +1,6 @@
+#!/bin/sh
+set -eu
+
+system_lib_dir="/usr/lib/$(uname -m)-linux-gnu"
+LD_LIBRARY_PATH="${system_lib_dir}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}" \
+    exec /usr/bin/sqlite3 "$@"

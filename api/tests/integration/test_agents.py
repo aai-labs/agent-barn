@@ -10,6 +10,8 @@ from hamcrest import (
     assert_that,
     contains_string,
     equal_to,
+    greater_than,
+    has_item,
     has_key,
     is_in,
     is_not,
@@ -90,6 +92,10 @@ from api.tests.steps.template import (
 
 _BASE = "/api/v1/organizations/{organization_id}/agents"
 
+# Agents run in k3d while the API runs outside it (compose or the host), so the
+# pod-facing ingest URL is an override, not the in-cluster default.
+_INGEST_BASE_URL = "http://host.docker.internal:8001/ingest/v1"
+
 _VALID_CREATE = {
     "name": "My Agent",
     "platform": "slack",
@@ -115,6 +121,7 @@ _VALID_CREATE_DISCORD = {
     "discord_allowed_channel_ids": ["channel-1"],
     "discord_allowed_user_ids": ["user-1"],
     "discord_allowed_role_ids": ["role-1"],
+    "discord_allow_all_users": False,
     "discord_home_channel_id": "channel-1",
     "template_key": "test-template",
 }
@@ -139,6 +146,27 @@ _GIVEN = [
     there_is_an_organization_with_user_and_access_token(),
     use_org_for_auth(),
     there_is_a_template(),
+]
+
+
+# Same as _GIVEN but with no server-owned Google OAuth client. Set here rather than in a
+# later step because Config is built (and cached) when the injector is prepared, and a
+# developer's root .env may define real Google credentials.
+_GIVEN_WITHOUT_GOOGLE_CLIENT = [
+    set_env_variable(
+        {
+            "AGENT_TOKEN_ENCRYPTION_KEY": TEST_ENCRYPTION_KEY,
+            "LITELLM_BASE_URL": "http://litellm:4000",
+            "LITELLM_SECRET_NAME": "litellm",
+            "AGENT_DEFAULT_MODEL": "litellm/gpt-5-mini",
+            "AGENT_LITELLM_BASE_URL": "http://litellm:4000",
+            "API_EXTERNAL_URL": "https://api.test.com",
+            "SKIP_SLACK_TOKEN_VALIDATION": "true",
+            "GOOGLE_CLOUD_CLIENT_ID": "",
+            "GOOGLE_CLOUD_CLIENT_SECRET": "",
+        }
+    ),
+    *_GIVEN[1:],
 ]
 
 
@@ -608,14 +636,14 @@ def test_patch_agent_adds_secret():
             assert_that(jira["secret_name"], equal_to("Jira credential"))
 
 
-def test_patch_agent_adds_google_sheets_secret():
-    """Exercises the provider check constraint: a provider missing from the migration
-    is rejected by the database, not by validation, so this only passes once both the
-    enum and the constraint know about google_sheets."""
+def test_patch_agent_rejects_retired_google_provider():
+    """The per-service Google providers were removed outright — enum member, content
+    model and rows (deleted by migration c9f1b30a7d42). A stale client naming one must be
+    refused by request validation rather than reaching the database."""
     with given([*_GIVEN, there_is_an_agent()]) as context:
         client: TestClient = context.client
 
-        with when("I patch the agent with a google sheets secret"):
+        with when("I patch the agent with a retired google sheets secret"):
             response = client.patch(
                 f"{_BASE}/{context.agent.id}",
                 json={
@@ -629,13 +657,9 @@ def test_patch_agent_adds_google_sheets_secret():
                 headers=_auth(context),
             )
 
-        with then("it returns 200 and the agent exposes the google sheets secret"):
-            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
-            assert_that(_providers(response), equal_to(["google_sheets"]))
-            sheets = response.json()["secrets"][0]
-            assert_that(sheets["secret_name"], equal_to("Google Sheets credential"))
-            # Read APIs return provider and label, never credential contents.
-            assert_that("content" in sheets, equal_to(False))
+        with then("it is rejected as an unknown provider"):
+            assert_that(response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_ENTITY))
+            assert_that("google_sheets" in response.text, equal_to(True))
 
 
 def test_patch_agent_upserts_existing_secret():
@@ -954,6 +978,28 @@ def test_start_agent_emits_started_domain_event_and_delivery():
             # after is best-effort (falls back to background reconciliation on failure),
             # so whether it's already ENQUEUED here depends on Redis being reachable.
             assert_that(deliveries[0].status, is_in([EventDeliveryStatus.PENDING, EventDeliveryStatus.ENQUEUED]))
+
+
+def test_start_agent_wires_telemetry_push_into_the_secret():
+    with given(
+        [
+            set_env_variable({"INGEST_BASE_URL": _INGEST_BASE_URL}),
+            *_GIVEN,
+            there_is_an_agent(),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        k8s: MagicMock = context.injector.get(KubernetesClient)
+
+        with when("I start the agent"):
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("the secret carries the telemetry push wiring the plugins read"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            _, secret = k8s.create_secret.call_args.args
+            assert_that(secret.string_data["AGENT_ID"], equal_to(str(context.agent.id)))
+            assert_that(secret.string_data["INGEST_URL"], equal_to(_INGEST_BASE_URL))
+            assert_that(secret.string_data["INGEST_API_KEY"], is_not(equal_to("")))
 
 
 def test_start_already_running_returns_409():
@@ -1890,6 +1936,7 @@ def test_create_discord_agent_returns_read_safe_configuration():
                         "allowed_channel_ids": ["channel-1"],
                         "allowed_user_ids": ["user-1"],
                         "allowed_role_ids": ["role-1"],
+                        "allow_all_users": False,
                         "home_channel_id": "channel-1",
                         "require_mention": True,
                         "group_policy": "allowlist",
@@ -1909,6 +1956,7 @@ def test_patch_discord_agent_updates_routing_and_rotates_token():
                     "discord_bot_token": "rotated-discord-token",
                     "discord_guild_ids": ["guild-2"],
                     "discord_allowed_role_ids": ["role-2"],
+                    "discord_allow_all_users": False,
                     "discord_home_channel_id": "channel-2",
                 },
                 headers=_auth(context),
@@ -1924,6 +1972,62 @@ def test_patch_discord_agent_updates_routing_and_rotates_token():
                 decrypt_token(config.bot_token_encrypted, TEST_ENCRYPTION_KEY),
                 equal_to("rotated-discord-token"),
             )
+
+
+def test_create_discord_agent_allows_all_users_by_default():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+
+        with when("I create a Discord agent without user or role restrictions"):
+            payload = {key: value for key, value in _VALID_CREATE_DISCORD.items() if key != "discord_allow_all_users"}
+            payload["discord_allowed_user_ids"] = []
+            payload["discord_allowed_role_ids"] = []
+            response = client.post(
+                _BASE,
+                json=payload,
+                headers=_auth(context),
+            )
+
+        with then("all users are allowed within the configured routing boundaries"):
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+            assert_that(response.json()["discord_config"]["allow_all_users"], equal_to(True))
+
+
+def test_create_discord_agent_rejects_empty_restricted_user_policy():
+    with given(_GIVEN) as context:
+        with when("I create a restricted Discord agent without a user or role"):
+            response = context.client.post(
+                _BASE,
+                json={
+                    **_VALID_CREATE_DISCORD,
+                    "discord_allow_all_users": False,
+                    "discord_allowed_user_ids": [],
+                    "discord_allowed_role_ids": [],
+                },
+                headers=_auth(context),
+            )
+
+        with then("the invalid policy is explained"):
+            assert_that(response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_ENTITY))
+            assert_that(response.text, contains_string("at least one allowed user or role"))
+
+
+def test_patch_discord_agent_rejects_empty_restricted_user_policy():
+    with given([*_GIVEN, there_is_an_agent(platform=AgentPlatform.DISCORD)]) as context:
+        with when("I disable allow-all without configuring a user or role"):
+            response = context.client.patch(
+                f"{_BASE}/{context.agent.id}",
+                json={
+                    "discord_allow_all_users": False,
+                    "discord_allowed_user_ids": [],
+                    "discord_allowed_role_ids": [],
+                },
+                headers=_auth(context),
+            )
+
+        with then("the invalid policy is explained"):
+            assert_that(response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_ENTITY))
+            assert_that(response.json()["detail"], contains_string("at least one allowed user or role"))
 
 
 def test_patch_discord_token_requires_secret_management_permission():
@@ -1963,6 +2067,7 @@ def test_start_openclaw_discord_agent_materializes_all_routing_fields():
         config.allowed_channel_ids = ["channel-1"]
         config.allowed_user_ids = ["user-1"]
         config.allowed_role_ids = ["role-1"]
+        config.allow_all_users = False
         config.home_channel_id = "channel-1"
         repository.save_discord_config(config)
         k8s: MagicMock = context.injector.get(KubernetesClient)
@@ -1994,6 +2099,7 @@ def test_start_hermes_discord_open_policy_preserves_channel_restrictions():
         config.group_policy = DiscordGroupPolicy.OPEN
         config.guild_ids = ["guild-1"]
         config.allowed_channel_ids = ["channel-1"]
+        config.allow_all_users = False
         repository.save_discord_config(config)
         k8s: MagicMock = context.injector.get(KubernetesClient)
 
@@ -2491,6 +2597,7 @@ _GIVEN_WITH_HERMES_IMAGE = [
             "AGENT_LITELLM_BASE_URL": "http://litellm:4000",
             "API_EXTERNAL_URL": "https://api.test.com",
             "HERMES_IMAGE": "nousresearch/hermes-agent:v1.0",
+            "SKIP_SLACK_TOKEN_VALIDATION": "true",
         }
     ),
     prepare_injector(modules=[MockK8sModule(), MockLiteLLMModule()]),
@@ -2891,6 +2998,155 @@ def test_create_agent_with_valid_skill_assigns_it():
             assert_that(body["skills"][0]["name"], equal_to("My Skill"))
 
 
+def _publish_skill_version(client: TestClient, context, content: str) -> None:
+    """Draft -> update -> publish a new skill version through the public API."""
+    skill_base = f"/api/v1/organizations/{context.organization.id}/skills/{context.skill.id}"
+    client.post(f"{skill_base}/draft", headers=_auth(context))
+    client.patch(
+        f"{skill_base}/draft",
+        json={"files": [{"path": "SKILL.md", "content": content}]},
+        headers=_auth(context),
+    )
+    client.post(f"{skill_base}/draft/publish", headers=_auth(context))
+
+
+def test_create_agent_pins_skill_to_latest_by_default():
+    with given([*_GIVEN, there_is_a_skill(name="My Skill")]) as context:
+        client: TestClient = context.client
+        payload = {**_VALID_CREATE, "skill_ids": [str(context.skill.id)]}
+
+        with when("I create an agent with a skill and no explicit version"):
+            response = client.post(_BASE, json=payload, headers=_auth(context))
+
+        with then("the skill is pinned to its latest version and the read exposes it"):
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+            body = response.json()
+            assert_that(body["skills"][0]["version"], equal_to(1))
+            repository: AgentRepository = context.injector.get(AgentRepository)
+            from uuid import UUID
+
+            agent_skills = repository.get_skills_for_agent(UUID(body["id"]))
+            assert_that(agent_skills[0].pinned_version, equal_to(1))
+
+
+def test_create_agent_pins_skill_to_explicit_version():
+    with given([*_GIVEN, there_is_a_skill(name="My Skill")]) as context:
+        client: TestClient = context.client
+        _publish_skill_version(client, context, "# v2")
+
+        with when("I create an agent pinning the skill to version 1"):
+            payload = {
+                **_VALID_CREATE,
+                "skill_ids": [str(context.skill.id)],
+                "skill_versions": [{"skill_id": str(context.skill.id), "version": 1}],
+            }
+            response = client.post(_BASE, json=payload, headers=_auth(context))
+
+        with then("the skill is pinned to version 1 even though v2 is latest"):
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+            assert_that(response.json()["skills"][0]["version"], equal_to(1))
+
+
+def test_create_agent_with_invalid_skill_version_returns_404_and_leaves_no_partial_state():
+    with given([*_GIVEN, there_is_a_skill(name="My Skill")]) as context:
+        client: TestClient = context.client
+        payload = {
+            **_VALID_CREATE,
+            "skill_ids": [str(context.skill.id)],
+            "skill_versions": [{"skill_id": str(context.skill.id), "version": 99}],
+        }
+
+        with when("I create an agent pinning a version that was never published"):
+            response = client.post(_BASE, json=payload, headers=_auth(context))
+
+        with then("it returns 404 and no agent is persisted"):
+            assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
+            agents = client.get(_BASE, headers=_auth(context)).json()["items"]
+            assert_that(len(agents), equal_to(0))
+
+
+def test_create_agent_with_skill_pin_for_unassigned_skill_returns_400():
+    with given([*_GIVEN, there_is_a_skill(name="My Skill")]) as context:
+        client: TestClient = context.client
+        payload = {
+            **_VALID_CREATE,
+            "skill_ids": [],
+            "skill_versions": [{"skill_id": str(context.skill.id), "version": 1}],
+        }
+
+        with when("I create an agent pinning a skill it doesn't assign"):
+            response = client.post(_BASE, json=payload, headers=_auth(context))
+
+        with then("it returns 400"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+
+
+def test_update_agent_rejects_a_skill_that_is_added_and_removed_together():
+    with given([*_GIVEN, there_is_an_agent(), there_is_a_skill(name="Contradictory Skill")]) as context:
+        response = context.client.patch(
+            f"{_BASE}/{context.agent.id}",
+            json={
+                "skill_ids": [str(context.skill.id)],
+                "removed_skill_ids": [str(context.skill.id)],
+            },
+            headers=_auth(context),
+        )
+
+        assert_that(response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_ENTITY))
+
+
+def test_update_agent_re_pins_existing_skill_to_newer_version():
+    with given(
+        [
+            *_GIVEN,
+            there_is_an_agent(),
+            there_is_a_skill(name="My Skill"),
+            skill_is_assigned_to_agent(),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        _publish_skill_version(client, context, "# v2")
+
+        with when("I re-pin the skill to version 2"):
+            response = client.patch(
+                f"{_BASE}/{context.agent.id}",
+                json={"skill_versions": [{"skill_id": str(context.skill.id), "version": 2}]},
+                headers=_auth(context),
+            )
+
+        with then("the agent's read reflects the new pin"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(response.json()["skills"][0]["version"], equal_to(2))
+
+
+def test_update_agent_with_invalid_skill_pin_leaves_config_intact():
+    with given(
+        [
+            *_GIVEN,
+            there_is_an_agent(),
+            there_is_a_skill(name="My Skill"),
+            skill_is_assigned_to_agent(),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        original_name = client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context)).json()["name"]
+
+        with when("I update the agent name and pin a nonexistent version"):
+            response = client.patch(
+                f"{_BASE}/{context.agent.id}",
+                json={
+                    "name": "Renamed Agent",
+                    "skill_versions": [{"skill_id": str(context.skill.id), "version": 99}],
+                },
+                headers=_auth(context),
+            )
+
+        with then("it returns 404 and the name change was not applied"):
+            assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
+            current_name = client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context)).json()["name"]
+            assert_that(current_name, equal_to(original_name))
+
+
 def test_create_agent_with_skill_from_other_org_returns_404():
     with given([*_GIVEN, there_is_a_skill_for_another_org()]) as context:
         client: TestClient = context.client
@@ -2901,6 +3157,22 @@ def test_create_agent_with_skill_from_other_org_returns_404():
 
         with then("it returns 404"):
             assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
+
+
+def test_create_agent_skill_pin_from_other_org_does_not_reveal_version_existence():
+    with given([*_GIVEN, there_is_a_skill_for_another_org()]) as context:
+        client: TestClient = context.client
+        payload = {
+            **_VALID_CREATE,
+            "skill_ids": [str(context.other_org_skill.id)],
+            "skill_versions": [{"skill_id": str(context.other_org_skill.id), "version": 99}],
+        }
+
+        response = client.post(_BASE, json=payload, headers=_auth(context))
+
+        assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
+        assert_that(response.json()["detail"], contains_string("Skill"))
+        assert_that(response.json()["detail"], is_not(contains_string("Version")))
 
 
 def test_create_agent_with_unknown_skill_id_returns_404():
@@ -3340,7 +3612,9 @@ def test_start_agent_with_skill_includes_skills_json_in_configmap():
             assert_that(config_map.data, has_key("skills.json"))
             entries = _json.loads(config_map.data["skills.json"])
             assert_that(len(entries), equal_to(1))
-            assert_that(entries[0]["path"], equal_to("skill.md"))
+            # Files are stored relative to the skill root; root_dir is applied at mount
+            # time, so the workspace path carries the skill's own directory.
+            assert_that(entries[0]["path"], equal_to("mounted-skill/SKILL.md"))
 
 
 def test_start_agent_without_skills_has_no_skills_json_in_configmap():
@@ -3372,13 +3646,40 @@ def test_start_agent_with_skill_pointer_injects_pointer_into_tools_md():
         with when("I start the agent"):
             response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
 
-        with then("the ConfigMap TOOLS.md contains the auto-generated skill pointer"):
+        with then("the ConfigMap TOOLS.md contains the derived skill pointer"):
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
             config_map = k8s.create_config_map.call_args.args[1]
+            # Custom skills store no pointer: it is derived from the skill's name and
+            # entry path, so a rename can never leave a stale pointer behind.
             assert_that(
                 config_map.data["TOOLS.md"],
-                contains_string('You can use "Pointed Skill" skill in the ./skills folder'),
+                contains_string("For Pointed Skill: See ./skills/pointed-skill/SKILL.md"),
             )
+
+
+def test_start_agent_mounts_pinned_skill_version():
+    with given(
+        [
+            *_GIVEN,
+            there_is_an_agent(),
+            there_is_a_skill(name="Pinned Skill"),
+            skill_is_assigned_to_agent(),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        # Agent is pinned to v1 (assigned before v2 existed); publish v2 so a
+        # newer version exists that the pin must ignore.
+        _publish_skill_version(client, context, "# v2 content")
+        k8s: MagicMock = context.injector.get(KubernetesClient)
+
+        with when("I start the agent while a newer skill version exists"):
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("the mounted skills.json carries the pinned v1 content, not v2"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            config_map = k8s.create_config_map.call_args.args[1]
+            assert_that(config_map.data["skills.json"], contains_string("# Pinned Skill"))
+            assert_that(config_map.data["skills.json"], is_not(contains_string("# v2 content")))
 
 
 # --- aai-cli skills auto-attach from configured providers ---
@@ -3418,7 +3719,9 @@ def test_start_agent_auto_attaches_aai_cli_skill_for_configured_provider():
             assert_that(config_map.data, has_key("skills.json"))
             entries = _json.loads(config_map.data["skills.json"])
             assert_that(len(entries), equal_to(1))
-            assert_that(entries[0]["path"], equal_to("skill.md"))
+            # Built-ins share the aai-cli mount directory so their long-published
+            # pointer paths keep resolving.
+            assert_that(entries[0]["path"], equal_to("aai-cli/SKILL.md"))
             assert_that(config_map.data["TOOLS.md"], contains_string(_JIRA_POINTER))
 
 
@@ -4126,6 +4429,7 @@ _GIVEN_HERMES_WITH_FIRECRAWL = [
             "HERMES_IMAGE": "nousresearch/hermes-agent:v1.0",
             "AGENT_FIRECRAWL_BASE_URL": "http://firecrawl:3002",
             "AGENT_FIRECRAWL_API_KEY": "fc-platform-key",
+            "SKIP_SLACK_TOKEN_VALIDATION": "true",
         }
     ),
     prepare_injector(modules=[MockK8sModule(), MockLiteLLMModule()]),
@@ -5105,3 +5409,179 @@ def test_agent_configuration_override_history_retained_after_soft_delete():
             retained = override_repository.get_version(agent_id, context.organization.id, published["version"])
             assert retained is not None
             assert_that(retained.soul_md, equal_to(published["soul_md"]))
+
+
+# ---------------------------------------------------------------------------
+# Google Workspace (gog) integration
+# ---------------------------------------------------------------------------
+
+_GWS_CONTENT = {
+    "email": "user@example.com",
+    "services": ["gmail", "calendar"],
+    "scopes": [
+        "https://www.googleapis.com/auth/gmail.modify",
+        "https://www.googleapis.com/auth/gmail.settings.basic",
+        "https://www.googleapis.com/auth/gmail.settings.sharing",
+        "https://www.googleapis.com/auth/calendar",
+    ],
+    "refresh_token": "gws-refresh-token",
+    "client_id": "client-id.apps.googleusercontent.com",
+    "client_secret": "GOCSPX-secret",
+}
+
+
+def _configure_gws(client: TestClient, context, content: dict | None = None):
+    return client.patch(
+        f"{_BASE}/{context.agent.id}",
+        json={"secrets": [{"provider": "google_workspace", "content": content or _GWS_CONTENT}]},
+        headers=_auth(context),
+    )
+
+
+def test_patch_agent_accepts_google_workspace_secret():
+    """Covers the enum member, the content schema, and the DB check constraint."""
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+
+        with when("I configure a Google Workspace credential"):
+            response = _configure_gws(client, context)
+
+        with then("it is stored and listed without exposing its contents"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            providers = [s["provider"] for s in response.json()["secrets"]]
+            assert_that(providers, has_item("google_workspace"))
+            assert_that(response.text, is_not(contains_string("gws-refresh-token")))
+
+
+def test_patch_agent_rejects_unsupported_google_workspace_service():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+
+        with when("I ask for a service gog's v1 allowlist does not cover"):
+            response = _configure_gws(client, context, {**_GWS_CONTENT, "services": ["gmail", "youtube"]})
+
+        with then("it is rejected"):
+            assert_that(response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_CONTENT))
+
+
+def test_patch_agent_rejects_google_workspace_scopes_missing_selected_service():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+
+        with when("the recorded consent scopes do not cover the selected services"):
+            response = _configure_gws(
+                client,
+                context,
+                {
+                    **_GWS_CONTENT,
+                    "scopes": ["https://www.googleapis.com/auth/gmail.modify"],
+                },
+            )
+
+        with then("it is rejected"):
+            assert_that(response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_CONTENT))
+
+
+def test_start_agent_materializes_gog_env_and_setup_script():
+    import json as _json
+
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        k8s: MagicMock = context.injector.get(KubernetesClient)
+
+        with when("I start an agent with a Google Workspace credential"):
+            _configure_gws(client, context)
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("the pod secret carries everything gog needs to rebuild its state"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            secret = k8s.create_secret.call_args.args[1]
+            assert_that(secret.string_data["GOG_HOME"], equal_to("/home/node/.config/gogcli"))
+            assert_that(secret.string_data["GOG_KEYRING_BACKEND"], equal_to("file"))
+            assert_that(len(secret.string_data["GOG_KEYRING_PASSWORD"]), greater_than(0))
+            assert_that(secret.string_data["GOG_ACCOUNT_EMAIL"], equal_to("user@example.com"))
+            token = _json.loads(secret.string_data["GOG_TOKEN_JSON"])
+            assert_that(token["refresh_token"], equal_to("gws-refresh-token"))
+            assert_that(token["services"], equal_to(["gmail", "calendar"]))
+            client_json = _json.loads(secret.string_data["GOG_CLIENT_JSON"])
+            assert_that(client_json["web"]["client_id"], equal_to("client-id.apps.googleusercontent.com"))
+
+        with then("the setup script is mounted and the agent is told how to use gog"):
+            config_map = k8s.create_config_map.call_args.args[1]
+            assert_that(config_map.data, has_key("gog-setup.sh"))
+            assert_that(config_map.data["gog-setup.sh"], contains_string("gog auth tokens import -"))
+            assert_that(config_map.data["AGENTS.md"], contains_string("Google Workspace (gog)"))
+            assert_that(config_map.data["AGENTS.md"], contains_string("user@example.com"))
+
+
+def test_start_agent_gog_state_is_not_on_the_hermes_pvc():
+    """Hermes' PVC is /opt/data (where aai-cli lives); gog's state is deliberately
+    ephemeral, since it is rebuilt from the credential on every boot."""
+    with given([*_GIVEN_WITH_HERMES_IMAGE, there_is_an_agent(agent_type=AgentType.HERMES)]) as context:
+        client: TestClient = context.client
+        k8s: MagicMock = context.injector.get(KubernetesClient)
+
+        with when("I start a Hermes agent with a Google Workspace credential"):
+            _configure_gws(client, context)
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("GOG_HOME is under the container home, not the PVC"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            secret = k8s.create_secret.call_args.args[1]
+            assert_that(secret.string_data["GOG_HOME"], equal_to("/home/hermes/.config/gogcli"))
+            config_map = k8s.create_config_map.call_args.args[1]
+            assert_that(config_map.data, has_key("gog-setup.sh"))
+
+
+def test_start_agent_without_google_workspace_has_no_gog_artifacts():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        k8s: MagicMock = context.injector.get(KubernetesClient)
+
+        with when("I start an agent with no Google Workspace credential"):
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("no gog script or env is injected"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            config_map = k8s.create_config_map.call_args.args[1]
+            assert_that(config_map.data, is_not(has_key("gog-setup.sh")))
+            secret = k8s.create_secret.call_args.args[1]
+            assert_that(secret.string_data, is_not(has_key("GOG_TOKEN_JSON")))
+            assert_that(config_map.data["AGENTS.md"], is_not(contains_string("Google Workspace (gog)")))
+
+
+def test_start_agent_with_only_google_workspace_omits_aai_cli_policy():
+    """gog takes no --profile, so the aai-cli block must not claim to cover it."""
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        k8s: MagicMock = context.injector.get(KubernetesClient)
+
+        with when("Google Workspace is the agent's only integration"):
+            _configure_gws(client, context)
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("the aai-cli integrations block and config.toml are absent"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            config_map = k8s.create_config_map.call_args.args[1]
+            assert_that(config_map.data["AGENTS.md"], is_not(contains_string("Integrations (aai-cli)")))
+            assert_that(config_map.data, is_not(has_key("aai-cli-config.toml")))
+
+
+def test_start_agent_rejects_google_workspace_without_a_client():
+    """The credential must name the OAuth client its refresh token was issued under;
+    with no server-owned client configured either, starting has to fail loudly.
+
+    The empty client config is explicit: a developer's root .env may define real Google
+    client credentials, which would otherwise be backfilled and let this pass.
+    """
+    with given([*_GIVEN_WITHOUT_GOOGLE_CLIENT, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+
+        with when("the stored credential has no client id/secret"):
+            content = {k: v for k, v in _GWS_CONTENT.items() if k not in ("client_id", "client_secret")}
+            _configure_gws(client, context, content)
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("the start is rejected with a reconnect hint"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+            assert_that(response.json()["detail"], contains_string("Google Workspace credential"))

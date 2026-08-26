@@ -286,7 +286,7 @@ export function SharedCredentialDrawer({
                     draft={{ provider, content }}
                     namePrefix="shared-"
                     onFieldChange={(key, value) => setField(key, value)}
-                    onReposChange={(key, repos) => setField(key, repos)}
+                    onListChange={(key, values) => setField(key, values)}
                   />
                 </div>
               )}

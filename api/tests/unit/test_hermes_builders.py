@@ -105,6 +105,7 @@ def test_build_secret_hermes_discord_scopes_access_and_home_channel():
         ["channel-1"],
         ["user-1"],
         ["role-1"],
+        False,
         "channel-1",
         ["guild-1"],
     )
@@ -113,9 +114,32 @@ def test_build_secret_hermes_discord_scopes_access_and_home_channel():
     assert_that(secret.string_data["DISCORD_ALLOWED_CHANNELS"], equal_to("channel-1"))
     assert_that(secret.string_data["DISCORD_ALLOWED_USERS"], equal_to("user-1"))
     assert_that(secret.string_data["DISCORD_ALLOWED_ROLES"], equal_to("role-1"))
+    assert_that(secret.string_data["DISCORD_ALLOW_ALL_USERS"], equal_to("false"))
     assert_that(secret.string_data["DISCORD_GUILD_IDS"], equal_to("guild-1"))
     assert_that(secret.string_data["DISCORD_HOME_CHANNEL"], equal_to("channel-1"))
     assert_that(secret.string_data["DISCORD_ALLOW_BOTS"], equal_to("none"))
+
+
+def test_build_secret_hermes_discord_allows_users_with_channel_restrictions():
+    secret = build_secret_hermes_discord(
+        _AGENT_ID,
+        _ORG_ID,
+        _NS,
+        "Infra Sentinel",
+        "discord-token",
+        "key",
+        "http://litellm",
+        "api-key",
+        ["channel-1"],
+        [],
+        [],
+        True,
+        None,
+        ["guild-1"],
+    )
+
+    assert_that(secret.string_data["DISCORD_ALLOWED_CHANNELS"], equal_to("channel-1"))
+    assert_that(secret.string_data["DISCORD_ALLOW_ALL_USERS"], equal_to("true"))
 
 
 def test_build_hermes_config_sets_model_and_base_url():
@@ -123,6 +147,13 @@ def test_build_hermes_config_sets_model_and_base_url():
     assert_that(cfg["model"]["model"], equal_to("qwen3"))
     assert_that(cfg["model"]["base_url"], equal_to("http://litellm:4000"))
     assert_that(cfg["model"]["api_mode"], equal_to("chat_completions"))
+
+
+def test_build_hermes_config_enables_persistent_memory_for_scheduled_runs():
+    cfg = build_hermes_config("litellm/qwen3", "http://litellm:4000")
+
+    assert_that(cfg["memory"]["memory_enabled"], equal_to(True))
+    assert_that(cfg["memory"]["user_profile_enabled"], equal_to(True))
 
 
 def test_build_hermes_config_unauthorized_dm_behavior_is_ignore():
@@ -427,6 +458,15 @@ def test_build_hermes_deployment_mounts_opt_data_and_workspace():
     assert_that("/workspace" in mounts, equal_to(True))
 
 
+def test_build_hermes_deployment_restarts_a_circuit_breaker_paused_gateway():
+    dep = build_hermes_deployment(_AGENT_ID, _ORG_ID, _NS, "hermes:latest")
+
+    probe = dep.spec.template.spec.containers[0].liveness_probe
+    assert_that(probe.http_get.path, equal_to("/live"))
+    assert_that(probe.period_seconds, equal_to(60))
+    assert_that(probe.failure_threshold, equal_to(5))
+
+
 def test_build_hermes_deployment_workspace_is_pvc_backed():
     # /workspace must persist across restarts (AF-215): it is a subPath of the
     # per-agent PVC, not an ephemeral emptyDir — mirroring ocbw's persistent
@@ -554,7 +594,7 @@ def test_build_hermes_deployment_pod_carries_agent_component_label():
         image="registry.example.com/hermes:0.1.0",
     )
     pod_labels = dep.spec.template.metadata.labels
-    assert_that(pod_labels["agentfarm.io/component"], equal_to("agent"))
+    assert_that(pod_labels["agentbarn.io/component"], equal_to("agent"))
     # Selector must NOT include the new label, so existing agents keep matching.
     assert_that(
         dep.spec.selector.match_labels,

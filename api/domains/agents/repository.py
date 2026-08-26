@@ -1014,6 +1014,17 @@ class AgentRepository:
             )
             return list(session.exec(query).all())
 
+    def find_all_running(self) -> list[Agent]:
+        """Live Agents currently eligible for an operator lifecycle cutover."""
+        with Session(self.delegate.engine) as session:
+            query = (
+                select(Agent)
+                .where(col(Agent.deleted_at).is_(None))
+                .where(col(Agent.status) == AgentStatus.RUNNING)
+                .order_by(col(Agent.organization_id), col(Agent.created_at))
+            )
+            return list(session.exec(query).all())
+
     def find_all_for_org(self, org_id: UUID) -> list[Agent]:
         """Return all agents for an org — both live and deleted."""
         with Session(self.delegate.engine) as session:
@@ -1161,7 +1172,7 @@ class AgentRepository:
     def save_skills(self, skills: list[AgentSkill]) -> None:
         self.delegate.save_all(skills)
 
-    def add_skill(self, agent_id: UUID, skill_id: UUID) -> None:
+    def add_skill(self, agent_id: UUID, skill_id: UUID, *, pinned_version: int) -> None:
         with Session(self.delegate.engine) as session:
             existing = session.exec(
                 select(AgentSkill)
@@ -1169,7 +1180,20 @@ class AgentRepository:
                 .where(col(AgentSkill.skill_id) == skill_id)
             ).first()
             if existing is None:
-                session.add(AgentSkill(agent_id=agent_id, skill_id=skill_id))
+                session.add(AgentSkill(agent_id=agent_id, skill_id=skill_id, pinned_version=pinned_version))
+                session.commit()
+
+    def re_pin_skill(self, agent_id: UUID, skill_id: UUID, pinned_version: int) -> None:
+        """Point an existing assignment at a different skill version."""
+        with Session(self.delegate.engine) as session:
+            row = session.exec(
+                select(AgentSkill)
+                .where(col(AgentSkill.agent_id) == agent_id)
+                .where(col(AgentSkill.skill_id) == skill_id)
+            ).first()
+            if row is not None:
+                row.pinned_version = pinned_version
+                session.add(row)
                 session.commit()
 
     def remove_skill(self, agent_id: UUID, skill_id: UUID) -> None:

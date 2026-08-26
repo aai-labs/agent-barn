@@ -3,6 +3,12 @@ POSTGRES_PASSWORD=your_postgres_password
 POSTGRES_DB=your_database_name
 POSTGRES_PORT=5432
 
+# Required by host-run tools — `make migrate`, `make dev-api`, `make dev-worker`
+# — which read this directly; the config has no default and doesn't assemble
+# it from POSTGRES_* (api/core/config.py: db_connection_url). `./run.sh` doesn't
+# need this set correctly: compose overrides it to the in-network `db` hostname.
+DB_CONNECTION_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@localhost:${POSTGRES_PORT}/${POSTGRES_DB}
+
 API_PORT=8000
 ENVIRONMENT=local
 UI_APP_URL=http://localhost:3000
@@ -13,7 +19,14 @@ REDIS_PORT=6379
 REDIS_URL=redis://localhost:6379/0
 
 SECRET_SIGNING_KEY=replace_with_a_secure_random_value
-PLATFORM_ADMIN_CREDENTIALS=admin@example.com:replace_with_secure_password
+# The password must satisfy the API's own policy — at least 8 characters with an
+# uppercase letter, a lowercase letter and a digit (see
+# api/domains/auth/password_validation.py). Deliberately left non-compliant
+# (no uppercase, no digit) so startup fails with "500: Error while
+# initializing startup data" until you replace it — this is a real login
+# credential, not a value you want silently accepted as-is on a publicly
+# bound API.
+PLATFORM_ADMIN_CREDENTIALS=admin@example.com:replace_with_a_secure_password
 
 # Optional: if unset, email delivery is disabled and send attempts are logged. All three
 # are required for delivery. Transactional mail goes through Cloudflare Email Sending.
@@ -43,7 +56,7 @@ K8S_NAMESPACE=agent-farm
 STORAGE_CLASS=
 
 # Agents
-# Full image ref for agent pods, e.g. {REGISTRY_URL}/agentfarm-openclaw-base:{VERSION}
+# Full image ref for agent pods, e.g. {REGISTRY_URL}/agentbarn-openclaw-base:{VERSION}
 AGENT_IMAGE=
 # Fernet key for encrypting Slack tokens at rest. Generate with:
 #   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
@@ -65,3 +78,37 @@ OPENROUTER_API_KEY=
 # Comma-separated fnmatch globs limiting which OpenRouter models the picker offers,
 # e.g. "z-ai/glm-5.2,openai/gpt-5*". Empty offers the full catalogue.
 AGENT_MODEL_ALLOWLIST=
+
+# ── Local Kubernetes (k3d) dev environment ──────────────────────────────────
+# Only needed to run agents locally (`./run.sh` sets this up for you).
+# See README → "Local Kubernetes (k3d) dev environment".
+
+# Stable admin key for the local LiteLLM proxy, e.g. sk-$(openssl rand -hex 16).
+# LiteLLM encrypts the virtual keys it stores with this value, so changing it
+# between runs breaks agents created under the old key. Set once and leave it.
+LITELLM_MASTER_KEY=
+
+# Full image refs the agent pods request. Each tag must equal the matching
+# openclaw-base/VERSION and hermes-base/VERSION; docker/k3d/k3d-load-images.sh
+# (run automatically by ./run.sh) builds and imports under exactly these tags.
+# These supersede AGENT_IMAGE above, which the API no longer reads.
+OPENCLAW_IMAGE=
+HERMES_IMAGE=
+
+# GitHub PAT with read access to aai-labs/aai-cli — the base-image
+# build clones that repo.
+GH_TOKEN=
+
+# In-container path to the kubeconfig, for the API started by `./run.sh`.
+# ./run.sh sets this automatically. Leave empty if you're not using k3d.
+API_K8S_KUBECONFIG_PATH=
+
+# Optional. How the API inside Docker reaches LiteLLM; defaults to the compose
+# service (http://litellm:4000). LITELLM_BASE_URL above is host-facing
+# (127.0.0.1) and inside the container would resolve to the container itself.
+API_LITELLM_BASE_URL=
+
+# Optional. Host port the ingest API is published on for agent pods to push
+# telemetry to; defaults to 8001. (`make dev-api` takes API_DEV_PORT/INGEST_PORT
+# as make variables on the command line, not from here.)
+INGEST_PORT=

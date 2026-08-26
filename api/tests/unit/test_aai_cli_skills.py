@@ -1,11 +1,12 @@
-import io
 import json
-import zipfile
+from types import SimpleNamespace
+from uuid import uuid7
 
 from api.domains.agents.aai_cli_skills import (
     AAI_CLI_PROVIDER_SKILLS,
-    build_skills_manifest_from_zips,
-    build_zip,
+    AAI_CLI_ROOT_DIR,
+    build_skills_manifest,
+    root_relative_files,
 )
 
 _EXPECTED_PROVIDER_NAMES = {
@@ -13,8 +14,6 @@ _EXPECTED_PROVIDER_NAMES = {
     "Confluence",
     "GitHub",
     "Bitbucket",
-    "Gmail",
-    "Google Sheets",
     "Excel",
     "Zoho Mail",
     "Slack",
@@ -53,36 +52,89 @@ def test_each_provider_skill_has_non_empty_files():
             assert f["skill_content"].strip(), f"Empty content in {f['skill_file_path']} for {skill_def['name']}"
 
 
-def test_build_zip_produces_valid_zip():
-    skill_def = AAI_CLI_PROVIDER_SKILLS[0]
-    zip_bytes = build_zip(skill_def["files"])
-    buf = io.BytesIO(zip_bytes)
-    with zipfile.ZipFile(buf, "r") as zf:
-        names = set(zf.namelist())
-    expected = {f["skill_file_path"] for f in skill_def["files"]}
-    assert names == expected
-
-
-def test_build_skills_manifest_from_zips_returns_sorted_path_content():
-    # Build fake Skill objects using simple namespaces.
-    from types import SimpleNamespace
-
-    skills = []
+def test_each_provider_skill_entry_path_is_root_relative():
+    """entry_path addresses a file inside the skill, so it must not repeat root_dir."""
     for skill_def in AAI_CLI_PROVIDER_SKILLS:
-        zip_content = build_zip(skill_def["files"])
-        skills.append(SimpleNamespace(zip_content=zip_content))
+        entry = skill_def["entry_path"]
+        assert not entry.startswith(f"{AAI_CLI_ROOT_DIR}/"), f"{skill_def['name']} entry_path keeps its root prefix"
+        declared = {f["skill_file_path"] for f in skill_def["files"]}
+        assert f"{AAI_CLI_ROOT_DIR}/{entry}" in declared, f"{skill_def['name']} entry_path names no shipped file"
 
-    manifest_str = build_skills_manifest_from_zips(skills)
+
+def test_root_relative_files_strips_the_shared_mount_directory():
+    skill_def = AAI_CLI_PROVIDER_SKILLS[0]
+    files = root_relative_files(skill_def["files"])
+    assert [path for path, _ in files] == [
+        f["skill_file_path"].removeprefix(f"{AAI_CLI_ROOT_DIR}/") for f in skill_def["files"]
+    ]
+
+
+def _fake_skill(name: str, root_dir: str):
+    return SimpleNamespace(id=uuid7(), name=name, root_dir=root_dir)
+
+
+def _fake_files(paths_to_content: dict[str, str]):
+    return [SimpleNamespace(path=path, content=content) for path, content in paths_to_content.items()]
+
+
+def test_build_skills_manifest_returns_sorted_path_content():
+    skills = []
+    files_by_skill_id = {}
+    for skill_def in AAI_CLI_PROVIDER_SKILLS:
+        skill = _fake_skill(skill_def["name"], AAI_CLI_ROOT_DIR)
+        skills.append(skill)
+        files_by_skill_id[skill.id] = _fake_files(dict(root_relative_files(skill_def["files"])))
+
+    manifest_str, collisions = build_skills_manifest(skills, files_by_skill_id)
     manifest = json.loads(manifest_str)
 
+    assert collisions == []
     paths = [m["path"] for m in manifest]
     assert paths == sorted(paths), "Manifest entries should be sorted by path"
 
     for entry in manifest:
         assert set(entry.keys()) == {"path", "content"}, "Each manifest entry must have only 'path' and 'content'"
 
+    # The mounted path must still be root_dir + the stored relative path, i.e. exactly
+    # the paths the built-in tools_pointers have always referenced.
     expected = {
         f["skill_file_path"]: f["skill_content"] for skill_def in AAI_CLI_PROVIDER_SKILLS for f in skill_def["files"]
     }
     for entry in manifest:
         assert entry["content"] == expected[entry["path"]], f"Content mismatch for {entry['path']}"
+
+
+def test_build_skills_manifest_reports_colliding_paths():
+    """Two skills sharing a root_dir can claim one path; the loser must be reported
+    rather than silently overwriting the winner."""
+    first = _fake_skill("Alpha", AAI_CLI_ROOT_DIR)
+    second = _fake_skill("Beta", AAI_CLI_ROOT_DIR)
+    files_by_skill_id = {
+        first.id: _fake_files({"shared.md": "from alpha"}),
+        second.id: _fake_files({"shared.md": "from beta", "own.md": "kept"}),
+    }
+
+    manifest_str, collisions = build_skills_manifest([second, first], files_by_skill_id)
+    manifest = {entry["path"]: entry["content"] for entry in json.loads(manifest_str)}
+
+    # Order is by skill name, not call order, so the winner is deterministic.
+    assert manifest[f"{AAI_CLI_ROOT_DIR}/shared.md"] == "from alpha"
+    assert manifest[f"{AAI_CLI_ROOT_DIR}/own.md"] == "kept"
+    assert len(collisions) == 1
+    assert "shared.md" in collisions[0]
+    assert "Alpha" in collisions[0] and "Beta" in collisions[0]
+
+
+def test_build_skills_manifest_allows_same_path_under_different_roots():
+    alpha = _fake_skill("Alpha", "alpha")
+    beta = _fake_skill("Beta", "beta")
+    files_by_skill_id = {
+        alpha.id: _fake_files({"SKILL.md": "a"}),
+        beta.id: _fake_files({"SKILL.md": "b"}),
+    }
+
+    manifest_str, collisions = build_skills_manifest([alpha, beta], files_by_skill_id)
+    manifest = {entry["path"]: entry["content"] for entry in json.loads(manifest_str)}
+
+    assert collisions == []
+    assert manifest == {"alpha/SKILL.md": "a", "beta/SKILL.md": "b"}

@@ -61,7 +61,17 @@ Guarantee strength differs by platform. Slack on both runtimes enforces a fresh 
 
 Runtime configuration is generated at agent start, so a running agent keeps the gating it was started with until it is stopped and started again.
 
-Discord guild policy and channel restrictions are independent. An open guild policy allows the bot to operate in any guild containing it, while configured channel, user, and role restrictions continue to narrow access within those guilds in both runtimes.
+Discord guild, channel, and user policies are independent. User access defaults open within the configured guild and channel boundaries. When open user access is explicitly disabled, at least one user or role ID is required and both runtimes materialize those restrictions. An open guild policy allows the bot to operate in any guild containing it, while configured channel restrictions continue to narrow access within those guilds.
+
+## Platform failure recovery
+
+Hermes retries retryable platform connection failures with its bounded exponential backoff. If repeated failures open Hermes' platform circuit breaker, the agent's dedicated `/live` probe reports unhealthy and Kubernetes restarts the pod after approximately five minutes, allowing recoverable external configuration changes to take effect without operator intervention. A platform intentionally paused through `/platform pause` remains live and is not automatically restarted.
+
+## Hermes scheduled-run context
+
+Hermes scheduled runs are isolated sessions: they do not inherit Slack thread or interactive-session history unless a job explicitly supplies continuity context. They do load the agent's persistent `MEMORY.md` and `USER.md` stores into the system prompt, using the same enabled memory configuration as interactive runs. This contract requires Hermes `v2026.8.19` or newer and is verified inside the pinned base image because an API-side builder test alone cannot prove runtime behavior.
+
+Cron delivery is automatic. When a scheduled run has nothing actionable to deliver, its final response must be exactly `[SILENT]`; ordinary prose such as `Nothing to flag today.` is a deliverable message, not a private acknowledgement.
 
 ## Telemetry and costs
 
@@ -79,7 +89,7 @@ Every release's namespace and `needs:` entries are templated on a `NAMESPACE` en
 
 ## Observability
 
-`../../helm/monitoring/` deploys plain namespace-scoped Prometheus, Grafana, and Alertmanager charts into the release namespace — no operator, no CRDs, and no cluster-scoped RBAC, because the shared cluster only grants this project a namespace (the chart renders no RBAC at all: Prometheus and kube-state-metrics run under the tenant deploy ServiceAccount `<namespace>-user`, which already holds namespaced read; Grafana — the only ingress-exposed pod — runs with no API token mounted). Scrape topology: the API exposes `/metrics` on both processes (main `:8000` with probe gauges for database, agents-in-ERROR, and the OpenRouter key's remaining credit limit (`GET /key` with the inference key; `+Inf` when the key has no limit); ingest `:8001` with the tool-call counter), LiteLLM exposes `/metrics` on `:4000` via its `prometheus` callback, and every agent's healthz server serves `/metrics` on `:8081`, discovered through an own-namespace scrape config selecting the stable `agentfarm.io/component: agent` Service label; the Service's `app`/`agent-name`/`org-name` labels are relabeled onto every scraped series so an agent keeps one identity across all its pod generations. Alerting is declarative: alert rules in the chart values → Alertmanager → Slack `#alerts` webhook (injected from `SLACK_ALERTS_WEBHOOK_URL` into a Secret referenced via `slack_api_url_file`, never committed). Grafana is dashboards-only, provisioned from ConfigMaps in the chart and exposed via traefik ingress at `GRAFANA_HOST`.
+`../../helm/monitoring/` deploys plain namespace-scoped Prometheus, Grafana, and Alertmanager charts into the release namespace — no operator, no CRDs, and no cluster-scoped RBAC, because the shared cluster only grants this project a namespace (the chart renders no RBAC at all: Prometheus and kube-state-metrics run under the tenant deploy ServiceAccount `<namespace>-user`, which already holds namespaced read; Grafana — the only ingress-exposed pod — runs with no API token mounted). Scrape topology: the API exposes `/metrics` on both processes (main `:8000` with probe gauges for database, agents-in-ERROR, and the OpenRouter key's remaining credit limit (`GET /key` with the inference key; `+Inf` when the key has no limit); ingest `:8001` with the tool-call counter), LiteLLM exposes `/metrics` on `:4000` via its `prometheus` callback, and every agent's healthz server serves `/metrics` on `:8081`, discovered through an own-namespace scrape config selecting the stable `agentbarn.io/component: agent` Service label; the Service's `app`/`agent-name`/`org-name` labels are relabeled onto every scraped series so an agent keeps one identity across all its pod generations. Alerting is declarative: alert rules in the chart values → Alertmanager → Slack `#alerts` webhook (injected from `SLACK_ALERTS_WEBHOOK_URL` into a Secret referenced via `slack_api_url_file`, never committed). Grafana is dashboards-only, provisioned from ConfigMaps in the chart and exposed via traefik ingress at `GRAFANA_HOST`.
 
 ## Kubernetes client constraint
 
@@ -91,7 +101,7 @@ Kubernetes `stream()` and `portforward()` temporarily monkey-patch `ApiClient.re
 | ------------------------------- | ------------------------------------------------------------------------------- |
 | Runtime orchestration           | `../../api/domains/agents/service.py`                                                 |
 | Ingest process and routing      | `../../api/ingest_app.py`, `../../api/ingest_main.py`, `../../api/start.sh`                       |
-| Domain Event delivery workers   | `../../api/worker_app.py`, `../../api/domains/events/worker.py`, `../../api/domains/events/reconciliation.py`, `../../helm/agentfarm-api/templates/event-delivery-worker-deployment.yaml`, `../../helm/agentfarm-api/templates/event-delivery-reconciliation-cronjob.yaml` |
+| Domain Event delivery workers   | `../../api/worker_app.py`, `../../api/domains/events/worker.py`, `../../api/domains/events/reconciliation.py`, `../../helm/agentbarn-api/templates/event-delivery-worker-deployment.yaml`, `../../helm/agentbarn-api/templates/event-delivery-reconciliation-cronjob.yaml` |
 | Shared Kubernetes builders      | `../../api/domains/agents/builders/common.py`                                         |
 | Hermes builders                 | `../../api/domains/agents/builders/hermes.py`, `../../hermes-base/`                         |
 | OpenClaw builders               | `../../api/domains/agents/builders/openclaw.py`, `../../openclaw-base/`                     |

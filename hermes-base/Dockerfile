@@ -1,19 +1,38 @@
 # syntax=docker/dockerfile:1
+
+# Debian archive host — see openclaw-base/Dockerfile for the rationale. Must
+# carry both /debian and /debian-security. Override with:
+#   docker build --build-arg APT_MIRROR=mirror.csclub.uwaterloo.ca ...
+ARG APT_MIRROR=deb.debian.org
+
 FROM rust:1-slim-bookworm AS rust-build
+ARG APT_MIRROR
+RUN set -eu; \
+    if [ "$APT_MIRROR" != "deb.debian.org" ]; then \
+      sed -i "s|deb\.debian\.org|${APT_MIRROR}|g" /etc/apt/sources.list 2>/dev/null || true; \
+      sed -i "s|deb\.debian\.org|${APT_MIRROR}|g" /etc/apt/sources.list.d/*.sources 2>/dev/null || true; \
+    fi
 RUN apt-get update && apt-get install -y --no-install-recommends \
       git pkg-config libssl-dev ca-certificates && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
 RUN --mount=type=secret,id=gh_token \
     git clone --depth 1 \
-      "https://x-access-token:$(cat /run/secrets/gh_token)@github.com/aai-labs/agent-cli-tools.git" repo && \
+      "https://x-access-token:$(cat /run/secrets/gh_token)@github.com/aai-labs/aai-cli.git" repo && \
     cargo install --path repo --root /out --locked
 
-FROM nousresearch/hermes-agent:v2026.5.29.2
+FROM nousresearch/hermes-agent:v2026.8.19
+ARG APT_MIRROR
 
 COPY --from=rust-build /out/bin/ /usr/local/bin/
 
 ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright
+
+RUN set -eu; \
+    if [ "$APT_MIRROR" != "deb.debian.org" ]; then \
+      sed -i "s|deb\.debian\.org|${APT_MIRROR}|g" /etc/apt/sources.list 2>/dev/null || true; \
+      sed -i "s|deb\.debian\.org|${APT_MIRROR}|g" /etc/apt/sources.list.d/*.sources 2>/dev/null || true; \
+    fi
 
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     apt-get update && \
@@ -32,9 +51,28 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     && ln -sf /usr/bin/fdfind /usr/local/bin/fd \
     && rm -rf /var/lib/apt/lists/*
 
+# Upstream ships a newer libsqlite3 in /usr/local/lib than Debian's sqlite3
+# executable was compiled against. Keep the upstream library available to
+# Hermes, but make the CLI load Debian's matching library explicitly.
+COPY --chmod=0755 sqlite3-wrapper /usr/local/bin/sqlite3
+
 RUN uv pip install --python /opt/hermes/.venv playwright && \
     /opt/hermes/.venv/bin/python -m playwright install chromium --with-deps && \
     chmod -R o+rX /opt/playwright
+
+# gog (gogcli) — Google Workspace CLI used by the google_workspace integration. Pinned:
+# the OAuth scopes the API requests mirror this version's service map, and auth-state
+# formats have changed across releases.
+ARG GOG_VERSION=0.37.0
+RUN curl -fsSL "https://github.com/openclaw/gogcli/releases/download/v${GOG_VERSION}/gogcli_${GOG_VERSION}_linux_amd64.tar.gz" \
+      | tar -xz -C /usr/local/bin ./gog && \
+    chmod 755 /usr/local/bin/gog
+
+# GOG_HOME lives under /home/hermes so gog's state is rebuilt from the credential on
+# every boot rather than persisting. This directory has to be created explicitly: the
+# hermes user's home is /opt/data (the PVC), and /home is root-owned and empty upstream,
+# so the agent could not otherwise create anything here.
+RUN mkdir -p /home/hermes && chown hermes:hermes /home/hermes
 
 ARG CLOUD_CLIS=false
 ENV CLOUD_CLIS=${CLOUD_CLIS}

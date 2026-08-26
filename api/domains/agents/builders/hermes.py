@@ -196,6 +196,7 @@ def build_hermes_config_map(
     hermes_config: dict,
     aai_cli_config_toml: str | None = None,
     aai_cli_setup_sh: str | None = None,
+    gog_setup_sh: str | None = None,
     skills_json: str | None = None,
     platform: str = "slack",
 ) -> client.V1ConfigMap:
@@ -232,6 +233,8 @@ def build_hermes_config_map(
         data["aai-cli-config.toml"] = aai_cli_config_toml
     if aai_cli_setup_sh is not None:
         data["aai-cli-setup.sh"] = aai_cli_setup_sh
+    if gog_setup_sh is not None:
+        data["gog-setup.sh"] = gog_setup_sh
     if skills_json is not None:
         data["skills.json"] = skills_json
     return client.V1ConfigMap(
@@ -342,6 +345,7 @@ def build_secret_hermes_discord(
     allowed_channel_ids: list[str],
     allowed_user_ids: list[str],
     allowed_role_ids: list[str],
+    allow_all_users: bool,
     home_channel_id: str | None,
     guild_ids: list[str],
 ) -> client.V1Secret:
@@ -355,9 +359,7 @@ def build_secret_hermes_discord(
             "DISCORD_ALLOWED_USERS": ",".join(allowed_user_ids),
             "DISCORD_ALLOWED_ROLES": ",".join(allowed_role_ids),
             "DISCORD_GUILD_IDS": ",".join(guild_ids),
-            "DISCORD_ALLOW_ALL_USERS": str(
-                bool(guild_ids and not allowed_channel_ids and not allowed_user_ids and not allowed_role_ids)
-            ).lower(),
+            "DISCORD_ALLOW_ALL_USERS": str(allow_all_users).lower(),
             "DISCORD_HOME_CHANNEL": home_channel_id or _NO_DISCORD_HOME_CHANNEL,
             "DISCORD_HOME_CHANNEL_NAME": home_channel_id or "No Discord Home Channel",
             "DISCORD_ALLOW_BOTS": "none",
@@ -412,6 +414,16 @@ def build_hermes_deployment(
                                 initial_delay_seconds=30,
                                 period_seconds=15,
                                 failure_threshold=6,
+                            ),
+                            liveness_probe=client.V1Probe(
+                                http_get=client.V1HTTPGetAction(
+                                    path="/live",
+                                    port=8081,
+                                ),
+                                initial_delay_seconds=60,
+                                period_seconds=60,
+                                failure_threshold=5,
+                                timeout_seconds=5,
                             ),
                             env=[
                                 # The hermes process starts in its install dir

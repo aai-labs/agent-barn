@@ -6,7 +6,7 @@ Read before changing spend attribution, LiteLLM integration, cost summaries, del
 
 ## Role in the system
 
-Costs provides organization and per-agent spend views by querying LiteLLM and joining its key-based records to Agent Farm agents. Cost records are not persisted by the Costs domain.
+Costs provides organization and per-agent spend views by querying LiteLLM and joining its key-based records to Agent Barn agents. Cost records are not persisted by the Costs domain.
 
 ## Invariants
 

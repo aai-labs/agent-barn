@@ -1,5 +1,7 @@
 # Development and operations
 
+> **Naming note:** the product rebranded from Agent Farm to Agent Barn. Code and deployment identifiers were migrated in that rebrand (`agentbarn_*` metrics, `agentbarn.io` labels, `agentbarn-*` charts/releases/images). Only the Kubernetes namespaces deliberately keep the old name — `agent-farm`, `agent-farm-staging`, and their `<namespace>-user` ServiceAccounts — because renaming them would strand running workloads; treat those as stable identifiers, not branding. Rationale and layer-by-layer blast radius: [`../adr/2026-08-22-agent-barn-rebrand-with-frozen-namespaces.md`](../adr/2026-08-22-agent-barn-rebrand-with-frozen-namespaces.md).
+
 ## Install dependencies
 
 From the repository root:
@@ -17,14 +19,11 @@ API configuration is read from the repository root `.env`; tests may use `.env.s
 make db-up       # PostgreSQL only
 make dev-api     # product API on :8000
 make dev-ui      # UI on :3000
-make up          # full Docker stack, including the separately served Ingest app
-make down
-make restart
-make logs
-make clean       # remove stack volumes and orphans
+./run.sh         # full Docker stack (db/redis/api/worker/ui + k3d), including the separately served Ingest app
+./stop.sh        # stop it; ./stop.sh --clean also deletes the k3d cluster
 ```
 
-Use `make db-down`, `make db-logs`, and `make db-restart` for database lifecycle. Prefer repository Make targets over ad hoc equivalents.
+Use `make db-down`, `make db-logs`, and `make db-restart` for database lifecycle. Prefer `./run.sh`/`./stop.sh` for the full stack and repository Make targets for individual services over ad hoc equivalents.
 
 ## Database migrations
 
@@ -96,7 +95,7 @@ Documentation-only changes do not change a service image and do not require a se
 - Required GitHub Actions config: secrets `SLACK_ALERTS_WEBHOOK_URL` (incoming webhook for `#alerts`) and `GRAFANA_ADMIN_PASSWORD`; variable `GRAFANA_HOST` (DNS must resolve for the http01 challenge). The credits metric reuses the existing `OPENROUTER_API_KEY` secret (the API polls `GET /key` for the key's `limit_remaining`); for `OpenRouterCreditsLow` to be meaningful, set a credit limit on that key at openrouter.ai — an unlimited key reports `+Inf`.
 - The pinned prometheus and grafana chart dependencies are rebuilt locally with `helm dependency build helm/monitoring` (`Chart.lock` is committed, the fetched `charts/*.tgz` is gitignored).
 - `make check-monitoring` unit-tests the alert rules with promtool and parse-checks every dashboard panel query; run it after touching the alert rules in `helm/monitoring/values.yaml` or the dashboards (needs helm, docker, and the chart dependency built). CI runs it automatically on `helm/monitoring/**` changes (`.github/workflows/monitoring.yml`).
-- Agents that were already running before the monitoring deploy are invisible to Prometheus until stopped and started once: the `/metrics` sidecar script and the Service labels the agent scrape config relies on (`agentfarm.io/component`, `agent-name`, `org-name`) only apply when the API rebuilds the agent's resources in the start flow.
+- Agents that were already running before the monitoring deploy are invisible to Prometheus until stopped and started once: the `/metrics` sidecar script and the Service labels the agent scrape config relies on (`agentbarn.io/component`, `agent-name`, `org-name`) only apply when the API rebuilds the agent's resources in the start flow. When only the scrape label is missing (e.g. agents predating the agentfarm→agentbarn rebrand), no restart is needed — patch the Service labels in place, which does not disturb running pods: `kubectl -n <namespace> label svc -l agentfarm.io/component=agent agentbarn.io/component=agent --overwrite`.
 
 ## Operational safety
 

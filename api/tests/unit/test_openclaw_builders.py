@@ -89,7 +89,7 @@ def test_build_deployment_pod_carries_agent_component_label():
         image="registry.example.com/openclaw:0.4.0",
     )
     pod_labels = dep.spec.template.metadata.labels
-    assert_that(pod_labels["agentfarm.io/component"], equal_to("agent"))
+    assert_that(pod_labels["agentbarn.io/component"], equal_to("agent"))
     # Selector must NOT include the new label, so existing agents keep matching.
     assert_that(
         dep.spec.selector.match_labels,
@@ -122,6 +122,7 @@ def test_build_openclaw_config_overlay_discord_allowlists_guilds_with_mentions()
         "http://litellm:4000",
         guild_ids=["123", "456"],
         allowed_role_ids=["role-1"],
+        allow_all_users=False,
         home_channel_id="channel-1",
     )
 
@@ -138,6 +139,21 @@ def test_build_openclaw_config_overlay_discord_allowlists_guilds_with_mentions()
         overlay["agents"]["defaults"]["heartbeat"],
         equal_to({"target": "discord", "to": "channel:channel-1", "directPolicy": "block"}),
     )
+
+
+def test_build_openclaw_config_overlay_discord_allow_all_ignores_stored_operator_lists():
+    overlay = build_openclaw_config_overlay_discord(
+        "litellm/gpt-4o",
+        "http://litellm:4000",
+        guild_ids=["123"],
+        allowed_user_ids=["stale-user"],
+        allowed_role_ids=["stale-role"],
+        allow_all_users=True,
+    )
+
+    guild = overlay["channels"]["discord"]["guilds"]["123"]
+    assert_that("users" in guild, equal_to(False))
+    assert_that("roles" in guild, equal_to(False))
 
 
 def test_build_secret_discord_sets_runtime_token_and_platform():

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Deploy agent-farm to a Kubernetes cluster with helmfile.
+# Deploy Agent Barn to a Kubernetes cluster with helmfile.
 #
 # Reads all configuration from .env.deploy (copy .env.deploy.spec and fill it
 # in). Ships alongside helmfile.yaml.gotmpl and the helm/ charts; run it from that

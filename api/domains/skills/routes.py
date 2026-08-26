@@ -8,9 +8,14 @@ from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.utils import get_current_user, require_platform_admin
 from api.domains.skills.models import (
     SkillCreate,
+    SkillDetailRead,
+    SkillDraftRead,
+    SkillDraftUpdate,
     SkillFilter,
-    SkillRead,
+    SkillSummaryRead,
     SkillUpdate,
+    SkillVersionDetailRead,
+    SkillVersionRead,
     get_skill_filter,
 )
 from api.domains.skills.service import SkillService
@@ -20,7 +25,7 @@ skills_router = APIRouter(prefix="/organizations/{organization_id}/skills", tags
 platform_skills_router = APIRouter(prefix="/platform/skills", tags=["platform-skills"])
 
 
-@platform_skills_router.get("", response_model=list[SkillRead])
+@platform_skills_router.get("", response_model=list[SkillSummaryRead])
 def list_global_skills_for_platform_admin(
     _: Annotated[CurrentUserContext, Depends(require_platform_admin())],
     service: Annotated[SkillService, Injected(SkillService)],
@@ -28,7 +33,7 @@ def list_global_skills_for_platform_admin(
     return service.list_global_skills_for_platform_admin()
 
 
-@skills_router.post("", response_model=SkillRead, status_code=status.HTTP_201_CREATED)
+@skills_router.post("", response_model=SkillSummaryRead, status_code=status.HTTP_201_CREATED)
 def create_skill(
     data: SkillCreate,
     context: Annotated[CurrentUserContext, Depends(get_current_user())],
@@ -37,7 +42,7 @@ def create_skill(
     return service.create_skill(data, context)
 
 
-@skills_router.get("", response_model=PaginatedItems[SkillRead])
+@skills_router.get("", response_model=PaginatedItems[SkillSummaryRead])
 def list_skills(
     context: Annotated[CurrentUserContext, Depends(get_current_user())],
     service: Annotated[SkillService, Injected(SkillService)],
@@ -52,7 +57,7 @@ def list_skills(
     )
 
 
-@skills_router.get("/{skill_id}", response_model=SkillRead)
+@skills_router.get("/{skill_id}", response_model=SkillSummaryRead)
 def get_skill(
     skill_id: UUID,
     context: Annotated[CurrentUserContext, Depends(get_current_user())],
@@ -61,7 +66,17 @@ def get_skill(
     return service.get_skill(skill_id, context)
 
 
-@skills_router.patch("/{skill_id}", response_model=SkillRead)
+@skills_router.get("/{skill_id}/files", response_model=SkillDetailRead)
+def get_skill_files(
+    skill_id: UUID,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[SkillService, Injected(SkillService)],
+):
+    """The skill plus the file contents of its published version."""
+    return service.get_skill_detail(skill_id, context)
+
+
+@skills_router.patch("/{skill_id}", response_model=SkillSummaryRead)
 def update_skill(
     skill_id: UUID,
     data: SkillUpdate,
@@ -71,11 +86,93 @@ def update_skill(
     return service.update_skill(skill_id, data, context)
 
 
-@skills_router.delete("/{skill_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_skill(
+@skills_router.post("/{skill_id}/fork", response_model=SkillDetailRead, status_code=status.HTTP_201_CREATED)
+def fork_skill(
     skill_id: UUID,
     context: Annotated[CurrentUserContext, Depends(get_current_user())],
     service: Annotated[SkillService, Injected(SkillService)],
 ):
-    service.delete_skill(skill_id, context)
+    """Create an org-scoped custom skill seeded from a built-in's latest version,
+    with an in-flight draft so the author lands directly in the editor."""
+    return service.fork_skill(skill_id, context)
+
+
+@skills_router.get("/{skill_id}/versions", response_model=list[SkillVersionRead])
+def list_skill_versions(
+    skill_id: UUID,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[SkillService, Injected(SkillService)],
+):
+    return service.list_skill_versions(skill_id, context)
+
+
+@skills_router.get("/{skill_id}/versions/{version}", response_model=SkillVersionDetailRead)
+def get_skill_version(
+    skill_id: UUID,
+    version: int,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[SkillService, Injected(SkillService)],
+):
+    return service.get_skill_version_detail(skill_id, version, context)
+
+
+@skills_router.get("/{skill_id}/draft", response_model=SkillDraftRead)
+def get_skill_draft(
+    skill_id: UUID,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[SkillService, Injected(SkillService)],
+):
+    return service.get_skill_draft(skill_id, context)
+
+
+@skills_router.post("/{skill_id}/draft", response_model=SkillDraftRead, status_code=status.HTTP_201_CREATED)
+def start_skill_draft(
+    skill_id: UUID,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[SkillService, Injected(SkillService)],
+):
+    """Get-or-create the in-flight draft, seeded from the latest published version."""
+    return service.start_skill_draft(skill_id, context)
+
+
+@skills_router.patch("/{skill_id}/draft", response_model=SkillDraftRead)
+def update_skill_draft(
+    skill_id: UUID,
+    data: SkillDraftUpdate,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[SkillService, Injected(SkillService)],
+):
+    return service.update_skill_draft(skill_id, data, context)
+
+
+@skills_router.delete("/{skill_id}/draft", status_code=status.HTTP_204_NO_CONTENT)
+def discard_skill_draft(
+    skill_id: UUID,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[SkillService, Injected(SkillService)],
+):
+    service.discard_skill_draft(skill_id, context)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@skills_router.post("/{skill_id}/draft/publish", response_model=SkillSummaryRead, status_code=status.HTTP_201_CREATED)
+def publish_skill_draft(
+    skill_id: UUID,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[SkillService, Injected(SkillService)],
+):
+    return service.publish_skill_draft(skill_id, context)
+
+
+@skills_router.delete("/{skill_id}/versions/{version}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_skill_version(
+    skill_id: UUID,
+    version: int,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[SkillService, Injected(SkillService)],
+):
+    """Delete one immutable version from a skill's history. The currently published
+    version is protected while any agent is assigned the skill; the last remaining
+    version is never deletable."""
+    service.delete_skill_version(skill_id, version, context)
     return Response(status_code=status.HTTP_204_NO_CONTENT)

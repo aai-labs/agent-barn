@@ -7,7 +7,7 @@ import {
   mockPlatformSkill,
   mockCustomSkill,
   mockJiraSkill,
-  mockGmailSkill,
+  mockGoogleWorkspaceSkill,
   MOCK_PLATFORM_SKILL_ID,
   MOCK_BITBUCKET_SKILL_ID,
 } from "../pages/data-support/skill-data-support.po";
@@ -86,6 +86,7 @@ test.describe("Hire Dialog", () => {
           allowed_channel_ids: ["channel-1"],
           allowed_user_ids: ["user-1"],
           allowed_role_ids: ["987654321098765432"],
+          allow_all_users: false,
           home_channel_id: null,
           require_mention: true,
           group_policy: "allowlist",
@@ -99,13 +100,24 @@ test.describe("Hire Dialog", () => {
     await page.getByRole("button", { name: /continue/i }).click(); // platform-choice → Discord token
 
     await expect(page.getByText("Connect your Discord bot")).toBeVisible();
+    await expect(page.getByText("Enable required Gateway Intents")).toBeVisible();
+    await expect(page.getByText("Server Members Intent", { exact: true })).toBeVisible();
     await page.getByPlaceholder("Discord bot token").fill("discord-token");
     await page.getByPlaceholder("123456789012345678").first().fill("111111111111111111");
-    await page.getByPlaceholder("987654321098765432").fill("987654321098765432");
     await expect(page.getByRole("link", { name: /recommended install link/i })).toHaveAttribute(
       "href",
       /client_id=111111111111111111/,
     );
+    const allowAllUsers = page.getByRole("checkbox", { name: /allow all users/i });
+    await expect(allowAllUsers).toBeChecked();
+    await allowAllUsers.uncheck();
+    await expect(page.getByText(/add at least one allowed operator or role/i)).toBeVisible();
+    await page.getByRole("button", { name: /continue/i }).click();
+    await expect(page.getByText("Connect your Discord bot")).toBeVisible();
+    const allowedRoleIds = page.getByPlaceholder("987654321098765432");
+    await expect(allowedRoleIds).toBeVisible();
+    await allowedRoleIds.fill("987654321098765432");
+    await expect(page.getByText(/add at least one allowed operator or role/i)).not.toBeVisible();
     await page.getByRole("button", { name: /continue/i }).click();
 
     await expect(page.getByLabel("Name them")).toBeVisible();
@@ -116,6 +128,10 @@ test.describe("Hire Dialog", () => {
     await page.getByRole("button", { name: "Hire Aria" }).click();
     const body = (await createRequest).postDataJSON();
     expect(body.discord_allowed_role_ids).toEqual(["987654321098765432"]);
+    expect(body.discord_allow_all_users).toBe(false);
+    await expect(page.getByText("Hiring Aria…")).not.toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText("Set up Slack access")).not.toBeVisible();
+    await expect(page.getByText("Aria was hired successfully.")).toBeVisible();
   });
 
   test("should skip bot builder when choosing existing app", async ({ page }) => {
@@ -620,21 +636,69 @@ test.describe("Hire Dialog — Skills step", () => {
     expect(body.secrets.some((secret) => secret.provider === "slack")).toBe(false);
   });
 
-  test("selecting a gmail skill reveals the Google OAuth button", async ({ page }) => {
+  test("selecting a google workspace skill reveals the Google OAuth button", async ({ page }) => {
     await navigateToSkillsStep(page);
 
-    await page.getByText(mockGmailSkill.name, { exact: true }).click();
+    await page.getByText(mockGoogleWorkspaceSkill.name, { exact: true }).click();
 
     await expect(page.getByText("Required credentials", { exact: true })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Authenticate with Google" })).toBeVisible();
+    const authenticateButton = page.getByRole("button", { name: "Authenticate with Google" });
+    await expect(authenticateButton).toBeVisible();
+    await expect(authenticateButton).toBeDisabled();
   });
 
-  test("hire button is disabled when gmail credentials are incomplete", async ({ page }) => {
+  test("hire button is disabled when google workspace credentials are incomplete", async ({ page }) => {
     await navigateToSkillsStep(page);
 
-    await page.getByText(mockGmailSkill.name, { exact: true }).click();
+    await page.getByText(mockGoogleWorkspaceSkill.name, { exact: true }).click();
 
     await expect(page.getByRole("button", { name: /hire aria/i })).toBeDisabled();
+  });
+
+  test("locks Google scope controls and displays the connected email", async ({ page }) => {
+    await navigateToSkillsStep(page);
+
+    await page.getByText(mockGoogleWorkspaceSkill.name, { exact: true }).click();
+    await page.getByLabel("Gmail", { exact: true }).check();
+    await page.getByRole("radio", { name: "Full access", exact: true }).check();
+    await page.locator('input[placeholder^="1234567890"]').fill("client-id");
+    await page.locator('input[placeholder^="GOCSPX"]').fill("client-secret");
+
+    await page.context().route("**/fake-google-consent", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "text/html",
+        body: '<script>window.opener.postMessage({ type: "google-oauth", code: "auth-code" }, "*");</script>',
+      });
+    });
+    await page.route("**/api/v1/integrations/google/authorize-url*", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ authorize_url: "http://127.0.0.1:3003/fake-google-consent" }),
+      });
+    });
+    await page.route("**/api/v1/integrations/google/token", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          refresh_token: "refresh-token",
+          email: "alice@example.com",
+          granted_scopes: ["openid", "email"],
+        }),
+      });
+    });
+
+    const popupPromise = page.waitForEvent("popup");
+    await page.getByRole("button", { name: "Authenticate with Google" }).click();
+    await popupPromise;
+    await expect(page.getByRole("button", { name: "Waiting for Google…" })).toBeVisible();
+
+    await expect(page.getByText("✓ Connected as alice@example.com")).toBeVisible();
+    await expect(page.getByLabel("Gmail", { exact: true })).toBeDisabled();
+    await expect(page.getByRole("radio", { name: "Full access", exact: true })).toBeDisabled();
+    await expect(page.getByRole("button", { name: "Reconnect Google account" })).toBeEnabled();
   });
 
   test("required skill card is shown as locked-selected with 'Required by template' label", async ({ page }) => {

@@ -6,7 +6,7 @@ Read before introducing a domain, moving ownership between domains, or changing 
 
 ## Source map
 
-Agent Farm is a monorepo with four operational areas:
+Agent Barn is a monorepo with four operational areas:
 
 | Area           | Responsibility                                                                                         | Authoritative sources                                                        |
 | -------------- | ------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------- |

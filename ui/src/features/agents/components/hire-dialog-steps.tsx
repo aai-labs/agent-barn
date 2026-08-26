@@ -19,7 +19,7 @@ import { SHARED_CREDENTIAL_PROVIDER_LABELS } from "@/features/shared-credentials
 import { useSkills } from "@/features/skills/hooks/use-skills";
 import { SKILL_PROVIDER_LABELS } from "@/features/skills/utils";
 import type { Skill } from "@/features/skills/schemas";
-import { SkillSourceBadge } from "@/features/skills/components/skill-drawer";
+import { SkillSourceBadge } from "@/features/skills/components/skill-source-badge";
 
 import {
   INTEGRATION_PROVIDERS,
@@ -821,10 +821,14 @@ export function TelegramTokenStep({
 }
 
 export function DiscordTokenStep({
-  token, onTokenChange, applicationId, onApplicationIdChange, guildIds, onGuildIdsChange, channelIds, onChannelIdsChange, allowedUserIds, onAllowedUserIdsChange, allowedRoleIds, onAllowedRoleIdsChange, homeChannelId, onHomeChannelIdChange, showToken, onToggleToken, error,
+  token, onTokenChange, applicationId, onApplicationIdChange, guildIds, onGuildIdsChange, channelIds, onChannelIdsChange, allowAllUsers, onAllowAllUsersChange, allowedUserIds, onAllowedUserIdsChange, allowedRoleIds, onAllowedRoleIdsChange, homeChannelId, onHomeChannelIdChange, showToken, onToggleToken, error,
 }: {
-  token: string; onTokenChange: (v: string) => void; applicationId: string; onApplicationIdChange: (v: string) => void; guildIds: string; onGuildIdsChange: (v: string) => void; channelIds: string; onChannelIdsChange: (v: string) => void; allowedUserIds: string; onAllowedUserIdsChange: (v: string) => void; allowedRoleIds: string; onAllowedRoleIdsChange: (v: string) => void; homeChannelId: string; onHomeChannelIdChange: (v: string) => void; showToken: boolean; onToggleToken: () => void; error: string | null;
+  token: string; onTokenChange: (v: string) => void; applicationId: string; onApplicationIdChange: (v: string) => void; guildIds: string; onGuildIdsChange: (v: string) => void; channelIds: string; onChannelIdsChange: (v: string) => void; allowAllUsers: boolean; onAllowAllUsersChange: (v: boolean) => void; allowedUserIds: string; onAllowedUserIdsChange: (v: string) => void; allowedRoleIds: string; onAllowedRoleIdsChange: (v: string) => void; homeChannelId: string; onHomeChannelIdChange: (v: string) => void; showToken: boolean; onToggleToken: () => void; error: string | null;
 }) {
+  const restrictedAccessMissingIds = !allowAllUsers
+    && !allowedUserIds.split(",").some((id) => id.trim())
+    && !allowedRoleIds.split(",").some((id) => id.trim());
+
   return (
     <form autoComplete="off" className="flex flex-col gap-5" onSubmit={(e) => e.preventDefault()}>
       <div className="flex flex-col gap-3.5 p-4 rounded-2xl" style={{ border: "1px solid var(--line)", background: "var(--bg-soft)" }}>
@@ -833,15 +837,28 @@ export function DiscordTokenStep({
         <FormField label="Application ID" hint="Optional. Lets us generate the least-privilege install link."><input className="af-input font-mono text-[0.8125rem]" value={applicationId} onChange={(e) => onApplicationIdChange(e.target.value)} placeholder="123456789012345678" /></FormField>
         <FormField label="Allowed server IDs" hint="Comma-separated Discord server (guild) IDs. Leave blank to configure later through the API."><input className="af-input font-mono text-[0.8125rem]" value={guildIds} onChange={(e) => onGuildIdsChange(e.target.value)} placeholder="123456789012345678" /></FormField>
         <FormField label="Allowed channel IDs" hint="The channels this agent may read or post in."><input className="af-input font-mono text-[0.8125rem]" value={channelIds} onChange={(e) => onChannelIdsChange(e.target.value)} placeholder="123456789012345678" /></FormField>
-        <FormField label="Allowed operator IDs" hint="Optional for outbound-only agents; required for interactive Hermes agents."><input className="af-input font-mono text-[0.8125rem]" value={allowedUserIds} onChange={(e) => onAllowedUserIdsChange(e.target.value)} placeholder="123456789012345678" /></FormField>
-        <FormField label="Allowed role IDs" hint="Members with any listed Discord role may interact with the agent."><input className="af-input font-mono text-[0.8125rem]" value={allowedRoleIds} onChange={(e) => onAllowedRoleIdsChange(e.target.value)} placeholder="987654321098765432" /></FormField>
+        <label className="flex items-start gap-2 text-[0.8125rem]" style={{ color: "var(--ink-2)" }}>
+          <input type="checkbox" className="mt-0.5" checked={allowAllUsers} onChange={(e) => onAllowAllUsersChange(e.target.checked)} />
+          <span><b>Allow all users</b><br /><span className="text-[0.72rem]" style={{ color: "var(--ink-4)" }}>Anyone in an allowed server and channel may interact with this agent.</span></span>
+        </label>
+        {!allowAllUsers && (
+          <>
+            <FormField label="Allowed operator IDs" hint="Restricts interaction to these Discord user IDs."><input className="af-input font-mono text-[0.8125rem]" value={allowedUserIds} onChange={(e) => onAllowedUserIdsChange(e.target.value)} placeholder="123456789012345678" /></FormField>
+            <FormField label="Allowed role IDs" hint="Members with any listed Discord role may interact with the agent."><input className="af-input font-mono text-[0.8125rem]" value={allowedRoleIds} onChange={(e) => onAllowedRoleIdsChange(e.target.value)} placeholder="987654321098765432" /></FormField>
+            {restrictedAccessMissingIds && (
+              <div className="rounded-lg px-3 py-2 text-[0.75rem]" style={{ color: "var(--err)", background: "color-mix(in srgb, var(--err) 8%, transparent)" }}>
+                Add at least one allowed operator or role, or turn on Allow all users.
+              </div>
+            )}
+          </>
+        )}
         <FormField label="Alert destination channel ID" hint="Optional. Hermes posts scheduled and proactive updates here."><input className="af-input font-mono text-[0.8125rem]" value={homeChannelId} onChange={(e) => onHomeChannelIdChange(e.target.value)} placeholder="123456789012345678" /></FormField>
         {error && <div className="text-[0.8125rem]" style={{ color: "var(--err)" }}>{error}</div>}
       </div>
       <div className="flex flex-col gap-3 rounded-2xl p-4" style={{ border: "1px solid var(--line)", background: "var(--bg-soft)" }}>
         <div className="font-semibold text-[0.844rem]" style={{ color: "var(--ink)" }}>Before you connect</div>
         <NextStep n={1} label="Create a Discord application">In the <a href="https://discord.com/developers/applications" target="_blank" rel="noopener noreferrer" className="underline" style={{ color: "var(--ink-2)" }}>Discord Developer Portal ↗</a>, create an application and add a bot.</NextStep>
-        <NextStep n={2} label="Enable Message Content Intent">On the Bot page, enable Message Content Intent so the agent can receive mentions in channels.</NextStep>
+        <NextStep n={2} label="Enable required Gateway Intents">On the Bot page under <b>Privileged Gateway Intents</b>, enable <b>Message Content Intent</b>. If you configure allowed roles, also enable <b>Server Members Intent</b>.</NextStep>
         <NextStep n={3} label="Invite the bot">{applicationId.trim() ? <a href={`https://discord.com/oauth2/authorize?client_id=${applicationId.trim()}&scope=bot%20applications.commands&permissions=274878286912`} target="_blank" rel="noopener noreferrer" className="underline" style={{ color: "var(--ink-2)" }}>Open the recommended install link ↗</a> : "Paste the Application ID above to generate a recommended, least-privilege install link."}</NextStep>
       </div>
     </form>
@@ -1532,7 +1549,7 @@ export function SkillsStep({
    * functional setState, so successive calls in the same tick all read the same stale
    * value and the last one wins. The OAuth flow writes refreshToken, clientId and
    * clientSecret together, which silently discarded the token. */
-  function setFields(providerId: string, patch: Record<string, string>) {
+  function setFields(providerId: string, patch: Record<string, string | string[]>) {
     onSkillCredentialsChange(
       skillCredentials.map((c) =>
         c.provider === providerId
@@ -1759,9 +1776,9 @@ export function SkillsStep({
                     draft={draft}
                     showScopeNote
                     onFieldChange={(key, value) => setField(providerId, key, value)}
-                    onReposChange={(key, repos) => setRepos(providerId, key, repos)}
-                    onOAuthConnected={({ refreshToken, clientId, clientSecret }) => {
-                      setFields(providerId, { refreshToken, clientId, clientSecret });
+                    onListChange={(key, values) => setRepos(providerId, key, values)}
+                    onOAuthConnected={({ refreshToken, clientId, clientSecret, email, scopes }) => {
+                      setFields(providerId, { refreshToken, clientId, clientSecret, email, scopes });
                     }}
                   />
                 )}
@@ -1802,7 +1819,7 @@ export function IntegrationsStep({
   /** Apply several keys in ONE update — see the note on the sibling step: successive
    * single-key calls in the same tick overwrite each other, which dropped the OAuth
    * refresh token. */
-  function setFields(providerId: string, patch: Record<string, string>) {
+  function setFields(providerId: string, patch: Record<string, string | string[]>) {
     onChange(
       integrations.map((i) =>
         i.provider === providerId
@@ -1871,9 +1888,9 @@ export function IntegrationsStep({
                 draft={draft}
                 showScopeNote
                 onFieldChange={(key, value) => setField(draft.provider, key, value)}
-                onReposChange={(key, repos) => setRepos(draft.provider, key, repos)}
-                onOAuthConnected={({ refreshToken, clientId, clientSecret }) => {
-                  setFields(draft.provider, { refreshToken, clientId, clientSecret });
+                onListChange={(key, values) => setRepos(draft.provider, key, values)}
+                onOAuthConnected={({ refreshToken, clientId, clientSecret, email, scopes }) => {
+                  setFields(draft.provider, { refreshToken, clientId, clientSecret, email, scopes });
                 }}
               />
             )}
