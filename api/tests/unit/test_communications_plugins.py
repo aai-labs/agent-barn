@@ -1,5 +1,6 @@
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
+from typing import Any
 from unittest.mock import patch
 from uuid import uuid4
 
@@ -16,7 +17,11 @@ from api.domains.communications.plugins.base import InboundAdmissionContext, Pro
 from api.domains.communications.plugins.discord import DiscordPlatformPlugin
 from api.domains.communications.plugins.registry import PlatformPluginRegistry
 from api.domains.communications.plugins.slack import SlackPlatformPlugin
+from api.domains.communications.plugins.teams import TeamsPlatformPlugin
 from api.domains.communications.plugins.telegram import TelegramPlatformPlugin
+
+_TEAMS_BOT_ID = "28:c9e8c047-2a74-40a2-b28a-b162d5f5327c"
+_TEAMS_SERVICE_URL = "https://smba.trafficmanager.net/amer/"
 
 
 @dataclass
@@ -24,6 +29,7 @@ class ValidationConfig:
     skip_discord_token_validation: bool = True
     skip_slack_token_validation: bool = True
     skip_telegram_token_validation: bool = True
+    skip_teams_token_validation: bool = True
 
 
 def test_registry_lists_shipped_plugins_in_stable_order() -> None:
@@ -504,3 +510,160 @@ def test_telegram_enrich_inbound_lookup_failure_leaves_envelope_valid_with_ids_i
     assert enriched[0].sender.id == "42"
     assert enriched[0].sender.display_name is None
     assert enriched[0].location.display_name is None
+
+
+# --- Microsoft Teams ---------------------------------------------------------
+
+
+def _teams_activity(**overrides: Any) -> dict[str, Any]:
+    activity: dict[str, Any] = {
+        "type": "message",
+        "id": "1485983408511",
+        "timestamp": "2026-08-25T09:18:44.211Z",
+        "serviceUrl": _TEAMS_SERVICE_URL,
+        "channelId": "msteams",
+        "from": {
+            "id": "29:1XJKJMvc5GBtc2JwZq0oj8tHZmzrQgFmB39ATiQWA85g",
+            "name": "Megan Bowen",
+            "aadObjectId": "7faf8ab2-3d56-4244-b585-20c8a42ed2b8",
+        },
+        "conversation": {"conversationType": "personal", "id": "a:17I0kl9EkpE1O9PH5TWrzrLNwnWWcfrU"},
+        "recipient": {"id": _TEAMS_BOT_ID, "name": "Aria"},
+        "text": "Hello",
+        "channelData": {"tenant": {"id": "72f988bf-86f1-41af-91ab-2d7cd011db47"}},
+    }
+    activity.update(overrides)
+    return activity
+
+
+def _teams_channel_activity(**overrides: Any) -> dict[str, Any]:
+    return _teams_activity(
+        conversation={
+            "conversationType": "channel",
+            "id": "19:aebd0ad4d6ab42c8b9ed19c251c2fc37@thread.skype;messageid=1481567603816",
+        },
+        channelData={
+            "tenant": {"id": "72f988bf-86f1-41af-91ab-2d7cd011db47"},
+            "team": {"id": "19:aebd0ad4d6ab42c8b9ed19c251c2fc37@thread.skype"},
+            "channel": {"id": "19:aebd0ad4d6ab42c8b9ed19c251c2fc37@thread.skype"},
+        },
+        entities=[{"type": "mention", "mentioned": {"id": _TEAMS_BOT_ID, "name": "Aria"}, "text": "<at>Aria</at>"}],
+        **overrides,
+    )
+
+
+def _teams_plugin() -> TeamsPlatformPlugin:
+    return TeamsPlatformPlugin(ValidationConfig())
+
+
+def test_teams_descriptor_declares_webhook_ingress() -> None:
+    descriptor = _teams_plugin().descriptor
+
+    assert descriptor.key == "teams"
+    assert PlatformCapability.WEBHOOK_INGRESS in descriptor.capabilities
+
+
+def test_teams_normalizes_a_personal_message_as_a_dm() -> None:
+    plugin = _teams_plugin()
+    settings = plugin.settings_model.model_validate({"dm_policy": "open"})
+
+    envelopes = plugin.normalize_inbound(settings, _teams_activity())
+
+    assert len(envelopes) == 1
+    envelope = envelopes[0]
+    assert envelope.location.type == "DM"
+    assert envelope.location.id == "a:17I0kl9EkpE1O9PH5TWrzrLNwnWWcfrU"
+    assert envelope.provider_message_id == "1485983408511"
+    assert envelope.sender.id == "7faf8ab2-3d56-4244-b585-20c8a42ed2b8"
+    assert envelope.sender.display_name == "Megan Bowen"
+    assert envelope.text == "Hello"
+
+
+def test_teams_carries_service_url_so_replies_can_be_addressed() -> None:
+    plugin = _teams_plugin()
+    settings = plugin.settings_model.model_validate({"dm_policy": "open"})
+
+    envelope = plugin.normalize_inbound(settings, _teams_activity())[0]
+
+    assert envelope.provider_metadata["service_url"] == _TEAMS_SERVICE_URL
+    assert envelope.provider_metadata["conversation_id"] == "a:17I0kl9EkpE1O9PH5TWrzrLNwnWWcfrU"
+
+
+def test_teams_channel_message_strips_the_messageid_suffix_into_the_thread() -> None:
+    plugin = _teams_plugin()
+    settings = plugin.settings_model.model_validate({"group_policy": "open"})
+
+    envelope = plugin.normalize_inbound(settings, _teams_channel_activity())[0]
+
+    # Keeping ";messageid=" on the location id would fragment one channel into
+    # a separate conversation per thread.
+    assert envelope.location.type == "CHANNEL"
+    assert envelope.location.id == "19:aebd0ad4d6ab42c8b9ed19c251c2fc37@thread.skype"
+    assert envelope.location.thread_id == "1481567603816"
+
+
+def test_teams_collects_bot_mentions() -> None:
+    plugin = _teams_plugin()
+    settings = plugin.settings_model.model_validate({"group_policy": "open"})
+
+    envelope = plugin.normalize_inbound(settings, _teams_channel_activity())[0]
+
+    assert _TEAMS_BOT_ID in envelope.mentions
+
+
+def test_teams_falls_back_to_the_teams_user_id_when_aad_object_id_is_absent() -> None:
+    plugin = _teams_plugin()
+    settings = plugin.settings_model.model_validate({"dm_policy": "open"})
+    payload = _teams_activity()
+    payload["from"] = {"id": "29:onlyteamsid", "name": "Megan Bowen"}
+
+    envelope = plugin.normalize_inbound(settings, payload)[0]
+
+    assert envelope.sender.id == "29:onlyteamsid"
+
+
+def test_teams_ignores_non_message_activities() -> None:
+    plugin = _teams_plugin()
+    settings = plugin.settings_model.model_validate({"dm_policy": "open"})
+
+    assert plugin.normalize_inbound(settings, _teams_activity(type="conversationUpdate")) == []
+
+
+def test_teams_ignores_the_agents_own_echo() -> None:
+    plugin = _teams_plugin()
+    settings = plugin.settings_model.model_validate({"dm_policy": "open"})
+    payload = _teams_activity()
+    payload["from"] = {"id": _TEAMS_BOT_ID, "name": "Aria"}
+
+    assert plugin.normalize_inbound(settings, payload) == []
+
+
+def test_teams_dm_policy_off_drops_direct_messages() -> None:
+    plugin = _teams_plugin()
+    settings = plugin.settings_model.model_validate({"dm_policy": "off"})
+
+    assert plugin.normalize_inbound(settings, _teams_activity()) == []
+
+
+def test_teams_dm_allowlist_admits_only_listed_senders() -> None:
+    plugin = _teams_plugin()
+    allowed = plugin.settings_model.model_validate(
+        {"dm_policy": "allowlist", "dm_user_ids": ["7faf8ab2-3d56-4244-b585-20c8a42ed2b8"]}
+    )
+    blocked = plugin.settings_model.model_validate({"dm_policy": "allowlist", "dm_user_ids": ["someone-else"]})
+
+    assert len(plugin.normalize_inbound(allowed, _teams_activity())) == 1
+    assert plugin.normalize_inbound(blocked, _teams_activity()) == []
+
+
+def test_teams_group_allowlist_matches_the_stripped_channel_id() -> None:
+    plugin = _teams_plugin()
+    allowed = plugin.settings_model.model_validate(
+        {"group_policy": "allowlist", "channel_ids": ["19:aebd0ad4d6ab42c8b9ed19c251c2fc37@thread.skype"]}
+    )
+    blocked = plugin.settings_model.model_validate(
+        {"group_policy": "allowlist", "channel_ids": ["19:other@thread.skype"]}
+    )
+
+    assert len(plugin.normalize_inbound(allowed, _teams_channel_activity())) == 1
+    assert plugin.normalize_inbound(blocked, _teams_channel_activity()) == []
