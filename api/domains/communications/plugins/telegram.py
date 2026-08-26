@@ -7,6 +7,7 @@ import httpx
 from pydantic import Field
 
 from api.domains.communications.models import (
+    CommunicationPolicyDisposition,
     CommunicationSender,
     ConversationLocation,
     CredentialUniquenessScope,
@@ -15,6 +16,7 @@ from api.domains.communications.models import (
     PlatformCapability,
 )
 from api.domains.communications.plugins.base import (
+    InboundAdmissionResult,
     PlatformCredentials,
     PlatformPlugin,
     PlatformSettings,
@@ -128,51 +130,64 @@ class TelegramPlatformPlugin(PlatformPlugin):
         self,
         settings: PlatformSettings,
         payload: dict[str, Any],
-    ) -> list[NormalizedCommunicationEnvelope]:
+    ) -> InboundAdmissionResult:
         assert isinstance(settings, TelegramSettings)
         message = payload.get("message") or payload.get("channel_post")
         if not isinstance(message, dict):
-            return []
+            return InboundAdmissionResult(CommunicationPolicyDisposition.MALFORMED_PAYLOAD)
         chat = message.get("chat")
         sender = message.get("from") or {}
         if not isinstance(chat, dict) or not isinstance(sender, dict):
-            return []
+            return InboundAdmissionResult(CommunicationPolicyDisposition.MALFORMED_PAYLOAD)
+        if sender.get("is_bot"):
+            return InboundAdmissionResult(CommunicationPolicyDisposition.BOT_IGNORED)
         chat_id = str(chat.get("id") or "")
         sender_id = str(sender.get("id") or "")
         is_dm = chat.get("type") == "private"
         if is_dm:
             if settings.dm_policy == "off":
-                return []
+                return InboundAdmissionResult(CommunicationPolicyDisposition.USER_DENIED)
             if settings.dm_policy == "allowlist" and sender_id not in settings.allowed_user_ids:
-                return []
+                return InboundAdmissionResult(CommunicationPolicyDisposition.USER_DENIED)
         elif settings.group_policy == "allowlist" and chat_id not in settings.allowed_chat_ids:
-            return []
+            return InboundAdmissionResult(CommunicationPolicyDisposition.CHANNEL_DENIED)
         message_id = str(message.get("message_id") or "")
         if not chat_id or not message_id:
-            return []
+            return InboundAdmissionResult(CommunicationPolicyDisposition.MALFORMED_PAYLOAD)
         display_name = " ".join(
             part for part in (str(sender.get("first_name") or ""), str(sender.get("last_name") or "")) if part
         )
-        return [
-            NormalizedCommunicationEnvelope(
-                provider_message_id=message_id,
-                occurred_at=datetime.fromtimestamp(int(message.get("date") or 0), tz=UTC),
-                location=ConversationLocation(
-                    id=chat_id,
-                    type="DM" if is_dm else "CHANNEL",
-                    display_name=str(chat.get("title") or chat.get("username") or "") or None,
-                    thread_id=str(message.get("message_thread_id") or "") or None,
+        raw_date = message.get("date")
+        if raw_date is None:
+            return InboundAdmissionResult(CommunicationPolicyDisposition.MALFORMED_PAYLOAD)
+        try:
+            occurred_at = datetime.fromtimestamp(int(raw_date), tz=UTC)
+            update_id = int(payload.get("update_id") or 0)
+        except (TypeError, ValueError, OSError) as _:
+            return InboundAdmissionResult(CommunicationPolicyDisposition.MALFORMED_PAYLOAD)
+        return InboundAdmissionResult(
+            CommunicationPolicyDisposition.ACCEPTED,
+            (
+                NormalizedCommunicationEnvelope(
+                    provider_message_id=message_id,
+                    occurred_at=occurred_at,
+                    location=ConversationLocation(
+                        id=chat_id,
+                        type="DM" if is_dm else "CHANNEL",
+                        display_name=str(chat.get("title") or chat.get("username") or "") or None,
+                        thread_id=str(message.get("message_thread_id") or "") or None,
+                    ),
+                    sender=CommunicationSender(id=sender_id or None, display_name=display_name or None),
+                    text=str(message.get("text") or message.get("caption") or ""),
+                    reply_to_provider_message_id=(
+                        str(message.get("reply_to_message", {}).get("message_id"))
+                        if isinstance(message.get("reply_to_message"), dict)
+                        else None
+                    ),
+                    provider_metadata={"update_id": update_id},
                 ),
-                sender=CommunicationSender(id=sender_id or None, display_name=display_name or None),
-                text=str(message.get("text") or message.get("caption") or ""),
-                reply_to_provider_message_id=(
-                    str(message.get("reply_to_message", {}).get("message_id"))
-                    if isinstance(message.get("reply_to_message"), dict)
-                    else None
-                ),
-                provider_metadata={"update_id": int(payload.get("update_id") or 0)},
-            )
-        ]
+            ),
+        )
 
     def enrich_inbound(
         self,

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import enum
 from datetime import datetime
 from typing import Any
@@ -65,6 +67,42 @@ class CommunicationDeliveryStatus(str, enum.Enum):
     DEAD_LETTERED = "DEAD_LETTERED"
     CANCELLED = "CANCELLED"
     UNAVAILABLE = "UNAVAILABLE"
+
+
+class CommunicationPolicyDisposition(str, enum.Enum):
+    """The explicit result of provider payload admission.
+
+    A provider event can be observed without becoming a durable Communication
+    Delivery. Keeping that decision typed lets diagnostics explain why an event
+    stopped at the policy boundary instead of treating every empty envelope as
+    an indistinguishable success.
+    """
+
+    ACCEPTED = "accepted"
+    BOT_IGNORED = "bot_ignored"
+    MENTION_REQUIRED = "mention_required"
+    USER_DENIED = "user_denied"
+    CHANNEL_DENIED = "channel_denied"
+    MALFORMED_PAYLOAD = "malformed_payload"
+
+
+class CommunicationJournalStage(str, enum.Enum):
+    PROVIDER_OBSERVED = "provider_observed"
+    POLICY_ADMITTED = "policy_admitted"
+    QUEUED = "queued"
+    AGENT_CLAIMED = "agent_claimed"
+    MODEL_COMPLETED = "model_completed"
+    REPLY_QUEUED = "reply_queued"
+    PROVIDER_DELIVERY_ATTEMPTED = "provider_delivery_attempted"
+    PROVIDER_DELIVERED = "provider_delivered"
+    CONNECTION_CONNECTING = "connection_connecting"
+    CONNECTION_CONNECTED = "connection_connected"
+    CONNECTION_DEGRADED = "connection_degraded"
+    CONNECTION_ERROR = "connection_error"
+    RECONNECT_REQUESTED = "reconnect_requested"
+    RETRY_REQUESTED = "retry_requested"
+    DEAD_LETTERED = "dead_lettered"
+    RECOVERED = "recovered"
 
 
 class CommunicationConnection(BaseModel, table=True):
@@ -201,6 +239,58 @@ class CommunicationDelivery(BaseModel, table=True):
     envelope: dict[str, Any] = SqlField(sa_column=Column(JSONB, nullable=False))
 
 
+class CommunicationJournalEntry(BaseModel, table=True):
+    """Append-only, content-free operational history for one Connection.
+
+    This table intentionally stores only lifecycle facts and safe summaries.
+    Provider payloads, message text, credentials, and sender identity do not
+    belong in diagnostics history.
+    """
+
+    __tablename__: str = "communication_operation_journal"
+    __table_args__ = (
+        sa.CheckConstraint("attempt_number >= 0", name="ck_communication_journal_attempt_number"),
+        sa.Index(
+            "ix_communication_journal_connection_occurred",
+            "connection_id",
+            "occurred_at",
+        ),
+        sa.Index(
+            "ix_communication_journal_delivery_occurred",
+            "delivery_id",
+            "occurred_at",
+        ),
+        sa.Index(
+            "ix_communication_journal_agent_occurred",
+            "agent_id",
+            "occurred_at",
+        ),
+    )
+
+    organization_id: UUID = SqlField(nullable=False)
+    agent_id: UUID = SqlField(nullable=False)
+    connection_id: UUID = SqlField(nullable=False)
+    delivery_id: UUID | None = SqlField(default=None, nullable=True)
+    occurred_at: datetime = SqlField(
+        sa_type=sa.DateTime(timezone=True),  # type: ignore
+        nullable=False,
+    )
+    stage: CommunicationJournalStage = SqlField(
+        sa_column=Column(sa.String(64), nullable=False),
+    )
+    disposition: CommunicationPolicyDisposition | None = SqlField(
+        default=None,
+        sa_column=Column(sa.String(32), nullable=True),
+    )
+    attempt_number: int = SqlField(
+        default=0,
+        sa_column=Column(sa.Integer(), nullable=False, server_default="0"),
+    )
+    duration_ms: float | None = SqlField(default=None, nullable=True)
+    error_code: str | None = SqlField(default=None, nullable=True, max_length=100)
+    error_summary: str | None = SqlField(default=None, nullable=True, max_length=500)
+
+
 class CommunicationAttachment(PydanticBaseModel):
     id: str = Field(min_length=1, max_length=512)
     media_type: str = Field(min_length=1, max_length=255)
@@ -240,6 +330,76 @@ class AcceptedCommunicationRead(PydanticBaseModel):
     delivery_id: UUID
     status: CommunicationDeliveryStatus
     duplicate: bool = False
+
+
+class CommunicationJournalEntryRead(PydanticBaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    connection_id: UUID
+    delivery_id: UUID | None
+    occurred_at: datetime
+    stage: CommunicationJournalStage
+    disposition: CommunicationPolicyDisposition | None
+    attempt_number: int
+    duration_ms: float | None
+    error_code: str | None
+    error_summary: str | None
+
+
+class CommunicationPipelineCounts(PydanticBaseModel):
+    provider_observed: int = 0
+    policy_admitted: int = 0
+    queued: int = 0
+    agent_claimed: int = 0
+    model_completed: int = 0
+    reply_queued: int = 0
+    provider_delivered: int = 0
+    dead_lettered: int = 0
+
+
+class CommunicationDeliveryCounts(PydanticBaseModel):
+    total: int = 0
+    pending: int = 0
+    processing: int = 0
+    succeeded: int = 0
+    dead_lettered: int = 0
+    cancelled: int = 0
+    unavailable: int = 0
+
+
+class CommunicationLatencyRead(PydanticBaseModel):
+    sample_count: int = 0
+    average_ms: float | None = None
+    p50_ms: float | None = None
+    latest_ms: float | None = None
+
+
+class CommunicationDiagnosticsRead(PydanticBaseModel):
+    connection: CommunicationConnectionRead
+    provider_connectivity: ConnectionObservedStatus | None
+    end_to_end_health: str
+    pipeline: CommunicationPipelineCounts
+    delivery_counts: CommunicationDeliveryCounts
+    queue_depth: int
+    oldest_queued_age_seconds: float | None
+    latency: CommunicationLatencyRead
+    recent_failures: list[CommunicationJournalEntryRead]
+    latest_transitions: list[CommunicationJournalEntryRead]
+    window_start: datetime
+    window_end: datetime
+
+
+class CommunicationReconnectRead(PydanticBaseModel):
+    connection: CommunicationConnectionRead
+    requested_at: datetime
+
+
+class CommunicationRetryRead(PydanticBaseModel):
+    delivery_id: UUID
+    status: CommunicationDeliveryStatus
+    attempt_count: int
+    requested_at: datetime
 
 
 class RuntimeDeliveryRead(PydanticBaseModel):

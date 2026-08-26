@@ -14,8 +14,10 @@ from api.domains.communications.gateway_routes import (
     provider_webhook_router,
     runtime_communications_router,
 )
+from api.domains.communications.metrics import refresh_communication_metrics
 from api.domains.communications.processor import OutboundCommunicationProcessor
 from api.domains.communications.supervisor import PlatformIngressSupervisor
+from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 
 
 def create_communications_app(injector: Injector | None = None) -> FastAPI:
@@ -58,6 +60,7 @@ def create_communications_app(injector: Injector | None = None) -> FastAPI:
 
     @app.get("/metrics")
     async def metrics():
+        refresh_communication_metrics(injector.get(PostgresRepositoryDelegate).engine)
         return Response(
             content=render_metrics(REGISTRY, http_registry),
             media_type=CONTENT_TYPE_LATEST,

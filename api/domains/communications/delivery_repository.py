@@ -16,18 +16,30 @@ from api.domains.communications.models import (
     CommunicationDelivery,
     CommunicationDeliveryStatus,
     CommunicationDirection,
+    CommunicationJournalStage,
     ConversationLocation,
     NormalizedCommunicationEnvelope,
     OutboundCommunicationEnvelope,
     RuntimeDeliveryRead,
     RuntimeReplyCreate,
 )
+from api.domains.communications.operations import CommunicationOperationalRepository
 from api.domains.conversations.models import (
     AgentChatMessage,
     ConversationType,
     MessageDirection,
 )
+from api.domains.events.catalog import (
+    COMMUNICATION_DELIVERY_DEAD_LETTERED,
+    COMMUNICATION_DELIVERY_RECOVERED,
+    COMMUNICATION_DELIVERY_RETRY_REQUESTED,
+)
+from api.domains.events.models import ActorIdentity, ActorIdentityType, SubjectIdentity, SubjectIdentityType
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
+
+
+class CommunicationDeliveryRetryError(RuntimeError):
+    pass
 
 
 @inject
@@ -35,6 +47,7 @@ from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 @dataclass
 class CommunicationDeliveryRepository:
     delegate: PostgresRepositoryDelegate
+    operations: CommunicationOperationalRepository | None = None
 
     def accept_inbound(
         self,
@@ -117,6 +130,18 @@ class CommunicationDeliveryRepository:
                 envelope=envelope.model_dump(mode="json"),
             )
             session.add(delivery)
+            if self.operations is not None:
+                self.operations.stage_journal(
+                    session=session,
+                    organization_id=delivery.organization_id,
+                    agent_id=delivery.agent_id,
+                    connection_id=delivery.connection_id,
+                    delivery_id=delivery.id,
+                    stage=CommunicationJournalStage.QUEUED,
+                    attempt_number=1 if delivery.status == CommunicationDeliveryStatus.PENDING else 0,
+                    error_code=delivery.last_error_code,
+                    error_summary=delivery.last_error_message,
+                )
             session.commit()
             session.refresh(delivery)
             return AcceptedCommunicationRead(
@@ -163,6 +188,16 @@ class CommunicationDeliveryRepository:
             delivery.lease_expires_at = now + timedelta(seconds=lease_seconds)
             delivery.attempt_count += 1
             session.add(delivery)
+            if self.operations is not None:
+                self.operations.stage_journal(
+                    session=session,
+                    organization_id=delivery.organization_id,
+                    agent_id=delivery.agent_id,
+                    connection_id=delivery.connection_id,
+                    delivery_id=delivery.id,
+                    stage=CommunicationJournalStage.AGENT_CLAIMED,
+                    attempt_number=delivery.attempt_count,
+                )
             session.commit()
             session.refresh(delivery)
             return RuntimeDeliveryRead(
@@ -267,6 +302,16 @@ class CommunicationDeliveryRepository:
                 envelope=outbound.model_dump(mode="json"),
             )
             session.add(delivery)
+            if self.operations is not None:
+                self.operations.stage_journal(
+                    session=session,
+                    organization_id=delivery.organization_id,
+                    agent_id=delivery.agent_id,
+                    connection_id=delivery.connection_id,
+                    delivery_id=delivery.id,
+                    stage=CommunicationJournalStage.REPLY_QUEUED,
+                    attempt_number=1,
+                )
             session.commit()
             session.refresh(delivery)
             return delivery.id
@@ -311,6 +356,16 @@ class CommunicationDeliveryRepository:
             delivery.lease_expires_at = now + timedelta(seconds=lease_seconds)
             delivery.attempt_count += 1
             session.add(delivery)
+            if self.operations is not None:
+                self.operations.stage_journal(
+                    session=session,
+                    organization_id=delivery.organization_id,
+                    agent_id=delivery.agent_id,
+                    connection_id=delivery.connection_id,
+                    delivery_id=delivery.id,
+                    stage=CommunicationJournalStage.PROVIDER_DELIVERY_ATTEMPTED,
+                    attempt_number=delivery.attempt_count,
+                )
             session.commit()
             return delivery
 
@@ -386,7 +441,9 @@ class CommunicationDeliveryRepository:
             )
             delivery.provider_message_id = provider_message_id
             session.add(delivery)
+            self._stage_completion_journal(session, delivery, now=now)
             session.commit()
+            self._record_completion_metric(delivery)
             return True
 
     def complete_runtime_delivery(
@@ -422,8 +479,228 @@ class CommunicationDeliveryRepository:
                 error_message=error_message,
             )
             session.add(delivery)
+            self._stage_completion_journal(session, delivery, now=now)
             session.commit()
+            self._record_completion_metric(delivery)
             return True
+
+    def retry_dead_lettered(
+        self,
+        delivery_id: UUID,
+        *,
+        agent_id: UUID,
+        connection_id: UUID,
+        actor: ActorIdentity,
+    ) -> CommunicationDelivery:
+        """Requeue one terminal outbound row without creating a new message.
+
+        The delivery's idempotency key, message row, and provider envelope are
+        preserved. Resetting the in-row attempt counter opens a fresh bounded
+        retry window; the journal retains the complete prior attempt history.
+        """
+        now = datetime.now(UTC)
+        with Session(self.delegate.engine, expire_on_commit=False) as session:
+            delivery = session.exec(
+                select(CommunicationDelivery)
+                .join(
+                    CommunicationConnection,
+                    col(CommunicationConnection.id) == col(CommunicationDelivery.connection_id),
+                )
+                .where(
+                    col(CommunicationDelivery.id) == delivery_id,
+                    col(CommunicationDelivery.agent_id) == agent_id,
+                    col(CommunicationDelivery.connection_id) == connection_id,
+                    col(CommunicationDelivery.direction) == CommunicationDirection.OUTBOUND,
+                    col(CommunicationDelivery.status) == CommunicationDeliveryStatus.DEAD_LETTERED,
+                    col(CommunicationConnection.enabled).is_(True),
+                    col(CommunicationConnection.retired_at).is_(None),
+                )
+                .with_for_update()
+            ).one_or_none()
+            if delivery is None:
+                raise CommunicationDeliveryRetryError("Only an active dead-lettered outbound delivery can be retried")
+            connection = session.get(CommunicationConnection, delivery.connection_id)
+            if connection is None:
+                raise CommunicationDeliveryRetryError("Communication Connection is unavailable")
+            delivery.status = CommunicationDeliveryStatus.PENDING
+            delivery.attempt_count = 0
+            delivery.available_at = now
+            delivery.claimed_at = None
+            delivery.lease_expires_at = None
+            delivery.completed_at = None
+            delivery.provider_message_id = None
+            delivery.last_error_code = None
+            delivery.last_error_message = None
+            session.add(delivery)
+            if self.operations is not None:
+                self.operations.stage_journal(
+                    session=session,
+                    organization_id=delivery.organization_id,
+                    agent_id=delivery.agent_id,
+                    connection_id=delivery.connection_id,
+                    delivery_id=delivery.id,
+                    stage=CommunicationJournalStage.RETRY_REQUESTED,
+                    attempt_number=1,
+                )
+                self.operations.stage_event(
+                    session=session,
+                    event_name=COMMUNICATION_DELIVERY_RETRY_REQUESTED,
+                    organization_id=delivery.organization_id,
+                    actor=actor,
+                    subject=SubjectIdentity(
+                        type=SubjectIdentityType.AGENT,
+                        id=delivery.agent_id,
+                        organization_id=delivery.organization_id,
+                    ),
+                    payload={
+                        "organization_id": delivery.organization_id,
+                        "agent_id": delivery.agent_id,
+                        "connection_id": delivery.connection_id,
+                        "delivery_id": delivery.id,
+                        "direction": self._enum_value(delivery.direction),
+                        "attempt_number": 1,
+                        "actor_display": self._actor_display(actor),
+                        "subject_display": connection.display_name,
+                    },
+                    occurred_at=now,
+                )
+            session.commit()
+            session.refresh(delivery)
+            return delivery
+
+    def _stage_completion_journal(
+        self,
+        session: Session,
+        delivery: CommunicationDelivery,
+        *,
+        now: datetime,
+    ) -> None:
+        if self.operations is None:
+            return
+        if delivery.direction == CommunicationDirection.OUTBOUND:
+            stage = (
+                CommunicationJournalStage.PROVIDER_DELIVERED
+                if delivery.status == CommunicationDeliveryStatus.SUCCEEDED
+                else CommunicationJournalStage.PROVIDER_DELIVERY_ATTEMPTED
+            )
+        else:
+            stage = CommunicationJournalStage.MODEL_COMPLETED
+        self.operations.stage_journal(
+            session=session,
+            organization_id=delivery.organization_id,
+            agent_id=delivery.agent_id,
+            connection_id=delivery.connection_id,
+            delivery_id=delivery.id,
+            stage=stage,
+            attempt_number=delivery.attempt_count,
+            occurred_at=now,
+            error_code=delivery.last_error_code,
+            error_summary=delivery.last_error_message,
+        )
+        if delivery.status == CommunicationDeliveryStatus.DEAD_LETTERED:
+            self.operations.stage_journal(
+                session=session,
+                organization_id=delivery.organization_id,
+                agent_id=delivery.agent_id,
+                connection_id=delivery.connection_id,
+                delivery_id=delivery.id,
+                stage=CommunicationJournalStage.DEAD_LETTERED,
+                attempt_number=delivery.attempt_count,
+                occurred_at=now,
+                error_code=delivery.last_error_code,
+                error_summary=delivery.last_error_message,
+            )
+            self._stage_delivery_event(
+                session,
+                delivery,
+                event_name=COMMUNICATION_DELIVERY_DEAD_LETTERED,
+                occurred_at=now,
+            )
+        elif delivery.status == CommunicationDeliveryStatus.SUCCEEDED and self.operations.has_stage(
+            session,
+            delivery_id=delivery.id,
+            stage=CommunicationJournalStage.RETRY_REQUESTED,
+        ):
+            self.operations.stage_journal(
+                session=session,
+                organization_id=delivery.organization_id,
+                agent_id=delivery.agent_id,
+                connection_id=delivery.connection_id,
+                delivery_id=delivery.id,
+                stage=CommunicationJournalStage.RECOVERED,
+                attempt_number=delivery.attempt_count,
+                occurred_at=now,
+            )
+            self._stage_delivery_event(
+                session,
+                delivery,
+                event_name=COMMUNICATION_DELIVERY_RECOVERED,
+                occurred_at=now,
+            )
+
+    def _stage_delivery_event(
+        self,
+        session: Session,
+        delivery: CommunicationDelivery,
+        *,
+        event_name: str,
+        occurred_at: datetime,
+    ) -> None:
+        if self.operations is None:
+            return
+        connection = session.get(CommunicationConnection, delivery.connection_id)
+        subject_display = connection.display_name if connection is not None else "Communication Connection"
+        if event_name == COMMUNICATION_DELIVERY_DEAD_LETTERED:
+            payload = {
+                "organization_id": delivery.organization_id,
+                "agent_id": delivery.agent_id,
+                "connection_id": delivery.connection_id,
+                "delivery_id": delivery.id,
+                "direction": self._enum_value(delivery.direction),
+                "attempt_number": delivery.attempt_count,
+                "error_code": delivery.last_error_code,
+                "error_summary": delivery.last_error_message,
+                "actor_display": "Communications Runtime",
+                "subject_display": subject_display,
+            }
+        else:
+            payload = {
+                "organization_id": delivery.organization_id,
+                "agent_id": delivery.agent_id,
+                "connection_id": delivery.connection_id,
+                "delivery_id": delivery.id,
+                "direction": self._enum_value(delivery.direction),
+                "attempt_number": delivery.attempt_count,
+                "actor_display": "Communications Runtime",
+                "subject_display": subject_display,
+            }
+        self.operations.stage_event(
+            session=session,
+            event_name=event_name,
+            organization_id=delivery.organization_id,
+            actor=ActorIdentity(type=ActorIdentityType.SYSTEM, id="communications-runtime"),
+            subject=SubjectIdentity(
+                type=SubjectIdentityType.AGENT,
+                id=delivery.agent_id,
+                organization_id=delivery.organization_id,
+            ),
+            payload=payload,
+            occurred_at=occurred_at,
+        )
+
+    @staticmethod
+    def _actor_display(actor: ActorIdentity) -> str:
+        return "Communications Runtime" if actor.type == ActorIdentityType.SYSTEM else str(actor.id)
+
+    @staticmethod
+    def _enum_value(value: Any) -> str:
+        return str(getattr(value, "value", value))
+
+    @staticmethod
+    def _record_completion_metric(delivery: CommunicationDelivery) -> None:
+        from api.domains.communications.metrics import record_delivery_outcome
+
+        record_delivery_outcome(delivery)
 
     @classmethod
     def _apply_completion(
@@ -437,8 +714,8 @@ class CommunicationDeliveryRepository:
         error_message: str | None,
     ) -> None:
         delivery.lease_expires_at = None
-        delivery.last_error_code = error_code
-        delivery.last_error_message = cls._safe_error(error_message)
+        delivery.last_error_code = CommunicationOperationalRepository.safe_error_code(error_code)
+        delivery.last_error_message = CommunicationOperationalRepository.safe_error_summary(error_message)
         if succeeded:
             delivery.status = CommunicationDeliveryStatus.SUCCEEDED
             delivery.completed_at = now
@@ -532,9 +809,3 @@ class CommunicationDeliveryRepository:
         stored["sender"] = sender
         stored["location"] = location
         delivery.envelope = stored
-
-    @staticmethod
-    def _safe_error(message: str | None) -> str | None:
-        if message is None:
-            return None
-        return message[:500]

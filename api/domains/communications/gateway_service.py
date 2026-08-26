@@ -16,6 +16,8 @@ from api.domains.communications.models import (
     CommunicationConnection,
     CommunicationDeliveryStatus,
     CommunicationDirection,
+    CommunicationJournalStage,
+    CommunicationPolicyDisposition,
     NormalizedCommunicationEnvelope,
     PlatformCapability,
     ProcessingFeedbackStage,
@@ -23,8 +25,10 @@ from api.domains.communications.models import (
     RuntimeDeliveryResult,
     RuntimeReplyCreate,
 )
+from api.domains.communications.operations import CommunicationOperationalRepository
 from api.domains.communications.plugins.base import (
     InboundAdmissionContext,
+    InboundAdmissionResult,
     PlatformPlugin,
     PlatformSettings,
     ProcessingFeedbackContext,
@@ -45,6 +49,7 @@ class CommunicationsGatewayService:
     delivery_repository: CommunicationDeliveryRepository
     connection_repository: CommunicationConnectionRepository
     plugins: PlatformPluginRegistry
+    operations: CommunicationOperationalRepository | None = None
 
     def accept_inbound(
         self,
@@ -181,7 +186,22 @@ class CommunicationsGatewayService:
         settings: PlatformSettings,
         payload: dict[str, Any],
     ) -> list[AcceptedCommunicationRead]:
-        envelopes = self._admit_plugin_payload(connection.id, plugin, settings, payload)
+        self._record_journal(
+            connection,
+            CommunicationJournalStage.PROVIDER_OBSERVED,
+        )
+        admission = self._admit_plugin_payload(connection.id, plugin, settings, payload)
+        self._record_journal(
+            connection,
+            CommunicationJournalStage.POLICY_ADMITTED,
+            disposition=admission.disposition,
+        )
+        self._record_policy_metric(admission.disposition)
+        if admission.disposition != CommunicationPolicyDisposition.ACCEPTED:
+            return []
+        envelopes = list(admission)
+        if not envelopes:
+            return []
         if envelopes:
             envelopes = self._enrich_inbound(connection, plugin, settings, envelopes)
         accepted: list[AcceptedCommunicationRead] = []
@@ -286,18 +306,69 @@ class CommunicationsGatewayService:
         plugin: PlatformPlugin,
         settings: PlatformSettings,
         payload: dict[str, Any],
-    ) -> list[NormalizedCommunicationEnvelope]:
-        return plugin.admit_inbound(
-            settings,
-            payload,
-            context=InboundAdmissionContext(
-                connection_id=connection_id,
-                thread_is_agent_owned=lambda location: self.delivery_repository.thread_has_agent_state(
+    ) -> InboundAdmissionResult:
+        try:
+            result = plugin.admit_inbound(
+                settings,
+                payload,
+                context=InboundAdmissionContext(
                     connection_id=connection_id,
-                    location=location,
+                    thread_is_agent_owned=lambda location: self.delivery_repository.thread_has_agent_state(
+                        connection_id=connection_id,
+                        location=location,
+                    ),
                 ),
-            ),
+            )
+        except Exception as exc:
+            logger.warning(
+                "Communication payload admission failed for Connection %s (%s)",
+                connection_id,
+                type(exc).__name__,
+            )
+            return InboundAdmissionResult(CommunicationPolicyDisposition.MALFORMED_PAYLOAD)
+        if isinstance(result, InboundAdmissionResult):
+            return result
+        # Compatibility for third-party plugins written against AF-272's list
+        # return type. Shipped plugins use the typed result above.
+        envelopes = tuple(result or ())
+        return InboundAdmissionResult(
+            CommunicationPolicyDisposition.ACCEPTED if envelopes else CommunicationPolicyDisposition.MALFORMED_PAYLOAD,
+            envelopes,
         )
+
+    def _record_journal(
+        self,
+        connection: CommunicationConnection,
+        stage: CommunicationJournalStage,
+        *,
+        disposition: CommunicationPolicyDisposition | None = None,
+    ) -> None:
+        if self.operations is None:
+            return
+        organization_id = getattr(connection, "organization_id", None)
+        agent_id = getattr(connection, "agent_id", None)
+        if organization_id is None or agent_id is None:
+            return
+        try:
+            self.operations.record_journal(
+                organization_id=organization_id,
+                agent_id=agent_id,
+                connection_id=connection.id,
+                stage=stage,
+                disposition=disposition,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Communication journal write failed for Connection %s (%s)",
+                connection.id,
+                type(exc).__name__,
+            )
+
+    @staticmethod
+    def _record_policy_metric(disposition: CommunicationPolicyDisposition) -> None:
+        from api.domains.communications.metrics import record_policy_disposition
+
+        record_policy_disposition(disposition)
 
     def accept_provider_webhook(
         self,

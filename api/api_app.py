@@ -25,6 +25,7 @@ from api.domains.agent_settings.routes import agent_settings_router
 from api.domains.agents.routes import agents_router
 from api.domains.agents.service import AgentService
 from api.domains.auth.routes import auth_router
+from api.domains.communications.metrics import refresh_communication_metrics
 from api.domains.communications.routes import communications_router
 from api.domains.conversations.routes import conversations_router
 from api.domains.costs.routes import costs_router
@@ -130,6 +131,7 @@ def create_app(injector: Injector | None = None):
         refresh_database_gauge(db.engine)
         refresh_agents_in_error(agent_service.count_agents_in_error)
         refresh_openrouter_credits()
+        refresh_communication_metrics(db.engine)
         return Response(
             content=render_metrics(REGISTRY, PROBE_REGISTRY, http_registry),
             media_type=CONTENT_TYPE_LATEST,

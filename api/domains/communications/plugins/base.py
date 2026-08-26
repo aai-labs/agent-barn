@@ -1,7 +1,7 @@
 import hashlib
 import json
 from abc import ABC, abstractmethod
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
@@ -9,6 +9,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict
 
 from api.domains.communications.models import (
+    CommunicationPolicyDisposition,
     ConversationLocation,
     CredentialUniquenessScope,
     NormalizedCommunicationEnvelope,
@@ -58,6 +59,41 @@ class ProcessingFeedbackContext:
     location: ConversationLocation
     provider_message_id: str | None = None
     source_delivery_id: UUID | None = None
+
+
+@dataclass(frozen=True)
+class InboundAdmissionResult(Sequence[NormalizedCommunicationEnvelope]):
+    """Typed provider admission outcome with list-compatible envelopes.
+
+    The sequence behavior keeps existing plugin integrations source-compatible
+    while making an ignored or denied payload observable to the gateway and
+    diagnostics instead of silently returning an empty list.
+    """
+
+    disposition: CommunicationPolicyDisposition
+    envelopes: tuple[NormalizedCommunicationEnvelope, ...] = ()
+
+    def __iter__(self):
+        return iter(self.envelopes)
+
+    def __len__(self) -> int:
+        return len(self.envelopes)
+
+    def __getitem__(self, index):
+        return self.envelopes[index]
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, InboundAdmissionResult):
+            return self.disposition == other.disposition and self.envelopes == other.envelopes
+        if isinstance(other, Sequence):
+            return list(self.envelopes) == list(other)
+        return NotImplemented
+
+
+# Names used by callers that describe this boundary as normalization rather
+# than admission. They intentionally refer to the same value object.
+InboundNormalizationResult = InboundAdmissionResult
+InboundDisposition = CommunicationPolicyDisposition
 
 
 class PlatformPlugin(ABC):
@@ -151,9 +187,10 @@ class PlatformPlugin(ABC):
         self,
         settings: PlatformSettings,
         payload: dict[str, Any],
-    ) -> list[NormalizedCommunicationEnvelope]:
+    ) -> InboundAdmissionResult:
         """Verify/filter a provider-decoded event and map it to protocol envelopes."""
-        raise NotImplementedError(f"{self.key} does not implement inbound normalization")
+        del settings, payload
+        return InboundAdmissionResult(CommunicationPolicyDisposition.MALFORMED_PAYLOAD)
 
     def admit_inbound(
         self,
@@ -161,7 +198,7 @@ class PlatformPlugin(ABC):
         payload: dict[str, Any],
         *,
         context: InboundAdmissionContext,
-    ) -> list[NormalizedCommunicationEnvelope]:
+    ) -> InboundAdmissionResult:
         """Apply provider admission policy before durable delivery acceptance.
 
         Most plugins only need normalization. Plugins with conversation-scoped
