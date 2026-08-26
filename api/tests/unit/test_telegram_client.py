@@ -47,3 +47,18 @@ def test_get_chat_display_name_network_error():
         side_effect=httpx.ConnectError("timeout"),
     ):
         assert get_chat_display_name("123:ABC", "42") is None
+
+
+def test_get_chat_display_name_cache_does_not_cross_contaminate_different_bot_tokens():
+    """Telegram chat/user IDs are provider-global, not bot-scoped: two
+    different bot credentials resolving the same chat_id must not share a
+    cached name across unrelated Connections.
+    """
+    response_one = _resp({"ok": True, "result": {"type": "private", "first_name": "Bot One's Alice"}})
+    response_two = _resp({"ok": True, "result": {"type": "private", "first_name": "Bot Two's Alice"}})
+    with patch("httpx.request", side_effect=[response_one, response_two]):
+        first = get_chat_display_name("111:AAA", "42")
+        second = get_chat_display_name("222:BBB", "42")
+
+    assert first == "Bot One's Alice"
+    assert second == "Bot Two's Alice"

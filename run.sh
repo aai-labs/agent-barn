@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # One-command local dev stack: validates .env, brings up the k3d cluster +
 # LiteLLM, loads agent base images (skipping any already in the cluster),
-# runs migrations, then starts db/redis/api/worker/ui in Docker with hot
+# runs migrations, then starts db/redis/api/worker/communications/ui in Docker with hot
 # reload.
 #
 # Usage:
@@ -97,8 +97,8 @@ step "Running database migrations"
 ${COMPOSE} build api
 ${COMPOSE} run --rm --no-deps --workdir /app/api api python -m alembic upgrade head
 
-step "Building and starting api, worker, ui"
-${COMPOSE} up -d --build api worker ui
+step "Building and starting api, worker, communications, ui"
+${COMPOSE} up -d --build api worker communications ui
 
 # Prints a boxed row padded to the border width, measuring visible width only
 # (ANSI color/bold codes stripped before computing the pad) so values of any
@@ -113,10 +113,11 @@ box_line() {
 
 printf '\n'
 green "+------------------------------------------------------+"
-box_line "Agent Farm is running"
+box_line "Agent Barn is running"
 green "+------------------------------------------------------+"
 box_line "UI  -> $(printf '\033[1mhttp://localhost:3000\033[0m')"
 box_line "API -> $(printf '\033[1mhttp://localhost:%s\033[0m' "${API_PORT}")"
+box_line "Communications -> $(printf '\033[1mhttp://localhost:%s\033[0m' "${COMMUNICATIONS_PORT:-8002}")"
 green "+------------------------------------------------------+"
 printf '\n'
 echo "Log in with PLATFORM_ADMIN_CREDENTIALS from .env."

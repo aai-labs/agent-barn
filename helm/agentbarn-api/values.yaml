@@ -140,6 +140,19 @@ worker:
       memory: 512Mi
       cpu: 1000m
 
+communications:
+  enabled: true
+  replicaCount: 1
+  service:
+    port: 8002
+  resources:
+    requests:
+      memory: 256Mi
+      cpu: 100m
+    limits:
+      memory: 512Mi
+      cpu: 500m
+
 resources:
   requests:
     memory: 256Mi

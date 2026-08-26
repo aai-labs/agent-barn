@@ -50,8 +50,12 @@ class Config(BaseSettings):
     # Agent workloads and the API run in the same namespace, so the short Service
     # name is portable between staging and production.
     ingest_base_url: str = "http://agentbarn-api:8001/ingest/v1"
+    communications_base_url: str = (
+        "http://agentbarn-api-communications.agent-farm.svc.cluster.local:8002/communications/v1"
+    )
     skip_slack_token_validation: bool = False
     skip_telegram_token_validation: bool = False
+    skip_discord_token_validation: bool = False
     slack_directory_cache_ttl_seconds: int = 600
     # Socket timeout for Slack Web API calls. Large sweeps (e.g. users.list can be
     # ~320KB) are slow over a poor link; too tight a timeout cuts the body off

@@ -45,11 +45,12 @@ def list_channels(
 
 
 @conversations_router.get(
-    "/{agent_id}/conversations/channels/{channel_id}/messages",
+    "/{agent_id}/conversations/connections/{connection_id}/channels/{channel_id}/messages",
     response_model=ConversationThreadsPage,
 )
 def list_channel_messages(
     agent_id: UUID,
+    connection_id: UUID,
     channel_id: str,
     context: Annotated[CurrentUserContext, Depends(get_current_user())],
     service: Annotated[ConversationService, Injected(ConversationService)],
@@ -60,6 +61,7 @@ def list_channel_messages(
     return service.list_threads(
         agent_id=agent_id,
         context=context,
+        connection_id=connection_id,
         channel_id=channel_id,
         filter=filter,
         cursor=cursor,

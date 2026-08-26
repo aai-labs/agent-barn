@@ -240,6 +240,29 @@ def test_get_agent_cost_returns_200_and_data():
             assert_that(data["agent_id"], equal_to(agent_id))
 
 
+def test_deleted_agent_cost_attribution_remains_available_after_key_is_blocked():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+        litellm: MagicMock = context.injector.get(LiteLLMClient)
+        agent_id = str(context.agent.id)
+        litellm.get_key_info.return_value = {"spend": 5.0}
+
+        with when("I delete the Agent and request its historical cost"):
+            delete_response = client.delete(
+                f"/api/v1/organizations/{context.organization.id}/agents/{agent_id}",
+                headers=_auth(context),
+            )
+            response = client.get(f"{_BASE}/agents/{agent_id}", headers=_auth(context))
+
+        with then("the deleted Agent's spend remains attributable"):
+            assert_that(delete_response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(response.json()["status"], equal_to("deleted"))
+            assert_that(response.json()["total_cost"], equal_to(5.0))
+            litellm.block_key.assert_called_once_with(FAKE_LITELLM_KEY)
+            litellm.delete_key.assert_not_called()
+
+
 def test_get_costs_summary_requires_auth():
     with given(_GIVEN) as context:
         client: TestClient = context.client

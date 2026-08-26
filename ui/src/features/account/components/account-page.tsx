@@ -1,7 +1,6 @@
 "use client";
 
 import { ChangePasswordSection } from "./change-password-section";
-import { SlackTokenSection } from "./slack-token-section";
 
 export function AccountPage() {
   return (
@@ -18,7 +17,6 @@ export function AccountPage() {
 
       <div className="flex flex-col gap-6">
         <ChangePasswordSection />
-        <SlackTokenSection />
       </div>
     </div>
   );

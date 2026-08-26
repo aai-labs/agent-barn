@@ -2,7 +2,7 @@ COMPOSE := docker compose -f compose.yml
 
 .PHONY: \
 	setup run stop stop-clean \
-	dev-api dev-ingest dev-ui dev-worker reconcile seed-event-deliveries seed-agent-overrides migrate merge-heads rollback makemigrations test-api test-ui lint-ui check-ui coverage check-api check-migrations check-monitoring fix-api test check fix \
+	dev-api dev-ingest dev-communications dev-ui dev-worker reconcile seed-event-deliveries seed-agent-overrides migrate merge-heads rollback makemigrations test-api test-ui lint-ui check-ui coverage check-api check-migrations check-monitoring fix-api test check fix \
 	db-up db-down db-logs db-restart redis-up redis-down redis-logs
 
 # One-command local dev: validates .env, brings up k3d + LiteLLM, loads agent
@@ -35,26 +35,30 @@ setup:
 # in k8s). Same value as compose.
 INGEST_PORT ?= 8001
 INGEST_BASE_URL ?= http://host.docker.internal:$(INGEST_PORT)/ingest/v1
+COMMUNICATIONS_PORT ?= 8002
+COMMUNICATIONS_BASE_URL ?= http://host.docker.internal:$(COMMUNICATIONS_PORT)/communications/v1
 # Overridable so a second worktree can run its own stack without port clashes.
 API_DEV_PORT ?= 8000
 
-# Runs ingest alongside the main app, mirroring the container entrypoint
-# (api/start.sh) so host and Docker behave the same. Without ingest, agents
-# start and chat normally but their activity silently never persists — the
-# worst failure mode to leave to a second, easily-forgotten command.
-# The trap kills both on Ctrl-C; a stray listener on $(INGEST_PORT) otherwise
-# breaks the next run confusingly.
+# Runs Ingest and Communications alongside the main app so native development
+# has the same service topology as Docker and Helm. The trap kills every child
+# on Ctrl-C; stray listeners otherwise break the next run confusingly.
 dev-api:
 	@cd api && \
 	trap 'kill 0' EXIT INT TERM; \
 	uv run python -m fastapi dev ingest_main.py --host 0.0.0.0 --port $(INGEST_PORT) & \
-	INGEST_BASE_URL=$(INGEST_BASE_URL) uv run python -m fastapi dev main.py --host 0.0.0.0 --port $(API_DEV_PORT)
+	uv run python -m fastapi dev communications_main.py --host 0.0.0.0 --port $(COMMUNICATIONS_PORT) & \
+	INGEST_BASE_URL=$(INGEST_BASE_URL) COMMUNICATIONS_BASE_URL=$(COMMUNICATIONS_BASE_URL) uv run python -m fastapi dev main.py --host 0.0.0.0 --port $(API_DEV_PORT)
 
 # Ingest on its own — `make dev-api` already starts it; use this to run or
 # restart the telemetry sink independently.
 # --host 0.0.0.0 is required: the default loopback bind is unreachable from pods.
 dev-ingest:
 	cd api && uv run python -m fastapi dev ingest_main.py --host 0.0.0.0 --port $(INGEST_PORT)
+
+# Communications on its own — `make dev-api` already starts it.
+dev-communications:
+	cd api && uv run python -m fastapi dev communications_main.py --host 0.0.0.0 --port $(COMMUNICATIONS_PORT)
 
 dev-ui:
 	cd ui && pnpm dev
@@ -141,7 +145,7 @@ fix-api:
 
 # Docker commands
 #
-# The full app stack (db/redis/api/worker/ui + k3d cluster) is run via
+# The full app stack (db/redis/api/worker/communications/ui + k3d cluster) is run via
 # ./run.sh and ./stop.sh at the repo root, not make targets — see README.
 # The db/redis-only targets below remain for the native dev-* workflow.
 

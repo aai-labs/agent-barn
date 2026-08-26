@@ -173,7 +173,7 @@ function GeneralPanel() {
           <button className="af-btn af-btn-sm" style={{ background: "var(--ink)", borderColor: "var(--ink)", color: "var(--bg-elev)" }}>
             Slack
           </button>
-          <button className="af-btn af-btn-sm">Teams</button>
+          <button className="af-btn af-btn-sm">Discord</button>
         </div>
       </Field>
       <div className="mt-6">
@@ -446,4 +446,3 @@ function AdvancedPanel() {
     </div>
   );
 }
-

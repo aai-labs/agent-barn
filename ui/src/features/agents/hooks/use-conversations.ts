@@ -6,7 +6,7 @@ import { api } from "@/shared/api";
 import { useOrganizationApiBase } from "@/features/organizations/hooks/use-organization-api-base";
 
 import {
-  ConversationChannel,
+  type ConversationChannel,
   ConversationChannelSchema,
   ConversationThreadsPage,
   ConversationThreadsPageSchema,
@@ -45,13 +45,13 @@ export function useConversationChannels(agentId: string) {
 
 export function useChannelMessages(
   agentId: string,
-  channelId: string | null,
+  channel: ConversationChannel | null,
   filters: ConversationsFiltersKey,
 ) {
   const orgApiBase = useOrganizationApiBase();
   const query = useInfiniteQuery({
-    queryKey: channelId
-      ? agentsKey.conversationMessages(agentId, channelId, filters)
+    queryKey: channel
+      ? agentsKey.conversationMessages(agentId, channel.connectionId, channel.channelId, filters)
       : ["disabled-conversation-messages"],
     queryFn: async ({ pageParam }) => {
       const params = new URLSearchParams();
@@ -65,7 +65,7 @@ export function useChannelMessages(
         params.set("before_id", pageParam.beforeId);
       }
       const response = await api.get<ConversationThreadsPage>(
-        `${orgApiBase}/agents/${agentId}/conversations/channels/${channelId}/messages?${params.toString()}`,
+        `${orgApiBase}/agents/${agentId}/conversations/connections/${channel?.connectionId}/channels/${encodeURIComponent(channel?.channelId ?? "")}/messages?${params.toString()}`,
         { schema: ConversationThreadsPageSchema },
       );
       return response.data;
@@ -73,7 +73,7 @@ export function useChannelMessages(
     initialPageParam: null as ConversationsCursor | null,
     getNextPageParam: (lastPage) =>
       lastPage.hasMore ? lastPage.nextCursor : undefined,
-    enabled: !!agentId && !!channelId,
+    enabled: Boolean(agentId && channel),
   });
 
   return query;

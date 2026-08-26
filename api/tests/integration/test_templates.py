@@ -1066,9 +1066,6 @@ def test_update_template_does_not_touch_agent_pins():
                 _AGENTS_BASE,
                 json={
                     "name": "Pinned Agent",
-                    "platform": "slack",
-                    "slack_bot_token": "xoxb-token",
-                    "slack_app_token": "xapp-1-token",
                     "template_key": "test-template",
                 },
                 headers=_auth(context),
@@ -1624,9 +1621,6 @@ def test_platform_template_update_clones_the_new_platform_snapshot_and_preserves
                 _AGENTS_BASE,
                 json={
                     "name": "Pinned Manual Agent",
-                    "platform": "slack",
-                    "slack_bot_token": "xoxb-token",
-                    "slack_app_token": "xapp-1-token",
                     "template_key": "manual",
                     "skill_ids": [str(baseline_skill.id)],
                 },
@@ -1965,9 +1959,6 @@ def test_agent_repin_moves_only_that_agent():
     ) as context:
         client: TestClient = context.client
         create_payload = {
-            "platform": "slack",
-            "slack_bot_token": "xoxb-token",
-            "slack_app_token": "xapp-1-token",
             "template_key": "shared",
         }
 
@@ -1982,8 +1973,6 @@ def test_agent_repin_moves_only_that_agent():
                 json={
                     **create_payload,
                     "name": "Second",
-                    "slack_bot_token": "xoxb-token-2",
-                    "slack_app_token": "xapp-1-token-2",
                 },
                 headers=_auth(context),
             ).json()

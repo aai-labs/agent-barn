@@ -1,4 +1,6 @@
 import hashlib
+import json
+from typing import Any
 
 from api.infrastructure.http import resilient_request
 from api.infrastructure.shared.cache import cached
@@ -32,6 +34,47 @@ class DiscordClient:
             return body if isinstance(body, dict) else None
         except Exception:
             return None
+
+    def get_current_bot(self) -> dict[str, Any]:
+        body = self._get("/users/@me", label="Discord get current bot")
+        if not body or not body.get("id"):
+            raise ValueError("Discord bot token is invalid")
+        return body
+
+    def get_gateway_url(self) -> str:
+        body = self._get("/gateway/bot", label="Discord get gateway")
+        if not body or not body.get("url"):
+            raise ValueError("Discord bot cannot open a Gateway session")
+        return str(body["url"])
+
+    def send_message(self, channel_id: str, text: str, *, reply_to_id: str | None = None) -> str:
+        payload: dict[str, Any] = {
+            "content": text,
+            "allowed_mentions": {"parse": []},
+        }
+        if reply_to_id:
+            payload["message_reference"] = {
+                "message_id": reply_to_id,
+                "channel_id": channel_id,
+                "fail_if_not_exists": False,
+            }
+        response = resilient_request(
+            "POST",
+            f"{_BASE}/channels/{channel_id}/messages",
+            headers={
+                "Authorization": f"Bot {self._bot_token}",
+                "Content-Type": "application/json",
+            },
+            content=json.dumps(payload).encode("utf-8"),
+            timeout=_TIMEOUT_SECONDS,
+            label="Discord create message",
+            retry_server_errors=True,
+        )
+        response.raise_for_status()
+        message_id = response.json().get("id")
+        if not message_id:
+            raise RuntimeError("Discord create message returned no message id")
+        return str(message_id)
 
     def get_user_display_name(self, user_id: str) -> str | None:
         def fetch() -> str | None:

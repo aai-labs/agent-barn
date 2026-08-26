@@ -4,6 +4,7 @@ import { useState } from "react";
 
 import type { GoogleOAuthResult } from "../hooks/use-google-oauth";
 import { isOAuthConnected, type IntegrationDraft, type IntegrationProvider } from "../integrations";
+import { CredentialErrorAlert } from "./credential-error-alert";
 import { FormField, GoogleAuthButton, RepoListField, TokenInput } from "./hire-dialog-primitives";
 
 /**
@@ -27,6 +28,7 @@ export function IntegrationFields({
   onOAuthConnected,
   namePrefix = "",
   showScopeNote = false,
+  credentialError,
   disabled,
 }: {
   provider: IntegrationProvider;
@@ -36,6 +38,7 @@ export function IntegrationFields({
   onOAuthConnected?: (result: GoogleOAuthResult) => void;
   namePrefix?: string;
   showScopeNote?: boolean;
+  credentialError?: string | null;
   disabled?: boolean;
 }) {
   const [visible, setVisible] = useState<Record<string, boolean>>({});
@@ -167,6 +170,8 @@ export function IntegrationFields({
           {provider.scopeNote}
         </p>
       )}
+
+      {credentialError && <CredentialErrorAlert message={credentialError} />}
 
       {renderedFields}
 
