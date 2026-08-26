@@ -21,6 +21,7 @@ from api.tests.steps.agent import (
     skill_is_assigned_to_agent,
     there_is_a_skill,
     there_is_a_skill_for_another_org,
+    there_is_agent_access,
     there_is_an_agent,
     use_org_for_auth,
 )
@@ -1004,6 +1005,26 @@ def test_fork_builtin_skill_opens_a_draft_seeded_from_the_fork():
             assert_that(draft.json()["files"], equal_to([{"path": "SKILL.md", "content": "# Built-in Tool"}]))
 
 
+def test_unpublished_fork_can_apply_a_newer_source_update_to_its_draft():
+    with given([*_GIVEN, there_is_a_skill(name="Built-in Tool", global_skill=True)]) as context:
+        client: TestClient = context.client
+        source_id = context.skill.id
+        fork = client.post(f"{_BASE}/{source_id}/fork", headers=_auth(context)).json()
+
+        from api.domains.skills.repository import SkillRepository
+
+        context.injector.get(SkillRepository).publish_version(source_id, [("SKILL.md", "# Built-in Tool v2")])
+
+        with when("the upstream publishes before the fork's initial draft is published"):
+            updated = client.post(f"{_BASE}/{fork['id']}/source-update", headers=_auth(context))
+
+        with then("Apply Update replaces the fork draft instead of reporting no update"):
+            assert_that(updated.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(updated.json()["version"], equal_to(None))
+            assert_that(updated.json()["has_draft"], equal_to(True))
+            assert_that(updated.json()["files"], equal_to(_files(content="# Built-in Tool v2")))
+
+
 def test_fork_builtin_skill_disambiguates_name_when_org_already_has_one():
     with given(
         [
@@ -1160,6 +1181,49 @@ def test_member_without_agent_access_cannot_create_private_skill():
         # Agent visibility is intentionally fail-closed to avoid leaking an
         # inaccessible Agent's existence.
         assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
+
+
+def test_agent_private_skill_routes_hide_another_agents_skills_from_a_same_org_member():
+    with given([*_GIVEN, there_is_an_agent(name="Private Skill Owner")]) as context:
+        client: TestClient = context.client
+        private_agent = context.agent
+        private_base = _AGENT_BASE.format(organization_id=context.organization.id, agent_id=private_agent.id)
+
+        created = client.post(
+            private_base,
+            json={"name": "Private Skill", "files": _files(content="# Private")},
+            headers=_auth(context),
+        )
+        skill_id = created.json()["id"]
+        client.post(f"{private_base}/{skill_id}/draft/publish", headers=_auth(context))
+        client.post(f"{private_base}/{skill_id}/draft", headers=_auth(context))
+
+        there_is_an_agent(name="Accessible Agent")(context)
+        accessible_agent = context.agent
+        accessible_base = _AGENT_BASE.format(organization_id=context.organization.id, agent_id=accessible_agent.id)
+        _there_is_a_member_actor()(context)
+        there_is_agent_access(agent_id=accessible_agent.id)(context)
+
+        with when("a member with access to a different Agent requests the private Skill routes"):
+            accessible_list = client.get(accessible_base, headers=_auth(context))
+            responses = [
+                client.get(private_base, headers=_auth(context)),
+                client.get(f"{private_base}/{skill_id}/files", headers=_auth(context)),
+                client.get(f"{private_base}/{skill_id}/versions", headers=_auth(context)),
+                client.get(f"{private_base}/{skill_id}/versions/1", headers=_auth(context)),
+                client.get(f"{private_base}/{skill_id}/draft", headers=_auth(context)),
+                client.patch(
+                    f"{private_base}/{skill_id}/draft",
+                    json={"files": _files(content="# Unauthorized")},
+                    headers=_auth(context),
+                ),
+                client.delete(f"{private_base}/{skill_id}/versions/1", headers=_auth(context)),
+            ]
+
+        with then("their access to the other Agent does not reveal or mutate the private Skill"):
+            assert_that(created.status_code, equal_to(status.HTTP_201_CREATED))
+            assert_that(accessible_list.status_code, equal_to(status.HTTP_200_OK))
+            assert_that([response.status_code for response in responses], equal_to([status.HTTP_404_NOT_FOUND] * 7))
 
 
 def test_member_cannot_fork_builtin_skill():

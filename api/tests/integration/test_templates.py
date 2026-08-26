@@ -853,6 +853,27 @@ def test_create_template_with_required_skills_stores_them():
             assert_that(len(get_resp.json()["required_skills"]), equal_to(1))
 
 
+def test_create_template_can_pin_a_required_skill_to_a_selected_version():
+    with given([*_GIVEN, there_is_a_skill(name="Jira")]) as context:
+        client: TestClient = context.client
+        context.injector.get(SkillRepository).publish_version(context.skill.id, [("SKILL.md", "# Jira v2")])
+
+        with when("I select version 1 for a required Skill"):
+            response = client.post(
+                _BASE,
+                json={
+                    "template_name": "Pinned Template",
+                    "required_skill_ids": [str(context.skill.id)],
+                    "required_skill_versions": {str(context.skill.id): 1},
+                },
+                headers=_auth(context),
+            )
+
+        with then("the Template retains the selected immutable version rather than the latest"):
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+            assert_that(response.json()["required_skills"][0]["version"], equal_to(1))
+
+
 def test_create_template_with_unknown_skill_returns_404():
     from uuid import uuid4
 

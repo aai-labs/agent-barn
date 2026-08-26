@@ -89,6 +89,35 @@ class SkillService:
                 detail="A skill with this name or mount slug already exists in this organization",
             ) from None
 
+    def _delete_skill_version(self, skill: Skill, version: int) -> None:
+        """Delete an unreferenced, non-final immutable Skill Version."""
+        skill_version = self.repository.get_version(skill.id, version)
+        if skill_version is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Version {version} not found")
+        if len(self.repository.list_versions(skill.id)) <= 1:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Cannot delete the only version of a skill",
+            )
+        if self.repository.is_skill_version_referenced_anywhere(skill.id, version):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "Cannot delete a Skill Version that is still referenced "
+                    "(it may be pinned by an agent or required by a Template)"
+                ),
+            )
+        try:
+            self.repository.delete_version_by_id(skill_version.id)
+        except IntegrityError:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "Cannot delete a Skill Version that is still referenced "
+                    "(it may be pinned by an agent or required by a Template)"
+                ),
+            ) from None
+
     def _to_read(
         self,
         skill: Skill,
@@ -270,33 +299,8 @@ class SkillService:
         return self._to_read(skill, published.version, has_draft=False)
 
     def delete_platform_skill_version(self, skill_id: UUID, version: int) -> None:
-        self._get_platform_or_404(skill_id)
-        skill_version = self.repository.get_version(skill_id, version)
-        if skill_version is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Version {version} not found")
-        if len(self.repository.list_versions(skill_id)) <= 1:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Cannot delete the only version of a skill",
-            )
-        if self.repository.is_skill_version_referenced_anywhere(skill_id, version):
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=(
-                    "Cannot delete a Skill Version that is still referenced "
-                    "(it may be pinned by an agent or required by a Template)"
-                ),
-            )
-        try:
-            self.repository.delete_version_by_id(skill_version.id)
-        except IntegrityError:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=(
-                    "Cannot delete a Skill Version that is still referenced "
-                    "(it may be pinned by an agent or required by a Template)"
-                ),
-            ) from None
+        skill = self._get_platform_or_404(skill_id)
+        self._delete_skill_version(skill, version)
 
     def list_platform_skill_versions(self, skill_id: UUID) -> list[SkillVersionRead]:
         self._get_platform_or_404(skill_id)
@@ -560,32 +564,7 @@ class SkillService:
         context: CurrentUserContext,
     ) -> None:
         _, skill = self._get_agent_owned_skill(agent_id, skill_id, context, PermissionKey.AGENT_UPDATE)
-        skill_version = self.repository.get_version(skill.id, version)
-        if skill_version is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Version {version} not found")
-        if len(self.repository.list_versions(skill.id)) <= 1:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Cannot delete the only version of a skill",
-            )
-        if self.repository.is_skill_version_referenced_anywhere(skill.id, version):
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=(
-                    "Cannot delete a Skill Version that is still referenced "
-                    "(it may be pinned by an agent or required by a Template)"
-                ),
-            )
-        try:
-            self.repository.delete_version_by_id(skill_version.id)
-        except IntegrityError:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=(
-                    "Cannot delete a Skill Version that is still referenced "
-                    "(it may be pinned by an agent or required by a Template)"
-                ),
-            ) from None
+        self._delete_skill_version(skill, version)
 
     def list_agent_skill_versions(
         self,
@@ -1040,35 +1019,7 @@ class SkillService:
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Cannot modify built-in skills",
             )
-        skill_version = self.repository.get_version(skill.id, version)
-        if skill_version is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail=f"Version {version} not found for skill {skill_id}"
-            )
-        versions = self.repository.list_versions(skill.id)
-        if len(versions) <= 1:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Cannot delete the only version of a skill",
-            )
-        if self.repository.is_skill_version_referenced_anywhere(skill.id, version):
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=(
-                    "Cannot delete a Skill Version that is still referenced "
-                    "(it may be pinned by an agent or required by a Template)"
-                ),
-            )
-        try:
-            self.repository.delete_version_by_id(skill_version.id)
-        except IntegrityError:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=(
-                    "Cannot delete a Skill Version that is still referenced "
-                    "(it may be pinned by an agent or required by a Template)"
-                ),
-            ) from None
+        self._delete_skill_version(skill, version)
 
     def get_skill(self, skill_id: UUID, context: CurrentUserContext) -> SkillSummaryRead:
         org_id = self._org_id(context)
@@ -1104,16 +1055,17 @@ class SkillService:
     ) -> list[SkillSummaryRead]:
         """Build lineage summaries with their latest source/update state."""
         skill_ids = [s.id for s in skills]
-        versions = self.repository.get_latest_version_numbers(skill_ids)
+        latest_versions = self.repository.get_latest_versions(skill_ids)
         draft_skill_ids = self.repository.get_draft_skill_ids(skill_ids)
+        source_update_skill_ids = self.repository.get_source_update_skill_ids(latest_versions)
         reads: list[SkillSummaryRead] = []
         for skill in skills:
-            latest = self.repository.get_latest_version(skill.id)
+            latest = latest_versions.get(skill.id)
             reads.append(
                 SkillSummaryRead.model_validate(
                     {
                         **skill.model_dump(),
-                        "version": versions.get(skill.id),
+                        "version": latest.version if latest else None,
                         "has_draft": (
                             skill.id in draft_skill_ids
                             and (
@@ -1124,7 +1076,7 @@ class SkillService:
                         ),
                         "source_skill_id": latest.source_skill_id if latest else None,
                         "source_skill_version": latest.source_skill_version if latest else None,
-                        "update_available": self.repository.has_source_update(skill.id),
+                        "update_available": skill.id in source_update_skill_ids,
                     }
                 )
             )

@@ -15,9 +15,8 @@ import { DEFAULT_ENTRY_PATH, NEW_SKILL_TEMPLATE } from "../utils";
 import { SkillFileBrowser } from "./skill-file-browser";
 import { SkillMetadataFields } from "./skill-metadata-fields";
 
-/** Creating a skill is just editing a draft that doesn't have a lineage yet, so
- * this reuses the same file browser and metadata fields as the detail page's
- * draft editor — "Create skill" is the one-step equivalent of publish. */
+/** Creating a skill starts its initial draft, using the same editor as later
+ * draft revisions. Publishing remains an explicit follow-up action. */
 export function SkillNewPage({ scope }: { scope: SkillScopeRef }) {
   const router = useRouter();
   const params = useParams();
@@ -79,8 +78,7 @@ export function SkillNewPage({ scope }: { scope: SkillScopeRef }) {
       <div className="af-card overflow-hidden">
         <div className="border-b px-6 py-5" style={{ borderColor: "var(--line)" }}>
           <p className="text-[13px] leading-[1.5] m-0" style={{ color: "var(--ink-3)" }}>
-            Creating a skill publishes it as version 1 immediately — from there, further
-            changes go through the same draft-and-publish flow as any other skill.
+            Creating a skill starts its initial draft. Review it, then publish version 1 when it is ready.
           </p>
         </div>
 

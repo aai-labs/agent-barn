@@ -92,18 +92,34 @@ class TemplateService:
         org_id: UUID | None,
         *,
         global_only: bool = False,
+        requested_versions: dict[UUID, int] | None = None,
     ) -> dict[UUID, tuple[int, str | None]]:
         group_ids = [skill_id for group in groups for skill_id in group.skill_ids]
         all_ids = standalone_ids + group_ids
+        requested_versions = requested_versions or {}
+        unknown_version_ids = set(requested_versions) - set(all_ids)
+        if unknown_version_ids:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Required Skill versions must reference a selected required Skill",
+            )
         if global_only:
             self._validate_global_skill_ids(all_ids)
         elif all_ids and org_id is not None:
             self._validate_skill_ids(all_ids, org_id)
         versions = self.skill_repository.get_latest_version_numbers(all_ids)
-        resolved = {skill_id: (versions[skill_id], None) for skill_id in standalone_ids}
+        for skill_id, version in requested_versions.items():
+            if self.skill_repository.get_version(skill_id, version) is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Skill Version {skill_id} v{version} not found",
+                )
+        resolved = {
+            skill_id: (requested_versions.get(skill_id, versions[skill_id]), None) for skill_id in standalone_ids
+        }
         for group in groups:
             for skill_id in group.skill_ids:
-                resolved[skill_id] = (versions[skill_id], group.group_key)
+                resolved[skill_id] = (requested_versions.get(skill_id, versions[skill_id]), group.group_key)
         return resolved
 
     def _mark_platform_updates(self, reads: list[TemplateRead]) -> list[TemplateRead]:
@@ -184,6 +200,7 @@ class TemplateService:
             data.required_skill_ids,
             data.required_skill_groups,
             org_id,
+            requested_versions=data.required_skill_versions,
         )
 
         def build(template_key: str) -> AgentTemplate:
@@ -256,11 +273,15 @@ class TemplateService:
         if data.required_skill_ids is None:
             standalone_map = {sid: value for sid, value in old_map.items() if value[1] is None}
         else:
-            standalone_map = self._resolve_skill_map(data.required_skill_ids, [], org_id)
+            standalone_map = self._resolve_skill_map(
+                data.required_skill_ids, [], org_id, requested_versions=data.required_skill_versions
+            )
         if data.required_skill_groups is None:
             groups_map = {sid: value for sid, value in old_map.items() if value[1] is not None}
         else:
-            groups_map = self._resolve_skill_map([], data.required_skill_groups, org_id)
+            groups_map = self._resolve_skill_map(
+                [], data.required_skill_groups, org_id, requested_versions=data.required_skill_versions
+            )
         overlap = set(standalone_map) & groups_map.keys()
         if overlap:
             raise HTTPException(
@@ -417,13 +438,17 @@ class TemplateService:
                 )
 
     def _skills_map(
-        self, required_skill_ids: list[UUID], required_skill_groups: list[TemplateSkillGroup]
+        self,
+        required_skill_ids: list[UUID],
+        required_skill_groups: list[TemplateSkillGroup],
+        required_skill_versions: dict[UUID, int] | None = None,
     ) -> dict[UUID, tuple[int, str | None]]:
         return self._resolve_skill_map(
             required_skill_ids,
             required_skill_groups,
             None,
             global_only=True,
+            requested_versions=required_skill_versions,
         )
 
     def list_platform_lineages_for_admin(self) -> list[PlatformTemplateAdminSummary]:
@@ -506,7 +531,11 @@ class TemplateService:
                 heartbeat_md=data.heartbeat_md or DEFAULT_HEARTBEAT_MD,
             )
 
-        skills_map = self._skills_map(data.required_skill_ids, data.required_skill_groups)
+        skills_map = self._skills_map(
+            data.required_skill_ids,
+            data.required_skill_groups,
+            data.required_skill_versions,
+        )
         draft = self._allocate_unique_key(build, lambda d: self.repository.save_new_draft_with_skills(d, skills_map))
         return self.get_draft(draft.template_key)
 
@@ -533,11 +562,23 @@ class TemplateService:
         if data.required_skill_ids is None:
             standalone_map = {sid: value for sid, value in old_map.items() if value[1] is None}
         else:
-            standalone_map = self._resolve_skill_map(data.required_skill_ids, [], None, global_only=True)
+            standalone_map = self._resolve_skill_map(
+                data.required_skill_ids,
+                [],
+                None,
+                global_only=True,
+                requested_versions=data.required_skill_versions,
+            )
         if data.required_skill_groups is None:
             groups_map = {sid: value for sid, value in old_map.items() if value[1] is not None}
         else:
-            groups_map = self._resolve_skill_map([], data.required_skill_groups, None, global_only=True)
+            groups_map = self._resolve_skill_map(
+                [],
+                data.required_skill_groups,
+                None,
+                global_only=True,
+                requested_versions=data.required_skill_versions,
+            )
         self.repository.update_draft_with_skills(draft, standalone_map | groups_map)
         return self.get_draft(template_key)
 

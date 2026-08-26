@@ -147,12 +147,23 @@ class SkillRepository:
                 .order_by(col(SkillVersion.version).desc())
                 .limit(1)
             ).first()
-            if latest is None or latest.source_skill_id is None or latest.source_skill_version is None:
+            draft = session.exec(select(SkillDraft).where(col(SkillDraft.skill_id) == skill_id)).first()
+            source_skill_id = (
+                draft.source_skill_id
+                if draft and draft.source_skill_id is not None
+                else (latest.source_skill_id if latest else None)
+            )
+            source_skill_version = (
+                draft.source_skill_version
+                if draft and draft.source_skill_version is not None
+                else (latest.source_skill_version if latest else None)
+            )
+            if source_skill_id is None or source_skill_version is None:
                 return False
             source_latest = session.exec(
-                select(func.max(col(SkillVersion.version))).where(col(SkillVersion.skill_id) == latest.source_skill_id)
+                select(func.max(col(SkillVersion.version))).where(col(SkillVersion.skill_id) == source_skill_id)
             ).one()
-            return bool(source_latest is not None and source_latest > latest.source_skill_version)
+            return bool(source_latest is not None and source_latest > source_skill_version)
 
     def has_update_for_pin(self, skill_id: UUID, pinned_version: int) -> bool:
         latest = self.get_latest_version(skill_id)
@@ -171,15 +182,26 @@ class SkillRepository:
                 .order_by(col(SkillVersion.version).desc())
                 .limit(1)
             ).first()
-            if latest is None or latest.source_skill_id is None or latest.source_skill_version is None:
+            draft = session.exec(select(SkillDraft).where(col(SkillDraft.skill_id) == skill_id)).first()
+            source_skill_id = (
+                draft.source_skill_id
+                if draft and draft.source_skill_id is not None
+                else (latest.source_skill_id if latest else None)
+            )
+            source_skill_version = (
+                draft.source_skill_version
+                if draft and draft.source_skill_version is not None
+                else (latest.source_skill_version if latest else None)
+            )
+            if source_skill_id is None or source_skill_version is None:
                 return None
             source = session.exec(
                 select(SkillVersion)
-                .where(col(SkillVersion.skill_id) == latest.source_skill_id)
+                .where(col(SkillVersion.skill_id) == source_skill_id)
                 .order_by(col(SkillVersion.version).desc())
                 .limit(1)
             ).first()
-            if source is None or source.version <= latest.source_skill_version:
+            if source is None or source.version <= source_skill_version:
                 return None
             return source
 
@@ -194,6 +216,51 @@ class SkillRepository:
                 .group_by(col(SkillVersion.skill_id))
             )
             return {skill_id: version for skill_id, version in session.exec(query).all()}
+
+    def get_latest_versions(self, skill_ids: list[UUID]) -> dict[UUID, SkillVersion]:
+        """Latest published snapshot for each requested lineage in one query."""
+        if not skill_ids:
+            return {}
+        with Session(self.delegate.engine) as session:
+            latest_by_skill = (
+                select(
+                    SkillVersion.skill_id,
+                    func.max(col(SkillVersion.version)).label("latest_version"),
+                )
+                .where(col(SkillVersion.skill_id).in_(skill_ids))
+                .group_by(SkillVersion.skill_id)
+                .subquery()
+            )
+            query = select(SkillVersion).join(
+                latest_by_skill,
+                (col(SkillVersion.skill_id) == latest_by_skill.c.skill_id)
+                & (col(SkillVersion.version) == latest_by_skill.c.latest_version),
+            )
+            return {version.skill_id: version for version in session.exec(query).all()}
+
+    def get_source_update_skill_ids(self, latest_versions: dict[UUID, SkillVersion]) -> set[UUID]:
+        """Lineages whose latest snapshot has a newer direct-source version."""
+        source_baselines = {
+            version.source_skill_id: version.source_skill_version
+            for version in latest_versions.values()
+            if version.source_skill_id is not None and version.source_skill_version is not None
+        }
+        if not source_baselines:
+            return set()
+        with Session(self.delegate.engine) as session:
+            query = (
+                select(SkillVersion.skill_id, func.max(col(SkillVersion.version)))
+                .where(col(SkillVersion.skill_id).in_(list(source_baselines)))
+                .group_by(SkillVersion.skill_id)
+            )
+            latest_source_versions = dict(session.exec(query).all())
+        return {
+            skill_id
+            for skill_id, version in latest_versions.items()
+            if version.source_skill_id is not None
+            and version.source_skill_version is not None
+            and latest_source_versions.get(version.source_skill_id, 0) > version.source_skill_version
+        }
 
     def get_version(self, skill_id: UUID, version: int) -> SkillVersion | None:
         with Session(self.delegate.engine) as session:

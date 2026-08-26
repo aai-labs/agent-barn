@@ -411,6 +411,29 @@ class AgentService:
                 resolved_ids.add(pin.skill_id)
         return resolved
 
+    def _validate_required_skill_versions(
+        self,
+        required_map: Mapping[UUID, tuple[int, str | None]],
+        pinned_versions: Mapping[UUID, int],
+    ) -> None:
+        """Require Template Skills to be present at the Template's exact pin."""
+        standalone_ids, required_groups = split_requirements(required_map)
+        for skill_id in standalone_ids:
+            required_version, _ = required_map[skill_id]
+            if pinned_versions.get(skill_id) != required_version:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Required template Skill {skill_id} must be pinned to version {required_version}",
+                )
+        for member_ids in required_groups.values():
+            if any(pinned_versions.get(skill_id) == required_map[skill_id][0] for skill_id in member_ids):
+                continue
+            names = sorted(s.name for s in self.skill_repository.get_many_by_ids(list(member_ids)))
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"One of these template Skills must be pinned to its required version: {', '.join(names)}",
+            )
+
     def _validate_skill_update(
         self,
         agent: Agent,
@@ -654,27 +677,15 @@ class AgentService:
         # every standalone-required skill, and at least one member of each
         # "at least one of" group (e.g. GitHub OR Bitbucket).
         required_map = self.template_repository.get_required_skill_map_for(template)
-        standalone_ids, required_groups = split_requirements(required_map)
-        selected_skill_ids = set(data.skill_ids)
-        if standalone_ids - selected_skill_ids:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Required template skills must be included in skill_ids",
-            )
-        for group_key in sorted(required_groups):
-            members = required_groups[group_key]
-            if not (members & selected_skill_ids):
-                names = sorted(s.name for s in self.skill_repository.get_many_by_ids(list(members)))
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"At least one of these template skills must be included in skill_ids: {', '.join(names)}",
-                )
-
         # Preflight skill version pins before any persistence so an invalid pin
         # (nonexistent version, pin for a skill not in the request) is rejected
         # atomically rather than after the agent, configs, and secrets are saved.
         resolved_pins = self._resolve_skill_pins(data.skill_ids, data.skill_versions, set(), [], org_id)
         resolved_pin_by_skill_id = {pin.skill_id: pin for pin in resolved_pins}
+        self._validate_required_skill_versions(
+            required_map,
+            {skill_id: pin.version for skill_id, pin in resolved_pin_by_skill_id.items()},
+        )
 
         # Prepare Agent Secrets in memory without persisting them yet.
         # Integration credentials are separate from Communication Connections.
@@ -1565,6 +1576,13 @@ class AgentService:
                                 + ", ".join(names)
                             ),
                         )
+
+            if "template_key" in updated or data.skill_ids or data.skill_versions or data.removed_skill_ids:
+                effective_pins = {row.skill_id: row.pinned_version for row in current_skill_rows}
+                effective_pins.update({pin.skill_id: pin.version for pin in resolved_skill_pins})
+                for skill_id in data.removed_skill_ids:
+                    effective_pins.pop(skill_id, None)
+                self._validate_required_skill_versions(required_map, effective_pins)
 
         # Validate skills accessibility and secret coverage
         if data.skill_ids or data.removed_secret_providers:
