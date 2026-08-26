@@ -47,11 +47,9 @@ class Config(BaseSettings):
     agent_default_model: str = "litellm/openrouter/z-ai/glm-5.2"
     organization_creation_limit: int = 5
     api_external_url: str = ""
-    # Points at the legacy agentfarm-api Service on purpose: agents read this at
-    # runtime, and the agentbarn-api Service doesn't exist until the chart-rename
-    # cutover (helm/agentbarn-api) is deployed and the old release retired. Do not
-    # flip this until that cutover, or running agents lose ingest.
-    ingest_base_url: str = "http://agentfarm-api.agent-farm.svc.cluster.local:8001/ingest/v1"
+    # Agent workloads and the API run in the same namespace, so the short Service
+    # name is portable between staging and production.
+    ingest_base_url: str = "http://agentbarn-api:8001/ingest/v1"
     communications_base_url: str = (
         "http://agentbarn-api-communications.agent-farm.svc.cluster.local:8002/communications/v1"
     )

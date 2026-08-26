@@ -15,6 +15,7 @@ import api.domains.events.models
 import api.domains.events.security_audit
 import api.domains.organizations.models
 import api.domains.rbac.models
+import api.domains.shared_credentials.models
 import api.domains.skills.models
 import api.domains.templates.models
 import api.domains.tool_calls.models

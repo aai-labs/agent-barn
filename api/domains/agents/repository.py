@@ -1119,6 +1119,17 @@ class AgentRepository:
             )
             return list(session.exec(query).all())
 
+    def find_all_running(self) -> list[Agent]:
+        """Live Agents currently eligible for an operator lifecycle cutover."""
+        with Session(self.delegate.engine) as session:
+            query = (
+                select(Agent)
+                .where(col(Agent.deleted_at).is_(None))
+                .where(col(Agent.status) == AgentStatus.RUNNING)
+                .order_by(col(Agent.organization_id), col(Agent.created_at))
+            )
+            return list(session.exec(query).all())
+
     def find_all_for_org(self, org_id: UUID) -> list[Agent]:
         """Return all agents for an org — both live and deleted."""
         with Session(self.delegate.engine) as session:
