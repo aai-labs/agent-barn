@@ -1,18 +1,18 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery } from "@tanstack/react-query";
 
 import { api } from "@/shared/api";
 
 import { PaginatedEventDeliveriesSchema, type PaginatedEventDeliveries } from "../schemas";
 import { EVENT_DELIVERIES_PAGE_SIZE, eventDeliveriesKey, type EventDeliveryFilters } from "../utils";
 
-export function useEventDeliveries(filters: EventDeliveryFilters, page: number) {
-  return useQuery({
-    queryKey: eventDeliveriesKey.list({ filters, page }),
-    queryFn: async () => {
+export function useEventDeliveries(filters: EventDeliveryFilters) {
+  const query = useInfiniteQuery({
+    queryKey: eventDeliveriesKey.list({ filters }),
+    queryFn: async ({ pageParam }) => {
       const params = new URLSearchParams();
-      params.set("page", String(page));
+      params.set("page", String(pageParam));
       params.set("page_size", String(EVENT_DELIVERIES_PAGE_SIZE));
       params.set("sort", filters.sort);
       if (filters.search) params.set("search", filters.search);
@@ -28,5 +28,22 @@ export function useEventDeliveries(filters: EventDeliveryFilters, page: number) 
       );
       return response.data;
     },
+    initialPageParam: 1,
+    getNextPageParam: (lastPage) => {
+      const nextPage = lastPage.page + 1;
+      const totalPages = Math.ceil(lastPage.total / lastPage.pageSize);
+      return nextPage <= totalPages ? nextPage : undefined;
+    },
   });
+
+  return {
+    deliveries: query.data?.pages.flatMap((page) => page.items) ?? [],
+    total: query.data?.pages[0]?.total ?? 0,
+    hasNextPage: query.hasNextPage,
+    fetchNextPage: query.fetchNextPage,
+    isFetchingNextPage: query.isFetchingNextPage,
+    isPending: query.isPending,
+    error: query.error,
+    refetch: query.refetch,
+  };
 }
