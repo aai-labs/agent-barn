@@ -817,6 +817,27 @@ test.describe("Agent Detail Page — Keys tab", () => {
     await expect(agentDetailPage.removeCredentialButton()).toBeVisible();
   });
 
+  test("validating a configured integration shows its identity", async ({ page }) => {
+    await dataSupportPage.agents.interceptGetAgentRequest({
+      body: { ...mockAgent, status: "STOPPED", secrets: [mockSecret] },
+    });
+    await dataSupportPage.agents.interceptValidateIntegrationRequest({
+      status: 200,
+      body: {
+        validation_status: "valid",
+        validation_identity: "alice@example.com",
+        validation_error: null,
+        missing_scopes: [],
+      },
+    });
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await agentDetailPage.configureButton().click();
+    await agentDetailPage.keysTab().click();
+
+    await page.getByRole("button", { name: "Validate" }).click();
+    await expect(page.getByText("Status: valid · alice@example.com")).toBeVisible();
+  });
+
   test("clicking Remove shows credential as pending removal with Undo", async ({ page }) => {
     await dataSupportPage.agents.interceptGetAgentRequest({
       body: { ...mockAgent, status: "STOPPED", secrets: [mockSecret] },

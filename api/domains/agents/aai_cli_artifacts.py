@@ -10,9 +10,6 @@ from api.domains.agents.models import (
     BitbucketContent,
     ConfluenceContent,
     GithubContent,
-    GmailContent,
-    GoogleCalendarContent,
-    GoogleSheetsContent,
     JiraContent,
     PipedriveContent,
     SecretContent,
@@ -30,17 +27,6 @@ provider_secrets_map: dict[str, list[tuple[str, str]]] = {
     "jira": [("jira.api_token", "api_token")],
     "confluence": [("confluence.api_token", "api_token")],
     "bitbucket": [("bitbucket.api_token", "api_token")],
-    "gmail": [
-        ("google.client_secret", "client_secret"),
-        ("google.gmail_refresh_token", "refresh_token"),
-    ],
-    # Deliberately not sharing gmail's "google.client_secret": a user may bring their own
-    # Google client for one provider and use the app-owned one for the other, and these
-    # names are flat keys in the same store — sharing would let one clobber the other.
-    "google_sheets": [
-        ("google.sheets_client_secret", "client_secret"),
-        ("google.sheets_refresh_token", "refresh_token"),
-    ],
     "zoho_mail": [
         ("zoho.client_secret", "client_secret"),
         ("zoho.mail_refresh_token", "refresh_token"),
@@ -58,9 +44,6 @@ PROFILE_SLUGS: dict[SecretProvider, str] = {
     SecretProvider.JIRA: "jira-work",
     SecretProvider.CONFLUENCE: "confluence-work",
     SecretProvider.BITBUCKET: "bitbucket-work",
-    SecretProvider.GMAIL: "gmail-work",
-    SecretProvider.GOOGLE_CALENDAR: "google-calendar-work",
-    SecretProvider.GOOGLE_SHEETS: "google-sheets-work",
     SecretProvider.ZOHO_MAIL: "zoho-mail-rest",
     SecretProvider.ZOHO_CALENDAR: "zoho-calendar-work",
     SecretProvider.SLACK: "slack-work",
@@ -170,39 +153,6 @@ def _bitbucket_block(c: BitbucketContent) -> str:
     return "\n".join(blocks)
 
 
-def _gmail_block(c: GmailContent) -> str:
-    return (
-        f"[profiles.{PROFILE_SLUGS[SecretProvider.GMAIL]}]\n"
-        'provider = "google"\n'
-        'auth_type = "bearer_token"\n'
-        f"client_id = {_q(c.client_id)}\n"
-        'client_secret_secret = "google.client_secret"\n'
-        'refresh_token_secret = "google.gmail_refresh_token"\n'
-        'user_id = "me"\n'
-    )
-
-
-def _google_sheets_block(c: GoogleSheetsContent) -> str:
-    return (
-        f"[profiles.{PROFILE_SLUGS[SecretProvider.GOOGLE_SHEETS]}]\n"
-        'provider = "google"\n'
-        'auth_type = "bearer_token"\n'
-        f"client_id = {_q(c.client_id)}\n"
-        'client_secret_secret = "google.sheets_client_secret"\n'
-        'refresh_token_secret = "google.sheets_refresh_token"\n'
-    )
-
-
-def _google_calendar_block(c: GoogleCalendarContent) -> str:
-    return (
-        f"[profiles.{PROFILE_SLUGS[SecretProvider.GOOGLE_CALENDAR]}]\n"
-        'provider = "google"\n'
-        'auth_type = "bearer_token"\n'
-        'token_env = "GOOGLE_CALENDAR_ACCESS_TOKEN"\n'
-        f"calendar_id = {_q(c.calendar_id)}\n"
-    )
-
-
 def _zoho_mail_block(c: ZohoMailContent) -> str:
     return (
         f"[profiles.{PROFILE_SLUGS[SecretProvider.ZOHO_MAIL]}]\n"
@@ -254,9 +204,6 @@ _PROFILE_BUILDERS: dict[SecretProvider, Callable[..., str]] = {
     SecretProvider.JIRA: _jira_block,
     SecretProvider.CONFLUENCE: _confluence_block,
     SecretProvider.BITBUCKET: _bitbucket_block,
-    SecretProvider.GMAIL: _gmail_block,
-    SecretProvider.GOOGLE_SHEETS: _google_sheets_block,
-    SecretProvider.GOOGLE_CALENDAR: _google_calendar_block,
     SecretProvider.ZOHO_MAIL: _zoho_mail_block,
     SecretProvider.ZOHO_CALENDAR: _zoho_calendar_block,
     SecretProvider.SLACK: _slack_block,
@@ -398,9 +345,6 @@ _INTEGRATION_LABELS: dict[SecretProvider, str] = {
     SecretProvider.JIRA: "Jira",
     SecretProvider.CONFLUENCE: "Confluence",
     SecretProvider.BITBUCKET: "Bitbucket",
-    SecretProvider.GMAIL: "Gmail",
-    SecretProvider.GOOGLE_CALENDAR: "Google Calendar",
-    SecretProvider.GOOGLE_SHEETS: "Google Sheets",
     SecretProvider.ZOHO_MAIL: "Zoho Mail",
     SecretProvider.ZOHO_CALENDAR: "Zoho Calendar",
     SecretProvider.SLACK: "Slack",
@@ -420,10 +364,6 @@ _INTEGRATION_CAPABILITIES: dict[SecretProvider, str] = {
     SecretProvider.JIRA: "issues (comments, attachments), sprints, boards, projects, users",
     SecretProvider.CONFLUENCE: "pages (comments, attachments), spaces",
     SecretProvider.BITBUCKET: "PRs (diff, comments), commits, branches, repo source, pipelines",
-    SecretProvider.GMAIL: "read and search mail (read-only)",
-    SecretProvider.GOOGLE_SHEETS: (
-        "create and list spreadsheets, add/delete/rename sheet tabs, read/update/clear cell ranges"
-    ),
     SecretProvider.ZOHO_MAIL: "read and search mail (read-only)",
     SecretProvider.SLACK: (
         "read channel data: list channels, list and download files and attachments, "
@@ -469,7 +409,7 @@ def build_integrations_policy_md(
     ``./skills/aai-<integration>/SKILL.md`` files and TOOLS.md. Returns "" when no
     integrations are configured.
     """
-    if not decrypted:
+    if not (decrypted.keys() & set(PROFILE_SLUGS)):
         return ""
 
     lines: list[str] = [

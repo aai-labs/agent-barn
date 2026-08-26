@@ -7,7 +7,7 @@ import {
   mockPlatformSkill,
   mockCustomSkill,
   mockJiraSkill,
-  mockGmailSkill,
+  mockGoogleWorkspaceSkill,
   MOCK_PLATFORM_SKILL_ID,
   MOCK_BITBUCKET_SKILL_ID,
 } from "../pages/data-support/skill-data-support.po";
@@ -636,21 +636,69 @@ test.describe("Hire Dialog — Skills step", () => {
     expect(body.secrets.some((secret) => secret.provider === "slack")).toBe(false);
   });
 
-  test("selecting a gmail skill reveals the Google OAuth button", async ({ page }) => {
+  test("selecting a google workspace skill reveals the Google OAuth button", async ({ page }) => {
     await navigateToSkillsStep(page);
 
-    await page.getByText(mockGmailSkill.name, { exact: true }).click();
+    await page.getByText(mockGoogleWorkspaceSkill.name, { exact: true }).click();
 
     await expect(page.getByText("Required credentials", { exact: true })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Authenticate with Google" })).toBeVisible();
+    const authenticateButton = page.getByRole("button", { name: "Authenticate with Google" });
+    await expect(authenticateButton).toBeVisible();
+    await expect(authenticateButton).toBeDisabled();
   });
 
-  test("hire button is disabled when gmail credentials are incomplete", async ({ page }) => {
+  test("hire button is disabled when google workspace credentials are incomplete", async ({ page }) => {
     await navigateToSkillsStep(page);
 
-    await page.getByText(mockGmailSkill.name, { exact: true }).click();
+    await page.getByText(mockGoogleWorkspaceSkill.name, { exact: true }).click();
 
     await expect(page.getByRole("button", { name: /hire aria/i })).toBeDisabled();
+  });
+
+  test("locks Google scope controls and displays the connected email", async ({ page }) => {
+    await navigateToSkillsStep(page);
+
+    await page.getByText(mockGoogleWorkspaceSkill.name, { exact: true }).click();
+    await page.getByLabel("Gmail", { exact: true }).check();
+    await page.getByRole("radio", { name: "Full access", exact: true }).check();
+    await page.locator('input[placeholder^="1234567890"]').fill("client-id");
+    await page.locator('input[placeholder^="GOCSPX"]').fill("client-secret");
+
+    await page.context().route("**/fake-google-consent", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "text/html",
+        body: '<script>window.opener.postMessage({ type: "google-oauth", code: "auth-code" }, "*");</script>',
+      });
+    });
+    await page.route("**/api/v1/integrations/google/authorize-url*", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ authorize_url: "http://127.0.0.1:3003/fake-google-consent" }),
+      });
+    });
+    await page.route("**/api/v1/integrations/google/token", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          refresh_token: "refresh-token",
+          email: "alice@example.com",
+          granted_scopes: ["openid", "email"],
+        }),
+      });
+    });
+
+    const popupPromise = page.waitForEvent("popup");
+    await page.getByRole("button", { name: "Authenticate with Google" }).click();
+    await popupPromise;
+    await expect(page.getByRole("button", { name: "Waiting for Google…" })).toBeVisible();
+
+    await expect(page.getByText("✓ Connected as alice@example.com")).toBeVisible();
+    await expect(page.getByLabel("Gmail", { exact: true })).toBeDisabled();
+    await expect(page.getByRole("radio", { name: "Full access", exact: true })).toBeDisabled();
+    await expect(page.getByRole("button", { name: "Reconnect Google account" })).toBeEnabled();
   });
 
   test("required skill card is shown as locked-selected with 'Required by template' label", async ({ page }) => {
