@@ -763,3 +763,38 @@ def test_teams_send_without_a_service_url_is_rejected() -> None:
 
     with pytest.raises(ValueError, match="serviceUrl"):
         plugin.send(plugin.settings_model.model_validate({}), credentials, envelope)
+
+
+def test_teams_strips_the_agents_own_mention_from_the_text() -> None:
+    plugin = _teams_plugin()
+    settings = plugin.settings_model.model_validate({"group_policy": "open"})
+    payload = _teams_channel_activity(text="<at>Aria</at> reply")
+
+    envelope = plugin.normalize_inbound(settings, payload)[0]
+
+    # Leaving the markup in makes the agent read its own name as a third party.
+    assert envelope.text == "reply"
+
+
+def test_teams_keeps_mentions_of_other_people() -> None:
+    plugin = _teams_plugin()
+    settings = plugin.settings_model.model_validate({"group_policy": "open"})
+    payload = _teams_channel_activity(text="<at>Aria</at> ask <at>Pranav</at> about it")
+    payload["entities"] = [
+        {"type": "mention", "mentioned": {"id": _TEAMS_BOT_ID, "name": "Aria"}, "text": "<at>Aria</at>"},
+        {"type": "mention", "mentioned": {"id": _TEAMS_USER_ID, "name": "Pranav"}, "text": "<at>Pranav</at>"},
+    ]
+
+    envelope = plugin.normalize_inbound(settings, payload)[0]
+
+    assert envelope.text == "ask <at>Pranav</at> about it"
+
+
+def test_teams_leaves_text_untouched_without_mention_entities() -> None:
+    plugin = _teams_plugin()
+    settings = plugin.settings_model.model_validate({"dm_policy": "open"})
+    payload = _teams_activity(text="Aria can you help")
+
+    envelope = plugin.normalize_inbound(settings, payload)[0]
+
+    assert envelope.text == "Aria can you help"

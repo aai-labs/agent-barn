@@ -13,6 +13,12 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
 
 ## Changes
 
+### 2026-08-26 — AF-118 — Strip the agent's own Teams @mention — PR pending
+
+- Delivered: Teams inbound normalization now removes the agent's own `<at>Name</at>` markup from the message text before persistence, matching Microsoft's documented guidance that the mention be stripped before the message is interpreted. Only the mention whose `mentioned.id` matches the connection's bot is removed; mentions of other people are preserved because they can be meaningful input.
+- Changed: Nothing else. Slack is unaffected — its markup is `<@U123>`, an identifier rather than a display name, so it never reads as a person.
+- Notes: Teams delivers channel and group-chat messages only when the agent is mentioned, so the markup was present on every one of them. Left in place it measurably degraded replies: an agent receiving `<at>Tommy</at> reply` answered "I don't see a message from Tommy to reply to", having read its own display name as a third party.
+
 ### 2026-08-26 — AF-118 — Teams round-trip fixes — PR pending
 
 - Delivered: Teams outbound replies now send a complete Bot Framework Activity (`conversation`, `from`, `recipient`, `replyToId`) to `POST /v3/conversations/{id}/activities`. A minimal `{type, text}` body was rejected with `400 Bad Request` and dead-lettered after five attempts. `normalize_inbound` now also records the addressable Teams ids (`from_id`, `recipient_id`) in provider metadata, because `sender.id` holds the Entra object id used for policy matching and cannot address a reply. Conversations are now labelled: a named group chat uses `conversation.name`, a DM falls back to the sender's name.

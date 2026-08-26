@@ -215,7 +215,7 @@ class TeamsPlatformPlugin(PlatformPlugin):
                     thread_id=thread_id,
                 ),
                 sender=CommunicationSender(id=sender_id, display_name=sender_name),
-                text=str(payload.get("text") or ""),
+                text=_without_own_mention(str(payload.get("text") or ""), payload.get("entities"), bot_id),
                 mentions=_mentioned_ids(payload.get("entities")),
                 provider_metadata={
                     "service_url": str(payload.get("serviceUrl") or ""),
@@ -235,6 +235,26 @@ def _occurred_at(raw: Any) -> datetime:
         except ValueError:
             logger.warning("Unparseable Teams activity timestamp: %s", raw)
     return datetime.now(UTC)
+
+
+def _without_own_mention(text: str, entities: Any, bot_id: str) -> str:
+    """Remove the agent's own `<at>Name</at>` markup, leaving other mentions intact.
+
+    Teams delivers channel messages only when the agent is mentioned, so the
+    markup is on every one of them. Left in, the agent reads its own display
+    name as a third party. Mentions of other people can be meaningful input and
+    are preserved.
+    """
+    if not isinstance(entities, list) or not bot_id:
+        return text
+    for entity in entities:
+        if not isinstance(entity, dict) or entity.get("type") != "mention":
+            continue
+        target = entity.get("mentioned")
+        markup = entity.get("text")
+        if isinstance(target, dict) and str(target.get("id") or "") == bot_id and markup:
+            text = text.replace(str(markup), "")
+    return text.strip()
 
 
 def _mentioned_ids(entities: Any) -> list[str]:
