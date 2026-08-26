@@ -2,13 +2,11 @@ from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
-from hamcrest import assert_that, calling, equal_to, has_length, raises
+from hamcrest import assert_that, calling, equal_to, raises
 
-from api.domains.agents.models import Agent, AgentPlatform, AgentStatus, AgentType
-from api.domains.conversations.models import ConversationType, MessageDirection
+from api.domains.agents.models import Agent, AgentStatus, AgentType
 from api.domains.ingest.models import (
     IngestBatchRequest,
-    IngestMessageEvent,
     IngestToolCallEvent,
     IngestToolResultEvent,
 )
@@ -22,7 +20,6 @@ def _make_agent(ingest_key_encrypted: str | None = "encrypted-key") -> Agent:
         organization_id=uuid4(),
         name="test-agent",
         status=AgentStatus.RUNNING,
-        platform=AgentPlatform.SLACK,
         agent_type=AgentType.OPENCLAW,
         litellm_key_encrypted="encrypted",
         model="gpt-5",
@@ -31,10 +28,9 @@ def _make_agent(ingest_key_encrypted: str | None = "encrypted-key") -> Agent:
     )
 
 
-def _make_service(agent_repo=None, conv_repo=None, tc_repo=None) -> IngestService:
+def _make_service(agent_repo=None, tc_repo=None) -> IngestService:
     return IngestService(
         agent_repository=agent_repo or MagicMock(),
-        conversation_repository=conv_repo or MagicMock(),
         tool_call_repository=tc_repo or MagicMock(),
     )
 
@@ -110,192 +106,15 @@ def test_authenticate_returns_agent_on_valid_key(mock_decrypt, mock_config):
 
 def test_process_empty_batch_does_nothing():
     with given():
-        conv_repo = MagicMock()
         tc_repo = MagicMock()
-        service = _make_service(conv_repo=conv_repo, tc_repo=tc_repo)
+        service = _make_service(tc_repo=tc_repo)
         agent = _make_agent()
 
         with when("I process an empty batch"):
             service.process(agent, IngestBatchRequest())
 
         with then("no repo methods are called"):
-            conv_repo.upsert_messages.assert_not_called()
             tc_repo.get_session.assert_not_called()
-
-
-@patch.object(IngestService, "_platform_maps", return_value=({}, {}))
-def test_process_messages_calls_upsert(mock_maps):
-    with given():
-        conv_repo = MagicMock()
-        service = _make_service(conv_repo=conv_repo)
-        agent = _make_agent()
-        now = datetime.now(UTC)
-        batch = IngestBatchRequest(
-            messages=[
-                IngestMessageEvent(
-                    msg_id="msg-1",
-                    session_key="agent:main:slack:dm:U123",
-                    channel_id="D123",
-                    direction=MessageDirection.INBOUND,
-                    conversation_type=ConversationType.DM,
-                    sender_id="U123",
-                    content="hello",
-                    occurred_at=now,
-                )
-            ]
-        )
-
-        with when("I process the batch"):
-            service.process(agent, batch)
-
-        with then("upsert_messages is called with one message"):
-            conv_repo.upsert_messages.assert_called_once()
-            messages = conv_repo.upsert_messages.call_args[0][0]
-            assert_that(messages, has_length(1))
-            assert_that(messages[0].openclaw_msg_id, equal_to("msg-1"))
-            assert_that(messages[0].content, equal_to("hello"))
-
-
-@patch.object(
-    IngestService,
-    "_platform_maps",
-    return_value=({"U123": "Alice"}, {"C456": "general"}),
-)
-def test_process_messages_resolves_names_from_slack(mock_maps):
-    with given():
-        conv_repo = MagicMock()
-        service = _make_service(conv_repo=conv_repo)
-        agent = _make_agent()
-        now = datetime.now(UTC)
-        batch = IngestBatchRequest(
-            messages=[
-                IngestMessageEvent(
-                    msg_id="msg-2",
-                    session_key="agent:main:slack:group:C456",
-                    channel_id="C456",
-                    direction=MessageDirection.INBOUND,
-                    conversation_type=ConversationType.CHANNEL,
-                    sender_id="U123",
-                    content="hi channel",
-                    occurred_at=now,
-                )
-            ]
-        )
-
-        with when("I process the batch"):
-            service.process(agent, batch)
-
-        with then("names are resolved from the maps"):
-            messages = conv_repo.upsert_messages.call_args[0][0]
-            assert_that(messages[0].sender_name, equal_to("Alice"))
-            assert_that(messages[0].channel_name, equal_to("general"))
-
-
-@patch.object(IngestService, "_platform_maps", return_value=({}, {}))
-def test_process_messages_keeps_provided_names(mock_maps):
-    with given():
-        conv_repo = MagicMock()
-        service = _make_service(conv_repo=conv_repo)
-        agent = _make_agent()
-        now = datetime.now(UTC)
-        batch = IngestBatchRequest(
-            messages=[
-                IngestMessageEvent(
-                    msg_id="msg-3",
-                    session_key="agent:main:slack:dm:U123",
-                    channel_id="D123",
-                    direction=MessageDirection.INBOUND,
-                    conversation_type=ConversationType.DM,
-                    sender_id="U123",
-                    sender_name="Bob",
-                    channel_name="bob-dm",
-                    content="hi",
-                    occurred_at=now,
-                )
-            ]
-        )
-
-        with when("I process the batch"):
-            service.process(agent, batch)
-
-        with then("the provided names are kept"):
-            messages = conv_repo.upsert_messages.call_args[0][0]
-            assert_that(messages[0].sender_name, equal_to("Bob"))
-            assert_that(messages[0].channel_name, equal_to("bob-dm"))
-
-
-@patch.object(
-    IngestService,
-    "_platform_maps",
-    return_value=({"42": "Alice"}, {"42": "Alice"}),
-)
-def test_process_messages_resolves_telegram_names(mock_maps):
-    with given():
-        conv_repo = MagicMock()
-        service = _make_service(conv_repo=conv_repo)
-        agent = _make_agent()
-        agent.platform = AgentPlatform.TELEGRAM
-        now = datetime.now(UTC)
-        batch = IngestBatchRequest(
-            messages=[
-                IngestMessageEvent(
-                    msg_id="tg-msg-1",
-                    session_key="agent:main:telegram:dm:42",
-                    channel_id="42",
-                    direction=MessageDirection.INBOUND,
-                    conversation_type=ConversationType.DM,
-                    sender_id="42",
-                    content="hello from telegram",
-                    occurred_at=now,
-                )
-            ]
-        )
-
-        with when("I process the batch"):
-            service.process(agent, batch)
-
-        with then("names are resolved from telegram maps"):
-            messages = conv_repo.upsert_messages.call_args[0][0]
-            assert_that(messages[0].sender_name, equal_to("Alice"))
-
-
-@patch("api.domains.ingest.service.get_config")
-@patch("api.domains.ingest.service.decrypt_token", return_value="discord-token")
-@patch("api.domains.ingest.service.DiscordClient")
-def test_process_messages_resolves_discord_names(mock_client_class, _mock_decrypt, mock_config):
-    with given():
-        agent_repo = MagicMock()
-        agent_repo.get_discord_config.return_value = MagicMock(bot_token_encrypted="encrypted-token")
-        conv_repo = MagicMock()
-        service = _make_service(agent_repo=agent_repo, conv_repo=conv_repo)
-        agent = _make_agent()
-        agent.platform = AgentPlatform.DISCORD
-        mock_config.return_value = MagicMock(agent_token_encryption_key="enc-key")
-        mock_client = mock_client_class.return_value
-        mock_client.get_user_display_name.return_value = "Alice"
-        mock_client.get_channel_display_name.return_value = "ops-alerts"
-        batch = IngestBatchRequest(
-            messages=[
-                IngestMessageEvent(
-                    msg_id="discord-msg-1",
-                    session_key="agent:main:discord:channel:channel-1",
-                    channel_id="channel-1",
-                    direction=MessageDirection.INBOUND,
-                    conversation_type=ConversationType.CHANNEL,
-                    sender_id="user-1",
-                    content="hello from Discord",
-                    occurred_at=datetime.now(UTC),
-                )
-            ]
-        )
-
-        with when("I process Discord telemetry without display names"):
-            service.process(agent, batch)
-
-        with then("the Discord directory supplies the sender and channel names"):
-            message = conv_repo.upsert_messages.call_args.args[0][0]
-            assert_that(message.sender_name, equal_to("Alice"))
-            assert_that(message.channel_name, equal_to("ops-alerts"))
 
 
 def test_process_tool_calls_calls_upsert_pending():

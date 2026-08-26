@@ -1,6 +1,6 @@
-# Agent Farm
+# Agent Barn
 
-Agent Farm manages organization-owned AI agents that operate in Slack, Microsoft Teams, Telegram, or Discord through a selected runtime and a versioned configuration.
+Agent Barn manages organization-owned AI agents that use a selected runtime and versioned configuration, and communicate through zero or more connections supplied by shipped Platform Plugins.
 
 ## Language
 
@@ -21,7 +21,7 @@ The deployment-configured maximum number of non-deleted Organizations attributed
 _Avoid_: Membership limit, ownership limit, Platform Administrator quota
 
 **Platform Administrator**:
-A user with platform-level authority to administer Agent Farm outside any single Organization. A Platform Administrator may also have normal Memberships, but platform authority is separate from Organization Membership authority.
+A user with platform-level authority to administer Agent Barn outside any single Organization. A Platform Administrator may also have normal Memberships, but platform authority is separate from Organization Membership authority.
 _Avoid_: superuser, super admin, global role
 
 **Platform Privilege**:
@@ -29,7 +29,7 @@ The platform-level grant that makes a user a Platform Administrator.
 _Avoid_: global Membership, Organization Role, default Organization ownership
 
 **Platform Resource**:
-A global resource owned by Agent Farm itself rather than by an Organization.
+A global resource owned by Agent Barn itself rather than by an Organization.
 _Avoid_: default Organization resource, shared tenant data
 
 **Platform View**:
@@ -77,7 +77,7 @@ The user who originally created an Agent, retained as immutable provenance. Crea
 _Avoid_: Organization Owner, permanent Agent authority
 
 **Agent**:
-An organization-owned AI worker configured from one active shared Template Version or Agent Template Override Version, and executed by one Runtime on one Platform.
+An organization-owned AI worker configured from one active shared Template Version or Agent Template Override Version, executed by one Runtime, and reachable through zero or more Communication Connections.
 _Avoid_: bot, pod
 
 **Configured Model**:
@@ -89,12 +89,20 @@ The models and token usage attributed to Agent executions during a defined repor
 _Avoid_: configured model, current model
 
 **Runtime**:
-The implementation that executes an agent. Agent Farm currently supports Hermes and OpenClaw.
+The implementation that executes an agent. Agent Barn currently supports Hermes and OpenClaw.
 _Avoid_: platform
 
 **Platform**:
-The chat system through which an agent interacts with people. Agent Farm currently supports Slack, Microsoft Teams, Telegram, and Discord.
+The chat system through which an Agent interacts with people. Agent Barn support for a Platform is supplied by a shipped Platform Plugin.
 _Avoid_: runtime
+
+**Communication Connection**:
+An Agent-owned configured relationship to one bot, application, account, or endpoint on a Platform. An Agent may have multiple Communication Connections, including several on the same Platform.
+_Avoid_: channel, integration, platform config
+
+**Platform Plugin**:
+A trusted, release-shipped module that supplies Agent Barn's support for one Platform.
+_Avoid_: integration, runtime plugin, dynamically installed plugin
 
 **Template**:
 A versioned Markdown configuration lineage used to create and run agents. Predefined templates are Platform Resources; custom templates belong to one Organization.
@@ -177,7 +185,7 @@ An ingested record of one external tool execution by an agent, with pending, suc
 _Avoid_: integration call
 
 **Domain Event**:
-An immutable, typed business fact that occurred at Platform or Organization scope and may be handled internally by Agent Farm.
+An immutable, typed business fact that occurred at Platform or Organization scope and may be handled internally by Agent Barn.
 _Avoid_: outbox row, telemetry event, audit log
 
 **Event Scope**:
@@ -217,7 +225,7 @@ A durable, immutable compliance artifact that records a security-relevant fact, 
 _Avoid_: domain event, audit event, log line
 
 **Ingest**:
-The separately served, authenticated telemetry path through which agent runtimes report conversation messages and tool-call state to Agent Farm.
+The separately served, authenticated telemetry path through which agent runtimes report conversation messages and tool-call state to Agent Barn.
 _Avoid_: webhook
 
 ## Relationships
@@ -228,7 +236,8 @@ _Avoid_: webhook
 - A **Membership** links one user to one **Organization** with one **Organization Role**.
 - An **Organization Role** grants **Permissions** for Organization capabilities.
 - An **Agent Access Role** grants **Permissions** for one Agent aggregate.
-- An **Agent** belongs to one **Organization**, has one original **Agent Creator**, pins one active shared **Template Version** or **Agent Template Override Version**, uses one **Runtime**, and connects to one **Platform**.
+- An **Agent** belongs to one **Organization**, has one original **Agent Creator**, pins one active shared **Template Version** or **Agent Template Override Version**, uses one **Runtime**, and owns zero or more **Communication Connections**.
+- Each **Communication Connection** belongs to one **Agent**, targets one **Platform**, and is interpreted by that Platform's **Platform Plugin**.
 - An **Agent** has one current **Configured Model** and may have **Observed Model Usage** for multiple models over time.
 - A **Membership** may have **Agent Access** to many Agents, and each relationship carries one **Agent Access Role**; creating an Agent grants its creator explicit Agent Owner access without transferring Organization ownership.
 - An **Agent** has one **Agent General Access** setting whose Permissions combine with (never subtract from) explicit Agent Access grants.

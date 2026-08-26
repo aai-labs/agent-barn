@@ -15,7 +15,7 @@ from api.core.metrics import (
     refresh_openrouter_credits,
     render_metrics,
 )
-from api.domains.agents.models import Agent, AgentPlatform, AgentStatus, AgentType
+from api.domains.agents.models import Agent, AgentStatus, AgentType
 from api.domains.ingest.models import IngestBatchRequest, IngestToolResultEvent
 from api.domains.ingest.service import IngestService
 from api.domains.tool_calls.models import ToolCall, ToolCallStatus
@@ -35,7 +35,6 @@ def _make_agent() -> Agent:
         organization_id=uuid4(),
         name="test-agent",
         status=AgentStatus.RUNNING,
-        platform=AgentPlatform.SLACK,
         agent_type=AgentType.OPENCLAW,
         litellm_key_encrypted="encrypted",
         model="gpt-5",
@@ -61,13 +60,12 @@ def _make_tool_call(agent: Agent, tool_name: str, status: ToolCallStatus) -> Too
 def _make_service(tc_repo) -> IngestService:
     return IngestService(
         agent_repository=MagicMock(),
-        conversation_repository=MagicMock(),
         tool_call_repository=tc_repo,
     )
 
 
 def _tool_calls_total(tool_name: str, status: str) -> float | None:
-    return REGISTRY.get_sample_value("agentfarm_tool_calls_total", {"tool_name": tool_name, "status": status})
+    return REGISTRY.get_sample_value("agentbarn_tool_calls_total", {"tool_name": tool_name, "status": status})
 
 
 def _mock_tc_repo(completed: ToolCall | None) -> MagicMock:
@@ -150,7 +148,7 @@ def test_refresh_database_gauge_sets_one_when_reachable():
 
         with then("the gauge reads 1"):
             assert_that(
-                PROBE_REGISTRY.get_sample_value("agentfarm_database_up"),
+                PROBE_REGISTRY.get_sample_value("agentbarn_database_up"),
                 equal_to(1.0),
             )
 
@@ -164,7 +162,7 @@ def test_refresh_database_gauge_sets_zero_without_raising_on_failure():
 
         with then("the gauge reads 0 and nothing raises"):
             assert_that(
-                PROBE_REGISTRY.get_sample_value("agentfarm_database_up"),
+                PROBE_REGISTRY.get_sample_value("agentbarn_database_up"),
                 equal_to(0.0),
             )
 
@@ -179,7 +177,7 @@ def test_refresh_agents_in_error_sets_count():
 
         with then("the gauge reads 3"):
             assert_that(
-                PROBE_REGISTRY.get_sample_value("agentfarm_agents_in_error"),
+                PROBE_REGISTRY.get_sample_value("agentbarn_agents_in_error"),
                 equal_to(3.0),
             )
 
@@ -196,7 +194,7 @@ def test_refresh_agents_in_error_keeps_last_value_on_failure():
 
         with then("the gauge keeps its last value and nothing raises"):
             assert_that(
-                PROBE_REGISTRY.get_sample_value("agentfarm_agents_in_error"),
+                PROBE_REGISTRY.get_sample_value("agentbarn_agents_in_error"),
                 equal_to(2.0),
             )
 
@@ -226,11 +224,11 @@ def test_refresh_openrouter_credits_sets_key_limit_remaining(mock_config, mock_g
 
         with then("the key's remaining credit limit and scrape_ok are set"):
             assert_that(
-                PROBE_REGISTRY.get_sample_value("agentfarm_openrouter_credits_remaining"),
+                PROBE_REGISTRY.get_sample_value("agentbarn_openrouter_credits_remaining"),
                 equal_to(75.0),
             )
             assert_that(
-                PROBE_REGISTRY.get_sample_value("agentfarm_openrouter_credits_scrape_ok"),
+                PROBE_REGISTRY.get_sample_value("agentbarn_openrouter_credits_scrape_ok"),
                 equal_to(1.0),
             )
 
@@ -249,11 +247,11 @@ def test_refresh_openrouter_credits_unlimited_key_reads_infinite(mock_config, mo
 
         with then("the gauge reads +Inf and the poll counts as healthy"):
             assert_that(
-                PROBE_REGISTRY.get_sample_value("agentfarm_openrouter_credits_remaining"),
+                PROBE_REGISTRY.get_sample_value("agentbarn_openrouter_credits_remaining"),
                 equal_to(float("inf")),
             )
             assert_that(
-                PROBE_REGISTRY.get_sample_value("agentfarm_openrouter_credits_scrape_ok"),
+                PROBE_REGISTRY.get_sample_value("agentbarn_openrouter_credits_scrape_ok"),
                 equal_to(1.0),
             )
 
@@ -292,7 +290,7 @@ def test_refresh_openrouter_credits_scrape_not_ok_without_key(mock_config, mock_
 
         with then("scrape_ok is 0 and no request is made"):
             assert_that(
-                PROBE_REGISTRY.get_sample_value("agentfarm_openrouter_credits_scrape_ok"),
+                PROBE_REGISTRY.get_sample_value("agentbarn_openrouter_credits_scrape_ok"),
                 equal_to(0.0),
             )
             mock_get.assert_not_called()
@@ -310,7 +308,7 @@ def test_refresh_openrouter_credits_scrape_not_ok_on_http_error(mock_config, moc
 
         with then("scrape_ok is 0 and nothing raises"):
             assert_that(
-                PROBE_REGISTRY.get_sample_value("agentfarm_openrouter_credits_scrape_ok"),
+                PROBE_REGISTRY.get_sample_value("agentbarn_openrouter_credits_scrape_ok"),
                 equal_to(0.0),
             )
 
@@ -343,5 +341,5 @@ def test_render_metrics_concatenates_registries():
             output = render_metrics(REGISTRY, PROBE_REGISTRY).decode()
 
         with then("it contains metrics from both"):
-            assert_that(output, contains_string("agentfarm_agents_in_error"))
+            assert_that(output, contains_string("agentbarn_agents_in_error"))
             assert_that(output, not_none())

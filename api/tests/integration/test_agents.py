@@ -4,12 +4,13 @@ from unittest.mock import MagicMock, patch
 from uuid import uuid7
 
 import httpx
-import yaml
-from fastapi import status
+from fastapi import HTTPException, status
 from hamcrest import (
     assert_that,
     contains_string,
     equal_to,
+    greater_than,
+    has_item,
     has_key,
     is_in,
     is_not,
@@ -18,21 +19,14 @@ from hamcrest import (
 from starlette.testclient import TestClient
 
 from api.domains.agents.models import (
-    AgentPlatform,
-    AgentSecret,
     AgentStatus,
     AgentTemplateOverrideSourceType,
     AgentTemplateOverrideVersion,
     AgentType,
-    DiscordGroupPolicy,
     SecretProvider,
-    SlackContent,
-    encrypt_content,
-    validate_content,
 )
 from api.domains.agents.override_repository import AgentOverrideRepository
 from api.domains.agents.repository import AgentRepository
-from api.domains.agents.service import AgentService
 from api.domains.events.catalog import (
     AGENT_CREATED,
     AGENT_DELETED,
@@ -51,10 +45,9 @@ from api.domains.events.processor import EventDeliveryProcessor
 from api.domains.events.repository import OutboxMessageRepository
 from api.domains.events.security_audit import SecurityAuditRepository
 from api.domains.organizations.repository import OrganizationRepository
-from api.domains.rbac.catalog import PermissionKey
 from api.domains.templates.models import AgentTemplate, PlatformTemplate
 from api.domains.templates.repository import TemplateRepository
-from api.infrastructure.crypto import decrypt_token
+from api.infrastructure.integration_validators.result import IntegrationValidationResult
 from api.infrastructure.kubernetes.client import KubernetesClient
 from api.infrastructure.litellm.client import LiteLLMClient, LiteLLMError
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
@@ -68,14 +61,12 @@ from api.tests.core.modules import (
 from api.tests.steps.agent import (
     FAKE_LITELLM_KEY,
     TEST_ENCRYPTION_KEY,
-    TEST_SLACK_BOT_TOKEN,
     MockK8sModule,
     MockLiteLLMModule,
     skill_is_assigned_to_agent,
     there_is_a_skill,
     there_is_a_skill_for_another_org,
     there_is_an_agent,
-    there_is_an_agent_in_another_org,
     use_org_for_auth,
 )
 from api.tests.steps.database import database_is_clean, database_repo_is_ready
@@ -90,32 +81,12 @@ from api.tests.steps.template import (
 
 _BASE = "/api/v1/organizations/{organization_id}/agents"
 
+# Agents run in k3d while the API runs outside it (compose or the host), so the
+# pod-facing ingest URL is an override, not the in-cluster default.
+_INGEST_BASE_URL = "http://host.docker.internal:8001/ingest/v1"
+
 _VALID_CREATE = {
     "name": "My Agent",
-    "platform": "slack",
-    "slack_bot_token": "xoxb-real-bot-token",
-    "slack_app_token": "xapp-1-real-app-token",
-    "template_key": "test-template",
-}
-
-_VALID_CREATE_TEAMS = {
-    "name": "My Teams Agent",
-    "platform": "teams",
-    "teams_app_id": "test-app-id-000",
-    "teams_app_password": "test-app-password-000",
-    "teams_tenant_id": "test-tenant-000",
-    "template_key": "test-template",
-}
-
-_VALID_CREATE_DISCORD = {
-    "name": "My Discord Agent",
-    "platform": "discord",
-    "discord_bot_token": "discord-bot-token",
-    "discord_guild_ids": ["guild-1"],
-    "discord_allowed_channel_ids": ["channel-1"],
-    "discord_allowed_user_ids": ["user-1"],
-    "discord_allowed_role_ids": ["role-1"],
-    "discord_home_channel_id": "channel-1",
     "template_key": "test-template",
 }
 
@@ -139,6 +110,55 @@ _GIVEN = [
     there_is_an_organization_with_user_and_access_token(),
     use_org_for_auth(),
     there_is_a_template(),
+]
+
+_VALID_CREATE_HERMES = {
+    "name": "My Hermes Agent",
+    "agent_type": "hermes",
+    "template_key": "test-template",
+}
+
+_GIVEN_WITH_HERMES_IMAGE = [
+    set_env_variable(
+        {
+            "AGENT_TOKEN_ENCRYPTION_KEY": TEST_ENCRYPTION_KEY,
+            "LITELLM_BASE_URL": "http://litellm:4000",
+            "LITELLM_SECRET_NAME": "litellm",
+            "AGENT_DEFAULT_MODEL": "litellm/gpt-5-mini",
+            "AGENT_LITELLM_BASE_URL": "http://litellm:4000",
+            "API_EXTERNAL_URL": "https://api.test.com",
+            "HERMES_IMAGE": "nousresearch/hermes-agent:v1.0",
+        }
+    ),
+    prepare_injector(modules=[MockK8sModule(), MockLiteLLMModule()]),
+    prepare_api_server(),
+    create_test_client(),
+    database_repo_is_ready(),
+    database_is_clean(),
+    there_is_an_organization_with_user_and_access_token(),
+    use_org_for_auth(),
+    there_is_a_template(),
+]
+
+
+# Same as _GIVEN but with no server-owned Google OAuth client. Set here rather than in a
+# later step because Config is built (and cached) when the injector is prepared, and a
+# developer's root .env may define real Google credentials.
+_GIVEN_WITHOUT_GOOGLE_CLIENT = [
+    set_env_variable(
+        {
+            "AGENT_TOKEN_ENCRYPTION_KEY": TEST_ENCRYPTION_KEY,
+            "LITELLM_BASE_URL": "http://litellm:4000",
+            "LITELLM_SECRET_NAME": "litellm",
+            "AGENT_DEFAULT_MODEL": "litellm/gpt-5-mini",
+            "AGENT_LITELLM_BASE_URL": "http://litellm:4000",
+            "API_EXTERNAL_URL": "https://api.test.com",
+            "SKIP_SLACK_TOKEN_VALIDATION": "true",
+            "GOOGLE_CLOUD_CLIENT_ID": "",
+            "GOOGLE_CLOUD_CLIENT_SECRET": "",
+        }
+    ),
+    *_GIVEN[1:],
 ]
 
 
@@ -183,25 +203,10 @@ def _pin_override_to_source(
     return version
 
 
-def test_create_slack_agent_returns_201_stopped():
-    with given(_GIVEN) as context:
-        client: TestClient = context.client
-
-        with when("I create a Slack agent with valid data"):
-            response = client.post(_BASE, json=_VALID_CREATE, headers=_auth(context))
-
-        with then("it returns 201 with status stopped"):
-            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
-            body = response.json()
-            assert_that(body["name"], equal_to("My Agent"))
-            assert_that(body["status"], equal_to(AgentStatus.STOPPED.value))
-            assert_that(body, is_not(has_key("slack_bot_token")))
-            assert_that(body, is_not(has_key("slack_app_token")))
-
-
 def test_create_agent_rejects_model_not_in_org_allowlist():
     with given(_GIVEN) as context:
         client: TestClient = context.client
+        litellm: MagicMock = context.injector.get(LiteLLMClient)
         org_repo: OrganizationRepository = context.injector.get(OrganizationRepository)
         org = org_repo.get(context.organization.id)
         assert org is not None
@@ -215,6 +220,7 @@ def test_create_agent_rejects_model_not_in_org_allowlist():
         with then("it returns 400"):
             assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
             assert_that(response.json()["detail"], contains_string("not in the allowed model list"))
+            litellm.generate_key.assert_not_called()
 
 
 def test_create_agent_emits_created_domain_event():
@@ -262,6 +268,7 @@ def test_create_agent_rejects_template_slug_after_key_migration():
 def test_create_agent_unknown_template_key_returns_404():
     with given(_GIVEN) as context:
         client: TestClient = context.client
+        litellm: MagicMock = context.injector.get(LiteLLMClient)
         payload = {**_VALID_CREATE, "template_key": "no-such-template"}
 
         with when("I create an agent referencing a non-existent template"):
@@ -269,6 +276,24 @@ def test_create_agent_unknown_template_key_returns_404():
 
         with then("it returns 404"):
             assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
+            litellm.generate_key.assert_not_called()
+
+
+def test_create_agent_missing_shared_credential_returns_404_before_litellm_key_generation():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+        litellm: MagicMock = context.injector.get(LiteLLMClient)
+        payload = {
+            **_VALID_CREATE,
+            "shared_credentials": [{"shared_credential_id": str(uuid7())}],
+        }
+
+        with when("I create an agent with a missing shared credential"):
+            response = client.post(_BASE, json=payload, headers=_auth(context))
+
+        with then("it returns 404 without allocating a LiteLLM key"):
+            assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
+            litellm.generate_key.assert_not_called()
 
 
 def test_create_agent_no_auth_returns_401():
@@ -349,14 +374,80 @@ def test_create_agent_default_approval_mode_is_auto():
             assert_that(response.json()["approval_mode"], equal_to("auto"))
 
 
-def test_create_agent_with_approval_mode_off():
+def test_create_openclaw_agent_with_approval_mode_off_returns_400():
     with given(_GIVEN) as context:
         client: TestClient = context.client
 
-        with when("I create an agent with approval_mode off"):
+        with when("I create an OpenClaw agent with approval_mode off"):
             response = client.post(
                 _BASE,
                 json={**_VALID_CREATE, "approval_mode": "off"},
+                headers=_auth(context),
+            )
+
+        with then("it returns 400 because OpenClaw does not support command approval"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+            assert_that(response.json()["detail"], contains_string("OpenClaw"))
+
+
+def test_create_openclaw_agent_with_approval_mode_manual_returns_400_and_does_not_persist_agent():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+
+        with when("I create an OpenClaw agent with approval_mode manual"):
+            response = client.post(
+                _BASE,
+                json={**_VALID_CREATE, "approval_mode": "manual"},
+                headers=_auth(context),
+            )
+
+        with then("it returns 400 and no agent is persisted"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+            assert_that(response.json()["detail"], contains_string("OpenClaw"))
+            agents = client.get(_BASE, headers=_auth(context)).json()["items"]
+            assert_that(len(agents), equal_to(0))
+
+
+def test_create_hermes_agent_with_approval_mode_manual():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+
+        with when("I create a Hermes agent with approval_mode manual"):
+            response = client.post(
+                _BASE,
+                json={**_VALID_CREATE_HERMES, "approval_mode": "manual"},
+                headers=_auth(context),
+            )
+
+        with then("the response has approval_mode set to manual"):
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+            assert_that(response.json()["approval_mode"], equal_to("manual"))
+
+
+def test_create_hermes_agent_with_approval_mode_auto():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+
+        with when("I create a Hermes agent with approval_mode auto"):
+            response = client.post(
+                _BASE,
+                json={**_VALID_CREATE_HERMES, "approval_mode": "auto"},
+                headers=_auth(context),
+            )
+
+        with then("the response has approval_mode set to auto"):
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+            assert_that(response.json()["approval_mode"], equal_to("auto"))
+
+
+def test_create_hermes_agent_with_approval_mode_off():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+
+        with when("I create a Hermes agent with approval_mode off"):
+            response = client.post(
+                _BASE,
+                json={**_VALID_CREATE_HERMES, "approval_mode": "off"},
                 headers=_auth(context),
             )
 
@@ -562,12 +653,12 @@ def test_patch_agent_no_auth_returns_401():
             assert_that(response.status_code, equal_to(status.HTTP_401_UNAUTHORIZED))
 
 
-def test_patch_agent_approval_mode():
-    with given([*_GIVEN, there_is_an_agent()]) as context:
+def test_patch_hermes_agent_approval_mode_to_manual():
+    with given([*_GIVEN, there_is_an_agent(agent_type=AgentType.HERMES)]) as context:
         client: TestClient = context.client
         agent_id = str(context.agent.id)
 
-        with when("I update the agent's approval_mode to manual"):
+        with when("I update the Hermes agent's approval_mode to manual"):
             response = client.patch(
                 f"{_BASE}/{agent_id}",
                 json={"approval_mode": "manual"},
@@ -577,6 +668,78 @@ def test_patch_agent_approval_mode():
         with then("the response reflects the new approval_mode"):
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
             assert_that(response.json()["approval_mode"], equal_to("manual"))
+
+
+def test_patch_hermes_agent_approval_mode_to_off():
+    with given([*_GIVEN, there_is_an_agent(agent_type=AgentType.HERMES)]) as context:
+        client: TestClient = context.client
+        agent_id = str(context.agent.id)
+
+        with when("I update the Hermes agent's approval_mode to off"):
+            response = client.patch(
+                f"{_BASE}/{agent_id}",
+                json={"approval_mode": "off"},
+                headers=_auth(context),
+            )
+
+        with then("the response reflects the new approval_mode"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(response.json()["approval_mode"], equal_to("off"))
+
+
+def test_patch_openclaw_agent_approval_mode_manual_returns_400_and_leaves_agent_unchanged():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        agent_id = str(context.agent.id)
+        original = client.get(f"{_BASE}/{agent_id}", headers=_auth(context)).json()
+
+        with when("I update the OpenClaw agent's approval_mode to manual"):
+            response = client.patch(
+                f"{_BASE}/{agent_id}",
+                json={"approval_mode": "manual"},
+                headers=_auth(context),
+            )
+
+        with then("it returns 400 and the agent is unchanged"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+            assert_that(response.json()["detail"], contains_string("OpenClaw"))
+            current = client.get(f"{_BASE}/{agent_id}", headers=_auth(context)).json()
+            assert_that(current["approval_mode"], equal_to(original["approval_mode"]))
+
+
+def test_patch_openclaw_agent_approval_mode_off_returns_400():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        agent_id = str(context.agent.id)
+
+        with when("I update the OpenClaw agent's approval_mode to off"):
+            response = client.patch(
+                f"{_BASE}/{agent_id}",
+                json={"approval_mode": "off"},
+                headers=_auth(context),
+            )
+
+        with then("it returns 400"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+            assert_that(response.json()["detail"], contains_string("OpenClaw"))
+
+
+def test_patch_agent_approval_mode_null_returns_422_and_leaves_agent_unchanged():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        agent_id = str(context.agent.id)
+
+        with when("I update approval_mode to null"):
+            response = client.patch(
+                f"{_BASE}/{agent_id}",
+                json={"approval_mode": None},
+                headers=_auth(context),
+            )
+
+        with then("it rejects null rather than clearing the non-null setting"):
+            assert_that(response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_ENTITY))
+            current = client.get(f"{_BASE}/{agent_id}", headers=_auth(context)).json()
+            assert_that(current["approval_mode"], equal_to("auto"))
 
 
 _JIRA_CONTENT = {
@@ -608,14 +771,14 @@ def test_patch_agent_adds_secret():
             assert_that(jira["secret_name"], equal_to("Jira credential"))
 
 
-def test_patch_agent_adds_google_sheets_secret():
-    """Exercises the provider check constraint: a provider missing from the migration
-    is rejected by the database, not by validation, so this only passes once both the
-    enum and the constraint know about google_sheets."""
+def test_patch_agent_rejects_retired_google_provider():
+    """The per-service Google providers were removed outright — enum member, content
+    model and rows (deleted by migration c9f1b30a7d42). A stale client naming one must be
+    refused by request validation rather than reaching the database."""
     with given([*_GIVEN, there_is_an_agent()]) as context:
         client: TestClient = context.client
 
-        with when("I patch the agent with a google sheets secret"):
+        with when("I patch the agent with a retired google sheets secret"):
             response = client.patch(
                 f"{_BASE}/{context.agent.id}",
                 json={
@@ -629,13 +792,9 @@ def test_patch_agent_adds_google_sheets_secret():
                 headers=_auth(context),
             )
 
-        with then("it returns 200 and the agent exposes the google sheets secret"):
-            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
-            assert_that(_providers(response), equal_to(["google_sheets"]))
-            sheets = response.json()["secrets"][0]
-            assert_that(sheets["secret_name"], equal_to("Google Sheets credential"))
-            # Read APIs return provider and label, never credential contents.
-            assert_that("content" in sheets, equal_to(False))
+        with then("it is rejected as an unknown provider"):
+            assert_that(response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_ENTITY))
+            assert_that("google_sheets" in response.text, equal_to(True))
 
 
 def test_patch_agent_upserts_existing_secret():
@@ -907,31 +1066,6 @@ def test_start_agent_sets_status_running():
             )
 
 
-def test_start_telegram_agent_labels_service_with_org_and_agent_name():
-    # Regression: the telegram start path once built its Service without the
-    # monitoring identity labels because org_name was threaded in from the
-    # route on the other platforms' paths only. Resolution now lives in the
-    # service, so every platform labels agents consistently.
-    with given([*_GIVEN, there_is_an_agent(platform=AgentPlatform.TELEGRAM)]) as context:
-        client: TestClient = context.client
-        k8s: MagicMock = context.injector.get(KubernetesClient)
-
-        with (
-            when("I start a telegram agent"),
-            patch(
-                "api.domains.agents.service.validate_telegram_bot_token",
-                return_value=(True, "", {"username": "test_bot"}),
-            ),
-        ):
-            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
-
-        with then("its Service carries the monitoring identity labels"):
-            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
-            service = k8s.create_service.call_args.args[1]
-            assert_that(service.metadata.labels["org-name"], equal_to("test-organization"))
-            assert_that(service.metadata.labels["agent-name"], equal_to("test-agent"))
-
-
 def test_start_agent_emits_started_domain_event_and_delivery():
     with given([*_GIVEN, there_is_an_agent()]) as context:
         client: TestClient = context.client
@@ -954,6 +1088,28 @@ def test_start_agent_emits_started_domain_event_and_delivery():
             # after is best-effort (falls back to background reconciliation on failure),
             # so whether it's already ENQUEUED here depends on Redis being reachable.
             assert_that(deliveries[0].status, is_in([EventDeliveryStatus.PENDING, EventDeliveryStatus.ENQUEUED]))
+
+
+def test_start_agent_wires_telemetry_push_into_the_secret():
+    with given(
+        [
+            set_env_variable({"INGEST_BASE_URL": _INGEST_BASE_URL}),
+            *_GIVEN,
+            there_is_an_agent(),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        k8s: MagicMock = context.injector.get(KubernetesClient)
+
+        with when("I start the agent"):
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("the secret carries the telemetry push wiring the plugins read"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            _, secret = k8s.create_secret.call_args.args
+            assert_that(secret.string_data["AGENT_ID"], equal_to(str(context.agent.id)))
+            assert_that(secret.string_data["INGEST_URL"], equal_to(_INGEST_BASE_URL))
+            assert_that(secret.string_data["INGEST_API_KEY"], is_not(equal_to("")))
 
 
 def test_start_already_running_returns_409():
@@ -1329,6 +1485,8 @@ def test_create_agent_calls_litellm_generate_key():
             agent_id = response.json()["id"]
             # the test uses _VALID_CREATE where name is "Test Agent"
             litellm.generate_key.assert_called_once_with(agent_id, _VALID_CREATE["name"], str(context.organization.id))
+            litellm.delete_key.assert_not_called()
+            litellm.block_key.assert_not_called()
 
 
 def test_create_agent_litellm_failure_returns_503():
@@ -1353,6 +1511,117 @@ def test_create_agent_litellm_failure_returns_503():
                 Pagination(page=1, size=10),
             )
             assert_that(total, equal_to(0))
+
+
+def test_create_agent_releases_litellm_key_when_persistence_fails():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+        repository: AgentRepository = context.injector.get(AgentRepository)
+        litellm: MagicMock = context.injector.get(LiteLLMClient)
+
+        with patch.object(
+            repository,
+            "create_with_creator_access",
+            side_effect=HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="persistence failed"),
+        ):
+            response = client.post(_BASE, json=_VALID_CREATE, headers=_auth(context))
+
+        with then("the unowned key is deleted exactly once"):
+            assert_that(response.status_code, equal_to(status.HTTP_500_INTERNAL_SERVER_ERROR))
+            litellm.delete_key.assert_called_once_with(FAKE_LITELLM_KEY)
+            litellm.block_key.assert_not_called()
+
+
+def test_create_agent_blocks_key_when_litellm_deletion_reports_failure(caplog):
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+        repository: AgentRepository = context.injector.get(AgentRepository)
+        litellm: MagicMock = context.injector.get(LiteLLMClient)
+        litellm.delete_key.return_value = False
+
+        with patch.object(
+            repository,
+            "create_with_creator_access",
+            side_effect=HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="persistence failed"),
+        ):
+            with caplog.at_level("WARNING"):
+                response = client.post(_BASE, json=_VALID_CREATE, headers=_auth(context))
+
+        with then("blocking is attempted and the plaintext key is absent from logs"):
+            assert_that(response.status_code, equal_to(status.HTTP_500_INTERNAL_SERVER_ERROR))
+            litellm.delete_key.assert_called_once_with(FAKE_LITELLM_KEY)
+            litellm.block_key.assert_called_once_with(FAKE_LITELLM_KEY)
+            assert_that(caplog.text, is_not(contains_string(FAKE_LITELLM_KEY)))
+
+
+def test_create_agent_blocks_key_when_litellm_deletion_raises(caplog):
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+        repository: AgentRepository = context.injector.get(AgentRepository)
+        litellm: MagicMock = context.injector.get(LiteLLMClient)
+        litellm.delete_key.side_effect = RuntimeError("remote delete failed")
+
+        with patch.object(
+            repository,
+            "create_with_creator_access",
+            side_effect=HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="persistence failed"),
+        ):
+            with caplog.at_level("WARNING"):
+                response = client.post(_BASE, json=_VALID_CREATE, headers=_auth(context))
+
+        with then("blocking is attempted after a deletion exception"):
+            assert_that(response.status_code, equal_to(status.HTTP_500_INTERNAL_SERVER_ERROR))
+            litellm.delete_key.assert_called_once_with(FAKE_LITELLM_KEY)
+            litellm.block_key.assert_called_once_with(FAKE_LITELLM_KEY)
+            assert_that(caplog.text, is_not(contains_string(FAKE_LITELLM_KEY)))
+
+
+def test_create_agent_rolls_back_initial_resources_before_releasing_key():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+        outbox: OutboxMessageRepository = context.injector.get(OutboxMessageRepository)
+        litellm: MagicMock = context.injector.get(LiteLLMClient)
+
+        with (
+            patch.dict(
+                "api.domains.agents.service.PROVIDER_VALIDATORS",
+                {SecretProvider.JIRA: lambda _content: IntegrationValidationResult(valid=True)},
+            ),
+            patch.object(
+                outbox,
+                "stage",
+                side_effect=[
+                    None,
+                    HTTPException(
+                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                        detail="secret persistence failed",
+                    ),
+                ],
+            ),
+        ):
+            response = client.post(
+                _BASE,
+                json={
+                    **_VALID_CREATE,
+                    "secrets": [
+                        {
+                            "provider": "jira",
+                            "content": {
+                                "site_url": "https://acme.atlassian.net",
+                                "email": "a@b.com",
+                                "api_token": "jira-token",
+                            },
+                        }
+                    ],
+                },
+                headers=_auth(context),
+            )
+
+        with then("the failed transaction leaves no Agent before key compensation"):
+            assert_that(response.status_code, equal_to(status.HTTP_500_INTERNAL_SERVER_ERROR))
+            litellm.delete_key.assert_called_once_with(FAKE_LITELLM_KEY)
+            litellm.block_key.assert_not_called()
+            assert_that(client.get(_BASE, headers=_auth(context)).json()["items"], equal_to([]))
 
 
 def test_start_agent_injects_per_agent_key():
@@ -1381,6 +1650,7 @@ def test_delete_agent_calls_litellm_block_key():
         with then("LiteLLM block_key was called once"):
             assert_that(response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
             litellm.block_key.assert_called_once_with(FAKE_LITELLM_KEY)
+            litellm.delete_key.assert_not_called()
 
 
 def test_delete_agent_litellm_failure_still_returns_204():
@@ -1394,6 +1664,7 @@ def test_delete_agent_litellm_failure_still_returns_204():
 
         with then("it still returns 204"):
             assert_that(response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
+            litellm.delete_key.assert_not_called()
 
 
 def test_create_agent_with_model():
@@ -1475,26 +1746,21 @@ def test_start_agent_configmap_has_init_script():
             assert_that(config_map.data, has_key("init-openclaw.js"))
 
 
-def test_start_agent_init_script_does_not_copy_whole_openclaw_npm_tree():
+def test_start_agent_init_script_scrubs_legacy_provider_configuration():
     with given([*_GIVEN, there_is_an_agent()]) as context:
         client: TestClient = context.client
         k8s: MagicMock = context.injector.get(KubernetesClient)
 
-        with when("I start a Slack agent"):
+        with when("I start a headless agent"):
             response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
 
-        with then("the init script does not restore Teams plugins for every agent"):
+        with then("the init script replaces channels and bindings wholesale"):
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
             config_map = k8s.create_config_map.call_args.args[1]
             init_js = config_map.data["init-openclaw.js"]
-            assert_that(
-                init_js,
-                is_not(contains_string("fs.cpSync(PREINSTALLED_NPM_DIR, RUNTIME_NPM_DIR")),
-            )
-            assert_that(
-                init_js,
-                contains_string("getPath(overlay, ['channels', 'msteams', 'enabled']) !== true"),
-            )
+            assert_that(init_js, contains_string("['channels']"))
+            assert_that(init_js, contains_string("['bindings']"))
+            assert_that(init_js, is_not(contains_string("PREINSTALLED_MSTEAMS")))
 
 
 def test_start_agent_deployment_runs_init_script():
@@ -1530,35 +1796,6 @@ def test_start_agent_uses_default_model_when_empty():
                 overlay["agents"]["defaults"]["model"]["primary"],
                 equal_to("litellm/gpt-5-mini"),
             )
-
-
-def test_pair_slack_agent_returns_400():
-    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
-        client: TestClient = context.client
-
-        with when("I pair a Slack agent"):
-            response = client.post(
-                f"{_BASE}/{context.agent.id}/pair",
-                json={"platform": "slack", "code": "abc123"},
-                headers=_auth(context),
-            )
-
-        with then("it returns 400"):
-            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
-
-
-def test_pair_agent_no_auth_returns_401():
-    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
-        client: TestClient = context.client
-
-        with when("I pair an agent without a token"):
-            response = client.post(
-                f"{_BASE}/{context.agent.id}/pair",
-                json={"platform": "slack", "code": "abc123"},
-            )
-
-        with then("it returns 401"):
-            assert_that(response.status_code, equal_to(status.HTTP_401_UNAUTHORIZED))
 
 
 def test_get_agent_template_returns_template():
@@ -1621,7 +1858,7 @@ def test_get_agent_template_no_auth_returns_401():
             assert_that(response.status_code, equal_to(status.HTTP_401_UNAUTHORIZED))
 
 
-def test_start_agent_configmap_and_overlay_are_correct():
+def test_start_agent_configmap_and_headless_gateway_overlay_are_correct():
     with given([*_GIVEN, there_is_an_agent()]) as context:
         client: TestClient = context.client
         k8s: MagicMock = context.injector.get(KubernetesClient)
@@ -1634,30 +1871,13 @@ def test_start_agent_configmap_and_overlay_are_correct():
         config_map = k8s.create_config_map.call_args.args[1]
         overlay = json.loads(config_map.data["openclaw-config-overlay.json"])
 
-        with then("the overlay configures the slack channel with default allowlist groups + DMs off"):
+        with then("the runtime has no provider transport configuration"):
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
-            slack = overlay["channels"]["slack"]
-            assert_that(slack["mode"], equal_to("socket"))
-            assert_that(slack["enabled"], equal_to(True))
-            assert_that(slack["groupPolicy"], equal_to("allowlist"))
-            assert_that(slack["dmPolicy"], equal_to("allowlist"))
-            assert_that(slack["userTokenReadOnly"], equal_to(True))
-            assert_that(slack["allowFrom"], equal_to([]))
-            assert_that(
-                slack["replyToModeByChatType"],
-                equal_to({"direct": "off", "group": "all", "channel": "all"}),
-            )
-            assert_that(
-                slack["streaming"],
-                equal_to({"mode": "partial", "nativeTransport": True}),
-            )
+            assert_that(overlay["channels"], equal_to({}))
+            assert_that(overlay["bindings"], equal_to([]))
 
-        with then("the overlay routes the slack channel to the main agent"):
-            bindings = overlay["bindings"]
-            assert_that(len(bindings), equal_to(1))
-            assert_that(bindings[0]["type"], equal_to("route"))
-            assert_that(bindings[0]["agentId"], equal_to("main"))
-            assert_that(bindings[0]["match"]["channel"], equal_to("slack"))
+        with then("the ConfigMap contains the runtime-neutral communications adapter"):
+            assert_that("communications-runtime-adapter.py" in config_map.data, equal_to(True))
 
         with then("tools, memory, and the core/active-memory plugins are enabled"):
             assert_that(overlay["tools"]["profile"], equal_to("full"))
@@ -1828,694 +2048,18 @@ def test_get_agent_healthz_returns_409_when_agent_not_running():
             assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
 
 
-def test_create_agent_with_slack_settings():
-    with given(_GIVEN) as context:
-        client: TestClient = context.client
-        payload = {
-            **_VALID_CREATE,
-            "slack_channel_ids": ["C111", "C222"],
-            "slack_dm_user_ids": ["U001"],
-            "slack_group_policy": "allowlist",
-            "slack_dm_policy": "allowlist",
-            "slack_verbose_mode": False,
-        }
-
-        with when("I create an agent with Slack settings"):
-            response = client.post(_BASE, json=payload, headers=_auth(context))
-
-        with then("it returns 201 with the Slack settings"):
-            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
-            body = response.json()
-            assert_that(body["slack_config"]["channel_ids"], equal_to(["C111", "C222"]))
-            assert_that(body["slack_config"]["dm_user_ids"], equal_to(["U001"]))
-            assert_that(body["slack_config"]["group_policy"], equal_to("allowlist"))
-            assert_that(body["slack_config"]["dm_policy"], equal_to("allowlist"))
-            assert_that(body["slack_config"]["verbose_mode"], equal_to(False))
-
-
-def test_create_agent_defaults_to_allowlist_groups_dms_off():
+def test_create_hermes_agent_returns_201_stopped_without_a_bundled_platform():
     with given(_GIVEN) as context:
         client: TestClient = context.client
 
-        with when("I create an agent without specifying Slack policies"):
-            response = client.post(_BASE, json=_VALID_CREATE, headers=_auth(context))
-
-        with then("it defaults to allowlist group policy and DMs off"):
-            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
-            body = response.json()
-            assert_that(body["slack_config"]["group_policy"], equal_to("allowlist"))
-            assert_that(body["slack_config"]["dm_policy"], equal_to("off"))
-            assert_that(body["slack_config"]["channel_ids"], equal_to([]))
-            assert_that(body["slack_config"]["dm_user_ids"], equal_to([]))
-            assert_that(body["slack_config"]["verbose_mode"], equal_to(True))
-
-
-def test_create_discord_agent_returns_read_safe_configuration():
-    with given(_GIVEN) as context:
-        client: TestClient = context.client
-
-        with when("I create a Discord agent"):
-            response = client.post(_BASE, json=_VALID_CREATE_DISCORD, headers=_auth(context))
-
-        with then("it remains stopped and returns routing configuration without the token"):
-            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
-            body = response.json()
-            assert_that(body["status"], equal_to("STOPPED"))
-            assert_that(body, is_not(has_key("discord_bot_token")))
-            assert_that(
-                body["discord_config"],
-                equal_to(
-                    {
-                        "guild_ids": ["guild-1"],
-                        "allowed_channel_ids": ["channel-1"],
-                        "allowed_user_ids": ["user-1"],
-                        "allowed_role_ids": ["role-1"],
-                        "home_channel_id": "channel-1",
-                        "require_mention": True,
-                        "group_policy": "allowlist",
-                    }
-                ),
-            )
-
-
-def test_patch_discord_agent_updates_routing_and_rotates_token():
-    with given([*_GIVEN, there_is_an_agent(platform=AgentPlatform.DISCORD)]) as context:
-        client: TestClient = context.client
-
-        with when("I update Discord routing and rotate its credential"):
-            response = client.patch(
-                f"{_BASE}/{context.agent.id}",
-                json={
-                    "discord_bot_token": "rotated-discord-token",
-                    "discord_guild_ids": ["guild-2"],
-                    "discord_allowed_role_ids": ["role-2"],
-                    "discord_home_channel_id": "channel-2",
-                },
-                headers=_auth(context),
-            )
-
-        with then("the update succeeds and persists the encrypted credential"):
-            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
-            assert_that(response.json()["discord_config"]["guild_ids"], equal_to(["guild-2"]))
-            repository: AgentRepository = context.injector.get(AgentRepository)
-            config = repository.get_discord_config(context.agent.id)
-            assert config is not None
-            assert_that(
-                decrypt_token(config.bot_token_encrypted, TEST_ENCRYPTION_KEY),
-                equal_to("rotated-discord-token"),
-            )
-
-
-def test_patch_discord_token_requires_secret_management_permission():
-    with given([*_GIVEN, there_is_an_agent(platform=AgentPlatform.DISCORD)]) as context:
-        service: AgentService = context.injector.get(AgentService)
-
-        with (
-            patch.object(
-                service.authorization,
-                "require_action_for_visible",
-                wraps=service.authorization.require_action_for_visible,
-            ) as require_secret_action,
-            when("I rotate a Discord bot token"),
-        ):
-            response = context.client.patch(
-                f"{_BASE}/{context.agent.id}",
-                json={"discord_bot_token": "rotated-discord-token"},
-                headers=_auth(context),
-            )
-
-        with then("the mutation independently checks agent.secret.manage"):
-            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
-            assert_that(
-                any(
-                    call.args[-1] == PermissionKey.AGENT_SECRET_MANAGE for call in require_secret_action.call_args_list
-                ),
-                equal_to(True),
-            )
-
-
-def test_start_openclaw_discord_agent_materializes_all_routing_fields():
-    with given([*_GIVEN, there_is_an_agent(platform=AgentPlatform.DISCORD)]) as context:
-        repository: AgentRepository = context.injector.get(AgentRepository)
-        config = repository.get_discord_config(context.agent.id)
-        assert config is not None
-        config.guild_ids = ["guild-1"]
-        config.allowed_channel_ids = ["channel-1"]
-        config.allowed_user_ids = ["user-1"]
-        config.allowed_role_ids = ["role-1"]
-        config.home_channel_id = "channel-1"
-        repository.save_discord_config(config)
-        k8s: MagicMock = context.injector.get(KubernetesClient)
-
-        with when("I start the Discord agent"):
-            response = context.client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
-
-        with then("the OpenClaw overlay contains users, roles, channels, and alert delivery"):
-            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
-            config_map = k8s.create_config_map.call_args.args[1]
-            overlay = json.loads(config_map.data["openclaw-config-overlay.json"])
-            guild = overlay["channels"]["discord"]["guilds"]["guild-1"]
-            assert_that(guild["users"], equal_to(["user-1"]))
-            assert_that(guild["roles"], equal_to(["role-1"]))
-            assert_that(guild["channels"], has_key("channel-1"))
-            assert_that(overlay["agents"]["defaults"]["heartbeat"]["to"], equal_to("channel:channel-1"))
-
-
-def test_start_hermes_discord_open_policy_preserves_channel_restrictions():
-    with given(
-        [
-            *_GIVEN_WITH_HERMES_IMAGE,
-            there_is_an_agent(platform=AgentPlatform.DISCORD, agent_type=AgentType.HERMES),
-        ]
-    ) as context:
-        repository: AgentRepository = context.injector.get(AgentRepository)
-        config = repository.get_discord_config(context.agent.id)
-        assert config is not None
-        config.group_policy = DiscordGroupPolicy.OPEN
-        config.guild_ids = ["guild-1"]
-        config.allowed_channel_ids = ["channel-1"]
-        repository.save_discord_config(config)
-        k8s: MagicMock = context.injector.get(KubernetesClient)
-
-        with when("I start an open-policy Hermes Discord agent"):
-            response = context.client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
-
-        with then("guild access is open while the configured channel boundary remains enforced"):
-            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
-            config_map = k8s.create_config_map.call_args.args[1]
-            hermes_config = yaml.safe_load(config_map.data["hermes-config.yaml"])
-            assert_that("discord-guild-allowlist" in hermes_config["plugins"]["enabled"], equal_to(False))
-            secret = k8s.create_secret.call_args.args[1]
-            assert_that(secret.string_data["DISCORD_ALLOWED_CHANNELS"], equal_to("channel-1"))
-            assert_that(secret.string_data["DISCORD_ALLOW_ALL_USERS"], equal_to("false"))
-
-
-def test_create_discord_agent_duplicate_bot_token_returns_409():
-    with given(
-        [
-            *_GIVEN,
-            there_is_an_agent(
-                platform=AgentPlatform.DISCORD,
-                bot_token=str(_VALID_CREATE_DISCORD["discord_bot_token"]),
-            ),
-        ]
-    ) as context:
-        with when("I create a second Discord agent with the same bot token"):
-            response = context.client.post(_BASE, json=_VALID_CREATE_DISCORD, headers=_auth(context))
-
-        with then("the duplicate identity is rejected without creating an orphan"):
-            assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
-            assert_that(response.json()["detail"], contains_string("Discord bot token is already in use"))
-            agents = context.client.get(_BASE, headers=_auth(context)).json()["items"]
-            assert_that(len(agents), equal_to(1))
-
-
-def test_update_discord_agent_duplicate_bot_token_returns_409():
-    with given(_GIVEN) as context:
-        agent_a = context.client.post(_BASE, json=_VALID_CREATE_DISCORD, headers=_auth(context)).json()
-        agent_b = context.client.post(
-            _BASE,
-            json={
-                **_VALID_CREATE_DISCORD,
-                "name": "Discord Agent B",
-                "discord_bot_token": "discord-bot-token-b",
-            },
-            headers=_auth(context),
-        ).json()
-
-        with when("I rotate agent B to agent A's Discord token"):
-            response = context.client.patch(
-                f"{_BASE}/{agent_b['id']}",
-                json={"discord_bot_token": _VALID_CREATE_DISCORD["discord_bot_token"]},
-                headers=_auth(context),
-            )
-
-        with then("the shared bot identity is rejected"):
-            assert_that(agent_a["id"], is_not(equal_to(agent_b["id"])))
-            assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
-
-
-def test_delete_discord_agent_releases_bot_token():
-    with given(_GIVEN) as context:
-        created = context.client.post(_BASE, json=_VALID_CREATE_DISCORD, headers=_auth(context)).json()
-        deleted = context.client.delete(f"{_BASE}/{created['id']}", headers=_auth(context))
-
-        with when("I reuse the deleted Discord agent's token"):
-            response = context.client.post(
-                _BASE,
-                json={**_VALID_CREATE_DISCORD, "name": "Replacement Discord Agent"},
-                headers=_auth(context),
-            )
-
-        with then("the released token can be assigned again"):
-            assert_that(deleted.status_code, equal_to(status.HTTP_204_NO_CONTENT))
-            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
-
-
-def test_patch_agent_updates_slack_settings():
-    with given([*_GIVEN, there_is_an_agent()]) as context:
-        client: TestClient = context.client
-
-        with when("I patch the agent's Slack settings"):
-            response = client.patch(
-                f"{_BASE}/{context.agent.id}",
-                json={
-                    "slack_channel_ids": ["C999"],
-                    "slack_dm_user_ids": ["U888"],
-                    "slack_group_policy": "open",
-                    "slack_dm_policy": "allowlist",
-                    "slack_verbose_mode": False,
-                },
-                headers=_auth(context),
-            )
-
-        with then("it returns 200 with the updated Slack settings"):
-            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
-            body = response.json()
-            assert_that(body["slack_config"]["channel_ids"], equal_to(["C999"]))
-            assert_that(body["slack_config"]["dm_user_ids"], equal_to(["U888"]))
-            assert_that(body["slack_config"]["group_policy"], equal_to("open"))
-            assert_that(body["slack_config"]["dm_policy"], equal_to("allowlist"))
-            assert_that(body["slack_config"]["verbose_mode"], equal_to(False))
-
-
-def test_start_agent_overlay_uses_slack_settings():
-    with given([*_GIVEN, there_is_an_agent()]) as context:
-        client: TestClient = context.client
-        k8s: MagicMock = context.injector.get(KubernetesClient)
-
-        client.patch(
-            f"{_BASE}/{context.agent.id}",
-            json={
-                "slack_channel_ids": ["C123"],
-                "slack_dm_user_ids": ["U456"],
-                "slack_group_policy": "allowlist",
-                "slack_dm_policy": "allowlist",
-            },
-            headers=_auth(context),
-        )
-
-        with when("I start the agent"):
-            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
-
-        with then("the overlay reflects the Slack settings"):
-            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
-            config_map = k8s.create_config_map.call_args.args[1]
-            overlay = json.loads(config_map.data["openclaw-config-overlay.json"])
-            slack = overlay["channels"]["slack"]
-            assert_that(slack["groupPolicy"], equal_to("allowlist"))
-            assert_that(slack["dmPolicy"], equal_to("allowlist"))
-            assert_that(slack["allowFrom"], equal_to(["U456"]))
-            assert_that(
-                slack["channels"],
-                equal_to({"C123": {"enabled": True, "requireMention": True}}),
-            )
-            assert_that(slack["requireMention"], equal_to(True))
-            assert_that(slack["thread"]["requireExplicitMention"], equal_to(True))
-
-
-def test_start_agent_open_policy_sets_allow_from_wildcard():
-    with given([*_GIVEN, there_is_an_agent()]) as context:
-        client: TestClient = context.client
-        k8s: MagicMock = context.injector.get(KubernetesClient)
-
-        client.patch(
-            f"{_BASE}/{context.agent.id}",
-            json={"slack_dm_policy": "open", "slack_dm_user_ids": []},
-            headers=_auth(context),
-        )
-
-        with when("I start the agent"):
-            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
-
-        with then("allowFrom defaults to wildcard"):
-            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
-            config_map = k8s.create_config_map.call_args.args[1]
-            overlay = json.loads(config_map.data["openclaw-config-overlay.json"])
-            assert_that(overlay["channels"]["slack"]["allowFrom"], equal_to(["*"]))
-
-
-def test_start_agent_off_dm_policy_sets_direct_reply_off():
-    with given([*_GIVEN, there_is_an_agent()]) as context:
-        client: TestClient = context.client
-        k8s: MagicMock = context.injector.get(KubernetesClient)
-
-        client.patch(
-            f"{_BASE}/{context.agent.id}",
-            json={"slack_dm_policy": "off", "slack_dm_user_ids": ["U999"]},
-            headers=_auth(context),
-        )
-
-        with when("I start the agent"):
-            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
-
-        with then("DMs are turned off in the overlay and the user list is preserved"):
-            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
-            config_map = k8s.create_config_map.call_args.args[1]
-            overlay = json.loads(config_map.data["openclaw-config-overlay.json"])
-            slack = overlay["channels"]["slack"]
-            assert_that(slack["replyToModeByChatType"]["direct"], equal_to("off"))
-            assert_that(slack["allowFrom"], equal_to([]))
-            assert_that(slack["dmPolicy"], equal_to("allowlist"))
-
-
-def test_start_agent_allowlist_with_no_users_sets_empty_allow_from():
-    with given([*_GIVEN, there_is_an_agent()]) as context:
-        client: TestClient = context.client
-        k8s: MagicMock = context.injector.get(KubernetesClient)
-
-        client.patch(
-            f"{_BASE}/{context.agent.id}",
-            json={"slack_dm_policy": "allowlist", "slack_dm_user_ids": []},
-            headers=_auth(context),
-        )
-
-        with when("I start the agent"):
-            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
-
-        with then("allowFrom is empty — no one can DM"):
-            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
-            config_map = k8s.create_config_map.call_args.args[1]
-            overlay = json.loads(config_map.data["openclaw-config-overlay.json"])
-            assert_that(overlay["channels"]["slack"]["allowFrom"], equal_to([]))
-
-        with then("the init script syncs slack-allowFrom.json from the overlay"):
-            init_js = config_map.data["init-openclaw.js"]
-            assert_that(init_js, contains_string("slack-allowFrom.json"))
-
-
-def test_list_slack_channels_returns_filtered_list():
-    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
-        client: TestClient = context.client
-
-        slack_response = {
-            "ok": True,
-            "channels": [
-                {"id": "C001", "name": "general"},
-                {"id": "C002", "name": "engineering"},
-                {"id": "C003", "name": "random"},
-            ],
-            "response_metadata": {"next_cursor": ""},
-        }
-
-        with patch("httpx.request") as mock_request:
-            mock_request.return_value = httpx.Response(
-                200,
-                json=slack_response,
-                request=httpx.Request("GET", "https://slack.com/api/test"),
-            )
-
-            with when("I list Slack channels with a search query"):
-                response = client.get(
-                    f"{_BASE}/{context.agent.id}/slack/channels?search=eng",
-                    headers=_auth(context),
-                )
-
-        with then("it returns only matching channels"):
-            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
-            results = response.json()
-            assert_that(len(results), equal_to(1))
-            assert_that(results[0]["id"], equal_to("C002"))
-            assert_that(results[0]["name"], equal_to("engineering"))
-
-
-def test_list_slack_users_excludes_bots_and_deleted():
-    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
-        client: TestClient = context.client
-
-        slack_response = {
-            "ok": True,
-            "members": [
-                {
-                    "id": "U001",
-                    "name": "alice",
-                    "real_name": "Alice Smith",
-                    "deleted": False,
-                    "is_bot": False,
-                },
-                {
-                    "id": "U002",
-                    "name": "bob",
-                    "real_name": "Bob Jones",
-                    "deleted": True,
-                    "is_bot": False,
-                },
-                {
-                    "id": "U003",
-                    "name": "mybot",
-                    "real_name": "My Bot",
-                    "deleted": False,
-                    "is_bot": True,
-                },
-            ],
-            "response_metadata": {"next_cursor": ""},
-        }
-
-        with patch("httpx.request") as mock_request:
-            mock_request.return_value = httpx.Response(
-                200,
-                json=slack_response,
-                request=httpx.Request("GET", "https://slack.com/api/test"),
-            )
-
-            with when("I list Slack users"):
-                response = client.get(
-                    f"{_BASE}/{context.agent.id}/slack/users",
-                    headers=_auth(context),
-                )
-
-        with then("only non-deleted, non-bot users are returned"):
-            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
-            results = response.json()
-            assert_that(len(results), equal_to(1))
-            assert_that(results[0]["id"], equal_to("U001"))
-
-
-def test_create_teams_agent_returns_201_and_starts_agent():
-    with given(_GIVEN) as context:
-        client: TestClient = context.client
-
-        with when("I create a Teams agent with valid data"):
-            response = client.post(_BASE, json=_VALID_CREATE_TEAMS, headers=_auth(context))
-
-        with then("it returns 201 with status running and webhook_url"):
-            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
-            body = response.json()
-            assert_that(body["name"], equal_to("My Teams Agent"))
-            assert_that(body["platform"], equal_to("teams"))
-            assert_that(body["status"], equal_to(AgentStatus.RUNNING.value))
-            assert_that(body["teams_config"]["tenant_id"], equal_to("test-tenant-000"))
-            assert_that(body, has_key("webhook_url"))
-            assert_that(body["webhook_url"], contains_string("/webhooks/teams/"))
-            assert_that(body["slack_config"], none())
-
-
-def test_create_teams_agent_missing_credentials_returns_422():
-    with given(_GIVEN) as context:
-        client: TestClient = context.client
-        payload = {**_VALID_CREATE_TEAMS}
-        del payload["teams_app_password"]
-
-        with when("I create a Teams agent without app_password"):
-            response = client.post(_BASE, json=payload, headers=_auth(context))
-
-        with then("it returns 422"):
-            assert_that(response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_ENTITY))
-
-
-def test_create_slack_agent_missing_tokens_returns_422():
-    with given(_GIVEN) as context:
-        client: TestClient = context.client
-        payload = {**_VALID_CREATE}
-        del payload["slack_bot_token"]
-
-        with when("I create a Slack agent without bot_token"):
-            response = client.post(_BASE, json=payload, headers=_auth(context))
-
-        with then("it returns 422"):
-            assert_that(response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_ENTITY))
-
-
-def test_start_teams_agent_creates_correct_k8s_resources():
-    with given([*_GIVEN, there_is_an_agent(platform=AgentPlatform.TEAMS)]) as context:
-        client: TestClient = context.client
-        k8s: MagicMock = context.injector.get(KubernetesClient)
-
-        with when("I start a Teams agent"):
-            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
-
-        with then("it returns 200 and K8s resources have Teams config"):
-            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
-            secret = k8s.create_secret.call_args.args[1]
-            assert_that(secret.string_data, has_key("MSTEAMS_APP_ID"))
-            assert_that(secret.string_data, has_key("MSTEAMS_APP_PASSWORD"))
-            assert_that(secret.string_data, has_key("MSTEAMS_TENANT_ID"))
-
-            config_map = k8s.create_config_map.call_args.args[1]
-            overlay = json.loads(config_map.data["openclaw-config-overlay.json"])
-            assert_that(overlay["channels"], has_key("msteams"))
-            assert_that(overlay["channels"]["msteams"]["enabled"], equal_to(True))
-            init_js = config_map.data["init-openclaw.js"]
-            assert_that(init_js, contains_string("PREINSTALLED_MSTEAMS_DIR"))
-            assert_that(
-                init_js,
-                contains_string("Restored preinstalled Microsoft Teams npm plugin"),
-            )
-            assert_that(init_js, contains_string("package.json"))
-            assert_that(init_js, contains_string("package-lock.json"))
-
-            service = k8s.create_service.call_args.args[1]
-            ports_by_name = {p.name: (p.port, p.target_port) for p in service.spec.ports}
-            assert_that(ports_by_name["gateway"], equal_to((80, 8080)))
-            assert_that(ports_by_name["healthz"], equal_to((8081, 8081)))
-            assert_that(ports_by_name["webhook"], equal_to((3978, 3978)))
-
-
-def test_teams_webhook_relay_proxies_to_pod():
-    with given(
-        [
-            *_GIVEN,
-            there_is_an_agent(status=AgentStatus.RUNNING, platform=AgentPlatform.TEAMS),
-        ]
-    ) as context:
-        client: TestClient = context.client
-        k8s: MagicMock = context.injector.get(KubernetesClient)
-        k8s.proxy_to_agent.return_value = (
-            200,
-            b'{"status":"ok"}',
-            {"content-type": "application/json"},
-        )
-
-        with when("I POST to the Teams webhook"):
-            response = client.post(
-                f"/api/v1/webhooks/teams/{context.agent.id}/messages",
-                content=b'{"type":"message"}',
-                headers={"Content-Type": "application/json"},
-            )
-
-        with then("it proxies to the pod and returns the response"):
-            assert_that(response.status_code, equal_to(200))
-            k8s.proxy_to_agent.assert_called_once()
-
-
-def test_teams_webhook_relay_returns_404_for_slack_agent():
-    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
-        client: TestClient = context.client
-
-        with when("I POST to the Teams webhook for a Slack agent"):
-            response = client.post(
-                f"/api/v1/webhooks/teams/{context.agent.id}/messages",
-                content=b'{"type":"message"}',
-                headers={"Content-Type": "application/json"},
-            )
-
-        with then("it returns 404"):
-            assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
-
-
-def test_teams_webhook_relay_returns_503_for_stopped_agent():
-    with given(
-        [
-            *_GIVEN,
-            there_is_an_agent(status=AgentStatus.STOPPED, platform=AgentPlatform.TEAMS),
-        ]
-    ) as context:
-        client: TestClient = context.client
-
-        with when("I POST to the Teams webhook for a stopped agent"):
-            response = client.post(
-                f"/api/v1/webhooks/teams/{context.agent.id}/messages",
-                content=b'{"type":"message"}',
-                headers={"Content-Type": "application/json"},
-            )
-
-        with then("it returns 503"):
-            assert_that(response.status_code, equal_to(status.HTTP_503_SERVICE_UNAVAILABLE))
-
-
-def test_update_teams_agent_rejects_slack_fields():
-    with given([*_GIVEN, there_is_an_agent(platform=AgentPlatform.TEAMS)]) as context:
-        client: TestClient = context.client
-
-        with when("I patch a Teams agent with Slack-specific fields"):
-            response = client.patch(
-                f"{_BASE}/{context.agent.id}",
-                json={"slack_bot_token": "xoxb-should-fail"},
-                headers=_auth(context),
-            )
-
-        with then("it returns 422"):
-            assert_that(response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_ENTITY))
-
-
-def test_pair_teams_agent_returns_400():
-    with given(
-        [
-            *_GIVEN,
-            there_is_an_agent(status=AgentStatus.RUNNING, platform=AgentPlatform.TEAMS),
-        ]
-    ) as context:
-        client: TestClient = context.client
-
-        with when("I pair a Teams agent"):
-            response = client.post(
-                f"{_BASE}/{context.agent.id}/pair",
-                json={"platform": "slack", "code": "abc123"},
-                headers=_auth(context),
-            )
-
-        with then("it returns 400"):
-            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
-
-
-# ---------------------------------------------------------------------------
-# Hermes agent tests
-# ---------------------------------------------------------------------------
-
-_VALID_CREATE_HERMES = {
-    "name": "My Hermes Agent",
-    "platform": "slack",
-    "agent_type": "hermes",
-    "slack_bot_token": "xoxb-hermes-bot-token",
-    "slack_app_token": "xapp-1-hermes-app-token",
-    "template_key": "test-template",
-}
-
-_GIVEN_WITH_HERMES_IMAGE = [
-    set_env_variable(
-        {
-            "AGENT_TOKEN_ENCRYPTION_KEY": TEST_ENCRYPTION_KEY,
-            "LITELLM_BASE_URL": "http://litellm:4000",
-            "LITELLM_SECRET_NAME": "litellm",
-            "AGENT_DEFAULT_MODEL": "litellm/gpt-5-mini",
-            "AGENT_LITELLM_BASE_URL": "http://litellm:4000",
-            "API_EXTERNAL_URL": "https://api.test.com",
-            "HERMES_IMAGE": "nousresearch/hermes-agent:v1.0",
-        }
-    ),
-    prepare_injector(modules=[MockK8sModule(), MockLiteLLMModule()]),
-    prepare_api_server(),
-    create_test_client(),
-    database_repo_is_ready(),
-    database_is_clean(),
-    there_is_an_organization_with_user_and_access_token(),
-    use_org_for_auth(),
-    there_is_a_template(),
-]
-
-
-def test_create_hermes_agent_returns_201_stopped():
-    with given(_GIVEN) as context:
-        client: TestClient = context.client
-
-        with when("I create a Hermes Slack agent"):
+        with when("I create a headless Hermes agent"):
             response = client.post(_BASE, json=_VALID_CREATE_HERMES, headers=_auth(context))
 
         with then("it returns 201 with agent_type hermes and status stopped"):
             assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
             body = response.json()
             assert_that(body["agent_type"], equal_to("hermes"))
-            assert_that(body["platform"], equal_to("slack"))
+            assert_that(body, is_not(has_key("platform")))
             assert_that(body["status"], equal_to(AgentStatus.STOPPED.value))
 
 
@@ -2529,39 +2073,6 @@ def test_create_agent_defaults_to_openclaw_type():
         with then("agent_type defaults to openclaw"):
             assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
             assert_that(response.json()["agent_type"], equal_to("openclaw"))
-
-
-def test_create_hermes_teams_agent_returns_422():
-    with given(_GIVEN) as context:
-        client: TestClient = context.client
-        payload = {
-            **_VALID_CREATE_HERMES,
-            "platform": "teams",
-            "teams_app_id": "app-id",
-            "teams_app_password": "app-pass",
-            "teams_tenant_id": "tenant-id",
-        }
-        del payload["slack_bot_token"]
-        del payload["slack_app_token"]
-
-        with when("I create a Hermes agent with Teams platform"):
-            response = client.post(_BASE, json=payload, headers=_auth(context))
-
-        with then("it returns 422"):
-            assert_that(response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_ENTITY))
-
-
-def test_create_hermes_agent_missing_slack_tokens_returns_422():
-    with given(_GIVEN) as context:
-        client: TestClient = context.client
-        payload = {**_VALID_CREATE_HERMES}
-        del payload["slack_bot_token"]
-
-        with when("I create a Hermes agent without slack_bot_token"):
-            response = client.post(_BASE, json=payload, headers=_auth(context))
-
-        with then("it returns 422"):
-            assert_that(response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_ENTITY))
 
 
 def test_start_hermes_agent_uses_hermes_image_and_config():
@@ -2610,21 +2121,18 @@ def test_start_hermes_agent_configmap_has_hermes_config():
             assert_that(config_map.data, has_key("hermes-config.yaml"))
             cfg = _yaml.safe_load(config_map.data["hermes-config.yaml"])
             assert_that(cfg["model"]["base_url"], equal_to("http://localhost:8090"))
-            assert_that(cfg["slack"]["unauthorized_dm_behavior"], equal_to("ignore"))
-            assert_that(
-                cfg["display"]["platforms"]["slack"]["interim_assistant_messages"],
-                equal_to(True),
-            )
-            assert_that("slack-deny-dms" in cfg["plugins"]["enabled"], equal_to(True))
-            assert_that("slack-channel-allowlist" in cfg["plugins"]["enabled"], equal_to(True))
+            assert_that(cfg["display"]["platforms"], equal_to({}))
+            assert_that(cfg["plugins"]["enabled"], equal_to(["telemetry-push"]))
+            assert_that(cfg, is_not(has_key("slack")))
 
-        with then("the ConfigMap has start.sh, healthz sidecar, and both plugins"):
+        with then("the ConfigMap has the headless runtime adapter"):
             assert_that(config_map.data, has_key("start.sh"))
             assert_that(config_map.data, has_key("healthz-server.py"))
-            assert_that(config_map.data, has_key("slack-deny-dms-plugin.yaml"))
-            assert_that(config_map.data, has_key("slack-deny-dms-init.py"))
-            assert_that(config_map.data, has_key("slack-channel-allowlist-plugin.yaml"))
-            assert_that(config_map.data, has_key("slack-channel-allowlist-init.py"))
+            assert_that(config_map.data, has_key("communications-runtime-adapter.py"))
+            assert_that(
+                any("allowlist" in key or "deny-dms" in key for key in config_map.data),
+                equal_to(False),
+            )
 
         with then("SOUL.md has the bootloader footer appended"):
             soul = config_map.data["SOUL.md"]
@@ -2633,77 +2141,6 @@ def test_start_hermes_agent_configmap_has_hermes_config():
 
         with then("BOOTSTRAP.md is absent from the ConfigMap"):
             assert_that(config_map.data, is_not(has_key("BOOTSTRAP.md")))
-
-
-def test_start_hermes_agent_configmap_concise_mode():
-    import yaml as _yaml
-
-    with given([*_GIVEN_WITH_HERMES_IMAGE, there_is_an_agent(agent_type=AgentType.HERMES)]) as context:
-        client: TestClient = context.client
-        k8s: MagicMock = context.injector.get(KubernetesClient)
-
-        client.patch(
-            f"{_BASE}/{context.agent.id}",
-            json={"slack_verbose_mode": False},
-            headers=_auth(context),
-        )
-
-        with when("I start the Hermes agent in concise mode"):
-            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
-
-        with then("hermes-config.yaml disables interim assistant messages"):
-            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
-            config_map = k8s.create_config_map.call_args.args[1]
-            cfg = _yaml.safe_load(config_map.data["hermes-config.yaml"])
-            slack_display = cfg["display"]["platforms"]["slack"]
-            assert_that(slack_display["interim_assistant_messages"], equal_to(False))
-            assert_that(slack_display["busy_ack_detail"], equal_to(False))
-
-
-def test_start_hermes_agent_secret_has_channel_and_dm_lists():
-    with given(
-        [
-            *_GIVEN_WITH_HERMES_IMAGE,
-            there_is_an_agent(agent_type=AgentType.HERMES),
-        ]
-    ) as context:
-        client: TestClient = context.client
-        k8s: MagicMock = context.injector.get(KubernetesClient)
-
-        client.patch(
-            f"{_BASE}/{context.agent.id}",
-            json={
-                "slack_channel_ids": ["C001", "C002"],
-                "slack_dm_user_ids": ["U001", "U002"],
-                "slack_dm_policy": "allowlist",
-            },
-            headers=_auth(context),
-        )
-
-        with when("I start the Hermes agent"):
-            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
-
-        with then("the secret has SLACK_CHANNEL_IDS, SLACK_DM_ALLOWED_USERS, and SLACK_ALLOW_ALL_USERS"):
-            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
-            secret = k8s.create_secret.call_args.args[1]
-            assert_that(secret.string_data["SLACK_CHANNEL_IDS"], equal_to("C001,C002"))
-            assert_that(secret.string_data["SLACK_DM_ALLOWED_USERS"], equal_to("U001,U002"))
-            assert_that(secret.string_data["SLACK_ALLOW_ALL_USERS"], equal_to("true"))
-            assert_that(secret.string_data["API_SERVER_ENABLED"], equal_to("true"))
-
-
-def test_start_hermes_agent_no_channels_gives_empty_slack_channel_ids():
-    with given([*_GIVEN_WITH_HERMES_IMAGE, there_is_an_agent(agent_type=AgentType.HERMES)]) as context:
-        client: TestClient = context.client
-        k8s: MagicMock = context.injector.get(KubernetesClient)
-
-        with when("I start a Hermes agent with no channel_ids configured"):
-            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
-
-        with then("SLACK_CHANNEL_IDS is empty — agent responds in all channels"):
-            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
-            secret = k8s.create_secret.call_args.args[1]
-            assert_that(secret.string_data["SLACK_CHANNEL_IDS"], equal_to(""))
 
 
 def test_start_hermes_agent_deployment_has_workspace_volume():
@@ -2731,59 +2168,6 @@ def test_start_hermes_agent_deployment_has_workspace_volume():
             assert_that(len(empty_dirs), equal_to(0))
 
 
-def test_pair_hermes_agent_returns_400():
-    with given(
-        [
-            *_GIVEN,
-            there_is_an_agent(status=AgentStatus.RUNNING, agent_type=AgentType.HERMES),
-        ]
-    ) as context:
-        client: TestClient = context.client
-
-        with when("I pair a Hermes agent"):
-            response = client.post(
-                f"{_BASE}/{context.agent.id}/pair",
-                json={"platform": "slack", "code": "abc123"},
-                headers=_auth(context),
-            )
-
-        with then("it returns 400"):
-            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
-
-
-def test_list_slack_channels_works_for_hermes_agent():
-    with given(
-        [
-            *_GIVEN,
-            there_is_an_agent(status=AgentStatus.RUNNING, agent_type=AgentType.HERMES),
-        ]
-    ) as context:
-        client: TestClient = context.client
-
-        slack_response = {
-            "ok": True,
-            "channels": [{"id": "C001", "name": "general"}],
-            "response_metadata": {"next_cursor": ""},
-        }
-
-        with patch("httpx.request") as mock_request:
-            mock_request.return_value = httpx.Response(
-                200,
-                json=slack_response,
-                request=httpx.Request("GET", "https://slack.com/api/test"),
-            )
-
-            with when("I list Slack channels for a Hermes agent"):
-                response = client.get(
-                    f"{_BASE}/{context.agent.id}/slack/channels",
-                    headers=_auth(context),
-                )
-
-        with then("it returns 200 with channels"):
-            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
-            assert_that(len(response.json()), equal_to(1))
-
-
 def test_existing_agent_rows_backfill_to_openclaw():
     with given([*_GIVEN, there_is_an_agent(name="Legacy Agent")]) as context:
         repository: AgentRepository = context.injector.get(AgentRepository)
@@ -2799,74 +2183,6 @@ def test_existing_agent_rows_backfill_to_openclaw():
 # ---------------------------------------------------------------------------
 # Slack token validation — unhappy paths
 # ---------------------------------------------------------------------------
-
-
-def test_create_slack_agent_rejects_invalid_tokens():
-    with given(_GIVEN) as context:
-        client: TestClient = context.client
-
-        with (
-            patch.object(
-                AgentService,
-                "_check_slack_tokens",
-                return_value=(False, "Slack bot token is invalid."),
-            ),
-            when("I create a Slack agent with invalid tokens"),
-        ):
-            response = client.post(_BASE, json=_VALID_CREATE, headers=_auth(context))
-
-        with then("it returns 400 and no agent is left in the database"):
-            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
-            assert_that(response.json()["detail"], contains_string("invalid"))
-            list_response = client.get(_BASE, headers=_auth(context))
-            assert_that(list_response.json()["total"], equal_to(0))
-
-
-def test_update_slack_agent_rejects_invalid_tokens():
-    with given([*_GIVEN, there_is_an_agent()]) as context:
-        client: TestClient = context.client
-
-        with (
-            patch.object(
-                AgentService,
-                "_check_slack_tokens",
-                return_value=(False, "Slack bot token is invalid."),
-            ),
-            when("I patch a Slack agent with invalid tokens"),
-        ):
-            response = client.patch(
-                f"{_BASE}/{context.agent.id}",
-                json={"slack_bot_token": "xoxb-bad"},
-                headers=_auth(context),
-            )
-
-        with then("it returns 400"):
-            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
-            assert_that(response.json()["detail"], contains_string("invalid"))
-
-
-def test_start_slack_agent_with_invalid_tokens_sets_error_status():
-    with given([*_GIVEN, there_is_an_agent()]) as context:
-        client: TestClient = context.client
-        k8s: MagicMock = context.injector.get(KubernetesClient)
-
-        with (
-            patch.object(
-                AgentService,
-                "_check_slack_tokens",
-                return_value=(False, "Slack bot token is invalid."),
-            ),
-            when("I start a Slack agent with invalid tokens"),
-        ):
-            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
-
-        with then("it returns 200 with status ERROR and no k8s resources are created"):
-            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
-            assert_that(response.json()["status"], equal_to(AgentStatus.ERROR.value))
-            k8s.create_deployment.assert_not_called()
-
-
-# --- skill assignment on agent creation ---
 
 
 def test_create_agent_with_valid_skill_assigns_it():
@@ -2943,6 +2259,7 @@ def test_create_agent_pins_skill_to_explicit_version():
 def test_create_agent_with_invalid_skill_version_returns_404_and_leaves_no_partial_state():
     with given([*_GIVEN, there_is_a_skill(name="My Skill")]) as context:
         client: TestClient = context.client
+        litellm: MagicMock = context.injector.get(LiteLLMClient)
         payload = {
             **_VALID_CREATE,
             "skill_ids": [str(context.skill.id)],
@@ -2954,6 +2271,7 @@ def test_create_agent_with_invalid_skill_version_returns_404_and_leaves_no_parti
 
         with then("it returns 404 and no agent is persisted"):
             assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
+            litellm.generate_key.assert_not_called()
             agents = client.get(_BASE, headers=_auth(context)).json()["items"]
             assert_that(len(agents), equal_to(0))
 
@@ -3093,6 +2411,7 @@ def test_create_agent_skill_missing_provider_returns_400():
         ]
     ) as context:
         client: TestClient = context.client
+        litellm: MagicMock = context.injector.get(LiteLLMClient)
         payload = {**_VALID_CREATE, "skill_ids": [str(context.skill.id)]}
 
         with when("I create an agent without providing the required GitHub secret"):
@@ -3102,6 +2421,47 @@ def test_create_agent_skill_missing_provider_returns_400():
             assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
             assert_that(response.json()["detail"], contains_string("GitHub Skill"))
             assert_that(response.json()["detail"], contains_string("github"))
+            litellm.generate_key.assert_not_called()
+
+
+def test_create_agent_rejects_live_invalid_secret_before_persistence():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+        litellm: MagicMock = context.injector.get(LiteLLMClient)
+        invalid = IntegrationValidationResult(valid=False, error="Token is invalid or expired")
+        seen_tokens: list[str] = []
+
+        def reject_tampered_token(content) -> IntegrationValidationResult:
+            seen_tokens.append(content.token)
+            return invalid
+
+        payload = {
+            **_VALID_CREATE,
+            "secrets": [
+                {
+                    "provider": "github",
+                    "content": {
+                        "token": "tampered-token",
+                        "owner": "my-org",
+                        "org": "my-org",
+                    },
+                }
+            ],
+        }
+
+        with when("I create an agent with a syntactically valid but invalid credential"):
+            with patch.dict(
+                "api.domains.agents.service.PROVIDER_VALIDATORS",
+                {SecretProvider.GITHUB: reject_tampered_token},
+            ):
+                response = client.post(_BASE, json=payload, headers=_auth(context))
+
+        with then("the final payload is live-validated and nothing is persisted"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+            assert_that(response.json()["detail"], equal_to("Token is invalid or expired"))
+            assert_that(seen_tokens, equal_to(["tampered-token"]))
+            litellm.generate_key.assert_not_called()
+            assert_that(client.get(_BASE, headers=_auth(context)).json()["items"], equal_to([]))
 
 
 def test_create_agent_skill_with_covered_provider_assigns_skill():
@@ -3132,7 +2492,11 @@ def test_create_agent_skill_with_covered_provider_assigns_skill():
         }
 
         with when("I create an agent with the required GitHub secret"):
-            response = client.post(_BASE, json=payload, headers=_auth(context))
+            with patch.dict(
+                "api.domains.agents.service.PROVIDER_VALIDATORS",
+                {SecretProvider.GITHUB: lambda _content: IntegrationValidationResult(valid=True)},
+            ):
+                response = client.post(_BASE, json=payload, headers=_auth(context))
 
         with then("it returns 201 and the skill is assigned"):
             assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
@@ -3162,68 +2526,6 @@ def test_create_agent_duplicate_skill_ids_assigns_skill_once():
 
 
 # --- aai-cli Slack secret mirrors the gateway bot token ---
-
-
-def test_create_slack_agent_with_slack_skill_mirrors_bot_token_secret():
-    with given(
-        [
-            *_GIVEN,
-            there_is_a_skill(name="Slack Skill", required_providers=[SecretProvider.SLACK]),
-        ]
-    ) as context:
-        from api.domains.agents.models import decrypt_content
-
-        client: TestClient = context.client
-        payload = {**_VALID_CREATE, "skill_ids": [str(context.skill.id)]}
-
-        with when("I create a Slack agent with the Slack skill and no explicit slack secret"):
-            response = client.post(_BASE, json=payload, headers=_auth(context))
-
-        with then("it returns 201 and the mirrored secret matches the gateway bot token"):
-            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
-            from uuid import UUID
-
-            repository: AgentRepository = context.injector.get(AgentRepository)
-            secret = repository.get_secret(UUID(response.json()["id"]), SecretProvider.SLACK)
-            assert secret is not None
-            assert secret.content is not None
-            content = decrypt_content(SecretProvider.SLACK, secret.content, TEST_ENCRYPTION_KEY)
-            assert_that(content, equal_to(SlackContent(token=_VALID_CREATE["slack_bot_token"])))
-
-
-def test_create_agent_slack_skill_on_non_slack_platform_returns_400():
-    with given(
-        [
-            *_GIVEN,
-            there_is_a_skill(name="Slack Skill", required_providers=[SecretProvider.SLACK]),
-        ]
-    ) as context:
-        client: TestClient = context.client
-        payload = {**_VALID_CREATE_TEAMS, "skill_ids": [str(context.skill.id)]}
-
-        with when("I create a Teams agent with the Slack skill"):
-            response = client.post(_BASE, json=payload, headers=_auth(context))
-
-        with then("it returns 400 explaining the skill requires the Slack platform"):
-            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
-            assert_that(response.json()["detail"], contains_string("Slack Skill"))
-            assert_that(response.json()["detail"], contains_string("Slack platform"))
-
-
-def test_create_agent_rejects_explicit_slack_secret():
-    with given(_GIVEN) as context:
-        client: TestClient = context.client
-        payload = {**_VALID_CREATE, "secrets": [{"provider": "slack", "content": {"token": "xoxb-manual"}}]}
-
-        with when("I create an agent submitting a slack secret directly"):
-            response = client.post(_BASE, json=payload, headers=_auth(context))
-
-        with then("it returns 400"):
-            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
-            assert_that(response.json()["detail"], contains_string("managed automatically"))
-
-
-# --- skill assignment on agent update ---
 
 
 def test_patch_agent_adds_skill():
@@ -3334,152 +2636,6 @@ def test_patch_agent_add_skill_missing_provider_returns_400():
             assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
             assert_that(response.json()["detail"], contains_string("GitHub Skill"))
             assert_that(response.json()["detail"], contains_string("github"))
-
-
-def test_patch_agent_adds_slack_skill_mirrors_bot_token_secret():
-    with given(
-        [
-            *_GIVEN,
-            there_is_an_agent(bot_token=TEST_SLACK_BOT_TOKEN),
-            there_is_a_skill(name="Slack Skill", required_providers=[SecretProvider.SLACK]),
-        ]
-    ) as context:
-        from api.domains.agents.models import decrypt_content
-
-        client: TestClient = context.client
-
-        with when("I add the Slack skill via PATCH without submitting a secret"):
-            response = client.patch(
-                f"{_BASE}/{context.agent.id}",
-                json={"skill_ids": [str(context.skill.id)]},
-                headers=_auth(context),
-            )
-
-        with then("it returns 200 and the mirrored secret matches the gateway bot token"):
-            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
-            repository: AgentRepository = context.injector.get(AgentRepository)
-            secret = repository.get_secret(context.agent.id, SecretProvider.SLACK)
-            assert secret is not None
-            assert secret.content is not None
-            content = decrypt_content(SecretProvider.SLACK, secret.content, TEST_ENCRYPTION_KEY)
-            assert_that(content, equal_to(SlackContent(token=TEST_SLACK_BOT_TOKEN)))
-
-
-def test_patch_agent_removes_slack_skill_deletes_mirrored_secret():
-    with given(
-        [
-            *_GIVEN,
-            there_is_an_agent(bot_token=TEST_SLACK_BOT_TOKEN),
-            there_is_a_skill(name="Slack Skill", required_providers=[SecretProvider.SLACK]),
-            skill_is_assigned_to_agent(),
-        ]
-    ) as context:
-        repository: AgentRepository = context.injector.get(AgentRepository)
-        repository.delegate.save(
-            AgentSecret(
-                agent_id=context.agent.id,
-                provider=SecretProvider.SLACK,
-                secret_name="Slack credential",
-                content=encrypt_content(
-                    validate_content(SecretProvider.SLACK, {"token": TEST_SLACK_BOT_TOKEN}), TEST_ENCRYPTION_KEY
-                ),
-            )
-        )
-        client: TestClient = context.client
-
-        with when("I remove the Slack skill via PATCH"):
-            response = client.patch(
-                f"{_BASE}/{context.agent.id}",
-                json={"removed_skill_ids": [str(context.skill.id)]},
-                headers=_auth(context),
-            )
-
-        with then("it returns 200 and the mirrored secret is gone"):
-            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
-            secret = repository.get_secret(context.agent.id, SecretProvider.SLACK)
-            assert_that(secret, none())
-
-
-def test_patch_agent_rotates_slack_bot_token_resyncs_mirrored_secret():
-    with given(
-        [
-            *_GIVEN,
-            there_is_an_agent(bot_token=TEST_SLACK_BOT_TOKEN),
-            there_is_a_skill(name="Slack Skill", required_providers=[SecretProvider.SLACK]),
-            skill_is_assigned_to_agent(),
-        ]
-    ) as context:
-        from api.domains.agents.models import decrypt_content
-
-        repository: AgentRepository = context.injector.get(AgentRepository)
-        repository.delegate.save(
-            AgentSecret(
-                agent_id=context.agent.id,
-                provider=SecretProvider.SLACK,
-                secret_name="Slack credential",
-                content=encrypt_content(
-                    validate_content(SecretProvider.SLACK, {"token": TEST_SLACK_BOT_TOKEN}), TEST_ENCRYPTION_KEY
-                ),
-            )
-        )
-        client: TestClient = context.client
-        new_token = "xoxb-rotated-token"
-
-        with when("I rotate the gateway bot token via PATCH"):
-            response = client.patch(
-                f"{_BASE}/{context.agent.id}",
-                json={"slack_bot_token": new_token, "slack_app_token": "xapp-1-real-app-token"},
-                headers=_auth(context),
-            )
-
-        with then("it returns 200 and the mirrored secret is re-synced to the new token"):
-            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
-            secret = repository.get_secret(context.agent.id, SecretProvider.SLACK)
-            assert secret is not None
-            assert secret.content is not None
-            content = decrypt_content(SecretProvider.SLACK, secret.content, TEST_ENCRYPTION_KEY)
-            assert_that(content, equal_to(SlackContent(token=new_token)))
-
-
-def test_patch_agent_add_slack_skill_on_non_slack_platform_returns_400():
-    with given(
-        [
-            *_GIVEN,
-            there_is_an_agent(platform=AgentPlatform.TEAMS),
-            there_is_a_skill(name="Slack Skill", required_providers=[SecretProvider.SLACK]),
-        ]
-    ) as context:
-        client: TestClient = context.client
-
-        with when("I add the Slack skill to a Teams agent via PATCH"):
-            response = client.patch(
-                f"{_BASE}/{context.agent.id}",
-                json={"skill_ids": [str(context.skill.id)]},
-                headers=_auth(context),
-            )
-
-        with then("it returns 400 explaining the skill requires the Slack platform"):
-            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
-            assert_that(response.json()["detail"], contains_string("Slack platform"))
-
-
-def test_patch_agent_rejects_explicit_slack_secret():
-    with given([*_GIVEN, there_is_an_agent()]) as context:
-        client: TestClient = context.client
-
-        with when("I submit a slack secret directly via PATCH"):
-            response = client.patch(
-                f"{_BASE}/{context.agent.id}",
-                json={"secrets": [{"provider": "slack", "content": {"token": "xoxb-manual"}}]},
-                headers=_auth(context),
-            )
-
-        with then("it returns 400"):
-            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
-            assert_that(response.json()["detail"], contains_string("managed automatically"))
-
-
-# --- skills.json in ConfigMap on start ---
 
 
 def test_start_agent_with_skill_includes_skills_json_in_configmap():
@@ -3880,12 +3036,14 @@ def test_create_agent_missing_required_skill_returns_400():
         ]
     ) as context:
         client: TestClient = context.client
+        litellm: MagicMock = context.injector.get(LiteLLMClient)
 
         with when("I create an agent without including the required skill"):
             response = client.post(_BASE, json=_VALID_CREATE, headers=_auth(context))
 
         with then("it returns 400"):
             assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+            litellm.generate_key.assert_not_called()
 
 
 def test_update_agent_cannot_remove_required_skill_returns_409():
@@ -4027,12 +3185,14 @@ def test_create_agent_with_no_group_member_returns_400():
         ]
     ) as context:
         client: TestClient = context.client
+        litellm: MagicMock = context.injector.get(LiteLLMClient)
 
         with when("I create an agent without any group member in skill_ids"):
             response = client.post(_BASE, json=_VALID_CREATE, headers=_auth(context))
 
         with then("it returns 400"):
             assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+            litellm.generate_key.assert_not_called()
 
 
 def test_create_agent_with_one_group_member_succeeds_and_marks_it_required():
@@ -4474,147 +3634,6 @@ def test_start_openclaw_agent_without_firecrawl():
             assert_that(overlay["plugins"]["entries"], is_not(has_key("firecrawl")))
             secret = k8s.create_secret.call_args.args[1]
             assert_that(secret.string_data, is_not(has_key("FIRECRAWL_API_KEY")))
-
-
-def test_create_agent_duplicate_bot_token_returns_409():
-    with given([*_GIVEN, there_is_an_agent(bot_token=TEST_SLACK_BOT_TOKEN)]) as context:
-        client: TestClient = context.client
-        payload = {**_VALID_CREATE, "slack_bot_token": TEST_SLACK_BOT_TOKEN}
-
-        with when("I create a second agent with the same bot token"):
-            response = client.post(_BASE, json=payload, headers=_auth(context))
-
-        with then("it returns 409 with a message about the conflict"):
-            assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
-            assert_that(response.json()["detail"], contains_string("already in use"))
-
-
-def test_create_agent_different_bot_token_succeeds():
-    with given([*_GIVEN, there_is_an_agent()]) as context:
-        client: TestClient = context.client
-
-        with when("I create a second agent with a different bot token"):
-            response = client.post(_BASE, json=_VALID_CREATE, headers=_auth(context))
-
-        with then("it returns 201"):
-            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
-
-
-def test_update_agent_duplicate_bot_token_returns_409():
-    with given(_GIVEN) as context:
-        client: TestClient = context.client
-
-        with when("I create two agents with different tokens"):
-            client.post(_BASE, json=_VALID_CREATE, headers=_auth(context))
-            agent_b = client.post(
-                _BASE,
-                json={
-                    **_VALID_CREATE,
-                    "name": "Agent B",
-                    "slack_bot_token": "xoxb-other-token",
-                    "slack_app_token": "xapp-1-other-token",
-                },
-                headers=_auth(context),
-            ).json()
-
-        with when("I update agent B to use agent A's bot token"):
-            response = client.patch(
-                f"{_BASE}/{agent_b['id']}",
-                json={"slack_bot_token": _VALID_CREATE["slack_bot_token"]},
-                headers=_auth(context),
-            )
-
-        with then("it returns 409"):
-            assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
-            assert_that(response.json()["detail"], contains_string("already in use"))
-
-
-def test_update_agent_same_token_no_conflict():
-    with given(_GIVEN) as context:
-        client: TestClient = context.client
-
-        with when("I create an agent"):
-            agent = client.post(_BASE, json=_VALID_CREATE, headers=_auth(context)).json()
-
-        with when("I update it with the same bot token plus a name change"):
-            response = client.patch(
-                f"{_BASE}/{agent['id']}",
-                json={
-                    "name": "Renamed",
-                    "slack_bot_token": _VALID_CREATE["slack_bot_token"],
-                },
-                headers=_auth(context),
-            )
-
-        with then("it returns 200"):
-            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
-
-
-def test_create_agent_reuses_token_of_deleted_agent():
-    with given([*_GIVEN, there_is_an_agent(deleted=True, bot_token=TEST_SLACK_BOT_TOKEN)]) as context:
-        client: TestClient = context.client
-        payload = {**_VALID_CREATE, "slack_bot_token": TEST_SLACK_BOT_TOKEN}
-
-        with when("I create a new agent with the deleted agent's bot token"):
-            response = client.post(_BASE, json=payload, headers=_auth(context))
-
-        with then("it returns 201 because deleted agents release their tokens"):
-            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
-
-
-def test_delete_agent_frees_bot_token_for_reuse():
-    with given(_GIVEN) as context:
-        client: TestClient = context.client
-        payload = {**_VALID_CREATE, "slack_bot_token": "xoxb-reusable-token"}
-
-        with when("I create an agent then delete it"):
-            agent = client.post(_BASE, json=payload, headers=_auth(context)).json()
-            delete_resp = client.delete(f"{_BASE}/{agent['id']}", headers=_auth(context))
-
-        with then("deletion succeeds"):
-            assert_that(delete_resp.status_code, equal_to(status.HTTP_204_NO_CONTENT))
-
-        with when("I create a new agent with the same bot token"):
-            response = client.post(_BASE, json=payload, headers=_auth(context))
-
-        with then("it returns 201"):
-            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
-
-
-def test_create_agent_duplicate_bot_token_cross_org_hides_name():
-    with given(
-        [
-            *_GIVEN,
-            there_is_an_agent_in_another_org(name="Secret Agent", bot_token=TEST_SLACK_BOT_TOKEN),
-        ]
-    ) as context:
-        client: TestClient = context.client
-
-        with when("I create an agent using a bot token owned by another org's agent"):
-            payload = {**_VALID_CREATE, "slack_bot_token": TEST_SLACK_BOT_TOKEN}
-            response = client.post(_BASE, json=payload, headers=_auth(context))
-
-        with then("it returns 409 without revealing the other org's agent name"):
-            assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
-            detail = response.json()["detail"]
-            assert_that(detail, contains_string("another agent"))
-            assert_that(detail, is_not(contains_string("Secret Agent")))
-
-
-def test_create_agent_duplicate_token_does_not_leave_orphan():
-    with given([*_GIVEN, there_is_an_agent(bot_token=TEST_SLACK_BOT_TOKEN)]) as context:
-        client: TestClient = context.client
-
-        with when("I try to create an agent with a duplicate bot token"):
-            payload = {**_VALID_CREATE, "slack_bot_token": TEST_SLACK_BOT_TOKEN}
-            response = client.post(_BASE, json=payload, headers=_auth(context))
-
-        with then("it returns 409"):
-            assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
-
-        with then("no orphaned agent row is left behind"):
-            agents = client.get(_BASE, headers=_auth(context)).json()["items"]
-            assert_that(len(agents), equal_to(1))
 
 
 def test_start_agent_secret_has_litellm_proxy_target():
@@ -5301,3 +4320,179 @@ def test_agent_configuration_override_history_retained_after_soft_delete():
             retained = override_repository.get_version(agent_id, context.organization.id, published["version"])
             assert retained is not None
             assert_that(retained.soul_md, equal_to(published["soul_md"]))
+
+
+# ---------------------------------------------------------------------------
+# Google Workspace (gog) integration
+# ---------------------------------------------------------------------------
+
+_GWS_CONTENT = {
+    "email": "user@example.com",
+    "services": ["gmail", "calendar"],
+    "scopes": [
+        "https://www.googleapis.com/auth/gmail.modify",
+        "https://www.googleapis.com/auth/gmail.settings.basic",
+        "https://www.googleapis.com/auth/gmail.settings.sharing",
+        "https://www.googleapis.com/auth/calendar",
+    ],
+    "refresh_token": "gws-refresh-token",
+    "client_id": "client-id.apps.googleusercontent.com",
+    "client_secret": "GOCSPX-secret",
+}
+
+
+def _configure_gws(client: TestClient, context, content: dict | None = None):
+    return client.patch(
+        f"{_BASE}/{context.agent.id}",
+        json={"secrets": [{"provider": "google_workspace", "content": content or _GWS_CONTENT}]},
+        headers=_auth(context),
+    )
+
+
+def test_patch_agent_accepts_google_workspace_secret():
+    """Covers the enum member, the content schema, and the DB check constraint."""
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+
+        with when("I configure a Google Workspace credential"):
+            response = _configure_gws(client, context)
+
+        with then("it is stored and listed without exposing its contents"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            providers = [s["provider"] for s in response.json()["secrets"]]
+            assert_that(providers, has_item("google_workspace"))
+            assert_that(response.text, is_not(contains_string("gws-refresh-token")))
+
+
+def test_patch_agent_rejects_unsupported_google_workspace_service():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+
+        with when("I ask for a service gog's v1 allowlist does not cover"):
+            response = _configure_gws(client, context, {**_GWS_CONTENT, "services": ["gmail", "youtube"]})
+
+        with then("it is rejected"):
+            assert_that(response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_CONTENT))
+
+
+def test_patch_agent_rejects_google_workspace_scopes_missing_selected_service():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+
+        with when("the recorded consent scopes do not cover the selected services"):
+            response = _configure_gws(
+                client,
+                context,
+                {
+                    **_GWS_CONTENT,
+                    "scopes": ["https://www.googleapis.com/auth/gmail.modify"],
+                },
+            )
+
+        with then("it is rejected"):
+            assert_that(response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_CONTENT))
+
+
+def test_start_agent_materializes_gog_env_and_setup_script():
+    import json as _json
+
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        k8s: MagicMock = context.injector.get(KubernetesClient)
+
+        with when("I start an agent with a Google Workspace credential"):
+            _configure_gws(client, context)
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("the pod secret carries everything gog needs to rebuild its state"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            secret = k8s.create_secret.call_args.args[1]
+            assert_that(secret.string_data["GOG_HOME"], equal_to("/home/node/.config/gogcli"))
+            assert_that(secret.string_data["GOG_KEYRING_BACKEND"], equal_to("file"))
+            assert_that(len(secret.string_data["GOG_KEYRING_PASSWORD"]), greater_than(0))
+            assert_that(secret.string_data["GOG_ACCOUNT_EMAIL"], equal_to("user@example.com"))
+            token = _json.loads(secret.string_data["GOG_TOKEN_JSON"])
+            assert_that(token["refresh_token"], equal_to("gws-refresh-token"))
+            assert_that(token["services"], equal_to(["gmail", "calendar"]))
+            client_json = _json.loads(secret.string_data["GOG_CLIENT_JSON"])
+            assert_that(client_json["web"]["client_id"], equal_to("client-id.apps.googleusercontent.com"))
+
+        with then("the setup script is mounted and the agent is told how to use gog"):
+            config_map = k8s.create_config_map.call_args.args[1]
+            assert_that(config_map.data, has_key("gog-setup.sh"))
+            assert_that(config_map.data["gog-setup.sh"], contains_string("gog auth tokens import -"))
+            assert_that(config_map.data["AGENTS.md"], contains_string("Google Workspace (gog)"))
+            assert_that(config_map.data["AGENTS.md"], contains_string("user@example.com"))
+
+
+def test_start_agent_gog_state_is_not_on_the_hermes_pvc():
+    """Hermes' PVC is /opt/data (where aai-cli lives); gog's state is deliberately
+    ephemeral, since it is rebuilt from the credential on every boot."""
+    with given([*_GIVEN_WITH_HERMES_IMAGE, there_is_an_agent(agent_type=AgentType.HERMES)]) as context:
+        client: TestClient = context.client
+        k8s: MagicMock = context.injector.get(KubernetesClient)
+
+        with when("I start a Hermes agent with a Google Workspace credential"):
+            _configure_gws(client, context)
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("GOG_HOME is under the container home, not the PVC"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            secret = k8s.create_secret.call_args.args[1]
+            assert_that(secret.string_data["GOG_HOME"], equal_to("/home/hermes/.config/gogcli"))
+            config_map = k8s.create_config_map.call_args.args[1]
+            assert_that(config_map.data, has_key("gog-setup.sh"))
+
+
+def test_start_agent_without_google_workspace_has_no_gog_artifacts():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        k8s: MagicMock = context.injector.get(KubernetesClient)
+
+        with when("I start an agent with no Google Workspace credential"):
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("no gog script or env is injected"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            config_map = k8s.create_config_map.call_args.args[1]
+            assert_that(config_map.data, is_not(has_key("gog-setup.sh")))
+            secret = k8s.create_secret.call_args.args[1]
+            assert_that(secret.string_data, is_not(has_key("GOG_TOKEN_JSON")))
+            assert_that(config_map.data["AGENTS.md"], is_not(contains_string("Google Workspace (gog)")))
+
+
+def test_start_agent_with_only_google_workspace_omits_aai_cli_policy():
+    """gog takes no --profile, so the aai-cli block must not claim to cover it."""
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        k8s: MagicMock = context.injector.get(KubernetesClient)
+
+        with when("Google Workspace is the agent's only integration"):
+            _configure_gws(client, context)
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("the aai-cli integrations block and config.toml are absent"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            config_map = k8s.create_config_map.call_args.args[1]
+            assert_that(config_map.data["AGENTS.md"], is_not(contains_string("Integrations (aai-cli)")))
+            assert_that(config_map.data, is_not(has_key("aai-cli-config.toml")))
+
+
+def test_start_agent_rejects_google_workspace_without_a_client():
+    """The credential must name the OAuth client its refresh token was issued under;
+    with no server-owned client configured either, starting has to fail loudly.
+
+    The empty client config is explicit: a developer's root .env may define real Google
+    client credentials, which would otherwise be backfilled and let this pass.
+    """
+    with given([*_GIVEN_WITHOUT_GOOGLE_CLIENT, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+
+        with when("the stored credential has no client id/secret"):
+            content = {k: v for k, v in _GWS_CONTENT.items() if k not in ("client_id", "client_secret")}
+            _configure_gws(client, context, content)
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("the start is rejected with a reconnect hint"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+            assert_that(response.json()["detail"], contains_string("Google Workspace credential"))

@@ -103,7 +103,6 @@ class AgentCreatedPayload(BaseModel):
     agent_id: UUID
     agent_name: str
     created_by_user_id: UUID | None
-    platform: str
     runtime: str
 
 
@@ -115,7 +114,6 @@ class AgentLifecyclePayload(BaseModel):
     agent_name: str
     previous_status: str
     new_status: str
-    platform: str
     runtime: str
 
 
@@ -159,7 +157,6 @@ class AgentDeletedPayload(BaseModel):
     organization_id: UUID
     agent_id: UUID
     agent_name: str
-    platform: str
     runtime: str
     actor_display: str
     subject_display: str

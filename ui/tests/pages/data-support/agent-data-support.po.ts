@@ -95,7 +95,7 @@ export const mockAgent = {
   id: MOCK_AGENT_ID,
   name: "Maya",
   status: "RUNNING",
-  platform: "slack",
+  agent_type: "openclaw",
   organization_id: MOCK_ORG_ID,
   template_key: MOCK_TEMPLATE_KEY,
   template_version: 1,
@@ -106,16 +106,8 @@ export const mockAgent = {
   running_model: "litellm/gpt-5-mini",
   pending_model: "",
   approval_mode: "auto",
-  slack_config: {
-    channel_ids: [],
-    dm_user_ids: [],
-    group_policy: "allowlist",
-    dm_policy: "off",
-  },
-  teams_config: null,
   secrets: [],
   skills: [],
-  webhook_url: null,
   allowed_actions: mockAgentAllowedActions,
   created_at: "2026-03-14T00:00:00Z",
   updated_at: "2026-05-14T09:14:00Z",
@@ -1116,11 +1108,13 @@ export class AgentDataSupport {
     provider = "github",
     status = 404,
     detail = "Agent not found",
+    body,
   }: {
     agentId?: string;
     provider?: string;
     status?: number;
     detail?: string;
+    body?: unknown;
   } = {}) {
     await this.page.route(
       `**/api/v1/organizations/*/agents/${agentId}/integrations/${provider}/validate`,
@@ -1132,7 +1126,7 @@ export class AgentDataSupport {
         await route.fulfill({
           status,
           contentType: "application/json",
-          body: JSON.stringify({ detail }),
+          body: JSON.stringify(status >= 400 ? { detail } : body),
         });
       },
     );

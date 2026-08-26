@@ -158,8 +158,8 @@ export function AgentProfileSettings({
             <div className="mt-1 text-[0.9rem]" style={{ color: "var(--ink-2)" }}>{agent.agentType === "hermes" ? "Hermes" : "OpenClaw"}</div>
           </div>
           <div className="rounded-xl px-3.5 py-3" style={{ border: "1px solid var(--line)", background: "var(--bg-soft)" }}>
-            <div className="text-[0.72rem] font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--ink-4)" }}>Messaging platform</div>
-            <div className="mt-1 text-[0.9rem] capitalize" style={{ color: "var(--ink-2)" }}>{agent.platform}</div>
+            <div className="text-[0.72rem] font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--ink-4)" }}>Communications</div>
+            <div className="mt-1 text-[0.9rem]" style={{ color: "var(--ink-2)" }}>Managed as independent connections</div>
           </div>
           <div className="rounded-xl px-3.5 py-3" style={{ border: "1px solid var(--line)", background: "var(--bg-soft)" }}>
             <div className="text-[0.72rem] font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--ink-4)" }}>Resource management</div>

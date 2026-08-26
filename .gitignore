@@ -138,6 +138,7 @@ kubeconfig.yaml
 # Cluster configs carry client certs; the bare name above misses prefixed variants
 # such as k3d-kubeconfig.yaml.
 *kubeconfig*.yaml
+.k3d/
 
 # Review helper scripts (untracked, shared across worktrees) — root only:
 # a bare scripts/ would also swallow tracked dirs like api/domains/agents/scripts/.
@@ -156,6 +157,7 @@ helm/monitoring/tests/generated/
 
 .kube
 .pi*
+.env.prod
 .agents
 .scratch
 docs/agents

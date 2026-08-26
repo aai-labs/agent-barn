@@ -53,7 +53,7 @@ export const PlatformAgentStatsSchema = z.object({
   series: z.array(PlatformAgentSeriesPointSchema),
 });
 
-export const AgentPlatformSchema = z.enum(["slack", "teams", "telegram"]);
+export const AgentPlatformSchema = z.enum(["slack", "telegram", "discord"]);
 
 // Narrowing dimensions the oversight boundary allows. There is deliberately no
 // "who sent the message" filter: sender identity is excluded from these

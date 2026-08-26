@@ -4,7 +4,7 @@ import os
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
-from urllib.error import HTTPError, URLError
+from urllib.error import URLError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
@@ -12,19 +12,10 @@ PROXY_PORT = 8090
 PORT = int(os.environ.get("HEALTHZ_PORT", "8081"))
 HERMES_URL = "http://localhost:8642/v1/models"
 POLL_INTERVAL = 10
-TOKEN_POLL_INTERVAL = 300  # 5 minutes
 
 LITELLM_PROXY_TARGET = os.environ.get("LITELLM_PROXY_TARGET", "")
-
 _lock = threading.Lock()
 _cache: dict = {"ok": None, "ever_connected": False, "reason": None}
-_token_cache: dict = {"ok": None, "reason": None}
-
-AGENT_PLATFORM = os.environ.get("AGENT_PLATFORM", "slack")
-_SLACK_API = "https://slack.com/api"
-_TELEGRAM_API = "https://api.telegram.org"
-_DISCORD_API = "https://discord.com/api/v10"
-_SKIP_VALIDATION = os.environ.get("SKIP_SLACK_TOKEN_VALIDATION", "").lower() in ("1", "true", "yes")
 
 _TERMINAL_LLM_ERRORS: dict[int, str] = {
     401: "LLM API key is invalid or expired. Check your API key configuration.",
@@ -51,111 +42,20 @@ def _poll() -> None:
         time.sleep(POLL_INTERVAL)
 
 
-def _check_token(url: str, token: str, label: str) -> tuple[bool, str]:
-    try:
-        req = Request(
-            url,
-            data=b"",
-            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
-        )
-        with urlopen(req, timeout=15) as resp:
-            body = json.loads(resp.read())
-        if body.get("ok"):
-            return True, ""
-        return False, f"Invalid {label}: {body.get('error', 'unknown_error')}"
-    except Exception as exc:
-        return False, f"{label} validation failed: {exc}"
-
-
-def _check_telegram_token(token: str) -> tuple[bool, str]:
-    try:
-        url = f"{_TELEGRAM_API}/bot{token}/getMe"
-        req = Request(url)
-        with urlopen(req, timeout=15) as resp:
-            body = json.loads(resp.read())
-        if body.get("ok"):
-            return True, ""
-        return False, f"Invalid Telegram bot token: {body.get('description', 'unknown_error')}"
-    except Exception as exc:
-        return False, f"Telegram token validation failed: {exc}"
-
-
-def _check_discord_token(token: str) -> tuple[bool, str]:
-    if not token:
-        return False, "No Discord bot token was provided."
-    try:
-        req = Request(
-            f"{_DISCORD_API}/users/@me",
-            headers={"Authorization": f"Bot {token}"},
-        )
-        with urlopen(req, timeout=15) as resp:
-            body = json.loads(resp.read())
-        if body.get("id") and body.get("bot") is True:
-            return True, ""
-        return False, "Discord bot token validation returned an unexpected account."
-    except HTTPError as exc:
-        if exc.code in (401, 403):
-            return False, "Discord bot token is invalid or unauthorized."
-        return False, f"Discord token validation failed: HTTP {exc.code}"
-    except Exception as exc:
-        return False, f"Discord token validation failed: {exc}"
-
-
-def _validate_platform_tokens() -> tuple[bool, str]:
-    if AGENT_PLATFORM == "telegram":
-        return _check_telegram_token(os.environ.get("TELEGRAM_BOT_TOKEN", ""))
-    if AGENT_PLATFORM == "discord":
-        return _check_discord_token(os.environ.get("DISCORD_BOT_TOKEN", ""))
-    if AGENT_PLATFORM == "slack":
-        ok, reason = _check_token(
-            f"{_SLACK_API}/auth.test",
-            os.environ.get("SLACK_BOT_TOKEN", ""),
-            "bot token",
-        )
-        if ok:
-            return _check_token(
-                f"{_SLACK_API}/apps.connections.open",
-                os.environ.get("SLACK_APP_TOKEN", ""),
-                "app token",
-            )
-        return ok, reason
-    return False, f"Unsupported agent platform: {AGENT_PLATFORM}"
-
-
-def _poll_tokens() -> None:
-    if _SKIP_VALIDATION:
-        with _lock:
-            _token_cache["ok"] = True
-            _token_cache["reason"] = None
-        return
-
-    while True:
-        ok, reason = _validate_platform_tokens()
-        with _lock:
-            _token_cache["ok"] = ok
-            _token_cache["reason"] = reason if not ok else None
-        time.sleep(TOKEN_POLL_INTERVAL)
-
-
 threading.Thread(target=_poll, daemon=True).start()
-threading.Thread(target=_poll_tokens, daemon=True).start()
 
 
 def _snapshot() -> tuple:
-    """One consistent read of both caches; handlers stay lock-free."""
+    """One consistent read of the runtime cache; handlers stay lock-free."""
     with _lock:
         return (
             _cache["ok"],
             _cache["ever_connected"],
             _cache["reason"],
-            _token_cache["ok"],
-            _token_cache["reason"],
         )
 
 
-def _metrics_text(ok, ever, tok_ok) -> str:
-    # Token gauge stays 1 while unknown/starting; 0 only on a definite
-    # failure, so a slow first validation never trips an alert.
+def _metrics_text(ok, ever) -> str:
     lines = [
         "# HELP agent_healthz_ok 1 if the agent runtime is reachable, 0 otherwise",
         "# TYPE agent_healthz_ok gauge",
@@ -163,24 +63,23 @@ def _metrics_text(ok, ever, tok_ok) -> str:
         "# HELP agent_healthz_ever_connected 1 once the runtime has connected at least once",
         "# TYPE agent_healthz_ever_connected gauge",
         f"agent_healthz_ever_connected {1 if ever else 0}",
-        "# HELP agent_slack_tokens_ok 0 if Slack token validation definitely failed, 1 otherwise",
-        "# TYPE agent_slack_tokens_ok gauge",
-        f"agent_slack_tokens_ok {0 if tok_ok is False else 1}",
     ]
     return "\n".join(lines) + "\n"
 
 
-def _healthz_result(ok, ever, reason, tok_ok, tok_reason) -> tuple[int, dict]:
-    # Token failures surface immediately as errors
-    if tok_ok is False:
-        return 500, {"status": "error", "reason": tok_reason}
-    if ok is None or tok_ok is None:
+def _healthz_result(ok, ever, reason) -> tuple[int, dict]:
+    if ok is None:
         return 503, {"status": "starting"}
     if ok:
         return 200, {"status": "ok"}
     if ever:
         return 500, {"status": "error", "reason": reason}
     return 503, {"status": "starting", "reason": reason}
+
+
+def _liveness_result() -> tuple[int, dict]:
+    """The sidecar process is live; provider sessions run in Communications."""
+    return 200, {"live": True}
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -190,9 +89,11 @@ class _Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         if self.path == "/ready":
             self._send(200, {"ready": True})
+        elif self.path == "/live":
+            self._send(*_liveness_result())
         elif self.path == "/metrics":
-            ok, ever, _, tok_ok, _ = _snapshot()
-            self._send_text(200, _metrics_text(ok, ever, tok_ok))
+            ok, ever, _ = _snapshot()
+            self._send_text(200, _metrics_text(ok, ever))
         elif self.path == "/healthz":
             code, body = _healthz_result(*_snapshot())
             self._send(code, body)

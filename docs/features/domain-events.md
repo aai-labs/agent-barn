@@ -6,7 +6,7 @@ Read before adding or changing internal Domain Events, Outbox Messages, Event De
 
 ## Role in the system
 
-Agent Farm uses internal Domain Events to record immutable, typed business facts at either Organization or Platform scope. A committed Domain Event is persisted as one PostgreSQL `event_outbox_message` row and one `event_delivery` row per currently registered Event Handler. PostgreSQL is the durable source for event intent and intended handler delivery state; Dramatiq/Redis is the low-latency, at-least-once transport for committed Event Deliveries.
+Agent Barn uses internal Domain Events to record immutable, typed business facts at either Organization or Platform scope. A committed Domain Event is persisted as one PostgreSQL `event_outbox_message` row and one `event_delivery` row per currently registered Event Handler. PostgreSQL is the durable source for event intent and intended handler delivery state; Dramatiq/Redis is the low-latency, at-least-once transport for committed Event Deliveries.
 
 ## Invariants
 
@@ -229,7 +229,7 @@ Use `../../api/tests/integration/test_outbox_messages.py`, `../../api/tests/unit
 
 ### Run delivery workers locally
 
-The Product API can commit Domain Events without Redis, but low-latency delivery requires Redis and the worker process. `make up` starts Redis and the worker (`worker` service in `../../compose.yml`, a general-purpose background job container — not event-delivery-specific) alongside the API automatically.
+The Product API can commit Domain Events without Redis, but low-latency delivery requires Redis and the worker process. `./run.sh` starts Redis and the worker (`worker` service in `../../compose.yml`, a general-purpose background job container — not event-delivery-specific) alongside the API automatically.
 
 Running the API outside Docker (`make dev-api`), start Redis and the worker separately:
 

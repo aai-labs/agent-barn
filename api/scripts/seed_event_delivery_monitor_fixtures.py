@@ -49,7 +49,7 @@ ORG_NAMES = [
 ]
 
 ORGANIZATION_ROLES = ["MEMBER", "ADMIN", "OWNER"]
-PLATFORMS = ["slack", "teams", "telegram"]
+PLATFORMS = ["slack", "telegram", "discord"]
 RUNTIMES = ["openclaw", "hermes"]
 AGENT_NAMES = ["Support Bot", "Release Notes Agent", "Standup Reporter", "Incident Triager", "Onboarding Guide"]
 

@@ -1,9 +1,24 @@
 COMPOSE := docker compose -f compose.yml
 
 .PHONY: \
-	setup \
-	dev-api dev-ui dev-worker reconcile seed-event-deliveries seed-agent-overrides migrate merge-heads rollback makemigrations test-api test-ui lint-ui check-ui coverage check-api check-migrations check-monitoring fix-api test check fix \
-	up down restart logs build clean db-up db-down db-logs db-restart redis-up redis-down redis-logs worker-logs
+	setup run stop stop-clean \
+	dev-api dev-ingest dev-communications dev-ui dev-worker reconcile seed-event-deliveries seed-agent-overrides migrate merge-heads rollback makemigrations test-api test-ui lint-ui check-ui coverage check-api check-migrations check-monitoring fix-api test check fix \
+	db-up db-down db-logs db-restart redis-up redis-down redis-logs
+
+# One-command local dev: validates .env, brings up k3d + LiteLLM, loads agent
+# images (skipping any already in the cluster), migrates, starts the app
+# stack in Docker with hot reload, and follows logs. See run.sh for details.
+run:
+	@./run.sh
+
+# Stops containers; DB/redis data and the k3d cluster survive.
+stop:
+	@./stop.sh
+
+# Stops containers and deletes the k3d cluster (images will need reloading on
+# the next `make run`). Volumes are never touched.
+stop-clean:
+	@./stop.sh --clean
 
 # One-time project bootstrap: installs deps for api + ui and creates a local
 # .env from the tracked template if one doesn't already exist.
@@ -11,12 +26,39 @@ setup:
 	cd api && uv sync
 	cd ui && pnpm install
 	@test -f .env || cp .env.spec .env
-	@echo "Setup complete. Fill in .env, then run: make db-up && make migrate && make up"
+	@echo "Setup complete. Fill in .env, then run: ./run.sh"
 
 # Non-docker commands
 
+# Agent pods in k3d push telemetry back through the host, so the pod-facing URL
+# has to override the in-cluster default (which only resolves when the API runs
+# in k8s). Same value as compose.
+INGEST_PORT ?= 8001
+INGEST_BASE_URL ?= http://host.docker.internal:$(INGEST_PORT)/ingest/v1
+COMMUNICATIONS_PORT ?= 8002
+COMMUNICATIONS_BASE_URL ?= http://host.docker.internal:$(COMMUNICATIONS_PORT)/communications/v1
+# Overridable so a second worktree can run its own stack without port clashes.
+API_DEV_PORT ?= 8000
+
+# Runs Ingest and Communications alongside the main app so native development
+# has the same service topology as Docker and Helm. The trap kills every child
+# on Ctrl-C; stray listeners otherwise break the next run confusingly.
 dev-api:
-	cd api && uv run python -m fastapi dev main.py --host 0.0.0.0 --port 8000
+	@cd api && \
+	trap 'kill 0' EXIT INT TERM; \
+	uv run python -m fastapi dev ingest_main.py --host 0.0.0.0 --port $(INGEST_PORT) & \
+	uv run python -m fastapi dev communications_main.py --host 0.0.0.0 --port $(COMMUNICATIONS_PORT) & \
+	INGEST_BASE_URL=$(INGEST_BASE_URL) COMMUNICATIONS_BASE_URL=$(COMMUNICATIONS_BASE_URL) uv run python -m fastapi dev main.py --host 0.0.0.0 --port $(API_DEV_PORT)
+
+# Ingest on its own — `make dev-api` already starts it; use this to run or
+# restart the telemetry sink independently.
+# --host 0.0.0.0 is required: the default loopback bind is unreachable from pods.
+dev-ingest:
+	cd api && uv run python -m fastapi dev ingest_main.py --host 0.0.0.0 --port $(INGEST_PORT)
+
+# Communications on its own — `make dev-api` already starts it.
+dev-communications:
+	cd api && uv run python -m fastapi dev communications_main.py --host 0.0.0.0 --port $(COMMUNICATIONS_PORT)
 
 dev-ui:
 	cd ui && pnpm dev
@@ -102,25 +144,10 @@ fix-api:
 	cd api && uv run ruff check --fix && uv run ruff format .
 
 # Docker commands
-
-up:
-	$(COMPOSE) up --build
-
-down:
-	$(COMPOSE) down
-
-restart:
-	$(COMPOSE) down
-	$(COMPOSE) up --build
-
-logs:
-	$(COMPOSE) logs -f
-
-build:
-	$(COMPOSE) build
-
-clean:
-	$(COMPOSE) down -v --remove-orphans
+#
+# The full app stack (db/redis/api/worker/communications/ui + k3d cluster) is run via
+# ./run.sh and ./stop.sh at the repo root, not make targets — see README.
+# The db/redis-only targets below remain for the native dev-* workflow.
 
 db-up:
 	$(COMPOSE) up -d db
@@ -142,6 +169,3 @@ redis-down:
 
 redis-logs:
 	$(COMPOSE) logs -f redis
-
-worker-logs:
-	$(COMPOSE) logs -f worker

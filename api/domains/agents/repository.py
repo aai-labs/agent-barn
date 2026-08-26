@@ -9,22 +9,22 @@ from sqlalchemy import exists, func, or_
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, col, select
 
-from api.domains.agents.exceptions import BotTokenConflictHTTPException
 from api.domains.agents.models import (
     Agent,
     AgentAccess,
-    AgentDiscordConfig,
     AgentFilter,
     AgentLifecycleEmailReceipt,
     AgentLogSnapshot,
-    AgentPlatform,
     AgentSecret,
     AgentSkill,
-    AgentSlackConfig,
     AgentStatus,
-    AgentTeamsConfig,
-    AgentTelegramConfig,
     SecretProvider,
+)
+from api.domains.communications.models import (
+    CommunicationConnection,
+    CommunicationDelivery,
+    CommunicationDeliveryStatus,
+    CommunicationPlatform,
 )
 from api.domains.events import ActorIdentity, ActorIdentityType, EventDelivery, SubjectIdentity, SubjectIdentityType
 from api.domains.events.catalog import (
@@ -33,6 +33,7 @@ from api.domains.events.catalog import (
     AGENT_CREATED,
     AGENT_DELETED,
     AGENT_GENERAL_ACCESS_CHANGED,
+    AGENT_SECRET_ADDED,
     AGENT_SECRET_REMOVED,
     AGENT_UPDATED,
     EVENT_REGISTRY,
@@ -195,7 +196,7 @@ class AgentRepository:
         organization_id: UUID | None,
         agent_id: UUID | None,
         created_by_user_id: UUID | None,
-        platform: AgentPlatform | None,
+        platform: CommunicationPlatform | None,
     ) -> list[Any]:
         """Shared narrowing for the stats aggregates (AF-256). Deliberately does
         not include a deleted_at predicate — callers decide that, since inventory
@@ -208,7 +209,13 @@ class AgentRepository:
         if created_by_user_id is not None:
             predicates.append(col(Agent.created_by_user_id) == created_by_user_id)
         if platform is not None:
-            predicates.append(col(Agent.platform) == platform)
+            predicates.append(
+                exists().where(
+                    col(CommunicationConnection.agent_id) == col(Agent.id),
+                    col(CommunicationConnection.platform_key) == platform.value,
+                    col(CommunicationConnection.retired_at).is_(None),
+                )
+            )
         return predicates
 
     def count_agents_for_stats(
@@ -217,7 +224,7 @@ class AgentRepository:
         organization_id: UUID | None = None,
         agent_id: UUID | None = None,
         created_by_user_id: UUID | None = None,
-        platform: AgentPlatform | None = None,
+        platform: CommunicationPlatform | None = None,
     ) -> tuple[int, int, int, int]:
         """(total, running, stopped, errored) Agent counts for the stats
         surfaces (AF-256).
@@ -256,7 +263,7 @@ class AgentRepository:
         organization_id: UUID | None = None,
         agent_id: UUID | None = None,
         created_by_user_id: UUID | None = None,
-        platform: AgentPlatform | None = None,
+        platform: CommunicationPlatform | None = None,
     ) -> list[tuple[datetime, int, int]]:
         """(bucket_start, existing, created) Agent inventory for the stats
         surfaces (AF-256), reconstructed exactly from created_at/deleted_at.
@@ -645,7 +652,17 @@ class AgentRepository:
         *,
         actor: ActorIdentity,
         correlation_id: UUID | None = None,
+        secrets: list[AgentSecret] | None = None,
+        skills: list[AgentSkill] | None = None,
+        actor_display: str | None = None,
     ) -> AgentLifecycleEventResult:
+        """Create an Agent and its initial resources in one transaction.
+
+        The LiteLLM key is allocated immediately before this method is called.
+        Keeping the Agent, access row, initial secrets, skills, and their outbox
+        deliveries in one transaction means a failure cannot leave a persisted
+        Agent pointing at a key that create-agent compensation has deleted.
+        """
         with Session(self.delegate.engine, expire_on_commit=False) as session:
             session.add(agent)
             session.flush()
@@ -674,15 +691,35 @@ class AgentRepository:
                     "organization_id": agent.organization_id,
                     "agent_id": agent.id,
                     "agent_name": agent.name,
-                    "platform": agent.platform,
                     "runtime": agent.agent_type,
                     "created_by_user_id": agent.created_by_user_id,
                 },
             )
             self.outbox_repository.stage(session=session, registry=EVENT_REGISTRY, event=event)
             delivery_ids = list(session.exec(select(EventDelivery.id).where(EventDelivery.event_id == event.event_id)))
-            session.commit()
+
+            for secret in secrets or []:
+                delivery_ids.extend(
+                    self._stage_secret_with_event(
+                        session,
+                        secret,
+                        event_name=AGENT_SECRET_ADDED,
+                        organization_id=agent.organization_id,
+                        agent_name=agent.name,
+                        actor=actor,
+                        actor_display=actor_display,
+                    )
+                )
+
+            if skills:
+                session.add_all(skills)
+                session.flush()
+
+            # Refresh before commit so the returned object retains the same
+            # behavior as the previous create method without doing fallible
+            # database work after the transaction has committed.
             session.refresh(agent)
+            session.commit()
             return AgentLifecycleEventResult(agent=agent, delivery_ids=delivery_ids)
 
     def save_with_lifecycle_event(
@@ -733,13 +770,13 @@ class AgentRepository:
             persisted.last_error = agent.last_error
             persisted.ingest_key_encrypted = agent.ingest_key_encrypted
             persisted.running_model = agent.running_model
+            persisted.communication_key_encrypted = agent.communication_key_encrypted
             session.add(persisted)
             session.flush()
             payload: dict[str, Any] = {
                 "organization_id": persisted.organization_id,
                 "agent_id": persisted.id,
                 "agent_name": persisted.name,
-                "platform": persisted.platform,
                 "runtime": persisted.agent_type,
             }
             if event_name == AGENT_CREATED:
@@ -786,7 +823,7 @@ class AgentRepository:
         on the Agent row (name, model, approval_mode, template pin), diffing against
         the currently-persisted row and staging an `agent.updated` event only when a
         tracked field actually changed. Skills, secrets, and nested platform config
-        (Slack/Teams/Telegram) are covered by their own events elsewhere and are
+        (Slack/Telegram/Discord) are covered by their own events elsewhere and are
         deliberately excluded from this diff."""
         with Session(self.delegate.engine, expire_on_commit=False) as session:
             persisted = session.exec(
@@ -848,9 +885,52 @@ class AgentRepository:
             persisted = session.exec(select(Agent).where(col(Agent.id) == agent.id).with_for_update()).first()
             if persisted is None:
                 return AgentLifecycleEventResult(agent=agent, delivery_ids=[])
-            persisted.deleted_at = datetime.now(UTC)
+            now = datetime.now(UTC)
+            persisted.deleted_at = now
             session.add(persisted)
             session.flush()
+            # Agent deletion is a soft delete, so the database FK cascade does
+            # not retire the Agent-owned Communication Connections. Release
+            # their provider credentials in this same transaction so retired
+            # Agents cannot keep global platform identities reserved.
+            session.exec(
+                sa.update(CommunicationConnection)
+                .where(
+                    col(CommunicationConnection.agent_id) == persisted.id,
+                    col(CommunicationConnection.organization_id) == persisted.organization_id,
+                    col(CommunicationConnection.retired_at).is_(None),
+                )
+                .values(
+                    enabled=False,
+                    observed_status=None,
+                    credentials_encrypted="",
+                    driver_key_encrypted="",
+                    credential_fingerprint=None,
+                    credential_scope_key=None,
+                    ingress_lease_owner=None,
+                    ingress_lease_expires_at=None,
+                    retired_at=now,
+                    updated_at=now,
+                    revision=col(CommunicationConnection.revision) + 1,
+                )
+            )
+            session.exec(
+                sa.update(CommunicationDelivery)
+                .where(
+                    col(CommunicationDelivery.agent_id) == persisted.id,
+                    col(CommunicationDelivery.organization_id) == persisted.organization_id,
+                    col(CommunicationDelivery.status).in_(
+                        [CommunicationDeliveryStatus.PENDING, CommunicationDeliveryStatus.PROCESSING]
+                    ),
+                )
+                .values(
+                    status=CommunicationDeliveryStatus.CANCELLED,
+                    completed_at=now,
+                    lease_expires_at=None,
+                    last_error_code="CONNECTION_RETIRED",
+                    last_error_message="Communication Connection was retired",
+                )
+            )
             event = EVENT_REGISTRY.build_event(
                 event_name=AGENT_DELETED,
                 schema_version=1,
@@ -867,7 +947,6 @@ class AgentRepository:
                     "organization_id": persisted.organization_id,
                     "agent_id": persisted.id,
                     "agent_name": persisted.name,
-                    "platform": persisted.platform,
                     "runtime": persisted.agent_type,
                     "actor_display": actor_display or actor.type.value,
                     "subject_display": persisted.name,
@@ -877,6 +956,47 @@ class AgentRepository:
             delivery_ids = list(session.exec(select(EventDelivery.id).where(EventDelivery.event_id == event.event_id)))
             session.commit()
             return AgentLifecycleEventResult(agent=persisted, delivery_ids=delivery_ids)
+
+    def _stage_secret_with_event(
+        self,
+        session: Session,
+        secret: AgentSecret,
+        *,
+        event_name: str,
+        organization_id: UUID,
+        agent_name: str,
+        actor: ActorIdentity,
+        actor_display: str | None = None,
+        correlation_id: UUID | None = None,
+    ) -> list[UUID]:
+        """Stage one AgentSecret and its audit event in an existing transaction."""
+        session.add(secret)
+        session.flush()
+        event = EVENT_REGISTRY.build_event(
+            event_name=event_name,
+            schema_version=1,
+            occurred_at=datetime.now(UTC),
+            organization_id=organization_id,
+            actor=actor,
+            subject=SubjectIdentity(
+                type=SubjectIdentityType.AGENT,
+                id=secret.agent_id,
+                organization_id=organization_id,
+            ),
+            correlation_id=correlation_id or uuid4(),
+            payload={
+                "organization_id": organization_id,
+                "agent_id": secret.agent_id,
+                "record_id": secret.id,
+                "provider": SecretProvider(secret.provider).value,
+                "label": secret.secret_name,
+                "shared_reference_id": secret.shared_credential_id,
+                "actor_display": actor_display or actor.type.value,
+                "subject_display": agent_name,
+            },
+        )
+        self.outbox_repository.stage(session=session, registry=EVENT_REGISTRY, event=event)
+        return list(session.exec(select(EventDelivery.id).where(EventDelivery.event_id == event.event_id)))
 
     def save_secret_with_event(
         self,
@@ -889,39 +1009,24 @@ class AgentRepository:
         actor_display: str | None = None,
         correlation_id: UUID | None = None,
     ) -> list[UUID]:
-        """Save an AgentSecret row and stage an agent.secret.added/.updated event in
-        one transaction. `organization_id`/`agent_name` are required explicitly since
-        AgentSecret carries neither. The payload never includes `secret.content`.
-        `secret` is the same object the caller holds, so it picks up any DB-assigned
-        fields (e.g. `id`) in place; no need to return it."""
+        """Save an AgentSecret row and stage its audit event in one transaction.
+
+        `organization_id`/`agent_name` are required explicitly since AgentSecret
+        carries neither. The payload never includes `secret.content`. `secret`
+        is the same object the caller holds, so it picks up DB-assigned fields
+        (e.g. `id`) in place; no need to return it.
+        """
         with Session(self.delegate.engine, expire_on_commit=False) as session:
-            session.add(secret)
-            session.flush()
-            event = EVENT_REGISTRY.build_event(
+            delivery_ids = self._stage_secret_with_event(
+                session,
+                secret,
                 event_name=event_name,
-                schema_version=1,
-                occurred_at=datetime.now(UTC),
                 organization_id=organization_id,
+                agent_name=agent_name,
                 actor=actor,
-                subject=SubjectIdentity(
-                    type=SubjectIdentityType.AGENT,
-                    id=secret.agent_id,
-                    organization_id=organization_id,
-                ),
-                correlation_id=correlation_id or uuid4(),
-                payload={
-                    "organization_id": organization_id,
-                    "agent_id": secret.agent_id,
-                    "record_id": secret.id,
-                    "provider": SecretProvider(secret.provider).value,
-                    "label": secret.secret_name,
-                    "shared_reference_id": secret.shared_credential_id,
-                    "actor_display": actor_display or actor.type.value,
-                    "subject_display": agent_name,
-                },
+                actor_display=actor_display,
+                correlation_id=correlation_id,
             )
-            self.outbox_repository.stage(session=session, registry=EVENT_REGISTRY, event=event)
-            delivery_ids = list(session.exec(select(EventDelivery.id).where(EventDelivery.event_id == event.event_id)))
             session.commit()
             return delivery_ids
 
@@ -1057,121 +1162,22 @@ class AgentRepository:
             )
             return list(session.exec(query).all())
 
+    def find_all_running(self) -> list[Agent]:
+        """Live Agents currently eligible for an operator lifecycle cutover."""
+        with Session(self.delegate.engine) as session:
+            query = (
+                select(Agent)
+                .where(col(Agent.deleted_at).is_(None))
+                .where(col(Agent.status) == AgentStatus.RUNNING)
+                .order_by(col(Agent.organization_id), col(Agent.created_at))
+            )
+            return list(session.exec(query).all())
+
     def find_all_for_org(self, org_id: UUID) -> list[Agent]:
         """Return all agents for an org — both live and deleted."""
         with Session(self.delegate.engine) as session:
             query = select(Agent).where(col(Agent.organization_id) == org_id).order_by(col(Agent.created_at).asc())
             return list(session.exec(query).all())
-
-    # --- Slack config ---
-
-    def get_slack_config(self, agent_id: UUID) -> AgentSlackConfig | None:
-        with Session(self.delegate.engine) as session:
-            query = select(AgentSlackConfig).where(col(AgentSlackConfig.agent_id) == agent_id)
-            return session.exec(query).first()
-
-    def save_slack_config(self, config: AgentSlackConfig) -> AgentSlackConfig:
-        try:
-            self.delegate.save(config)
-        except IntegrityError as e:
-            if "ix_agent_slack_config_bot_token_hash" in str(e).lower():
-                raise BotTokenConflictHTTPException("another agent")
-            raise
-        return config
-
-    def find_active_agent_by_bot_token_hash(
-        self, bot_token_hash: str, exclude_agent_id: UUID | None = None
-    ) -> Agent | None:
-        with Session(self.delegate.engine) as session:
-            query = (
-                select(Agent)
-                .join(AgentSlackConfig, col(AgentSlackConfig.agent_id) == col(Agent.id))
-                .where(col(AgentSlackConfig.bot_token_hash) == bot_token_hash)
-                .where(col(Agent.deleted_at).is_(None))
-            )
-            if exclude_agent_id is not None:
-                query = query.where(col(Agent.id) != exclude_agent_id)
-            return session.exec(query).first()
-
-    def get_slack_configs_for_agents(self, agent_ids: list[UUID]) -> dict[UUID, AgentSlackConfig]:
-        if not agent_ids:
-            return {}
-        with Session(self.delegate.engine) as session:
-            query = select(AgentSlackConfig).where(col(AgentSlackConfig.agent_id).in_(agent_ids))
-            return {c.agent_id: c for c in session.exec(query).all()}
-
-    # --- Teams config ---
-
-    def get_teams_config(self, agent_id: UUID) -> AgentTeamsConfig | None:
-        with Session(self.delegate.engine) as session:
-            query = select(AgentTeamsConfig).where(col(AgentTeamsConfig.agent_id) == agent_id)
-            return session.exec(query).first()
-
-    def save_teams_config(self, config: AgentTeamsConfig) -> AgentTeamsConfig:
-        self.delegate.save(config)
-        return config
-
-    def get_teams_configs_for_agents(self, agent_ids: list[UUID]) -> dict[UUID, AgentTeamsConfig]:
-        if not agent_ids:
-            return {}
-        with Session(self.delegate.engine) as session:
-            query = select(AgentTeamsConfig).where(col(AgentTeamsConfig.agent_id).in_(agent_ids))
-            return {c.agent_id: c for c in session.exec(query).all()}
-
-    # --- Telegram config ---
-
-    def get_telegram_config(self, agent_id: UUID) -> AgentTelegramConfig | None:
-        with Session(self.delegate.engine) as session:
-            query = select(AgentTelegramConfig).where(col(AgentTelegramConfig.agent_id) == agent_id)
-            return session.exec(query).first()
-
-    def save_telegram_config(self, config: AgentTelegramConfig) -> AgentTelegramConfig:
-        self.delegate.save(config)
-        return config
-
-    def get_telegram_configs_for_agents(self, agent_ids: list[UUID]) -> dict[UUID, AgentTelegramConfig]:
-        if not agent_ids:
-            return {}
-        with Session(self.delegate.engine) as session:
-            query = select(AgentTelegramConfig).where(col(AgentTelegramConfig.agent_id).in_(agent_ids))
-            return {c.agent_id: c for c in session.exec(query).all()}
-
-    # --- Discord config ---
-
-    def get_discord_config(self, agent_id: UUID) -> AgentDiscordConfig | None:
-        with Session(self.delegate.engine) as session:
-            query = select(AgentDiscordConfig).where(col(AgentDiscordConfig.agent_id) == agent_id)
-            return session.exec(query).first()
-
-    def save_discord_config(self, config: AgentDiscordConfig) -> AgentDiscordConfig:
-        try:
-            self.delegate.save(config)
-        except IntegrityError as e:
-            if "ix_agent_discord_config_bot_token_hash" in str(e).lower():
-                raise BotTokenConflictHTTPException("another agent", platform="Discord")
-            raise
-        return config
-
-    def find_active_discord_agent_by_bot_token_hash(
-        self, bot_token_hash: str, exclude_agent_id: UUID | None = None
-    ) -> Agent | None:
-        with Session(self.delegate.engine) as session:
-            query = (
-                select(Agent)
-                .join(AgentDiscordConfig, col(AgentDiscordConfig.agent_id) == col(Agent.id))
-                .where(col(AgentDiscordConfig.bot_token_hash) == bot_token_hash)
-                .where(col(Agent.deleted_at).is_(None))
-            )
-            if exclude_agent_id is not None:
-                query = query.where(col(Agent.id) != exclude_agent_id)
-            return session.exec(query).first()
-
-    def get_discord_configs_for_agents(self, agent_ids: list[UUID]) -> dict[UUID, AgentDiscordConfig]:
-        if not agent_ids:
-            return {}
-        with Session(self.delegate.engine) as session:
-            query = select(AgentDiscordConfig).where(col(AgentDiscordConfig.agent_id).in_(agent_ids))
-            return {c.agent_id: c for c in session.exec(query).all()}
 
     # --- Integration secrets ---
 

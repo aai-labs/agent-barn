@@ -1,17 +1,17 @@
 import enum
-import hashlib
 import json
 from datetime import datetime
-from typing import Literal
+from typing import Literal, Self
 from uuid import UUID
 
 import sqlalchemy as sa
 from fastapi import Query
 from pydantic import BaseModel as PydanticBaseModel
-from pydantic import ConfigDict, Field, model_validator
+from pydantic import ConfigDict, Field, field_validator, model_validator
 from sqlmodel import Column, Enum, Index
 from sqlmodel import Field as SqlField
 
+from api.domains.agents.google_workspace_scopes import required_service_scopes
 from api.domains.rbac.catalog import PermissionKey
 from api.domains.users.organization_users.models import OrganizationRole
 from api.infrastructure.crypto import decrypt_token, encrypt_token
@@ -30,13 +30,6 @@ class CommandApprovalMode(str, enum.Enum):
     OFF = "off"
 
 
-class AgentPlatform(str, enum.Enum):
-    SLACK = "slack"
-    TEAMS = "teams"
-    TELEGRAM = "telegram"
-    DISCORD = "discord"
-
-
 class AgentType(str, enum.Enum):
     OPENCLAW = "openclaw"
     HERMES = "hermes"
@@ -52,33 +45,6 @@ class AgentTemplatePinType(str, enum.Enum):
     OVERRIDE = "override"
 
 
-class SlackGroupPolicy(str, enum.Enum):
-    OPEN = "open"
-    ALLOWLIST = "allowlist"
-
-
-class SlackDmPolicy(str, enum.Enum):
-    OFF = "off"
-    OPEN = "open"
-    ALLOWLIST = "allowlist"
-
-
-class TelegramGroupPolicy(str, enum.Enum):
-    OPEN = "open"
-    ALLOWLIST = "allowlist"
-
-
-class TelegramDmPolicy(str, enum.Enum):
-    OFF = "off"
-    OPEN = "open"
-    ALLOWLIST = "allowlist"
-
-
-class DiscordGroupPolicy(str, enum.Enum):
-    OPEN = "open"
-    ALLOWLIST = "allowlist"
-
-
 # --- Integration secrets ---
 
 
@@ -87,14 +53,17 @@ class SecretProvider(str, enum.Enum):
     JIRA = "jira"
     CONFLUENCE = "confluence"
     BITBUCKET = "bitbucket"
-    GMAIL = "gmail"
-    GOOGLE_CALENDAR = "google_calendar"
-    GOOGLE_SHEETS = "google_sheets"
     ZOHO_MAIL = "zoho_mail"
     ZOHO_CALENDAR = "zoho_calendar"
     FIRECRAWL = "firecrawl"
     SLACK = "slack"
     PIPEDRIVE = "pipedrive"
+    GOOGLE_WORKSPACE = "google_workspace"
+
+
+# Google services a google_workspace credential may cover, as named by the gog CLI.
+# The OAuth scope and runtime-policy maps are checked against this allowlist in tests.
+GOOGLE_WORKSPACE_SERVICES: tuple[str, ...] = ("gmail", "calendar", "drive", "sheets")
 
 
 # Predefined display labels — NOT user-entered; the backend stamps these by provider.
@@ -103,14 +72,12 @@ PROVIDER_DISPLAY_NAMES: dict[SecretProvider, str] = {
     SecretProvider.JIRA: "Jira credential",
     SecretProvider.CONFLUENCE: "Confluence credential",
     SecretProvider.BITBUCKET: "Bitbucket credential",
-    SecretProvider.GMAIL: "Gmail credential",
-    SecretProvider.GOOGLE_CALENDAR: "Google Calendar credential",
-    SecretProvider.GOOGLE_SHEETS: "Google Sheets credential",
     SecretProvider.ZOHO_MAIL: "Zoho Mail credential",
     SecretProvider.ZOHO_CALENDAR: "Zoho Calendar credential",
     SecretProvider.FIRECRAWL: "Firecrawl credential",
     SecretProvider.SLACK: "Slack credential",
     SecretProvider.PIPEDRIVE: "Pipedrive credential",
+    SecretProvider.GOOGLE_WORKSPACE: "Google Workspace credential",
 }
 
 
@@ -168,28 +135,50 @@ class BitbucketContent(_RepoListCompat):
     api_token: str
 
 
-class GmailContent(SecretContent):
-    # client_id/client_secret are optional: secrets created via the "Authenticate
-    # with Google" OAuth flow carry only the refresh token, and the app-owned client
-    # id/secret are injected from config at agent-start time (see AgentService.start_agent).
-    # Legacy secrets from the old three-field form still carry all three and validate as-is.
+class GoogleWorkspaceContent(SecretContent):
+    """Credential for the gog CLI: one refresh token covering several Google services.
+
+    Unlike the per-service Google providers above, one consent covers every service in
+    ``services``. ``scopes`` records what Google actually granted (the token response's
+    ``scope``), which is what the validator compares against on re-check — the user can
+    uncheck individual scopes on the consent screen, so requested != granted.
+
+    ``client_id``/``client_secret`` are optional: empty means the
+    server-owned client is backfilled from config at agent-start time.
+    """
+
+    email: str = Field(min_length=1)
+    services: list[str]
+    scopes: list[str] = Field(default_factory=list)
+    refresh_token: str
+    read_only: bool = False
     client_id: str = ""
     client_secret: str = ""
-    refresh_token: str
 
+    @field_validator("services")
+    @classmethod
+    def _validate_services(cls, value: list[str]) -> list[str]:
+        if not value:
+            raise ValueError("at least one service is required")
+        unknown = [s for s in value if s not in GOOGLE_WORKSPACE_SERVICES]
+        if unknown:
+            raise ValueError(
+                f"unsupported service(s): {', '.join(unknown)}. Supported: {', '.join(GOOGLE_WORKSPACE_SERVICES)}"
+            )
+        # Deduplicate while keeping the caller's order so the stored list, the consent
+        # scopes, and GOG_TOKEN_JSON all agree.
+        return list(dict.fromkeys(value))
 
-class GoogleCalendarContent(SecretContent):
-    access_token: str
-    calendar_id: str
-
-
-class GoogleSheetsContent(SecretContent):
-    # Same shape and rationale as GmailContent: the "Authenticate with Google" flow
-    # stores only the refresh token and the app-owned client id/secret are injected
-    # from config at agent-start time. A user's own Google client carries all three.
-    client_id: str = ""
-    client_secret: str = ""
-    refresh_token: str
+    @model_validator(mode="after")
+    def _validate_granted_scopes(self) -> Self:
+        if not self.scopes:
+            return self
+        missing = sorted(required_service_scopes(self.services, self.read_only) - set(self.scopes))
+        if missing:
+            raise ValueError(
+                "scopes do not cover the selected Google services at the configured access level: " + ", ".join(missing)
+            )
+        return self
 
 
 class ZohoMailContent(SecretContent):
@@ -229,14 +218,12 @@ PROVIDER_CONTENT_MODELS: dict[SecretProvider, type[SecretContent]] = {
     SecretProvider.JIRA: JiraContent,
     SecretProvider.CONFLUENCE: ConfluenceContent,
     SecretProvider.BITBUCKET: BitbucketContent,
-    SecretProvider.GMAIL: GmailContent,
-    SecretProvider.GOOGLE_CALENDAR: GoogleCalendarContent,
-    SecretProvider.GOOGLE_SHEETS: GoogleSheetsContent,
     SecretProvider.ZOHO_MAIL: ZohoMailContent,
     SecretProvider.ZOHO_CALENDAR: ZohoCalendarContent,
     SecretProvider.FIRECRAWL: FirecrawlContent,
     SecretProvider.SLACK: SlackContent,
     SecretProvider.PIPEDRIVE: PipedriveContent,
+    SecretProvider.GOOGLE_WORKSPACE: GoogleWorkspaceContent,
 }
 
 
@@ -345,14 +332,11 @@ class Agent(BaseModel, table=True):
     )
 
     ingest_key_encrypted: str | None = SqlField(default=None, nullable=True)
+    communication_key_encrypted: str | None = SqlField(default=None, nullable=True)
     approval_mode: CommandApprovalMode = SqlField(
         default=CommandApprovalMode.AUTO,
         sa_column=Column(sa.String(10), nullable=False, server_default="auto"),
     )
-
-
-def compute_bot_token_hash(bot_token: str) -> str:
-    return hashlib.sha256(bot_token.encode("utf-8")).hexdigest()
 
 
 class AgentAccess(BaseModel, table=True):
@@ -391,119 +375,6 @@ class AgentAccess(BaseModel, table=True):
         foreign_key="agent_access_roles.id",
         nullable=False,
         ondelete="RESTRICT",
-    )
-
-
-class AgentSlackConfig(BaseModel, table=True):
-    __tablename__: str = "agent_slack_config"
-
-    __table_args__ = (
-        sa.Index(
-            "ix_agent_slack_config_bot_token_hash",
-            "bot_token_hash",
-            unique=True,
-            postgresql_where=sa.text("bot_token_hash IS NOT NULL"),
-        ),
-    )
-
-    agent_id: UUID = SqlField(foreign_key="agent.id", nullable=False, unique=True, ondelete="CASCADE")
-    bot_token_encrypted: str = SqlField(nullable=False)
-    app_token_encrypted: str = SqlField(nullable=False)
-    bot_token_hash: str | None = SqlField(default=None, nullable=True)
-    channel_ids: list[str] = SqlField(
-        default_factory=list,
-        sa_column=Column(sa.JSON(), nullable=False, server_default="[]"),
-    )
-    dm_user_ids: list[str] = SqlField(
-        default_factory=list,
-        sa_column=Column(sa.JSON(), nullable=False, server_default="[]"),
-    )
-    group_policy: SlackGroupPolicy = SqlField(
-        default=SlackGroupPolicy.ALLOWLIST,
-        sa_column=Column(sa.String(), nullable=False, server_default="allowlist"),
-    )
-    dm_policy: SlackDmPolicy = SqlField(
-        default=SlackDmPolicy.OFF,
-        sa_column=Column(sa.String(), nullable=False, server_default="off"),
-    )
-    verbose_mode: bool = SqlField(
-        default=True,
-        sa_column=Column(sa.Boolean(), nullable=False, server_default=sa.true()),
-    )
-
-
-class AgentTeamsConfig(BaseModel, table=True):
-    __tablename__: str = "agent_teams_config"
-
-    agent_id: UUID = SqlField(foreign_key="agent.id", nullable=False, unique=True, ondelete="CASCADE")
-    app_id_encrypted: str = SqlField(nullable=False)
-    app_password_encrypted: str = SqlField(nullable=False)
-    tenant_id: str = SqlField(nullable=False, max_length=255)
-
-
-class AgentTelegramConfig(BaseModel, table=True):
-    __tablename__: str = "agent_telegram_config"
-
-    agent_id: UUID = SqlField(foreign_key="agent.id", nullable=False, unique=True, ondelete="CASCADE")
-    bot_token_encrypted: str = SqlField(nullable=False)
-    bot_username: str = SqlField(nullable=False, max_length=255)
-    allowed_user_ids: list[str] = SqlField(
-        default_factory=list,
-        sa_column=Column(sa.JSON(), nullable=False, server_default="[]"),
-    )
-    allowed_chat_ids: list[str] = SqlField(
-        default_factory=list,
-        sa_column=Column(sa.JSON(), nullable=False, server_default="[]"),
-    )
-    group_policy: TelegramGroupPolicy = SqlField(
-        default=TelegramGroupPolicy.ALLOWLIST,
-        sa_column=Column(sa.String(), nullable=False, server_default="allowlist"),
-    )
-    dm_policy: TelegramDmPolicy = SqlField(
-        default=TelegramDmPolicy.OFF,
-        sa_column=Column(sa.String(), nullable=False, server_default="off"),
-    )
-
-
-class AgentDiscordConfig(BaseModel, table=True):
-    __tablename__: str = "agent_discord_config"
-
-    __table_args__ = (
-        sa.Index(
-            "ix_agent_discord_config_bot_token_hash",
-            "bot_token_hash",
-            unique=True,
-            postgresql_where=sa.text("bot_token_hash IS NOT NULL"),
-        ),
-    )
-
-    agent_id: UUID = SqlField(foreign_key="agent.id", nullable=False, unique=True, ondelete="CASCADE")
-    bot_token_encrypted: str = SqlField(nullable=False)
-    bot_token_hash: str | None = SqlField(default=None, nullable=True)
-    guild_ids: list[str] = SqlField(
-        default_factory=list,
-        sa_column=Column(sa.JSON(), nullable=False, server_default="[]"),
-    )
-    allowed_channel_ids: list[str] = SqlField(
-        default_factory=list,
-        sa_column=Column(sa.JSON(), nullable=False, server_default="[]"),
-    )
-    allowed_user_ids: list[str] = SqlField(
-        default_factory=list,
-        sa_column=Column(sa.JSON(), nullable=False, server_default="[]"),
-    )
-    allowed_role_ids: list[str] = SqlField(
-        default_factory=list,
-        sa_column=Column(sa.JSON(), nullable=False, server_default="[]"),
-    )
-    home_channel_id: str | None = SqlField(default=None, nullable=True, max_length=32)
-    require_mention: bool = SqlField(
-        default=True,
-        sa_column=Column(sa.Boolean(), nullable=False, server_default=sa.true()),
-    )
-    group_policy: DiscordGroupPolicy = SqlField(
-        default=DiscordGroupPolicy.ALLOWLIST,
-        sa_column=Column(sa.String(), nullable=False, server_default="allowlist"),
     )
 
 
@@ -810,36 +681,10 @@ class SkillVersionPin(PydanticBaseModel):
 
 
 class AgentCreate(PydanticBaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     name: str = Field(min_length=1, max_length=255)
-    platform: AgentPlatform = AgentPlatform.SLACK
     agent_type: AgentType = AgentType.OPENCLAW
-    # Slack credentials (required when platform=slack)
-    slack_bot_token: str | None = Field(default=None, min_length=1)
-    slack_app_token: str | None = Field(default=None, min_length=1)
-    slack_channel_ids: list[str] = Field(default_factory=list)
-    slack_dm_user_ids: list[str] = Field(default_factory=list)
-    slack_group_policy: SlackGroupPolicy = SlackGroupPolicy.ALLOWLIST
-    slack_dm_policy: SlackDmPolicy = SlackDmPolicy.OFF
-    slack_verbose_mode: bool = True
-    # Teams credentials (required when platform=teams)
-    teams_app_id: str | None = Field(default=None, min_length=1)
-    teams_app_password: str | None = Field(default=None, min_length=1)
-    teams_tenant_id: str | None = Field(default=None, min_length=1)
-    # Telegram credentials (required when platform=telegram)
-    telegram_bot_token: str | None = Field(default=None, min_length=1)
-    telegram_allowed_user_ids: list[str] = Field(default_factory=list)
-    telegram_allowed_chat_ids: list[str] = Field(default_factory=list)
-    telegram_group_policy: TelegramGroupPolicy = TelegramGroupPolicy.ALLOWLIST
-    telegram_dm_policy: TelegramDmPolicy = TelegramDmPolicy.OFF
-    # Discord credentials (required when platform=discord)
-    discord_bot_token: str | None = Field(default=None, min_length=1)
-    discord_guild_ids: list[str] = Field(default_factory=list)
-    discord_allowed_channel_ids: list[str] = Field(default_factory=list)
-    discord_allowed_user_ids: list[str] = Field(default_factory=list)
-    discord_allowed_role_ids: list[str] = Field(default_factory=list)
-    discord_home_channel_id: str | None = Field(default=None, min_length=1)
-    discord_require_mention: bool = True
-    discord_group_policy: DiscordGroupPolicy = DiscordGroupPolicy.ALLOWLIST
     # Template reference. The agent pins to template_version if given, else to
     # the lineage's latest version.
     template_key: str = Field(min_length=1, max_length=255)
@@ -856,21 +701,6 @@ class AgentCreate(PydanticBaseModel):
     approval_mode: CommandApprovalMode = CommandApprovalMode.AUTO
 
     @model_validator(mode="after")
-    def validate_platform_credentials(self) -> AgentCreate:
-        if self.agent_type == AgentType.HERMES and self.platform == AgentPlatform.TEAMS:
-            raise ValueError(f"Hermes agents do not support the {self.platform.value.title()} platform")
-        if self.platform == AgentPlatform.SLACK and (not self.slack_bot_token or not self.slack_app_token):
-            raise ValueError("slack_bot_token and slack_app_token are required for Slack agents")
-        elif self.platform == AgentPlatform.TEAMS:
-            if not self.teams_app_id or not self.teams_app_password or not self.teams_tenant_id:
-                raise ValueError("teams_app_id, teams_app_password, and teams_tenant_id are required for Teams agents")
-        elif self.platform == AgentPlatform.TELEGRAM and not self.telegram_bot_token:
-            raise ValueError("telegram_bot_token is required for Telegram agents")
-        elif self.platform == AgentPlatform.DISCORD and not self.discord_bot_token:
-            raise ValueError("discord_bot_token is required for Discord agents")
-        return self
-
-    @model_validator(mode="after")
     def validate_unique_secret_providers(self) -> AgentCreate:
         providers = [s.provider for s in self.secrets]
         if len(providers) != len(set(providers)):
@@ -879,34 +709,9 @@ class AgentCreate(PydanticBaseModel):
 
 
 class AgentUpdate(PydanticBaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     name: str | None = Field(default=None, min_length=1, max_length=255)
-    # Slack
-    slack_bot_token: str | None = Field(default=None, min_length=1)
-    slack_app_token: str | None = Field(default=None, min_length=1)
-    slack_channel_ids: list[str] | None = None
-    slack_dm_user_ids: list[str] | None = None
-    slack_group_policy: SlackGroupPolicy | None = None
-    slack_dm_policy: SlackDmPolicy | None = None
-    slack_verbose_mode: bool | None = None
-    # Teams
-    teams_app_id: str | None = Field(default=None, min_length=1)
-    teams_app_password: str | None = Field(default=None, min_length=1)
-    teams_tenant_id: str | None = Field(default=None, min_length=1)
-    # Telegram
-    telegram_bot_token: str | None = Field(default=None, min_length=1)
-    telegram_allowed_user_ids: list[str] | None = None
-    telegram_allowed_chat_ids: list[str] | None = None
-    telegram_group_policy: TelegramGroupPolicy | None = None
-    telegram_dm_policy: TelegramDmPolicy | None = None
-    # Discord
-    discord_bot_token: str | None = Field(default=None, min_length=1)
-    discord_guild_ids: list[str] | None = None
-    discord_allowed_channel_ids: list[str] | None = None
-    discord_allowed_user_ids: list[str] | None = None
-    discord_allowed_role_ids: list[str] | None = None
-    discord_home_channel_id: str | None = Field(default=None, min_length=1)
-    discord_require_mention: bool | None = None
-    discord_group_policy: DiscordGroupPolicy | None = None
     # Template re-pin: point the agent at a different (key, version). Both must
     # be provided together. Per-agent markdown editing is no longer supported —
     # persona changes happen by editing templates in the catalog.
@@ -931,6 +736,13 @@ class AgentUpdate(PydanticBaseModel):
     def reject_legacy_template_slug(cls, values: object) -> object:
         if isinstance(values, dict) and "template_slug" in values:
             raise ValueError("template_slug is no longer supported; use template_key")
+        return values
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_null_approval_mode(cls, values: object) -> object:
+        if isinstance(values, dict) and values.get("approval_mode", ...) is None:
+            raise ValueError("approval_mode must be omitted rather than null")
         return values
 
     @model_validator(mode="after")
@@ -1123,45 +935,6 @@ class AgentConfigurationRead(PydanticBaseModel):
     override_versions: list[AgentTemplateOverrideVersionRead] = Field(default_factory=list)
 
 
-class AgentSlackConfigRead(PydanticBaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    channel_ids: list[str]
-    dm_user_ids: list[str]
-    group_policy: SlackGroupPolicy
-    dm_policy: SlackDmPolicy
-    verbose_mode: bool
-    bot_display_name: str | None = None  # fetched live from Slack, not persisted
-
-
-class AgentTeamsConfigRead(PydanticBaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    tenant_id: str
-
-
-class AgentTelegramConfigRead(PydanticBaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    allowed_user_ids: list[str]
-    allowed_chat_ids: list[str]
-    group_policy: TelegramGroupPolicy
-    dm_policy: TelegramDmPolicy
-    bot_username: str | None = None
-
-
-class AgentDiscordConfigRead(PydanticBaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    guild_ids: list[str]
-    allowed_channel_ids: list[str]
-    allowed_user_ids: list[str]
-    allowed_role_ids: list[str]
-    home_channel_id: str | None
-    require_mention: bool
-    group_policy: DiscordGroupPolicy
-
-
 class AgentSecretRead(PydanticBaseModel):  # label + provider only — no secret values
     model_config = ConfigDict(from_attributes=True)
 
@@ -1234,7 +1007,6 @@ class AgentRead(PydanticBaseModel):
     id: UUID
     name: str
     status: AgentStatus
-    platform: AgentPlatform
     agent_type: AgentType
     organization_id: UUID
     template_key: str
@@ -1260,15 +1032,9 @@ class AgentRead(PydanticBaseModel):
     secrets: list[AgentSecretRead] = Field(default_factory=list)
     skills: list[AgentAssignedSkillRead] = Field(default_factory=list)
     approval_mode: CommandApprovalMode
-    webhook_url: str | None = None
     allowed_actions: list[PermissionKey] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
-
-
-class PairRequest(PydanticBaseModel):
-    platform: str = Field(min_length=1)
-    code: str = Field(min_length=1)
 
 
 class AgentFilter(PydanticBaseModel):

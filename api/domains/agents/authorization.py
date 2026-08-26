@@ -52,6 +52,14 @@ class AgentAuthorization:
             include_general_access=context.user.email_verified_at is not None,
         )
 
+    def authorization_scope(
+        self,
+        context: CurrentUserContext,
+        permission: PermissionKey,
+    ) -> AuthorizationScope:
+        """Return the repository scope for an Agent or subordinate-resource query."""
+        return self._scope(context, permission)
+
     def require_collection_scope(
         self,
         context: CurrentUserContext,

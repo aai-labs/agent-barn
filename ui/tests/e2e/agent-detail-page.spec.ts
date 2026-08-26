@@ -50,6 +50,25 @@ test.describe("Agent Detail Page", () => {
     await expect(page.getByText("litellm/gpt-5-mini")).toBeVisible();
   });
 
+  test("guides an unreachable Agent to messaging setup", async ({ page }) => {
+    await page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}/connections`, async (route) => {
+      if (route.request().method() !== "GET") {
+        await route.fallback();
+        return;
+      }
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([]) });
+    });
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+
+    await expect(page.getByText("Messaging setup", { exact: true })).toBeVisible();
+    await expect(page.getByText("Make Maya reachable", { exact: true })).toBeVisible();
+    await expect(page.getByText("Not connected", { exact: true })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Add connection" })).toHaveAttribute(
+      "href",
+      /configuration\?section=channels&connect=true/,
+    );
+  });
+
   test("shows error state when agent fails to load", async ({ page }) => {
     await dataSupportPage.agents.interceptGetAgentRequest({
       status: 404,
@@ -469,80 +488,206 @@ test.describe("Agent Detail Page — Channels tab", () => {
       body: { ...mockAgent, status: "STOPPED" },
     });
     await dataSupportPage.agents.interceptGetAgentTemplateRequest();
-    await dataSupportPage.agents.interceptSlackChannelsRequest();
-    await dataSupportPage.agents.interceptSlackUsersRequest();
-    await dataSupportPage.agents.interceptUpdateAgentRequest();
     await dataSupportPage.agents.interceptGetConversationChannelsRequest();
     await dataSupportPage.agents.interceptGetTemplatesRequest();
     await dataSupportPage.agents.interceptGetAgentConfigurationRequest();
     await dataSupportPage.agents.interceptGetModelsRequest();
-
-    await agentDetailPage.goto(MOCK_AGENT_ID);
-    await agentDetailPage.configureButton().click();
-    await agentDetailPage.channelsTab().click();
-    await agentDetailPage.editButton().click();
-  });
-
-  test("shows group and DM policy dropdowns with the agent's current values", async () => {
-    await expect(agentDetailPage.groupPolicySelect()).toHaveValue("allowlist");
-    await expect(agentDetailPage.dmPolicySelect()).toHaveValue("off");
-  });
-
-  test("uses the card footer for cancel and apply actions", async ({ page }) => {
-    const footer = page.locator('section[aria-label="Channels & endpoint"] footer');
-
-    await expect(footer.getByRole("button", { name: "Cancel", exact: true })).toBeVisible();
-    await expect(footer.getByRole("button", { name: "Apply", exact: true })).toBeDisabled();
-
-    await agentDetailPage.groupPolicySelect().selectOption("open");
-    await expect(footer.getByRole("button", { name: "Apply", exact: true })).toBeEnabled();
-
-    await footer.getByRole("button", { name: "Cancel", exact: true }).click();
-    await expect(page.getByRole("button", { name: "Edit", exact: true })).toBeVisible();
-  });
-
-  test("shows Discord routing and write-only token controls", async ({ page }) => {
-    await dataSupportPage.agents.interceptGetAgentRequest({
-      body: {
-        ...mockAgent,
-        status: "STOPPED",
-        platform: "discord",
-        slack_config: null,
-        discord_config: {
-          guild_ids: ["guild-1"],
-          allowed_channel_ids: ["channel-1"],
-          allowed_user_ids: ["user-1"],
-          allowed_role_ids: ["role-1"],
-          home_channel_id: "channel-1",
-          require_mention: true,
-          group_policy: "allowlist",
-        },
-      },
+    await page.route("**/api/v1/organizations/*/communication-platforms", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify([{
+          key: "discord",
+          display_name: "Discord",
+          setup_hint: "Credential: Developer Portal → Applications → app → Bot → Token. Enable Message Content Intent; invite with OAuth2 bot scope and View Channels, Send Messages, Read Message History permissions. Use Developer Mode to copy IDs.",
+          schema_version: 1,
+          capabilities: ["MENTIONS"],
+          settings_schema: {
+            type: "object",
+            properties: { guild_ids: { title: "Guild IDs", type: "array", items: { type: "string" } } },
+          },
+          credentials_schema: {
+            type: "object",
+            properties: {
+              bot_token: { title: "Bot token", type: "string" },
+            },
+            required: ["bot_token"],
+          },
+        }, {
+          key: "slack",
+          display_name: "Slack",
+          setup_hint: "In Slack OAuth & Permissions → Bot Token Scopes, add channels:read for public channel names, groups:read for private channel names, im:read and mpim:read for direct-message names, and users:read for sender names. Reinstall the Slack app after adding scopes, then update the bot token here.",
+          schema_version: 1,
+          capabilities: ["DIRECTORY_DISCOVERY"],
+          settings_schema: { type: "object", properties: {} },
+          credentials_schema: {
+            type: "object",
+            properties: {
+              bot_token: { title: "Bot token", type: "string" },
+              app_token: { title: "App-level token", type: "string" },
+            },
+            required: ["bot_token", "app_token"],
+          },
+        }, {
+          key: "telegram",
+          display_name: "Telegram",
+          setup_hint: "Credential: create a bot with @BotFather /newbot. This integration uses getUpdates long polling, so remove any webhook; disable /setprivacy for all group messages and add the bot as a channel administrator.",
+          schema_version: 1,
+          capabilities: ["THREADS"],
+          settings_schema: { type: "object", properties: {} },
+          credentials_schema: {
+            type: "object",
+            properties: {
+              bot_token: { title: "Bot token", type: "string" },
+            },
+            required: ["bot_token"],
+          },
+        }]),
+      });
     });
+    await page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}/connections`, async (route) => {
+      if (route.request().method() === "POST") {
+        await route.fulfill({
+          status: 201,
+          contentType: "application/json",
+          body: JSON.stringify({
+            id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+            agent_id: MOCK_AGENT_ID,
+            platform_key: "discord",
+            display_name: "Partner Discord",
+            enabled: true,
+            schema_version: 1,
+            settings: { guild_ids: ["guild-two"] },
+            external_identity: "validation-skipped",
+            observed_status: "PENDING",
+            last_health_at: null,
+            last_error_code: null,
+            last_error_message: null,
+            webhook_url: "https://api.example.test/communications/v1/webhooks/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+            revision: 1,
+            created_at: "2026-01-01T00:00:00Z",
+            updated_at: "2026-01-01T00:00:00Z",
+          }),
+        });
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify([{
+          id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+          agent_id: MOCK_AGENT_ID,
+          platform_key: "discord",
+          display_name: "Customer Discord",
+          enabled: true,
+          schema_version: 1,
+          settings: { guild_ids: ["guild-one"] },
+          external_identity: "validation-skipped",
+          observed_status: "CONNECTED",
+          last_health_at: "2026-01-01T00:00:00Z",
+          last_error_code: null,
+          last_error_message: null,
+          webhook_url: null,
+          revision: 3,
+          created_at: "2026-01-01T00:00:00Z",
+          updated_at: "2026-01-01T00:00:00Z",
+        }]),
+      });
+    });
+    await page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}/connections/*`, async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+          agent_id: MOCK_AGENT_ID,
+          platform_key: "discord",
+          display_name: "Renamed Discord",
+          enabled: true,
+          schema_version: 1,
+          settings: { guild_ids: ["guild-updated"] },
+          external_identity: "validation-skipped",
+          observed_status: "PENDING",
+          last_health_at: null,
+          last_error_code: null,
+          last_error_message: null,
+          webhook_url: null,
+          revision: 4,
+          created_at: "2026-01-01T00:00:00Z",
+          updated_at: "2026-01-01T00:00:00Z",
+        }),
+      });
+    });
+
     await agentDetailPage.goto(MOCK_AGENT_ID);
     await agentDetailPage.configureButton().click();
     await agentDetailPage.channelsTab().click();
-    await agentDetailPage.editButton().click();
-
-    await expect(page.getByRole("textbox", { name: "Allowed server IDs" })).toHaveValue("guild-1");
-    await expect(page.getByRole("textbox", { name: "Allowed role IDs" })).toHaveValue("role-1");
-
-    await page.getByRole("button", { name: "Keys & integrations", exact: true }).click();
-    await agentDetailPage.editButton().click();
-    await expect(page.getByPlaceholder("Leave blank to keep existing token")).toBeVisible();
   });
 
+  test("lists Connection identity and health independently of the Agent runtime", async ({ page }) => {
+    await expect(page.getByText("Customer Discord", { exact: true })).toBeVisible();
+    await expect(page.getByText(/Connected as validation-skipped/)).toBeVisible();
+    await expect(page.getByText("Connected", { exact: true })).toBeVisible();
+  });
 
-  test("focusing the channel search shows mocked channels in the dropdown", async ({
-    page,
-  }) => {
-    await agentDetailPage.groupPolicySelect().selectOption("allowlist");
-    await agentDetailPage.channelSearchInput().focus();
+  test("edits Connection name and plugin settings without resending credentials", async ({ page }) => {
+    await page.getByRole("button", { name: "Edit Customer Discord" }).click();
+    await page.getByLabel("Connection name").fill("Renamed Discord");
+    await page.getByLabel("Guild IDs").fill("guild-updated");
+    const update = page.waitForRequest((request) => request.method() === "PATCH" && request.url().includes("/connections/"));
+    await page.getByRole("button", { name: "Save changes" }).click();
+    expect((await update).postDataJSON()).toEqual({
+      revision: 3,
+      display_name: "Renamed Discord",
+      settings: { guild_ids: ["guild-updated"] },
+    });
+  });
 
-    await expect(page.getByRole("button", { name: /#general/ })).toBeVisible();
-    await expect(
-      page.getByRole("button", { name: /#engineering/ }),
-    ).toBeVisible();
+  test("shows provider setup requirements before connecting", async ({ page }) => {
+    await page.getByRole("button", { name: "Add connection" }).click();
+    await page.getByRole("button", { name: "Select Slack" }).click();
+
+    const hint = page.getByText(/Bot Token Scopes/);
+    await expect(hint).toBeVisible();
+    await expect(hint).toContainText("channels:read");
+    await expect(hint).toContainText("groups:read");
+    await expect(hint).toContainText("users:read");
+    await expect(hint).toContainText("Reinstall the Slack app");
+
+    await page.getByRole("button", { name: "Select Discord" }).click();
+    const discordHint = page.getByText(/Message Content Intent/);
+    await expect(discordHint).toBeVisible();
+    await expect(discordHint).toContainText("Read Message History");
+    await expect(discordHint).toContainText("Developer Mode");
+
+    await page.getByRole("button", { name: "Select Telegram" }).click();
+    const telegramHint = page.getByText(/@BotFather/);
+    await expect(telegramHint).toBeVisible();
+    await expect(telegramHint).toContainText("getUpdates");
+    await expect(telegramHint).toContainText("/setprivacy");
+    await expect(telegramHint).toContainText("webhook");
+  });
+
+  test("creates another same-platform Connection from the plugin schema", async ({ page }) => {
+    await page.getByRole("button", { name: "Add connection" }).click();
+    await page.getByText("Discord", { exact: true }).click();
+    await page.getByLabel("Guild IDs").fill("guild-two");
+    const botToken = page.getByRole("textbox", { name: "Bot token" });
+    await botToken.fill("token-two");
+    await expect(botToken).toHaveAttribute("type", "password");
+    await page.getByRole("button", { name: "Show Bot token" }).click();
+    await expect(botToken).toHaveAttribute("type", "text");
+    await page.getByRole("button", { name: "Hide Bot token" }).click();
+    await expect(botToken).toHaveAttribute("type", "password");
+    const create = page.waitForRequest((request) => request.method() === "POST" && request.url().endsWith("/connections"));
+    await page.getByRole("button", { name: "Connect Discord", exact: true }).click();
+    expect((await create).postDataJSON()).toEqual({
+      platform_key: "discord",
+      display_name: "Discord",
+      enabled: true,
+      settings: { guild_ids: ["guild-two"] },
+      credentials: { bot_token: "token-two" },
+    });
   });
 });
 
@@ -750,50 +895,8 @@ test.describe("Agent Detail Page — Keys tab", () => {
     await agentDetailPage.editButton().click();
   });
 
-  test("shows app-level token and bot token inputs", async () => {
-    await expect(agentDetailPage.appTokenInput()).toBeVisible();
-    await expect(agentDetailPage.botTokenInput()).toBeVisible();
-  });
-
-  test("Save tokens button is disabled when both fields are empty", async () => {
-    await expect(agentDetailPage.saveTokensButton()).toBeDisabled();
-  });
-
-  test("filling a token field enables Save tokens", async () => {
-    await agentDetailPage.appTokenInput().fill("xapp-1-test");
-    await expect(agentDetailPage.saveTokensButton()).toBeEnabled();
-  });
-
-  test("saving tokens calls the update API", async ({ page }) => {
-    await dataSupportPage.agents.interceptUpdateAgentRequest();
-
-    await agentDetailPage.appTokenInput().fill("xapp-1-test");
-
-    const updatePromise = page.waitForRequest(
-      (req) => req.url().includes(`/agents/${MOCK_AGENT_ID}`) && req.method() === "PATCH",
-    );
-    await agentDetailPage.saveTokensButton().click();
-    await agentDetailPage.applyAndRestartConfirmationButton().click();
-    await updatePromise;
-  });
-
-  test("shows error near Save tokens when token save fails", async ({ page }) => {
-    await dataSupportPage.agents.interceptUpdateAgentRequest({
-      status: 422,
-      detail: "Invalid token format",
-    });
-
-    await agentDetailPage.appTokenInput().fill("bad-token");
-    await agentDetailPage.saveTokensButton().click();
-    await agentDetailPage.applyAndRestartConfirmationButton().click();
-
-    await expect(
-      page.locator('section[aria-label="Keys & integrations"]').getByText("Invalid token format"),
-    ).toBeVisible();
-  });
-
   test("shows Integrations section", async ({ page }) => {
-    await expect(page.getByText("Integration credentials", { exact: true })).toBeVisible();
+    await expect(page.getByText("Add an integration", { exact: true })).toBeVisible();
   });
 
   test("Save integrations is disabled when nothing is staged", async () => {
@@ -875,19 +978,6 @@ test.describe("Agent Detail Page — Keys tab", () => {
     await expect(page.getByText("Will be removed")).toBeVisible();
   });
 
-  test("error from token save does not appear in integrations section", async ({ page }) => {
-    await dataSupportPage.agents.interceptUpdateAgentRequest({
-      status: 500,
-      detail: "Token save failed",
-    });
-
-    await agentDetailPage.appTokenInput().fill("xapp-1-test");
-    await agentDetailPage.saveTokensButton().click();
-    await agentDetailPage.applyAndRestartConfirmationButton().click();
-
-    await expect(page.getByText("Token save failed")).toHaveCount(1);
-    await expect(agentDetailPage.saveIntegrationsButton()).toBeEnabled();
-  });
 });
 
 test.describe("Agent Detail Page — Personality tab (approval mode)", () => {
@@ -943,5 +1033,48 @@ test.describe("Agent Detail Page — Personality tab (approval mode)", () => {
     const body = (await patchPromise).postDataJSON() as Record<string, unknown>;
 
     expect(body.approval_mode).toBe("off");
+  });
+});
+
+test.describe("Agent Detail Page — Personality tab (approval mode, OpenClaw)", () => {
+  test.describe.configure({ mode: "serial" });
+  let agentDetailPage: AgentDetailPage;
+  let dataSupportPage: DataSupport;
+
+  test.use({ storageState: { cookies: [], origins: [] } });
+
+  test.beforeEach(async ({ page }) => {
+    agentDetailPage = new AgentDetailPage(page);
+    dataSupportPage = new DataSupport(page);
+
+    await dataSupportPage.auth.interceptRefreshRequest();
+    await dataSupportPage.users.interceptGetUserContextRequest();
+    await dataSupportPage.users.interceptGetOrganizationsRequest();
+    await dataSupportPage.agents.interceptGetAgentRequest({
+      body: { ...mockAgent, status: "STOPPED", agent_type: "openclaw" },
+    });
+    await dataSupportPage.agents.interceptGetAgentTemplateRequest();
+    await dataSupportPage.agents.interceptGetTemplatesRequest();
+    await dataSupportPage.agents.interceptGetTemplateVersionsRequest();
+    await dataSupportPage.agents.interceptGetAgentConfigurationRequest();
+    await dataSupportPage.agents.interceptUpdateAgentRequest();
+    await dataSupportPage.agents.interceptGetConversationChannelsRequest();
+    await dataSupportPage.agents.interceptGetModelsRequest();
+    await dataSupportPage.agents.interceptStartAgentRequest();
+
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await agentDetailPage.configureButton().click();
+    await page.getByRole("button", { name: "Profile", exact: true }).click();
+  });
+
+  test("shows Managed by OpenClaw instead of a command approval value", async ({ page }) => {
+    await expect(page.getByText("Managed by OpenClaw")).toBeVisible();
+    await expect(page.getByRole("combobox", { name: "Command approval" })).toHaveCount(0);
+  });
+
+  test("editing the profile does not offer a command approval control", async ({ page }) => {
+    await agentDetailPage.editButton().click();
+
+    await expect(page.getByRole("combobox", { name: "Command approval" })).toHaveCount(0);
   });
 });

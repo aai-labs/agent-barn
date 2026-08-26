@@ -1,8 +1,8 @@
 {
   "title": "Agent Health",
-  "uid": "agentfarm-agent-health",
+  "uid": "agentbarn-agent-health",
   "tags": [
-    "agent-farm"
+    "agent-barn"
   ],
   "schemaVersion": 39,
   "version": 1,
@@ -122,46 +122,7 @@
       },
       "targets": [
         {
-          "expr": "max(agentfarm_agents_in_error)",
-          "refId": "A"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "red",
-                "value": 1
-              }
-            ]
-          }
-        },
-        "overrides": []
-      }
-    },
-    {
-      "id": 4,
-      "type": "stat",
-      "title": "Slack tokens failing",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${datasource}"
-      },
-      "gridPos": {
-        "h": 5,
-        "w": 6,
-        "x": 18,
-        "y": 0
-      },
-      "targets": [
-        {
-          "expr": "count(min by (app) (agent_slack_tokens_ok{job=\"agent\", org_name=~\"$org\"}) == 0) or vector(0)",
+          "expr": "max(agentbarn_agents_in_error)",
           "refId": "A"
         }
       ],

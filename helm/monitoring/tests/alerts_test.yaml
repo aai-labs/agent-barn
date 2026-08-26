@@ -12,7 +12,7 @@ tests:
   # --- APIDown: fires only after 2m of failed scrapes ---
   - interval: 1m
     input_series:
-      - series: 'up{job="agentfarm-api", endpoint="http"}'
+      - series: 'up{job="agentbarn-api", endpoint="http"}'
         values: "1x3 0x10"
     alert_rule_test:
       - eval_time: 3m
@@ -23,10 +23,10 @@ tests:
         exp_alerts:
           - exp_labels:
               severity: critical
-              job: agentfarm-api
+              job: agentbarn-api
               endpoint: http
             exp_annotations:
-              summary: The agent-farm API is not responding to scrapes.
+              summary: The Agent Barn API is not responding to scrapes.
               description: Prometheus cannot scrape the main API process on :8000.
 
   # --- APIAbsent: fires when the target does not exist at all ---
@@ -40,16 +40,16 @@ tests:
         exp_alerts:
           - exp_labels:
               severity: critical
-              job: agentfarm-api
+              job: agentbarn-api
               endpoint: http
             exp_annotations:
-              summary: The agent-farm API target has disappeared entirely.
+              summary: The Agent Barn API target has disappeared entirely.
               description: No scrape target exists for the API — the Service is gone or discovery is broken.
 
   # --- IngestAPIDown ---
   - interval: 1m
     input_series:
-      - series: 'up{job="agentfarm-api", endpoint="ingest"}'
+      - series: 'up{job="agentbarn-api", endpoint="ingest"}'
         values: "1x2 0x12"
     alert_rule_test:
       - eval_time: 9m
@@ -57,7 +57,7 @@ tests:
         exp_alerts:
           - exp_labels:
               severity: warning
-              job: agentfarm-api
+              job: agentbarn-api
               endpoint: ingest
             exp_annotations:
               summary: The ingest API process is not responding to scrapes.
@@ -67,9 +67,9 @@ tests:
   # and the alert carries no pod/instance labels (redeploy-stable) ---
   - interval: 1m
     input_series:
-      - series: 'agentfarm_database_up{pod="api-a"}'
+      - series: 'agentbarn_database_up{pod="api-a"}'
         values: "1x30"
-      - series: 'agentfarm_database_up{pod="api-b"}'
+      - series: 'agentbarn_database_up{pod="api-b"}'
         values: "1x5 0x25"
     alert_rule_test:
       - eval_time: 5m
@@ -88,9 +88,9 @@ tests:
   # (5% warning + 20% critical) ---
   - interval: 1m
     input_series:
-      - series: 'http_requests_total{job="agentfarm-api", status="2xx"}'
+      - series: 'http_requests_total{job="agentbarn-api", status="2xx"}'
         values: "0+12x30"
-      - series: 'http_requests_total{job="agentfarm-api", status="5xx"}'
+      - series: 'http_requests_total{job="agentbarn-api", status="5xx"}'
         values: "0+6x30"
     alert_rule_test:
       - eval_time: 10m
@@ -110,9 +110,9 @@ tests:
   # --- HighAPI5xxRate: ~8% errors trips only the warning tier ---
   - interval: 1m
     input_series:
-      - series: 'http_requests_total{job="agentfarm-api", status="2xx"}'
+      - series: 'http_requests_total{job="agentbarn-api", status="2xx"}'
         values: "0+12x30"
-      - series: 'http_requests_total{job="agentfarm-api", status="5xx"}'
+      - series: 'http_requests_total{job="agentbarn-api", status="5xx"}'
         values: "0+1x30"
     alert_rule_test:
       - eval_time: 10m
@@ -128,7 +128,7 @@ tests:
   # floor must NOT fire ---
   - interval: 1m
     input_series:
-      - series: 'http_requests_total{job="agentfarm-api", status="5xx"}'
+      - series: 'http_requests_total{job="agentbarn-api", status="5xx"}'
         values: "0+3x30"
     alert_rule_test:
       - eval_time: 10m
@@ -138,9 +138,9 @@ tests:
   # --- HighToolCallErrorRate: 50% errors at healthy call rate fires ---
   - interval: 1m
     input_series:
-      - series: 'agentfarm_tool_calls_total{status="error"}'
+      - series: 'agentbarn_tool_calls_total{status="error"}'
         values: "0+3x40"
-      - series: 'agentfarm_tool_calls_total{status="success"}'
+      - series: 'agentbarn_tool_calls_total{status="success"}'
         values: "0+3x40"
     alert_rule_test:
       - eval_time: 14m
@@ -156,7 +156,7 @@ tests:
   # floor must NOT fire ---
   - interval: 1m
     input_series:
-      - series: 'agentfarm_tool_calls_total{status="error"}'
+      - series: 'agentbarn_tool_calls_total{status="error"}'
         values: "0+0.3x40"
     alert_rule_test:
       - eval_time: 14m
@@ -218,32 +218,13 @@ tests:
         alertname: AgentUnhealthy
         exp_alerts: []
 
-  # --- AgentSlackTokensInvalid ---
-  - interval: 1m
-    input_series:
-      - series: 'agent_slack_tokens_ok{job="agent", app="agent-abc", agent_name="abby", org_name="acme"}'
-        values: "0x15"
-    alert_rule_test:
-      - eval_time: 12m
-        alertname: AgentSlackTokensInvalid
-        exp_alerts:
-          - exp_labels:
-              severity: warning
-              job: agent
-              app: agent-abc
-              agent_name: abby
-              org_name: acme
-            exp_annotations:
-              summary: Agent abby (org acme) has invalid Slack tokens.
-              description: Slack token validation is failing for agent abby (agent-abc) in org acme; the agent cannot serve its workspace.
-
   # --- AgentsInErrorState: max() — a fresh replica's default-0 gauge must
   # not mask the real count, and no pod labels leak into the alert ---
   - interval: 1m
     input_series:
-      - series: 'agentfarm_agents_in_error{pod="api-old"}'
+      - series: 'agentbarn_agents_in_error{pod="api-old"}'
         values: "2x10"
-      - series: 'agentfarm_agents_in_error{pod="api-new"}'
+      - series: 'agentbarn_agents_in_error{pod="api-new"}'
         values: "0x10"
     alert_rule_test:
       - eval_time: 7m
@@ -274,7 +255,7 @@ tests:
   # --- LiteLLMDown: absent target is the same incident ---
   - interval: 1m
     input_series:
-      - series: 'up{job="agentfarm-api", endpoint="http"}'
+      - series: 'up{job="agentbarn-api", endpoint="http"}'
         values: "1x10"
     alert_rule_test:
       - eval_time: 5m
@@ -290,9 +271,9 @@ tests:
   # --- OpenRouterCreditsLow: below $5 with a healthy probe fires ---
   - interval: 1m
     input_series:
-      - series: 'agentfarm_openrouter_credits_remaining{pod="api-a"}'
+      - series: 'agentbarn_openrouter_credits_remaining{pod="api-a"}'
         values: "3x40"
-      - series: 'agentfarm_openrouter_credits_scrape_ok{pod="api-a"}'
+      - series: 'agentbarn_openrouter_credits_scrape_ok{pod="api-a"}'
         values: "1x40"
     alert_rule_test:
       - eval_time: 17m
@@ -308,9 +289,9 @@ tests:
   # CreditsUnknown, never a false CreditsLow ---
   - interval: 1m
     input_series:
-      - series: 'agentfarm_openrouter_credits_remaining{pod="api-a"}'
+      - series: 'agentbarn_openrouter_credits_remaining{pod="api-a"}'
         values: "0x40"
-      - series: 'agentfarm_openrouter_credits_scrape_ok{pod="api-a"}'
+      - series: 'agentbarn_openrouter_credits_scrape_ok{pod="api-a"}'
         values: "0x40"
     alert_rule_test:
       - eval_time: 17m

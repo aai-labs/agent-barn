@@ -98,7 +98,7 @@ prometheus:
         # The API container runs two processes; each exposes its own
         # /metrics. The endpoint label ("http" vs "ingest") tells the two
         # targets apart — alerts rely on it.
-        - job_name: agentfarm-api
+        - job_name: agentbarn-api
           kubernetes_sd_configs:
             - role: endpoints
               namespaces:
@@ -109,7 +109,7 @@ prometheus:
                   __meta_kubernetes_service_label_app_kubernetes_io_name,
                   __meta_kubernetes_endpoint_port_name,
                 ]
-              regex: agentfarm-api;(http|ingest)
+              regex: agentbarn-api;(http|ingest)
               action: keep
             - source_labels: [__meta_kubernetes_endpoint_port_name]
               target_label: endpoint
@@ -140,7 +140,7 @@ prometheus:
           relabel_configs:
             - source_labels:
                 [
-                  __meta_kubernetes_service_label_agentfarm_io_component,
+                  __meta_kubernetes_service_label_agentbarn_io_component,
                   __meta_kubernetes_endpoint_port_name,
                 ]
               regex: agent;healthz
@@ -172,29 +172,29 @@ prometheus:
     # annotations included, verbatim.
     alerting_rules.yml:
       groups:
-        - name: agent-farm.rules
+        - name: agent-barn.rules
           rules:
             # --- system up (API + DB) ---
             - alert: APIDown
-              expr: up{job="agentfarm-api", endpoint="http"} == 0
+              expr: up{job="agentbarn-api", endpoint="http"} == 0
               for: 2m
               labels:
                 severity: critical
               annotations:
-                summary: The agent-farm API is not responding to scrapes.
+                summary: The Agent Barn API is not responding to scrapes.
                 description: Prometheus cannot scrape the main API process on :8000.
 
             - alert: APIAbsent
-              expr: absent(up{job="agentfarm-api", endpoint="http"})
+              expr: absent(up{job="agentbarn-api", endpoint="http"})
               for: 5m
               labels:
                 severity: critical
               annotations:
-                summary: The agent-farm API target has disappeared entirely.
+                summary: The Agent Barn API target has disappeared entirely.
                 description: No scrape target exists for the API — the Service is gone or discovery is broken.
 
             - alert: IngestAPIDown
-              expr: up{job="agentfarm-api", endpoint="ingest"} == 0
+              expr: up{job="agentbarn-api", endpoint="ingest"} == 0
               for: 5m
               labels:
                 severity: warning
@@ -207,7 +207,7 @@ prometheus:
               # survives API redeploys instead of resolving + re-firing on
               # every rollout; keep_firing_for bridges the series gap while
               # pods are swapped.
-              expr: min(agentfarm_database_up) == 0
+              expr: min(agentbarn_database_up) == 0
               for: 2m
               keep_firing_for: 5m
               labels:
@@ -221,11 +221,11 @@ prometheus:
             - alert: HighAPI5xxRate
               expr: >-
                 (
-                  sum(rate(http_requests_total{job="agentfarm-api", status="5xx"}[5m]))
+                  sum(rate(http_requests_total{job="agentbarn-api", status="5xx"}[5m]))
                   /
-                  clamp_min(sum(rate(http_requests_total{job="agentfarm-api"}[5m])), 1e-9)
+                  clamp_min(sum(rate(http_requests_total{job="agentbarn-api"}[5m])), 1e-9)
                 ) > 0.05
-                and sum(rate(http_requests_total{job="agentfarm-api"}[5m])) > 0.1
+                and sum(rate(http_requests_total{job="agentbarn-api"}[5m])) > 0.1
               for: 5m
               labels:
                 severity: warning
@@ -236,11 +236,11 @@ prometheus:
             - alert: HighAPI5xxRate
               expr: >-
                 (
-                  sum(rate(http_requests_total{job="agentfarm-api", status="5xx"}[5m]))
+                  sum(rate(http_requests_total{job="agentbarn-api", status="5xx"}[5m]))
                   /
-                  clamp_min(sum(rate(http_requests_total{job="agentfarm-api"}[5m])), 1e-9)
+                  clamp_min(sum(rate(http_requests_total{job="agentbarn-api"}[5m])), 1e-9)
                 ) > 0.2
-                and sum(rate(http_requests_total{job="agentfarm-api"}[5m])) > 0.1
+                and sum(rate(http_requests_total{job="agentbarn-api"}[5m])) > 0.1
               for: 5m
               labels:
                 severity: critical
@@ -251,11 +251,11 @@ prometheus:
             - alert: HighToolCallErrorRate
               expr: >-
                 (
-                  sum(rate(agentfarm_tool_calls_total{status="error"}[15m]))
+                  sum(rate(agentbarn_tool_calls_total{status="error"}[15m]))
                   /
-                  clamp_min(sum(rate(agentfarm_tool_calls_total[15m])), 1e-9)
+                  clamp_min(sum(rate(agentbarn_tool_calls_total[15m])), 1e-9)
                 ) > 0.25
-                and sum(rate(agentfarm_tool_calls_total[15m])) > 0.01
+                and sum(rate(agentbarn_tool_calls_total[15m])) > 0.01
               for: 10m
               labels:
                 severity: warning
@@ -282,20 +282,11 @@ prometheus:
                 summary: Agent {{ $labels.agent_name }} (org {{ $labels.org_name }}) lost its runtime connection.
                 description: The runtime of agent {{ $labels.agent_name }} ({{ $labels.app }}) in org {{ $labels.org_name }} was connected before and is now unhealthy.
 
-            - alert: AgentSlackTokensInvalid
-              expr: agent_slack_tokens_ok{job="agent"} == 0
-              for: 10m
-              labels:
-                severity: warning
-              annotations:
-                summary: Agent {{ $labels.agent_name }} (org {{ $labels.org_name }}) has invalid Slack tokens.
-                description: Slack token validation is failing for agent {{ $labels.agent_name }} ({{ $labels.app }}) in org {{ $labels.org_name }}; the agent cannot serve its workspace.
-
             - alert: AgentsInErrorState
               # max() drops pod/instance labels: stable identity across API
               # redeploys, and a fresh replica's default-0 gauge can't mask
               # the real count.
-              expr: max(agentfarm_agents_in_error) > 0
+              expr: max(agentbarn_agents_in_error) > 0
               for: 5m
               keep_firing_for: 5m
               labels:
@@ -321,8 +312,8 @@ prometheus:
               # identity across API redeploys) and ignores fresh replicas
               # that still export default 0.
               expr: >-
-                max(agentfarm_openrouter_credits_remaining) < 5
-                and max(agentfarm_openrouter_credits_scrape_ok) == 1
+                max(agentbarn_openrouter_credits_remaining) < 5
+                and max(agentbarn_openrouter_credits_scrape_ok) == 1
               for: 15m
               keep_firing_for: 5m
               labels:
@@ -334,7 +325,7 @@ prometheus:
             - alert: OpenRouterCreditsUnknown
               # max(): healthy if any replica polls successfully; drops
               # pod/instance labels so redeploys don't resolve + re-fire it.
-              expr: max(agentfarm_openrouter_credits_scrape_ok) == 0
+              expr: max(agentbarn_openrouter_credits_scrape_ok) == 0
               for: 30m
               keep_firing_for: 5m
               labels:

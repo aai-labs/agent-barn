@@ -24,9 +24,8 @@ from api.core.utils import create_injector
 from api.domains.agent_settings.routes import agent_settings_router
 from api.domains.agents.routes import agents_router
 from api.domains.agents.service import AgentService
-from api.domains.agents.slack_routes import slack_router
-from api.domains.agents.webhook_routes import webhook_router
 from api.domains.auth.routes import auth_router
+from api.domains.communications.routes import communications_router
 from api.domains.conversations.routes import conversations_router
 from api.domains.costs.routes import costs_router
 from api.domains.events.routes import event_delivery_monitor_router
@@ -105,6 +104,7 @@ def create_app(injector: Injector | None = None):
     subapi.include_router(webhook_router)
     subapi.include_router(auth_router)
     subapi.include_router(conversations_router)
+    subapi.include_router(communications_router)
     subapi.include_router(costs_router)
     subapi.include_router(event_delivery_monitor_router)
     subapi.include_router(platform_stats_router)
@@ -120,7 +120,6 @@ def create_app(injector: Injector | None = None):
     subapi.include_router(platform_templates_router)
     subapi.include_router(tool_calls_router)
     subapi.include_router(users_router)
-    subapi.include_router(slack_router)
 
     http_registry = setup_http_metrics(subapi)
 

@@ -30,12 +30,14 @@ export const agentsKey = {
     [..._agentsKeyBase.detail(agentId), "conversation-channels"] as const,
   conversationMessages: (
     agentId: string,
+    connectionId: string,
     channelId: string,
     filters: ConversationsFiltersKey,
   ) =>
     [
       ..._agentsKeyBase.detail(agentId),
       "conversation-messages",
+      connectionId,
       channelId,
       filters,
     ] as const,

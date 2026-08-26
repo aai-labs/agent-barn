@@ -6,7 +6,7 @@ from hamcrest import assert_that, contains_inanyorder, equal_to, has_item, is_no
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, col, select
 
-from api.domains.agents.models import Agent, AgentAccess, AgentFilter, AgentPlatform, AgentStatus
+from api.domains.agents.models import Agent, AgentAccess, AgentFilter, AgentStatus
 from api.domains.agents.repository import AgentRepository
 from api.domains.events import ActorIdentity, ActorIdentityType
 from api.domains.organizations.models import Organization
@@ -21,7 +21,6 @@ from api.domains.rbac.catalog import (
 from api.domains.rbac.models import AgentAccessRole, AgentAccessRolePermission
 from api.domains.users.organization_users.models import OrganizationRole
 from api.domains.users.organization_users.repository import OrganizationUserRepository
-from api.infrastructure.crypto import decrypt_token
 from api.infrastructure.shared.models import Pagination
 from api.tests.core.givenpy import given
 from api.tests.core.modules import (
@@ -48,9 +47,6 @@ from api.tests.steps.user import there_is_a_user, there_is_an_access_token_for_u
 _BASE = "/api/v1/organizations/{organization_id}/agents"
 _CREATE = {
     "name": "Member Agent",
-    "platform": "slack",
-    "slack_bot_token": "xoxb-member-agent",
-    "slack_app_token": "xapp-1-member-agent",
     "template_key": "test-template",
 }
 _GIVEN = [
@@ -149,35 +145,6 @@ def _insert_custom_agent_role(context, permissions: set[PermissionKey]) -> Agent
             )
         )
     return role
-
-
-def test_discord_token_rotation_requires_secret_permission_from_actual_caller():
-    with given([*_GIVEN, there_is_an_agent(platform=AgentPlatform.DISCORD)]) as context:
-        repository: AgentRepository = context.injector.get(AgentRepository)
-        original_config = repository.get_discord_config(context.agent.id)
-        assert original_config is not None
-        original_token = decrypt_token(original_config.bot_token_encrypted, TEST_ENCRYPTION_KEY)
-
-        _switch_to_member()(context)
-        role = _insert_custom_agent_role(
-            context,
-            {PermissionKey.AGENT_READ, PermissionKey.AGENT_UPDATE},
-        )
-        there_is_agent_access(access_role_id=role.id)(context)
-
-        response = context.client.patch(
-            f"{_BASE}/{context.agent.id}",
-            json={"discord_bot_token": "forbidden-rotation"},
-            headers=_auth(context),
-        )
-
-        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
-        persisted = repository.get_discord_config(context.agent.id)
-        assert persisted is not None
-        assert_that(
-            decrypt_token(persisted.bot_token_encrypted, TEST_ENCRYPTION_KEY),
-            equal_to(original_token),
-        )
 
 
 def test_member_creation_persists_creator_access_and_effective_permission_keys():

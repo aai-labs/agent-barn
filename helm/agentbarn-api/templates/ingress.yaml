@@ -1,0 +1,42 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ .Release.Name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "agentbarn-api.labels" . | nindent 4 }}
+  annotations:
+    cert-manager.io/cluster-issuer: {{ .Values.ingress.clusterIssuer }}
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
+spec:
+  ingressClassName: traefik
+  tls:
+    - hosts:
+        {{- range splitList "," .Values.ingress.hosts }}
+        - {{ . | trim }}
+        {{- end }}
+      secretName: {{ .Values.ingress.tlsSecretName }}
+  rules:
+    {{- range splitList "," .Values.ingress.hosts }}
+    - host: {{ . | trim }}
+      http:
+        paths:
+          - path: /communications/v1/webhooks
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $.Release.Name }}-communications
+                port:
+                  number: {{ $.Values.communications.service.port }}
+          # /api only: the outer app also serves /metrics, which must stay
+          # cluster-internal (Prometheus scrapes the Service directly, not
+          # the ingress) — a / prefix would expose it to the internet.
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $.Release.Name }}
+                port:
+                  number: {{ $.Values.service.port }}
+    {{- end }}

@@ -47,9 +47,15 @@ class Config(BaseSettings):
     agent_default_model: str = "litellm/openrouter/z-ai/glm-5.2"
     organization_creation_limit: int = 5
     api_external_url: str = ""
-    ingest_base_url: str = "http://agentfarm-api.agent-farm.svc.cluster.local:8001/ingest/v1"
+    # Agent workloads and the API run in the same namespace, so the short Service
+    # name is portable between staging and production.
+    ingest_base_url: str = "http://agentbarn-api:8001/ingest/v1"
+    communications_base_url: str = (
+        "http://agentbarn-api-communications.agent-farm.svc.cluster.local:8002/communications/v1"
+    )
     skip_slack_token_validation: bool = False
     skip_telegram_token_validation: bool = False
+    skip_discord_token_validation: bool = False
     slack_directory_cache_ttl_seconds: int = 600
     # Socket timeout for Slack Web API calls. Large sweeps (e.g. users.list can be
     # ~320KB) are slow over a poor link; too tight a timeout cuts the body off
@@ -59,7 +65,7 @@ class Config(BaseSettings):
     openrouter_api_key: str = ""
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
     openrouter_models_cache_ttl_seconds: int = 3600
-    # TTL for the credits poll behind agentfarm_openrouter_credits_remaining
+    # TTL for the credits poll behind agentbarn_openrouter_credits_remaining
     # (GET /key with the inference key above; no management key involved).
     openrouter_credits_cache_ttl_seconds: int = 300
 
