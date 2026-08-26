@@ -6,21 +6,21 @@ Skills define _how_ tools work. This file is the agent-local cheat sheet for whi
 
 External integrations are driven exclusively by `aai-cli`. **This is the only supported interface for all code host, Jira, and Confluence operations. Do not call these APIs directly or use any other HTTP client.** Read the relevant skill file before calling any `aai-cli` command — the skill files document allowed commands, forbidden commands, and concrete examples. Do not guess CLI syntax from memory.
 
-- **Bitbucket** (if primary code host is Bitbucket): Read `./skills/aai-cli/bitbucket_skill.md` — always pass `--profile bitbucket-work`. This single file documents all of this agent's core operations, each under its own section:
+- **Bitbucket** (if primary code host is Bitbucket): Read `./skills/aai-bitbucket/SKILL.md` — always pass `--profile bitbucket-work`. This single file documents all of this agent's core operations, each under its own section:
   - PR list, get, diff, diffstat, inline comments (`## Bitbucket Pull Requests`)
   - Source file content at a specific commit or branch (`## Bitbucket Source`)
   - Branch lookups (`## Bitbucket Branches`)
   - Commit history (`## Bitbucket Commits`)
   - Pipeline/CI logs (`## Bitbucket Pipelines`)
 
-- **GitHub** (if primary code host is GitHub): Read `./skills/aai-cli/github_skill.md` — always pass `--profile github-work`. Covers PR operations (list, get, diff), inline review comments, and Actions logs, each under its own section. **Never pass `--event APPROVE`.**
+- **GitHub** (if primary code host is GitHub): Read `./skills/aai-github/SKILL.md` — always pass `--profile github-work`. Covers PR operations (list, get, diff), inline review comments, and Actions logs, each under its own section. **Never pass `--event APPROVE`.**
 
-- **Jira** (read-only ticket context, if configured): Read `./skills/aai-cli/jira_skill.md` — always pass `--profile jira-work`. Sections relevant to this agent:
+- **Jira** (read-only ticket context, if configured): Read `./skills/aai-jira/SKILL.md` — always pass `--profile jira-work`. Sections relevant to this agent:
   - Issue fetch, acceptance criteria, comments (`## Jira Issues`)
   - Project and sprint context (`## Jira Projects`, `## Jira Sprints`)
   Read-only only. Always use bounded queries — never fish blindly across all projects.
 
-- **Confluence** (read-only style-guide lookup, if configured): `./skills/aai-cli/confluence_skill.md` — always pass `--profile confluence-work`. Used to cite codified style rules before firing a style finding.
+- **Confluence** (read-only style-guide lookup, if configured): `./skills/aai-confluence/SKILL.md` — always pass `--profile confluence-work`. Used to cite codified style rules before firing a style finding.
 
 - **Slack**: built-in integration configured during agent setup. No `aai-cli` skill — see the Slack section below for posture.
 
@@ -37,21 +37,21 @@ Read configured integrations from the `## Configured Integrations` section of TO
 
 ## Bitbucket
 
-Used when Bitbucket is listed in TOOLS.md Configured Integrations. Read `./skills/aai-cli/bitbucket_skill.md` before running any command — it documents every available operation and the ones that are forbidden.
+Used when Bitbucket is listed in TOOLS.md Configured Integrations. Read `./skills/aai-bitbucket/SKILL.md` before running any command — it documents every available operation and the ones that are forbidden.
 
 - **Posture**: read PRs, diffs, source files, and pipeline logs freely. The only write allowed is posting PR comments.
 - **Never** call approve, decline, merge, or any branch-write command — these are explicitly forbidden in the skill file.
 
 ## GitHub
 
-Used when GitHub is listed in TOOLS.md Configured Integrations. Read `./skills/aai-cli/github_skill.md` before running any command.
+Used when GitHub is listed in TOOLS.md Configured Integrations. Read `./skills/aai-github/SKILL.md` before running any command.
 
 - **Posture**: read PRs, diffs, source files, and Actions logs freely. The only writes allowed are PR comments and review comments.
 - **Never** pass `--event APPROVE` to any review command.
 
 ## Jira
 
-Used when Jira is listed in TOOLS.md Configured Integrations. Read `./skills/aai-cli/jira_skill.md` before running any command.
+Used when Jira is listed in TOOLS.md Configured Integrations. Read `./skills/aai-jira/SKILL.md` before running any command.
 
 - **Posture**: read-only. Fetch the linked ticket and acceptance criteria; never transition, comment on, or modify a ticket.
 - Use bounded queries only — never fish blindly across all projects.
@@ -65,7 +65,7 @@ Used when Jira is listed in TOOLS.md Configured Integrations. Read `./skills/aai
 
 ## Confluence
 
-Used when Confluence is listed in TOOLS.md Configured Integrations. Read `./skills/aai-cli/confluence_skill.md` before running any command.
+Used when Confluence is listed in TOOLS.md Configured Integrations. Read `./skills/aai-confluence/SKILL.md` before running any command.
 
 - **Posture**: read-only. Search for codified style guides or review checklists to cite when firing a style finding. Never create or edit pages.
 

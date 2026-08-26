@@ -5,6 +5,7 @@ import { Badge } from "@/components/badge";
 
 import type { Skill } from "../schemas";
 import { SKILL_PROVIDER_LABELS } from "../utils";
+import { SkillScopeBadge } from "./skill-scope-badge";
 import { SkillSourceBadge } from "./skill-source-badge";
 
 export function SkillCard({ skill, href }: { skill: Skill; href: string }) {
@@ -19,6 +20,7 @@ export function SkillCard({ skill, href }: { skill: Skill; href: string }) {
         </div>
         <div className="flex items-center gap-1.5 flex-shrink-0">
           {skill.hasDraft && <Badge variant="warn">Draft</Badge>}
+          <SkillScopeBadge scope={skill.scope} />
           <SkillSourceBadge source={skill.source} />
         </div>
       </div>

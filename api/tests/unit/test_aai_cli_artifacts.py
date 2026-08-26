@@ -495,7 +495,7 @@ def test_integrations_policy_md_includes_no_fallback_policy():
     assert "aai-cli" in md
     assert "--profile" in md
     assert "curl" in md
-    assert "./skills/aai-cli/" in md
+    assert "./skills/aai-<integration>/SKILL.md" in md
 
 
 def test_integrations_policy_md_includes_nested_command_grammar():
@@ -505,7 +505,7 @@ def test_integrations_policy_md_includes_nested_command_grammar():
     md = build_integrations_policy_md({SecretProvider.JIRA: _JIRA})
     assert "aai-cli --profile <slug> <service> <resource> <verb>" in md
     assert "aai-cli --profile jira-work jira issues get AF-147" in md
-    assert "./skills/aai-cli/<service>_skill.md" in md
+    assert "./skills/aai-<integration>/SKILL.md" in md
 
 
 def test_integrations_policy_md_emits_profile_line_per_provider():
@@ -680,7 +680,7 @@ def test_local_tools_block_names_credential_free_capabilities():
     # The integrations block tells the agent to always pass --profile; this must say the
     # opposite, or it will invent one.
     assert "no `--profile`" in md
-    assert "excel_skill.md" in md
+    assert "./skills/aai-excel/SKILL.md" in md
 
 
 def test_local_tools_block_is_empty_when_the_skill_is_not_mounted():

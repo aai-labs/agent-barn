@@ -10,6 +10,7 @@ import {
   type SkillFilePayload,
   useCreateSkill,
 } from "../hooks/use-skill-mutations";
+import { skillDetailHref, skillsListHref, type SkillScopeRef } from "../scope";
 import { DEFAULT_ENTRY_PATH, NEW_SKILL_TEMPLATE } from "../utils";
 import { SkillFileBrowser } from "./skill-file-browser";
 import { SkillMetadataFields } from "./skill-metadata-fields";
@@ -17,11 +18,11 @@ import { SkillMetadataFields } from "./skill-metadata-fields";
 /** Creating a skill is just editing a draft that doesn't have a lineage yet, so
  * this reuses the same file browser and metadata fields as the detail page's
  * draft editor — "Create skill" is the one-step equivalent of publish. */
-export function SkillNewPage() {
+export function SkillNewPage({ scope }: { scope: SkillScopeRef }) {
   const router = useRouter();
   const params = useParams();
   const orgId = typeof params?.orgId === "string" ? params.orgId : null;
-  const skillsHref = orgId ? `/dashboard/${orgId}/settings?tab=skills` : "/dashboard";
+  const skillsHref = skillsListHref(scope, orgId);
 
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -31,7 +32,7 @@ export function SkillNewPage() {
   ]);
   const [fileError, setFileError] = useState<string | null>(null);
 
-  const createSkill = useCreateSkill();
+  const createSkill = useCreateSkill(scope);
 
   function toggleProvider(value: string) {
     setSelectedProviders((prev) =>
@@ -53,7 +54,7 @@ export function SkillNewPage() {
         requiredProviders: selectedProviders,
       };
       const created = await createSkill.mutateAsync(payload);
-      router.push(orgId ? `/dashboard/${orgId}/settings/skills/${created.id}` : skillsHref);
+      router.push(skillDetailHref(scope, orgId, created.id));
     } catch {
       // error displayed via createSkill.error
     }
@@ -66,7 +67,7 @@ export function SkillNewPage() {
         className="inline-flex items-center gap-1.5 text-[0.8125rem] mb-6 px-2 py-1 -ml-2 rounded-lg hover:bg-[var(--bg-soft)] transition-colors"
         style={{ color: "var(--ink-3)" }}
       >
-        <ArrowLeft size={14} /> Skills
+        <ArrowLeft size={14} /> {scope.kind === "agent" ? "Agent skills" : "Skills"}
       </Link>
 
       <div className="mb-8">

@@ -1,10 +1,13 @@
 import { z } from "zod";
 
 export const SkillSourceSchema = z.enum(["aai_cli", "custom"]);
+export const SkillScopeSchema = z.enum(["platform", "organization", "agent"]);
 
 export const SkillSchema = z.object({
   id: z.string().uuid(),
   organizationId: z.string().uuid().nullable(),
+  agentId: z.string().uuid().nullable().optional(),
+  scope: SkillScopeSchema,
   name: z.string(),
   slug: z.string(),
   description: z.string().nullable(),
@@ -14,8 +17,11 @@ export const SkillSchema = z.object({
   source: SkillSourceSchema,
   requiredProviders: z.array(z.string()),
   toolsPointer: z.string().nullable(),
-  version: z.number().int().min(1),
+  version: z.number().int().min(1).nullable(),
   hasDraft: z.boolean(),
+  sourceSkillId: z.string().uuid().nullable().optional(),
+  sourceSkillVersion: z.number().int().nullable().optional(),
+  updateAvailable: z.boolean().default(false),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -35,6 +41,10 @@ export const SkillDetailSchema = SkillSchema.extend({
 
 export const SkillVersionSchema = z.object({
   version: z.number().int().min(1),
+  description: z.string().nullable().optional(),
+  requiredProviders: z.array(z.string()).default([]),
+  sourceSkillId: z.string().uuid().nullable().optional(),
+  sourceSkillVersion: z.number().int().nullable().optional(),
   createdBy: z.string().uuid().nullable(),
   createdAt: z.string(),
   isPinnedByAgent: z.boolean(),
@@ -45,6 +55,8 @@ export const SkillDraftSchema = z.object({
   files: z.array(SkillFileSchema),
   description: z.string().nullable(),
   requiredProviders: z.array(z.string()),
+  sourceSkillId: z.string().uuid().nullable().optional(),
+  sourceSkillVersion: z.number().int().nullable().optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -62,4 +74,5 @@ export type SkillDetail = z.infer<typeof SkillDetailSchema>;
 export type SkillVersion = z.infer<typeof SkillVersionSchema>;
 export type SkillDraft = z.infer<typeof SkillDraftSchema>;
 export type SkillSource = z.infer<typeof SkillSourceSchema>;
+export type SkillScope = z.infer<typeof SkillScopeSchema>;
 export type PaginatedSkills = z.infer<typeof PaginatedSkillsSchema>;

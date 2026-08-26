@@ -92,7 +92,11 @@ export function TemplateDrawer({
   const [selectMode, setSelectMode] = useState(false);
   const [groupSkillSearch, setGroupSkillSearch] = useState<Record<string, string>>({});
 
-  const { skills, isLoading: skillsLoading } = useSkills({ search: debouncedSkillSearch || undefined, pageSize: 100 });
+  const { skills, isLoading: skillsLoading } = useSkills({
+    scope: { kind: "organization" },
+    search: debouncedSkillSearch || undefined,
+    pageSize: 100,
+  });
   const requiredSkillIds = selectedSkillDetails.map((s) => s.id);
 
   // The version currently being displayed/edited defaults to the latest

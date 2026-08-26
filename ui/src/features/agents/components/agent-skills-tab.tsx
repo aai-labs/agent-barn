@@ -1,7 +1,9 @@
 "use client";
 
 import { forwardRef, useEffect, useImperativeHandle, useState } from "react";
+import Link from "next/link";
 import { useDebouncedValue } from "@tanstack/react-pacer";
+import { Plus } from "lucide-react";
 
 import { AppErrorState } from "@/components/app-error-state";
 import { SearchIcon } from "@/components/icons";
@@ -20,6 +22,8 @@ import { SHARED_CREDENTIAL_PROVIDER_LABELS } from "@/features/shared-credentials
 import { useSkills } from "@/features/skills/hooks/use-skills";
 import { useSkillVersions } from "@/features/skills/hooks/use-skill-versions";
 import { SKILL_PROVIDER_LABELS } from "@/features/skills/utils";
+import { skillDetailHref, skillNewHref, type SkillScopeRef } from "@/features/skills/scope";
+import { SkillScopeBadge } from "@/features/skills/components/skill-scope-badge";
 import { SkillSourceBadge } from "@/features/skills/components/skill-source-badge";
 import type { Skill } from "@/features/skills/schemas";
 
@@ -45,9 +49,14 @@ export const AgentSkillsTab = forwardRef<
   AgentConfigurationEditHandle,
   AgentSkillsTabProps
 >(function AgentSkillsTab({ agent, isRunning, onDirtyChange }, ref) {
+  const scope: SkillScopeRef = { kind: "agent", agentId: agent.id };
   const [search, setSearch] = useState("");
   const [debouncedSearch] = useDebouncedValue(search, { wait: 300 });
-  const { skills, isLoading, error, refetch } = useSkills({ search: debouncedSearch || undefined, pageSize: 100 });
+  const { skills, isLoading, error, refetch } = useSkills({
+    scope,
+    search: debouncedSearch || undefined,
+    pageSize: 100,
+  });
   const updateAgent = useUpdateAgent();
 
   const [pendingAddIds, setPendingAddIds] = useState<string[]>([]);
@@ -266,6 +275,8 @@ export const AgentSkillsTab = forwardRef<
           <AssignedSkillRow
             key={skill.id}
             skill={skill}
+            href={skillDetailHref(scope, agent.organizationId, skill.id)}
+            scope={scope}
             isRunning={isRunning}
             pin={pendingPins[skill.id] ?? skill.version}
             onPinChange={(version) =>
@@ -434,7 +445,15 @@ export const AgentSkillsTab = forwardRef<
 
       {/* Available skills to add */}
       <div className="flex flex-col gap-2">
-        <SectionLabel>Add skills</SectionLabel>
+        <div className="flex items-center justify-between gap-2">
+          <SectionLabel>Add skills</SectionLabel>
+          <Link
+            href={skillNewHref(scope, agent.organizationId)}
+            className="af-btn af-btn-sm af-btn-ghost"
+          >
+            <Plus size={13} /> New private skill
+          </Link>
+        </div>
         <div
           className="flex items-center gap-2 px-3 py-2 rounded-xl"
           style={{ border: "1px solid var(--line)", background: "var(--bg-elev)" }}
@@ -462,6 +481,7 @@ export const AgentSkillsTab = forwardRef<
           <AvailableSkillRow
             key={skill.id}
             skill={skill}
+            href={skillDetailHref(scope, agent.organizationId, skill.id)}
             isRunning={isRunning}
             needsSlackPlatform={skill.requiredProviders.includes("slack") && agent.platform !== "slack"}
             onAdd={() => addSkill(skill)}
@@ -493,27 +513,36 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
 
 function AssignedSkillRow({
   skill,
+  href,
+  scope,
   isRunning,
   pin,
   onPinChange,
   onRemove,
 }: {
   skill: AgentAssignedSkill;
+  href: string;
+  scope: SkillScopeRef;
   isRunning: boolean;
   pin: number;
   onPinChange: (version: number) => void;
   onRemove: () => void;
 }) {
-  const { versions } = useSkillVersions(skill.id);
+  // Versions are fetched only once the picker is actually opened, not for every
+  // assigned row on mount — an agent with a dozen skills would otherwise fire a
+  // dozen requests just to render, for a control most rows never touch.
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const { versions, isLoading: versionsLoading } = useSkillVersions(skill.id, scope, pickerOpen);
   return (
     <div
       className="flex items-center gap-2 px-3.5 py-2.5 rounded-2xl"
       style={{ border: "1px solid var(--line)", background: "var(--bg-soft)" }}
     >
       <div className="flex items-center gap-2 flex-1 min-w-0">
-        <span className="font-medium text-[0.844rem]" style={{ color: "var(--ink)" }}>
+        <Link href={href} className="font-medium text-[0.844rem] hover:underline" style={{ color: "var(--ink)" }}>
           {skill.name}
-        </span>
+        </Link>
+        {skill.scope && <SkillScopeBadge scope={skill.scope} />}
         <SkillSourceBadge source={skill.source} />
         {skill.required && (
           <span
@@ -527,6 +556,7 @@ function AssignedSkillRow({
       <Select
         value={String(pin)}
         onValueChange={(value) => onPinChange(Number(value))}
+        onOpenChange={setPickerOpen}
         disabled={isRunning}
       >
         <SelectTrigger className="w-auto min-w-24" aria-label={`Version for ${skill.name}`}>
@@ -534,11 +564,20 @@ function AssignedSkillRow({
         </SelectTrigger>
         <SelectContent>
           <SelectGroup>
-            {versions.map((v) => (
-              <SelectItem key={v.version} value={String(v.version)}>
-                Version v{v.version}
+            {/* Until the picker has been opened (and its fetch resolved), the
+              currently pinned version is the only option — Select needs a
+              matching Item mounted to show the trigger's label at rest, and
+              that's the one version we already know without a request. */}
+            {(pickerOpen && versions.length > 0 ? versions.map((v) => v.version) : [pin]).map((version) => (
+              <SelectItem key={version} value={String(version)}>
+                Version v{version}
               </SelectItem>
             ))}
+            {pickerOpen && versionsLoading && versions.length === 0 && (
+              <div className="px-2 py-1.5 text-[0.78rem]" style={{ color: "var(--ink-4)" }}>
+                Loading versions…
+              </div>
+            )}
           </SelectGroup>
         </SelectContent>
       </Select>
@@ -570,11 +609,13 @@ function AssignedSkillRow({
 
 function AvailableSkillRow({
   skill,
+  href,
   isRunning,
   needsSlackPlatform,
   onAdd,
 }: {
   skill: Skill;
+  href: string;
   isRunning: boolean;
   needsSlackPlatform: boolean;
   onAdd: () => void;
@@ -586,9 +627,10 @@ function AvailableSkillRow({
     >
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2">
-          <span className="font-medium text-[0.844rem]" style={{ color: "var(--ink)" }}>
+          <Link href={href} className="font-medium text-[0.844rem] hover:underline" style={{ color: "var(--ink)" }}>
             {skill.name}
-          </span>
+          </Link>
+          <SkillScopeBadge scope={skill.scope} />
           <SkillSourceBadge source={skill.source} />
         </div>
         {needsSlackPlatform ? (

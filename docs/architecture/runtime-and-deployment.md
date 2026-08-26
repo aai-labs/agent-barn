@@ -12,8 +12,8 @@ Starting an agent is an API-orchestrated deployment flow:
 2. Render template Markdown with the agent identity.
 3. Decrypt platform and provider credentials.
 4. Select runtime-specific configuration and deployment builders.
-5. Combine explicitly assigned skills with eligible built-in provider skills.
-6. Append tool pointers, integration policy, and the unconditional runtime behaviour policies (chat commands, role scope) to rendered Markdown.
+5. Combine explicitly assigned Skill Version pins with eligible supported aai-cli Platform Skills.
+6. Build the isolated Skill manifest and append exact `SKILL.md` pointers, integration policy, and the unconditional runtime behaviour policies (chat commands, role scope) to rendered Markdown.
 7. Generate a fresh ingest key and runtime environment.
 8. Build ConfigMap, Secret, PVC, Service, and Deployment resources.
 9. Apply resources through the Kubernetes client and mark the agent running.
@@ -29,7 +29,16 @@ A failed Slack or Telegram credential check or Kubernetes start can place the ag
 | Hermes   |   Yes |    No |      Yes |     Yes | Hermes config and Hermes deployment builders |
 | OpenClaw |   Yes |   Yes |      Yes |     Yes | OpenClaw overlay and deployment builders     |
 
-Runtime is persisted as `agent_type`; platform is persisted separately. Both runtimes receive rendered template files, skills, integrations, model/LiteLLM settings, and ingest credentials, but their filesystem and configuration shapes differ.
+Runtime is persisted as `agent_type`; platform is persisted separately. Both runtimes receive rendered template files, exact pinned Skill Version files, integrations, model/LiteLLM settings, and ingest credentials, but their filesystem and configuration shapes differ.
+
+## Skill materialization contract
+
+The API stores Skill files relative to each lineage root. Agent start prefixes every manifest entry with the Skill's isolated slug directory and writes the result from `skills.json`; ZIP archives and shared `aai-cli` roots are not runtime inputs.
+
+- Hermes reconstructs files below `/workspace/skills/<skill-root>/`, with the root entry at `/workspace/skills/<skill-root>/SKILL.md`.
+- OpenClaw reconstructs files below `/home/node/.openclaw/workspace/skills/<skill-root>/`, with the root entry at `/home/node/.openclaw/workspace/skills/<skill-root>/SKILL.md`.
+- The manifest is built from the Agent's explicit `pinned_version`; implicit supported aai-cli mounts resolve the latest Platform Version at start.
+- Startup prunes/reconstructs the managed skills directory so removed assignments cannot linger on a persistent workspace. Paths that collide are logged and not silently overwritten.
 
 ## Future platform-extension boundary
 
@@ -99,7 +108,7 @@ Kubernetes `stream()` and `portforward()` temporarily monkey-patch `ApiClient.re
 | Shared Kubernetes builders      | `../../api/domains/agents/builders/common.py`                                         |
 | Hermes builders                 | `../../api/domains/agents/builders/hermes.py`, `../../hermes-base/`                         |
 | OpenClaw builders               | `../../api/domains/agents/builders/openclaw.py`, `../../openclaw-base/`                     |
-| Skill and integration artifacts | `../../api/domains/agents/aai_cli_artifacts.py`, `../../api/domains/agents/aai_cli_skills/` |
+| Skill and integration artifacts | `../../api/domains/agents/aai_cli_artifacts.py`, `../../api/domains/agents/aai_cli_skills/bundled/skills/` |
 | Telegram client                 | `../../api/infrastructure/telegram/`                                                  |
 | Kubernetes client               | `../../api/infrastructure/kubernetes/`                                                |
 | Charts and release ordering     | `../../helm/`, `../../helmfile.yaml.gotmpl`                                                 |
@@ -109,4 +118,4 @@ Kubernetes `stream()` and `portforward()` temporarily monkey-patch `ApiClient.re
 
 ## Change impact
 
-Runtime changes must be checked against both platforms, builders, images/base configuration, agent lifecycle tests, telemetry, and persisted configuration contracts. For staging/main GitHub deploys, service-code changes automatically deploy under environment-derived API/UI image tags; chart template/value changes still require the chart `version` bump according to `../../AGENTS.md`. Manual or bundled releases also use explicit API/UI image tags rather than chart metadata.
+Runtime changes must be checked against both platforms, builders, images/base configuration, Skill Version pinning and manifest reconstruction, agent lifecycle tests, telemetry, and persisted configuration contracts. For staging/main GitHub deploys, service-code changes automatically deploy under environment-derived API/UI image tags; chart template/value changes still require the chart `version` bump according to `../../AGENTS.md`. Manual or bundled releases also use explicit API/UI image tags rather than chart metadata.

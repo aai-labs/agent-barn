@@ -84,7 +84,7 @@ export default function SettingsPage() {
           {tab === "providers" && <ProvidersPanel />}
           {tab === "shared-credentials" && <SharedCredentialsPanel />}
           {tab === "templates" && <TemplatesPanel />}
-          {tab === "skills" && <SkillsPanel />}
+          {tab === "skills" && <SkillsPanel scope={{ kind: "organization" }} canManage={canManage} />}
           {tab === "budgets" && <BudgetsPanel />}
           {tab === "audit" && <AuditPanel />}
           {tab === "infra" && <InfraPanel />}

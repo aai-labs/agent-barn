@@ -346,7 +346,7 @@ CREDENTIAL_FREE_TOOLS: dict[str, str] = {
         "**This is the only supported way to build or edit a spreadsheet.** Do not write "
         "Python, and do not reach for `openpyxl`, `pandas`, `xlsxwriter` or a hand-rolled "
         "zip — they are not installed and produce files Excel may reject. "
-        "Read `./skills/aai-cli/excel_skill.md` for the command shapes."
+        "Read `./skills/aai-excel/SKILL.md` for the command shapes."
     ),
 }
 
@@ -412,8 +412,9 @@ _INTEGRATION_LABELS: dict[SecretProvider, str] = {
 # an agent asked "are there files in this channel?" had no token in context linking the
 # question to `slack-work` and would answer that it had no access — the profile slug alone
 # never told it what the profile was *for*. Sourced from the command surface documented in
-# each ``aai_cli_skills/<provider>.py``; keep in sync when commands are added. Providers
-# with no aai-cli skill doc (the calendars) are omitted and render as before.
+# ``aai_cli_skills/bundled/skills/aai-<provider>/SKILL.md``; keep it in sync when
+# commands are added. Providers with no bundled aai-cli skill doc (the calendars)
+# are omitted and render as before.
 _INTEGRATION_CAPABILITIES: dict[SecretProvider, str] = {
     SecretProvider.GITHUB: "PRs (diff, files, reviews, comments), issues, branches, repo source, Actions runs",
     SecretProvider.JIRA: "issues (comments, attachments), sprints, boards, projects, users",
@@ -465,7 +466,7 @@ def build_integrations_policy_md(
     a bare slug left agents unable to connect a user's question to the profile that
     answers it — and a read-the-file pointer to the on-demand skill docs. Full command
     syntax stays in the per-service
-    ``./skills/aai-cli/<service>_skill.md`` files and TOOLS.md. Returns "" when no
+    ``./skills/aai-<integration>/SKILL.md`` files and TOOLS.md. Returns "" when no
     integrations are configured.
     """
     if not decrypted:
@@ -481,7 +482,7 @@ def build_integrations_policy_md(
         (
             "Commands nest as `aai-cli --profile <slug> <service> <resource> <verb>` "
             "(e.g. `aai-cli --profile jira-work jira issues get AF-147`). Don't guess "
-            "subcommands — **Read** the matching `./skills/aai-cli/<service>_skill.md` "
+            "subcommands — **Read** the matching `./skills/aai-<integration>/SKILL.md` "
             "file first (they are plain files, not lookup-by-name skills).\n"
         ),
     ]

@@ -8,8 +8,8 @@ Read `email_platform` from USER.md, then choose the correct profile:
 
 | `email_platform` | `--profile` flag | Skill reference |
 |---|---|---|
-| `gmail` | `--profile gmail-work` | `./skills/aai-cli/gmail_skill.md` |
-| `zoho_mail` | `--profile zoho-mail-rest` | `./skills/aai-cli/zoho_mail_skill.md` |
+| `gmail` | `--profile gmail-work` | `./skills/aai-gmail/SKILL.md` |
+| `zoho_mail` | `--profile zoho-mail-rest` | `./skills/aai-zoho-mail/SKILL.md` |
 
 Always read the skill file before running commands — it documents the exact subcommands, flags, and response shapes for the platform.
 

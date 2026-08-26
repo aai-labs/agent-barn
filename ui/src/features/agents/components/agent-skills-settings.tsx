@@ -1,6 +1,9 @@
 "use client";
 
 import { useRef, useState } from "react";
+import Link from "next/link";
+
+import { skillDetailHref } from "@/features/skills/scope";
 
 import { useAgentApplyAndRestart } from "../hooks/use-agent-apply-and-restart";
 import type { Agent } from "../schemas";
@@ -65,7 +68,13 @@ export function AgentSkillsSettings({
           {agent.skills.map((skill) => (
             <div key={skill.id} className="flex flex-wrap items-center justify-between gap-2 rounded-xl px-3.5 py-3" style={{ border: "1px solid var(--line)", background: "var(--bg-soft)" }}>
               <div>
-                <div className="font-medium text-[0.86rem]" style={{ color: "var(--ink-2)" }}>{skill.name}</div>
+                <Link
+                  href={skillDetailHref({ kind: "agent", agentId: agent.id }, agent.organizationId, skill.id)}
+                  className="font-medium text-[0.86rem] hover:underline"
+                  style={{ color: "var(--ink-2)" }}
+                >
+                  {skill.name}
+                </Link>
                 <div className="text-[0.76rem]" style={{ color: "var(--ink-4)" }}>{skill.source}{skill.required ? " · Required by active template" : ""}</div>
               </div>
               <div className="flex items-center gap-2">

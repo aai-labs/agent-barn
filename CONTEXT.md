@@ -149,8 +149,32 @@ The manual action that clones an origin's newer Platform Template snapshot—inc
 _Avoid_: template merge, in-place sync
 
 **Skill**:
-A packaged set of agent instructions or references that can be assigned to an agent and required by a template.
-_Avoid_: integration, tool
+A packaged set of UTF-8 agent instructions or references that can be assigned to an Agent or required by a Template. A Skill is a stable lineage; immutable content is stored in Skill Versions and every published version has one root `SKILL.md`.
+_Avoid_: integration, tool, prompt blob
+
+**Platform Skill**:
+A Skill with no Organization or Agent owner. Platform Skills are managed by Platform Administrators and are visible to Organizations and Agents according to the additive visibility rules. The bundled aai-cli Platform Skills use isolated `aai-<integration>/SKILL.md` roots.
+_Avoid_: built-in ZIP, shared Organization Skill
+
+**Organization Skill**:
+A Skill owned by one Organization and visible to that Organization's Agents. Organization managers can author drafts, publish versions, fork visible Platform Skills, and explicitly apply source updates.
+_Avoid_: global Skill, Agent Skill
+
+**Agent Skill**:
+A private Skill owned by one Agent and its Organization. It is visible only through that Agent's authorized scope; another Agent in the same Organization cannot see it.
+_Avoid_: personal integration, shared Skill
+
+**Skill Version**:
+An immutable, self-contained snapshot of one Skill lineage's files and declarative provider metadata. Agent assignments and Template requirements pin a specific Skill Version and never follow publication automatically.
+_Avoid_: mutable skill, latest skill pointer
+
+**Skill Draft**:
+The single mutable working snapshot for one Skill lineage. New Skills and forks start with a Draft and no published Version; publishing creates the next immutable Skill Version and clears the Draft.
+_Avoid_: published version, ZIP upload
+
+**Skill Source Update**:
+An explicit action that copies a newer direct source Skill Version into a fork. With no Draft it publishes immediately; with a Draft it replaces the Draft and leaves it unpublished. It never repins existing consumers automatically.
+_Avoid_: automatic merge, live sync
 
 **Agent Secret**:
 An encrypted, provider-specific credential payload assigned to one agent so its runtime can access an external service. May hold its own encrypted content or reference a Shared Credential.
@@ -222,7 +246,7 @@ _Avoid_: webhook
 
 ## Relationships
 
-- An **Organization** has many **Memberships**, **Agents**, **Templates**, custom **Skills**, and **Shared Credentials**.
+- An **Organization** has many **Memberships**, **Agents**, Organization/Agent-private **Skills**, and **Shared Credentials**; Platform Skills are global resources visible through additive scope rules.
 - An **Organization** has one immutable **Organization Creator**, and creation grants that user the initial Organization Owner **Membership**.
 - **Platform Oversight Data** may describe Organizations and their resources but never establishes an Active Organization or grants Organization authority.
 - A **Membership** links one user to one **Organization** with one **Organization Role**.
@@ -232,7 +256,9 @@ _Avoid_: webhook
 - An **Agent** has one current **Configured Model** and may have **Observed Model Usage** for multiple models over time.
 - A **Membership** may have **Agent Access** to many Agents, and each relationship carries one **Agent Access Role**; creating an Agent grants its creator explicit Agent Owner access without transferring Organization ownership.
 - An **Agent** has one **Agent General Access** setting whose Permissions combine with (never subtract from) explicit Agent Access grants.
-- A **Template Version** may require multiple **Skills**.
+- A **Template Version** may require multiple immutable **Skill Versions**.
+- A **Platform Skill** has no owner; an **Organization Skill** belongs to one Organization; an **Agent Skill** belongs to one Agent and retains its Organization for tenant isolation.
+- An **Agent** can see Platform Skills, its Organization's Skills, and its own Agent Skills, but never another Agent's private Skills. Agent assignments and Template requirements pin exact Skill Versions.
 - A Platform Template lineage has at most one **Draft Template Version**, authored only by a **Platform Administrator**; publishing it exposes the next Platform Template Version to every Organization.
 - A **Platform Administrator** can inspect any immutable Platform Template Version and use a **Template Restore** to seed a new Draft Template Version from it; the restore leaves version history and existing Agent pins unchanged.
 - An Organization Template fork tracks a **Fork Baseline Version**; the first fork is Organization v1 and a **Template Update** clones its origin's newer Platform Template snapshot into the next organization version.

@@ -50,7 +50,7 @@ Each Google provider owns its own secret-store names rather than sharing one ent
 
 ## Runtime materialization
 
-At start, Agent Service decrypts provider payloads, backfills configured Google client credentials where applicable, builds aai-cli configuration and secret-store setup, injects provider environment, mounts provider skills, and appends tool/integration policy to rendered template content. Provider handling is not complete until both storage validation and runtime materialization are updated.
+At start, Agent Service decrypts provider payloads, backfills configured Google client credentials where applicable, builds aai-cli configuration and secret-store setup, injects provider environment, mounts the Agent's exact Skill Version pins plus eligible supported aai-cli bundle Skills, and appends tool/integration policy to rendered template content. Provider handling is not complete until both storage validation and runtime materialization are updated.
 
 ## Source map
 
@@ -59,8 +59,8 @@ At start, Agent Service decrypts provider payloads, backfills configured Google 
 | Provider enum, content schemas, encryption helpers | `../../api/domains/agents/models.py`                                                                                                                |
 | Shared Credential CRUD and lifecycle               | `../../api/domains/shared_credentials/`                                                                                                             |
 | Agent Secret persistence and lifecycle             | `../../api/domains/agents/service.py`, `../../api/domains/agents/repository.py`                                                                     |
-| aai-cli runtime materialization                    | `../../api/domains/agents/aai_cli_artifacts.py`, `../../api/domains/agents/aai_cli_skills/`                                                         |
-| Built-in skill definitions                         | `../../api/domains/agents/aai_cli_skills/`                                                                                                          |
+| aai-cli runtime materialization                    | `../../api/domains/agents/aai_cli_artifacts.py`, `../../api/domains/agents/aai_cli_skills/bundled/skills/`                                          |
+| Built-in skill definitions                         | `../../api/domains/agents/aai_cli_skills/bundled/skills/`, `../../api/domains/skills/skill_seeder.py`                                               |
 | Slack configuration token lifecycle                | `../../api/domains/auth/token_service.py`, `../../api/domains/auth/routes.py`                                                                       |
 | Google OAuth (Gmail, Google Sheets)                | `../../api/domains/integrations/google_oauth/routes.py`                                                                                             |
 | Firecrawl runtime wiring                           | `../../api/domains/agents/service.py` (platform-default + per-agent override)                                                                       |

@@ -1,20 +1,6 @@
-"""aai-cli gmail skill docs."""
-
-GMAIL_SKILLS: list[dict[str, str]] = [
-    {
-        "skill_file_path": "aai-cli/gmail_skill.md",
-        "skill_content": r"""\
 # aai-cli Gmail Skill
 
 Agent reference for the `aai-cli email` command group with a Gmail profile.
-
-## IMPORTANT: credentials are already configured
-
-The tool is fully set up on this agent. **Do not ask the user for credentials, site URLs,
-tokens, or any config details.** The profile is on disk and ready. Just run the command.
-
-If the command returns an error, show the raw error output to the user — do not ask them
-to provide config or credentials.
 
 ## Required flag
 
@@ -139,6 +125,4 @@ aai-cli email messages get 19ede287c1ca8ad4 --profile gmail-work
 ```
 
 `body_type` is `"text"` when a `text/plain` MIME part was found, `"html"` when only HTML was available (tags stripped), or `"snippet"` when no body could be decoded.
-""",
-    },
-]
+

@@ -79,6 +79,7 @@ test.describe("Agent configuration page", () => {
     await dataSupport.users.interceptGetUserContextRequest();
     await dataSupport.users.interceptGetOrganizationsRequest();
     await dataSupport.skills.interceptGetSkillsRequest();
+    await dataSupport.skills.interceptGetAgentSkillsRequest();
     await dataSupport.agents.interceptGetTemplatesRequest();
     await dataSupport.agents.interceptGetTemplateVersionsRequest();
 
@@ -193,6 +194,7 @@ test.describe("Agent configuration page", () => {
     await dataSupport.users.interceptGetOrganizationsRequest();
     await dataSupport.agents.interceptGetAgentRequest({ body: { ...mockAgent, status: "STOPPED" } });
     await dataSupport.skills.interceptGetSkillsRequest();
+    await dataSupport.skills.interceptGetAgentSkillsRequest();
     await page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}/configuration`, async (route) => {
       if (route.request().method() !== "GET") {
         await route.fallback();
@@ -267,6 +269,7 @@ test.describe("Agent configuration page", () => {
     await dataSupport.users.interceptGetUserContextRequest();
     await dataSupport.users.interceptGetOrganizationsRequest();
     await dataSupport.skills.interceptGetSkillsRequest();
+    await dataSupport.skills.interceptGetAgentSkillsRequest();
     await dataSupport.agents.interceptGetTemplatesRequest();
     await dataSupport.agents.interceptGetTemplateVersionsRequest();
     await page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}`, async (route) => {
@@ -335,6 +338,7 @@ test.describe("Agent configuration page", () => {
     await dataSupport.users.interceptGetUserContextRequest();
     await dataSupport.users.interceptGetOrganizationsRequest();
     await dataSupport.skills.interceptGetSkillsRequest();
+    await dataSupport.skills.interceptGetAgentSkillsRequest();
     await dataSupport.agents.interceptGetTemplatesRequest();
     await dataSupport.agents.interceptGetTemplateVersionsRequest();
     await dataSupport.agents.interceptGetAgentRequest({
@@ -436,7 +440,8 @@ test.describe("Agent configuration page", () => {
     await dataSupport.agents.interceptGetAgentRequest({ body: currentAgent });
     await dataSupport.agents.interceptGetAgentConfigurationRequest();
     await dataSupport.skills.interceptGetSkillsRequest();
-    await page.route(`**/api/v1/organizations/*/skills/${MOCK_CUSTOM_SKILL_ID}/versions`, async (route) => {
+    await dataSupport.skills.interceptGetAgentSkillsRequest();
+    await page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}/skills/${MOCK_CUSTOM_SKILL_ID}/versions`, async (route) => {
       if (route.request().method() !== "GET") {
         await route.fallback();
         return;

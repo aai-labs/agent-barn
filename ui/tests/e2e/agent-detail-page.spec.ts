@@ -566,6 +566,7 @@ test.describe("Agent Detail Page — Skills tab", () => {
     });
     await dataSupportPage.agents.interceptGetAgentTemplateRequest();
     await dataSupportPage.skills.interceptGetSkillsRequest();
+    await dataSupportPage.skills.interceptGetAgentSkillsRequest();
     await dataSupportPage.agents.interceptGetConversationChannelsRequest();
     await dataSupportPage.agents.interceptGetTemplatesRequest();
     await dataSupportPage.agents.interceptGetAgentConfigurationRequest();
@@ -675,6 +676,7 @@ test.describe("Agent Detail Page — Skills tab", () => {
   test("saving skills calls the update API", async ({ page }) => {
     await dataSupportPage.agents.interceptUpdateAgentRequest();
     await dataSupportPage.skills.interceptGetSkillsRequest({ body: [mockCustomSkill] });
+    await dataSupportPage.skills.interceptGetAgentSkillsRequest({ body: [mockCustomSkill] });
 
     await agentDetailPage.goto(MOCK_AGENT_ID);
     await agentDetailPage.configureButton().click();

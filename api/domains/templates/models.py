@@ -71,6 +71,8 @@ class AgentTemplate(BaseModel, table=True):
 
 
 class TemplateRequiredSkillRead(SkillRead):
+    # The exact immutable Skill Version required by this Template Version.
+    version: int
     # None for a standalone (AND-required) skill; otherwise the key of the
     # "at least one of" group this skill belongs to on this template.
     group_key: str | None = None

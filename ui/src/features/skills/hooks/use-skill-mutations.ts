@@ -3,9 +3,9 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 
 import { api } from "@/shared/api";
-import { useOrganizationApiBase } from "@/features/organizations/hooks/use-organization-api-base";
 
 import { SkillDetailSchema, SkillDraftSchema, SkillSchema, type Skill, type SkillDetail, type SkillDraft } from "../schemas";
+import { useSkillsBasePath, type SkillScopeRef } from "../scope";
 import { skillDraftKey, skillsKey } from "../utils";
 
 export type SkillFilePayload = {
@@ -25,15 +25,17 @@ export type SkillUpdatePayload = {
   name?: string;
 };
 
-export function useCreateSkill() {
+/** Create a new lineage in `scope`, published as v1 immediately. Parsed with the
+ * lineage-level schema even though Platform/Agent responses also include the
+ * file/assignment fields Organization's response omits — the extra fields are
+ * simply ignored, so one schema covers all three scopes' create response. */
+export function useCreateSkill(scope: SkillScopeRef) {
   const queryClient = useQueryClient();
-  const orgApiBase = useOrganizationApiBase();
+  const basePath = useSkillsBasePath(scope);
 
   return useMutation({
-    mutationFn: async ({ ...body }: SkillCreatePayload) => {
-      const response = await api.post<Skill>(`${orgApiBase}/skills`, body, {
-        schema: SkillSchema,
-      });
+    mutationFn: async (body: SkillCreatePayload) => {
+      const response = await api.post<Skill>(basePath, body, { schema: SkillSchema });
       return response.data;
     },
     onSuccess: () => {
@@ -42,37 +44,52 @@ export function useCreateSkill() {
   });
 }
 
-/** Fork a built-in skill into an org-scoped custom skill, seeded from the
- * built-in's latest version with an in-flight draft ready to edit. */
-export function useForkSkill() {
+/** Fork a visible Platform (or, from Agent scope, also Organization) Skill into
+ * `scope`, seeded from its latest version with an in-flight draft ready to edit.
+ * Not applicable to Platform scope — nothing sits above it to fork from. Accepts
+ * the full scope union (rather than excluding "platform" at the type level) only
+ * so callers can instantiate it unconditionally alongside scope-driven UI that
+ * never actually invokes it for Platform. */
+export function useForkSkill(scope: SkillScopeRef) {
   const queryClient = useQueryClient();
-  const orgApiBase = useOrganizationApiBase();
+  const basePath = useSkillsBasePath(scope);
 
   return useMutation({
     mutationFn: async (skillId: string) => {
-      const response = await api.post<SkillDetail>(
-        `${orgApiBase}/skills/${skillId}/fork`,
-        {},
-        { schema: SkillDetailSchema },
-      );
+      const response = await api.post<SkillDetail>(`${basePath}/${skillId}/fork`, {}, { schema: SkillDetailSchema });
       return response.data;
     },
     onSuccess: (skill) => {
-      queryClient.setQueryData(skillsKey.detail(skill.id), skill);
+      queryClient.setQueryData(skillDraftKey(skill.id, scope), undefined);
       void queryClient.invalidateQueries({ queryKey: skillsKey.all });
     },
   });
 }
 
-export function useUpdateSkill() {
+/** Not applicable to Platform scope — Platform Skills have no source to update from. */
+export function useApplySkillSourceUpdate(scope: SkillScopeRef) {
   const queryClient = useQueryClient();
-  const orgApiBase = useOrganizationApiBase();
+  const basePath = useSkillsBasePath(scope);
+
+  return useMutation({
+    mutationFn: async (skillId: string) => {
+      const response = await api.post<SkillDetail>(`${basePath}/${skillId}/source-update`, {}, { schema: SkillDetailSchema });
+      return response.data;
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: skillsKey.all });
+    },
+  });
+}
+
+/** Rename an owned lineage. Content/metadata changes are draft-gated, not here. */
+export function useUpdateSkill(scope: SkillScopeRef) {
+  const queryClient = useQueryClient();
+  const basePath = useSkillsBasePath(scope);
 
   return useMutation({
     mutationFn: async ({ skillId, ...body }: SkillUpdatePayload) => {
-      const response = await api.patch<Skill>(`${orgApiBase}/skills/${skillId}`, body, {
-        schema: SkillSchema,
-      });
+      const response = await api.patch<Skill>(`${basePath}/${skillId}`, body, { schema: SkillSchema });
       return response.data;
     },
     onSuccess: () => {
@@ -82,21 +99,17 @@ export function useUpdateSkill() {
 }
 
 /** Get-or-create the in-flight draft, seeded from the latest published version. */
-export function useStartSkillDraft() {
+export function useStartSkillDraft(scope: SkillScopeRef) {
   const queryClient = useQueryClient();
-  const orgApiBase = useOrganizationApiBase();
+  const basePath = useSkillsBasePath(scope);
 
   return useMutation({
     mutationFn: async (skillId: string) => {
-      const response = await api.post<SkillDraft>(
-        `${orgApiBase}/skills/${skillId}/draft`,
-        {},
-        { schema: SkillDraftSchema },
-      );
+      const response = await api.post<SkillDraft>(`${basePath}/${skillId}/draft`, {}, { schema: SkillDraftSchema });
       return response.data;
     },
     onSuccess: (draft) => {
-      queryClient.setQueryData(skillDraftKey(draft.skillId), draft);
+      queryClient.setQueryData(skillDraftKey(draft.skillId, scope), draft);
       void queryClient.invalidateQueries({ queryKey: skillsKey.all });
     },
   });
@@ -109,68 +122,62 @@ export type SkillDraftUpdatePayload = {
   requiredProviders?: string[] | null;
 };
 
-export function useUpdateSkillDraft() {
+export function useUpdateSkillDraft(scope: SkillScopeRef) {
   const queryClient = useQueryClient();
-  const orgApiBase = useOrganizationApiBase();
+  const basePath = useSkillsBasePath(scope);
 
   return useMutation({
     mutationFn: async ({ skillId, files, ...metadata }: SkillDraftUpdatePayload) => {
-      const response = await api.patch<SkillDraft>(
-        `${orgApiBase}/skills/${skillId}/draft`,
-        { files, ...metadata },
-        { schema: SkillDraftSchema },
-      );
+      const response = await api.patch<SkillDraft>(`${basePath}/${skillId}/draft`, { files, ...metadata }, {
+        schema: SkillDraftSchema,
+      });
       return response.data;
     },
     onSuccess: (draft) => {
-      queryClient.setQueryData(skillDraftKey(draft.skillId), draft);
+      queryClient.setQueryData(skillDraftKey(draft.skillId, scope), draft);
       void queryClient.invalidateQueries({ queryKey: skillsKey.all });
     },
   });
 }
 
-export function useDiscardSkillDraft() {
+export function useDiscardSkillDraft(scope: SkillScopeRef) {
   const queryClient = useQueryClient();
-  const orgApiBase = useOrganizationApiBase();
+  const basePath = useSkillsBasePath(scope);
 
   return useMutation({
     mutationFn: async (skillId: string) => {
-      await api.delete(`${orgApiBase}/skills/${skillId}/draft`);
+      await api.delete(`${basePath}/${skillId}/draft`);
     },
     onSuccess: (_data, skillId) => {
-      queryClient.removeQueries({ queryKey: skillDraftKey(skillId) });
+      queryClient.removeQueries({ queryKey: skillDraftKey(skillId, scope) });
       void queryClient.invalidateQueries({ queryKey: skillsKey.all });
     },
   });
 }
 
-export function usePublishSkillDraft() {
+export function usePublishSkillDraft(scope: SkillScopeRef) {
   const queryClient = useQueryClient();
-  const orgApiBase = useOrganizationApiBase();
+  const basePath = useSkillsBasePath(scope);
 
   return useMutation({
     mutationFn: async (skillId: string) => {
-      const response = await api.post<Skill>(
-        `${orgApiBase}/skills/${skillId}/draft/publish`,
-        {},
-        { schema: SkillSchema },
-      );
+      const response = await api.post<Skill>(`${basePath}/${skillId}/draft/publish`, {}, { schema: SkillSchema });
       return response.data;
     },
     onSuccess: (skill) => {
-      queryClient.removeQueries({ queryKey: skillDraftKey(skill.id) });
+      queryClient.removeQueries({ queryKey: skillDraftKey(skill.id, scope) });
       void queryClient.invalidateQueries({ queryKey: skillsKey.all });
     },
   });
 }
 
-export function useDeleteSkillVersion() {
+export function useDeleteSkillVersion(scope: SkillScopeRef) {
   const queryClient = useQueryClient();
-  const orgApiBase = useOrganizationApiBase();
+  const basePath = useSkillsBasePath(scope);
 
   return useMutation({
     mutationFn: async ({ skillId, version }: { skillId: string; version: number }) => {
-      await api.delete(`${orgApiBase}/skills/${skillId}/versions/${version}`);
+      await api.delete(`${basePath}/${skillId}/versions/${version}`);
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: skillsKey.all });

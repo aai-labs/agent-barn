@@ -3665,7 +3665,7 @@ def test_start_agent_mounts_pinned_skill_version():
 
 # --- aai-cli skills auto-attach from configured providers ---
 
-_JIRA_POINTER = "\nFor Jira, use the aai-cli tool. See ./skills/aai-cli/jira_skill.md\n"
+_JIRA_POINTER = "\nFor Jira, use the aai-cli tool. See ./skills/jira/SKILL.md\n"
 
 
 def test_start_agent_auto_attaches_aai_cli_skill_for_configured_provider():
@@ -3700,9 +3700,9 @@ def test_start_agent_auto_attaches_aai_cli_skill_for_configured_provider():
             assert_that(config_map.data, has_key("skills.json"))
             entries = _json.loads(config_map.data["skills.json"])
             assert_that(len(entries), equal_to(1))
-            # Built-ins share the aai-cli mount directory so their long-published
-            # pointer paths keep resolving.
-            assert_that(entries[0]["path"], equal_to("aai-cli/SKILL.md"))
+            # Built-ins use the same isolated <slug>/SKILL.md mount contract as
+            # organization and Agent-owned Skills.
+            assert_that(entries[0]["path"], equal_to("jira/SKILL.md"))
             assert_that(config_map.data["TOOLS.md"], contains_string(_JIRA_POINTER))
 
 
@@ -3828,7 +3828,7 @@ def test_start_agent_injects_profile_mapping_into_agents_md_openclaw():
             config_map = k8s.create_config_map.call_args.args[1]
             agents_md = config_map.data["AGENTS.md"]
             assert_that(agents_md, contains_string("--profile jira-work"))
-            assert_that(agents_md, contains_string("./skills/aai-cli/"))
+            assert_that(agents_md, contains_string("./skills/aai-<integration>/SKILL.md"))
 
 
 def test_start_agent_injects_profile_mapping_into_agents_md_hermes():
@@ -3849,7 +3849,7 @@ def test_start_agent_injects_profile_mapping_into_agents_md_hermes():
             config_map = k8s.create_config_map.call_args.args[1]
             agents_md = config_map.data["AGENTS.md"]
             assert_that(agents_md, contains_string("--profile jira-work"))
-            assert_that(agents_md, contains_string("./skills/aai-cli/"))
+            assert_that(agents_md, contains_string("./skills/aai-<integration>/SKILL.md"))
 
 
 def test_start_agent_injects_chat_commands_policy_into_agents_md_openclaw():

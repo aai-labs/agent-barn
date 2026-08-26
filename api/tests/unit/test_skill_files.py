@@ -59,10 +59,9 @@ def test_validate_files_requires_the_entry_point():
         validate_files([("helpers/a.md", "a")], entry_path="SKILL.md")
 
 
-def test_validate_files_allows_omitting_the_entry_point_check():
-    """Built-ins name their own entry file, so the check is caller-supplied."""
-    files = validate_files([("jira_skill.md", "docs")])
-    assert files == [("jira_skill.md", "docs")]
+def test_validate_files_requires_the_canonical_entry_point_by_default():
+    with pytest.raises(ValueError, match="SKILL.md"):
+        validate_files([("jira_skill.md", "docs")])
 
 
 def test_validate_files_rejects_case_insensitive_duplicates():

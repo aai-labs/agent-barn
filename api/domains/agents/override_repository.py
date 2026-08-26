@@ -74,13 +74,13 @@ class AgentOverrideSnapshot:
     boot_md: str
     bootstrap_md: str
     heartbeat_md: str
-    required_skill_map: Mapping[UUID, str | None]
+    required_skill_map: Mapping[UUID, tuple[int, str | None]]
 
     @classmethod
     def from_template(
         cls,
         template: AgentTemplate | PlatformTemplate,
-        required_skill_map: Mapping[UUID, str | None],
+        required_skill_map: Mapping[UUID, tuple[int, str | None]],
     ) -> AgentOverrideSnapshot:
         if isinstance(template, PlatformTemplate):
             source = AgentOverrideSource(
@@ -115,7 +115,7 @@ class AgentOverrideSnapshot:
     def from_override_version(
         cls,
         version: AgentTemplateOverrideVersion,
-        required_skill_map: Mapping[UUID, str | None],
+        required_skill_map: Mapping[UUID, tuple[int, str | None]],
     ) -> AgentOverrideSnapshot:
         return cls(
             source=AgentOverrideSource(
@@ -212,22 +212,24 @@ class AgentOverrideRepository:
                 )
             ).first()
 
-    def get_draft_skill_map(self, draft_id: UUID) -> dict[UUID, str | None]:
+    def get_draft_skill_map(self, draft_id: UUID) -> dict[UUID, tuple[int, str | None]]:
         with Session(self.delegate.engine) as session:
-            return dict(
-                session.exec(
+            return {
+                skill_id: (skill_version, group_key)
+                for skill_id, skill_version, group_key in session.exec(
                     select(
                         AgentTemplateOverrideDraftSkill.skill_id,
+                        AgentTemplateOverrideDraftSkill.skill_version,
                         AgentTemplateOverrideDraftSkill.group_key,
                     ).where(col(AgentTemplateOverrideDraftSkill.draft_id) == draft_id)
                 ).all()
-            )
+            }
 
     def get_draft_skill_map_for_agent(
         self,
         agent_id: UUID,
         organization_id: UUID,
-    ) -> dict[UUID, str | None]:
+    ) -> dict[UUID, tuple[int, str | None]]:
         with Session(self.delegate.engine) as session:
             draft_id = session.exec(
                 select(AgentTemplateOverrideDraft.id).where(
@@ -237,22 +239,26 @@ class AgentOverrideRepository:
             ).first()
         return self.get_draft_skill_map(draft_id) if draft_id is not None else {}
 
-    def get_version_skill_map(self, version_id: UUID) -> dict[UUID, str | None]:
+    def get_version_skill_map(self, version_id: UUID) -> dict[UUID, tuple[int, str | None]]:
         with Session(self.delegate.engine) as session:
-            return dict(
-                session.exec(
+            return {
+                skill_id: (skill_version, group_key)
+                for skill_id, skill_version, group_key in session.exec(
                     select(
                         AgentTemplateOverrideVersionSkill.skill_id,
+                        AgentTemplateOverrideVersionSkill.skill_version,
                         AgentTemplateOverrideVersionSkill.group_key,
                     ).where(col(AgentTemplateOverrideVersionSkill.version_id) == version_id)
                 ).all()
-            )
+            }
 
-    def get_skills_for_draft(self, draft_id: UUID) -> list[tuple[Skill, str | None]]:
+    def get_skills_for_draft(self, draft_id: UUID) -> list[tuple[Skill, int, str | None]]:
         with Session(self.delegate.engine) as session:
             return list(
                 session.exec(
-                    select(Skill, AgentTemplateOverrideDraftSkill.group_key)
+                    select(
+                        Skill, AgentTemplateOverrideDraftSkill.skill_version, AgentTemplateOverrideDraftSkill.group_key
+                    )
                     .join(
                         AgentTemplateOverrideDraftSkill,
                         col(AgentTemplateOverrideDraftSkill.skill_id) == col(Skill.id),
@@ -262,15 +268,15 @@ class AgentOverrideRepository:
                 ).all()
             )
 
-    def get_skills_for_version(self, version_id: UUID) -> list[tuple[Skill, str | None]]:
+    def get_skills_for_version(self, version_id: UUID) -> list[tuple[Skill, int, str | None]]:
         return self.get_skills_for_versions([version_id]).get(version_id, [])
 
     def get_skills_for_versions(
         self,
         version_ids: Collection[UUID],
-    ) -> dict[UUID, list[tuple[Skill, str | None]]]:
+    ) -> dict[UUID, list[tuple[Skill, int, str | None]]]:
         ids = list(version_ids)
-        result: dict[UUID, list[tuple[Skill, str | None]]] = {version_id: [] for version_id in ids}
+        result: dict[UUID, list[tuple[Skill, int, str | None]]] = {version_id: [] for version_id in ids}
         if not ids:
             return result
         with Session(self.delegate.engine) as session:
@@ -285,7 +291,7 @@ class AgentOverrideRepository:
                 )
             ).all()
             for link, skill in rows:
-                result[link.version_id].append((skill, link.group_key))
+                result[link.version_id].append((skill, link.skill_version, link.group_key))
         return result
 
     def get_author(self, user_id: UUID | None) -> User | None:
@@ -350,7 +356,7 @@ class AgentOverrideRepository:
         agent_id: UUID,
         organization_id: UUID,
         updates: Mapping[str, object],
-        skill_map: Mapping[UUID, str | None] | None,
+        skill_map: Mapping[UUID, tuple[int, str | None]] | None,
         *,
         expected_updated_at: datetime,
         actor: ActorIdentity,
@@ -443,6 +449,7 @@ class AgentOverrideRepository:
                     AgentTemplateOverrideVersionSkill(
                         version_id=published.id,
                         skill_id=row.skill_id,
+                        skill_version=row.skill_version,
                         group_key=row.group_key,
                     )
                     for row in draft_skills
@@ -596,7 +603,7 @@ class AgentOverrideRepository:
     def _replace_draft_skills(
         session: Session,
         draft_id: UUID,
-        skill_map: Mapping[UUID, str | None],
+        skill_map: Mapping[UUID, tuple[int, str | None]],
     ) -> None:
         session.exec(
             delete(AgentTemplateOverrideDraftSkill).where(col(AgentTemplateOverrideDraftSkill.draft_id) == draft_id)
@@ -606,8 +613,9 @@ class AgentOverrideRepository:
                 AgentTemplateOverrideDraftSkill(
                     draft_id=draft_id,
                     skill_id=skill_id,
+                    skill_version=skill_version,
                     group_key=group_key,
                 )
-                for skill_id, group_key in skill_map.items()
+                for skill_id, (skill_version, group_key) in skill_map.items()
             ]
         )

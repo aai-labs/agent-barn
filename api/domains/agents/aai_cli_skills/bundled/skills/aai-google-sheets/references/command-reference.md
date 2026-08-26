@@ -1,20 +1,6 @@
-"""aai-cli google sheets skill docs."""
-
-GOOGLE_SHEETS_SKILLS: list[dict[str, str]] = [
-    {
-        "skill_file_path": "aai-cli/google_sheets_skill.md",
-        "skill_content": r"""\
 # aai-cli Google Sheets Skill
 
 Agent reference for the `aai-cli sheets` command group.
-
-## IMPORTANT: credentials are already configured
-
-The tool is fully set up on this agent. **Do not ask the user for credentials, site URLs,
-tokens, or any config details.** The profile is on disk and ready. Just run the command.
-
-If the command returns an error, show the raw error output to the user — do not ask them
-to provide config or credentials.
 
 ## Required flag
 
@@ -68,14 +54,13 @@ Exit code is non-zero on any error.
 
 ## spreadsheets create
 
-Create a new spreadsheet in the authenticated user's Drive. Use this when the user asks for
-a new sheet — do not tell them to create one by hand.
+Create a new spreadsheet in the authenticated user's Drive.
 
 ```
-aai-cli sheets spreadsheets create <TITLE> [--sheets "Name1,Name2"] --profile google-sheets-work
+aai-cli sheets spreadsheets create <TITLE> [--sheets A,B,C] --profile google-sheets-work
 ```
 
-| Argument/Flag | Required | Description |
+| Argument / Flag | Required | Description |
 |---|---|---|
 | `TITLE` | **yes** | Title for the new spreadsheet |
 | `--sheets` | no | Comma-separated tab names. Omit for a single default `Sheet1` |
@@ -93,13 +78,12 @@ aai-cli sheets spreadsheets create "Q3 Forecast" --sheets "Summary,Detail" --pro
   "properties": { "title": "Q3 Forecast" },
   "sheets": [
     { "properties": { "sheetId": 0, "title": "Summary" } },
-    { "properties": { "sheetId": 1491539105, "title": "Detail" } }
+    { "properties": { "sheetId": 1, "title": "Detail" } }
   ]
 }
 ```
 
-Write into it with `values update` using the returned `spreadsheetId`, then give the user
-the `spreadsheetUrl`.
+Write into it with `values update` using the returned `spreadsheetId`, and give the user the `spreadsheetUrl`.
 
 ---
 
@@ -168,8 +152,7 @@ Use the `title` value to construct range strings (e.g. `'Inventory'!A1:D10`).
 
 ## sheets add
 
-Add a tab to an existing spreadsheet. Address tabs by title — the numeric `sheetId` is
-looked up for you.
+Add a tab to an existing spreadsheet.
 
 ```
 aai-cli sheets sheets add <SPREADSHEET_ID> <TITLE> --profile google-sheets-work
@@ -196,14 +179,13 @@ Delete a tab by title.
 aai-cli sheets sheets delete <SPREADSHEET_ID> <TITLE> --profile google-sheets-work
 ```
 
-The last remaining tab cannot be deleted — a spreadsheet must keep at least one. Deleting a
-tab destroys its data; confirm with the user first.
+The last remaining tab cannot be deleted — a spreadsheet must keep at least one.
 
 ---
 
 ## sheets rename
 
-Rename a tab. Google updates formulas that reference the old title, so this is safe.
+Rename a tab. Google updates formulas that reference the old title.
 
 ```
 aai-cli sheets sheets rename <SPREADSHEET_ID> <TITLE> <NEW_TITLE> --profile google-sheets-work
@@ -309,6 +291,3 @@ aai-cli sheets values clear 1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms "'Sheet
   "clearedRange": "'Sheet1'!A2:B3"
 }
 ```
-""",
-    },
-]

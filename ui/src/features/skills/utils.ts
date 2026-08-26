@@ -1,10 +1,21 @@
 import { createQueryKeyStructure } from "@/shared/query-keys";
 
+import { skillScopeCacheKey, type SkillScopeRef } from "./scope";
+
 export const skillsKey = createQueryKeyStructure("skills");
-export const skillDraftKey = (skillId: string) => [...skillsKey.detail(skillId), "draft"] as const;
-export const skillVersionsKey = (skillId: string) => [...skillsKey.detail(skillId), "versions"] as const;
-export const skillVersionKey = (skillId: string, version: number) =>
-  [...skillsKey.detail(skillId), "versions", version] as const;
+
+// Scoped, not just skillId-keyed: the same skill row reads differently
+// depending on which scope's endpoint fetched it (e.g. isAssignedToAgent/
+// isPinnedByAgent/hasDraft are computed relative to the caller's scope), so a
+// cache hit from one scope's lens must never leak into another's.
+export const skillDetailKey = (skillId: string, scope: SkillScopeRef) =>
+  [...skillsKey.detail(skillId), skillScopeCacheKey(scope)] as const;
+export const skillDraftKey = (skillId: string, scope: SkillScopeRef) =>
+  [...skillDetailKey(skillId, scope), "draft"] as const;
+export const skillVersionsKey = (skillId: string, scope: SkillScopeRef) =>
+  [...skillDetailKey(skillId, scope), "versions"] as const;
+export const skillVersionKey = (skillId: string, version: number, scope: SkillScopeRef) =>
+  [...skillDetailKey(skillId, scope), "versions", version] as const;
 export const SKILLS_PAGE_SIZE = 15;
 
 export const SKILL_PROVIDER_LABELS: Record<string, string> = {

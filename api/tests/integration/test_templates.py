@@ -1935,7 +1935,7 @@ def test_seed_predefined_templates_is_idempotent_for_group_keys():
             assert template is not None
             skill_map = repository.get_platform_required_skill_map(template.id)
             assert_that(len(skill_map), equal_to(2))
-            assert_that(set(skill_map.values()), equal_to({"github-or-bitbucket"}))
+            assert_that({group_key for _, group_key in skill_map.values()}, equal_to({"github-or-bitbucket"}))
 
 
 def test_predefined_content_keeps_raw_placeholders():

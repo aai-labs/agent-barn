@@ -1449,6 +1449,7 @@ export function SkillsStep({
   );
 
   const { skills, total, isLoading } = useSkills({
+    scope: { kind: "organization" },
     search: search || undefined,
     page,
     pageSize: HIRE_DIALOG_PAGE_SIZE,

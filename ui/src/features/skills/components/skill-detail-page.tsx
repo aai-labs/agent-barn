@@ -17,7 +17,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { useActiveOrgRole } from "@/features/organizations/hooks/use-active-org-role";
 
 import { useSkillDraft } from "../hooks/use-skill-draft";
 import { useSkillFiles } from "../hooks/use-skill-files";
@@ -25,6 +24,7 @@ import { useSkillVersions } from "../hooks/use-skill-versions";
 import { useSkillVersionDetail } from "../hooks/use-skill-version-detail";
 import {
   type SkillFilePayload,
+  useApplySkillSourceUpdate,
   useDeleteSkillVersion,
   useDiscardSkillDraft,
   useForkSkill,
@@ -33,24 +33,37 @@ import {
   useUpdateSkill,
   useUpdateSkillDraft,
 } from "../hooks/use-skill-mutations";
+import { canForkInto, skillDetailHref, skillsListHref, type SkillScopeRef } from "../scope";
 import { SkillDetailSidebar, type SkillDetailSection } from "./skill-detail-sidebar";
 import { SkillFileBrowser } from "./skill-file-browser";
 import { SkillMetadataFields } from "./skill-metadata-fields";
 import { SkillRequiredProviders } from "./skill-required-providers";
+import { SkillScopeBadge } from "./skill-scope-badge";
 import { SkillSourceBadge } from "./skill-source-badge";
 import { SkillVersionHistory } from "./skill-version-history";
 
-type Confirmation = "discard" | "publish" | "delete-version" | "fork";
+type Confirmation = "discard" | "publish" | "delete-version" | "fork" | "source-update";
 
-export function SkillDetailPage({ skillId }: { skillId: string }) {
-  const { canManage } = useActiveOrgRole();
+export function SkillDetailPage({
+  skillId,
+  scope,
+  canManage,
+}: {
+  skillId: string;
+  scope: SkillScopeRef;
+  /** Whether the caller may manage lineages in `scope` (Platform Administrator,
+   * Organization manager, or this Agent's editor access) — computed by the route
+   * wrapper, which knows which permission source applies to its own scope. */
+  canManage: boolean;
+}) {
   const router = useRouter();
   const params = useParams();
   const orgId = typeof params?.orgId === "string" ? params.orgId : null;
-  const skillsHref = orgId ? `/dashboard/${orgId}/settings?tab=skills` : "/dashboard";
+  const skillsHref = skillsListHref(scope, orgId);
+  const skillsLabel = scope.kind === "agent" ? "Agent skills" : "Skills";
 
-  const { detail, isLoading, error, refetch } = useSkillFiles(skillId);
-  const { versions, isLoading: versionsLoading } = useSkillVersions(skillId);
+  const { detail, isLoading, error, refetch } = useSkillFiles(skillId, scope);
+  const { versions, isLoading: versionsLoading } = useSkillVersions(skillId, scope);
 
   // After forking a built-in, the router lands here with ?edit=1. The editor
   // opens immediately, seeded from the persisted draft (fetched via useSkillDraft)
@@ -72,17 +85,18 @@ export function SkillDetailPage({ skillId }: { skillId: string }) {
   const [draftApplied, setDraftApplied] = useState(false);
   const [viewingDraft, setViewingDraft] = useState(false);
 
-  const startDraft = useStartSkillDraft();
-  const updateDraft = useUpdateSkillDraft();
-  const discardDraft = useDiscardSkillDraft();
-  const publishDraft = usePublishSkillDraft();
-  const updateSkill = useUpdateSkill();
-  const forkSkill = useForkSkill();
-  const deleteSkillVersion = useDeleteSkillVersion();
+  const startDraft = useStartSkillDraft(scope);
+  const updateDraft = useUpdateSkillDraft(scope);
+  const discardDraft = useDiscardSkillDraft(scope);
+  const publishDraft = usePublishSkillDraft(scope);
+  const updateSkill = useUpdateSkill(scope);
+  const forkSkill = useForkSkill(scope);
+  const deleteSkillVersion = useDeleteSkillVersion(scope);
+  const applySourceUpdate = useApplySkillSourceUpdate(scope);
 
   // Fetch the persisted draft whenever one is known to exist, so the
   // read-only view can preview it and ?edit=1 can hydrate from it.
-  const { draft: existingDraft } = useSkillDraft(skillId, !!detail?.hasDraft);
+  const { draft: existingDraft } = useSkillDraft(skillId, !!detail?.hasDraft, scope);
 
   // Seed the auto-opened editor. When the draft query resolves, replace the
   // editor content with the persisted draft so unpublished edits survive a
@@ -107,6 +121,7 @@ export function SkillDetailPage({ skillId }: { skillId: string }) {
   const { files: historicalFiles, isLoading: historicalLoading } = useSkillVersionDetail(
     viewingHistorical ? skillId : null,
     viewingHistorical ? selectedVersion : null,
+    scope,
   );
 
   const isPending =
@@ -114,13 +129,15 @@ export function SkillDetailPage({ skillId }: { skillId: string }) {
     updateDraft.isPending ||
     updateSkill.isPending ||
     discardDraft.isPending ||
-    publishDraft.isPending;
+    publishDraft.isPending ||
+    applySourceUpdate.isPending;
   const mutationError =
     startDraft.error ??
     updateDraft.error ??
     updateSkill.error ??
     discardDraft.error ??
     publishDraft.error ??
+    applySourceUpdate.error ??
     forkSkill.error ??
     deleteSkillVersion.error;
 
@@ -143,7 +160,7 @@ export function SkillDetailPage({ skillId }: { skillId: string }) {
           className="inline-flex items-center gap-1.5 text-[0.8125rem] mb-6 px-2 py-1 -ml-2 rounded-lg hover:bg-[var(--bg-soft)] transition-colors"
           style={{ color: "var(--ink-3)" }}
         >
-          <ArrowLeft size={14} /> Skills
+          <ArrowLeft size={14} /> {skillsLabel}
         </Link>
         <AppErrorState
           error={error}
@@ -157,9 +174,14 @@ export function SkillDetailPage({ skillId }: { skillId: string }) {
     );
   }
 
-  const isCustom = detail.source === "custom";
-  const isBuiltIn = detail.source === "aai_cli";
-  const canEdit = isCustom && canManage;
+  // Editable only when this scope is the lineage's own owner — an Organization
+  // page never edits a Platform Skill in place, it forks it. Platform Admins may
+  // edit even the bundled aai-cli lineages they curate, so unlike Organization/
+  // Agent scope (whose lineages are never aai_cli-sourced anyway) this is not
+  // additionally gated on source === "custom".
+  const isOwnScope = detail.scope === scope.kind;
+  const canEdit = isOwnScope && canManage;
+  const canFork = canForkInto(scope, detail.scope) && canManage;
   const draftFiles = existingDraft?.files.map((f) => ({ path: f.path, content: f.content })) ?? [];
   const showDraftPreview = !editing && viewingDraft && existingDraft && detail.hasDraft;
   const displayedFiles = showDraftPreview
@@ -239,7 +261,7 @@ export function SkillDetailPage({ skillId }: { skillId: string }) {
         await updateSkill.mutateAsync({ skillId, name: nextName });
       }
       setLocalFiles(draft.files.map((f) => ({ path: f.path, content: f.content })));
-      toast.success(`${nextName} v${detail!.version + 1} draft saved.`);
+      toast.success(`${nextName} v${(detail!.version ?? 0) + 1} draft saved.`);
     } catch {
       // error rendered via mutationError
     }
@@ -263,11 +285,29 @@ export function SkillDetailPage({ skillId }: { skillId: string }) {
     setConfirmation("fork");
   }
 
+  function handleSourceUpdate() {
+    setConfirmation("source-update");
+  }
+
+  async function confirmSourceUpdate() {
+    setConfirmation(null);
+    try {
+      const updated = await applySourceUpdate.mutateAsync(skillId);
+      if (updated.hasDraft) {
+        toast.success("Draft replaced with the latest source version. Review and publish it.");
+      } else {
+        toast.success(`Updated ${updated.name} to v${updated.version}.`);
+      }
+    } catch {
+      // error rendered via mutationError
+    }
+  }
+
   async function confirmFork() {
     setConfirmation(null);
     try {
       const fork = await forkSkill.mutateAsync(skillId);
-      router.push(orgId ? `/dashboard/${orgId}/settings/skills/${fork.id}?edit=1` : "/dashboard");
+      router.push(`${skillDetailHref(scope, orgId, fork.id)}?edit=1`);
     } catch {
       // error rendered via mutationError
     }
@@ -326,15 +366,28 @@ export function SkillDetailPage({ skillId }: { skillId: string }) {
             }
           : confirmation === "fork"
             ? {
-                title: "Fork this built-in skill?",
-                description: `Create an editable copy of ${detail.name} for your organization? It publishes as its own custom skill version and opens a draft. The built-in skill stays read-only.`,
+                title: "Fork this skill?",
+                description: `Create an editable copy of ${detail.name} for your organization? It opens as a draft and keeps the source version available for future updates.`,
                 confirmLabel: "Fork skill",
                 pendingLabel: "Forking…",
                 onConfirm: confirmFork,
                 isPending: forkSkill.isPending,
                 icon: <GitFork size={18} />,
               }
-            : null;
+            : confirmation === "source-update"
+              ? {
+                  title: "Apply source update?",
+                  description: detail.hasDraft
+                    ? `Replace the current draft for ${detail.name} with the latest source version? Your draft changes will be replaced, but the result will remain unpublished.`
+                    : `Copy and publish the latest source version of ${detail.name}? Existing pins remain unchanged.`,
+                  confirmLabel: "Apply update",
+                  pendingLabel: "Applying…",
+                  onConfirm: confirmSourceUpdate,
+                  isPending: applySourceUpdate.isPending,
+                  variant: detail.hasDraft ? ("destructive" as const) : undefined,
+                  icon: <Upload size={18} />,
+                }
+              : null;
 
   return (
     <div className="af-page">
@@ -343,7 +396,7 @@ export function SkillDetailPage({ skillId }: { skillId: string }) {
         className="inline-flex items-center gap-1.5 text-[0.8125rem] mb-6 px-2 py-1 -ml-2 rounded-lg hover:bg-[var(--bg-soft)] transition-colors"
         style={{ color: "var(--ink-3)" }}
       >
-        <ArrowLeft size={14} /> Skills
+        <ArrowLeft size={14} /> {skillsLabel}
       </Link>
 
       <div className="flex flex-wrap items-start justify-between gap-4 mb-8">
@@ -353,6 +406,7 @@ export function SkillDetailPage({ skillId }: { skillId: string }) {
               {detail.name}
             </h1>
             <SkillSourceBadge source={detail.source} />
+            <SkillScopeBadge scope={detail.scope} />
             {detail.hasDraft && <Badge variant="warn">Draft in progress</Badge>}
           </div>
           <div className="text-[13px] font-mono mt-1" style={{ color: "var(--ink-3)" }}>
@@ -361,7 +415,15 @@ export function SkillDetailPage({ skillId }: { skillId: string }) {
         </div>
 
         <div className="flex items-center gap-2 flex-shrink-0">
-          {isBuiltIn && canManage && !editing ? (
+          {detail.updateAvailable && canEdit && !editing ? (
+            <>
+              <Badge variant="warn">Source update available</Badge>
+              <button className="af-btn af-btn-primary" onClick={handleSourceUpdate}>
+                <Upload size={14} /> Apply update
+              </button>
+            </>
+          ) : null}
+          {canFork && !editing ? (
             <button className="af-btn" onClick={handleFork} disabled={forkSkill.isPending}>
               {forkSkill.isPending ? <Loader2 size={14} className="animate-spin" /> : <GitFork size={14} />}
               Fork
@@ -395,7 +457,7 @@ export function SkillDetailPage({ skillId }: { skillId: string }) {
               </h2>
               <SkillVersionHistory
                 versions={versions}
-                currentVersion={detail.version}
+                currentVersion={latestVersion}
                 isLoading={versionsLoading}
                 canManage={canEdit}
                 onDelete={handleDeleteVersion}
