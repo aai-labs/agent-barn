@@ -218,13 +218,13 @@ alongside the first:
 
 | Variable                                              | Default                         | What it names                   |
 | ----------------------------------------------------- | ------------------------------- | ------------------------------- |
-| `K3D_CLUSTER`                                         | `agentfarm-dev`                 | the k3d cluster                 |
+| `K3D_CLUSTER`                                         | `agentbarn-dev`                 | the k3d cluster                 |
 | `K3D_API_PORT`                                        | `16443`                         | host port for the k8s API       |
 | `LITELLM_PORT`                                        | `7070`                          | host port for the LiteLLM proxy |
 | `LITELLM_CONTAINER_NAME`, `LITELLM_DB_CONTAINER_NAME` | `aai_litellm`, `aai_litellm_db` | the LiteLLM containers          |
 
 ```bash
-K3D_CLUSTER=agentfarm-mytask K3D_API_PORT=16444 LITELLM_PORT=7071 \
+K3D_CLUSTER=agentbarn-mytask K3D_API_PORT=16444 LITELLM_PORT=7071 \
   LITELLM_CONTAINER_NAME=aai_litellm_mytask \
   LITELLM_DB_CONTAINER_NAME=aai_litellm_db_mytask \
   ./run.sh
@@ -309,7 +309,7 @@ private registry, so an image that was never imported cannot be pulled. Compare
 what's in the cluster against what the API asks for:
 
 ```bash
-docker exec k3d-${K3D_CLUSTER:-agentfarm-dev}-server-0 crictl images | grep -E 'openclaw|hermes'
+docker exec k3d-${K3D_CLUSTER:-agentbarn-dev}-server-0 crictl images | grep -E 'openclaw|hermes'
 grep -E '^(OPENCLAW|HERMES)_IMAGE=' .env
 ```
 
@@ -364,7 +364,7 @@ A maintainer responds to every `#support` post within 3 business days.
 
 ## Contributing
 
-Start with [`good first issue`](https://github.com/aai-labs/agent-farm/labels/good%20first%20issue).
+Start with [`good first issue`](https://github.com/aai-labs/agent-barn/labels/good%20first%20issue).
 Setup, conventions, and the review process are in [CONTRIBUTING.md](CONTRIBUTING.md).
 Repository-wide engineering rules live in [AGENTS.md](AGENTS.md) and
 [`docs/INDEX.md`](docs/INDEX.md); domain terminology is in [CONTEXT.md](CONTEXT.md).
