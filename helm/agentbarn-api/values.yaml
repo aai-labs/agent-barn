@@ -62,6 +62,7 @@ agentLitellmBaseUrl: "http://litellm:4000"
 # platform-level key shared by all agents (users can override per-agent via UI).
 agentFirecrawlBaseUrl: "http://firecrawl:3002"
 agentFirecrawlApiKey: ""
+ingestBaseUrl: "http://agentbarn-api:8001/ingest/v1"
 
 # Comma-separated fnmatch globs limiting which OpenRouter models the picker
 # offers, e.g. "z-ai/glm-5.2,openai/gpt-5*". Empty offers the full catalogue.
