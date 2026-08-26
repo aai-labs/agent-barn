@@ -13,6 +13,13 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
 
 ## Changes
 
+### 2026-08-26 — AF-118 — Teams round-trip fixes — PR pending
+
+- Delivered: Teams outbound replies now send a complete Bot Framework Activity (`conversation`, `from`, `recipient`, `replyToId`) to `POST /v3/conversations/{id}/activities`. A minimal `{type, text}` body was rejected with `400 Bad Request` and dead-lettered after five attempts. `normalize_inbound` now also records the addressable Teams ids (`from_id`, `recipient_id`) in provider metadata, because `sender.id` holds the Entra object id used for policy matching and cannot address a reply. Conversations are now labelled: a named group chat uses `conversation.name`, a DM falls back to the sender's name.
+- Changed: `ConversationService.list_threads` no longer uppercases the requested channel id. That was a Slack-era assumption — Slack ids are natively uppercase and Discord/Telegram ids are numeric, so uppercasing was a silent no-op for every shipped platform. Teams conversation ids are case-sensitive mixed case (`a:1mc8AgCtwYH7…`), so the lookup never matched and stored messages rendered as "No messages in this range". Exact matching is correct for all platforms; message writing already stored provider ids verbatim.
+- Notes: Teams omits `channelData.channel.name` on ordinary messages — Microsoft documents it as sent only on channel modification events — so a team channel still displays its `19:…@thread.tacv2` id. Resolving it requires Microsoft Graph, which remains out of scope; DMs and named group chats are unaffected.
+- Follow-up: Threaded channel replies send the raw conversation id including its `;messageid=` suffix, percent-encoded in the request path. That form has not yet been exercised against live channel traffic.
+
 ### 2026-08-26 — AF-118 — Microsoft Teams platform plugin — PR pending
 
 - Delivered: A shipped Microsoft Teams Platform Plugin with schema-driven Azure credentials (App ID, client secret, tenant ID), the same channel/DM policy settings the other platforms expose, and a provider setup hint covering Azure Bot creation, secret retrieval, enabling the Teams channel, and pasting the Connection's webhook URL into the bot's messaging endpoint. Teams is the first plugin to use `WEBHOOK_INGRESS`: inbound activities are authenticated through `verify_webhook` against the Bot Framework JWKS, requiring the documented issuer and the Connection's own App ID as audience. Outbound replies use the Bot Connector API, threading through the reply-to-activity form.

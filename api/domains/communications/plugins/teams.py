@@ -137,18 +137,28 @@ class TeamsPlatformPlugin(PlatformPlugin):
         envelope: OutboundCommunicationEnvelope,
     ) -> str:
         assert isinstance(credentials, TeamsCredentials)
-        service_url = str(envelope.provider_metadata.get("service_url") or "")
-        conversation_id = str(envelope.provider_metadata.get("conversation_id") or envelope.location.id)
+        metadata = envelope.provider_metadata
+        service_url = str(metadata.get("service_url") or "")
         if not service_url:
             raise ValueError("Teams reply is missing the serviceUrl captured from its inbound activity")
+
+        # The thread lives in the conversation id, so the stored raw value is
+        # sent whole rather than the stripped location id.
+        conversation_id = str(metadata.get("conversation_id") or envelope.location.id)
+        activity: dict[str, Any] = {
+            "type": "message",
+            "text": envelope.text,
+            "conversation": {"id": conversation_id},
+        }
+        if metadata.get("recipient_id"):
+            activity["from"] = {"id": str(metadata["recipient_id"])}
+        if metadata.get("from_id"):
+            activity["recipient"] = {"id": str(metadata["from_id"])}
+        if envelope.reply_to_provider_message_id:
+            activity["replyToId"] = envelope.reply_to_provider_message_id
+
         token = acquire_token(credentials.tenant_id, credentials.app_id, credentials.app_password)
-        return send_activity(
-            service_url,
-            conversation_id,
-            envelope.text,
-            token,
-            reply_to_activity_id=envelope.reply_to_provider_message_id,
-        )
+        return send_activity(service_url, conversation_id, activity, token)
 
     def normalize_inbound(
         self,
@@ -189,6 +199,10 @@ class TeamsPlatformPlugin(PlatformPlugin):
             return []
 
         thread_id = thread_suffix or str(payload.get("replyToId") or "") or None
+        sender_name = str(sender.get("name") or "") or None
+        # Teams omits channelData.channel.name on ordinary messages, so a team
+        # channel has no name to show without Microsoft Graph.
+        display_name = str(conversation.get("name") or "") or (sender_name if is_dm else None)
 
         return [
             NormalizedCommunicationEnvelope(
@@ -197,17 +211,16 @@ class TeamsPlatformPlugin(PlatformPlugin):
                 location=ConversationLocation(
                     id=conversation_id,
                     type="DM" if is_dm else "CHANNEL",
+                    display_name=display_name,
                     thread_id=thread_id,
                 ),
-                sender=CommunicationSender(
-                    id=sender_id,
-                    display_name=str(sender.get("name") or "") or None,
-                ),
+                sender=CommunicationSender(id=sender_id, display_name=sender_name),
                 text=str(payload.get("text") or ""),
                 mentions=_mentioned_ids(payload.get("entities")),
                 provider_metadata={
                     "service_url": str(payload.get("serviceUrl") or ""),
                     "conversation_id": raw_conversation_id,
+                    "from_id": str(sender.get("id") or ""),
                     "recipient_id": bot_id,
                     "tenant_id": str(((payload.get("channelData") or {}).get("tenant") or {}).get("id") or ""),
                 },

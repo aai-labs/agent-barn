@@ -65,20 +65,12 @@ def acquire_token(tenant_id: str, app_id: str, app_password: str) -> str:
     return token
 
 
-def send_activity(
-    service_url: str,
-    conversation_id: str,
-    text: str,
-    token: str,
-    reply_to_activity_id: str | None = None,
-) -> str:
-    base = f"{service_url.rstrip('/')}/v3/conversations/{quote(conversation_id, safe='')}/activities"
-    url = f"{base}/{quote(reply_to_activity_id, safe='')}" if reply_to_activity_id else base
+def send_activity(service_url: str, conversation_id: str, activity: dict, token: str) -> str:
     response = resilient_request(
         "POST",
-        url,
+        f"{service_url.rstrip('/')}/v3/conversations/{quote(conversation_id, safe='')}/activities",
         headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
-        content=json.dumps({"type": "message", "text": text}).encode(),
+        content=json.dumps(activity).encode(),
         timeout=_TIMEOUT_SECONDS,
         label="Teams send",
         retry_server_errors=True,
