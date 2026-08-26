@@ -495,11 +495,6 @@ class AgentService:
             )
             for pinned in (skills or [])
         ]
-        webhook_url = (
-            f"{self.config.api_external_url}/api/v1/webhooks/teams/{agent.id}/messages"
-            if agent.platform == AgentPlatform.TEAMS and self.config.api_external_url
-            else None
-        )
         resolved_model = agent.model or effective_default_model
         return AgentRead(
             id=agent.id,
@@ -518,11 +513,6 @@ class AgentService:
             # A running pod that started on something else is the only case a surface
             # must not report the resolved value as current.
             pending_model=(resolved_model if agent.running_model and agent.running_model != resolved_model else ""),
-            approval_mode=agent.approval_mode,
-            slack_config=slack_config_read,
-            teams_config=teams_config_read,
-            telegram_config=telegram_config_read,
-            discord_config=discord_config_read,
             # OpenClaw ignores approval_mode; report the effective AUTO default
             # instead of a stored value from before this became enforced, so
             # reads stay truthful even for agents persisted prior to this check.

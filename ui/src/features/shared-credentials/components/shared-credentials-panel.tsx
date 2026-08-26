@@ -23,7 +23,6 @@ import {
   SHARED_CREDENTIAL_PROVIDERS,
 } from "../utils";
 import { SharedCredentialDrawer } from "./shared-credential-drawer";
-import { SettingsHint } from "@/components/settings/settings-hint";
 
 const PROVIDER_FILTERS: Array<{ value: string; label: string }> = [
   { value: "", label: "All providers" },
@@ -37,7 +36,7 @@ type DrawerMode =
 function ProviderBadge({ provider }: { provider: string }) {
   return (
     <span
-      className="inline-flex items-center px-2 py-0.5 rounded-md text-[0.7rem] font-medium"
+      className="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-medium"
       style={{
         background: "var(--bg-soft)",
         color: "var(--ink-3)",
@@ -80,153 +79,154 @@ export function SharedCredentialsPanel() {
 
   return (
     <>
-      <SettingsHint>
+      <div
+        className="flex items-start gap-2 text-[13px] rounded-xl px-3.5 py-3 mb-5 leading-[1.5]"
+        style={{ background: "var(--bg-soft)", color: "var(--ink-3)" }}
+      >
         <KeyIcon style={{ flexShrink: 0, marginTop: 1 }} />
         Shared credentials are org-wide integration keys that admins create once.
         Any member can attach them to their agents instead of entering credentials manually.
-      </SettingsHint>
+      </div>
 
-      <div className="af-card p-5">
-        <div className="mb-4 flex items-center gap-2.5">
-          <div className="relative flex-1">
-            <input
-              className="af-input w-full"
-              placeholder="Search credentials…"
-              aria-label="Search shared credentials"
-              value={search}
-              onChange={(e) => handleSearchChange(e.target.value)}
-            />
-          </div>
-          <div className="flex-1">
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <button
-                  className="af-input w-full flex items-center gap-2 whitespace-nowrap"
-                  aria-label="Filter by provider"
-                >
-                  {PROVIDER_FILTERS.find((f) => f.value === providerFilter)
-                    ?.label ?? "All providers"}
-                  <ChevronDownIcon
-                    size={13}
-                    className="opacity-50 flex-shrink-0"
-                  />
-                </button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent>
-                <DropdownMenuRadioGroup
-                  value={providerFilter}
-                  onValueChange={handleProviderChange}
-                >
-                  {PROVIDER_FILTERS.map((f) => (
-                    <DropdownMenuRadioItem key={f.value} value={f.value}>
-                      {f.label}
-                    </DropdownMenuRadioItem>
-                  ))}
-                </DropdownMenuRadioGroup>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </div>
-          {canManage && (
-            <button
-              className="af-btn af-btn-primary ml-auto"
-              onClick={() => setDrawer({ kind: "create" })}
-            >
-              <PlusIcon /> Connect credential
-            </button>
-          )}
+      <div className="mb-4 flex items-center gap-2.5">
+        <div className="relative flex-1">
+          <input
+            className="af-input w-full"
+            placeholder="Search credentials…"
+            aria-label="Search shared credentials"
+            value={search}
+            onChange={(e) => handleSearchChange(e.target.value)}
+          />
         </div>
+        <div className="flex-1">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                className="af-input w-full flex items-center gap-2 whitespace-nowrap"
+                aria-label="Filter by provider"
+              >
+                {PROVIDER_FILTERS.find((f) => f.value === providerFilter)
+                  ?.label ?? "All providers"}
+                <ChevronDownIcon
+                  size={13}
+                  className="opacity-50 flex-shrink-0"
+                />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent>
+              <DropdownMenuRadioGroup
+                value={providerFilter}
+                onValueChange={handleProviderChange}
+              >
+                {PROVIDER_FILTERS.map((f) => (
+                  <DropdownMenuRadioItem key={f.value} value={f.value}>
+                    {f.label}
+                  </DropdownMenuRadioItem>
+                ))}
+              </DropdownMenuRadioGroup>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+        {canManage && (
+          <button
+            className="af-btn af-btn-primary ml-auto"
+            onClick={() => setDrawer({ kind: "create" })}
+          >
+            <PlusIcon /> Connect credential
+          </button>
+        )}
+      </div>
 
-        {isLoading && (
+      {isLoading && (
+        <div
+          className="py-8 text-center text-[13px]"
+          style={{ color: "var(--ink-3)" }}
+        >
+          Loading credentials…
+        </div>
+      )}
+      {error && (
+        <AppErrorState
+          error={error}
+          title="We couldn't load shared credentials"
+          description="The credentials list is unavailable right now."
+          onRetry={() => {
+            void refetch();
+          }}
+          retryLabel="Retry"
+        />
+      )}
+      {!isLoading &&
+        !error &&
+        credentials.length === 0 &&
+        total === 0 &&
+        !search &&
+        !providerFilter && (
           <div
-            className="py-8 text-center text-[0.8rem]"
+            className="flex flex-col items-center justify-center text-center py-10 rounded-2xl"
+            style={{
+              border: "1px dashed var(--line-strong)",
+              color: "var(--ink-3)",
+            }}
+          >
+            <div
+              className="font-medium text-[0.9375rem] mb-1"
+              style={{ color: "var(--ink)" }}
+            >
+              No shared credentials yet
+            </div>
+            <div className="text-[0.844rem]">
+              {canManage
+                ? "Create your first shared credential to get started."
+                : "An admin can create shared credentials for this organization."}
+            </div>
+          </div>
+        )}
+      {!isLoading &&
+        !error &&
+        credentials.length === 0 &&
+        (search || providerFilter) && (
+          <div
+            className="py-8 text-center text-[13px]"
             style={{ color: "var(--ink-3)" }}
           >
-            Loading credentials…
+            No credentials match.
           </div>
         )}
-        {error && (
-          <AppErrorState
-            error={error}
-            title="We couldn't load shared credentials"
-            description="The credentials list is unavailable right now."
-            onRetry={() => {
-              void refetch();
-            }}
-            retryLabel="Retry"
-          />
-        )}
-        {!isLoading &&
-          !error &&
-          credentials.length === 0 &&
-          total === 0 &&
-          !search &&
-          !providerFilter && (
-            <div
-              className="flex flex-col items-center justify-center text-center py-10 rounded-2xl"
-              style={{
-                border: "1px dashed var(--line-strong)",
-                color: "var(--ink-3)",
-              }}
-            >
-              <div
-                className="font-medium text-[0.9375rem] mb-1"
-                style={{ color: "var(--ink)" }}
-              >
-                No shared credentials yet
-              </div>
-              <div className="text-[0.844rem]">
-                {canManage
-                  ? "Create your first shared credential to get started."
-                  : "An admin can create shared credentials for this organization."}
-              </div>
-            </div>
-          )}
-        {!isLoading &&
-          !error &&
-          credentials.length === 0 &&
-          (search || providerFilter) && (
-            <div
-              className="py-8 text-center text-[0.8rem]"
-              style={{ color: "var(--ink-3)" }}
-            >
-              No credentials match.
-            </div>
-          )}
 
-        {credentials.map((cred) => (
-          <div
-            key={cred.id}
-            className="flex items-center gap-3 px-0 py-3.5"
-            style={{ borderBottom: "1px solid var(--line)" }}
+      {credentials.map((cred) => (
+        <div
+          key={cred.id}
+          className="flex items-center gap-3 px-0 py-3.5"
+          style={{ borderBottom: "1px solid var(--line)" }}
+        >
+          <div className="flex-1 min-w-0">
+            <div
+              className="font-medium text-[14px] flex items-center gap-2"
+              style={{ color: "var(--ink)" }}
+            >
+              <span>{cred.name}</span>
+              <ProviderBadge provider={cred.provider} />
+            </div>
+            <div className="text-[12.5px] mt-0.5" style={{ color: "var(--ink-3)" }}>
+              {cred.agentCount === 0
+                ? "Not used by any agents"
+                : cred.agentCount === 1
+                  ? "Used by 1 agent"
+                  : `Used by ${cred.agentCount} agents`}
+            </div>
+          </div>
+          <button
+            className="af-btn af-btn-sm af-btn-ghost"
+            onClick={() => setDrawer({ kind: "view", credential: cred })}
           >
-            <div className="flex-1 min-w-0">
-              <div
-                className="font-medium text-[0.875rem] flex items-center gap-2"
-                style={{ color: "var(--ink)" }}
-              >
-                <span>{cred.name}</span>
-                <ProviderBadge provider={cred.provider} />
-              </div>
-              <div className="text-[0.78rem] mt-0.5" style={{ color: "var(--ink-3)" }}>
-                {cred.agentCount === 0
-                  ? "Not used by any agents"
-                  : cred.agentCount === 1
-                    ? "Used by 1 agent"
-                    : `Used by ${cred.agentCount} agents`}
-              </div>
-            </div>
-            <button
-              className="af-btn af-btn-sm af-btn-ghost"
-              onClick={() => setDrawer({ kind: "view", credential: cred })}
-            >
-              View
-            </button>
-          </div>
-        ))}
-
-        <div className="pt-4">
-          <Pagination page={page} totalPages={totalPages} onPageChange={setPage} />
+            View
+          </button>
         </div>
+      ))}
+
+      <div className="pt-4">
+        <Pagination page={page} totalPages={totalPages} onPageChange={setPage} />
       </div>
 
       {drawer && (

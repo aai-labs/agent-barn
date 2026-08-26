@@ -20,12 +20,13 @@ import {
 } from "../integrations";
 import { useCreateAgent } from "../hooks/use-create-agent";
 import { useStartAgent } from "../hooks/use-start-agent";
+import { useModels } from "../hooks/use-models";
 import { useTemplates } from "../hooks/use-templates";
 import { splitRequiredSkills } from "../utils";
 import { CredentialErrorAlert } from "./credential-error-alert";
 import { DialogShell, FormField } from "./hire-dialog-primitives";
 import { SkillsStep } from "./hire-dialog-steps";
-import { ModelSelect } from "./model-select";
+import { ModelChoice } from "./model-choice";
 
 const DEFAULT_AGENT_NAME = "Aria";
 
@@ -55,7 +56,8 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
   const [name, setName] = useState(DEFAULT_AGENT_NAME);
   const [templateKey, setTemplateKey] = useState("");
   const [agentType, setAgentType] = useState<"openclaw" | "hermes">("hermes");
-  const [model, setModel] = useState("");
+  const [model, setModel] = useState<string | null>(null);
+  const { defaultModel } = useModels();
   const [approvalMode, setApprovalMode] = useState<"manual" | "auto" | "off">("auto");
   const [selectedSkillIds, setSelectedSkillIds] = useState<string[]>([]);
   const [skillCredentials, setSkillCredentials] = useState<IntegrationDraft[]>([]);
@@ -133,7 +135,7 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
         agentType,
         templateKey: template.templateKey,
         templateVersion: template.version,
-        model,
+        ...(model ? { model } : {}),
         ...(skillIds.length > 0 ? { skillIds } : {}),
         ...(manualSecrets.length > 0 ? { secrets: manualSecrets } : {}),
         ...(sharedCredentials.length > 0 ? { sharedCredentials } : {}),
@@ -174,7 +176,12 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
           </Select>
         </FormField>
         <FormField label="Model">
-          <ModelSelect value={model} onChange={setModel} disabled={pending} />
+          <ModelChoice
+            value={model}
+            effectiveDefaultModel={defaultModel}
+            onChange={setModel}
+            disabled={pending}
+          />
         </FormField>
         {agentType === "hermes" && (
           <FormField label="Command approval">
@@ -223,7 +230,7 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
 
       <footer className="flex justify-end gap-2 border-t px-6 py-4" style={{ borderColor: "var(--line)" }}>
         <button type="button" className="af-btn" disabled={pending} onClick={onClose}>Cancel</button>
-        <button type="button" className="af-btn af-btn-primary" disabled={pending || !template || !name.trim() || !model || !canHire} onClick={() => void hire()}>
+        <button type="button" className="af-btn af-btn-primary" disabled={pending || !template || !name.trim() || !canHire} onClick={() => void hire()}>
           {pending ? "Hiring…" : "Hire Agent"}
         </button>
       </footer>

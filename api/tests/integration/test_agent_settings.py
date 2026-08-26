@@ -118,6 +118,17 @@ def test_a_new_organization_follows_the_platform_default():
             assert_that(body["updated_at"], none())
 
 
+def test_agent_settings_require_authentication():
+    with given(_given()) as context:
+        with when("an unauthenticated caller reads or changes Agent Settings"):
+            read = context.client.get(_SETTINGS)
+            write = context.client.put(_SETTINGS, json={"default_model": PLATFORM_DEFAULT})
+
+        with then("both routes reject the request"):
+            assert_that(read.status_code, equal_to(status.HTTP_401_UNAUTHORIZED))
+            assert_that(write.status_code, equal_to(status.HTTP_401_UNAUTHORIZED))
+
+
 def test_setting_a_default_reports_it_as_the_organizations_own():
     with given(_given(allowed_models=["*"])) as context:
         with catalog_contains("openai/gpt-5-mini", "qwen/qwen3.6-plus"):

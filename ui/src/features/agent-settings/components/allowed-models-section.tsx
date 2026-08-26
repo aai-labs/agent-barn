@@ -36,9 +36,13 @@ export function AllowedModelsSection({
   // The guard's refusal names the Agents in the way; that belongs beside the list.
   const updateOrg = useUpdateOrganization({ toastOnError: false });
 
-  // The default model can never be unchecked: the API rejects an allowlist that stops
-  // covering it, so offering the checkbox would only produce a 400.
-  const requiredModel = settings?.effectiveDefaultModel ?? "";
+  // Only an Organization-owned default is constrained by the allowlist. A platform
+  // default can change during deploys, so organizations that follow it must remain
+  // free to omit it from their own allowlist.
+  const requiredModel =
+    settings?.defaultModelSource === "organization"
+      ? settings.effectiveDefaultModel
+      : "";
 
   // Drafts are null until touched, so the control follows the server without an
   // effect syncing two sources of truth — and without a frame of empty state.

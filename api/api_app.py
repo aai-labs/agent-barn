@@ -101,7 +101,6 @@ def create_app(injector: Injector | None = None):
 
     subapi.include_router(agents_router)
     subapi.include_router(agent_settings_router)
-    subapi.include_router(webhook_router)
     subapi.include_router(auth_router)
     subapi.include_router(conversations_router)
     subapi.include_router(communications_router)

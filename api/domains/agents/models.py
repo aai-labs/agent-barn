@@ -317,10 +317,6 @@ class Agent(BaseModel, table=True):
         default="",
         sa_column=Column(sa.String(), nullable=False, server_default=""),
     )
-    platform: AgentPlatform = SqlField(
-        default=AgentPlatform.SLACK,
-        sa_column=Column(sa.String(10), nullable=False, server_default="slack"),
-    )
     agent_type: AgentType = SqlField(
         default=AgentType.OPENCLAW,
         sa_column=Column(sa.String(20), nullable=False, server_default="openclaw"),
@@ -1025,10 +1021,6 @@ class AgentRead(PydanticBaseModel):
     #: Set only when a running Agent's resolved model has moved since it started, so a
     #: surface can say what a restart would switch it to without recomputing the rule.
     pending_model: str
-    slack_config: AgentSlackConfigRead | None = None
-    teams_config: AgentTeamsConfigRead | None = None
-    telegram_config: AgentTelegramConfigRead | None = None
-    discord_config: AgentDiscordConfigRead | None = None
     secrets: list[AgentSecretRead] = Field(default_factory=list)
     skills: list[AgentAssignedSkillRead] = Field(default_factory=list)
     approval_mode: CommandApprovalMode

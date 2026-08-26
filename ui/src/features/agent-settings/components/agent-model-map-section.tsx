@@ -9,6 +9,8 @@ import { PendingModelNote } from "@/features/agents/components/pending-model-not
 import { useAgents } from "@/features/agents/hooks/use-agents";
 import { currentModelOf, formatModelName } from "@/features/agents/utils";
 
+import { useAgentSettings } from "../hooks/use-agent-settings";
+
 /**
  * Who actually follows the default, named.
  *
@@ -22,10 +24,11 @@ import { currentModelOf, formatModelName } from "@/features/agents/utils";
  */
 export function AgentModelMapSection() {
   const [open, setOpen] = useState(false);
-  const { agents, isLoading } = useAgents();
+  const { agents, total, isLoading } = useAgents();
+  const { settings } = useAgentSettings();
   const panelId = useId();
 
-  const inheriting = agents.filter((agent) => agent.modelSource === "default").length;
+  const inheriting = settings?.inheritingAgentCount;
 
   return (
     <section className="af-card overflow-hidden" aria-label="Agent models">
@@ -41,9 +44,9 @@ export function AgentModelMapSection() {
           description="Which model each Agent is on, and whether it follows the default."
         />
         <span className="flex flex-shrink-0 items-center gap-3">
-          {!isLoading && agents.length > 0 && (
+          {!isLoading && total > 0 && (
             <span className="text-[0.8rem]" style={{ color: "var(--ink-3)" }}>
-              {inheriting} of {agents.length} follow the default
+              {inheriting ?? "—"} of {total} follow the default
             </span>
           )}
           {/* Styled as a button rather than a bare chevron: the card is read-only, so
@@ -101,6 +104,11 @@ export function AgentModelMapSection() {
                 </li>
               ))}
             </ul>
+          )}
+          {agents.length < total && (
+            <p className="my-3 text-[0.8rem]" style={{ color: "var(--ink-3)" }}>
+              Showing the first {agents.length} of {total} Agents.
+            </p>
           )}
         </div>
       )}
