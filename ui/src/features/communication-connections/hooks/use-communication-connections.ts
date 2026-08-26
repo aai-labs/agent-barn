@@ -10,15 +10,22 @@ import { createQueryKeyStructure } from "@/shared/query-keys";
 
 import {
   CommunicationConnectionSchema,
+  CommunicationDiagnosticsSchema,
+  CommunicationReconnectSchema,
+  CommunicationRetrySchema,
   CommunicationPlatformSchema,
   type CommunicationConnection,
   type CommunicationPlatform,
+  type CommunicationDiagnostics,
+  type CommunicationReconnect,
+  type CommunicationRetry,
   type CreateCommunicationConnection,
   type UpdateCommunicationConnection,
 } from "../schemas";
 
 export const communicationConnectionsKey = createQueryKeyStructure("communication-connections");
 export const communicationPlatformsKey = createQueryKeyStructure("communication-platforms");
+export const communicationDiagnosticsKey = createQueryKeyStructure("communication-connection-diagnostics");
 
 export function useCommunicationPlatforms() {
   const orgApiBase = useOrganizationApiBase();
@@ -53,6 +60,27 @@ export function useCommunicationConnections(agentId: string) {
   });
 }
 
+export function useCommunicationConnectionDiagnostics(
+  agentId: string,
+  connectionId: string,
+  enabled = true,
+) {
+  const orgApiBase = useOrganizationApiBase();
+  const { selectedOrganization } = useOrganizationContext();
+  const organizationId = selectedOrganization?.id ?? "";
+  return useQuery({
+    queryKey: communicationDiagnosticsKey.detail(`${organizationId}:${connectionId}`),
+    queryFn: async () => {
+      const response = await api.get<CommunicationDiagnostics>(
+        `${orgApiBase}/agents/${agentId}/connections/${connectionId}/diagnostics`,
+        { schema: CommunicationDiagnosticsSchema },
+      );
+      return response.data;
+    },
+    enabled: enabled && Boolean(agentId && connectionId),
+  });
+}
+
 export function useCommunicationConnectionActions() {
   const orgApiBase = useOrganizationApiBase();
   const { selectedOrganization } = useOrganizationContext();
@@ -63,6 +91,13 @@ export function useCommunicationConnectionActions() {
     return queryClient.invalidateQueries({
       queryKey: communicationConnectionsKey.list({ organizationId, agentId }),
     });
+  }
+
+  function invalidateDiagnostics(agentId: string, connectionId: string) {
+    void queryClient.invalidateQueries({
+      queryKey: communicationDiagnosticsKey.detail(`${organizationId}:${connectionId}`),
+    });
+    return invalidate(agentId);
   }
 
   const createConnection = useMutation({
@@ -99,5 +134,29 @@ export function useCommunicationConnectionActions() {
     onSuccess: invalidate,
   });
 
-  return { createConnection, updateConnection, retireConnection };
+  const reconnectConnection = useMutation({
+    mutationFn: async ({ agentId, connectionId }: { agentId: string; connectionId: string }) => {
+      const response = await api.post<CommunicationReconnect>(
+        `${orgApiBase}/agents/${agentId}/connections/${connectionId}/reconnect`,
+        undefined,
+        { schema: CommunicationReconnectSchema },
+      );
+      return response.data;
+    },
+    onSuccess: (data) => invalidateDiagnostics(data.connection.agentId, data.connection.id),
+  });
+
+  const retryDelivery = useMutation({
+    mutationFn: async ({ agentId, connectionId, deliveryId }: { agentId: string; connectionId: string; deliveryId: string }) => {
+      const response = await api.post<CommunicationRetry>(
+        `${orgApiBase}/agents/${agentId}/connections/${connectionId}/deliveries/${deliveryId}/retry`,
+        undefined,
+        { schema: CommunicationRetrySchema },
+      );
+      return response.data;
+    },
+    onSuccess: (_data, variables) => invalidateDiagnostics(variables.agentId, variables.connectionId),
+  });
+
+  return { createConnection, updateConnection, retireConnection, reconnectConnection, retryDelivery };
 }

@@ -1,6 +1,7 @@
 import json
 import secrets
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from fastapi import HTTPException, status
@@ -10,20 +11,29 @@ from pydantic import ValidationError
 from api.core.config import Config
 from api.domains.agents.authorization import AgentAuthorization
 from api.domains.auth.models import CurrentUserContext
+from api.domains.communications.delivery_repository import (
+    CommunicationDeliveryRepository,
+    CommunicationDeliveryRetryError,
+)
 from api.domains.communications.models import (
     CommunicationConnection,
     CommunicationConnectionCreate,
     CommunicationConnectionRead,
     CommunicationConnectionUpdate,
+    CommunicationDiagnosticsRead,
+    CommunicationReconnectRead,
+    CommunicationRetryRead,
     ConnectionObservedStatus,
     PlatformCapability,
     PlatformDescriptorRead,
 )
+from api.domains.communications.operations import CommunicationOperationalRepository
 from api.domains.communications.plugins.registry import PlatformPluginRegistry
 from api.domains.communications.repository import (
     CommunicationConnectionConflictError,
     CommunicationConnectionRepository,
 )
+from api.domains.events import resolve_actor_identity
 from api.domains.rbac.catalog import PermissionKey
 from api.infrastructure.crypto import decrypt_token, encrypt_token
 
@@ -36,6 +46,8 @@ class CommunicationsService:
     authorization: AgentAuthorization
     repository: CommunicationConnectionRepository
     plugins: PlatformPluginRegistry
+    delivery_repository: CommunicationDeliveryRepository | None = None
+    operations: CommunicationOperationalRepository | None = None
 
     def list_platforms(self, context: CurrentUserContext) -> list[PlatformDescriptorRead]:
         context.require_current_user_organization()
@@ -152,6 +164,116 @@ class CommunicationsService:
         except CommunicationConnectionConflictError as exc:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
+    def get_diagnostics(
+        self,
+        agent_id: UUID,
+        connection_id: UUID,
+        context: CurrentUserContext,
+        *,
+        since: datetime | None = None,
+        until: datetime | None = None,
+        window_minutes: int | None = None,
+    ) -> CommunicationDiagnosticsRead:
+        self.authorization.require_visible(context, agent_id)
+        read_scope = self.authorization.authorization_scope(context, PermissionKey.AGENT_READ)
+        connection = self.repository.get_active_in_scope(connection_id, agent_id, read_scope)
+        if connection is None:
+            self._raise_not_found(connection_id)
+        assert connection is not None
+
+        window_end = self._as_utc(until) if until is not None else datetime.now(UTC)
+        default_minutes = window_minutes or 24 * 60
+        window_start = self._as_utc(since) if since is not None else window_end - timedelta(minutes=default_minutes)
+        if window_start > window_end:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Diagnostics window is invalid")
+        if window_end - window_start > timedelta(days=31):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Diagnostics window cannot exceed 31 days",
+            )
+        operations = self.operations or getattr(self.repository, "operations", None)
+        if operations is None:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Diagnostics are unavailable")
+        snapshot = operations.diagnostics_snapshot(
+            organization_id=connection.organization_id,
+            agent_id=agent_id,
+            connection_id=connection.id,
+            window_start=window_start,
+            window_end=window_end,
+        )
+        return CommunicationDiagnosticsRead(
+            connection=self._read(connection),
+            provider_connectivity=connection.observed_status,
+            end_to_end_health=operations.end_to_end_health(connection.observed_status, snapshot.delivery_counts),
+            pipeline=snapshot.pipeline,
+            delivery_counts=snapshot.delivery_counts,
+            queue_depth=snapshot.queue_depth,
+            oldest_queued_age_seconds=snapshot.oldest_queued_age_seconds,
+            latency=snapshot.latency,
+            recent_failures=snapshot.recent_failures,
+            latest_transitions=snapshot.latest_transitions,
+            window_start=window_start,
+            window_end=window_end,
+        )
+
+    def reconnect_connection(
+        self,
+        agent_id: UUID,
+        connection_id: UUID,
+        context: CurrentUserContext,
+    ) -> CommunicationReconnectRead:
+        agent = self.authorization.require_action(context, agent_id, PermissionKey.AGENT_UPDATE)
+        action_scope = self.authorization.authorization_scope(context, PermissionKey.AGENT_UPDATE)
+        connection = self.repository.get_active_in_scope(connection_id, agent_id, action_scope)
+        if connection is None:
+            self._raise_not_found(connection_id)
+        assert connection is not None
+        if not connection.enabled:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Enable the Communication Connection before reconnecting it",
+            )
+        updated = self.repository.request_reconnect(
+            connection_id,
+            actor=resolve_actor_identity(context, agent.organization_id),
+        )
+        if updated is None:
+            self._raise_not_found(connection_id)
+        assert updated is not None
+        return CommunicationReconnectRead(
+            connection=self._read(updated),
+            requested_at=datetime.now(UTC),
+        )
+
+    def retry_delivery(
+        self,
+        agent_id: UUID,
+        connection_id: UUID,
+        delivery_id: UUID,
+        context: CurrentUserContext,
+    ) -> CommunicationRetryRead:
+        agent = self.authorization.require_action(context, agent_id, PermissionKey.AGENT_UPDATE)
+        action_scope = self.authorization.authorization_scope(context, PermissionKey.AGENT_UPDATE)
+        if self.repository.get_active_in_scope(connection_id, agent_id, action_scope) is None:
+            self._raise_not_found(connection_id)
+        if self.delivery_repository is None:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Recovery is unavailable")
+        try:
+            delivery = self.delivery_repository.retry_dead_lettered(
+                delivery_id,
+                agent_id=agent.id,
+                connection_id=connection_id,
+                actor=resolve_actor_identity(context, agent.organization_id),
+            )
+        except CommunicationDeliveryRetryError as exc:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+        return CommunicationRetryRead(
+            delivery_id=delivery.id,
+            status=delivery.status,
+            attempt_count=delivery.attempt_count,
+            requested_at=datetime.now(UTC),
+        )
+
     def _require_plugin(self, key: str):
         try:
             return self.plugins.require(key)
@@ -199,3 +321,7 @@ class CommunicationsService:
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Communication Connection {connection_id} not found",
         )
+
+    @staticmethod
+    def _as_utc(value: datetime) -> datetime:
+        return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)

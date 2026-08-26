@@ -24,6 +24,7 @@ import {
   useCommunicationConnections,
   useCommunicationPlatforms,
 } from "@/features/communication-connections/hooks/use-communication-connections";
+import { CommunicationConnectionDiagnostics } from "@/features/communication-connections/components/communication-connection-diagnostics";
 import type { CommunicationConnection } from "@/features/communication-connections/schemas";
 
 import type { Agent } from "../schemas";
@@ -387,6 +388,7 @@ export function AgentChannelSettings({
                   <div className="mt-0.5 flex flex-wrap items-center gap-x-1.5 text-xs" style={{ color: "var(--ink-4)" }}>
                     <span>{connection.externalIdentity ? `Connected as ${connection.externalIdentity}` : "Not connected yet"}</span>
                     <span aria-hidden>·</span>
+                    <span>Provider:</span>
                     <StatusDot {...connectionStatus(connection)} />
                   </div>
                   {connection.lastErrorMessage && <div className="mt-2 text-xs" style={{ color: "var(--err)" }}>{connection.lastErrorMessage}</div>}
@@ -421,6 +423,11 @@ export function AgentChannelSettings({
                 </div>
               )}
             </div>
+            <CommunicationConnectionDiagnostics
+              agentId={agent.id}
+              connection={connection}
+              canEdit={canEdit}
+            />
             {editingConnection?.id === connection.id && (() => {
               const platform = platforms.data?.find((candidate) => candidate.key === connection.platformKey);
               return (

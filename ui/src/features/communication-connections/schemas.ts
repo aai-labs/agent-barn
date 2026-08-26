@@ -31,8 +31,74 @@ export const CommunicationConnectionSchema = z.object({
   updatedAt: z.string(),
 });
 
+export const CommunicationJournalEntrySchema = z.object({
+  id: z.string().uuid(),
+  connectionId: z.string().uuid(),
+  deliveryId: z.string().uuid().nullable(),
+  occurredAt: z.string(),
+  stage: z.string(),
+  disposition: z.string().nullable(),
+  attemptNumber: z.number().int().nonnegative(),
+  durationMs: z.number().nullable(),
+  errorCode: z.string().nullable(),
+  errorSummary: z.string().nullable(),
+});
+
+export const CommunicationDiagnosticsSchema = z.object({
+  connection: CommunicationConnectionSchema,
+  providerConnectivity: z.enum(["PENDING", "CONNECTING", "CONNECTED", "DEGRADED", "ERROR"]).nullable(),
+  endToEndHealth: z.enum(["healthy", "degraded", "no_data", "unavailable"]),
+  pipeline: z.object({
+    providerObserved: z.number().int().nonnegative(),
+    policyAdmitted: z.number().int().nonnegative(),
+    queued: z.number().int().nonnegative(),
+    agentClaimed: z.number().int().nonnegative(),
+    modelCompleted: z.number().int().nonnegative(),
+    replyQueued: z.number().int().nonnegative(),
+    providerDelivered: z.number().int().nonnegative(),
+    deadLettered: z.number().int().nonnegative(),
+  }),
+  deliveryCounts: z.object({
+    total: z.number().int().nonnegative(),
+    pending: z.number().int().nonnegative(),
+    processing: z.number().int().nonnegative(),
+    succeeded: z.number().int().nonnegative(),
+    deadLettered: z.number().int().nonnegative(),
+    cancelled: z.number().int().nonnegative(),
+    unavailable: z.number().int().nonnegative(),
+  }),
+  queueDepth: z.number().int().nonnegative(),
+  oldestQueuedAgeSeconds: z.number().nonnegative().nullable(),
+  latency: z.object({
+    sampleCount: z.number().int().nonnegative(),
+    averageMs: z.number().nonnegative().nullable(),
+    p50Ms: z.number().nonnegative().nullable(),
+    latestMs: z.number().nonnegative().nullable(),
+  }),
+  recentFailures: z.array(CommunicationJournalEntrySchema),
+  latestTransitions: z.array(CommunicationJournalEntrySchema),
+  windowStart: z.string(),
+  windowEnd: z.string(),
+});
+
+export const CommunicationReconnectSchema = z.object({
+  connection: CommunicationConnectionSchema,
+  requestedAt: z.string(),
+});
+
+export const CommunicationRetrySchema = z.object({
+  deliveryId: z.string().uuid(),
+  status: z.enum(["PENDING", "PROCESSING", "SUCCEEDED", "DEAD_LETTERED", "CANCELLED", "UNAVAILABLE"]),
+  attemptCount: z.number().int().nonnegative(),
+  requestedAt: z.string(),
+});
+
 export type CommunicationPlatform = z.infer<typeof CommunicationPlatformSchema>;
 export type CommunicationConnection = z.infer<typeof CommunicationConnectionSchema>;
+export type CommunicationDiagnostics = z.infer<typeof CommunicationDiagnosticsSchema>;
+export type CommunicationJournalEntry = z.infer<typeof CommunicationJournalEntrySchema>;
+export type CommunicationReconnect = z.infer<typeof CommunicationReconnectSchema>;
+export type CommunicationRetry = z.infer<typeof CommunicationRetrySchema>;
 
 export type CreateCommunicationConnection = {
   agentId: string;
