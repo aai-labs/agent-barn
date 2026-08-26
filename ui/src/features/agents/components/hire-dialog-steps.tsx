@@ -320,6 +320,56 @@ export function TemplateStep({
   );
 }
 
+function SkillCard({
+  skill,
+  selected,
+  status,
+  role,
+  onClick,
+}: {
+  skill: Skill | TemplateRequiredSkill;
+  selected: boolean;
+  status?: string;
+  role?: "checkbox";
+  onClick?: () => void;
+}) {
+  return (
+    <div
+      role={role}
+      aria-checked={role ? selected : undefined}
+      className="flex flex-col gap-1.5 p-4 rounded-2xl transition-colors min-h-[4.5rem]"
+      style={{
+        cursor: onClick ? "pointer" : "default",
+        border: selected ? "1.5px solid var(--ink)" : "1.5px solid var(--line)",
+        background: selected ? "var(--bg-soft)" : "var(--bg-elev)",
+      }}
+      onClick={onClick}
+    >
+      <div className="flex items-center justify-between gap-2">
+        <div
+          className="font-semibold text-[0.844rem]"
+          style={{ color: "var(--ink)" }}
+        >
+          {skill.name}
+        </div>
+        <SkillSourceBadge source={skill.source} />
+      </div>
+      {status && (
+        <div className="text-[0.6875rem]" style={{ color: "var(--ink-3)" }}>
+          {status}
+        </div>
+      )}
+      {skill.requiredProviders.length > 0 && (
+        <div className="text-[0.75rem]" style={{ color: "var(--ink-4)" }}>
+          {skill.requiredProviders
+            .map((p) => SKILL_PROVIDER_LABELS[p] ?? p)
+            .join(", ")}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // Free-text repeatable list of repo names — Enter/Add appends a chip, X removes one.
 export function SkillsStep({
   selectedSkillIds,
@@ -360,14 +410,14 @@ export function SkillsStep({
   const groupMemberIds = new Set(
     requiredGroups.flatMap((g) => g.members.map((m) => m.id)),
   );
-  // Required standalone skills come from the selected template and must remain
-  // visible even when they are not on the current paginated catalog page.
-  const orderedSkills = [
-    ...templateRequiredSkills,
-    ...skills.filter(
-      (s) => !requiredSkillIds.has(s.id) && !groupMemberIds.has(s.id),
-    ),
-  ];
+  // Template-required skills render in their own section so the distinction
+  // between required and optional skills is consistent across requirement types.
+  // Optional skills remain paginated through the catalog response.
+  const orderedSkills = skills.filter(
+    (s) => !requiredSkillIds.has(s.id) && !groupMemberIds.has(s.id),
+  );
+  const hasTemplateRequirements =
+    templateRequiredSkills.length > 0 || requiredGroups.length > 0;
 
   const chosenGroupSkills: TemplateRequiredSkill[] = requiredGroups.flatMap(
     (g) =>
@@ -497,65 +547,70 @@ export function SkillsStep({
         below as you select skills.
       </p>
 
-      {requiredGroups.map((group) => (
-        <div key={group.key} className="flex flex-col gap-2">
-          <div
-            className="text-[0.8125rem] font-medium"
+      {hasTemplateRequirements && (
+        <section
+          aria-labelledby="hire-required-skills-heading"
+          className="flex flex-col gap-3"
+        >
+          <h4
+            id="hire-required-skills-heading"
+            className="m-0 text-[0.8125rem] font-medium"
             style={{ color: "var(--ink)" }}
           >
-            Required by template — choose at least one
-          </div>
-          <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
-            {group.members.map((member) => {
-              const chosen = (groupChoices[group.key] ?? []).includes(
-                member.id,
-              );
-              return (
-                <div
-                  key={member.id}
-                  role="checkbox"
-                  aria-checked={chosen}
-                  className="flex flex-col gap-1.5 p-4 rounded-2xl transition-colors min-h-[4.5rem]"
-                  style={{
-                    cursor: "pointer",
-                    border: chosen
-                      ? "1.5px solid var(--ink)"
-                      : "1.5px solid var(--line)",
-                    background: chosen ? "var(--bg-soft)" : "var(--bg-elev)",
-                  }}
-                  onClick={() => toggleGroupMember(group.key, member)}
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <div
-                      className="font-semibold text-[0.844rem]"
-                      style={{ color: "var(--ink)" }}
-                    >
-                      {member.name}
-                    </div>
-                    <SkillSourceBadge source={member.source} />
-                  </div>
-                  <div
-                    className="text-[0.6875rem]"
-                    style={{ color: "var(--ink-3)" }}
-                  >
-                    {chosen ? "Selected" : "Required by template"}
-                  </div>
-                  {member.requiredProviders.length > 0 && (
-                    <div
-                      className="text-[0.75rem]"
-                      style={{ color: "var(--ink-4)" }}
-                    >
-                      {member.requiredProviders
-                        .map((p) => SKILL_PROVIDER_LABELS[p] ?? p)
-                        .join(", ")}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      ))}
+            Required by template
+          </h4>
+
+          {templateRequiredSkills.length > 0 && (
+            <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
+              {templateRequiredSkills.map((skill) => (
+                <SkillCard
+                  key={skill.id}
+                  skill={skill}
+                  selected
+                  status="Included automatically"
+                />
+              ))}
+            </div>
+          )}
+
+          {requiredGroups.map((group) => (
+            <div key={group.key} className="flex flex-col gap-2">
+              <h5
+                className="m-0 text-[0.8125rem] font-medium"
+                style={{ color: "var(--ink)" }}
+              >
+                Choose at least one
+              </h5>
+              <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
+                {group.members.map((member) => {
+                  const chosen = (groupChoices[group.key] ?? []).includes(
+                    member.id,
+                  );
+                  return (
+                    <SkillCard
+                      key={member.id}
+                      skill={member}
+                      selected={chosen}
+                      status={chosen ? "Selected" : "Required by template"}
+                      role="checkbox"
+                      onClick={() => toggleGroupMember(group.key, member)}
+                    />
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </section>
+      )}
+
+      {hasTemplateRequirements && (
+        <h4
+          className="m-0 text-[0.8125rem] font-medium"
+          style={{ color: "var(--ink)" }}
+        >
+          Additional skills
+        </h4>
+      )}
 
       <div
         className="flex items-center gap-2 px-3 py-2 rounded-xl"
@@ -606,59 +661,16 @@ export function SkillsStep({
             No skills match.
           </div>
         )}
-        {!isLoading && (skills.length > 0 || templateRequiredSkills.length > 0) && (
+        {!isLoading && orderedSkills.length > 0 && (
           <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
-            {orderedSkills.map((skill) => {
-              const isRequired = requiredSkillIds.has(skill.id);
-              const selected =
-                isRequired || selectedSkillIds.includes(skill.id);
-              const disabled = false;
-              return (
-                <div
-                  key={skill.id}
-                  className="flex flex-col gap-1.5 p-4 rounded-2xl transition-colors min-h-[4.5rem]"
-                  style={{
-                    cursor: isRequired || disabled ? "default" : "pointer",
-                    border: selected
-                      ? "1.5px solid var(--ink)"
-                      : "1.5px solid var(--line)",
-                    background: selected ? "var(--bg-soft)" : "var(--bg-elev)",
-                    opacity: disabled ? 0.5 : 1,
-                  }}
-                  onClick={() => {
-                    if (!isRequired && !disabled) toggleSkill(skill);
-                  }}
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <div
-                      className="font-semibold text-[0.844rem]"
-                      style={{ color: "var(--ink)" }}
-                    >
-                      {skill.name}
-                    </div>
-                    <SkillSourceBadge source={skill.source} />
-                  </div>
-                  {isRequired && (
-                    <div
-                      className="text-[0.6875rem]"
-                      style={{ color: "var(--ink-3)" }}
-                    >
-                      Required by template
-                    </div>
-                  )}
-                  {skill.requiredProviders.length > 0 && (
-                    <div
-                      className="text-[0.75rem]"
-                      style={{ color: "var(--ink-4)" }}
-                    >
-                      {skill.requiredProviders
-                        .map((p) => SKILL_PROVIDER_LABELS[p] ?? p)
-                        .join(", ")}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
+            {orderedSkills.map((skill) => (
+              <SkillCard
+                key={skill.id}
+                skill={skill}
+                selected={selectedSkillIds.includes(skill.id)}
+                onClick={() => toggleSkill(skill)}
+              />
+            ))}
           </div>
         )}
       </div>
