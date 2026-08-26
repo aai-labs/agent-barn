@@ -28,7 +28,6 @@ import { useOrganization } from "../hooks/use-organization";
 import { useOrganizationMembers } from "../hooks/use-organization-members";
 import { useRequireOrgManager } from "../hooks/use-require-org-manager";
 import { MembersSection } from "./members-section";
-import { AllowedModelsSection } from "./allowed-models-section";
 import { DetailStatTile } from "@/components/detail-stat-tile";
 
 import { organizationInitials } from "./organization-detail-utils";
@@ -169,10 +168,6 @@ export function OrganizationDetail({ organizationId }: { organizationId: string 
           organizationId={organizationId}
           organizationName={organization.name}
         />
-      </div>
-
-      <div style={{ borderTop: "1px solid var(--line)" }} className="mt-8 pt-8">
-        <AllowedModelsSection organization={organization} />
       </div>
 
       <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>

@@ -4,8 +4,6 @@ import { useCallback, useMemo, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import { parseAsString, parseAsStringEnum, useQueryStates } from "nuqs";
 
-import { Pagination } from "@/features/agents/components/pagination";
-
 import { useEventDeliveryEventTypes } from "../hooks/use-event-delivery-event-types";
 import { useEventDeliverySummary } from "../hooks/use-event-delivery-summary";
 import { useEventDeliveries } from "../hooks/use-event-deliveries";
@@ -14,7 +12,7 @@ import {
   EventDeliveryStatusSchema,
   type EventDeliveryStatus,
 } from "../schemas";
-import { EVENT_DELIVERIES_PAGE_SIZE, type EventDeliveryFilters } from "../utils";
+import type { EventDeliveryFilters } from "../utils";
 import { EventDeliveryFilterBar } from "./event-delivery-filter-bar";
 import { EventDeliveryList } from "./event-delivery-list";
 import { EventDeliverySummaryCards } from "./event-delivery-summary-cards";
@@ -33,7 +31,6 @@ const filterParsers = {
 export function EventDeliveryMonitorPage() {
   const [urlFilters, setUrlFilters] = useQueryStates(filterParsers, { history: "replace" });
   const [expandedId, setExpandedId] = useState<string | null>(null);
-  const [page, setPage] = useState(1);
 
   const filters: EventDeliveryFilters = useMemo(
     () => ({
@@ -59,14 +56,20 @@ export function EventDeliveryMonitorPage() {
 
   const summary = useEventDeliverySummary();
   const { eventTypes } = useEventDeliveryEventTypes();
-  const { data, isPending, error, refetch } = useEventDeliveries(filters, page);
-  const total = data?.total ?? 0;
-  const totalPages = Math.max(1, Math.ceil(total / EVENT_DELIVERIES_PAGE_SIZE));
+  const {
+    deliveries,
+    total,
+    hasNextPage,
+    fetchNextPage,
+    isFetchingNextPage,
+    isPending,
+    error,
+    refetch,
+  } = useEventDeliveries(filters);
 
   const handleChange = useCallback(
     (key: keyof typeof urlFilters, value: string | null) => {
       setUrlFilters({ [key]: value || null });
-      setPage(1);
     },
     [setUrlFilters],
   );
@@ -81,13 +84,11 @@ export function EventDeliveryMonitorPage() {
       from: null,
       to: null,
     });
-    setPage(1);
   }, [setUrlFilters]);
 
   const handleOrganizationChange = useCallback(
     (organization: { id: string; name: string } | null) => {
       setUrlFilters({ orgId: organization?.id ?? null, orgName: organization?.name ?? null });
-      setPage(1);
     },
     [setUrlFilters],
   );
@@ -95,7 +96,6 @@ export function EventDeliveryMonitorPage() {
   const handleDateRangeChange = useCallback(
     (from: string, to: string) => {
       setUrlFilters({ from: from || null, to: to || null });
-      setPage(1);
     },
     [setUrlFilters],
   );
@@ -103,7 +103,6 @@ export function EventDeliveryMonitorPage() {
   const handleSelectStatus = useCallback(
     (status: EventDeliveryStatus) => {
       setUrlFilters({ status: urlFilters.status === status ? null : status });
-      setPage(1);
     },
     [setUrlFilters, urlFilters.status],
   );
@@ -153,18 +152,17 @@ export function EventDeliveryMonitorPage() {
       </p>
 
       <EventDeliveryList
-        deliveries={data?.items ?? []}
+        deliveries={deliveries}
         isLoading={isPending}
         error={error}
         onRetry={() => void refetch()}
         expandedId={expandedId}
         onToggleExpand={(id) => setExpandedId((current) => (current === id ? null : id))}
         hasActiveFilters={hasActiveFilters}
+        hasNextPage={Boolean(hasNextPage)}
+        isFetchingNextPage={isFetchingNextPage}
+        onLoadMore={fetchNextPage}
       />
-
-      <div className="pt-4">
-        <Pagination page={page} totalPages={totalPages} onPageChange={setPage} />
-      </div>
     </div>
   );
 }

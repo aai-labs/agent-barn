@@ -29,7 +29,10 @@ export function useModels({ catalog = false }: { catalog?: boolean } = {}) {
       );
       return response.data;
     },
-    staleTime: 60 * 60_000,
+    // The response carries the Organization's resolved default. It must be refreshed
+    // whenever a picker mounts so “Use organization default” never describes a model
+    // another owner changed in a different session.
+    staleTime: 0,
   });
 
   const models = query.data?.length ? query.data : FALLBACK_MODELS;

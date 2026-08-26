@@ -100,6 +100,11 @@ export const mockAgent = {
   template_key: MOCK_TEMPLATE_KEY,
   template_version: 1,
   model: "litellm/gpt-5-mini",
+  model_source: "override",
+  effective_model: "litellm/gpt-5-mini",
+  // Started on what it resolves to, so the default fixture reports nothing pending.
+  running_model: "litellm/gpt-5-mini",
+  pending_model: "",
   approval_mode: "auto",
   secrets: [],
   skills: [],

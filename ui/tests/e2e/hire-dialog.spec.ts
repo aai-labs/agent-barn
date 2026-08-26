@@ -46,6 +46,7 @@ test.describe("Hire Dialog", () => {
     await expect(page.getByPlaceholder(/discord bot token/i)).toHaveCount(0);
 
     await chooseTemplate(page);
+    await expect(page.getByRole("radio", { name: /use organization default/i })).toBeChecked();
     const createRequest = page.waitForRequest(
       (request) => request.url().endsWith("/agents") && request.method() === "POST",
     );
@@ -60,7 +61,6 @@ test.describe("Hire Dialog", () => {
       agent_type: "hermes",
       template_key: "general-purpose",
       template_version: 1,
-      model: "litellm/openrouter/z-ai/glm-5.2",
       approval_mode: "auto",
     });
     await startRequest;

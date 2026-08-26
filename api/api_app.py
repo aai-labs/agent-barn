@@ -21,6 +21,7 @@ from api.core.metrics import (
     setup_http_metrics,
 )
 from api.core.utils import create_injector
+from api.domains.agent_settings.routes import agent_settings_router
 from api.domains.agents.routes import agents_router
 from api.domains.agents.service import AgentService
 from api.domains.auth.routes import auth_router
@@ -99,6 +100,7 @@ def create_app(injector: Injector | None = None):
     app_v1.mount("/api/v1", subapi)
 
     subapi.include_router(agents_router)
+    subapi.include_router(agent_settings_router)
     subapi.include_router(auth_router)
     subapi.include_router(conversations_router)
     subapi.include_router(communications_router)

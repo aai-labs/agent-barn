@@ -1,6 +1,8 @@
 "use client";
 
-import { SearchX, Waypoints } from "lucide-react";
+import { useEffect, useRef } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
+import { Loader2, SearchX, Waypoints } from "lucide-react";
 
 import { AppErrorState } from "@/components/app-error-state";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -11,6 +13,8 @@ import { EventDeliveryRow } from "./event-delivery-row";
 const ROW_GRID_HEADER =
   "grid-cols-[28px_130px_minmax(160px,1.3fr)_minmax(140px,1fr)_minmax(140px,1fr)_90px_70px]";
 
+const ESTIMATED_ROW_HEIGHT = 44;
+
 interface EventDeliveryListProps {
   deliveries: EventDelivery[];
   isLoading: boolean;
@@ -19,6 +23,9 @@ interface EventDeliveryListProps {
   expandedId: string | null;
   onToggleExpand: (id: string) => void;
   hasActiveFilters: boolean;
+  hasNextPage: boolean;
+  isFetchingNextPage: boolean;
+  onLoadMore: () => void;
 }
 
 export function EventDeliveryList({
@@ -29,7 +36,30 @@ export function EventDeliveryList({
   expandedId,
   onToggleExpand,
   hasActiveFilters,
+  hasNextPage,
+  isFetchingNextPage,
+  onLoadMore,
 }: EventDeliveryListProps) {
+  const parentRef = useRef<HTMLDivElement>(null);
+  const rowCount = hasNextPage ? deliveries.length + 1 : deliveries.length;
+
+  const rowVirtualizer = useVirtualizer({
+    count: rowCount,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => ESTIMATED_ROW_HEIGHT,
+    overscan: 8,
+  });
+
+  const virtualItems = rowVirtualizer.getVirtualItems();
+
+  useEffect(() => {
+    const lastItem = virtualItems[virtualItems.length - 1];
+    if (!lastItem) return;
+    if (lastItem.index >= deliveries.length - 1 && hasNextPage && !isFetchingNextPage) {
+      onLoadMore();
+    }
+  }, [virtualItems, hasNextPage, isFetchingNextPage, onLoadMore, deliveries.length]);
+
   if (isLoading) {
     return (
       <div data-testid="event-delivery-list-skeleton" className="af-card overflow-hidden" style={{ padding: 0 }}>
@@ -90,14 +120,44 @@ export function EventDeliveryList({
           </div>
         ))}
       </div>
-      {deliveries.map((delivery) => (
-        <EventDeliveryRow
-          key={delivery.id}
-          delivery={delivery}
-          expanded={expandedId === delivery.id}
-          onToggle={() => onToggleExpand(delivery.id)}
-        />
-      ))}
+      <div ref={parentRef} className="overflow-auto" style={{ maxHeight: "calc(100vh - 360px)" }}>
+        <div style={{ height: rowVirtualizer.getTotalSize(), position: "relative", width: "100%" }}>
+          {virtualItems.map((virtualRow) => {
+            const isLoaderRow = virtualRow.index > deliveries.length - 1;
+            const delivery = deliveries[virtualRow.index];
+
+            return (
+              <div
+                key={virtualRow.key}
+                data-index={virtualRow.index}
+                ref={rowVirtualizer.measureElement}
+                style={{
+                  position: "absolute",
+                  top: 0,
+                  left: 0,
+                  width: "100%",
+                  transform: `translateY(${virtualRow.start}px)`,
+                }}
+              >
+                {isLoaderRow ? (
+                  <div
+                    className="flex items-center justify-center gap-2 px-3 py-3 text-[13px]"
+                    style={{ borderTop: "1px solid var(--line)", color: "var(--ink-4)" }}
+                  >
+                    <Loader2 size={14} className="animate-spin" /> Loading more…
+                  </div>
+                ) : (
+                  <EventDeliveryRow
+                    delivery={delivery}
+                    expanded={expandedId === delivery.id}
+                    onToggle={() => onToggleExpand(delivery.id)}
+                  />
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
     </div>
   );
 }

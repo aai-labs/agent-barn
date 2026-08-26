@@ -166,3 +166,14 @@ export function isShareDraftDirty(
     return !original || original.accessRole.id !== row.roleId;
   });
 }
+
+/**
+ * The model an Agent is serving right now.
+ *
+ * Not the same as `effectiveModel`, which is what it *would* start on: a running pod
+ * reads its model once at container start, so a default change does not reach it until
+ * it restarts. Falls back to the resolved value when nothing is running.
+ */
+export function currentModelOf(agent: { runningModel: string; effectiveModel: string }) {
+  return agent.runningModel || agent.effectiveModel;
+}
