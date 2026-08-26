@@ -28,7 +28,7 @@ An Agent is the central execution aggregate. It connects organization tenancy, a
 - Template-required skills are validated as explicit assignments during agent create, update, and repin, and cannot be removed while currently required.
 - Each assigned skill is pinned to an exact version at apply time (mirroring template pins): `agent_skill.pinned_version`. Publishing a newer skill version never moves an existing pin, and an agent recovers from a bad version by re-pinning to an older one. Start mounts each assigned skill's pinned-version files; a version pinned by any agent is protected from skill version deletion.
 - Provider requirements for assigned skills are validated during agent create/update against the agent's resulting Agent Secrets. During Agent creation, the service live-validates the exact submitted manual and shared credentials before allocating a LiteLLM key or persisting the Agent; providers without a live validator still receive schema validation and remain eligible for on-demand validation. Later edits to skill metadata are not revalidated at Agent start.
-- Agents are soft-deleted; deletion also removes runtime resources and attempts to block the LiteLLM key.
+- Agents are soft-deleted; deletion also removes runtime resources, retires all owned Communication Connections (releasing their provider credential identities), and attempts to block the LiteLLM key.
 - Secret values are encrypted at rest and omitted from read DTOs. Google Workspace credentials are validated as one service-scoped OAuth payload and materialized through the gog CLI; retired per-service Google providers are not supported.
 
 ## State model
@@ -64,7 +64,7 @@ Start renders the pinned Template, decrypts Agent Secrets, selects Hermes/OpenCl
 
 ### Stop and delete
 
-Stop snapshots logs before removing active runtime resources and marking the Agent stopped. A successful transition to `STOPPED` emits `agent.stopped`; its email handler notifies the Agent Creator and users with Agent Owner access, de-duplicated by email. Delete removes runtime resources, soft-deletes the Agent, and preserves the record for history and cost attribution. Communication Connection retirement remains an independent Communications workflow.
+Stop snapshots logs before removing active runtime resources and marking the Agent stopped. A successful transition to `STOPPED` emits `agent.stopped`; its email handler notifies the Agent Creator and users with Agent Owner access, de-duplicated by email. Delete removes runtime resources, retires all owned Communication Connections (cancelling pending deliveries and releasing provider credential identities), soft-deletes the Agent, and preserves the record for history and cost attribution. Individual Communication Connection retirement remains an independent Communications workflow.
 
 ### Manage access
 

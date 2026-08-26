@@ -13,6 +13,11 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
 
 ## Changes
 
+### 2026-08-26 — Agent retirement releases Connection credentials — PR pending
+
+- Delivered: Retiring (soft-deleting) an Agent now retires all owned Communication Connections in the same transaction, cancels pending and processing deliveries, clears credential identity material, and releases platform credentials for reassignment. Historical Conversation Messages remain preserved.
+- Changed: Agent-owned Connection cleanup is explicit because a soft delete does not trigger the database foreign-key cascade.
+
 ### 2026-08-25 — Provider setup guidance — PR pending
 
 - Changed: Platform descriptors now expose optional provider-owned setup hints in the schema-driven Connection form. Slack, Discord, and Telegram hints now document credential locations/formats, required scopes or Gateway intents, bot membership/visibility requirements, and provider-specific polling or privacy setup.

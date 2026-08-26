@@ -20,7 +20,12 @@ from api.domains.agents.models import (
     AgentStatus,
     SecretProvider,
 )
-from api.domains.communications.models import CommunicationConnection, CommunicationPlatform
+from api.domains.communications.models import (
+    CommunicationConnection,
+    CommunicationDelivery,
+    CommunicationDeliveryStatus,
+    CommunicationPlatform,
+)
 from api.domains.events import ActorIdentity, ActorIdentityType, EventDelivery, SubjectIdentity, SubjectIdentityType
 from api.domains.events.catalog import (
     AGENT_ACCESS_GRANTED,
@@ -837,9 +842,52 @@ class AgentRepository:
             persisted = session.exec(select(Agent).where(col(Agent.id) == agent.id).with_for_update()).first()
             if persisted is None:
                 return AgentLifecycleEventResult(agent=agent, delivery_ids=[])
-            persisted.deleted_at = datetime.now(UTC)
+            now = datetime.now(UTC)
+            persisted.deleted_at = now
             session.add(persisted)
             session.flush()
+            # Agent deletion is a soft delete, so the database FK cascade does
+            # not retire the Agent-owned Communication Connections. Release
+            # their provider credentials in this same transaction so retired
+            # Agents cannot keep global platform identities reserved.
+            session.exec(
+                sa.update(CommunicationConnection)
+                .where(
+                    col(CommunicationConnection.agent_id) == persisted.id,
+                    col(CommunicationConnection.organization_id) == persisted.organization_id,
+                    col(CommunicationConnection.retired_at).is_(None),
+                )
+                .values(
+                    enabled=False,
+                    observed_status=None,
+                    credentials_encrypted="",
+                    driver_key_encrypted="",
+                    credential_fingerprint=None,
+                    credential_scope_key=None,
+                    ingress_lease_owner=None,
+                    ingress_lease_expires_at=None,
+                    retired_at=now,
+                    updated_at=now,
+                    revision=col(CommunicationConnection.revision) + 1,
+                )
+            )
+            session.exec(
+                sa.update(CommunicationDelivery)
+                .where(
+                    col(CommunicationDelivery.agent_id) == persisted.id,
+                    col(CommunicationDelivery.organization_id) == persisted.organization_id,
+                    col(CommunicationDelivery.status).in_(
+                        [CommunicationDeliveryStatus.PENDING, CommunicationDeliveryStatus.PROCESSING]
+                    ),
+                )
+                .values(
+                    status=CommunicationDeliveryStatus.CANCELLED,
+                    completed_at=now,
+                    lease_expires_at=None,
+                    last_error_code="CONNECTION_RETIRED",
+                    last_error_message="Communication Connection was retired",
+                )
+            )
             event = EVENT_REGISTRY.build_event(
                 event_name=AGENT_DELETED,
                 schema_version=1,

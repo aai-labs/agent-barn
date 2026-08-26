@@ -4,6 +4,7 @@ from fastapi import status
 from hamcrest import all_of, assert_that, contains_inanyorder, contains_string, equal_to, has_entries, has_key, not_
 from starlette.testclient import TestClient
 
+from api.domains.agents.models import AgentType
 from api.domains.communications.repository import CommunicationConnectionRepository
 from api.domains.rbac.catalog import AGENT_VIEWER_ROLE_ID
 from api.domains.users.organization_users.models import OrganizationRole
@@ -17,6 +18,9 @@ from api.tests.core.modules import (
 )
 from api.tests.steps.agent import (
     TEST_ENCRYPTION_KEY,
+    TEST_SLACK_APP_TOKEN,
+    TEST_SLACK_BOT_TOKEN,
+    TEST_TELEGRAM_BOT_TOKEN,
     MockK8sModule,
     MockLiteLLMModule,
     there_is_agent_access,
@@ -50,13 +54,38 @@ _GIVEN = [
     there_is_an_agent(),
 ]
 
+_GIVEN_WITH_HERMES_AGENT = [*_GIVEN[:-1], there_is_an_agent(agent_type=AgentType.HERMES)]
+
 
 def _auth(context) -> dict[str, str]:
     return {"Authorization": f"Bearer {context.access_token}"}
 
 
+def _base_for_agent(context, agent_id: UUID) -> str:
+    return f"/api/v1/organizations/{context.organization.id}/agents/{agent_id}/connections"
+
+
 def _base(context) -> str:
-    return f"/api/v1/organizations/{context.organization.id}/agents/{context.agent.id}/connections"
+    return _base_for_agent(context, context.agent.id)
+
+
+def _slack_payload() -> dict:
+    return {
+        "platform_key": "slack",
+        "display_name": "Slack",
+        "credentials": {
+            "bot_token": TEST_SLACK_BOT_TOKEN,
+            "app_token": TEST_SLACK_APP_TOKEN,
+        },
+    }
+
+
+def _telegram_payload() -> dict:
+    return {
+        "platform_key": "telegram",
+        "display_name": "Telegram",
+        "credentials": {"bot_token": TEST_TELEGRAM_BOT_TOKEN},
+    }
 
 
 def _discord_payload(name: str = "Community Discord", bot_token: str = "token-one") -> dict:
@@ -197,6 +226,48 @@ def test_agent_can_have_multiple_connections_for_the_same_platform() -> None:
             assert_that(len(listed.json()), equal_to(2))
             assert_that(first.json(), has_entries(platform_key="discord", display_name="Community Discord", revision=1))
             assert_that(first.json(), not_(has_key("credentials")))
+
+
+def test_retiring_agent_releases_all_platform_credentials() -> None:
+    with given(_GIVEN_WITH_HERMES_AGENT) as context:
+        client: TestClient = context.client
+        retired_agent_id = context.agent.id
+        retired_agent_connections = _base_for_agent(context, retired_agent_id)
+
+        with when("I retire the Hermes Agent and assign its tokens to OpenClaw"):
+            slack = client.post(
+                retired_agent_connections,
+                json=_slack_payload(),
+                headers=_auth(context),
+            )
+            telegram = client.post(
+                retired_agent_connections,
+                json=_telegram_payload(),
+                headers=_auth(context),
+            )
+            retired = client.delete(
+                f"/api/v1/organizations/{context.organization.id}/agents/{retired_agent_id}",
+                headers=_auth(context),
+            )
+            there_is_an_agent(name="OpenClaw Agent", agent_type=AgentType.OPENCLAW)(context)
+            openclaw_connections = _base(context)
+            reassigned_slack = client.post(
+                openclaw_connections,
+                json=_slack_payload(),
+                headers=_auth(context),
+            )
+            reassigned_telegram = client.post(
+                openclaw_connections,
+                json=_telegram_payload(),
+                headers=_auth(context),
+            )
+
+        with then("retiring the Agent releases both platform tokens"):
+            assert_that(slack.status_code, equal_to(status.HTTP_201_CREATED))
+            assert_that(telegram.status_code, equal_to(status.HTTP_201_CREATED))
+            assert_that(retired.status_code, equal_to(status.HTTP_204_NO_CONTENT))
+            assert_that(reassigned_slack.status_code, equal_to(status.HTTP_201_CREATED))
+            assert_that(reassigned_telegram.status_code, equal_to(status.HTTP_201_CREATED))
 
 
 def test_duplicate_active_connection_name_returns_conflict() -> None:
