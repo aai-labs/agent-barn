@@ -19,4 +19,4 @@ fi
 if [ -f /app/config/gog-setup.sh ]; then
   sh /app/config/gog-setup.sh || echo "[gog] setup failed; continuing"
 fi
-exec openclaw gateway --allow-unconfigured --port 8080
+exec openclaw gateway --allow-unconfigured

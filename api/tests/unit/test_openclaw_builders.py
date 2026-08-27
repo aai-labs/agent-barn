@@ -7,6 +7,7 @@ from api.domains.agents.builders import (
     build_openclaw_gateway_config,
     build_secret_runtime,
 )
+from api.domains.agents.builders.openclaw import OPENCLAW_GATEWAY_PORT
 
 _AGENT_ID = UUID("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
 _ORG_ID = UUID("11111111-2222-3333-4444-555555555555")
@@ -72,9 +73,24 @@ def test_deployment_runs_one_headless_runtime_container() -> None:
     assert deployment.spec.template.spec.containers[0].name == "agent"
 
 
-def test_openclaw_gateway_port_is_pinned_to_the_adapter_target() -> None:
-    # The in-pod communications adapter posts to RUNTIME_API_URL (127.0.0.1:8080).
-    # Without an explicit --port the gateway binds its own default, the adapter
-    # gets ECONNREFUSED, and every inbound delivery dead-letters while the pod
-    # still reports healthy.
-    assert "--port 8080" in START_SH
+def test_adapter_targets_the_port_the_gateway_actually_binds() -> None:
+    secret = build_secret_runtime(
+        _AGENT_ID,
+        _ORG_ID,
+        _NS,
+        runtime_api_key="runtime-key",
+        litellm_api_key="key",
+        litellm_base_url="http://litellm:4000",
+    )
+
+    # A mismatch here is silent: the pod reports healthy, chat history fills in,
+    # and every inbound delivery dead-letters with ECONNREFUSED because the
+    # adapter posts to a port nothing is listening on.
+    assert secret.string_data["RUNTIME_API_URL"] == f"http://127.0.0.1:{OPENCLAW_GATEWAY_PORT}"
+
+
+def test_start_sh_does_not_move_the_gateway_off_its_default_port() -> None:
+    # `openclaw health` resolves the default port with no override flag, so
+    # pinning the gateway elsewhere breaks the health probe and leaves every
+    # agent stuck reporting "initializing".
+    assert "--port" not in START_SH
