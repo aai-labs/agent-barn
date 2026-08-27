@@ -28,6 +28,8 @@ test.describe("Settings · Templates", () => {
     await dataSupport.auth.interceptRefreshRequest();
     await dataSupport.users.interceptGetUserContextRequest();
     await dataSupport.users.interceptGetOrganizationsRequest();
+    // The Settings page opens on the Agents tab.
+    await dataSupport.organizations.interceptAgentSettings();
     await dataSupport.agents.interceptGetTemplatesRequest();
     await dataSupport.agents.interceptGetTemplateVersionsRequest();
     await dataSupport.skills.interceptGetSkillsRequest();

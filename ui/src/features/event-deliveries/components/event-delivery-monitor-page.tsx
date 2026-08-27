@@ -4,8 +4,6 @@ import { useCallback, useMemo, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import { parseAsString, parseAsStringEnum, useQueryStates } from "nuqs";
 
-import { Pagination } from "@/features/agents/components/pagination";
-
 import { useEventDeliveryEventTypes } from "../hooks/use-event-delivery-event-types";
 import { useEventDeliverySummary } from "../hooks/use-event-delivery-summary";
 import { useEventDeliveries } from "../hooks/use-event-deliveries";
@@ -14,7 +12,7 @@ import {
   EventDeliveryStatusSchema,
   type EventDeliveryStatus,
 } from "../schemas";
-import { EVENT_DELIVERIES_PAGE_SIZE, type EventDeliveryFilters } from "../utils";
+import { type EventDeliveryFilters } from "../utils";
 import { EventDeliveryFilterBar } from "./event-delivery-filter-bar";
 import { EventDeliveryList } from "./event-delivery-list";
 import { EventDeliverySummaryCards } from "./event-delivery-summary-cards";
@@ -27,13 +25,16 @@ const filterParsers = {
   eventName: parseAsString,
   from: parseAsString.withDefault(""),
   to: parseAsString.withDefault(""),
-  sort: parseAsStringEnum(EventDeliverySortDirectionSchema.options).withDefault("NEWEST_FIRST"),
+  sort: parseAsStringEnum(EventDeliverySortDirectionSchema.options).withDefault(
+    "NEWEST_FIRST",
+  ),
 };
 
 export function EventDeliveryMonitorPage() {
-  const [urlFilters, setUrlFilters] = useQueryStates(filterParsers, { history: "replace" });
+  const [urlFilters, setUrlFilters] = useQueryStates(filterParsers, {
+    history: "replace",
+  });
   const [expandedId, setExpandedId] = useState<string | null>(null);
-  const [page, setPage] = useState(1);
 
   const filters: EventDeliveryFilters = useMemo(
     () => ({
@@ -59,14 +60,21 @@ export function EventDeliveryMonitorPage() {
 
   const summary = useEventDeliverySummary();
   const { eventTypes } = useEventDeliveryEventTypes();
-  const { data, isPending, error, refetch } = useEventDeliveries(filters, page);
-  const total = data?.total ?? 0;
-  const totalPages = Math.max(1, Math.ceil(total / EVENT_DELIVERIES_PAGE_SIZE));
+  const {
+    deliveries,
+    total,
+    isLoading,
+    isFetchingNextPage,
+    isFetchingNextPageError,
+    hasNextPage,
+    fetchNextPage,
+    error,
+    refetch,
+  } = useEventDeliveries(filters);
 
   const handleChange = useCallback(
     (key: keyof typeof urlFilters, value: string | null) => {
       setUrlFilters({ [key]: value || null });
-      setPage(1);
     },
     [setUrlFilters],
   );
@@ -81,13 +89,14 @@ export function EventDeliveryMonitorPage() {
       from: null,
       to: null,
     });
-    setPage(1);
   }, [setUrlFilters]);
 
   const handleOrganizationChange = useCallback(
     (organization: { id: string; name: string } | null) => {
-      setUrlFilters({ orgId: organization?.id ?? null, orgName: organization?.name ?? null });
-      setPage(1);
+      setUrlFilters({
+        orgId: organization?.id ?? null,
+        orgName: organization?.name ?? null,
+      });
     },
     [setUrlFilters],
   );
@@ -95,7 +104,6 @@ export function EventDeliveryMonitorPage() {
   const handleDateRangeChange = useCallback(
     (from: string, to: string) => {
       setUrlFilters({ from: from || null, to: to || null });
-      setPage(1);
     },
     [setUrlFilters],
   );
@@ -103,7 +111,6 @@ export function EventDeliveryMonitorPage() {
   const handleSelectStatus = useCallback(
     (status: EventDeliveryStatus) => {
       setUrlFilters({ status: urlFilters.status === status ? null : status });
-      setPage(1);
     },
     [setUrlFilters, urlFilters.status],
   );
@@ -112,6 +119,7 @@ export function EventDeliveryMonitorPage() {
     setExpandedId(null);
     void summary.refetch();
     void refetch();
+    window.scrollTo({ top: 0 });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [summary.refetch, refetch]);
 
@@ -119,7 +127,10 @@ export function EventDeliveryMonitorPage() {
     <div className="max-w-[1200px] mx-auto px-10 pt-9 pb-24">
       <div className="flex flex-wrap items-start justify-between gap-3 mb-7">
         <div>
-          <h1 className="text-[28px] font-semibold tracking-tight m-0 mb-1" style={{ color: "var(--ink)" }}>
+          <h1
+            className="text-[28px] font-semibold tracking-tight m-0 mb-1"
+            style={{ color: "var(--ink)" }}
+          >
             Event Delivery Monitor
           </h1>
           <p className="text-[14px] m-0" style={{ color: "var(--ink-3)" }}>
@@ -153,18 +164,29 @@ export function EventDeliveryMonitorPage() {
       </p>
 
       <EventDeliveryList
-        deliveries={data?.items ?? []}
-        isLoading={isPending}
-        error={error}
+        deliveries={deliveries}
+        isLoading={isLoading}
+        error={isFetchingNextPageError ? undefined : error}
         onRetry={() => void refetch()}
         expandedId={expandedId}
-        onToggleExpand={(id) => setExpandedId((current) => (current === id ? null : id))}
+        onToggleExpand={(id) =>
+          setExpandedId((current) => (current === id ? null : id))
+        }
         hasActiveFilters={hasActiveFilters}
+        hasNextPage={hasNextPage}
+        fetchNextPage={() => void fetchNextPage()}
+        isFetchingNextPage={isFetchingNextPage}
+        isFetchingNextPageError={isFetchingNextPageError}
       />
 
-      <div className="pt-4">
-        <Pagination page={page} totalPages={totalPages} onPageChange={setPage} />
-      </div>
+      {isFetchingNextPageError && (
+        <p
+          className="py-4 text-center text-[13px]"
+          style={{ color: "var(--err)" }}
+        >
+          Unable to load more deliveries. <button type="button" className="underline" onClick={() => void fetchNextPage()}>Try again</button>
+        </p>
+      )}
     </div>
   );
 }

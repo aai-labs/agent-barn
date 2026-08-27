@@ -1,6 +1,6 @@
 # Contributing to Agent Barn
 
-Thanks for considering a contribution. Agent Barn is an open-source control plane for AI agents, maintained by [AAI Labs UAB](https://aai-labs.com). The repository is `aai-labs/agent-farm`.
+Thanks for considering a contribution. Agent Barn is an open-source control plane for AI agents, maintained by [AAI Labs UAB](https://aai-labs.com). The repository is `aai-labs/agent-barn`.
 
 This document covers how to report problems, propose changes, and get a pull request merged.
 
@@ -29,25 +29,25 @@ This document covers how to report problems, propose changes, and get a pull req
 
 You do not need to write code to be useful here.
 
-| Contribution | Where it goes |
-|---|---|
-| Bug report | GitHub Issues |
-| Feature proposal | GitHub Discussions first, then an Issue |
-| Documentation fix | Pull request |
-| New agent template or skill | Pull request, see [below](#contributing-a-template-or-skill) |
-| Answering questions from other users | Discord `#support` |
-| Triaging existing issues | GitHub Issues |
+| Contribution                         | Where it goes                                                |
+| ------------------------------------ | ------------------------------------------------------------ |
+| Bug report                           | GitHub Issues                                                |
+| Feature proposal                     | GitHub Discussions first, then an Issue                      |
+| Documentation fix                    | Pull request                                                 |
+| New agent template or skill          | Pull request, see [below](#contributing-a-template-or-skill) |
+| Answering questions from other users | Discord `#support`                                           |
+| Triaging existing issues             | GitHub Issues                                                |
 
 ## Where to ask questions
 
 Do not open an issue to ask a question.
 
-| What | Where |
-|---|---|
-| Setup help, config questions, "is this a bug?" | Discord `#support` |
-| Confirmed bugs | GitHub Issues |
-| Feature requests and design debate | GitHub Discussions |
-| Security vulnerabilities | See [Security](#security). Never post publicly |
+| What                                           | Where                                          |
+| ---------------------------------------------- | ---------------------------------------------- |
+| Setup help, config questions, "is this a bug?" | Discord `#support`                             |
+| Confirmed bugs                                 | GitHub Issues                                  |
+| Feature requests and design debate             | GitHub Discussions                             |
+| Security vulnerabilities                       | See [Security](#security). Never post publicly |
 
 A maintainer responds to every Discord `#support` post within 3 business days.
 
@@ -87,22 +87,22 @@ Small, self-contained changes (a bug fix, a docs correction, a missing config va
 
 **Prerequisites**
 
-| Tool | Version |
-|---|---|
-| Python | 3.14, as pinned in `api/.python-version` |
-| [uv](https://github.com/astral-sh/uv) | current |
-| Node.js | 24 in CI, 20+ works locally |
-| [pnpm](https://pnpm.io/) | 11.17, as pinned by `packageManager` in `ui/package.json` |
-| Docker | with Compose v2 |
-| Make | any |
+| Tool                                  | Version                                                   |
+| ------------------------------------- | --------------------------------------------------------- |
+| Python                                | 3.14, as pinned in `api/.python-version`                  |
+| [uv](https://github.com/astral-sh/uv) | current                                                   |
+| Node.js                               | 24 in CI, 20+ works locally                               |
+| [pnpm](https://pnpm.io/)              | 11.17, as pinned by `packageManager` in `ui/package.json` |
+| Docker                                | with Compose v2                                           |
+| Make                                  | any                                                       |
 
 Only needed if you touch deployment: `kubectl`, Helm 3, Helmfile 0.171+, and the `helm-diff` plugin.
 
 **Get running**
 
 ```bash
-git clone https://github.com/aai-labs/agent-farm.git
-cd agent-farm
+git clone https://github.com/aai-labs/agent-barn.git
+cd agent-barn
 
 make setup          # cd api && uv sync; cd ui && pnpm install; copies .env.spec to .env
 # fill in the required values in .env
@@ -118,20 +118,20 @@ Prefer running on the host? Each target below watches its own source, so run the
 
 **Common commands**
 
-| Command | What it does |
-|---|---|
-| `make dev-api` | API on `:8000`, hot reload |
-| `make dev-ui` | UI on `:3000`, hot reload |
-| `make dev-worker` | Dramatiq worker, hot reload; needs Redis |
-| `make up` / `make down` / `make restart` | Full Docker stack, foreground |
-| `make logs` / `make worker-logs` | Tail logs |
-| `make clean` | Tear down the stack and its volumes |
-| `make migrate` / `make rollback` / `make makemigrations` / `make merge-heads` | Alembic |
-| `make check-api` / `make fix-api` | Ruff check, format check, and `ty` type check / autofix |
-| `make lint-ui` / `make check-ui` | ESLint / TypeScript |
-| `make test-api` / `make test-api-k8s` / `make test-ui` | Test suites |
-| `make coverage` | API coverage report |
-| `make reconcile` | One-shot repair pass for stuck event deliveries |
+| Command                                                                       | What it does                                            |
+| ----------------------------------------------------------------------------- | ------------------------------------------------------- |
+| `make dev-api`                                                                | API on `:8000`, hot reload                              |
+| `make dev-ui`                                                                 | UI on `:3000`, hot reload                               |
+| `make dev-worker`                                                             | Dramatiq worker, hot reload; needs Redis                |
+| `make up` / `make down` / `make restart`                                      | Full Docker stack, foreground                           |
+| `make logs` / `make worker-logs`                                              | Tail logs                                               |
+| `make clean`                                                                  | Tear down the stack and its volumes                     |
+| `make migrate` / `make rollback` / `make makemigrations` / `make merge-heads` | Alembic                                                 |
+| `make check-api` / `make fix-api`                                             | Ruff check, format check, and `ty` type check / autofix |
+| `make lint-ui` / `make check-ui`                                              | ESLint / TypeScript                                     |
+| `make test-api` / `make test-api-k8s` / `make test-ui`                        | Test suites                                             |
+| `make coverage`                                                               | API coverage report                                     |
+| `make reconcile`                                                              | One-shot repair pass for stuck event deliveries         |
 
 If `make setup` fails, post in `#support` with the output. Setup breakage is our bug, not yours.
 
@@ -187,9 +187,9 @@ Maintainers also use `AF-<number>-<slug>` for branches tracking an internal tick
 
 **Good first issues**
 
-Issues tagged [`good first issue`](https://github.com/aai-labs/agent-farm/labels/good%20first%20issue) are scoped small and have enough context to start without asking. If one is unclear, say so in the issue and we will improve it.
+Issues tagged [`good first issue`](https://github.com/aai-labs/agent-barn/labels/good%20first%20issue) are scoped small and have enough context to start without asking. If one is unclear, say so in the issue and we will improve it.
 
-Issues tagged [`help wanted`](https://github.com/aai-labs/agent-farm/labels/help%20wanted) are larger and unclaimed.
+Issues tagged [`help wanted`](https://github.com/aai-labs/agent-barn/labels/help%20wanted) are larger and unclaimed.
 
 ## Commit messages
 
@@ -203,15 +203,15 @@ Use [Conventional Commits](https://www.conventionalcommits.org/) for new work. H
 <optional footer>
 ```
 
-| Type | Use |
-|---|---|
-| `feat` | New functionality |
-| `fix` | Bug fix |
-| `docs` | Documentation only |
-| `test` | Tests only |
-| `refactor` | No behaviour change |
-| `perf` | Performance |
-| `chore` | Tooling, dependencies, CI |
+| Type       | Use                                    |
+| ---------- | -------------------------------------- |
+| `feat`     | New functionality                      |
+| `fix`      | Bug fix                                |
+| `docs`     | Documentation only                     |
+| `test`     | Tests only                             |
+| `refactor` | No behaviour change                    |
+| `perf`     | Performance                            |
+| `chore`    | Tooling, dependencies, CI              |
 | `breaking` | Use `!` after type, e.g. `feat(api)!:` |
 
 Examples:
@@ -253,12 +253,12 @@ Draft PRs are welcome. Open one early if you want direction before finishing.
 
 ## Review process
 
-| Stage | What happens | Typical time |
-|---|---|---|
-| CI | Lint, type checks, tests, and image builds run for changed components | Minutes |
-| First review | A maintainer reads it and responds | 3 business days |
-| Iteration | You address comments, push updates | Yours |
-| Approval and merge | Squash merge into `staging` | Same day as approval |
+| Stage              | What happens                                                          | Typical time         |
+| ------------------ | --------------------------------------------------------------------- | -------------------- |
+| CI                 | Lint, type checks, tests, and image builds run for changed components | Minutes              |
+| First review       | A maintainer reads it and responds                                    | 3 business days      |
+| Iteration          | You address comments, push updates                                    | Yours                |
+| Approval and merge | Squash merge into `staging`                                           | Same day as approval |
 
 Reviewers check the routed documentation as well as the diff: a changed invariant, boundary, state model, or operational contract has to move its authoritative document in the same PR. Any change that reads or writes an agent or a subordinate resource is also checked against [`docs/features/rbac/IMPLEMENTATION-BRIEF.md`](docs/features/rbac/IMPLEMENTATION-BRIEF.md), even when the PR is not framed as an RBAC change.
 
@@ -282,12 +282,12 @@ Full rules: [`docs/guidelines/code.md`](docs/guidelines/code.md) for the API, [`
 
 ## Tests
 
-| Type | Location | Run with |
-|---|---|---|
-| API unit | `api/tests/unit/` | `make test-api` |
-| API integration | `api/tests/integration/` | `make test-api` |
+| Type                   | Location                                          | Run with            |
+| ---------------------- | ------------------------------------------------- | ------------------- |
+| API unit               | `api/tests/unit/`                                 | `make test-api`     |
+| API integration        | `api/tests/integration/`                          | `make test-api`     |
 | Kubernetes integration | `api/tests/integration/test_kubernetes_client.py` | `make test-api-k8s` |
-| Browser end-to-end | `ui/tests/e2e/` | `make test-ui` |
+| Browser end-to-end     | `ui/tests/e2e/`                                   | `make test-ui`      |
 
 Integration tests run the real FastAPI app against a migrated PostgreSQL from Testcontainers, so Docker has to be running. They follow a Given/When/Then style with PyHamcrest matchers rather than bare `assert`. Playwright specs live in `ui/tests/e2e/`, with selectors in `ui/tests/pages/` and mocks in `ui/tests/pages/data-support/`.
 
@@ -307,9 +307,9 @@ Docs-only PRs are welcome and get reviewed fast.
 
 **An agent template** is a directory under `api/domains/templates/predefined/seeds/`, named for its stable key, containing:
 
-| File | Purpose |
-|---|---|
-| `settings.yaml` | `name`, `description`, and `required_skills` (a bare skill name, or `any_of:` for an either/or group) |
+| File               | Purpose                                                                                                        |
+| ------------------ | -------------------------------------------------------------------------------------------------------------- |
+| `settings.yaml`    | `name`, `description`, and `required_skills` (a bare skill name, or `any_of:` for an either/or group)          |
 | Markdown artifacts | Any of `soul.md`, `identity.md`, `user.md`, `tools.md`, `agents.md`, `boot.md`, `bootstrap.md`, `heartbeat.md` |
 
 Anything you omit falls back to the shared file in `seeds/_defaults/`, so a focused template only ships the artifacts that differ. These files feed the one-time bootstrap of a platform lineage; once it exists in the database, further versions are authored through the admin draft flow, not by editing the seed. Read [`docs/features/templates-and-skills.md`](docs/features/templates-and-skills.md) and the [file-based bootstrap ADR](docs/adr/2026-08-03-platform-template-file-based-bootstrap.md) first.
@@ -318,14 +318,14 @@ Anything you omit falls back to the shared file in `seeds/_defaults/`, so a focu
 
 What we look for:
 
-| Requirement | Detail |
-|---|---|
-| Scoped credentials | Read-only by default. Document every permission the provider token needs |
-| Credential validation | A validator that fails clearly on a bad or under-scoped credential |
-| Error handling | Fail loudly and clearly. Never fail silently |
-| Rate limit handling | Respect upstream limits, back off |
-| Tests | Unit coverage under `api/tests/unit/`, upstream mocked, no live API calls in CI |
-| Docs | Auth setup, config options, known limitations |
+| Requirement           | Detail                                                                          |
+| --------------------- | ------------------------------------------------------------------------------- |
+| Scoped credentials    | Read-only by default. Document every permission the provider token needs        |
+| Credential validation | A validator that fails clearly on a bad or under-scoped credential              |
+| Error handling        | Fail loudly and clearly. Never fail silently                                    |
+| Rate limit handling   | Respect upstream limits, back off                                               |
+| Tests                 | Unit coverage under `api/tests/unit/`, upstream mocked, no live API calls in CI |
+| Docs                  | Auth setup, config options, known limitations                                   |
 
 Before building a skill for a third-party service, open a Discussion. We may already have one in progress, and integrations carry ongoing maintenance cost that we need to plan for.
 
@@ -333,7 +333,7 @@ Before building a skill for a third-party service, open a Discussion. We may alr
 
 **Do not open a public issue for a security vulnerability.**
 
-Email [tadas@aai-labs.com](mailto:tadas@aai-labs.com), or use [GitHub private vulnerability reporting](https://github.com/aai-labs/agent-farm/security/advisories/new) on this repo. Both reach the same people.
+Email [tadas@aai-labs.com](mailto:tadas@aai-labs.com), or use [GitHub private vulnerability reporting](https://github.com/aai-labs/agent-barn/security/advisories/new) on this repo. Both reach the same people.
 
 Include:
 

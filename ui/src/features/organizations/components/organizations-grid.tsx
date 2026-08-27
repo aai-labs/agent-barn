@@ -6,6 +6,7 @@ import { Building, Loader2, UserRound } from "lucide-react";
 
 import { AppErrorState } from "@/components/app-error-state";
 import { ListPageHeader } from "@/components/list-page-header";
+import { useLoadMoreOnScroll } from "@/hooks/use-load-more-on-scroll";
 
 import { useInfiniteOrganizations } from "../hooks/use-infinite-organizations";
 
@@ -33,6 +34,11 @@ export function OrganizationsGrid() {
     isLoading,
     refetch,
   } = useInfiniteOrganizations({ search });
+  const loadMoreRef = useLoadMoreOnScroll({
+    hasNextPage: Boolean(hasNextPage),
+    isFetchingNextPage,
+    fetchNextPage: () => void fetchNextPage(),
+  });
 
   return (
     <div className="af-page">
@@ -94,6 +100,16 @@ export function OrganizationsGrid() {
               </div>
             </div>
           ))}
+          {hasNextPage && (
+            <div
+              ref={loadMoreRef}
+              className="col-span-full flex items-center justify-center gap-2 py-6 text-[13px]"
+              style={{ color: "var(--ink-4)" }}
+            >
+              <Loader2 width={14} className={isFetchingNextPage ? "animate-spin" : "invisible"} />
+              Loading more organizations…
+            </div>
+          )}
         </div>
       )}
 
@@ -107,15 +123,6 @@ export function OrganizationsGrid() {
         </div>
       )}
 
-      {hasNextPage && (
-        <div className="flex justify-center mt-6">
-          <button className="af-btn" onClick={() => fetchNextPage()} disabled={isFetchingNextPage}>
-            {isFetchingNextPage
-              ? <><Loader2 width={14} height={14} className="animate-spin" /> Loading more</>
-              : "Load more organizations"}
-          </button>
-        </div>
-      )}
     </div>
   );
 }

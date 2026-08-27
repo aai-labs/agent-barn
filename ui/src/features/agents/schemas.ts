@@ -98,7 +98,16 @@ export const AgentSchema = z.object({
   templateVersion: z.number().int(),
   templatePinType: z.enum(["shared", "override"]).default("shared"),
   overrideVersion: z.number().int().nullable().optional(),
+  // The stored value: empty means the Agent follows its organization's default.
   model: z.string(),
+  // Resolved server-side so nothing here has to re-derive inheritance, and an
+  // inheriting Agent can still name the model it will actually run.
+  modelSource: z.enum(["default", "override"]).default("override"),
+  effectiveModel: z.string().default(""),
+  /** What the running pod actually started on; "" when the Agent is not running. */
+  runningModel: z.string().default(""),
+  /** Set only when a restart would move a running Agent onto a different model. */
+  pendingModel: z.string().default(""),
   approvalMode: z.enum(["manual", "auto", "off"]).default("auto"),
   secrets: z.array(AgentSecretReadSchema).optional(),
   skills: z.array(AgentAssignedSkillSchema).default([]),
