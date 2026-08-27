@@ -34,6 +34,18 @@ function twoOrgs() {
   ];
 }
 
+function platformOrganization(index: number) {
+  return {
+    id: `22222222-2222-4222-8222-${String(index).padStart(12, "0")}`,
+    created_at: "2024-01-01T00:00:00Z",
+    updated_at: "2024-01-01T00:00:00Z",
+    name: `Organization ${index}`,
+    description: "Test organization",
+    owner_email: `owner-${index}@example.com`,
+    owner_name: `Owner ${index}`,
+  };
+}
+
 function userWithOrgMemberships({
   isPlatformAdmin = true,
   roles = ["OWNER", "OWNER"],
@@ -95,6 +107,18 @@ test.describe("Organizations — list", () => {
       page.getByRole("heading", { name: /organizations/i }),
     ).toBeVisible();
     await expect(page.getByText("AAI Labs").first()).toBeVisible();
+  });
+
+  test("loads more organizations when the grid reaches its loading sentinel", async ({ page }) => {
+    const firstPage = Array.from({ length: 20 }, (_, index) => platformOrganization(index));
+    await data.organizations.interceptListOrganizations({ pages: [firstPage, [platformOrganization(20)]] });
+
+    await page.goto(ORGS_URL);
+    await expect(page.getByText("Organization 0")).toBeVisible();
+
+    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+
+    await expect(page.getByText("Organization 20")).toBeVisible();
   });
 });
 

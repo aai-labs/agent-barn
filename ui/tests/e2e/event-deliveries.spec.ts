@@ -56,6 +56,57 @@ test.describe("Event Delivery Monitor (platform_admin)", () => {
     await expect(page.getByText("AAI Labs")).toBeVisible();
   });
 
+  test("loads the next page when the user reaches the end of the delivery list", async ({ page }) => {
+    const firstPage = Array.from({ length: 20 }, (_, index) =>
+      delivery({
+        id: `77777777-7777-4777-8777-${String(index).padStart(12, "0")}`,
+        handler_name: `handler.${index}`,
+      }),
+    );
+    const secondPage = delivery({
+      id: "77777777-7777-4777-8777-000000000020",
+      handler_name: "handler.20",
+    });
+    await data.eventDeliveries.interceptSummary({ summary: summaryWithCounts() });
+    await data.eventDeliveries.interceptList({ pages: [firstPage, [secondPage]], total: 21 });
+
+    await page.goto(MONITOR_URL);
+    await expect(page.getByText("handler.0")).toBeVisible();
+
+    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+
+    await expect(page.getByText("handler.20")).toBeVisible();
+  });
+
+  test("keeps a follow-up page failure local and lets the user retry", async ({ page }) => {
+    const firstPage = Array.from({ length: 20 }, (_, index) =>
+      delivery({
+        id: `77777777-7777-4777-8777-${String(index).padStart(12, "0")}`,
+        handler_name: `handler.${index}`,
+      }),
+    );
+    const secondPage = delivery({
+      id: "77777777-7777-4777-8777-000000000020",
+      handler_name: "handler.20",
+    });
+    await data.eventDeliveries.interceptSummary({ summary: summaryWithCounts() });
+    await data.eventDeliveries.interceptList({
+      pages: [firstPage, [secondPage]],
+      total: 21,
+      failOnPage: 2,
+    });
+
+    await page.goto(MONITOR_URL);
+    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+
+    await expect(page.getByText(/unable to load more deliveries/i)).toBeVisible();
+
+    await data.eventDeliveries.interceptList({ pages: [firstPage, [secondPage]], total: 21 });
+    await page.getByRole("button", { name: /try again/i }).click();
+
+    await expect(page.getByText("handler.20")).toBeVisible();
+  });
+
   test("renders platform deliveries without an organization", async ({ page }) => {
     await data.eventDeliveries.interceptSummary({ summary: emptySummary() });
     await data.eventDeliveries.interceptList({

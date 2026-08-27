@@ -72,10 +72,12 @@ export class OrganizationDataSupport {
 
   async interceptListOrganizations({
     items,
+    pages,
     status = 200,
     detail = "Unable to load organizations",
   }: {
     items?: unknown[];
+    pages?: unknown[][];
     status?: number;
     detail?: string;
   } = {}) {
@@ -85,13 +87,16 @@ export class OrganizationDataSupport {
         await route.fallback();
         return;
       }
+      const page = Number(new URL(route.request().url()).searchParams.get("page") ?? "1");
+      const pageSize = Number(new URL(route.request().url()).searchParams.get("page_size") ?? "200");
+      const pageItems = pages?.[page - 1] ?? list;
       await route.fulfill({
         status,
         contentType: "application/json",
         body: JSON.stringify(
           status >= 400
             ? { detail, page: 1, page_size: 200, total: 0, items: [] }
-            : { page: 1, page_size: 200, total: list.length, items: list },
+            : { page, page_size: pageSize, total: pages?.flat().length ?? list.length, items: pageItems },
         ),
       });
     });
