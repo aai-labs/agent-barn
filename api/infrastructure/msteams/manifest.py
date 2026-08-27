@@ -47,7 +47,6 @@ def build_app_package(
         # Stable per Connection so re-downloading updates the existing app
         # rather than registering a second one in the tenant catalogue.
         "id": str(uuid.uuid5(_MANIFEST_NAMESPACE, str(connection_id))),
-        "packageName": f"com.agentbarn.{_slug(short_name)}",
         "developer": {
             "name": publisher_name,
             "websiteUrl": website_url,

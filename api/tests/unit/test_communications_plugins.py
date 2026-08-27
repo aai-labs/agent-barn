@@ -990,3 +990,38 @@ def test_teams_app_package_rejects_a_non_public_publisher_url() -> None:
             connection_id=uuid4(),
             display_name="Aria",
         )
+
+
+def test_teams_manifest_uses_only_fields_its_declared_schema_allows() -> None:
+    plugin = _teams_plugin()
+
+    _, payload = plugin.build_app_package(
+        plugin.settings_model.model_validate({}),
+        _teams_credentials(plugin),
+        connection_id=uuid4(),
+        display_name="Aria",
+    )
+    with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+        manifest = json.loads(archive.read("manifest.json"))
+
+    # The Teams schema sets additionalProperties:false, so a field carried over
+    # from an older schema version fails upload with an unparseable-manifest
+    # error. packageName was valid through v1.16 and removed in v1.17.
+    assert manifest["manifestVersion"] == "1.17"
+    assert f"/v{manifest['manifestVersion']}/" in manifest["$schema"]
+    assert "packageName" not in manifest
+    assert set(manifest) <= {
+        "$schema",
+        "manifestVersion",
+        "version",
+        "id",
+        "developer",
+        "name",
+        "description",
+        "icons",
+        "accentColor",
+        "bots",
+        "permissions",
+        "validDomains",
+    }
+    assert set(manifest["bots"][0]["scopes"]) <= {"team", "personal", "groupChat"}
