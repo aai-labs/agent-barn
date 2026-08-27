@@ -246,7 +246,7 @@ test.describe("Settings · Templates", () => {
     await page.getByText("My Custom", { exact: true }).click();
 
     await expect(page.getByText("Required skills")).toBeVisible();
-    await expect(page.getByText(mockAssignedSkill.name, { exact: true })).toBeVisible();
+    await expect(page.getByText(`${mockAssignedSkill.name} v1`, { exact: true })).toBeVisible();
   });
 
   test("edit mode adding a skill sends required_skill_ids in PATCH body", async ({ page }) => {
