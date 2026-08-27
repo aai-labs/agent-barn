@@ -1,6 +1,7 @@
 from uuid import UUID
 
 from api.domains.agents.builders import (
+    START_SH,
     build_config_map,
     build_deployment,
     build_openclaw_gateway_config,
@@ -69,3 +70,11 @@ def test_deployment_runs_one_headless_runtime_container() -> None:
 
     assert deployment.spec.replicas == 1
     assert deployment.spec.template.spec.containers[0].name == "agent"
+
+
+def test_openclaw_gateway_port_is_pinned_to_the_adapter_target() -> None:
+    # The in-pod communications adapter posts to RUNTIME_API_URL (127.0.0.1:8080).
+    # Without an explicit --port the gateway binds its own default, the adapter
+    # gets ECONNREFUSED, and every inbound delivery dead-letters while the pod
+    # still reports healthy.
+    assert "--port 8080" in START_SH
