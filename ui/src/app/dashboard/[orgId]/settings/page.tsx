@@ -13,7 +13,6 @@ import {
   visibleOrganizationSettingsSections,
   type OrganizationSettingsSectionKey,
 } from "@/features/organizations/components/organization-settings-utils";
-import { organizationInitials } from "@/features/organizations/components/organization-detail-utils";
 import { SharedCredentialsPanel } from "@/features/shared-credentials/components/shared-credentials-panel";
 import { SkillsPanel } from "@/features/skills/components/skills-panel";
 
@@ -45,13 +44,6 @@ export default function SettingsPage() {
     <div style={{ background: "var(--bg)" }}>
       <main className="af-page">
         <div className="mb-8 flex flex-wrap items-start gap-4">
-          <div
-            className="grid h-14 w-14 flex-shrink-0 place-items-center rounded-2xl text-[18px] font-semibold text-white"
-            style={{ background: "linear-gradient(135deg, #4338ca, #7c3aed)" }}
-            aria-hidden
-          >
-            {organizationInitials(selectedOrganization?.name ?? "")}
-          </div>
           <div className="min-w-0 flex-1">
             <h1
               className="m-0 text-[2rem] font-semibold tracking-[-0.025em]"

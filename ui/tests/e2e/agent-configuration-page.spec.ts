@@ -481,6 +481,7 @@ test.describe("Agent configuration page", () => {
     const applyButton = section.getByRole("button", { name: "Apply", exact: true });
     await expect(applyButton).toBeDisabled();
     await section.getByRole("button", { name: "Remove", exact: true }).click();
+    await page.getByRole("dialog").getByRole("button", { name: "Remove skill", exact: true }).click();
     await expect(section.getByRole("button", { name: "Undo", exact: true })).toBeVisible();
     await expect(applyButton).toBeEnabled();
   });
@@ -618,6 +619,6 @@ test.describe("Agent configuration page", () => {
     await page.getByRole("dialog").getByRole("button", { name: "Apply", exact: true }).click();
 
     expect(sentBody?.skill_versions).toEqual([{ skill_id: MOCK_CUSTOM_SKILL_ID, version: 2 }]);
-    await expect(page.getByText("v2")).toBeVisible();
+    await expect(page.getByRole("combobox", { name: "Version for my-tool" })).toHaveText("Version v2");
   });
 });

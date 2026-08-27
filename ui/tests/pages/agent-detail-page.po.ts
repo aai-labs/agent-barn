@@ -68,6 +68,10 @@ export class AgentDetailPage {
     return this.page.getByRole("button", { name: "Remove" });
   }
 
+  confirmRemoveSkillButton(): Locator {
+    return this.page.getByRole("dialog").getByRole("button", { name: "Remove skill", exact: true });
+  }
+
   undoSkillButton(): Locator {
     return this.page.getByRole("button", { name: "Undo" });
   }

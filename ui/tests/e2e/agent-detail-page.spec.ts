@@ -722,8 +722,8 @@ test.describe("Agent Detail Page — Skills tab", () => {
     await agentDetailPage.skillsTab().click();
   });
 
-  test("Skills tab is clickable and shows the tab panel", async ({ page }) => {
-    await expect(page.getByText("No skills assigned yet.")).toBeVisible();
+  test("Skills tab is clickable and shows the tab panel", async () => {
+    await expect(agentDetailPage.skillsSearchInput()).toBeVisible();
   });
 
   test("shows assigned skills when agent has skills", async ({ page }) => {
@@ -734,12 +734,60 @@ test.describe("Agent Detail Page — Skills tab", () => {
     await agentDetailPage.configureButton().click();
     await agentDetailPage.skillsTab().click();
 
-    await expect(page.getByText("Assigned", { exact: true })).toBeVisible();
+    const assignedSkillLink = page.locator(
+      `a[href="/dashboard/${TEST_ORG_ID}/agents/${MOCK_AGENT_ID}/skills/${mockAssignedSkill.id}"]`,
+    );
+    await expect(assignedSkillLink.getByText("In use", { exact: true })).toBeVisible();
     await expect(agentDetailPage.removeSkillButton()).toBeVisible();
   });
 
+  test("opens an assigned skill detail page from its card", async ({ page }) => {
+    await dataSupportPage.agents.interceptGetAgentRequest({
+      body: { ...mockAgent, status: "STOPPED", skills: [mockAssignedSkill] },
+    });
+    await dataSupportPage.skills.interceptGetSkillFilesRequest({
+      skillId: mockAssignedSkill.id,
+      scope: "agent",
+      agentId: MOCK_AGENT_ID,
+      skill: {
+        ...mockCustomSkill,
+        id: mockAssignedSkill.id,
+        name: mockAssignedSkill.name,
+        organizationId: MOCK_ORG_ID,
+        isAssignedToAgent: true,
+      },
+      files: [{ path: "SKILL.md", content: "# GitHub" }],
+    });
+    await dataSupportPage.skills.interceptGetSkillVersionsRequest({
+      skillId: mockAssignedSkill.id,
+      scope: "agent",
+      agentId: MOCK_AGENT_ID,
+    });
+
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await agentDetailPage.configureButton().click();
+    await agentDetailPage.skillsTab().click();
+
+    const assignedSkillLink = page.locator(
+      `a[href="/dashboard/${TEST_ORG_ID}/agents/${MOCK_AGENT_ID}/skills/${mockAssignedSkill.id}"]`,
+    );
+    await expect(assignedSkillLink).toBeVisible();
+    await assignedSkillLink.click();
+
+    await expect(page).toHaveURL(
+      new RegExp(`/agents/${MOCK_AGENT_ID}/skills/${mockAssignedSkill.id}$`),
+    );
+    await expect(page.getByRole("heading", { name: mockAssignedSkill.name })).toBeVisible();
+
+    const backLink = page.getByRole("link", { name: "Agent skills" });
+    await expect(backLink).toHaveAttribute(
+      "href",
+      `/dashboard/${TEST_ORG_ID}/agents/${MOCK_AGENT_ID}/configuration?section=skills`,
+    );
+  });
+
   test("shows available skills with source badges", async ({ page }) => {
-    await expect(page.getByText("Add skills")).toBeVisible();
+    await expect(agentDetailPage.skillsSearchInput()).toBeVisible();
     const platformSkillCard = page.getByRole("link", { name: /github/ }).first();
     await expect(platformSkillCard).toBeVisible();
     await expect(platformSkillCard.getByText("Built in")).toBeVisible();
@@ -807,7 +855,7 @@ test.describe("Agent Detail Page — Skills tab", () => {
     await expect(page).toHaveURL(
       new RegExp(`/agents/${MOCK_AGENT_ID}/configuration\\?section=skills$`),
     );
-    await expect(page.getByText("Add skills", { exact: true })).toBeVisible();
+    await expect(agentDetailPage.skillsSearchInput()).toBeVisible();
   });
 
   test("search filters available skills", async ({ page }) => {
@@ -816,10 +864,11 @@ test.describe("Agent Detail Page — Skills tab", () => {
     await expect(page.getByRole("link", { name: /github/ })).not.toBeVisible();
   });
 
-  test("adding a skill moves it to the pending Assigned section", async ({ page }) => {
+  test("adding a skill marks its card In use while pending", async ({ page }) => {
     await agentDetailPage.addSkillButton().first().click();
 
-    await expect(page.getByText("Assigned", { exact: true })).toBeVisible();
+    const pendingCard = page.locator("article").filter({ hasText: "· Adding" });
+    await expect(pendingCard.getByText("In use", { exact: true })).toBeVisible();
     await expect(page.getByText("· Adding")).toBeVisible();
     await expect(agentDetailPage.cancelSkillButton()).toBeVisible();
     await expect(agentDetailPage.saveSkillsButton()).toBeVisible();
@@ -835,7 +884,7 @@ test.describe("Agent Detail Page — Skills tab", () => {
     await expect(agentDetailPage.saveSkillsButton()).toBeDisabled();
   });
 
-  test("removing an assigned skill shows it struck-through with Undo", async () => {
+  test("removing an assigned skill shows it struck-through with Undo", async ({ page }) => {
     await dataSupportPage.agents.interceptGetAgentRequest({
       body: { ...mockAgent, status: "STOPPED", skills: [mockAssignedSkill] },
     });
@@ -844,6 +893,9 @@ test.describe("Agent Detail Page — Skills tab", () => {
     await agentDetailPage.skillsTab().click();
 
     await agentDetailPage.removeSkillButton().click();
+    await expect(page.getByRole("dialog")).toBeVisible();
+    await expect(page.getByRole("dialog").getByRole("heading", { name: "Remove github?" })).toBeVisible();
+    await agentDetailPage.confirmRemoveSkillButton().click();
 
     await expect(agentDetailPage.undoSkillButton()).toBeVisible();
     await expect(agentDetailPage.saveSkillsButton()).toBeVisible();
@@ -858,6 +910,7 @@ test.describe("Agent Detail Page — Skills tab", () => {
     await agentDetailPage.skillsTab().click();
 
     await agentDetailPage.removeSkillButton().click();
+    await agentDetailPage.confirmRemoveSkillButton().click();
     await agentDetailPage.undoSkillButton().click();
 
     await expect(agentDetailPage.removeSkillButton()).toBeVisible();
@@ -869,7 +922,9 @@ test.describe("Agent Detail Page — Skills tab", () => {
     await agentDetailPage.addSkillButton().first().click();
 
     await expect(page.getByText("Required credentials")).toBeVisible();
-    await expect(page.getByText("GitHub", { exact: true })).toBeVisible();
+    await expect(
+      page.getByText("Required credentials").locator("..").getByText("GitHub", { exact: true }),
+    ).toBeVisible();
   });
 
   test("save button is disabled when required credentials are incomplete", async () => {
