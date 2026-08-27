@@ -348,8 +348,8 @@ class SkillSummaryRead(SkillRead):
 
 class SkillDetailRead(SkillSummaryRead):
     files: list[SkillFileRead]
-    # Whether a non-soft-deleted agent in the caller's organization has this skill
-    # assigned. The UI uses it to gate deleting the currently published version.
+    # Whether a non-soft-deleted agent in the caller's scope has this skill
+    # assigned. The UI uses it to gate whole-lineage deletion.
     is_assigned_to_agent: bool
 
 

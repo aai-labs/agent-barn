@@ -1,4 +1,4 @@
-from uuid import uuid7
+from uuid import UUID, uuid7
 
 from fastapi import status
 from hamcrest import assert_that, contains_string, equal_to, has_item, has_items, not_, starts_with
@@ -30,6 +30,7 @@ from api.tests.steps.organization import (
     there_is_an_organization_with_user_and_access_token,
 )
 from api.tests.steps.rbac import role_lacks_permission
+from api.tests.steps.template import there_is_a_template, there_is_a_template_skill
 from api.tests.steps.user import there_is_a_user, there_is_an_access_token_for_user
 
 _BASE = "/api/v1/organizations/{organization_id}/skills"
@@ -575,6 +576,98 @@ def test_platform_admin_can_create_and_publish_platform_skill():
         assert_that(rename.json()["name"], equal_to("Platform Authored Renamed"))
 
 
+def test_platform_admin_can_delete_unused_custom_platform_skill_lineage():
+    platform_admin_id = uuid7()
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_user(
+                id=platform_admin_id,
+                email="platform-skill-deleter@example.com",
+                role=OrganizationRole.MEMBER,
+                is_platform_admin=True,
+            ),
+            there_is_an_access_token_for_user(user_id=platform_admin_id),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        created = client.post(
+            _PLATFORM_BASE,
+            json={"name": "Unused Platform Skill", "files": _files(content="# Platform v1")},
+            headers=_auth(context),
+        )
+        skill_id = created.json()["id"]
+        published = client.post(f"{_PLATFORM_BASE}/{skill_id}/draft/publish", headers=_auth(context))
+        client.post(f"{_PLATFORM_BASE}/{skill_id}/draft", headers=_auth(context))
+
+        with when("the platform administrator deletes an unused custom Platform Skill"):
+            response = client.delete(f"{_PLATFORM_BASE}/{skill_id}", headers=_auth(context))
+
+        with then("the Platform Skill lineage, version, and draft are gone"):
+            assert_that(created.status_code, equal_to(status.HTTP_201_CREATED))
+            assert_that(published.status_code, equal_to(status.HTTP_201_CREATED))
+            assert_that(response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
+            assert_that(
+                client.get(f"{_PLATFORM_BASE}/{skill_id}/files", headers=_auth(context)).status_code,
+                equal_to(status.HTTP_404_NOT_FOUND),
+            )
+
+
+def test_platform_admin_cannot_delete_builtin_skill_lineage():
+    platform_admin_id = uuid7()
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_skill(name="Built-in Platform Skill", global_skill=True),
+            there_is_a_user(
+                id=platform_admin_id,
+                email="platform-builtin-deleter@example.com",
+                role=OrganizationRole.MEMBER,
+                is_platform_admin=True,
+            ),
+            there_is_an_access_token_for_user(user_id=platform_admin_id),
+        ]
+    ) as context:
+        response = context.client.delete(f"{_PLATFORM_BASE}/{context.skill.id}", headers=_auth(context))
+
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+
+
+def test_platform_skill_lineage_delete_is_blocked_when_any_agent_uses_it():
+    platform_admin_id = uuid7()
+    with given(
+        [
+            *_GIVEN,
+            there_is_an_agent(),
+            there_is_a_user(
+                id=platform_admin_id,
+                email="platform-assigned-skill-deleter@example.com",
+                role=OrganizationRole.MEMBER,
+                is_platform_admin=True,
+            ),
+            there_is_an_access_token_for_user(user_id=platform_admin_id),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        created = client.post(
+            _PLATFORM_BASE,
+            json={"name": "Assigned Platform Skill", "files": _files(content="# Platform")},
+            headers=_auth(context),
+        )
+        skill_id = created.json()["id"]
+        published = client.post(f"{_PLATFORM_BASE}/{skill_id}/draft/publish", headers=_auth(context))
+
+        from api.domains.agents.repository import AgentRepository
+
+        context.injector.get(AgentRepository).add_skill(context.agent.id, UUID(skill_id), pinned_version=1)
+
+        response = client.delete(f"{_PLATFORM_BASE}/{skill_id}", headers=_auth(context))
+
+        assert_that(published.status_code, equal_to(status.HTTP_201_CREATED))
+        assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
+        assert_that(response.json()["detail"], contains_string("Agent"))
+
+
 def test_non_platform_admin_cannot_list_global_skills():
     with given([*_GIVEN, there_is_a_skill(name="Global Platform Skill", global_skill=True)]) as context:
         response = context.client.get(_PLATFORM_BASE, headers=_auth(context))
@@ -1076,6 +1169,65 @@ def test_agent_owner_can_create_private_skill_and_org_list_cannot_see_it():
         assert_that([skill["id"] for skill in org_response.json()["items"]], not_(has_item(body["id"])))
 
 
+def test_agent_owner_can_delete_unused_private_skill_lineage():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        agent_base = _AGENT_BASE.format(organization_id=context.organization.id, agent_id=context.agent.id)
+        created = client.post(
+            agent_base,
+            json={"name": "Unused Private Skill", "files": _files(content="# Private")},
+            headers=_auth(context),
+        )
+        skill_id = created.json()["id"]
+
+        with when("the owner deletes an unused private Skill with its initial draft"):
+            response = client.delete(f"{agent_base}/{skill_id}", headers=_auth(context))
+
+        with then("the private Skill lineage and its draft are gone"):
+            assert_that(response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
+            assert_that(
+                client.get(f"{agent_base}/{skill_id}/files", headers=_auth(context)).status_code,
+                equal_to(status.HTTP_404_NOT_FOUND),
+            )
+
+
+def test_agent_private_skill_lineage_delete_is_blocked_when_any_version_is_assigned():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        agent_base = _AGENT_BASE.format(organization_id=context.organization.id, agent_id=context.agent.id)
+        created = client.post(
+            agent_base,
+            json={"name": "Assigned Private Skill", "files": _files(content="# Private v1")},
+            headers=_auth(context),
+        )
+        skill_id = created.json()["id"]
+        published_v1 = client.post(f"{agent_base}/{skill_id}/draft/publish", headers=_auth(context))
+        assert_that(published_v1.status_code, equal_to(status.HTTP_201_CREATED))
+
+        from api.domains.skills.repository import SkillRepository
+
+        skill_repository: SkillRepository = context.injector.get(SkillRepository)
+        context.skill = skill_repository.get_by_id(UUID(skill_id))
+        assert context.skill is not None
+        skill_is_assigned_to_agent()(context)
+
+        client.post(f"{agent_base}/{skill_id}/draft", headers=_auth(context))
+        client.patch(
+            f"{agent_base}/{skill_id}/draft",
+            json={"files": _files(content="# Private v2")},
+            headers=_auth(context),
+        )
+        published_v2 = client.post(f"{agent_base}/{skill_id}/draft/publish", headers=_auth(context))
+
+        with when("the owner deletes a private Skill whose historical version is assigned"):
+            response = client.delete(f"{agent_base}/{skill_id}", headers=_auth(context))
+
+        with then("the lineage remains because an Agent still pins one of its versions"):
+            assert_that(published_v2.status_code, equal_to(status.HTTP_201_CREATED))
+            assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
+            assert_that(response.json()["detail"], contains_string("Agent"))
+
+
 def test_agent_owner_can_list_private_skill_with_visible_shared_skills():
     with given([*_GIVEN, there_is_an_agent(), there_is_a_skill(name="Shared Skill")]) as context:
         agent_base = _AGENT_BASE.format(organization_id=context.organization.id, agent_id=context.agent.id)
@@ -1217,13 +1369,14 @@ def test_agent_private_skill_routes_hide_another_agents_skills_from_a_same_org_m
                     json={"files": _files(content="# Unauthorized")},
                     headers=_auth(context),
                 ),
+                client.delete(f"{private_base}/{skill_id}", headers=_auth(context)),
                 client.delete(f"{private_base}/{skill_id}/versions/1", headers=_auth(context)),
             ]
 
         with then("their access to the other Agent does not reveal or mutate the private Skill"):
             assert_that(created.status_code, equal_to(status.HTTP_201_CREATED))
             assert_that(accessible_list.status_code, equal_to(status.HTTP_200_OK))
-            assert_that([response.status_code for response in responses], equal_to([status.HTTP_404_NOT_FOUND] * 7))
+            assert_that([response.status_code for response in responses], equal_to([status.HTTP_404_NOT_FOUND] * 8))
 
 
 def test_member_cannot_fork_builtin_skill():
@@ -1475,6 +1628,114 @@ def test_member_cannot_publish_skill_draft():
         response = context.client.post(f"{_BASE}/{context.skill.id}/draft/publish", headers=_auth(context))
 
         assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+
+
+def test_delete_unused_organization_skill_lineage_removes_all_versions_and_draft():
+    with given([*_GIVEN, there_is_a_skill(name="Unused Organization Skill")]) as context:
+        client: TestClient = context.client
+        from api.domains.skills.repository import SkillRepository
+
+        repository: SkillRepository = context.injector.get(SkillRepository)
+        _publish_new_version(client, context, "# v2")
+        draft = client.post(f"{_BASE}/{context.skill.id}/draft", headers=_auth(context))
+
+        with when("the organization manager deletes an unused custom Skill lineage"):
+            response = client.delete(f"{_BASE}/{context.skill.id}", headers=_auth(context))
+
+        with then("the Skill, every version, and its draft are deleted"):
+            assert_that(draft.status_code, equal_to(status.HTTP_201_CREATED))
+            assert_that(response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
+            assert_that(
+                client.get(f"{_BASE}/{context.skill.id}", headers=_auth(context)).status_code,
+                equal_to(status.HTTP_404_NOT_FOUND),
+            )
+            assert_that(
+                client.get(f"{_BASE}/{context.skill.id}/versions", headers=_auth(context)).status_code,
+                equal_to(status.HTTP_404_NOT_FOUND),
+            )
+            assert_that(repository.get_by_id(context.skill.id), equal_to(None))
+            assert_that(repository.list_versions(context.skill.id), equal_to([]))
+            assert_that(repository.get_draft(context.skill.id), equal_to(None))
+
+
+def test_delete_organization_skill_requires_skill_manage_permission():
+    with given([*_GIVEN, there_is_a_skill(name="Member Cannot Delete"), _there_is_a_member_actor()]) as context:
+        response = context.client.delete(f"{_BASE}/{context.skill.id}", headers=_auth(context))
+
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+
+
+def test_delete_organization_skill_requires_authentication():
+    with given([*_GIVEN, there_is_a_skill(name="Unauthenticated Delete")]) as context:
+        response = context.client.delete(f"{_BASE}/{context.skill.id}")
+
+        assert_that(response.status_code, equal_to(status.HTTP_401_UNAUTHORIZED))
+
+
+def test_delete_organization_skill_not_found_returns_404():
+    with given(_GIVEN) as context:
+        response = context.client.delete(f"{_BASE}/{uuid7()}", headers=_auth(context))
+
+        assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
+
+
+def test_delete_organization_builtin_skill_returns_403():
+    with given([*_GIVEN, there_is_a_skill(name="Built-in Skill", global_skill=True)]) as context:
+        response = context.client.delete(f"{_BASE}/{context.skill.id}", headers=_auth(context))
+
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+
+
+def test_delete_organization_skill_is_blocked_when_any_version_is_pinned_by_an_agent():
+    with given(
+        [
+            *_GIVEN,
+            there_is_an_agent(),
+            there_is_a_skill(name="Pinned Historical Skill"),
+            skill_is_assigned_to_agent(),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        _publish_new_version(client, context, "# v2")
+
+        with when("the organization manager deletes a Skill whose historical version is pinned"):
+            response = client.delete(f"{_BASE}/{context.skill.id}", headers=_auth(context))
+
+        with then("the whole lineage remains and the response identifies the Agent usage"):
+            assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
+            assert_that(response.json()["detail"], contains_string("Agent"))
+            assert_that(
+                client.get(f"{_BASE}/{context.skill.id}/versions", headers=_auth(context)).status_code,
+                equal_to(status.HTTP_200_OK),
+            )
+
+
+def test_delete_organization_skill_is_blocked_when_required_by_a_template():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_skill(name="Template Required Skill"),
+            there_is_a_template(),
+            there_is_a_template_skill(),
+        ]
+    ) as context:
+        response = context.client.delete(f"{_BASE}/{context.skill.id}", headers=_auth(context))
+
+        assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
+        assert_that(response.json()["detail"], contains_string("Template"))
+
+
+def test_delete_organization_skill_is_blocked_when_used_as_a_fork_source():
+    with given([*_GIVEN, there_is_a_skill(name="Fork Source Skill")]) as context:
+        client: TestClient = context.client
+        source_id = context.skill.id
+        fork = client.post(f"{_BASE}/{source_id}/fork", headers=_auth(context))
+
+        response = client.delete(f"{_BASE}/{source_id}", headers=_auth(context))
+
+        assert_that(fork.status_code, equal_to(status.HTTP_201_CREATED))
+        assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
+        assert_that(response.json()["detail"], contains_string("fork"))
 
 
 def test_member_cannot_delete_skill_version():

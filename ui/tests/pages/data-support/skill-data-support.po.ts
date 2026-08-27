@@ -379,6 +379,28 @@ export class SkillDataSupport {
     });
   }
 
+  async interceptDeleteSkillRequest({
+    skillId = MOCK_CUSTOM_SKILL_ID,
+    status = 204,
+    detail = "Unable to delete skill",
+  }: {
+    skillId?: string;
+    status?: number;
+    detail?: string;
+  } = {}) {
+    await this.page.route(`**/api/v1/organizations/*/skills/${skillId}`, async (route) => {
+      if (route.request().method() !== "DELETE") {
+        await route.fallback();
+        return;
+      }
+      await route.fulfill({
+        status,
+        contentType: "application/json",
+        body: status >= 400 ? JSON.stringify({ detail }) : "",
+      });
+    });
+  }
+
   async interceptGetSkillVersionsRequest({
     skillId = MOCK_CUSTOM_SKILL_ID,
     status = 200,

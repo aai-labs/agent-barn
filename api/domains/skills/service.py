@@ -124,6 +124,28 @@ class SkillService:
                 ),
             ) from None
 
+    def _delete_custom_skill_lineage(self, skill: Skill) -> None:
+        """Delete a custom lineage and all of its owned snapshots when unused."""
+        if skill.source == SkillSource.AAI_CLI:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Cannot delete built-in skills",
+            )
+
+        blocker = self.repository.delete_skill_if_unused(skill.id)
+        if blocker == "not_found":
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Skill {skill.id} not found")
+        if blocker == "agent":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Cannot delete a Skill that is used by one or more Agents",
+            )
+        if blocker == "reference":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Cannot delete a Skill referenced by a Template, Override, or fork",
+            )
+
     def _to_read(
         self,
         skill: Skill,
@@ -306,7 +328,16 @@ class SkillService:
 
     def delete_platform_skill_version(self, skill_id: UUID, version: int) -> None:
         skill = self._get_platform_or_404(skill_id)
+        if skill.source == SkillSource.AAI_CLI:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Cannot modify built-in skills",
+            )
         self._delete_skill_version(skill, version)
+
+    def delete_platform_skill(self, skill_id: UUID) -> None:
+        skill = self._get_platform_or_404(skill_id)
+        self._delete_custom_skill_lineage(skill)
 
     def list_platform_skill_versions(self, skill_id: UUID) -> list[SkillVersionRead]:
         self._get_platform_or_404(skill_id)
@@ -575,6 +606,10 @@ class SkillService:
     ) -> None:
         _, skill = self._get_agent_owned_skill(agent_id, skill_id, context, PermissionKey.AGENT_UPDATE)
         self._delete_skill_version(skill, version)
+
+    def delete_agent_skill(self, agent_id: UUID, skill_id: UUID, context: CurrentUserContext) -> None:
+        _, skill = self._get_agent_owned_skill(agent_id, skill_id, context, PermissionKey.AGENT_UPDATE)
+        self._delete_custom_skill_lineage(skill)
 
     def list_agent_skill_versions(
         self,
@@ -1030,6 +1065,18 @@ class SkillService:
                 detail="Cannot modify built-in skills",
             )
         self._delete_skill_version(skill, version)
+
+    def delete_skill(self, skill_id: UUID, context: CurrentUserContext) -> None:
+        """Delete an unused Organization-owned custom Skill lineage."""
+        org_id = self._org_id(context)
+        skill = self._get_or_404(skill_id, org_id)
+        self.permission_policy.require_organization(context, org_id, PermissionKey.SKILL_MANAGE)
+        if skill.organization_id != org_id or skill.agent_id is not None:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only organization-owned Skills can be deleted here",
+            )
+        self._delete_custom_skill_lineage(skill)
 
     def get_skill(self, skill_id: UUID, context: CurrentUserContext) -> SkillSummaryRead:
         org_id = self._org_id(context)

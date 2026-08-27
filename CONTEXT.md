@@ -157,7 +157,7 @@ The manual action that clones an origin's newer Platform Template snapshot—inc
 _Avoid_: template merge, in-place sync
 
 **Skill**:
-A packaged set of UTF-8 agent instructions or references that can be assigned to an Agent or required by a Template. A Skill is a stable lineage; immutable content is stored in Skill Versions and every published version has one root `SKILL.md`.
+A packaged set of UTF-8 agent instructions or references that can be assigned to an Agent or required by a Template. A retained Skill is a stable lineage; immutable content is stored in Skill Versions and every published version has one root `SKILL.md`. A custom lineage may be hard-deleted with its draft and versions when no Agent pins any version and no Template, Override, or fork-source reference remains.
 _Avoid_: integration, tool, prompt blob
 
 **Platform Skill**:
@@ -165,11 +165,11 @@ A Skill with no Organization or Agent owner. Platform Skills are managed by Plat
 _Avoid_: built-in ZIP, shared Organization Skill
 
 **Organization Skill**:
-A Skill owned by one Organization and visible to that Organization's Agents. Organization managers can author drafts, publish versions, fork visible Platform Skills, and explicitly apply source updates.
+A Skill owned by one Organization and visible to that Organization's Agents. Organization managers can author drafts, publish versions, delete an unused custom lineage, fork visible Platform Skills, and explicitly apply source updates.
 _Avoid_: global Skill, Agent Skill
 
 **Agent Skill**:
-A private Skill owned by one Agent and its Organization. It is visible only through that Agent's authorized scope; another Agent in the same Organization cannot see it.
+A private Skill owned by one Agent and its Organization. It is visible only through that Agent's authorized scope; another Agent in the same Organization cannot see it. The Agent owner can delete the custom lineage when no Agent pins any of its versions.
 _Avoid_: personal integration, shared Skill
 
 **Skill Version**:
@@ -179,6 +179,10 @@ _Avoid_: mutable skill, latest skill pointer
 **Skill Draft**:
 The single mutable working snapshot for one Skill lineage. New Skills and forks start with a Draft and no published Version; publishing creates the next immutable Skill Version and clears the Draft.
 _Avoid_: published version, ZIP upload
+
+**Skill Lineage Deletion**:
+The owning-scope operation that permanently removes a custom Skill's Draft, all Skill Versions, and their files. It is allowed only when no `AgentSkill` row pins any version and no Template, Agent Template Override, or fork-source reference remains; built-in `aai_cli` lineages cannot be deleted.
+_Avoid_: version pruning, archive, soft-delete
 
 **Skill Source Update**:
 An explicit action that copies a newer direct source Skill Version into a fork. With no Draft it publishes immediately; with a Draft it replaces the Draft and leaves it unpublished. It never repins existing consumers automatically.
@@ -268,6 +272,7 @@ _Avoid_: webhook
 - A **Template Version** may require multiple immutable **Skill Versions**.
 - A **Platform Skill** has no owner; an **Organization Skill** belongs to one Organization; an **Agent Skill** belongs to one Agent and retains its Organization for tenant isolation.
 - An **Agent** can see Platform Skills, its Organization's Skills, and its own Agent Skills, but never another Agent's private Skills. Agent assignments and Template requirements pin exact Skill Versions.
+- A custom **Skill Lineage** can be hard-deleted from its owning Platform, Organization, or Agent scope only when no Agent pins any of its versions and no Template, Override, or fork-source reference remains; the delete cascades the lineage's own Drafts, Versions, and files.
 - A Platform Template lineage has at most one **Draft Template Version**, authored only by a **Platform Administrator**; publishing it exposes the next Platform Template Version to every Organization.
 - A **Platform Administrator** can inspect any immutable Platform Template Version and use a **Template Restore** to seed a new Draft Template Version from it; the restore leaves version history and existing Agent pins unchanged.
 - An Organization Template fork tracks a **Fork Baseline Version**; the first fork is Organization v1 and a **Template Update** clones its origin's newer Platform Template snapshot into the next organization version.

@@ -1,9 +1,9 @@
 # Skill versions are deleted per version, not whole lineages
 
-Status: Accepted
+Status: Superseded by `2026-08-27-delete-unused-custom-skill-lineages.md`
 Date: 2026-08-15
 
-Whole-lineage skill deletion was removed, and history is pruned one immutable version snapshot at a time instead. A skill lineage is permanent while it exists; only individual published versions can be removed.
+At the time of this decision, whole-lineage skill deletion was removed and history was pruned one immutable version snapshot at a time. The superseding ADR restores whole-lineage deletion for unused custom lineages while retaining the per-version protections below.
 
 ## Context
 

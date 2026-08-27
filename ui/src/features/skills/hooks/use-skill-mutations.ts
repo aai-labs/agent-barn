@@ -184,3 +184,19 @@ export function useDeleteSkillVersion(scope: SkillScopeRef) {
     },
   });
 }
+
+/** Permanently delete an unused custom Skill lineage and all of its snapshots. */
+export function useDeleteSkill(scope: SkillScopeRef) {
+  const queryClient = useQueryClient();
+  const basePath = useSkillsBasePath(scope);
+
+  return useMutation({
+    mutationFn: async (skillId: string) => {
+      await api.delete(`${basePath}/${skillId}`);
+    },
+    onSuccess: (_data, skillId) => {
+      queryClient.removeQueries({ queryKey: skillDraftKey(skillId, scope) });
+      void queryClient.invalidateQueries({ queryKey: skillsKey.all });
+    },
+  });
+}

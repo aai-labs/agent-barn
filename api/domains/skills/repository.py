@@ -1,10 +1,11 @@
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import cast
+from typing import Literal, cast
 from uuid import UUID
 
 from injector import inject, singleton
 from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, col, delete, or_, select
 
 from api.domains.agents.models import (
@@ -31,6 +32,8 @@ from api.domains.skills.models import (
 )
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.infrastructure.shared.models import Pagination
+
+SkillDeletionBlocker = Literal["not_found", "agent", "reference"]
 
 
 @inject
@@ -350,6 +353,51 @@ class SkillRepository:
                 ),
             )
             return any(session.exec(check).first() is not None for check in checks)
+
+    def delete_skill_if_unused(self, skill_id: UUID) -> SkillDeletionBlocker | None:
+        """Delete a complete Skill lineage when no consumer still references it.
+
+        The lineage row is locked for the duration of the reference checks and
+        delete. This makes the application-level usage check safe against a
+        concurrent Agent assignment or reference insert; the database cascades
+        the lineage's own drafts, versions, and files after the checks pass.
+
+        Returns ``"not_found"``, ``"agent"``, or ``"reference"`` when deletion
+        is not possible, and ``None`` after a successful delete.
+        """
+        with Session(self.delegate.engine) as session:
+            skill = session.exec(select(Skill).where(col(Skill.id) == skill_id).with_for_update()).first()
+            if skill is None:
+                return "not_found"
+
+            if session.exec(select(AgentSkill.id).where(col(AgentSkill.skill_id) == skill_id)).first() is not None:
+                return "agent"
+
+            reference_checks = (
+                select(AgentTemplateSkill.id).where(col(AgentTemplateSkill.skill_id) == skill_id),
+                select(PlatformTemplateSkill.id).where(col(PlatformTemplateSkill.skill_id) == skill_id),
+                select(PlatformTemplateDraftSkill.id).where(col(PlatformTemplateDraftSkill.skill_id) == skill_id),
+                select(AgentTemplateOverrideDraftSkill.id).where(
+                    col(AgentTemplateOverrideDraftSkill.skill_id) == skill_id
+                ),
+                select(AgentTemplateOverrideVersionSkill.id).where(
+                    col(AgentTemplateOverrideVersionSkill.skill_id) == skill_id
+                ),
+                select(SkillVersion.id).where(col(SkillVersion.source_skill_id) == skill_id),
+                select(SkillDraft.id).where(col(SkillDraft.source_skill_id) == skill_id),
+            )
+            if any(session.exec(check).first() is not None for check in reference_checks):
+                return "reference"
+
+            session.delete(skill)
+            try:
+                session.commit()
+            except IntegrityError:
+                # Keep deletion conservative if another FK-backed reference is
+                # introduced before the database evaluates the cascade.
+                session.rollback()
+                return "reference"
+        return None
 
     def is_skill_version_pinned(self, skill_id: UUID, version: int, org_id: UUID) -> bool:
         """Whether an organization's non-soft-deleted agent pins this version."""

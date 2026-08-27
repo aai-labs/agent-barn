@@ -77,6 +77,17 @@ def update_agent_skill(
     return service.update_agent_skill(agent_id, skill_id, data, context)
 
 
+@agent_skills_router.delete("/{skill_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_agent_skill(
+    skill_id: UUID,
+    agent_id: UUID,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[SkillService, Injected(SkillService)],
+):
+    service.delete_agent_skill(agent_id, skill_id, context)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
 @agent_skills_router.get("/{skill_id}/files", response_model=SkillDetailRead)
 def get_agent_skill_files(
     skill_id: UUID,
@@ -211,6 +222,16 @@ def update_platform_skill(
     service: Annotated[SkillService, Injected(SkillService)],
 ):
     return service.update_platform_skill(skill_id, data)
+
+
+@platform_skills_router.delete("/{skill_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_platform_skill(
+    skill_id: UUID,
+    _: Annotated[CurrentUserContext, Depends(require_platform_admin())],
+    service: Annotated[SkillService, Injected(SkillService)],
+):
+    service.delete_platform_skill(skill_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @platform_skills_router.get("/{skill_id}/files", response_model=SkillDetailRead)
@@ -363,6 +384,16 @@ def update_skill(
     service: Annotated[SkillService, Injected(SkillService)],
 ):
     return service.update_skill(skill_id, data, context)
+
+
+@skills_router.delete("/{skill_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_skill(
+    skill_id: UUID,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[SkillService, Injected(SkillService)],
+):
+    service.delete_skill(skill_id, context)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @skills_router.post("/{skill_id}/fork", response_model=SkillDetailRead, status_code=status.HTTP_201_CREATED)

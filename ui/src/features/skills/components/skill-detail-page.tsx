@@ -25,6 +25,7 @@ import { useSkillVersionDetail } from "../hooks/use-skill-version-detail";
 import {
   type SkillFilePayload,
   useApplySkillSourceUpdate,
+  useDeleteSkill,
   useDeleteSkillVersion,
   useDiscardSkillDraft,
   useForkSkill,
@@ -42,7 +43,7 @@ import { SkillScopeBadge } from "./skill-scope-badge";
 import { SkillSourceBadge } from "./skill-source-badge";
 import { SkillVersionHistory } from "./skill-version-history";
 
-type Confirmation = "discard" | "publish" | "delete-version" | "fork" | "source-update";
+type Confirmation = "discard" | "publish" | "delete-skill" | "delete-version" | "fork" | "source-update";
 
 export function SkillDetailPage({
   skillId,
@@ -91,6 +92,7 @@ export function SkillDetailPage({
   const publishDraft = usePublishSkillDraft(scope);
   const updateSkill = useUpdateSkill(scope);
   const forkSkill = useForkSkill(scope);
+  const deleteSkill = useDeleteSkill(scope);
   const deleteSkillVersion = useDeleteSkillVersion(scope);
   const applySourceUpdate = useApplySkillSourceUpdate(scope);
 
@@ -130,6 +132,7 @@ export function SkillDetailPage({
     updateSkill.isPending ||
     discardDraft.isPending ||
     publishDraft.isPending ||
+    deleteSkill.isPending ||
     applySourceUpdate.isPending;
   const mutationError =
     startDraft.error ??
@@ -139,6 +142,7 @@ export function SkillDetailPage({
     publishDraft.error ??
     applySourceUpdate.error ??
     forkSkill.error ??
+    deleteSkill.error ??
     deleteSkillVersion.error;
 
   if (isLoading) {
@@ -182,6 +186,8 @@ export function SkillDetailPage({
   const isOwnScope = detail.scope === scope.kind;
   const canEdit = isOwnScope && canManage;
   const canFork = canForkInto(scope, detail.scope) && canManage;
+  const canDeleteLineage = canEdit && detail.source === "custom";
+  const deleteBlocked = detail.isAssignedToAgent;
   const draftFiles = existingDraft?.files.map((f) => ({ path: f.path, content: f.content })) ?? [];
   const showDraftPreview = !editing && viewingDraft && existingDraft && detail.hasDraft;
   const displayedFiles = showDraftPreview
@@ -285,6 +291,10 @@ export function SkillDetailPage({
     setConfirmation("fork");
   }
 
+  function handleDeleteSkill() {
+    setConfirmation("delete-skill");
+  }
+
   function handleSourceUpdate() {
     setConfirmation("source-update");
   }
@@ -308,6 +318,17 @@ export function SkillDetailPage({
     try {
       const fork = await forkSkill.mutateAsync(skillId);
       router.push(`${skillDetailHref(scope, orgId, fork.id)}?edit=1`);
+    } catch {
+      // error rendered via mutationError
+    }
+  }
+
+  async function confirmDeleteSkill() {
+    setConfirmation(null);
+    try {
+      await deleteSkill.mutateAsync(skillId);
+      toast.success(`${detail!.name} deleted.`);
+      router.push(skillsHref);
     } catch {
       // error rendered via mutationError
     }
@@ -353,6 +374,17 @@ export function SkillDetailPage({
             isPending: publishDraft.isPending,
             icon: <Upload size={18} />,
           }
+        : confirmation === "delete-skill"
+          ? {
+              title: `Delete ${detail.name}?`,
+              description: `Permanently delete ${detail.name} and all of its versions and drafts? This cannot be undone. The Skill must not be used by any Agent.`,
+              confirmLabel: "Delete skill",
+              pendingLabel: "Deleting…",
+              onConfirm: confirmDeleteSkill,
+              isPending: deleteSkill.isPending,
+              variant: "destructive" as const,
+              icon: <Trash2 size={18} />,
+            }
         : confirmation === "delete-version"
           ? {
               title: `Delete version ${deletingVersion}?`,
@@ -427,6 +459,18 @@ export function SkillDetailPage({
             <button className="af-btn" onClick={handleFork} disabled={forkSkill.isPending}>
               {forkSkill.isPending ? <Loader2 size={14} className="animate-spin" /> : <GitFork size={14} />}
               Fork
+            </button>
+          ) : null}
+          {canDeleteLineage && !editing ? (
+            <button
+              className="af-btn"
+              onClick={handleDeleteSkill}
+              disabled={deleteBlocked || deleteSkill.isPending}
+              title={deleteBlocked ? "Remove this Skill from all Agents before deleting it" : undefined}
+              style={{ borderColor: "var(--err)", color: "var(--err)" }}
+            >
+              {deleteSkill.isPending ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
+              Delete
             </button>
           ) : null}
         </div>
