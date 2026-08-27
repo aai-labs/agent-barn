@@ -514,7 +514,7 @@ export function AgentChannelSettings({
                   </div>
                 )}
                 {platforms.data && platforms.data.length > 0 && (
-                  <div className="mt-3 grid gap-2.5 sm:grid-cols-3">
+                  <div className="mt-3 grid gap-2.5 sm:grid-cols-2">
                     {platforms.data.map((platform) => (
                       <PlatformOption
                         key={platform.key}
