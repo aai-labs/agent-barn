@@ -13,6 +13,13 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
 
 ## Changes
 
+### 2026-08-27 — AF-118 — Server-side Teams app package — PR pending
+
+- Delivered: A new `build_app_package` Platform Plugin seam, declared through the existing `APPLICATION_PROVISIONING` capability, and a Teams implementation that produces a sideloadable app package server-side. `GET /agents/{agent_id}/connections/{connection_id}/app-package` streams the zip; the schema-driven Connection panel offers a download button for any platform declaring the capability, so no platform is hard-coded in the UI. The manifest uses schema v1.17, takes publisher/website/privacy/terms values from configuration, and derives a stable manifest id from the Connection id so re-downloading updates the tenant's existing app rather than registering a second one.
+- Changed: `PlatformPlugin` gained the optional `build_app_package` seam, defaulting to `NotImplementedError` like the other opt-in seams. Package generation uses only the standard library, so no dependency was added; the two required icons ship as assets under `api/domains/communications/assets/`.
+- Notes: An operator can install a bot into a team or group chat only through an app package — Azure's *Open in Teams* covers personal scope alone — so this closes the last manual step that had no supported path. The package deliberately carries no credential material: the App ID it contains is public by design and appears in every Teams manifest. Publisher URLs are validated as public `https` before packaging, because Teams rejects uploads referencing unreachable hosts.
+- Follow-up: The shipped icons are neutral defaults; per-Connection branding is not yet supported.
+
 ### 2026-08-26 — AF-118 — Resolve Teams channel names — PR pending
 
 - Delivered: Teams now implements the `enrich_inbound` seam, resolving a channel's display name through the Bot Framework Teams extension (`GET {serviceUrl}/v3/teams/{teamId}/conversations`) when the inbound payload carries none. Results are cached per team, scoped by a hash of the acquired bot token so two Connections can never share a cached name — matching the existing Telegram and Discord scoping. `normalize_inbound` now records `team_id` from `channelData.team.id`, since enrichment sees envelopes rather than the provider payload.

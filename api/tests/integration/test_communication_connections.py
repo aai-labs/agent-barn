@@ -1,4 +1,7 @@
-from uuid import UUID
+import io
+import json
+import zipfile
+from uuid import UUID, uuid4
 
 from fastapi import status
 from hamcrest import all_of, assert_that, contains_inanyorder, contains_string, equal_to, has_entries, has_key, not_
@@ -42,6 +45,7 @@ _GIVEN = [
             "SKIP_SLACK_TOKEN_VALIDATION": "true",
             "SKIP_TELEGRAM_TOKEN_VALIDATION": "true",
             "SKIP_DISCORD_TOKEN_VALIDATION": "true",
+            "SKIP_TEAMS_TOKEN_VALIDATION": "true",
         }
     ),
     prepare_injector(modules=[MockK8sModule(), MockLiteLLMModule()]),
@@ -379,3 +383,73 @@ def test_ingress_lease_allows_only_one_gateway_replica() -> None:
             assert_that(first, equal_to(True))
             assert_that(second, equal_to(False))
             assert_that(after_release, equal_to(True))
+
+
+def _teams_payload(name: str = "Microsoft Teams") -> dict:
+    return {
+        "platform_key": "teams",
+        "display_name": name,
+        "credentials": {
+            "app_id": "11111111-1111-4111-8111-111111111111",
+            "app_password": "azure-client-secret",
+            "tenant_id": "22222222-2222-4222-8222-222222222222",
+        },
+    }
+
+
+def test_teams_connection_serves_a_downloadable_app_package() -> None:
+    with given(_GIVEN) as context:
+        created = context.client.post(_base(context), json=_teams_payload(), headers=_auth(context))
+        connection_id = created.json()["id"]
+
+        with when("I download the Teams app package for the Connection"):
+            response = context.client.get(
+                f"{_base(context)}/{connection_id}/app-package",
+                headers=_auth(context),
+            )
+
+        with then("a Teams-installable zip is returned"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(response.headers["content-type"], equal_to("application/zip"))
+            assert_that(response.headers["content-disposition"], contains_string(".zip"))
+            with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
+                assert_that(sorted(archive.namelist()), equal_to(["color.png", "manifest.json", "outline.png"]))
+                manifest = json.loads(archive.read("manifest.json"))
+            assert_that(manifest["bots"][0]["botId"], equal_to("11111111-1111-4111-8111-111111111111"))
+            assert_that("azure-client-secret" in archive_text(response.content), equal_to(False))
+
+
+def test_app_package_is_rejected_for_a_platform_without_provisioning() -> None:
+    with given(_GIVEN) as context:
+        created = context.client.post(_base(context), json=_discord_payload(), headers=_auth(context))
+        connection_id = created.json()["id"]
+
+        with when("I request an app package for Discord"):
+            response = context.client.get(
+                f"{_base(context)}/{connection_id}/app-package",
+                headers=_auth(context),
+            )
+
+        with then("the platform reports it provides no installable package"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+
+
+def test_app_package_is_concealed_across_organizations() -> None:
+    with given(_GIVEN) as context:
+        created = context.client.post(_base(context), json=_teams_payload(), headers=_auth(context))
+        connection_id = created.json()["id"]
+        other_agent_id = uuid4()
+
+        with when("I request the package through another Agent's path"):
+            response = context.client.get(
+                f"{_base_for_agent(context, other_agent_id)}/{connection_id}/app-package",
+                headers=_auth(context),
+            )
+
+        with then("the Connection is concealed"):
+            assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
+
+
+def archive_text(payload: bytes) -> str:
+    with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+        return archive.read("manifest.json").decode()

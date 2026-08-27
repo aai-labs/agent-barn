@@ -53,6 +53,25 @@ export function useCommunicationConnections(agentId: string) {
   });
 }
 
+export function useDownloadAppPackage() {
+  const orgApiBase = useOrganizationApiBase();
+
+  return async function downloadAppPackage(agentId: string, connectionId: string, fallbackName: string) {
+    const response = await api.getFile(`${orgApiBase}/agents/${agentId}/connections/${connectionId}/app-package`);
+    const filename =
+      /filename="([^"]+)"/.exec(response.headers?.["content-disposition"] ?? "")?.[1] ?? `${fallbackName}.zip`;
+    const objectUrl = URL.createObjectURL(response.data);
+    try {
+      const link = document.createElement("a");
+      link.href = objectUrl;
+      link.download = filename;
+      link.click();
+    } finally {
+      URL.revokeObjectURL(objectUrl);
+    }
+  };
+}
+
 export function useCommunicationConnectionActions() {
   const orgApiBase = useOrganizationApiBase();
   const { selectedOrganization } = useOrganizationContext();

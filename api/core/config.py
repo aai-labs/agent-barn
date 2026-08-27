@@ -57,6 +57,12 @@ class Config(BaseSettings):
     skip_telegram_token_validation: bool = False
     skip_discord_token_validation: bool = False
     skip_teams_token_validation: bool = False
+    # Shown to Teams administrators reviewing a generated app package. Must be
+    # publicly reachable or Teams rejects the upload.
+    teams_publisher_name: str = "AAI Labs"
+    teams_publisher_website_url: str = "https://aai-labs.com"
+    teams_privacy_url: str = "https://aai-labs.com/privacy"
+    teams_terms_url: str = "https://aai-labs.com/terms"
     slack_directory_cache_ttl_seconds: int = 600
     # Socket timeout for Slack Web API calls. Large sweeps (e.g. users.list can be
     # ~320KB) are slow over a poor link; too tight a timeout cuts the body off

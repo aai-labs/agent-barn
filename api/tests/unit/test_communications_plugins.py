@@ -1,3 +1,6 @@
+import io
+import json
+import zipfile
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import Any
@@ -35,6 +38,10 @@ class ValidationConfig:
     skip_slack_token_validation: bool = True
     skip_telegram_token_validation: bool = True
     skip_teams_token_validation: bool = True
+    teams_publisher_name: str = "Agent Barn"
+    teams_publisher_website_url: str = "https://example.test"
+    teams_privacy_url: str = "https://example.test/privacy"
+    teams_terms_url: str = "https://example.test/terms"
 
 
 def test_registry_lists_shipped_plugins_in_stable_order() -> None:
@@ -909,3 +916,77 @@ def test_teams_enrich_lookup_failure_leaves_the_envelope_intact() -> None:
 
     assert enriched[0].location.id == _TEAMS_CHANNEL_ID
     assert enriched[0].location.display_name is None
+
+
+def test_teams_descriptor_declares_application_provisioning() -> None:
+    assert PlatformCapability.APPLICATION_PROVISIONING in _teams_plugin().descriptor.capabilities
+
+
+def test_teams_app_package_contains_a_valid_manifest_and_icons() -> None:
+    plugin = _teams_plugin()
+    connection_id = uuid4()
+
+    filename, payload = plugin.build_app_package(
+        plugin.settings_model.model_validate({}),
+        _teams_credentials(plugin),
+        connection_id=connection_id,
+        display_name="Aria",
+    )
+
+    assert filename == "aria-teams-app.zip"
+    with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+        assert sorted(archive.namelist()) == ["color.png", "manifest.json", "outline.png"]
+        manifest = json.loads(archive.read("manifest.json"))
+        assert archive.read("color.png").startswith(b"\x89PNG")
+        assert archive.read("outline.png").startswith(b"\x89PNG")
+
+    assert manifest["manifestVersion"] == "1.17"
+    assert manifest["bots"][0]["botId"] == "app-1"
+    assert manifest["bots"][0]["scopes"] == ["personal", "team", "groupChat"]
+    assert manifest["developer"]["websiteUrl"] == "https://example.test"
+
+
+def test_teams_app_package_manifest_id_is_stable_per_connection() -> None:
+    plugin = _teams_plugin()
+    settings = plugin.settings_model.model_validate({})
+    credentials = _teams_credentials(plugin)
+    connection_id = uuid4()
+
+    def manifest_id(cid) -> str:
+        _, payload = plugin.build_app_package(settings, credentials, connection_id=cid, display_name="Aria")
+        with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+            return json.loads(archive.read("manifest.json"))["id"]
+
+    # Re-downloading must update the tenant's existing app, not register a second.
+    assert manifest_id(connection_id) == manifest_id(connection_id)
+    assert manifest_id(connection_id) != manifest_id(uuid4())
+
+
+def test_teams_app_package_never_carries_credentials() -> None:
+    plugin = _teams_plugin()
+
+    _, payload = plugin.build_app_package(
+        plugin.settings_model.model_validate({}),
+        _teams_credentials(plugin),
+        connection_id=uuid4(),
+        display_name="Aria",
+    )
+
+    with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+        manifest = archive.read("manifest.json").decode()
+    assert "secret" not in manifest
+    assert "tenant-1" not in manifest
+
+
+def test_teams_app_package_rejects_a_non_public_publisher_url() -> None:
+    config = ValidationConfig()
+    config.teams_privacy_url = "http://internal.cluster.local/privacy"
+    plugin = TeamsPlatformPlugin(config)
+
+    with pytest.raises(ValueError, match="privacy policy"):
+        plugin.build_app_package(
+            plugin.settings_model.model_validate({}),
+            _teams_credentials(plugin),
+            connection_id=uuid4(),
+            display_name="Aria",
+        )

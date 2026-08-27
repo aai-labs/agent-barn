@@ -1,6 +1,7 @@
 import logging
 from datetime import UTC, datetime
 from typing import Any, Protocol
+from uuid import UUID
 
 from pydantic import Field
 
@@ -23,6 +24,7 @@ from api.infrastructure.msteams.client import (
     send_activity,
     verify_inbound_jwt,
 )
+from api.infrastructure.msteams.manifest import build_app_package as build_teams_app_package
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +34,10 @@ _PERSONAL_CONVERSATION_TYPE = "personal"
 
 class TeamsValidationConfig(Protocol):
     skip_teams_token_validation: bool
+    teams_publisher_name: str
+    teams_publisher_website_url: str
+    teams_privacy_url: str
+    teams_terms_url: str
 
 
 class TeamsSettings(PlatformSettings):
@@ -102,6 +108,7 @@ class TeamsPlatformPlugin(PlatformPlugin):
     )
     capabilities = frozenset(
         {
+            PlatformCapability.APPLICATION_PROVISIONING,
             PlatformCapability.WEBHOOK_INGRESS,
             PlatformCapability.MENTIONS,
             PlatformCapability.THREADS,
@@ -113,6 +120,10 @@ class TeamsPlatformPlugin(PlatformPlugin):
 
     def __init__(self, config: TeamsValidationConfig) -> None:
         self._skip_validation = config.skip_teams_token_validation
+        self._publisher_name = config.teams_publisher_name
+        self._website_url = config.teams_publisher_website_url
+        self._privacy_url = config.teams_privacy_url
+        self._terms_url = config.teams_terms_url
 
     def validate_external(self, settings: PlatformSettings, credentials: PlatformCredentials) -> str | None:
         assert isinstance(credentials, TeamsCredentials)
@@ -124,6 +135,26 @@ class TeamsPlatformPlugin(PlatformPlugin):
     def fingerprint_material(self, credentials: PlatformCredentials) -> str:
         assert isinstance(credentials, TeamsCredentials)
         return f"{credentials.tenant_id}:{credentials.app_id}"
+
+    def build_app_package(
+        self,
+        settings: PlatformSettings,
+        credentials: PlatformCredentials,
+        *,
+        connection_id: UUID,
+        display_name: str,
+    ) -> tuple[str, bytes]:
+        del settings
+        assert isinstance(credentials, TeamsCredentials)
+        return build_teams_app_package(
+            connection_id=connection_id,
+            app_id=credentials.app_id,
+            display_name=display_name,
+            publisher_name=self._publisher_name,
+            website_url=self._website_url,
+            privacy_url=self._privacy_url,
+            terms_url=self._terms_url,
+        )
 
     def verify_webhook(
         self,
