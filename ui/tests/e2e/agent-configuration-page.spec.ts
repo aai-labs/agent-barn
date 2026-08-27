@@ -606,7 +606,7 @@ test.describe("Agent configuration page", () => {
 
     await configurationPage.goto(MOCK_AGENT_ID, TEST_ORG_ID);
     await configurationPage.sectionButton("Skills").click();
-    await expect(page.getByText("v1")).toBeVisible();
+    await expect(page.getByRole("combobox", { name: "Version for my-tool" })).toHaveText("Version v1");
     await expect(page.getByRole("button", { name: "Edit", exact: true })).toHaveCount(0);
 
     await page.getByRole("combobox", { name: "Version for my-tool" }).click();

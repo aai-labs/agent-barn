@@ -106,6 +106,37 @@ export const mockBitbucketSkill = {
 export class SkillDataSupport {
   constructor(private page: Page) {}
 
+  async interceptGetPlatformSkillsRequest({
+    status = 200,
+    detail = "Unable to load platform skills",
+    body,
+  }: {
+    status?: number;
+    detail?: string;
+    body?: unknown;
+  } = {}) {
+    await this.page.route("**/api/v1/platform/skills*", async (route) => {
+      if (route.request().method() !== "GET") {
+        await route.fallback();
+        return;
+      }
+      const url = new URL(route.request().url());
+      if (url.pathname !== "/api/v1/platform/skills") {
+        await route.fallback();
+        return;
+      }
+      await route.fulfill({
+        status,
+        contentType: "application/json",
+        body: JSON.stringify(status >= 400 ? { detail } : (body ?? [
+          mockPlatformSkill,
+          mockJiraSkill,
+          mockGoogleWorkspaceSkill,
+        ])),
+      });
+    });
+  }
+
   async interceptGetSkillsRequest({
     status = 200,
     detail = "Unable to load skills",
@@ -221,13 +252,22 @@ export class SkillDataSupport {
     status = 200,
     files = [{ path: "SKILL.md", content: "# My tool" }],
     skill = mockCustomSkill,
+    scope = "organization",
+    agentId = MOCK_AGENT_ID,
   }: {
     skillId?: string;
     status?: number;
     files?: { path: string; content: string }[];
     skill?: Record<string, unknown>;
+    scope?: "organization" | "platform" | "agent";
+    agentId?: string;
   } = {}) {
-    await this.page.route(`**/api/v1/organizations/*/skills/${skillId}/files`, async (route) => {
+    const path = scope === "platform"
+      ? `**/api/v1/platform/skills/${skillId}/files`
+      : scope === "agent"
+        ? `**/api/v1/organizations/*/agents/${agentId}/skills/${skillId}/files`
+        : `**/api/v1/organizations/*/skills/${skillId}/files`;
+    await this.page.route(path, async (route) => {
       if (route.request().method() !== "GET") {
         await route.fallback();
         return;
@@ -420,12 +460,21 @@ export class SkillDataSupport {
     versions = [
       { version: 1, created_by: null, created_at: "2026-01-01T00:00:00Z", is_pinned_by_agent: false },
     ],
+    scope = "organization",
+    agentId = MOCK_AGENT_ID,
   }: {
     skillId?: string;
     status?: number;
     versions?: Record<string, unknown>[];
+    scope?: "organization" | "platform" | "agent";
+    agentId?: string;
   } = {}) {
-    await this.page.route(`**/api/v1/organizations/*/skills/${skillId}/versions`, async (route) => {
+    const path = scope === "platform"
+      ? `**/api/v1/platform/skills/${skillId}/versions`
+      : scope === "agent"
+        ? `**/api/v1/organizations/*/agents/${agentId}/skills/${skillId}/versions`
+        : `**/api/v1/organizations/*/skills/${skillId}/versions`;
+    await this.page.route(path, async (route) => {
       if (route.request().method() !== "GET") {
         await route.fallback();
         return;

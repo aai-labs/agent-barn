@@ -25,6 +25,7 @@ import { SKILL_PROVIDER_LABELS } from "@/features/skills/utils";
 import { skillDetailHref, skillNewHref, type SkillScopeRef } from "@/features/skills/scope";
 import { SkillScopeBadge } from "@/features/skills/components/skill-scope-badge";
 import { SkillSourceBadge } from "@/features/skills/components/skill-source-badge";
+import { SkillCard } from "@/features/skills/components/skill-card";
 import { useLoadMoreOnScroll } from "@/hooks/use-load-more-on-scroll";
 import type { Skill } from "@/features/skills/schemas";
 
@@ -501,32 +502,39 @@ export const AgentSkillsTab = forwardRef<
             {search ? "No skills match." : "No more skills to add."}
           </div>
         )}
-        {!isLoading && availableSkills.map((skill) => (
-          <AvailableSkillRow
-            key={skill.id}
-            skill={skill}
-            href={skillDetailHref(scope, agent.organizationId, skill.id)}
-            isRunning={isRunning}
-            onAdd={() => addSkill(skill)}
-          />
-        ))}
-        {hasNextPage && (
+        {!isLoading && (
           <div
-            ref={loadMoreRef}
-            className="flex items-center justify-center gap-2 py-4 text-[0.75rem]"
-            style={{ color: "var(--ink-4)" }}
+            className="grid gap-4"
+            style={{ gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))" }}
           >
-            <Loader2 size={14} className={isFetchingNextPage ? "animate-spin" : "invisible"} />
-            {isFetchingNextPage ? "Loading more skills…" : "Scroll to load more skills…"}
+            {availableSkills.map((skill) => (
+              <SkillCard
+                key={skill.id}
+                skill={skill}
+                href={skillDetailHref(scope, agent.organizationId, skill.id)}
+                addDisabled={isRunning}
+                onAdd={() => addSkill(skill)}
+              />
+            ))}
+            {hasNextPage && (
+              <div
+                ref={loadMoreRef}
+                className="col-span-full flex items-center justify-center gap-2 py-4 text-[0.75rem]"
+                style={{ color: "var(--ink-4)" }}
+              >
+                <Loader2 size={14} className={isFetchingNextPage ? "animate-spin" : "invisible"} />
+                {isFetchingNextPage ? "Loading more skills…" : "Scroll to load more skills…"}
+              </div>
+            )}
+            {isFetchingNextPageError && (
+              <p className="col-span-full m-0 py-3 text-center text-[0.75rem]" style={{ color: "var(--err)" }}>
+                Unable to load more skills. {" "}
+                <button type="button" className="underline" onClick={() => void fetchNextPage()}>
+                  Try again
+                </button>
+              </p>
+            )}
           </div>
-        )}
-        {isFetchingNextPageError && (
-          <p className="m-0 py-3 text-center text-[0.75rem]" style={{ color: "var(--err)" }}>
-            Unable to load more skills. {" "}
-            <button type="button" className="underline" onClick={() => void fetchNextPage()}>
-              Try again
-            </button>
-          </p>
         )}
       </div>
 
@@ -651,62 +659,6 @@ function AssignedSkillRow({
           Remove
         </button>
       )}
-    </div>
-  );
-}
-
-function AvailableSkillRow({
-  skill,
-  href,
-  isRunning,
-  onAdd,
-}: {
-  skill: Skill;
-  href: string;
-  isRunning: boolean;
-  onAdd: () => void;
-}) {
-  return (
-    <div
-      className="flex items-center gap-2 px-3.5 py-2.5 rounded-2xl"
-      style={{ border: "1px solid var(--line)" }}
-    >
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2">
-          <Link href={href} className="font-medium text-[0.844rem] hover:underline" style={{ color: "var(--ink)" }}>
-            {skill.name}
-          </Link>
-          <SkillScopeBadge scope={skill.scope} />
-          <SkillSourceBadge source={skill.source} />
-        </div>
-        {skill.requiredProviders.length > 0 && (
-          <span className="text-[0.75rem]" style={{ color: "var(--ink-4)" }}>
-            Requires:{" "}
-            {skill.requiredProviders
-              .map((p) => SKILL_PROVIDER_LABELS[p] ?? p)
-              .join(", ")}
-          </span>
-        )}
-        {skill.description && (
-          <p className="m-0 mt-1 text-[0.75rem] leading-5" style={{ color: "var(--ink-4)" }}>
-            {skill.description}
-          </p>
-        )}
-      </div>
-      <Link
-        href={href}
-        className="af-btn af-btn-sm af-btn-ghost"
-        aria-label={`View details for ${skill.name}`}
-      >
-        Details
-      </Link>
-      <button
-        className="af-btn af-btn-sm af-btn-ghost"
-        disabled={isRunning}
-        onClick={onAdd}
-      >
-        Add
-      </button>
     </div>
   );
 }

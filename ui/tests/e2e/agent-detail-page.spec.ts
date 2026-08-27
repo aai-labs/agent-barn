@@ -740,16 +740,80 @@ test.describe("Agent Detail Page — Skills tab", () => {
 
   test("shows available skills with source badges", async ({ page }) => {
     await expect(page.getByText("Add skills")).toBeVisible();
-    await expect(page.getByText(mockPlatformSkill.name, { exact: true })).toBeVisible();
-    await expect(page.getByText(mockCustomSkill.name)).toBeVisible();
-    await expect(page.getByRole("link", { name: `View details for ${mockPlatformSkill.name}` })).toBeVisible();
+    const platformSkillCard = page.getByRole("link", { name: /github/ }).first();
+    await expect(platformSkillCard).toBeVisible();
+    await expect(platformSkillCard.getByText("Built in")).toBeVisible();
+    await expect(page.getByRole("link", { name: /my-tool/ }).first()).toBeVisible();
+    await expect(page.getByRole("button", { name: "Add", exact: true })).toHaveCount(4);
+    await expect(
+      page.getByRole("link", { name: `View details for ${mockPlatformSkill.name}` }),
+    ).toHaveCount(0);
     await expect(agentDetailPage.skillsSearchInput()).toBeVisible();
+  });
+
+  test("opens an available skill detail page and returns to Agent skills", async ({ page }) => {
+    await page.route(
+      `**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}/skills/${MOCK_PLATFORM_SKILL_ID}/files`,
+      async (route) => {
+        if (route.request().method() !== "GET") {
+          await route.fallback();
+          return;
+        }
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            ...mockPlatformSkill,
+            files: [{ path: "github_skill.md", content: "# GitHub" }],
+          }),
+        });
+      },
+    );
+    await page.route(
+      `**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}/skills/${MOCK_PLATFORM_SKILL_ID}/versions`,
+      async (route) => {
+        if (route.request().method() !== "GET") {
+          await route.fallback();
+          return;
+        }
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify([
+            {
+              version: 1,
+              created_by: null,
+              created_at: "2026-01-01T00:00:00Z",
+              is_pinned_by_agent: false,
+            },
+          ]),
+        });
+      },
+    );
+
+    await page.getByRole("link", { name: /github/ }).click();
+
+    await expect(page).toHaveURL(
+      new RegExp(`/agents/${MOCK_AGENT_ID}/skills/${MOCK_PLATFORM_SKILL_ID}$`),
+    );
+    await expect(page.getByRole("heading", { name: mockPlatformSkill.name })).toBeVisible();
+
+    const backLink = page.getByRole("link", { name: "Agent skills" });
+    await expect(backLink).toHaveAttribute(
+      "href",
+      `/dashboard/${TEST_ORG_ID}/agents/${MOCK_AGENT_ID}/configuration?section=skills`,
+    );
+    await backLink.click();
+    await expect(page).toHaveURL(
+      new RegExp(`/agents/${MOCK_AGENT_ID}/configuration\\?section=skills$`),
+    );
+    await expect(page.getByText("Add skills", { exact: true })).toBeVisible();
   });
 
   test("search filters available skills", async ({ page }) => {
     await agentDetailPage.skillsSearchInput().fill(mockCustomSkill.name);
-    await expect(page.getByText(mockCustomSkill.name)).toBeVisible();
-    await expect(page.getByText(mockPlatformSkill.name, { exact: true })).not.toBeVisible();
+    await expect(page.getByRole("link", { name: /my-tool/ })).toBeVisible();
+    await expect(page.getByRole("link", { name: /github/ })).not.toBeVisible();
   });
 
   test("adding a skill moves it to the pending Assigned section", async ({ page }) => {
