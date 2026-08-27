@@ -158,7 +158,7 @@ class CommunicationsService:
         connection_id: UUID,
         context: CurrentUserContext,
     ) -> tuple[str, bytes]:
-        self.authorization.require_action(context, agent_id, PermissionKey.AGENT_UPDATE)
+        agent = self.authorization.require_action(context, agent_id, PermissionKey.AGENT_UPDATE)
         scope = self.authorization.authorization_scope(context, PermissionKey.AGENT_UPDATE)
         connection = self.repository.get_active_in_scope(connection_id, agent_id, scope)
         if connection is None:
@@ -178,7 +178,9 @@ class CommunicationsService:
                     self._decrypt_credentials(plugin, connection.credentials_encrypted)
                 ),
                 connection_id=connection.id,
-                display_name=connection.display_name,
+                # The package names the bot as people see it in the provider, so
+                # it carries the Agent's name, not the Connection's UI label.
+                display_name=agent.name,
             )
         except (ValidationError, ValueError) as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc

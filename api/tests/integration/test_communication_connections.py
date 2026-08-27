@@ -453,3 +453,27 @@ def test_app_package_is_concealed_across_organizations() -> None:
 def archive_text(payload: bytes) -> str:
     with zipfile.ZipFile(io.BytesIO(payload)) as archive:
         return archive.read("manifest.json").decode()
+
+
+def test_app_package_is_named_after_the_agent_not_the_connection() -> None:
+    with given(_GIVEN) as context:
+        created = context.client.post(
+            _base(context),
+            json=_teams_payload(name="Microsoft Teams"),
+            headers=_auth(context),
+        )
+        connection_id = created.json()["id"]
+
+        with when("I download the package for a Connection labelled with the platform name"):
+            response = context.client.get(
+                f"{_base(context)}/{connection_id}/app-package",
+                headers=_auth(context),
+            )
+
+        with then("the bot is named after the Agent, so two Agents never collide in Teams"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            manifest = json.loads(archive_text(response.content))
+            assert_that(manifest["name"]["short"], equal_to(context.agent.name))
+            assert_that(manifest["name"]["short"], not_(equal_to("Microsoft Teams")))
+            slug = context.agent.name.lower().replace(" ", "-")
+            assert_that(response.headers["content-disposition"], contains_string(f"{slug}-teams-app.zip"))
