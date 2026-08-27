@@ -87,6 +87,25 @@ def _auth(context) -> dict:
     return {"Authorization": f"Bearer {context.access_token}"}
 
 
+def _save_draft_only_skill(context, *, name: str, global_skill: bool = False):
+    from api.domains.skills.models import Skill, SkillSource
+
+    repository: SkillRepository = context.injector.get(SkillRepository)
+    slug = f"draft-only-{uuid7().hex}"
+    skill = Skill(
+        organization_id=None if global_skill else context.organization.id,
+        name=name,
+        slug=slug,
+        root_dir=slug,
+        entry_path="SKILL.md",
+        source=SkillSource.CUSTOM,
+        required_providers=[],
+    )
+    repository.save(skill)
+    repository.save_new_draft(skill.id, [("SKILL.md", f"# {name}")])
+    return skill
+
+
 def _platform_version(template_key: str, version: int, **overrides: str) -> PlatformTemplate:
     return PlatformTemplate(
         template_key=template_key,
@@ -376,6 +395,72 @@ def test_platform_admin_can_create_edit_and_discard_a_new_draft():
                 client.get(f"{_PLATFORM_TEMPLATES_BASE}/{template_key}/draft", headers=_auth(context)).status_code,
                 equal_to(status.HTTP_404_NOT_FOUND),
             )
+
+
+def test_platform_template_draft_rejects_an_unpublished_required_skill():
+    with given([*_GIVEN, _there_is_a_platform_admin_actor()]) as context:
+        skill = _save_draft_only_skill(context, name="Unpublished Platform Requirement", global_skill=True)
+
+        response = context.client.post(
+            _PLATFORM_TEMPLATES_BASE,
+            json={
+                "template_name": "Draft With Unpublished Skill",
+                "required_skill_ids": [str(skill.id)],
+            },
+            headers=_auth(context),
+        )
+
+        assert_that(response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_ENTITY))
+        assert_that(response.json()["detail"], contains_string("published version"))
+
+
+def test_platform_template_draft_resolves_standalone_and_group_versions_together():
+    with given(
+        [
+            *_GIVEN,
+            _there_is_a_platform_admin_actor(),
+            there_is_a_skill(name="Platform Standalone", global_skill=True),
+            there_is_a_skill(name="Platform Group A", global_skill=True),
+            there_is_a_skill(name="Platform Group B", global_skill=True),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        repository: SkillRepository = context.injector.get(SkillRepository)
+        skills = {skill.name: skill for skill in repository.find_all_global()}
+        standalone = skills["Platform Standalone"]
+        group_a = skills["Platform Group A"]
+        group_b = skills["Platform Group B"]
+        payload = {
+            "required_skill_ids": [str(standalone.id)],
+            "required_skill_groups": [
+                {"group_key": "platform-a-or-b", "skill_ids": [str(group_a.id), str(group_b.id)]}
+            ],
+            "required_skill_versions": {
+                str(standalone.id): 1,
+                str(group_a.id): 1,
+                str(group_b.id): 1,
+            },
+        }
+
+        draft = client.post(
+            _PLATFORM_TEMPLATES_BASE,
+            json={"template_name": "Combined Platform Requirements"},
+            headers=_auth(context),
+        )
+        assert_that(draft.status_code, equal_to(status.HTTP_201_CREATED))
+        template_key = draft.json()["template_key"]
+
+        response = client.patch(
+            f"{_PLATFORM_TEMPLATES_BASE}/{template_key}/draft",
+            json={"soul_md": "# Updated", **payload},
+            headers=_auth(context),
+        )
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+        required = {item["id"]: item for item in response.json()["required_skills"]}
+        assert_that(required[str(standalone.id)]["version"], equal_to(1))
+        assert_that(required[str(group_a.id)]["version"], equal_to(1))
+        assert_that(required[str(group_b.id)]["version"], equal_to(1))
 
 
 def test_platform_admin_can_publish_a_draft_as_the_next_immutable_version():
@@ -853,6 +938,23 @@ def test_create_template_with_required_skills_stores_them():
             assert_that(len(get_resp.json()["required_skills"]), equal_to(1))
 
 
+def test_create_template_rejects_an_unpublished_required_skill():
+    with given(_GIVEN) as context:
+        skill = _save_draft_only_skill(context, name="Unpublished Organization Requirement")
+
+        response = context.client.post(
+            _BASE,
+            json={
+                "template_name": "Template With Unpublished Skill",
+                "required_skill_ids": [str(skill.id)],
+            },
+            headers=_auth(context),
+        )
+
+        assert_that(response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_ENTITY))
+        assert_that(response.json()["detail"], contains_string("published version"))
+
+
 def test_create_template_can_pin_a_required_skill_to_a_selected_version():
     with given([*_GIVEN, there_is_a_skill(name="Jira")]) as context:
         client: TestClient = context.client
@@ -1181,6 +1283,54 @@ def test_update_template_replaces_skills():
             assert_that(body["version"], equal_to(2))
             assert_that(len(body["required_skills"]), equal_to(1))
             assert_that(body["required_skills"][0]["name"], equal_to("Confluence"))
+
+
+def test_update_template_resolves_standalone_and_group_versions_together():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_skill(name="Organization Standalone"),
+            there_is_a_skill(name="Organization Group A"),
+            there_is_a_skill(name="Organization Group B"),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        repository: SkillRepository = context.injector.get(SkillRepository)
+        skills = {skill.name: skill for skill in repository.find_accessible_for_org(context.organization.id)}
+        standalone = skills["Organization Standalone"]
+        group_a = skills["Organization Group A"]
+        group_b = skills["Organization Group B"]
+        payload = {
+            "required_skill_ids": [str(standalone.id)],
+            "required_skill_groups": [
+                {"group_key": "organization-a-or-b", "skill_ids": [str(group_a.id), str(group_b.id)]}
+            ],
+            "required_skill_versions": {
+                str(standalone.id): 1,
+                str(group_a.id): 1,
+                str(group_b.id): 1,
+            },
+        }
+
+        create = client.post(
+            _BASE,
+            json={"template_name": "Combined Organization Requirements", **payload},
+            headers=_auth(context),
+        )
+        assert_that(create.status_code, equal_to(status.HTTP_201_CREATED))
+        template_key = create.json()["template_key"]
+
+        response = client.patch(
+            f"{_BASE}/{template_key}",
+            json={"soul_md": "# Updated", **payload},
+            headers=_auth(context),
+        )
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+        required = {item["id"]: item for item in response.json()["required_skills"]}
+        assert_that(required[str(standalone.id)]["version"], equal_to(1))
+        assert_that(required[str(group_a.id)]["version"], equal_to(1))
+        assert_that(required[str(group_b.id)]["version"], equal_to(1))
 
 
 def test_update_template_clears_skills():

@@ -53,7 +53,7 @@ export function SkillNewPage({ scope }: { scope: SkillScopeRef }) {
         requiredProviders: selectedProviders,
       };
       const created = await createSkill.mutateAsync(payload);
-      router.push(skillDetailHref(scope, orgId, created.id));
+      router.push(`${skillDetailHref(scope, orgId, created.id)}?edit=1`);
     } catch {
       // error displayed via createSkill.error
     }

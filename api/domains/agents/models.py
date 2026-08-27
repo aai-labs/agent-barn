@@ -464,7 +464,7 @@ class AgentTemplateSkill(BaseModel, table=True):
     __tablename__: str = "agent_template_skill"
 
     __table_args__ = (
-        sa.UniqueConstraint("template_id", "skill_id", "skill_version", name="uq_agent_template_skill"),
+        sa.UniqueConstraint("template_id", "skill_id", name="uq_agent_template_skill"),
         sa.Index("ix_agent_template_skill_template", "template_id"),
         sa.ForeignKeyConstraint(
             ["skill_id", "skill_version"],
@@ -591,7 +591,7 @@ class AgentTemplateOverrideDraftSkill(BaseModel, table=True):
     __tablename__: str = "agent_template_override_draft_skill"
 
     __table_args__ = (
-        sa.UniqueConstraint("draft_id", "skill_id", "skill_version", name="uq_agent_template_override_draft_skill"),
+        sa.UniqueConstraint("draft_id", "skill_id", name="uq_agent_template_override_draft_skill"),
         sa.Index("ix_agent_template_override_draft_skill_draft", "draft_id"),
         sa.ForeignKeyConstraint(
             ["skill_id", "skill_version"],
@@ -615,7 +615,7 @@ class AgentTemplateOverrideVersionSkill(BaseModel, table=True):
     __tablename__: str = "agent_template_override_version_skill"
 
     __table_args__ = (
-        sa.UniqueConstraint("version_id", "skill_id", "skill_version", name="uq_agent_template_override_version_skill"),
+        sa.UniqueConstraint("version_id", "skill_id", name="uq_agent_template_override_version_skill"),
         sa.Index("ix_agent_template_override_version_skill_version", "version_id"),
         sa.ForeignKeyConstraint(
             ["skill_id", "skill_version"],
@@ -639,7 +639,7 @@ class PlatformTemplateSkill(BaseModel, table=True):
     __tablename__: str = "platform_template_skill"
 
     __table_args__ = (
-        sa.UniqueConstraint("template_id", "skill_id", "skill_version", name="uq_platform_template_skill"),
+        sa.UniqueConstraint("template_id", "skill_id", name="uq_platform_template_skill"),
         sa.Index("ix_platform_template_skill_template", "template_id"),
         sa.ForeignKeyConstraint(
             ["skill_id", "skill_version"],
@@ -665,7 +665,7 @@ class PlatformTemplateDraftSkill(BaseModel, table=True):
     # staged on a Draft Template Version, carried over to platform_template_skill
     # on publish.
     __table_args__ = (
-        sa.UniqueConstraint("draft_id", "skill_id", "skill_version", name="uq_platform_template_draft_skill"),
+        sa.UniqueConstraint("draft_id", "skill_id", name="uq_platform_template_draft_skill"),
         sa.Index("ix_platform_template_draft_skill_draft", "draft_id"),
         sa.ForeignKeyConstraint(
             ["skill_id", "skill_version"],

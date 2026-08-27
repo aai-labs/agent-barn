@@ -564,9 +564,17 @@ function AssignedSkillRow({
         value={String(pin)}
         onValueChange={(value) => onPinChange(Number(value))}
         onOpenChange={setPickerOpen}
-        disabled={isRunning}
+        disabled={isRunning || skill.required}
       >
-        <SelectTrigger className="w-auto min-w-24" aria-label={`Version for ${skill.name}`}>
+        <SelectTrigger
+          className="w-auto min-w-24"
+          aria-label={`Version for ${skill.name}`}
+          title={
+            skill.required
+              ? "Pinned by the active template; publish a new template version to change it."
+              : undefined
+          }
+        >
           <SelectValue placeholder="Version" />
         </SelectTrigger>
         <SelectContent>

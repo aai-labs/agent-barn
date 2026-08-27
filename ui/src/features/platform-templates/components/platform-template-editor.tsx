@@ -59,6 +59,7 @@ function emptyForm(): PlatformTemplateForm {
     files: blankPlatformTemplateFiles(),
     standaloneSkillIds: [],
     skillGroups: [],
+    skillVersions: {},
   };
 }
 
@@ -175,16 +176,24 @@ export function PlatformTemplateEditor({
     }));
   }
 
-  function toggleStandaloneSkill(skillId: string) {
+  function toggleStandaloneSkill(skillId: string, latestVersion: number | null) {
     patchForm((previous) => ({
       ...previous,
       standaloneSkillIds: previous.standaloneSkillIds.includes(skillId)
         ? previous.standaloneSkillIds.filter((id) => id !== skillId)
         : [...previous.standaloneSkillIds, skillId],
+      skillVersions: previous.standaloneSkillIds.includes(skillId)
+        ? Object.fromEntries(Object.entries(previous.skillVersions).filter(([id]) => id !== skillId))
+        : latestVersion === null
+          ? previous.skillVersions
+          : { ...previous.skillVersions, [skillId]: latestVersion },
     }));
   }
 
-  function toggleGroupSkill(groupKey: string, skillId: string) {
+  function toggleGroupSkill(groupKey: string, skillId: string, latestVersion: number | null) {
+    const group = form.skillGroups.find((item) => item.groupKey === groupKey);
+    const selected = group?.skillIds.includes(skillId) ?? false;
+    const canRemove = selected && (group?.skillIds.length ?? 0) > 1;
     patchForm((previous) => ({
       ...previous,
       skillGroups: previous.skillGroups.map((group) => {
@@ -198,6 +207,18 @@ export function PlatformTemplateEditor({
         }
         return { ...group, skillIds: [...group.skillIds, skillId] };
       }),
+      skillVersions: canRemove
+        ? Object.fromEntries(Object.entries(previous.skillVersions).filter(([id]) => id !== skillId))
+        : !selected && latestVersion !== null
+          ? { ...previous.skillVersions, [skillId]: latestVersion }
+          : previous.skillVersions,
+    }));
+  }
+
+  function updateSkillVersion(skillId: string, version: number) {
+    patchForm((previous) => ({
+      ...previous,
+      skillVersions: { ...previous.skillVersions, [skillId]: version },
     }));
   }
 
@@ -752,7 +773,10 @@ export function PlatformTemplateEditor({
                           key={skill.id}
                           skill={skill}
                           checked={form.standaloneSkillIds.includes(skill.id)}
-                          onChange={() => toggleStandaloneSkill(skill.id)}
+                          version={form.skillVersions[skill.id] ?? skill.version}
+                          onVersionChange={(version) => updateSkillVersion(skill.id, version)}
+                          showVersionPicker
+                          onChange={() => toggleStandaloneSkill(skill.id, skill.version)}
                         />
                       ))}
                     {form.skillGroups.map((group) => (
@@ -763,8 +787,11 @@ export function PlatformTemplateEditor({
                         skillMap={skillMap}
                         selectedSkillIds={selectedSkillIds}
                         onToggle={(skillId) =>
-                          toggleGroupSkill(group.groupKey, skillId)
+                          toggleGroupSkill(group.groupKey, skillId, skillMap.get(skillId)?.version ?? null)
                         }
+                        skillVersions={form.skillVersions}
+                        onVersionChange={updateSkillVersion}
+                        showVersionPicker
                       />
                     ))}
                     {visibleSkills.length === 0 &&

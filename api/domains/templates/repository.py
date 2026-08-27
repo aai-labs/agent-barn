@@ -50,6 +50,10 @@ class TemplateKeyCollisionError(RuntimeError):
     """Raised when a newly generated key is already used by any template row."""
 
 
+class SkillVersionResolutionError(ValueError):
+    """Raised when a legacy requirement has no published Skill Version."""
+
+
 _TEMPLATE_KEY_ALLOCATION_LOCK = "agent-barn.template-key-allocation"
 
 
@@ -81,7 +85,7 @@ def _resolve_skill_versions(session: Session, requirements: SkillRequirementInpu
             continue
         version = latest.get(skill_id)
         if version is None:
-            raise ValueError(f"Skill {skill_id} has no published version")
+            raise SkillVersionResolutionError(f"Skill {skill_id} has no published version")
         resolved[skill_id] = (version, value)
     return resolved
 

@@ -379,7 +379,7 @@ export function SkillDetailPage({
                   title: "Apply source update?",
                   description: detail.hasDraft
                     ? `Replace the current draft for ${detail.name} with the latest source version? Your draft changes will be replaced, but the result will remain unpublished.`
-                    : `Copy and publish the latest source version of ${detail.name}? Existing pins remain unchanged.`,
+                    : `Copy and publish the latest source version of ${detail.name}? Any local customizations in this lineage will be overwritten. Existing pins remain unchanged.`,
                   confirmLabel: "Apply update",
                   pendingLabel: "Applying…",
                   onConfirm: confirmSourceUpdate,

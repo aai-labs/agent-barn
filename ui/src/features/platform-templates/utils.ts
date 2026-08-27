@@ -29,6 +29,7 @@ export type PlatformTemplateForm = {
   files: PlatformTemplateFileValues;
   standaloneSkillIds: string[];
   skillGroups: SkillGroupDraft[];
+  skillVersions: Record<string, number>;
 };
 
 export function blankPlatformTemplateFiles(): PlatformTemplateFileValues {
@@ -48,12 +49,14 @@ export function formFromDraft(draft: {
   bootMd: string;
   bootstrapMd: string;
   heartbeatMd: string;
-  requiredSkills: Array<{ id: string; groupKey?: string | null }>;
+  requiredSkills: Array<{ id: string; version: number | null; groupKey?: string | null }>;
 }): PlatformTemplateForm {
   const grouped = new Map<string, string[]>();
   const standaloneSkillIds: string[] = [];
+  const skillVersions: Record<string, number> = {};
 
   for (const skill of draft.requiredSkills) {
+    if (skill.version !== null) skillVersions[skill.id] = skill.version;
     if (skill.groupKey) {
       grouped.set(skill.groupKey, [...(grouped.get(skill.groupKey) ?? []), skill.id]);
     } else {
@@ -76,12 +79,20 @@ export function formFromDraft(draft: {
     },
     standaloneSkillIds,
     skillGroups: Array.from(grouped, ([groupKey, skillIds]) => ({ groupKey, skillIds })),
+    skillVersions,
   };
 }
 
 export function requiredSkillPayload(form: PlatformTemplateForm) {
+  const selectedSkillIds = new Set([
+    ...form.standaloneSkillIds,
+    ...form.skillGroups.flatMap((group) => group.skillIds),
+  ]);
   return {
     requiredSkillIds: form.standaloneSkillIds,
     requiredSkillGroups: form.skillGroups.filter((group) => group.skillIds.length > 0),
+    requiredSkillVersions: Object.fromEntries(
+      Object.entries(form.skillVersions).filter(([skillId]) => selectedSkillIds.has(skillId)),
+    ),
   };
 }

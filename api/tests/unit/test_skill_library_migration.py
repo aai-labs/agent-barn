@@ -44,3 +44,27 @@ def test_mount_references_are_rewritten_to_the_isolated_bundle_root():
     assert migration._replace_mount_references(content, "aai-cli", "jira_skill.md", "aai-jira") == (
         "Read ./skills/aai-jira/SKILL.md and skills/aai-jira/SKILL.md."
     )
+
+
+def test_normalized_mount_slug_collisions_fail_before_unique_indexes_are_created():
+    rows = [
+        {
+            "id": "platform-one",
+            "organization_id": None,
+            "agent_id": None,
+            "name": "Jira",
+            "slug": "jira",
+            "source": "aai_cli",
+        },
+        {
+            "id": "platform-two",
+            "organization_id": None,
+            "agent_id": None,
+            "name": "Jira Custom",
+            "slug": "aai-jira",
+            "source": "custom",
+        },
+    ]
+
+    with pytest.raises(RuntimeError, match="duplicate normalized mount slugs"):
+        migration._check_normalized_slug_collisions(rows)

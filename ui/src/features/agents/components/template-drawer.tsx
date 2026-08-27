@@ -4,7 +4,16 @@ import { useState } from "react";
 import { useDebouncedValue } from "@tanstack/react-pacer";
 import { SearchIcon, XIcon } from "@/components/icons";
 import { ConfirmationDialog } from "@/components/confirmation-dialog";
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { useSkills } from "@/features/skills/hooks/use-skills";
+import { useSkillVersions } from "@/features/skills/hooks/use-skill-versions";
 import { SkillSourceBadge } from "@/features/skills/components/skill-source-badge";
 import { SKILL_PROVIDER_LABELS } from "@/features/skills/utils";
 import {
@@ -51,8 +60,66 @@ function filesFrom(template: AgentTemplateRead): TemplateFiles {
   };
 }
 
-type SkillEntry = { id: string; name: string; source: string; requiredProviders: string[] };
+type SkillEntry = {
+  id: string;
+  name: string;
+  source: string;
+  requiredProviders: string[];
+  version: number | null;
+};
 type GroupDraft = { key: string; members: SkillEntry[] };
+
+function RequiredSkillVersionSelect({
+  entry,
+  onChange,
+}: {
+  entry: SkillEntry;
+  onChange: (version: number) => void;
+}) {
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const { versions, isLoading } = useSkillVersions(
+    entry.id,
+    { kind: "organization" },
+    pickerOpen,
+  );
+  const options =
+    pickerOpen && versions.length > 0
+      ? versions.map((version) => version.version)
+      : entry.version === null
+        ? []
+        : [entry.version];
+
+  return (
+    <Select
+      value={entry.version === null ? "" : String(entry.version)}
+      onValueChange={(value) => onChange(Number(value))}
+      onOpenChange={setPickerOpen}
+      disabled={entry.version === null}
+    >
+      <SelectTrigger
+        className="w-auto min-w-24"
+        aria-label={`Required version for ${entry.name}`}
+        title="Choose the exact published Skill Version required by this Template."
+      >
+        <SelectValue placeholder="Version" />
+      </SelectTrigger>
+      <SelectContent>
+        <SelectGroup>
+          {options.map((version) => (
+            <SelectItem key={version} value={String(version)}>
+              Version v{version}
+            </SelectItem>
+          ))}
+          {pickerOpen && isLoading && options.length === 0 && (
+            <div className="px-2 py-1.5 text-[0.78rem]" style={{ color: "var(--ink-4)" }}>
+              Loading versions…
+            </div>
+          )}
+        </SelectGroup>
+      </SelectContent>
+    </Select>
+  );
+}
 
 export function TemplateDrawer({
   mode,
@@ -151,6 +218,7 @@ export function TemplateDrawer({
           name: s.name,
           source: s.source,
           requiredProviders: s.requiredProviders,
+          version: s.version,
         })),
       );
       setGroupDrafts(
@@ -161,6 +229,7 @@ export function TemplateDrawer({
             name: m.name,
             source: m.source,
             requiredProviders: m.requiredProviders,
+            version: m.version,
           })),
         })),
       );
@@ -181,14 +250,21 @@ export function TemplateDrawer({
     setSelectedSkillDetails((prev) => prev.filter((s) => s.id !== id));
   }
 
+  function updateRequiredSkillVersion(id: string, version: number) {
+    setSelectedSkillDetails((prev) =>
+      prev.map((skill) => (skill.id === id ? { ...skill, version } : skill)),
+    );
+  }
+
   function createGroupFromSelection() {
     const members = skills.filter((s) => groupingSelection.has(s.id));
-    if (members.length < 2) return;
+    if (members.length < 2 || members.some((skill) => skill.version === null)) return;
     const memberEntries: SkillEntry[] = members.map((s) => ({
       id: s.id,
       name: s.name,
       source: s.source,
       requiredProviders: s.requiredProviders,
+      version: s.version,
     }));
     const key = generateGroupKey(memberEntries, groupDrafts.map((g) => g.key));
     setGroupDrafts((prev) => [...prev, { key, members: memberEntries }]);
@@ -210,6 +286,21 @@ export function TemplateDrawer({
     );
   }
 
+  function updateGroupSkillVersion(groupKey: string, skillId: string, version: number) {
+    setGroupDrafts((prev) =>
+      prev.map((group) =>
+        group.key === groupKey
+          ? {
+              ...group,
+              members: group.members.map((skill) =>
+                skill.id === skillId ? { ...skill, version } : skill,
+              ),
+            }
+          : group,
+      ),
+    );
+  }
+
   function dissolveGroup(groupKey: string) {
     const group = groupDrafts.find((g) => g.key === groupKey);
     if (!group) return;
@@ -221,14 +312,18 @@ export function TemplateDrawer({
     createTemplate.reset();
     updateTemplate.reset();
     const requiredSkillGroups = groupDrafts.map((g) => ({ groupKey: g.key, skillIds: g.members.map((m) => m.id) }));
+    const requiredSkillVersions = Object.fromEntries(
+      [...selectedSkillDetails, ...groupDrafts.flatMap((group) => group.members)]
+        .flatMap((skill) => (skill.version === null ? [] : [[skill.id, skill.version]])),
+    );
     try {
       if (mode === "create") {
-        await createTemplate.mutateAsync({ templateName: name, description: description || null, ...files, requiredSkillIds, requiredSkillGroups });
+        await createTemplate.mutateAsync({ templateName: name, description: description || null, ...files, requiredSkillIds, requiredSkillGroups, requiredSkillVersions });
         onClose();
         return;
       }
       // Saving publishes a new immutable version; the name is inherited.
-      const updated = await updateTemplate.mutateAsync({ templateKey: templateKey!, description: description || null, ...files, requiredSkillIds, requiredSkillGroups });
+      const updated = await updateTemplate.mutateAsync({ templateKey: templateKey!, description: description || null, ...files, requiredSkillIds, requiredSkillGroups, requiredSkillVersions });
       await refetch();
       setSelectedVersion(updated.version);
       setEditing(false);
@@ -438,14 +533,14 @@ export function TemplateDrawer({
                                   className="text-[12px] font-medium px-2.5 py-0.5 rounded-full"
                                   style={{ background: "var(--bg-soft)", color: "var(--ink-2)", border: "1px solid var(--line)" }}
                                 >
-                                  {skill.name}
+                                  {skill.name} <span className="font-mono text-[0.6875rem]">v{skill.version}</span>
                                 </span>
                               ))}
                             </div>
                           )}
                           {groups.map((group) => (
                             <div key={group.key} className="text-[12.5px]" style={{ color: "var(--ink-3)" }}>
-                              One of: {group.members.map((m) => m.name).join(", ")}
+                              One of: {group.members.map((m) => `${m.name} v${m.version}`).join(", ")}
                             </div>
                           ))}
                         </div>
@@ -510,6 +605,10 @@ export function TemplateDrawer({
                                     </span>
                                     <SkillSourceBadge source={member.source} />
                                   </div>
+                                  <RequiredSkillVersionSelect
+                                    entry={member}
+                                    onChange={(version) => updateGroupSkillVersion(group.key, member.id, version)}
+                                  />
                                   <button
                                     type="button"
                                     className="af-btn af-btn-sm af-btn-ghost"
@@ -544,16 +643,19 @@ export function TemplateDrawer({
                                 <button
                                   type="button"
                                   className="af-btn af-btn-sm af-btn-ghost"
+                                  disabled={skill.version === null}
+                                  title={skill.version === null ? "Publish this Skill before requiring it in a Template." : undefined}
                                   onClick={() =>
                                     addToGroup(group.key, {
                                       id: skill.id,
                                       name: skill.name,
                                       source: skill.source,
                                       requiredProviders: skill.requiredProviders,
+                                      version: skill.version,
                                     })
                                   }
                                 >
-                                  Add
+                                  {skill.version === null ? "No published version" : "Add"}
                                 </button>
                               </div>
                             ))}
@@ -585,6 +687,10 @@ export function TemplateDrawer({
                               </span>
                             )}
                           </div>
+                          <RequiredSkillVersionSelect
+                            entry={skill}
+                            onChange={(version) => updateRequiredSkillVersion(skill.id, version)}
+                          />
                           <button
                             className="af-btn af-btn-sm af-btn-ghost"
                             onClick={() => removeRequiredSkill(skill.id)}
@@ -671,6 +777,8 @@ export function TemplateDrawer({
                                 role="checkbox"
                                 aria-checked={checked}
                                 className="af-btn af-btn-sm af-btn-ghost"
+                                disabled={skill.version === null}
+                                title={skill.version === null ? "Publish this Skill before requiring it in a Template." : undefined}
                                 onClick={() =>
                                   setGroupingSelection((prev) => {
                                     const next = new Set(prev);
@@ -688,9 +796,11 @@ export function TemplateDrawer({
                             ) : (
                               <button
                                 className="af-btn af-btn-sm af-btn-ghost"
-                                onClick={() => addRequiredSkill({ id: skill.id, name: skill.name, source: skill.source, requiredProviders: skill.requiredProviders })}
+                                disabled={skill.version === null}
+                                title={skill.version === null ? "Publish this Skill before requiring it in a Template." : undefined}
+                                onClick={() => addRequiredSkill({ id: skill.id, name: skill.name, source: skill.source, requiredProviders: skill.requiredProviders, version: skill.version })}
                               >
-                                Add
+                                {skill.version === null ? "No published version" : "Add"}
                               </button>
                             )}
                           </div>

@@ -601,6 +601,21 @@ class SkillRepository:
             )
             return session.exec(query).first()
 
+    def get_by_slug_global(self, slug: str) -> Skill | None:
+        """Find a global Skill by its immutable mount slug."""
+        with Session(self.delegate.engine) as session:
+            query = select(Skill).where(
+                col(Skill.slug) == slug,
+                col(Skill.organization_id).is_(None),
+                col(Skill.agent_id).is_(None),
+            )
+            return session.exec(query).first()
+
+    def find_all_slugs(self) -> set[str]:
+        """Return every mount slug across all Skill scopes."""
+        with Session(self.delegate.engine) as session:
+            return set(session.exec(select(col(Skill.slug))).all())
+
     def find_accessible_for_org(self, org_id: UUID) -> list[Skill]:
         """Return Organization-owned plus every global Platform Skill."""
         with Session(self.delegate.engine) as session:
@@ -665,6 +680,27 @@ class SkillRepository:
                 .join(Agent, col(AgentSkill.agent_id) == col(Agent.id))
                 .where(col(AgentSkill.skill_id) == skill_id)
                 .where(col(Agent.organization_id) == org_id)
+                .where(col(Agent.deleted_at).is_(None))
+            )
+            return session.exec(query).first() is not None
+
+    def is_assigned_to_agent(self, skill_id: UUID, agent_id: UUID) -> bool:
+        with Session(self.delegate.engine) as session:
+            query = (
+                select(AgentSkill.id)
+                .join(Agent, col(AgentSkill.agent_id) == col(Agent.id))
+                .where(col(AgentSkill.skill_id) == skill_id)
+                .where(col(AgentSkill.agent_id) == agent_id)
+                .where(col(Agent.deleted_at).is_(None))
+            )
+            return session.exec(query).first() is not None
+
+    def is_assigned_to_any_agent_globally(self, skill_id: UUID) -> bool:
+        with Session(self.delegate.engine) as session:
+            query = (
+                select(AgentSkill.id)
+                .join(Agent, col(AgentSkill.agent_id) == col(Agent.id))
+                .where(col(AgentSkill.skill_id) == skill_id)
                 .where(col(Agent.deleted_at).is_(None))
             )
             return session.exec(query).first() is not None

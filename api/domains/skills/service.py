@@ -57,7 +57,7 @@ class SkillService:
         here rather than surfacing as a database error.
         """
         base = slugify(name) or "skill"
-        taken = {s.slug for s in self.repository.find_org_scoped(org_id)}
+        taken = {s.slug for s in self.repository.find_accessible_for_org(org_id)}
         if base not in taken:
             return base
         suffix = 2
@@ -88,6 +88,12 @@ class SkillService:
                 status_code=status.HTTP_409_CONFLICT,
                 detail="A skill with this name or mount slug already exists in this organization",
             ) from None
+
+    def _save_existing_skill(self, skill: Skill, detail: str) -> None:
+        try:
+            self.repository.save(skill)
+        except IntegrityError:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=detail) from None
 
     def _delete_skill_version(self, skill: Skill, version: int) -> None:
         """Delete an unreferenced, non-final immutable Skill Version."""
@@ -164,7 +170,7 @@ class SkillService:
 
     def _allocate_platform_slug(self, name: str) -> str:
         base = slugify(name) or "skill"
-        taken = {skill.slug for skill in self.repository.find_all_global()}
+        taken = self.repository.find_all_slugs()
         if base not in taken:
             return base
         suffix = 2
@@ -212,7 +218,7 @@ class SkillService:
                     detail="A Platform Skill with this name already exists",
                 )
             skill.name = updated["name"]
-            self.repository.save(skill)
+            self._save_existing_skill(skill, "A Platform Skill with this name already exists")
         return self._to_read(skill)
 
     def get_platform_skill_detail(self, skill_id: UUID) -> SkillDetailRead:
@@ -229,7 +235,7 @@ class SkillService:
             {
                 **read.model_dump(),
                 "files": [SkillFileRead.model_validate(file) for file in files],
-                "is_assigned_to_agent": False,
+                "is_assigned_to_agent": self.repository.is_assigned_to_any_agent_globally(skill.id),
             }
         )
 
@@ -341,13 +347,16 @@ class SkillService:
         files: list[tuple[str, str]],
         *,
         has_draft: bool,
+        agent_id: UUID | None = None,
     ) -> SkillDetailRead:
         read = self._to_read(skill, has_draft=has_draft)
         return SkillDetailRead.model_validate(
             {
                 **read.model_dump(),
                 "files": [SkillFileRead(path=path, content=content) for path, content in files],
-                "is_assigned_to_agent": False,
+                "is_assigned_to_agent": (
+                    self.repository.is_assigned_to_agent(skill.id, agent_id) if agent_id is not None else False
+                ),
             }
         )
 
@@ -400,7 +409,7 @@ class SkillService:
                     detail="An Agent Skill with this name already exists",
                 )
             skill.name = updated["name"]
-            self.repository.save(skill)
+            self._save_existing_skill(skill, "An Agent Skill with this name already exists")
         return self._to_read(skill)
 
     def get_agent_skill_detail(
@@ -421,6 +430,7 @@ class SkillService:
             skill,
             [(file.path, file.content) for file in files],
             has_draft=draft is not None,
+            agent_id=agent.id,
         )
 
     def get_agent_skill_draft(
@@ -514,7 +524,7 @@ class SkillService:
         skill_id: UUID,
         context: CurrentUserContext,
     ) -> SkillDetailRead:
-        _, skill = self._get_agent_owned_skill(agent_id, skill_id, context, PermissionKey.AGENT_UPDATE)
+        agent, skill = self._get_agent_owned_skill(agent_id, skill_id, context, PermissionKey.AGENT_UPDATE)
         source = self.repository.get_skill_update_source(skill.id)
         if source is None:
             raise HTTPException(
@@ -535,7 +545,7 @@ class SkillService:
                 source_skill_id=source.skill_id,
                 source_skill_version=source.version,
             )
-            return self._agent_detail(skill, files, has_draft=True).model_copy(
+            return self._agent_detail(skill, files, has_draft=True, agent_id=agent.id).model_copy(
                 update={
                     "source_skill_id": source.skill_id,
                     "source_skill_version": source.version,
@@ -554,7 +564,7 @@ class SkillService:
         skill.description = source.description
         skill.required_providers = source.required_providers
         self.repository.save(skill)
-        return self._agent_detail(skill, files, has_draft=False)
+        return self._agent_detail(skill, files, has_draft=False, agent_id=agent.id)
 
     def delete_agent_skill_version(
         self,
@@ -630,7 +640,7 @@ class SkillService:
             description=data.description,
             required_providers=[provider.value for provider in data.required_providers],
         )
-        return self._agent_detail(skill, files, has_draft=True)
+        return self._agent_detail(skill, files, has_draft=True, agent_id=agent.id)
 
     def fork_agent_skill(
         self,
@@ -668,7 +678,7 @@ class SkillService:
             source_skill_id=source.id,
             source_skill_version=latest.version,
         )
-        return self._agent_detail(skill, files, has_draft=True)
+        return self._agent_detail(skill, files, has_draft=True, agent_id=agent.id)
 
     def list_agent_skills(
         self,
@@ -750,7 +760,7 @@ class SkillService:
             {
                 **read.model_dump(),
                 "files": [SkillFileRead(path=path, content=content) for path, content in files],
-                "is_assigned_to_agent": False,
+                "is_assigned_to_agent": self.repository.is_assigned_to_any_agent(skill.id, org_id),
             }
         )
 
@@ -842,7 +852,7 @@ class SkillService:
         # invalidate paths referenced from inside its own markdown.
         if "name" in updated:
             skill.name = updated["name"]
-        self.repository.save(skill)
+        self._save_existing_skill(skill, "An Organization Skill with this name already exists")
         return self._to_read(skill)
 
     def get_skill_detail(self, skill_id: UUID, context: CurrentUserContext) -> SkillDetailRead:

@@ -3800,6 +3800,42 @@ def test_agent_configuration_override_draft_publish_and_select_preserves_lineage
             assert_that(second_body["source_template_version"], equal_to(pinned_template.version))
 
 
+def test_agent_configuration_override_rejects_an_unpublished_required_skill():
+    with given([*_GIVEN, there_is_an_agent(name="Unpublished Requirement Agent")]) as context:
+        from api.domains.skills.models import Skill, SkillSource
+        from api.domains.skills.repository import SkillRepository
+
+        client: TestClient = context.client
+        repository: SkillRepository = context.injector.get(SkillRepository)
+        slug = f"draft-only-{uuid7().hex}"
+        skill = Skill(
+            organization_id=context.organization.id,
+            name="Unpublished Override Requirement",
+            slug=slug,
+            root_dir=slug,
+            entry_path="SKILL.md",
+            source=SkillSource.CUSTOM,
+            required_providers=[],
+        )
+        repository.save(skill)
+        repository.save_new_draft(skill.id, [("SKILL.md", "# Draft")])
+        configuration_url = f"{_BASE}/{context.agent.id}/configuration"
+        draft = client.post(f"{configuration_url}/draft", headers=_auth(context))
+        assert_that(draft.status_code, equal_to(status.HTTP_201_CREATED))
+
+        response = client.patch(
+            f"{configuration_url}/draft",
+            json={
+                "expected_updated_at": draft.json()["updated_at"],
+                "required_skill_ids": [str(skill.id)],
+            },
+            headers=_auth(context),
+        )
+
+        assert_that(response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_ENTITY))
+        assert_that(response.json()["detail"], contains_string("published version"))
+
+
 def test_agent_configuration_override_lifecycle_emits_domain_events():
     with given([*_GIVEN, there_is_an_agent(name="Configurable Agent")]) as context:
         client: TestClient = context.client

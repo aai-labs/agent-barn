@@ -25,7 +25,7 @@ export type SkillUpdatePayload = {
   name?: string;
 };
 
-/** Create a new lineage in `scope`, published as v1 immediately. Parsed with the
+/** Create a new lineage in `scope` with an initial unpublished draft. Parsed with the
  * lineage-level schema even though Platform/Agent responses also include the
  * file/assignment fields Organization's response omits — the extra fields are
  * simply ignored, so one schema covers all three scopes' create response. */

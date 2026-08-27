@@ -28,11 +28,11 @@ def seed_aai_cli_skills(repository: SkillRepository) -> None:
     """
     for skill_def in AAI_CLI_PROVIDER_SKILLS:
         name = skill_def["name"]
-        existing = repository.get_by_name_global(name)
+        slug = skill_def.get("slug") or slugify(name) or "skill"
+        existing = repository.get_by_slug_global(slug)
         if existing is not None:
             continue
 
-        slug = skill_def.get("slug") or slugify(name) or "skill"
         files = root_relative_files(
             skill_def["files"],
             entry_path=skill_def.get("entry_path"),

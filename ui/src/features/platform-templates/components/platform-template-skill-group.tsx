@@ -8,6 +8,9 @@ export function PlatformTemplateSkillGroup({
   skillMap,
   selectedSkillIds,
   onToggle,
+  skillVersions,
+  onVersionChange,
+  showVersionPicker = false,
   disabled = false,
 }: {
   group: SkillGroupDraft;
@@ -15,6 +18,9 @@ export function PlatformTemplateSkillGroup({
   skillMap: Map<string, PlatformSkill>;
   selectedSkillIds: Set<string>;
   onToggle: (skillId: string) => void;
+  skillVersions?: Record<string, number>;
+  onVersionChange?: (skillId: string, version: number) => void;
+  showVersionPicker?: boolean;
   disabled?: boolean;
 }) {
   const groupSkills = group.skillIds
@@ -58,7 +64,10 @@ export function PlatformTemplateSkillGroup({
           skill={skill}
           checked={selectedSkillIds.has(skill.id)}
           onChange={() => onToggle(skill.id)}
-          disabled={disabled}
+          version={skillVersions?.[skill.id] ?? skill.version}
+          onVersionChange={(version) => onVersionChange?.(skill.id, version)}
+          showVersionPicker={showVersionPicker}
+          disabled={disabled || (showVersionPicker && skill.version === null)}
         />
       ))}
       {missingSkillCount > 0 && (

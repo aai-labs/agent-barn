@@ -26,6 +26,7 @@ export function AgentSkillsSettings({
   const [isDirty, setIsDirty] = useState(false);
   const [isValid, setIsValid] = useState(true);
   const { applyAndRestart } = useAgentApplyAndRestart(agent);
+  const configuredProviders = new Set((agent.secrets ?? []).map((secret) => secret.provider));
 
   async function applyChanges() {
     const action = panelRef.current;
@@ -78,9 +79,16 @@ export function AgentSkillsSettings({
                 {skill.requiredProviders.length > 0 && (
                   <span
                     className="ml-2 inline-flex rounded-full px-2 py-0.5 text-[0.6875rem] font-semibold uppercase tracking-wide"
-                    style={{ color: "var(--ink-3)", background: "var(--line)" }}
+                    style={{
+                      color: skill.requiredProviders.every((provider) => configuredProviders.has(provider))
+                        ? "var(--ink-3)"
+                        : "var(--err)",
+                      background: "var(--line)",
+                    }}
                   >
-                    Credentials configured
+                    {skill.requiredProviders.every((provider) => configuredProviders.has(provider))
+                      ? "Credentials configured"
+                      : "Credentials missing"}
                   </span>
                 )}
                 <div className="text-[0.76rem]" style={{ color: "var(--ink-4)" }}>{skill.source}{skill.required ? " · Required by active template" : ""}</div>

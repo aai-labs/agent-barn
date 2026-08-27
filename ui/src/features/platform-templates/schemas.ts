@@ -1,14 +1,20 @@
 import { z } from "zod";
 
-const PlatformTemplateSkillSchema = z.object({
+const PlatformSkillSchema = z.object({
   id: z.string().uuid(),
   organizationId: z.string().uuid().nullable(),
   name: z.string(),
   source: z.enum(["aai_cli", "custom"]),
   requiredProviders: z.array(z.string()),
   toolsPointer: z.string().nullable(),
+  version: z.number().int().min(1).nullable(),
   createdAt: z.string(),
   updatedAt: z.string(),
+});
+
+const PlatformTemplateSkillSchema = PlatformSkillSchema.extend({
+  // A required Skill must always point at an exact published version.
+  version: z.number().int().min(1),
   groupKey: z.string().nullable().optional().default(null),
 });
 
@@ -72,7 +78,7 @@ export const PlatformTemplatePublishedReadSchema = z.object({
   version: z.number().int(),
 });
 
-export const PlatformSkillListSchema = z.array(PlatformTemplateSkillSchema.omit({ groupKey: true }));
+export const PlatformSkillListSchema = z.array(PlatformSkillSchema);
 
 export type PlatformTemplateAdminSummary = z.infer<
   typeof PlatformTemplateAdminSummarySchema
@@ -93,6 +99,7 @@ export type PlatformTemplateDraftFields = {
   heartbeatMd?: string;
   requiredSkillIds?: string[];
   requiredSkillGroups?: { groupKey: string; skillIds: string[] }[];
+  requiredSkillVersions?: Record<string, number>;
 };
 
 export type CreatePlatformTemplateDraft = PlatformTemplateDraftFields & {

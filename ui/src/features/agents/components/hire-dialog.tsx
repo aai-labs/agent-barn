@@ -112,6 +112,14 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
         ...Object.values(groupChoices).flat(),
       ]),
     ];
+    const requiredSkillVersions = [
+      ...standalone,
+      ...groups.flatMap((group) =>
+        (groupChoices[group.key] ?? [])
+          .map((id) => group.members.find((member) => member.id === id))
+          .filter((skill): skill is (typeof standalone)[number] => skill !== undefined),
+      ),
+    ].map((skill) => ({ skillId: skill.id, version: skill.version }));
     const manualSecrets = skillCredentials
       .filter((draft) => !draft.sharedCredentialId && !isAutoConfiguredProvider(draft.provider))
       .map((draft) => ({
@@ -135,6 +143,7 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
         templateVersion: template.version,
         model,
         ...(skillIds.length > 0 ? { skillIds } : {}),
+        ...(requiredSkillVersions.length > 0 ? { skillVersions: requiredSkillVersions } : {}),
         ...(manualSecrets.length > 0 ? { secrets: manualSecrets } : {}),
         ...(sharedCredentials.length > 0 ? { sharedCredentials } : {}),
         ...approval,

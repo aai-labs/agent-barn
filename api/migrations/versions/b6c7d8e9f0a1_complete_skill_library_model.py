@@ -153,24 +153,58 @@ def _replace_mount_references(content: str, old_root: str, old_entry: str, new_r
     return content
 
 
-def _normalize_template_references(bind: sa.engine.Connection, old_root: str, old_entry: str, new_root: str) -> None:
-    replacements = (
-        (f"./skills/{old_root}/{old_entry}", f"./skills/{new_root}/{_ENTRY_PATH}"),
-        (f"skills/{old_root}/{old_entry}", f"skills/{new_root}/{_ENTRY_PATH}"),
-    )
+def _normalize_template_references(
+    bind: sa.engine.Connection,
+    references: Sequence[tuple[str, str, str]],
+) -> None:
+    """Normalize all template pointers in one UPDATE per text column."""
+    unique_references = list(dict.fromkeys(references))
+    if not unique_references:
+        return
+
     for table, columns in _TEMPLATE_TEXT_COLUMNS.items():
         for column in columns:
-            for old_path, new_path in replacements:
-                bind.execute(
-                    sa.text(
-                        f"UPDATE {table} SET {column} = REPLACE({column}, :old_path, :new_path) "
-                        f"WHERE {column} IS NOT NULL"
-                    ),
-                    {"old_path": old_path, "new_path": new_path},
+            expression = column
+            params: dict[str, str] = {}
+            for reference_index, (old_root, old_entry, new_root) in enumerate(unique_references):
+                replacements = (
+                    (f"./skills/{old_root}/{old_entry}", f"./skills/{new_root}/{_ENTRY_PATH}"),
+                    (f"skills/{old_root}/{old_entry}", f"skills/{new_root}/{_ENTRY_PATH}"),
                 )
+                for replacement_index, (old_path, new_path) in enumerate(replacements):
+                    old_param = f"old_path_{reference_index}_{replacement_index}"
+                    new_param = f"new_path_{reference_index}_{replacement_index}"
+                    expression = f"REPLACE({expression}, :{old_param}, :{new_param})"
+                    params[old_param] = old_path
+                    params[new_param] = new_path
+            bind.execute(
+                sa.text(f"UPDATE {table} SET {column} = {expression} WHERE {column} IS NOT NULL"),
+                params,
+            )
+
+
+def _check_required_skill_versions(bind: sa.engine.Connection) -> None:
+    """Abort before adding FKs if any requirement points at an unpublished Skill."""
+    missing: list[str] = []
+    for table, _, _, _ in _VERSIONED_SKILL_TABLES:
+        rows = bind.execute(
+            sa.text(
+                f"SELECT DISTINCT requirement.skill_id "
+                f"FROM {table} AS requirement "
+                "LEFT JOIN skill_version AS version "
+                "ON version.skill_id = requirement.skill_id "
+                "WHERE version.skill_id IS NULL"
+            )
+        ).scalars()
+        missing.extend(f"{table}:{skill_id}" for skill_id in rows)
+    if missing:
+        raise RuntimeError(
+            "Skill migration cannot pin required skills without a published version: " + ", ".join(sorted(missing))
+        )
 
 
 def _add_version_columns() -> None:
+    _check_required_skill_versions(op.get_bind())
     for table, parent_column, constraint, _ in _VERSIONED_SKILL_TABLES:
         op.drop_constraint(constraint, table, type_="unique")
         op.add_column(table, sa.Column("skill_version", sa.Integer(), nullable=True))
@@ -182,13 +216,56 @@ def _add_version_columns() -> None:
                 "WHERE latest.skill_id = requirement.skill_id"
             )
         )
-        op.execute(sa.text(f"UPDATE {table} SET skill_version = 1 WHERE skill_version IS NULL"))
+        remaining = (
+            op.get_bind()
+            .execute(sa.text(f"SELECT DISTINCT skill_id FROM {table} WHERE skill_version IS NULL"))
+            .scalars()
+        )
+        remaining_ids = list(remaining)
+        if remaining_ids:
+            raise RuntimeError(
+                f"Skill migration could not resolve published versions for {table}: "
+                + ", ".join(str(skill_id) for skill_id in remaining_ids)
+            )
         op.alter_column(table, "skill_version", existing_type=sa.Integer(), nullable=False)
         op.create_unique_constraint(
             constraint,
             table,
-            [parent_column, "skill_id", "skill_version"],
+            [parent_column, "skill_id"],
         )
+
+
+def _normalized_root(row: sa.RowMapping) -> str:
+    legacy_slug = row["slug"] or "skill"
+    if row["source"] == "aai_cli" and not legacy_slug.startswith("aai-"):
+        return f"aai-{legacy_slug}"
+    return legacy_slug
+
+
+def _check_normalized_slug_collisions(rows: Sequence[sa.RowMapping]) -> None:
+    """Fail before updates if normalized slugs violate a scope's unique index."""
+    seen: dict[tuple[str, object, str], tuple[object, str]] = {}
+    for row in rows:
+        scope_type = (
+            "agent" if row["agent_id"] is not None else "organization" if row["organization_id"] else "platform"
+        )
+        scope_id = (
+            row["agent_id"]
+            if scope_type == "agent"
+            else row["organization_id"]
+            if scope_type == "organization"
+            else None
+        )
+        key = (scope_type, scope_id, _normalized_root(row))
+        previous = seen.get(key)
+        if previous is not None:
+            previous_id, previous_name = previous
+            raise RuntimeError(
+                "Skill migration would create duplicate normalized mount slugs: "
+                f"{previous_name!r} ({previous_id}) and {row['name']!r} ({row['id']}) "
+                f"in {scope_type} scope"
+            )
+        seen[key] = (row["id"], row["name"])
 
 
 def _normalize_existing_files() -> None:
@@ -196,7 +273,7 @@ def _normalize_existing_files() -> None:
     rows = (
         bind.execute(
             sa.text(
-                "SELECT id, organization_id, name, slug, root_dir, entry_path, source "
+                "SELECT id, organization_id, agent_id, name, slug, root_dir, entry_path, source "
                 "FROM skill ORDER BY created_at, id"
             )
         )
@@ -204,19 +281,15 @@ def _normalize_existing_files() -> None:
         .all()
     )
 
+    _check_normalized_slug_collisions(rows)
+    references: list[tuple[str, str, str]] = []
     now = datetime.datetime.now(datetime.UTC)
     for row in rows:
         skill_id = row["id"]
         old_root = row["root_dir"] or row["slug"]
         old_entry = row["entry_path"] or _ENTRY_PATH
-        legacy_slug = row["slug"] or "skill"
-        new_root = (
-            legacy_slug
-            if row["source"] == "aai_cli" and legacy_slug.startswith("aai-")
-            else f"aai-{legacy_slug}"
-            if row["source"] == "aai_cli"
-            else legacy_slug
-        )
+        new_root = _normalized_root(row)
+        references.append((old_root, old_entry, new_root))
 
         version_rows = (
             bind.execute(
@@ -303,7 +376,6 @@ def _normalize_existing_files() -> None:
                     {"path": new_path, "content": content, "now": now, "id": file["id"]},
                 )
 
-        _normalize_template_references(bind, old_root, old_entry, new_root)
         bind.execute(
             sa.text(
                 "UPDATE skill SET slug = :root_dir, root_dir = :root_dir, entry_path = :entry_path, "
@@ -321,6 +393,8 @@ def _normalize_existing_files() -> None:
                 "id": skill_id,
             },
         )
+
+    _normalize_template_references(bind, references)
 
 
 def upgrade() -> None:

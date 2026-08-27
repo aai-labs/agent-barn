@@ -108,6 +108,13 @@ class TemplateService:
         elif all_ids and org_id is not None:
             self._validate_skill_ids(all_ids, org_id)
         versions = self.skill_repository.get_latest_version_numbers(all_ids)
+        unpublished_ids = set(all_ids) - versions.keys()
+        if unpublished_ids:
+            skill_id = min(unpublished_ids, key=str)
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Skill {skill_id} must have a published version before it can be required",
+            )
         for skill_id, version in requested_versions.items():
             if self.skill_repository.get_version(skill_id, version) is None:
                 raise HTTPException(
@@ -121,6 +128,69 @@ class TemplateService:
             for skill_id in group.skill_ids:
                 resolved[skill_id] = (requested_versions.get(skill_id, versions[skill_id]), group.group_key)
         return resolved
+
+    def _resolve_updated_skill_map(
+        self,
+        old_map: dict[UUID, tuple[int, str | None]],
+        standalone_ids: list[UUID] | None,
+        groups: list[TemplateSkillGroup] | None,
+        org_id: UUID | None,
+        *,
+        global_only: bool = False,
+        requested_versions: dict[UUID, int] | None = None,
+    ) -> dict[UUID, tuple[int, str | None]]:
+        """Resolve one complete requirement set while preserving omitted pins.
+
+        Updating only one side of the standalone/group pair must not resolve the
+        other side independently: doing so rejects version entries for the other
+        side and can accidentally repin unchanged requirements to the latest
+        version. Explicit version requests win; retained requirements keep their
+        existing immutable pin.
+        """
+        if standalone_ids is None and groups is None and requested_versions is None:
+            return dict(old_map)
+
+        effective_standalone_ids = (
+            standalone_ids
+            if standalone_ids is not None
+            else [skill_id for skill_id, (_, group_key) in old_map.items() if group_key is None]
+        )
+        if groups is not None:
+            effective_groups = groups
+        else:
+            grouped: dict[str, list[UUID]] = {}
+            for skill_id, (_, group_key) in old_map.items():
+                if group_key is not None:
+                    grouped.setdefault(group_key, []).append(skill_id)
+            effective_groups = [
+                TemplateSkillGroup(group_key=group_key, skill_ids=skill_ids) for group_key, skill_ids in grouped.items()
+            ]
+
+        group_ids = {skill_id for group in effective_groups for skill_id in group.skill_ids}
+        overlap = set(effective_standalone_ids) & group_ids
+        if overlap:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    "Skills cannot be both standalone required and part of a group: "
+                    f"{sorted(str(skill_id) for skill_id in overlap)}"
+                ),
+            )
+
+        effective_ids = set(effective_standalone_ids) | {
+            skill_id for group in effective_groups for skill_id in group.skill_ids
+        }
+        requested = dict(requested_versions or {})
+        for skill_id in effective_ids:
+            if skill_id in old_map and skill_id not in requested:
+                requested[skill_id] = old_map[skill_id][0]
+        return self._resolve_skill_map(
+            effective_standalone_ids,
+            effective_groups,
+            org_id,
+            global_only=global_only,
+            requested_versions=requested,
+        )
 
     def _mark_platform_updates(self, reads: list[TemplateRead]) -> list[TemplateRead]:
         flags = self.repository.get_platform_update_flags(reads)
@@ -270,18 +340,15 @@ class TemplateService:
             heartbeat_md=updated.get("heartbeat_md", old.heartbeat_md),
         )
         old_map = self.repository.get_required_skill_map_for(old)
-        if data.required_skill_ids is None:
-            standalone_map = {sid: value for sid, value in old_map.items() if value[1] is None}
-        else:
-            standalone_map = self._resolve_skill_map(
-                data.required_skill_ids, [], org_id, requested_versions=data.required_skill_versions
-            )
-        if data.required_skill_groups is None:
-            groups_map = {sid: value for sid, value in old_map.items() if value[1] is not None}
-        else:
-            groups_map = self._resolve_skill_map(
-                [], data.required_skill_groups, org_id, requested_versions=data.required_skill_versions
-            )
+        resolved_map = self._resolve_updated_skill_map(
+            old_map,
+            data.required_skill_ids,
+            data.required_skill_groups,
+            org_id,
+            requested_versions=data.required_skill_versions,
+        )
+        standalone_map = {sid: value for sid, value in resolved_map.items() if value[1] is None}
+        groups_map = {sid: value for sid, value in resolved_map.items() if value[1] is not None}
         overlap = set(standalone_map) & groups_map.keys()
         if overlap:
             raise HTTPException(
@@ -559,27 +626,15 @@ class TemplateService:
                 setattr(draft, field, updated[field])
 
         old_map = self.repository.get_draft_required_skill_map(draft.id)
-        if data.required_skill_ids is None:
-            standalone_map = {sid: value for sid, value in old_map.items() if value[1] is None}
-        else:
-            standalone_map = self._resolve_skill_map(
-                data.required_skill_ids,
-                [],
-                None,
-                global_only=True,
-                requested_versions=data.required_skill_versions,
-            )
-        if data.required_skill_groups is None:
-            groups_map = {sid: value for sid, value in old_map.items() if value[1] is not None}
-        else:
-            groups_map = self._resolve_skill_map(
-                [],
-                data.required_skill_groups,
-                None,
-                global_only=True,
-                requested_versions=data.required_skill_versions,
-            )
-        self.repository.update_draft_with_skills(draft, standalone_map | groups_map)
+        resolved_map = self._resolve_updated_skill_map(
+            old_map,
+            data.required_skill_ids,
+            data.required_skill_groups,
+            None,
+            global_only=True,
+            requested_versions=data.required_skill_versions,
+        )
+        self.repository.update_draft_with_skills(draft, resolved_map)
         return self.get_draft(template_key)
 
     def discard_draft(self, template_key: str) -> None:
