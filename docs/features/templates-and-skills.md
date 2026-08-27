@@ -98,7 +98,7 @@ Platform Administrators use the Platform View's Platform Templates catalog (`/da
 | Built-in skill seeding              | `../../api/domains/skills/skill_seeder.py`, `../../api/domains/agents/aai_cli_skills/bundled/skills/`                         |
 | Assignment enforcement and mounting | `../../api/domains/agents/service.py`, `../../api/domains/agents/scripts/hermes/start.sh`, `../../api/domains/agents/scripts/openclaw/init-openclaw.js` |
 | UI template surface                 | `../../ui/src/features/agents/components/templates-panel.tsx`, `../../ui/src/features/platform-templates/`                     |
-| UI skill surface                    | `../../ui/src/features/skills/` (scope-parameterized list/detail/new, reused across all three scopes via `scope.ts`), `../../ui/src/features/agents/components/agent-skills-tab.tsx`, `../../ui/src/features/agents/components/agent-skill-detail-page.tsx`, `../../ui/src/features/skills/components/platform-skills-page.tsx` |
+| UI skill surface                    | `../../ui/src/features/skills/` (scope-parameterized list/detail/new, reused across all three scopes via `scope.ts`), `../../ui/src/features/agents/components/agent-skills-tab.tsx` (always-visible Agent assignment editor with debounced API search and infinite loading), `../../ui/src/features/agents/components/agent-skill-detail-page.tsx`, `../../ui/src/features/skills/components/platform-skills-page.tsx` |
 | Tests                               | `../../api/tests/integration/test_templates.py`, `../../api/tests/integration/test_skills.py`, `../../api/tests/integration/test_agents.py` |
 
 ## Change impact

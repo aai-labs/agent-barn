@@ -14,13 +14,9 @@ import { AgentSkillsTab } from "./agent-skills-tab";
 export function AgentSkillsSettings({
   agent,
   canEdit,
-  editing,
-  onEdit,
 }: {
   agent: Agent;
   canEdit: boolean;
-  editing: boolean;
-  onEdit: () => void;
 }) {
   const panelRef = useRef<AgentConfigurationEditHandle>(null);
   const [isDirty, setIsDirty] = useState(false);
@@ -34,27 +30,17 @@ export function AgentSkillsSettings({
     await applyAndRestart(action.apply);
   }
 
-  function cancelChanges() {
-    panelRef.current?.cancel();
-    setIsDirty(false);
-    setIsValid(true);
-    onEdit();
-  }
-
   return (
     <AgentConfigurationSection
       title="Skills"
       description="Assigned tools are independent from the Markdown template. Required skills are protected by the active configuration."
       canEdit={canEdit}
-      editing={editing}
-      onEdit={onEdit}
+      editing={canEdit}
       onApply={applyChanges}
-      onCancel={cancelChanges}
-      onApplied={onEdit}
       applyDisabled={!isDirty || !isValid}
       restartOnApply={agent.status === "RUNNING"}
     >
-      {editing && canEdit ? (
+      {canEdit ? (
         <AgentSkillsTab
           ref={panelRef}
           agent={agent}

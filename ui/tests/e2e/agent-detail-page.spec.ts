@@ -720,7 +720,6 @@ test.describe("Agent Detail Page — Skills tab", () => {
     await agentDetailPage.goto(MOCK_AGENT_ID);
     await agentDetailPage.configureButton().click();
     await agentDetailPage.skillsTab().click();
-    await agentDetailPage.editButton().click();
   });
 
   test("Skills tab is clickable and shows the tab panel", async ({ page }) => {
@@ -734,7 +733,6 @@ test.describe("Agent Detail Page — Skills tab", () => {
     await agentDetailPage.goto(MOCK_AGENT_ID);
     await agentDetailPage.configureButton().click();
     await agentDetailPage.skillsTab().click();
-    await agentDetailPage.editButton().click();
 
     await expect(page.getByText("Assigned", { exact: true })).toBeVisible();
     await expect(agentDetailPage.removeSkillButton()).toBeVisible();
@@ -780,7 +778,6 @@ test.describe("Agent Detail Page — Skills tab", () => {
     await agentDetailPage.goto(MOCK_AGENT_ID);
     await agentDetailPage.configureButton().click();
     await agentDetailPage.skillsTab().click();
-    await agentDetailPage.editButton().click();
 
     await agentDetailPage.removeSkillButton().click();
 
@@ -795,7 +792,6 @@ test.describe("Agent Detail Page — Skills tab", () => {
     await agentDetailPage.goto(MOCK_AGENT_ID);
     await agentDetailPage.configureButton().click();
     await agentDetailPage.skillsTab().click();
-    await agentDetailPage.editButton().click();
 
     await agentDetailPage.removeSkillButton().click();
     await agentDetailPage.undoSkillButton().click();
@@ -826,7 +822,6 @@ test.describe("Agent Detail Page — Skills tab", () => {
     await agentDetailPage.goto(MOCK_AGENT_ID);
     await agentDetailPage.configureButton().click();
     await agentDetailPage.skillsTab().click();
-    await agentDetailPage.editButton().click();
 
     await agentDetailPage.addSkillButton().last().click(); // custom skill — no required providers
 
@@ -847,7 +842,6 @@ test.describe("Agent Detail Page — Skills tab", () => {
     await agentDetailPage.goto(MOCK_AGENT_ID);
     await agentDetailPage.configureButton().click();
     await agentDetailPage.skillsTab().click();
-    await agentDetailPage.editButton().click();
 
     await expect(page.getByText("Required", { exact: true })).toBeVisible();
     await expect(agentDetailPage.removeSkillButton()).toBeDisabled();
@@ -860,7 +854,6 @@ test.describe("Agent Detail Page — Skills tab", () => {
     await agentDetailPage.goto(MOCK_AGENT_ID);
     await agentDetailPage.configureButton().click();
     await agentDetailPage.skillsTab().click();
-    await agentDetailPage.editButton().click();
 
     await agentDetailPage.removeSkillButton().hover();
 

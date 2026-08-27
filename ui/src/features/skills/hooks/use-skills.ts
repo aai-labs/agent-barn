@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 
 import { api } from "@/shared/api";
 
@@ -89,5 +89,56 @@ export function useSkills(filters: SkillsFilters) {
     isLoading: tenantQuery.isPending,
     error: tenantQuery.error,
     refetch: tenantQuery.refetch,
+  };
+}
+
+/**
+ * Paginated tenant Skill lists for screens that keep loading as the user
+ * reaches the end. The platform catalogue still uses `useSkills` because its
+ * endpoint intentionally returns the complete global list.
+ */
+export function useInfiniteSkills(
+  filters: Omit<SkillsFilters, "page">,
+) {
+  const { scope, search, source, pageSize = SKILLS_PAGE_SIZE } = filters;
+  const basePath = useSkillsBasePath(scope);
+  const normalizedSearch = search?.trim() ?? "";
+
+  const query = useInfiniteQuery({
+    queryKey: skillsKey.list({
+      scope: { scope: skillScopeCacheKey(scope), mode: "infinite" },
+      filters: { search: normalizedSearch, source, pageSize },
+    }),
+    queryFn: async ({ pageParam = 1 }) => {
+      const params = new URLSearchParams();
+      params.set("page", String(pageParam));
+      params.set("page_size", String(pageSize));
+      if (normalizedSearch) params.set("search", normalizedSearch);
+      if (source) params.set("source", source);
+
+      const response = await api.get<PaginatedSkills>(
+        `${basePath}?${params.toString()}`,
+        { schema: PaginatedSkillsSchema },
+      );
+      return response.data;
+    },
+    initialPageParam: 1,
+    getNextPageParam: (lastPage) => {
+      const nextPage = lastPage.page + 1;
+      const totalPages = Math.ceil(lastPage.total / lastPage.pageSize);
+      return nextPage <= totalPages ? nextPage : undefined;
+    },
+  });
+
+  return {
+    skills: query.data?.pages.flatMap((page) => page.items) ?? [],
+    total: query.data?.pages[0]?.total ?? 0,
+    hasNextPage: query.hasNextPage,
+    fetchNextPage: query.fetchNextPage,
+    isFetchingNextPage: query.isFetchingNextPage,
+    isFetchingNextPageError: query.isFetchNextPageError,
+    isLoading: query.isPending,
+    error: query.error,
+    refetch: query.refetch,
   };
 }

@@ -163,11 +163,15 @@ export class SkillDataSupport {
     status = 200,
     detail = "Unable to load skills",
     body,
+    pages,
+    total,
   }: {
     agentId?: string;
     status?: number;
     detail?: string;
     body?: unknown;
+    pages?: unknown[][];
+    total?: number;
   } = {}) {
     await this.page.route(`**/api/v1/organizations/*/agents/${agentId}/skills*`, async (route) => {
       if (route.request().method() !== "GET") {
@@ -182,6 +186,8 @@ export class SkillDataSupport {
 
       const search = url.searchParams.get("search")?.toLowerCase();
       const source = url.searchParams.get("source");
+      const page = Number(url.searchParams.get("page") ?? "1");
+      const pageSize = Number(url.searchParams.get("page_size") ?? "15");
       let items = [mockPlatformSkill, mockCustomSkill, mockJiraSkill, mockGoogleWorkspaceSkill];
       if (search) items = items.filter((skill) => skill.name.toLowerCase().includes(search));
       if (source) items = items.filter((skill) => skill.source === source);
@@ -189,6 +195,13 @@ export class SkillDataSupport {
       const responseBody: unknown =
         status >= 400
           ? { detail }
+          : pages !== undefined
+            ? {
+                page,
+                page_size: pageSize,
+                total: total ?? pages.flat().length,
+                items: pages[page - 1] ?? [],
+              }
           : body !== undefined
             ? Array.isArray(body)
               ? { page: 1, page_size: 15, total: body.length, items: body }

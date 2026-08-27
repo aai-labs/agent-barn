@@ -3,7 +3,7 @@
 import { forwardRef, useEffect, useImperativeHandle, useState } from "react";
 import Link from "next/link";
 import { useDebouncedValue } from "@tanstack/react-pacer";
-import { Plus } from "lucide-react";
+import { Loader2, Plus } from "lucide-react";
 
 import { AppErrorState } from "@/components/app-error-state";
 import { SearchIcon } from "@/components/icons";
@@ -19,12 +19,13 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { SharedManualToggle } from "@/features/shared-credentials/components/shared-manual-toggle";
 import { useSharedManualSwitch } from "@/features/shared-credentials/hooks/use-shared-manual-switch";
 import { SHARED_CREDENTIAL_PROVIDER_LABELS } from "@/features/shared-credentials/utils";
-import { useSkills } from "@/features/skills/hooks/use-skills";
+import { useInfiniteSkills } from "@/features/skills/hooks/use-skills";
 import { useSkillVersions } from "@/features/skills/hooks/use-skill-versions";
 import { SKILL_PROVIDER_LABELS } from "@/features/skills/utils";
 import { skillDetailHref, skillNewHref, type SkillScopeRef } from "@/features/skills/scope";
 import { SkillScopeBadge } from "@/features/skills/components/skill-scope-badge";
 import { SkillSourceBadge } from "@/features/skills/components/skill-source-badge";
+import { useLoadMoreOnScroll } from "@/hooks/use-load-more-on-scroll";
 import type { Skill } from "@/features/skills/schemas";
 
 import {
@@ -53,14 +54,28 @@ export const AgentSkillsTab = forwardRef<
   const scope: SkillScopeRef = { kind: "agent", agentId: agent.id };
   const [search, setSearch] = useState("");
   const [debouncedSearch] = useDebouncedValue(search, { wait: 300 });
-  const { skills, isLoading, error, refetch } = useSkills({
+  const {
+    skills,
+    isLoading,
+    error,
+    refetch,
+    hasNextPage,
+    fetchNextPage,
+    isFetchingNextPage,
+    isFetchingNextPageError,
+  } = useInfiniteSkills({
     scope,
     search: debouncedSearch || undefined,
-    pageSize: 100,
+  });
+  const loadMoreRef = useLoadMoreOnScroll({
+    hasNextPage: Boolean(hasNextPage),
+    isFetchingNextPage,
+    fetchNextPage: () => void fetchNextPage(),
   });
   const updateAgent = useUpdateAgent();
 
   const [pendingAddIds, setPendingAddIds] = useState<string[]>([]);
+  const [pendingAddSkills, setPendingAddSkills] = useState<Skill[]>([]);
   const [pendingRemoveIds, setPendingRemoveIds] = useState<string[]>([]);
   const [pendingPins, setPendingPins] = useState<Record<string, number>>({});
   const [newSecretDrafts, setNewSecretDrafts] = useState<IntegrationDraft[]>([]);
@@ -72,8 +87,6 @@ export const AgentSkillsTab = forwardRef<
   const currentSkills = agent.skills.filter(
     (s) => !pendingRemoveIds.includes(s.id),
   );
-
-  const pendingAddSkills = skills.filter((s) => pendingAddIds.includes(s.id));
 
   const assignedIds = new Set(agent.skills.map((s) => s.id));
   const availableSkills = skills.filter(
@@ -108,7 +121,8 @@ export const AgentSkillsTab = forwardRef<
     const needed = skill.requiredProviders.filter(
       (p) => !existingSecretProviders.has(p),
     );
-    setPendingAddIds((prev) => [...prev, skill.id]);
+    setPendingAddIds((prev) => (prev.includes(skill.id) ? prev : [...prev, skill.id]));
+    setPendingAddSkills((prev) => (prev.some((item) => item.id === skill.id) ? prev : [...prev, skill]));
     setNewSecretDrafts((prev) => {
       const existing = new Set(prev.map((d) => d.provider));
       const toAdd = needed.filter((p) => !existing.has(p));
@@ -117,15 +131,14 @@ export const AgentSkillsTab = forwardRef<
   }
 
   function cancelAdd(skillId: string) {
-    const remaining = skills.filter(
-      (s) => pendingAddIds.includes(s.id) && s.id !== skillId,
-    );
+    const remaining = pendingAddSkills.filter((s) => s.id !== skillId);
     const stillNeeded = new Set(
       remaining
         .flatMap((s) => s.requiredProviders)
         .filter((p) => !existingSecretProviders.has(p)),
     );
     setPendingAddIds((prev) => prev.filter((id) => id !== skillId));
+    setPendingAddSkills(remaining);
     setNewSecretDrafts((prev) =>
       prev.filter((d) => stillNeeded.has(d.provider)),
     );
@@ -186,7 +199,7 @@ export const AgentSkillsTab = forwardRef<
     // Providers required by skills that survive this update (kept + newly added).
     const survivingSkills = [
       ...agent.skills.filter((s) => !pendingRemoveIds.includes(s.id)),
-      ...skills.filter((s) => pendingAddIds.includes(s.id)),
+      ...pendingAddSkills,
     ];
     const stillNeeded = new Set(survivingSkills.flatMap((s) => s.requiredProviders));
 
@@ -228,6 +241,7 @@ export const AgentSkillsTab = forwardRef<
         : {}),
     });
     setPendingAddIds([]);
+    setPendingAddSkills([]);
     setPendingRemoveIds([]);
     setPendingPins({});
     setNewSecretDrafts([]);
@@ -235,6 +249,7 @@ export const AgentSkillsTab = forwardRef<
 
   function resetForm() {
     setPendingAddIds([]);
+    setPendingAddSkills([]);
     setPendingRemoveIds([]);
     setPendingPins({});
     setNewSecretDrafts([]);
@@ -257,7 +272,7 @@ export const AgentSkillsTab = forwardRef<
     );
   }
 
-  if (error) {
+  if (error && skills.length === 0) {
     return (
       <AppErrorState
         error={error}
@@ -481,7 +496,7 @@ export const AgentSkillsTab = forwardRef<
             Loading…
           </div>
         )}
-        {!isLoading && availableSkills.length === 0 && (
+        {!isLoading && availableSkills.length === 0 && !hasNextPage && (
           <div className="text-[0.8125rem] py-4 text-center" style={{ color: "var(--ink-3)" }}>
             {search ? "No skills match." : "No more skills to add."}
           </div>
@@ -495,6 +510,24 @@ export const AgentSkillsTab = forwardRef<
             onAdd={() => addSkill(skill)}
           />
         ))}
+        {hasNextPage && (
+          <div
+            ref={loadMoreRef}
+            className="flex items-center justify-center gap-2 py-4 text-[0.75rem]"
+            style={{ color: "var(--ink-4)" }}
+          >
+            <Loader2 size={14} className={isFetchingNextPage ? "animate-spin" : "invisible"} />
+            {isFetchingNextPage ? "Loading more skills…" : "Scroll to load more skills…"}
+          </div>
+        )}
+        {isFetchingNextPageError && (
+          <p className="m-0 py-3 text-center text-[0.75rem]" style={{ color: "var(--err)" }}>
+            Unable to load more skills. {" "}
+            <button type="button" className="underline" onClick={() => void fetchNextPage()}>
+              Try again
+            </button>
+          </p>
+        )}
       </div>
 
       {credentialError && newlyRequiredProviderIds.length === 0 && (
