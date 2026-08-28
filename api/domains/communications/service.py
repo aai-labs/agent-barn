@@ -2,6 +2,7 @@ import json
 import secrets
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from typing import NoReturn
 from uuid import UUID
 
 from fastapi import HTTPException, status
@@ -117,7 +118,6 @@ class CommunicationsService:
         connection = self.repository.get_active_in_scope(connection_id, agent_id, action_scope)
         if connection is None:
             self._raise_not_found(connection_id)
-        assert connection is not None
 
         if data.credentials is not None:
             self.authorization.require_action_for_visible(context, agent, PermissionKey.AGENT_SECRET_MANAGE)
@@ -183,7 +183,6 @@ class CommunicationsService:
         connection = self.repository.get_active_in_scope(connection_id, agent_id, read_scope)
         if connection is None:
             self._raise_not_found(connection_id)
-        assert connection is not None
 
         window_end = self._as_utc(until) if until is not None else datetime.now(UTC)
         default_minutes = window_minutes or 24 * 60
@@ -202,6 +201,7 @@ class CommunicationsService:
             organization_id=connection.organization_id,
             agent_id=agent_id,
             connection_id=connection.id,
+            authorization_scope=read_scope,
             window_start=window_start,
             window_end=window_end,
         )
@@ -248,7 +248,6 @@ class CommunicationsService:
         connection = self.repository.get_active_in_scope(connection_id, agent_id, read_scope)
         if connection is None:
             self._raise_not_found(connection_id)
-        assert connection is not None
         operations = self.operations or getattr(self.repository, "operations", None)
         if operations is None:
             raise HTTPException(
@@ -258,6 +257,7 @@ class CommunicationsService:
             organization_id=connection.organization_id,
             agent_id=agent_id,
             connection_id=connection.id,
+            authorization_scope=read_scope,
             pagination=Pagination(page=page, size=page_size),
             kind=kind,
             since=since,
@@ -281,7 +281,6 @@ class CommunicationsService:
         connection = self.repository.get_active_in_scope(connection_id, agent_id, action_scope)
         if connection is None:
             self._raise_not_found(connection_id)
-        assert connection is not None
         if not connection.enabled:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -293,7 +292,6 @@ class CommunicationsService:
         )
         if updated is None:
             self._raise_not_found(connection_id)
-        assert updated is not None
         return CommunicationReconnectRead(
             connection=self._read(updated),
             requested_at=datetime.now(UTC),
@@ -339,7 +337,6 @@ class CommunicationsService:
         connection = self.repository.get_active_in_scope(connection_id, agent_id, scope)
         if connection is None:
             self._raise_not_found(connection_id)
-        assert connection is not None
 
         plugin = self._require_plugin(connection.platform_key)
         if PlatformCapability.APPLICATION_PROVISIONING not in plugin.capabilities:
@@ -415,7 +412,7 @@ class CommunicationsService:
         )
 
     @staticmethod
-    def _raise_not_found(connection_id: UUID) -> None:
+    def _raise_not_found(connection_id: UUID) -> NoReturn:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Communication Connection {connection_id} not found",

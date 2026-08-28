@@ -2,6 +2,7 @@ import json
 from unittest.mock import MagicMock, patch
 
 import httpx
+from hamcrest import assert_that, equal_to
 
 from api.infrastructure.telegram.client import get_chat_display_name, send_message
 
@@ -73,6 +74,6 @@ def test_send_message_carries_the_provider_idempotency_key(mock_request):
 
     message_id = send_message("bot-value", "chat-1", "reply", idempotency_key="provider-key")
 
-    assert message_id == "17"
-    assert mock_request.call_args.kwargs["headers"]["Idempotency-Key"] == "provider-key"
-    assert json.loads(mock_request.call_args.kwargs["content"])["text"] == "reply"
+    assert_that(message_id, equal_to("17"))
+    assert_that(mock_request.call_args.kwargs["headers"]["Idempotency-Key"], equal_to("provider-key"))
+    assert_that(json.loads(mock_request.call_args.kwargs["content"])["text"], equal_to("reply"))

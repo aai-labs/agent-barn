@@ -11,7 +11,10 @@ import sqlalchemy as sa
 from injector import inject, singleton
 from sqlmodel import Session, col, select
 
+from api.domains.agents.models import Agent
+from api.domains.agents.repository import agent_scope_predicates
 from api.domains.communications.models import (
+    CommunicationConnection,
     CommunicationDelivery,
     CommunicationDeliveryCounts,
     CommunicationDeliveryStatus,
@@ -24,6 +27,7 @@ from api.domains.communications.models import (
     CommunicationPipelineCounts,
     CommunicationPolicyDisposition,
     CommunicationTransitionRead,
+    ConnectionObservedStatus,
 )
 from api.domains.events.catalog import EVENT_REGISTRY
 from api.domains.events.models import (
@@ -32,6 +36,7 @@ from api.domains.events.models import (
     SubjectIdentity,
 )
 from api.domains.events.repository import OutboxMessageRepository
+from api.domains.rbac.policy import AuthorizationScope
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.infrastructure.shared.models import PaginatedItems, Pagination
 
@@ -75,6 +80,14 @@ class CommunicationDiagnosticsSnapshot:
     latest_transitions: list[CommunicationTransitionRead]
 
 
+@dataclass(frozen=True)
+class CommunicationMetricsSnapshot:
+    """Database rows needed to refresh low-cardinality Communications metrics."""
+
+    connection_statuses: list[tuple[ConnectionObservedStatus | str | None, int]]
+    queued_deliveries: list[tuple[CommunicationDirection | str, int, datetime]]
+
+
 @inject
 @singleton
 @dataclass
@@ -89,6 +102,45 @@ class CommunicationOperationalRepository:
 
     delegate: PostgresRepositoryDelegate
     outbox_repository: OutboxMessageRepository
+
+    def get_metrics_snapshot(self) -> CommunicationMetricsSnapshot:
+        """Read the aggregate rows used by the Communications Prometheus gauges."""
+        with Session(self.delegate.engine) as session:
+            connection_statuses = list(
+                session.exec(
+                    select(CommunicationConnection.observed_status, sa.func.count())
+                    .where(
+                        col(CommunicationConnection.retired_at).is_(None),
+                        col(CommunicationConnection.enabled).is_(True),
+                    )
+                    .group_by(CommunicationConnection.observed_status)
+                ).all()
+            )
+            queued_deliveries = list(
+                session.exec(
+                    select(
+                        CommunicationDelivery.direction,
+                        sa.func.count(),
+                        sa.func.min(CommunicationDelivery.available_at),
+                    )
+                    .join(
+                        CommunicationConnection,
+                        col(CommunicationConnection.id) == col(CommunicationDelivery.connection_id),
+                    )
+                    .where(
+                        col(CommunicationDelivery.status).in_(
+                            [CommunicationDeliveryStatus.PENDING, CommunicationDeliveryStatus.PROCESSING]
+                        ),
+                        col(CommunicationConnection.enabled).is_(True),
+                        col(CommunicationConnection.retired_at).is_(None),
+                    )
+                    .group_by(CommunicationDelivery.direction)
+                ).all()
+            )
+        return CommunicationMetricsSnapshot(
+            connection_statuses=connection_statuses,
+            queued_deliveries=queued_deliveries,
+        )
 
     def stage_journal(
         self,
@@ -216,14 +268,18 @@ class CommunicationOperationalRepository:
         organization_id: UUID,
         agent_id: UUID,
         connection_id: UUID,
+        authorization_scope: AuthorizationScope,
         window_start: datetime,
         window_end: datetime,
     ) -> CommunicationDiagnosticsSnapshot:
         with Session(self.delegate.engine) as session:
+            agent_visibility = agent_scope_predicates(authorization_scope)
             journal_rows = list(
                 session.exec(
                     select(CommunicationJournalEntry)
+                    .join(Agent, col(Agent.id) == col(CommunicationJournalEntry.agent_id))
                     .where(
+                        *agent_visibility,
                         col(CommunicationJournalEntry.organization_id) == organization_id,
                         col(CommunicationJournalEntry.agent_id) == agent_id,
                         col(CommunicationJournalEntry.connection_id) == connection_id,
@@ -237,7 +293,10 @@ class CommunicationOperationalRepository:
             )
             deliveries = list(
                 session.exec(
-                    select(CommunicationDelivery).where(
+                    select(CommunicationDelivery)
+                    .join(Agent, col(Agent.id) == col(CommunicationDelivery.agent_id))
+                    .where(
+                        *agent_visibility,
                         col(CommunicationDelivery.organization_id) == organization_id,
                         col(CommunicationDelivery.agent_id) == agent_id,
                         col(CommunicationDelivery.connection_id) == connection_id,
@@ -248,7 +307,10 @@ class CommunicationOperationalRepository:
             )
             queued_deliveries = list(
                 session.exec(
-                    select(CommunicationDelivery).where(
+                    select(CommunicationDelivery)
+                    .join(Agent, col(Agent.id) == col(CommunicationDelivery.agent_id))
+                    .where(
+                        *agent_visibility,
                         col(CommunicationDelivery.organization_id) == organization_id,
                         col(CommunicationDelivery.agent_id) == agent_id,
                         col(CommunicationDelivery.connection_id) == connection_id,
@@ -264,7 +326,9 @@ class CommunicationOperationalRepository:
             # trajectory", not "what happened in the selected window".
             last_connected_at = session.exec(
                 select(CommunicationJournalEntry.occurred_at)
+                .join(Agent, col(Agent.id) == col(CommunicationJournalEntry.agent_id))
                 .where(
+                    *agent_visibility,
                     col(CommunicationJournalEntry.organization_id) == organization_id,
                     col(CommunicationJournalEntry.agent_id) == agent_id,
                     col(CommunicationJournalEntry.connection_id) == connection_id,
@@ -275,7 +339,9 @@ class CommunicationOperationalRepository:
             ).first()
             latest_connectivity_entry = session.exec(
                 select(CommunicationJournalEntry.stage, CommunicationJournalEntry.occurred_at)
+                .join(Agent, col(Agent.id) == col(CommunicationJournalEntry.agent_id))
                 .where(
+                    *agent_visibility,
                     col(CommunicationJournalEntry.organization_id) == organization_id,
                     col(CommunicationJournalEntry.agent_id) == agent_id,
                     col(CommunicationJournalEntry.connection_id) == connection_id,
@@ -289,7 +355,9 @@ class CommunicationOperationalRepository:
             recent_delivery_statuses = list(
                 session.exec(
                     select(CommunicationDelivery.status)
+                    .join(Agent, col(Agent.id) == col(CommunicationDelivery.agent_id))
                     .where(
+                        *agent_visibility,
                         col(CommunicationDelivery.organization_id) == organization_id,
                         col(CommunicationDelivery.agent_id) == agent_id,
                         col(CommunicationDelivery.connection_id) == connection_id,
@@ -446,6 +514,7 @@ class CommunicationOperationalRepository:
         organization_id: UUID,
         agent_id: UUID,
         connection_id: UUID,
+        authorization_scope: AuthorizationScope,
         pagination: Pagination,
         kind: str,
         since: datetime | None = None,
@@ -464,7 +533,9 @@ class CommunicationOperationalRepository:
         per-delivery drill-down is served without a separate read model.
         """
         with Session(self.delegate.engine) as session:
+            agent_visibility = agent_scope_predicates(authorization_scope)
             predicates = [
+                *agent_visibility,
                 col(CommunicationJournalEntry.organization_id) == organization_id,
                 col(CommunicationJournalEntry.agent_id) == agent_id,
                 col(CommunicationJournalEntry.connection_id) == connection_id,
@@ -486,12 +557,14 @@ class CommunicationOperationalRepository:
             if retryable_only:
                 predicates.append(col(CommunicationJournalEntry.stage) == CommunicationJournalStage.DEAD_LETTERED)
                 predicates.append(col(CommunicationDelivery.status) == CommunicationDeliveryStatus.DEAD_LETTERED)
+                predicates.append(col(CommunicationDelivery.direction) == CommunicationDirection.OUTBOUND)
             if direction is not None:
                 predicates.append(col(CommunicationDelivery.direction) == direction)
 
             total = session.exec(
                 select(sa.func.count())
                 .select_from(CommunicationJournalEntry)
+                .join(Agent, col(Agent.id) == col(CommunicationJournalEntry.agent_id))
                 .outerjoin(
                     CommunicationDelivery,
                     col(CommunicationDelivery.id) == col(CommunicationJournalEntry.delivery_id),
@@ -514,6 +587,7 @@ class CommunicationOperationalRepository:
                         CommunicationDelivery.status,
                         CommunicationDelivery,
                     )
+                    .join(Agent, col(Agent.id) == col(CommunicationJournalEntry.agent_id))
                     .outerjoin(
                         CommunicationDelivery,
                         col(CommunicationDelivery.id) == col(CommunicationJournalEntry.delivery_id),

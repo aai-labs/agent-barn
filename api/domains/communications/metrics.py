@@ -1,20 +1,21 @@
 """Low-cardinality Prometheus metrics for the Communications process."""
 
+import logging
 from datetime import UTC, datetime
 from typing import Any
 
-import sqlalchemy as sa
 from prometheus_client import Counter, Gauge, Histogram
-from sqlmodel import Session, col, select
 
 from api.domains.communications.models import (
-    CommunicationConnection,
     CommunicationDelivery,
     CommunicationDeliveryStatus,
     CommunicationDirection,
     CommunicationPolicyDisposition,
     ConnectionObservedStatus,
 )
+from api.domains.communications.operations import CommunicationOperationalRepository
+
+logger = logging.getLogger(__name__)
 
 CONNECTION_STATUS = Gauge(
     "agentbarn_communication_connection_status",
@@ -77,40 +78,13 @@ def record_delivery_outcome(delivery: CommunicationDelivery) -> None:
         )
 
 
-def refresh_communication_metrics(engine: Any) -> None:
+def refresh_communication_metrics(operations: CommunicationOperationalRepository) -> None:
     """Refresh gauges from current rows; failures leave the last scrape intact."""
     try:
-        with Session(engine) as session:
-            status_rows = session.exec(
-                select(CommunicationConnection.observed_status, sa.func.count())
-                .where(
-                    col(CommunicationConnection.retired_at).is_(None),
-                    col(CommunicationConnection.enabled).is_(True),
-                )
-                .group_by(CommunicationConnection.observed_status)
-            ).all()
-            queue_rows = session.exec(
-                select(
-                    CommunicationDelivery.direction,
-                    sa.func.count(),
-                    sa.func.min(CommunicationDelivery.available_at),
-                )
-                .join(
-                    CommunicationConnection,
-                    col(CommunicationConnection.id) == col(CommunicationDelivery.connection_id),
-                )
-                .where(
-                    col(CommunicationDelivery.status).in_(
-                        [CommunicationDeliveryStatus.PENDING, CommunicationDeliveryStatus.PROCESSING]
-                    ),
-                    col(CommunicationConnection.enabled).is_(True),
-                    col(CommunicationConnection.retired_at).is_(None),
-                )
-                .group_by(CommunicationDelivery.direction)
-            ).all()
+        snapshot = operations.get_metrics_snapshot()
         for status in ConnectionObservedStatus:
             CONNECTION_STATUS.labels(status=status.value).set(0)
-        for status, count in status_rows:
+        for status, count in snapshot.connection_statuses:
             if status is not None:
                 CONNECTION_STATUS.labels(status=_value(status)).set(count)
         now = datetime.now(UTC)
@@ -118,13 +92,14 @@ def refresh_communication_metrics(engine: Any) -> None:
             label = _value(direction).lower()
             QUEUE_DEPTH.labels(direction=label).set(0)
             OLDEST_QUEUED_AGE.labels(direction=label).set(0)
-        for direction, count, oldest in queue_rows:
+        for direction, count, oldest in snapshot.queued_deliveries:
             label = _value(direction).lower()
             QUEUE_DEPTH.labels(direction=label).set(count)
             if oldest is not None:
                 OLDEST_QUEUED_AGE.labels(direction=label).set(max(0.0, (now - oldest).total_seconds()))
     except Exception:
         # Metrics must never interrupt the communications worker or a scrape.
+        logger.warning("Failed to refresh Communications metrics", exc_info=True)
         return
 
 

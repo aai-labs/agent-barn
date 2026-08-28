@@ -67,6 +67,14 @@ export class CommunicationConnectionDetailPage {
     return this.activityPanel("delivery").getByRole("list");
   }
 
+  connectionEventRow(stage: string | RegExp): Locator {
+    return this.activityPanel("connection").getByRole("button", { name: stage });
+  }
+
+  admissionOutcome(): Locator {
+    return this.activityPanel("connection").getByText("Admission outcome", { exact: true });
+  }
+
   timelineStage(stage: string): Locator {
     return this.deliveryTimeline().getByText(stage, { exact: true });
   }
@@ -96,6 +104,14 @@ export class CommunicationConnectionDetailPage {
   waitForDeliveryLifecycleRequest(deliveryId: string): Promise<Request> {
     return this.page.waitForRequest(
       (request) => request.url().includes(`delivery_id=${deliveryId}`) && request.url().includes("order=asc"),
+    );
+  }
+
+  waitForDeliveryLifecyclePageRequest(deliveryId: string, page: number): Promise<Request> {
+    return this.page.waitForRequest(
+      (request) => request.url().includes(`delivery_id=${deliveryId}`)
+        && request.url().includes("order=asc")
+        && request.url().includes(`page=${page}`),
     );
   }
 

@@ -3,6 +3,7 @@ from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
+from hamcrest import assert_that, equal_to
 
 from api.infrastructure.slack.client import (
     SlackClient,
@@ -397,5 +398,5 @@ def test_send_message_carries_the_provider_idempotency_key():
             idempotency_key="provider-key",
         )
 
-    assert message_id == "1724264405.531769"
-    assert json.loads(mock.call_args.kwargs["content"])["client_msg_id"] == "provider-key"
+    assert_that(message_id, equal_to("1724264405.531769"))
+    assert_that(json.loads(mock.call_args.kwargs["content"])["client_msg_id"], equal_to("provider-key"))

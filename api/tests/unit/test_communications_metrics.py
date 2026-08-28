@@ -2,6 +2,8 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import cast
 
+from hamcrest import assert_that, equal_to, greater_than_or_equal_to
+
 from api.domains.communications.metrics import (
     CONNECTION_STATUS,
     DELIVERY_LATENCY,
@@ -21,12 +23,12 @@ from api.domains.communications.models import (
 
 
 def test_communication_metrics_have_no_resource_identity_labels() -> None:
-    assert CONNECTION_STATUS._labelnames == ("status",)
-    assert DELIVERY_OUTCOMES._labelnames == ("direction", "outcome")
-    assert QUEUE_DEPTH._labelnames == ("direction",)
-    assert OLDEST_QUEUED_AGE._labelnames == ("direction",)
-    assert DELIVERY_LATENCY._labelnames == ("direction", "outcome")
-    assert POLICY_DISPOSITIONS._labelnames == ("disposition",)
+    assert_that(CONNECTION_STATUS._labelnames, equal_to(("status",)))
+    assert_that(DELIVERY_OUTCOMES._labelnames, equal_to(("direction", "outcome")))
+    assert_that(QUEUE_DEPTH._labelnames, equal_to(("direction",)))
+    assert_that(OLDEST_QUEUED_AGE._labelnames, equal_to(("direction",)))
+    assert_that(DELIVERY_LATENCY._labelnames, equal_to(("direction", "outcome")))
+    assert_that(POLICY_DISPOSITIONS._labelnames, equal_to(("disposition",)))
 
 
 def test_delivery_and_policy_metrics_record_bounded_outcomes() -> None:
@@ -45,5 +47,8 @@ def test_delivery_and_policy_metrics_record_bounded_outcomes() -> None:
     record_delivery_outcome(delivery)
     record_policy_disposition(CommunicationPolicyDisposition.MENTION_REQUIRED)
 
-    assert outcome._value.get() == before + 1
-    assert POLICY_DISPOSITIONS.labels(disposition="mention_required")._value.get() >= 1
+    assert_that(outcome._value.get(), equal_to(before + 1))
+    assert_that(
+        POLICY_DISPOSITIONS.labels(disposition="mention_required")._value.get(),
+        greater_than_or_equal_to(1),
+    )

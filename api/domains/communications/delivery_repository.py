@@ -676,30 +676,23 @@ class CommunicationDeliveryRepository:
             return
         connection = session.get(CommunicationConnection, delivery.connection_id)
         subject_display = connection.display_name if connection is not None else "Communication Connection"
+        payload = {
+            "organization_id": delivery.organization_id,
+            "agent_id": delivery.agent_id,
+            "connection_id": delivery.connection_id,
+            "delivery_id": delivery.id,
+            "direction": self._enum_value(delivery.direction),
+            "attempt_number": delivery.attempt_count,
+            "actor_display": "Communications Runtime",
+            "subject_display": subject_display,
+        }
         if event_name == COMMUNICATION_DELIVERY_DEAD_LETTERED:
-            payload = {
-                "organization_id": delivery.organization_id,
-                "agent_id": delivery.agent_id,
-                "connection_id": delivery.connection_id,
-                "delivery_id": delivery.id,
-                "direction": self._enum_value(delivery.direction),
-                "attempt_number": delivery.attempt_count,
-                "error_code": delivery.last_error_code,
-                "error_summary": delivery.last_error_message,
-                "actor_display": "Communications Runtime",
-                "subject_display": subject_display,
-            }
-        else:
-            payload = {
-                "organization_id": delivery.organization_id,
-                "agent_id": delivery.agent_id,
-                "connection_id": delivery.connection_id,
-                "delivery_id": delivery.id,
-                "direction": self._enum_value(delivery.direction),
-                "attempt_number": delivery.attempt_count,
-                "actor_display": "Communications Runtime",
-                "subject_display": subject_display,
-            }
+            payload.update(
+                {
+                    "error_code": delivery.last_error_code,
+                    "error_summary": delivery.last_error_message,
+                }
+            )
         self.operations.stage_event(
             session=session,
             event_name=event_name,

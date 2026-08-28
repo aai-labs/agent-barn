@@ -324,15 +324,9 @@ class CommunicationsGatewayService:
                 type(exc).__name__,
             )
             return InboundAdmissionResult(CommunicationPolicyDisposition.MALFORMED_PAYLOAD)
-        if isinstance(result, InboundAdmissionResult):
-            return result
-        # Compatibility for third-party plugins written against AF-272's list
-        # return type. Shipped plugins use the typed result above.
-        envelopes = tuple(result or ())
-        return InboundAdmissionResult(
-            CommunicationPolicyDisposition.ACCEPTED if envelopes else CommunicationPolicyDisposition.MALFORMED_PAYLOAD,
-            envelopes,
-        )
+        if not isinstance(result, InboundAdmissionResult):
+            raise TypeError("Communication plugin returned an unsupported admission result")
+        return result
 
     def _record_journal(
         self,

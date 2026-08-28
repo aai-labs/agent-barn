@@ -102,12 +102,6 @@ class InboundAdmissionResult(Sequence[NormalizedCommunicationEnvelope]):
         return NotImplemented
 
 
-# Names used by callers that describe this boundary as normalization rather
-# than admission. They intentionally refer to the same value object.
-InboundNormalizationResult = InboundAdmissionResult
-InboundDisposition = CommunicationPolicyDisposition
-
-
 class PlatformPlugin(ABC):
     key: str
     display_name: str

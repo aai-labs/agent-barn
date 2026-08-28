@@ -1,6 +1,7 @@
 "use client";
 
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect } from "react";
 import { z } from "zod";
 
 import { useOrganizationApiBase } from "@/features/organizations/hooks/use-organization-api-base";
@@ -157,11 +158,11 @@ export function useCommunicationDeliveryLifecycle(
   const orgApiBase = useOrganizationApiBase();
   const { selectedOrganization } = useOrganizationContext();
   const organizationId = selectedOrganization?.id ?? "";
-  return useQuery({
+  const query = useInfiniteQuery({
     queryKey: communicationJournalKey.detail(`${organizationId}:${connectionId}:${deliveryId ?? ""}`),
-    queryFn: async () => {
+    queryFn: async ({ pageParam }) => {
       const params = journalSearchParams({ deliveryId: deliveryId ?? undefined, order: "asc" });
-      params.set("page", "1");
+      params.set("page", String(pageParam));
       params.set("page_size", "100");
       params.set("kind", "delivery");
       const response = await api.get<PaginatedCommunicationJournalEntries>(
@@ -170,8 +171,24 @@ export function useCommunicationDeliveryLifecycle(
       );
       return response.data;
     },
+    initialPageParam: 1,
+    getNextPageParam: (lastPage) => {
+      const nextPage = lastPage.page + 1;
+      return nextPage <= Math.ceil(lastPage.total / lastPage.pageSize) ? nextPage : undefined;
+    },
     enabled: Boolean(agentId && connectionId && deliveryId),
   });
+  const { fetchNextPage, hasNextPage, isFetchNextPageError, isFetchingNextPage } = query;
+  useEffect(() => {
+    if (hasNextPage && !isFetchingNextPage && !isFetchNextPageError) {
+      void fetchNextPage();
+    }
+  }, [fetchNextPage, hasNextPage, isFetchNextPageError, isFetchingNextPage]);
+
+  const entries = Array.from(
+    new Map((query.data?.pages.flatMap((page) => page.items) ?? []).map((entry) => [entry.id, entry])).values(),
+  );
+  return { ...query, entries };
 }
 
 export function useDownloadAppPackage() {

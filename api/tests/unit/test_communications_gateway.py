@@ -5,6 +5,7 @@ from unittest.mock import Mock, patch
 from uuid import uuid4
 
 import pytest
+from hamcrest import assert_that, empty
 
 from api.core.config import Config
 from api.domains.agents.models import Agent, AgentStatus
@@ -77,7 +78,10 @@ def _feedback_plugin() -> Mock:
     plugin.capabilities = frozenset({PlatformCapability.PROCESSING_FEEDBACK})
     plugin.settings_model = SlackSettings
     plugin.credentials_model = SlackCredentials
-    plugin.admit_inbound.return_value = [_envelope()]
+    plugin.admit_inbound.return_value = InboundAdmissionResult(
+        CommunicationPolicyDisposition.ACCEPTED,
+        (_envelope(),),
+    )
     plugin.enrich_inbound.side_effect = lambda settings, credentials, envelopes: envelopes
     return plugin
 
@@ -184,7 +188,7 @@ def test_gateway_does_not_create_a_delivery_for_a_denied_admission() -> None:
     with patch("api.domains.communications.metrics.record_policy_disposition") as record_disposition:
         accepted = service._accept_admitted_payload(connection, plugin, SlackSettings(), {})
 
-    assert accepted == []
+    assert_that(accepted, empty())
     deliveries.accept_inbound.assert_not_called()
     record_disposition.assert_called_once_with(CommunicationPolicyDisposition.USER_DENIED)
 

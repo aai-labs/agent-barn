@@ -585,12 +585,26 @@ test.describe("Agent Detail Page — Channels tab", () => {
     await connectionDetailPage.deliveryTransitionRow(/provider delivered/i).click();
 
     const lifecycleRequest = connectionDetailPage.waitForDeliveryLifecycleRequest(COMMUNICATION_DELIVERY_ID);
+    const lifecyclePageTwoRequest = connectionDetailPage.waitForDeliveryLifecyclePageRequest(COMMUNICATION_DELIVERY_ID, 2);
     await connectionDetailPage.deliveryTimelineButton().click();
     await lifecycleRequest;
+    await lifecyclePageTwoRequest;
 
     await expect(connectionDetailPage.summaryMetric("Delivery timeline")).toBeVisible();
     await expect(connectionDetailPage.timelineStage("reply queued")).toBeVisible();
     await expect(connectionDetailPage.timelineStage("provider delivered")).toBeVisible();
+    await expect(connectionDetailPage.timelineStage("recovered")).toBeVisible();
+  });
+
+  test("shows typed admission outcomes on Connection event rows", async () => {
+    await agentDetailPage.connectionDetailsLink().click();
+    await connectionDetailPage.connectionEventsTab().click();
+
+    const eventRow = connectionDetailPage.connectionEventRow(/policy admitted/i);
+    await eventRow.click();
+
+    await expect(connectionDetailPage.admissionOutcome()).toBeVisible();
+    await expect(connectionDetailPage.activityPanel("connection")).toContainText("mention required");
   });
 
   test("edits Connection name and plugin settings without resending credentials", async () => {

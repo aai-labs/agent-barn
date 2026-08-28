@@ -3,9 +3,11 @@ import { Page } from "@playwright/test";
 import {
   COMMUNICATION_CONNECTION_ID,
   mockCommunicationConnection,
+  mockCommunicationConnectionJournalPage,
   mockCommunicationConnectionSummary,
   mockCommunicationDeliveryJournalPage,
   mockCommunicationDeliveryLifecyclePage,
+  mockCommunicationDeliveryLifecyclePage2,
   mockCommunicationReconnectResponse,
   mockCommunicationPlatforms,
   mockCreatedCommunicationConnection,
@@ -86,9 +88,13 @@ export class CommunicationConnectionDataSupport {
         status: 200,
         contentType: "application/json",
         body: JSON.stringify(
-          url.searchParams.has("delivery_id")
-            ? mockCommunicationDeliveryLifecyclePage
-            : mockCommunicationDeliveryJournalPage,
+          url.searchParams.get("kind") === "connection"
+            ? mockCommunicationConnectionJournalPage
+            : url.searchParams.has("delivery_id")
+              ? url.searchParams.get("page") === "2"
+                ? mockCommunicationDeliveryLifecyclePage2
+                : mockCommunicationDeliveryLifecyclePage
+              : mockCommunicationDeliveryJournalPage,
         ),
       });
     });

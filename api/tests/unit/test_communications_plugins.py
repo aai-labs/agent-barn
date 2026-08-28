@@ -8,6 +8,7 @@ from unittest.mock import patch
 from uuid import uuid4
 
 import pytest
+from hamcrest import assert_that, empty, equal_to, has_length
 
 from api.domains.communications.models import (
     CommunicationPolicyDisposition,
@@ -244,12 +245,12 @@ def test_slack_admission_returns_typed_policy_dispositions() -> None:
         context=context,
     )
 
-    assert denied_dm.disposition == CommunicationPolicyDisposition.USER_DENIED
-    assert bot_message.disposition == CommunicationPolicyDisposition.BOT_IGNORED
-    assert mention_required.disposition == CommunicationPolicyDisposition.MENTION_REQUIRED
-    assert malformed.disposition == CommunicationPolicyDisposition.MALFORMED_PAYLOAD
-    assert accepted.disposition == CommunicationPolicyDisposition.ACCEPTED
-    assert len(accepted) == 1
+    assert_that(denied_dm.disposition, equal_to(CommunicationPolicyDisposition.USER_DENIED))
+    assert_that(bot_message.disposition, equal_to(CommunicationPolicyDisposition.BOT_IGNORED))
+    assert_that(mention_required.disposition, equal_to(CommunicationPolicyDisposition.MENTION_REQUIRED))
+    assert_that(malformed.disposition, equal_to(CommunicationPolicyDisposition.MALFORMED_PAYLOAD))
+    assert_that(accepted.disposition, equal_to(CommunicationPolicyDisposition.ACCEPTED))
+    assert_that(accepted, has_length(1))
 
 
 def test_slack_message_identity_uses_timestamp_for_reaction_feedback() -> None:
@@ -387,7 +388,7 @@ def test_slack_send_passes_a_stable_provider_idempotency_key() -> None:
             idempotency_key="reply-1",
         )
 
-    assert result == "sent-1"
+    assert_that(result, equal_to("sent-1"))
     client_type.return_value.send_message.assert_called_once_with(
         "channel-1",
         "reply",
@@ -414,7 +415,7 @@ def test_discord_send_passes_a_stable_provider_idempotency_key() -> None:
             idempotency_key="reply-1",
         )
 
-    assert result == "sent-1"
+    assert_that(result, equal_to("sent-1"))
     client_type.return_value.send_message.assert_called_once_with(
         "channel-1",
         "reply",
@@ -440,7 +441,7 @@ def test_telegram_send_passes_a_stable_provider_idempotency_key() -> None:
             idempotency_key="reply-1",
         )
 
-    assert result == "sent-1"
+    assert_that(result, equal_to("sent-1"))
     send.assert_called_once_with(
         "bot-value",
         "chat-1",
@@ -700,7 +701,7 @@ def test_teams_normalizes_a_personal_message_as_a_dm() -> None:
 
     envelopes = plugin.normalize_inbound(settings, _teams_activity())
 
-    assert envelopes.disposition == CommunicationPolicyDisposition.ACCEPTED
+    assert_that(envelopes.disposition, equal_to(CommunicationPolicyDisposition.ACCEPTED))
     assert len(envelopes) == 1
     envelope = envelopes[0]
     assert envelope.location.type == "DM"
@@ -760,8 +761,8 @@ def test_teams_ignores_non_message_activities() -> None:
 
     result = plugin.normalize_inbound(settings, _teams_activity(type="conversationUpdate"))
 
-    assert result.disposition == CommunicationPolicyDisposition.MALFORMED_PAYLOAD
-    assert result == []
+    assert_that(result.disposition, equal_to(CommunicationPolicyDisposition.MALFORMED_PAYLOAD))
+    assert_that(result, empty())
 
 
 def test_teams_ignores_the_agents_own_echo() -> None:
@@ -772,8 +773,8 @@ def test_teams_ignores_the_agents_own_echo() -> None:
 
     result = plugin.normalize_inbound(settings, payload)
 
-    assert result.disposition == CommunicationPolicyDisposition.BOT_IGNORED
-    assert result == []
+    assert_that(result.disposition, equal_to(CommunicationPolicyDisposition.BOT_IGNORED))
+    assert_that(result, empty())
 
 
 def test_teams_rejects_a_message_without_a_sender_id() -> None:
@@ -784,8 +785,8 @@ def test_teams_rejects_a_message_without_a_sender_id() -> None:
 
     result = plugin.normalize_inbound(settings, payload)
 
-    assert result.disposition == CommunicationPolicyDisposition.MALFORMED_PAYLOAD
-    assert result == []
+    assert_that(result.disposition, equal_to(CommunicationPolicyDisposition.MALFORMED_PAYLOAD))
+    assert_that(result, empty())
 
 
 def test_teams_dm_policy_off_drops_direct_messages() -> None:
@@ -794,8 +795,8 @@ def test_teams_dm_policy_off_drops_direct_messages() -> None:
 
     result = plugin.normalize_inbound(settings, _teams_activity())
 
-    assert result.disposition == CommunicationPolicyDisposition.USER_DENIED
-    assert result == []
+    assert_that(result.disposition, equal_to(CommunicationPolicyDisposition.USER_DENIED))
+    assert_that(result, empty())
 
 
 def test_teams_dm_allowlist_admits_only_listed_senders() -> None:
@@ -808,8 +809,8 @@ def test_teams_dm_allowlist_admits_only_listed_senders() -> None:
     assert len(plugin.normalize_inbound(allowed, _teams_activity())) == 1
     result = plugin.normalize_inbound(blocked, _teams_activity())
 
-    assert result.disposition == CommunicationPolicyDisposition.USER_DENIED
-    assert result == []
+    assert_that(result.disposition, equal_to(CommunicationPolicyDisposition.USER_DENIED))
+    assert_that(result, empty())
 
 
 def test_teams_group_allowlist_matches_the_stripped_channel_id() -> None:
@@ -824,8 +825,8 @@ def test_teams_group_allowlist_matches_the_stripped_channel_id() -> None:
     assert len(plugin.normalize_inbound(allowed, _teams_channel_activity())) == 1
     result = plugin.normalize_inbound(blocked, _teams_channel_activity())
 
-    assert result.disposition == CommunicationPolicyDisposition.CHANNEL_DENIED
-    assert result == []
+    assert_that(result.disposition, equal_to(CommunicationPolicyDisposition.CHANNEL_DENIED))
+    assert_that(result, empty())
 
 
 def test_teams_captures_addressable_ids_for_replies() -> None:
@@ -894,15 +895,14 @@ def test_teams_send_posts_a_complete_activity_to_the_conversation() -> None:
         patch("api.domains.communications.plugins.teams.acquire_token", return_value="tok"),
         patch("api.domains.communications.plugins.teams.send_activity", return_value="sent-1") as send,
     ):
-        assert (
-            plugin.send(
-                plugin.settings_model.model_validate({}),
-                credentials,
-                envelope,
-                idempotency_key="reply-1",
-            )
-            == "sent-1"
+        result = plugin.send(
+            plugin.settings_model.model_validate({}),
+            credentials,
+            envelope,
+            idempotency_key="reply-1",
         )
+
+        assert_that(result, equal_to("sent-1"))
 
     service_url, conversation_id, activity, token = send.call_args.args
     assert service_url == _TEAMS_SERVICE_URL
@@ -915,7 +915,7 @@ def test_teams_send_posts_a_complete_activity_to_the_conversation() -> None:
     assert activity["from"] == {"id": _TEAMS_BOT_ID}
     assert activity["recipient"] == {"id": _TEAMS_USER_ID}
     assert activity["replyToId"] == "1485983408511"
-    assert send.call_args.kwargs["idempotency_key"] == provider_idempotency_key("reply-1")
+    assert_that(send.call_args.kwargs["idempotency_key"], equal_to(provider_idempotency_key("reply-1")))
 
 
 def test_teams_send_without_a_service_url_is_rejected() -> None:

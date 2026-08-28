@@ -770,6 +770,36 @@ def test_journal_filters_narrow_by_stage_error_direction_and_delivery() -> None:
             assert_that(retryable_after.json()["total"], equal_to(0))
 
 
+def test_retryable_journal_filter_excludes_dead_lettered_inbound_deliveries() -> None:
+    with given([*_GIVEN[:-1], there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        created = context.client.post(_base(context), json=_discord_payload(), headers=_auth(context)).json()
+        connection_id = UUID(created["id"])
+        deliveries = context.injector.get(CommunicationDeliveryRepository)
+        accepted = deliveries.accept_inbound(connection_id=connection_id, envelope=_envelope("inbound-dead-letter"))
+        claimed = deliveries.claim_next_inbound(agent_id=context.agent.id)
+        assert_that(claimed, is_(not_(none())))
+        assert_that(
+            deliveries.complete_runtime_delivery(
+                claimed.delivery_id if claimed is not None else UUID(int=0),
+                agent_id=context.agent.id,
+                succeeded=False,
+                error_code="runtime_timeout",
+                error_message="runtime failed",
+                max_attempts=1,
+            ),
+            is_(True),
+        )
+
+        response = context.client.get(
+            f"{_base(context)}/{connection_id}/journal?kind=delivery&retryable_only=true",
+            headers=_auth(context),
+        )
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+        assert_that(response.json()["total"], equal_to(0))
+        assert_that(accepted.delivery_id, is_(not_none()))
+
+
 def _teams_payload(name: str = "Microsoft Teams") -> dict:
     return {
         "platform_key": "teams",

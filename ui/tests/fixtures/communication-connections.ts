@@ -195,7 +195,7 @@ export const mockCommunicationDeliveryJournalPage = {
 export const mockCommunicationDeliveryLifecyclePage = {
   page: 1,
   page_size: 100,
-  total: 2,
+  total: 101,
   items: [
     {
       id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
@@ -229,6 +229,56 @@ export const mockCommunicationDeliveryLifecyclePage = {
       delivery_status: "DEAD_LETTERED",
       queue_wait_ms: 20,
       processing_ms: 140,
+      next_retry_at: null,
+    },
+  ],
+};
+
+export const mockCommunicationDeliveryLifecyclePage2 = {
+  page: 2,
+  page_size: 100,
+  total: 101,
+  items: [
+    {
+      id: "ffffffff-ffff-4fff-8fff-ffffffffffff",
+      connection_id: COMMUNICATION_CONNECTION_ID,
+      delivery_id: COMMUNICATION_DELIVERY_ID,
+      occurred_at: "2026-01-01T00:01:00Z",
+      stage: "recovered",
+      disposition: null,
+      attempt_number: 2,
+      duration_ms: 60,
+      error_code: null,
+      error_summary: null,
+      direction: "OUTBOUND",
+      delivery_status: "SUCCEEDED",
+      queue_wait_ms: 20,
+      processing_ms: 60,
+      next_retry_at: null,
+    },
+  ],
+};
+
+export const mockCommunicationConnectionJournalPage = {
+  page: 1,
+  page_size: 20,
+  total: 1,
+  items: [
+    {
+      id: "99999999-9999-4999-8999-999999999999",
+      connection_id: COMMUNICATION_CONNECTION_ID,
+      delivery_id: null,
+      occurred_at: "2026-01-01T00:00:00Z",
+      stage: "policy_admitted",
+      disposition: "mention_required",
+      attempt_number: 0,
+      duration_ms: 2,
+      error_code: null,
+      error_summary: null,
+      direction: null,
+      delivery_status: null,
+      queue_wait_ms: null,
+      processing_ms: null,
       next_retry_at: null,
     },
   ],

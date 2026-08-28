@@ -238,6 +238,7 @@ export function CommunicationConnectionJournal({
 
 function JournalRow({ entry, expanded, onToggle, canEdit, onRetryDelivery, agentId, connectionId, rowGrid, showDeliveryColumns }: { entry: CommunicationJournalEntry; expanded: boolean; onToggle: () => void; canEdit: boolean; onRetryDelivery: (deliveryId: string) => void; agentId: string; connectionId: string; rowGrid: string; showDeliveryColumns: boolean }) {
   const hasDetails = Boolean(entry.deliveryId)
+    || Boolean(entry.disposition)
     || ["connection_error", "connection_degraded", "reconnect_requested"].includes(entry.stage);
   const row = (
     <>
@@ -333,6 +334,7 @@ function JournalDetail({
     <div className="space-y-4 px-10 py-4" style={{ background: "var(--bg-soft)" }}>
       <DetailSection title={entry.deliveryId ? "Delivery activity" : "Connection event"}>
         <DetailRow label="Stage" value={label(entry.stage)} />
+        {entry.disposition && <DetailRow label="Admission outcome" value={label(entry.disposition)} />}
         {entry.direction && <DetailRow label="Direction" value={label(entry.direction)} />}
         {entry.deliveryStatus && <DetailRow label="Current status" value={label(entry.deliveryStatus)} />}
         <DetailRow label="Occurred at" value={formatTimestamp(entry.occurredAt)} />
@@ -372,9 +374,14 @@ function JournalDetail({
             {timelineOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
           </button>
         )}
-        {canEdit && entry.deliveryId && entry.stage === "dead_lettered" && (
-          <button type="button" className="af-btn af-btn-sm" onClick={() => onRetryDelivery(entry.deliveryId!)}>Retry delivery</button>
-        )}
+        {canEdit
+          && entry.deliveryId
+          && entry.direction === "OUTBOUND"
+          && entry.stage === "dead_lettered"
+          && entry.deliveryStatus === "DEAD_LETTERED"
+          && (
+            <button type="button" className="af-btn af-btn-sm" onClick={() => onRetryDelivery(entry.deliveryId!)}>Retry delivery</button>
+          )}
       </div>
       {timelineOpen && entry.deliveryId && (
         <DeliveryTimeline agentId={agentId} connectionId={connectionId} deliveryId={entry.deliveryId} />
@@ -385,7 +392,7 @@ function JournalDetail({
 
 function DeliveryTimeline({ agentId, connectionId, deliveryId }: { agentId: string; connectionId: string; deliveryId: string }) {
   const lifecycle = useCommunicationDeliveryLifecycle(agentId, connectionId, deliveryId);
-  const entries = lifecycle.data?.items ?? [];
+  const entries = lifecycle.entries;
 
   if (lifecycle.isPending) {
     return (
