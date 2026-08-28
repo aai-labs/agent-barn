@@ -152,6 +152,44 @@ class CommunicationsService:
         except CommunicationConnectionConflictError as exc:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
+    def build_app_package(
+        self,
+        agent_id: UUID,
+        connection_id: UUID,
+        context: CurrentUserContext,
+    ) -> tuple[str, bytes]:
+        agent = self.authorization.require_action(context, agent_id, PermissionKey.AGENT_UPDATE)
+        scope = self.authorization.authorization_scope(context, PermissionKey.AGENT_UPDATE)
+        connection = self.repository.get_active_in_scope(connection_id, agent_id, scope)
+        if connection is None:
+            self._raise_not_found(connection_id)
+        assert connection is not None
+
+        plugin = self._require_plugin(connection.platform_key)
+        if PlatformCapability.APPLICATION_PROVISIONING not in plugin.capabilities:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"{plugin.display_name} does not provide an installable app package",
+            )
+        try:
+            return plugin.build_app_package(
+                plugin.settings_model.model_validate(connection.settings),
+                plugin.credentials_model.model_validate(
+                    self._decrypt_credentials(plugin, connection.credentials_encrypted)
+                ),
+                connection_id=connection.id,
+                # The package names the bot as people see it in the provider, so
+                # it carries the Agent's name, not the Connection's UI label.
+                display_name=agent.name,
+            )
+        except NotImplementedError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"{plugin.display_name} does not provide an installable app package",
+            ) from exc
+        except (ValidationError, ValueError) as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
     def _require_plugin(self, key: str):
         try:
             return self.plugins.require(key)

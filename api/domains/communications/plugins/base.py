@@ -223,3 +223,20 @@ class PlatformPlugin(ABC):
     ) -> None:
         """Authenticate a provider webhook before normalization."""
         raise NotImplementedError(f"{self.key} does not implement webhook ingress")
+
+    def build_app_package(
+        self,
+        settings: PlatformSettings,
+        credentials: PlatformCredentials,
+        *,
+        connection_id: UUID,
+        display_name: str,
+    ) -> tuple[str, bytes]:
+        """Build an installable provider app package for this Connection.
+
+        Platforms that require an operator to upload an application bundle
+        implement this seam and declare APPLICATION_PROVISIONING. Returns the
+        suggested filename and the package bytes. The package must never carry
+        credential material.
+        """
+        raise NotImplementedError(f"{self.key} does not implement application provisioning")

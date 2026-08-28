@@ -1,5 +1,9 @@
+import io
+import json
+import zipfile
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
+from typing import Any
 from unittest.mock import patch
 from uuid import uuid4
 
@@ -9,6 +13,7 @@ from api.domains.communications.models import (
     CommunicationSender,
     ConversationLocation,
     NormalizedCommunicationEnvelope,
+    OutboundCommunicationEnvelope,
     PlatformCapability,
     ProcessingFeedbackStage,
 )
@@ -16,7 +21,16 @@ from api.domains.communications.plugins.base import InboundAdmissionContext, Pro
 from api.domains.communications.plugins.discord import DiscordPlatformPlugin
 from api.domains.communications.plugins.registry import PlatformPluginRegistry
 from api.domains.communications.plugins.slack import SlackPlatformPlugin
+from api.domains.communications.plugins.teams import TeamsPlatformPlugin
 from api.domains.communications.plugins.telegram import TelegramPlatformPlugin
+from api.infrastructure.msteams.client import TeamsAuthError
+
+_TEAMS_BOT_ID = "28:c9e8c047-2a74-40a2-b28a-b162d5f5327c"
+_TEAMS_SERVICE_URL = "https://smba.trafficmanager.net/amer/"
+_TEAMS_USER_ID = "29:1XJKJMvc5GBtc2JwZq0oj8tHZmzrQgFmB39ATiQWA85g"
+_TEAMS_AAD_ID = "7faf8ab2-3d56-4244-b585-20c8a42ed2b8"
+_TEAMS_CHANNEL_ID = "19:aebd0ad4d6ab42c8b9ed19c251c2fc37@thread.skype"
+_TEAMS_TEAM_ID = "19:0f1e2d3c4b5a6978@thread.tacv2"
 
 
 @dataclass
@@ -24,6 +38,11 @@ class ValidationConfig:
     skip_discord_token_validation: bool = True
     skip_slack_token_validation: bool = True
     skip_telegram_token_validation: bool = True
+    skip_teams_token_validation: bool = True
+    teams_publisher_name: str = "Agent Barn"
+    teams_publisher_website_url: str = "https://example.test"
+    teams_privacy_url: str = "https://example.test/privacy"
+    teams_terms_url: str = "https://example.test/terms"
 
 
 def test_registry_lists_shipped_plugins_in_stable_order() -> None:
@@ -33,9 +52,10 @@ def test_registry_lists_shipped_plugins_in_stable_order() -> None:
             TelegramPlatformPlugin(config),
             DiscordPlatformPlugin(config),
             SlackPlatformPlugin(config),
+            TeamsPlatformPlugin(config),
         ]
     )
-    assert [descriptor.key for descriptor in registry.descriptors()] == ["discord", "slack", "telegram"]
+    assert [descriptor.key for descriptor in registry.descriptors()] == ["discord", "slack", "teams", "telegram"]
     assert PlatformCapability.DIRECTORY_DISCOVERY in registry.require("slack").descriptor.capabilities
 
 
@@ -504,3 +524,541 @@ def test_telegram_enrich_inbound_lookup_failure_leaves_envelope_valid_with_ids_i
     assert enriched[0].sender.id == "42"
     assert enriched[0].sender.display_name is None
     assert enriched[0].location.display_name is None
+
+
+# --- Microsoft Teams ---------------------------------------------------------
+
+
+def _teams_activity(**overrides: Any) -> dict[str, Any]:
+    activity: dict[str, Any] = {
+        "type": "message",
+        "id": "1485983408511",
+        "timestamp": "2026-08-25T09:18:44.211Z",
+        "serviceUrl": _TEAMS_SERVICE_URL,
+        "channelId": "msteams",
+        "from": {"id": _TEAMS_USER_ID, "name": "Megan Bowen", "aadObjectId": _TEAMS_AAD_ID},
+        "conversation": {"conversationType": "personal", "id": "a:17I0kl9EkpE1O9PH5TWrzrLNwnWWcfrU"},
+        "recipient": {"id": _TEAMS_BOT_ID, "name": "Aria"},
+        "text": "Hello",
+        "channelData": {"tenant": {"id": "72f988bf-86f1-41af-91ab-2d7cd011db47"}},
+    }
+    activity.update(overrides)
+    return activity
+
+
+def _teams_channel_activity(**overrides: Any) -> dict[str, Any]:
+    return _teams_activity(
+        conversation={
+            "conversationType": "channel",
+            "id": f"{_TEAMS_CHANNEL_ID};messageid=1481567603816",
+        },
+        channelData={
+            "tenant": {"id": "72f988bf-86f1-41af-91ab-2d7cd011db47"},
+            "team": {"id": _TEAMS_CHANNEL_ID},
+            "channel": {"id": _TEAMS_CHANNEL_ID},
+        },
+        entities=[{"type": "mention", "mentioned": {"id": _TEAMS_BOT_ID, "name": "Aria"}, "text": "<at>Aria</at>"}],
+        **overrides,
+    )
+
+
+def _teams_plugin() -> TeamsPlatformPlugin:
+    return TeamsPlatformPlugin(ValidationConfig())
+
+
+def test_teams_descriptor_declares_webhook_ingress() -> None:
+    descriptor = _teams_plugin().descriptor
+
+    assert descriptor.key == "teams"
+    assert PlatformCapability.WEBHOOK_INGRESS in descriptor.capabilities
+
+
+def test_teams_normalizes_a_personal_message_as_a_dm() -> None:
+    plugin = _teams_plugin()
+    settings = plugin.settings_model.model_validate({"dm_policy": "open"})
+
+    envelopes = plugin.normalize_inbound(settings, _teams_activity())
+
+    assert len(envelopes) == 1
+    envelope = envelopes[0]
+    assert envelope.location.type == "DM"
+    assert envelope.location.id == "a:17I0kl9EkpE1O9PH5TWrzrLNwnWWcfrU"
+    assert envelope.provider_message_id == "1485983408511"
+    assert envelope.sender.id == "7faf8ab2-3d56-4244-b585-20c8a42ed2b8"
+    assert envelope.sender.display_name == "Megan Bowen"
+    assert envelope.text == "Hello"
+
+
+def test_teams_carries_service_url_so_replies_can_be_addressed() -> None:
+    plugin = _teams_plugin()
+    settings = plugin.settings_model.model_validate({"dm_policy": "open"})
+
+    envelope = plugin.normalize_inbound(settings, _teams_activity())[0]
+
+    assert envelope.provider_metadata["service_url"] == _TEAMS_SERVICE_URL
+    assert envelope.provider_metadata["conversation_id"] == "a:17I0kl9EkpE1O9PH5TWrzrLNwnWWcfrU"
+
+
+def test_teams_channel_message_strips_the_messageid_suffix_into_the_thread() -> None:
+    plugin = _teams_plugin()
+    settings = plugin.settings_model.model_validate({"group_policy": "open"})
+
+    envelope = plugin.normalize_inbound(settings, _teams_channel_activity())[0]
+
+    # Keeping ";messageid=" on the location id would fragment one channel into
+    # a separate conversation per thread.
+    assert envelope.location.type == "CHANNEL"
+    assert envelope.location.id == "19:aebd0ad4d6ab42c8b9ed19c251c2fc37@thread.skype"
+    assert envelope.location.thread_id == "1481567603816"
+
+
+def test_teams_collects_bot_mentions() -> None:
+    plugin = _teams_plugin()
+    settings = plugin.settings_model.model_validate({"group_policy": "open"})
+
+    envelope = plugin.normalize_inbound(settings, _teams_channel_activity())[0]
+
+    assert _TEAMS_BOT_ID in envelope.mentions
+
+
+def test_teams_falls_back_to_the_teams_user_id_when_aad_object_id_is_absent() -> None:
+    plugin = _teams_plugin()
+    settings = plugin.settings_model.model_validate({"dm_policy": "open"})
+    payload = _teams_activity()
+    payload["from"] = {"id": "29:onlyteamsid", "name": "Megan Bowen"}
+
+    envelope = plugin.normalize_inbound(settings, payload)[0]
+
+    assert envelope.sender.id == "29:onlyteamsid"
+
+
+def test_teams_ignores_non_message_activities() -> None:
+    plugin = _teams_plugin()
+    settings = plugin.settings_model.model_validate({"dm_policy": "open"})
+
+    assert plugin.normalize_inbound(settings, _teams_activity(type="conversationUpdate")) == []
+
+
+def test_teams_ignores_the_agents_own_echo() -> None:
+    plugin = _teams_plugin()
+    settings = plugin.settings_model.model_validate({"dm_policy": "open"})
+    payload = _teams_activity()
+    payload["from"] = {"id": _TEAMS_BOT_ID, "name": "Aria"}
+
+    assert plugin.normalize_inbound(settings, payload) == []
+
+
+def test_teams_dm_policy_off_drops_direct_messages() -> None:
+    plugin = _teams_plugin()
+    settings = plugin.settings_model.model_validate({"dm_policy": "off"})
+
+    assert plugin.normalize_inbound(settings, _teams_activity()) == []
+
+
+def test_teams_dm_allowlist_admits_only_listed_senders() -> None:
+    plugin = _teams_plugin()
+    allowed = plugin.settings_model.model_validate(
+        {"dm_policy": "allowlist", "dm_user_ids": ["7faf8ab2-3d56-4244-b585-20c8a42ed2b8"]}
+    )
+    blocked = plugin.settings_model.model_validate({"dm_policy": "allowlist", "dm_user_ids": ["someone-else"]})
+
+    assert len(plugin.normalize_inbound(allowed, _teams_activity())) == 1
+    assert plugin.normalize_inbound(blocked, _teams_activity()) == []
+
+
+def test_teams_group_allowlist_matches_the_stripped_channel_id() -> None:
+    plugin = _teams_plugin()
+    allowed = plugin.settings_model.model_validate(
+        {"group_policy": "allowlist", "channel_ids": ["19:aebd0ad4d6ab42c8b9ed19c251c2fc37@thread.skype"]}
+    )
+    blocked = plugin.settings_model.model_validate(
+        {"group_policy": "allowlist", "channel_ids": ["19:other@thread.skype"]}
+    )
+
+    assert len(plugin.normalize_inbound(allowed, _teams_channel_activity())) == 1
+    assert plugin.normalize_inbound(blocked, _teams_channel_activity()) == []
+
+
+def test_teams_captures_addressable_ids_for_replies() -> None:
+    plugin = _teams_plugin()
+    settings = plugin.settings_model.model_validate({"dm_policy": "open"})
+
+    envelope = plugin.normalize_inbound(settings, _teams_activity())[0]
+
+    # sender.id is the Entra object id, used for policy matching. Replies must
+    # be addressed with the Teams ids instead.
+    assert envelope.sender.id == _TEAMS_AAD_ID
+    assert envelope.provider_metadata["from_id"] == _TEAMS_USER_ID
+    assert envelope.provider_metadata["recipient_id"] == _TEAMS_BOT_ID
+
+
+def test_teams_dm_is_labelled_with_the_sender_name() -> None:
+    plugin = _teams_plugin()
+    settings = plugin.settings_model.model_validate({"dm_policy": "open"})
+
+    envelope = plugin.normalize_inbound(settings, _teams_activity())[0]
+
+    assert envelope.location.display_name == "Megan Bowen"
+
+
+def test_teams_conversation_name_wins_over_the_sender_name() -> None:
+    plugin = _teams_plugin()
+    settings = plugin.settings_model.model_validate({"dm_policy": "open", "group_policy": "open"})
+    payload = _teams_activity()
+    payload["conversation"] = {**payload["conversation"], "name": "Release planning"}
+
+    envelope = plugin.normalize_inbound(settings, payload)[0]
+
+    assert envelope.location.display_name == "Release planning"
+
+
+def test_teams_channel_without_a_name_stays_unlabelled() -> None:
+    plugin = _teams_plugin()
+    settings = plugin.settings_model.model_validate({"group_policy": "open"})
+
+    envelope = plugin.normalize_inbound(settings, _teams_channel_activity())[0]
+
+    # Teams omits channelData.channel.name on ordinary messages, so there is
+    # nothing to label a team channel with without Microsoft Graph.
+    assert envelope.location.display_name is None
+
+
+def test_teams_send_posts_a_complete_activity_to_the_conversation() -> None:
+    plugin = _teams_plugin()
+    credentials = plugin.credentials_model.model_validate(
+        {"app_id": "app-1", "app_password": "secret", "tenant_id": "tenant-1"}
+    )
+    envelope = OutboundCommunicationEnvelope(
+        source_delivery_id=uuid4(),
+        location=ConversationLocation(id=_TEAMS_CHANNEL_ID, type="CHANNEL"),
+        text="Acknowledged",
+        reply_to_provider_message_id="1485983408511",
+        provider_metadata={
+            "service_url": _TEAMS_SERVICE_URL,
+            "conversation_id": f"{_TEAMS_CHANNEL_ID};messageid=1481567603816",
+            "from_id": _TEAMS_USER_ID,
+            "recipient_id": _TEAMS_BOT_ID,
+        },
+    )
+
+    with (
+        patch("api.domains.communications.plugins.teams.acquire_token", return_value="tok"),
+        patch("api.domains.communications.plugins.teams.send_activity", return_value="sent-1") as send,
+    ):
+        assert plugin.send(plugin.settings_model.model_validate({}), credentials, envelope) == "sent-1"
+
+    service_url, conversation_id, activity, token = send.call_args.args
+    assert service_url == _TEAMS_SERVICE_URL
+    # The thread lives in the conversation id, so it must be sent whole.
+    assert conversation_id == f"{_TEAMS_CHANNEL_ID};messageid=1481567603816"
+    assert token == "tok"
+    assert activity["type"] == "message"
+    assert activity["text"] == "Acknowledged"
+    assert activity["conversation"] == {"id": f"{_TEAMS_CHANNEL_ID};messageid=1481567603816"}
+    assert activity["from"] == {"id": _TEAMS_BOT_ID}
+    assert activity["recipient"] == {"id": _TEAMS_USER_ID}
+    assert activity["replyToId"] == "1485983408511"
+
+
+def test_teams_send_without_a_service_url_is_rejected() -> None:
+    plugin = _teams_plugin()
+    credentials = plugin.credentials_model.model_validate(
+        {"app_id": "app-1", "app_password": "secret", "tenant_id": "tenant-1"}
+    )
+    envelope = OutboundCommunicationEnvelope(
+        source_delivery_id=uuid4(),
+        location=ConversationLocation(id=_TEAMS_CHANNEL_ID, type="CHANNEL"),
+        text="Acknowledged",
+    )
+
+    with pytest.raises(ValueError, match="serviceUrl"):
+        plugin.send(plugin.settings_model.model_validate({}), credentials, envelope)
+
+
+def test_teams_strips_the_agents_own_mention_from_the_text() -> None:
+    plugin = _teams_plugin()
+    settings = plugin.settings_model.model_validate({"group_policy": "open"})
+    payload = _teams_channel_activity(text="<at>Aria</at> reply")
+
+    envelope = plugin.normalize_inbound(settings, payload)[0]
+
+    # Leaving the markup in makes the agent read its own name as a third party.
+    assert envelope.text == "reply"
+
+
+def test_teams_keeps_mentions_of_other_people() -> None:
+    plugin = _teams_plugin()
+    settings = plugin.settings_model.model_validate({"group_policy": "open"})
+    payload = _teams_channel_activity(text="<at>Aria</at> ask <at>Pranav</at> about it")
+    payload["entities"] = [
+        {"type": "mention", "mentioned": {"id": _TEAMS_BOT_ID, "name": "Aria"}, "text": "<at>Aria</at>"},
+        {"type": "mention", "mentioned": {"id": _TEAMS_USER_ID, "name": "Pranav"}, "text": "<at>Pranav</at>"},
+    ]
+
+    envelope = plugin.normalize_inbound(settings, payload)[0]
+
+    assert envelope.text == "ask <at>Pranav</at> about it"
+
+
+def test_teams_leaves_text_untouched_without_mention_entities() -> None:
+    plugin = _teams_plugin()
+    settings = plugin.settings_model.model_validate({"dm_policy": "open"})
+    payload = _teams_activity(text="Aria can you help")
+
+    envelope = plugin.normalize_inbound(settings, payload)[0]
+
+    assert envelope.text == "Aria can you help"
+
+
+def _teams_channel_envelope(**overrides: Any) -> NormalizedCommunicationEnvelope:
+    fields: dict[str, Any] = {
+        "provider_message_id": "1485983408511",
+        "occurred_at": datetime(2026, 8, 26, 12, 0, tzinfo=UTC),
+        "location": ConversationLocation(id=_TEAMS_CHANNEL_ID, type="CHANNEL"),
+        "text": "hello",
+        "provider_metadata": {
+            "service_url": _TEAMS_SERVICE_URL,
+            "team_id": _TEAMS_TEAM_ID,
+        },
+    }
+    fields.update(overrides)
+    return NormalizedCommunicationEnvelope(**fields)
+
+
+def _teams_credentials(plugin: TeamsPlatformPlugin):
+    return plugin.credentials_model.model_validate(
+        {"app_id": "app-1", "app_password": "secret", "tenant_id": "tenant-1"}
+    )
+
+
+def test_teams_channel_message_carries_the_team_id_for_enrichment() -> None:
+    plugin = _teams_plugin()
+    settings = plugin.settings_model.model_validate({"group_policy": "open"})
+
+    envelope = plugin.normalize_inbound(settings, _teams_channel_activity())[0]
+
+    assert envelope.provider_metadata["team_id"] == _TEAMS_CHANNEL_ID
+
+
+def test_teams_enrich_resolves_a_channel_name() -> None:
+    plugin = _teams_plugin()
+    envelope = _teams_channel_envelope()
+
+    with (
+        patch("api.domains.communications.plugins.teams.acquire_token", return_value="tok"),
+        patch(
+            "api.domains.communications.plugins.teams.list_team_channels",
+            return_value={_TEAMS_CHANNEL_ID: "Release planning"},
+        ),
+    ):
+        enriched = plugin.enrich_inbound(
+            plugin.settings_model.model_validate({}), _teams_credentials(plugin), [envelope]
+        )
+
+    assert enriched[0].location.display_name == "Release planning"
+
+
+def test_teams_enrich_labels_the_general_channel() -> None:
+    plugin = _teams_plugin()
+    # Teams returns a null name for General, and its channel id equals the team id.
+    envelope = _teams_channel_envelope(
+        location=ConversationLocation(id=_TEAMS_TEAM_ID, type="CHANNEL"),
+    )
+
+    with (
+        patch("api.domains.communications.plugins.teams.acquire_token", return_value="tok"),
+        patch("api.domains.communications.plugins.teams.list_team_channels", return_value={_TEAMS_TEAM_ID: None}),
+    ):
+        enriched = plugin.enrich_inbound(
+            plugin.settings_model.model_validate({}), _teams_credentials(plugin), [envelope]
+        )
+
+    assert enriched[0].location.display_name == "General"
+
+
+def test_teams_enrich_keeps_a_name_the_payload_already_supplied() -> None:
+    plugin = _teams_plugin()
+    envelope = _teams_channel_envelope(
+        location=ConversationLocation(id=_TEAMS_CHANNEL_ID, type="CHANNEL", display_name="From payload"),
+    )
+
+    with patch("api.domains.communications.plugins.teams.list_team_channels") as lookup:
+        enriched = plugin.enrich_inbound(
+            plugin.settings_model.model_validate({}), _teams_credentials(plugin), [envelope]
+        )
+
+    lookup.assert_not_called()
+    assert enriched[0].location.display_name == "From payload"
+
+
+def test_teams_enrich_skips_direct_messages() -> None:
+    plugin = _teams_plugin()
+    envelope = _teams_channel_envelope(location=ConversationLocation(id="a:dm", type="DM"))
+
+    with patch("api.domains.communications.plugins.teams.list_team_channels") as lookup:
+        plugin.enrich_inbound(plugin.settings_model.model_validate({}), _teams_credentials(plugin), [envelope])
+
+    lookup.assert_not_called()
+
+
+def test_teams_enrich_lookup_failure_leaves_the_envelope_intact() -> None:
+    plugin = _teams_plugin()
+    envelope = _teams_channel_envelope()
+
+    with (
+        patch("api.domains.communications.plugins.teams.acquire_token", return_value="tok"),
+        patch(
+            "api.domains.communications.plugins.teams.list_team_channels",
+            side_effect=RuntimeError("Teams unreachable"),
+        ),
+    ):
+        enriched = plugin.enrich_inbound(
+            plugin.settings_model.model_validate({}), _teams_credentials(plugin), [envelope]
+        )
+
+    assert enriched[0].location.id == _TEAMS_CHANNEL_ID
+    assert enriched[0].location.display_name is None
+
+
+def test_slack_does_not_advertise_an_app_package_it_cannot_build() -> None:
+    plugin = SlackPlatformPlugin(ValidationConfig())
+
+    assert PlatformCapability.APPLICATION_PROVISIONING not in plugin.descriptor.capabilities
+    with pytest.raises(NotImplementedError):
+        plugin.build_app_package(
+            plugin.settings_model.model_validate({}),
+            plugin.credentials_model.model_validate({"bot_token": "xoxb-1", "app_token": "xapp-1"}),
+            connection_id=uuid4(),
+            display_name="Aria",
+        )
+
+
+def test_teams_descriptor_declares_application_provisioning() -> None:
+    assert PlatformCapability.APPLICATION_PROVISIONING in _teams_plugin().descriptor.capabilities
+
+
+def test_teams_app_package_contains_a_valid_manifest_and_icons() -> None:
+    plugin = _teams_plugin()
+    connection_id = uuid4()
+
+    filename, payload = plugin.build_app_package(
+        plugin.settings_model.model_validate({}),
+        _teams_credentials(plugin),
+        connection_id=connection_id,
+        display_name="Aria",
+    )
+
+    assert filename == "aria-teams-app.zip"
+    with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+        assert sorted(archive.namelist()) == ["color.png", "manifest.json", "outline.png"]
+        manifest = json.loads(archive.read("manifest.json"))
+        assert archive.read("color.png").startswith(b"\x89PNG")
+        assert archive.read("outline.png").startswith(b"\x89PNG")
+
+    assert manifest["manifestVersion"] == "1.17"
+    assert manifest["bots"][0]["botId"] == "app-1"
+    assert manifest["bots"][0]["scopes"] == ["personal", "team", "groupChat"]
+    assert manifest["developer"]["websiteUrl"] == "https://example.test"
+
+
+def test_teams_app_package_manifest_id_is_stable_per_connection() -> None:
+    plugin = _teams_plugin()
+    settings = plugin.settings_model.model_validate({})
+    credentials = _teams_credentials(plugin)
+    connection_id = uuid4()
+
+    def manifest_id(cid) -> str:
+        _, payload = plugin.build_app_package(settings, credentials, connection_id=cid, display_name="Aria")
+        with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+            return json.loads(archive.read("manifest.json"))["id"]
+
+    # Re-downloading must update the tenant's existing app, not register a second.
+    assert manifest_id(connection_id) == manifest_id(connection_id)
+    assert manifest_id(connection_id) != manifest_id(uuid4())
+
+
+def test_teams_app_package_never_carries_credentials() -> None:
+    plugin = _teams_plugin()
+
+    _, payload = plugin.build_app_package(
+        plugin.settings_model.model_validate({}),
+        _teams_credentials(plugin),
+        connection_id=uuid4(),
+        display_name="Aria",
+    )
+
+    with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+        manifest = archive.read("manifest.json").decode()
+    assert "secret" not in manifest
+    assert "tenant-1" not in manifest
+
+
+def test_teams_app_package_rejects_a_non_https_publisher_url() -> None:
+    config = ValidationConfig()
+    config.teams_privacy_url = "http://internal.cluster.local/privacy"
+    plugin = TeamsPlatformPlugin(config)
+
+    with pytest.raises(ValueError, match="privacy policy"):
+        plugin.build_app_package(
+            plugin.settings_model.model_validate({}),
+            _teams_credentials(plugin),
+            connection_id=uuid4(),
+            display_name="Aria",
+        )
+
+
+def test_teams_manifest_uses_only_fields_its_declared_schema_allows() -> None:
+    plugin = _teams_plugin()
+
+    _, payload = plugin.build_app_package(
+        plugin.settings_model.model_validate({}),
+        _teams_credentials(plugin),
+        connection_id=uuid4(),
+        display_name="Aria",
+    )
+    with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+        manifest = json.loads(archive.read("manifest.json"))
+
+    # The Teams schema sets additionalProperties:false, so a field carried over
+    # from an older schema version fails upload with an unparseable-manifest
+    # error. packageName was valid through v1.16 and removed in v1.17.
+    assert manifest["manifestVersion"] == "1.17"
+    assert f"/v{manifest['manifestVersion']}/" in manifest["$schema"]
+    assert "packageName" not in manifest
+    assert set(manifest) <= {
+        "$schema",
+        "manifestVersion",
+        "version",
+        "id",
+        "developer",
+        "name",
+        "description",
+        "icons",
+        "accentColor",
+        "bots",
+        "permissions",
+        "validDomains",
+    }
+    assert set(manifest["bots"][0]["scopes"]) <= {"team", "personal", "groupChat"}
+
+
+def test_teams_rejected_webhook_token_raises_the_gateways_permission_error() -> None:
+    plugin = _teams_plugin()
+
+    with patch(
+        "api.domains.communications.plugins.teams.verify_inbound_jwt",
+        side_effect=TeamsAuthError("Bot Framework token verification failed"),
+    ):
+        with pytest.raises(PermissionError):
+            plugin.verify_webhook(_teams_credentials(plugin), {"type": "message"}, "Bearer nope")
+
+
+def test_teams_rejected_credentials_raise_value_error_like_every_other_plugin() -> None:
+    plugin = TeamsPlatformPlugin(replace(ValidationConfig(), skip_teams_token_validation=False))
+
+    with patch(
+        "api.domains.communications.plugins.teams.acquire_token",
+        side_effect=TeamsAuthError("Microsoft rejected the Teams credentials."),
+    ):
+        with pytest.raises(ValueError):
+            plugin.validate_external(plugin.settings_model.model_validate({}), _teams_credentials(plugin))

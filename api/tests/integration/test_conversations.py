@@ -479,3 +479,26 @@ def test_upsert_messages_does_not_erase_a_known_sender_name_on_conflict():
         with then("the sender name is preserved rather than cleared"):
             response = client.get(_messages_url(context, "CABC"), headers=_auth(context))
             assert_that(response.json()["threads"][0]["root"]["sender_name"], equal_to("Person One"))
+
+
+def test_list_messages_matches_a_case_sensitive_channel_id():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        client: TestClient = context.client
+        # Teams conversation ids are mixed case, unlike Slack's uppercase ids.
+        channel_id = "a:1mc8AgCtwYH7Lc6YQBsx-TRUVE4DweU6g2"
+        _seed_message(
+            context,
+            direction=MessageDirection.INBOUND,
+            channel_id=channel_id,
+            content="Hello",
+            occurred_at=datetime(2025, 5, 1, 12, 0, 0, tzinfo=UTC),
+        )
+
+        with when("I list messages for that channel"):
+            response = client.get(_messages_url(context, channel_id), headers=_auth(context))
+
+        with then("the message is found rather than normalized away"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            body = response.json()
+            assert_that(body["threads"], has_length(1))
+            assert_that(body["threads"][0]["root"]["content"], equal_to("Hello"))

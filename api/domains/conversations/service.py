@@ -73,7 +73,7 @@ class ConversationService:
         messages = self.repository.find_all_channel_messages(
             agent_id=agent_id,
             connection_id=connection_id,
-            channel_id=channel_id.upper(),
+            channel_id=channel_id,
             filter=filter,
             authorization_scope=activity_scope,
         )

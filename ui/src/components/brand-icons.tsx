@@ -86,12 +86,17 @@ export function TelegramIcon(p: BrandIconProps) {
   return <ColorGlyph src="/brand/telegram.svg" label="Telegram" {...p} />;
 }
 
+export function TeamsIcon(p: BrandIconProps) {
+  return <ColorGlyph src="/brand/teams.svg" label="Microsoft Teams" {...p} />;
+}
+
 /** Brand icon element for a communication platform key (e.g. "slack"), or null if unknown. */
 export function platformIcon(platformKey: string, props: BrandIconProps = {}): React.ReactNode | null {
   switch (platformKey) {
     case "slack": return <SlackIcon {...props} />;
     case "discord": return <DiscordIcon {...props} />;
     case "telegram": return <TelegramIcon {...props} />;
+    case "teams": return <TeamsIcon {...props} />;
     default: return null;
   }
 }
