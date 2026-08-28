@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 import jwt
 import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
-from hamcrest import assert_that, equal_to, has_entries, none
+from hamcrest import assert_that, equal_to, none
 
 from api.infrastructure.msteams import client
 from api.infrastructure.msteams.client import (
@@ -87,6 +87,23 @@ def test_a_malformed_token_is_rejected() -> None:
         _verify("not-a-jwt")
 
 
+def test_a_token_signed_by_an_unknown_key_is_rejected() -> None:
+    impostor = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    forged = jwt.encode(
+        {
+            "iss": _ISSUER,
+            "aud": _APP_ID,
+            "serviceurl": _SERVICE_URL,
+            "exp": int(time.time()) + 600,
+        },
+        impostor,
+        algorithm="RS256",
+    )
+
+    with pytest.raises(TeamsAuthError):
+        _verify(forged)
+
+
 def test_a_token_bound_to_another_service_url_is_rejected() -> None:
     with pytest.raises(TeamsAuthError):
         _verify(_token(), service_url="https://attacker.example.com/")
@@ -162,7 +179,7 @@ def test_the_default_general_channel_keeps_its_null_name_for_the_caller_to_local
 
     channels = list_team_channels(_SERVICE_URL, _TEAM_ID, "bot-token")
 
-    assert_that(channels, has_entries({"19:abc@thread.tacv2": "ops"}))
+    assert_that(channels["19:abc@thread.tacv2"], equal_to("ops"))
     assert_that(channels[_TEAM_ID], none())
 
 
