@@ -3,6 +3,7 @@ import json
 import logging
 import threading
 import time
+from typing import Any
 from urllib.parse import quote
 
 import jwt
@@ -22,18 +23,18 @@ _TIMEOUT_SECONDS = 15
 _TOKEN_EXPIRY_MARGIN_SECONDS = 60
 _JWT_LEEWAY_SECONDS = 300
 
-_token_cache: dict[tuple[str, str], tuple[str, float]] = {}
+_token_cache: dict[tuple[str, str, str], tuple[str, float]] = {}
 _token_lock = threading.Lock()
 _jwk_client: PyJWKClient | None = None
 _jwk_lock = threading.Lock()
 
 
-class TeamsAuthError(Exception):
+class TeamsAuthError(ValueError):
     """Raised when Teams credentials or an inbound webhook token are rejected."""
 
 
 def acquire_token(tenant_id: str, app_id: str, app_password: str) -> str:
-    key = (tenant_id, app_id)
+    key = (tenant_id, app_id, hashlib.sha256(app_password.encode()).hexdigest())
     now = time.monotonic()
     with _token_lock:
         cached = _token_cache.get(key)
@@ -68,7 +69,7 @@ def acquire_token(tenant_id: str, app_id: str, app_password: str) -> str:
     return token
 
 
-def send_activity(service_url: str, conversation_id: str, activity: dict, token: str) -> str:
+def send_activity(service_url: str, conversation_id: str, activity: dict[str, Any], token: str) -> str:
     response = resilient_request(
         "POST",
         f"{service_url.rstrip('/')}/v3/conversations/{quote(conversation_id, safe='')}/activities",
@@ -111,25 +112,35 @@ def _fetch_team_channels(service_url: str, team_id: str, token: str) -> dict[str
     }
 
 
-def verify_inbound_jwt(authorization: str, app_id: str) -> None:
+def verify_inbound_jwt(authorization: str, app_id: str, *, service_url: str) -> None:
     token = authorization.removeprefix("Bearer ").strip()
     if not token:
         raise TeamsAuthError("Missing Bot Framework bearer token")
+    if not service_url:
+        raise TeamsAuthError("Inbound activity carries no serviceUrl to bind the token to")
 
     try:
         signing_key = _signing_key(token)
-        jwt.decode(
+        claims = jwt.decode(
             token,
             signing_key,
             algorithms=["RS256"],
             audience=app_id,
             issuer=_EXPECTED_ISSUER,
             leeway=_JWT_LEEWAY_SECONDS,
+            options={"require": ["exp", "iss", "aud", "serviceurl"]},
         )
     except TeamsAuthError:
         raise
     except Exception as exc:
         raise TeamsAuthError("Bot Framework token verification failed") from exc
+
+    if _normalized_service_url(claims["serviceurl"]) != _normalized_service_url(service_url):
+        raise TeamsAuthError("Bot Framework token is not valid for this activity's serviceUrl")
+
+
+def _normalized_service_url(value: object) -> str:
+    return str(value).rstrip("/").casefold()
 
 
 def _signing_key(token: str):

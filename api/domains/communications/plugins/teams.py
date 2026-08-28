@@ -19,6 +19,7 @@ from api.domains.communications.plugins.base import (
     PlatformSettings,
 )
 from api.infrastructure.msteams.client import (
+    TeamsAuthError,
     acquire_token,
     list_team_channels,
     send_activity,
@@ -163,8 +164,14 @@ class TeamsPlatformPlugin(PlatformPlugin):
         authorization: str,
     ) -> None:
         assert isinstance(credentials, TeamsCredentials)
-        del payload
-        verify_inbound_jwt(authorization, credentials.app_id)
+        try:
+            verify_inbound_jwt(
+                authorization,
+                credentials.app_id,
+                service_url=str(payload.get("serviceUrl") or ""),
+            )
+        except TeamsAuthError as exc:
+            raise PermissionError(str(exc)) from exc
 
     def send(
         self,

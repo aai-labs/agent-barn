@@ -23,6 +23,7 @@ from api.domains.communications.plugins.registry import PlatformPluginRegistry
 from api.domains.communications.plugins.slack import SlackPlatformPlugin
 from api.domains.communications.plugins.teams import TeamsPlatformPlugin
 from api.domains.communications.plugins.telegram import TelegramPlatformPlugin
+from api.infrastructure.msteams.client import TeamsAuthError
 
 _TEAMS_BOT_ID = "28:c9e8c047-2a74-40a2-b28a-b162d5f5327c"
 _TEAMS_SERVICE_URL = "https://smba.trafficmanager.net/amer/"
@@ -51,9 +52,10 @@ def test_registry_lists_shipped_plugins_in_stable_order() -> None:
             TelegramPlatformPlugin(config),
             DiscordPlatformPlugin(config),
             SlackPlatformPlugin(config),
+            TeamsPlatformPlugin(config),
         ]
     )
-    assert [descriptor.key for descriptor in registry.descriptors()] == ["discord", "slack", "telegram"]
+    assert [descriptor.key for descriptor in registry.descriptors()] == ["discord", "slack", "teams", "telegram"]
     assert PlatformCapability.DIRECTORY_DISCOVERY in registry.require("slack").descriptor.capabilities
 
 
@@ -918,6 +920,19 @@ def test_teams_enrich_lookup_failure_leaves_the_envelope_intact() -> None:
     assert enriched[0].location.display_name is None
 
 
+def test_slack_does_not_advertise_an_app_package_it_cannot_build() -> None:
+    plugin = SlackPlatformPlugin(ValidationConfig())
+
+    assert PlatformCapability.APPLICATION_PROVISIONING not in plugin.descriptor.capabilities
+    with pytest.raises(NotImplementedError):
+        plugin.build_app_package(
+            plugin.settings_model.model_validate({}),
+            plugin.credentials_model.model_validate({"bot_token": "xoxb-1", "app_token": "xapp-1"}),
+            connection_id=uuid4(),
+            display_name="Aria",
+        )
+
+
 def test_teams_descriptor_declares_application_provisioning() -> None:
     assert PlatformCapability.APPLICATION_PROVISIONING in _teams_plugin().descriptor.capabilities
 
@@ -978,7 +993,7 @@ def test_teams_app_package_never_carries_credentials() -> None:
     assert "tenant-1" not in manifest
 
 
-def test_teams_app_package_rejects_a_non_public_publisher_url() -> None:
+def test_teams_app_package_rejects_a_non_https_publisher_url() -> None:
     config = ValidationConfig()
     config.teams_privacy_url = "http://internal.cluster.local/privacy"
     plugin = TeamsPlatformPlugin(config)
@@ -1025,3 +1040,25 @@ def test_teams_manifest_uses_only_fields_its_declared_schema_allows() -> None:
         "validDomains",
     }
     assert set(manifest["bots"][0]["scopes"]) <= {"team", "personal", "groupChat"}
+
+
+def test_teams_rejected_webhook_token_raises_the_gateways_permission_error() -> None:
+    plugin = _teams_plugin()
+
+    with patch(
+        "api.domains.communications.plugins.teams.verify_inbound_jwt",
+        side_effect=TeamsAuthError("Bot Framework token verification failed"),
+    ):
+        with pytest.raises(PermissionError):
+            plugin.verify_webhook(_teams_credentials(plugin), {"type": "message"}, "Bearer nope")
+
+
+def test_teams_rejected_credentials_raise_value_error_like_every_other_plugin() -> None:
+    plugin = TeamsPlatformPlugin(replace(ValidationConfig(), skip_teams_token_validation=False))
+
+    with patch(
+        "api.domains.communications.plugins.teams.acquire_token",
+        side_effect=TeamsAuthError("Microsoft rejected the Teams credentials."),
+    ):
+        with pytest.raises(ValueError):
+            plugin.validate_external(plugin.settings_model.model_validate({}), _teams_credentials(plugin))

@@ -37,7 +37,7 @@ def build_app_package(
         raise TeamsManifestError("The connection has no Microsoft App ID to build a package from")
     for label, url in (("website", website_url), ("privacy policy", privacy_url), ("terms of use", terms_url)):
         if not url.startswith("https://"):
-            raise TeamsManifestError(f"The configured Teams {label} URL must be a public https URL")
+            raise TeamsManifestError(f"The configured Teams {label} URL must be an https URL")
 
     short_name = display_name.strip()[:_SHORT_NAME_MAX] or "Agent"
     manifest = {

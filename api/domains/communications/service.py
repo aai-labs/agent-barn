@@ -182,6 +182,11 @@ class CommunicationsService:
                 # it carries the Agent's name, not the Connection's UI label.
                 display_name=agent.name,
             )
+        except NotImplementedError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"{plugin.display_name} does not provide an installable app package",
+            ) from exc
         except (ValidationError, ValueError) as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
