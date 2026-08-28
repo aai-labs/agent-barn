@@ -59,8 +59,8 @@ class Config(BaseSettings):
     skip_teams_token_validation: bool = False
     # Shown to Teams administrators reviewing a generated app package. Must be
     # publicly reachable or Teams rejects the upload.
-    teams_publisher_name: str = "AAI Labs"
-    teams_publisher_website_url: str = "https://aai-labs.com"
+    teams_publisher_name: str = "Agent Barn"
+    teams_publisher_website_url: str = "https://agentbarn.dev"
     teams_privacy_url: str = "https://aai-labs.com/privacy"
     teams_terms_url: str = "https://aai-labs.com/terms"
     slack_directory_cache_ttl_seconds: int = 600
