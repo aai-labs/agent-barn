@@ -403,8 +403,14 @@ def test_connection_diagnostics_and_reconnect_preserve_safe_operational_history(
         )
 
         with when("I inspect the Connection and request a reconnect"):
-            diagnostics = client.get(f"{_base(context)}/{connection_id}/diagnostics", headers=_auth(context))
+            diagnostics = client.get(f"{_base(context)}/{connection_id}/summary", headers=_auth(context))
             reconnect = client.post(f"{_base(context)}/{connection_id}/reconnect", headers=_auth(context))
+            journal_page = client.get(
+                f"{_base(context)}/{connection_id}/journal?page=1&page_size=2&kind=connection", headers=_auth(context)
+            )
+            delivery_page = client.get(
+                f"{_base(context)}/{connection_id}/journal?kind=delivery", headers=_auth(context)
+            )
 
         with then("the API separates health from delivery and records safe recovery history"):
             assert_that(diagnostics.status_code, equal_to(status.HTTP_200_OK))
@@ -417,6 +423,8 @@ def test_connection_diagnostics_and_reconnect_preserve_safe_operational_history(
                 ),
             )
             assert_that(reconnect.status_code, equal_to(status.HTTP_202_ACCEPTED))
+            assert_that(journal_page.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(delivery_page.status_code, equal_to(status.HTTP_200_OK))
             assert_that(
                 reconnect.json()["connection"],
                 has_entries(observed_status="CONNECTING", revision=2),
@@ -446,8 +454,11 @@ def test_connection_diagnostics_and_reconnect_preserve_safe_operational_history(
             assert_that(journal[0].error_summary, equal_to("Provider error details were redacted"))
             assert_that(len(events), equal_to(3))
             assert_that(str(events[0].payload), not_(contains_string("top-secret-token")))
-            assert_that(diagnostics.json()["latest_transitions"][0], not_(has_key("sender_id")))
             assert_that(str(diagnostics.json()), not_(contains_string("provider rejected")))
+            assert_that(journal_page.json(), has_entries(page=1, page_size=2, total=3))
+            assert_that(len(journal_page.json()["items"]), equal_to(2))
+            assert_that(str(journal_page.json()), not_(contains_string("provider rejected")))
+            assert_that(delivery_page.json(), has_entries(total=0, items=[]))
 
 
 def test_diagnostics_read_does_not_grant_connection_recovery_permission() -> None:
@@ -459,12 +470,14 @@ def test_diagnostics_read_does_not_grant_connection_recovery_permission() -> Non
         context.injector.get(OrganizationUserRepository).save(context.organization_user)
         there_is_agent_access(access_role_id=AGENT_VIEWER_ROLE_ID)(context)
 
-        with when("a viewer reads diagnostics and attempts a reconnect"):
-            diagnostics = client.get(f"{connection_url}/diagnostics", headers=_auth(context))
+        with when("a viewer reads diagnostics and activity while attempting a reconnect"):
+            diagnostics = client.get(f"{connection_url}/summary", headers=_auth(context))
+            journal_page = client.get(f"{connection_url}/journal", headers=_auth(context))
             reconnect = client.post(f"{connection_url}/reconnect", headers=_auth(context))
 
         with then("read access remains available while recovery requires Agent update"):
             assert_that(diagnostics.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(journal_page.status_code, equal_to(status.HTTP_200_OK))
             assert_that(reconnect.status_code, equal_to(status.HTTP_403_FORBIDDEN))
 
 

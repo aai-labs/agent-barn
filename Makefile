@@ -2,6 +2,7 @@ COMPOSE := docker compose -f compose.yml
 
 .PHONY: \
 	setup run stop stop-clean \
+	restart-ui \
 	dev-api dev-ingest dev-communications dev-ui dev-worker reconcile seed-event-deliveries seed-agent-overrides migrate merge-heads rollback makemigrations test-api test-ui lint-ui check-ui coverage check-api check-migrations check-monitoring fix-api test check fix \
 	db-up db-down db-logs db-restart redis-up redis-down redis-logs
 
@@ -19,6 +20,12 @@ stop:
 # the next `make run`). Volumes are never touched.
 stop-clean:
 	@./stop.sh --clean
+
+# Next's Docker bind-mount watcher reliably refreshes changed files but may
+# miss a newly created App Router directory. This refreshes its route manifest
+# without rebuilding the UI image or restarting the rest of the local stack.
+restart-ui:
+	$(COMPOSE) restart ui
 
 # One-time project bootstrap: installs deps for api + ui and creates a local
 # .env from the tracked template if one doesn't already exist.

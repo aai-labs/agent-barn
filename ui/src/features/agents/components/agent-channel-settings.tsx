@@ -1,15 +1,18 @@
 "use client";
 
+import Link from "next/link";
 import { useMemo, useState } from "react";
 import {
   Check,
   CircleAlert,
+  Copy,
   Info,
   LockKeyhole,
   MessageCircleWarning,
   Pencil,
   Plug,
   Plus,
+  RefreshCw,
   Trash2,
 } from "lucide-react";
 
@@ -25,7 +28,6 @@ import {
   useCommunicationPlatforms,
   useDownloadAppPackage,
 } from "@/features/communication-connections/hooks/use-communication-connections";
-import { CommunicationConnectionDiagnostics } from "@/features/communication-connections/components/communication-connection-diagnostics";
 import type { CommunicationConnection } from "@/features/communication-connections/schemas";
 
 import type { Agent } from "../schemas";
@@ -297,6 +299,7 @@ export function AgentChannelSettings({
   const [editDisplayName, setEditDisplayName] = useState("");
   const [editSettings, setEditSettings] = useState<Record<string, unknown>>({});
   const [editCredentials, setEditCredentials] = useState<Record<string, unknown>>({});
+  const [copiedErrorId, setCopiedErrorId] = useState<string | null>(null);
 
   const selectedPlatform = useMemo(
     () => platforms.data?.find((platform) => platform.key === platformKey),
@@ -363,6 +366,20 @@ export function AgentChannelSettings({
     }
   }
 
+  async function copyProviderError(connection: CommunicationConnection) {
+    const error = [connection.lastErrorCode, connection.lastErrorMessage]
+      .filter(Boolean)
+      .join(": ");
+    if (!error) return;
+
+    try {
+      await navigator.clipboard.writeText(error);
+      setCopiedErrorId(connection.id);
+    } catch {
+      setCopiedErrorId(null);
+    }
+  }
+
   return (
     <AgentConfigurationSection
       title="Messaging connections"
@@ -395,7 +412,39 @@ export function AgentChannelSettings({
                     <span>Provider:</span>
                     <StatusDot {...connectionStatus(connection)} />
                   </div>
-                  {connection.lastErrorMessage && <div className="mt-2 text-xs" style={{ color: "var(--err)" }}>{connection.lastErrorMessage}</div>}
+                  {connection.lastErrorMessage && (
+                    <div
+                      className="mt-3 flex w-full max-w-none items-start gap-2 rounded-lg px-2.5 py-2"
+                      role="alert"
+                      style={{
+                        border: "1px solid color-mix(in srgb, var(--err) 24%, var(--line))",
+                        background: "color-mix(in srgb, var(--err) 6%, var(--bg-elev))",
+                      }}
+                    >
+                      <CircleAlert size={14} className="mt-0.5 flex-shrink-0" style={{ color: "var(--err)" }} />
+                      <div className="min-w-0 flex-1 text-xs">
+                        <div className="font-medium" style={{ color: "var(--ink-2)" }}>
+                          Latest provider error{connection.lastErrorCode ? ` · ${connection.lastErrorCode}` : ""}
+                        </div>
+                        <p
+                          className="mb-0 mt-0.5 break-words whitespace-pre-wrap leading-relaxed"
+                          title={connection.lastErrorMessage}
+                          style={{ color: "var(--ink-3)" }}
+                        >
+                          {connection.lastErrorMessage}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        className="grid h-7 w-7 flex-shrink-0 place-items-center rounded-md transition-colors hover:bg-[var(--bg-soft)]"
+                        aria-label={`${copiedErrorId === connection.id ? "Copied" : "Copy full provider error"} for ${connection.displayName}`}
+                        title={copiedErrorId === connection.id ? "Copied" : "Copy full provider error"}
+                        onClick={() => void copyProviderError(connection)}
+                      >
+                        {copiedErrorId === connection.id ? <Check size={14} /> : <Copy size={14} />}
+                      </button>
+                    </div>
+                  )}
                   {connection.webhookUrl && (
                     <div className="mt-2 text-xs" style={{ color: "var(--ink-3)" }}>
                       Paste this URL into {platforms.data?.find((p) => p.key === connection.platformKey)?.displayName ?? "the platform"}&apos;s webhook settings: <code className="break-all">{connection.webhookUrl}</code>
@@ -431,35 +480,47 @@ export function AgentChannelSettings({
                   )}
                 </div>
               </div>
-              {canEdit && (
-                <div className="flex gap-2">
-                  <button type="button" className="af-btn af-btn-sm" aria-label={`Edit ${connection.displayName}`} onClick={() => beginEditing(connection)}>
-                    <Pencil size={14} /> Edit
-                  </button>
-                  <button
-                    type="button"
-                    className="af-btn af-btn-sm"
-                    disabled={updateConnection.isPending}
-                    onClick={() => void updateConnection.mutateAsync({
-                      agentId: agent.id,
-                      connectionId: connection.id,
-                      revision: connection.revision,
-                      enabled: !connection.enabled,
-                    })}
-                  >
-                    {connection.enabled ? "Disable" : "Enable"}
-                  </button>
-                  <button type="button" className="af-btn af-btn-sm" aria-label={`Remove ${connection.displayName}`} onClick={() => setRetiring(connection)}>
-                    <Trash2 size={14} />
-                  </button>
-                </div>
-              )}
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  className="af-btn af-btn-sm"
+                  aria-label={`Refresh status for ${connection.displayName}`}
+                  disabled={connections.isFetching}
+                  onClick={() => void connections.refetch()}
+                >
+                  <RefreshCw size={14} className={connections.isFetching ? "animate-spin" : undefined} /> Refresh status
+                </button>
+                <Link
+                  href={`/dashboard/${agent.organizationId}/agents/${agent.id}/connections/${connection.id}`}
+                  className="af-btn af-btn-sm"
+                >
+                  View details
+                </Link>
+                {canEdit && (
+                  <>
+                    <button type="button" className="af-btn af-btn-sm" aria-label={`Edit ${connection.displayName}`} onClick={() => beginEditing(connection)}>
+                      <Pencil size={14} /> Edit
+                    </button>
+                    <button
+                      type="button"
+                      className="af-btn af-btn-sm"
+                      disabled={updateConnection.isPending}
+                      onClick={() => void updateConnection.mutateAsync({
+                        agentId: agent.id,
+                        connectionId: connection.id,
+                        revision: connection.revision,
+                        enabled: !connection.enabled,
+                      })}
+                    >
+                      {connection.enabled ? "Disable" : "Enable"}
+                    </button>
+                    <button type="button" className="af-btn af-btn-sm" aria-label={`Remove ${connection.displayName}`} onClick={() => setRetiring(connection)}>
+                      <Trash2 size={14} />
+                    </button>
+                  </>
+                )}
+              </div>
             </div>
-            <CommunicationConnectionDiagnostics
-              agentId={agent.id}
-              connection={connection}
-              canEdit={canEdit}
-            />
             {editingConnection?.id === connection.id && (() => {
               const platform = platforms.data?.find((candidate) => candidate.key === connection.platformKey);
               return (

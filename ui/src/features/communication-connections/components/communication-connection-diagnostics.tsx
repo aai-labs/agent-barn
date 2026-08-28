@@ -1,9 +1,11 @@
 "use client";
 
 import { useState } from "react";
-import { CircleAlert, RefreshCw, RotateCcw, X } from "lucide-react";
+import { Activity, CircleAlert, RefreshCw, RotateCcw, X } from "lucide-react";
 
 import { ConfirmationDialog } from "@/components/confirmation-dialog";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { CommunicationConnectionJournal } from "@/features/communication-connections/components/communication-connection-journal";
 import {
   useCommunicationConnectionActions,
   useCommunicationConnectionDiagnostics,
@@ -11,6 +13,7 @@ import {
 import type {
   CommunicationConnection,
   CommunicationDiagnostics,
+  CommunicationJournalKind,
 } from "@/features/communication-connections/schemas";
 
 const PIPELINE_STEPS: Array<[keyof CommunicationDiagnostics["pipeline"], string]> = [
@@ -33,15 +36,6 @@ function healthColor(value: string): string {
   return "var(--ink-4)";
 }
 
-function formatTimestamp(value: string): string {
-  return new Date(value).toLocaleString(undefined, {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  });
-}
-
 function formatDuration(value: number | null): string {
   if (value === null) return "—";
   if (value < 1000) return `${Math.round(value)} ms`;
@@ -56,14 +50,17 @@ export function CommunicationConnectionDiagnostics({
   agentId,
   connection,
   canEdit,
+  alwaysExpanded = false,
 }: {
   agentId: string;
   connection: CommunicationConnection;
   canEdit: boolean;
+  alwaysExpanded?: boolean;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(alwaysExpanded);
   const [reconnectOpen, setReconnectOpen] = useState(false);
   const [retryDeliveryId, setRetryDeliveryId] = useState<string | null>(null);
+  const [activityKind, setActivityKind] = useState<CommunicationJournalKind>("delivery");
   const diagnostics = useCommunicationConnectionDiagnostics(agentId, connection.id, open);
   const { reconnectConnection, retryDelivery } = useCommunicationConnectionActions();
   const actionError = errorMessage(reconnectConnection.error) ?? errorMessage(retryDelivery.error);
@@ -81,6 +78,17 @@ export function CommunicationConnectionDiagnostics({
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
+            {open && diagnostics.data && (
+              <button
+                type="button"
+                className="af-btn af-btn-sm"
+                disabled={diagnostics.isFetching}
+                onClick={() => void diagnostics.refetch()}
+              >
+                <RefreshCw size={14} className={diagnostics.isFetching ? "animate-spin" : undefined} />
+                Refresh
+              </button>
+            )}
             {canEdit && (
               <button
                 type="button"
@@ -92,15 +100,17 @@ export function CommunicationConnectionDiagnostics({
                 {reconnectConnection.isPending ? "Reconnecting…" : "Reconnect"}
               </button>
             )}
-            <button
-              type="button"
-              className="af-btn af-btn-sm"
-              aria-expanded={open}
-              onClick={() => setOpen((current) => !current)}
-            >
-              {open ? <X size={14} /> : <RefreshCw size={14} />}
-              {open ? "Hide diagnostics" : "Diagnostics"}
-            </button>
+            {!alwaysExpanded && (
+              <button
+                type="button"
+                className="af-btn af-btn-sm"
+                aria-expanded={open}
+                onClick={() => setOpen((current) => !current)}
+              >
+                {open ? <X size={14} /> : <Activity size={14} />}
+                {open ? "Hide diagnostics" : "Diagnostics"}
+              </button>
+            )}
           </div>
         </div>
 
@@ -164,66 +174,47 @@ export function CommunicationConnectionDiagnostics({
                   </div>
                 </div>
 
-                {diagnostics.data.recentFailures.length > 0 && (
-                  <div className="rounded-lg p-3" style={{ border: "1px solid color-mix(in srgb, var(--err) 25%, var(--line))", background: "var(--bg-elev)" }}>
-                    <div className="text-xs font-semibold" style={{ color: "var(--ink-2)" }}>Recent failures</div>
-                    <div className="mt-2 flex flex-col gap-2">
-                      {diagnostics.data.recentFailures.map((failure) => (
-                        <div key={failure.id} className="flex flex-wrap items-center justify-between gap-2 text-xs">
-                          <div className="min-w-0">
-                            <span style={{ color: "var(--err)" }}>{failure.errorCode ?? failure.stage}</span>
-                            <span className="ml-2" style={{ color: "var(--ink-4)" }}>{formatTimestamp(failure.occurredAt)}</span>
-                            {failure.errorSummary && <div className="mt-0.5 truncate" style={{ color: "var(--ink-3)" }}>{failure.errorSummary}</div>}
-                          </div>
-                          {canEdit && failure.deliveryId && failure.stage === "dead_lettered" && (
-                            <button
-                              type="button"
-                              className="af-btn af-btn-sm"
-                              onClick={() => setRetryDeliveryId(failure.deliveryId)}
-                            >
-                              <RotateCcw size={13} /> Retry
-                            </button>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                <div className="rounded-lg p-3" style={{ border: "1px solid var(--line)", background: "var(--bg-elev)" }}>
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div className="text-xs font-semibold" style={{ color: "var(--ink-2)" }}>Latest transitions</div>
-                    <span className="text-[11px]" style={{ color: "var(--ink-4)" }}>Showing up to 50 · no message content</span>
-                  </div>
-                  <div className="mt-2 max-h-64 overflow-auto">
-                    {diagnostics.data.latestTransitions.length === 0 ? (
-                      <p className="m-0 text-xs" style={{ color: "var(--ink-4)" }}>No transitions in this window.</p>
-                    ) : (
-                      <div className="flex flex-col divide-y" style={{ borderColor: "var(--line)" }}>
-                        {diagnostics.data.latestTransitions.map((transition) => (
-                          <div key={transition.id} className="grid grid-cols-[1fr_auto] gap-3 py-2 text-xs first:pt-0 last:pb-0">
-                            <div>
-                              <span className="font-medium" style={{ color: "var(--ink-2)" }}>{transition.stage.replace(/_/g, " ")}</span>
-                              {transition.disposition && <span className="ml-2" style={{ color: "var(--ink-4)" }}>{transition.disposition.replace(/_/g, " ")}</span>}
-                              {transition.errorCode && <div className="mt-0.5" style={{ color: "var(--err)" }}>{transition.errorCode}</div>}
-                            </div>
-                            <div className="text-right" style={{ color: "var(--ink-4)" }}>
-                              <div>{formatTimestamp(transition.occurredAt)}</div>
-                              <div>attempt {transition.attemptNumber} · {formatDuration(transition.durationMs)}</div>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div className="text-xs" style={{ color: "var(--ink-4)" }}>Last checked {formatTimestamp(diagnostics.data.windowEnd)}</div>
-                  <button type="button" className="af-btn af-btn-sm" onClick={() => void diagnostics.refetch()}>
-                    <RefreshCw size={13} /> Refresh
-                  </button>
-                </div>
+                <Tabs value={activityKind} onValueChange={(value) => setActivityKind(value as CommunicationJournalKind)} className="gap-4">
+                  <TabsList
+                    variant="line"
+                    aria-label="Connection activity view"
+                    className="h-auto w-full justify-start gap-1 border-b p-0 group-data-horizontal/tabs:h-auto"
+                    style={{ borderColor: "var(--line)" }}
+                  >
+                    <TabsTrigger
+                      value="delivery"
+                      className="h-auto flex-none rounded-none border-0 bg-transparent px-4 py-3 text-sm font-medium text-[var(--ink-3)] shadow-none hover:text-[var(--ink)] group-data-horizontal/tabs:after:inset-x-4 group-data-horizontal/tabs:after:bottom-[-1px] after:rounded-[2px_2px_0_0] after:bg-[var(--ink)] data-active:bg-transparent data-active:font-semibold data-active:text-[var(--ink)] data-active:shadow-none"
+                    >
+                      Delivery transitions
+                    </TabsTrigger>
+                    <TabsTrigger
+                      value="connection"
+                      className="h-auto flex-none rounded-none border-0 bg-transparent px-4 py-3 text-sm font-medium text-[var(--ink-3)] shadow-none hover:text-[var(--ink)] group-data-horizontal/tabs:after:inset-x-4 group-data-horizontal/tabs:after:bottom-[-1px] after:rounded-[2px_2px_0_0] after:bg-[var(--ink)] data-active:bg-transparent data-active:font-semibold data-active:text-[var(--ink)] data-active:shadow-none"
+                    >
+                      Connection events
+                    </TabsTrigger>
+                  </TabsList>
+                  <TabsContent value="delivery">
+                    <CommunicationConnectionJournal
+                      agentId={agentId}
+                      connectionId={connection.id}
+                      kind="delivery"
+                      canEdit={canEdit}
+                      lastCheckedAt={diagnostics.data.windowEnd}
+                      onRetryDelivery={setRetryDeliveryId}
+                    />
+                  </TabsContent>
+                  <TabsContent value="connection">
+                    <CommunicationConnectionJournal
+                      agentId={agentId}
+                      connectionId={connection.id}
+                      kind="connection"
+                      canEdit={canEdit}
+                      lastCheckedAt={diagnostics.data.windowEnd}
+                      onRetryDelivery={setRetryDeliveryId}
+                    />
+                  </TabsContent>
+                </Tabs>
               </>
             )}
           </div>

@@ -17,6 +17,9 @@ import { mockCustomSkill, mockPlatformSkill, MOCK_PLATFORM_SKILL_ID } from "../p
 import { DataSupport } from "../pages/data-support/data-support.po";
 import { AgentDetailPage } from "../pages/agent-detail-page.po";
 
+const FULL_PROVIDER_ERROR =
+  "Client error '409 Conflict' for url 'https://api.telegram.org/bot123456789:TEST_TOKEN/getUpdates?timeout=30' For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/409";
+
 test.describe("Agent Detail Page", () => {
   test.describe.configure({ mode: "serial" });
   let agentDetailPage: AgentDetailPage;
@@ -585,8 +588,8 @@ test.describe("Agent Detail Page — Channels tab", () => {
           external_identity: "validation-skipped",
           observed_status: "CONNECTED",
           last_health_at: "2026-01-01T00:00:00Z",
-          last_error_code: null,
-          last_error_message: null,
+          last_error_code: "HTTPStatusError",
+          last_error_message: FULL_PROVIDER_ERROR,
           webhook_url: null,
           revision: 3,
           created_at: "2026-01-01T00:00:00Z",
@@ -618,7 +621,7 @@ test.describe("Agent Detail Page — Channels tab", () => {
         }),
       });
     });
-    await page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}/connections/*/diagnostics`, async (route) => {
+    await page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}/connections/*/summary`, async (route) => {
       await route.fulfill({
         status: 200,
         contentType: "application/json",
@@ -670,21 +673,33 @@ test.describe("Agent Detail Page — Channels tab", () => {
             p50_ms: 100,
             latest_ms: 140,
           },
-          recent_failures: [],
-          latest_transitions: [{
+          window_start: "2025-12-31T00:00:00Z",
+          window_end: "2026-01-01T00:00:00Z",
+        }),
+      });
+    });
+    await page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}/connections/*/journal?*`, async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          page: 1,
+          page_size: 20,
+          total: 1,
+          items: [{
             id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
             connection_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
-            delivery_id: null,
+            delivery_id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
             occurred_at: "2026-01-01T00:00:00Z",
             stage: "provider_delivered",
             disposition: null,
             attempt_number: 1,
             duration_ms: 140,
-            error_code: null,
-            error_summary: null,
+            error_code: "provider_error",
+            error_summary: "The provider rejected this delivery.",
+            direction: "OUTBOUND",
+            deliveryStatus: "DEAD_LETTERED",
           }],
-          window_start: "2025-12-31T00:00:00Z",
-          window_end: "2026-01-01T00:00:00Z",
         }),
       });
     });
@@ -727,13 +742,46 @@ test.describe("Agent Detail Page — Channels tab", () => {
     await expect(page.getByText("Connected", { exact: true })).toBeVisible();
   });
 
-  test("shows separate diagnostics health and confirms a reconnect request", async ({ page }) => {
-    await page.getByRole("button", { name: "Diagnostics", exact: true }).click();
+  test("shows the complete provider error at full width and can copy it", async ({ page, context }) => {
+    await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+
+    const providerError = page.getByRole("alert").filter({ hasText: "Latest provider error" });
+    const errorMessage = providerError.locator("p");
+    await expect(errorMessage).toHaveText(FULL_PROVIDER_ERROR);
+    expect(await errorMessage.evaluate((element) => getComputedStyle(element).getPropertyValue("-webkit-line-clamp"))).toBe("none");
+    expect(await providerError.evaluate((element) => getComputedStyle(element).maxWidth)).toBe("none");
+    const widths = await providerError.evaluate((element) => ({
+      alert: element.getBoundingClientRect().width,
+      content: element.parentElement?.getBoundingClientRect().width ?? 0,
+    }));
+    expect(widths.alert).toBeCloseTo(widths.content, 0);
+
+    const copyError = providerError.getByRole("button", { name: /(?:Copy full provider error|Copied) for Customer Discord/ });
+    await copyError.click();
+    await expect(copyError).toHaveAttribute("aria-label", "Copied for Customer Discord");
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(`HTTPStatusError: ${FULL_PROVIDER_ERROR}`);
+  });
+
+  test("shows delivery activity, lets an operator copy an error, and confirms a reconnect request", async ({ page, context }) => {
+    await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+    await page.getByRole("link", { name: "View details", exact: true }).click();
 
     await expect(page.getByText("Provider connectivity", { exact: true })).toBeVisible();
     await expect(page.getByText("End-to-end delivery", { exact: true })).toBeVisible();
-    await expect(page.getByText("Latest transitions", { exact: true })).toBeVisible();
-    await expect(page.getByText("Showing up to 50 · no message content", { exact: true })).toBeVisible();
+    await expect(page.getByRole("tab", { name: "Delivery transitions" })).toBeVisible();
+    await expect(page.getByText("1 event", { exact: true })).toBeVisible();
+    await expect(page.getByText("Outbound", { exact: true })).toBeVisible();
+    await expect(page.getByText("Dead lettered", { exact: true })).toBeVisible();
+    await page.getByRole("button", { name: /provider delivered.*provider_error/i }).click();
+    await expect(page.getByRole("button", { name: "Copy error for provider delivered" })).toBeVisible();
+    await page.getByRole("button", { name: "Copy error for provider delivered" }).click();
+    await expect(page.getByRole("button", { name: "Copy error for provider delivered" })).toHaveText("Copied");
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("provider_error: The provider rejected this delivery.");
+
+    const connectionEvents = page.waitForRequest((request) => request.url().includes("/journal?") && request.url().includes("kind=connection"));
+    await page.getByRole("tab", { name: "Connection events" }).click();
+    await connectionEvents;
+    await expect(page.getByRole("tab", { name: "Connection events" })).toHaveAttribute("aria-selected", "true");
 
     const reconnect = page.waitForRequest((request) => request.method() === "POST" && request.url().endsWith("/reconnect"));
     await page.getByRole("button", { name: "Reconnect", exact: true }).click();

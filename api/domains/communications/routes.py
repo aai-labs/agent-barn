@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, Response, status
@@ -12,11 +12,13 @@ from api.domains.communications.models import (
     CommunicationConnectionRead,
     CommunicationConnectionUpdate,
     CommunicationDiagnosticsRead,
+    CommunicationJournalEntryRead,
     CommunicationReconnectRead,
     CommunicationRetryRead,
     PlatformDescriptorRead,
 )
 from api.domains.communications.service import CommunicationsService
+from api.infrastructure.shared.models import PaginatedItems
 
 communications_router = APIRouter(
     prefix="/organizations/{organization_id}",
@@ -107,10 +109,10 @@ def retire_communication_connection(
 
 
 @communications_router.get(
-    "/agents/{agent_id}/connections/{connection_id}/diagnostics",
+    "/agents/{agent_id}/connections/{connection_id}/summary",
     response_model=CommunicationDiagnosticsRead,
 )
-def get_communication_connection_diagnostics(
+def get_communication_connection_summary(
     agent_id: UUID,
     connection_id: UUID,
     context: Annotated[CurrentUserContext, Depends(get_current_user())],
@@ -119,13 +121,36 @@ def get_communication_connection_diagnostics(
     until: datetime | None = Query(default=None),
     window_minutes: Annotated[int | None, Query(ge=1, le=31 * 24 * 60)] = None,
 ):
-    return service.get_diagnostics(
+    return service.get_connection_summary(
         agent_id,
         connection_id,
         context,
         since=since,
         until=until,
         window_minutes=window_minutes,
+    )
+
+
+@communications_router.get(
+    "/agents/{agent_id}/connections/{connection_id}/journal",
+    response_model=PaginatedItems[CommunicationJournalEntryRead],
+)
+def list_communication_connection_journal(
+    agent_id: UUID,
+    connection_id: UUID,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[CommunicationsService, Injected(CommunicationsService)],
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=100)] = 20,
+    kind: Literal["delivery", "connection"] = "delivery",
+):
+    return service.list_journal_entries(
+        agent_id,
+        connection_id,
+        context,
+        page=page,
+        page_size=page_size,
+        kind=kind,
     )
 
 

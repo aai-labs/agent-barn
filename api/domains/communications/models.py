@@ -345,6 +345,8 @@ class CommunicationJournalEntryRead(PydanticBaseModel):
     duration_ms: float | None
     error_code: str | None
     error_summary: str | None
+    direction: CommunicationDirection | None = None
+    delivery_status: CommunicationDeliveryStatus | None = None
 
 
 class CommunicationPipelineCounts(PydanticBaseModel):
@@ -384,8 +386,6 @@ class CommunicationDiagnosticsRead(PydanticBaseModel):
     queue_depth: int
     oldest_queued_age_seconds: float | None
     latency: CommunicationLatencyRead
-    recent_failures: list[CommunicationJournalEntryRead]
-    latest_transitions: list[CommunicationJournalEntryRead]
     window_start: datetime
     window_end: datetime
 

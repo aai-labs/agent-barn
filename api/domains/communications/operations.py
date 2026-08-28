@@ -7,6 +7,7 @@ from statistics import median
 from typing import Any
 from uuid import UUID, uuid4
 
+import sqlalchemy as sa
 from injector import inject, singleton
 from sqlmodel import Session, col, select
 
@@ -29,6 +30,7 @@ from api.domains.events.models import (
 )
 from api.domains.events.repository import OutboxMessageRepository
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
+from api.infrastructure.shared.models import PaginatedItems, Pagination
 
 _SAFE_CODE = re.compile(r"^[A-Za-z0-9_.:-]{1,100}$")
 _SENSITIVE_PARTS = (
@@ -52,8 +54,6 @@ class CommunicationDiagnosticsSnapshot:
     queue_depth: int
     oldest_queued_age_seconds: float | None
     latency: CommunicationLatencyRead
-    recent_failures: list[CommunicationJournalEntryRead]
-    latest_transitions: list[CommunicationJournalEntryRead]
 
 
 @inject
@@ -296,25 +296,71 @@ class CommunicationOperationalRepository:
             latest_ms=latencies[-1] if latencies else None,
         )
 
-        read_entries = [CommunicationJournalEntryRead.model_validate(entry) for entry in journal_rows]
-        failures = [
-            entry
-            for entry in read_entries
-            if entry.stage
-            in {
-                CommunicationJournalStage.DEAD_LETTERED,
-                CommunicationJournalStage.CONNECTION_ERROR,
-            }
-            or entry.error_code is not None
-        ][:20]
         return CommunicationDiagnosticsSnapshot(
             pipeline=pipeline,
             delivery_counts=delivery_counts,
             queue_depth=len(queued_deliveries),
             oldest_queued_age_seconds=oldest_age,
             latency=latency,
-            recent_failures=failures,
-            latest_transitions=read_entries[:50],
+        )
+
+    def find_journal_page(
+        self,
+        *,
+        organization_id: UUID,
+        agent_id: UUID,
+        connection_id: UUID,
+        pagination: Pagination,
+        kind: str,
+    ) -> PaginatedItems[CommunicationJournalEntryRead]:
+        """Return the Connection's content-free operational history, newest first."""
+        with Session(self.delegate.engine) as session:
+            predicates = [
+                col(CommunicationJournalEntry.organization_id) == organization_id,
+                col(CommunicationJournalEntry.agent_id) == agent_id,
+                col(CommunicationJournalEntry.connection_id) == connection_id,
+            ]
+            if kind == "delivery":
+                predicates.append(col(CommunicationJournalEntry.delivery_id).is_not(None))
+            elif kind == "connection":
+                predicates.append(col(CommunicationJournalEntry.delivery_id).is_(None))
+            total = session.exec(
+                select(sa.func.count()).select_from(CommunicationJournalEntry).where(*predicates)
+            ).one()
+            rows = list(
+                session.exec(
+                    select(
+                        CommunicationJournalEntry,
+                        CommunicationDelivery.direction,
+                        CommunicationDelivery.status,
+                    )
+                    .outerjoin(
+                        CommunicationDelivery,
+                        col(CommunicationDelivery.id) == col(CommunicationJournalEntry.delivery_id),
+                    )
+                    .where(*predicates)
+                    .order_by(
+                        col(CommunicationJournalEntry.occurred_at).desc(),
+                        col(CommunicationJournalEntry.id).desc(),
+                    )
+                    .offset((pagination.page - 1) * pagination.size)
+                    .limit(pagination.size)
+                ).all()
+            )
+        return PaginatedItems(
+            page=pagination.page,
+            page_size=pagination.size,
+            total=total,
+            items=[
+                CommunicationJournalEntryRead.model_validate(
+                    {
+                        **CommunicationJournalEntryRead.model_validate(entry).model_dump(),
+                        "direction": direction,
+                        "delivery_status": delivery_status,
+                    }
+                )
+                for entry, direction, delivery_status in rows
+            ],
         )
 
     @staticmethod

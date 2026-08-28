@@ -1,6 +1,6 @@
 "use client";
 
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { z } from "zod";
 
 import { useOrganizationApiBase } from "@/features/organizations/hooks/use-organization-api-base";
@@ -11,12 +11,15 @@ import { createQueryKeyStructure } from "@/shared/query-keys";
 import {
   CommunicationConnectionSchema,
   CommunicationDiagnosticsSchema,
+  PaginatedCommunicationJournalEntriesSchema,
   CommunicationReconnectSchema,
   CommunicationRetrySchema,
   CommunicationPlatformSchema,
   type CommunicationConnection,
   type CommunicationPlatform,
   type CommunicationDiagnostics,
+  type CommunicationJournalKind,
+  type PaginatedCommunicationJournalEntries,
   type CommunicationReconnect,
   type CommunicationRetry,
   type CreateCommunicationConnection,
@@ -26,6 +29,9 @@ import {
 export const communicationConnectionsKey = createQueryKeyStructure("communication-connections");
 export const communicationPlatformsKey = createQueryKeyStructure("communication-platforms");
 export const communicationDiagnosticsKey = createQueryKeyStructure("communication-connection-diagnostics");
+export const communicationJournalKey = createQueryKeyStructure("communication-connection-journal");
+
+const JOURNAL_PAGE_SIZE = 20;
 
 export function useCommunicationPlatforms() {
   const orgApiBase = useOrganizationApiBase();
@@ -72,13 +78,56 @@ export function useCommunicationConnectionDiagnostics(
     queryKey: communicationDiagnosticsKey.detail(`${organizationId}:${connectionId}`),
     queryFn: async () => {
       const response = await api.get<CommunicationDiagnostics>(
-        `${orgApiBase}/agents/${agentId}/connections/${connectionId}/diagnostics`,
+        `${orgApiBase}/agents/${agentId}/connections/${connectionId}/summary`,
         { schema: CommunicationDiagnosticsSchema },
       );
       return response.data;
     },
     enabled: enabled && Boolean(agentId && connectionId),
   });
+}
+
+export function useCommunicationConnectionJournal(agentId: string, connectionId: string, kind: CommunicationJournalKind) {
+  const orgApiBase = useOrganizationApiBase();
+  const { selectedOrganization } = useOrganizationContext();
+  const organizationId = selectedOrganization?.id ?? "";
+  const query = useInfiniteQuery({
+    queryKey: communicationJournalKey.list({ organizationId, agentId, connectionId, kind }),
+    queryFn: async ({ pageParam }) => {
+      const params = new URLSearchParams({
+        page: String(pageParam),
+        page_size: String(JOURNAL_PAGE_SIZE),
+        kind,
+      });
+      const response = await api.get<PaginatedCommunicationJournalEntries>(
+        `${orgApiBase}/agents/${agentId}/connections/${connectionId}/journal?${params.toString()}`,
+        { schema: PaginatedCommunicationJournalEntriesSchema },
+      );
+      return response.data;
+    },
+    initialPageParam: 1,
+    getNextPageParam: (lastPage) => {
+      const nextPage = lastPage.page + 1;
+      return nextPage <= Math.ceil(lastPage.total / lastPage.pageSize) ? nextPage : undefined;
+    },
+    enabled: Boolean(agentId && connectionId),
+  });
+  // Offset pages can overlap when a new journal record arrives between requests.
+  // Keep the append-only record ID canonical so a live refresh never renders a row twice.
+  const entries = Array.from(
+    new Map((query.data?.pages.flatMap((page) => page.items) ?? []).map((entry) => [entry.id, entry])).values(),
+  );
+  return {
+    entries,
+    total: query.data?.pages[0]?.total ?? 0,
+    isLoading: query.isPending,
+    isFetchingNextPage: query.isFetchingNextPage,
+    isFetchingNextPageError: query.isFetchNextPageError,
+    hasNextPage: query.hasNextPage,
+    fetchNextPage: query.fetchNextPage,
+    error: query.error,
+    refetch: query.refetch,
+  };
 }
 
 export function useDownloadAppPackage() {
@@ -116,6 +165,11 @@ export function useCommunicationConnectionActions() {
     void queryClient.invalidateQueries({
       queryKey: communicationDiagnosticsKey.detail(`${organizationId}:${connectionId}`),
     });
+    for (const kind of ["delivery", "connection"] as const) {
+      void queryClient.invalidateQueries({
+        queryKey: communicationJournalKey.list({ organizationId, agentId, connectionId, kind }),
+      });
+    }
     return invalidate(agentId);
   }
 

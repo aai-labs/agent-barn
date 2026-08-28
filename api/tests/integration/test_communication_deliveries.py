@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 from uuid import UUID
 
-from hamcrest import assert_that, contains_string, equal_to, has_entries, is_, none, not_
+from hamcrest import assert_that, contains_string, equal_to, has_entries, has_key, is_, none, not_
 from sqlmodel import Session, col, select
 from starlette.testclient import TestClient
 
@@ -305,7 +305,11 @@ def test_diagnostics_reports_pipeline_transitions_without_message_content() -> N
 
         with when("I inspect the completed Connection pipeline"):
             response = context.client.get(
-                f"/api/v1/organizations/{context.organization.id}/agents/{context.agent.id}/connections/{connection_id}/diagnostics",
+                f"/api/v1/organizations/{context.organization.id}/agents/{context.agent.id}/connections/{connection_id}/summary",
+                headers=_auth(context),
+            )
+            journal = context.client.get(
+                f"/api/v1/organizations/{context.organization.id}/agents/{context.agent.id}/connections/{connection_id}/journal?kind=delivery",
                 headers=_auth(context),
             )
 
@@ -330,9 +334,13 @@ def test_diagnostics_reports_pipeline_transitions_without_message_content() -> N
                 ),
             )
             assert_that(body["delivery_counts"]["succeeded"], equal_to(2))
-            assert_that(len(body["latest_transitions"]), not_(equal_to(0)))
+            assert_that(body, not_(has_key("latest_transitions")))
+            assert_that(journal.status_code, equal_to(200))
+            assert_that(journal.json()["total"], not_(equal_to(0)))
             assert_that(repr(body), not_(contains_string("message provider-1")))
             assert_that(repr(body), not_(contains_string("private response")))
+            assert_that(repr(journal.json()), not_(contains_string("message provider-1")))
+            assert_that(repr(journal.json()), not_(contains_string("private response")))
 
 
 def test_dead_letter_retry_reuses_one_delivery_and_is_idempotent() -> None:

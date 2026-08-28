@@ -21,6 +21,7 @@ from api.domains.communications.models import (
     CommunicationConnectionRead,
     CommunicationConnectionUpdate,
     CommunicationDiagnosticsRead,
+    CommunicationJournalEntryRead,
     CommunicationReconnectRead,
     CommunicationRetryRead,
     ConnectionObservedStatus,
@@ -36,6 +37,7 @@ from api.domains.communications.repository import (
 from api.domains.events import resolve_actor_identity
 from api.domains.rbac.catalog import PermissionKey
 from api.infrastructure.crypto import decrypt_token, encrypt_token
+from api.infrastructure.shared.models import PaginatedItems, Pagination
 
 
 @inject
@@ -164,7 +166,7 @@ class CommunicationsService:
         except CommunicationConnectionConflictError as exc:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
-    def get_diagnostics(
+    def get_connection_summary(
         self,
         agent_id: UUID,
         connection_id: UUID,
@@ -210,10 +212,37 @@ class CommunicationsService:
             queue_depth=snapshot.queue_depth,
             oldest_queued_age_seconds=snapshot.oldest_queued_age_seconds,
             latency=snapshot.latency,
-            recent_failures=snapshot.recent_failures,
-            latest_transitions=snapshot.latest_transitions,
             window_start=window_start,
             window_end=window_end,
+        )
+
+    def list_journal_entries(
+        self,
+        agent_id: UUID,
+        connection_id: UUID,
+        context: CurrentUserContext,
+        *,
+        page: int,
+        page_size: int,
+        kind: str,
+    ) -> PaginatedItems[CommunicationJournalEntryRead]:
+        self.authorization.require_visible(context, agent_id)
+        read_scope = self.authorization.authorization_scope(context, PermissionKey.AGENT_READ)
+        connection = self.repository.get_active_in_scope(connection_id, agent_id, read_scope)
+        if connection is None:
+            self._raise_not_found(connection_id)
+        assert connection is not None
+        operations = self.operations or getattr(self.repository, "operations", None)
+        if operations is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Connection activity is unavailable"
+            )
+        return operations.find_journal_page(
+            organization_id=connection.organization_id,
+            agent_id=agent_id,
+            connection_id=connection.id,
+            pagination=Pagination(page=page, size=page_size),
+            kind=kind,
         )
 
     def reconnect_connection(

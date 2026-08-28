@@ -42,6 +42,15 @@ export const CommunicationJournalEntrySchema = z.object({
   durationMs: z.number().nullable(),
   errorCode: z.string().nullable(),
   errorSummary: z.string().nullable(),
+  direction: z.enum(["INBOUND", "OUTBOUND"]).nullable().optional(),
+  deliveryStatus: z.enum(["PENDING", "PROCESSING", "SUCCEEDED", "DEAD_LETTERED", "CANCELLED", "UNAVAILABLE"]).nullable().optional(),
+});
+
+export const PaginatedCommunicationJournalEntriesSchema = z.object({
+  page: z.number().int().min(1),
+  pageSize: z.number().int().min(1),
+  total: z.number().int().min(0),
+  items: z.array(CommunicationJournalEntrySchema),
 });
 
 export const CommunicationDiagnosticsSchema = z.object({
@@ -75,8 +84,6 @@ export const CommunicationDiagnosticsSchema = z.object({
     p50Ms: z.number().nonnegative().nullable(),
     latestMs: z.number().nonnegative().nullable(),
   }),
-  recentFailures: z.array(CommunicationJournalEntrySchema),
-  latestTransitions: z.array(CommunicationJournalEntrySchema),
   windowStart: z.string(),
   windowEnd: z.string(),
 });
@@ -97,6 +104,8 @@ export type CommunicationPlatform = z.infer<typeof CommunicationPlatformSchema>;
 export type CommunicationConnection = z.infer<typeof CommunicationConnectionSchema>;
 export type CommunicationDiagnostics = z.infer<typeof CommunicationDiagnosticsSchema>;
 export type CommunicationJournalEntry = z.infer<typeof CommunicationJournalEntrySchema>;
+export type PaginatedCommunicationJournalEntries = z.infer<typeof PaginatedCommunicationJournalEntriesSchema>;
+export type CommunicationJournalKind = "delivery" | "connection";
 export type CommunicationReconnect = z.infer<typeof CommunicationReconnectSchema>;
 export type CommunicationRetry = z.infer<typeof CommunicationRetrySchema>;
 
