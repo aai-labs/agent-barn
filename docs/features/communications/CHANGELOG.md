@@ -16,6 +16,7 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
 ### 2026-08-28 — AF-273 — Connection details page — PR pending
 
 - Changed: Messaging settings now show each Connection's current observed status and compact actions. A dedicated Connection details page holds summary diagnostics, recovery controls, and an event-delivery-style, paginated Connection activity explorer. Summary is intentionally aggregate-only: recent failures and transitions belong solely to the Journal endpoint. The explorer splits the append-only Journal into Delivery transitions and Connection events; rows expand for complete content-free operational detail, including copyable error metadata and eligible delivery retries. The compact view offers a manual status refresh; it reads the most recently recorded supervisor state and does not create a provider probe.
+- Changed: Journal reads now enrich Delivery Transitions from their linked live Delivery with direction and current status. The explorer presents inbound/outbound and status badges plus per-entry duration without storing duplicate or content-bearing facts in the append-only Journal.
 
 ### 2026-08-27 — AF-273 — Communication diagnostics and recovery controls — PR pending
 
