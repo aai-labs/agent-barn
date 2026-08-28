@@ -21,7 +21,9 @@ from api.domains.communications.models import (
     CommunicationConnectionRead,
     CommunicationConnectionUpdate,
     CommunicationDiagnosticsRead,
+    CommunicationDirection,
     CommunicationJournalEntryRead,
+    CommunicationJournalStage,
     CommunicationReconnectRead,
     CommunicationRetryRead,
     ConnectionObservedStatus,
@@ -211,7 +213,12 @@ class CommunicationsService:
             delivery_counts=snapshot.delivery_counts,
             queue_depth=snapshot.queue_depth,
             oldest_queued_age_seconds=snapshot.oldest_queued_age_seconds,
+            oldest_pending_delivery_age_seconds=snapshot.oldest_pending_delivery_age_seconds,
             latency=snapshot.latency,
+            last_successful_connection_at=snapshot.last_successful_connection_at,
+            current_error_age_seconds=snapshot.current_error_age_seconds,
+            consecutive_failure_count=snapshot.consecutive_failure_count,
+            delivery_success_rate=snapshot.delivery_success_rate,
             window_start=window_start,
             window_end=window_end,
         )
@@ -225,6 +232,14 @@ class CommunicationsService:
         page: int,
         page_size: int,
         kind: str,
+        since: datetime | None = None,
+        until: datetime | None = None,
+        stage: CommunicationJournalStage | None = None,
+        failed_only: bool = False,
+        retryable_only: bool = False,
+        direction: CommunicationDirection | None = None,
+        delivery_id: UUID | None = None,
+        order: str = "desc",
     ) -> PaginatedItems[CommunicationJournalEntryRead]:
         self.authorization.require_visible(context, agent_id)
         read_scope = self.authorization.authorization_scope(context, PermissionKey.AGENT_READ)
@@ -243,6 +258,14 @@ class CommunicationsService:
             connection_id=connection.id,
             pagination=Pagination(page=page, size=page_size),
             kind=kind,
+            since=since,
+            until=until,
+            stage=stage,
+            failed_only=failed_only,
+            retryable_only=retryable_only,
+            direction=direction,
+            delivery_id=delivery_id,
+            order=order,
         )
 
     def reconnect_connection(

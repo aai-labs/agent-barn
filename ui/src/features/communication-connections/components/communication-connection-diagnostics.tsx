@@ -42,6 +42,25 @@ function formatDuration(value: number | null): string {
   return `${(value / 1000).toFixed(1)} s`;
 }
 
+function formatAgeSeconds(value: number | null): string {
+  if (value === null) return "—";
+  if (value < 60) return `${Math.round(value)}s`;
+  if (value < 3600) return `${Math.round(value / 60)}m`;
+  if (value < 86_400) return `${Math.round(value / 3600)}h`;
+  return `${Math.round(value / 86_400)}d`;
+}
+
+function formatRelativeTimestamp(value: string | null): string {
+  if (value === null) return "Never";
+  const seconds = Math.max(0, (Date.now() - new Date(value).getTime()) / 1000);
+  return `${formatAgeSeconds(seconds)} ago`;
+}
+
+function formatPercent(value: number | null): string {
+  if (value === null) return "—";
+  return `${Math.round(value * 100)}%`;
+}
+
 function errorMessage(error: unknown): string | null {
   return error instanceof Error ? error.message : error ? "The recovery request failed." : null;
 }
@@ -138,6 +157,25 @@ export function CommunicationConnectionDiagnostics({
                 </div>
 
                 <div className="rounded-lg p-3" style={{ border: "1px solid var(--line)", background: "var(--bg-elev)" }}>
+                  <div className="text-xs font-semibold" style={{ color: "var(--ink-2)" }}>Health signals</div>
+                  <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-5">
+                    <StatTile label="Last successful connection" value={formatRelativeTimestamp(diagnostics.data.lastSuccessfulConnectionAt)} />
+                    <StatTile
+                      label="Current error age"
+                      value={formatAgeSeconds(diagnostics.data.currentErrorAgeSeconds)}
+                      warn={diagnostics.data.currentErrorAgeSeconds !== null}
+                    />
+                    <StatTile
+                      label="Consecutive failures"
+                      value={String(diagnostics.data.consecutiveFailureCount)}
+                      warn={diagnostics.data.consecutiveFailureCount > 0}
+                    />
+                    <StatTile label="Delivery success rate" value={formatPercent(diagnostics.data.deliverySuccessRate)} />
+                    <StatTile label="Oldest pending delivery" value={formatAgeSeconds(diagnostics.data.oldestPendingDeliveryAgeSeconds)} />
+                  </div>
+                </div>
+
+                <div className="rounded-lg p-3" style={{ border: "1px solid var(--line)", background: "var(--bg-elev)" }}>
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div className="text-xs font-semibold" style={{ color: "var(--ink-2)" }}>Pipeline, last window</div>
                     <div className="text-xs" style={{ color: "var(--ink-4)" }}>
@@ -194,7 +232,10 @@ export function CommunicationConnectionDiagnostics({
                       Connection events
                     </TabsTrigger>
                   </TabsList>
-                  <TabsContent value="delivery">
+                  {/* forceMount + CSS-hide (rather than Radix's default unmount-on-switch) so each
+                      tab keeps its own filters, expanded row, and query cache when you switch away
+                      and back — a remount was silently resetting filters and re-fetching. */}
+                  <TabsContent value="delivery" forceMount className="data-[state=inactive]:hidden">
                     <CommunicationConnectionJournal
                       agentId={agentId}
                       connectionId={connection.id}
@@ -204,7 +245,7 @@ export function CommunicationConnectionDiagnostics({
                       onRetryDelivery={setRetryDeliveryId}
                     />
                   </TabsContent>
-                  <TabsContent value="connection">
+                  <TabsContent value="connection" forceMount className="data-[state=inactive]:hidden">
                     <CommunicationConnectionJournal
                       agentId={agentId}
                       connectionId={connection.id}
@@ -253,6 +294,15 @@ export function CommunicationConnectionDiagnostics({
         }}
       />
     </>
+  );
+}
+
+function StatTile({ label, value, warn = false }: { label: string; value: string; warn?: boolean }) {
+  return (
+    <div className="rounded-md px-2.5 py-2" style={{ background: "var(--bg-soft)" }}>
+      <div className="text-[11px]" style={{ color: "var(--ink-4)" }}>{label}</div>
+      <div className="mt-0.5 text-sm font-semibold" style={{ color: warn ? "var(--err)" : "var(--ink)" }}>{value}</div>
+    </div>
   );
 }
 

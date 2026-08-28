@@ -18,6 +18,7 @@ import {
   type CommunicationConnection,
   type CommunicationPlatform,
   type CommunicationDiagnostics,
+  type CommunicationJournalFilters,
   type CommunicationJournalKind,
   type PaginatedCommunicationJournalEntries,
   type CommunicationReconnect,
@@ -87,18 +88,35 @@ export function useCommunicationConnectionDiagnostics(
   });
 }
 
-export function useCommunicationConnectionJournal(agentId: string, connectionId: string, kind: CommunicationJournalKind) {
+function journalSearchParams(filters: CommunicationJournalFilters): URLSearchParams {
+  const params = new URLSearchParams();
+  if (filters.since) params.set("since", filters.since);
+  if (filters.until) params.set("until", filters.until);
+  if (filters.stage) params.set("stage", filters.stage);
+  if (filters.failedOnly) params.set("failed_only", "true");
+  if (filters.retryableOnly) params.set("retryable_only", "true");
+  if (filters.direction) params.set("direction", filters.direction);
+  if (filters.deliveryId) params.set("delivery_id", filters.deliveryId);
+  if (filters.order) params.set("order", filters.order);
+  return params;
+}
+
+export function useCommunicationConnectionJournal(
+  agentId: string,
+  connectionId: string,
+  kind: CommunicationJournalKind,
+  filters: CommunicationJournalFilters = {},
+) {
   const orgApiBase = useOrganizationApiBase();
   const { selectedOrganization } = useOrganizationContext();
   const organizationId = selectedOrganization?.id ?? "";
   const query = useInfiniteQuery({
-    queryKey: communicationJournalKey.list({ organizationId, agentId, connectionId, kind }),
+    queryKey: communicationJournalKey.list({ organizationId, agentId, connectionId, kind, filters }),
     queryFn: async ({ pageParam }) => {
-      const params = new URLSearchParams({
-        page: String(pageParam),
-        page_size: String(JOURNAL_PAGE_SIZE),
-        kind,
-      });
+      const params = journalSearchParams(filters);
+      params.set("page", String(pageParam));
+      params.set("page_size", String(JOURNAL_PAGE_SIZE));
+      params.set("kind", kind);
       const response = await api.get<PaginatedCommunicationJournalEntries>(
         `${orgApiBase}/agents/${agentId}/connections/${connectionId}/journal?${params.toString()}`,
         { schema: PaginatedCommunicationJournalEntriesSchema },
@@ -128,6 +146,32 @@ export function useCommunicationConnectionJournal(agentId: string, connectionId:
     error: query.error,
     refetch: query.refetch,
   };
+}
+
+/** Every Journal entry for one Delivery, chronological — the lifecycle drill-down. */
+export function useCommunicationDeliveryLifecycle(
+  agentId: string,
+  connectionId: string,
+  deliveryId: string | null,
+) {
+  const orgApiBase = useOrganizationApiBase();
+  const { selectedOrganization } = useOrganizationContext();
+  const organizationId = selectedOrganization?.id ?? "";
+  return useQuery({
+    queryKey: communicationJournalKey.detail(`${organizationId}:${connectionId}:${deliveryId ?? ""}`),
+    queryFn: async () => {
+      const params = journalSearchParams({ deliveryId: deliveryId ?? undefined, order: "asc" });
+      params.set("page", "1");
+      params.set("page_size", "100");
+      params.set("kind", "delivery");
+      const response = await api.get<PaginatedCommunicationJournalEntries>(
+        `${orgApiBase}/agents/${agentId}/connections/${connectionId}/journal?${params.toString()}`,
+        { schema: PaginatedCommunicationJournalEntriesSchema },
+      );
+      return response.data;
+    },
+    enabled: Boolean(agentId && connectionId && deliveryId),
+  });
 }
 
 export function useDownloadAppPackage() {
@@ -165,11 +209,9 @@ export function useCommunicationConnectionActions() {
     void queryClient.invalidateQueries({
       queryKey: communicationDiagnosticsKey.detail(`${organizationId}:${connectionId}`),
     });
-    for (const kind of ["delivery", "connection"] as const) {
-      void queryClient.invalidateQueries({
-        queryKey: communicationJournalKey.list({ organizationId, agentId, connectionId, kind }),
-      });
-    }
+    // Covers both journal list pages (by kind/filters) and delivery lifecycle
+    // drill-down detail queries, which don't nest under a shared list prefix.
+    void queryClient.invalidateQueries({ queryKey: communicationJournalKey.all });
     return invalidate(agentId);
   }
 

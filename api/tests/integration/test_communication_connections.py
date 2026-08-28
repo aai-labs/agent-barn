@@ -1,15 +1,38 @@
 import io
 import json
 import zipfile
+from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 from fastapi import status
-from hamcrest import all_of, assert_that, contains_inanyorder, contains_string, equal_to, has_entries, has_key, not_
+from hamcrest import (
+    all_of,
+    assert_that,
+    close_to,
+    contains_inanyorder,
+    contains_string,
+    equal_to,
+    greater_than_or_equal_to,
+    has_entries,
+    has_key,
+    has_length,
+    is_,
+    not_,
+    not_none,
+)
 from sqlmodel import Session, col, select
 from starlette.testclient import TestClient
 
-from api.domains.agents.models import AgentType
-from api.domains.communications.models import CommunicationJournalEntry, ConnectionObservedStatus
+from api.domains.agents.models import AgentStatus, AgentType
+from api.domains.communications.delivery_repository import CommunicationDeliveryRepository
+from api.domains.communications.models import (
+    CommunicationJournalEntry,
+    CommunicationSender,
+    ConnectionObservedStatus,
+    ConversationLocation,
+    NormalizedCommunicationEnvelope,
+    RuntimeReplyCreate,
+)
 from api.domains.communications.repository import CommunicationConnectionRepository
 from api.domains.events.models import OutboxMessage
 from api.domains.rbac.catalog import AGENT_VIEWER_ROLE_ID
@@ -479,6 +502,143 @@ def test_diagnostics_read_does_not_grant_connection_recovery_permission() -> Non
             assert_that(diagnostics.status_code, equal_to(status.HTTP_200_OK))
             assert_that(journal_page.status_code, equal_to(status.HTTP_200_OK))
             assert_that(reconnect.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+
+
+def _envelope(message_id: str) -> NormalizedCommunicationEnvelope:
+    return NormalizedCommunicationEnvelope(
+        provider_message_id=message_id,
+        occurred_at=datetime.now(UTC),
+        location=ConversationLocation(id="channel-one", type="CHANNEL", thread_id="thread-one"),
+        sender=CommunicationSender(id="person-one", display_name="Person One"),
+        text=f"message {message_id}",
+    )
+
+
+def test_connection_summary_reports_richer_health_and_delivery_signals() -> None:
+    with given([*_GIVEN[:-1], there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        client: TestClient = context.client
+        created = client.post(_base(context), json=_discord_payload(), headers=_auth(context)).json()
+        connection_id = UUID(created["id"])
+        connections = context.injector.get(CommunicationConnectionRepository)
+        deliveries = context.injector.get(CommunicationDeliveryRepository)
+
+        connections.record_health(connection_id, ConnectionObservedStatus.CONNECTED)
+
+        succeeded = deliveries.accept_inbound(connection_id=connection_id, envelope=_envelope("succeeded"))
+        claimed = deliveries.claim_next_inbound(agent_id=context.agent.id)
+        assert claimed is not None and claimed.delivery_id == succeeded.delivery_id
+        assert deliveries.complete_runtime_delivery(claimed.delivery_id, agent_id=context.agent.id, succeeded=True)
+
+        for message_id in ("failed-one", "failed-two"):
+            accepted = deliveries.accept_inbound(connection_id=connection_id, envelope=_envelope(message_id))
+            claimed = deliveries.claim_next_inbound(agent_id=context.agent.id)
+            assert claimed is not None and claimed.delivery_id == accepted.delivery_id
+            assert deliveries.complete_runtime_delivery(
+                claimed.delivery_id,
+                agent_id=context.agent.id,
+                succeeded=False,
+                error_code="model_error",
+                error_message="the model failed",
+                max_attempts=1,
+            )
+
+        deliveries.accept_inbound(connection_id=connection_id, envelope=_envelope("still-pending"))
+
+        connections.record_health(
+            connection_id,
+            ConnectionObservedStatus.ERROR,
+            error_code="authorization-token",
+            error_message="provider rejected the bearer token",
+        )
+
+        with when("I inspect the Connection summary"):
+            summary = client.get(f"{_base(context)}/{connection_id}/summary", headers=_auth(context))
+
+        with then("aggregate health and delivery-trend signals are reported"):
+            assert_that(summary.status_code, equal_to(status.HTTP_200_OK))
+            body = summary.json()
+            assert_that(body["last_successful_connection_at"], not_none())
+            assert_that(body["current_error_age_seconds"], not_none())
+            assert_that(body["current_error_age_seconds"], greater_than_or_equal_to(0.0))
+            assert_that(body["consecutive_failure_count"], equal_to(2))
+            assert_that(body["delivery_success_rate"], close_to(1 / 3, 0.001))
+            assert_that(body["oldest_pending_delivery_age_seconds"], not_none())
+            assert_that(str(body), not_(contains_string("provider rejected")))
+
+
+def test_journal_filters_narrow_by_stage_error_direction_and_delivery() -> None:
+    with given([*_GIVEN[:-1], there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        client: TestClient = context.client
+        created = client.post(_base(context), json=_discord_payload(), headers=_auth(context)).json()
+        connection_id = UUID(created["id"])
+        deliveries = context.injector.get(CommunicationDeliveryRepository)
+
+        # An inbound Delivery that stays queued, plus an outbound reply that
+        # gets dead-lettered, so direction and retry filters have two distinct
+        # Deliveries to tell apart.
+        accepted = deliveries.accept_inbound(connection_id=connection_id, envelope=_envelope("provider-1"))
+        outbound_id = deliveries.enqueue_runtime_reply(
+            agent_id=context.agent.id,
+            source_delivery_id=accepted.delivery_id,
+            reply=RuntimeReplyCreate(idempotency_key="reply-1", text="retry me"),
+        )
+        claimed = deliveries.claim_next_outbound()
+        assert claimed is not None
+        assert deliveries.complete_outbound(
+            outbound_id,
+            error_code="provider_timeout",
+            error_message="temporary provider failure",
+            max_attempts=1,
+        )
+
+        base = f"{_base(context)}/{connection_id}/journal"
+
+        with when("I filter Connection activity along several axes"):
+            failed_only = client.get(f"{base}?kind=delivery&failed_only=true", headers=_auth(context))
+            retryable_before = client.get(f"{base}?kind=delivery&retryable_only=true", headers=_auth(context))
+            inbound_direction = client.get(f"{base}?kind=delivery&direction=INBOUND", headers=_auth(context))
+            outbound_direction = client.get(f"{base}?kind=delivery&direction=OUTBOUND", headers=_auth(context))
+            by_stage = client.get(f"{base}?kind=delivery&stage=dead_lettered", headers=_auth(context))
+            by_delivery = client.get(
+                f"{base}?kind=delivery&delivery_id={outbound_id}&order=asc", headers=_auth(context)
+            )
+
+            retry = client.post(
+                f"{_base(context)}/{connection_id}/deliveries/{outbound_id}/retry",
+                headers=_auth(context),
+            )
+            retryable_after = client.get(f"{base}?kind=delivery&retryable_only=true", headers=_auth(context))
+
+        with then("each filter composes correctly against the joined Delivery state"):
+            assert_that(failed_only.json()["total"], equal_to(2))
+            failed_stages = {item["stage"] for item in failed_only.json()["items"]}
+            assert_that(failed_stages, equal_to({"provider_delivery_attempted", "dead_lettered"}))
+            assert_that(
+                all(item["error_code"] == "provider_timeout" for item in failed_only.json()["items"]), is_(True)
+            )
+
+            assert_that(retryable_before.json()["total"], equal_to(1))
+            assert_that(retryable_before.json()["items"][0]["stage"], equal_to("dead_lettered"))
+
+            assert_that(inbound_direction.json()["total"], equal_to(1))
+            assert_that(inbound_direction.json()["items"][0]["stage"], equal_to("queued"))
+            assert_that(outbound_direction.json()["total"], equal_to(4))
+
+            assert_that(by_stage.json()["total"], equal_to(1))
+
+            by_delivery_stages = [item["stage"] for item in by_delivery.json()["items"]]
+            assert_that(
+                by_delivery_stages,
+                equal_to(
+                    ["reply_queued", "provider_delivery_attempted", "provider_delivery_attempted", "dead_lettered"]
+                ),
+            )
+            assert_that(by_delivery.json()["items"], has_length(len(by_delivery_stages)))
+
+            assert_that(retry.status_code, equal_to(status.HTTP_202_ACCEPTED))
+            # The dead-lettered Delivery Transition is still there, but the Delivery it
+            # belongs to is no longer dead-lettered, so it drops off retryable_only.
+            assert_that(retryable_after.json()["total"], equal_to(0))
 
 
 def _teams_payload(name: str = "Microsoft Teams") -> dict:

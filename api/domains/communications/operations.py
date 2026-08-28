@@ -15,6 +15,7 @@ from api.domains.communications.models import (
     CommunicationDelivery,
     CommunicationDeliveryCounts,
     CommunicationDeliveryStatus,
+    CommunicationDirection,
     CommunicationJournalEntry,
     CommunicationJournalEntryRead,
     CommunicationJournalStage,
@@ -53,7 +54,12 @@ class CommunicationDiagnosticsSnapshot:
     delivery_counts: CommunicationDeliveryCounts
     queue_depth: int
     oldest_queued_age_seconds: float | None
+    oldest_pending_delivery_age_seconds: float | None
     latency: CommunicationLatencyRead
+    last_successful_connection_at: datetime | None
+    current_error_age_seconds: float | None
+    consecutive_failure_count: int
+    delivery_success_rate: float | None
 
 
 @inject
@@ -240,6 +246,45 @@ class CommunicationOperationalRepository:
                     )
                 ).all()
             )
+            # These three reads are deliberately unbounded by the diagnostics
+            # window: they answer "what is this Connection's current health
+            # trajectory", not "what happened in the selected window".
+            last_connected_at = session.exec(
+                select(CommunicationJournalEntry.occurred_at)
+                .where(
+                    col(CommunicationJournalEntry.organization_id) == organization_id,
+                    col(CommunicationJournalEntry.agent_id) == agent_id,
+                    col(CommunicationJournalEntry.connection_id) == connection_id,
+                    col(CommunicationJournalEntry.stage) == CommunicationJournalStage.CONNECTION_CONNECTED,
+                )
+                .order_by(col(CommunicationJournalEntry.occurred_at).desc())
+                .limit(1)
+            ).first()
+            latest_connectivity_entry = session.exec(
+                select(CommunicationJournalEntry.stage, CommunicationJournalEntry.occurred_at)
+                .where(
+                    col(CommunicationJournalEntry.organization_id) == organization_id,
+                    col(CommunicationJournalEntry.agent_id) == agent_id,
+                    col(CommunicationJournalEntry.connection_id) == connection_id,
+                    col(CommunicationJournalEntry.stage).in_(
+                        [CommunicationJournalStage.CONNECTION_CONNECTED, CommunicationJournalStage.CONNECTION_ERROR]
+                    ),
+                )
+                .order_by(col(CommunicationJournalEntry.occurred_at).desc())
+                .limit(1)
+            ).first()
+            recent_delivery_statuses = list(
+                session.exec(
+                    select(CommunicationDelivery.status)
+                    .where(
+                        col(CommunicationDelivery.organization_id) == organization_id,
+                        col(CommunicationDelivery.agent_id) == agent_id,
+                        col(CommunicationDelivery.connection_id) == connection_id,
+                    )
+                    .order_by(col(CommunicationDelivery.created_at).desc())
+                    .limit(200)
+                ).all()
+            )
 
         pipeline_values = {stage.value: 0 for stage in CommunicationJournalStage}
         for entry in journal_rows:
@@ -273,6 +318,37 @@ class CommunicationOperationalRepository:
         now = datetime.now(UTC)
         oldest = min((delivery.available_at for delivery in queued_deliveries), default=None)
         oldest_age = max(0.0, (now - oldest).total_seconds()) if oldest is not None else None
+        oldest_pending = min(
+            (
+                delivery.available_at
+                for delivery in queued_deliveries
+                if self._enum_value(delivery.status) == CommunicationDeliveryStatus.PENDING.value
+            ),
+            default=None,
+        )
+        oldest_pending_age = max(0.0, (now - oldest_pending).total_seconds()) if oldest_pending is not None else None
+
+        current_error_age: float | None = None
+        if latest_connectivity_entry is not None:
+            latest_stage, latest_occurred_at = latest_connectivity_entry
+            if self._enum_value(latest_stage) == CommunicationJournalStage.CONNECTION_ERROR.value:
+                current_error_age = max(0.0, (now - latest_occurred_at).total_seconds())
+
+        consecutive_failure_count = 0
+        for delivery_status in recent_delivery_statuses:
+            status_value = self._enum_value(delivery_status)
+            if status_value in {
+                CommunicationDeliveryStatus.PENDING.value,
+                CommunicationDeliveryStatus.PROCESSING.value,
+            }:
+                continue
+            if status_value in {
+                CommunicationDeliveryStatus.DEAD_LETTERED.value,
+                CommunicationDeliveryStatus.UNAVAILABLE.value,
+            }:
+                consecutive_failure_count += 1
+                continue
+            break
 
         latency_samples: list[tuple[datetime, float]] = []
         for delivery in deliveries:
@@ -296,12 +372,25 @@ class CommunicationOperationalRepository:
             latest_ms=latencies[-1] if latencies else None,
         )
 
+        terminal_deliveries = (
+            delivery_counts.succeeded
+            + delivery_counts.dead_lettered
+            + delivery_counts.cancelled
+            + delivery_counts.unavailable
+        )
+        delivery_success_rate = delivery_counts.succeeded / terminal_deliveries if terminal_deliveries else None
+
         return CommunicationDiagnosticsSnapshot(
             pipeline=pipeline,
             delivery_counts=delivery_counts,
             queue_depth=len(queued_deliveries),
             oldest_queued_age_seconds=oldest_age,
+            oldest_pending_delivery_age_seconds=oldest_pending_age,
             latency=latency,
+            last_successful_connection_at=last_connected_at,
+            current_error_age_seconds=current_error_age,
+            consecutive_failure_count=consecutive_failure_count,
+            delivery_success_rate=delivery_success_rate,
         )
 
     def find_journal_page(
@@ -312,8 +401,21 @@ class CommunicationOperationalRepository:
         connection_id: UUID,
         pagination: Pagination,
         kind: str,
+        since: datetime | None = None,
+        until: datetime | None = None,
+        stage: CommunicationJournalStage | None = None,
+        failed_only: bool = False,
+        retryable_only: bool = False,
+        direction: CommunicationDirection | None = None,
+        delivery_id: UUID | None = None,
+        order: str = "desc",
     ) -> PaginatedItems[CommunicationJournalEntryRead]:
-        """Return the Connection's content-free operational history, newest first."""
+        """Return the Connection's content-free operational history.
+
+        Newest first by default. ``delivery_id`` with ``order="asc"`` gives a
+        single Delivery's lifecycle in chronological order, which is how the
+        per-delivery drill-down is served without a separate read model.
+        """
         with Session(self.delegate.engine) as session:
             predicates = [
                 col(CommunicationJournalEntry.organization_id) == organization_id,
@@ -324,25 +426,53 @@ class CommunicationOperationalRepository:
                 predicates.append(col(CommunicationJournalEntry.delivery_id).is_not(None))
             elif kind == "connection":
                 predicates.append(col(CommunicationJournalEntry.delivery_id).is_(None))
+            if delivery_id is not None:
+                predicates.append(col(CommunicationJournalEntry.delivery_id) == delivery_id)
+            if since is not None:
+                predicates.append(col(CommunicationJournalEntry.occurred_at) >= since)
+            if until is not None:
+                predicates.append(col(CommunicationJournalEntry.occurred_at) <= until)
+            if stage is not None:
+                predicates.append(col(CommunicationJournalEntry.stage) == stage)
+            if failed_only:
+                predicates.append(col(CommunicationJournalEntry.error_code).is_not(None))
+            if retryable_only:
+                predicates.append(col(CommunicationJournalEntry.stage) == CommunicationJournalStage.DEAD_LETTERED)
+                predicates.append(col(CommunicationDelivery.status) == CommunicationDeliveryStatus.DEAD_LETTERED)
+            if direction is not None:
+                predicates.append(col(CommunicationDelivery.direction) == direction)
+
             total = session.exec(
-                select(sa.func.count()).select_from(CommunicationJournalEntry).where(*predicates)
+                select(sa.func.count())
+                .select_from(CommunicationJournalEntry)
+                .outerjoin(
+                    CommunicationDelivery,
+                    col(CommunicationDelivery.id) == col(CommunicationJournalEntry.delivery_id),
+                )
+                .where(*predicates)
             ).one()
+            occurred_order = (
+                col(CommunicationJournalEntry.occurred_at).asc()
+                if order == "asc"
+                else col(CommunicationJournalEntry.occurred_at).desc()
+            )
+            id_order = (
+                col(CommunicationJournalEntry.id).asc() if order == "asc" else col(CommunicationJournalEntry.id).desc()
+            )
             rows = list(
                 session.exec(
                     select(
                         CommunicationJournalEntry,
                         CommunicationDelivery.direction,
                         CommunicationDelivery.status,
+                        CommunicationDelivery,
                     )
                     .outerjoin(
                         CommunicationDelivery,
                         col(CommunicationDelivery.id) == col(CommunicationJournalEntry.delivery_id),
                     )
                     .where(*predicates)
-                    .order_by(
-                        col(CommunicationJournalEntry.occurred_at).desc(),
-                        col(CommunicationJournalEntry.id).desc(),
-                    )
+                    .order_by(occurred_order, id_order)
                     .offset((pagination.page - 1) * pagination.size)
                     .limit(pagination.size)
                 ).all()
@@ -357,11 +487,39 @@ class CommunicationOperationalRepository:
                         **CommunicationJournalEntryRead.model_validate(entry).model_dump(),
                         "direction": direction,
                         "delivery_status": delivery_status,
+                        **self._delivery_journal_details(delivery),
                     }
                 )
-                for entry, direction, delivery_status in rows
+                for entry, direction, delivery_status, delivery in rows
             ],
         )
+
+    @staticmethod
+    def _delivery_journal_details(delivery: CommunicationDelivery | None) -> dict[str, float | datetime | None]:
+        """Return safe, current operational timing for a Delivery-backed Journal row."""
+        if delivery is None:
+            return {"queue_wait_ms": None, "processing_ms": None, "next_retry_at": None}
+
+        queue_wait_ms = None
+        if delivery.claimed_at is not None:
+            queue_wait_ms = max(0.0, (delivery.claimed_at - delivery.available_at).total_seconds() * 1000)
+
+        processing_ms = None
+        if delivery.claimed_at is not None and delivery.completed_at is not None:
+            processing_ms = max(0.0, (delivery.completed_at - delivery.claimed_at).total_seconds() * 1000)
+
+        next_retry_at = None
+        if (
+            CommunicationOperationalRepository._enum_value(delivery.status) == CommunicationDeliveryStatus.PENDING.value
+            and delivery.attempt_count > 0
+        ):
+            next_retry_at = delivery.available_at
+
+        return {
+            "queue_wait_ms": queue_wait_ms,
+            "processing_ms": processing_ms,
+            "next_retry_at": next_retry_at,
+        }
 
     @staticmethod
     def end_to_end_health(

@@ -12,7 +12,9 @@ from api.domains.communications.models import (
     CommunicationConnectionRead,
     CommunicationConnectionUpdate,
     CommunicationDiagnosticsRead,
+    CommunicationDirection,
     CommunicationJournalEntryRead,
+    CommunicationJournalStage,
     CommunicationReconnectRead,
     CommunicationRetryRead,
     PlatformDescriptorRead,
@@ -143,6 +145,14 @@ def list_communication_connection_journal(
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1, le=100)] = 20,
     kind: Literal["delivery", "connection"] = "delivery",
+    since: datetime | None = Query(default=None),
+    until: datetime | None = Query(default=None),
+    stage: CommunicationJournalStage | None = Query(default=None),
+    failed_only: bool = Query(default=False),
+    retryable_only: bool = Query(default=False),
+    direction: CommunicationDirection | None = Query(default=None),
+    delivery_id: UUID | None = Query(default=None),
+    order: Literal["asc", "desc"] = "desc",
 ):
     return service.list_journal_entries(
         agent_id,
@@ -151,6 +161,14 @@ def list_communication_connection_journal(
         page=page,
         page_size=page_size,
         kind=kind,
+        since=since,
+        until=until,
+        stage=stage,
+        failed_only=failed_only,
+        retryable_only=retryable_only,
+        direction=direction,
+        delivery_id=delivery_id,
+        order=order,
     )
 
 

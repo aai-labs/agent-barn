@@ -2,12 +2,33 @@
 
 import { useEffect, useState } from "react";
 import { useWindowVirtualizer } from "@tanstack/react-virtual";
-import { ArrowDownToLine, ArrowUpFromLine, Check, ChevronDown, ChevronRight, CircleDot, Copy, Loader2, Waypoints } from "lucide-react";
+import {
+  ArrowDownToLine,
+  ArrowUpFromLine,
+  Check,
+  ChevronDown,
+  ChevronRight,
+  CircleDot,
+  Copy,
+  ListTree,
+  Loader2,
+  Waypoints,
+} from "lucide-react";
 
 import { AppErrorState } from "@/components/app-error-state";
+import { DateRangePicker } from "@/components/date-range-picker";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useCommunicationConnectionJournal } from "@/features/communication-connections/hooks/use-communication-connections";
-import type { CommunicationJournalEntry, CommunicationJournalKind } from "@/features/communication-connections/schemas";
+import {
+  useCommunicationConnectionJournal,
+  useCommunicationDeliveryLifecycle,
+} from "@/features/communication-connections/hooks/use-communication-connections";
+import {
+  CONNECTION_JOURNAL_STAGES,
+  DELIVERY_JOURNAL_STAGES,
+  type CommunicationJournalEntry,
+  type CommunicationJournalFilters,
+  type CommunicationJournalKind,
+} from "@/features/communication-connections/schemas";
 
 const DELIVERY_ROW_GRID = "grid-cols-[28px_minmax(160px,1fr)_110px_130px_110px_130px_70px]";
 const CONNECTION_ROW_GRID = "grid-cols-[28px_minmax(160px,1fr)_130px_110px_130px_70px]";
@@ -38,7 +59,13 @@ function formatDuration(value: number | null): string {
 }
 
 function label(value: string): string {
-  return value.replace(/_/g, " ");
+  return value.replace(/_/g, " ").toLowerCase();
+}
+
+function hasActiveFilters(filters: CommunicationJournalFilters): boolean {
+  return Boolean(
+    filters.since || filters.until || filters.stage || filters.failedOnly || filters.retryableOnly || filters.direction || filters.deliveryId,
+  );
 }
 
 function statusColor(status: string): string {
@@ -65,7 +92,8 @@ export function CommunicationConnectionJournal({
 }) {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [scrollMargin, setScrollMargin] = useState(0);
-  const journal = useCommunicationConnectionJournal(agentId, connectionId, kind);
+  const [filters, setFilters] = useState<CommunicationJournalFilters>({});
+  const journal = useCommunicationConnectionJournal(agentId, connectionId, kind, filters);
   const { entries, fetchNextPage, hasNextPage, isFetchingNextPage, isFetchingNextPageError } = journal;
   const virtualRowCount = hasNextPage ? entries.length + 1 : entries.length;
   const rowVirtualizer = useWindowVirtualizer({
@@ -89,17 +117,15 @@ export function CommunicationConnectionJournal({
     }
   }, [entries.length, fetchNextPage, hasNextPage, isFetchingNextPage, isFetchingNextPageError, virtualRows]);
 
-  if (journal.isLoading) {
-    return <JournalSkeleton />;
-  }
-
-  if (journal.error) {
-    return <AppErrorState error={journal.error} title="Failed to load connection activity" onRetry={() => void journal.refetch()} />;
+  function handleFiltersChange(next: CommunicationJournalFilters) {
+    setExpandedId(null);
+    setFilters(next);
   }
 
   const isDelivery = kind === "delivery";
   const rowGrid = isDelivery ? DELIVERY_ROW_GRID : CONNECTION_ROW_GRID;
   const headings = isDelivery ? DELIVERY_HEADINGS : CONNECTION_HEADINGS;
+  const filtersActive = hasActiveFilters(filters);
 
   const header = (
     <div className="mb-3 flex items-center justify-between gap-3">
@@ -108,14 +134,41 @@ export function CommunicationConnectionJournal({
     </div>
   );
 
+  const filterBar = (
+    <CommunicationJournalFilterBar kind={kind} filters={filters} onChange={handleFiltersChange} />
+  );
+
+  if (journal.isLoading) {
+    return (
+      <section>
+        {header}
+        {filterBar}
+        <JournalSkeleton />
+      </section>
+    );
+  }
+
+  if (journal.error) {
+    return (
+      <section>
+        {header}
+        {filterBar}
+        <AppErrorState error={journal.error} title="Failed to load connection activity" onRetry={() => void journal.refetch()} />
+      </section>
+    );
+  }
+
   if (journal.entries.length === 0) {
     return (
       <section>
         {header}
+        {filterBar}
         <div className="flex flex-col items-center justify-center gap-2 rounded-2xl py-16 text-center" style={{ border: "1px dashed var(--line-strong)" }}>
           <Waypoints size={20} style={{ color: "var(--ink-4)" }} />
-          <div className="text-[15px] font-medium" style={{ color: "var(--ink)" }}>No {kind === "delivery" ? "delivery transitions" : "connection events"} yet</div>
-          <div className="text-[13.5px]" style={{ color: "var(--ink-3)" }}>{kind === "delivery" ? "Delivery transitions appear once this connection receives or sends messages." : "Connection events appear when the provider connects, reconnects, or reports an error."}</div>
+          <div className="text-[15px] font-medium" style={{ color: "var(--ink)" }}>
+            {filtersActive ? "No activity matches these filters" : `No ${kind === "delivery" ? "delivery transitions" : "connection events"} yet`}
+          </div>
+          <div className="text-[13.5px]" style={{ color: "var(--ink-3)" }}>{filtersActive ? "Try widening the time range or clearing a filter." : (kind === "delivery" ? "Delivery transitions appear once this connection receives or sends messages." : "Connection events appear when the provider connects, reconnects, or reports an error.")}</div>
         </div>
       </section>
     );
@@ -124,6 +177,7 @@ export function CommunicationConnectionJournal({
   return (
     <section>
       {header}
+      {filterBar}
       <div className="af-card overflow-hidden" style={{ padding: 0 }}>
         <div className={`grid ${rowGrid} border-b px-3 py-2`} style={{ borderColor: "var(--line)" }}>
           <div />
@@ -154,6 +208,8 @@ export function CommunicationConnectionJournal({
                     onToggle={() => setExpandedId((current) => current === entry.id ? null : entry.id)}
                     canEdit={canEdit}
                     onRetryDelivery={onRetryDelivery}
+                    agentId={agentId}
+                    connectionId={connectionId}
                     rowGrid={rowGrid}
                     showDeliveryColumns={isDelivery}
                   />
@@ -172,21 +228,45 @@ export function CommunicationConnectionJournal({
   );
 }
 
-function JournalRow({ entry, expanded, onToggle, canEdit, onRetryDelivery, rowGrid, showDeliveryColumns }: { entry: CommunicationJournalEntry; expanded: boolean; onToggle: () => void; canEdit: boolean; onRetryDelivery: (deliveryId: string) => void; rowGrid: string; showDeliveryColumns: boolean }) {
+function JournalRow({ entry, expanded, onToggle, canEdit, onRetryDelivery, agentId, connectionId, rowGrid, showDeliveryColumns }: { entry: CommunicationJournalEntry; expanded: boolean; onToggle: () => void; canEdit: boolean; onRetryDelivery: (deliveryId: string) => void; agentId: string; connectionId: string; rowGrid: string; showDeliveryColumns: boolean }) {
+  const hasDetails = Boolean(entry.deliveryId)
+    || ["connection_error", "connection_degraded", "reconnect_requested"].includes(entry.stage);
+  const row = (
+    <>
+      <span style={{ color: "var(--ink-4)" }}>
+        {hasDetails && (expanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />)}
+      </span>
+      <span className="truncate capitalize" style={{ color: "var(--ink)" }}>{label(entry.stage)}</span>
+      {showDeliveryColumns && <span>{entry.direction && <DirectionBadge direction={entry.direction} />}</span>}
+      <span>
+        {entry.deliveryStatus ? <StatusBadge status={entry.deliveryStatus} /> : <ConnectionStatusBadge stage={entry.stage} />}
+      </span>
+      <span style={{ color: "var(--ink-3)" }}>{formatDuration(entry.durationMs)}</span>
+      <span style={{ color: "var(--ink-3)" }}>{formatTimestamp(entry.occurredAt)}</span>
+      <span style={{ color: "var(--ink-3)" }}>{entry.attemptNumber}</span>
+    </>
+  );
+
   return (
     <div style={{ borderTop: "1px solid var(--line)" }}>
-      <button type="button" onClick={onToggle} className={`grid ${rowGrid} w-full items-center px-3 py-2.5 text-left text-[0.8125rem] af-hover-bg`}>
-        <span style={{ color: "var(--ink-4)" }}>{expanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}</span>
-        <span className="truncate capitalize" style={{ color: "var(--ink)" }}>{label(entry.stage)}</span>
-        {showDeliveryColumns && <span>{entry.direction && <DirectionBadge direction={entry.direction} />}</span>}
-        <span>
-          {entry.deliveryStatus ? <StatusBadge status={entry.deliveryStatus} /> : <ConnectionStatusBadge stage={entry.stage} />}
-        </span>
-        <span style={{ color: "var(--ink-3)" }}>{formatDuration(entry.durationMs)}</span>
-        <span style={{ color: "var(--ink-3)" }}>{formatTimestamp(entry.occurredAt)}</span>
-        <span style={{ color: "var(--ink-3)" }}>{entry.attemptNumber}</span>
-      </button>
-      {expanded && <JournalDetail entry={entry} canEdit={canEdit} onRetryDelivery={onRetryDelivery} />}
+      {hasDetails ? (
+        <button type="button" onClick={onToggle} className={`grid ${rowGrid} w-full items-center px-3 py-2.5 text-left text-[0.8125rem] af-hover-bg`}>
+          {row}
+        </button>
+      ) : (
+        <div className={`grid ${rowGrid} w-full items-center px-3 py-2.5 text-left text-[0.8125rem]`}>
+          {row}
+        </div>
+      )}
+      {expanded && (
+        <JournalDetail
+          entry={entry}
+          canEdit={canEdit}
+          onRetryDelivery={onRetryDelivery}
+          agentId={agentId}
+          connectionId={connectionId}
+        />
+      )}
     </div>
   );
 }
@@ -218,8 +298,21 @@ function ConnectionStatusBadge({ stage }: { stage: string }) {
   );
 }
 
-function JournalDetail({ entry, canEdit, onRetryDelivery }: { entry: CommunicationJournalEntry; canEdit: boolean; onRetryDelivery: (deliveryId: string) => void }) {
+function JournalDetail({
+  entry,
+  canEdit,
+  onRetryDelivery,
+  agentId,
+  connectionId,
+}: {
+  entry: CommunicationJournalEntry;
+  canEdit: boolean;
+  onRetryDelivery: (deliveryId: string) => void;
+  agentId: string;
+  connectionId: string;
+}) {
   const [copied, setCopied] = useState(false);
+  const [timelineOpen, setTimelineOpen] = useState(false);
   const error = [entry.errorCode, entry.errorSummary].filter(Boolean).join(": ");
 
   async function copyError() {
@@ -230,16 +323,24 @@ function JournalDetail({ entry, canEdit, onRetryDelivery }: { entry: Communicati
 
   return (
     <div className="space-y-4 px-10 py-4" style={{ background: "var(--bg-soft)" }}>
-      <DetailSection title="Activity">
+      <DetailSection title={entry.deliveryId ? "Delivery activity" : "Connection event"}>
         <DetailRow label="Stage" value={label(entry.stage)} />
-        {entry.disposition && <DetailRow label="Disposition" value={label(entry.disposition)} />}
         {entry.direction && <DetailRow label="Direction" value={label(entry.direction)} />}
         {entry.deliveryStatus && <DetailRow label="Current status" value={label(entry.deliveryStatus)} />}
-        <DetailRow label="Delivery ID" value={entry.deliveryId ?? "—"} mono />
         <DetailRow label="Occurred at" value={formatTimestamp(entry.occurredAt)} />
-        <DetailRow label="Attempt" value={entry.attemptNumber} />
-        <DetailRow label="Duration" value={formatDuration(entry.durationMs)} />
+        {entry.deliveryId ? (
+          <DetailRow label="Attempt" value={entry.attemptNumber} />
+        ) : (
+          <DetailRow label="Since previous event" value={formatDuration(entry.durationMs)} />
+        )}
       </DetailSection>
+      {entry.deliveryId && (
+        <DetailSection title="Delivery timing">
+          <DetailRow label="Wait before attempt" value={formatDuration(entry.queueWaitMs ?? null)} />
+          <DetailRow label="Processing time" value={formatDuration(entry.processingMs ?? null)} />
+          {entry.nextRetryAt && <DetailRow label="Next retry" value={formatTimestamp(entry.nextRetryAt)} />}
+        </DetailSection>
+      )}
       {error && (
         <DetailSection title="Error">
           <div className="flex items-start justify-between gap-3 px-3 py-2.5 text-[13px]" style={{ color: "var(--err)" }}>
@@ -250,11 +351,95 @@ function JournalDetail({ entry, canEdit, onRetryDelivery }: { entry: Communicati
           </div>
         </DetailSection>
       )}
-      {canEdit && entry.deliveryId && entry.stage === "dead_lettered" && (
-        <button type="button" className="af-btn af-btn-sm" onClick={() => onRetryDelivery(entry.deliveryId!)}>Retry delivery</button>
+      <div className="flex flex-wrap gap-2">
+        {entry.deliveryId && (
+          <button
+            type="button"
+            className="af-btn af-btn-sm"
+            aria-expanded={timelineOpen}
+            onClick={() => setTimelineOpen((current) => !current)}
+          >
+            <ListTree size={13} />
+            {timelineOpen ? "Hide delivery timeline" : "View delivery timeline"}
+            {timelineOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+          </button>
+        )}
+        {canEdit && entry.deliveryId && entry.stage === "dead_lettered" && (
+          <button type="button" className="af-btn af-btn-sm" onClick={() => onRetryDelivery(entry.deliveryId!)}>Retry delivery</button>
+        )}
+      </div>
+      {timelineOpen && entry.deliveryId && (
+        <DeliveryTimeline agentId={agentId} connectionId={connectionId} deliveryId={entry.deliveryId} />
       )}
     </div>
   );
+}
+
+function DeliveryTimeline({ agentId, connectionId, deliveryId }: { agentId: string; connectionId: string; deliveryId: string }) {
+  const lifecycle = useCommunicationDeliveryLifecycle(agentId, connectionId, deliveryId);
+  const entries = lifecycle.data?.items ?? [];
+
+  if (lifecycle.isPending) {
+    return (
+      <DetailSection title="Delivery timeline">
+        <div className="space-y-2 p-3">{Array.from({ length: 3 }).map((_, index) => <Skeleton key={index} className="h-10 w-full" />)}</div>
+      </DetailSection>
+    );
+  }
+
+  if (lifecycle.error) {
+    return (
+      <DetailSection title="Delivery timeline">
+        <div className="p-3">
+          <AppErrorState error={lifecycle.error} title="Failed to load the delivery timeline" onRetry={() => void lifecycle.refetch()} />
+        </div>
+      </DetailSection>
+    );
+  }
+
+  return (
+    <DetailSection title="Delivery timeline">
+      <ol className="p-3">
+        {entries.map((item, index) => {
+          const itemError = [item.errorCode, item.errorSummary].filter(Boolean).join(": ");
+          const isLast = index === entries.length - 1;
+          return (
+            <li key={item.id} className="relative pb-4 pl-5 last:pb-0">
+              {!isLast && (
+                <span className="absolute top-3 bottom-0 left-[4px] w-px" style={{ background: "var(--line-strong)" }} />
+              )}
+              <span
+                className="absolute top-1 left-0 h-2.5 w-2.5 rounded-full"
+                style={{ background: timelineDotColor(item) }}
+              />
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="text-[13px] font-medium capitalize" style={{ color: "var(--ink)" }}>{label(item.stage)}</span>
+                <span className="text-[12px]" style={{ color: "var(--ink-4)" }}>{formatTimestamp(item.occurredAt)}</span>
+              </div>
+              <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[12px]" style={{ color: "var(--ink-3)" }}>
+                <span>Attempt {item.attemptNumber}</span>
+                <span>·</span>
+                <span>{formatDuration(item.durationMs)}</span>
+                {item.deliveryStatus && (
+                  <>
+                    <span>·</span>
+                    <StatusBadge status={item.deliveryStatus} />
+                  </>
+                )}
+              </div>
+              {itemError && <p className="mt-1 mb-0 text-[12px]" style={{ color: "var(--err)" }}>{itemError}</p>}
+            </li>
+          );
+        })}
+      </ol>
+    </DetailSection>
+  );
+}
+
+function timelineDotColor(entry: CommunicationJournalEntry): string {
+  if (entry.errorCode) return "var(--err)";
+  if (entry.deliveryStatus) return statusColor(entry.deliveryStatus);
+  return CONNECTION_STAGE_STATUS[entry.stage]?.color ?? "var(--ink-4)";
 }
 
 function DetailSection({ title, children }: { title: string; children: React.ReactNode }) {
@@ -267,4 +452,100 @@ function DetailRow({ label: rowLabel, value, mono = false }: { label: string; va
 
 function JournalSkeleton() {
   return <div className="af-card overflow-hidden" style={{ padding: 0 }}>{Array.from({ length: 7 }).map((_, index) => <div key={index} className="px-3 py-2.5" style={{ borderTop: index ? "1px solid var(--line)" : undefined }}><Skeleton className="h-4 w-full" /></div>)}</div>;
+}
+
+function CommunicationJournalFilterBar({
+  kind,
+  filters,
+  onChange,
+}: {
+  kind: CommunicationJournalKind;
+  filters: CommunicationJournalFilters;
+  onChange: (filters: CommunicationJournalFilters) => void;
+}) {
+  const [deliveryIdInput, setDeliveryIdInput] = useState(filters.deliveryId ?? "");
+  const isDelivery = kind === "delivery";
+  const stages = isDelivery ? DELIVERY_JOURNAL_STAGES : CONNECTION_JOURNAL_STAGES;
+
+  function applyDeliveryId() {
+    const trimmed = deliveryIdInput.trim();
+    onChange({ ...filters, deliveryId: trimmed || undefined });
+  }
+
+  return (
+    <div className="mb-3 flex flex-wrap items-center gap-2">
+      <DateRangePicker
+        from={filters.since ?? ""}
+        to={filters.until ?? ""}
+        onChange={(from, to) => onChange({ ...filters, since: from || undefined, until: to || undefined })}
+        placeholder="Time range"
+        width="13rem"
+        ariaLabel="Filter by time range"
+      />
+      <select
+        className="af-input"
+        style={{ width: "10.5rem" }}
+        aria-label="Filter by stage"
+        value={filters.stage ?? ""}
+        onChange={(event) => onChange({ ...filters, stage: event.target.value || undefined })}
+      >
+        <option value="">All stages</option>
+        {stages.map((stage) => (
+          <option key={stage} value={stage}>{label(stage)}</option>
+        ))}
+      </select>
+      {isDelivery && (
+        <select
+          className="af-input"
+          style={{ width: "9rem" }}
+          aria-label="Filter by direction"
+          value={filters.direction ?? ""}
+          onChange={(event) => onChange({ ...filters, direction: (event.target.value || undefined) as "INBOUND" | "OUTBOUND" | undefined })}
+        >
+          <option value="">Any direction</option>
+          <option value="INBOUND">Inbound</option>
+          <option value="OUTBOUND">Outbound</option>
+        </select>
+      )}
+      {isDelivery && (
+        <input
+          className="af-input"
+          style={{ width: "13rem" }}
+          aria-label="Filter by delivery ID"
+          placeholder="Delivery ID"
+          value={deliveryIdInput}
+          onChange={(event) => setDeliveryIdInput(event.target.value)}
+          onBlur={applyDeliveryId}
+          onKeyDown={(event) => { if (event.key === "Enter") applyDeliveryId(); }}
+        />
+      )}
+      <label className="flex items-center gap-1.5 text-[13px]" style={{ color: "var(--ink-3)" }}>
+        <input
+          type="checkbox"
+          checked={Boolean(filters.failedOnly)}
+          onChange={(event) => onChange({ ...filters, failedOnly: event.target.checked || undefined })}
+        />
+        Failed only
+      </label>
+      {isDelivery && (
+        <label className="flex items-center gap-1.5 text-[13px]" style={{ color: "var(--ink-3)" }}>
+          <input
+            type="checkbox"
+            checked={Boolean(filters.retryableOnly)}
+            onChange={(event) => onChange({ ...filters, retryableOnly: event.target.checked || undefined })}
+          />
+          Retryable only
+        </label>
+      )}
+      {hasActiveFilters(filters) && (
+        <button
+          type="button"
+          className="af-btn af-btn-sm"
+          onClick={() => { setDeliveryIdInput(""); onChange({}); }}
+        >
+          Clear filters
+        </button>
+      )}
+    </div>
+  );
 }

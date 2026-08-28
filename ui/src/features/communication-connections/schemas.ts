@@ -44,6 +44,9 @@ export const CommunicationJournalEntrySchema = z.object({
   errorSummary: z.string().nullable(),
   direction: z.enum(["INBOUND", "OUTBOUND"]).nullable().optional(),
   deliveryStatus: z.enum(["PENDING", "PROCESSING", "SUCCEEDED", "DEAD_LETTERED", "CANCELLED", "UNAVAILABLE"]).nullable().optional(),
+  queueWaitMs: z.number().nonnegative().nullable().optional(),
+  processingMs: z.number().nonnegative().nullable().optional(),
+  nextRetryAt: z.string().nullable().optional(),
 });
 
 export const PaginatedCommunicationJournalEntriesSchema = z.object({
@@ -78,12 +81,17 @@ export const CommunicationDiagnosticsSchema = z.object({
   }),
   queueDepth: z.number().int().nonnegative(),
   oldestQueuedAgeSeconds: z.number().nonnegative().nullable(),
+  oldestPendingDeliveryAgeSeconds: z.number().nonnegative().nullable(),
   latency: z.object({
     sampleCount: z.number().int().nonnegative(),
     averageMs: z.number().nonnegative().nullable(),
     p50Ms: z.number().nonnegative().nullable(),
     latestMs: z.number().nonnegative().nullable(),
   }),
+  lastSuccessfulConnectionAt: z.string().nullable(),
+  currentErrorAgeSeconds: z.number().nonnegative().nullable(),
+  consecutiveFailureCount: z.number().int().nonnegative(),
+  deliverySuccessRate: z.number().min(0).max(1).nullable(),
   windowStart: z.string(),
   windowEnd: z.string(),
 });
@@ -106,6 +114,39 @@ export type CommunicationDiagnostics = z.infer<typeof CommunicationDiagnosticsSc
 export type CommunicationJournalEntry = z.infer<typeof CommunicationJournalEntrySchema>;
 export type PaginatedCommunicationJournalEntries = z.infer<typeof PaginatedCommunicationJournalEntriesSchema>;
 export type CommunicationJournalKind = "delivery" | "connection";
+
+export const DELIVERY_JOURNAL_STAGES = [
+  "queued",
+  "agent_claimed",
+  "model_completed",
+  "reply_queued",
+  "provider_delivery_attempted",
+  "provider_delivered",
+  "retry_requested",
+  "dead_lettered",
+  "recovered",
+] as const;
+
+export const CONNECTION_JOURNAL_STAGES = [
+  "provider_observed",
+  "policy_admitted",
+  "connection_connecting",
+  "connection_connected",
+  "connection_degraded",
+  "connection_error",
+  "reconnect_requested",
+] as const;
+
+export type CommunicationJournalFilters = {
+  since?: string;
+  until?: string;
+  stage?: string;
+  failedOnly?: boolean;
+  retryableOnly?: boolean;
+  direction?: "INBOUND" | "OUTBOUND";
+  deliveryId?: string;
+  order?: "asc" | "desc";
+};
 export type CommunicationReconnect = z.infer<typeof CommunicationReconnectSchema>;
 export type CommunicationRetry = z.infer<typeof CommunicationRetrySchema>;
 

@@ -667,18 +667,72 @@ test.describe("Agent Detail Page — Channels tab", () => {
           },
           queue_depth: 0,
           oldest_queued_age_seconds: null,
+          oldest_pending_delivery_age_seconds: null,
           latency: {
             sample_count: 2,
             average_ms: 120,
             p50_ms: 100,
             latest_ms: 140,
           },
+          last_successful_connection_at: "2026-01-01T00:00:00Z",
+          current_error_age_seconds: null,
+          consecutive_failure_count: 0,
+          delivery_success_rate: 1,
           window_start: "2025-12-31T00:00:00Z",
           window_end: "2026-01-01T00:00:00Z",
         }),
       });
     });
     await page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}/connections/*/journal?*`, async (route) => {
+      const url = new URL(route.request().url());
+      if (url.searchParams.get("delivery_id")) {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            page: 1,
+            page_size: 100,
+            total: 2,
+            items: [
+              {
+                id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+                connection_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+                delivery_id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+                occurred_at: "2025-12-31T23:59:00Z",
+                stage: "reply_queued",
+                disposition: null,
+                attempt_number: 1,
+                duration_ms: 10,
+                error_code: null,
+                error_summary: null,
+                direction: "OUTBOUND",
+                delivery_status: "PROCESSING",
+                queue_wait_ms: 20,
+                processing_ms: null,
+                next_retry_at: null,
+              },
+              {
+                id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+                connection_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+                delivery_id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+                occurred_at: "2026-01-01T00:00:00Z",
+                stage: "provider_delivered",
+                disposition: null,
+                attempt_number: 1,
+                duration_ms: 140,
+                error_code: "provider_error",
+                error_summary: "The provider rejected this delivery.",
+                direction: "OUTBOUND",
+                delivery_status: "DEAD_LETTERED",
+                queue_wait_ms: 20,
+                processing_ms: 140,
+                next_retry_at: null,
+              },
+            ],
+          }),
+        });
+        return;
+      }
       await route.fulfill({
         status: 200,
         contentType: "application/json",
@@ -698,7 +752,10 @@ test.describe("Agent Detail Page — Channels tab", () => {
             error_code: "provider_error",
             error_summary: "The provider rejected this delivery.",
             direction: "OUTBOUND",
-            deliveryStatus: "DEAD_LETTERED",
+            delivery_status: "DEAD_LETTERED",
+            queue_wait_ms: 20,
+            processing_ms: 140,
+            next_retry_at: null,
           }],
         }),
       });
@@ -764,29 +821,76 @@ test.describe("Agent Detail Page — Channels tab", () => {
 
   test("shows delivery activity, lets an operator copy an error, and confirms a reconnect request", async ({ page, context }) => {
     await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+    // Both tabs' Journal queries fire once, up front, because both stay mounted
+    // (forceMount) so a later tab switch never re-fetches or resets state.
+    const initialDeliveryRequest = page.waitForRequest((request) => request.url().includes("/journal?") && request.url().includes("kind=delivery"));
+    const initialConnectionRequest = page.waitForRequest((request) => request.url().includes("/journal?") && request.url().includes("kind=connection"));
     await page.getByRole("link", { name: "View details", exact: true }).click();
+    await initialDeliveryRequest;
+    await initialConnectionRequest;
 
     await expect(page.getByText("Provider connectivity", { exact: true })).toBeVisible();
     await expect(page.getByText("End-to-end delivery", { exact: true })).toBeVisible();
+    await expect(page.getByText("Health signals", { exact: true })).toBeVisible();
+    await expect(page.getByText("Consecutive failures", { exact: true })).toBeVisible();
+    await expect(page.getByText("Delivery success rate", { exact: true })).toBeVisible();
     await expect(page.getByRole("tab", { name: "Delivery transitions" })).toBeVisible();
-    await expect(page.getByText("1 event", { exact: true })).toBeVisible();
-    await expect(page.getByText("Outbound", { exact: true })).toBeVisible();
-    await page.getByRole("button", { name: /provider delivered/i }).click();
-    await expect(page.getByRole("button", { name: "Copy error for provider delivered" })).toBeVisible();
-    await page.getByRole("button", { name: "Copy error for provider delivered" }).click();
-    await expect(page.getByRole("button", { name: "Copy error for provider delivered" })).toHaveText("Copied");
+    // Both tabpanels are mounted (kept alive across tab switches), so scope to
+    // the active one — the inactive tab has the same mocked "1 event" text.
+    const deliveryPanel = page.getByRole("tabpanel", { name: "Delivery transitions" });
+    await expect(deliveryPanel.getByText("1 event", { exact: true })).toBeVisible();
+    const deliveryRow = deliveryPanel.getByRole("button", { name: /provider delivered/i });
+    await expect(deliveryRow).toContainText("Outbound");
+    await expect(deliveryRow).toContainText(/dead lettered/i);
+    await deliveryRow.click();
+    await expect(deliveryPanel.getByText("Delivery timing", { exact: true })).toBeVisible();
+    await expect(deliveryPanel.getByText("Wait before attempt", { exact: true })).toBeVisible();
+    await expect(deliveryPanel.getByRole("button", { name: "Copy error for provider delivered" })).toBeVisible();
+    await deliveryPanel.getByRole("button", { name: "Copy error for provider delivered" }).click();
+    await expect(deliveryPanel.getByRole("button", { name: "Copy error for provider delivered" })).toHaveText("Copied");
     expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("provider_error: The provider rejected this delivery.");
 
-    const connectionEvents = page.waitForRequest((request) => request.url().includes("/journal?") && request.url().includes("kind=connection"));
+    const failedOnlyRequest = page.waitForRequest((request) => request.url().includes("failed_only=true"));
+    await deliveryPanel.getByLabel("Failed only").check();
+    await failedOnlyRequest;
+
+    // Regression coverage: switching tabs must not clear a set filter or
+    // re-fetch either tab's Journal — it previously unmounted and reset both.
+    const journalRequestsAfterFilter: string[] = [];
+    page.on("request", (request) => {
+      if (request.url().includes("/journal?")) journalRequestsAfterFilter.push(request.url());
+    });
     await page.getByRole("tab", { name: "Connection events" }).click();
-    await connectionEvents;
     await expect(page.getByRole("tab", { name: "Connection events" })).toHaveAttribute("aria-selected", "true");
+    await page.getByRole("tab", { name: "Delivery transitions" }).click();
+    await expect(page.getByRole("tab", { name: "Delivery transitions" })).toHaveAttribute("aria-selected", "true");
+    await expect(deliveryPanel.getByLabel("Failed only")).toBeChecked();
+    expect(journalRequestsAfterFilter).toEqual([]);
+
+    await deliveryPanel.getByLabel("Failed only").uncheck();
 
     const reconnect = page.waitForRequest((request) => request.method() === "POST" && request.url().endsWith("/reconnect"));
     await page.getByRole("button", { name: "Reconnect", exact: true }).click();
     await expect(page.getByRole("heading", { name: "Reconnect this connection?" })).toBeVisible();
     await page.getByRole("button", { name: "Reconnect", exact: true }).last().click();
     await reconnect;
+  });
+
+  test("drills down into a Delivery's full lifecycle from a transition row", async ({ page }) => {
+    await page.getByRole("link", { name: "View details", exact: true }).click();
+    const deliveryPanel = page.getByRole("tabpanel", { name: "Delivery transitions" });
+    await deliveryPanel.getByRole("button", { name: /provider delivered/i }).click();
+
+    const lifecycleRequest = page.waitForRequest(
+      (request) => request.url().includes("delivery_id=dddddddd-dddd-4ddd-8ddd-dddddddddddd") && request.url().includes("order=asc"),
+    );
+    await deliveryPanel.getByRole("button", { name: "View delivery timeline" }).click();
+    await lifecycleRequest;
+
+    await expect(deliveryPanel.getByText("Delivery timeline", { exact: true })).toBeVisible();
+    const timeline = deliveryPanel.getByRole("list");
+    await expect(timeline.getByText("reply queued", { exact: true })).toBeVisible();
+    await expect(timeline.getByText("provider delivered", { exact: true })).toBeVisible();
   });
 
   test("edits Connection name and plugin settings without resending credentials", async ({ page }) => {
