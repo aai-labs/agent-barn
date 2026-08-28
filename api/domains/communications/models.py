@@ -265,6 +265,10 @@ class CommunicationJournalEntry(BaseModel, table=True):
             "agent_id",
             "occurred_at",
         ),
+        sa.Index(
+            "ix_communication_journal_occurred",
+            "occurred_at",
+        ),
     )
 
     organization_id: UUID = SqlField(nullable=False)
@@ -380,6 +384,23 @@ class CommunicationLatencyRead(PydanticBaseModel):
     latest_ms: float | None = None
 
 
+class CommunicationFailureRead(PydanticBaseModel):
+    occurred_at: datetime
+    stage: CommunicationJournalStage
+    delivery_id: UUID | None
+    error_code: str | None
+    error_summary: str | None
+
+
+class CommunicationTransitionRead(PydanticBaseModel):
+    occurred_at: datetime
+    stage: CommunicationJournalStage
+    delivery_id: UUID | None
+    disposition: CommunicationPolicyDisposition | None
+    attempt_number: int
+    duration_ms: float | None
+
+
 class CommunicationDiagnosticsRead(PydanticBaseModel):
     connection: CommunicationConnectionRead
     provider_connectivity: ConnectionObservedStatus | None
@@ -394,6 +415,8 @@ class CommunicationDiagnosticsRead(PydanticBaseModel):
     current_error_age_seconds: float | None
     consecutive_failure_count: int
     delivery_success_rate: float | None
+    recent_failures: list[CommunicationFailureRead]
+    latest_transitions: list[CommunicationTransitionRead]
     window_start: datetime
     window_end: datetime
 

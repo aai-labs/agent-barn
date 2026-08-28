@@ -56,6 +56,15 @@ function formatRelativeTimestamp(value: string | null): string {
   return `${formatAgeSeconds(seconds)} ago`;
 }
 
+function formatTimestamp(value: string): string {
+  return new Date(value).toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
 function formatPercent(value: number | null): string {
   if (value === null) return "—";
   return `${Math.round(value * 100)}%`;
@@ -212,6 +221,32 @@ export function CommunicationConnectionDiagnostics({
                   </div>
                 </div>
 
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <DiagnosticsList title="Recent failures">
+                    {diagnostics.data.recentFailures.length === 0 ? (
+                      <p className="m-0 text-xs" style={{ color: "var(--ink-4)" }}>No recent failures</p>
+                    ) : diagnostics.data.recentFailures.map((failure) => (
+                      <div key={`${failure.occurredAt}-${failure.stage}-${failure.deliveryId ?? "connection"}`} className="flex items-start justify-between gap-3 text-xs">
+                        <span className="min-w-0" style={{ color: "var(--err)" }}>
+                          {failure.errorCode ?? failure.stage.replace(/_/g, " ")}
+                          {failure.errorSummary && <span className="ml-1" style={{ color: "var(--ink-3)" }}>· {failure.errorSummary}</span>}
+                        </span>
+                        <span className="shrink-0" style={{ color: "var(--ink-4)" }}>{formatTimestamp(failure.occurredAt)}</span>
+                      </div>
+                    ))}
+                  </DiagnosticsList>
+                  <DiagnosticsList title="Latest transitions">
+                    {diagnostics.data.latestTransitions.length === 0 ? (
+                      <p className="m-0 text-xs" style={{ color: "var(--ink-4)" }}>No transitions in this window</p>
+                    ) : diagnostics.data.latestTransitions.slice(0, 5).map((transition) => (
+                      <div key={`${transition.occurredAt}-${transition.stage}-${transition.deliveryId ?? "connection"}`} className="flex items-center justify-between gap-3 text-xs">
+                        <span className="capitalize" style={{ color: "var(--ink-2)" }}>{transition.stage.replace(/_/g, " ")}</span>
+                        <span className="shrink-0" style={{ color: "var(--ink-4)" }}>{formatTimestamp(transition.occurredAt)}</span>
+                      </div>
+                    ))}
+                  </DiagnosticsList>
+                </div>
+
                 <Tabs value={activityKind} onValueChange={(value) => setActivityKind(value as CommunicationJournalKind)} className="gap-4">
                   <TabsList
                     variant="line"
@@ -294,6 +329,15 @@ export function CommunicationConnectionDiagnostics({
         }}
       />
     </>
+  );
+}
+
+function DiagnosticsList({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div className="rounded-lg p-3" style={{ border: "1px solid var(--line)", background: "var(--bg-elev)" }}>
+      <div className="mb-2 text-xs font-semibold" style={{ color: "var(--ink-2)" }}>{title}</div>
+      <div className="space-y-2">{children}</div>
+    </div>
   );
 }
 

@@ -5,7 +5,6 @@ import { useMemo, useState } from "react";
 import {
   Check,
   CircleAlert,
-  Copy,
   Info,
   LockKeyhole,
   MessageCircleWarning,
@@ -299,7 +298,6 @@ export function AgentChannelSettings({
   const [editDisplayName, setEditDisplayName] = useState("");
   const [editSettings, setEditSettings] = useState<Record<string, unknown>>({});
   const [editCredentials, setEditCredentials] = useState<Record<string, unknown>>({});
-  const [copiedErrorId, setCopiedErrorId] = useState<string | null>(null);
 
   const selectedPlatform = useMemo(
     () => platforms.data?.find((platform) => platform.key === platformKey),
@@ -366,20 +364,6 @@ export function AgentChannelSettings({
     }
   }
 
-  async function copyProviderError(connection: CommunicationConnection) {
-    const error = [connection.lastErrorCode, connection.lastErrorMessage]
-      .filter(Boolean)
-      .join(": ");
-    if (!error) return;
-
-    try {
-      await navigator.clipboard.writeText(error);
-      setCopiedErrorId(connection.id);
-    } catch {
-      setCopiedErrorId(null);
-    }
-  }
-
   return (
     <AgentConfigurationSection
       title="Messaging connections"
@@ -428,21 +412,11 @@ export function AgentChannelSettings({
                         </div>
                         <p
                           className="mb-0 mt-0.5 break-words whitespace-pre-wrap leading-relaxed"
-                          title={connection.lastErrorMessage}
                           style={{ color: "var(--ink-3)" }}
                         >
                           {connection.lastErrorMessage}
                         </p>
                       </div>
-                      <button
-                        type="button"
-                        className="grid h-7 w-7 flex-shrink-0 place-items-center rounded-md transition-colors hover:bg-[var(--bg-soft)]"
-                        aria-label={`${copiedErrorId === connection.id ? "Copied" : "Copy full provider error"} for ${connection.displayName}`}
-                        title={copiedErrorId === connection.id ? "Copied" : "Copy full provider error"}
-                        onClick={() => void copyProviderError(connection)}
-                      >
-                        {copiedErrorId === connection.id ? <Check size={14} /> : <Copy size={14} />}
-                      </button>
                     </div>
                   )}
                   {connection.webhookUrl && (

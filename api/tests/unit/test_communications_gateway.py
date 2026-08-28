@@ -4,9 +4,14 @@ from typing import cast
 from unittest.mock import Mock, patch
 from uuid import uuid4
 
+import pytest
+
 from api.core.config import Config
 from api.domains.agents.models import Agent, AgentStatus
-from api.domains.communications.gateway_service import CommunicationsGatewayService
+from api.domains.communications.gateway_service import (
+    CommunicationJournalWriteError,
+    CommunicationsGatewayService,
+)
 from api.domains.communications.models import (
     AcceptedCommunicationRead,
     CommunicationConnection,
@@ -43,7 +48,12 @@ def _envelope() -> NormalizedCommunicationEnvelope:
     )
 
 
-def _service(connection: CommunicationConnection, plugin: Mock) -> tuple[CommunicationsGatewayService, Mock]:
+def _service(
+    connection: CommunicationConnection,
+    plugin: Mock,
+    *,
+    operations: Mock | None = None,
+) -> tuple[CommunicationsGatewayService, Mock]:
     deliveries = Mock()
     connections = Mock()
     connections.get_active.return_value = connection
@@ -54,6 +64,7 @@ def _service(connection: CommunicationConnection, plugin: Mock) -> tuple[Communi
         delivery_repository=deliveries,
         connection_repository=connections,
         plugins=plugins,
+        operations=operations,
     )
     return service, deliveries
 
@@ -176,6 +187,22 @@ def test_gateway_does_not_create_a_delivery_for_a_denied_admission() -> None:
     assert accepted == []
     deliveries.accept_inbound.assert_not_called()
     record_disposition.assert_called_once_with(CommunicationPolicyDisposition.USER_DENIED)
+
+
+def test_gateway_does_not_accept_an_event_when_its_observation_cannot_be_journaled() -> None:
+    connection = cast(CommunicationConnection, _connection())
+    connection.organization_id = uuid4()
+    connection.agent_id = uuid4()
+    plugin = _feedback_plugin()
+    operations = Mock()
+    operations.record_journal.side_effect = RuntimeError("database unavailable")
+    service, deliveries = _service(connection, plugin, operations=operations)
+
+    with pytest.raises(CommunicationJournalWriteError, match="provider_observed"):
+        service._accept_admitted_payload(connection, plugin, SlackSettings(), {})
+
+    deliveries.accept_inbound.assert_not_called()
+    plugin.admit_inbound.assert_not_called()
 
 
 def test_gateway_marks_claim_and_terminal_runtime_failure_at_lifecycle_seam() -> None:

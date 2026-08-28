@@ -1,0 +1,244 @@
+export const COMMUNICATION_CONNECTION_ID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+export const COMMUNICATION_DELIVERY_ID = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+export const SAFE_PROVIDER_ERROR = "Provider error details were redacted";
+
+export const mockCommunicationPlatforms = [
+  {
+    key: "discord",
+    display_name: "Discord",
+    setup_hint:
+      "Credential: Developer Portal → Applications → app → Bot → Token. Enable Message Content Intent; invite with OAuth2 bot scope and View Channels, Send Messages, Read Message History permissions. Use Developer Mode to copy IDs.",
+    schema_version: 1,
+    capabilities: ["MENTIONS"],
+    settings_schema: {
+      type: "object",
+      properties: { guild_ids: { title: "Guild IDs", type: "array", items: { type: "string" } } },
+    },
+    credentials_schema: {
+      type: "object",
+      properties: { bot_token: { title: "Bot token", type: "string" } },
+      required: ["bot_token"],
+    },
+  },
+  {
+    key: "slack",
+    display_name: "Slack",
+    setup_hint:
+      "In Slack OAuth & Permissions → Bot Token Scopes, add channels:read for public channel names, groups:read for private channel names, im:read and mpim:read for direct-message names, and users:read for sender names. Reinstall the Slack app after adding scopes, then update the bot token here.",
+    schema_version: 1,
+    capabilities: ["DIRECTORY_DISCOVERY"],
+    settings_schema: { type: "object", properties: {} },
+    credentials_schema: {
+      type: "object",
+      properties: {
+        bot_token: { title: "Bot token", type: "string" },
+        app_token: { title: "App-level token", type: "string" },
+      },
+      required: ["bot_token", "app_token"],
+    },
+  },
+  {
+    key: "telegram",
+    display_name: "Telegram",
+    setup_hint:
+      "Credential: create a bot with @BotFather /newbot. This integration uses getUpdates long polling, so remove any webhook; disable /setprivacy for all group messages and add the bot as a channel administrator.",
+    schema_version: 1,
+    capabilities: ["THREADS"],
+    settings_schema: { type: "object", properties: {} },
+    credentials_schema: {
+      type: "object",
+      properties: { bot_token: { title: "Bot token", type: "string" } },
+      required: ["bot_token"],
+    },
+  },
+];
+
+export const mockCommunicationConnection = {
+  id: COMMUNICATION_CONNECTION_ID,
+  agent_id: "33333333-3333-4333-8333-333333333333",
+  platform_key: "discord",
+  display_name: "Customer Discord",
+  enabled: true,
+  schema_version: 1,
+  settings: { guild_ids: ["guild-one"] },
+  external_identity: "validation-skipped",
+  observed_status: "CONNECTED",
+  last_health_at: "2026-01-01T00:00:00Z",
+  last_error_code: "HTTPStatusError",
+  last_error_message: SAFE_PROVIDER_ERROR,
+  webhook_url: null,
+  revision: 3,
+  created_at: "2026-01-01T00:00:00Z",
+  updated_at: "2026-01-01T00:00:00Z",
+};
+
+export const mockUpdatedCommunicationConnection = {
+  ...mockCommunicationConnection,
+  display_name: "Renamed Discord",
+  settings: { guild_ids: ["guild-updated"] },
+  observed_status: "PENDING",
+  last_health_at: null,
+  last_error_code: null,
+  last_error_message: null,
+  revision: 4,
+};
+
+export const mockCreatedCommunicationConnection = {
+  id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+  agent_id: "33333333-3333-4333-8333-333333333333",
+  platform_key: "discord",
+  display_name: "Partner Discord",
+  enabled: true,
+  schema_version: 1,
+  settings: { guild_ids: ["guild-two"] },
+  external_identity: "validation-skipped",
+  observed_status: "PENDING",
+  last_health_at: null,
+  last_error_code: null,
+  last_error_message: null,
+  webhook_url: "https://api.example.test/communications/v1/webhooks/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+  revision: 1,
+  created_at: "2026-01-01T00:00:00Z",
+  updated_at: "2026-01-01T00:00:00Z",
+};
+
+const summaryConnection = {
+  ...mockCommunicationConnection,
+  last_error_code: null,
+  last_error_message: null,
+};
+
+export const mockCommunicationConnectionSummary = {
+  connection: summaryConnection,
+  provider_connectivity: "CONNECTED",
+  end_to_end_health: "healthy",
+  pipeline: {
+    provider_observed: 2,
+    policy_admitted: 2,
+    queued: 2,
+    agent_claimed: 2,
+    model_completed: 2,
+    reply_queued: 2,
+    provider_delivered: 2,
+    dead_lettered: 0,
+  },
+  delivery_counts: {
+    total: 2,
+    pending: 0,
+    processing: 0,
+    succeeded: 2,
+    dead_lettered: 0,
+    cancelled: 0,
+    unavailable: 0,
+  },
+  queue_depth: 0,
+  oldest_queued_age_seconds: null,
+  oldest_pending_delivery_age_seconds: null,
+  latency: {
+    sample_count: 2,
+    average_ms: 120,
+    p50_ms: 100,
+    latest_ms: 140,
+  },
+  last_successful_connection_at: "2026-01-01T00:00:00Z",
+  current_error_age_seconds: null,
+  consecutive_failure_count: 0,
+  delivery_success_rate: 1,
+  recent_failures: [
+    {
+      occurred_at: "2026-01-01T00:00:00Z",
+      stage: "provider_delivered",
+      delivery_id: COMMUNICATION_DELIVERY_ID,
+      error_code: "provider_error",
+      error_summary: SAFE_PROVIDER_ERROR,
+    },
+  ],
+  latest_transitions: [
+    {
+      occurred_at: "2026-01-01T00:00:00Z",
+      stage: "provider_delivered",
+      delivery_id: COMMUNICATION_DELIVERY_ID,
+      disposition: null,
+      attempt_number: 1,
+      duration_ms: 140,
+    },
+  ],
+  window_start: "2025-12-31T00:00:00Z",
+  window_end: "2026-01-01T00:00:00Z",
+};
+
+export const mockCommunicationDeliveryJournalPage = {
+  page: 1,
+  page_size: 20,
+  total: 1,
+  items: [
+    {
+      id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+      connection_id: COMMUNICATION_CONNECTION_ID,
+      delivery_id: COMMUNICATION_DELIVERY_ID,
+      occurred_at: "2026-01-01T00:00:00Z",
+      stage: "provider_delivered",
+      disposition: null,
+      attempt_number: 1,
+      duration_ms: 140,
+      error_code: "provider_error",
+      error_summary: SAFE_PROVIDER_ERROR,
+      direction: "OUTBOUND",
+      delivery_status: "DEAD_LETTERED",
+      queue_wait_ms: 20,
+      processing_ms: 140,
+      next_retry_at: null,
+    },
+  ],
+};
+
+export const mockCommunicationDeliveryLifecyclePage = {
+  page: 1,
+  page_size: 100,
+  total: 2,
+  items: [
+    {
+      id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+      connection_id: COMMUNICATION_CONNECTION_ID,
+      delivery_id: COMMUNICATION_DELIVERY_ID,
+      occurred_at: "2025-12-31T23:59:00Z",
+      stage: "reply_queued",
+      disposition: null,
+      attempt_number: 1,
+      duration_ms: 10,
+      error_code: null,
+      error_summary: null,
+      direction: "OUTBOUND",
+      delivery_status: "PROCESSING",
+      queue_wait_ms: 20,
+      processing_ms: null,
+      next_retry_at: null,
+    },
+    {
+      id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+      connection_id: COMMUNICATION_CONNECTION_ID,
+      delivery_id: COMMUNICATION_DELIVERY_ID,
+      occurred_at: "2026-01-01T00:00:00Z",
+      stage: "provider_delivered",
+      disposition: null,
+      attempt_number: 1,
+      duration_ms: 140,
+      error_code: "provider_error",
+      error_summary: SAFE_PROVIDER_ERROR,
+      direction: "OUTBOUND",
+      delivery_status: "DEAD_LETTERED",
+      queue_wait_ms: 20,
+      processing_ms: 140,
+      next_retry_at: null,
+    },
+  ],
+};
+
+export const mockCommunicationReconnectResponse = {
+  connection: {
+    ...summaryConnection,
+    observed_status: "CONNECTING",
+    revision: 4,
+  },
+  requested_at: "2026-01-01T00:00:00Z",
+};

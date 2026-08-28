@@ -19,6 +19,14 @@ import { AppErrorState } from "@/components/app-error-state";
 import { DateRangePicker } from "@/components/date-range-picker";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
   useCommunicationConnectionJournal,
   useCommunicationDeliveryLifecycle,
 } from "@/features/communication-connections/hooks/use-communication-connections";
@@ -482,30 +490,38 @@ function CommunicationJournalFilterBar({
         width="13rem"
         ariaLabel="Filter by time range"
       />
-      <select
-        className="af-input"
-        style={{ width: "10.5rem" }}
-        aria-label="Filter by stage"
-        value={filters.stage ?? ""}
-        onChange={(event) => onChange({ ...filters, stage: event.target.value || undefined })}
+      <Select
+        value={filters.stage ?? "__all_stages__"}
+        onValueChange={(value) => onChange({ ...filters, stage: value === "__all_stages__" ? undefined : value })}
       >
-        <option value="">All stages</option>
-        {stages.map((stage) => (
-          <option key={stage} value={stage}>{label(stage)}</option>
-        ))}
-      </select>
+        <SelectTrigger className="af-input" style={{ width: "10.5rem" }} aria-label="Filter by stage">
+          <SelectValue placeholder="All stages" />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectGroup>
+            <SelectItem value="__all_stages__">All stages</SelectItem>
+            {stages.map((stage) => (
+              <SelectItem key={stage} value={stage}>{label(stage)}</SelectItem>
+            ))}
+          </SelectGroup>
+        </SelectContent>
+      </Select>
       {isDelivery && (
-        <select
-          className="af-input"
-          style={{ width: "9rem" }}
-          aria-label="Filter by direction"
-          value={filters.direction ?? ""}
-          onChange={(event) => onChange({ ...filters, direction: (event.target.value || undefined) as "INBOUND" | "OUTBOUND" | undefined })}
+        <Select
+          value={filters.direction ?? "__any_direction__"}
+          onValueChange={(value) => onChange({ ...filters, direction: value === "__any_direction__" ? undefined : value as "INBOUND" | "OUTBOUND" })}
         >
-          <option value="">Any direction</option>
-          <option value="INBOUND">Inbound</option>
-          <option value="OUTBOUND">Outbound</option>
-        </select>
+          <SelectTrigger className="af-input" style={{ width: "9rem" }} aria-label="Filter by direction">
+            <SelectValue placeholder="Any direction" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectGroup>
+              <SelectItem value="__any_direction__">Any direction</SelectItem>
+              <SelectItem value="INBOUND">Inbound</SelectItem>
+              <SelectItem value="OUTBOUND">Outbound</SelectItem>
+            </SelectGroup>
+          </SelectContent>
+        </Select>
       )}
       {isDelivery && (
         <input

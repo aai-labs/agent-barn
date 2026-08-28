@@ -1,16 +1,31 @@
 from datetime import UTC, datetime
+from unittest.mock import patch
 from uuid import UUID
 
-from hamcrest import assert_that, contains_string, equal_to, has_entries, has_key, is_, none, not_
+from hamcrest import (
+    assert_that,
+    contains_inanyorder,
+    contains_string,
+    equal_to,
+    greater_than,
+    has_entries,
+    has_length,
+    is_,
+    none,
+    not_,
+)
 from sqlmodel import Session, col, select
 from starlette.testclient import TestClient
 
 from api.domains.agents.models import AgentStatus
 from api.domains.communications.delivery_repository import CommunicationDeliveryRepository
+from api.domains.communications.gateway_service import CommunicationsGatewayService
 from api.domains.communications.models import (
     CommunicationDelivery,
     CommunicationDeliveryStatus,
     CommunicationJournalEntry,
+    CommunicationJournalStage,
+    CommunicationPolicyDisposition,
     CommunicationSender,
     ConnectionObservedStatus,
     ConversationLocation,
@@ -19,6 +34,7 @@ from api.domains.communications.models import (
 )
 from api.domains.communications.repository import CommunicationConnectionRepository
 from api.domains.conversations.models import AgentChatMessage
+from api.domains.events.models import ActorIdentity, ActorIdentityType
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.tests.core.givenpy import given, then, when
 from api.tests.core.modules import (
@@ -96,16 +112,18 @@ def _message(context, message_id: UUID) -> AgentChatMessage:
     delegate = context.injector.get(PostgresRepositoryDelegate)
     with Session(delegate.engine) as session:
         message = session.get(AgentChatMessage, message_id)
-        assert message is not None
-        return message
+    if message is None:
+        raise AssertionError(f"Message {message_id} was not persisted")
+    return message
 
 
 def _delivery(context, delivery_id: UUID) -> CommunicationDelivery:
     delegate = context.injector.get(PostgresRepositoryDelegate)
     with Session(delegate.engine) as session:
         delivery = session.get(CommunicationDelivery, delivery_id)
-        assert delivery is not None
-        return delivery
+    if delivery is None:
+        raise AssertionError(f"Delivery {delivery_id} was not persisted")
+    return delivery
 
 
 def test_inbound_acceptance_is_idempotent() -> None:
@@ -289,19 +307,22 @@ def test_diagnostics_reports_pipeline_transitions_without_message_content() -> N
 
         accepted = repository.accept_inbound(connection_id=connection_id, envelope=_envelope("provider-1"))
         claimed = repository.claim_next_inbound(agent_id=context.agent.id)
-        assert claimed is not None
-        assert repository.complete_runtime_delivery(
-            claimed.delivery_id,
-            agent_id=context.agent.id,
-            succeeded=True,
+        assert_that(claimed, is_(not_(none())))
+        assert_that(
+            repository.complete_runtime_delivery(
+                claimed.delivery_id if claimed is not None else UUID(int=0),
+                agent_id=context.agent.id,
+                succeeded=True,
+            ),
+            is_(True),
         )
         outbound_id = repository.enqueue_runtime_reply(
             agent_id=context.agent.id,
             source_delivery_id=accepted.delivery_id,
             reply=RuntimeReplyCreate(idempotency_key="reply-1", text="private response"),
         )
-        assert repository.claim_next_outbound() is not None
-        assert repository.complete_outbound(outbound_id, provider_message_id="provider-reply")
+        assert_that(repository.claim_next_outbound(), is_(not_(none())))
+        assert_that(repository.complete_outbound(outbound_id, provider_message_id="provider-reply"), is_(True))
 
         with when("I inspect the completed Connection pipeline"):
             response = context.client.get(
@@ -334,7 +355,8 @@ def test_diagnostics_reports_pipeline_transitions_without_message_content() -> N
                 ),
             )
             assert_that(body["delivery_counts"]["succeeded"], equal_to(2))
-            assert_that(body, not_(has_key("latest_transitions")))
+            assert_that(body["recent_failures"], equal_to([]))
+            assert_that(len(body["latest_transitions"]), greater_than(0))
             assert_that(journal.status_code, equal_to(200))
             assert_that(journal.json()["total"], not_(equal_to(0)))
             assert_that(
@@ -353,6 +375,65 @@ def test_diagnostics_reports_pipeline_transitions_without_message_content() -> N
             assert_that(repr(journal.json()), not_(contains_string("private response")))
 
 
+def test_gateway_records_typed_admission_and_only_accepted_messages_enter_the_pipeline() -> None:
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        connection_id = _create_connection(context)
+        gateway = context.injector.get(CommunicationsGatewayService)
+        accepted_payload = {
+            "t": "MESSAGE_CREATE",
+            "agentbarn_bot_user_id": "bot-1",
+            "d": {
+                "id": "provider-accepted",
+                "guild_id": "guild-one",
+                "channel_id": "channel-one",
+                "timestamp": "2026-08-28T10:00:00+00:00",
+                "content": "hello",
+                "author": {"id": "person-one", "username": "Person One", "bot": False},
+                "member": {"roles": []},
+                "mentions": [{"id": "bot-1"}],
+            },
+        }
+        denied_payload = {
+            **accepted_payload,
+            "d": {**accepted_payload["d"], "id": "provider-denied", "mentions": []},
+        }
+
+        with patch("api.domains.communications.plugins.discord.DiscordClient") as client_type:
+            client_type.return_value.get_channel_display_name.return_value = None
+            with when("the provider emits one admitted and one mention-gated event"):
+                accepted = gateway.accept_plugin_payload(connection_id, accepted_payload)
+                denied = gateway.accept_plugin_payload(connection_id, denied_payload)
+
+        with Session(context.injector.get(PostgresRepositoryDelegate).engine) as session:
+            journal = list(
+                session.exec(
+                    select(CommunicationJournalEntry)
+                    .where(CommunicationJournalEntry.connection_id == connection_id)
+                    .order_by(col(CommunicationJournalEntry.occurred_at), col(CommunicationJournalEntry.id))
+                ).all()
+            )
+            deliveries = list(
+                session.exec(
+                    select(CommunicationDelivery).where(CommunicationDelivery.connection_id == connection_id)
+                ).all()
+            )
+
+        with then("only the accepted event is queued and both policy outcomes are journaled"):
+            assert_that(accepted, has_length(1))
+            assert_that(denied, equal_to([]))
+            assert_that(deliveries, has_length(1))
+            policy_entries = [entry for entry in journal if entry.stage == CommunicationJournalStage.POLICY_ADMITTED]
+            assert_that(
+                {entry.disposition for entry in policy_entries},
+                equal_to(
+                    {
+                        CommunicationPolicyDisposition.ACCEPTED,
+                        CommunicationPolicyDisposition.MENTION_REQUIRED,
+                    }
+                ),
+            )
+
+
 def test_dead_letter_retry_reuses_one_delivery_and_is_idempotent() -> None:
     with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
         client: TestClient = context.client
@@ -365,12 +446,15 @@ def test_dead_letter_retry_reuses_one_delivery_and_is_idempotent() -> None:
             reply=RuntimeReplyCreate(idempotency_key="reply-1", text="retry me"),
         )
         claimed = repository.claim_next_outbound()
-        assert claimed is not None
-        assert repository.complete_outbound(
-            outbound_id,
-            error_code="provider_timeout",
-            error_message="temporary provider failure",
-            max_attempts=1,
+        assert_that(claimed, is_(not_(none())))
+        assert_that(
+            repository.complete_outbound(
+                outbound_id,
+                error_code="provider_timeout",
+                error_message="temporary provider failure",
+                max_attempts=1,
+            ),
+            is_(True),
         )
         original = _delivery(context, outbound_id)
         original_message_id = original.message_id
@@ -420,3 +504,65 @@ def test_dead_letter_retry_reuses_one_delivery_and_is_idempotent() -> None:
                     ]
                 ),
             )
+
+
+def test_outbound_recovery_preserves_conversation_order_and_delivery_identity() -> None:
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        connection_id = _create_connection(context)
+        repository = context.injector.get(CommunicationDeliveryRepository)
+        accepted = repository.accept_inbound(connection_id=connection_id, envelope=_envelope("provider-1"))
+        first_id = repository.enqueue_runtime_reply(
+            agent_id=context.agent.id,
+            source_delivery_id=accepted.delivery_id,
+            reply=RuntimeReplyCreate(idempotency_key="reply-first", text="first"),
+        )
+        second_id = repository.enqueue_runtime_reply(
+            agent_id=context.agent.id,
+            source_delivery_id=accepted.delivery_id,
+            reply=RuntimeReplyCreate(idempotency_key="reply-second", text="second"),
+        )
+
+        first_claim = repository.claim_next_outbound()
+        assert_that(first_claim.id if first_claim is not None else None, equal_to(first_id))
+        assert_that(
+            repository.complete_outbound(
+                first_id,
+                error_code="provider_timeout",
+                error_message="temporary provider failure",
+                max_attempts=1,
+            ),
+            is_(True),
+        )
+
+        with when("an operator retries the earlier dead-lettered reply"):
+            blocked = repository.claim_next_outbound()
+            retried = repository.retry_dead_lettered(
+                first_id,
+                agent_id=context.agent.id,
+                connection_id=connection_id,
+                actor=ActorIdentity(type=ActorIdentityType.SYSTEM, id="test-operator"),
+            )
+            retry_claim = repository.claim_next_outbound()
+
+        assert_that(blocked, none())
+        assert_that(retried.id, equal_to(first_id))
+        assert_that(retry_claim.id if retry_claim is not None else None, equal_to(first_id))
+        assert_that(repository.complete_outbound(first_id, provider_message_id="provider-first"), is_(True))
+
+        with then("the next reply is released only after the earlier one succeeds"):
+            next_claim = repository.claim_next_outbound()
+            assert_that(next_claim.id if next_claim is not None else None, equal_to(second_id))
+            assert_that(
+                repository.complete_outbound(second_id, provider_message_id="provider-second"),
+                is_(True),
+            )
+            with Session(context.injector.get(PostgresRepositoryDelegate).engine) as session:
+                outbound_deliveries = list(
+                    session.exec(
+                        select(CommunicationDelivery).where(
+                            CommunicationDelivery.connection_id == connection_id,
+                            CommunicationDelivery.direction == "OUTBOUND",
+                        )
+                    ).all()
+                )
+            assert_that([delivery.id for delivery in outbound_deliveries], contains_inanyorder(first_id, second_id))

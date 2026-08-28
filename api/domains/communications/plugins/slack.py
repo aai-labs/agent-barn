@@ -27,6 +27,7 @@ from api.domains.communications.plugins.base import (
     PlatformPlugin,
     PlatformSettings,
     ProcessingFeedbackContext,
+    provider_idempotency_key,
 )
 from api.infrastructure.slack.client import SlackClient
 
@@ -159,12 +160,15 @@ class SlackPlatformPlugin(PlatformPlugin):
         settings: PlatformSettings,
         credentials: PlatformCredentials,
         envelope: OutboundCommunicationEnvelope,
+        *,
+        idempotency_key: str,
     ) -> str:
         assert isinstance(credentials, SlackCredentials)
         return SlackClient(credentials.bot_token).send_message(
             envelope.location.id,
             envelope.text,
             thread_id=envelope.location.thread_id,
+            idempotency_key=provider_idempotency_key(idempotency_key),
         )
 
     def processing_feedback(
@@ -240,14 +244,12 @@ class SlackPlatformPlugin(PlatformPlugin):
         try:
             callback()
         except Exception as exc:
-            detail = " ".join(str(exc).split())[:160]
             logger.warning(
-                "Slack processing feedback %s failed for channel %s thread %s (%s): %s",
+                "Slack processing feedback %s failed for channel %s thread %s (%s)",
                 action,
                 context.location.id,
                 context.location.thread_id or "root",
                 type(exc).__name__,
-                detail,
             )
 
     def normalize_inbound(
@@ -431,13 +433,11 @@ class SlackPlatformPlugin(PlatformPlugin):
         try:
             return callback()
         except Exception as exc:
-            detail = " ".join(str(exc).split())[:160]
             logger.warning(
-                "Slack inbound enrichment %s failed for message %s (%s): %s",
+                "Slack inbound enrichment %s failed for message %s (%s)",
                 action,
                 envelope.provider_message_id,
                 type(exc).__name__,
-                detail,
             )
             return None
 

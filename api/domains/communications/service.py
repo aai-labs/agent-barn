@@ -219,6 +219,8 @@ class CommunicationsService:
             current_error_age_seconds=snapshot.current_error_age_seconds,
             consecutive_failure_count=snapshot.consecutive_failure_count,
             delivery_success_rate=snapshot.delivery_success_rate,
+            recent_failures=snapshot.recent_failures,
+            latest_transitions=snapshot.latest_transitions,
             window_start=window_start,
             window_end=window_end,
         )
@@ -403,7 +405,14 @@ class CommunicationsService:
         webhook_url = None
         if PlatformCapability.WEBHOOK_INGRESS in plugin.capabilities and self.config.api_external_url:
             webhook_url = f"{self.config.api_external_url.rstrip('/')}/communications/v1/webhooks/{connection.id}"
-        return CommunicationConnectionRead.model_validate(connection).model_copy(update={"webhook_url": webhook_url})
+        read = CommunicationConnectionRead.model_validate(connection)
+        return read.model_copy(
+            update={
+                "last_error_code": CommunicationOperationalRepository.safe_error_code(read.last_error_code),
+                "last_error_message": CommunicationOperationalRepository.safe_error_summary(read.last_error_message),
+                "webhook_url": webhook_url,
+            }
+        )
 
     @staticmethod
     def _raise_not_found(connection_id: UUID) -> None:

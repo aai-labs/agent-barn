@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 from injector import inject, singleton
@@ -13,6 +14,7 @@ from api.domains.communications.models import (
     ConnectionObservedStatus,
     PlatformCapability,
 )
+from api.domains.communications.operations import CommunicationOperationalRepository
 from api.domains.communications.plugins.registry import PlatformPluginRegistry
 from api.domains.communications.repository import CommunicationConnectionRepository
 from api.infrastructure.crypto import decrypt_token
@@ -30,12 +32,27 @@ class PlatformIngressSupervisor:
     connections: CommunicationConnectionRepository
     gateway: CommunicationsGatewayService
     plugins: PlatformPluginRegistry
+    operations: CommunicationOperationalRepository | None = None
     owner_id: str = field(default_factory=lambda: str(uuid4()), init=False)
 
     async def run(self, stop: asyncio.Event) -> None:
         tasks: dict[UUID, tuple[int, asyncio.Task[None]]] = {}
+        last_journal_prune_at = datetime.min.replace(tzinfo=UTC)
         try:
             while not stop.is_set():
+                now = datetime.now(UTC)
+                if self.operations is not None and now - last_journal_prune_at >= timedelta(minutes=5):
+                    try:
+                        await asyncio.to_thread(
+                            self.operations.prune_journal,
+                            retention_days=self.config.communication_journal_retention_days,
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "Communication journal retention sweep failed (%s)",
+                            type(exc).__name__,
+                        )
+                    last_journal_prune_at = now
                 enabled_connections = await asyncio.to_thread(self.connections.list_enabled)
                 enabled = {connection.id: connection for connection in enabled_connections}
                 for connection_id, (revision, task) in list(tasks.items()):
@@ -130,7 +147,7 @@ class PlatformIngressSupervisor:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                logger.warning("Communication Connection %s ingress failed: %s", connection.id, exc)
+                logger.warning("Communication Connection %s ingress failed (%s)", connection.id, type(exc).__name__)
                 await asyncio.to_thread(
                     self.connections.record_health,
                     connection.id,

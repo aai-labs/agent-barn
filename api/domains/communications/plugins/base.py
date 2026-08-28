@@ -20,6 +20,18 @@ from api.domains.communications.models import (
 )
 
 
+def provider_idempotency_key(delivery_key: str) -> str:
+    """Return a bounded opaque key safe to pass to a provider adapter.
+
+    Runtime reply keys are user/runtime input and may be long or contain
+    provider-sensitive characters. The delivery row remains the source of
+    truth, while adapters receive the same deterministic, non-secret token on
+    every retry.
+    """
+
+    return hashlib.sha256(f"agentbarn:communication:{delivery_key}".encode()).hexdigest()
+
+
 class PlatformSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -175,8 +187,14 @@ class PlatformPlugin(ABC):
         settings: PlatformSettings,
         credentials: PlatformCredentials,
         envelope: OutboundCommunicationEnvelope,
+        *,
+        idempotency_key: str,
     ) -> str:
         """Deliver one normalized reply and return the provider message id.
+
+        ``idempotency_key`` is stable for the durable Delivery across leases
+        and manual retries. Provider adapters must pass it to the provider's
+        native deduplication field or idempotency transport header.
 
         A shipped plugin that cannot provide outbound delivery is not eligible for
         an enabled Communication Connection.

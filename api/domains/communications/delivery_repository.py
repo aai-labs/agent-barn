@@ -42,6 +42,13 @@ class CommunicationDeliveryRetryError(RuntimeError):
     pass
 
 
+_BLOCKING_OUTBOUND_STATUSES = (
+    CommunicationDeliveryStatus.PENDING,
+    CommunicationDeliveryStatus.PROCESSING,
+    CommunicationDeliveryStatus.DEAD_LETTERED,
+)
+
+
 @inject
 @singleton
 @dataclass
@@ -318,6 +325,7 @@ class CommunicationDeliveryRepository:
 
     def claim_next_outbound(self, *, lease_seconds: int = 120) -> CommunicationDelivery | None:
         now = datetime.now(UTC)
+        earlier_outbound = aliased(CommunicationDelivery)
         with Session(self.delegate.engine, expire_on_commit=False) as session:
             session.exec(
                 sa.update(CommunicationDelivery)
@@ -340,10 +348,28 @@ class CommunicationDeliveryRepository:
                     col(CommunicationDelivery.available_at) <= now,
                     col(CommunicationConnection.enabled).is_(True),
                     col(CommunicationConnection.retired_at).is_(None),
+                    # A conversation is a single ordered stream. A later
+                    # reply cannot overtake an earlier pending, in-flight, or
+                    # dead-lettered delivery; retrying that earlier row is the
+                    # explicit operator decision that releases it.
+                    ~sa.exists().where(
+                        col(earlier_outbound.connection_id) == col(CommunicationDelivery.connection_id),
+                        col(earlier_outbound.direction) == CommunicationDirection.OUTBOUND,
+                        col(earlier_outbound.ordering_key) == col(CommunicationDelivery.ordering_key),
+                        sa.or_(
+                            col(earlier_outbound.created_at) < col(CommunicationDelivery.created_at),
+                            sa.and_(
+                                col(earlier_outbound.created_at) == col(CommunicationDelivery.created_at),
+                                col(earlier_outbound.id) < col(CommunicationDelivery.id),
+                            ),
+                        ),
+                        col(earlier_outbound.status).in_(_BLOCKING_OUTBOUND_STATUSES),
+                    ),
                 )
                 .order_by(
                     col(CommunicationDelivery.available_at).asc(),
                     col(CommunicationDelivery.created_at).asc(),
+                    col(CommunicationDelivery.id).asc(),
                 )
                 .limit(1)
                 .with_for_update(skip_locked=True)

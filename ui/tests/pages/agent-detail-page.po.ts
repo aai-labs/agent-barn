@@ -1,5 +1,6 @@
+import { Locator, Page, Request } from "@playwright/test";
+
 import { TEST_ORG_ID } from "../constants";
-import { Locator, Page } from "@playwright/test";
 
 export class AgentDetailPage {
   constructor(private page: Page) {}
@@ -38,6 +39,74 @@ export class AgentDetailPage {
 
   channelsTab(): Locator {
     return this.page.getByRole("button", { name: /^messaging$/i });
+  }
+
+  connectionDetailsLink(): Locator {
+    return this.page.getByRole("link", { name: "View details", exact: true });
+  }
+
+  connectionIdentity(identity: string): Locator {
+    return this.page.getByText(`Connected as ${identity}`, { exact: true });
+  }
+
+  connectionProviderStatus(status: string): Locator {
+    return this.page.getByText(status, { exact: true });
+  }
+
+  providerErrorAlert(): Locator {
+    return this.page.getByRole("alert").filter({ hasText: "Latest provider error" });
+  }
+
+  providerErrorMessage(): Locator {
+    return this.providerErrorAlert().locator("p");
+  }
+
+  addConnectionButton(): Locator {
+    return this.page.getByRole("button", { name: "Add connection", exact: true });
+  }
+
+  selectPlatformButton(platformName: string): Locator {
+    return this.page.getByRole("button", { name: `Select ${platformName}`, exact: true });
+  }
+
+  setupHint(text: string | RegExp): Locator {
+    return this.page.getByText(text);
+  }
+
+  editConnectionButton(connectionName: string): Locator {
+    return this.page.getByRole("button", { name: `Edit ${connectionName}`, exact: true });
+  }
+
+  connectionNameInput(): Locator {
+    return this.page.getByLabel("Connection name", { exact: true });
+  }
+
+  connectionSettingsInput(label: string): Locator {
+    return this.page.getByLabel(label, { exact: true });
+  }
+
+  saveConnectionButton(): Locator {
+    return this.page.getByRole("button", { name: "Save changes", exact: true });
+  }
+
+  credentialInput(label: string): Locator {
+    // The visibility toggle contributes its accessible name to the wrapped
+    // textbox, so use the stable field label as a partial accessible-name match.
+    return this.page.getByRole("textbox", { name: label });
+  }
+
+  credentialVisibilityButton(label: string, visible: boolean): Locator {
+    return this.page.getByRole("button", { name: `${visible ? "Hide" : "Show"} ${label}`, exact: true });
+  }
+
+  connectPlatformButton(platformName: string): Locator {
+    return this.page.getByRole("button", { name: `Connect ${platformName}`, exact: true });
+  }
+
+  waitForConnectionMutation(method: "PATCH" | "POST"): Promise<Request> {
+    return this.page.waitForRequest(
+      (request) => request.method() === method && request.url().includes("/connections"),
+    );
   }
 
   groupPolicySelect(): Locator {

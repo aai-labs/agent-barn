@@ -2,7 +2,7 @@
 
 import re
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from statistics import median
 from typing import Any
 from uuid import UUID, uuid4
@@ -16,12 +16,14 @@ from api.domains.communications.models import (
     CommunicationDeliveryCounts,
     CommunicationDeliveryStatus,
     CommunicationDirection,
+    CommunicationFailureRead,
     CommunicationJournalEntry,
     CommunicationJournalEntryRead,
     CommunicationJournalStage,
     CommunicationLatencyRead,
     CommunicationPipelineCounts,
     CommunicationPolicyDisposition,
+    CommunicationTransitionRead,
 )
 from api.domains.events.catalog import EVENT_REGISTRY
 from api.domains.events.models import (
@@ -46,6 +48,15 @@ _SENSITIVE_PARTS = (
     "secret",
     "token",
 )
+_REDACTED_ERROR_SUMMARY = "Provider error details were redacted"
+_RECENT_FAILURE_LIMIT = 10
+_LATEST_TRANSITION_LIMIT = 50
+_SAFE_ERROR_SUMMARIES = {
+    "agent was not running when the message arrived": "Agent was not running when the message arrived",
+    "communication connection is unavailable": "Communication Connection is unavailable",
+    "communication connection was retired": "Communication Connection was retired",
+    _REDACTED_ERROR_SUMMARY.casefold(): _REDACTED_ERROR_SUMMARY,
+}
 
 
 @dataclass(frozen=True)
@@ -60,6 +71,8 @@ class CommunicationDiagnosticsSnapshot:
     current_error_age_seconds: float | None
     consecutive_failure_count: int
     delivery_success_rate: float | None
+    recent_failures: list[CommunicationFailureRead]
+    latest_transitions: list[CommunicationTransitionRead]
 
 
 @inject
@@ -380,6 +393,38 @@ class CommunicationOperationalRepository:
         )
         delivery_success_rate = delivery_counts.succeeded / terminal_deliveries if terminal_deliveries else None
 
+        recent_failures = [
+            CommunicationFailureRead(
+                occurred_at=entry.occurred_at,
+                stage=CommunicationJournalStage(self._enum_value(entry.stage)),
+                delivery_id=entry.delivery_id,
+                error_code=self.safe_error_code(entry.error_code),
+                error_summary=self.safe_error_summary(entry.error_summary),
+            )
+            for entry in journal_rows
+            if entry.error_code is not None
+            or self._enum_value(entry.stage)
+            in {
+                CommunicationJournalStage.CONNECTION_ERROR.value,
+                CommunicationJournalStage.DEAD_LETTERED.value,
+            }
+        ][:_RECENT_FAILURE_LIMIT]
+        latest_transitions = [
+            CommunicationTransitionRead(
+                occurred_at=entry.occurred_at,
+                stage=CommunicationJournalStage(self._enum_value(entry.stage)),
+                delivery_id=entry.delivery_id,
+                disposition=(
+                    CommunicationPolicyDisposition(self._enum_value(entry.disposition))
+                    if entry.disposition is not None
+                    else None
+                ),
+                attempt_number=entry.attempt_number,
+                duration_ms=entry.duration_ms,
+            )
+            for entry in journal_rows[:_LATEST_TRANSITION_LIMIT]
+        ]
+
         return CommunicationDiagnosticsSnapshot(
             pipeline=pipeline,
             delivery_counts=delivery_counts,
@@ -391,6 +436,8 @@ class CommunicationOperationalRepository:
             current_error_age_seconds=current_error_age,
             consecutive_failure_count=consecutive_failure_count,
             delivery_success_rate=delivery_success_rate,
+            recent_failures=recent_failures,
+            latest_transitions=latest_transitions,
         )
 
     def find_journal_page(
@@ -482,17 +529,36 @@ class CommunicationOperationalRepository:
             page_size=pagination.size,
             total=total,
             items=[
-                CommunicationJournalEntryRead.model_validate(
-                    {
-                        **CommunicationJournalEntryRead.model_validate(entry).model_dump(),
-                        "direction": direction,
-                        "delivery_status": delivery_status,
-                        **self._delivery_journal_details(delivery),
-                    }
+                self._journal_read(
+                    entry,
+                    direction=direction,
+                    delivery_status=delivery_status,
+                    delivery=delivery,
                 )
                 for entry, direction, delivery_status, delivery in rows
             ],
         )
+
+    @staticmethod
+    def _journal_read(
+        entry: CommunicationJournalEntry,
+        *,
+        direction: CommunicationDirection | str | None,
+        delivery_status: CommunicationDeliveryStatus | str | None,
+        delivery: CommunicationDelivery | None,
+    ) -> CommunicationJournalEntryRead:
+        """Project a journal row without re-exposing legacy unsafe error text."""
+        values = CommunicationJournalEntryRead.model_validate(entry).model_dump()
+        values.update(
+            {
+                "error_code": CommunicationOperationalRepository.safe_error_code(entry.error_code),
+                "error_summary": CommunicationOperationalRepository.safe_error_summary(entry.error_summary),
+                "direction": direction,
+                "delivery_status": delivery_status,
+                **CommunicationOperationalRepository._delivery_journal_details(delivery),
+            }
+        )
+        return CommunicationJournalEntryRead.model_validate(values)
 
     @staticmethod
     def _delivery_journal_details(delivery: CommunicationDelivery | None) -> dict[str, float | datetime | None]:
@@ -552,10 +618,22 @@ class CommunicationOperationalRepository:
     def safe_error_summary(value: str | None) -> str | None:
         if not value:
             return None
-        normalized = value.lower().replace("-", "_")
-        if any(part in normalized for part in _SENSITIVE_PARTS):
-            return "Provider error details were redacted"
-        return " ".join(value.split())[:500]
+        normalized = " ".join(value.split())
+        return _SAFE_ERROR_SUMMARIES.get(normalized.casefold(), _REDACTED_ERROR_SUMMARY)
+
+    def prune_journal(self, *, retention_days: int) -> int:
+        """Delete journal rows older than the configured bounded retention window."""
+        if retention_days < 1:
+            raise ValueError("Communication journal retention must be at least one day")
+        cutoff = datetime.now(UTC) - timedelta(days=retention_days)
+        with Session(self.delegate.engine) as session:
+            result = session.exec(
+                sa.delete(CommunicationJournalEntry).where(
+                    col(CommunicationJournalEntry.occurred_at) < cutoff,
+                )
+            )
+            session.commit()
+            return int(result.rowcount or 0)
 
     @staticmethod
     def _enum_value(value: Any) -> str:

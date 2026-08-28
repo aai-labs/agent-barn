@@ -20,6 +20,7 @@ from api.domains.communications.plugins.base import (
     PlatformCredentials,
     PlatformPlugin,
     PlatformSettings,
+    provider_idempotency_key,
 )
 from api.infrastructure.telegram.client import get_chat_display_name, send_message, validate_bot_token
 
@@ -117,6 +118,8 @@ class TelegramPlatformPlugin(PlatformPlugin):
         settings: PlatformSettings,
         credentials: PlatformCredentials,
         envelope: OutboundCommunicationEnvelope,
+        *,
+        idempotency_key: str,
     ) -> str:
         assert isinstance(credentials, TelegramCredentials)
         return send_message(
@@ -124,6 +127,7 @@ class TelegramPlatformPlugin(PlatformPlugin):
             envelope.location.id,
             envelope.text,
             thread_id=envelope.location.thread_id,
+            idempotency_key=provider_idempotency_key(idempotency_key),
         )
 
     def normalize_inbound(
@@ -237,13 +241,11 @@ class TelegramPlatformPlugin(PlatformPlugin):
         try:
             return callback()
         except Exception as exc:
-            detail = " ".join(str(exc).split())[:160]
             logger.warning(
-                "Telegram inbound enrichment %s failed for message %s (%s): %s",
+                "Telegram inbound enrichment %s failed for message %s (%s)",
                 action,
                 envelope.provider_message_id,
                 type(exc).__name__,
-                detail,
             )
             return None
 

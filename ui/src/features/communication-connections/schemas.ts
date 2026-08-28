@@ -92,6 +92,21 @@ export const CommunicationDiagnosticsSchema = z.object({
   currentErrorAgeSeconds: z.number().nonnegative().nullable(),
   consecutiveFailureCount: z.number().int().nonnegative(),
   deliverySuccessRate: z.number().min(0).max(1).nullable(),
+  recentFailures: z.array(z.object({
+    occurredAt: z.string(),
+    stage: z.string(),
+    deliveryId: z.string().uuid().nullable(),
+    errorCode: z.string().nullable(),
+    errorSummary: z.string().nullable(),
+  })),
+  latestTransitions: z.array(z.object({
+    occurredAt: z.string(),
+    stage: z.string(),
+    deliveryId: z.string().uuid().nullable(),
+    disposition: z.string().nullable(),
+    attemptNumber: z.number().int().nonnegative(),
+    durationMs: z.number().nullable(),
+  })),
   windowStart: z.string(),
   windowEnd: z.string(),
 });

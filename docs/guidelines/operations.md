@@ -37,6 +37,8 @@ make makemigrations
 
 Schema changes require a migration under `../../api/migrations/versions/`. Review generated migrations before applying them. Production deployment runs Alembic through the API chart migration hook described in `../architecture/runtime-and-deployment.md`.
 
+The content-free Communications operation journal is retained for `COMMUNICATION_JOURNAL_RETENTION_DAYS` days (default `31`, bounded to `1`–`3650`). The Communications supervisor runs the pruning sweep; changing the retention window is an operational configuration change, not a release-version change.
+
 ## Checks and tests
 
 Testing and verification commands live in `testing.md`. Run the smallest complete set for the touched area before widening to full suites.

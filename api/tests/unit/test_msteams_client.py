@@ -1,3 +1,4 @@
+import json
 import time
 from unittest.mock import MagicMock, patch
 
@@ -11,6 +12,7 @@ from api.infrastructure.msteams.client import (
     TeamsAuthError,
     acquire_token,
     list_team_channels,
+    send_activity,
     verify_inbound_jwt,
 )
 from api.infrastructure.shared.cache import clear_cache
@@ -196,3 +198,22 @@ def test_two_connections_never_share_a_cached_channel_name(mock_request) -> None
 
     assert_that(first["19:abc@thread.tacv2"], equal_to("one"))
     assert_that(second["19:abc@thread.tacv2"], equal_to("two"))
+
+
+@patch("api.infrastructure.msteams.client.resilient_request")
+def test_send_activity_carries_the_provider_idempotency_key(mock_request):
+    response = MagicMock(status_code=200)
+    response.json.return_value = {"id": "activity-1"}
+    mock_request.return_value = response
+
+    activity_id = send_activity(
+        _SERVICE_URL,
+        "conversation-1",
+        {"type": "message", "text": "reply"},
+        "access-value",
+        idempotency_key="provider-key",
+    )
+
+    assert_that(activity_id, equal_to("activity-1"))
+    assert_that(mock_request.call_args.kwargs["headers"]["Idempotency-Key"], equal_to("provider-key"))
+    assert_that(json.loads(mock_request.call_args.kwargs["content"])["text"], equal_to("reply"))

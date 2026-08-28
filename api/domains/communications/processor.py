@@ -56,9 +56,10 @@ class OutboundCommunicationProcessor:
                 settings,
                 credentials,
                 outbound,
+                idempotency_key=delivery.idempotency_key,
             )
         except Exception as exc:
-            logger.warning("Outbound Communication Delivery %s failed: %s", delivery.id, exc)
+            logger.warning("Outbound Communication Delivery %s failed (%s)", delivery.id, type(exc).__name__)
             completed = self.deliveries.complete_outbound(
                 delivery.id,
                 error_code=type(exc).__name__,
@@ -91,12 +92,10 @@ class OutboundCommunicationProcessor:
                 == expected
             )
         except Exception as exc:
-            detail = " ".join(str(exc).split())[:160]
             logger.warning(
-                "Communication feedback status lookup failed for Delivery %s (%s): %s",
+                "Communication feedback status lookup failed for Delivery %s (%s)",
                 delivery_id,
                 type(exc).__name__,
-                detail,
             )
             return False
 

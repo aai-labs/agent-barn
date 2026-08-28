@@ -22,6 +22,7 @@ from api.domains.communications.plugins.base import (
     PlatformCredentials,
     PlatformPlugin,
     PlatformSettings,
+    provider_idempotency_key,
 )
 from api.infrastructure.discord.client import DiscordClient
 
@@ -134,12 +135,15 @@ class DiscordPlatformPlugin(PlatformPlugin):
         settings: PlatformSettings,
         credentials: PlatformCredentials,
         envelope: OutboundCommunicationEnvelope,
+        *,
+        idempotency_key: str,
     ) -> str:
         assert isinstance(credentials, DiscordCredentials)
         return DiscordClient(credentials.bot_token).send_message(
             envelope.location.id,
             envelope.text,
             reply_to_id=envelope.reply_to_provider_message_id,
+            idempotency_key=provider_idempotency_key(idempotency_key),
         )
 
     def normalize_inbound(
@@ -282,13 +286,11 @@ class DiscordPlatformPlugin(PlatformPlugin):
         try:
             return callback()
         except Exception as exc:
-            detail = " ".join(str(exc).split())[:160]
             logger.warning(
-                "Discord inbound enrichment %s failed for message %s (%s): %s",
+                "Discord inbound enrichment %s failed for message %s (%s)",
                 action,
                 envelope.provider_message_id,
                 type(exc).__name__,
-                detail,
             )
             return None
 

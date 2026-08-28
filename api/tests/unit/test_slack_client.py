@@ -386,3 +386,16 @@ def test_processing_feedback_calls_are_idempotent_for_reactions_and_status():
         "status": "is thinking...",
     }
     assert json.loads(clear_request.kwargs["content"])["status"] == ""
+
+
+def test_send_message_carries_the_provider_idempotency_key():
+    response = _resp({"ok": True, "ts": "1724264405.531769"})
+    with patch("httpx.request", _mock_httpx([response])) as mock:
+        message_id = SlackClient("bot-value").send_message(
+            "C123",
+            "reply",
+            idempotency_key="provider-key",
+        )
+
+    assert message_id == "1724264405.531769"
+    assert json.loads(mock.call_args.kwargs["content"])["client_msg_id"] == "provider-key"

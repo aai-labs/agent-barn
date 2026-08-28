@@ -40,6 +40,10 @@ from api.infrastructure.crypto import decrypt_token
 logger = logging.getLogger(__name__)
 
 
+class CommunicationJournalWriteError(RuntimeError):
+    """Raised when an observed provider event cannot be durably journaled."""
+
+
 @inject
 @singleton
 @dataclass
@@ -127,12 +131,10 @@ class CommunicationsGatewayService:
                     )
                 )
         except Exception as exc:
-            detail = " ".join(str(exc).split())[:160]
             logger.warning(
-                "Communication terminal-failure feedback context failed for Delivery %s (%s): %s",
+                "Communication terminal-failure feedback context failed for Delivery %s (%s)",
                 delivery_id,
                 type(exc).__name__,
-                detail,
             )
 
     def enqueue_runtime_reply(
@@ -248,12 +250,10 @@ class CommunicationsGatewayService:
             if connection is not None:
                 self._notify_processing_feedback_context(connection, context)
         except Exception as exc:
-            detail = " ".join(str(exc).split())[:160]
             logger.warning(
-                "Communication processing feedback lookup failed for Connection %s (%s): %s",
+                "Communication processing feedback lookup failed for Connection %s (%s)",
                 context.connection_id,
                 type(exc).__name__,
-                detail,
             )
 
     def _notify_processing_feedback(
@@ -291,13 +291,11 @@ class CommunicationsGatewayService:
                 context,
             )
         except Exception as exc:
-            detail = " ".join(str(exc).split())[:160]
             logger.warning(
-                "Communication processing feedback %s failed for Connection %s (%s): %s",
+                "Communication processing feedback %s failed for Connection %s (%s)",
                 context.stage.value,
                 connection.id,
                 type(exc).__name__,
-                detail,
             )
 
     def _admit_plugin_payload(
@@ -358,11 +356,9 @@ class CommunicationsGatewayService:
                 disposition=disposition,
             )
         except Exception as exc:
-            logger.warning(
-                "Communication journal write failed for Connection %s (%s)",
-                connection.id,
-                type(exc).__name__,
-            )
+            raise CommunicationJournalWriteError(
+                f"Unable to record {stage.value} for Communication Connection {connection.id}"
+            ) from exc
 
     @staticmethod
     def _record_policy_metric(disposition: CommunicationPolicyDisposition) -> None:

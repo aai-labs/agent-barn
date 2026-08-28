@@ -1,7 +1,7 @@
 import io
 import json
 import zipfile
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 from fastapi import status
@@ -17,6 +17,7 @@ from hamcrest import (
     has_key,
     has_length,
     is_,
+    none,
     not_,
     not_none,
 )
@@ -26,18 +27,22 @@ from starlette.testclient import TestClient
 from api.domains.agents.models import AgentStatus, AgentType
 from api.domains.communications.delivery_repository import CommunicationDeliveryRepository
 from api.domains.communications.models import (
+    CommunicationConnection,
     CommunicationJournalEntry,
+    CommunicationJournalStage,
     CommunicationSender,
     ConnectionObservedStatus,
     ConversationLocation,
     NormalizedCommunicationEnvelope,
     RuntimeReplyCreate,
 )
+from api.domains.communications.operations import CommunicationOperationalRepository
 from api.domains.communications.repository import CommunicationConnectionRepository
 from api.domains.events.models import OutboxMessage
 from api.domains.rbac.catalog import AGENT_VIEWER_ROLE_ID
 from api.domains.users.organization_users.models import OrganizationRole
 from api.domains.users.organization_users.repository import OrganizationUserRepository
+from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.tests.core.givenpy import given, then, when
 from api.tests.core.modules import (
     create_test_client,
@@ -422,7 +427,7 @@ def test_connection_diagnostics_and_reconnect_preserve_safe_operational_history(
             connection_id,
             ConnectionObservedStatus.ERROR,
             error_code="authorization-token",
-            error_message="provider rejected Bearer top-secret-token",
+            error_message="provider rejected an invalid credential",
         )
 
         with when("I inspect the Connection and request a reconnect"):
@@ -476,7 +481,7 @@ def test_connection_diagnostics_and_reconnect_preserve_safe_operational_history(
             assert_that(journal[0].error_code, equal_to("REDACTED"))
             assert_that(journal[0].error_summary, equal_to("Provider error details were redacted"))
             assert_that(len(events), equal_to(3))
-            assert_that(str(events[0].payload), not_(contains_string("top-secret-token")))
+            assert_that(str(events[0].payload), not_(contains_string("invalid credential")))
             assert_that(str(diagnostics.json()), not_(contains_string("provider rejected")))
             assert_that(journal_page.json(), has_entries(page=1, page_size=2, total=3))
             assert_that(len(journal_page.json()["items"]), equal_to(2))
@@ -526,20 +531,36 @@ def test_connection_summary_reports_richer_health_and_delivery_signals() -> None
 
         succeeded = deliveries.accept_inbound(connection_id=connection_id, envelope=_envelope("succeeded"))
         claimed = deliveries.claim_next_inbound(agent_id=context.agent.id)
-        assert claimed is not None and claimed.delivery_id == succeeded.delivery_id
-        assert deliveries.complete_runtime_delivery(claimed.delivery_id, agent_id=context.agent.id, succeeded=True)
+        assert_that(
+            claimed.delivery_id if claimed is not None else None,
+            equal_to(succeeded.delivery_id),
+        )
+        assert_that(
+            deliveries.complete_runtime_delivery(
+                claimed.delivery_id if claimed is not None else UUID(int=0),
+                agent_id=context.agent.id,
+                succeeded=True,
+            ),
+            is_(True),
+        )
 
         for message_id in ("failed-one", "failed-two"):
             accepted = deliveries.accept_inbound(connection_id=connection_id, envelope=_envelope(message_id))
             claimed = deliveries.claim_next_inbound(agent_id=context.agent.id)
-            assert claimed is not None and claimed.delivery_id == accepted.delivery_id
-            assert deliveries.complete_runtime_delivery(
-                claimed.delivery_id,
-                agent_id=context.agent.id,
-                succeeded=False,
-                error_code="model_error",
-                error_message="the model failed",
-                max_attempts=1,
+            assert_that(
+                claimed.delivery_id if claimed is not None else None,
+                equal_to(accepted.delivery_id),
+            )
+            assert_that(
+                deliveries.complete_runtime_delivery(
+                    claimed.delivery_id if claimed is not None else UUID(int=0),
+                    agent_id=context.agent.id,
+                    succeeded=False,
+                    error_code="model_error",
+                    error_message="the model failed",
+                    max_attempts=1,
+                ),
+                is_(True),
             )
 
         deliveries.accept_inbound(connection_id=connection_id, envelope=_envelope("still-pending"))
@@ -566,6 +587,111 @@ def test_connection_summary_reports_richer_health_and_delivery_signals() -> None
             assert_that(str(body), not_(contains_string("provider rejected")))
 
 
+def test_connection_and_journal_reads_redact_legacy_error_details() -> None:
+    with given([*_GIVEN[:-1], there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        client: TestClient = context.client
+        created = client.post(_base(context), json=_discord_payload(), headers=_auth(context)).json()
+        connection_id = UUID(created["id"])
+        operations = context.injector.get(CommunicationOperationalRepository)
+        legacy_entry = operations.record_journal(
+            organization_id=context.organization.id,
+            agent_id=context.agent.id,
+            connection_id=connection_id,
+            stage=CommunicationJournalStage.CONNECTION_ERROR,
+            error_code="provider_error",
+            error_summary="Provider error details were redacted",
+        )
+
+        with Session(context.injector.get(PostgresRepositoryDelegate).engine, expire_on_commit=False) as session:
+            connection = session.get(CommunicationConnection, connection_id)
+            if connection is None:
+                raise AssertionError("Connection was not persisted")
+            connection.last_error_code = "authorization-token"
+            connection.last_error_message = "provider returned confidential details"
+            session.add(connection)
+            journal_entry = session.get(CommunicationJournalEntry, legacy_entry.id)
+            if journal_entry is None:
+                raise AssertionError("Journal entry was not persisted")
+            journal_entry.error_code = "authorization-token"
+            journal_entry.error_summary = "provider returned confidential details"
+            session.add(journal_entry)
+            session.commit()
+
+        with when("I read a Connection and its legacy journal entry"):
+            connection_read = client.get(_base(context), headers=_auth(context))
+            journal_read = client.get(
+                f"{_base(context)}/{connection_id}/journal?kind=connection",
+                headers=_auth(context),
+            )
+
+        with then("legacy error details are redacted at every read boundary"):
+            assert_that(connection_read.status_code, equal_to(status.HTTP_200_OK))
+            connection_items = connection_read.json()
+            matching_connection = next(
+                (item for item in connection_items if item.get("id") == str(connection_id)),
+                None,
+            )
+            if matching_connection is None:
+                raise AssertionError("Connection was not returned by the list endpoint")
+            assert_that(
+                matching_connection,
+                has_entries(
+                    last_error_code="REDACTED",
+                    last_error_message="Provider error details were redacted",
+                ),
+            )
+            assert_that(journal_read.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(
+                journal_read.json()["items"][0],
+                has_entries(
+                    error_code="REDACTED",
+                    error_summary="Provider error details were redacted",
+                ),
+            )
+
+
+def test_communication_journal_pruning_keeps_the_configured_retention_window_bounded() -> None:
+    with given([*_GIVEN[:-1], there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        client: TestClient = context.client
+        created = client.post(_base(context), json=_discord_payload(), headers=_auth(context)).json()
+        connection_id = UUID(created["id"])
+        operations = context.injector.get(CommunicationOperationalRepository)
+        now = datetime.now(UTC)
+
+        operations.record_journal(
+            organization_id=context.organization.id,
+            agent_id=context.agent.id,
+            connection_id=connection_id,
+            stage=CommunicationJournalStage.CONNECTION_ERROR,
+            occurred_at=now - timedelta(days=40),
+            error_code="provider_error",
+            error_summary="Provider error details were redacted",
+        )
+        operations.record_journal(
+            organization_id=context.organization.id,
+            agent_id=context.agent.id,
+            connection_id=connection_id,
+            stage=CommunicationJournalStage.CONNECTION_CONNECTED,
+            occurred_at=now - timedelta(days=1),
+        )
+
+        with when("the retention sweep runs for a thirty-day window"):
+            removed = operations.prune_journal(retention_days=30)
+
+        with then("expired history is removed while recent operational history remains"):
+            assert_that(removed, equal_to(1))
+            with Session(context.injector.get(PostgresRepositoryDelegate).engine) as session:
+                remaining = list(
+                    session.exec(
+                        select(CommunicationJournalEntry).where(
+                            CommunicationJournalEntry.connection_id == connection_id
+                        )
+                    ).all()
+                )
+            assert_that(remaining, has_length(1))
+            assert_that(remaining[0].stage, equal_to(CommunicationJournalStage.CONNECTION_CONNECTED))
+
+
 def test_journal_filters_narrow_by_stage_error_direction_and_delivery() -> None:
     with given([*_GIVEN[:-1], there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
         client: TestClient = context.client
@@ -583,12 +709,15 @@ def test_journal_filters_narrow_by_stage_error_direction_and_delivery() -> None:
             reply=RuntimeReplyCreate(idempotency_key="reply-1", text="retry me"),
         )
         claimed = deliveries.claim_next_outbound()
-        assert claimed is not None
-        assert deliveries.complete_outbound(
-            outbound_id,
-            error_code="provider_timeout",
-            error_message="temporary provider failure",
-            max_attempts=1,
+        assert_that(claimed, is_(not_(none())))
+        assert_that(
+            deliveries.complete_outbound(
+                outbound_id,
+                error_code="provider_timeout",
+                error_message="temporary provider failure",
+                max_attempts=1,
+            ),
+            is_(True),
         )
 
         base = f"{_base(context)}/{connection_id}/journal"
@@ -647,7 +776,7 @@ def _teams_payload(name: str = "Microsoft Teams") -> dict:
         "display_name": name,
         "credentials": {
             "app_id": "11111111-1111-4111-8111-111111111111",
-            "app_password": "azure-client-secret",
+            "app_password": "placeholder",
             "tenant_id": "22222222-2222-4222-8222-222222222222",
         },
     }
@@ -672,7 +801,7 @@ def test_teams_connection_serves_a_downloadable_app_package() -> None:
                 assert_that(sorted(archive.namelist()), equal_to(["color.png", "manifest.json", "outline.png"]))
                 manifest = json.loads(archive.read("manifest.json"))
             assert_that(manifest["bots"][0]["botId"], equal_to("11111111-1111-4111-8111-111111111111"))
-            assert_that("azure-client-secret" in archive_text(response.content), equal_to(False))
+            assert_that("placeholder" in archive_text(response.content), equal_to(False))
 
 
 def test_app_package_is_rejected_for_a_platform_without_provisioning() -> None:

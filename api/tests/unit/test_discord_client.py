@@ -1,3 +1,4 @@
+import json
 from unittest.mock import MagicMock, patch
 
 from hamcrest import assert_that, equal_to, none
@@ -49,3 +50,21 @@ def test_discord_client_cache_does_not_cross_contaminate_different_tokens(mock_r
         assert_that(second, equal_to("Bot Two's Alice"))
     finally:
         clear_cache()
+
+
+@patch("api.infrastructure.discord.client.resilient_request")
+def test_discord_client_carries_the_provider_idempotency_key(mock_request):
+    response = MagicMock(status_code=200)
+    response.json.return_value = {"id": "message-1"}
+    mock_request.return_value = response
+
+    message_id = DiscordClient("bot-value").send_message(
+        "channel-1",
+        "reply",
+        idempotency_key="provider-key",
+    )
+
+    assert_that(message_id, equal_to("message-1"))
+    payload = json.loads(mock_request.call_args.kwargs["content"])
+    assert_that(payload["nonce"], equal_to("provider-key"))
+    assert_that(payload["enforce_nonce"], equal_to(True))

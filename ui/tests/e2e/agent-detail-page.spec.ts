@@ -1,6 +1,10 @@
-import { TEST_ORG_ID } from "../constants";
 import { expect, test } from "@playwright/test";
 
+import { TEST_ORG_ID } from "../constants";
+import {
+  COMMUNICATION_DELIVERY_ID,
+  SAFE_PROVIDER_ERROR,
+} from "../fixtures/communication-connections";
 import {
   MOCK_AGENT_ID,
   MOCK_ORG_ID,
@@ -16,9 +20,7 @@ import {
 import { mockCustomSkill, mockPlatformSkill, MOCK_PLATFORM_SKILL_ID } from "../pages/data-support/skill-data-support.po";
 import { DataSupport } from "../pages/data-support/data-support.po";
 import { AgentDetailPage } from "../pages/agent-detail-page.po";
-
-const FULL_PROVIDER_ERROR =
-  "Client error '409 Conflict' for url 'https://api.telegram.org/bot123456789:TEST_TOKEN/getUpdates?timeout=30' For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/409";
+import { CommunicationConnectionDetailPage } from "../pages/communication-connection-detail-page.po";
 
 test.describe("Agent Detail Page", () => {
   test.describe.configure({ mode: "serial" });
@@ -476,12 +478,14 @@ test.describe("Agent Detail Page — Template tab (re-pin)", () => {
 test.describe("Agent Detail Page — Channels tab", () => {
   test.describe.configure({ mode: "serial" });
   let agentDetailPage: AgentDetailPage;
+  let connectionDetailPage: CommunicationConnectionDetailPage;
   let dataSupportPage: DataSupport;
 
   test.use({ storageState: { cookies: [], origins: [] } });
 
   test.beforeEach(async ({ page }) => {
     agentDetailPage = new AgentDetailPage(page);
+    connectionDetailPage = new CommunicationConnectionDetailPage(page);
     dataSupportPage = new DataSupport(page);
 
     await dataSupportPage.auth.interceptRefreshRequest();
@@ -495,316 +499,21 @@ test.describe("Agent Detail Page — Channels tab", () => {
     await dataSupportPage.agents.interceptGetTemplatesRequest();
     await dataSupportPage.agents.interceptGetAgentConfigurationRequest();
     await dataSupportPage.agents.interceptGetModelsRequest();
-    await page.route("**/api/v1/organizations/*/communication-platforms", async (route) => {
-      await route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify([{
-          key: "discord",
-          display_name: "Discord",
-          setup_hint: "Credential: Developer Portal → Applications → app → Bot → Token. Enable Message Content Intent; invite with OAuth2 bot scope and View Channels, Send Messages, Read Message History permissions. Use Developer Mode to copy IDs.",
-          schema_version: 1,
-          capabilities: ["MENTIONS"],
-          settings_schema: {
-            type: "object",
-            properties: { guild_ids: { title: "Guild IDs", type: "array", items: { type: "string" } } },
-          },
-          credentials_schema: {
-            type: "object",
-            properties: {
-              bot_token: { title: "Bot token", type: "string" },
-            },
-            required: ["bot_token"],
-          },
-        }, {
-          key: "slack",
-          display_name: "Slack",
-          setup_hint: "In Slack OAuth & Permissions → Bot Token Scopes, add channels:read for public channel names, groups:read for private channel names, im:read and mpim:read for direct-message names, and users:read for sender names. Reinstall the Slack app after adding scopes, then update the bot token here.",
-          schema_version: 1,
-          capabilities: ["DIRECTORY_DISCOVERY"],
-          settings_schema: { type: "object", properties: {} },
-          credentials_schema: {
-            type: "object",
-            properties: {
-              bot_token: { title: "Bot token", type: "string" },
-              app_token: { title: "App-level token", type: "string" },
-            },
-            required: ["bot_token", "app_token"],
-          },
-        }, {
-          key: "telegram",
-          display_name: "Telegram",
-          setup_hint: "Credential: create a bot with @BotFather /newbot. This integration uses getUpdates long polling, so remove any webhook; disable /setprivacy for all group messages and add the bot as a channel administrator.",
-          schema_version: 1,
-          capabilities: ["THREADS"],
-          settings_schema: { type: "object", properties: {} },
-          credentials_schema: {
-            type: "object",
-            properties: {
-              bot_token: { title: "Bot token", type: "string" },
-            },
-            required: ["bot_token"],
-          },
-        }]),
-      });
-    });
-    await page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}/connections`, async (route) => {
-      if (route.request().method() === "POST") {
-        await route.fulfill({
-          status: 201,
-          contentType: "application/json",
-          body: JSON.stringify({
-            id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
-            agent_id: MOCK_AGENT_ID,
-            platform_key: "discord",
-            display_name: "Partner Discord",
-            enabled: true,
-            schema_version: 1,
-            settings: { guild_ids: ["guild-two"] },
-            external_identity: "validation-skipped",
-            observed_status: "PENDING",
-            last_health_at: null,
-            last_error_code: null,
-            last_error_message: null,
-            webhook_url: "https://api.example.test/communications/v1/webhooks/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
-            revision: 1,
-            created_at: "2026-01-01T00:00:00Z",
-            updated_at: "2026-01-01T00:00:00Z",
-          }),
-        });
-        return;
-      }
-      await route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify([{
-          id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
-          agent_id: MOCK_AGENT_ID,
-          platform_key: "discord",
-          display_name: "Customer Discord",
-          enabled: true,
-          schema_version: 1,
-          settings: { guild_ids: ["guild-one"] },
-          external_identity: "validation-skipped",
-          observed_status: "CONNECTED",
-          last_health_at: "2026-01-01T00:00:00Z",
-          last_error_code: "HTTPStatusError",
-          last_error_message: FULL_PROVIDER_ERROR,
-          webhook_url: null,
-          revision: 3,
-          created_at: "2026-01-01T00:00:00Z",
-          updated_at: "2026-01-01T00:00:00Z",
-        }]),
-      });
-    });
-    await page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}/connections/*`, async (route) => {
-      await route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify({
-          id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
-          agent_id: MOCK_AGENT_ID,
-          platform_key: "discord",
-          display_name: "Renamed Discord",
-          enabled: true,
-          schema_version: 1,
-          settings: { guild_ids: ["guild-updated"] },
-          external_identity: "validation-skipped",
-          observed_status: "PENDING",
-          last_health_at: null,
-          last_error_code: null,
-          last_error_message: null,
-          webhook_url: null,
-          revision: 4,
-          created_at: "2026-01-01T00:00:00Z",
-          updated_at: "2026-01-01T00:00:00Z",
-        }),
-      });
-    });
-    await page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}/connections/*/summary`, async (route) => {
-      await route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify({
-          connection: {
-            id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
-            agent_id: MOCK_AGENT_ID,
-            platform_key: "discord",
-            display_name: "Customer Discord",
-            enabled: true,
-            schema_version: 1,
-            settings: { guild_ids: ["guild-one"] },
-            external_identity: "validation-skipped",
-            observed_status: "CONNECTED",
-            last_health_at: "2026-01-01T00:00:00Z",
-            last_error_code: null,
-            last_error_message: null,
-            webhook_url: null,
-            revision: 3,
-            created_at: "2026-01-01T00:00:00Z",
-            updated_at: "2026-01-01T00:00:00Z",
-          },
-          provider_connectivity: "CONNECTED",
-          end_to_end_health: "healthy",
-          pipeline: {
-            provider_observed: 2,
-            policy_admitted: 2,
-            queued: 2,
-            agent_claimed: 2,
-            model_completed: 2,
-            reply_queued: 2,
-            provider_delivered: 2,
-            dead_lettered: 0,
-          },
-          delivery_counts: {
-            total: 2,
-            pending: 0,
-            processing: 0,
-            succeeded: 2,
-            dead_lettered: 0,
-            cancelled: 0,
-            unavailable: 0,
-          },
-          queue_depth: 0,
-          oldest_queued_age_seconds: null,
-          oldest_pending_delivery_age_seconds: null,
-          latency: {
-            sample_count: 2,
-            average_ms: 120,
-            p50_ms: 100,
-            latest_ms: 140,
-          },
-          last_successful_connection_at: "2026-01-01T00:00:00Z",
-          current_error_age_seconds: null,
-          consecutive_failure_count: 0,
-          delivery_success_rate: 1,
-          window_start: "2025-12-31T00:00:00Z",
-          window_end: "2026-01-01T00:00:00Z",
-        }),
-      });
-    });
-    await page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}/connections/*/journal?*`, async (route) => {
-      const url = new URL(route.request().url());
-      if (url.searchParams.get("delivery_id")) {
-        await route.fulfill({
-          status: 200,
-          contentType: "application/json",
-          body: JSON.stringify({
-            page: 1,
-            page_size: 100,
-            total: 2,
-            items: [
-              {
-                id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
-                connection_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
-                delivery_id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
-                occurred_at: "2025-12-31T23:59:00Z",
-                stage: "reply_queued",
-                disposition: null,
-                attempt_number: 1,
-                duration_ms: 10,
-                error_code: null,
-                error_summary: null,
-                direction: "OUTBOUND",
-                delivery_status: "PROCESSING",
-                queue_wait_ms: 20,
-                processing_ms: null,
-                next_retry_at: null,
-              },
-              {
-                id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
-                connection_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
-                delivery_id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
-                occurred_at: "2026-01-01T00:00:00Z",
-                stage: "provider_delivered",
-                disposition: null,
-                attempt_number: 1,
-                duration_ms: 140,
-                error_code: "provider_error",
-                error_summary: "The provider rejected this delivery.",
-                direction: "OUTBOUND",
-                delivery_status: "DEAD_LETTERED",
-                queue_wait_ms: 20,
-                processing_ms: 140,
-                next_retry_at: null,
-              },
-            ],
-          }),
-        });
-        return;
-      }
-      await route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify({
-          page: 1,
-          page_size: 20,
-          total: 1,
-          items: [{
-            id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
-            connection_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
-            delivery_id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
-            occurred_at: "2026-01-01T00:00:00Z",
-            stage: "provider_delivered",
-            disposition: null,
-            attempt_number: 1,
-            duration_ms: 140,
-            error_code: "provider_error",
-            error_summary: "The provider rejected this delivery.",
-            direction: "OUTBOUND",
-            delivery_status: "DEAD_LETTERED",
-            queue_wait_ms: 20,
-            processing_ms: 140,
-            next_retry_at: null,
-          }],
-        }),
-      });
-    });
-    await page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}/connections/*/reconnect`, async (route) => {
-      await route.fulfill({
-        status: 202,
-        contentType: "application/json",
-        body: JSON.stringify({
-          connection: {
-            id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
-            agent_id: MOCK_AGENT_ID,
-            platform_key: "discord",
-            display_name: "Customer Discord",
-            enabled: true,
-            schema_version: 1,
-            settings: { guild_ids: ["guild-one"] },
-            external_identity: "validation-skipped",
-            observed_status: "CONNECTING",
-            last_health_at: "2026-01-01T00:00:00Z",
-            last_error_code: null,
-            last_error_message: null,
-            webhook_url: null,
-            revision: 4,
-            created_at: "2026-01-01T00:00:00Z",
-            updated_at: "2026-01-01T00:00:00Z",
-          },
-          requested_at: "2026-01-01T00:00:00Z",
-        }),
-      });
-    });
-
+    await dataSupportPage.communicationConnections.interceptChannelsRequests({ agentId: MOCK_AGENT_ID });
     await agentDetailPage.goto(MOCK_AGENT_ID);
     await agentDetailPage.configureButton().click();
     await agentDetailPage.channelsTab().click();
   });
 
-  test("lists Connection identity and health independently of the Agent runtime", async ({ page }) => {
-    await expect(page.getByText("Customer Discord", { exact: true })).toBeVisible();
-    await expect(page.getByText(/Connected as validation-skipped/)).toBeVisible();
-    await expect(page.getByText("Connected", { exact: true })).toBeVisible();
+  test("lists Connection identity and health independently of the Agent runtime", async () => {
+    await expect(agentDetailPage.connectionIdentity("validation-skipped")).toBeVisible();
+    await expect(agentDetailPage.connectionProviderStatus("Connected")).toBeVisible();
   });
 
-  test("shows the complete provider error at full width and can copy it", async ({ page, context }) => {
-    await context.grantPermissions(["clipboard-read", "clipboard-write"]);
-
-    const providerError = page.getByRole("alert").filter({ hasText: "Latest provider error" });
-    const errorMessage = providerError.locator("p");
-    await expect(errorMessage).toHaveText(FULL_PROVIDER_ERROR);
+  test("shows a redacted provider error at full width", async () => {
+    const providerError = agentDetailPage.providerErrorAlert();
+    const errorMessage = agentDetailPage.providerErrorMessage();
+    await expect(errorMessage).toHaveText(SAFE_PROVIDER_ERROR);
     expect(await errorMessage.evaluate((element) => getComputedStyle(element).getPropertyValue("-webkit-line-clamp"))).toBe("none");
     expect(await providerError.evaluate((element) => getComputedStyle(element).maxWidth)).toBe("none");
     const widths = await providerError.evaluate((element) => ({
@@ -812,93 +521,84 @@ test.describe("Agent Detail Page — Channels tab", () => {
       content: element.parentElement?.getBoundingClientRect().width ?? 0,
     }));
     expect(widths.alert).toBeCloseTo(widths.content, 0);
-
-    const copyError = providerError.getByRole("button", { name: /(?:Copy full provider error|Copied) for Customer Discord/ });
-    await copyError.click();
-    await expect(copyError).toHaveAttribute("aria-label", "Copied for Customer Discord");
-    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(`HTTPStatusError: ${FULL_PROVIDER_ERROR}`);
   });
 
-  test("shows delivery activity, lets an operator copy an error, and confirms a reconnect request", async ({ page, context }) => {
+  test("shows delivery activity, lets an operator copy an error, and confirms a reconnect request", async ({ context }) => {
     await context.grantPermissions(["clipboard-read", "clipboard-write"]);
     // Both tabs' Journal queries fire once, up front, because both stay mounted
     // (forceMount) so a later tab switch never re-fetches or resets state.
-    const initialDeliveryRequest = page.waitForRequest((request) => request.url().includes("/journal?") && request.url().includes("kind=delivery"));
-    const initialConnectionRequest = page.waitForRequest((request) => request.url().includes("/journal?") && request.url().includes("kind=connection"));
-    await page.getByRole("link", { name: "View details", exact: true }).click();
+    const initialDeliveryRequest = connectionDetailPage.waitForJournalRequest("delivery");
+    const initialConnectionRequest = connectionDetailPage.waitForJournalRequest("connection");
+    await agentDetailPage.connectionDetailsLink().click();
     await initialDeliveryRequest;
     await initialConnectionRequest;
 
-    await expect(page.getByText("Provider connectivity", { exact: true })).toBeVisible();
-    await expect(page.getByText("End-to-end delivery", { exact: true })).toBeVisible();
-    await expect(page.getByText("Health signals", { exact: true })).toBeVisible();
-    await expect(page.getByText("Consecutive failures", { exact: true })).toBeVisible();
-    await expect(page.getByText("Delivery success rate", { exact: true })).toBeVisible();
-    await expect(page.getByRole("tab", { name: "Delivery transitions" })).toBeVisible();
+    await expect(connectionDetailPage.summaryMetric("Provider connectivity")).toBeVisible();
+    await expect(connectionDetailPage.summaryMetric("End-to-end delivery")).toBeVisible();
+    await expect(connectionDetailPage.summaryMetric("Health signals")).toBeVisible();
+    await expect(connectionDetailPage.summaryMetric("Consecutive failures")).toBeVisible();
+    await expect(connectionDetailPage.summaryMetric("Delivery success rate")).toBeVisible();
+    await expect(connectionDetailPage.summaryMetric("Recent failures")).toBeVisible();
+    await expect(connectionDetailPage.summaryMetric("Latest transitions")).toBeVisible();
+    await expect(connectionDetailPage.deliveryTransitionsTab()).toBeVisible();
     // Both tabpanels are mounted (kept alive across tab switches), so scope to
     // the active one — the inactive tab has the same mocked "1 event" text.
-    const deliveryPanel = page.getByRole("tabpanel", { name: "Delivery transitions" });
-    await expect(deliveryPanel.getByText("1 event", { exact: true })).toBeVisible();
-    const deliveryRow = deliveryPanel.getByRole("button", { name: /provider delivered/i });
+    await expect(connectionDetailPage.deliveryEventCount(1)).toBeVisible();
+    const deliveryRow = connectionDetailPage.deliveryTransitionRow(/provider delivered/i);
     await expect(deliveryRow).toContainText("Outbound");
     await expect(deliveryRow).toContainText(/dead lettered/i);
     await deliveryRow.click();
-    await expect(deliveryPanel.getByText("Delivery timing", { exact: true })).toBeVisible();
-    await expect(deliveryPanel.getByText("Wait before attempt", { exact: true })).toBeVisible();
-    await expect(deliveryPanel.getByRole("button", { name: "Copy error for provider delivered" })).toBeVisible();
-    await deliveryPanel.getByRole("button", { name: "Copy error for provider delivered" }).click();
-    await expect(deliveryPanel.getByRole("button", { name: "Copy error for provider delivered" })).toHaveText("Copied");
-    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("provider_error: The provider rejected this delivery.");
+    await expect(connectionDetailPage.deliveryTiming()).toBeVisible();
+    await expect(connectionDetailPage.waitBeforeAttempt()).toBeVisible();
+    const copyError = connectionDetailPage.copyErrorButton("provider delivered");
+    await expect(copyError).toBeVisible();
+    await copyError.click();
+    await expect(copyError).toHaveText("Copied");
+    expect(await connectionDetailPage.readClipboard()).toBe("provider_error: " + SAFE_PROVIDER_ERROR);
 
-    const failedOnlyRequest = page.waitForRequest((request) => request.url().includes("failed_only=true"));
-    await deliveryPanel.getByLabel("Failed only").check();
+    const failedOnlyRequest = connectionDetailPage.waitForFailedOnlyRequest();
+    await connectionDetailPage.failedOnlyCheckbox().check();
     await failedOnlyRequest;
 
     // Regression coverage: switching tabs must not clear a set filter or
     // re-fetch either tab's Journal — it previously unmounted and reset both.
-    const journalRequestsAfterFilter: string[] = [];
-    page.on("request", (request) => {
-      if (request.url().includes("/journal?")) journalRequestsAfterFilter.push(request.url());
-    });
-    await page.getByRole("tab", { name: "Connection events" }).click();
-    await expect(page.getByRole("tab", { name: "Connection events" })).toHaveAttribute("aria-selected", "true");
-    await page.getByRole("tab", { name: "Delivery transitions" }).click();
-    await expect(page.getByRole("tab", { name: "Delivery transitions" })).toHaveAttribute("aria-selected", "true");
-    await expect(deliveryPanel.getByLabel("Failed only")).toBeChecked();
-    expect(journalRequestsAfterFilter).toEqual([]);
+    const journalRequestsAfterFilter = connectionDetailPage.startJournalRequestCapture();
+    await connectionDetailPage.connectionEventsTab().click();
+    await expect(connectionDetailPage.connectionEventsTab()).toHaveAttribute("aria-selected", "true");
+    await connectionDetailPage.deliveryTransitionsTab().click();
+    await expect(connectionDetailPage.deliveryTransitionsTab()).toHaveAttribute("aria-selected", "true");
+    await expect(connectionDetailPage.failedOnlyCheckbox()).toBeChecked();
+    journalRequestsAfterFilter.stop();
+    expect(journalRequestsAfterFilter.urls).toEqual([]);
 
-    await deliveryPanel.getByLabel("Failed only").uncheck();
+    await connectionDetailPage.failedOnlyCheckbox().uncheck();
 
-    const reconnect = page.waitForRequest((request) => request.method() === "POST" && request.url().endsWith("/reconnect"));
-    await page.getByRole("button", { name: "Reconnect", exact: true }).click();
-    await expect(page.getByRole("heading", { name: "Reconnect this connection?" })).toBeVisible();
-    await page.getByRole("button", { name: "Reconnect", exact: true }).last().click();
+    const reconnect = connectionDetailPage.waitForReconnectRequest();
+    await connectionDetailPage.reconnectButton().click();
+    await expect(connectionDetailPage.reconnectDialog()).toBeVisible();
+    await connectionDetailPage.confirmReconnectButton().click();
     await reconnect;
   });
 
-  test("drills down into a Delivery's full lifecycle from a transition row", async ({ page }) => {
-    await page.getByRole("link", { name: "View details", exact: true }).click();
-    const deliveryPanel = page.getByRole("tabpanel", { name: "Delivery transitions" });
-    await deliveryPanel.getByRole("button", { name: /provider delivered/i }).click();
+  test("drills down into a Delivery's full lifecycle from a transition row", async () => {
+    await agentDetailPage.connectionDetailsLink().click();
+    await connectionDetailPage.deliveryTransitionRow(/provider delivered/i).click();
 
-    const lifecycleRequest = page.waitForRequest(
-      (request) => request.url().includes("delivery_id=dddddddd-dddd-4ddd-8ddd-dddddddddddd") && request.url().includes("order=asc"),
-    );
-    await deliveryPanel.getByRole("button", { name: "View delivery timeline" }).click();
+    const lifecycleRequest = connectionDetailPage.waitForDeliveryLifecycleRequest(COMMUNICATION_DELIVERY_ID);
+    await connectionDetailPage.deliveryTimelineButton().click();
     await lifecycleRequest;
 
-    await expect(deliveryPanel.getByText("Delivery timeline", { exact: true })).toBeVisible();
-    const timeline = deliveryPanel.getByRole("list");
-    await expect(timeline.getByText("reply queued", { exact: true })).toBeVisible();
-    await expect(timeline.getByText("provider delivered", { exact: true })).toBeVisible();
+    await expect(connectionDetailPage.summaryMetric("Delivery timeline")).toBeVisible();
+    await expect(connectionDetailPage.timelineStage("reply queued")).toBeVisible();
+    await expect(connectionDetailPage.timelineStage("provider delivered")).toBeVisible();
   });
 
-  test("edits Connection name and plugin settings without resending credentials", async ({ page }) => {
-    await page.getByRole("button", { name: "Edit Customer Discord" }).click();
-    await page.getByLabel("Connection name").fill("Renamed Discord");
-    await page.getByLabel("Guild IDs").fill("guild-updated");
-    const update = page.waitForRequest((request) => request.method() === "PATCH" && request.url().includes("/connections/"));
-    await page.getByRole("button", { name: "Save changes" }).click();
+  test("edits Connection name and plugin settings without resending credentials", async () => {
+    await agentDetailPage.editConnectionButton("Customer Discord").click();
+    await agentDetailPage.connectionNameInput().fill("Renamed Discord");
+    await agentDetailPage.connectionSettingsInput("Guild IDs").fill("guild-updated");
+    const update = agentDetailPage.waitForConnectionMutation("PATCH");
+    await agentDetailPage.saveConnectionButton().click();
     expect((await update).postDataJSON()).toEqual({
       revision: 3,
       display_name: "Renamed Discord",
@@ -906,44 +606,44 @@ test.describe("Agent Detail Page — Channels tab", () => {
     });
   });
 
-  test("shows provider setup requirements before connecting", async ({ page }) => {
-    await page.getByRole("button", { name: "Add connection" }).click();
-    await page.getByRole("button", { name: "Select Slack" }).click();
+  test("shows provider setup requirements before connecting", async () => {
+    await agentDetailPage.addConnectionButton().click();
+    await agentDetailPage.selectPlatformButton("Slack").click();
 
-    const hint = page.getByText(/Bot Token Scopes/);
+    const hint = agentDetailPage.setupHint(/Bot Token Scopes/);
     await expect(hint).toBeVisible();
     await expect(hint).toContainText("channels:read");
     await expect(hint).toContainText("groups:read");
     await expect(hint).toContainText("users:read");
     await expect(hint).toContainText("Reinstall the Slack app");
 
-    await page.getByRole("button", { name: "Select Discord" }).click();
-    const discordHint = page.getByText(/Message Content Intent/);
+    await agentDetailPage.selectPlatformButton("Discord").click();
+    const discordHint = agentDetailPage.setupHint(/Message Content Intent/);
     await expect(discordHint).toBeVisible();
     await expect(discordHint).toContainText("Read Message History");
     await expect(discordHint).toContainText("Developer Mode");
 
-    await page.getByRole("button", { name: "Select Telegram" }).click();
-    const telegramHint = page.getByText(/@BotFather/);
+    await agentDetailPage.selectPlatformButton("Telegram").click();
+    const telegramHint = agentDetailPage.setupHint(/@BotFather/);
     await expect(telegramHint).toBeVisible();
     await expect(telegramHint).toContainText("getUpdates");
     await expect(telegramHint).toContainText("/setprivacy");
     await expect(telegramHint).toContainText("webhook");
   });
 
-  test("creates another same-platform Connection from the plugin schema", async ({ page }) => {
-    await page.getByRole("button", { name: "Add connection" }).click();
-    await page.getByText("Discord", { exact: true }).click();
-    await page.getByLabel("Guild IDs").fill("guild-two");
-    const botToken = page.getByRole("textbox", { name: "Bot token" });
+  test("creates another same-platform Connection from the plugin schema", async () => {
+    await agentDetailPage.addConnectionButton().click();
+    await agentDetailPage.selectPlatformButton("Discord").click();
+    await agentDetailPage.connectionSettingsInput("Guild IDs").fill("guild-two");
+    const botToken = agentDetailPage.credentialInput("Bot token");
     await botToken.fill("token-two");
     await expect(botToken).toHaveAttribute("type", "password");
-    await page.getByRole("button", { name: "Show Bot token" }).click();
+    await agentDetailPage.credentialVisibilityButton("Bot token", false).click();
     await expect(botToken).toHaveAttribute("type", "text");
-    await page.getByRole("button", { name: "Hide Bot token" }).click();
+    await agentDetailPage.credentialVisibilityButton("Bot token", true).click();
     await expect(botToken).toHaveAttribute("type", "password");
-    const create = page.waitForRequest((request) => request.method() === "POST" && request.url().endsWith("/connections"));
-    await page.getByRole("button", { name: "Connect Discord", exact: true }).click();
+    const create = agentDetailPage.waitForConnectionMutation("POST");
+    await agentDetailPage.connectPlatformButton("Discord").click();
     expect((await create).postDataJSON()).toEqual({
       platform_key: "discord",
       display_name: "Discord",
