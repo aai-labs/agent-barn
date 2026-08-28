@@ -40,7 +40,7 @@ export function AgentOverrideDraftEditor({
   onCancel: () => void;
   isSaving: boolean;
 }) {
-  const { skills, isLoading: skillsLoading } = useSkills({ pageSize: 100 });
+  const { skills, isLoading: skillsLoading } = useSkills({ scope: { kind: "organization" }, pageSize: 100 });
   const original = draftToForm(draft);
   const isDirty =
     PLATFORM_TEMPLATE_FILES.some(({ key }) => form[key] !== original[key]) ||

@@ -46,7 +46,7 @@ Scopes are derived per request from the selected services and access level rathe
 
 ## Runtime materialization
 
-At start, Agent Service decrypts provider payloads, backfills configured Google Workspace client credentials where applicable, builds aai-cli configuration and secret-store setup, injects provider environment, mounts provider skills, and appends tool/integration policy to rendered template content. Provider handling is not complete until both storage validation and runtime materialization are updated.
+At start, Agent Service decrypts provider payloads, backfills configured Google Workspace client credentials where applicable, builds aai-cli configuration and secret-store setup, injects provider environment, mounts the Agent's exact Skill Version pins plus eligible bundled aai-cli Skills, and appends tool/integration policy to rendered template content. Provider handling is not complete until both storage validation and runtime materialization are updated.
 
 The aai-cli integrations policy is gated on providers that actually have an aai-cli profile. An agent whose only integration is profile-less Google Workspace must not receive instructions claiming that aai-cli profiles are required.
 
@@ -59,14 +59,14 @@ Google Workspace materializes through `gog_artifacts.py`: the pod Secret carries
 | Provider enum, content schemas, encryption helpers | `../../api/domains/agents/models.py`                                                                                                                |
 | Shared Credential CRUD and lifecycle               | `../../api/domains/shared_credentials/`                                                                                                             |
 | Agent Secret persistence and lifecycle             | `../../api/domains/agents/service.py`, `../../api/domains/agents/repository.py`                                                                     |
-| aai-cli runtime materialization                    | `../../api/domains/agents/aai_cli_artifacts.py`, `../../api/domains/agents/aai_cli_skills/`                                                         |
-| gog runtime materialization                       | `../../api/domains/agents/gog_artifacts.py`; gog is pinned in `../../openclaw-base/Dockerfile` and `../../hermes-base/Dockerfile`               |
-| Built-in skill definitions                         | `../../api/domains/agents/aai_cli_skills/`                                                                                                          |
+| aai-cli runtime materialization                    | `../../api/domains/agents/aai_cli_artifacts.py`, `../../api/domains/agents/aai_cli_skills/bundled/skills/`                                         |
+| gog runtime materialization                        | `../../api/domains/agents/gog_artifacts.py`; gog is pinned in `../../openclaw-base/Dockerfile` and `../../hermes-base/Dockerfile`                 |
+| Built-in skill definitions                         | `../../api/domains/agents/aai_cli_skills/bundled/skills/`, `../../api/domains/skills/skill_seeder.py`                                               |
 | Communication platform credentials                 | `../../api/domains/communications/`, [`communications/CHANGELOG.md`](communications/CHANGELOG.md)                                                   |
 | Google OAuth (Google Workspace)                    | `../../api/domains/integrations/google_oauth/routes.py`                                                                                             |
 | Firecrawl runtime wiring                           | `../../api/domains/agents/service.py` (platform-default + per-agent override)                                                                       |
 | UI credential forms                                | `../../ui/src/features/agents/`, `../../ui/src/features/account/`                                                                                   |
-| Tests                                              | `../../api/tests/integration/test_agents.py`, `../../api/tests/integration/test_shared_credentials.py`, `../../api/tests/integration/test_slack_config_token.py`, `../../api/tests/unit/test_google_oauth.py` |
+| Tests                                              | `../../api/tests/integration/test_agents.py`, `../../api/tests/integration/test_shared_credentials.py`, `../../api/tests/integration/test_communication_connections.py`, `../../api/tests/unit/test_google_oauth.py` |
 
 ## Change impact
 

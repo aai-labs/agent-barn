@@ -92,7 +92,7 @@ Kubernetes `stream()` and `portforward()` temporarily monkey-patch `ApiClient.re
 | Shared Kubernetes builders      | `../../api/domains/agents/builders/common.py`                                         |
 | Hermes builders                 | `../../api/domains/agents/builders/hermes.py`, `../../hermes-base/`                         |
 | OpenClaw builders               | `../../api/domains/agents/builders/openclaw.py`, `../../openclaw-base/`                     |
-| Skill and integration artifacts | `../../api/domains/agents/aai_cli_artifacts.py`, `../../api/domains/agents/aai_cli_skills/`, `../../api/domains/agents/gog_artifacts.py` |
+| Skill and integration artifacts | `../../api/domains/agents/aai_cli_artifacts.py`, `../../api/domains/agents/aai_cli_skills/bundled/skills/`, `../../api/domains/agents/gog_artifacts.py` |
 | Provider clients                | `../../api/infrastructure/slack/`, `../../api/infrastructure/telegram/`, `../../api/infrastructure/discord/` |
 | Kubernetes client               | `../../api/infrastructure/kubernetes/`                                                |
 | Charts and release ordering     | `../../helm/`, `../../helmfile.yaml.gotmpl`                                                 |

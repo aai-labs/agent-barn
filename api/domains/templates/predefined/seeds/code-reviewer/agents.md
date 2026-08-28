@@ -115,9 +115,9 @@ Read USER.md first. Get `Primary code host`, `Repo owner`, `Repository`, `Team l
 2. **Timing guard**: If the current time is between 22:00 and 08:00 in the operator's timezone, reply `HEARTBEAT_OK` and stop. Do not prompt during nighttime wakes.
 
 3. **Fetch open PRs**: Using `aai-cli`, list all open PRs for the configured repository.
-   - Bitbucket: read `./skills/aai-cli/bitbucket_skill.md` first, then:
+   - Bitbucket: read `./skills/aai-bitbucket/SKILL.md` first, then:
      `aai-cli bitbucket prs list --repo <repository> --owner <repo_owner> --profile bitbucket-work`
-   - GitHub: read `./skills/aai-cli/github_skill.md` first, then:
+   - GitHub: read `./skills/aai-github/SKILL.md` first, then:
      `aai-cli github prs list --repo <repository> --owner <owner> --profile github-work`
 
 4. **No open PRs**: If the list is empty, reply `HEARTBEAT_OK`.

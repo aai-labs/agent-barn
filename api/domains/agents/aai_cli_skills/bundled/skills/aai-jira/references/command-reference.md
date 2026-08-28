@@ -1,28 +1,18 @@
-"""aai-cli jira skill docs."""
-
-JIRA_SKILLS: list[dict[str, str]] = [
-    {
-        "skill_file_path": "aai-cli/jira_skill.md",
-        "skill_content": """\
 # aai-cli Jira Skill
 
 Agent reference for the `aai-cli jira` command group.
 
-## IMPORTANT: credentials are already configured
+## Global flags
 
-The tool is fully set up on this agent. **Do not ask the user for credentials, site URLs,
-tokens, or any config details.** The profile is on disk and ready. Just run the command.
+Accepted by every command. Can also be set via environment variables.
 
-If the command returns an error, show the raw error output to the user — do not ask them
-to provide config or credentials.
+| Flag | Env | Default | Description |
+|---|---|---|---|
+| `--profile NAME` | `AAI_PROFILE` | config `default_profile` | Profile from `~/.config/aai-cli/config.toml` |
+| `--config PATH` | `AAI_CONFIG` | `~/.config/aai-cli/config.toml` | Path to config file |
+| `--secrets-file PATH` | `AAI_SECRETS_FILE` | `~/.config/aai-cli/secrets.enc.json` | Path to encrypted secrets file |
+| `--key-file PATH` | `AAI_SECRET_KEY_FILE` | `/run/aai/key` or `~/.config/aai-cli/key` | Path to decryption key file |
 
-## Required flag
-
-Every command requires `--profile jira-work`. Always include it.
-
-```
-aai-cli jira <command> --profile jira-work [other flags]
-```
 ## Response shapes
 
 **List commands** return trimmed responses: UI-only fields (`self`, `expand`, avatar URLs) are stripped. Pagination is resolved internally up to `--limit`. The envelope always includes `isLast`, `maxResults`, and `startAt`/`total` where the API provides them.
@@ -54,107 +44,27 @@ All errors print to stderr as a single JSON line:
 
 Exit code is non-zero on any error.
 
-# Jira Boards Skill
+## Resources
 
-Commands under `aai-cli jira boards`.
+- [Issues](#issues) — `issues list`, `get`, `create`, `update`, `comments` list/get/create, `attachments` list/download/upload
+- [Ideas](#ideas-jira-product-discovery) — `ideas list`, `get`, `create`, `update`, `fields` (Jira Product Discovery)
+- [Projects](#projects) — `projects list`, `get`
+- [Sprints](#sprints) — `sprints list`, `get`, `create`, `issues add`
+- [Boards](#boards) — `boards list`, `get`
+- [Users](#users) — `users get`
 
----
-
-## boards list
-
-List Agile boards. Returns trimmed board objects (avatar URLs and internal location IDs stripped).
-
-```
-aai-cli jira boards list [--type TYPE] [--project KEY] [--name TEXT] [--limit N] --profile jira-work
-```
-
-| Flag | Required | Description |
-|---|---|---|
-| `--type` | no | Board type: `scrum`, `kanban`, or `simple` |
-| `--project` | no | Filter by project key |
-| `--name` | no | Filter by board name (substring match) |
-| `--limit` | no | Max boards to return. Default: `50` |
-
-**Example**
-
-```
-aai-cli jira boards list --limit 1 --profile jira-work
-```
-
-```json
-{
-  "isLast": true,
-  "maxResults": 1,
-  "startAt": 0,
-  "total": 1,
-  "values": [
-    {
-      "id": 1,
-      "location": {
-        "projectKey": "SCRUM",
-        "projectName": "test-space",
-        "projectTypeKey": "software"
-      },
-      "name": "SCRUM board",
-      "type": "simple"
-    }
-  ]
-}
-```
-
----
-
-## boards get
-
-Fetch a single board by numeric ID. Returns the full raw API response.
-
-```
-aai-cli jira boards get <BOARD_ID> --profile jira-work
-```
-
-| Argument | Required | Description |
-|---|---|---|
-| `BOARD_ID` | **yes** | Numeric board ID |
-
-**Example**
-
-```
-aai-cli jira boards get 1 --profile jira-work
-```
-
-```json
-{
-  "id": 1,
-  "isPrivate": false,
-  "location": {
-    "avatarURI": "https://marsellewing.atlassian.net/rest/api/2/universal_avatar/...",
-    "displayName": "test-space (SCRUM)",
-    "name": "test-space (SCRUM)",
-    "projectId": 10000,
-    "projectKey": "SCRUM",
-    "projectName": "test-space",
-    "projectTypeKey": "software"
-  },
-  "name": "SCRUM board",
-  "self": "https://marsellewing.atlassian.net/rest/agile/1.0/board/1",
-  "type": "simple"
-}
-```
-
-# Jira Issues Skill
+## Issues
 
 Commands under `aai-cli jira issues`.
 
----
-
-## issues list
+### issues list
 
 List issues with structured filters. All filter flags are optional and AND-joined. Omitting all filters returns a Jira error (unbounded queries are blocked by the API) — provide at least one filter flag.
 
 Multi-value flags accept comma-separated strings.
 
 ```
-aai-cli jira issues list [--project KEY] [--status NAMES] [--assignee me|ACCOUNT_ID] --profile jira-work
+aai-cli jira issues list [--project KEY] [--status NAMES] [--assignee me|ACCOUNT_ID]
                          [--type NAMES] [--sprint current|future|closed|ID]
                          [--text TEXT] [--updated-since DATE_OR_RELATIVE]
                          [--fields FIELD_LIST] [--limit N]
@@ -175,7 +85,7 @@ aai-cli jira issues list [--project KEY] [--status NAMES] [--assignee me|ACCOUNT
 **Example — project + multi-status filter**
 
 ```
-aai-cli jira issues list --project SCRUM --status "To Do,In Progress" --limit 1 --profile jira-work
+aai-cli jira issues list --project SCRUM --status "To Do,In Progress" --limit 1
 ```
 
 ```json
@@ -204,7 +114,7 @@ aai-cli jira issues list --project SCRUM --status "To Do,In Progress" --limit 1 
 **Example — current sprint**
 
 ```
-aai-cli jira issues list --sprint current --limit 1 --profile jira-work
+aai-cli jira issues list --sprint current --limit 1
 ```
 
 ```json
@@ -230,14 +140,12 @@ aai-cli jira issues list --sprint current --limit 1 --profile jira-work
 }
 ```
 
----
-
-## issues get
+### issues get
 
 Fetch a single issue by key or numeric ID. Returns the full raw API response including all fields, comments, and changelog.
 
 ```
-aai-cli jira issues get <ISSUE_KEY_OR_ID> --profile jira-work
+aai-cli jira issues get <ISSUE_KEY_OR_ID>
 ```
 
 | Argument | Required | Description |
@@ -247,7 +155,7 @@ aai-cli jira issues get <ISSUE_KEY_OR_ID> --profile jira-work
 **Example**
 
 ```
-aai-cli jira issues get SCRUM-1 --profile jira-work
+aai-cli jira issues get SCRUM-1
 ```
 
 ```json
@@ -290,14 +198,12 @@ aai-cli jira issues get SCRUM-1 --profile jira-work
 }
 ```
 
----
-
-## issues create
+### issues create
 
 Create a new issue. `--project` and `--summary` are the minimal required flags. Use `--json` to pass a full Jira create body; individual flags override matching JSON fields.
 
 ```
-aai-cli jira issues create [--json JSON_OR_PATH] [--project KEY] [--summary TEXT] --profile jira-work
+aai-cli jira issues create [--json JSON_OR_PATH] [--project KEY] [--summary TEXT]
                            [--description TEXT] [--issue-type NAME]
 ```
 
@@ -312,7 +218,7 @@ aai-cli jira issues create [--json JSON_OR_PATH] [--project KEY] [--summary TEXT
 **Example**
 
 ```
-aai-cli jira issues create --project SCRUM --summary "Fix login timeout" --description "Users are logged out after 5 minutes of inactivity" --profile jira-work
+aai-cli jira issues create --project SCRUM --summary "Fix login timeout" --description "Users are logged out after 5 minutes of inactivity"
 ```
 
 ```json
@@ -323,14 +229,12 @@ aai-cli jira issues create --project SCRUM --summary "Fix login timeout" --descr
 }
 ```
 
----
-
-## issues update
+### issues update
 
 Update an existing issue. Only the flags you pass are changed; omitted flags leave the field untouched.
 
 ```
-aai-cli jira issues update <ISSUE_KEY_OR_ID> [--json JSON_OR_PATH] --profile jira-work
+aai-cli jira issues update <ISSUE_KEY_OR_ID> [--json JSON_OR_PATH]
                            [--summary TEXT] [--description TEXT]
 ```
 
@@ -344,7 +248,7 @@ aai-cli jira issues update <ISSUE_KEY_OR_ID> [--json JSON_OR_PATH] --profile jir
 **Example**
 
 ```
-aai-cli jira issues update SCRUM-11 --summary "Fix login timeout (critical)" --profile jira-work
+aai-cli jira issues update SCRUM-11 --summary "Fix login timeout (critical)"
 ```
 
 ```json
@@ -353,14 +257,12 @@ aai-cli jira issues update SCRUM-11 --summary "Fix login timeout (critical)" --p
 
 An empty `{}` response means success.
 
----
-
-## issues comments list
+### issues comments list
 
 List comments on an issue. Returns trimmed comment objects (avatar URLs stripped).
 
 ```
-aai-cli jira issues comments list <ISSUE_KEY_OR_ID> [--limit N] --profile jira-work
+aai-cli jira issues comments list <ISSUE_KEY_OR_ID> [--limit N]
 ```
 
 | Argument / Flag | Required | Description |
@@ -371,7 +273,7 @@ aai-cli jira issues comments list <ISSUE_KEY_OR_ID> [--limit N] --profile jira-w
 **Example**
 
 ```
-aai-cli jira issues comments list SCRUM-1 --limit 1 --profile jira-work
+aai-cli jira issues comments list SCRUM-1 --limit 1
 ```
 
 ```json
@@ -410,14 +312,12 @@ aai-cli jira issues comments list SCRUM-1 --limit 1 --profile jira-work
 }
 ```
 
----
-
-## issues comments get
+### issues comments get
 
 Fetch a single comment by ID. Returns the full raw API response.
 
 ```
-aai-cli jira issues comments get <ISSUE_KEY_OR_ID> <COMMENT_ID> --profile jira-work
+aai-cli jira issues comments get <ISSUE_KEY_OR_ID> <COMMENT_ID>
 ```
 
 | Argument | Required | Description |
@@ -428,7 +328,7 @@ aai-cli jira issues comments get <ISSUE_KEY_OR_ID> <COMMENT_ID> --profile jira-w
 **Example**
 
 ```
-aai-cli jira issues comments get SCRUM-1 10001 --profile jira-work
+aai-cli jira issues comments get SCRUM-1 10001
 ```
 
 ```json
@@ -458,14 +358,12 @@ aai-cli jira issues comments get SCRUM-1 10001 --profile jira-work
 }
 ```
 
----
-
-## issues comments create
+### issues comments create
 
 Add a comment to an issue. Use `--body` for plain text (auto-converted to ADF), or `--json` for pre-built ADF content.
 
 ```
-aai-cli jira issues comments create <ISSUE_KEY_OR_ID> [--body TEXT] [--json JSON_OR_PATH] --profile jira-work
+aai-cli jira issues comments create <ISSUE_KEY_OR_ID> [--body TEXT] [--json JSON_OR_PATH]
 ```
 
 | Argument / Flag | Required | Description |
@@ -477,7 +375,7 @@ aai-cli jira issues comments create <ISSUE_KEY_OR_ID> [--body TEXT] [--json JSON
 **Example**
 
 ```
-aai-cli jira issues comments create SCRUM-1 --body "Confirmed fix is deployed to staging." --profile jira-work
+aai-cli jira issues comments create SCRUM-1 --body "Confirmed fix is deployed to staging."
 ```
 
 ```json
@@ -503,14 +401,12 @@ aai-cli jira issues comments create SCRUM-1 --body "Confirmed fix is deployed to
 }
 ```
 
----
-
-## issues attachments list
+### issues attachments list
 
 List attachments on an issue. Returns trimmed attachment objects (avatar URLs and self-links stripped).
 
 ```
-aai-cli jira issues attachments list <ISSUE_KEY_OR_ID> --profile jira-work
+aai-cli jira issues attachments list <ISSUE_KEY_OR_ID>
 ```
 
 | Argument | Required | Description |
@@ -520,7 +416,7 @@ aai-cli jira issues attachments list <ISSUE_KEY_OR_ID> --profile jira-work
 **Example**
 
 ```
-aai-cli jira issues attachments list SCRUM-1 --profile jira-work
+aai-cli jira issues attachments list SCRUM-1
 ```
 
 ```json
@@ -544,14 +440,12 @@ aai-cli jira issues attachments list SCRUM-1 --profile jira-work
 
 Use `id` from this response as `<ATTACHMENT_ID>` in the download command.
 
----
-
-## issues attachments download
+### issues attachments download
 
 Download an attachment's binary content to a local file.
 
 ```
-aai-cli jira issues attachments download <ATTACHMENT_ID> --output <PATH> --profile jira-work
+aai-cli jira issues attachments download <ATTACHMENT_ID> --output <PATH>
 ```
 
 | Argument / Flag | Required | Description |
@@ -562,7 +456,7 @@ aai-cli jira issues attachments download <ATTACHMENT_ID> --output <PATH> --profi
 **Example**
 
 ```
-aai-cli jira issues attachments download 10000 --output /tmp/jira_smoke.txt --profile jira-work
+aai-cli jira issues attachments download 10000 --output /tmp/jira_smoke.txt
 ```
 
 ```json
@@ -572,14 +466,12 @@ aai-cli jira issues attachments download 10000 --output /tmp/jira_smoke.txt --pr
 }
 ```
 
----
-
-## issues attachments upload
+### issues attachments upload
 
 Upload a local file as an attachment to an issue.
 
 ```
-aai-cli jira issues attachments upload <ISSUE_KEY_OR_ID> --file <PATH> --profile jira-work
+aai-cli jira issues attachments upload <ISSUE_KEY_OR_ID> --file <PATH>
 ```
 
 | Argument / Flag | Required | Description |
@@ -592,7 +484,7 @@ Returns an array of attachment objects (raw Jira response). On success there wil
 **Example**
 
 ```
-aai-cli jira issues attachments upload SCRUM-1 --file /tmp/report.pdf --profile jira-work
+aai-cli jira issues attachments upload SCRUM-1 --file /tmp/report.pdf
 ```
 
 ```json
@@ -613,18 +505,209 @@ aai-cli jira issues attachments upload SCRUM-1 --file /tmp/report.pdf --profile 
 ]
 ```
 
-# Jira Projects Skill
+## Ideas (Jira Product Discovery)
+
+Commands under `aai-cli jira ideas`. Product Discovery ideas are Jira issues in `product_discovery`-type projects on the same site with the same credentials. Project-specific idea fields (Impact, Effort, ratings, and other Product Discovery fields) are custom fields — discover their ids with `ideas fields`, then set them via `--json`. Votes, reactions, insights, and formula values are not exposed by Atlassian's public APIs.
+
+Find Product Discovery projects with `aai-cli jira projects list --type product_discovery`.
+
+### ideas list
+
+Search ideas across Product Discovery projects. The query is always scoped to `projectType = product_discovery`, so it is valid with no filter flags; add flags to narrow it. Filters are AND-joined.
+
+```
+aai-cli jira ideas list [--project KEY] [--status NAMES] [--assignee me|ACCOUNT_ID]
+                        [--text TEXT] [--updated-since DATE_OR_RELATIVE]
+                        [--fields FIELD_LIST] [--limit N]
+```
+
+| Flag | Required | Type | Description |
+|---|---|---|---|
+| `--project` | no | string | Product Discovery project key, e.g. `BAW` |
+| `--status` | no | string (csv) | Status name(s). Single: `"Discovery"`. Multi: `"Discovery,Delivery"` |
+| `--assignee` | no | string | `me` expands to `currentUser()`. Otherwise an account ID |
+| `--text` | no | string | Full-text search across summary, description, and comments |
+| `--updated-since` | no | string | Relative: `7d`, `30d`, `1y`. Absolute ISO date: `2026-05-01` |
+| `--fields` | no | string (csv) | Jira field names to include, including `customfield_*` ids from `ideas fields`. Default: `key,summary,status,issuetype,assignee,created,updated,description,project` |
+| `--limit` | no | integer | Max ideas to return. Default: `50` |
+
+**Example — ideas in one project, including a custom field**
+
+```
+aai-cli jira ideas list --project BAW --fields key,summary,status,customfield_10011 --limit 1
+```
+
+```json
+{
+  "isLast": true,
+  "issues": [
+    {
+      "fields": {
+        "summary": "Faster onboarding",
+        "status": { "name": "Discovery", "statusCategory": { "name": "In Progress" } }
+      },
+      "id": "10101",
+      "key": "BAW-12"
+    }
+  ],
+  "maxResults": 1
+}
+```
+
+Fields requested via `--fields` outside the default trim allowlist (such as `customfield_*`) are returned by the API but stripped from the trimmed list output; use `ideas get` to read custom field values.
+
+### ideas get
+
+Fetch a single idea by key or numeric ID. Returns the full raw API response including every custom field, so this is the way to read Product Discovery field values.
+
+```
+aai-cli jira ideas get <IDEA_KEY_OR_ID>
+```
+
+| Argument | Required | Description |
+|---|---|---|
+| `IDEA_KEY_OR_ID` | **yes** | Idea key (`BAW-12`) or numeric ID (`10101`) |
+
+**Example**
+
+```
+aai-cli jira ideas get BAW-12
+```
+
+```json
+{
+  "fields": {
+    "customfield_10011": { "id": "10", "value": "High" },
+    "issuetype": { "name": "Idea", "subtask": false },
+    "project": { "key": "BAW", "name": "Business Automation Workflows" },
+    "status": { "name": "Discovery", "statusCategory": { "name": "In Progress" } },
+    "summary": "Faster onboarding"
+  },
+  "id": "10101",
+  "key": "BAW-12"
+}
+```
+
+### ideas create
+
+Create an idea. `--project` and `--summary` are the minimal required flags. The issue type defaults to `Idea`; pass `--type` when the project uses a different idea type name. Set Product Discovery custom fields through `--json`; individual flags override matching JSON fields.
+
+```
+aai-cli jira ideas create [--json JSON_OR_PATH] [--project KEY] [--type NAME]
+                          [--summary TEXT] [--description TEXT]
+```
+
+| Flag | Required | Description |
+|---|---|---|
+| `--project` | **yes** (unless `--json` covers it) | Product Discovery project key |
+| `--summary` | **yes** (unless `--json` covers it) | Idea summary line |
+| `--type` | no | Issue type name. Defaults to `Idea` |
+| `--description` | no | Description text. Auto-converted to Atlassian Document Format (ADF) |
+| `--json` | no | Inline JSON string or path to a JSON file (`-` for stdin). Flags override matching fields |
+
+**Example — create with a custom field**
+
+```
+aai-cli jira ideas create --project BAW --summary "Faster onboarding" \
+  --json '{"fields":{"customfield_10011":{"id":"10"}}}'
+```
+
+```json
+{
+  "id": "10101",
+  "key": "BAW-12",
+  "self": "https://example.atlassian.net/rest/api/3/issue/10101"
+}
+```
+
+### ideas update
+
+Update an existing idea. Only the flags you pass are changed; omitted flags leave the field untouched. Use `--json` to set Product Discovery custom fields.
+
+```
+aai-cli jira ideas update <IDEA_KEY_OR_ID> [--json JSON_OR_PATH]
+                          [--summary TEXT] [--description TEXT]
+```
+
+| Argument / Flag | Required | Description |
+|---|---|---|
+| `IDEA_KEY_OR_ID` | **yes** | Idea key or numeric ID |
+| `--summary` | no | New summary text |
+| `--description` | no | New description (auto-converted to ADF) |
+| `--json` | no | Raw Jira issue-update body, e.g. `{"fields":{"customfield_10011":{"id":"11"}}}`. Flags override matching fields |
+
+**Example**
+
+```
+aai-cli jira ideas update BAW-12 --json '{"fields":{"customfield_10011":{"id":"11"}}}'
+```
+
+```json
+{}
+```
+
+An empty `{}` response means success.
+
+### ideas fields
+
+Discover the fields available on a project's idea type, including required flags, schemas, allowed values, and permitted operations. The command resolves the project's idea issue type automatically: a single type is used as-is, `Idea` is preferred when several exist, and any other ambiguity asks for `--type`.
+
+```
+aai-cli jira ideas fields <PROJECT_KEY_OR_ID> [--type NAME] [--limit N]
+```
+
+| Argument / Flag | Required | Description |
+|---|---|---|
+| `PROJECT_KEY_OR_ID` | **yes** | Product Discovery project key or numeric ID |
+| `--type` | no | Issue type name to inspect when the project has more than one |
+| `--limit` | no | Max fields to return. Default: `200` |
+
+**Example**
+
+```
+aai-cli jira ideas fields BAW
+```
+
+```json
+{
+  "fields": [
+    {
+      "allowedValues": [
+        { "id": "10", "value": "High" },
+        { "id": "11", "value": "Low" }
+      ],
+      "fieldId": "customfield_10011",
+      "hasDefaultValue": false,
+      "key": "customfield_10011",
+      "name": "Impact",
+      "operations": ["set"],
+      "required": false,
+      "schema": {
+        "custom": "com.atlassian.jira.plugin.system.customfieldtypes:select",
+        "customId": 10011,
+        "type": "option"
+      }
+    }
+  ],
+  "issueType": { "id": "11444", "name": "Idea", "subtask": false },
+  "maxResults": 200,
+  "startAt": 0,
+  "total": 1
+}
+```
+
+`issueType` reports which issue type the fields belong to. Use each field's `fieldId` as the key in `--json` bodies for `ideas create` and `ideas update`, and match option-typed fields by their allowed value `id`.
+
+## Projects
 
 Commands under `aai-cli jira projects`.
 
----
-
-## projects list
+### projects list
 
 List all projects in the Jira site. Returns trimmed objects (avatar URLs and self links stripped).
 
 ```
-aai-cli jira projects list [--limit N] --profile jira-work
+aai-cli jira projects list [--limit N]
 ```
 
 | Flag | Required | Description |
@@ -634,7 +717,7 @@ aai-cli jira projects list [--limit N] --profile jira-work
 **Example**
 
 ```
-aai-cli jira projects list --profile jira-work
+aai-cli jira projects list
 ```
 
 ```json
@@ -655,14 +738,12 @@ aai-cli jira projects list --profile jira-work
 }
 ```
 
----
-
-## projects get
+### projects get
 
 Fetch a single project by key or numeric ID. Returns the full raw API response including issue types, lead, and all metadata.
 
 ```
-aai-cli jira projects get <PROJECT_KEY_OR_ID> --profile jira-work
+aai-cli jira projects get <PROJECT_KEY_OR_ID>
 ```
 
 | Argument | Required | Description |
@@ -672,7 +753,7 @@ aai-cli jira projects get <PROJECT_KEY_OR_ID> --profile jira-work
 **Example**
 
 ```
-aai-cli jira projects get SCRUM --profile jira-work
+aai-cli jira projects get SCRUM
 ```
 
 ```json
@@ -693,18 +774,16 @@ aai-cli jira projects get SCRUM --profile jira-work
 }
 ```
 
-# Jira Sprints Skill
+## Sprints
 
 Commands under `aai-cli jira sprints`.
 
----
-
-## sprints list
+### sprints list
 
 List sprints for a board. Returns trimmed sprint objects. Future sprints omit `startDate`/`endDate` until scheduled.
 
 ```
-aai-cli jira sprints list --board BOARD_ID [--state STATE] [--limit N] --profile jira-work
+aai-cli jira sprints list --board BOARD_ID [--state STATE] [--limit N]
 ```
 
 | Flag | Required | Description |
@@ -716,7 +795,7 @@ aai-cli jira sprints list --board BOARD_ID [--state STATE] [--limit N] --profile
 **Example — active sprints only**
 
 ```
-aai-cli jira sprints list --board 1 --state active --profile jira-work
+aai-cli jira sprints list --board 1 --state active
 ```
 
 ```json
@@ -741,7 +820,7 @@ aai-cli jira sprints list --board 1 --state active --profile jira-work
 **Example — all sprints (mixed states)**
 
 ```
-aai-cli jira sprints list --board 1 --limit 2 --profile jira-work
+aai-cli jira sprints list --board 1 --limit 2
 ```
 
 ```json
@@ -770,14 +849,12 @@ aai-cli jira sprints list --board 1 --limit 2 --profile jira-work
 }
 ```
 
----
-
-## sprints get
+### sprints get
 
 Fetch a single sprint by numeric ID. Returns the full raw API response.
 
 ```
-aai-cli jira sprints get <SPRINT_ID> --profile jira-work
+aai-cli jira sprints get <SPRINT_ID>
 ```
 
 | Argument | Required | Description |
@@ -787,7 +864,7 @@ aai-cli jira sprints get <SPRINT_ID> --profile jira-work
 **Example**
 
 ```
-aai-cli jira sprints get 2 --profile jira-work
+aai-cli jira sprints get 2
 ```
 
 ```json
@@ -802,14 +879,12 @@ aai-cli jira sprints get 2 --profile jira-work
 }
 ```
 
----
-
-## sprints create
+### sprints create
 
 Create a new sprint on a board. `--board` and `--name` are required unless a complete body is passed via `--json`.
 
 ```
-aai-cli jira sprints create [--json JSON_OR_PATH] --board BOARD_ID --name TEXT --profile jira-work
+aai-cli jira sprints create [--json JSON_OR_PATH] --board BOARD_ID --name TEXT
                             [--goal TEXT] [--start-date ISO_8601] [--end-date ISO_8601]
 ```
 
@@ -825,7 +900,7 @@ aai-cli jira sprints create [--json JSON_OR_PATH] --board BOARD_ID --name TEXT -
 **Example**
 
 ```
-aai-cli jira sprints create --board 1 --name "Sprint 5" --goal "Ship auth v2" --start-date 2026-06-01T00:00:00.000Z --end-date 2026-06-14T00:00:00.000Z --profile jira-work
+aai-cli jira sprints create --board 1 --name "Sprint 5" --goal "Ship auth v2" --start-date 2026-06-01T00:00:00.000Z --end-date 2026-06-14T00:00:00.000Z
 ```
 
 ```json
@@ -838,14 +913,12 @@ aai-cli jira sprints create --board 1 --name "Sprint 5" --goal "Ship auth v2" --
 }
 ```
 
----
-
-## sprints issues add
+### sprints issues add
 
 Move one or more issues into a sprint.
 
 ```
-aai-cli jira sprints issues add <SPRINT_ID> --issues KEY1[,KEY2,...] --profile jira-work
+aai-cli jira sprints issues add <SPRINT_ID> --issues KEY1[,KEY2,...]
 ```
 
 | Argument / Flag | Required | Description |
@@ -856,7 +929,7 @@ aai-cli jira sprints issues add <SPRINT_ID> --issues KEY1[,KEY2,...] --profile j
 **Example**
 
 ```
-aai-cli jira sprints issues add 2 --issues SCRUM-5,SCRUM-6 --profile jira-work
+aai-cli jira sprints issues add 2 --issues SCRUM-5,SCRUM-6
 ```
 
 ```json
@@ -865,18 +938,99 @@ aai-cli jira sprints issues add 2 --issues SCRUM-5,SCRUM-6 --profile jira-work
 
 An empty `{}` response means success.
 
-# Jira Users Skill
+## Boards
+
+Commands under `aai-cli jira boards`.
+
+### boards list
+
+List Agile boards. Returns trimmed board objects (avatar URLs and internal location IDs stripped).
+
+```
+aai-cli jira boards list [--type TYPE] [--project KEY] [--name TEXT] [--limit N]
+```
+
+| Flag | Required | Description |
+|---|---|---|
+| `--type` | no | Board type: `scrum`, `kanban`, or `simple` |
+| `--project` | no | Filter by project key |
+| `--name` | no | Filter by board name (substring match) |
+| `--limit` | no | Max boards to return. Default: `50` |
+
+**Example**
+
+```
+aai-cli jira boards list --limit 1
+```
+
+```json
+{
+  "isLast": true,
+  "maxResults": 1,
+  "startAt": 0,
+  "total": 1,
+  "values": [
+    {
+      "id": 1,
+      "location": {
+        "projectKey": "SCRUM",
+        "projectName": "test-space",
+        "projectTypeKey": "software"
+      },
+      "name": "SCRUM board",
+      "type": "simple"
+    }
+  ]
+}
+```
+
+### boards get
+
+Fetch a single board by numeric ID. Returns the full raw API response.
+
+```
+aai-cli jira boards get <BOARD_ID>
+```
+
+| Argument | Required | Description |
+|---|---|---|
+| `BOARD_ID` | **yes** | Numeric board ID |
+
+**Example**
+
+```
+aai-cli jira boards get 1
+```
+
+```json
+{
+  "id": 1,
+  "isPrivate": false,
+  "location": {
+    "avatarURI": "https://marsellewing.atlassian.net/rest/api/2/universal_avatar/...",
+    "displayName": "test-space (SCRUM)",
+    "name": "test-space (SCRUM)",
+    "projectId": 10000,
+    "projectKey": "SCRUM",
+    "projectName": "test-space",
+    "projectTypeKey": "software"
+  },
+  "name": "SCRUM board",
+  "self": "https://marsellewing.atlassian.net/rest/agile/1.0/board/1",
+  "type": "simple"
+}
+```
+
+## Users
 
 Commands under `aai-cli jira users`.
 
----
-
-## users get
+### users get
 
 Fetch a user profile by Atlassian account ID. Returns the full raw API response.
 
 ```
-aai-cli jira users get <ACCOUNT_ID> --profile jira-work
+aai-cli jira users get <ACCOUNT_ID>
 ```
 
 | Argument | Required | Description |
@@ -888,7 +1042,7 @@ To find the account ID for the authenticated user, run `aai-cli jira issues list
 **Example**
 
 ```
-aai-cli jira users get 712020:3fd582db-3261-4930-b192-171d1cb74d1f --profile jira-work
+aai-cli jira users get 712020:3fd582db-3261-4930-b192-171d1cb74d1f
 ```
 
 ```json
@@ -901,6 +1055,3 @@ aai-cli jira users get 712020:3fd582db-3261-4930-b192-171d1cb74d1f --profile jir
   "timeZone": "Africa/Addis_Ababa"
 }
 ```
-""",
-    },
-]

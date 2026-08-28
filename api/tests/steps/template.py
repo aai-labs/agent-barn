@@ -71,6 +71,7 @@ def there_is_a_template_skill(group_key: str | None = None):
                 AgentTemplateSkill(
                     template_id=context.template.id,
                     skill_id=context.skill.id,
+                    skill_version=1,
                     group_key=group_key,
                 )
             )
@@ -108,7 +109,12 @@ def there_is_a_template_skill_group(skill_names: tuple[str, ...], group_key: str
                 )
                 session.add(skill)
                 session.flush()
-                version = SkillVersion(skill_id=skill.id, version=1)
+                version = SkillVersion(
+                    skill_id=skill.id,
+                    version=1,
+                    description=None,
+                    required_providers=[],
+                )
                 session.add(version)
                 session.flush()
                 session.add(SkillFile(skill_version_id=version.id, path="SKILL.md", content=f"# {name}"))
@@ -116,6 +122,7 @@ def there_is_a_template_skill_group(skill_names: tuple[str, ...], group_key: str
                     AgentTemplateSkill(
                         template_id=context.template.id,
                         skill_id=skill.id,
+                        skill_version=1,
                         group_key=group_key,
                     )
                 )

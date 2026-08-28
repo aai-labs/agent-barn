@@ -3,8 +3,7 @@ correspond to a real seeded skill file.
 
 The templates instruct the agent to "read the skill file first". If a referenced
 path is not actually mounted under ./skills, the agent is sent to a file that does
-not exist. Each aai-cli provider seeds a single flat file (e.g. aai-cli/jira_skill.md),
-mounted at ./skills/aai-cli/jira_skill.md.
+not exist. Each bundled provider is mounted as ``aai-<provider>/SKILL.md``.
 """
 
 import re
@@ -17,7 +16,7 @@ VALID_SKILL_PATHS = {
     f"./skills/{f['skill_file_path']}" for skill_def in AAI_CLI_PROVIDER_SKILLS for f in skill_def["files"]
 }
 
-_PATH_RE = re.compile(r"\./skills/aai-cli/[^\s`)]+\.md")
+_PATH_RE = re.compile(r"\./skills/aai-[a-z0-9-]+/SKILL\.md")
 
 
 def _all_template_text(template) -> str:

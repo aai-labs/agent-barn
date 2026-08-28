@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { OrganizationRoleSchema } from "@/features/organizations/schemas";
+import { SkillScopeSchema } from "@/features/skills/schemas";
 
 export const AgentSecretReadSchema = z.object({
   provider: z.string(),
@@ -23,6 +24,9 @@ export const AgentAssignedSkillSchema = z.object({
   id: z.string().uuid(),
   name: z.string(),
   source: z.string(),
+  // Optional: present on an Agent's actual assigned-skill reads, absent on the
+  // narrower Template-required-skill snapshot this schema is also reused for.
+  scope: SkillScopeSchema.optional(),
   requiredProviders: z.array(z.string()),
   toolsPointer: z.string().nullable(),
   required: z.boolean().default(false),
@@ -31,6 +35,9 @@ export const AgentAssignedSkillSchema = z.object({
   // The exact skill version this agent is pinned to (explicit, like templates).
   // Optional so template required-skill reads (which don't carry a pin) still parse.
   version: z.number().int().optional().default(1),
+  updateAvailable: z.boolean().default(false),
+  sourceSkillId: z.string().uuid().nullable().optional(),
+  sourceSkillVersion: z.number().int().nullable().optional(),
 });
 
 // A template's required skill. groupKey is null for a standalone

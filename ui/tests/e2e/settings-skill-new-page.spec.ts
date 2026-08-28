@@ -70,7 +70,7 @@ test.describe("Settings — New skill page", () => {
     await page.getByPlaceholder("e.g. my-tool").fill("test-skill");
     await page.getByRole("button", { name: "Create skill" }).click();
 
-    await expect(page).toHaveURL(new RegExp(`/settings/skills/${newSkillId}$`));
+    await expect(page).toHaveURL(new RegExp(`/settings/skills/${newSkillId}\\?edit=1$`));
   });
 
   test("shows the create error inline", async ({ page }) => {

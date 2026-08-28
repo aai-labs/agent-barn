@@ -15,10 +15,10 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Pagination } from "@/features/agents/components/pagination";
-import { useActiveOrgRole } from "@/features/organizations/hooks/use-active-org-role";
 
 import { type SkillSource } from "../schemas";
 import { useSkills } from "../hooks/use-skills";
+import { skillDetailHref, skillNewHref, type SkillScopeRef } from "../scope";
 import { SKILLS_PAGE_SIZE } from "../utils";
 import { SkillCard } from "./skill-card";
 
@@ -39,8 +39,13 @@ function Hint({ children }: { children: React.ReactNode }) {
   );
 }
 
-export function SkillsPanel() {
-  const { canManage } = useActiveOrgRole();
+const HINTS: Record<SkillScopeRef["kind"], string> = {
+  platform: "Built-in skills are the aai-cli bundle you curate here. Custom Platform Skills are visible to every organization and can be forked, never edited, from Organization or Agent scope.",
+  organization: "Built-in skills are provided by AAI Labs and can be viewed but not modified. Custom skills are written by your organization and can be assigned to agents.",
+  agent: "Skills owned by this Agent are private to it. Fork a Platform or Organization Skill to customize it for this Agent alone.",
+};
+
+export function SkillsPanel({ scope, canManage }: { scope: SkillScopeRef; canManage: boolean }) {
   const params = useParams();
   const orgId = typeof params?.orgId === "string" ? params.orgId : null;
   const [search, setSearch] = useState("");
@@ -48,6 +53,7 @@ export function SkillsPanel() {
   const [page, setPage] = useState(1);
 
   const { skills, total, isLoading, error, refetch } = useSkills({
+    scope,
     search: search || undefined,
     source: sourceFilter || undefined,
     page,
@@ -65,18 +71,13 @@ export function SkillsPanel() {
     setPage(1);
   }
 
-  function skillHref(skillId: string) {
-    return orgId ? `/dashboard/${orgId}/settings/skills/${skillId}` : "#";
-  }
-
-  const newSkillHref = orgId ? `/dashboard/${orgId}/settings/skills/new` : "#";
+  const newSkillHref = skillNewHref(scope, orgId);
 
   return (
     <>
       <Hint>
         <ShieldIcon style={{ flexShrink: 0, marginTop: 1 }} />
-        Built-in skills are provided by AAI Labs and can be viewed but not modified. Custom skills
-        are written by your organization and can be assigned to agents.
+        {HINTS[scope.kind]}
       </Hint>
 
       <div className="mb-4 flex items-center gap-2.5">
@@ -93,11 +94,11 @@ export function SkillsPanel() {
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <button
-                className="af-input w-full flex items-center gap-2 whitespace-nowrap"
+                className="af-input w-full flex items-center justify-between gap-2 whitespace-nowrap"
                 aria-label="Filter by source"
               >
                 {SOURCE_FILTERS.find((f) => f.value === sourceFilter)?.label ?? "All sources"}
-                <ChevronDownIcon size={13} className="opacity-50 flex-shrink-0" />
+                <ChevronDownIcon size={13} className="ml-auto shrink-0 opacity-50" />
               </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent>
@@ -160,7 +161,7 @@ export function SkillsPanel() {
           style={{ gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))" }}
         >
           {skills.map((skill) => (
-            <SkillCard key={skill.id} skill={skill} href={skillHref(skill.id)} />
+            <SkillCard key={skill.id} skill={skill} href={skillDetailHref(scope, orgId, skill.id)} />
           ))}
         </div>
       )}

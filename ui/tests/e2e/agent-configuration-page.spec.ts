@@ -1,7 +1,10 @@
 import { expect, test } from "@playwright/test";
 
 import { TEST_ORG_ID } from "../constants";
-import { MOCK_CUSTOM_SKILL_ID } from "../pages/data-support/skill-data-support.po";
+import {
+  MOCK_CUSTOM_SKILL_ID,
+  mockCustomSkill,
+} from "../pages/data-support/skill-data-support.po";
 import { AgentConfigurationPage } from "../pages/agent-configuration-page.po";
 import {
   MOCK_AGENT_ID,
@@ -79,6 +82,7 @@ test.describe("Agent configuration page", () => {
     await dataSupport.users.interceptGetUserContextRequest();
     await dataSupport.users.interceptGetOrganizationsRequest();
     await dataSupport.skills.interceptGetSkillsRequest();
+    await dataSupport.skills.interceptGetAgentSkillsRequest();
     await dataSupport.agents.interceptGetTemplatesRequest();
     await dataSupport.agents.interceptGetTemplateVersionsRequest();
 
@@ -193,6 +197,7 @@ test.describe("Agent configuration page", () => {
     await dataSupport.users.interceptGetOrganizationsRequest();
     await dataSupport.agents.interceptGetAgentRequest({ body: { ...mockAgent, status: "STOPPED" } });
     await dataSupport.skills.interceptGetSkillsRequest();
+    await dataSupport.skills.interceptGetAgentSkillsRequest();
     await page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}/configuration`, async (route) => {
       if (route.request().method() !== "GET") {
         await route.fallback();
@@ -267,6 +272,7 @@ test.describe("Agent configuration page", () => {
     await dataSupport.users.interceptGetUserContextRequest();
     await dataSupport.users.interceptGetOrganizationsRequest();
     await dataSupport.skills.interceptGetSkillsRequest();
+    await dataSupport.skills.interceptGetAgentSkillsRequest();
     await dataSupport.agents.interceptGetTemplatesRequest();
     await dataSupport.agents.interceptGetTemplateVersionsRequest();
     await page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}`, async (route) => {
@@ -335,6 +341,7 @@ test.describe("Agent configuration page", () => {
     await dataSupport.users.interceptGetUserContextRequest();
     await dataSupport.users.interceptGetOrganizationsRequest();
     await dataSupport.skills.interceptGetSkillsRequest();
+    await dataSupport.skills.interceptGetAgentSkillsRequest();
     await dataSupport.agents.interceptGetTemplatesRequest();
     await dataSupport.agents.interceptGetTemplateVersionsRequest();
     await dataSupport.agents.interceptGetAgentRequest({
@@ -414,6 +421,142 @@ test.describe("Agent configuration page", () => {
     await Promise.all([stopPromise, updatePromise, startPromise]);
   });
 
+  test("keeps the Skills editor visible and enables Apply for a pending addition", async ({ page }) => {
+    const dataSupport = new DataSupport(page);
+    const configurationPage = new AgentConfigurationPage(page);
+
+    await dataSupport.auth.interceptRefreshRequest();
+    await dataSupport.users.interceptGetUserContextRequest();
+    await dataSupport.users.interceptGetOrganizationsRequest();
+    await dataSupport.agents.interceptGetAgentRequest({
+      body: { ...mockAgent, status: "STOPPED", skills: [] },
+    });
+    await dataSupport.agents.interceptGetAgentConfigurationRequest();
+    await dataSupport.skills.interceptGetAgentSkillsRequest();
+
+    await configurationPage.goto(MOCK_AGENT_ID, TEST_ORG_ID);
+    await configurationPage.sectionButton("Skills").click();
+
+    const section = page.locator('section[aria-label="Skills"]');
+    await expect(section.getByPlaceholder("Search skills…")).toBeVisible();
+    await expect(section.getByRole("button", { name: "Edit", exact: true })).toHaveCount(0);
+
+    const applyButton = section.getByRole("button", { name: "Apply", exact: true });
+    await expect(applyButton).toBeDisabled();
+
+    // my-tool is the second fixture row and has no credential requirements.
+    await section.getByRole("button", { name: "Add", exact: true }).nth(1).click();
+    await expect(section.getByText("my-tool", { exact: true }).last()).toBeVisible();
+    await expect(applyButton).toBeEnabled();
+  });
+
+  test("enables Apply when an assigned skill is marked for removal", async ({ page }) => {
+    const dataSupport = new DataSupport(page);
+    const configurationPage = new AgentConfigurationPage(page);
+    const assignedSkill = {
+      id: MOCK_CUSTOM_SKILL_ID,
+      name: "my-tool",
+      source: "custom",
+      requiredProviders: [],
+      toolsPointer: null,
+      required: false,
+      createdAt: "2026-01-01T00:00:00Z",
+      updatedAt: "2026-01-01T00:00:00Z",
+      version: 1,
+    };
+
+    await dataSupport.auth.interceptRefreshRequest();
+    await dataSupport.users.interceptGetUserContextRequest();
+    await dataSupport.users.interceptGetOrganizationsRequest();
+    await dataSupport.agents.interceptGetAgentRequest({
+      body: { ...mockAgent, status: "STOPPED", skills: [assignedSkill] },
+    });
+    await dataSupport.agents.interceptGetAgentConfigurationRequest();
+    await dataSupport.skills.interceptGetAgentSkillsRequest();
+
+    await configurationPage.goto(MOCK_AGENT_ID, TEST_ORG_ID);
+    await configurationPage.sectionButton("Skills").click();
+
+    const section = page.locator('section[aria-label="Skills"]');
+    const applyButton = section.getByRole("button", { name: "Apply", exact: true });
+    await expect(applyButton).toBeDisabled();
+    await section.getByRole("button", { name: "Remove", exact: true }).click();
+    await page.getByRole("dialog").getByRole("button", { name: "Remove skill", exact: true }).click();
+    await expect(section.getByRole("button", { name: "Undo", exact: true })).toBeVisible();
+    await expect(applyButton).toBeEnabled();
+  });
+
+  test("loads more available skills as the user reaches the end of the list", async ({ page }) => {
+    const dataSupport = new DataSupport(page);
+    const configurationPage = new AgentConfigurationPage(page);
+    const firstPage = Array.from({ length: 15 }, (_, index) => ({
+      ...mockCustomSkill,
+      id: `66666666-6666-4666-8666-${String(index).padStart(12, "0")}`,
+      name: `paged-skill-${index}`,
+      slug: `paged-skill-${index}`,
+    }));
+    const secondPage = {
+      ...mockCustomSkill,
+      id: "66666666-6666-4666-8666-000000000015",
+      name: "paged-skill-15",
+      slug: "paged-skill-15",
+    };
+
+    await dataSupport.auth.interceptRefreshRequest();
+    await dataSupport.users.interceptGetUserContextRequest();
+    await dataSupport.users.interceptGetOrganizationsRequest();
+    await dataSupport.agents.interceptGetAgentRequest({
+      body: { ...mockAgent, status: "STOPPED", skills: [] },
+    });
+    await dataSupport.agents.interceptGetAgentConfigurationRequest();
+    await dataSupport.skills.interceptGetAgentSkillsRequest({
+      pages: [firstPage, [secondPage]],
+      total: 16,
+    });
+
+    await configurationPage.goto(MOCK_AGENT_ID, TEST_ORG_ID);
+    await configurationPage.sectionButton("Skills").click();
+    await expect(page.getByText("paged-skill-0", { exact: true })).toBeVisible();
+
+    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+    await expect(page.getByText("paged-skill-15", { exact: true })).toBeVisible();
+  });
+
+  test("debounces Skills search and sends the query to the API", async ({ page }) => {
+    const dataSupport = new DataSupport(page);
+    const configurationPage = new AgentConfigurationPage(page);
+    const skillRequests: string[] = [];
+    page.on("request", (request) => {
+      const url = new URL(request.url());
+      if (
+        request.method() === "GET" &&
+        url.pathname.endsWith(`/agents/${MOCK_AGENT_ID}/skills`)
+      ) {
+        skillRequests.push(url.toString());
+      }
+    });
+
+    await dataSupport.auth.interceptRefreshRequest();
+    await dataSupport.users.interceptGetUserContextRequest();
+    await dataSupport.users.interceptGetOrganizationsRequest();
+    await dataSupport.agents.interceptGetAgentRequest({
+      body: { ...mockAgent, status: "STOPPED", skills: [] },
+    });
+    await dataSupport.agents.interceptGetAgentConfigurationRequest();
+    await dataSupport.skills.interceptGetAgentSkillsRequest();
+
+    await configurationPage.goto(MOCK_AGENT_ID, TEST_ORG_ID);
+    await configurationPage.sectionButton("Skills").click();
+    const search = page.getByPlaceholder("Search skills…");
+    await expect(search).toBeVisible();
+    await expect.poll(() => skillRequests.length).toBe(1);
+
+    await search.fill("jira");
+    await expect.poll(() => skillRequests.length, { timeout: 200 }).toBe(1);
+    await expect.poll(() => skillRequests.length, { timeout: 2_000 }).toBe(2);
+    expect(new URL(skillRequests[1]).searchParams.get("search")).toBe("jira");
+  });
+
   test("re-pins an assigned skill to a specific version and sends skill_versions", async ({ page }) => {
     const dataSupport = new DataSupport(page);
     const configurationPage = new AgentConfigurationPage(page);
@@ -436,7 +579,8 @@ test.describe("Agent configuration page", () => {
     await dataSupport.agents.interceptGetAgentRequest({ body: currentAgent });
     await dataSupport.agents.interceptGetAgentConfigurationRequest();
     await dataSupport.skills.interceptGetSkillsRequest();
-    await page.route(`**/api/v1/organizations/*/skills/${MOCK_CUSTOM_SKILL_ID}/versions`, async (route) => {
+    await dataSupport.skills.interceptGetAgentSkillsRequest();
+    await page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}/skills/${MOCK_CUSTOM_SKILL_ID}/versions`, async (route) => {
       if (route.request().method() !== "GET") {
         await route.fallback();
         return;
@@ -463,8 +607,8 @@ test.describe("Agent configuration page", () => {
 
     await configurationPage.goto(MOCK_AGENT_ID, TEST_ORG_ID);
     await configurationPage.sectionButton("Skills").click();
-    await expect(page.getByText("v1")).toBeVisible();
-    await page.getByRole("button", { name: "Edit", exact: true }).click();
+    await expect(page.getByRole("combobox", { name: "Version for my-tool" })).toHaveText("Version v1");
+    await expect(page.getByRole("button", { name: "Edit", exact: true })).toHaveCount(0);
 
     await page.getByRole("combobox", { name: "Version for my-tool" }).click();
     await page.getByRole("option", { name: "Version v2", exact: true }).click();
@@ -475,6 +619,6 @@ test.describe("Agent configuration page", () => {
     await page.getByRole("dialog").getByRole("button", { name: "Apply", exact: true }).click();
 
     expect(sentBody?.skill_versions).toEqual([{ skill_id: MOCK_CUSTOM_SKILL_ID, version: 2 }]);
-    await expect(page.getByText("v2")).toBeVisible();
+    await expect(page.getByRole("combobox", { name: "Version for my-tool" })).toHaveText("Version v2");
   });
 });

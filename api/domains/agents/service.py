@@ -2,7 +2,7 @@ import datetime as dt
 import fnmatch
 import logging
 import secrets
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
@@ -62,6 +62,7 @@ from api.domains.agents.models import (
     AgentTemplateOverrideDraftUpdate,
     AgentTemplateOverridePublish,
     AgentTemplateOverrideRequiredSkillRead,
+    AgentTemplateOverrideSkillGroup,
     AgentTemplateOverrideSourceType,
     AgentTemplateOverrideVersion,
     AgentTemplateOverrideVersionRead,
@@ -98,7 +99,7 @@ from api.domains.events.catalog import (
 from api.domains.organizations.lookup import OrganizationLookupService
 from api.domains.rbac.catalog import PermissionKey
 from api.domains.shared_credentials.repository import SharedCredentialRepository
-from api.domains.skills.models import PinnedSkill, Skill, derive_tools_pointer
+from api.domains.skills.models import PinnedSkill, Skill, SkillVersion, derive_tools_pointer
 from api.domains.skills.repository import SkillRepository
 from api.domains.templates.models import AgentTemplate, PlatformTemplate, TemplateRead
 from api.domains.templates.renderer import render_template
@@ -345,6 +346,7 @@ class AgentService:
         current_skill_ids: set[UUID],
         removed_skill_ids: list[UUID],
         org_id: UUID,
+        agent_id: UUID | None = None,
     ) -> list[SkillVersionPin]:
         """Resolve every agent assignment to an explicit pinned version.
 
@@ -381,7 +383,12 @@ class AgentService:
 
         requested_ids = set(skill_ids) | set(pin_map)
         if requested_ids:
-            accessible_ids = {skill.id for skill in self.skill_repository.find_accessible_for_org(org_id)}
+            visible_skills = (
+                self.skill_repository.find_visible_for_agent(agent_id, org_id)
+                if agent_id is not None
+                else self.skill_repository.find_accessible_for_org(org_id)
+            )
+            accessible_ids = {skill.id for skill in visible_skills}
             inaccessible_ids = requested_ids - accessible_ids
             if inaccessible_ids:
                 skill_id = min(inaccessible_ids, key=str)
@@ -416,6 +423,29 @@ class AgentService:
                 resolved_ids.add(pin.skill_id)
         return resolved
 
+    def _validate_required_skill_versions(
+        self,
+        required_map: Mapping[UUID, tuple[int, str | None]],
+        pinned_versions: Mapping[UUID, int],
+    ) -> None:
+        """Require Template Skills to be present at the Template's exact pin."""
+        standalone_ids, required_groups = split_requirements(required_map)
+        for skill_id in standalone_ids:
+            required_version, _ = required_map[skill_id]
+            if pinned_versions.get(skill_id) != required_version:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Required template Skill {skill_id} must be pinned to version {required_version}",
+                )
+        for member_ids in required_groups.values():
+            if any(pinned_versions.get(skill_id) == required_map[skill_id][0] for skill_id in member_ids):
+                continue
+            names = sorted(s.name for s in self.skill_repository.get_many_by_ids(list(member_ids)))
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"One of these template Skills must be pinned to its required version: {', '.join(names)}",
+            )
+
     def _validate_skill_update(
         self,
         agent: Agent,
@@ -425,7 +455,7 @@ class AgentService:
         """Validate that new skills are accessible and that all remaining skills
         have their required providers covered after the update is applied."""
         if data.skill_ids:
-            accessible = {s.id for s in self.skill_repository.find_accessible_for_org(org_id)}
+            accessible = {s.id for s in self.skill_repository.find_visible_for_agent(agent.id, org_id)}
             for skill_id in data.skill_ids:
                 if skill_id not in accessible:
                     raise HTTPException(
@@ -462,12 +492,14 @@ class AgentService:
         agent: Agent,
         secrets: list[AgentSecret] | None = None,
         skills: list[PinnedSkill] | None = None,
-        required_skill_map: dict[UUID, str | None] | None = None,
+        required_skill_map: Mapping[UUID, str | None | tuple[int, str | None]] | None = None,
         allowed_actions: list[PermissionKey] | None = None,
         template_key: str = "",
         template_version: int = 0,
         template_pin_type: AgentTemplatePinType = AgentTemplatePinType.SHARED,
         override_version: int | None = None,
+        latest_versions: Mapping[UUID, SkillVersion] | None = None,
+        source_update_skill_ids: set[UUID] | None = None,
         effective_default_model: str = "",
     ) -> AgentRead:
         shared_ids = [s.shared_credential_id for s in (secrets or []) if s.shared_credential_id is not None]
@@ -485,16 +517,37 @@ class AgentService:
             secrets_read.append(read)
         assigned_ids = {pinned.skill.id for pinned in (skills or [])}
         req_ids = effective_required_ids(required_skill_map or {}, assigned_ids)
-        skills_read = [
-            AgentAssignedSkillRead.model_validate(
-                {
-                    **pinned.skill.model_dump(),
-                    "version": pinned.version,
-                    "required": pinned.skill.id in req_ids,
-                }
+        skills_read = []
+        for pinned in skills or []:
+            latest = (
+                latest_versions.get(pinned.skill.id)
+                if latest_versions is not None
+                else self.skill_repository.get_latest_version(pinned.skill.id)
             )
-            for pinned in (skills or [])
-        ]
+            update_available = (
+                (latest is not None and latest.version > pinned.version) or pinned.skill.id in source_update_skill_ids
+                if source_update_skill_ids is not None
+                else self.skill_repository.has_update_for_pin(pinned.skill.id, pinned.version)
+            )
+            skills_read.append(
+                AgentAssignedSkillRead.model_validate(
+                    {
+                        **pinned.skill.model_dump(),
+                        "version": pinned.version,
+                        "required": pinned.skill.id in req_ids,
+                        "update_available": update_available,
+                        "source_skill_id": latest.source_skill_id if latest else None,
+                        "source_skill_version": latest.source_skill_version if latest else None,
+                        "scope": (
+                            "agent"
+                            if pinned.skill.agent_id is not None
+                            else "organization"
+                            if pinned.skill.organization_id is not None
+                            else "platform"
+                        ),
+                    }
+                )
+            )
         resolved_model = agent.model or effective_default_model
         return AgentRead(
             id=agent.id,
@@ -656,27 +709,15 @@ class AgentService:
         # every standalone-required skill, and at least one member of each
         # "at least one of" group (e.g. GitHub OR Bitbucket).
         required_map = self.template_repository.get_required_skill_map_for(template)
-        standalone_ids, required_groups = split_requirements(required_map)
-        selected_skill_ids = set(data.skill_ids)
-        if standalone_ids - selected_skill_ids:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Required template skills must be included in skill_ids",
-            )
-        for group_key in sorted(required_groups):
-            members = required_groups[group_key]
-            if not (members & selected_skill_ids):
-                names = sorted(s.name for s in self.skill_repository.get_many_by_ids(list(members)))
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"At least one of these template skills must be included in skill_ids: {', '.join(names)}",
-                )
-
         # Preflight skill version pins before any persistence so an invalid pin
         # (nonexistent version, pin for a skill not in the request) is rejected
         # atomically rather than after the agent, configs, and secrets are saved.
         resolved_pins = self._resolve_skill_pins(data.skill_ids, data.skill_versions, set(), [], org_id)
         resolved_pin_by_skill_id = {pin.skill_id: pin for pin in resolved_pins}
+        self._validate_required_skill_versions(
+            required_map,
+            {skill_id: pin.version for skill_id, pin in resolved_pin_by_skill_id.items()},
+        )
 
         # Prepare Agent Secrets in memory without persisting them yet.
         # Integration credentials are separate from Communication Connections.
@@ -1044,19 +1085,13 @@ class AgentService:
         skill_map = None
         if data.required_skill_ids is not None or data.required_skill_groups is not None:
             existing_map = self.override_repository.get_draft_skill_map_for_agent(agent.id, org_id)
-            if data.required_skill_ids is None:
-                standalone_ids = {skill_id for skill_id, group_key in existing_map.items() if group_key is None}
-            else:
-                standalone_ids = set(data.required_skill_ids)
-            if data.required_skill_groups is None:
-                groups_map = {
-                    skill_id: group_key for skill_id, group_key in existing_map.items() if group_key is not None
-                }
-            else:
-                groups_map = {
-                    skill_id: group.group_key for group in data.required_skill_groups for skill_id in group.skill_ids
-                }
-            skill_map = {skill_id: None for skill_id in standalone_ids} | groups_map
+            skill_map = self._resolve_override_skill_map(
+                agent,
+                existing_map,
+                data.required_skill_ids,
+                data.required_skill_groups,
+                org_id,
+            )
             self._validate_override_requirements(agent, skill_map, org_id)
         try:
             saved = self.override_repository.update_draft(
@@ -1130,7 +1165,7 @@ class AgentService:
         selected_id: UUID
         selected_template_key: str | None
         selected_version: int | None
-        required_map: dict[UUID, str | None]
+        required_map: Mapping[UUID, tuple[int, str | None]]
         if data.selection_type == "platform":
             assert data.template_key is not None and data.template_version is not None
             selected = self.template_repository.get_platform_template_by_key_version(
@@ -1197,19 +1232,32 @@ class AgentService:
     def _validate_override_requirements(
         self,
         agent: Agent,
-        required_map: dict[UUID, str | None],
+        required_map: Mapping[UUID, tuple[int, str | None]],
         org_id: UUID,
     ) -> None:
         if not required_map:
             return
-        accessible = {skill.id: skill for skill in self.skill_repository.find_accessible_for_org(org_id)}
+        accessible = {skill.id: skill for skill in self.skill_repository.find_visible_for_agent(agent.id, org_id)}
         missing_ids = set(required_map) - accessible.keys()
         if missing_ids:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Override requires a Skill that is no longer available to this Organization",
             )
-        assigned_ids = {skill.id for _, skill in self.skill_repository.get_agent_skills_with_details(agent.id)}
+        assigned_rows = self.skill_repository.get_agent_skills_with_details(agent.id)
+        assigned_versions = {skill.id: row.pinned_version for row, skill in assigned_rows}
+        assigned_ids = set(assigned_versions)
+        wrong_versions = {
+            skill_id
+            for skill_id, (required_version, _) in required_map.items()
+            if assigned_versions.get(skill_id) != required_version
+        }
+        if wrong_versions:
+            names = ", ".join(sorted(accessible[skill_id].name for skill_id in wrong_versions))
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Required template skills must use the pinned versions: {names}",
+            )
         standalone_ids, groups = split_requirements(required_map)
         if standalone_ids - assigned_ids:
             missing = ", ".join(sorted(accessible[skill_id].name for skill_id in standalone_ids - assigned_ids))
@@ -1234,11 +1282,72 @@ class AgentService:
                     detail=f"Required Skill '{accessible[skill_id].name}' needs configured providers: {names}",
                 )
 
+    def _resolve_override_skill_map(
+        self,
+        agent: Agent,
+        old_map: Mapping[UUID, tuple[int, str | None]],
+        standalone_ids: list[UUID] | None,
+        groups: list[AgentTemplateOverrideSkillGroup] | None,
+        org_id: UUID,
+    ) -> dict[UUID, tuple[int, str | None]]:
+        """Resolve one complete override requirement set without repinning omissions."""
+        effective_standalone_ids = (
+            standalone_ids
+            if standalone_ids is not None
+            else [skill_id for skill_id, (_, group_key) in old_map.items() if group_key is None]
+        )
+        if groups is not None:
+            effective_groups = groups
+        else:
+            grouped: dict[str, list[UUID]] = {}
+            for skill_id, (_, group_key) in old_map.items():
+                if group_key is not None:
+                    grouped.setdefault(group_key, []).append(skill_id)
+            effective_groups = [
+                AgentTemplateOverrideSkillGroup(group_key=group_key, skill_ids=skill_ids)
+                for group_key, skill_ids in grouped.items()
+            ]
+
+        group_ids = [skill_id for group in effective_groups for skill_id in group.skill_ids]
+        effective_ids = set(effective_standalone_ids) | set(group_ids)
+        overlap = set(effective_standalone_ids) & set(group_ids)
+        if overlap:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Skills cannot be both standalone required and part of an override group",
+            )
+
+        accessible_ids = {skill.id for skill in self.skill_repository.find_visible_for_agent(agent.id, org_id)}
+        missing_ids = effective_ids - accessible_ids
+        if missing_ids:
+            skill_id = min(missing_ids, key=str)
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Skill {skill_id} not found")
+
+        latest_versions = self.skill_repository.get_latest_version_numbers(list(effective_ids))
+        unpublished_ids = effective_ids - latest_versions.keys()
+        if unpublished_ids:
+            skill_id = min(unpublished_ids, key=str)
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Skill {skill_id} must have a published version before it can be required",
+            )
+
+        resolved: dict[UUID, tuple[int, str | None]] = {}
+        for skill_id in effective_standalone_ids:
+            resolved[skill_id] = (old_map.get(skill_id, (latest_versions[skill_id], None))[0], None)
+        for group in effective_groups:
+            for skill_id in group.skill_ids:
+                resolved[skill_id] = (
+                    old_map.get(skill_id, (latest_versions[skill_id], group.group_key))[0],
+                    group.group_key,
+                )
+        return resolved
+
     def _override_draft_read(
         self,
         draft: AgentTemplateOverrideDraft,
         *,
-        skills: list[tuple[Skill, str | None]],
+        skills: list[tuple[Skill, int, str | None]],
         author: User | None,
     ) -> AgentTemplateOverrideDraftRead:
         return AgentTemplateOverrideDraftRead(
@@ -1255,7 +1364,7 @@ class AgentService:
         self,
         version: AgentTemplateOverrideVersion,
         *,
-        skills: list[tuple[Skill, str | None]],
+        skills: list[tuple[Skill, int, str | None]],
         author: User | None,
     ) -> AgentTemplateOverrideVersionRead:
         values = self._override_snapshot_values(
@@ -1271,7 +1380,7 @@ class AgentService:
         self,
         version: AgentTemplateOverrideVersion,
         *,
-        skills: list[tuple[Skill, str | None]],
+        skills: list[tuple[Skill, int, str | None]],
         author: User | None,
     ) -> AgentConfigurationVersionRead:
         return AgentConfigurationVersionRead(
@@ -1289,6 +1398,7 @@ class AgentService:
     @staticmethod
     def _required_skill_read(
         skill: Skill,
+        skill_version: int,
         group_key: str | None,
     ) -> AgentTemplateOverrideRequiredSkillRead:
         source = skill.source.value if hasattr(skill.source, "value") else skill.source
@@ -1302,6 +1412,7 @@ class AgentService:
             source=source,
             required_providers=required_providers,
             tools_pointer=skill.tools_pointer,
+            version=skill_version,
             group_key=group_key,
             created_at=skill.created_at,
             updated_at=skill.updated_at,
@@ -1313,7 +1424,7 @@ class AgentService:
         *,
         agent_id: UUID,
         version: int | None,
-        skills: list[tuple[Skill, str | None]],
+        skills: list[tuple[Skill, int, str | None]],
         author: User | None,
     ) -> dict[str, Any]:
         return {
@@ -1346,7 +1457,9 @@ class AgentService:
                 if author is not None
                 else None
             ),
-            "required_skills": [self._required_skill_read(skill, group_key) for skill, group_key in skills],
+            "required_skills": [
+                self._required_skill_read(skill, skill_version, group_key) for skill, skill_version, group_key in skills
+            ],
             "created_at": snapshot.created_at,
             "updated_at": snapshot.updated_at,
         }
@@ -1355,7 +1468,7 @@ class AgentService:
         self,
         template: AgentTemplate | PlatformTemplate,
         agent: Agent,
-        skills: list[tuple[Skill, str | None]],
+        skills: list[tuple[Skill, int, str | None]],
     ) -> AgentConfigurationVersionRead:
         source_type = (
             AgentTemplateOverrideSourceType.PLATFORM
@@ -1384,7 +1497,9 @@ class AgentService:
             source_agent_template_id=template.id if isinstance(template, AgentTemplate) else None,
             created_by_user_id=None,
             author=None,
-            required_skills=[self._required_skill_read(skill, group_key) for skill, group_key in skills],
+            required_skills=[
+                self._required_skill_read(skill, skill_version, group_key) for skill, skill_version, group_key in skills
+            ],
             created_at=template.created_at,
             updated_at=template.updated_at,
             state="active" if self._is_active_shared_pin(agent, template.id) else "published",
@@ -1409,6 +1524,11 @@ class AgentService:
         agent_ids = [a.id for a in agents]
         secrets_by_agent = self.repository.get_secrets_for_agents(agent_ids)
         skills_by_agent = self.skill_repository.get_skills_for_agents_with_versions(agent_ids)
+        assigned_skill_ids = list(
+            {pinned.skill.id for agent_skills in skills_by_agent.values() for pinned in agent_skills}
+        )
+        latest_versions = self.skill_repository.get_latest_versions(assigned_skill_ids)
+        source_update_skill_ids = self.skill_repository.get_source_update_skill_ids(latest_versions)
 
         req_maps_by_agent = self.template_repository.get_required_skill_map_for_agents(agents)
         pin_info = self.template_repository.get_pinned_template_info_for_agents(agents)
@@ -1431,6 +1551,8 @@ class AgentService:
                     else AgentTemplatePinType.SHARED
                 ),
                 override_version=pin_info.get(agent.id, ("", 0, "shared", None))[3],
+                latest_versions=latest_versions,
+                source_update_skill_ids=source_update_skill_ids,
                 effective_default_model=effective_default_model,
             )
             for agent in agents
@@ -1469,6 +1591,7 @@ class AgentService:
             current_skill_ids,
             data.removed_skill_ids,
             org_id,
+            agent.id,
         )
 
         # Re-pin the agent to a different template (key, version). The model
@@ -1549,6 +1672,13 @@ class AgentService:
                                 + ", ".join(names)
                             ),
                         )
+
+            if "template_key" in updated or data.skill_ids or data.skill_versions or data.removed_skill_ids:
+                effective_pins = {row.skill_id: row.pinned_version for row in current_skill_rows}
+                effective_pins.update({pin.skill_id: pin.version for pin in resolved_skill_pins})
+                for skill_id in data.removed_skill_ids:
+                    effective_pins.pop(skill_id, None)
+                self._validate_required_skill_versions(required_map, effective_pins)
 
         # Validate skills accessibility and secret coverage
         if data.skill_ids or data.removed_secret_providers:

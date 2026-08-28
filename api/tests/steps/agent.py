@@ -293,8 +293,8 @@ def there_is_a_skill(
             organization_id=org_id,
             name=name,
             slug=slug,
-            # Built-ins share the aai-cli mount directory; custom skills get their own.
-            root_dir="aai-cli" if global_skill else slug,
+            # Every lineage gets an isolated runtime root, including built-ins.
+            root_dir=slug,
             entry_path="SKILL.md",
             source=source,
             required_providers=required_providers or [],

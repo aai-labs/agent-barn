@@ -399,6 +399,7 @@ export function SkillsStep({
     useSharedManualSwitch(skillCredentials, onSkillCredentialsChange);
 
   const { skills, total, isLoading } = useSkills({
+    scope: { kind: "organization" },
     search: search || undefined,
     page,
     pageSize: HIRE_DIALOG_PAGE_SIZE,

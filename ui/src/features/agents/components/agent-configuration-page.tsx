@@ -210,8 +210,6 @@ export function AgentConfigurationPage({ agentId }: { agentId: string }) {
               <AgentSkillsSettings
                 agent={agent}
                 canEdit={canEdit}
-                editing={editingSection === "skills"}
-                onEdit={() => toggleEditing("skills")}
               />
             )}
             {activeSection === "keys" && (

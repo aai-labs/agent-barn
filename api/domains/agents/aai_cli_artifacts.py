@@ -213,11 +213,10 @@ _PROFILE_BUILDERS: dict[SecretProvider, Callable[..., str]] = {
 
 # Every provider reachable through an aai-cli --profile gets a "Configured Integrations"
 # line. This was previously limited to the four repo/issue trackers, which left Slack,
-# Zoho Mail, Pipedrive, and the calendars with no "credentials are already in
+# Gmail, Zoho Mail, Pipedrive, and the calendars with no "credentials are already in
 # place" note at all — so those agents would tell the user they had no access, or ask for
 # a token that was already mounted. Keyed off PROFILE_SLUGS so a new provider is covered
-# the moment it gets a profile. Google is not here: it is served by gog, not aai-cli
-# (see gog_artifacts.py).
+# the moment it gets a profile.
 _TOOL_CONTEXT_PROVIDERS = frozenset(PROFILE_SLUGS)
 
 
@@ -275,7 +274,7 @@ def build_tool_context_md(decrypted: Mapping[SecretProvider, SecretContent]) -> 
         else:
             # Providers with no site/repo metadata worth printing still belong here: the
             # point of this block is "credentials are already in place", which is exactly
-            # what a Slack-only agent was missing.
+            # what a Slack- or Gmail-only agent was missing.
             lines.append(f"- **{_INTEGRATION_LABELS[provider]}** (`{PROFILE_SLUGS[provider]}`)")
     return "\n".join(lines) + "\n"
 
@@ -294,7 +293,7 @@ CREDENTIAL_FREE_TOOLS: dict[str, str] = {
         "**This is the only supported way to build or edit a spreadsheet.** Do not write "
         "Python, and do not reach for `openpyxl`, `pandas`, `xlsxwriter` or a hand-rolled "
         "zip — they are not installed and produce files Excel may reject. "
-        "Read `./skills/aai-cli/excel_skill.md` for the command shapes."
+        "Read `./skills/aai-excel/SKILL.md` for the command shapes."
     ),
 }
 
@@ -357,8 +356,9 @@ _INTEGRATION_LABELS: dict[SecretProvider, str] = {
 # an agent asked "are there files in this channel?" had no token in context linking the
 # question to `slack-work` and would answer that it had no access — the profile slug alone
 # never told it what the profile was *for*. Sourced from the command surface documented in
-# each ``aai_cli_skills/<provider>.py``; keep in sync when commands are added. Providers
-# with no aai-cli skill doc (Zoho Calendar) are omitted and render as before.
+# ``aai_cli_skills/bundled/skills/aai-<provider>/SKILL.md``; keep it in sync when
+# commands are added. Providers with no bundled aai-cli skill doc (the calendars)
+# are omitted and render as before.
 _INTEGRATION_CAPABILITIES: dict[SecretProvider, str] = {
     SecretProvider.GITHUB: "PRs (diff, files, reviews, comments), issues, branches, repo source, Actions runs",
     SecretProvider.JIRA: "issues (comments, attachments), sprints, boards, projects, users",
@@ -406,13 +406,8 @@ def build_integrations_policy_md(
     a bare slug left agents unable to connect a user's question to the profile that
     answers it — and a read-the-file pointer to the on-demand skill docs. Full command
     syntax stays in the per-service
-    ``./skills/aai-cli/<service>_skill.md`` files and TOOLS.md. Returns "" when no
+    ``./skills/aai-<integration>/SKILL.md`` files and TOOLS.md. Returns "" when no
     integrations are configured.
-
-    Gated on providers that actually have a profile, not on ``decrypted`` being non-empty:
-    an agent whose only integrations are profile-less (google_workspace, firecrawl) would
-    otherwise be told "aai-cli is the only way to reach them — always pass --profile"
-    above an empty list, which contradicts the guidance those tools ship with.
     """
     if not (decrypted.keys() & set(PROFILE_SLUGS)):
         return ""
@@ -427,7 +422,7 @@ def build_integrations_policy_md(
         (
             "Commands nest as `aai-cli --profile <slug> <service> <resource> <verb>` "
             "(e.g. `aai-cli --profile jira-work jira issues get AF-147`). Don't guess "
-            "subcommands — **Read** the matching `./skills/aai-cli/<service>_skill.md` "
+            "subcommands — **Read** the matching `./skills/aai-<integration>/SKILL.md` "
             "file first (they are plain files, not lookup-by-name skills).\n"
         ),
     ]

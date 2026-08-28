@@ -16,10 +16,10 @@ Use service-specific skills before calling any external integration CLI. Do not 
 
 Read the relevant skill file first:
 
-- Jira: `./skills/aai-cli/jira_skill.md` for the `aai-cli jira` commands (always pass `--profile jira-work`).
-- Confluence: `./skills/aai-cli/confluence_skill.md` for the `aai-cli confluence` commands (always pass `--profile confluence-work`).
-- GitHub: `./skills/aai-cli/github_skill.md` for the `aai-cli github` commands (always pass `--profile github-work`).
-- Bitbucket: `./skills/aai-cli/bitbucket_skill.md` for the `aai-cli bitbucket` commands (always pass `--profile bitbucket-work`).
+- Jira: `./skills/aai-jira/SKILL.md` for the `aai-cli jira` commands (always pass `--profile jira-work`).
+- Confluence: `./skills/aai-confluence/SKILL.md` for the `aai-cli confluence` commands (always pass `--profile confluence-work`).
+- GitHub: `./skills/aai-github/SKILL.md` for the `aai-cli github` commands (always pass `--profile github-work`).
+- Bitbucket: `./skills/aai-bitbucket/SKILL.md` for the `aai-cli bitbucket` commands (always pass `--profile bitbucket-work`).
 - Slack: use the built-in Slack integration configured during agent setup.
 
 ## CLI Policy

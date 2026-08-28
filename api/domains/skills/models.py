@@ -6,7 +6,7 @@ from uuid import UUID
 import sqlalchemy as sa
 from fastapi import Query
 from pydantic import BaseModel as PydanticBaseModel
-from pydantic import ConfigDict, Field
+from pydantic import ConfigDict, Field, model_validator
 from sqlmodel import Column
 from sqlmodel import Field as SqlField
 
@@ -20,6 +20,12 @@ class SkillSource(str, enum.Enum):
     AAI_CLI = "aai_cli"
     # User-entered skills
     CUSTOM = "custom"
+
+
+class SkillScope(str, enum.Enum):
+    PLATFORM = "platform"
+    ORGANIZATION = "organization"
+    AGENT = "agent"
 
 
 class Skill(BaseModel, table=True):
@@ -37,32 +43,77 @@ class Skill(BaseModel, table=True):
 
     __table_args__ = (
         sa.Index("ix_skill_organization_id", "organization_id"),
-        sa.UniqueConstraint("organization_id", "name", name="uq_skill_organization_name"),
-        sa.UniqueConstraint("organization_id", "slug", name="uq_skill_organization_slug"),
+        sa.Index("ix_skill_agent_id", "agent_id"),
+        sa.Index(
+            "uq_skill_platform_name",
+            "name",
+            unique=True,
+            postgresql_where=sa.text("organization_id IS NULL AND agent_id IS NULL"),
+        ),
+        sa.Index(
+            "uq_skill_org_name",
+            "organization_id",
+            "name",
+            unique=True,
+            postgresql_where=sa.text("organization_id IS NOT NULL AND agent_id IS NULL"),
+        ),
+        sa.Index(
+            "uq_skill_agent_name",
+            "agent_id",
+            "name",
+            unique=True,
+            postgresql_where=sa.text("agent_id IS NOT NULL"),
+        ),
+        sa.Index(
+            "uq_skill_platform_slug",
+            "slug",
+            unique=True,
+            postgresql_where=sa.text("organization_id IS NULL AND agent_id IS NULL"),
+        ),
+        sa.Index(
+            "uq_skill_org_slug",
+            "organization_id",
+            "slug",
+            unique=True,
+            postgresql_where=sa.text("organization_id IS NOT NULL AND agent_id IS NULL"),
+        ),
+        sa.Index(
+            "uq_skill_agent_slug",
+            "agent_id",
+            "slug",
+            unique=True,
+            postgresql_where=sa.text("agent_id IS NOT NULL"),
+        ),
+        sa.CheckConstraint(
+            "agent_id IS NULL OR organization_id IS NOT NULL",
+            name="ck_skill_agent_requires_organization",
+        ),
     )
 
     organization_id: UUID | None = SqlField(
         default=None, foreign_key="organization.id", nullable=True, ondelete="CASCADE"
     )
+    # Agent-owned Skills retain their Organization for tenant-scoped queries and
+    # point at the Agent that owns the private lineage. Platform Skills have both
+    # owner columns NULL; Organization Skills have only organization_id set.
+    agent_id: UUID | None = SqlField(default=None, foreign_key="agent.id", nullable=True, ondelete="CASCADE")
     name: str = SqlField(nullable=False, max_length=255)
     # Immutable URL/identity slug. Display name can change without moving files.
     slug: str = SqlField(nullable=False, max_length=255)
     description: str | None = SqlField(default=None, sa_column=Column(sa.Text(), nullable=True))
-    # Directory the skill's files are written to under ./skills. Defaults to the slug,
-    # but the ten built-ins deliberately share "aai-cli" so their long-published
-    # pointer paths (./skills/aai-cli/jira_skill.md) keep resolving.
+    # Directory the skill's files are written to under ./skills. Every lineage has
+    # its own stable directory so Platform, Organization, and Agent Skills cannot
+    # collide when mounted together.
     root_dir: str = SqlField(nullable=False, max_length=255)
-    # Entry-point file, relative to root_dir. Custom skills use SKILL.md; built-ins
-    # keep their historical per-provider filenames.
+    # Every published version must contain this root entrypoint.
     entry_path: str = SqlField(nullable=False, max_length=512, default=DEFAULT_ENTRY_PATH)
     source: SkillSource = SqlField(sa_column=Column(sa.String(), nullable=False))
+    # Denormalized latest-version metadata used by list/assignment reads. The
+    # immutable copy is stored on SkillVersion as well.
     required_providers: list[SecretProvider] = SqlField(
         default_factory=list,
         sa_column=Column(sa.JSON(), nullable=False, server_default="[]"),
     )
-    # Superseded by skill_version/skill_file; retained until the follow-up migration
-    # drops it so a rollback of this deploy still has content to serve.
-    zip_content: bytes | None = SqlField(default=None, sa_column=Column(sa.LargeBinary(), nullable=True))
     # Only an override: when NULL the pointer is derived from name + description +
     # entry path. The built-ins carry curated wording here.
     tools_pointer: str | None = SqlField(default=None, sa_column=Column(sa.Text(), nullable=True))
@@ -84,10 +135,30 @@ class SkillVersion(BaseModel, table=True):
     __table_args__ = (
         sa.UniqueConstraint("skill_id", "version", name="uq_skill_version_skill_version"),
         sa.Index("ix_skill_version_skill_id", "skill_id"),
+        sa.Index("ix_skill_version_source_skill", "source_skill_id", "source_skill_version"),
+        sa.CheckConstraint(
+            "(source_skill_id IS NULL) = (source_skill_version IS NULL)",
+            name="ck_skill_version_source_pair",
+        ),
+        sa.ForeignKeyConstraint(
+            ["source_skill_id", "source_skill_version"],
+            ["skill_version.skill_id", "skill_version.version"],
+            ondelete="RESTRICT",
+            name="fk_skill_version_source_version",
+        ),
     )
 
     skill_id: UUID = SqlField(foreign_key="skill.id", nullable=False, ondelete="CASCADE")
     version: int = SqlField(nullable=False)
+    description: str | None = SqlField(default=None, nullable=True, max_length=2000)
+    required_providers: list[SecretProvider] = SqlField(
+        default_factory=list,
+        sa_column=Column(sa.JSON(), nullable=False, server_default="[]"),
+    )
+    # Set only when this version is a copied snapshot of another Skill Version.
+    # A NULL source identifies a Platform Skill or a standalone new lineage.
+    source_skill_id: UUID | None = SqlField(default=None, nullable=True)
+    source_skill_version: int | None = SqlField(default=None, nullable=True)
     created_by: UUID | None = SqlField(default=None, foreign_key="user.id", nullable=True, ondelete="SET NULL")
 
 
@@ -121,7 +192,19 @@ class SkillDraft(BaseModel, table=True):
 
     __tablename__: str = "skill_draft"
 
-    __table_args__ = (sa.UniqueConstraint("skill_id", name="uq_skill_draft_skill_id"),)
+    __table_args__ = (
+        sa.UniqueConstraint("skill_id", name="uq_skill_draft_skill_id"),
+        sa.CheckConstraint(
+            "(source_skill_id IS NULL) = (source_skill_version IS NULL)",
+            name="ck_skill_draft_source_pair",
+        ),
+        sa.ForeignKeyConstraint(
+            ["source_skill_id", "source_skill_version"],
+            ["skill_version.skill_id", "skill_version.version"],
+            ondelete="RESTRICT",
+            name="fk_skill_draft_source_version",
+        ),
+    )
 
     skill_id: UUID = SqlField(foreign_key="skill.id", nullable=False, ondelete="CASCADE")
     # Draft metadata: staged here and only applied to the skill row on publish,
@@ -131,6 +214,10 @@ class SkillDraft(BaseModel, table=True):
         default_factory=list,
         sa_column=Column(sa.JSON(), nullable=False, server_default="[]"),
     )
+    # A fork draft remembers the exact source snapshot it was copied from. The
+    # reference advances only when Apply Update replaces the draft.
+    source_skill_id: UUID | None = SqlField(default=None, nullable=True)
+    source_skill_version: int | None = SqlField(default=None, nullable=True)
 
 
 class SkillDraftFile(BaseModel, table=True):
@@ -187,14 +274,12 @@ class SkillUpdate(PydanticBaseModel):
 
 
 class SkillRead(PydanticBaseModel):
-    """Lineage-level view of a skill, with no version attached.
-
-    Templates require a skill *lineage* rather than a snapshot of it, so
-    ``TemplateRequiredSkillRead`` inherits this and deliberately carries no version.
-    """
+    """Lineage-level view of a Skill and its current source/update state."""
 
     id: UUID
     organization_id: UUID | None
+    agent_id: UUID | None
+    scope: SkillScope
     name: str
     slug: str
     description: str | None
@@ -208,25 +293,74 @@ class SkillRead(PydanticBaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
+    @model_validator(mode="before")
+    @classmethod
+    def derive_scope(cls, value: object) -> object:
+        if isinstance(value, dict):
+            if "scope" not in value:
+                value = {
+                    **value,
+                    "scope": (
+                        SkillScope.AGENT.value
+                        if value.get("agent_id") is not None
+                        else SkillScope.ORGANIZATION.value
+                        if value.get("organization_id") is not None
+                        else SkillScope.PLATFORM.value
+                    ),
+                }
+            return value
+        attrs = vars(value)
+        agent_id = attrs.get("agent_id")
+        organization_id = attrs.get("organization_id")
+        return {
+            "id": attrs["id"],
+            "organization_id": organization_id,
+            "agent_id": agent_id,
+            "scope": (
+                SkillScope.AGENT
+                if agent_id is not None
+                else SkillScope.ORGANIZATION
+                if organization_id is not None
+                else SkillScope.PLATFORM
+            ),
+            "name": attrs["name"],
+            "slug": attrs["slug"],
+            "description": attrs["description"],
+            "root_dir": attrs["root_dir"],
+            "entry_path": attrs["entry_path"],
+            "source": attrs["source"],
+            "required_providers": attrs["required_providers"],
+            "tools_pointer": attrs["tools_pointer"],
+            "created_at": attrs["created_at"],
+            "updated_at": attrs["updated_at"],
+        }
+
 
 class SkillSummaryRead(SkillRead):
-    """A skill as the Skills UI sees it: lineage plus its currently published version."""
+    """A skill as the Skills UI sees it: lineage plus its latest published version."""
 
-    version: int
+    version: int | None
     has_draft: bool
+    source_skill_id: UUID | None = None
+    source_skill_version: int | None = None
+    update_available: bool = False
 
 
 class SkillDetailRead(SkillSummaryRead):
     files: list[SkillFileRead]
-    # Whether a non-soft-deleted agent in the caller's organization has this skill
-    # assigned. The UI uses it to gate deleting the currently published version.
+    # Whether a non-soft-deleted agent in the caller's scope has this skill
+    # assigned. The UI uses it to gate whole-lineage deletion.
     is_assigned_to_agent: bool
 
 
 class SkillVersionRead(PydanticBaseModel):
-    """One entry in a skill lineage's version history."""
+    """One immutable entry in a Skill lineage's version history."""
 
     version: int
+    description: str | None
+    required_providers: list[SecretProvider]
+    source_skill_id: UUID | None = None
+    source_skill_version: int | None = None
     created_by: UUID | None
     created_at: datetime
     # Whether a non-soft-deleted agent in the caller's organization pins this exact
@@ -246,6 +380,8 @@ class SkillDraftRead(PydanticBaseModel):
     files: list[SkillFileRead]
     description: str | None
     required_providers: list[SecretProvider]
+    source_skill_id: UUID | None = None
+    source_skill_version: int | None = None
     created_at: datetime
     updated_at: datetime
 

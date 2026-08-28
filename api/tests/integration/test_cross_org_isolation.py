@@ -259,6 +259,13 @@ def test_cannot_delete_skill_version_from_another_org():
         assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
 
 
+def test_cannot_delete_skill_lineage_from_another_org():
+    with given(_member_a_with_org_b_skill()) as context:
+        skill_id = context.skill_b.id
+        response = context.client.delete(f"{_skills(ORG_A)}/{skill_id}", headers=_headers(context))
+        assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
+
+
 def test_global_skill_assignment_indicators_are_scoped_to_the_calling_org():
     with given(
         [
