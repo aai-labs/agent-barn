@@ -165,7 +165,6 @@ class CommunicationsService:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
     def get_diagnostics(
-
         self,
         agent_id: UUID,
         connection_id: UUID,
