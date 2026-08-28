@@ -10,9 +10,17 @@ import { useCommunicationConnectionJournal } from "@/features/communication-conn
 import type { CommunicationJournalEntry, CommunicationJournalKind } from "@/features/communication-connections/schemas";
 
 const DELIVERY_ROW_GRID = "grid-cols-[28px_minmax(160px,1fr)_110px_130px_110px_130px_70px]";
-const CONNECTION_ROW_GRID = "grid-cols-[28px_minmax(160px,1fr)_110px_130px_70px]";
+const CONNECTION_ROW_GRID = "grid-cols-[28px_minmax(160px,1fr)_130px_110px_130px_70px]";
 const DELIVERY_HEADINGS = ["Stage", "Direction", "Status", "Duration", "Occurred", "Attempt"];
-const CONNECTION_HEADINGS = ["Stage", "Duration", "Occurred", "Attempt"];
+const CONNECTION_HEADINGS = ["Stage", "Status", "Duration", "Occurred", "Attempt"];
+
+const CONNECTION_STAGE_STATUS: Record<string, { label: string; color: string }> = {
+  connection_connected: { label: "Connected", color: "var(--ok)" },
+  connection_connecting: { label: "Connecting", color: "var(--warn)" },
+  connection_degraded: { label: "Degraded", color: "var(--warn)" },
+  connection_error: { label: "Error", color: "var(--err)" },
+  reconnect_requested: { label: "Reconnecting", color: "var(--warn)" },
+};
 
 function formatTimestamp(value: string): string {
   return new Date(value).toLocaleString(undefined, {
@@ -171,7 +179,9 @@ function JournalRow({ entry, expanded, onToggle, canEdit, onRetryDelivery, rowGr
         <span style={{ color: "var(--ink-4)" }}>{expanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}</span>
         <span className="truncate capitalize" style={{ color: "var(--ink)" }}>{label(entry.stage)}</span>
         {showDeliveryColumns && <span>{entry.direction && <DirectionBadge direction={entry.direction} />}</span>}
-        {showDeliveryColumns && <span>{entry.deliveryStatus && <StatusBadge status={entry.deliveryStatus} />}</span>}
+        <span>
+          {entry.deliveryStatus ? <StatusBadge status={entry.deliveryStatus} /> : <ConnectionStatusBadge stage={entry.stage} />}
+        </span>
         <span style={{ color: "var(--ink-3)" }}>{formatDuration(entry.durationMs)}</span>
         <span style={{ color: "var(--ink-3)" }}>{formatTimestamp(entry.occurredAt)}</span>
         <span style={{ color: "var(--ink-3)" }}>{entry.attemptNumber}</span>
@@ -195,6 +205,15 @@ function StatusBadge({ status }: { status: "PENDING" | "PROCESSING" | "SUCCEEDED
   return (
     <span className="inline-flex items-center gap-1.5 text-[11px] font-medium capitalize" style={{ color: statusColor(status) }}>
       <CircleDot size={12} />{label(status)}
+    </span>
+  );
+}
+
+function ConnectionStatusBadge({ stage }: { stage: string }) {
+  const status = CONNECTION_STAGE_STATUS[stage] ?? { label: label(stage), color: "var(--ink-4)" };
+  return (
+    <span className="inline-flex items-center gap-1.5 text-[11px] font-medium capitalize" style={{ color: status.color }}>
+      <CircleDot size={12} />{status.label}
     </span>
   );
 }

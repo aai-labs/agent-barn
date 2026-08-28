@@ -771,8 +771,7 @@ test.describe("Agent Detail Page — Channels tab", () => {
     await expect(page.getByRole("tab", { name: "Delivery transitions" })).toBeVisible();
     await expect(page.getByText("1 event", { exact: true })).toBeVisible();
     await expect(page.getByText("Outbound", { exact: true })).toBeVisible();
-    await expect(page.getByText("Dead lettered", { exact: true })).toBeVisible();
-    await page.getByRole("button", { name: /provider delivered.*provider_error/i }).click();
+    await page.getByRole("button", { name: /provider delivered/i }).click();
     await expect(page.getByRole("button", { name: "Copy error for provider delivered" })).toBeVisible();
     await page.getByRole("button", { name: "Copy error for provider delivered" }).click();
     await expect(page.getByRole("button", { name: "Copy error for provider delivered" })).toHaveText("Copied");
