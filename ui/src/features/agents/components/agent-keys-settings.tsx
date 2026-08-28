@@ -63,7 +63,7 @@ export function AgentKeysSettings({ agent, canEdit, editing, onEdit }: {
 
   return (
     <AgentConfigurationSection
-      title="Keys & integrations"
+      title="Integrations"
       description="Runtime integration credentials are separate from communication connection credentials. Secret values remain write-only and encrypted at rest."
       canEdit={canEdit}
       editing={editing}

@@ -1,16 +1,16 @@
 """merge heads
 
-Revision ID: 82b57eb2e598
-Revises: 9b4c7d2e6f10, c9f1b30a7d42
-Create Date: 2026-08-25 12:32:20.575839
+Revision ID: af0a523a3dd6
+Revises: b6c7d8e9f0a1, d02c31a1bb9f
+Create Date: 2026-08-27 22:43:46.590424
 
 """
 
 from collections.abc import Sequence
 
 # revision identifiers, used by Alembic.
-revision: str = "82b57eb2e598"
-down_revision: str | Sequence[str] | None = ("9b4c7d2e6f10", "c9f1b30a7d42")
+revision: str = "af0a523a3dd6"
+down_revision: str | Sequence[str] | None = ("b6c7d8e9f0a1", "d02c31a1bb9f")
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

@@ -1,16 +1,15 @@
-import { Suspense } from "react";
+"use client";
 
+import { useParams } from "next/navigation";
+
+import { useActiveOrgRole } from "@/features/organizations/hooks/use-active-org-role";
 import { SkillDetailPage } from "@/features/skills/components/skill-detail-page";
 
-interface PageProps {
-  params: Promise<{ skillId: string }>;
-}
+export default function SkillDetailRoute() {
+  const params = useParams();
+  const skillId = typeof params?.skillId === "string" ? params.skillId : null;
+  const { canManage } = useActiveOrgRole();
 
-export default async function SkillDetailRoute({ params }: PageProps) {
-  const { skillId } = await params;
-  return (
-    <Suspense fallback={null}>
-      <SkillDetailPage skillId={skillId} />
-    </Suspense>
-  );
+  if (!skillId) return null;
+  return <SkillDetailPage skillId={skillId} scope={{ kind: "organization" }} canManage={canManage} />;
 }

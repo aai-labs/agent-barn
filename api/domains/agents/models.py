@@ -473,10 +473,17 @@ class AgentTemplateSkill(BaseModel, table=True):
     __table_args__ = (
         sa.UniqueConstraint("template_id", "skill_id", name="uq_agent_template_skill"),
         sa.Index("ix_agent_template_skill_template", "template_id"),
+        sa.ForeignKeyConstraint(
+            ["skill_id", "skill_version"],
+            ["skill_version.skill_id", "skill_version.version"],
+            ondelete="RESTRICT",
+            name="fk_agent_template_skill_version",
+        ),
     )
 
     template_id: UUID = SqlField(foreign_key="agent_template.id", nullable=False, ondelete="CASCADE")
     skill_id: UUID = SqlField(foreign_key="skill.id", nullable=False, ondelete="RESTRICT")
+    skill_version: int = SqlField(nullable=False)
     # Rows on the same template sharing a non-NULL group_key form an "at least
     # one of" requirement group (e.g. GitHub OR Bitbucket). NULL means the
     # skill is a standalone AND-required skill, as it always was before groups.
@@ -593,6 +600,12 @@ class AgentTemplateOverrideDraftSkill(BaseModel, table=True):
     __table_args__ = (
         sa.UniqueConstraint("draft_id", "skill_id", name="uq_agent_template_override_draft_skill"),
         sa.Index("ix_agent_template_override_draft_skill_draft", "draft_id"),
+        sa.ForeignKeyConstraint(
+            ["skill_id", "skill_version"],
+            ["skill_version.skill_id", "skill_version.version"],
+            ondelete="RESTRICT",
+            name="fk_agent_template_override_draft_skill_version",
+        ),
     )
 
     draft_id: UUID = SqlField(
@@ -601,6 +614,7 @@ class AgentTemplateOverrideDraftSkill(BaseModel, table=True):
         ondelete="CASCADE",
     )
     skill_id: UUID = SqlField(foreign_key="skill.id", nullable=False, ondelete="RESTRICT")
+    skill_version: int = SqlField(nullable=False)
     group_key: str | None = SqlField(default=None, nullable=True, max_length=100)
 
 
@@ -610,6 +624,12 @@ class AgentTemplateOverrideVersionSkill(BaseModel, table=True):
     __table_args__ = (
         sa.UniqueConstraint("version_id", "skill_id", name="uq_agent_template_override_version_skill"),
         sa.Index("ix_agent_template_override_version_skill_version", "version_id"),
+        sa.ForeignKeyConstraint(
+            ["skill_id", "skill_version"],
+            ["skill_version.skill_id", "skill_version.version"],
+            ondelete="RESTRICT",
+            name="fk_agent_template_override_version_skill_version",
+        ),
     )
 
     version_id: UUID = SqlField(
@@ -618,6 +638,7 @@ class AgentTemplateOverrideVersionSkill(BaseModel, table=True):
         ondelete="CASCADE",
     )
     skill_id: UUID = SqlField(foreign_key="skill.id", nullable=False, ondelete="RESTRICT")
+    skill_version: int = SqlField(nullable=False)
     group_key: str | None = SqlField(default=None, nullable=True, max_length=100)
 
 
@@ -627,10 +648,17 @@ class PlatformTemplateSkill(BaseModel, table=True):
     __table_args__ = (
         sa.UniqueConstraint("template_id", "skill_id", name="uq_platform_template_skill"),
         sa.Index("ix_platform_template_skill_template", "template_id"),
+        sa.ForeignKeyConstraint(
+            ["skill_id", "skill_version"],
+            ["skill_version.skill_id", "skill_version.version"],
+            ondelete="RESTRICT",
+            name="fk_platform_template_skill_version",
+        ),
     )
 
     template_id: UUID = SqlField(foreign_key="platform_template.id", nullable=False, ondelete="CASCADE")
     skill_id: UUID = SqlField(foreign_key="skill.id", nullable=False, ondelete="RESTRICT")
+    skill_version: int = SqlField(nullable=False)
     # Rows on the same template sharing a non-NULL group_key form an "at least
     # one of" requirement group (e.g. GitHub OR Bitbucket). NULL means the
     # skill is a standalone AND-required skill, as it always was before groups.
@@ -646,10 +674,17 @@ class PlatformTemplateDraftSkill(BaseModel, table=True):
     __table_args__ = (
         sa.UniqueConstraint("draft_id", "skill_id", name="uq_platform_template_draft_skill"),
         sa.Index("ix_platform_template_draft_skill_draft", "draft_id"),
+        sa.ForeignKeyConstraint(
+            ["skill_id", "skill_version"],
+            ["skill_version.skill_id", "skill_version.version"],
+            ondelete="RESTRICT",
+            name="fk_platform_template_draft_skill_version",
+        ),
     )
 
     draft_id: UUID = SqlField(foreign_key="platform_template_draft.id", nullable=False, ondelete="CASCADE")
     skill_id: UUID = SqlField(foreign_key="skill.id", nullable=False, ondelete="RESTRICT")
+    skill_version: int = SqlField(nullable=False)
     # None for a standalone (AND-required) skill; otherwise the key of the
     # "at least one of" group this skill belongs to on this draft.
     group_key: str | None = SqlField(default=None, nullable=True, max_length=100)
@@ -786,6 +821,7 @@ class AgentTemplateOverrideRequiredSkillRead(PydanticBaseModel):
     source: str
     required_providers: list[str]
     tools_pointer: str | None
+    version: int
     group_key: str | None = None
     created_at: datetime
     updated_at: datetime
@@ -985,6 +1021,11 @@ class AgentAssignedSkillRead(PydanticBaseModel):
     id: UUID
     name: str
     source: str
+    # Which of the three owning tiers this Skill belongs to — not derived from a
+    # shared SkillScope enum (api.domains.skills.models already imports from this
+    # module, so importing back would cycle); the caller computes it from the
+    # same organization_id/agent_id presence rule skills.models.SkillRead uses.
+    scope: Literal["platform", "organization", "agent"]
     required_providers: list[str]
     tools_pointer: str | None
     created_at: datetime
@@ -992,6 +1033,9 @@ class AgentAssignedSkillRead(PydanticBaseModel):
     required: bool = False
     # The exact skill version this agent is pinned to (explicit, like templates).
     version: int
+    update_available: bool = False
+    source_skill_id: UUID | None = None
+    source_skill_version: int | None = None
 
 
 AgentModelSource = Literal["default", "override"]

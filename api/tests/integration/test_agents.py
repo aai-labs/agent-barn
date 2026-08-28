@@ -2733,7 +2733,7 @@ def test_start_agent_mounts_pinned_skill_version():
 
 # --- aai-cli skills auto-attach from configured providers ---
 
-_JIRA_POINTER = "\nFor Jira, use the aai-cli tool. See ./skills/aai-cli/jira_skill.md\n"
+_JIRA_POINTER = "\nFor Jira, use the aai-cli tool. See ./skills/jira/SKILL.md\n"
 
 
 def test_start_agent_auto_attaches_aai_cli_skill_for_configured_provider():
@@ -2768,9 +2768,9 @@ def test_start_agent_auto_attaches_aai_cli_skill_for_configured_provider():
             assert_that(config_map.data, has_key("skills.json"))
             entries = _json.loads(config_map.data["skills.json"])
             assert_that(len(entries), equal_to(1))
-            # Built-ins share the aai-cli mount directory so their long-published
-            # pointer paths keep resolving.
-            assert_that(entries[0]["path"], equal_to("aai-cli/SKILL.md"))
+            # Built-ins use the same isolated <slug>/SKILL.md mount contract as
+            # organization and Agent-owned Skills.
+            assert_that(entries[0]["path"], equal_to("jira/SKILL.md"))
             assert_that(config_map.data["TOOLS.md"], contains_string(_JIRA_POINTER))
 
 
@@ -2896,7 +2896,7 @@ def test_start_agent_injects_profile_mapping_into_agents_md_openclaw():
             config_map = k8s.create_config_map.call_args.args[1]
             agents_md = config_map.data["AGENTS.md"]
             assert_that(agents_md, contains_string("--profile jira-work"))
-            assert_that(agents_md, contains_string("./skills/aai-cli/"))
+            assert_that(agents_md, contains_string("./skills/aai-<integration>/SKILL.md"))
 
 
 def test_start_agent_injects_profile_mapping_into_agents_md_hermes():
@@ -2917,7 +2917,7 @@ def test_start_agent_injects_profile_mapping_into_agents_md_hermes():
             config_map = k8s.create_config_map.call_args.args[1]
             agents_md = config_map.data["AGENTS.md"]
             assert_that(agents_md, contains_string("--profile jira-work"))
-            assert_that(agents_md, contains_string("./skills/aai-cli/"))
+            assert_that(agents_md, contains_string("./skills/aai-<integration>/SKILL.md"))
 
 
 def test_start_agent_injects_chat_commands_policy_into_agents_md_openclaw():
@@ -3025,6 +3025,29 @@ def test_create_agent_with_required_skill_marks_it_required():
             assert_that(len(skills), equal_to(1))
             assert_that(skills[0]["id"], equal_to(skill_id))
             assert_that(skills[0]["required"], equal_to(True))
+
+
+def test_create_agent_rejects_a_required_skill_pinned_to_a_different_version():
+    with given([*_GIVEN, there_is_a_skill(name="Jira"), there_is_a_template_skill()]) as context:
+        from api.domains.skills.repository import SkillRepository
+
+        context.injector.get(SkillRepository).publish_version(context.skill.id, [("SKILL.md", "# Jira v2")])
+        skill_id = str(context.skill.id)
+
+        with when("I assign version 2 when the Template requires version 1"):
+            response = context.client.post(
+                _BASE,
+                json={
+                    **_VALID_CREATE,
+                    "skill_ids": [skill_id],
+                    "skill_versions": [{"skill_id": skill_id, "version": 2}],
+                },
+                headers=_auth(context),
+            )
+
+        with then("the Agent creation is rejected rather than treating the lineage as sufficient"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+            assert_that(response.json()["detail"], contains_string("must be pinned to version 1"))
 
 
 def test_create_agent_missing_required_skill_returns_400():
@@ -3775,6 +3798,42 @@ def test_agent_configuration_override_draft_publish_and_select_preserves_lineage
             assert_that(second_body["soul_md"], equal_to("# Agent-specific soul"))
             assert_that(second_body["source_template_key"], equal_to(pinned_template.template_key))
             assert_that(second_body["source_template_version"], equal_to(pinned_template.version))
+
+
+def test_agent_configuration_override_rejects_an_unpublished_required_skill():
+    with given([*_GIVEN, there_is_an_agent(name="Unpublished Requirement Agent")]) as context:
+        from api.domains.skills.models import Skill, SkillSource
+        from api.domains.skills.repository import SkillRepository
+
+        client: TestClient = context.client
+        repository: SkillRepository = context.injector.get(SkillRepository)
+        slug = f"draft-only-{uuid7().hex}"
+        skill = Skill(
+            organization_id=context.organization.id,
+            name="Unpublished Override Requirement",
+            slug=slug,
+            root_dir=slug,
+            entry_path="SKILL.md",
+            source=SkillSource.CUSTOM,
+            required_providers=[],
+        )
+        repository.save(skill)
+        repository.save_new_draft(skill.id, [("SKILL.md", "# Draft")])
+        configuration_url = f"{_BASE}/{context.agent.id}/configuration"
+        draft = client.post(f"{configuration_url}/draft", headers=_auth(context))
+        assert_that(draft.status_code, equal_to(status.HTTP_201_CREATED))
+
+        response = client.patch(
+            f"{configuration_url}/draft",
+            json={
+                "expected_updated_at": draft.json()["updated_at"],
+                "required_skill_ids": [str(skill.id)],
+            },
+            headers=_auth(context),
+        )
+
+        assert_that(response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_ENTITY))
+        assert_that(response.json()["detail"], contains_string("published version"))
 
 
 def test_agent_configuration_override_lifecycle_emits_domain_events():

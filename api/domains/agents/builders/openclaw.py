@@ -10,6 +10,11 @@ _SCRIPTS = Path(__file__).parent.parent / "scripts" / "openclaw"
 _COMMON_SCRIPTS = _SCRIPTS.parent
 _TELEMETRY_PUSH = _SCRIPTS / "plugins" / "telemetry-push"
 
+# OpenClaw's gateway binds this port and its own `openclaw health` CLI resolves
+# the same value with no way to override it, so the runtime must not be moved
+# off it. The in-pod communications adapter is pointed here to match.
+OPENCLAW_GATEWAY_PORT = 18789
+
 INIT_OPENCLAW_JS: str = (_SCRIPTS / "init-openclaw.js").read_text()
 HEALTHZ_SERVER_JS: str = (_SCRIPTS / "healthz-server.js").read_text()
 START_SH: str = (_SCRIPTS / "start.sh").read_text()
@@ -164,7 +169,7 @@ def build_secret_runtime(
         string_data={
             "OPENCLAW_GATEWAY_TOKEN": runtime_api_key,
             "RUNTIME_API_KEY": runtime_api_key,
-            "RUNTIME_API_URL": "http://127.0.0.1:8080",
+            "RUNTIME_API_URL": f"http://127.0.0.1:{OPENCLAW_GATEWAY_PORT}",
             "RUNTIME_MODEL": "openclaw/default",
             "LITELLM_API_KEY": litellm_api_key,
             "LITELLM_BASE_URL": litellm_base_url,

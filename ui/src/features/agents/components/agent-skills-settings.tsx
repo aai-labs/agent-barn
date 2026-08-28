@@ -1,6 +1,9 @@
 "use client";
 
 import { useRef, useState } from "react";
+import Link from "next/link";
+
+import { skillDetailHref } from "@/features/skills/scope";
 
 import { useAgentApplyAndRestart } from "../hooks/use-agent-apply-and-restart";
 import type { Agent } from "../schemas";
@@ -11,18 +14,15 @@ import { AgentSkillsTab } from "./agent-skills-tab";
 export function AgentSkillsSettings({
   agent,
   canEdit,
-  editing,
-  onEdit,
 }: {
   agent: Agent;
   canEdit: boolean;
-  editing: boolean;
-  onEdit: () => void;
 }) {
   const panelRef = useRef<AgentConfigurationEditHandle>(null);
   const [isDirty, setIsDirty] = useState(false);
   const [isValid, setIsValid] = useState(true);
   const { applyAndRestart } = useAgentApplyAndRestart(agent);
+  const configuredProviders = new Set((agent.secrets ?? []).map((secret) => secret.provider));
 
   async function applyChanges() {
     const action = panelRef.current;
@@ -30,27 +30,17 @@ export function AgentSkillsSettings({
     await applyAndRestart(action.apply);
   }
 
-  function cancelChanges() {
-    panelRef.current?.cancel();
-    setIsDirty(false);
-    setIsValid(true);
-    onEdit();
-  }
-
   return (
     <AgentConfigurationSection
       title="Skills"
       description="Assigned tools are independent from the Markdown template. Required skills are protected by the active configuration."
       canEdit={canEdit}
-      editing={editing}
-      onEdit={onEdit}
+      editing={canEdit}
       onApply={applyChanges}
-      onCancel={cancelChanges}
-      onApplied={onEdit}
       applyDisabled={!isDirty || !isValid}
       restartOnApply={agent.status === "RUNNING"}
     >
-      {editing && canEdit ? (
+      {canEdit ? (
         <AgentSkillsTab
           ref={panelRef}
           agent={agent}
@@ -65,12 +55,32 @@ export function AgentSkillsSettings({
           {agent.skills.map((skill) => (
             <div key={skill.id} className="flex flex-wrap items-center justify-between gap-2 rounded-xl px-3.5 py-3" style={{ border: "1px solid var(--line)", background: "var(--bg-soft)" }}>
               <div>
-                <div className="font-medium text-[0.86rem]" style={{ color: "var(--ink-2)" }}>{skill.name}</div>
+                <Link
+                  href={skillDetailHref({ kind: "agent", agentId: agent.id }, agent.organizationId, skill.id)}
+                  className="font-medium text-[0.86rem] hover:underline"
+                  style={{ color: "var(--ink-2)" }}
+                >
+                  {skill.name}
+                </Link>
+                {skill.requiredProviders.length > 0 && (
+                  <span
+                    className="ml-2 inline-flex rounded-full px-2 py-0.5 text-[0.6875rem] font-semibold uppercase tracking-wide"
+                    style={{
+                      color: skill.requiredProviders.every((provider) => configuredProviders.has(provider))
+                        ? "var(--ink-3)"
+                        : "var(--err)",
+                      background: "var(--line)",
+                    }}
+                  >
+                    {skill.requiredProviders.every((provider) => configuredProviders.has(provider))
+                      ? "Credentials configured"
+                      : "Credentials missing"}
+                  </span>
+                )}
                 <div className="text-[0.76rem]" style={{ color: "var(--ink-4)" }}>{skill.source}{skill.required ? " · Required by active template" : ""}</div>
               </div>
               <div className="flex items-center gap-2">
                 <span className="font-mono text-[0.72rem]" style={{ color: "var(--ink-4)" }}>v{skill.version}</span>
-                <span className="font-mono text-[0.72rem]" style={{ color: "var(--ink-4)" }}>{skill.requiredProviders.length > 0 ? skill.requiredProviders.join(", ") : "No provider"}</span>
               </div>
             </div>
           ))}

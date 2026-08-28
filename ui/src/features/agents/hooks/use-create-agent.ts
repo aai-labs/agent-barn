@@ -17,6 +17,8 @@ export type CreateAgentData = {
   model?: string;
   // Skills to assign on creation
   skillIds?: string[];
+  // Exact versions required by the selected Template; optional skills default to latest.
+  skillVersions?: Array<{ skillId: string; version: number }>;
   // Integration credentials (provider + provider-specific content; name is server-stamped)
   secrets?: Array<{ provider: string; content: Record<string, string | string[] | boolean> }>;
   // Shared credentials to attach (by ID)

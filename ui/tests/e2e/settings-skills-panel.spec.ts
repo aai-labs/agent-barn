@@ -35,6 +35,10 @@ test.describe("Settings — Skills panel", () => {
     ).toBeVisible();
   });
 
+  test("does not show an organization avatar in the settings header", async ({ page }) => {
+    await expect(page.getByText("AL", { exact: true })).toHaveCount(0);
+  });
+
   test("shows search input and source filter", async ({ page }) => {
     await expect(page.getByLabel("Search skills")).toBeVisible();
     await expect(page.getByLabel("Filter by source")).toBeVisible();

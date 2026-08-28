@@ -23,6 +23,7 @@ import {
   useCommunicationConnectionActions,
   useCommunicationConnections,
   useCommunicationPlatforms,
+  useDownloadAppPackage,
 } from "@/features/communication-connections/hooks/use-communication-connections";
 import { CommunicationConnectionDiagnostics } from "@/features/communication-connections/components/communication-connection-diagnostics";
 import type { CommunicationConnection } from "@/features/communication-connections/schemas";
@@ -289,6 +290,9 @@ export function AgentChannelSettings({
   const [credentials, setCredentials] = useState<Record<string, unknown>>({});
   const [formError, setFormError] = useState<string | null>(null);
   const [retiring, setRetiring] = useState<CommunicationConnection | null>(null);
+  const downloadAppPackage = useDownloadAppPackage();
+  const [packageBusyId, setPackageBusyId] = useState<string | null>(null);
+  const [packageError, setPackageError] = useState<string | null>(null);
   const [editingConnection, setEditingConnection] = useState<CommunicationConnection | null>(null);
   const [editDisplayName, setEditDisplayName] = useState("");
   const [editSettings, setEditSettings] = useState<Record<string, unknown>>({});
@@ -397,6 +401,34 @@ export function AgentChannelSettings({
                       Paste this URL into {platforms.data?.find((p) => p.key === connection.platformKey)?.displayName ?? "the platform"}&apos;s webhook settings: <code className="break-all">{connection.webhookUrl}</code>
                     </div>
                   )}
+                  {platforms.data
+                    ?.find((p) => p.key === connection.platformKey)
+                    ?.capabilities.includes("application_provisioning") && (
+                    <div className="mt-2 flex items-center gap-2 text-xs" style={{ color: "var(--ink-3)" }}>
+                      <span>Install the app in your workspace to add this Agent to channels and chats.</span>
+                      <button
+                        type="button"
+                        className="af-btn af-btn-sm flex-shrink-0"
+                        disabled={packageBusyId === connection.id}
+                        onClick={() => {
+                          setPackageBusyId(connection.id);
+                          setPackageError(null);
+                          void downloadAppPackage(agent.id, connection.id, connection.displayName)
+                            .catch((cause: unknown) =>
+                              setPackageError(
+                                cause instanceof Error ? cause.message : "Could not build the app package.",
+                              ),
+                            )
+                            .finally(() => setPackageBusyId(null));
+                        }}
+                      >
+                        {packageBusyId === connection.id ? "Preparing…" : "Download app package"}
+                      </button>
+                    </div>
+                  )}
+                  {packageError && packageBusyId === null && (
+                    <div className="mt-2 text-xs" style={{ color: "var(--err)" }}>{packageError}</div>
+                  )}
                 </div>
               </div>
               {canEdit && (
@@ -489,7 +521,7 @@ export function AgentChannelSettings({
                   </div>
                 )}
                 {platforms.data && platforms.data.length > 0 && (
-                  <div className="mt-3 grid gap-2.5 sm:grid-cols-3">
+                  <div className="mt-3 grid gap-2.5 sm:grid-cols-2">
                     {platforms.data.map((platform) => (
                       <PlatformOption
                         key={platform.key}

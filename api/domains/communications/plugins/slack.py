@@ -118,7 +118,6 @@ class SlackPlatformPlugin(PlatformPlugin):
     )
     capabilities = frozenset(
         {
-            PlatformCapability.APPLICATION_PROVISIONING,
             PlatformCapability.ATTACHMENTS,
             PlatformCapability.DIRECTORY_DISCOVERY,
             PlatformCapability.MENTIONS,

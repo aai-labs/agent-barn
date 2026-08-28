@@ -58,6 +58,25 @@ def create_communication_connection(
     return service.create_connection(agent_id, data, context)
 
 
+@communications_router.get(
+    "/agents/{agent_id}/connections/{connection_id}/app-package",
+    response_class=Response,
+    responses={200: {"content": {"application/zip": {}}}},
+)
+def download_communication_app_package(
+    agent_id: UUID,
+    connection_id: UUID,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[CommunicationsService, Injected(CommunicationsService)],
+):
+    filename, payload = service.build_app_package(agent_id, connection_id, context)
+    return Response(
+        content=payload,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 @communications_router.patch(
     "/agents/{agent_id}/connections/{connection_id}",
     response_model=CommunicationConnectionRead,

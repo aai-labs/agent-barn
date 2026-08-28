@@ -1,9 +1,13 @@
 "use client";
 
 import { forwardRef, useEffect, useImperativeHandle, useState } from "react";
+import Link from "next/link";
 import { useDebouncedValue } from "@tanstack/react-pacer";
+import { Loader2, Plus, Trash2 } from "lucide-react";
 
 import { AppErrorState } from "@/components/app-error-state";
+import { Badge } from "@/components/badge";
+import { ConfirmationDialog } from "@/components/confirmation-dialog";
 import { SearchIcon } from "@/components/icons";
 import {
   Select,
@@ -17,10 +21,12 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { SharedManualToggle } from "@/features/shared-credentials/components/shared-manual-toggle";
 import { useSharedManualSwitch } from "@/features/shared-credentials/hooks/use-shared-manual-switch";
 import { SHARED_CREDENTIAL_PROVIDER_LABELS } from "@/features/shared-credentials/utils";
-import { useSkills } from "@/features/skills/hooks/use-skills";
+import { useInfiniteSkills } from "@/features/skills/hooks/use-skills";
 import { useSkillVersions } from "@/features/skills/hooks/use-skill-versions";
 import { SKILL_PROVIDER_LABELS } from "@/features/skills/utils";
-import { SkillSourceBadge } from "@/features/skills/components/skill-source-badge";
+import { skillDetailHref, skillNewHref, type SkillScopeRef } from "@/features/skills/scope";
+import { SkillCard } from "@/features/skills/components/skill-card";
+import { useLoadMoreOnScroll } from "@/hooks/use-load-more-on-scroll";
 import type { Skill } from "@/features/skills/schemas";
 
 import {
@@ -46,15 +52,35 @@ export const AgentSkillsTab = forwardRef<
   AgentConfigurationEditHandle,
   AgentSkillsTabProps
 >(function AgentSkillsTab({ agent, isRunning, onDirtyChange }, ref) {
+  const scope: SkillScopeRef = { kind: "agent", agentId: agent.id };
   const [search, setSearch] = useState("");
   const [debouncedSearch] = useDebouncedValue(search, { wait: 300 });
-  const { skills, isLoading, error, refetch } = useSkills({ search: debouncedSearch || undefined, pageSize: 100 });
+  const {
+    skills,
+    isLoading,
+    error,
+    refetch,
+    hasNextPage,
+    fetchNextPage,
+    isFetchingNextPage,
+    isFetchingNextPageError,
+  } = useInfiniteSkills({
+    scope,
+    search: debouncedSearch || undefined,
+  });
+  const loadMoreRef = useLoadMoreOnScroll({
+    hasNextPage: Boolean(hasNextPage),
+    isFetchingNextPage,
+    fetchNextPage: () => void fetchNextPage(),
+  });
   const updateAgent = useUpdateAgent();
 
   const [pendingAddIds, setPendingAddIds] = useState<string[]>([]);
+  const [pendingAddSkills, setPendingAddSkills] = useState<Skill[]>([]);
   const [pendingRemoveIds, setPendingRemoveIds] = useState<string[]>([]);
   const [pendingPins, setPendingPins] = useState<Record<string, number>>({});
   const [newSecretDrafts, setNewSecretDrafts] = useState<IntegrationDraft[]>([]);
+  const [skillToRemove, setSkillToRemove] = useState<AgentAssignedSkill | null>(null);
 
   const existingSecretProviders = new Set(
     (agent.secrets ?? []).map((s) => s.provider),
@@ -63,8 +89,6 @@ export const AgentSkillsTab = forwardRef<
   const currentSkills = agent.skills.filter(
     (s) => !pendingRemoveIds.includes(s.id),
   );
-
-  const pendingAddSkills = skills.filter((s) => pendingAddIds.includes(s.id));
 
   const assignedIds = new Set(agent.skills.map((s) => s.id));
   const availableSkills = skills.filter(
@@ -99,7 +123,8 @@ export const AgentSkillsTab = forwardRef<
     const needed = skill.requiredProviders.filter(
       (p) => !existingSecretProviders.has(p),
     );
-    setPendingAddIds((prev) => [...prev, skill.id]);
+    setPendingAddIds((prev) => (prev.includes(skill.id) ? prev : [...prev, skill.id]));
+    setPendingAddSkills((prev) => (prev.some((item) => item.id === skill.id) ? prev : [...prev, skill]));
     setNewSecretDrafts((prev) => {
       const existing = new Set(prev.map((d) => d.provider));
       const toAdd = needed.filter((p) => !existing.has(p));
@@ -108,15 +133,14 @@ export const AgentSkillsTab = forwardRef<
   }
 
   function cancelAdd(skillId: string) {
-    const remaining = skills.filter(
-      (s) => pendingAddIds.includes(s.id) && s.id !== skillId,
-    );
+    const remaining = pendingAddSkills.filter((s) => s.id !== skillId);
     const stillNeeded = new Set(
       remaining
         .flatMap((s) => s.requiredProviders)
         .filter((p) => !existingSecretProviders.has(p)),
     );
     setPendingAddIds((prev) => prev.filter((id) => id !== skillId));
+    setPendingAddSkills(remaining);
     setNewSecretDrafts((prev) =>
       prev.filter((d) => stillNeeded.has(d.provider)),
     );
@@ -129,6 +153,12 @@ export const AgentSkillsTab = forwardRef<
       delete next[skillId];
       return next;
     });
+  }
+
+  function confirmRemoval() {
+    if (!skillToRemove) return;
+    markForRemoval(skillToRemove.id);
+    setSkillToRemove(null);
   }
 
   function undoRemoval(skillId: string) {
@@ -177,7 +207,7 @@ export const AgentSkillsTab = forwardRef<
     // Providers required by skills that survive this update (kept + newly added).
     const survivingSkills = [
       ...agent.skills.filter((s) => !pendingRemoveIds.includes(s.id)),
-      ...skills.filter((s) => pendingAddIds.includes(s.id)),
+      ...pendingAddSkills,
     ];
     const stillNeeded = new Set(survivingSkills.flatMap((s) => s.requiredProviders));
 
@@ -219,6 +249,7 @@ export const AgentSkillsTab = forwardRef<
         : {}),
     });
     setPendingAddIds([]);
+    setPendingAddSkills([]);
     setPendingRemoveIds([]);
     setPendingPins({});
     setNewSecretDrafts([]);
@@ -226,6 +257,7 @@ export const AgentSkillsTab = forwardRef<
 
   function resetForm() {
     setPendingAddIds([]);
+    setPendingAddSkills([]);
     setPendingRemoveIds([]);
     setPendingPins({});
     setNewSecretDrafts([]);
@@ -248,7 +280,7 @@ export const AgentSkillsTab = forwardRef<
     );
   }
 
-  if (error) {
+  if (error && skills.length === 0) {
     return (
       <AppErrorState
         error={error}
@@ -269,87 +301,104 @@ export const AgentSkillsTab = forwardRef<
 
   return (
     <div className="flex flex-col gap-5">
-      {/* Assigned skills */}
+      {/* Skills currently in use by this Agent */}
       <div className="flex flex-col gap-2">
-        {hasAnything && (
-          <SectionLabel>Assigned</SectionLabel>
-        )}
+        {hasAnything && <SectionLabel>In use</SectionLabel>}
 
-        {currentSkills.map((skill) => (
-          <AssignedSkillRow
-            key={skill.id}
-            skill={skill}
-            isRunning={isRunning}
-            pin={pendingPins[skill.id] ?? skill.version}
-            onPinChange={(version) =>
-              setPendingPins((prev) => {
-                const next = { ...prev };
-                if (version === skill.version) {
-                  delete next[skill.id];
-                } else {
-                  next[skill.id] = version;
-                }
-                return next;
-              })
-            }
-            onRemove={() => markForRemoval(skill.id)}
-          />
-        ))}
-
-        {pendingRemoveIds.map((id) => {
-          const skill = agent.skills.find((s) => s.id === id);
-          if (!skill) return null;
-          return (
-            <div
-              key={id}
-              className="flex items-center gap-2 px-3.5 py-2.5 rounded-2xl"
-              style={{ border: "1px dashed var(--line)", opacity: 0.55 }}
-            >
-              <span
-                className="flex-1 font-medium text-[0.844rem] line-through"
-                style={{ color: "var(--ink-3)" }}
-              >
-                {skill.name}
-              </span>
-              <button
-                className="af-btn af-btn-sm af-btn-ghost"
-                onClick={() => undoRemoval(id)}
-              >
-                Undo
-              </button>
-            </div>
-          );
-        })}
-
-        {pendingAddSkills.map((skill) => (
+        {hasAnything ? (
           <div
-            key={skill.id}
-            className="flex items-center gap-2 px-3.5 py-2.5 rounded-2xl"
-            style={{ border: "1.5px dashed var(--line)", background: "var(--bg-soft)" }}
+            className="grid gap-4"
+            style={{ gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))" }}
           >
-            <div className="flex-1 min-w-0">
-              <span className="font-medium text-[0.844rem]" style={{ color: "var(--ink)" }}>
-                {skill.name}
-              </span>
-              <span className="ml-2 text-[0.75rem]" style={{ color: "var(--ink-4)" }}>
-                · Adding
-              </span>
-            </div>
-            <button
-              className="af-btn af-btn-sm af-btn-ghost"
-              onClick={() => cancelAdd(skill.id)}
-            >
-              Cancel
-            </button>
-          </div>
-        ))}
+            {currentSkills.map((skill) => (
+              <AssignedSkillCard
+                key={skill.id}
+                skill={skill}
+                href={skillDetailHref(scope, agent.organizationId, skill.id)}
+                scope={scope}
+                isRunning={isRunning}
+                pin={pendingPins[skill.id] ?? skill.version}
+                onPinChange={(version) =>
+                  setPendingPins((prev) => {
+                    const next = { ...prev };
+                    if (version === skill.version) {
+                      delete next[skill.id];
+                    } else {
+                      next[skill.id] = version;
+                    }
+                    return next;
+                  })
+                }
+                onRemove={() => setSkillToRemove(skill)}
+              />
+            ))}
 
-        {!hasAnything && (
+            {pendingRemoveIds.map((id) => {
+              const skill = agent.skills.find((s) => s.id === id);
+              if (!skill) return null;
+              return (
+                <SkillCard
+                  key={`removing-${id}`}
+                  skill={skill}
+                  href={skillDetailHref(scope, agent.organizationId, skill.id)}
+                  badges={
+                    <>
+                      <Badge variant="ok">In use</Badge>
+                      <Badge variant="warn">Removing</Badge>
+                    </>
+                  }
+                  footer={
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[0.75rem] line-through" style={{ color: "var(--ink-3)" }}>
+                        {skill.name}
+                      </span>
+                      <button
+                        type="button"
+                        className="af-btn af-btn-sm af-btn-ghost"
+                        onClick={() => undoRemoval(id)}
+                      >
+                        Undo
+                      </button>
+                    </div>
+                  }
+                />
+              );
+            })}
+
+            {pendingAddSkills.map((skill) => (
+              <SkillCard
+                key={`adding-${skill.id}`}
+                skill={skill}
+                href={skillDetailHref(scope, agent.organizationId, skill.id)}
+                badges={
+                  <>
+                    <Badge variant="ok">In use</Badge>
+                    <Badge variant="accent">Adding</Badge>
+                  </>
+                }
+                footer={
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[0.75rem]" style={{ color: "var(--ink-3)" }}>
+                      · Adding
+                    </span>
+                    <button
+                      type="button"
+                      className="af-btn af-btn-sm af-btn-ghost"
+                      onClick={() => cancelAdd(skill.id)}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                }
+              />
+            ))}
+          </div>
+        ) : (
           <div
             className="py-6 text-center rounded-2xl text-[0.8125rem]"
             style={{ border: "1px dashed var(--line-strong)", color: "var(--ink-4)" }}
           >
-            No skills assigned yet.
+            No skills in use yet.
           </div>
         )}
       </div>
@@ -441,9 +490,17 @@ export const AgentSkillsTab = forwardRef<
         </div>
       )}
 
-      {/* Available skills to add */}
+      {/* Skills */}
       <div className="flex flex-col gap-2">
-        <SectionLabel>Add skills</SectionLabel>
+        <div className="flex items-center justify-between gap-2">
+          <SectionLabel>Add skills</SectionLabel>
+          <Link
+            href={skillNewHref(scope, agent.organizationId)}
+            className="af-btn af-btn-sm af-btn-ghost"
+          >
+            <Plus size={13} /> New private skill
+          </Link>
+        </div>
         <div
           className="flex items-center gap-2 px-3 py-2 rounded-xl"
           style={{ border: "1px solid var(--line)", background: "var(--bg-elev)" }}
@@ -462,19 +519,50 @@ export const AgentSkillsTab = forwardRef<
             Loading…
           </div>
         )}
-        {!isLoading && availableSkills.length === 0 && (
+        {!isLoading &&
+          currentSkills.length === 0 &&
+          pendingRemoveIds.length === 0 &&
+          pendingAddSkills.length === 0 &&
+          availableSkills.length === 0 &&
+          !hasNextPage && (
           <div className="text-[0.8125rem] py-4 text-center" style={{ color: "var(--ink-3)" }}>
-            {search ? "No skills match." : "No more skills to add."}
+            {search ? "No skills match." : "No skills available."}
           </div>
         )}
-        {!isLoading && availableSkills.map((skill) => (
-          <AvailableSkillRow
-            key={skill.id}
-            skill={skill}
-            isRunning={isRunning}
-            onAdd={() => addSkill(skill)}
-          />
-        ))}
+        {!isLoading && (
+          <div
+            className="grid gap-4"
+            style={{ gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))" }}
+          >
+            {availableSkills.map((skill) => (
+              <SkillCard
+                key={skill.id}
+                skill={skill}
+                href={skillDetailHref(scope, agent.organizationId, skill.id)}
+                addDisabled={isRunning}
+                onAdd={() => addSkill(skill)}
+              />
+            ))}
+            {hasNextPage && (
+              <div
+                ref={loadMoreRef}
+                className="col-span-full flex items-center justify-center gap-2 py-4 text-[0.75rem]"
+                style={{ color: "var(--ink-4)" }}
+              >
+                <Loader2 size={14} className={isFetchingNextPage ? "animate-spin" : "invisible"} />
+                {isFetchingNextPage ? "Loading more skills…" : "Scroll to load more skills…"}
+              </div>
+            )}
+            {isFetchingNextPageError && (
+              <p className="col-span-full m-0 py-3 text-center text-[0.75rem]" style={{ color: "var(--err)" }}>
+                Unable to load more skills. {" "}
+                <button type="button" className="underline" onClick={() => void fetchNextPage()}>
+                  Try again
+                </button>
+              </p>
+            )}
+          </div>
+        )}
       </div>
 
       {credentialError && newlyRequiredProviderIds.length === 0 && (
@@ -483,6 +571,23 @@ export const AgentSkillsTab = forwardRef<
           message={credentialError}
         />
       )}
+
+      <ConfirmationDialog
+        open={Boolean(skillToRemove)}
+        onOpenChange={(open) => {
+          if (!open) setSkillToRemove(null);
+        }}
+        title={`Remove ${skillToRemove?.name ?? "this skill"}?`}
+        description={
+          skillToRemove
+            ? `This will stage ${skillToRemove.name} for removal from ${agent.name}. You can undo this before applying the skills changes.`
+            : ""
+        }
+        confirmLabel="Remove skill"
+        variant="destructive"
+        onConfirm={confirmRemoval}
+        icon={<Trash2 size={18} />}
+      />
     </div>
   );
 });
@@ -498,120 +603,101 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
   );
 }
 
-function AssignedSkillRow({
+function AssignedSkillCard({
   skill,
+  href,
+  scope,
   isRunning,
   pin,
   onPinChange,
   onRemove,
 }: {
   skill: AgentAssignedSkill;
+  href: string;
+  scope: SkillScopeRef;
   isRunning: boolean;
   pin: number;
   onPinChange: (version: number) => void;
   onRemove: () => void;
 }) {
-  const { versions } = useSkillVersions(skill.id);
+  // Versions are fetched only once the picker is actually opened, not for every
+  // assigned card on mount — an agent with a dozen skills would otherwise fire a
+  // dozen requests just to render, for a control most cards never touch.
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const { versions, isLoading: versionsLoading } = useSkillVersions(skill.id, scope, pickerOpen);
   return (
-    <div
-      className="flex items-center gap-2 px-3.5 py-2.5 rounded-2xl"
-      style={{ border: "1px solid var(--line)", background: "var(--bg-soft)" }}
-    >
-      <div className="flex items-center gap-2 flex-1 min-w-0">
-        <span className="font-medium text-[0.844rem]" style={{ color: "var(--ink)" }}>
-          {skill.name}
-        </span>
-        <SkillSourceBadge source={skill.source} />
-        {skill.required && (
-          <span
-            className="text-[0.6875rem] font-semibold uppercase tracking-wide px-2 py-0.5 rounded-full"
-            style={{ color: "var(--ink-3)", background: "var(--line)" }}
+    <SkillCard
+      skill={skill}
+      href={href}
+      badges={
+        <>
+          <Badge variant="ok">In use</Badge>
+          {skill.required && <Badge>Required</Badge>}
+        </>
+      }
+      footer={
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <Select
+            value={String(pin)}
+            onValueChange={(value) => onPinChange(Number(value))}
+            onOpenChange={setPickerOpen}
+            disabled={isRunning || skill.required}
           >
-            Required
-          </span>
-        )}
-      </div>
-      <Select
-        value={String(pin)}
-        onValueChange={(value) => onPinChange(Number(value))}
-        disabled={isRunning}
-      >
-        <SelectTrigger className="w-auto min-w-24" aria-label={`Version for ${skill.name}`}>
-          <SelectValue placeholder="Version" />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectGroup>
-            {versions.map((v) => (
-              <SelectItem key={v.version} value={String(v.version)}>
-                Version v{v.version}
-              </SelectItem>
-            ))}
-          </SelectGroup>
-        </SelectContent>
-      </Select>
-      {skill.required ? (
-        <TooltipProvider>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <span>
-                <button className="af-btn af-btn-sm af-btn-ghost" disabled>
-                  Remove
-                </button>
-              </span>
-            </TooltipTrigger>
-            <TooltipContent>Required by template</TooltipContent>
-          </Tooltip>
-        </TooltipProvider>
-      ) : (
-        <button
-          className="af-btn af-btn-sm af-btn-ghost"
-          disabled={isRunning}
-          onClick={onRemove}
-        >
-          Remove
-        </button>
-      )}
-    </div>
-  );
-}
-
-function AvailableSkillRow({
-  skill,
-  isRunning,
-  onAdd,
-}: {
-  skill: Skill;
-  isRunning: boolean;
-  onAdd: () => void;
-}) {
-  return (
-    <div
-      className="flex items-center gap-2 px-3.5 py-2.5 rounded-2xl"
-      style={{ border: "1px solid var(--line)" }}
-    >
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2">
-          <span className="font-medium text-[0.844rem]" style={{ color: "var(--ink)" }}>
-            {skill.name}
-          </span>
-          <SkillSourceBadge source={skill.source} />
+            <SelectTrigger
+              className="w-auto min-w-24"
+              aria-label={`Version for ${skill.name}`}
+              title={
+                skill.required
+                  ? "Pinned by the active template; publish a new template version to change it."
+                  : undefined
+              }
+            >
+              <SelectValue placeholder="Version" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectGroup>
+                {/* Until the picker has been opened (and its fetch resolved), the
+                  currently pinned version is the only option — Select needs a
+                  matching Item mounted to show the trigger's label at rest, and
+                  that's the one version we already know without a request. */}
+                {(pickerOpen && versions.length > 0 ? versions.map((v) => v.version) : [pin]).map((version) => (
+                  <SelectItem key={version} value={String(version)}>
+                    Version v{version}
+                  </SelectItem>
+                ))}
+                {pickerOpen && versionsLoading && versions.length === 0 && (
+                  <div className="px-2 py-1.5 text-[0.78rem]" style={{ color: "var(--ink-4)" }}>
+                    Loading versions…
+                  </div>
+                )}
+              </SelectGroup>
+            </SelectContent>
+          </Select>
+          {skill.required ? (
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span>
+                    <button type="button" className="af-btn af-btn-sm af-btn-ghost" disabled>
+                      Remove
+                    </button>
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent>Required by template</TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          ) : (
+            <button
+              type="button"
+              className="af-btn af-btn-sm af-btn-ghost"
+              disabled={isRunning}
+              onClick={onRemove}
+            >
+              Remove
+            </button>
+          )}
         </div>
-        {skill.requiredProviders.length > 0 && (
-          <span className="text-[0.75rem]" style={{ color: "var(--ink-4)" }}>
-            Requires:{" "}
-            {skill.requiredProviders
-              .map((p) => SKILL_PROVIDER_LABELS[p] ?? p)
-              .join(", ")}
-          </span>
-        )}
-      </div>
-      <button
-        className="af-btn af-btn-sm af-btn-ghost"
-        disabled={isRunning}
-        onClick={onAdd}
-      >
-        Add
-      </button>
-    </div>
+      }
+    />
   );
 }

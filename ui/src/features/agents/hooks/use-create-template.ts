@@ -22,6 +22,8 @@ export type CreateTemplateData = {
   requiredSkillIds?: string[];
   // "At least one of" requirement groups (e.g. GitHub OR Bitbucket).
   requiredSkillGroups?: { groupKey: string; skillIds: string[] }[];
+  /** Exact published version selected for each required Skill. */
+  requiredSkillVersions?: Record<string, number>;
 };
 
 export function useCreateTemplate() {

@@ -28,6 +28,7 @@ test.describe("Platform Template Admin", () => {
           source: "aai_cli",
           required_providers: ["github"],
           tools_pointer: null,
+          version: 1,
           created_at: "2026-01-01T00:00:00Z",
           updated_at: "2026-01-01T00:00:00Z",
         },
@@ -195,7 +196,8 @@ test.describe("Platform Template Admin", () => {
     expect(draftRequestCount).toBe(0);
 
     await page.getByRole("button", { name: "Restore v1 as draft" }).click();
+    await expect(page.getByRole("button", { name: "Save draft" })).toBeVisible();
     await expect(page.getByRole("tab", { name: "SOUL.md", exact: true })).toHaveAttribute("data-state", "active");
-    await expect(page.getByLabel("SOUL.md content")).toHaveValue(/version one/);
+    await expect(page.getByRole("textbox", { name: "SOUL.md content" })).toHaveValue(/version one/);
   });
 });
