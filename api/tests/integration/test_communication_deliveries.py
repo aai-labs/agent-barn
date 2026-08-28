@@ -337,6 +337,10 @@ def test_diagnostics_reports_pipeline_transitions_without_message_content() -> N
             assert_that(body, not_(has_key("latest_transitions")))
             assert_that(journal.status_code, equal_to(200))
             assert_that(journal.json()["total"], not_(equal_to(0)))
+            assert_that(
+                journal.json()["items"][0],
+                has_entries(direction="OUTBOUND", delivery_status="SUCCEEDED"),
+            )
             assert_that(repr(body), not_(contains_string("message provider-1")))
             assert_that(repr(body), not_(contains_string("private response")))
             assert_that(repr(journal.json()), not_(contains_string("message provider-1")))
