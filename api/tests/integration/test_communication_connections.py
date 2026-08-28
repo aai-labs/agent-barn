@@ -584,7 +584,33 @@ def test_connection_summary_reports_richer_health_and_delivery_signals() -> None
             assert_that(body["consecutive_failure_count"], equal_to(2))
             assert_that(body["delivery_success_rate"], close_to(1 / 3, 0.001))
             assert_that(body["oldest_pending_delivery_age_seconds"], not_none())
+            assert_that(
+                [state["status"] for state in body["connection_history"]],
+                equal_to(["ERROR", "CONNECTED"]),
+            )
             assert_that(str(body), not_(contains_string("provider rejected")))
+
+
+def test_diagnostics_and_journal_reject_windows_over_31_days() -> None:
+    with given(_GIVEN) as context:
+        created = context.client.post(_base(context), json=_discord_payload(), headers=_auth(context)).json()
+        connection_id = created["id"]
+        invalid_window = "2025-01-01T00:00:00Z"
+        window_end = "2026-01-01T00:00:00Z"
+
+        summary = context.client.get(
+            f"{_base(context)}/{connection_id}/summary?since={invalid_window}&until={window_end}",
+            headers=_auth(context),
+        )
+        journal = context.client.get(
+            f"{_base(context)}/{connection_id}/journal?kind=connection&since={invalid_window}&until={window_end}",
+            headers=_auth(context),
+        )
+
+        assert_that(summary.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+        assert_that(journal.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+        assert_that(summary.json()["detail"], equal_to("Diagnostics window cannot exceed 31 days"))
+        assert_that(journal.json()["detail"], equal_to("Diagnostics window cannot exceed 31 days"))
 
 
 def test_connection_and_journal_reads_redact_legacy_error_details() -> None:

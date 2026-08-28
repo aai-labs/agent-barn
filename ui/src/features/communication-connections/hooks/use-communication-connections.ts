@@ -21,6 +21,7 @@ import {
   type CommunicationDiagnostics,
   type CommunicationJournalFilters,
   type CommunicationJournalKind,
+  type CommunicationJournalWindow,
   type PaginatedCommunicationJournalEntries,
   type CommunicationReconnect,
   type CommunicationRetry,
@@ -72,15 +73,22 @@ export function useCommunicationConnectionDiagnostics(
   agentId: string,
   connectionId: string,
   enabled = true,
+  window: CommunicationJournalWindow = {},
 ) {
   const orgApiBase = useOrganizationApiBase();
   const { selectedOrganization } = useOrganizationContext();
   const organizationId = selectedOrganization?.id ?? "";
+  const searchParams = new URLSearchParams();
+  if (window.since) searchParams.set("since", window.since);
+  if (window.until) searchParams.set("until", window.until);
+  const queryString = searchParams.toString();
   return useQuery({
-    queryKey: communicationDiagnosticsKey.detail(`${organizationId}:${connectionId}`),
+    queryKey: communicationDiagnosticsKey.detail(
+      `${organizationId}:${connectionId}:${window.since ?? ""}:${window.until ?? ""}`,
+    ),
     queryFn: async () => {
       const response = await api.get<CommunicationDiagnostics>(
-        `${orgApiBase}/agents/${agentId}/connections/${connectionId}/summary`,
+        `${orgApiBase}/agents/${agentId}/connections/${connectionId}/summary${queryString ? `?${queryString}` : ""}`,
         { schema: CommunicationDiagnosticsSchema },
       );
       return response.data;
@@ -222,9 +230,9 @@ export function useCommunicationConnectionActions() {
     });
   }
 
-  function invalidateDiagnostics(agentId: string, connectionId: string) {
+  function invalidateDiagnostics(agentId: string) {
     void queryClient.invalidateQueries({
-      queryKey: communicationDiagnosticsKey.detail(`${organizationId}:${connectionId}`),
+      queryKey: communicationDiagnosticsKey.all,
     });
     // Covers both journal list pages (by kind/filters) and delivery lifecycle
     // drill-down detail queries, which don't nest under a shared list prefix.
@@ -275,7 +283,7 @@ export function useCommunicationConnectionActions() {
       );
       return response.data;
     },
-    onSuccess: (data) => invalidateDiagnostics(data.connection.agentId, data.connection.id),
+    onSuccess: (data) => invalidateDiagnostics(data.connection.agentId),
   });
 
   const retryDelivery = useMutation({
@@ -287,7 +295,7 @@ export function useCommunicationConnectionActions() {
       );
       return response.data;
     },
-    onSuccess: (_data, variables) => invalidateDiagnostics(variables.agentId, variables.connectionId),
+    onSuccess: (_data, variables) => invalidateDiagnostics(variables.agentId),
   });
 
   return { createConnection, updateConnection, retireConnection, reconnectConnection, retryDelivery };

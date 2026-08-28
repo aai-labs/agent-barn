@@ -10,6 +10,13 @@ import { useCommunicationConnections } from "@/features/communication-connection
 import { useAgent } from "../hooks/use-agent";
 import { canAgent } from "../utils";
 
+function formatPlatformLabel(value: string): string {
+  return value
+    .replace(/_/g, " ")
+    .toLowerCase()
+    .replace(/(^|\s)\S/g, (character) => character.toUpperCase());
+}
+
 export function AgentCommunicationConnectionDetailPage({
   agentId,
   connectionId,
@@ -71,6 +78,19 @@ export function AgentCommunicationConnectionDetailPage({
         <p className="mb-0 mt-1 text-[0.9rem]" style={{ color: "var(--ink-3)" }}>
           Communication details and recovery controls for {agent.name}.
         </p>
+        <div className="mt-3 flex flex-wrap items-center gap-2 text-xs" style={{ color: "var(--ink-3)" }}>
+          <span className="rounded-full px-2 py-1 font-medium" style={{ background: "var(--bg-soft)", color: "var(--ink-2)" }}>
+            {formatPlatformLabel(connection.platformKey)}
+          </span>
+          {connection.externalIdentity && (
+            <span className="rounded-full px-2 py-1" style={{ border: "1px solid var(--line)", background: "var(--bg-elev)" }}>
+              Provider identity: {connection.externalIdentity}
+            </span>
+          )}
+          <span className="rounded-full px-2 py-1" style={{ border: "1px solid var(--line)", background: "var(--bg-elev)" }}>
+            {connection.enabled ? "Enabled" : "Disabled"}
+          </span>
+        </div>
         <CommunicationConnectionDiagnostics
           agentId={agent.id}
           connection={connection}

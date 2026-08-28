@@ -401,6 +401,37 @@ class CommunicationTransitionRead(PydanticBaseModel):
     duration_ms: float | None
 
 
+class CommunicationConnectionStateRead(PydanticBaseModel):
+    """One contiguous provider state interval inside a diagnostics window."""
+
+    status: ConnectionObservedStatus
+    started_at: datetime
+    ended_at: datetime | None
+    next_status: ConnectionObservedStatus | None
+    duration_ms: float
+    reconnect_count: int = 0
+    error_code: str | None = None
+    error_summary: str | None = None
+
+
+class CommunicationConnectionIncidentOutcome(str, enum.Enum):
+    RECONNECTED = "RECONNECTED"
+    FAILED = "FAILED"
+    IN_PROGRESS = "IN_PROGRESS"
+
+
+class CommunicationConnectionIncidentRead(PydanticBaseModel):
+    """One connection attempt projected from contiguous provider states."""
+
+    started_at: datetime
+    outcome: CommunicationConnectionIncidentOutcome
+    connect_time_ms: float | None
+    outage_ms: float | None
+    cause_code: str | None = None
+    cause_summary: str | None = None
+    reconnect_count: int = 0
+
+
 class CommunicationDiagnosticsRead(PydanticBaseModel):
     connection: CommunicationConnectionRead
     provider_connectivity: ConnectionObservedStatus | None
@@ -417,6 +448,11 @@ class CommunicationDiagnosticsRead(PydanticBaseModel):
     delivery_success_rate: float | None
     recent_failures: list[CommunicationFailureRead]
     latest_transitions: list[CommunicationTransitionRead]
+    connection_history: list[CommunicationConnectionStateRead]
+    connection_incidents: list[CommunicationConnectionIncidentRead]
+    reconnect_count: int
+    median_connect_time_ms: float | None
+    longest_outage_ms: float | None
     window_start: datetime
     window_end: datetime
 

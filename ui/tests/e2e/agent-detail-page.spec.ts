@@ -525,24 +525,35 @@ test.describe("Agent Detail Page — Channels tab", () => {
 
   test("shows delivery activity, lets an operator copy an error, and confirms a reconnect request", async ({ context }) => {
     await context.grantPermissions(["clipboard-read", "clipboard-write"]);
-    // Both tabs' Journal queries fire once, up front, because both stay mounted
-    // (forceMount) so a later tab switch never re-fetches or resets state.
+    // Delivery transitions are the primary activity surface. Connection
+    // failures are explained inline from the diagnostics read model.
     const initialDeliveryRequest = connectionDetailPage.waitForJournalRequest("delivery");
-    const initialConnectionRequest = connectionDetailPage.waitForJournalRequest("connection");
+    const journalRequests = connectionDetailPage.startJournalRequestCapture();
     await agentDetailPage.connectionDetailsLink().click();
-    await initialDeliveryRequest;
-    await initialConnectionRequest;
+    const deliveryRequest = await initialDeliveryRequest;
+    journalRequests.stop();
+    expect(journalRequests.urls.some((url) => url.includes("kind=connection"))).toBe(false);
+    const deliveryWindow = new URL(deliveryRequest.url()).searchParams;
+    expect(deliveryWindow.get("since")).toBe("2025-12-31T00:00:00Z");
+    expect(deliveryWindow.get("until")).toBe("2026-01-01T00:00:00Z");
 
     await expect(connectionDetailPage.summaryMetric("Provider connectivity")).toBeVisible();
     await expect(connectionDetailPage.summaryMetric("End-to-end delivery")).toBeVisible();
     await expect(connectionDetailPage.summaryMetric("Health signals")).toBeVisible();
-    await expect(connectionDetailPage.summaryMetric("Consecutive failures")).toBeVisible();
+    await expect(connectionDetailPage.summaryMetric("Connection health")).toBeVisible();
+    await expect(connectionDetailPage.summaryMetric("Recent incidents")).toBeVisible();
+    await expect(connectionDetailPage.connectionHealthSummary()).toBeVisible();
+    await expect(connectionDetailPage.summaryMetric("Consecutive delivery failures")).toBeVisible();
     await expect(connectionDetailPage.summaryMetric("Delivery success rate")).toBeVisible();
     await expect(connectionDetailPage.summaryMetric("Recent failures")).toBeVisible();
-    await expect(connectionDetailPage.summaryMetric("Latest transitions")).toBeVisible();
-    await expect(connectionDetailPage.deliveryTransitionsTab()).toBeVisible();
-    // Both tabpanels are mounted (kept alive across tab switches), so scope to
-    // the active one — the inactive tab has the same mocked "1 event" text.
+    const failureCard = connectionDetailPage.recentFailureCard();
+    await expect(failureCard).toContainText(SAFE_PROVIDER_ERROR);
+    await expect(connectionDetailPage.failureDetailsToggle()).toHaveText("Show details");
+    await connectionDetailPage.failureDetailsToggle().click();
+    await expect(failureCard).toContainText("Error details");
+    await expect(failureCard).toContainText("provider_error");
+    await expect(failureCard).toContainText(COMMUNICATION_DELIVERY_ID);
+    await expect(connectionDetailPage.failureDetailsToggle()).toHaveText("Hide details");
     await expect(connectionDetailPage.deliveryEventCount(1)).toBeVisible();
     const deliveryRow = connectionDetailPage.deliveryTransitionRow(/provider delivered/i);
     await expect(deliveryRow).toContainText("Outbound");
@@ -559,17 +570,6 @@ test.describe("Agent Detail Page — Channels tab", () => {
     const failedOnlyRequest = connectionDetailPage.waitForFailedOnlyRequest();
     await connectionDetailPage.failedOnlyCheckbox().check();
     await failedOnlyRequest;
-
-    // Regression coverage: switching tabs must not clear a set filter or
-    // re-fetch either tab's Journal — it previously unmounted and reset both.
-    const journalRequestsAfterFilter = connectionDetailPage.startJournalRequestCapture();
-    await connectionDetailPage.connectionEventsTab().click();
-    await expect(connectionDetailPage.connectionEventsTab()).toHaveAttribute("aria-selected", "true");
-    await connectionDetailPage.deliveryTransitionsTab().click();
-    await expect(connectionDetailPage.deliveryTransitionsTab()).toHaveAttribute("aria-selected", "true");
-    await expect(connectionDetailPage.failedOnlyCheckbox()).toBeChecked();
-    journalRequestsAfterFilter.stop();
-    expect(journalRequestsAfterFilter.urls).toEqual([]);
 
     await connectionDetailPage.failedOnlyCheckbox().uncheck();
 
@@ -594,17 +594,6 @@ test.describe("Agent Detail Page — Channels tab", () => {
     await expect(connectionDetailPage.timelineStage("reply queued")).toBeVisible();
     await expect(connectionDetailPage.timelineStage("provider delivered")).toBeVisible();
     await expect(connectionDetailPage.timelineStage("recovered")).toBeVisible();
-  });
-
-  test("shows typed admission outcomes on Connection event rows", async () => {
-    await agentDetailPage.connectionDetailsLink().click();
-    await connectionDetailPage.connectionEventsTab().click();
-
-    const eventRow = connectionDetailPage.connectionEventRow(/policy admitted/i);
-    await eventRow.click();
-
-    await expect(connectionDetailPage.admissionOutcome()).toBeVisible();
-    await expect(connectionDetailPage.activityPanel("connection")).toContainText("mention required");
   });
 
   test("edits Connection name and plugin settings without resending credentials", async () => {

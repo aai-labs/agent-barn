@@ -16,7 +16,6 @@ import {
 } from "lucide-react";
 
 import { AppErrorState } from "@/components/app-error-state";
-import { DateRangePicker } from "@/components/date-range-picker";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Select,
@@ -36,12 +35,13 @@ import {
   type CommunicationJournalEntry,
   type CommunicationJournalFilters,
   type CommunicationJournalKind,
+  type CommunicationJournalWindow,
 } from "@/features/communication-connections/schemas";
 
 const DELIVERY_ROW_GRID = "grid-cols-[28px_minmax(160px,1fr)_110px_130px_110px_130px_70px]";
-const CONNECTION_ROW_GRID = "grid-cols-[28px_minmax(160px,1fr)_130px_110px_130px_70px]";
-const DELIVERY_HEADINGS = ["Stage", "Direction", "Status", "Duration", "Occurred", "Attempt"];
-const CONNECTION_HEADINGS = ["Stage", "Status", "Duration", "Occurred", "Attempt"];
+const CONNECTION_ROW_GRID = "grid-cols-[28px_minmax(160px,1fr)_130px_110px_160px]";
+const DELIVERY_HEADINGS = ["Stage", "Direction", "Current status", "Elapsed", "Occurred", "Attempt"];
+const CONNECTION_HEADINGS = ["Stage", "Status", "Since previous", "Occurred"];
 
 const CONNECTION_STAGE_STATUS: Record<string, { label: string; color: string }> = {
   connection_connected: { label: "Connected", color: "var(--ok)" },
@@ -57,6 +57,7 @@ function formatTimestamp(value: string): string {
     day: "numeric",
     hour: "numeric",
     minute: "2-digit",
+    second: "2-digit",
   });
 }
 
@@ -70,9 +71,11 @@ function label(value: string): string {
   return value.replace(/_/g, " ").toLowerCase();
 }
 
-function hasActiveFilters(filters: CommunicationJournalFilters): boolean {
+type JournalFilters = Omit<CommunicationJournalFilters, "since" | "until">;
+
+function hasActiveFilters(filters: JournalFilters): boolean {
   return Boolean(
-    filters.since || filters.until || filters.stage || filters.failedOnly || filters.retryableOnly || filters.direction || filters.deliveryId,
+    filters.stage || filters.failedOnly || filters.retryableOnly || filters.direction || filters.deliveryId,
   );
 }
 
@@ -88,6 +91,7 @@ export function CommunicationConnectionJournal({
   connectionId,
   kind,
   canEdit,
+  timeRange,
   lastCheckedAt,
   onRetryDelivery,
 }: {
@@ -95,13 +99,14 @@ export function CommunicationConnectionJournal({
   connectionId: string;
   kind: CommunicationJournalKind;
   canEdit: boolean;
-  lastCheckedAt: string;
+  timeRange: CommunicationJournalWindow;
+  lastCheckedAt: string | null;
   onRetryDelivery: (deliveryId: string) => void;
 }) {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [scrollMargin, setScrollMargin] = useState(0);
-  const [filters, setFilters] = useState<CommunicationJournalFilters>({});
-  const journal = useCommunicationConnectionJournal(agentId, connectionId, kind, filters);
+  const [filters, setFilters] = useState<JournalFilters>({});
+  const journal = useCommunicationConnectionJournal(agentId, connectionId, kind, { ...filters, ...timeRange });
   const { entries, fetchNextPage, hasNextPage, isFetchingNextPage, isFetchingNextPageError } = journal;
   const virtualRowCount = hasNextPage ? entries.length + 1 : entries.length;
   const rowVirtualizer = useWindowVirtualizer({
@@ -125,7 +130,7 @@ export function CommunicationConnectionJournal({
     }
   }, [entries.length, fetchNextPage, hasNextPage, isFetchingNextPage, isFetchingNextPageError, virtualRows]);
 
-  function handleFiltersChange(next: CommunicationJournalFilters) {
+  function handleFiltersChange(next: JournalFilters) {
     setExpandedId(null);
     setFilters(next);
   }
@@ -138,7 +143,7 @@ export function CommunicationConnectionJournal({
   const header = (
     <div className="mb-3 flex items-center justify-between gap-3">
       <span className="text-[13px]" style={{ color: "var(--ink-4)" }}>{journal.total.toLocaleString()} {journal.total === 1 ? "event" : "events"}</span>
-      <span className="text-[13px]" style={{ color: "var(--ink-4)" }}>Last checked {formatTimestamp(lastCheckedAt)}</span>
+      {lastCheckedAt && <span className="text-[13px]" style={{ color: "var(--ink-4)" }}>Updated {formatTimestamp(lastCheckedAt)}</span>}
     </div>
   );
 
@@ -148,7 +153,7 @@ export function CommunicationConnectionJournal({
 
   if (journal.isLoading) {
     return (
-      <section>
+      <section data-activity-kind={kind}>
         {header}
         {filterBar}
         <JournalSkeleton />
@@ -158,7 +163,7 @@ export function CommunicationConnectionJournal({
 
   if (journal.error) {
     return (
-      <section>
+      <section data-activity-kind={kind}>
         {header}
         {filterBar}
         <AppErrorState error={journal.error} title="Failed to load connection activity" onRetry={() => void journal.refetch()} />
@@ -168,22 +173,22 @@ export function CommunicationConnectionJournal({
 
   if (journal.entries.length === 0) {
     return (
-      <section>
+      <section data-activity-kind={kind}>
         {header}
         {filterBar}
         <div className="flex flex-col items-center justify-center gap-2 rounded-2xl py-16 text-center" style={{ border: "1px dashed var(--line-strong)" }}>
           <Waypoints size={20} style={{ color: "var(--ink-4)" }} />
           <div className="text-[15px] font-medium" style={{ color: "var(--ink)" }}>
-            {filtersActive ? "No activity matches these filters" : `No ${kind === "delivery" ? "delivery transitions" : "connection events"} yet`}
+            {filtersActive ? "No activity matches these filters" : `No ${kind === "delivery" ? "delivery transitions" : "technical events"} yet`}
           </div>
-          <div className="text-[13.5px]" style={{ color: "var(--ink-3)" }}>{filtersActive ? "Try widening the time range or clearing a filter." : (kind === "delivery" ? "Delivery transitions appear once this connection receives or sends messages." : "Connection events appear when the provider connects, reconnects, or reports an error.")}</div>
+          <div className="text-[13.5px]" style={{ color: "var(--ink-3)" }}>{filtersActive ? "Try widening the time range or clearing a filter." : (kind === "delivery" ? "Delivery transitions appear once this connection receives or sends messages." : "Technical events appear when the provider connects, reconnects, or reports an error.")}</div>
         </div>
       </section>
     );
   }
 
   return (
-    <section>
+    <section data-activity-kind={kind}>
       {header}
       {filterBar}
       <div className="af-card overflow-hidden" style={{ padding: 0 }}>
@@ -252,7 +257,7 @@ function JournalRow({ entry, expanded, onToggle, canEdit, onRetryDelivery, agent
       </span>
       <span style={{ color: "var(--ink-3)" }}>{formatDuration(entry.durationMs)}</span>
       <span style={{ color: "var(--ink-3)" }}>{formatTimestamp(entry.occurredAt)}</span>
-      <span style={{ color: "var(--ink-3)" }}>{entry.attemptNumber}</span>
+      {showDeliveryColumns && <span style={{ color: "var(--ink-3)" }}>{entry.attemptNumber}</span>}
     </>
   );
 
@@ -320,14 +325,13 @@ function JournalDetail({
   agentId: string;
   connectionId: string;
 }) {
-  const [copied, setCopied] = useState(false);
+  const [copiedField, setCopiedField] = useState<string | null>(null);
   const [timelineOpen, setTimelineOpen] = useState(false);
   const error = [entry.errorCode, entry.errorSummary].filter(Boolean).join(": ");
 
-  async function copyError() {
-    if (!error) return;
-    await navigator.clipboard.writeText(error);
-    setCopied(true);
+  async function copyValue(value: string, field: string) {
+    await navigator.clipboard.writeText(value);
+    setCopiedField(field);
   }
 
   return (
@@ -337,6 +341,14 @@ function JournalDetail({
         {entry.disposition && <DetailRow label="Admission outcome" value={label(entry.disposition)} />}
         {entry.direction && <DetailRow label="Direction" value={label(entry.direction)} />}
         {entry.deliveryStatus && <DetailRow label="Current status" value={label(entry.deliveryStatus)} />}
+        {entry.deliveryId && (
+          <CopyableDetailRow
+            label="Delivery ID"
+            value={entry.deliveryId}
+            copied={copiedField === "delivery-id"}
+            onCopy={() => void copyValue(entry.deliveryId!, "delivery-id")}
+          />
+        )}
         <DetailRow label="Occurred at" value={formatTimestamp(entry.occurredAt)} />
         {entry.deliveryId ? (
           <DetailRow label="Attempt" value={entry.attemptNumber} />
@@ -355,8 +367,8 @@ function JournalDetail({
         <DetailSection title="Error">
           <div className="flex items-start justify-between gap-3 px-3 py-2.5 text-[13px]" style={{ color: "var(--err)" }}>
             <span className="min-w-0 break-words">{error}</span>
-            <button type="button" className="af-btn af-btn-sm flex-shrink-0" aria-label={`Copy error for ${label(entry.stage)}`} onClick={() => void copyError()}>
-              {copied ? <Check size={13} /> : <Copy size={13} />}{copied ? "Copied" : "Copy"}
+            <button type="button" className="af-btn af-btn-sm flex-shrink-0" aria-label={`Copy error for ${label(entry.stage)}`} onClick={() => void copyValue(error, "error")}>
+              {copiedField === "error" ? <Check size={13} /> : <Copy size={13} />}{copiedField === "error" ? "Copied" : "Copy"}
             </button>
           </div>
         </DetailSection>
@@ -435,9 +447,10 @@ function DeliveryTimeline({ agentId, connectionId, deliveryId }: { agentId: stri
                 <span>Attempt {item.attemptNumber}</span>
                 <span>·</span>
                 <span>{formatDuration(item.durationMs)}</span>
-                {item.deliveryStatus && (
+                {isLast && item.deliveryStatus && (
                   <>
                     <span>·</span>
+                    <span>Current</span>
                     <StatusBadge status={item.deliveryStatus} />
                   </>
                 )}
@@ -465,6 +478,30 @@ function DetailRow({ label: rowLabel, value, mono = false }: { label: string; va
   return <div className="grid grid-cols-[140px_1fr] gap-4 px-3 py-2 text-[13px]"><span style={{ color: "var(--ink-4)" }}>{rowLabel}</span><span className={mono ? "break-all font-mono text-xs" : "break-words"} style={{ color: "var(--ink-2)" }}>{value}</span></div>;
 }
 
+function CopyableDetailRow({
+  label: rowLabel,
+  value,
+  copied,
+  onCopy,
+}: {
+  label: string;
+  value: string;
+  copied: boolean;
+  onCopy: () => void;
+}) {
+  return (
+    <div className="grid grid-cols-[140px_1fr] gap-4 px-3 py-2 text-[13px]">
+      <span style={{ color: "var(--ink-4)" }}>{rowLabel}</span>
+      <span className="flex min-w-0 items-center gap-2" style={{ color: "var(--ink-2)" }}>
+        <span className="min-w-0 break-all font-mono text-xs">{value}</span>
+        <button type="button" className="af-btn af-btn-sm flex-shrink-0" aria-label={`Copy ${rowLabel.toLowerCase()}`} onClick={onCopy}>
+          {copied ? <Check size={13} /> : <Copy size={13} />}{copied ? "Copied" : "Copy"}
+        </button>
+      </span>
+    </div>
+  );
+}
+
 function JournalSkeleton() {
   return <div className="af-card overflow-hidden" style={{ padding: 0 }}>{Array.from({ length: 7 }).map((_, index) => <div key={index} className="px-3 py-2.5" style={{ borderTop: index ? "1px solid var(--line)" : undefined }}><Skeleton className="h-4 w-full" /></div>)}</div>;
 }
@@ -475,8 +512,8 @@ function CommunicationJournalFilterBar({
   onChange,
 }: {
   kind: CommunicationJournalKind;
-  filters: CommunicationJournalFilters;
-  onChange: (filters: CommunicationJournalFilters) => void;
+  filters: JournalFilters;
+  onChange: (filters: JournalFilters) => void;
 }) {
   const [deliveryIdInput, setDeliveryIdInput] = useState(filters.deliveryId ?? "");
   const isDelivery = kind === "delivery";
@@ -489,14 +526,6 @@ function CommunicationJournalFilterBar({
 
   return (
     <div className="mb-3 flex flex-wrap items-center gap-2">
-      <DateRangePicker
-        from={filters.since ?? ""}
-        to={filters.until ?? ""}
-        onChange={(from, to) => onChange({ ...filters, since: from || undefined, until: to || undefined })}
-        placeholder="Time range"
-        width="13rem"
-        ariaLabel="Filter by time range"
-      />
       <Select
         value={filters.stage ?? "__all_stages__"}
         onValueChange={(value) => onChange({ ...filters, stage: value === "__all_stages__" ? undefined : value })}

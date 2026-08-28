@@ -187,13 +187,7 @@ class CommunicationsService:
         window_end = self._as_utc(until) if until is not None else datetime.now(UTC)
         default_minutes = window_minutes or 24 * 60
         window_start = self._as_utc(since) if since is not None else window_end - timedelta(minutes=default_minutes)
-        if window_start > window_end:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Diagnostics window is invalid")
-        if window_end - window_start > timedelta(days=31):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Diagnostics window cannot exceed 31 days",
-            )
+        self._validate_window(window_start, window_end)
         operations = self.operations or getattr(self.repository, "operations", None)
         if operations is None:
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Diagnostics are unavailable")
@@ -221,6 +215,11 @@ class CommunicationsService:
             delivery_success_rate=snapshot.delivery_success_rate,
             recent_failures=snapshot.recent_failures,
             latest_transitions=snapshot.latest_transitions,
+            connection_history=snapshot.connection_history,
+            connection_incidents=snapshot.connection_incidents,
+            reconnect_count=snapshot.reconnect_count,
+            median_connect_time_ms=snapshot.median_connect_time_ms,
+            longest_outage_ms=snapshot.longest_outage_ms,
             window_start=window_start,
             window_end=window_end,
         )
@@ -253,6 +252,9 @@ class CommunicationsService:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Connection activity is unavailable"
             )
+        normalized_since = self._as_utc(since) if since is not None else None
+        normalized_until = self._as_utc(until) if until is not None else None
+        self._validate_window(normalized_since, normalized_until)
         return operations.find_journal_page(
             organization_id=connection.organization_id,
             agent_id=agent_id,
@@ -260,8 +262,8 @@ class CommunicationsService:
             authorization_scope=read_scope,
             pagination=Pagination(page=page, size=page_size),
             kind=kind,
-            since=since,
-            until=until,
+            since=normalized_since,
+            until=normalized_until,
             stage=stage,
             failed_only=failed_only,
             retryable_only=retryable_only,
@@ -421,3 +423,13 @@ class CommunicationsService:
     @staticmethod
     def _as_utc(value: datetime) -> datetime:
         return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+
+    @staticmethod
+    def _validate_window(window_start: datetime | None, window_end: datetime | None) -> None:
+        if window_start is not None and window_end is not None and window_start > window_end:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Diagnostics window is invalid")
+        if window_start is not None and window_end is not None and window_end - window_start > timedelta(days=31):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Diagnostics window cannot exceed 31 days",
+            )

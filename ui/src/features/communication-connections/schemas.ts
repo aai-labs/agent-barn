@@ -107,6 +107,28 @@ export const CommunicationDiagnosticsSchema = z.object({
     attemptNumber: z.number().int().nonnegative(),
     durationMs: z.number().nullable(),
   })),
+  connectionHistory: z.array(z.object({
+    status: z.enum(["PENDING", "CONNECTING", "CONNECTED", "DEGRADED", "ERROR"]),
+    startedAt: z.string(),
+    endedAt: z.string().nullable(),
+    nextStatus: z.enum(["PENDING", "CONNECTING", "CONNECTED", "DEGRADED", "ERROR"]).nullable(),
+    durationMs: z.number().nonnegative(),
+    reconnectCount: z.number().int().nonnegative(),
+    errorCode: z.string().nullable(),
+    errorSummary: z.string().nullable(),
+  })),
+  connectionIncidents: z.array(z.object({
+    startedAt: z.string(),
+    outcome: z.enum(["RECONNECTED", "FAILED", "IN_PROGRESS"]),
+    connectTimeMs: z.number().nonnegative().nullable(),
+    outageMs: z.number().nonnegative().nullable(),
+    causeCode: z.string().nullable(),
+    causeSummary: z.string().nullable(),
+    reconnectCount: z.number().int().nonnegative(),
+  })),
+  reconnectCount: z.number().int().nonnegative(),
+  medianConnectTimeMs: z.number().nonnegative().nullable(),
+  longestOutageMs: z.number().nonnegative().nullable(),
   windowStart: z.string(),
   windowEnd: z.string(),
 });
@@ -129,6 +151,7 @@ export type CommunicationDiagnostics = z.infer<typeof CommunicationDiagnosticsSc
 export type CommunicationJournalEntry = z.infer<typeof CommunicationJournalEntrySchema>;
 export type PaginatedCommunicationJournalEntries = z.infer<typeof PaginatedCommunicationJournalEntriesSchema>;
 export type CommunicationJournalKind = "delivery" | "connection";
+export type CommunicationJournalWindow = Pick<CommunicationJournalFilters, "since" | "until">;
 
 export const DELIVERY_JOURNAL_STAGES = [
   "queued",

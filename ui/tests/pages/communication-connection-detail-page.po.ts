@@ -21,18 +21,20 @@ export class CommunicationConnectionDetailPage {
     return this.page.getByText(label, { exact: true });
   }
 
-  deliveryTransitionsTab(): Locator {
-    return this.page.getByRole("tab", { name: "Delivery transitions", exact: true });
-  }
-
-  connectionEventsTab(): Locator {
-    return this.page.getByRole("tab", { name: "Connection events", exact: true });
-  }
-
   activityPanel(kind: "delivery" | "connection"): Locator {
-    return this.page.getByRole("tabpanel", {
-      name: kind === "delivery" ? "Delivery transitions" : "Connection events",
-    });
+    return this.page.locator(`[data-activity-kind="${kind}"]`);
+  }
+
+  connectionHealthSummary(): Locator {
+    return this.page.getByText(/Median connect time/);
+  }
+
+  recentFailureCard(): Locator {
+    return this.page.locator("[data-failure-card]").first();
+  }
+
+  failureDetailsToggle(): Locator {
+    return this.recentFailureCard().getByRole("button", { name: /Show details|Hide details/ });
   }
 
   deliveryEventCount(count: number): Locator {
@@ -65,14 +67,6 @@ export class CommunicationConnectionDetailPage {
 
   deliveryTimeline(): Locator {
     return this.activityPanel("delivery").getByRole("list");
-  }
-
-  connectionEventRow(stage: string | RegExp): Locator {
-    return this.activityPanel("connection").getByRole("button", { name: stage });
-  }
-
-  admissionOutcome(): Locator {
-    return this.activityPanel("connection").getByText("Admission outcome", { exact: true });
   }
 
   timelineStage(stage: string): Locator {

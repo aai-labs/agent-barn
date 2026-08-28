@@ -15,6 +15,9 @@ from api.domains.agents.models import Agent
 from api.domains.agents.repository import agent_scope_predicates
 from api.domains.communications.models import (
     CommunicationConnection,
+    CommunicationConnectionIncidentOutcome,
+    CommunicationConnectionIncidentRead,
+    CommunicationConnectionStateRead,
     CommunicationDelivery,
     CommunicationDeliveryCounts,
     CommunicationDeliveryStatus,
@@ -56,6 +59,14 @@ _SENSITIVE_PARTS = (
 _REDACTED_ERROR_SUMMARY = "Provider error details were redacted"
 _RECENT_FAILURE_LIMIT = 10
 _LATEST_TRANSITION_LIMIT = 50
+_CONNECTION_HISTORY_LIMIT = 8
+_CONNECTION_INCIDENT_LIMIT = 8
+_CONNECTION_STAGE_STATUS = {
+    CommunicationJournalStage.CONNECTION_CONNECTING.value: ConnectionObservedStatus.CONNECTING,
+    CommunicationJournalStage.CONNECTION_CONNECTED.value: ConnectionObservedStatus.CONNECTED,
+    CommunicationJournalStage.CONNECTION_DEGRADED.value: ConnectionObservedStatus.DEGRADED,
+    CommunicationJournalStage.CONNECTION_ERROR.value: ConnectionObservedStatus.ERROR,
+}
 _SAFE_ERROR_SUMMARIES = {
     "agent was not running when the message arrived": "Agent was not running when the message arrived",
     "communication connection is unavailable": "Communication Connection is unavailable",
@@ -78,6 +89,11 @@ class CommunicationDiagnosticsSnapshot:
     delivery_success_rate: float | None
     recent_failures: list[CommunicationFailureRead]
     latest_transitions: list[CommunicationTransitionRead]
+    connection_history: list[CommunicationConnectionStateRead]
+    connection_incidents: list[CommunicationConnectionIncidentRead]
+    reconnect_count: int
+    median_connect_time_ms: float | None
+    longest_outage_ms: float | None
 
 
 @dataclass(frozen=True)
@@ -291,6 +307,20 @@ class CommunicationOperationalRepository:
                     )
                 ).all()
             )
+            previous_connection_entry = session.exec(
+                select(CommunicationJournalEntry)
+                .join(Agent, col(Agent.id) == col(CommunicationJournalEntry.agent_id))
+                .where(
+                    *agent_visibility,
+                    col(CommunicationJournalEntry.organization_id) == organization_id,
+                    col(CommunicationJournalEntry.agent_id) == agent_id,
+                    col(CommunicationJournalEntry.connection_id) == connection_id,
+                    col(CommunicationJournalEntry.stage).in_(list(_CONNECTION_STAGE_STATUS)),
+                    col(CommunicationJournalEntry.occurred_at) < window_start,
+                )
+                .order_by(col(CommunicationJournalEntry.occurred_at).desc(), col(CommunicationJournalEntry.id).desc())
+                .limit(1)
+            ).first()
             deliveries = list(
                 session.exec(
                     select(CommunicationDelivery)
@@ -492,6 +522,16 @@ class CommunicationOperationalRepository:
             )
             for entry in journal_rows[:_LATEST_TRANSITION_LIMIT]
         ]
+        all_connection_history = self._build_connection_history(
+            journal_rows,
+            previous_connection_entry=previous_connection_entry,
+            window_start=window_start,
+            window_end=window_end,
+            limit=None,
+        )
+        connection_incidents, reconnect_count, median_connect_time_ms, longest_outage_ms = (
+            self._build_connection_health(all_connection_history, window_end=window_end)
+        )
 
         return CommunicationDiagnosticsSnapshot(
             pipeline=pipeline,
@@ -506,7 +546,209 @@ class CommunicationOperationalRepository:
             delivery_success_rate=delivery_success_rate,
             recent_failures=recent_failures,
             latest_transitions=latest_transitions,
+            connection_history=all_connection_history[:_CONNECTION_HISTORY_LIMIT],
+            connection_incidents=connection_incidents[:_CONNECTION_INCIDENT_LIMIT],
+            reconnect_count=reconnect_count,
+            median_connect_time_ms=median_connect_time_ms,
+            longest_outage_ms=longest_outage_ms,
         )
+
+    @staticmethod
+    def _build_connection_history(
+        journal_rows: list[CommunicationJournalEntry],
+        *,
+        previous_connection_entry: CommunicationJournalEntry | None,
+        window_start: datetime,
+        window_end: datetime,
+        limit: int | None = _CONNECTION_HISTORY_LIMIT,
+    ) -> list[CommunicationConnectionStateRead]:
+        """Collapse health transitions into contiguous state intervals.
+
+        Provider observation and policy admission rows intentionally do not
+        participate here even though they also have no Delivery ID. A prior
+        health row seeds the interval that crosses the left edge of the
+        selected window; the final interval is open when no later transition
+        closes it inside the window.
+        """
+        entries = [
+            entry
+            for entry in journal_rows
+            if CommunicationOperationalRepository._enum_value(entry.stage) in _CONNECTION_STAGE_STATUS
+            or CommunicationOperationalRepository._enum_value(entry.stage)
+            == CommunicationJournalStage.RECONNECT_REQUESTED.value
+        ]
+        if previous_connection_entry is not None:
+            entries.append(previous_connection_entry)
+        # A manual reconnect records CONNECTING and RECONNECT_REQUESTED at the
+        # same instant. Process the state transition first so UUID ordering
+        # cannot make a same-timestamp request disappear from its interval.
+        entries.sort(
+            key=lambda entry: (
+                entry.occurred_at,
+                CommunicationOperationalRepository._enum_value(entry.stage)
+                == CommunicationJournalStage.RECONNECT_REQUESTED.value,
+                entry.id,
+            )
+        )
+
+        intervals: list[CommunicationConnectionStateRead] = []
+        current_status: ConnectionObservedStatus | None = None
+        current_started_at = window_start
+        current_error_code: str | None = None
+        current_error_summary: str | None = None
+        current_reconnect_count = 0
+
+        def append_interval(
+            *,
+            ended_at: datetime | None,
+            next_status: ConnectionObservedStatus | None,
+        ) -> None:
+            if current_status is None:
+                return
+            end = ended_at or window_end
+            intervals.append(
+                CommunicationConnectionStateRead(
+                    status=current_status,
+                    started_at=current_started_at,
+                    ended_at=ended_at,
+                    next_status=next_status,
+                    duration_ms=max(0.0, (end - current_started_at).total_seconds() * 1000),
+                    reconnect_count=current_reconnect_count,
+                    error_code=current_error_code,
+                    error_summary=current_error_summary,
+                )
+            )
+
+        for entry in entries:
+            stage = CommunicationOperationalRepository._enum_value(entry.stage)
+            if stage == CommunicationJournalStage.RECONNECT_REQUESTED.value:
+                if current_status == ConnectionObservedStatus.CONNECTING and entry.occurred_at >= window_start:
+                    current_reconnect_count += 1
+                continue
+
+            status = _CONNECTION_STAGE_STATUS.get(stage)
+            if status is None:
+                continue
+            if entry.occurred_at < window_start:
+                current_status = status
+                current_started_at = window_start
+                current_error_code = CommunicationOperationalRepository.safe_error_code(entry.error_code)
+                current_error_summary = CommunicationOperationalRepository.safe_error_summary(entry.error_summary)
+                continue
+
+            if current_status is None:
+                current_status = status
+                current_started_at = entry.occurred_at
+                current_error_code = CommunicationOperationalRepository.safe_error_code(entry.error_code)
+                current_error_summary = CommunicationOperationalRepository.safe_error_summary(entry.error_summary)
+                continue
+
+            if status == current_status:
+                continue
+
+            append_interval(ended_at=entry.occurred_at, next_status=status)
+            current_status = status
+            current_started_at = entry.occurred_at
+            current_error_code = CommunicationOperationalRepository.safe_error_code(entry.error_code)
+            current_error_summary = CommunicationOperationalRepository.safe_error_summary(entry.error_summary)
+            current_reconnect_count = 0
+
+        append_interval(ended_at=None, next_status=None)
+        ordered_intervals = list(reversed(intervals))
+        return ordered_intervals if limit is None else ordered_intervals[:limit]
+
+    @staticmethod
+    def _build_connection_health(
+        states: list[CommunicationConnectionStateRead],
+        *,
+        window_end: datetime,
+    ) -> tuple[
+        list[CommunicationConnectionIncidentRead],
+        int,
+        float | None,
+        float | None,
+    ]:
+        """Project provider state intervals into attempts and outage metrics."""
+        chronological = sorted(states, key=lambda state: state.started_at)
+        incidents: list[CommunicationConnectionIncidentRead] = []
+        connection_times: list[float] = []
+
+        for index, state in enumerate(chronological):
+            if state.status != ConnectionObservedStatus.CONNECTING:
+                continue
+            previous = chronological[index - 1] if index else None
+            following = chronological[index + 1] if index + 1 < len(chronological) else None
+            if following is not None and following.status == ConnectionObservedStatus.CONNECTED:
+                outcome = CommunicationConnectionIncidentOutcome.RECONNECTED
+                connection_times.append(state.duration_ms)
+            elif following is not None and following.status in {
+                ConnectionObservedStatus.DEGRADED,
+                ConnectionObservedStatus.ERROR,
+            }:
+                outcome = CommunicationConnectionIncidentOutcome.FAILED
+            else:
+                outcome = CommunicationConnectionIncidentOutcome.IN_PROGRESS
+
+            cause = following if outcome == CommunicationConnectionIncidentOutcome.FAILED else None
+            if (
+                cause is None
+                and previous is not None
+                and previous.status in {ConnectionObservedStatus.DEGRADED, ConnectionObservedStatus.ERROR}
+            ):
+                cause = previous
+            outage_ms = None
+            if (
+                outcome == CommunicationConnectionIncidentOutcome.RECONNECTED
+                and previous is not None
+                and previous.status in {ConnectionObservedStatus.DEGRADED, ConnectionObservedStatus.ERROR}
+            ):
+                recovery_at = state.ended_at or window_end
+                outage_ms = max(0.0, (recovery_at - previous.started_at).total_seconds() * 1000)
+
+            incidents.append(
+                CommunicationConnectionIncidentRead(
+                    started_at=state.started_at,
+                    outcome=outcome,
+                    connect_time_ms=state.duration_ms if following is not None else None,
+                    outage_ms=outage_ms,
+                    cause_code=cause.error_code if cause is not None else None,
+                    cause_summary=cause.error_summary if cause is not None else None,
+                    reconnect_count=state.reconnect_count,
+                )
+            )
+
+        longest_outage_ms = CommunicationOperationalRepository._longest_outage(
+            chronological,
+            window_end=window_end,
+        )
+        median_connect_time_ms = float(median(connection_times)) if connection_times else None
+        return list(reversed(incidents)), len(incidents), median_connect_time_ms, longest_outage_ms
+
+    @staticmethod
+    def _longest_outage(
+        states: list[CommunicationConnectionStateRead],
+        *,
+        window_end: datetime,
+    ) -> float | None:
+        outage_start: datetime | None = None
+        longest: float | None = None
+        for state in states:
+            if state.status in {ConnectionObservedStatus.DEGRADED, ConnectionObservedStatus.ERROR}:
+                outage_start = outage_start or state.started_at
+                continue
+            if state.status == ConnectionObservedStatus.CONNECTING:
+                continue
+            if state.status == ConnectionObservedStatus.CONNECTED and outage_start is not None:
+                duration_ms = max(0.0, (state.started_at - outage_start).total_seconds() * 1000)
+                longest = duration_ms if longest is None else max(longest, duration_ms)
+                outage_start = None
+
+        if outage_start is not None and states:
+            last_state = states[-1]
+            outage_end = window_end if last_state.ended_at is None else last_state.ended_at
+            duration_ms = max(0.0, (outage_end - outage_start).total_seconds() * 1000)
+            longest = duration_ms if longest is None else max(longest, duration_ms)
+        return longest
 
     def find_journal_page(
         self,

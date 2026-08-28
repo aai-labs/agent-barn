@@ -39,7 +39,7 @@ function toDateRange(from: string, to: string): DateRange | undefined {
  *
  * Bounds come back as local start-of-day and end-of-day so a picked day is
  * covered end to end, which is what every caller here wants — the API treats
- * the upper bound as exclusive.
+ * both bounds as inclusive.
  */
 export function DateRangePicker({
   from,
