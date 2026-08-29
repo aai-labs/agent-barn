@@ -10,6 +10,7 @@ from hamcrest import assert_that, equal_to, none
 from api.infrastructure.msteams import client
 from api.infrastructure.msteams.client import (
     TeamsAuthError,
+    TeamsDeliveryError,
     acquire_token,
     list_team_channels,
     send_activity,
@@ -217,3 +218,19 @@ def test_send_activity_carries_the_provider_idempotency_key(mock_request):
     assert_that(activity_id, equal_to("activity-1"))
     assert_that(mock_request.call_args.kwargs["headers"]["Idempotency-Key"], equal_to("provider-key"))
     assert_that(json.loads(mock_request.call_args.kwargs["content"])["text"], equal_to("reply"))
+
+
+@pytest.mark.parametrize("body", [{}, {"id": "   "}])
+@patch("api.infrastructure.msteams.client.resilient_request")
+def test_send_activity_rejects_a_success_without_an_activity_id(mock_request, body):
+    response = MagicMock(status_code=200)
+    response.json.return_value = body
+    mock_request.return_value = response
+
+    with pytest.raises(TeamsDeliveryError, match="no activity id"):
+        send_activity(
+            _SERVICE_URL,
+            "conversation-1",
+            {"type": "message", "text": "reply"},
+            "access-value",
+        )

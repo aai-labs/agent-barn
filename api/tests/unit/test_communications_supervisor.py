@@ -5,6 +5,7 @@ from unittest.mock import Mock
 from uuid import uuid4
 
 import pytest
+from hamcrest import assert_that, contains_exactly, equal_to
 
 from api.core.config import Config
 from api.domains.communications.models import (
@@ -40,8 +41,11 @@ def test_connection_setup_failure_records_error_health() -> None:
     asyncio.run(exercise())
 
     statuses = [call.args[1] for call in connections.record_health.call_args_list]
-    assert statuses == [ConnectionObservedStatus.CONNECTING, ConnectionObservedStatus.ERROR]
+    assert_that(
+        statuses,
+        contains_exactly(ConnectionObservedStatus.CONNECTING, ConnectionObservedStatus.ERROR),
+    )
     error_call = connections.record_health.call_args_list[-1]
-    assert error_call.kwargs["error_code"] == "CONFIGURATION_ERROR"
-    assert error_call.kwargs["error_details"].category.value == "configuration"
-    assert error_call.kwargs["error_details"].operation == "ingress_session"
+    assert_that(error_call.kwargs["error_code"], equal_to("CONFIGURATION_ERROR"))
+    assert_that(error_call.kwargs["error_details"].category.value, equal_to("configuration"))
+    assert_that(error_call.kwargs["error_details"].operation, equal_to("ingress_session"))

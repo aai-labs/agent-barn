@@ -33,6 +33,10 @@ class TeamsAuthError(ValueError):
     """Raised when Teams credentials or an inbound webhook token are rejected."""
 
 
+class TeamsDeliveryError(RuntimeError):
+    """Raised when Teams does not return a durable identifier for a sent activity."""
+
+
 def acquire_token(tenant_id: str, app_id: str, app_password: str) -> str:
     key = (tenant_id, app_id, hashlib.sha256(app_password.encode()).hexdigest())
     now = time.monotonic()
@@ -93,7 +97,11 @@ def send_activity(
         retry_server_errors=True,
     )
     response.raise_for_status()
-    return str(response.json().get("id") or "")
+    payload = response.json()
+    activity_id = str(payload.get("id") or "").strip() if isinstance(payload, dict) else ""
+    if not activity_id:
+        raise TeamsDeliveryError("Teams send returned no activity id")
+    return activity_id
 
 
 def list_team_channels(service_url: str, team_id: str, token: str) -> dict[str, str | None]:
