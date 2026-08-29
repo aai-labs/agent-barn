@@ -126,21 +126,32 @@ type FailureGroup = {
   stage: string;
   errorCode: string | null;
   errorSummary: string | null;
+  errorDetails: CommunicationDiagnostics["recentFailures"][number]["errorDetails"];
   count: number;
   firstOccurredAt: string;
   lastOccurredAt: string;
-  entries: CommunicationDiagnostics["recentFailures"];
   deliveryIds: string[];
 };
 
 function groupFailures(failures: CommunicationDiagnostics["recentFailures"]): FailureGroup[] {
   const groups = new Map<string, FailureGroup>();
   for (const failure of failures) {
-    const key = `${failure.errorCode ?? failure.stage}:${failure.errorSummary ?? ""}`;
+    const details = failure.errorDetails;
+    // Request IDs and retry-after values identify one provider response, not
+    // the underlying failure. Keep them in each occurrence, but do not let
+    // them split otherwise identical incidents into separate cards.
+    const key = JSON.stringify({
+      code: failure.errorCode ?? failure.stage,
+      summary: failure.errorSummary,
+      category: details?.category ?? null,
+      operation: details?.operation ?? null,
+      httpStatus: details?.httpStatus ?? null,
+      providerCode: details?.providerCode ?? null,
+      retryable: details?.retryable ?? null,
+    });
     const existing = groups.get(key);
     if (existing) {
       existing.count += 1;
-      existing.entries.push(failure);
       if (failure.deliveryId && !existing.deliveryIds.includes(failure.deliveryId)) {
         existing.deliveryIds.push(failure.deliveryId);
       }
@@ -153,10 +164,10 @@ function groupFailures(failures: CommunicationDiagnostics["recentFailures"]): Fa
       stage: failure.stage,
       errorCode: failure.errorCode,
       errorSummary: failure.errorSummary,
+      errorDetails: failure.errorDetails,
       count: 1,
       firstOccurredAt: failure.occurredAt,
       lastOccurredAt: failure.occurredAt,
-      entries: [failure],
       deliveryIds: failure.deliveryId ? [failure.deliveryId] : [],
     });
   }
@@ -386,17 +397,21 @@ export function CommunicationConnectionDiagnostics({
                               <div className="text-[11px] font-semibold uppercase tracking-wide" style={{ color: "var(--ink-4)" }}>Error details</div>
                               <p className="mb-0 mt-1 text-xs" style={{ color: "var(--ink-3)" }}>{failure.errorSummary ?? "No safe detail was recorded."}</p>
                             </div>
-                            {failure.entries.length > 1 && (
-                              <div className="mt-3">
-                                <div className="text-[11px] font-semibold uppercase tracking-wide" style={{ color: "var(--ink-4)" }}>Occurrences</div>
-                                <div className="mt-1 space-y-1 text-xs" style={{ color: "var(--ink-3)" }}>
-                                  {failure.entries.map((entry, index) => (
-                                    <div key={`${entry.occurredAt}-${entry.deliveryId ?? "connection"}-${index}`} className="flex flex-wrap justify-between gap-x-3 gap-y-1">
-                                      <span>{formatTimestamp(entry.occurredAt)}</span>
-                                      <span style={{ color: "var(--ink-4)" }}>{entry.deliveryId ?? "Connection-level"}</span>
-                                    </div>
-                                  ))}
-                                </div>
+                            {failure.errorDetails && (
+                              <div className="mt-3 grid gap-2 text-xs sm:grid-cols-2">
+                                <FailureDetail label="Category" value={label(failure.errorDetails.category)} />
+                                <FailureDetail label="Operation" value={label(failure.errorDetails.operation)} />
+                                {failure.errorDetails.httpStatus !== null && (
+                                  <FailureDetail label="HTTP status" value={String(failure.errorDetails.httpStatus)} />
+                                )}
+                                <FailureDetail label="Provider code" value={failure.errorDetails.providerCode ?? "—"} />
+                                <FailureDetail label="Retryable" value={failure.errorDetails.retryable ? "Yes" : "No"} />
+                                {failure.errorDetails.retryAfterSeconds !== null && (
+                                  <FailureDetail label="Retry after" value={`${failure.errorDetails.retryAfterSeconds}s`} />
+                                )}
+                                {failure.errorDetails.requestId && (
+                                  <FailureDetail label="Request ID" value={failure.errorDetails.requestId} />
+                                )}
                               </div>
                             )}
                           </CollapsibleContent>

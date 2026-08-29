@@ -1,6 +1,15 @@
 export const COMMUNICATION_CONNECTION_ID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 export const COMMUNICATION_DELIVERY_ID = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
 export const SAFE_PROVIDER_ERROR = "Provider error details were redacted";
+export const SAFE_ERROR_DETAILS = {
+  category: "provider_unavailable",
+  operation: "send_message",
+  http_status: 503,
+  provider_code: "service_unavailable",
+  retryable: true,
+  retry_after_seconds: 30,
+  request_id: "provider-request-123",
+};
 
 export const mockCommunicationPlatforms = [
   {
@@ -151,6 +160,15 @@ export const mockCommunicationConnectionSummary = {
       delivery_id: COMMUNICATION_DELIVERY_ID,
       error_code: "provider_error",
       error_summary: SAFE_PROVIDER_ERROR,
+      error_details: SAFE_ERROR_DETAILS,
+    },
+    {
+      occurred_at: "2025-12-31T23:59:59Z",
+      stage: "provider_delivered",
+      delivery_id: COMMUNICATION_DELIVERY_ID,
+      error_code: "provider_error",
+      error_summary: SAFE_PROVIDER_ERROR,
+      error_details: { ...SAFE_ERROR_DETAILS, request_id: "provider-request-456" },
     },
   ],
   latest_transitions: [
@@ -287,6 +305,7 @@ export const mockCommunicationDeliveryJournalPage = {
       duration_ms: 140,
       error_code: "provider_error",
       error_summary: SAFE_PROVIDER_ERROR,
+      error_details: SAFE_ERROR_DETAILS,
       direction: "OUTBOUND",
       delivery_status: "DEAD_LETTERED",
       queue_wait_ms: 20,
@@ -329,6 +348,7 @@ export const mockCommunicationDeliveryLifecyclePage = {
       duration_ms: 140,
       error_code: "provider_error",
       error_summary: SAFE_PROVIDER_ERROR,
+      error_details: SAFE_ERROR_DETAILS,
       direction: "OUTBOUND",
       delivery_status: "DEAD_LETTERED",
       queue_wait_ms: 20,

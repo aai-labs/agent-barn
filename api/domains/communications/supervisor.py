@@ -8,6 +8,7 @@ from uuid import UUID, uuid4
 from injector import inject, singleton
 
 from api.core.config import Config
+from api.domains.communications.error_details import normalize_communication_error
 from api.domains.communications.gateway_service import CommunicationsGatewayService
 from api.domains.communications.models import (
     CommunicationConnection,
@@ -136,23 +137,31 @@ class PlatformIngressSupervisor:
                 await plugin.run_ingress(settings, credentials, emit, connected)
                 raise RuntimeError("Platform ingress session ended unexpectedly")
             except NotImplementedError as exc:
+                normalized_error = normalize_communication_error(
+                    exc,
+                    error_code="INGRESS_NOT_SUPERVISED",
+                    operation="ingress_session",
+                )
                 await asyncio.to_thread(
                     self.connections.record_health,
                     connection.id,
                     ConnectionObservedStatus.DEGRADED,
-                    error_code="INGRESS_NOT_SUPERVISED",
-                    error_message=str(exc),
+                    error_code=normalized_error.code,
+                    error_message=normalized_error.summary,
+                    error_details=normalized_error.details,
                 )
                 await asyncio.Event().wait()
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
                 logger.warning("Communication Connection %s ingress failed (%s)", connection.id, type(exc).__name__)
+                normalized_error = normalize_communication_error(exc, operation="ingress_session")
                 await asyncio.to_thread(
                     self.connections.record_health,
                     connection.id,
                     ConnectionObservedStatus.ERROR,
-                    error_code=type(exc).__name__,
-                    error_message=str(exc),
+                    error_code=normalized_error.code,
+                    error_message=normalized_error.summary,
+                    error_details=normalized_error.details,
                 )
                 await asyncio.sleep(2)

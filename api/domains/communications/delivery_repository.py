@@ -10,12 +10,14 @@ from sqlalchemy.orm import aliased
 from sqlmodel import Session, col, select
 
 from api.domains.agents.models import Agent, AgentStatus
+from api.domains.communications.error_details import error_code_from_details
 from api.domains.communications.models import (
     AcceptedCommunicationRead,
     CommunicationConnection,
     CommunicationDelivery,
     CommunicationDeliveryStatus,
     CommunicationDirection,
+    CommunicationErrorDetails,
     CommunicationJournalStage,
     ConversationLocation,
     NormalizedCommunicationEnvelope,
@@ -442,6 +444,7 @@ class CommunicationDeliveryRepository:
         provider_message_id: str | None = None,
         error_code: str | None = None,
         error_message: str | None = None,
+        error_details: CommunicationErrorDetails | dict[str, Any] | None = None,
         max_attempts: int = 5,
     ) -> bool:
         now = datetime.now(UTC)
@@ -464,10 +467,11 @@ class CommunicationDeliveryRepository:
                 max_attempts=max_attempts,
                 error_code=error_code,
                 error_message=error_message,
+                error_details=error_details,
             )
             delivery.provider_message_id = provider_message_id
             session.add(delivery)
-            self._stage_completion_journal(session, delivery, now=now)
+            self._stage_completion_journal(session, delivery, now=now, error_details=error_details)
             session.commit()
             self._record_completion_metric(delivery)
             return True
@@ -480,6 +484,7 @@ class CommunicationDeliveryRepository:
         succeeded: bool,
         error_code: str | None = None,
         error_message: str | None = None,
+        error_details: CommunicationErrorDetails | dict[str, Any] | None = None,
         max_attempts: int = 5,
     ) -> bool:
         now = datetime.now(UTC)
@@ -503,9 +508,10 @@ class CommunicationDeliveryRepository:
                 max_attempts=max_attempts,
                 error_code=error_code,
                 error_message=error_message,
+                error_details=error_details,
             )
             session.add(delivery)
-            self._stage_completion_journal(session, delivery, now=now)
+            self._stage_completion_journal(session, delivery, now=now, error_details=error_details)
             session.commit()
             self._record_completion_metric(delivery)
             return True
@@ -600,6 +606,7 @@ class CommunicationDeliveryRepository:
         delivery: CommunicationDelivery,
         *,
         now: datetime,
+        error_details: CommunicationErrorDetails | dict[str, Any] | None = None,
     ) -> None:
         if self.operations is None:
             return
@@ -622,6 +629,7 @@ class CommunicationDeliveryRepository:
             occurred_at=now,
             error_code=delivery.last_error_code,
             error_summary=delivery.last_error_message,
+            error_details=error_details,
         )
         if delivery.status == CommunicationDeliveryStatus.DEAD_LETTERED:
             self.operations.stage_journal(
@@ -635,6 +643,7 @@ class CommunicationDeliveryRepository:
                 occurred_at=now,
                 error_code=delivery.last_error_code,
                 error_summary=delivery.last_error_message,
+                error_details=error_details,
             )
             self._stage_delivery_event(
                 session,
@@ -731,10 +740,17 @@ class CommunicationDeliveryRepository:
         max_attempts: int,
         error_code: str | None,
         error_message: str | None,
+        error_details: CommunicationErrorDetails | dict[str, Any] | None,
     ) -> None:
         delivery.lease_expires_at = None
-        delivery.last_error_code = CommunicationOperationalRepository.safe_error_code(error_code)
-        delivery.last_error_message = CommunicationOperationalRepository.safe_error_summary(error_message)
+        safe_details = CommunicationOperationalRepository.safe_error_details(error_details)
+        delivery.last_error_code = CommunicationOperationalRepository.safe_error_code(
+            error_code
+        ) or error_code_from_details(safe_details)
+        delivery.last_error_message = CommunicationOperationalRepository.safe_error_summary(
+            error_message,
+            details=safe_details,
+        )
         if succeeded:
             delivery.status = CommunicationDeliveryStatus.SUCCEEDED
             delivery.completed_at = now

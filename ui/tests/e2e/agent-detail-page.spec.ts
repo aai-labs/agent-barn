@@ -3,6 +3,7 @@ import { expect, test } from "@playwright/test";
 import { TEST_ORG_ID } from "../constants";
 import {
   COMMUNICATION_DELIVERY_ID,
+  SAFE_ERROR_DETAILS,
   SAFE_PROVIDER_ERROR,
 } from "../fixtures/communication-connections";
 import {
@@ -546,13 +547,22 @@ test.describe("Agent Detail Page — Channels tab", () => {
     await expect(connectionDetailPage.summaryMetric("Consecutive delivery failures")).toBeVisible();
     await expect(connectionDetailPage.summaryMetric("Delivery success rate")).toBeVisible();
     await expect(connectionDetailPage.summaryMetric("Recent failures")).toBeVisible();
+    await expect(connectionDetailPage.recentFailureCards()).toHaveCount(1);
     const failureCard = connectionDetailPage.recentFailureCard();
+    await expect(failureCard).toContainText("×2");
     await expect(failureCard).toContainText(SAFE_PROVIDER_ERROR);
     await expect(connectionDetailPage.failureDetailsToggle()).toHaveText("Show details");
     await connectionDetailPage.failureDetailsToggle().click();
     await expect(failureCard).toContainText("Error details");
     await expect(failureCard).toContainText("provider_error");
     await expect(failureCard).toContainText(COMMUNICATION_DELIVERY_ID);
+    await expect(failureCard).toContainText("HTTP status");
+    await expect(failureCard).toContainText(String(SAFE_ERROR_DETAILS.http_status));
+    await expect(failureCard).toContainText(SAFE_ERROR_DETAILS.provider_code);
+    await expect(failureCard).toContainText("Retryable");
+    await expect(failureCard).toContainText("Yes");
+    await expect(failureCard).toContainText(SAFE_ERROR_DETAILS.request_id);
+    await expect(failureCard).not.toContainText("Occurrences");
     await expect(connectionDetailPage.failureDetailsToggle()).toHaveText("Hide details");
     await expect(connectionDetailPage.deliveryEventCount(1)).toBeVisible();
     const deliveryRow = connectionDetailPage.deliveryTransitionRow(/provider delivered/i);

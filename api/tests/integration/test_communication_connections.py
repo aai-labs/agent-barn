@@ -4,6 +4,7 @@ import zipfile
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
+import httpx
 from fastapi import status
 from hamcrest import (
     all_of,
@@ -26,6 +27,7 @@ from starlette.testclient import TestClient
 
 from api.domains.agents.models import AgentStatus, AgentType
 from api.domains.communications.delivery_repository import CommunicationDeliveryRepository
+from api.domains.communications.error_details import normalize_communication_error
 from api.domains.communications.models import (
     CommunicationConnection,
     CommunicationJournalEntry,
@@ -487,6 +489,89 @@ def test_connection_diagnostics_and_reconnect_preserve_safe_operational_history(
             assert_that(len(journal_page.json()["items"]), equal_to(2))
             assert_that(str(journal_page.json()), not_(contains_string("provider rejected")))
             assert_that(delivery_page.json(), has_entries(total=0, items=[]))
+
+
+def test_structured_provider_diagnostics_are_retained_without_provider_secrets() -> None:
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+        created = client.post(_base(context), json=_telegram_payload(), headers=_auth(context)).json()
+        connection_id = UUID(created["id"])
+        repository = context.injector.get(CommunicationConnectionRepository)
+        request = httpx.Request(
+            "GET",
+            "https://api.telegram.org/botsecret-token/getUpdates",
+        )
+        response = httpx.Response(
+            503,
+            request=request,
+            headers={"Retry-After": "30", "X-Request-ID": "telegram-request-123"},
+            json={"ok": False, "error": "service_unavailable"},
+        )
+        normalized = normalize_communication_error(
+            httpx.HTTPStatusError("503 provider error for a botsecret-token URL", request=request, response=response),
+            operation="poll_updates",
+        )
+
+        repository.record_health(
+            connection_id,
+            ConnectionObservedStatus.ERROR,
+            error_code=normalized.code,
+            error_message=normalized.summary,
+            error_details=normalized.details,
+        )
+
+        summary = client.get(f"{_base(context)}/{connection_id}/summary", headers=_auth(context))
+        journal = client.get(
+            f"{_base(context)}/{connection_id}/journal?kind=connection",
+            headers=_auth(context),
+        )
+        connection_list = client.get(_base(context), headers=_auth(context))
+
+        expected_details = has_entries(
+            category="provider_unavailable",
+            operation="poll_updates",
+            http_status=503,
+            provider_code="service_unavailable",
+            retryable=True,
+            retry_after_seconds=30,
+            request_id="telegram-request-123",
+        )
+        expected_summary = "The provider is temporarily unavailable (HTTP 503, service_unavailable)"
+
+        assert_that(summary.status_code, equal_to(status.HTTP_200_OK))
+        assert_that(
+            summary.json()["connection"],
+            has_entries(
+                last_error_code="PROVIDER_UNAVAILABLE",
+                last_error_message=expected_summary,
+                last_error_details=expected_details,
+            ),
+        )
+        assert_that(
+            summary.json()["recent_failures"][0],
+            has_entries(
+                error_code="PROVIDER_UNAVAILABLE",
+                error_summary=expected_summary,
+                error_details=expected_details,
+            ),
+        )
+        assert_that(
+            journal.json()["items"][0],
+            has_entries(
+                error_code="PROVIDER_UNAVAILABLE",
+                error_summary=expected_summary,
+                error_details=expected_details,
+            ),
+        )
+        assert_that(
+            connection_list.json()[0],
+            has_entries(
+                last_error_code="PROVIDER_UNAVAILABLE",
+                last_error_message=expected_summary,
+                last_error_details=expected_details,
+            ),
+        )
+        assert_that(str(summary.json()), not_(contains_string("botsecret-token")))
 
 
 def test_diagnostics_read_does_not_grant_connection_recovery_permission() -> None:

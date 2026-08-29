@@ -144,6 +144,7 @@ class CommunicationsService:
         connection.observed_status = ConnectionObservedStatus.PENDING if connection.enabled else None
         connection.last_error_code = None
         connection.last_error_message = None
+        connection.last_error_details = None
         try:
             updated = self.repository.update(connection, expected_revision=data.revision)
             return self._read(updated)
@@ -405,10 +406,15 @@ class CommunicationsService:
         if PlatformCapability.WEBHOOK_INGRESS in plugin.capabilities and self.config.api_external_url:
             webhook_url = f"{self.config.api_external_url.rstrip('/')}/communications/v1/webhooks/{connection.id}"
         read = CommunicationConnectionRead.model_validate(connection)
+        safe_details = CommunicationOperationalRepository.safe_error_details(connection.last_error_details)
         return read.model_copy(
             update={
                 "last_error_code": CommunicationOperationalRepository.safe_error_code(read.last_error_code),
-                "last_error_message": CommunicationOperationalRepository.safe_error_summary(read.last_error_message),
+                "last_error_message": CommunicationOperationalRepository.safe_error_summary(
+                    read.last_error_message,
+                    details=safe_details,
+                ),
+                "last_error_details": safe_details,
                 "webhook_url": webhook_url,
             }
         )

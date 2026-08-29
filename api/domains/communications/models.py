@@ -86,6 +86,40 @@ class CommunicationPolicyDisposition(str, enum.Enum):
     MALFORMED_PAYLOAD = "malformed_payload"
 
 
+class CommunicationErrorCategory(str, enum.Enum):
+    AUTHENTICATION = "authentication"
+    AUTHORIZATION = "authorization"
+    CONFIGURATION = "configuration"
+    NETWORK = "network"
+    PROVIDER_REJECTED = "provider_rejected"
+    PROVIDER_UNAVAILABLE = "provider_unavailable"
+    RATE_LIMITED = "rate_limited"
+    TIMEOUT = "timeout"
+    UNKNOWN = "unknown"
+
+
+class CommunicationErrorDetails(PydanticBaseModel):
+    """Structured, content-free diagnostics safe to show to an Agent user."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    category: CommunicationErrorCategory
+    operation: str = Field(min_length=1, max_length=64, pattern=r"^[a-z][a-z0-9_.-]*$")
+    http_status: int | None = Field(default=None, ge=100, le=599)
+    provider_code: str | None = Field(
+        default=None,
+        max_length=100,
+        pattern=r"^[A-Za-z0-9_.:-]{1,100}$",
+    )
+    retryable: bool
+    retry_after_seconds: int | None = Field(default=None, ge=0, le=86_400)
+    request_id: str | None = Field(
+        default=None,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9_.:-]{1,128}$",
+    )
+
+
 class CommunicationJournalStage(str, enum.Enum):
     PROVIDER_OBSERVED = "provider_observed"
     POLICY_ADMITTED = "policy_admitted"
@@ -167,6 +201,10 @@ class CommunicationConnection(BaseModel, table=True):
     )
     last_error_code: str | None = SqlField(default=None, nullable=True, max_length=100)
     last_error_message: str | None = SqlField(default=None, nullable=True, max_length=500)
+    last_error_details: dict[str, Any] | None = SqlField(
+        default=None,
+        sa_column=Column(JSONB, nullable=True),
+    )
     ingress_lease_owner: str | None = SqlField(default=None, nullable=True, max_length=64)
     ingress_lease_expires_at: datetime | None = SqlField(
         default=None,
@@ -293,6 +331,10 @@ class CommunicationJournalEntry(BaseModel, table=True):
     duration_ms: float | None = SqlField(default=None, nullable=True)
     error_code: str | None = SqlField(default=None, nullable=True, max_length=100)
     error_summary: str | None = SqlField(default=None, nullable=True, max_length=500)
+    error_details: dict[str, Any] | None = SqlField(
+        default=None,
+        sa_column=Column(JSONB, nullable=True),
+    )
 
 
 class CommunicationAttachment(PydanticBaseModel):
@@ -349,6 +391,7 @@ class CommunicationJournalEntryRead(PydanticBaseModel):
     duration_ms: float | None
     error_code: str | None
     error_summary: str | None
+    error_details: CommunicationErrorDetails | None = None
     direction: CommunicationDirection | None = None
     delivery_status: CommunicationDeliveryStatus | None = None
     queue_wait_ms: float | None = None
@@ -390,6 +433,7 @@ class CommunicationFailureRead(PydanticBaseModel):
     delivery_id: UUID | None
     error_code: str | None
     error_summary: str | None
+    error_details: CommunicationErrorDetails | None = None
 
 
 class CommunicationTransitionRead(PydanticBaseModel):
@@ -552,6 +596,7 @@ class CommunicationConnectionRead(PydanticBaseModel):
     last_health_at: datetime | None
     last_error_code: str | None
     last_error_message: str | None
+    last_error_details: CommunicationErrorDetails | None = None
     webhook_url: str | None = None
     revision: int
     created_at: datetime

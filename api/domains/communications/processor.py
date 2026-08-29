@@ -7,6 +7,7 @@ from injector import inject, singleton
 
 from api.core.config import Config
 from api.domains.communications.delivery_repository import CommunicationDeliveryRepository
+from api.domains.communications.error_details import normalize_communication_error
 from api.domains.communications.gateway_service import CommunicationsGatewayService
 from api.domains.communications.models import (
     CommunicationDeliveryStatus,
@@ -60,10 +61,12 @@ class OutboundCommunicationProcessor:
             )
         except Exception as exc:
             logger.warning("Outbound Communication Delivery %s failed (%s)", delivery.id, type(exc).__name__)
+            normalized_error = normalize_communication_error(exc, operation="send_message")
             completed = self.deliveries.complete_outbound(
                 delivery.id,
-                error_code=type(exc).__name__,
-                error_message=str(exc),
+                error_code=normalized_error.code,
+                error_message=normalized_error.summary,
+                error_details=normalized_error.details,
             )
             if completed and outbound is not None and self._is_dead_lettered(delivery.id):
                 self._notify_feedback(delivery.connection_id, outbound, ProcessingFeedbackStage.FAILED)

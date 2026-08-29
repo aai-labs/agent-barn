@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from typing import Any
 from uuid import UUID
 
 import sqlalchemy as sa
@@ -9,10 +10,12 @@ from sqlmodel import Session, col, select
 
 from api.domains.agents.models import Agent
 from api.domains.agents.repository import agent_scope_predicates
+from api.domains.communications.error_details import error_code_from_details
 from api.domains.communications.models import (
     CommunicationConnection,
     CommunicationDelivery,
     CommunicationDeliveryStatus,
+    CommunicationErrorDetails,
     CommunicationJournalStage,
     ConnectionObservedStatus,
 )
@@ -106,18 +109,25 @@ class CommunicationConnectionRepository:
         *,
         error_code: str | None = None,
         error_message: str | None = None,
+        error_details: CommunicationErrorDetails | dict[str, Any] | None = None,
     ) -> None:
         with Session(self.delegate.engine, expire_on_commit=False) as session:
             connection = session.get(CommunicationConnection, connection_id)
             if connection is None or connection.retired_at is not None:
                 return
             previous_status = connection.observed_status
-            safe_code = CommunicationOperationalRepository.safe_error_code(error_code)
-            safe_message = CommunicationOperationalRepository.safe_error_summary(error_message)
+            safe_details = CommunicationOperationalRepository.safe_error_details(error_details)
+            safe_code = CommunicationOperationalRepository.safe_error_code(error_code) or error_code_from_details(
+                safe_details
+            )
+            safe_message = CommunicationOperationalRepository.safe_error_summary(error_message, details=safe_details)
             connection.observed_status = status
             connection.last_health_at = datetime.now(UTC)
             connection.last_error_code = safe_code
             connection.last_error_message = safe_message
+            connection.last_error_details = (
+                safe_details.model_dump(mode="json", exclude_none=True) if safe_details is not None else None
+            )
             session.add(connection)
             if previous_status != status and self.operations is not None:
                 stage_by_status = {
@@ -135,6 +145,7 @@ class CommunicationConnectionRepository:
                     stage=stage_by_status[status],
                     error_code=safe_code,
                     error_summary=safe_message,
+                    error_details=safe_details,
                 )
                 self.operations.stage_event(
                     session=session,
@@ -154,6 +165,9 @@ class CommunicationConnectionRepository:
                         "new_status": status.value,
                         "error_code": safe_code,
                         "error_summary": safe_message,
+                        "error_details": safe_details.model_dump(mode="json", exclude_none=True)
+                        if safe_details is not None
+                        else None,
                         "actor_display": "Communications Supervisor",
                         "subject_display": connection.display_name,
                     },
@@ -186,6 +200,7 @@ class CommunicationConnectionRepository:
                 connection.last_health_at = requested_at
             connection.last_error_code = None
             connection.last_error_message = None
+            connection.last_error_details = None
             session.add(connection)
             if self.operations is not None:
                 if connection.enabled and previous_status != ConnectionObservedStatus.CONNECTING:

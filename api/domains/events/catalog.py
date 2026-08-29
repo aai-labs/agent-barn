@@ -3,6 +3,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
 
+from api.domains.communications.models import CommunicationErrorDetails
 from api.domains.events.models import EventScope
 from api.domains.events.registry import DomainEventDefinition, DomainEventRegistry
 
@@ -312,6 +313,7 @@ class CommunicationConnectionHealthChangedPayload(BaseModel):
     new_status: str
     error_code: str | None
     error_summary: str | None
+    error_details: CommunicationErrorDetails | None = None
     actor_display: str
     subject_display: str
 

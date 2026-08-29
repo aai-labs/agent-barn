@@ -1,6 +1,5 @@
 """Persistence helpers for Communication operational history and diagnostics."""
 
-import re
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from statistics import median
@@ -13,6 +12,10 @@ from sqlmodel import Session, col, select
 
 from api.domains.agents.models import Agent
 from api.domains.agents.repository import agent_scope_predicates
+from api.domains.communications.error_details import error_code_from_details
+from api.domains.communications.error_details import safe_error_code as _safe_error_code
+from api.domains.communications.error_details import safe_error_details as _safe_error_details
+from api.domains.communications.error_details import safe_error_summary as _safe_error_summary
 from api.domains.communications.models import (
     CommunicationConnection,
     CommunicationConnectionIncidentOutcome,
@@ -22,6 +25,7 @@ from api.domains.communications.models import (
     CommunicationDeliveryCounts,
     CommunicationDeliveryStatus,
     CommunicationDirection,
+    CommunicationErrorDetails,
     CommunicationFailureRead,
     CommunicationJournalEntry,
     CommunicationJournalEntryRead,
@@ -43,20 +47,6 @@ from api.domains.rbac.policy import AuthorizationScope
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.infrastructure.shared.models import PaginatedItems, Pagination
 
-_SAFE_CODE = re.compile(r"^[A-Za-z0-9_.:-]{1,100}$")
-_SENSITIVE_PARTS = (
-    "api_key",
-    "apikey",
-    "authorization",
-    "client_secret",
-    "credential",
-    "password",
-    "private_key",
-    "refresh_token",
-    "secret",
-    "token",
-)
-_REDACTED_ERROR_SUMMARY = "Provider error details were redacted"
 _RECENT_FAILURE_LIMIT = 10
 _LATEST_TRANSITION_LIMIT = 50
 _CONNECTION_HISTORY_LIMIT = 8
@@ -66,12 +56,6 @@ _CONNECTION_STAGE_STATUS = {
     CommunicationJournalStage.CONNECTION_CONNECTED.value: ConnectionObservedStatus.CONNECTED,
     CommunicationJournalStage.CONNECTION_DEGRADED.value: ConnectionObservedStatus.DEGRADED,
     CommunicationJournalStage.CONNECTION_ERROR.value: ConnectionObservedStatus.ERROR,
-}
-_SAFE_ERROR_SUMMARIES = {
-    "agent was not running when the message arrived": "Agent was not running when the message arrived",
-    "communication connection is unavailable": "Communication Connection is unavailable",
-    "communication connection was retired": "Communication Connection was retired",
-    _REDACTED_ERROR_SUMMARY.casefold(): _REDACTED_ERROR_SUMMARY,
 }
 
 
@@ -173,6 +157,7 @@ class CommunicationOperationalRepository:
         duration_ms: float | None = None,
         error_code: str | None = None,
         error_summary: str | None = None,
+        error_details: CommunicationErrorDetails | dict[str, Any] | None = None,
     ) -> CommunicationJournalEntry:
         occurred_at = occurred_at or datetime.now(UTC)
         if duration_ms is None:
@@ -182,6 +167,7 @@ class CommunicationOperationalRepository:
                 delivery_id=delivery_id,
                 occurred_at=occurred_at,
             )
+        safe_details = self.safe_error_details(error_details)
         entry = CommunicationJournalEntry(
             organization_id=organization_id,
             agent_id=agent_id,
@@ -192,8 +178,9 @@ class CommunicationOperationalRepository:
             disposition=disposition,
             attempt_number=max(0, attempt_number),
             duration_ms=max(0.0, duration_ms) if duration_ms is not None else None,
-            error_code=self.safe_error_code(error_code),
-            error_summary=self.safe_error_summary(error_summary),
+            error_code=self.safe_error_code(error_code) or error_code_from_details(safe_details),
+            error_summary=self.safe_error_summary(error_summary, details=safe_details),
+            error_details=safe_details.model_dump(mode="json", exclude_none=True) if safe_details else None,
         )
         session.add(entry)
         session.flush()
@@ -213,6 +200,7 @@ class CommunicationOperationalRepository:
         duration_ms: float | None = None,
         error_code: str | None = None,
         error_summary: str | None = None,
+        error_details: CommunicationErrorDetails | dict[str, Any] | None = None,
     ) -> CommunicationJournalEntry:
         with Session(self.delegate.engine, expire_on_commit=False) as session:
             entry = self.stage_journal(
@@ -228,6 +216,7 @@ class CommunicationOperationalRepository:
                 duration_ms=duration_ms,
                 error_code=error_code,
                 error_summary=error_summary,
+                error_details=error_details,
             )
             session.commit()
             return entry
@@ -496,8 +485,12 @@ class CommunicationOperationalRepository:
                 occurred_at=entry.occurred_at,
                 stage=CommunicationJournalStage(self._enum_value(entry.stage)),
                 delivery_id=entry.delivery_id,
-                error_code=self.safe_error_code(entry.error_code),
-                error_summary=self.safe_error_summary(entry.error_summary),
+                error_code=self.safe_error_code(entry.error_code) or error_code_from_details(entry.error_details),
+                error_summary=self.safe_error_summary(
+                    entry.error_summary,
+                    details=entry.error_details,
+                ),
+                error_details=self.safe_error_details(entry.error_details),
             )
             for entry in journal_rows
             if entry.error_code is not None
@@ -632,15 +625,27 @@ class CommunicationOperationalRepository:
             if entry.occurred_at < window_start:
                 current_status = status
                 current_started_at = window_start
-                current_error_code = CommunicationOperationalRepository.safe_error_code(entry.error_code)
-                current_error_summary = CommunicationOperationalRepository.safe_error_summary(entry.error_summary)
+                safe_details = CommunicationOperationalRepository.safe_error_details(entry.error_details)
+                current_error_code = CommunicationOperationalRepository.safe_error_code(
+                    entry.error_code
+                ) or error_code_from_details(safe_details)
+                current_error_summary = CommunicationOperationalRepository.safe_error_summary(
+                    entry.error_summary,
+                    details=safe_details,
+                )
                 continue
 
             if current_status is None:
                 current_status = status
                 current_started_at = entry.occurred_at
-                current_error_code = CommunicationOperationalRepository.safe_error_code(entry.error_code)
-                current_error_summary = CommunicationOperationalRepository.safe_error_summary(entry.error_summary)
+                safe_details = CommunicationOperationalRepository.safe_error_details(entry.error_details)
+                current_error_code = CommunicationOperationalRepository.safe_error_code(
+                    entry.error_code
+                ) or error_code_from_details(safe_details)
+                current_error_summary = CommunicationOperationalRepository.safe_error_summary(
+                    entry.error_summary,
+                    details=safe_details,
+                )
                 continue
 
             if status == current_status:
@@ -649,8 +654,14 @@ class CommunicationOperationalRepository:
             append_interval(ended_at=entry.occurred_at, next_status=status)
             current_status = status
             current_started_at = entry.occurred_at
-            current_error_code = CommunicationOperationalRepository.safe_error_code(entry.error_code)
-            current_error_summary = CommunicationOperationalRepository.safe_error_summary(entry.error_summary)
+            safe_details = CommunicationOperationalRepository.safe_error_details(entry.error_details)
+            current_error_code = CommunicationOperationalRepository.safe_error_code(
+                entry.error_code
+            ) or error_code_from_details(safe_details)
+            current_error_summary = CommunicationOperationalRepository.safe_error_summary(
+                entry.error_summary,
+                details=safe_details,
+            )
             current_reconnect_count = 0
 
         append_interval(ended_at=None, next_status=None)
@@ -864,11 +875,28 @@ class CommunicationOperationalRepository:
         delivery: CommunicationDelivery | None,
     ) -> CommunicationJournalEntryRead:
         """Project a journal row without re-exposing legacy unsafe error text."""
-        values = CommunicationJournalEntryRead.model_validate(entry).model_dump()
+        safe_details = CommunicationOperationalRepository.safe_error_details(entry.error_details)
+        values = {
+            "id": entry.id,
+            "connection_id": entry.connection_id,
+            "delivery_id": entry.delivery_id,
+            "occurred_at": entry.occurred_at,
+            "stage": entry.stage,
+            "disposition": entry.disposition,
+            "attempt_number": entry.attempt_number,
+            "duration_ms": entry.duration_ms,
+            "error_code": entry.error_code,
+            "error_summary": entry.error_summary,
+            "error_details": safe_details,
+        }
         values.update(
             {
-                "error_code": CommunicationOperationalRepository.safe_error_code(entry.error_code),
-                "error_summary": CommunicationOperationalRepository.safe_error_summary(entry.error_summary),
+                "error_code": CommunicationOperationalRepository.safe_error_code(entry.error_code)
+                or error_code_from_details(safe_details),
+                "error_summary": CommunicationOperationalRepository.safe_error_summary(
+                    entry.error_summary,
+                    details=safe_details,
+                ),
                 "direction": direction,
                 "delivery_status": delivery_status,
                 **CommunicationOperationalRepository._delivery_journal_details(delivery),
@@ -923,19 +951,21 @@ class CommunicationOperationalRepository:
 
     @staticmethod
     def safe_error_code(value: str | None) -> str | None:
-        if not value:
-            return None
-        normalized = value.lower().replace("-", "_")
-        if any(part in normalized for part in _SENSITIVE_PARTS) or not _SAFE_CODE.fullmatch(value):
-            return "REDACTED"
-        return value
+        return _safe_error_code(value)
 
     @staticmethod
-    def safe_error_summary(value: str | None) -> str | None:
-        if not value:
-            return None
-        normalized = " ".join(value.split())
-        return _SAFE_ERROR_SUMMARIES.get(normalized.casefold(), _REDACTED_ERROR_SUMMARY)
+    def safe_error_details(
+        value: CommunicationErrorDetails | dict[str, Any] | None,
+    ) -> CommunicationErrorDetails | None:
+        return _safe_error_details(value)
+
+    @staticmethod
+    def safe_error_summary(
+        value: str | None,
+        *,
+        details: CommunicationErrorDetails | dict[str, Any] | None = None,
+    ) -> str | None:
+        return _safe_error_summary(value, details=details)
 
     def prune_journal(self, *, retention_days: int) -> int:
         """Delete journal rows older than the configured bounded retention window."""

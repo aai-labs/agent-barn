@@ -416,6 +416,21 @@ export function AgentChannelSettings({
                         >
                           {connection.lastErrorMessage}
                         </p>
+                        {connection.lastErrorDetails && (
+                          <div className="mt-2 flex flex-wrap gap-x-2 gap-y-1 text-[11px]" style={{ color: "var(--ink-4)" }}>
+                            <span>{connection.lastErrorDetails.category.replace(/_/g, " ")}</span>
+                            {connection.lastErrorDetails.httpStatus !== null && (
+                              <span>HTTP {connection.lastErrorDetails.httpStatus}</span>
+                            )}
+                            {connection.lastErrorDetails.providerCode && (
+                              <span>Provider code: {connection.lastErrorDetails.providerCode}</span>
+                            )}
+                            {connection.lastErrorDetails.retryable && <span>Retryable</span>}
+                            {connection.lastErrorDetails.requestId && (
+                              <span>Request ID: {connection.lastErrorDetails.requestId}</span>
+                            )}
+                          </div>
+                        )}
                       </div>
                     </div>
                   )}

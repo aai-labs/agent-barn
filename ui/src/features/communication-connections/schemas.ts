@@ -2,6 +2,26 @@ import { z } from "zod";
 
 const JsonSchemaSchema = z.record(z.string(), z.unknown());
 
+const CommunicationErrorDetailsSchema = z.object({
+  category: z.enum([
+    "authentication",
+    "authorization",
+    "configuration",
+    "network",
+    "provider_rejected",
+    "provider_unavailable",
+    "rate_limited",
+    "timeout",
+    "unknown",
+  ]),
+  operation: z.string(),
+  httpStatus: z.number().int().min(100).max(599).nullable(),
+  providerCode: z.string().nullable(),
+  retryable: z.boolean(),
+  retryAfterSeconds: z.number().int().min(0).max(86400).nullable(),
+  requestId: z.string().nullable(),
+});
+
 export const CommunicationPlatformSchema = z.object({
   key: z.string(),
   displayName: z.string(),
@@ -25,6 +45,7 @@ export const CommunicationConnectionSchema = z.object({
   lastHealthAt: z.string().nullable(),
   lastErrorCode: z.string().nullable(),
   lastErrorMessage: z.string().nullable(),
+  lastErrorDetails: CommunicationErrorDetailsSchema.nullable().optional(),
   webhookUrl: z.string().url().nullable(),
   revision: z.number().int().positive(),
   createdAt: z.string(),
@@ -42,6 +63,7 @@ export const CommunicationJournalEntrySchema = z.object({
   durationMs: z.number().nullable(),
   errorCode: z.string().nullable(),
   errorSummary: z.string().nullable(),
+  errorDetails: CommunicationErrorDetailsSchema.nullable().optional(),
   direction: z.enum(["INBOUND", "OUTBOUND"]).nullable().optional(),
   deliveryStatus: z.enum(["PENDING", "PROCESSING", "SUCCEEDED", "DEAD_LETTERED", "CANCELLED", "UNAVAILABLE"]).nullable().optional(),
   queueWaitMs: z.number().nonnegative().nullable().optional(),
@@ -98,6 +120,7 @@ export const CommunicationDiagnosticsSchema = z.object({
     deliveryId: z.string().uuid().nullable(),
     errorCode: z.string().nullable(),
     errorSummary: z.string().nullable(),
+    errorDetails: CommunicationErrorDetailsSchema.nullable().optional(),
   })),
   latestTransitions: z.array(z.object({
     occurredAt: z.string(),

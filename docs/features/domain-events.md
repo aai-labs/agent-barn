@@ -83,7 +83,7 @@ AF-273 adds Communications operational events as Organization-scoped audit input
 - `communication.delivery.retry.requested` — emitted when an authorized user requeues one dead-lettered outbound Delivery.
 - `communication.delivery.recovered` — emitted when that retried Delivery succeeds.
 
-These events carry scoped resource IDs, lifecycle status, attempt/error metadata, and safe actor/subject display snapshots only. The separate Communications operation journal remains runtime diagnostics rather than a Domain Event stream; it records intermediate attempts and timings without payload content, credentials, or sender identity.
+These events carry scoped resource IDs, lifecycle status, attempt/error metadata, and safe actor/subject display snapshots only. The Connection health event may also carry the validated, content-free diagnostic envelope (category, operation, HTTP status, provider code, retryability, bounded retry-after value, and provider request ID); it never carries provider URLs, credentials, headers, bodies, or exception text. The separate Communications operation journal remains runtime diagnostics rather than a Domain Event stream; it records intermediate attempts and timings without payload content, credentials, or sender identity.
 
 RBAC, Platform Privilege, and the AF-167 events above are intended for the `security_audit.projection` Event Handler, which persists deletion-independent Security Audit Records. Agent start/stop events are intended for the `agent.lifecycle_email.notification` Event Handler, which emails the Agent Creator and users with Agent Owner access, de-duplicated by email.
 

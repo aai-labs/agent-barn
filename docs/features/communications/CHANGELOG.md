@@ -13,6 +13,11 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
 
 ## Changes
 
+### 2026-08-28 — Structured safe failure diagnostics — PR pending
+
+- Changed: Connection and Delivery failures now pass through one structured diagnostic normalizer before persistence. Recent failure details retain a safe category, operation, HTTP status, provider error code, retryability, bounded retry-after value, and provider request ID without storing provider URLs, credentials, headers, bodies, or exception text. Legacy error projections remain redacted when no validated diagnostic envelope exists.
+- Changed: The Connection details page's expanded Recent failure cards and Delivery transition details render the structured diagnostics, giving authorized Agent users actionable provider context while keeping the content-free journal boundary intact.
+
 ### 2026-08-28 — AF-273 — Journal filters, delivery lifecycle drill-down, and richer summary signals — PR pending
 
 - Delivered: `GET .../journal` now accepts server-backed `since`/`until`, `stage`, `failed_only`, `retryable_only`, `direction`, and `delivery_id` filters, composed as SQL predicates in `CommunicationOperationalRepository.find_journal_page` against the existing Delivery join — routes and the service stay thin, and authorization is unchanged. `retryable_only` reads the live joined Delivery status rather than the historical Journal stage, so a Delivery Transition that has already been retried drops off the filter even though its `dead_lettered` entry remains in the Journal. The same endpoint now accepts `order=asc`, which combined with `delivery_id` serves one Delivery's complete lifecycle in chronological order — a read, not a new table. The Connection details page's transition rows link to this as "View delivery timeline".

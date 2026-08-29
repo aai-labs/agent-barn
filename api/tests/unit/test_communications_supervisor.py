@@ -41,4 +41,7 @@ def test_connection_setup_failure_records_error_health() -> None:
 
     statuses = [call.args[1] for call in connections.record_health.call_args_list]
     assert statuses == [ConnectionObservedStatus.CONNECTING, ConnectionObservedStatus.ERROR]
-    assert connections.record_health.call_args_list[-1].kwargs["error_code"] == "KeyError"
+    error_call = connections.record_health.call_args_list[-1]
+    assert error_call.kwargs["error_code"] == "CONFIGURATION_ERROR"
+    assert error_call.kwargs["error_details"].category.value == "configuration"
+    assert error_call.kwargs["error_details"].operation == "ingress_session"

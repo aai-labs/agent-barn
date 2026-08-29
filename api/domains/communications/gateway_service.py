@@ -11,6 +11,7 @@ from api.core.config import Config
 from api.domains.agents.models import Agent, AgentStatus
 from api.domains.agents.repository import AgentRepository
 from api.domains.communications.delivery_repository import CommunicationDeliveryRepository
+from api.domains.communications.error_details import normalize_communication_error
 from api.domains.communications.models import (
     AcceptedCommunicationRead,
     CommunicationConnection,
@@ -100,12 +101,22 @@ class CommunicationsGatewayService:
         delivery_id: UUID,
         result: RuntimeDeliveryResult,
     ) -> bool:
+        normalized_error = (
+            normalize_communication_error(
+                error_code=result.error_code,
+                error_message=result.error_message,
+                operation="runtime_processing",
+            )
+            if not result.succeeded
+            else None
+        )
         completed = self.delivery_repository.complete_runtime_delivery(
             delivery_id,
             agent_id=agent.id,
             succeeded=result.succeeded,
-            error_code=result.error_code,
-            error_message=result.error_message,
+            error_code=normalized_error.code if normalized_error is not None else None,
+            error_message=normalized_error.summary if normalized_error is not None else None,
+            error_details=normalized_error.details if normalized_error is not None else None,
         )
         if completed and not result.succeeded:
             self._notify_runtime_failure_feedback(agent.id, delivery_id)

@@ -16,6 +16,10 @@ import {
 } from "lucide-react";
 
 import { AppErrorState } from "@/components/app-error-state";
+import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Select,
@@ -373,6 +377,17 @@ function JournalDetail({
           </div>
         </DetailSection>
       )}
+      {entry.errorDetails && (
+        <DetailSection title="Diagnostic details">
+          <DetailRow label="Category" value={label(entry.errorDetails.category)} />
+          <DetailRow label="Operation" value={label(entry.errorDetails.operation)} />
+          {entry.errorDetails.httpStatus !== null && <DetailRow label="HTTP status" value={entry.errorDetails.httpStatus} />}
+          <DetailRow label="Provider code" value={entry.errorDetails.providerCode ?? "—"} />
+          <DetailRow label="Retryable" value={entry.errorDetails.retryable ? "Yes" : "No"} />
+          {entry.errorDetails.retryAfterSeconds !== null && <DetailRow label="Retry after" value={`${entry.errorDetails.retryAfterSeconds}s`} />}
+          {entry.errorDetails.requestId && <DetailRow label="Request ID" value={entry.errorDetails.requestId} mono />}
+        </DetailSection>
+      )}
       <div className="flex flex-wrap gap-2">
         {entry.deliveryId && (
           <button
@@ -530,7 +545,7 @@ function CommunicationJournalFilterBar({
         value={filters.stage ?? "__all_stages__"}
         onValueChange={(value) => onChange({ ...filters, stage: value === "__all_stages__" ? undefined : value })}
       >
-        <SelectTrigger className="af-input" style={{ width: "10.5rem" }} aria-label="Filter by stage">
+        <SelectTrigger className="w-[10.5rem]" aria-label="Filter by stage">
           <SelectValue placeholder="All stages" />
         </SelectTrigger>
         <SelectContent>
@@ -547,7 +562,7 @@ function CommunicationJournalFilterBar({
           value={filters.direction ?? "__any_direction__"}
           onValueChange={(value) => onChange({ ...filters, direction: value === "__any_direction__" ? undefined : value as "INBOUND" | "OUTBOUND" })}
         >
-          <SelectTrigger className="af-input" style={{ width: "9rem" }} aria-label="Filter by direction">
+          <SelectTrigger className="w-[9rem]" aria-label="Filter by direction">
             <SelectValue placeholder="Any direction" />
           </SelectTrigger>
           <SelectContent>
@@ -560,9 +575,8 @@ function CommunicationJournalFilterBar({
         </Select>
       )}
       {isDelivery && (
-        <input
-          className="af-input"
-          style={{ width: "13rem" }}
+        <Input
+          className="w-[13rem]"
           aria-label="Filter by delivery ID"
           placeholder="Delivery ID"
           value={deliveryIdInput}
@@ -571,32 +585,26 @@ function CommunicationJournalFilterBar({
           onKeyDown={(event) => { if (event.key === "Enter") applyDeliveryId(); }}
         />
       )}
-      <label className="flex items-center gap-1.5 text-[13px]" style={{ color: "var(--ink-3)" }}>
-        <input
-          type="checkbox"
+      <Label className="h-8 gap-1.5 text-[13px] font-normal" style={{ color: "var(--ink-3)" }}>
+        <Checkbox
           checked={Boolean(filters.failedOnly)}
-          onChange={(event) => onChange({ ...filters, failedOnly: event.target.checked || undefined })}
+          onCheckedChange={(checked) => onChange({ ...filters, failedOnly: checked === true || undefined })}
         />
         Failed only
-      </label>
+      </Label>
       {isDelivery && (
-        <label className="flex items-center gap-1.5 text-[13px]" style={{ color: "var(--ink-3)" }}>
-          <input
-            type="checkbox"
+        <Label className="h-8 gap-1.5 text-[13px] font-normal" style={{ color: "var(--ink-3)" }}>
+          <Checkbox
             checked={Boolean(filters.retryableOnly)}
-            onChange={(event) => onChange({ ...filters, retryableOnly: event.target.checked || undefined })}
+            onCheckedChange={(checked) => onChange({ ...filters, retryableOnly: checked === true || undefined })}
           />
           Retryable only
-        </label>
+        </Label>
       )}
       {hasActiveFilters(filters) && (
-        <button
-          type="button"
-          className="af-btn af-btn-sm"
-          onClick={() => { setDeliveryIdInput(""); onChange({}); }}
-        >
+        <Button type="button" variant="outline" onClick={() => { setDeliveryIdInput(""); onChange({}); }}>
           Clear filters
-        </button>
+        </Button>
       )}
     </div>
   );

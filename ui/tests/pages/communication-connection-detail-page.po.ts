@@ -33,6 +33,10 @@ export class CommunicationConnectionDetailPage {
     return this.page.locator("[data-failure-card]").first();
   }
 
+  recentFailureCards(): Locator {
+    return this.page.locator("[data-failure-card]");
+  }
+
   failureDetailsToggle(): Locator {
     return this.recentFailureCard().getByRole("button", { name: /Show details|Hide details/ });
   }
