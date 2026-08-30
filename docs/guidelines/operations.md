@@ -60,7 +60,7 @@ Invites, password resets, and agent lifecycle notifications send through **Cloud
 
 ## Staging environment
 
-Staging is a fully separate stack in its own namespace (`agent-farm-staging`), driven off the `staging` branch — not a GitHub Environment (Free plan + private repo can't gate those). `main` remains the production deploy source. See [`../adr/2026-07-13-staging-environment-namespace-isolation.md`](../adr/2026-07-13-staging-environment-namespace-isolation.md) for why.
+Staging is a fully separate stack in its own namespace (`agent-farm-staging`), driven off the `staging` branch — not a GitHub Environment (Free plan + private repo can't gate those). `main` remains the k3s testing-ground deploy source. Hosted public production is the Talos cluster via release tags; see [Public cluster (Talos)](#public-cluster-talos). See [`../adr/2026-07-13-staging-environment-namespace-isolation.md`](../adr/2026-07-13-staging-environment-namespace-isolation.md) for why staging is a namespace.
 
 - **Trigger:** `deploy.yml` runs on pushes to `staging` and `main`, and via `workflow_dispatch`; it resolves `NAMESPACE`/`ENVIRONMENT`/image-tag suffix/hosts/secrets from `github.ref_name`. Dispatching from anything other than `staging` or `main` fails the workflow.
 - **Images:** all four images (api, ui, hermes-base, openclaw-base) get a `-staging` tag suffix on staging; staging never pushes `:latest`, since each environment builds its own base images and their installed contents can diverge.
@@ -69,6 +69,62 @@ Staging is a fully separate stack in its own namespace (`agent-farm-staging`), d
 - **RBAC bootstrap:** `k8s/agent-farm-user.staging.yaml` provisions the `agent-farm-user` ServiceAccount/Role/RoleBinding for `agent-farm-staging` (omitting the cluster-scoped `Namespace` object, since a namespace-scoped kubeconfig can't create one and the namespace is expected to pre-exist). `deploy.sh` applies the prod manifest by default; a staging bring-up points its `kubectl apply` line at the staging manifest instead.
 - **Local bring-up:** copy `.env.deploy.spec` to `.env.deploy.staging`, set `NAMESPACE=agent-farm-staging`, the staging hosts, the four `*_IMAGE_TAG=<ver>-staging`, and the same passwords/keys as the `STAGING_*` GitHub secrets (they must match — see the ADR's consequences), then run `ENV_FILE=.env.deploy.staging bash deploy.sh`.
 - **Isolation invariant:** the API pod's `K8S_NAMESPACE` env var (from `{{ .Release.Namespace }}` in the API chart) must stay wired, or the staging API would create agent workloads in the prod namespace instead of its own.
+
+## Public cluster (Talos)
+
+Hosted public Agent Barn runs on the dedicated Talos cluster, not on k3s. k3s (`staging` / `main` via `deploy.yml`) stays the AAI Labs testing ground. Public deploys only from a `vX.Y.Z` tag via `../../.github/workflows/deploy-public.yml`. Rationale: [`../adr/2026-08-27-public-cluster-release-tags.md`](../adr/2026-08-27-public-cluster-release-tags.md).
+
+- **Trigger:** pushing a tag matching `v*.*.*`, or `workflow_dispatch` with that tag. Dispatching any other ref fails the workflow.
+- **Images:** API and UI are tagged with the git tag (and `:latest` on the **public** registry only). Hermes/OpenClaw keep the versions in their `VERSION` files. Nothing in this workflow writes to `registry.k8s.aai-labs.com`.
+- **Registry:** `PUBLIC_REGISTRY_URL` (`registry.agentbarn.dev`). Do not reuse the k3s registry password or R2 bucket.
+- **Namespace:** still `agent-farm` so helmfile and `k8s/agent-farm-user.yaml` apply unchanged. This is a different cluster, so it does not collide with k3s.
+- **Secrets/vars:** every public-only value is `PUBLIC_`-prefixed. Postgres **user/db names**, `AGENT_DEFAULT_MODEL` / `AGENT_MODEL_ALLOWLIST`, the Cloudflare email account/token, and the Google OAuth client are reused. OpenRouter, Firecrawl, Slack webhook, DB passwords, and signing keys are **not** reused — copy a value into a `PUBLIC_` secret only when that sharing is intentional.
+- **Kubeconfig:** `PUBLIC_KUBECONFIG_B64` must reach the Talos API (`https://<cp-1>:6443`). There is no bastion tunnel. `PUBLIC_POD_KUBECONFIG_B64` is what the API pod uses to manage agents; if unset, the workflow falls back to the deploy kubeconfig. Prefer a namespace-scoped kubeconfig for the pod, as on k3s.
+- **Storage:** `PUBLIC_STORAGE_CLASS`. Intended value is `rook-ceph-block-main`. Use `local-path` only while Ceph has no OSDs — postgres then dies with the node that holds the volume.
+- **Hosts:** `PUBLIC_UI_HOST` / `PUBLIC_API_HOST` / `PUBLIC_WEB_APP_URL` / `PUBLIC_GRAFANA_HOST`. Product Grafana must not use `grafana.agentbarn.dev` (that hostname is the cluster kube-prometheus-stack). Cut `app.agentbarn.dev` over from k3s only after a successful public sync; until then k3s `UI_HOST` can keep serving it.
+- **RBAC bootstrap:** the deploy kubeconfig is cluster-admin, so the workflow applies `k8s/agent-farm-user.yaml` (creates the namespace) before helmfile.
+- **Release command:** from a commit already on `main` that you want public:
+
+```bash
+git tag v0.15.0
+git push origin v0.15.0
+```
+
+### Public GitHub variables
+
+| Variable | Intended value |
+|---|---|
+| `PUBLIC_REGISTRY_URL` | `registry.agentbarn.dev` |
+| `PUBLIC_REGISTRY_USERNAME` | platform registry user (`admin`) |
+| `PUBLIC_API_HOST` | `api.agentbarn.dev` |
+| `PUBLIC_UI_HOST` | `app.agentbarn.dev` |
+| `PUBLIC_WEB_APP_URL` | `https://app.agentbarn.dev` |
+| `PUBLIC_GRAFANA_HOST` | `grafana-app.agentbarn.dev` |
+| `PUBLIC_SENDER_EMAIL` | `noreply@mail.agentbarn.dev` |
+| `PUBLIC_STORAGE_CLASS` | `rook-ceph-block-main` (or `local-path` until Ceph OSDs exist) |
+
+### Public GitHub secrets
+
+Generate new values; do not paste k3s `POSTGRES_*` / signing keys. Encode kubeconfigs with `base64 -w0`.
+
+| Secret | What |
+|---|---|
+| `PUBLIC_KUBECONFIG_B64` | Talos kubeconfig (deploy identity) |
+| `PUBLIC_POD_KUBECONFIG_B64` | Optional. API pod identity; defaults to the deploy kubeconfig |
+| `PUBLIC_REGISTRY_PASSWORD` | `registry.agentbarn.dev` password |
+| `PUBLIC_POSTGRES_APP_PASSWORD` | New |
+| `PUBLIC_POSTGRES_LITELLM_PASSWORD` | New |
+| `PUBLIC_POSTGRES_FIRECRAWL_PASSWORD` | New |
+| `PUBLIC_LITELLM_MASTER_KEY` | New (`sk-` + random) |
+| `PUBLIC_SECRET_SIGNING_KEY` | New |
+| `PUBLIC_AGENT_TOKEN_ENCRYPTION_KEY` | New Fernet key |
+| `PUBLIC_PLATFORM_ADMIN_CREDENTIALS` | `email:password` |
+| `PUBLIC_GRAFANA_ADMIN_PASSWORD` | Product Grafana (not cluster Grafana) |
+| `PUBLIC_FIRECRAWL_API_KEY` | New (this cluster's Firecrawl) |
+| `PUBLIC_OPENROUTER_API_KEY` | Prefer a dedicated key so public traffic is not the testing quota |
+| `PUBLIC_SLACK_ALERTS_WEBHOOK_URL` | `#alerts` or a public-specific channel |
+
+Shared with k3s (already present): `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN`, `GOOGLE_CLOUD_CLIENT_SECRET`, `AAI_CLI_REPO_ACCESS_TOKEN`.
 
 ## Versioning and releases
 
@@ -82,6 +138,7 @@ Rules:
 - Bump chart versions late, ideally immediately before the PR, to reduce merge conflicts, when chart packaging actually changed.
 - The git commit or PR is the product release identifier; there is no shared API/UI release number.
 - `../../.github/workflows/deploy.yml` builds API and UI images under moving environment tags and passes those tags into Helm via `API_IMAGE_TAG` and `UI_IMAGE_TAG`: `latest` on `main`, `latest-staging` on `staging`. Branch deploys no longer depend on chart `appVersion` bumps.
+- Public hosted deploys (`../../.github/workflows/deploy-public.yml`) pin API/UI to the git tag (`vX.Y.Z`) on `registry.agentbarn.dev`. They never move k3s `latest` tags.
 - Manual/bundled release flows also pass explicit API/UI tags rather than reading them from chart metadata.
 - LiteLLM, PostgreSQL, and monitoring charts run upstream images; bump only chart `version` when their chart templates change.
 
@@ -102,4 +159,4 @@ Documentation-only changes do not change a service image and do not require a se
 - Treat signing-key and encryption-key rotation as migrations: existing tokens or encrypted values depend on the current keys.
 - Verify migration and secret-hook behavior when changing API chart startup.
 - Keep runtime/platform differences explicit when changing Hermes, OpenClaw, Slack, Teams, or Telegram deployment configuration.
-- Use the existing deployment workflow rather than manually publishing mutable production tags.
+- On k3s, use `deploy.yml` rather than manually publishing mutable `latest` tags. Public hosted releases are git tags via `deploy-public.yml`.

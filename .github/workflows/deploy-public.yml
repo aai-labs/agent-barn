@@ -1,0 +1,294 @@
+name: Deploy to public cluster
+
+# Hosted public Agent Barn on the Talos cluster (agentbarn.dev).
+# Distinct from deploy.yml, which keeps shipping every main/staging push to
+# the k3s cluster AAI Labs uses as a testing ground.
+#
+# Trigger: a vX.Y.Z tag (or a manual dispatch of an existing tag). Images are
+# pinned to that tag and pushed to this cluster's registry, then helmfile
+# syncs. There is no SSH bastion; the kubeconfig must reach :6443 directly.
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to deploy (e.g. v0.15.0)
+        required: true
+        type: string
+
+concurrency:
+  group: deploy-public
+  cancel-in-progress: false
+
+env:
+  RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+
+jobs:
+  resolve:
+    name: Resolve release
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+      sha: ${{ steps.meta.outputs.sha }}
+      api_image_tag: ${{ steps.meta.outputs.tag }}
+      ui_image_tag: ${{ steps.meta.outputs.tag }}
+      hermes_image_tag: ${{ steps.meta.outputs.hermes }}
+      openclaw_image_tag: ${{ steps.meta.outputs.openclaw }}
+      api_host: ${{ steps.meta.outputs.api_host }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.sha }}
+
+      - name: Validate tag and required config
+        id: meta
+        env:
+          PUBLIC_REGISTRY_URL: ${{ vars.PUBLIC_REGISTRY_URL }}
+          PUBLIC_REGISTRY_USERNAME: ${{ vars.PUBLIC_REGISTRY_USERNAME }}
+          PUBLIC_API_HOST: ${{ vars.PUBLIC_API_HOST }}
+          PUBLIC_UI_HOST: ${{ vars.PUBLIC_UI_HOST }}
+          PUBLIC_WEB_APP_URL: ${{ vars.PUBLIC_WEB_APP_URL }}
+          PUBLIC_GRAFANA_HOST: ${{ vars.PUBLIC_GRAFANA_HOST }}
+          PUBLIC_STORAGE_CLASS: ${{ vars.PUBLIC_STORAGE_CLASS }}
+          PUBLIC_SENDER_EMAIL: ${{ vars.PUBLIC_SENDER_EMAIL }}
+          PUBLIC_KUBECONFIG_B64: ${{ secrets.PUBLIC_KUBECONFIG_B64 }}
+          PUBLIC_REGISTRY_PASSWORD: ${{ secrets.PUBLIC_REGISTRY_PASSWORD }}
+          PUBLIC_POSTGRES_APP_PASSWORD: ${{ secrets.PUBLIC_POSTGRES_APP_PASSWORD }}
+          PUBLIC_POSTGRES_LITELLM_PASSWORD: ${{ secrets.PUBLIC_POSTGRES_LITELLM_PASSWORD }}
+          PUBLIC_POSTGRES_FIRECRAWL_PASSWORD: ${{ secrets.PUBLIC_POSTGRES_FIRECRAWL_PASSWORD }}
+          PUBLIC_LITELLM_MASTER_KEY: ${{ secrets.PUBLIC_LITELLM_MASTER_KEY }}
+          PUBLIC_SECRET_SIGNING_KEY: ${{ secrets.PUBLIC_SECRET_SIGNING_KEY }}
+          PUBLIC_PLATFORM_ADMIN_CREDENTIALS: ${{ secrets.PUBLIC_PLATFORM_ADMIN_CREDENTIALS }}
+          PUBLIC_AGENT_TOKEN_ENCRYPTION_KEY: ${{ secrets.PUBLIC_AGENT_TOKEN_ENCRYPTION_KEY }}
+          PUBLIC_GRAFANA_ADMIN_PASSWORD: ${{ secrets.PUBLIC_GRAFANA_ADMIN_PASSWORD }}
+          PUBLIC_FIRECRAWL_API_KEY: ${{ secrets.PUBLIC_FIRECRAWL_API_KEY }}
+          PUBLIC_OPENROUTER_API_KEY: ${{ secrets.PUBLIC_OPENROUTER_API_KEY }}
+          PUBLIC_SLACK_ALERTS_WEBHOOK_URL: ${{ secrets.PUBLIC_SLACK_ALERTS_WEBHOOK_URL }}
+        run: |
+          set -euo pipefail
+          tag="${{ env.RELEASE_TAG }}"
+          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Public deploy requires a tag like v0.15.0 (got '$tag')."
+            exit 1
+          fi
+
+          missing=()
+          for name in \
+            PUBLIC_REGISTRY_URL PUBLIC_REGISTRY_USERNAME \
+            PUBLIC_API_HOST PUBLIC_UI_HOST PUBLIC_WEB_APP_URL \
+            PUBLIC_GRAFANA_HOST PUBLIC_STORAGE_CLASS PUBLIC_SENDER_EMAIL; do
+            if [ -z "${!name:-}" ]; then
+              missing+=("var $name")
+            fi
+          done
+          for name in \
+            PUBLIC_KUBECONFIG_B64 PUBLIC_REGISTRY_PASSWORD \
+            PUBLIC_POSTGRES_APP_PASSWORD PUBLIC_POSTGRES_LITELLM_PASSWORD \
+            PUBLIC_POSTGRES_FIRECRAWL_PASSWORD PUBLIC_LITELLM_MASTER_KEY \
+            PUBLIC_SECRET_SIGNING_KEY PUBLIC_PLATFORM_ADMIN_CREDENTIALS \
+            PUBLIC_AGENT_TOKEN_ENCRYPTION_KEY PUBLIC_GRAFANA_ADMIN_PASSWORD \
+            PUBLIC_FIRECRAWL_API_KEY PUBLIC_OPENROUTER_API_KEY \
+            PUBLIC_SLACK_ALERTS_WEBHOOK_URL; do
+            if [ -z "${!name:-}" ]; then
+              missing+=("secret $name")
+            fi
+          done
+          if [ "${#missing[@]}" -ne 0 ]; then
+            echo "::error::Public deploy is missing GitHub config: ${missing[*]}"
+            exit 1
+          fi
+
+          api_host="$(echo "$PUBLIC_API_HOST" | cut -d',' -f1 | tr -d ' ')"
+          {
+            echo "tag=$tag"
+            echo "sha=$(git rev-parse HEAD)"
+            echo "hermes=$(tr -d '[:space:]' < hermes-base/VERSION)"
+            echo "openclaw=$(tr -d '[:space:]' < openclaw-base/VERSION)"
+            echo "api_host=$api_host"
+          } >> "$GITHUB_OUTPUT"
+
+  push:
+    name: Build and push ${{ matrix.image }}
+    needs: [resolve]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: agentbarn-api
+            name: api
+            context: .
+            file: api/Dockerfile
+            tag: ${{ needs.resolve.outputs.api_image_tag }}
+          - image: agentbarn-ui
+            name: ui
+            context: ui
+            file: ui/Dockerfile
+            tag: ${{ needs.resolve.outputs.ui_image_tag }}
+          - image: agentbarn-hermes-base
+            name: hermes-base
+            context: hermes-base
+            file: hermes-base/Dockerfile
+            tag: ${{ needs.resolve.outputs.hermes_image_tag }}
+            needs_token: true
+            smoke: hermes-base/smoke-test.sh
+            free_disk: true
+          - image: agentbarn-openclaw-base
+            name: openclaw-base
+            context: openclaw-base
+            file: openclaw-base/Dockerfile
+            tag: ${{ needs.resolve.outputs.openclaw_image_tag }}
+            needs_token: true
+            smoke: openclaw-base/smoke-test.sh
+            free_disk: true
+    steps:
+      - uses: jlumbroso/free-disk-space@v1.3.1
+        if: matrix.free_disk
+        with:
+          tool-cache: false
+          docker-images: false
+
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Log in to the public registry
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ vars.PUBLIC_REGISTRY_URL }}
+          username: ${{ vars.PUBLIC_REGISTRY_USERNAME }}
+          password: ${{ secrets.PUBLIC_REGISTRY_PASSWORD }}
+
+      - name: Compute tags
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ vars.PUBLIC_REGISTRY_URL }}/${{ matrix.image }}
+          tags: |
+            type=raw,value=${{ matrix.tag }}
+            type=raw,value=latest
+
+      - name: Build
+        uses: docker/build-push-action@v7
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.file }}
+          load: true
+          push: false
+          tags: ${{ steps.meta.outputs.tags }}
+          build-args: ${{ matrix.name == 'ui' && format('NEXT_PUBLIC_BACKEND_URL=https://{0}', needs.resolve.outputs.api_host) || '' }}
+          secrets: ${{ matrix.needs_token && format('gh_token={0}', secrets.AAI_CLI_REPO_ACCESS_TOKEN) || '' }}
+          cache-from: type=gha,scope=public-${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=public-${{ matrix.name }}
+          no-cache-filters: ${{ matrix.needs_token && 'rust-build' || '' }}
+
+      - name: Smoke test
+        if: matrix.smoke
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}/${{ matrix.smoke }}:/smoke-test.sh:ro" \
+            "${{ vars.PUBLIC_REGISTRY_URL }}/${{ matrix.image }}:${{ matrix.tag }}" \
+            /bin/sh /smoke-test.sh
+
+      - name: Push
+        uses: docker/build-push-action@v7
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.file }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          build-args: ${{ matrix.name == 'ui' && format('NEXT_PUBLIC_BACKEND_URL=https://{0}', needs.resolve.outputs.api_host) || '' }}
+          secrets: ${{ matrix.needs_token && format('gh_token={0}', secrets.AAI_CLI_REPO_ACCESS_TOKEN) || '' }}
+          cache-from: type=gha,scope=public-${{ matrix.name }}
+          no-cache-filters: ${{ matrix.needs_token && 'rust-build' || '' }}
+
+  deploy:
+    name: Helmfile sync
+    needs: [resolve, push]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
+
+      - name: Install Helm
+        run: curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+
+      - name: Install Helmfile
+        run: |
+          HELMFILE_VERSION=0.171.0
+          curl -fsSL \
+            https://github.com/helmfile/helmfile/releases/download/v${HELMFILE_VERSION}/helmfile_${HELMFILE_VERSION}_linux_amd64.tar.gz \
+            | tar -xz -C /usr/local/bin helmfile
+
+      - name: Install helm-diff plugin
+        run: helm plugin install https://github.com/databus23/helm-diff
+
+      - name: Set up kubeconfig
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.kube
+          printf '%s' '${{ secrets.PUBLIC_KUBECONFIG_B64 }}' | base64 -d > ~/.kube/config
+          chmod 600 ~/.kube/config
+          kubectl get nodes -o wide
+
+      - name: Bootstrap namespace RBAC
+        env:
+          KUBECONFIG: /home/runner/.kube/config
+        run: kubectl apply -f k8s/agent-farm-user.yaml
+
+      - name: Helmfile sync
+        env:
+          KUBECONFIG: /home/runner/.kube/config
+          NAMESPACE: agent-farm
+          ENVIRONMENT: public
+          LITELLM_KEY_SERVICE_ACCOUNT: agent-farm-user
+          API_IMAGE_TAG: ${{ needs.resolve.outputs.api_image_tag }}
+          UI_IMAGE_TAG: ${{ needs.resolve.outputs.ui_image_tag }}
+          OPENCLAW_IMAGE_TAG: ${{ needs.resolve.outputs.openclaw_image_tag }}
+          HERMES_IMAGE_TAG: ${{ needs.resolve.outputs.hermes_image_tag }}
+          GIT_SHA: ${{ needs.resolve.outputs.sha }}
+          REGISTRY_PREFIX: ${{ vars.PUBLIC_REGISTRY_URL }}
+          REGISTRY_SERVER: ${{ vars.PUBLIC_REGISTRY_URL }}
+          REGISTRY_USERNAME: ${{ vars.PUBLIC_REGISTRY_USERNAME }}
+          REGISTRY_PASSWORD: ${{ secrets.PUBLIC_REGISTRY_PASSWORD }}
+          API_HOST: ${{ vars.PUBLIC_API_HOST }}
+          UI_HOST: ${{ vars.PUBLIC_UI_HOST }}
+          WEB_APP_URL: ${{ vars.PUBLIC_WEB_APP_URL }}
+          GRAFANA_HOST: ${{ vars.PUBLIC_GRAFANA_HOST }}
+          STORAGE_CLASS: ${{ vars.PUBLIC_STORAGE_CLASS }}
+          SENDER_EMAIL: ${{ vars.PUBLIC_SENDER_EMAIL }}
+          POSTGRES_APP_USER: ${{ vars.POSTGRES_APP_USER }}
+          POSTGRES_APP_DB: ${{ vars.POSTGRES_APP_DB }}
+          POSTGRES_APP_PASSWORD: ${{ secrets.PUBLIC_POSTGRES_APP_PASSWORD }}
+          POSTGRES_LITELLM_USER: ${{ vars.POSTGRES_LITELLM_USER }}
+          POSTGRES_LITELLM_DB: ${{ vars.POSTGRES_LITELLM_DB }}
+          POSTGRES_LITELLM_PASSWORD: ${{ secrets.PUBLIC_POSTGRES_LITELLM_PASSWORD }}
+          POSTGRES_FIRECRAWL_USER: ${{ vars.POSTGRES_FIRECRAWL_USER }}
+          POSTGRES_FIRECRAWL_DB: ${{ vars.POSTGRES_FIRECRAWL_DB }}
+          POSTGRES_FIRECRAWL_PASSWORD: ${{ secrets.PUBLIC_POSTGRES_FIRECRAWL_PASSWORD }}
+          LITELLM_MASTER_KEY: ${{ secrets.PUBLIC_LITELLM_MASTER_KEY }}
+          SECRET_SIGNING_KEY: ${{ secrets.PUBLIC_SECRET_SIGNING_KEY }}
+          PLATFORM_ADMIN_CREDENTIALS: ${{ secrets.PUBLIC_PLATFORM_ADMIN_CREDENTIALS }}
+          AGENT_TOKEN_ENCRYPTION_KEY: ${{ secrets.PUBLIC_AGENT_TOKEN_ENCRYPTION_KEY }}
+          GRAFANA_ADMIN_PASSWORD: ${{ secrets.PUBLIC_GRAFANA_ADMIN_PASSWORD }}
+          FIRECRAWL_API_KEY: ${{ secrets.PUBLIC_FIRECRAWL_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.PUBLIC_OPENROUTER_API_KEY }}
+          SLACK_ALERTS_WEBHOOK_URL: ${{ secrets.PUBLIC_SLACK_ALERTS_WEBHOOK_URL }}
+          POD_KUBECONFIG_B64: ${{ secrets.PUBLIC_POD_KUBECONFIG_B64 || secrets.PUBLIC_KUBECONFIG_B64 }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          GOOGLE_CLOUD_CLIENT_ID: ${{ vars.GOOGLE_CLOUD_CLIENT_ID }}
+          GOOGLE_CLOUD_CLIENT_SECRET: ${{ secrets.GOOGLE_CLOUD_CLIENT_SECRET }}
+          AGENT_DEFAULT_MODEL: ${{ vars.AGENT_DEFAULT_MODEL }}
+          AGENT_MODEL_ALLOWLIST: ${{ vars.AGENT_MODEL_ALLOWLIST }}
+        run: helmfile -f helmfile.yaml.gotmpl sync --wait
