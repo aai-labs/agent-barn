@@ -74,14 +74,14 @@ Staging is a fully separate stack in its own namespace (`agent-farm-staging`), d
 
 Hosted public Agent Barn runs on the dedicated Talos cluster, not on k3s. k3s (`staging` / `main` via `deploy.yml`) stays the AAI Labs testing ground. Public deploys only from a `vX.Y.Z` tag via `../../.github/workflows/deploy-public.yml`. Rationale: [`../adr/2026-08-27-public-cluster-release-tags.md`](../adr/2026-08-27-public-cluster-release-tags.md).
 
-- **Trigger:** pushing a tag matching `v*.*.*`, or `workflow_dispatch` with that tag. Dispatching any other ref fails the workflow.
+- **Trigger:** pushing a tag matching `v*.*.*`, or `workflow_dispatch` of that tag from `main`. Dispatch can set `skip_build` to re-run helmfile against images already in the registry (no 20-minute rebuild). Helmfile uses the dispatch branch; image tags still come from the release tag.
 - **Images:** API and UI are tagged with the git tag (and `:latest` on the **public** registry only). Hermes/OpenClaw keep the versions in their `VERSION` files. Nothing in this workflow writes to `registry.k8s.aai-labs.com`.
 - **Registry:** `PUBLIC_REGISTRY_URL` (`registry.agentbarn.dev`). Do not reuse the k3s registry password or R2 bucket.
 - **Namespace:** still `agent-farm` so helmfile and `k8s/agent-farm-user.yaml` apply unchanged. This is a different cluster, so it does not collide with k3s.
 - **Secrets/vars:** every public-only value is `PUBLIC_`-prefixed. Postgres **user/db names**, `AGENT_DEFAULT_MODEL` / `AGENT_MODEL_ALLOWLIST`, the Cloudflare email account/token, and the Google OAuth client are reused. OpenRouter, Firecrawl, Slack webhook, DB passwords, and signing keys are **not** reused — copy a value into a `PUBLIC_` secret only when that sharing is intentional.
 - **Kubeconfig:** `PUBLIC_KUBECONFIG_B64` must reach the Talos API (`https://<cp-1>:6443`). There is no bastion tunnel. `PUBLIC_POD_KUBECONFIG_B64` is what the API pod uses to manage agents; if unset, the workflow falls back to the deploy kubeconfig. Prefer a namespace-scoped kubeconfig for the pod, as on k3s.
 - **Storage:** `PUBLIC_STORAGE_CLASS`. Intended value is `rook-ceph-block-main`. Use `local-path` only while Ceph has no OSDs — postgres then dies with the node that holds the volume.
-- **Hosts:** `PUBLIC_UI_HOST` / `PUBLIC_API_HOST` / `PUBLIC_WEB_APP_URL` / `PUBLIC_GRAFANA_HOST`. Product Grafana must not use `grafana.agentbarn.dev` (that hostname is the cluster kube-prometheus-stack). Cut `app.agentbarn.dev` over from k3s only after a successful public sync; until then k3s `UI_HOST` can keep serving it.
+- **Hosts:** `PUBLIC_UI_HOST` is `cloud.agentbarn.dev` (not `app` — that hostname stays on k3s). Product Grafana is `grafana-app.agentbarn.dev`, not cluster `grafana.agentbarn.dev`.
 - **RBAC bootstrap:** the deploy kubeconfig is cluster-admin, so the workflow applies `k8s/agent-farm-user.yaml` (creates the namespace) before helmfile.
 - **Release command:** from a commit already on `main` that you want public:
 
