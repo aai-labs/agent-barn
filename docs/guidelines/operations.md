@@ -97,8 +97,8 @@ git push origin v0.15.0
 | `PUBLIC_REGISTRY_URL` | `registry.agentbarn.dev` |
 | `PUBLIC_REGISTRY_USERNAME` | platform registry user (`admin`) |
 | `PUBLIC_API_HOST` | `api.agentbarn.dev` |
-| `PUBLIC_UI_HOST` | `app.agentbarn.dev` |
-| `PUBLIC_WEB_APP_URL` | `https://app.agentbarn.dev` |
+| `PUBLIC_UI_HOST` | `cloud.agentbarn.dev` |
+| `PUBLIC_WEB_APP_URL` | `https://cloud.agentbarn.dev` |
 | `PUBLIC_GRAFANA_HOST` | `grafana-app.agentbarn.dev` |
 | `PUBLIC_SENDER_EMAIL` | `noreply@mail.agentbarn.dev` |
 | `PUBLIC_STORAGE_CLASS` | `rook-ceph-block-main` (or `local-path` until Ceph OSDs exist) |
@@ -118,7 +118,7 @@ Generate new values; do not paste k3s `POSTGRES_*` / signing keys. Encode kubeco
 | `PUBLIC_LITELLM_MASTER_KEY` | New (`sk-` + random) |
 | `PUBLIC_SECRET_SIGNING_KEY` | New |
 | `PUBLIC_AGENT_TOKEN_ENCRYPTION_KEY` | New Fernet key |
-| `PUBLIC_PLATFORM_ADMIN_CREDENTIALS` | `email:password` |
+| `PUBLIC_PLATFORM_ADMIN_CREDENTIALS` | `email:password` (API policy: 8+, upper, lower, digit; `openssl rand -hex` is not enough) |
 | `PUBLIC_GRAFANA_ADMIN_PASSWORD` | Product Grafana (not cluster Grafana) |
 | `PUBLIC_FIRECRAWL_API_KEY` | New (this cluster's Firecrawl) |
 | `PUBLIC_OPENROUTER_API_KEY` | Prefer a dedicated key so public traffic is not the testing quota |

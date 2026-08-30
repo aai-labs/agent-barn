@@ -18,6 +18,11 @@ on:
         description: Existing release tag to deploy (e.g. v0.15.0)
         required: true
         type: string
+      skip_build:
+        description: Skip image builds (use images already in the registry for this tag)
+        required: false
+        type: boolean
+        default: false
 
 concurrency:
   group: deploy-public
@@ -101,6 +106,31 @@ jobs:
             exit 1
           fi
 
+          python3 - <<'PY'
+          import os, sys
+          creds = os.environ["PUBLIC_PLATFORM_ADMIN_CREDENTIALS"]
+          if ":" not in creds:
+              print("::error::PUBLIC_PLATFORM_ADMIN_CREDENTIALS must be email:password")
+              sys.exit(1)
+          _email, password = creds.split(":", 1)
+          missing = []
+          if len(password) < 8:
+              missing.append("8+ characters")
+          if not any(c.isupper() for c in password):
+              missing.append("an uppercase letter")
+          if not any(c.islower() for c in password):
+              missing.append("a lowercase letter")
+          if not any(c.isdigit() for c in password):
+              missing.append("a digit")
+          if missing:
+              print(
+                  "::error::PUBLIC_PLATFORM_ADMIN_CREDENTIALS password must include "
+                  + ", ".join(missing)
+                  + " (openssl rand -hex has no uppercase)"
+              )
+              sys.exit(1)
+          PY
+
           api_host="$(echo "$PUBLIC_API_HOST" | cut -d',' -f1 | tr -d ' ')"
           {
             echo "tag=$tag"
@@ -113,6 +143,7 @@ jobs:
   push:
     name: Build and push ${{ matrix.image }}
     needs: [resolve]
+    if: ${{ github.event_name == 'push' || inputs.skip_build != true }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -212,13 +243,17 @@ jobs:
   deploy:
     name: Helmfile sync
     needs: [resolve, push]
+    if: ${{ always() && needs.resolve.result == 'success' && (needs.push.result == 'success' || needs.push.result == 'skipped') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: ${{ needs.resolve.outputs.sha }}
+          # Tag push: the tagged commit. Manual dispatch: the branch you ran
+          # from (usually main), so helmfile fixes land without a new tag.
+          # Image tags still come from the release tag via resolve outputs.
+          ref: ${{ github.sha }}
 
       - name: Install Helm
         run: curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
