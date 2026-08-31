@@ -42,6 +42,8 @@ from api.domains.rbac.catalog import PermissionKey
 from api.infrastructure.crypto import decrypt_token, encrypt_token
 from api.infrastructure.shared.models import PaginatedItems, Pagination
 
+MAX_DIAGNOSTICS_WINDOW_DAYS = 90
+
 
 @inject
 @singleton
@@ -438,8 +440,12 @@ class CommunicationsService:
     def _validate_window(window_start: datetime | None, window_end: datetime | None) -> None:
         if window_start is not None and window_end is not None and window_start > window_end:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Diagnostics window is invalid")
-        if window_start is not None and window_end is not None and window_end - window_start > timedelta(days=31):
+        if (
+            window_start is not None
+            and window_end is not None
+            and window_end - window_start > timedelta(days=MAX_DIAGNOSTICS_WINDOW_DAYS)
+        ):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Diagnostics window cannot exceed 31 days",
+                detail=f"Diagnostics window cannot exceed {MAX_DIAGNOSTICS_WINDOW_DAYS} days",
             )

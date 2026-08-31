@@ -19,7 +19,7 @@ from api.domains.communications.models import (
     CommunicationRetryRead,
     PlatformDescriptorRead,
 )
-from api.domains.communications.service import CommunicationsService
+from api.domains.communications.service import MAX_DIAGNOSTICS_WINDOW_DAYS, CommunicationsService
 from api.infrastructure.shared.models import PaginatedItems
 
 communications_router = APIRouter(
@@ -121,7 +121,7 @@ def get_communication_connection_summary(
     service: Annotated[CommunicationsService, Injected(CommunicationsService)],
     since: datetime | None = Query(default=None),
     until: datetime | None = Query(default=None),
-    window_minutes: Annotated[int | None, Query(ge=1, le=31 * 24 * 60)] = None,
+    window_minutes: Annotated[int | None, Query(ge=1, le=MAX_DIAGNOSTICS_WINDOW_DAYS * 24 * 60)] = None,
 ):
     return service.get_connection_summary(
         agent_id,

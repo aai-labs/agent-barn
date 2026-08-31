@@ -371,8 +371,36 @@ export function CommunicationConnectionDiagnostics({
           <div className="mt-3 flex flex-col gap-3">
             {diagnostics.isPending && <p className="m-0 text-xs" style={{ color: "var(--ink-3)" }}>Loading diagnostics…</p>}
             {diagnostics.error && (
-              <div className="flex items-center gap-2 text-xs" style={{ color: "var(--err)" }} role="alert">
-                <CircleAlert size={14} /> Could not load connection diagnostics.
+              <div
+                className="flex flex-col gap-1 rounded-lg px-3 py-2 text-xs"
+                style={{ border: "1px solid color-mix(in srgb, var(--err) 24%, var(--line))", background: "color-mix(in srgb, var(--err) 6%, var(--bg-elev))", color: "var(--err)" }}
+                role="alert"
+              >
+                <div className="flex items-center gap-2">
+                  <CircleAlert size={14} /> Could not load connection diagnostics.
+                </div>
+                <p className="mb-0 ml-5" style={{ color: "var(--ink-3)" }}>
+                  {errorMessage(diagnostics.error)}
+                </p>
+              </div>
+            )}
+            {!diagnostics.data && diagnostics.error && (
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg p-3" style={{ border: "1px solid var(--line)", background: "var(--bg-elev)" }}>
+                <div>
+                  <div className="text-xs font-semibold" style={{ color: "var(--ink-2)" }}>Diagnostics window</div>
+                  <p className="mb-0 mt-1 text-xs" style={{ color: "var(--ink-4)" }}>
+                    Choose a range of 90 days or less to load connection health and delivery activity.
+                  </p>
+                </div>
+                <DateRangePicker
+                  from={effectiveWindow.since ?? ""}
+                  to={effectiveWindow.until ?? ""}
+                  onChange={handleWindowChange}
+                  placeholder="Select a valid range"
+                  width="14rem"
+                  ariaLabel="Select diagnostics time range"
+                  maxRangeDays={90}
+                />
               </div>
             )}
             {diagnostics.data && (
@@ -391,6 +419,7 @@ export function CommunicationConnectionDiagnostics({
                     placeholder="Time range"
                     width="14rem"
                     ariaLabel="Select diagnostics time range"
+                    maxRangeDays={90}
                   />
                 </div>
 

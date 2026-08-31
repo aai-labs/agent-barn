@@ -383,7 +383,7 @@ export function AgentChannelSettings({
         )}
         {connections.data?.map((connection) => (
           <div key={connection.id} className="rounded-xl p-4" style={{ border: "1px solid var(--line)", background: "var(--bg-soft)" }}>
-            <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="flex flex-col gap-3">
               <div className="flex min-w-0 items-start gap-3">
                 <span className="mt-0.5 rounded-lg p-2" style={{ background: "var(--bg-elev)", color: "var(--accent-ink)" }}>
                   <ConnectionIcon platformKey={connection.platformKey} />
@@ -469,7 +469,7 @@ export function AgentChannelSettings({
                   )}
                 </div>
               </div>
-              <div className="flex flex-wrap gap-2">
+              <div className="flex w-full flex-wrap gap-2">
                 <button
                   type="button"
                   className="af-btn af-btn-sm"
