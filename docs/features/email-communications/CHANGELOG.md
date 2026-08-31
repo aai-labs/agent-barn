@@ -7,9 +7,9 @@ Related context: [Communications](../communications/CHANGELOG.md), [Agents](../a
 ## Current state
 
 - Delivered: `Email` carries an optional per-message sender address, plain-text part, `Reply-To`, and custom headers, and `EmailClient` maps them onto the Cloudflare Email Sending REST payload. Configuration gates agent email behind `is_agent_email_enabled`. A shipped Email Platform Plugin normalizes inbound mail into thread-anchored envelopes, applies sender policy and automated-mail guards, and sends threaded plain-text replies addressed only to the inbound sender.
-- Delivered: Each Email Connection is allocated its own address, released on Connection retirement and on Agent deletion, with the local part claimed permanently so it is never reissued.
-- In transition: an Email Connection can be created and shows its address, but nothing reaches it. No inbound route exists, so `AgentEmailAddressRepository.resolve` has no caller and no mail can arrive. Every environment currently leaves `AGENT_EMAIL_DOMAIN` unset, which makes `validate_external` refuse Email Connections outright — the feature is inert until an operator configures the domain.
-- Next: the inbound gateway route (`POST /communications/v1/webhooks/email/inbound`), then the UI surface, then the Cloudflare Worker and deployment plumbing.
+- Delivered: Each Email Connection is allocated its own address, released on Connection retirement and on Agent deletion, with the local part claimed permanently so it is never reissued. An authenticated inbound route turns a parsed message into a Communication Delivery, completing the API half of the round trip.
+- In transition: nothing outside Agent Barn can reach the route yet — the Cloudflare Worker and the agent domain do not exist, and the address is not shown in the UI, so an operator has no way to read it without calling the API. Every environment currently leaves `AGENT_EMAIL_DOMAIN` unset, which makes `validate_external` refuse Email Connections outright; the feature is inert until an operator configures the domain.
+- Next: the UI surface (`managed_address` is returned but not rendered), then the Cloudflare Worker and deployment plumbing.
 - Blockers: none in code. Rollout needs `agents.agentbarn.dev` onboarded for both Email Routing and Email Sending in Cloudflare, which is dashboard work with up to 24 hours of verification latency.
 
 ## Scope
@@ -29,6 +29,14 @@ Confirmed against Cloudflare's documentation while planning; recorded here becau
 - The Cloudflare daily send quota is **per account and shared with invites, password resets, staging and production** (`../../guidelines/operations.md`). Agent mail draws from the same pool.
 
 ## Changes
+
+### 2026-08-31 — AF-276 — Inbound email gateway route — PR pending
+
+- Delivered: `POST /communications/v1/webhooks/email/inbound` accepts one parsed message from the ingress Worker, resolves the recipient's `+tag` to a Connection, and hands off to the existing `accept_plugin_payload`, so admission, enrichment, persistence and processing feedback all reuse the one shared path. The API half of the slice is now complete: mail can be driven end to end by POSTing a payload, with no Cloudflare involved.
+- Changed: `CommunicationsGatewayService` gained `AgentEmailAddressRepository`. The route sits at a two-segment path so it cannot collide with the existing one-segment `/webhooks/{connection_id}`, and under the `/communications/v1/webhooks` prefix the ingress already exposes — **no Helm or ingress change**.
+- Notes: Authentication is a gateway-level shared secret compared in constant time, not the per-Connection driver key, because the Worker is addressed by mailbox and knows only the recipient address, never a Connection id. An address that does not resolve — never allocated, or released by retirement or Agent deletion — returns `202` with an empty acceptance rather than `404`, so the endpoint cannot be used to enumerate which agent addresses exist. A near-miss local part is likewise silently dropped rather than fuzzy-matched.
+- Notes: Added `prepare_communications_server` alongside the existing `prepare_ingest_server` helper, giving the Communications app real HTTP coverage for the first time — the communications CHANGELOG previously recorded the provider webhook route as having no integration coverage. Twelve tests cover acceptance, the stored message's location and context block, wrong and missing credentials, unknown and released addresses, retry idempotency, sender policy, automated-mail rejection, recipient case-insensitivity, and Connection/Agent/Organization attribution.
+- Follow-up: the provider webhook route (`/webhooks/{connection_id}`, used by Teams) still has no integration coverage; the new helper now makes that straightforward.
 
 ### 2026-08-31 — AF-276 — Per-agent email address allocation — PR pending
 
