@@ -39,6 +39,8 @@ export function SettingsSection({
   applyDisabled = false,
   applyLabel = "Apply",
   applyPendingLabel = "Applying…",
+  actionsRenderer,
+  unstyled = false,
   confirm = DEFAULT_CONFIRM,
   errorsShownInline = false,
   children,
@@ -56,6 +58,10 @@ export function SettingsSection({
   /** Names the consequence, not the mechanism — "Apply & Restart" when a runtime cycles. */
   applyLabel?: string;
   applyPendingLabel?: string;
+  /** Render the edit/apply actions at a caller-owned location. */
+  actionsRenderer?: (actions: ReactNode) => ReactNode;
+  /** Omit the standard card frame when the caller owns the layout. */
+  unstyled?: boolean;
   /** What the confirmation dialog says this Apply will do. */
   confirm?: SettingsSectionConfirmCopy;
   /**
@@ -90,6 +96,28 @@ export function SettingsSection({
     </button>
   ) : null;
   const hasFooter = Boolean(footer || editAction || applyAction);
+  const renderedContent = actionsRenderer
+    ? actionsRenderer(
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          {editAction}
+          {applyAction}
+        </div>,
+      )
+    : (
+        <>
+          <div className="p-5">{children}</div>
+          {hasFooter && (
+            <footer
+              className="flex flex-wrap items-center justify-end gap-2 border-t px-5 py-3"
+              style={{ borderColor: "var(--line)" }}
+            >
+              {footer}
+              {editAction}
+              {applyAction}
+            </footer>
+          )}
+        </>
+      );
 
   async function confirmApply() {
     if (!onApply) return;
@@ -106,23 +134,21 @@ export function SettingsSection({
     }
   }
 
-  return (
+  const content = unstyled ? (
+    renderedContent
+  ) : (
     <section
       className="af-card overflow-hidden"
       aria-label={title}
       data-section-description={description}
     >
-      <div className="p-5">{children}</div>
-      {hasFooter && (
-        <footer
-          className="flex flex-wrap items-center justify-end gap-2 border-t px-5 py-3"
-          style={{ borderColor: "var(--line)" }}
-        >
-          {footer}
-          {editAction}
-          {applyAction}
-        </footer>
-      )}
+      {renderedContent}
+    </section>
+  );
+
+  return (
+    <>
+      {content}
       <ConfirmationDialog
         open={applyConfirmationOpen}
         onOpenChange={setApplyConfirmationOpen}
@@ -133,6 +159,6 @@ export function SettingsSection({
         onConfirm={() => void confirmApply()}
         isPending={isApplying}
       />
-    </section>
+    </>
   );
 }
