@@ -135,7 +135,9 @@ export function SettingsSection({
   }
 
   const content = unstyled ? (
-    renderedContent
+    <section aria-label={title} data-section-description={description}>
+      {renderedContent}
+    </section>
   ) : (
     <section
       className="af-card overflow-hidden"
