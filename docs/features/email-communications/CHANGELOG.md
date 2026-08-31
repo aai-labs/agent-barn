@@ -6,9 +6,9 @@ Related context: [Communications](../communications/CHANGELOG.md), [Agents](../a
 
 ## Current state
 
-- Delivered: `Email` carries an optional per-message sender address, plain-text part, `Reply-To`, and custom headers, and `EmailClient` maps them onto the Cloudflare Email Sending REST payload. Configuration gates agent email behind `is_agent_email_enabled`.
-- In transition: nothing is wired to Agents yet. No Email Platform Plugin, no address allocation, no inbound route, and no Cloudflare agent domain — an Agent cannot send or receive mail. The new `Email` fields are used only by tests.
-- Next: address allocation (`agent_email_address` table, claim on Connection create, release on retire and on Agent deletion).
+- Delivered: `Email` carries an optional per-message sender address, plain-text part, `Reply-To`, and custom headers, and `EmailClient` maps them onto the Cloudflare Email Sending REST payload. Configuration gates agent email behind `is_agent_email_enabled`. A shipped Email Platform Plugin normalizes inbound mail into thread-anchored envelopes, applies sender policy and automated-mail guards, and sends threaded plain-text replies addressed only to the inbound sender.
+- In transition: an Email Connection can be created on a configured environment but is not yet usable end to end. No address is allocated for it, and no inbound route exists, so nothing reaches the plugin in production. Every environment currently leaves `AGENT_EMAIL_DOMAIN` unset, which makes `validate_external` refuse Email Connections outright — the plugin is inert until an operator configures the domain.
+- Next: address allocation (`agent_email_address` table, claim on Connection create, release on retire and on Agent deletion), then the inbound gateway route.
 - Blockers: none in code. Rollout needs `agents.agentbarn.dev` onboarded for both Email Routing and Email Sending in Cloudflare, which is dashboard work with up to 24 hours of verification latency.
 
 ## Scope
@@ -28,6 +28,15 @@ Confirmed against Cloudflare's documentation while planning; recorded here becau
 - The Cloudflare daily send quota is **per account and shared with invites, password resets, staging and production** (`../../guidelines/operations.md`). Agent mail draws from the same pool.
 
 ## Changes
+
+### 2026-08-31 — AF-276 — Email Platform Plugin — PR pending
+
+- Delivered: A shipped `email` Platform Plugin declaring `WEBHOOK_INGRESS`, `MANAGED_ADDRESS` and `THREADS`. Inbound mail becomes one `DM` envelope per message, located on the sender's lowercased address and threaded on the References root, falling back to `In-Reply-To` and then the message's own `Message-ID`. Outbound replies are plain text, sent from the agent's own address with a matching `Reply-To`, threaded with `In-Reply-To`/`References`, and marked `Auto-Submitted: auto-generated`.
+- Changed: `PlatformCapability` gained `MANAGED_ADDRESS` and `CommunicationPlatform` gained `EMAIL`, the latter so the platform-admin stats filter can see Email Connections at all. `AppModule.provide_platform_plugin_registry` now also receives `EmailClient`, which previously reached only `EmailService`. The plugin takes **no per-agent credentials** — the provider credential is the platform's own Cloudflare token — so `EmailCredentials` is empty and `credential_uniqueness_scope` is `NONE`; address uniqueness is a separate concern handled by the next slice.
+- Notes: `send()` derives its recipient solely from `envelope.location.id`, which `enqueue_runtime_reply` copies from the source inbound delivery. Combined with `RuntimeReplyCreate` having no recipient field, an Agent **structurally cannot** address anyone who did not write to it first; a test pins this. The agent address used as the `From` is read from `provider_metadata.recipient`, captured from the inbound `to` — the plugin needs no database lookup to answer. Guards drop automated mail (`Auto-Submitted`, bulk/list `Precedence`, `List-Id`, unattended local parts such as `mailer-daemon`) and reference chains over 100 entries. `normalize_inbound` prepends a `From:`/`Subject:` block to the envelope text because the runtime adapter forwards only `envelope["text"]`, so an Agent would otherwise reply to a bare body with no idea who wrote it or about what. A `Message-ID` longer than the 512-character identity fields is replaced by a stable `sha256:` digest, so idempotency survives provider retries; the raw value is kept in `provider_metadata` for the outbound headers.
+- Bounds: every value an outside sender controls is bounded before it reaches a constrained field. Display names are trimmed to 255 so an overlong `From` name cannot fail envelope validation and silently drop a legitimate message; subjects are trimmed to 998 so Cloudflare cannot reject the reply and burn five delivery attempts; the body is capped before it reaches the runtime. Addresses are the exception and are **rejected rather than trimmed** over 254 characters, because a truncated address is a wrong reply recipient rather than a cosmetic loss.
+- Deviation from plan: the sender display name is an operator-set `sender_display_name` connection setting rather than the Agent's name. `PlatformPlugin.send` receives only settings, credentials and the envelope, so the Agent's name is not reachable without changing a seam shared by all five plugins. The setting also lets an operator present a public identity that differs from an internal Agent name.
+- Follow-up: seeding `sender_display_name` from the Agent's name at Connection create. Quoted-history trimming is a line-prefix heuristic and will not catch every client's reply format.
 
 ### 2026-08-31 — AF-276 — Email infrastructure supports per-message sender, text, Reply-To and headers — PR pending
 

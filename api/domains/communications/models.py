@@ -27,12 +27,14 @@ class CommunicationPlatform(str, enum.Enum):
     SLACK = "slack"
     TELEGRAM = "telegram"
     DISCORD = "discord"
+    EMAIL = "email"
 
 
 class PlatformCapability(str, enum.Enum):
     DIRECTORY_DISCOVERY = "directory_discovery"
     APPLICATION_PROVISIONING = "application_provisioning"
     WEBHOOK_INGRESS = "webhook_ingress"
+    MANAGED_ADDRESS = "managed_address"
     ATTACHMENTS = "attachments"
     THREADS = "threads"
     MENTIONS = "mentions"

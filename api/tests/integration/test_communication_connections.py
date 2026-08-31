@@ -60,6 +60,16 @@ _GIVEN = [
 
 _GIVEN_WITH_HERMES_AGENT = [*_GIVEN[:-1], there_is_an_agent(agent_type=AgentType.HERMES)]
 
+_GIVEN_WITH_AGENT_EMAIL = [
+    set_env_variable(
+        {
+            "AGENT_EMAIL_DOMAIN": "agents.agentbarn.test",
+            "EMAIL_INBOUND_SECRET": "inbound-secret",
+        }
+    ),
+    *_GIVEN,
+]
+
 
 def _auth(context) -> dict[str, str]:
     return {"Authorization": f"Bearer {context.access_token}"}
@@ -92,6 +102,15 @@ def _telegram_payload() -> dict:
     }
 
 
+def _email_payload(name: str = "Email") -> dict:
+    return {
+        "platform_key": "email",
+        "display_name": name,
+        "settings": {"sender_policy": "allowlist", "allowed_senders": ["@acme.test"]},
+        "credentials": {},
+    }
+
+
 def _discord_payload(name: str = "Community Discord", bot_token: str = "token-one") -> dict:
     return {
         "platform_key": "discord",
@@ -116,7 +135,7 @@ def test_platform_catalog_lists_the_shipped_plugins() -> None:
             catalogue = response.json()
             assert_that(
                 [item["key"] for item in catalogue],
-                contains_inanyorder("discord", "slack", "teams", "telegram"),
+                contains_inanyorder("discord", "email", "slack", "teams", "telegram"),
             )
             hints = {item["key"]: item["setup_hint"] for item in catalogue}
             assert_that(
@@ -182,6 +201,36 @@ def test_create_connection_rejects_incomplete_payload() -> None:
 
         with then("request validation reports the missing field"):
             assert_that(response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_ENTITY))
+
+
+def test_email_connection_is_refused_when_the_environment_has_no_agent_email_domain() -> None:
+    with given(_GIVEN) as context:
+        with when("I add an Email connection on an environment with no agent email domain"):
+            response = context.client.post(
+                _base(context),
+                json=_email_payload(),
+                headers=_auth(context),
+            )
+
+        with then("the connection is refused rather than created with an unroutable address"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+            assert_that(response.json()["detail"], contains_string("AGENT_EMAIL_DOMAIN"))
+
+
+def test_email_connection_is_created_without_any_per_agent_credential() -> None:
+    with given(_GIVEN_WITH_AGENT_EMAIL) as context:
+        with when("I add an Email connection on a configured environment"):
+            response = context.client.post(
+                _base(context),
+                json=_email_payload(),
+                headers=_auth(context),
+            )
+
+        with then("it is accepted and exposes no credential material"):
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+            body = response.json()
+            assert_that(body["platform_key"], equal_to("email"))
+            assert_that(body, not_(has_key("credentials")))
 
 
 def test_create_connection_requires_agent_update_permission() -> None:
