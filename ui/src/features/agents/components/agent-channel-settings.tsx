@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import {
   Check,
   CircleAlert,
+  Copy,
   Info,
   LockKeyhole,
   MessageCircleWarning,
@@ -12,6 +13,7 @@ import {
   Plus,
   Trash2,
 } from "lucide-react";
+import { toast } from "sonner";
 
 import { ConfirmationDialog } from "@/components/confirmation-dialog";
 import { EyeIcon, EyeOffIcon } from "@/components/icons";
@@ -399,6 +401,25 @@ export function AgentChannelSettings({
                       Paste this URL into {platforms.data?.find((p) => p.key === connection.platformKey)?.displayName ?? "the platform"}&apos;s webhook settings: <code className="break-all">{connection.webhookUrl}</code>
                     </div>
                   )}
+                  {connection.managedAddress && (
+                    <div className="mt-2 flex flex-wrap items-center gap-2 text-xs" style={{ color: "var(--ink-3)" }}>
+                      <span>Give people this address to reach the Agent:</span>
+                      <code className="break-all" data-testid="managed-address">{connection.managedAddress}</code>
+                      <button
+                        type="button"
+                        className="af-btn af-btn-sm flex-shrink-0"
+                        title="Copy address"
+                        aria-label="Copy address"
+                        onClick={() => {
+                          void navigator.clipboard
+                            .writeText(connection.managedAddress ?? "")
+                            .then(() => toast.success("Address copied to clipboard"));
+                        }}
+                      >
+                        <Copy width={13} height={13} />
+                      </button>
+                    </div>
+                  )}
                   {platforms.data
                     ?.find((p) => p.key === connection.platformKey)
                     ?.capabilities.includes("application_provisioning") && (
@@ -467,13 +488,15 @@ export function AgentChannelSettings({
                       <div className="grid gap-3 sm:grid-cols-2">
                         <SchemaFields schema={platform.settingsSchema} values={editSettings} onChange={setEditSettings} />
                       </div>
-                      <div className="rounded-lg p-3" style={{ border: "1px solid var(--line)" }}>
-                        <div className="mb-1 text-xs font-semibold uppercase tracking-wide" style={{ color: "var(--ink-4)" }}>Replace credentials</div>
-                        <p className="mb-3 mt-0 text-xs" style={{ color: "var(--ink-3)" }}>Leave every credential blank to keep the encrypted credentials already stored.</p>
-                        <div className="flex w-full flex-col gap-3">
-                          <SchemaFields schema={platform.credentialsSchema} values={editCredentials} onChange={setEditCredentials} secret />
+                      {schemaProperties(platform.credentialsSchema).length > 0 && (
+                        <div className="rounded-lg p-3" style={{ border: "1px solid var(--line)" }}>
+                          <div className="mb-1 text-xs font-semibold uppercase tracking-wide" style={{ color: "var(--ink-4)" }}>Replace credentials</div>
+                          <p className="mb-3 mt-0 text-xs" style={{ color: "var(--ink-3)" }}>Leave every credential blank to keep the encrypted credentials already stored.</p>
+                          <div className="flex w-full flex-col gap-3">
+                            <SchemaFields schema={platform.credentialsSchema} values={editCredentials} onChange={setEditCredentials} secret />
+                          </div>
                         </div>
-                      </div>
+                      )}
                     </>
                   )}
                   {formError && <p className="m-0 text-xs" style={{ color: "var(--err)" }}>{formError}</p>}
@@ -572,20 +595,22 @@ export function AgentChannelSettings({
                         </div>
                       </div>
                     )}
-                    <div className="rounded-xl p-4" style={{ border: "1px solid var(--line)", background: "var(--bg-soft)" }}>
-                      <div className="flex items-start gap-2.5">
-                        <LockKeyhole size={16} className="mt-0.5 flex-shrink-0" style={{ color: "var(--accent-ink)" }} />
-                        <div>
-                          <div className="text-xs font-semibold uppercase tracking-[0.1em]" style={{ color: "var(--ink-2)" }}>Credentials</div>
-                          <p className="mb-0 mt-1 text-xs leading-relaxed" style={{ color: "var(--ink-3)" }}>
-                            Encrypted at rest and never shown again after you save this connection.
-                          </p>
+                    {schemaProperties(selectedPlatform.credentialsSchema).length > 0 && (
+                      <div className="rounded-xl p-4" style={{ border: "1px solid var(--line)", background: "var(--bg-soft)" }}>
+                        <div className="flex items-start gap-2.5">
+                          <LockKeyhole size={16} className="mt-0.5 flex-shrink-0" style={{ color: "var(--accent-ink)" }} />
+                          <div>
+                            <div className="text-xs font-semibold uppercase tracking-[0.1em]" style={{ color: "var(--ink-2)" }}>Credentials</div>
+                            <p className="mb-0 mt-1 text-xs leading-relaxed" style={{ color: "var(--ink-3)" }}>
+                              Encrypted at rest and never shown again after you save this connection.
+                            </p>
+                          </div>
+                        </div>
+                        <div className="mt-4 flex w-full flex-col gap-3">
+                          <SchemaFields schema={selectedPlatform.credentialsSchema} values={credentials} onChange={setCredentials} secret />
                         </div>
                       </div>
-                      <div className="mt-4 flex w-full flex-col gap-3">
-                        <SchemaFields schema={selectedPlatform.credentialsSchema} values={credentials} onChange={setCredentials} secret />
-                      </div>
-                    </div>
+                    )}
                   </div>
                 </div>
               )}

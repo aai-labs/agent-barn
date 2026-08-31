@@ -8,8 +8,9 @@ Related context: [Communications](../communications/CHANGELOG.md), [Agents](../a
 
 - Delivered: `Email` carries an optional per-message sender address, plain-text part, `Reply-To`, and custom headers, and `EmailClient` maps them onto the Cloudflare Email Sending REST payload. Configuration gates agent email behind `is_agent_email_enabled`. A shipped Email Platform Plugin normalizes inbound mail into thread-anchored envelopes, applies sender policy and automated-mail guards, and sends threaded plain-text replies addressed only to the inbound sender.
 - Delivered: Each Email Connection is allocated its own address, released on Connection retirement and on Agent deletion, with the local part claimed permanently so it is never reissued. An authenticated inbound route turns a parsed message into a Communication Delivery, completing the API half of the round trip.
-- In transition: nothing outside Agent Barn can reach the route yet — the Cloudflare Worker and the agent domain do not exist, and the address is not shown in the UI, so an operator has no way to read it without calling the API. Every environment currently leaves `AGENT_EMAIL_DOMAIN` unset, which makes `validate_external` refuse Email Connections outright; the feature is inert until an operator configures the domain.
-- Next: the UI surface (`managed_address` is returned but not rendered), then the Cloudflare Worker and deployment plumbing.
+- Delivered: The Connection card shows the allocated address with a copy button, and platforms with no credentials no longer render an empty credentials form.
+- In transition: nothing outside Agent Barn can reach the inbound route yet — the Cloudflare Worker does not exist, so no routing rule can point anywhere. Every environment currently leaves `AGENT_EMAIL_DOMAIN` unset, which makes `validate_external` refuse Email Connections outright; the feature is inert until an operator configures the domain.
+- Next: the Cloudflare Worker, the environment plumbing for `AGENT_EMAIL_DOMAIN` and `EMAIL_INBOUND_SECRET`, and the operations documentation.
 - Blockers: none in code. Rollout needs `agents.agentbarn.dev` onboarded for both Email Routing and Email Sending in Cloudflare, which is dashboard work with up to 24 hours of verification latency.
 
 ## Scope
@@ -29,6 +30,13 @@ Confirmed against Cloudflare's documentation while planning; recorded here becau
 - The Cloudflare daily send quota is **per account and shared with invites, password resets, staging and production** (`../../guidelines/operations.md`). Agent mail draws from the same pool.
 
 ## Changes
+
+### 2026-08-31 — AF-276 — Agent email address in the UI — PR pending
+
+- Delivered: The Connection card shows the agent's address with a copy button, so an operator can read and hand out the address without calling the API. The create and edit forms no longer render a credentials section, or the "Your credentials stay private" panel, for a platform whose credentials schema has no properties — Email previously showed an empty box under a heading promising encryption of nothing.
+- Changed (bug fix): `CommunicationsService._read` no longer emits a `webhook_url` for a platform that also declares `MANAGED_ADDRESS`. Email declares `WEBHOOK_INGRESS` because that is what stops `PlatformIngressSupervisor` from trying to run a polling session against it and marking the Connection `DEGRADED`. But the capability also generated a per-Connection `/webhooks/{connection_id}` URL, which for Email is meaningless — nothing posts there, the plugin implements no `verify_webhook` so it would answer 401, and the UI rendered it as "Paste this URL into Email's webhook settings". A platform addressed by mailbox has no per-Connection URL for an operator to configure anywhere.
+- Notes: `humps.camelizeKeys` in the shared API interceptor maps `managed_address` to `managedAddress` with no mapping code; only the Zod schema needed the field. The three existing Playwright connection fixtures gained `managed_address: null`, and Email coverage lives in its own `describe` block with its own routes so the existing Channels fixtures stay untouched.
+- Follow-up: the address is shown but never validated against what Cloudflare will actually route to; that only becomes testable once the Worker and the routing rule exist.
 
 ### 2026-08-31 — AF-276 — Inbound email gateway route — PR pending
 

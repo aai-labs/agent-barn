@@ -262,11 +262,16 @@ class CommunicationsService:
         addresses: dict[UUID, str] | None = None,
     ) -> CommunicationConnectionRead:
         plugin = self.plugins.require(connection.platform_key)
+        addressed_by_mailbox = PlatformCapability.MANAGED_ADDRESS in plugin.capabilities
         webhook_url = None
-        if PlatformCapability.WEBHOOK_INGRESS in plugin.capabilities and self.config.api_external_url:
+        if (
+            PlatformCapability.WEBHOOK_INGRESS in plugin.capabilities
+            and not addressed_by_mailbox
+            and self.config.api_external_url
+        ):
             webhook_url = f"{self.config.api_external_url.rstrip('/')}/communications/v1/webhooks/{connection.id}"
         managed_address = None
-        if PlatformCapability.MANAGED_ADDRESS in plugin.capabilities:
+        if addressed_by_mailbox:
             if addresses is None:
                 addresses = self.addresses.addresses_for([connection.id])
             managed_address = addresses.get(connection.id)

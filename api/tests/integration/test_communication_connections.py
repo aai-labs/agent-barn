@@ -278,6 +278,17 @@ def test_the_allocated_address_carries_a_slug_of_the_agent_name() -> None:
             assert_that(local_part, starts_with(context.agent.name.lower().replace(" ", "-")))
 
 
+def test_an_email_connection_offers_no_webhook_url_to_paste_anywhere() -> None:
+    with given(_GIVEN_WITH_AGENT_EMAIL) as context:
+        with when("I add an Email connection"):
+            response = context.client.post(_base(context), json=_email_payload(), headers=_auth(context))
+
+        with then("it is reached at its address, so there is no per-connection URL to configure"):
+            body = response.json()
+            assert_that(body["webhook_url"], equal_to(None))
+            assert_that(body["managed_address"], not_(equal_to(None)))
+
+
 def test_a_platform_without_a_managed_address_reports_none() -> None:
     with given(_GIVEN_WITH_AGENT_EMAIL) as context:
         with when("I add a Discord connection"):
