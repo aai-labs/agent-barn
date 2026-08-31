@@ -24,6 +24,9 @@ class Config(BaseSettings):
     # reputation can't reach the root domain (website, logins) or another environment.
     sender_email: str | None = None
     email_from_name: str = "Agent Barn"
+    agent_email_domain: str = ""
+    agent_email_mailbox: str = "agent"
+    email_inbound_secret: str = ""
 
     environment: str = "local"
     web_app_url: str = "http://localhost:3000"
@@ -99,6 +102,15 @@ class Config(BaseSettings):
             (self.cloudflare_account_id or "").strip()
             and (self.cloudflare_api_token or "").strip()
             and (self.sender_email or "").strip()
+        )
+
+    @property
+    def is_agent_email_enabled(self) -> bool:
+        return bool(
+            self.is_email_delivery_enabled
+            and self.agent_email_domain.strip()
+            and self.agent_email_mailbox.strip()
+            and self.email_inbound_secret.strip()
         )
 
 

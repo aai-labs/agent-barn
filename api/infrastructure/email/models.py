@@ -22,3 +22,7 @@ class Email:
     subject: str
     html_part: str
     from_name: str | None = "Agent Barn"
+    text_part: str | None = None
+    from_email: str | None = None
+    reply_to: str | None = None
+    headers: dict[str, str] | None = None
