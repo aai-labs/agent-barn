@@ -148,10 +148,21 @@ class SlackClient:
         logger.warning("conversations.join failed for %s: %s", channel_id, error)
         return False
 
-    def send_message(self, channel_id: str, text: str, *, thread_id: str | None = None) -> str:
+    def send_message(
+        self,
+        channel_id: str,
+        text: str,
+        *,
+        thread_id: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> str:
         payload = {"channel": channel_id, "text": text}
         if thread_id:
             payload["thread_ts"] = thread_id
+        if idempotency_key:
+            # Slack echoes client_msg_id in the message object and uses it to
+            # recognize a retried client submission.
+            payload["client_msg_id"] = idempotency_key
         body = self._post("chat.postMessage", payload)
         if not body.get("ok"):
             raise SlackFetchError(f"chat.postMessage error: {body.get('error', 'unknown_error')}")

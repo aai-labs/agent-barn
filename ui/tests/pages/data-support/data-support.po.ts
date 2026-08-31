@@ -2,6 +2,7 @@ import { Page } from "@playwright/test";
 
 import { AgentDataSupport } from "./agent-data-support.po";
 import { AuthSupport } from "./auth-support.po";
+import { CommunicationConnectionDataSupport } from "./communication-connection-data-support.po";
 import { EventDeliveryDataSupport } from "./event-delivery-data-support.po";
 import { OrganizationDataSupport } from "./organization-data-support.po";
 import { PlatformStatsDataSupport } from "./platform-stats-data-support.po";
@@ -13,6 +14,7 @@ export class DataSupport {
   public auth: AuthSupport;
   public users: UserDataSupport;
   public agents: AgentDataSupport;
+  public communicationConnections: CommunicationConnectionDataSupport;
   public skills: SkillDataSupport;
   public organizations: OrganizationDataSupport;
   public eventDeliveries: EventDeliveryDataSupport;
@@ -23,6 +25,7 @@ export class DataSupport {
     this.auth = new AuthSupport(page);
     this.users = new UserDataSupport(page);
     this.agents = new AgentDataSupport(page);
+    this.communicationConnections = new CommunicationConnectionDataSupport(page);
     this.skills = new SkillDataSupport(page);
     this.organizations = new OrganizationDataSupport(page);
     this.eventDeliveries = new EventDeliveryDataSupport(page);

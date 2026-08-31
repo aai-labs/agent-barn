@@ -11,6 +11,7 @@ import {
 import {
   EVENT_DELIVERIES_PAGE_SIZE,
   eventDeliveriesKey,
+  mergeEventDeliveryPages,
   type EventDeliveryFilters,
 } from "../utils";
 
@@ -46,7 +47,7 @@ export function useEventDeliveries(filters: EventDeliveryFilters) {
   });
 
   return {
-    deliveries: query.data?.pages.flatMap((page) => page.items) ?? [],
+    deliveries: mergeEventDeliveryPages(query.data?.pages ?? []),
     total: query.data?.pages[0]?.total ?? 0,
     isLoading: query.isPending,
     isFetchingNextPage: query.isFetchingNextPage,

@@ -1,8 +1,10 @@
-from unittest.mock import patch
+import json
+from unittest.mock import MagicMock, patch
 
 import httpx
+from hamcrest import assert_that, equal_to
 
-from api.infrastructure.telegram.client import get_chat_display_name
+from api.infrastructure.telegram.client import get_chat_display_name, send_message
 
 _REQUEST = httpx.Request("GET", "https://api.telegram.org/bot123:ABC/getChat")
 
@@ -62,3 +64,16 @@ def test_get_chat_display_name_cache_does_not_cross_contaminate_different_bot_to
 
     assert first == "Bot One's Alice"
     assert second == "Bot Two's Alice"
+
+
+@patch("api.infrastructure.telegram.client.resilient_request")
+def test_send_message_carries_the_provider_idempotency_key(mock_request):
+    response = MagicMock(status_code=200)
+    response.json.return_value = {"ok": True, "result": {"message_id": 17}}
+    mock_request.return_value = response
+
+    message_id = send_message("bot-value", "chat-1", "reply", idempotency_key="provider-key")
+
+    assert_that(message_id, equal_to("17"))
+    assert_that(mock_request.call_args.kwargs["headers"]["Idempotency-Key"], equal_to("provider-key"))
+    assert_that(json.loads(mock_request.call_args.kwargs["content"])["text"], equal_to("reply"))

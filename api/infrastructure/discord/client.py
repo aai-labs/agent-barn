@@ -47,11 +47,23 @@ class DiscordClient:
             raise ValueError("Discord bot cannot open a Gateway session")
         return str(body["url"])
 
-    def send_message(self, channel_id: str, text: str, *, reply_to_id: str | None = None) -> str:
+    def send_message(
+        self,
+        channel_id: str,
+        text: str,
+        *,
+        reply_to_id: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> str:
         payload: dict[str, Any] = {
             "content": text,
             "allowed_mentions": {"parse": []},
         }
+        if idempotency_key:
+            # Discord's nonce/enforce_nonce pair makes a retried create
+            # request resolve to the existing message instead of posting twice.
+            payload["nonce"] = idempotency_key
+            payload["enforce_nonce"] = True
         if reply_to_id:
             payload["message_reference"] = {
                 "message_id": reply_to_id,

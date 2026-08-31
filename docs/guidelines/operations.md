@@ -20,6 +20,7 @@ make db-up       # PostgreSQL only
 make dev-api     # product API on :8000 plus Ingest :8001 and Communications :8002
 make dev-ui      # UI on :3000
 ./run.sh         # full Docker stack (db/redis/api/worker/ui/communications + k3d), including the separately served Ingest app
+make restart-ui  # refresh the Docker UI dev server's route manifest after adding an App Router directory
 ./stop.sh        # stop it; ./stop.sh --clean also deletes the k3d cluster
 ```
 
@@ -35,6 +36,8 @@ make makemigrations
 ```
 
 Schema changes require a migration under `../../api/migrations/versions/`. Review generated migrations before applying them. Production deployment runs Alembic through the API chart migration hook described in `../architecture/runtime-and-deployment.md`.
+
+The content-free Communications operation journal is retained for `COMMUNICATION_JOURNAL_RETENTION_DAYS` days (default `31`, bounded to `1`–`3650`). The Communications supervisor runs the pruning sweep; changing the retention window is an operational configuration change, not a release-version change.
 
 ## Checks and tests
 
