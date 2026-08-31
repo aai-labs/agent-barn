@@ -7,8 +7,9 @@ Related context: [Communications](../communications/CHANGELOG.md), [Agents](../a
 ## Current state
 
 - Delivered: `Email` carries an optional per-message sender address, plain-text part, `Reply-To`, and custom headers, and `EmailClient` maps them onto the Cloudflare Email Sending REST payload. Configuration gates agent email behind `is_agent_email_enabled`. A shipped Email Platform Plugin normalizes inbound mail into thread-anchored envelopes, applies sender policy and automated-mail guards, and sends threaded plain-text replies addressed only to the inbound sender.
-- In transition: an Email Connection can be created on a configured environment but is not yet usable end to end. No address is allocated for it, and no inbound route exists, so nothing reaches the plugin in production. Every environment currently leaves `AGENT_EMAIL_DOMAIN` unset, which makes `validate_external` refuse Email Connections outright — the plugin is inert until an operator configures the domain.
-- Next: address allocation (`agent_email_address` table, claim on Connection create, release on retire and on Agent deletion), then the inbound gateway route.
+- Delivered: Each Email Connection is allocated its own address, released on Connection retirement and on Agent deletion, with the local part claimed permanently so it is never reissued.
+- In transition: an Email Connection can be created and shows its address, but nothing reaches it. No inbound route exists, so `AgentEmailAddressRepository.resolve` has no caller and no mail can arrive. Every environment currently leaves `AGENT_EMAIL_DOMAIN` unset, which makes `validate_external` refuse Email Connections outright — the feature is inert until an operator configures the domain.
+- Next: the inbound gateway route (`POST /communications/v1/webhooks/email/inbound`), then the UI surface, then the Cloudflare Worker and deployment plumbing.
 - Blockers: none in code. Rollout needs `agents.agentbarn.dev` onboarded for both Email Routing and Email Sending in Cloudflare, which is dashboard work with up to 24 hours of verification latency.
 
 ## Scope
@@ -28,6 +29,14 @@ Confirmed against Cloudflare's documentation while planning; recorded here becau
 - The Cloudflare daily send quota is **per account and shared with invites, password resets, staging and production** (`../../guidelines/operations.md`). Agent mail draws from the same pool.
 
 ## Changes
+
+### 2026-08-31 — AF-276 — Per-agent email address allocation — PR pending
+
+- Delivered: A new `agent_email_address` table and repository. Creating a Connection whose plugin declares `MANAGED_ADDRESS` claims an address of the form `agent+<agent-slug>-<token>@<AGENT_EMAIL_DOMAIN>`, returned as `managed_address` on the Connection read model. Retiring the Connection releases it, and so does deleting the Agent. `resolve(local_part)` gives the inbound gateway its address-to-Connection lookup.
+- Changed: `CommunicationConnectionRepository.create` takes an optional address allocator and claims inside the Connection's own transaction, so a Connection is never created without the address it needs. Each claim attempt runs in a savepoint: a local-part collision rolls back only the address insert and retries with a fresh token, leaving the Connection row and outer transaction intact. `CommunicationConnectionRead` gained `managed_address`, populated by capability rather than by platform key, and `list_connections` batches the lookup so listing stays one query.
+- Notes: The unique index is on `lower(local_part)` and deliberately covers **released rows too**, so a local part is claimed once and never reissued — otherwise a retired Agent's correspondents would eventually reach whoever was allocated next. Release therefore stamps `released_at` rather than deleting the row. Uniqueness is on the local part alone rather than the full address because the local part is the resolution key: two rows sharing a tag on different domains would make `resolve` ambiguous.
+- Notes: Agent deletion is a soft delete and retires Connections through a bulk `UPDATE` in `AgentRepository`, bypassing the Communications service entirely, so the release had to be added at that call site rather than in `retire_connection` alone. The shared statement builder lives in `email_address_repository` because the Connection repository already imports the Agent repository, and putting it there would have closed an import cycle.
+- Follow-up: `resolve` has no caller until the inbound gateway route lands.
 
 ### 2026-08-31 — AF-276 — Email Platform Plugin — PR pending
 

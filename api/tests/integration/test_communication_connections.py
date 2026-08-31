@@ -4,14 +4,30 @@ import zipfile
 from uuid import UUID, uuid4
 
 from fastapi import status
-from hamcrest import all_of, assert_that, contains_inanyorder, contains_string, equal_to, has_entries, has_key, not_
+from hamcrest import (
+    all_of,
+    assert_that,
+    contains_inanyorder,
+    contains_string,
+    equal_to,
+    has_entries,
+    has_key,
+    is_in,
+    matches_regexp,
+    not_,
+    starts_with,
+)
+from sqlmodel import Session, col, select
 from starlette.testclient import TestClient
 
 from api.domains.agents.models import AgentType
+from api.domains.communications.email_address_repository import AgentEmailAddressRepository
+from api.domains.communications.models import AgentEmailAddress
 from api.domains.communications.repository import CommunicationConnectionRepository
 from api.domains.rbac.catalog import AGENT_VIEWER_ROLE_ID
 from api.domains.users.organization_users.models import OrganizationRole
 from api.domains.users.organization_users.repository import OrganizationUserRepository
+from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.tests.core.givenpy import given, then, when
 from api.tests.core.modules import (
     create_test_client,
@@ -100,6 +116,15 @@ def _telegram_payload() -> dict:
         "display_name": "Telegram",
         "credentials": {"bot_token": TEST_TELEGRAM_BOT_TOKEN},
     }
+
+
+def _local_part_row_exists(context, local_part: str) -> bool:
+    delegate = context.injector.get(PostgresRepositoryDelegate)
+    with Session(delegate.engine) as session:
+        row = session.exec(
+            select(AgentEmailAddress).where(col(AgentEmailAddress.local_part) == local_part)
+        ).one_or_none()
+        return row is not None and row.released_at is not None
 
 
 def _email_payload(name: str = "Email") -> dict:
@@ -231,6 +256,98 @@ def test_email_connection_is_created_without_any_per_agent_credential() -> None:
             body = response.json()
             assert_that(body["platform_key"], equal_to("email"))
             assert_that(body, not_(has_key("credentials")))
+
+
+def test_an_email_connection_is_allocated_its_own_address() -> None:
+    with given(_GIVEN_WITH_AGENT_EMAIL) as context:
+        with when("I add an Email connection"):
+            response = context.client.post(_base(context), json=_email_payload(), headers=_auth(context))
+
+        with then("it carries an address on the configured agent domain"):
+            address = response.json()["managed_address"]
+            assert_that(address, matches_regexp(r"^agent\+[a-z0-9-]+-[0-9a-f]{4}@agents\.agentbarn\.test$"))
+
+
+def test_the_allocated_address_carries_a_slug_of_the_agent_name() -> None:
+    with given(_GIVEN_WITH_AGENT_EMAIL) as context:
+        with when("I add an Email connection for an agent named in the fixture"):
+            response = context.client.post(_base(context), json=_email_payload(), headers=_auth(context))
+
+        with then("the address is recognisable as that agent's"):
+            local_part = response.json()["managed_address"].split("+")[1].split("@")[0]
+            assert_that(local_part, starts_with(context.agent.name.lower().replace(" ", "-")))
+
+
+def test_a_platform_without_a_managed_address_reports_none() -> None:
+    with given(_GIVEN_WITH_AGENT_EMAIL) as context:
+        with when("I add a Discord connection"):
+            response = context.client.post(_base(context), json=_discord_payload(), headers=_auth(context))
+
+        with then("no address is allocated for it"):
+            assert_that(response.json()["managed_address"], equal_to(None))
+
+
+def test_two_email_connections_on_one_agent_get_different_addresses() -> None:
+    with given(_GIVEN_WITH_AGENT_EMAIL) as context:
+        with when("I add two Email connections"):
+            first = context.client.post(_base(context), json=_email_payload("Support"), headers=_auth(context))
+            second = context.client.post(_base(context), json=_email_payload("Sales"), headers=_auth(context))
+
+        with then("each is separately addressable"):
+            assert_that(first.status_code, equal_to(status.HTTP_201_CREATED))
+            assert_that(second.status_code, equal_to(status.HTTP_201_CREATED))
+            assert_that(
+                first.json()["managed_address"],
+                not_(equal_to(second.json()["managed_address"])),
+            )
+
+
+def test_the_allocated_address_is_listed_with_the_connection() -> None:
+    with given(_GIVEN_WITH_AGENT_EMAIL) as context:
+        created = context.client.post(_base(context), json=_email_payload(), headers=_auth(context)).json()
+
+        with when("I list the agent's connections"):
+            response = context.client.get(_base(context), headers=_auth(context))
+
+        with then("the address comes back with it"):
+            [listed] = [item for item in response.json() if item["platform_key"] == "email"]
+            assert_that(listed["managed_address"], equal_to(created["managed_address"]))
+
+
+def test_retiring_an_email_connection_releases_its_address_without_freeing_it() -> None:
+    with given(_GIVEN_WITH_AGENT_EMAIL) as context:
+        created = context.client.post(_base(context), json=_email_payload(), headers=_auth(context)).json()
+        addresses: AgentEmailAddressRepository = context.injector.get(AgentEmailAddressRepository)
+        local_part = created["managed_address"].split("+")[1].split("@")[0]
+
+        with when("I retire the connection"):
+            response = context.client.delete(
+                f"{_base(context)}/{created['id']}?revision={created['revision']}",
+                headers=_auth(context),
+            )
+
+        with then("inbound mail no longer resolves, and the local part stays claimed"):
+            assert_that(response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
+            assert_that(addresses.resolve(local_part), equal_to(None))
+            assert_that(_local_part_row_exists(context, local_part), equal_to(True))
+
+
+def test_deleting_an_agent_releases_the_addresses_of_its_email_connections() -> None:
+    with given(_GIVEN_WITH_AGENT_EMAIL) as context:
+        created = context.client.post(_base(context), json=_email_payload(), headers=_auth(context)).json()
+        addresses: AgentEmailAddressRepository = context.injector.get(AgentEmailAddressRepository)
+        local_part = created["managed_address"].split("+")[1].split("@")[0]
+
+        with when("I delete the agent"):
+            response = context.client.delete(
+                f"/api/v1/organizations/{context.organization.id}/agents/{context.agent.id}",
+                headers=_auth(context),
+            )
+
+        with then("its address stops routing even though the connection was never retired directly"):
+            assert_that(response.status_code, is_in([status.HTTP_200_OK, status.HTTP_204_NO_CONTENT]))
+            assert_that(addresses.resolve(local_part), equal_to(None))
+            assert_that(_local_part_row_exists(context, local_part), equal_to(True))
 
 
 def test_create_connection_requires_agent_update_permission() -> None:
