@@ -203,7 +203,11 @@ class CommunicationsService:
         return CommunicationDiagnosticsRead(
             connection=self._read(connection),
             provider_connectivity=connection.observed_status,
-            end_to_end_health=operations.end_to_end_health(connection.observed_status, snapshot.delivery_counts),
+            end_to_end_health=operations.end_to_end_health(
+                connection.observed_status,
+                snapshot.delivery_counts,
+                oldest_pending_delivery_age_seconds=snapshot.oldest_pending_delivery_age_seconds,
+            ),
             pipeline=snapshot.pipeline,
             delivery_counts=snapshot.delivery_counts,
             queue_depth=snapshot.queue_depth,

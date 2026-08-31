@@ -4,15 +4,11 @@ from typing import cast
 from unittest.mock import Mock, patch
 from uuid import uuid4
 
-import pytest
 from hamcrest import assert_that, empty
 
 from api.core.config import Config
 from api.domains.agents.models import Agent, AgentStatus
-from api.domains.communications.gateway_service import (
-    CommunicationJournalWriteError,
-    CommunicationsGatewayService,
-)
+from api.domains.communications.gateway_service import CommunicationsGatewayService
 from api.domains.communications.models import (
     AcceptedCommunicationRead,
     CommunicationConnection,
@@ -193,7 +189,7 @@ def test_gateway_does_not_create_a_delivery_for_a_denied_admission() -> None:
     record_disposition.assert_called_once_with(CommunicationPolicyDisposition.USER_DENIED)
 
 
-def test_gateway_does_not_accept_an_event_when_its_observation_cannot_be_journaled() -> None:
+def test_gateway_journal_failure_does_not_drop_an_event() -> None:
     connection = cast(CommunicationConnection, _connection())
     connection.organization_id = uuid4()
     connection.agent_id = uuid4()
@@ -202,11 +198,11 @@ def test_gateway_does_not_accept_an_event_when_its_observation_cannot_be_journal
     operations.record_journal.side_effect = RuntimeError("database unavailable")
     service, deliveries = _service(connection, plugin, operations=operations)
 
-    with pytest.raises(CommunicationJournalWriteError, match="provider_observed"):
-        service._accept_admitted_payload(connection, plugin, SlackSettings(), {})
+    accepted = service._accept_admitted_payload(connection, plugin, SlackSettings(), {})
 
-    deliveries.accept_inbound.assert_not_called()
-    plugin.admit_inbound.assert_not_called()
+    assert len(accepted) == 1
+    deliveries.accept_inbound.assert_called_once_with(connection_id=connection.id, envelope=_envelope())
+    plugin.admit_inbound.assert_called_once()
 
 
 def test_gateway_marks_claim_and_terminal_runtime_failure_at_lifecycle_seam() -> None:

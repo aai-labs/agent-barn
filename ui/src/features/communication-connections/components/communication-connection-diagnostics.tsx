@@ -121,6 +121,109 @@ function successRateLabel(diagnostics: CommunicationDiagnostics): string {
   return `${formatPercent(diagnostics.deliverySuccessRate)} (${diagnostics.deliveryCounts.succeeded}/${terminal})`;
 }
 
+const PIPELINE_STAGES = [
+  { key: "providerObserved", label: "Provider observed" },
+  { key: "policyAdmitted", label: "Policy admitted" },
+  { key: "queued", label: "Queued" },
+  { key: "agentClaimed", label: "Agent claimed" },
+  { key: "modelCompleted", label: "Model completed" },
+  { key: "replyQueued", label: "Reply queued" },
+  { key: "providerDelivered", label: "Provider delivered" },
+] as const;
+
+function PipelineSummary({ pipeline, timeRange }: { pipeline: CommunicationDiagnostics["pipeline"]; timeRange: CommunicationJournalWindow }) {
+  const observed = pipeline.providerObserved;
+  return (
+    <section
+      aria-labelledby="pipeline-summary-heading"
+      className="rounded-lg p-3"
+      style={{ border: "1px solid var(--line)", background: "var(--bg-elev)" }}
+      data-pipeline-summary
+    >
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <div>
+          <h2 id="pipeline-summary-heading" className="m-0 text-sm font-semibold" style={{ color: "var(--ink-2)" }}>Pipeline</h2>
+          <p className="mb-0 mt-1 text-xs" style={{ color: "var(--ink-4)" }}>
+            Message flow through the delivery pipeline over {formatHealthWindow(timeRange)}. Counts that fall behind earlier stages show where traffic drops off.
+          </p>
+        </div>
+        {pipeline.deadLettered > 0 && (
+          <div className="text-xs font-medium" style={{ color: "var(--err)" }}>
+            {pipeline.deadLettered} dead-lettered
+          </div>
+        )}
+      </div>
+      <div className="mt-3 grid gap-2 sm:grid-cols-4 lg:grid-cols-7">
+        {PIPELINE_STAGES.map((stage) => {
+          const count = pipeline[stage.key];
+          const share = observed > 0 ? count / observed : null;
+          return (
+            <div key={stage.key} className="rounded-md px-2.5 py-2" style={{ background: "var(--bg-soft)" }} data-pipeline-stage={stage.key}>
+              <div className="text-[11px]" style={{ color: "var(--ink-4)" }}>{stage.label}</div>
+              <div className="mt-0.5 text-sm font-semibold" style={{ color: "var(--ink)" }}>{count.toLocaleString()}</div>
+              <div className="mt-0.5 text-[11px]" style={{ color: share !== null && share < 1 ? "var(--warn)" : "var(--ink-4)" }}>
+                {formatPercent(share)}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+function LatestTransitions({ transitions }: { transitions: CommunicationDiagnostics["latestTransitions"] }) {
+  return (
+    <section aria-labelledby="latest-transitions-heading" data-latest-transitions>
+      <div className="mb-2">
+        <h2 id="latest-transitions-heading" className="m-0 text-sm font-semibold" style={{ color: "var(--ink-2)" }}>Latest transitions</h2>
+        <p className="mb-0 mt-1 text-xs" style={{ color: "var(--ink-4)" }}>
+          The latest {transitions.length} delivery and connection transitions, newest first.
+        </p>
+      </div>
+      {transitions.length === 0 ? (
+        <p className="m-0 rounded-lg p-3 text-xs" style={{ border: "1px solid var(--line)", background: "var(--bg-elev)", color: "var(--ink-4)" }}>
+          No transitions in this window
+        </p>
+      ) : (
+        <div className="af-card overflow-x-auto" style={{ padding: 0 }}>
+          <table className="w-full min-w-[560px] border-collapse text-xs">
+            <thead>
+              <tr className="border-b text-left" style={{ borderColor: "var(--line)", color: "var(--ink-4)" }}>
+                <th className="px-3 py-2 font-medium">Occurred</th>
+                <th className="px-3 py-2 font-medium">Stage</th>
+                <th className="px-3 py-2 font-medium">Delivery</th>
+                <th className="px-3 py-2 font-medium">Admission</th>
+                <th className="px-3 py-2 font-medium">Attempt</th>
+                <th className="px-3 py-2 font-medium">Elapsed</th>
+              </tr>
+            </thead>
+            <tbody>
+              {transitions.map((transition, index) => (
+                <tr
+                  key={`${transition.occurredAt}-${transition.stage}-${index}`}
+                  data-latest-transition={transition.stage}
+                  className="border-b last:border-b-0"
+                  style={{ borderColor: "var(--line)" }}
+                >
+                  <td className="whitespace-nowrap px-3 py-2" style={{ color: "var(--ink-3)" }}>{formatTimestamp(transition.occurredAt)}</td>
+                  <td className="whitespace-nowrap px-3 py-2 capitalize" style={{ color: "var(--ink)" }}>{label(transition.stage)}</td>
+                  <td className="px-3 py-2" style={{ color: "var(--ink-3)" }}>
+                    {transition.deliveryId ? <span className="font-mono text-[11px]">{transition.deliveryId.slice(0, 8)}…</span> : "Connection"}
+                  </td>
+                  <td className="whitespace-nowrap px-3 py-2 capitalize" style={{ color: "var(--ink-3)" }}>{transition.disposition ? label(transition.disposition) : "—"}</td>
+                  <td className="whitespace-nowrap px-3 py-2" style={{ color: "var(--ink-3)" }}>{transition.attemptNumber}</td>
+                  <td className="whitespace-nowrap px-3 py-2" style={{ color: "var(--ink-3)" }}>{formatDuration(transition.durationMs)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  );
+}
+
 type FailureGroup = {
   key: string;
   stage: string;
@@ -306,6 +409,8 @@ export function CommunicationConnectionDiagnostics({
                   />
                 </div>
 
+                <PipelineSummary pipeline={diagnostics.data.pipeline} timeRange={effectiveWindow} />
+
                 <div className="rounded-lg p-3" style={{ border: "1px solid var(--line)", background: "var(--bg-elev)" }}>
                   <div className="text-xs font-semibold" style={{ color: "var(--ink-2)" }}>Health signals</div>
                   <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-5">
@@ -420,6 +525,8 @@ export function CommunicationConnectionDiagnostics({
                     );
                   })}
                 </DiagnosticsList>
+
+                <LatestTransitions transitions={diagnostics.data.latestTransitions} />
 
                 <section aria-labelledby="delivery-transitions-heading">
                   <div className="mb-2">

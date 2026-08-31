@@ -41,10 +41,6 @@ from api.infrastructure.crypto import decrypt_token
 logger = logging.getLogger(__name__)
 
 
-class CommunicationJournalWriteError(RuntimeError):
-    """Raised when an observed provider event cannot be durably journaled."""
-
-
 @inject
 @singleton
 @dataclass
@@ -204,17 +200,20 @@ class CommunicationsGatewayService:
             CommunicationJournalStage.PROVIDER_OBSERVED,
         )
         admission = self._admit_plugin_payload(connection.id, plugin, settings, payload)
+        # Only accepted events reach the POLICY_ADMITTED stage; rejected events
+        # record their own stage so the pipeline funnel can show drop-off
+        # instead of always equating provider_observed with policy_admitted.
         self._record_journal(
             connection,
-            CommunicationJournalStage.POLICY_ADMITTED,
+            CommunicationJournalStage.POLICY_ADMITTED
+            if admission.disposition == CommunicationPolicyDisposition.ACCEPTED
+            else CommunicationJournalStage.POLICY_REJECTED,
             disposition=admission.disposition,
         )
         self._record_policy_metric(admission.disposition)
         if admission.disposition != CommunicationPolicyDisposition.ACCEPTED:
             return []
         envelopes = list(admission)
-        if not envelopes:
-            return []
         if envelopes:
             envelopes = self._enrich_inbound(connection, plugin, settings, envelopes)
         accepted: list[AcceptedCommunicationRead] = []
@@ -361,9 +360,16 @@ class CommunicationsGatewayService:
                 disposition=disposition,
             )
         except Exception as exc:
-            raise CommunicationJournalWriteError(
-                f"Unable to record {stage.value} for Communication Connection {connection.id}"
-            ) from exc
+            # Provider observation and policy admission are observability, not
+            # ingress: a diagnostics-table failure must not drop or 500 a real
+            # provider message (polling transports cannot replay a consumed
+            # payload, so failing closed would lose it permanently).
+            logger.error(
+                "Unable to record %s for Communication Connection %s (%s)",
+                stage.value,
+                connection.id,
+                type(exc).__name__,
+            )
 
     @staticmethod
     def _record_policy_metric(disposition: CommunicationPolicyDisposition) -> None:

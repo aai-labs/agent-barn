@@ -80,6 +80,7 @@ class CommunicationPolicyDisposition(str, enum.Enum):
 
     ACCEPTED = "accepted"
     BOT_IGNORED = "bot_ignored"
+    EVENT_IGNORED = "event_ignored"
     MENTION_REQUIRED = "mention_required"
     USER_DENIED = "user_denied"
     CHANNEL_DENIED = "channel_denied"
@@ -123,6 +124,7 @@ class CommunicationErrorDetails(PydanticBaseModel):
 class CommunicationJournalStage(str, enum.Enum):
     PROVIDER_OBSERVED = "provider_observed"
     POLICY_ADMITTED = "policy_admitted"
+    POLICY_REJECTED = "policy_rejected"
     QUEUED = "queued"
     AGENT_CLAIMED = "agent_claimed"
     MODEL_COMPLETED = "model_completed"

@@ -33,6 +33,26 @@ class CommunicationConnectionConflictError(RuntimeError):
     pass
 
 
+# Observed statuses that represent a stable failure. Repeated retries cycle
+# ERROR -> CONNECTING -> ERROR without leaving the failure state; the health
+# Domain Event fires only when that boundary is actually crossed (ticket
+# AF-273: retries and intermediate timing belong in the journal and metrics).
+_FAILURE_STATUSES = {ConnectionObservedStatus.DEGRADED, ConnectionObservedStatus.ERROR}
+
+
+def _emits_health_event(previous: ConnectionObservedStatus | None, new: ConnectionObservedStatus) -> bool:
+    """Debounce health events to entry/exit of a failure state."""
+    if new in _FAILURE_STATUSES:
+        return (
+            previous is not None
+            and previous not in _FAILURE_STATUSES
+            and previous != ConnectionObservedStatus.CONNECTING
+        )
+    if new is ConnectionObservedStatus.CONNECTED:
+        return previous is None or previous in _FAILURE_STATUSES
+    return False
+
+
 @inject
 @singleton
 @dataclass
@@ -147,31 +167,32 @@ class CommunicationConnectionRepository:
                     error_summary=safe_message,
                     error_details=safe_details,
                 )
-                self.operations.stage_event(
-                    session=session,
-                    event_name=COMMUNICATION_CONNECTION_HEALTH_CHANGED,
-                    organization_id=connection.organization_id,
-                    actor=ActorIdentity(type=ActorIdentityType.SYSTEM, id="communications-supervisor"),
-                    subject=SubjectIdentity(
-                        type=SubjectIdentityType.AGENT,
-                        id=connection.agent_id,
+                if _emits_health_event(previous_status, status):
+                    self.operations.stage_event(
+                        session=session,
+                        event_name=COMMUNICATION_CONNECTION_HEALTH_CHANGED,
                         organization_id=connection.organization_id,
-                    ),
-                    payload={
-                        "organization_id": connection.organization_id,
-                        "agent_id": connection.agent_id,
-                        "connection_id": connection.id,
-                        "previous_status": self._status_value(previous_status),
-                        "new_status": status.value,
-                        "error_code": safe_code,
-                        "error_summary": safe_message,
-                        "error_details": safe_details.model_dump(mode="json", exclude_none=True)
-                        if safe_details is not None
-                        else None,
-                        "actor_display": "Communications Supervisor",
-                        "subject_display": connection.display_name,
-                    },
-                )
+                        actor=ActorIdentity(type=ActorIdentityType.SYSTEM, id="communications-supervisor"),
+                        subject=SubjectIdentity(
+                            type=SubjectIdentityType.AGENT,
+                            id=connection.agent_id,
+                            organization_id=connection.organization_id,
+                        ),
+                        payload={
+                            "organization_id": connection.organization_id,
+                            "agent_id": connection.agent_id,
+                            "connection_id": connection.id,
+                            "previous_status": self._status_value(previous_status),
+                            "new_status": status.value,
+                            "error_code": safe_code,
+                            "error_summary": safe_message,
+                            "error_details": safe_details.model_dump(mode="json", exclude_none=True)
+                            if safe_details is not None
+                            else None,
+                            "actor_display": "Communications Supervisor",
+                            "subject_display": connection.display_name,
+                        },
+                    )
             session.commit()
 
     def request_reconnect(

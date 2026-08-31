@@ -540,6 +540,15 @@ test.describe("Agent Detail Page — Channels tab", () => {
 
     await expect(connectionDetailPage.summaryMetric("Provider connectivity")).toBeVisible();
     await expect(connectionDetailPage.summaryMetric("End-to-end delivery")).toBeVisible();
+    // AF-273 acceptance criteria: the diagnostics view exposes a pipeline
+    // summary and the latest transitions (delivery and connection-scoped) from
+    // the summary read model — no separate kind=connection journal request.
+    await expect(connectionDetailPage.pipelineSummary()).toBeVisible();
+    await expect(connectionDetailPage.pipelineStage("providerObserved")).toContainText("2");
+    await expect(connectionDetailPage.pipelineStage("providerDelivered")).toContainText("2");
+    await expect(connectionDetailPage.latestTransitionsPanel()).toBeVisible();
+    await expect(connectionDetailPage.latestTransitionRow("provider_delivered")).toContainText("Provider Delivered");
+    await expect(connectionDetailPage.latestTransitionRow("connection_connected")).toContainText("Connection");
     await expect(connectionDetailPage.summaryMetric("Health signals")).toBeVisible();
     await expect(connectionDetailPage.summaryMetric("Connection health")).toBeVisible();
     await expect(connectionDetailPage.summaryMetric("Recent incidents")).toBeVisible();

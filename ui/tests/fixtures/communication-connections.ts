@@ -180,6 +180,14 @@ export const mockCommunicationConnectionSummary = {
       attempt_number: 1,
       duration_ms: 140,
     },
+    {
+      occurred_at: "2025-12-31T23:43:13Z",
+      stage: "connection_connected",
+      delivery_id: null,
+      disposition: null,
+      attempt_number: 0,
+      duration_ms: 12_000,
+    },
   ],
   connection_history: [
     {

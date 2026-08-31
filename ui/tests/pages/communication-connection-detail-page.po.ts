@@ -29,6 +29,22 @@ export class CommunicationConnectionDetailPage {
     return this.page.getByText(/Median connect time/);
   }
 
+  pipelineSummary(): Locator {
+    return this.page.locator("[data-pipeline-summary]");
+  }
+
+  pipelineStage(stage: string): Locator {
+    return this.pipelineSummary().locator(`[data-pipeline-stage="${stage}"]`);
+  }
+
+  latestTransitionsPanel(): Locator {
+    return this.page.locator("[data-latest-transitions]");
+  }
+
+  latestTransitionRow(stage: string): Locator {
+    return this.latestTransitionsPanel().locator(`[data-latest-transition="${stage}"]`);
+  }
+
   recentFailureCard(): Locator {
     return this.page.locator("[data-failure-card]").first();
   }

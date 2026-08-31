@@ -422,7 +422,11 @@ def test_gateway_records_typed_admission_and_only_accepted_messages_enter_the_pi
             assert_that(accepted, has_length(1))
             assert_that(denied, equal_to([]))
             assert_that(deliveries, has_length(1))
-            policy_entries = [entry for entry in journal if entry.stage == CommunicationJournalStage.POLICY_ADMITTED]
+            policy_entries = [
+                entry
+                for entry in journal
+                if entry.stage in (CommunicationJournalStage.POLICY_ADMITTED, CommunicationJournalStage.POLICY_REJECTED)
+            ]
             assert_that(
                 {entry.disposition for entry in policy_entries},
                 equal_to(
@@ -431,6 +435,16 @@ def test_gateway_records_typed_admission_and_only_accepted_messages_enter_the_pi
                         CommunicationPolicyDisposition.MENTION_REQUIRED,
                     }
                 ),
+            )
+            # The rejected event lands on its own stage so the pipeline funnel
+            # can show drop-off between provider_observed and policy_admitted.
+            assert_that(
+                [
+                    entry.disposition
+                    for entry in policy_entries
+                    if entry.stage == CommunicationJournalStage.POLICY_ADMITTED
+                ],
+                equal_to([CommunicationPolicyDisposition.ACCEPTED]),
             )
 
 

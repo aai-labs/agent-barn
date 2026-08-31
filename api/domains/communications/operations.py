@@ -37,11 +37,7 @@ from api.domains.communications.models import (
     ConnectionObservedStatus,
 )
 from api.domains.events.catalog import EVENT_REGISTRY
-from api.domains.events.models import (
-    ActorIdentity,
-    EventDelivery,
-    SubjectIdentity,
-)
+from api.domains.events.models import ActorIdentity, SubjectIdentity
 from api.domains.events.repository import OutboxMessageRepository
 from api.domains.rbac.policy import AuthorizationScope
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
@@ -165,6 +161,7 @@ class CommunicationOperationalRepository:
                 session,
                 connection_id=connection_id,
                 delivery_id=delivery_id,
+                stage=stage,
                 occurred_at=occurred_at,
             )
         safe_details = self.safe_error_details(error_details)
@@ -233,7 +230,7 @@ class CommunicationOperationalRepository:
         occurred_at: datetime | None = None,
         correlation_id: UUID | None = None,
         causation_id: UUID | None = None,
-    ) -> list[UUID]:
+    ) -> None:
         event = EVENT_REGISTRY.build_event(
             event_name=event_name,
             schema_version=1,
@@ -246,7 +243,6 @@ class CommunicationOperationalRepository:
             payload=payload,
         )
         self.outbox_repository.stage(session=session, event=event, registry=EVENT_REGISTRY)
-        return list(session.exec(select(EventDelivery.id).where(EventDelivery.event_id == event.event_id)))
 
     def has_stage(
         self,
@@ -931,17 +927,28 @@ class CommunicationOperationalRepository:
             "next_retry_at": next_retry_at,
         }
 
+    # In-flight deliveries are normal traffic, not a fault: a Connection only
+    # reads as degraded once queued work has been waiting this long (AF-273
+    # review — one UNAVAILABLE delivery must not keep a Connection amber for
+    # the whole reporting window after the Agent is running again).
+    _STALE_PENDING_DELIVERY_SECONDS = 300.0
+
     @staticmethod
     def end_to_end_health(
         provider_status: Any,
         delivery_counts: CommunicationDeliveryCounts,
+        oldest_pending_delivery_age_seconds: float | None = None,
     ) -> str:
         provider_value = getattr(provider_status, "value", provider_status)
-        if delivery_counts.dead_lettered or delivery_counts.unavailable:
+        if delivery_counts.dead_lettered:
             return "degraded"
         if provider_value in {"ERROR", "DEGRADED"}:
             return "degraded"
-        if delivery_counts.pending or delivery_counts.processing:
+        if (
+            oldest_pending_delivery_age_seconds is not None
+            and oldest_pending_delivery_age_seconds
+            >= CommunicationOperationalRepository._STALE_PENDING_DELIVERY_SECONDS
+        ):
             return "degraded"
         if provider_value == "CONNECTED" and delivery_counts.total:
             return "healthy"
@@ -992,12 +999,29 @@ class CommunicationOperationalRepository:
         connection_id: UUID,
         delivery_id: UUID | None,
         occurred_at: datetime,
+        stage: CommunicationJournalStage | None = None,
     ) -> float | None:
         predicates = [col(CommunicationJournalEntry.connection_id) == connection_id]
         if delivery_id is not None:
             predicates.append(col(CommunicationJournalEntry.delivery_id) == delivery_id)
         else:
             predicates.append(col(CommunicationJournalEntry.delivery_id).is_(None))
+            # Delivery-less rows span two unrelated timelines: connection
+            # health transitions and provider observation/admission. Measure a
+            # row against the previous row of its own kind so a CONNECTION_*
+            # duration is time since the previous connection event, not time
+            # since an unrelated provider event (mirrors the exclusion
+            # _build_connection_history already applies).
+        stage_value = CommunicationOperationalRepository._enum_value(stage) if stage is not None else None
+        if (
+            stage_value in _CONNECTION_STAGE_STATUS
+            or stage_value == CommunicationJournalStage.RECONNECT_REQUESTED.value
+        ):
+            predicates.append(
+                col(CommunicationJournalEntry.stage).in_(
+                    [*_CONNECTION_STAGE_STATUS, CommunicationJournalStage.RECONNECT_REQUESTED.value]
+                )
+            )
         previous = session.exec(
             select(CommunicationJournalEntry.occurred_at)
             .where(*predicates, col(CommunicationJournalEntry.occurred_at) <= occurred_at)

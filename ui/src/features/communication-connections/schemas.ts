@@ -191,6 +191,7 @@ export const DELIVERY_JOURNAL_STAGES = [
 export const CONNECTION_JOURNAL_STAGES = [
   "provider_observed",
   "policy_admitted",
+  "policy_rejected",
   "connection_connecting",
   "connection_connected",
   "connection_degraded",

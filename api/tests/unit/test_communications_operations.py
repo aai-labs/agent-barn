@@ -7,6 +7,7 @@ from hamcrest import assert_that, equal_to
 from api.domains.communications.models import (
     CommunicationConnectionIncidentOutcome,
     CommunicationConnectionStateRead,
+    CommunicationDeliveryCounts,
     CommunicationJournalEntry,
     CommunicationJournalStage,
     ConnectionObservedStatus,
@@ -235,3 +236,54 @@ def test_connection_health_projects_attempts_and_outage_metrics() -> None:
     assert_that(reconnect_count, equal_to(3))
     assert_that(median_connect_time_ms, equal_to(12_000.0))
     assert_that(longest_outage_ms, equal_to(193_000.0))
+
+
+def test_end_to_end_health_treats_in_flight_deliveries_as_healthy() -> None:
+    # AF-273 review: pending/processing deliveries inside the reporting window
+    # are normal traffic — a busy Connection must not sit at "degraded".
+    counts = CommunicationDeliveryCounts(pending=3, processing=1, total=4)
+    assert_that(
+        CommunicationOperationalRepository.end_to_end_health(
+            ConnectionObservedStatus.CONNECTED, counts, oldest_pending_delivery_age_seconds=12.0
+        ),
+        equal_to("healthy"),
+    )
+
+
+def test_end_to_end_health_degrades_only_once_queued_work_goes_stale() -> None:
+    counts = CommunicationDeliveryCounts(pending=2, total=2)
+    threshold = CommunicationOperationalRepository._STALE_PENDING_DELIVERY_SECONDS
+    assert_that(
+        CommunicationOperationalRepository.end_to_end_health(
+            ConnectionObservedStatus.CONNECTED, counts, oldest_pending_delivery_age_seconds=threshold
+        ),
+        equal_to("degraded"),
+    )
+
+
+def test_end_to_end_health_unavailable_delivery_does_not_linger_as_degraded() -> None:
+    # One UNAVAILABLE delivery (Agent stopped when a message arrived) must not
+    # keep the Connection degraded for the rest of the window once the Agent is
+    # running again.
+    counts = CommunicationDeliveryCounts(unavailable=1, total=1)
+    assert_that(
+        CommunicationOperationalRepository.end_to_end_health(
+            ConnectionObservedStatus.CONNECTED, counts, oldest_pending_delivery_age_seconds=None
+        ),
+        equal_to("healthy"),
+    )
+
+
+def test_end_to_end_health_still_degrades_on_provider_error_and_dead_letters() -> None:
+    assert_that(
+        CommunicationOperationalRepository.end_to_end_health(
+            ConnectionObservedStatus.ERROR, CommunicationDeliveryCounts()
+        ),
+        equal_to("degraded"),
+    )
+    assert_that(
+        CommunicationOperationalRepository.end_to_end_health(
+            ConnectionObservedStatus.CONNECTED, CommunicationDeliveryCounts(dead_lettered=1, total=1)
+        ),
+        equal_to("degraded"),
+    )

@@ -249,6 +249,12 @@ def test_slack_admission_returns_typed_policy_dispositions() -> None:
     assert_that(bot_message.disposition, equal_to(CommunicationPolicyDisposition.BOT_IGNORED))
     assert_that(mention_required.disposition, equal_to(CommunicationPolicyDisposition.MENTION_REQUIRED))
     assert_that(malformed.disposition, equal_to(CommunicationPolicyDisposition.MALFORMED_PAYLOAD))
+    non_message = plugin.admit_inbound(
+        settings,
+        {"event": {"type": "reaction_added", "user": "user-1"}},
+        context=context,
+    )
+    assert_that(non_message.disposition, equal_to(CommunicationPolicyDisposition.EVENT_IGNORED))
     assert_that(accepted.disposition, equal_to(CommunicationPolicyDisposition.ACCEPTED))
     assert_that(accepted, has_length(1))
 

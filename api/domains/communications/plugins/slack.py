@@ -270,8 +270,12 @@ class SlackPlatformPlugin(PlatformPlugin):
         # Slack emits both app_mention and message events for a mentioned
         # channel message. We consume the message event only; accepting
         # app_mention here would create a second delivery for the same event.
+        # Non-message events (reactions, membership changes, edits/deletes) are
+        # neither bot output nor malformed — they are events the policy simply
+        # does not handle, so they get their own disposition instead of
+        # polluting the bot_ignored signal.
         if event.get("type") != "message" or event.get("subtype"):
-            return InboundAdmissionResult(CommunicationPolicyDisposition.BOT_IGNORED)
+            return InboundAdmissionResult(CommunicationPolicyDisposition.EVENT_IGNORED)
         channel_id = str(event.get("channel") or "")
         sender_id = str(event.get("user") or "")
         bot_user_id = self._bot_user_id(payload)
