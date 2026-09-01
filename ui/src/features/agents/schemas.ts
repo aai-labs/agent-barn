@@ -205,6 +205,19 @@ export const ConversationChannelSchema = z.object({
   conversationType: z.enum(["CHANNEL", "DM"]),
 });
 
+export const WebChatMessageSchema = z.object({
+  id: z.string().uuid(),
+  direction: z.enum(["INBOUND", "OUTBOUND"]),
+  content: z.string(),
+  occurredAt: z.string(),
+});
+
+export const WebChatThreadSchema = z.object({
+  threadId: z.string(),
+  lastOccurredAt: z.string(),
+  lastContent: z.string(),
+});
+
 export const ConversationsCursorSchema = z.object({
   beforeOccurredAt: z.string().nullable(),
   beforeId: z.string().uuid().nullable(),
@@ -334,6 +347,8 @@ export type AgentConfigurationVersion = z.infer<typeof AgentConfigurationVersion
 export type AgentOverrideDraft = z.infer<typeof AgentOverrideDraftSchema>;
 export type AgentOverrideVersion = z.infer<typeof AgentOverrideVersionSchema>;
 export type AgentConfiguration = z.infer<typeof AgentConfigurationSchema>;
+export type WebChatMessage = z.infer<typeof WebChatMessageSchema>;
+export type WebChatThread = z.infer<typeof WebChatThreadSchema>;
 export type ConversationMessage = z.infer<typeof ConversationMessageSchema>;
 export type ConversationChannel = z.infer<typeof ConversationChannelSchema>;
 export type ConversationsCursor = z.infer<typeof ConversationsCursorSchema>;
