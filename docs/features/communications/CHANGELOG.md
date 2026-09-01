@@ -13,6 +13,10 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
 
 ## Changes
 
+### 2026-09-01 — Expanded Slack sample manifest — PR pending
+
+- Changed: The UI-local Slack sample manifest now includes the requested full bot-scope and event-subscription set, including app mentions, canvases, files, pins, reactions, and membership/channel events. This is a user-provided sample manifest rather than a statement of the minimum permissions consumed by the Communications plugin.
+
 ### 2026-09-01 — Local Markdown guidance and Slack sample manifest — PR pending
 
 - Changed: The Slack sample manifest now lives in the web application beside its copy control rather than travelling through the platform catalogue API. It is static user guidance, not a provider capability or API contract.
@@ -34,7 +38,7 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
 ### 2026-09-01 — Guided Slack and Discord Connection setup — PR pending
 
 - Delivered: Slack and Discord Connection setup hints now give ordered, provider-specific instructions instead of scope/permission inventories. The Slack flow explicitly separates manifest import, manual `xapp-` Socket Mode token creation, bot installation/token retrieval, credential entry, and channel access; Discord covers bot creation, Message Content Intent, OAuth installation permissions, token entry, and Connection policy.
-- Delivered: Slack's copyable setup manifest is now derived from the behavior the shipped plugin consumes: message events for channels, private channels, DMs, and group DMs; the read/history scopes needed for delivery and directory discovery; `chat:write`; and `reactions:write`. It intentionally excludes legacy broad scopes/events. Slack still requires an operator to create the `connections:write` app-level token after import because manifests cannot create one.
+- Delivered: Slack setup includes a copyable manifest and documents the manual `connections:write` app-level-token step, which manifests cannot perform.
 
 ### 2026-09-01 — Connection setup candidates and Agent platform indicators — PR pending
 
