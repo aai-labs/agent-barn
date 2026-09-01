@@ -88,7 +88,7 @@ function ConnectionIcon({
   return platformIcon(platformKey, { size }) ?? <Plug size={size} />;
 }
 
-function PlatformSetupHint({ hint }: { hint?: string | null }) {
+function PlatformSetupHint({ hint, title = "Setup requirements" }: { hint?: string | null; title?: string }) {
   if (!hint) return null;
   return (
     <div
@@ -108,7 +108,7 @@ function PlatformSetupHint({ hint }: { hint?: string | null }) {
           className="text-xs font-semibold uppercase tracking-[0.1em]"
           style={{ color: "var(--accent-ink)" }}
         >
-          Setup requirements
+          {title}
         </div>
         <p
           className="mb-0 mt-1 text-xs leading-relaxed"
@@ -692,6 +692,12 @@ export function AgentChannelSettings({
                       {packageError}
                     </div>
                   )}
+                  <div className="mt-3">
+                    <PlatformSetupHint
+                      hint={platforms.data?.find((p) => p.key === connection.platformKey)?.postSetupHint}
+                      title="Finish setup"
+                    />
+                  </div>
                 </div>
               </div>
               <div className="flex w-full flex-wrap gap-2">

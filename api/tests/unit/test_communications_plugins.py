@@ -1234,3 +1234,13 @@ def test_teams_rejected_credentials_raise_value_error_like_every_other_plugin() 
     ):
         with pytest.raises(ValueError):
             plugin.validate_external(plugin.settings_model.model_validate({}), _teams_credentials(plugin))
+
+
+def test_teams_offers_guidance_for_after_the_connection_is_saved() -> None:
+    descriptor = _teams_plugin().descriptor
+
+    # Steps needing the saved Connection's webhook URL or app package cannot be
+    # actioned from the creation form, so they are surfaced alongside them.
+    assert "Messaging endpoint" in (descriptor.post_setup_hint or "")
+    assert "app package" in (descriptor.post_setup_hint or "")
+    assert "client secret" in (descriptor.setup_hint or "")

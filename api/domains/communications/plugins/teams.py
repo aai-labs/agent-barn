@@ -96,7 +96,7 @@ class TeamsPlatformPlugin(PlatformPlugin):
     setup_hint = (
         "Credentials\n"
         "• Create an Azure Bot resource in the Azure Portal, then open Configuration and copy the Microsoft App ID.\n"
-        "• Open the linked app registration → Certificates & secrets → New client secret. Copy the secret Value "
+        "• Open Manage passwords near Microsoft App ID → Certificates & secrets → New client secret. Copy the secret Value "
         "immediately; it is masked once you leave the page, and the Secret ID is not the password.\n"
         "• Copy the Directory (tenant) ID from Microsoft Entra ID → Overview.\n\n"
         "Teams setup\n"
@@ -109,6 +109,13 @@ class TeamsPlatformPlugin(PlatformPlugin):
         "• Teams delivers channel and group-chat messages only when the bot is @mentioned.\n"
         "• Allowed DM senders use the sender's Microsoft Entra object ID; Allowed channels use the Teams channel "
         "conversation ID, which looks like 19:....@thread.tacv2."
+    )
+    post_setup_hint = (
+        "• Paste the webhook URL above into the Azure Bot's Configuration → Messaging endpoint, then Apply. "
+        "The endpoint must be reachable from the public internet or Microsoft cannot deliver messages.\n"
+        "• Download the app package and upload it in Teams: Apps → Manage your apps → Upload a custom app. "
+        "Add it to every team and chat this Agent should serve — a bot cannot reach a channel it is not installed in.\n"
+        "• Re-upload the package after renaming the Agent to refresh how it appears in Teams."
     )
     capabilities = frozenset(
         {
