@@ -37,6 +37,9 @@ import type { CommunicationConnection } from "@/features/communication-connectio
 import type { Agent } from "../schemas";
 import { AgentConfigurationSection } from "./agent-configuration-section";
 
+/** Built-in, auto-provisioned, one-per-agent, immutable — never user-added or user-edited. */
+const WEB_PLATFORM_KEY = "web";
+
 function titleCase(text: string): string {
   return text.replace(/[_-]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
@@ -391,6 +394,11 @@ export function AgentChannelSettings({
 }) {
   const connections = useCommunicationConnections(agent.id);
   const platforms = useCommunicationPlatforms();
+  // Web Chat is auto-provisioned once per Agent and can't be added by hand.
+  const addablePlatforms = useMemo(
+    () => platforms.data?.filter((platform) => platform.key !== WEB_PLATFORM_KEY),
+    [platforms.data],
+  );
   const { createConnection, updateConnection, retireConnection } =
     useCommunicationConnectionActions();
   const [adding, setAdding] = useState(autoOpen && canEdit);
@@ -708,7 +716,7 @@ export function AgentChannelSettings({
                 >
                   View details
                 </Link>
-                {canEdit && (
+                {canEdit && connection.platformKey !== WEB_PLATFORM_KEY && (
                   <>
                     <button
                       type="button"
@@ -907,9 +915,9 @@ export function AgentChannelSettings({
                     platforms.
                   </div>
                 )}
-                {platforms.data && platforms.data.length > 0 && (
+                {addablePlatforms && addablePlatforms.length > 0 && (
                   <div className="mt-3 grid gap-2.5 sm:grid-cols-2">
-                    {platforms.data.map((platform) => (
+                    {addablePlatforms.map((platform) => (
                       <PlatformOption
                         key={platform.key}
                         platform={platform}
