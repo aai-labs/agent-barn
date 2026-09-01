@@ -623,6 +623,9 @@ test.describe("Agent Detail Page — Channels tab", () => {
   test("edits Connection name and plugin settings without resending credentials", async () => {
     await agentDetailPage.editConnectionButton("Customer Discord").click();
     await agentDetailPage.connectionNameInput().fill("Renamed Discord");
+    // Array settings are chip inputs: clear the existing chip ("Community" is the
+    // directory label for guild-one), then add the new ID.
+    await agentDetailPage.removeArraySettingChip("Community").click();
     await agentDetailPage.connectionSettingsInput("Guild IDs").fill("guild-updated");
     const update = agentDetailPage.waitForConnectionMutation("PATCH");
     await agentDetailPage.saveConnectionButton().click();

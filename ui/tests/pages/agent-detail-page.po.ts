@@ -85,6 +85,12 @@ export class AgentDetailPage {
     return this.page.getByLabel(label, { exact: true });
   }
 
+  removeArraySettingChip(label: string): Locator {
+    // Array settings render committed values as chips named after the directory
+    // label they display (falling back to the raw platform ID when unknown).
+    return this.page.getByRole("button", { name: `Remove ${label}`, exact: true });
+  }
+
   saveConnectionButton(): Locator {
     return this.page.getByRole("button", { name: "Save changes", exact: true });
   }
