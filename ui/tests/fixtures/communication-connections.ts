@@ -18,10 +18,15 @@ export const mockCommunicationPlatforms = [
     setup_hint:
       "1. Create a bot\nOpen the Bot page and copy the Token.\n\n2. Enable the required intent\nEnable Message Content Intent.\n\n3. Invite the bot\nGrant View Channels, Send Messages, and Read Message History.",
     schema_version: 1,
-    capabilities: ["MENTIONS"],
+    capabilities: ["MENTIONS", "DIRECTORY_DISCOVERY"],
     settings_schema: {
       type: "object",
-      properties: { guild_ids: { title: "Guild IDs", type: "array", items: { type: "string" } } },
+      properties: {
+        guild_ids: { title: "Guild IDs", type: "array", items: { type: "string" } },
+        allowed_channel_ids: { title: "Allowed channels", type: "array", items: { type: "string" } },
+        allowed_user_ids: { title: "Allowed users", type: "array", items: { type: "string" } },
+        allowed_role_ids: { title: "Allowed roles", type: "array", items: { type: "string" } },
+      },
     },
     credentials_schema: {
       type: "object",

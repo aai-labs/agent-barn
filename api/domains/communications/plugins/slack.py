@@ -163,8 +163,9 @@ class SlackPlatformPlugin(PlatformPlugin):
         *,
         kind: str,
         search: str | None = None,
+        guild_id: str | None = None,
     ) -> list[dict[str, str | None]]:
-        del settings
+        del settings, guild_id
         assert isinstance(credentials, SlackCredentials)
         client = SlackClient(credentials.bot_token)
         if kind == "channels":

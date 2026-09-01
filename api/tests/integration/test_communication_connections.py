@@ -223,6 +223,29 @@ def test_slack_connection_directory_lists_safe_channels_and_users() -> None:
         assert_that(users.json(), equal_to([{"id": "U1", "label": "Aria", "detail": "@aria"}]))
 
 
+def test_discord_connection_directory_requires_a_guild_for_nested_candidates() -> None:
+    with given(_GIVEN) as context:
+        created = context.client.post(_base(context), json=_discord_payload(), headers=_auth(context))
+        connection_id = created.json()["id"]
+        with patch(
+            "api.infrastructure.discord.client.DiscordClient.list_guilds",
+            return_value=[{"id": "guild-1", "name": "Community"}],
+        ):
+            guilds = context.client.get(f"{_base(context)}/{connection_id}/directory/guilds", headers=_auth(context))
+        with patch(
+            "api.infrastructure.discord.client.DiscordClient.list_guild_members",
+            return_value=[{"id": "user-1", "name": "Aria"}],
+        ):
+            users = context.client.get(
+                f"{_base(context)}/{connection_id}/directory/users?guild_id=guild-1", headers=_auth(context)
+            )
+
+        assert_that(guilds.status_code, equal_to(status.HTTP_200_OK))
+        assert_that(guilds.json(), equal_to([{"id": "guild-1", "label": "Community", "detail": None}]))
+        assert_that(users.status_code, equal_to(status.HTTP_200_OK))
+        assert_that(users.json(), equal_to([{"id": "user-1", "label": "Aria", "detail": None}]))
+
+
 def test_agent_reads_project_distinct_active_connection_platforms() -> None:
     with given(_GIVEN) as context:
         context.client.post(_base(context), json=_slack_payload(), headers=_auth(context))

@@ -30,6 +30,28 @@ def test_discord_client_returns_none_when_resource_is_not_visible(mock_request, 
     assert_that(client.get_channel_display_name("channel-1"), none())
 
 
+@patch("api.infrastructure.discord.client.cached", side_effect=lambda _key, fetch, ttl: fetch())
+@patch("api.infrastructure.discord.client.resilient_request")
+def test_discord_client_lists_a_guild_directory(mock_request, _mock_cached):
+    def response(body):
+        value = MagicMock(status_code=200)
+        value.json.return_value = body
+        return value
+
+    mock_request.side_effect = [
+        response([{"id": "guild-1", "name": "Community"}]),
+        response([{"id": "channel-1", "name": "general", "type": 0}, {"id": "voice-1", "name": "Voice", "type": 2}]),
+        response([{"user": {"id": "user-1", "username": "aria"}, "nick": "Aria"}]),
+        response([{"id": "guild-1", "name": "@everyone"}, {"id": "role-1", "name": "Maintainer"}]),
+    ]
+    client = DiscordClient("discord-token")
+
+    assert_that(client.list_guilds(), equal_to([{"id": "guild-1", "name": "Community"}]))
+    assert_that(client.list_guild_channels("guild-1"), equal_to([{"id": "channel-1", "name": "general"}]))
+    assert_that(client.list_guild_members("guild-1"), equal_to([{"id": "user-1", "name": "Aria"}]))
+    assert_that(client.list_guild_roles("guild-1"), equal_to([{"id": "role-1", "name": "Maintainer"}]))
+
+
 @patch("api.infrastructure.discord.client.resilient_request")
 def test_discord_client_cache_does_not_cross_contaminate_different_tokens(mock_request):
     """Two bots resolving the same Discord user ID must not share a cached

@@ -74,17 +74,19 @@ export function useCommunicationConnections(agentId: string) {
 export function useCommunicationConnectionDirectory(
   agentId: string,
   connectionId: string,
-  kind: "channels" | "users",
+  kind: "guilds" | "channels" | "users" | "roles",
   search = "",
   enabled = true,
+  guildId?: string,
 ) {
   const orgApiBase = useOrganizationApiBase();
   const { selectedOrganization } = useOrganizationContext();
   const organizationId = selectedOrganization?.id ?? "";
   const params = new URLSearchParams();
   if (search.trim()) params.set("search", search.trim());
+  if (guildId) params.set("guild_id", guildId);
   return useQuery({
-    queryKey: communicationConnectionsKey.detail(`${organizationId}:${connectionId}:directory:${kind}:${search.trim()}`),
+    queryKey: communicationConnectionsKey.detail(`${organizationId}:${connectionId}:directory:${kind}:${guildId ?? ""}:${search.trim()}`),
     queryFn: async () => {
       const response = await api.get<CommunicationDirectoryEntry[]>(
         `${orgApiBase}/agents/${agentId}/connections/${connectionId}/directory/${kind}${params.size ? `?${params}` : ""}`,

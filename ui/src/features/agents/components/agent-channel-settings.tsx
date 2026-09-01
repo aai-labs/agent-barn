@@ -384,8 +384,14 @@ export function AgentChannelSettings({
   const [editSettings, setEditSettings] = useState<Record<string, unknown>>({});
   const [editCredentials, setEditCredentials] = useState<Record<string, unknown>>({});
   const editingSlack = editingConnection?.platformKey === "slack";
+  const editingDiscord = editingConnection?.platformKey === "discord";
+  const [discordGuildId, setDiscordGuildId] = useState("");
   const slackChannels = useCommunicationConnectionDirectory(agent.id, editingConnection?.id ?? "", "channels", "", editingSlack);
   const slackUsers = useCommunicationConnectionDirectory(agent.id, editingConnection?.id ?? "", "users", "", editingSlack);
+  const discordGuilds = useCommunicationConnectionDirectory(agent.id, editingConnection?.id ?? "", "guilds", "", editingDiscord);
+  const discordChannels = useCommunicationConnectionDirectory(agent.id, editingConnection?.id ?? "", "channels", "", editingDiscord && Boolean(discordGuildId), discordGuildId);
+  const discordUsers = useCommunicationConnectionDirectory(agent.id, editingConnection?.id ?? "", "users", "", editingDiscord && Boolean(discordGuildId), discordGuildId);
+  const discordRoles = useCommunicationConnectionDirectory(agent.id, editingConnection?.id ?? "", "roles", "", editingDiscord && Boolean(discordGuildId), discordGuildId);
 
   const selectedPlatform = useMemo(
     () => platforms.data?.find((platform) => platform.key === platformKey),
@@ -427,6 +433,7 @@ export function AgentChannelSettings({
     setEditDisplayName(connection.displayName);
     setEditSettings(connection.settings);
     setEditCredentials({});
+    setDiscordGuildId("");
     setFormError(null);
   }
 
@@ -616,11 +623,25 @@ export function AgentChannelSettings({
                     <>
                       <PlatformSetupHint hint={platform.setupHint} manifest={platform.setupManifest} />
                       <div className="grid gap-3 sm:grid-cols-2">
-                        <SchemaFields
+                        {connection.platformKey === "discord" && (
+                        <label className="flex flex-col gap-1.5 text-sm font-medium">
+                          Browse server
+                          <Select value={discordGuildId} onValueChange={setDiscordGuildId}>
+                            <SelectTrigger className="w-full"><SelectValue placeholder="Choose a server to browse channels, users, and roles" /></SelectTrigger>
+                            <SelectContent><SelectGroup>{(discordGuilds.data ?? []).map((guild) => <SelectItem key={guild.id} value={guild.id}>{guild.label}</SelectItem>)}</SelectGroup></SelectContent>
+                          </Select>
+                          <span className="text-xs" style={{ color: "var(--ink-4)" }}>Select a server, then choose its channels, users, or roles below. Manual IDs still work.</span>
+                        </label>
+                      )}
+                      <SchemaFields
                         schema={platform.settingsSchema}
                         values={editSettings}
                         onChange={setEditSettings}
-                        arraySuggestions={connection.platformKey === "slack" ? { channel_ids: slackChannels.data ?? [], dm_user_ids: slackUsers.data ?? [] } : {}}
+                        arraySuggestions={connection.platformKey === "slack"
+                          ? { channel_ids: slackChannels.data ?? [], dm_user_ids: slackUsers.data ?? [] }
+                          : connection.platformKey === "discord"
+                            ? { guild_ids: discordGuilds.data ?? [], allowed_channel_ids: discordChannels.data ?? [], allowed_user_ids: discordUsers.data ?? [], allowed_role_ids: discordRoles.data ?? [] }
+                            : {}}
                       />
                       </div>
                       <div className="rounded-lg p-3" style={{ border: "1px solid var(--line)" }}>

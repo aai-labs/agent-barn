@@ -76,6 +76,7 @@ class CommunicationsService:
         connection_id: UUID,
         kind: str,
         search: str | None,
+        guild_id: str | None,
         context: CurrentUserContext,
     ) -> list[CommunicationDirectoryEntryRead]:
         self.authorization.require_action(context, agent_id, PermissionKey.AGENT_UPDATE)
@@ -97,6 +98,7 @@ class CommunicationsService:
                 ),
                 kind=kind,
                 search=search,
+                guild_id=guild_id,
             )
         except ValueError as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc

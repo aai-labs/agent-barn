@@ -92,9 +92,10 @@ class DiscordPlatformPlugin(PlatformPlugin):
         "1. Create a bot\n"
         "In Discord Developer Portal, create or open an Application and open its Bot page. Reset/copy the Token; do not "
         "use the Application ID, public key, client secret, or an OAuth invite URL.\n\n"
-        "2. Enable the required intent\n"
-        "Under Bot → Privileged Gateway Intents, enable Message Content Intent. This Connection requests GUILDS, "
-        "GUILD_MESSAGES, DIRECT_MESSAGES, and MESSAGE_CONTENT.\n\n"
+        "2. Enable the required intents\n"
+        "Under Bot → Privileged Gateway Intents, enable Message Content Intent. Enable Server Members Intent too when "
+        "you want the Connection editor to suggest server members. This Connection requests GUILDS, GUILD_MESSAGES, "
+        "DIRECT_MESSAGES, and MESSAGE_CONTENT.\n\n"
         "3. Invite the bot\n"
         "Under OAuth2 → URL Generator, choose the bot scope, then invite it to each server. Grant View Channels, Send "
         "Messages, and Read Message History; also grant Send Messages in Threads when threads are used.\n\n"
@@ -107,6 +108,7 @@ class DiscordPlatformPlugin(PlatformPlugin):
     )
     capabilities = frozenset(
         {
+            PlatformCapability.DIRECTORY_DISCOVERY,
             PlatformCapability.ATTACHMENTS,
             PlatformCapability.MENTIONS,
             PlatformCapability.THREADS,
@@ -131,6 +133,39 @@ class DiscordPlatformPlugin(PlatformPlugin):
     def fingerprint_material(self, credentials: PlatformCredentials) -> str:
         assert isinstance(credentials, DiscordCredentials)
         return credentials.bot_token
+
+    def list_directory_entries(
+        self,
+        settings: PlatformSettings,
+        credentials: PlatformCredentials,
+        *,
+        kind: str,
+        search: str | None = None,
+        guild_id: str | None = None,
+    ) -> list[dict[str, str | None]]:
+        del settings
+        assert isinstance(credentials, DiscordCredentials)
+        client = DiscordClient(credentials.bot_token)
+        if kind == "guilds":
+            entries = client.list_guilds()
+            prefix = ""
+        elif kind == "channels" and guild_id:
+            entries = client.list_guild_channels(guild_id)
+            prefix = "#"
+        elif kind == "users" and guild_id:
+            entries = client.list_guild_members(guild_id)
+            prefix = ""
+        elif kind == "roles" and guild_id:
+            entries = client.list_guild_roles(guild_id)
+            prefix = "@"
+        else:
+            raise ValueError("Choose a Discord server before browsing channels, users, or roles")
+        query = search.lower() if search else ""
+        return [
+            {"id": entry["id"], "label": f"{prefix}{entry['name']}", "detail": None}
+            for entry in entries
+            if not query or query in entry["id"].lower() or query in entry["name"].lower()
+        ]
 
     def send(
         self,

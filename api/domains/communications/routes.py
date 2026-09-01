@@ -56,12 +56,13 @@ def list_communication_connections(
 def list_communication_connection_directory(
     agent_id: UUID,
     connection_id: UUID,
-    kind: Literal["channels", "users"],
+    kind: Literal["guilds", "channels", "users", "roles"],
     context: Annotated[CurrentUserContext, Depends(get_current_user())],
     service: Annotated[CommunicationsService, Injected(CommunicationsService)],
     search: str | None = Query(default=None, max_length=255),
+    guild_id: str | None = Query(default=None, max_length=64),
 ):
-    return service.list_connection_directory(agent_id, connection_id, kind, search, context)
+    return service.list_connection_directory(agent_id, connection_id, kind, search, guild_id, context)
 
 
 @communications_router.post(

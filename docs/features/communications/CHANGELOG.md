@@ -13,6 +13,11 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
 
 ## Changes
 
+### 2026-09-01 — Discord Connection directory discovery — PR pending
+
+- Delivered: Discord now advertises directory discovery and lists the bot's guilds plus a selected guild's message channels, active human members, and non-default roles through credential-scoped, ten-minute cached provider reads. Member enumeration follows Discord pagination and filters bot accounts; channel choices exclude non-message channels.
+- Delivered: Discord Connection editing is server-first: choose a server in the Browse server control, then select its channels, users, and roles as removable settings tokens. Raw IDs remain accepted, including for multi-server allowlists. The connection setup guidance now calls out Server Members Intent as necessary when member suggestions are used.
+
 ### 2026-09-01 — Guided Slack and Discord Connection setup — PR pending
 
 - Delivered: Slack and Discord Connection setup hints now give ordered, provider-specific instructions instead of scope/permission inventories. The Slack flow explicitly separates manifest import, manual `xapp-` Socket Mode token creation, bot installation/token retrieval, credential entry, and channel access; Discord covers bot creation, Message Content Intent, OAuth installation permissions, token entry, and Connection policy.

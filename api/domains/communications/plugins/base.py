@@ -247,6 +247,7 @@ class PlatformPlugin(ABC):
         *,
         kind: str,
         search: str | None = None,
+        guild_id: str | None = None,
     ) -> list[dict[str, str | None]]:
         """List safe provider-owned candidates for Connection settings.
 
@@ -254,7 +255,7 @@ class PlatformPlugin(ABC):
         seam. Returned values are display-only identifiers; credentials and
         provider payloads never leave the plugin boundary.
         """
-        del settings, credentials, kind, search
+        del settings, credentials, kind, search, guild_id
         raise NotImplementedError(f"{self.key} does not implement directory discovery")
 
     def processing_feedback(
