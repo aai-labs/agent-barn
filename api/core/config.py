@@ -2,7 +2,7 @@ from functools import lru_cache
 from pathlib import Path
 
 from dotenv import load_dotenv
-from pydantic import PostgresDsn
+from pydantic import Field, PostgresDsn
 from pydantic_settings import BaseSettings
 
 ROOT_ENV_PATH = Path(__file__).resolve().parents[2] / ".env"
@@ -64,6 +64,9 @@ class Config(BaseSettings):
     teams_privacy_url: str = "https://aai-labs.com/privacy"
     teams_terms_url: str = "https://aai-labs.com/terms"
     slack_directory_cache_ttl_seconds: int = 600
+    # Content-free Communication journal history is pruned by the gateway
+    # supervisor after this many days.
+    communication_journal_retention_days: int = Field(default=31, ge=1, le=3650)
     # Socket timeout for Slack Web API calls. Large sweeps (e.g. users.list can be
     # ~320KB) are slow over a poor link; too tight a timeout cuts the body off
     # mid-stream (IncompleteRead). Generous default; in-cluster latency is low.

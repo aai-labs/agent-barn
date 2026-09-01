@@ -11,11 +11,14 @@ from api.core.config import Config
 from api.domains.agents.models import Agent, AgentStatus
 from api.domains.agents.repository import AgentRepository
 from api.domains.communications.delivery_repository import CommunicationDeliveryRepository
+from api.domains.communications.error_details import normalize_communication_error
 from api.domains.communications.models import (
     AcceptedCommunicationRead,
     CommunicationConnection,
     CommunicationDeliveryStatus,
     CommunicationDirection,
+    CommunicationJournalStage,
+    CommunicationPolicyDisposition,
     NormalizedCommunicationEnvelope,
     PlatformCapability,
     ProcessingFeedbackStage,
@@ -23,8 +26,10 @@ from api.domains.communications.models import (
     RuntimeDeliveryResult,
     RuntimeReplyCreate,
 )
+from api.domains.communications.operations import CommunicationOperationalRepository
 from api.domains.communications.plugins.base import (
     InboundAdmissionContext,
+    InboundAdmissionResult,
     PlatformPlugin,
     PlatformSettings,
     ProcessingFeedbackContext,
@@ -45,6 +50,7 @@ class CommunicationsGatewayService:
     delivery_repository: CommunicationDeliveryRepository
     connection_repository: CommunicationConnectionRepository
     plugins: PlatformPluginRegistry
+    operations: CommunicationOperationalRepository | None = None
 
     def accept_inbound(
         self,
@@ -91,12 +97,22 @@ class CommunicationsGatewayService:
         delivery_id: UUID,
         result: RuntimeDeliveryResult,
     ) -> bool:
+        normalized_error = (
+            normalize_communication_error(
+                error_code=result.error_code,
+                error_message=result.error_message,
+                operation="runtime_processing",
+            )
+            if not result.succeeded
+            else None
+        )
         completed = self.delivery_repository.complete_runtime_delivery(
             delivery_id,
             agent_id=agent.id,
             succeeded=result.succeeded,
-            error_code=result.error_code,
-            error_message=result.error_message,
+            error_code=normalized_error.code if normalized_error is not None else None,
+            error_message=normalized_error.summary if normalized_error is not None else None,
+            error_details=normalized_error.details if normalized_error is not None else None,
         )
         if completed and not result.succeeded:
             self._notify_runtime_failure_feedback(agent.id, delivery_id)
@@ -122,12 +138,10 @@ class CommunicationsGatewayService:
                     )
                 )
         except Exception as exc:
-            detail = " ".join(str(exc).split())[:160]
             logger.warning(
-                "Communication terminal-failure feedback context failed for Delivery %s (%s): %s",
+                "Communication terminal-failure feedback context failed for Delivery %s (%s)",
                 delivery_id,
                 type(exc).__name__,
-                detail,
             )
 
     def enqueue_runtime_reply(
@@ -181,7 +195,25 @@ class CommunicationsGatewayService:
         settings: PlatformSettings,
         payload: dict[str, Any],
     ) -> list[AcceptedCommunicationRead]:
-        envelopes = self._admit_plugin_payload(connection.id, plugin, settings, payload)
+        self._record_journal(
+            connection,
+            CommunicationJournalStage.PROVIDER_OBSERVED,
+        )
+        admission = self._admit_plugin_payload(connection.id, plugin, settings, payload)
+        # Only accepted events reach the POLICY_ADMITTED stage; rejected events
+        # record their own stage so the pipeline funnel can show drop-off
+        # instead of always equating provider_observed with policy_admitted.
+        self._record_journal(
+            connection,
+            CommunicationJournalStage.POLICY_ADMITTED
+            if admission.disposition == CommunicationPolicyDisposition.ACCEPTED
+            else CommunicationJournalStage.POLICY_REJECTED,
+            disposition=admission.disposition,
+        )
+        self._record_policy_metric(admission.disposition)
+        if admission.disposition != CommunicationPolicyDisposition.ACCEPTED:
+            return []
+        envelopes = list(admission)
         if envelopes:
             envelopes = self._enrich_inbound(connection, plugin, settings, envelopes)
         accepted: list[AcceptedCommunicationRead] = []
@@ -228,12 +260,10 @@ class CommunicationsGatewayService:
             if connection is not None:
                 self._notify_processing_feedback_context(connection, context)
         except Exception as exc:
-            detail = " ".join(str(exc).split())[:160]
             logger.warning(
-                "Communication processing feedback lookup failed for Connection %s (%s): %s",
+                "Communication processing feedback lookup failed for Connection %s (%s)",
                 context.connection_id,
                 type(exc).__name__,
-                detail,
             )
 
     def _notify_processing_feedback(
@@ -271,13 +301,11 @@ class CommunicationsGatewayService:
                 context,
             )
         except Exception as exc:
-            detail = " ".join(str(exc).split())[:160]
             logger.warning(
-                "Communication processing feedback %s failed for Connection %s (%s): %s",
+                "Communication processing feedback %s failed for Connection %s (%s)",
                 context.stage.value,
                 connection.id,
                 type(exc).__name__,
-                detail,
             )
 
     def _admit_plugin_payload(
@@ -286,18 +314,68 @@ class CommunicationsGatewayService:
         plugin: PlatformPlugin,
         settings: PlatformSettings,
         payload: dict[str, Any],
-    ) -> list[NormalizedCommunicationEnvelope]:
-        return plugin.admit_inbound(
-            settings,
-            payload,
-            context=InboundAdmissionContext(
-                connection_id=connection_id,
-                thread_is_agent_owned=lambda location: self.delivery_repository.thread_has_agent_state(
+    ) -> InboundAdmissionResult:
+        try:
+            result = plugin.admit_inbound(
+                settings,
+                payload,
+                context=InboundAdmissionContext(
                     connection_id=connection_id,
-                    location=location,
+                    thread_is_agent_owned=lambda location: self.delivery_repository.thread_has_agent_state(
+                        connection_id=connection_id,
+                        location=location,
+                    ),
                 ),
-            ),
-        )
+            )
+        except Exception as exc:
+            logger.warning(
+                "Communication payload admission failed for Connection %s (%s)",
+                connection_id,
+                type(exc).__name__,
+            )
+            return InboundAdmissionResult(CommunicationPolicyDisposition.MALFORMED_PAYLOAD)
+        if not isinstance(result, InboundAdmissionResult):
+            raise TypeError("Communication plugin returned an unsupported admission result")
+        return result
+
+    def _record_journal(
+        self,
+        connection: CommunicationConnection,
+        stage: CommunicationJournalStage,
+        *,
+        disposition: CommunicationPolicyDisposition | None = None,
+    ) -> None:
+        if self.operations is None:
+            return
+        organization_id = getattr(connection, "organization_id", None)
+        agent_id = getattr(connection, "agent_id", None)
+        if organization_id is None or agent_id is None:
+            return
+        try:
+            self.operations.record_journal(
+                organization_id=organization_id,
+                agent_id=agent_id,
+                connection_id=connection.id,
+                stage=stage,
+                disposition=disposition,
+            )
+        except Exception as exc:
+            # Provider observation and policy admission are observability, not
+            # ingress: a diagnostics-table failure must not drop or 500 a real
+            # provider message (polling transports cannot replay a consumed
+            # payload, so failing closed would lose it permanently).
+            logger.error(
+                "Unable to record %s for Communication Connection %s (%s)",
+                stage.value,
+                connection.id,
+                type(exc).__name__,
+            )
+
+    @staticmethod
+    def _record_policy_metric(disposition: CommunicationPolicyDisposition) -> None:
+        from api.domains.communications.metrics import record_policy_disposition
+
+        record_policy_disposition(disposition)
 
     def accept_provider_webhook(
         self,

@@ -62,6 +62,7 @@ The application lifespan ensures a bootstrap Platform Administrator, seeds built
 | Permission and Agent authorization | `../../api/domains/rbac/catalog.py`, `../../api/domains/rbac/policy.py`, `../../api/domains/agents/authorization.py` |
 | Shared persistence delegate | `../../api/infrastructure/postgres/repository.py` |
 | Domain Event outbox persistence | `../../api/domains/events/`, `../features/domain-events.md` |
+| Communications diagnostics and recovery | `../../api/domains/communications/operations.py`, `../../api/domains/communications/routes.py` |
 | Base database model | `../../api/infrastructure/postgres/models.py` |
 | Migrations | `../../api/migrations/versions/` |
 | Test app and database setup | `../../api/tests/conftest.py`, `../../api/tests/core/` |

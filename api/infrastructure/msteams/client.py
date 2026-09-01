@@ -33,6 +33,10 @@ class TeamsAuthError(ValueError):
     """Raised when Teams credentials or an inbound webhook token are rejected."""
 
 
+class TeamsDeliveryError(RuntimeError):
+    """Raised when Teams does not return a durable identifier for a sent activity."""
+
+
 def acquire_token(tenant_id: str, app_id: str, app_password: str) -> str:
     key = (tenant_id, app_id, hashlib.sha256(app_password.encode()).hexdigest())
     now = time.monotonic()
@@ -69,18 +73,35 @@ def acquire_token(tenant_id: str, app_id: str, app_password: str) -> str:
     return token
 
 
-def send_activity(service_url: str, conversation_id: str, activity: dict[str, Any], token: str) -> str:
+def send_activity(
+    service_url: str,
+    conversation_id: str,
+    activity: dict[str, Any],
+    token: str,
+    *,
+    idempotency_key: str | None = None,
+) -> str:
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    if idempotency_key:
+        # Bot Framework does not expose a provider-native idempotency field;
+        # preserve the stable delivery key for an idempotency-aware connector
+        # or egress proxy without putting it in message content.
+        headers["Idempotency-Key"] = idempotency_key
     response = resilient_request(
         "POST",
         f"{service_url.rstrip('/')}/v3/conversations/{quote(conversation_id, safe='')}/activities",
-        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+        headers=headers,
         content=json.dumps(activity).encode(),
         timeout=_TIMEOUT_SECONDS,
         label="Teams send",
         retry_server_errors=True,
     )
     response.raise_for_status()
-    return str(response.json().get("id") or "")
+    payload = response.json()
+    activity_id = str(payload.get("id") or "").strip() if isinstance(payload, dict) else ""
+    if not activity_id:
+        raise TeamsDeliveryError("Teams send returned no activity id")
+    return activity_id
 
 
 def list_team_channels(service_url: str, team_id: str, token: str) -> dict[str, str | None]:

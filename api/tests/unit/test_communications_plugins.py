@@ -8,8 +8,10 @@ from unittest.mock import patch
 from uuid import uuid4
 
 import pytest
+from hamcrest import assert_that, empty, equal_to, has_length
 
 from api.domains.communications.models import (
+    CommunicationPolicyDisposition,
     CommunicationSender,
     ConversationLocation,
     NormalizedCommunicationEnvelope,
@@ -17,7 +19,11 @@ from api.domains.communications.models import (
     PlatformCapability,
     ProcessingFeedbackStage,
 )
-from api.domains.communications.plugins.base import InboundAdmissionContext, ProcessingFeedbackContext
+from api.domains.communications.plugins.base import (
+    InboundAdmissionContext,
+    ProcessingFeedbackContext,
+    provider_idempotency_key,
+)
 from api.domains.communications.plugins.discord import DiscordPlatformPlugin
 from api.domains.communications.plugins.registry import PlatformPluginRegistry
 from api.domains.communications.plugins.slack import SlackPlatformPlugin
@@ -212,6 +218,47 @@ def test_slack_plugin_requires_a_direct_bot_mention_for_channel_messages() -> No
     assert unmentioned == []
 
 
+def test_slack_admission_returns_typed_policy_dispositions() -> None:
+    plugin = SlackPlatformPlugin(ValidationConfig())
+    settings = plugin.settings_model.model_validate({"group_policy": "open"})
+    context = _slack_admission_context(owned=False)
+
+    denied_dm = plugin.admit_inbound(
+        settings,
+        _slack_event("hello", channel_type="im"),
+        context=context,
+    )
+    bot_message = plugin.admit_inbound(
+        settings,
+        _slack_event("hello <@bot-1>", user="bot-1"),
+        context=context,
+    )
+    mention_required = plugin.admit_inbound(
+        settings,
+        _slack_event("hello everyone"),
+        context=context,
+    )
+    malformed = plugin.admit_inbound(settings, {}, context=context)
+    accepted = plugin.admit_inbound(
+        settings,
+        _slack_event("hello <@bot-1>"),
+        context=context,
+    )
+
+    assert_that(denied_dm.disposition, equal_to(CommunicationPolicyDisposition.USER_DENIED))
+    assert_that(bot_message.disposition, equal_to(CommunicationPolicyDisposition.BOT_IGNORED))
+    assert_that(mention_required.disposition, equal_to(CommunicationPolicyDisposition.MENTION_REQUIRED))
+    assert_that(malformed.disposition, equal_to(CommunicationPolicyDisposition.MALFORMED_PAYLOAD))
+    non_message = plugin.admit_inbound(
+        settings,
+        {"event": {"type": "reaction_added", "user": "user-1"}},
+        context=context,
+    )
+    assert_that(non_message.disposition, equal_to(CommunicationPolicyDisposition.EVENT_IGNORED))
+    assert_that(accepted.disposition, equal_to(CommunicationPolicyDisposition.ACCEPTED))
+    assert_that(accepted, has_length(1))
+
+
 def test_slack_message_identity_uses_timestamp_for_reaction_feedback() -> None:
     plugin = SlackPlatformPlugin(ValidationConfig())
     settings = plugin.settings_model.model_validate({"group_policy": "open"})
@@ -327,6 +374,87 @@ def test_slack_processing_feedback_uses_reactions_and_thread_status() -> None:
     client.remove_reaction.assert_called_once_with("channel-1", "root-1", "eyes")
     assert client.add_reaction.call_count == 2
     assert client.add_reaction.call_args_list[-1].args == ("channel-1", "root-1", "white_check_mark")
+
+
+def test_slack_send_passes_a_stable_provider_idempotency_key() -> None:
+    plugin = SlackPlatformPlugin(ValidationConfig())
+    credentials = plugin.credentials_model.model_validate({"bot_token": "bot-value", "app_token": "app-value"})
+    envelope = OutboundCommunicationEnvelope(
+        source_delivery_id=uuid4(),
+        location=ConversationLocation(id="channel-1", type="CHANNEL"),
+        text="reply",
+    )
+
+    with patch("api.domains.communications.plugins.slack.SlackClient") as client_type:
+        client_type.return_value.send_message.return_value = "sent-1"
+        result = plugin.send(
+            plugin.settings_model.model_validate({}),
+            credentials,
+            envelope,
+            idempotency_key="reply-1",
+        )
+
+    assert_that(result, equal_to("sent-1"))
+    client_type.return_value.send_message.assert_called_once_with(
+        "channel-1",
+        "reply",
+        thread_id=None,
+        idempotency_key=provider_idempotency_key("reply-1"),
+    )
+
+
+def test_discord_send_passes_a_stable_provider_idempotency_key() -> None:
+    plugin = DiscordPlatformPlugin(ValidationConfig())
+    credentials = plugin.credentials_model.model_validate({"bot_token": "bot-value"})
+    envelope = OutboundCommunicationEnvelope(
+        source_delivery_id=uuid4(),
+        location=ConversationLocation(id="channel-1", type="CHANNEL"),
+        text="reply",
+    )
+
+    with patch("api.domains.communications.plugins.discord.DiscordClient") as client_type:
+        client_type.return_value.send_message.return_value = "sent-1"
+        result = plugin.send(
+            plugin.settings_model.model_validate({}),
+            credentials,
+            envelope,
+            idempotency_key="reply-1",
+        )
+
+    assert_that(result, equal_to("sent-1"))
+    client_type.return_value.send_message.assert_called_once_with(
+        "channel-1",
+        "reply",
+        reply_to_id=None,
+        idempotency_key=provider_idempotency_key("reply-1"),
+    )
+
+
+def test_telegram_send_passes_a_stable_provider_idempotency_key() -> None:
+    plugin = TelegramPlatformPlugin(ValidationConfig())
+    credentials = plugin.credentials_model.model_validate({"bot_token": "bot-value"})
+    envelope = OutboundCommunicationEnvelope(
+        source_delivery_id=uuid4(),
+        location=ConversationLocation(id="chat-1", type="DM"),
+        text="reply",
+    )
+
+    with patch("api.domains.communications.plugins.telegram.send_message", return_value="sent-1") as send:
+        result = plugin.send(
+            plugin.settings_model.model_validate({}),
+            credentials,
+            envelope,
+            idempotency_key="reply-1",
+        )
+
+    assert_that(result, equal_to("sent-1"))
+    send.assert_called_once_with(
+        "bot-value",
+        "chat-1",
+        "reply",
+        thread_id=None,
+        idempotency_key=provider_idempotency_key("reply-1"),
+    )
 
 
 # --- inbound name enrichment ------------------------------------------------
@@ -579,6 +707,7 @@ def test_teams_normalizes_a_personal_message_as_a_dm() -> None:
 
     envelopes = plugin.normalize_inbound(settings, _teams_activity())
 
+    assert_that(envelopes.disposition, equal_to(CommunicationPolicyDisposition.ACCEPTED))
     assert len(envelopes) == 1
     envelope = envelopes[0]
     assert envelope.location.type == "DM"
@@ -636,7 +765,10 @@ def test_teams_ignores_non_message_activities() -> None:
     plugin = _teams_plugin()
     settings = plugin.settings_model.model_validate({"dm_policy": "open"})
 
-    assert plugin.normalize_inbound(settings, _teams_activity(type="conversationUpdate")) == []
+    result = plugin.normalize_inbound(settings, _teams_activity(type="conversationUpdate"))
+
+    assert_that(result.disposition, equal_to(CommunicationPolicyDisposition.MALFORMED_PAYLOAD))
+    assert_that(result, empty())
 
 
 def test_teams_ignores_the_agents_own_echo() -> None:
@@ -645,14 +777,32 @@ def test_teams_ignores_the_agents_own_echo() -> None:
     payload = _teams_activity()
     payload["from"] = {"id": _TEAMS_BOT_ID, "name": "Aria"}
 
-    assert plugin.normalize_inbound(settings, payload) == []
+    result = plugin.normalize_inbound(settings, payload)
+
+    assert_that(result.disposition, equal_to(CommunicationPolicyDisposition.BOT_IGNORED))
+    assert_that(result, empty())
+
+
+def test_teams_rejects_a_message_without_a_sender_id() -> None:
+    plugin = _teams_plugin()
+    settings = plugin.settings_model.model_validate({"dm_policy": "open"})
+    payload = _teams_activity()
+    payload["from"] = {"name": "Megan Bowen"}
+
+    result = plugin.normalize_inbound(settings, payload)
+
+    assert_that(result.disposition, equal_to(CommunicationPolicyDisposition.MALFORMED_PAYLOAD))
+    assert_that(result, empty())
 
 
 def test_teams_dm_policy_off_drops_direct_messages() -> None:
     plugin = _teams_plugin()
     settings = plugin.settings_model.model_validate({"dm_policy": "off"})
 
-    assert plugin.normalize_inbound(settings, _teams_activity()) == []
+    result = plugin.normalize_inbound(settings, _teams_activity())
+
+    assert_that(result.disposition, equal_to(CommunicationPolicyDisposition.USER_DENIED))
+    assert_that(result, empty())
 
 
 def test_teams_dm_allowlist_admits_only_listed_senders() -> None:
@@ -663,7 +813,10 @@ def test_teams_dm_allowlist_admits_only_listed_senders() -> None:
     blocked = plugin.settings_model.model_validate({"dm_policy": "allowlist", "dm_user_ids": ["someone-else"]})
 
     assert len(plugin.normalize_inbound(allowed, _teams_activity())) == 1
-    assert plugin.normalize_inbound(blocked, _teams_activity()) == []
+    result = plugin.normalize_inbound(blocked, _teams_activity())
+
+    assert_that(result.disposition, equal_to(CommunicationPolicyDisposition.USER_DENIED))
+    assert_that(result, empty())
 
 
 def test_teams_group_allowlist_matches_the_stripped_channel_id() -> None:
@@ -676,7 +829,10 @@ def test_teams_group_allowlist_matches_the_stripped_channel_id() -> None:
     )
 
     assert len(plugin.normalize_inbound(allowed, _teams_channel_activity())) == 1
-    assert plugin.normalize_inbound(blocked, _teams_channel_activity()) == []
+    result = plugin.normalize_inbound(blocked, _teams_channel_activity())
+
+    assert_that(result.disposition, equal_to(CommunicationPolicyDisposition.CHANNEL_DENIED))
+    assert_that(result, empty())
 
 
 def test_teams_captures_addressable_ids_for_replies() -> None:
@@ -745,7 +901,14 @@ def test_teams_send_posts_a_complete_activity_to_the_conversation() -> None:
         patch("api.domains.communications.plugins.teams.acquire_token", return_value="tok"),
         patch("api.domains.communications.plugins.teams.send_activity", return_value="sent-1") as send,
     ):
-        assert plugin.send(plugin.settings_model.model_validate({}), credentials, envelope) == "sent-1"
+        result = plugin.send(
+            plugin.settings_model.model_validate({}),
+            credentials,
+            envelope,
+            idempotency_key="reply-1",
+        )
+
+        assert_that(result, equal_to("sent-1"))
 
     service_url, conversation_id, activity, token = send.call_args.args
     assert service_url == _TEAMS_SERVICE_URL
@@ -758,6 +921,7 @@ def test_teams_send_posts_a_complete_activity_to_the_conversation() -> None:
     assert activity["from"] == {"id": _TEAMS_BOT_ID}
     assert activity["recipient"] == {"id": _TEAMS_USER_ID}
     assert activity["replyToId"] == "1485983408511"
+    assert_that(send.call_args.kwargs["idempotency_key"], equal_to(provider_idempotency_key("reply-1")))
 
 
 def test_teams_send_without_a_service_url_is_rejected() -> None:
@@ -772,7 +936,7 @@ def test_teams_send_without_a_service_url_is_rejected() -> None:
     )
 
     with pytest.raises(ValueError, match="serviceUrl"):
-        plugin.send(plugin.settings_model.model_validate({}), credentials, envelope)
+        plugin.send(plugin.settings_model.model_validate({}), credentials, envelope, idempotency_key="reply-1")
 
 
 def test_teams_strips_the_agents_own_mention_from_the_text() -> None:

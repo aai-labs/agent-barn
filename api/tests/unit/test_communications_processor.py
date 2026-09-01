@@ -28,6 +28,7 @@ def _delivery() -> tuple[SimpleNamespace, OutboundCommunicationEnvelope]:
         SimpleNamespace(
             id=uuid4(),
             connection_id=connection_id,
+            idempotency_key="reply-1",
             envelope=outbound.model_dump(mode="json"),
         ),
         outbound,

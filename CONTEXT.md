@@ -100,6 +100,18 @@ _Avoid_: runtime
 An Agent-owned configured relationship to one bot, application, account, or endpoint on a Platform. An Agent may have multiple Communication Connections, including several on the same Platform.
 _Avoid_: channel, integration, platform config
 
+**Connection Journal**:
+The append-only, content-free operational history for one Communication Connection. Its entries are either Delivery Transitions, which belong to one durable Communication Delivery, or Connection Events, which record provider connectivity and recovery without a Delivery.
+_Avoid_: message log, provider payload, diagnostics snapshot
+
+**Delivery Transition**:
+A Connection Journal entry describing one stage, error, or recovery attempt in a durable Communication Delivery's lifecycle.
+_Avoid_: Connection Event, Event Delivery
+
+**Connection Event**:
+A Connection Journal entry describing a provider connection, degradation, error, or reconnect request that does not belong to a Communication Delivery.
+_Avoid_: Delivery Transition, message failure
+
 **Platform Plugin**:
 A trusted, release-shipped module that supplies Agent Barn's support for one Platform.
 _Avoid_: integration, runtime plugin, dynamically installed plugin
