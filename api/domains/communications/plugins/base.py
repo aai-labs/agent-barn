@@ -106,7 +106,6 @@ class PlatformPlugin(ABC):
     key: str
     display_name: str
     setup_hint: str | None = None
-    setup_manifest: dict[str, Any] | None = None
     post_setup_hint: str | None = None
     schema_version: int = 1
     capabilities: frozenset[PlatformCapability] = frozenset()
@@ -120,7 +119,6 @@ class PlatformPlugin(ABC):
             key=self.key,
             display_name=self.display_name,
             setup_hint=self.setup_hint,
-            setup_manifest=self.setup_manifest,
             post_setup_hint=self.post_setup_hint,
             schema_version=self.schema_version,
             capabilities=sorted(self.capabilities, key=lambda item: item.value),

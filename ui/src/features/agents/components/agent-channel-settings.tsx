@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import {
   Check,
   CircleAlert,
@@ -31,6 +31,7 @@ import {
   useCommunicationPlatforms,
   useDownloadAppPackage,
 } from "@/features/communication-connections/hooks/use-communication-connections";
+import { SLACK_APP_MANIFEST } from "@/features/communication-connections/slack-manifest";
 import type { CommunicationConnection, CommunicationDirectoryEntry } from "@/features/communication-connections/schemas";
 
 import type { Agent } from "../schemas";
@@ -67,15 +68,39 @@ function ConnectionIcon({ platformKey, size = 16 }: { platformKey: string; size?
   return platformIcon(platformKey, { size }) ?? <Plug size={size} />;
 }
 
+function renderSetupInline(markdown: string): ReactNode[] {
+  return markdown.split(/(\[[^\]]+\]\([^\s)]+\)|`[^`]+`|\*\*[^*]+\*\*)/g).filter(Boolean).map((part, index) => {
+    const link = /^\[([^\]]+)\]\(([^\s)]+)\)$/.exec(part);
+    if (link) return <a key={index} href={link[2]} target="_blank" rel="noreferrer" className="underline underline-offset-2">{link[1]}</a>;
+    if (part.startsWith("`") && part.endsWith("`")) return <code key={index} className="rounded px-1 py-0.5" style={{ background: "var(--bg-soft)" }}>{part.slice(1, -1)}</code>;
+    if (part.startsWith("**") && part.endsWith("**")) return <strong key={index}>{part.slice(2, -2)}</strong>;
+    return part;
+  });
+}
+
+function SetupMarkdown({ markdown }: { markdown: string }) {
+  return (
+    <div className="mt-2 space-y-3 text-xs leading-relaxed" style={{ color: "var(--ink-2)" }}>
+      {markdown.trim().split("\n\n").filter(Boolean).map((block, index) => {
+        if (block.startsWith("## ")) return <h3 key={index} className="mt-5 first:mt-0 text-xs font-semibold" style={{ color: "var(--ink)" }}>{renderSetupInline(block.slice(3))}</h3>;
+        const lines = block.split("\n");
+        if (lines.every((line) => /^\d+\. /.test(line))) return <ol key={index} className="m-0 list-decimal space-y-1 pl-4">{lines.map((line) => <li key={line}>{renderSetupInline(line.replace(/^\d+\. /, ""))}</li>)}</ol>;
+        return <p key={index} className="m-0 whitespace-pre-line">{renderSetupInline(block)}</p>;
+      })}
+    </div>
+  );
+}
+
 function PlatformSetupHint({
   hint,
-  manifest,
+  platformKey,
   title = "Setup requirements",
 }: {
   hint?: string | null;
-  manifest?: Record<string, unknown> | null;
+  platformKey?: string;
   title?: string;
 }) {
+  const manifest = platformKey === "slack" ? SLACK_APP_MANIFEST : null;
   if (!hint && !manifest) return null;
   return (
     <div
@@ -90,12 +115,7 @@ function PlatformSetupHint({
         <div className="text-xs font-semibold uppercase tracking-[0.1em]" style={{ color: "var(--accent-ink)" }}>
           {title}
         </div>
-        <p
-          className="mb-0 mt-1 text-xs leading-relaxed"
-          style={{ color: "var(--ink-2)", whiteSpace: "pre-line" }}
-        >
-          {hint}
-        </p>
+        {hint && <SetupMarkdown markdown={hint} />}
         {manifest && (
           <button
             type="button"
@@ -621,7 +641,7 @@ export function AgentChannelSettings({
                   </label>
                   {platform && (
                     <>
-                      <PlatformSetupHint hint={platform.setupHint} manifest={platform.setupManifest} />
+                      <PlatformSetupHint hint={platform.setupHint} platformKey={platform.key} />
                       <div className="grid gap-3 sm:grid-cols-2">
                         {connection.platformKey === "discord" && (
                         <label className="flex flex-col gap-1.5 text-sm font-medium">
@@ -730,7 +750,7 @@ export function AgentChannelSettings({
                   </div>
 
                   <div className="mt-5 flex flex-col gap-4">
-                    <PlatformSetupHint hint={selectedPlatform.setupHint} manifest={selectedPlatform.setupManifest} />
+                    <PlatformSetupHint hint={selectedPlatform.setupHint} platformKey={selectedPlatform.key} />
                     <label className="flex flex-col gap-1.5 text-sm font-medium">
                       Connection name
                       <input

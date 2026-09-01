@@ -16,7 +16,7 @@ export const mockCommunicationPlatforms = [
     key: "discord",
     display_name: "Discord",
     setup_hint:
-      "1. Create a bot\nOpen the Bot page and copy the Token.\n\n2. Enable the required intent\nEnable Message Content Intent.\n\n3. Invite the bot\nGrant View Channels, Send Messages, and Read Message History.",
+      "## Create a bot\n\n1. Open the **Bot** page and copy the Token.\n2. Enable **Message Content Intent**.\n\n## Invite the bot\n\n1. Grant **View Channels**, **Send Messages**, and **Read Message History**.",
     schema_version: 1,
     capabilities: ["MENTIONS", "DIRECTORY_DISCOVERY"],
     settings_schema: {
@@ -38,11 +38,7 @@ export const mockCommunicationPlatforms = [
     key: "slack",
     display_name: "Slack",
     setup_hint:
-      "1. Create the app\nIn Slack API → Your Apps, choose Create New App → From a manifest.\n\n2. Create the Socket Mode token\nCreate an xapp- token with connections:write.\n\n3. Install and copy the bot token\nCopy the xoxb- token and reinstall after scope changes.",
-    setup_manifest: {
-      display_information: { name: "Agent Barn" },
-      settings: { socket_mode_enabled: true },
-    },
+      "## Create a Slack app\n\n1. Open [Slack app management](https://api.slack.com/apps).\n2. Click **New App**.\n3. Click **From Manifest**.\n\n## Create credentials\n\n1. Create an `xapp-` token with `connections:write`.\n2. Copy the `xoxb-` token and reinstall after scope changes.",
     schema_version: 1,
     capabilities: ["DIRECTORY_DISCOVERY"],
     settings_schema: { type: "object", properties: {} },

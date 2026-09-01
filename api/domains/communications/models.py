@@ -555,7 +555,6 @@ class PlatformDescriptorRead(PydanticBaseModel):
     settings_schema: dict[str, Any]
     credentials_schema: dict[str, Any]
     setup_hint: str | None = None
-    setup_manifest: dict[str, Any] | None = None
     post_setup_hint: str | None = None
 
 

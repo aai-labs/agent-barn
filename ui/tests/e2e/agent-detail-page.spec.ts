@@ -637,18 +637,19 @@ test.describe("Agent Detail Page — Channels tab", () => {
     await agentDetailPage.addConnectionButton().click();
     await agentDetailPage.selectPlatformButton("Slack").click();
 
-    const hint = agentDetailPage.setupHint(/Create the Socket Mode token/);
+    const hint = agentDetailPage.setupHint(/Create credentials/);
     await expect(hint).toBeVisible();
-    await expect(hint).toContainText("1. Create the app");
-    await expect(hint).toContainText("connections:write");
-    await expect(hint).toContainText("xapp-");
+    await expect(page.getByRole("heading", { name: "Create a Slack app" })).toBeVisible();
+    await expect(page.getByText("connections:write", { exact: true })).toBeVisible();
+    await expect(page.getByText("xapp-", { exact: true })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Slack app management" })).toHaveAttribute("href", "https://api.slack.com/apps");
     await expect(page.getByRole("button", { name: "Copy Slack manifest" })).toBeVisible();
 
     await agentDetailPage.selectPlatformButton("Discord").click();
-    const discordHint = agentDetailPage.setupHint(/Enable the required intent/);
+    const discordHint = agentDetailPage.setupHint(/Invite the bot/);
     await expect(discordHint).toBeVisible();
-    await expect(discordHint).toContainText("1. Create a bot");
-    await expect(discordHint).toContainText("Read Message History");
+    await expect(page.getByRole("heading", { name: "Create a bot" })).toBeVisible();
+    await expect(page.getByText("Read Message History", { exact: true })).toBeVisible();
 
     await agentDetailPage.selectPlatformButton("Telegram").click();
     const telegramHint = agentDetailPage.setupHint(/@BotFather/);

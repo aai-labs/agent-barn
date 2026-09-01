@@ -13,6 +13,19 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
 
 ## Changes
 
+### 2026-09-01 — Local Markdown guidance and Slack sample manifest — PR pending
+
+- Changed: The Slack sample manifest now lives in the web application beside its copy control rather than travelling through the platform catalogue API. It is static user guidance, not a provider capability or API contract.
+- Changed: Slack, Discord, Telegram, and Teams setup guidance—including Teams' post-connection instructions—is now authored in the same Markdown subset. The shared renderer adds separation before subsequent headings so multi-section instructions remain scannable.
+
+### 2026-09-01 — Markdown setup guidance — PR pending
+
+- Changed: Provider-owned setup hints are now authored as Markdown and the Connection form renders their headings, ordered steps, links, inline code, and emphasis as structured UI. Slack and Discord setup guidance now use this format; the Slack app-management link is directly usable instead of appearing as unstructured prose.
+
+### 2026-09-01 — Slack manifest import instructions corrected — PR pending
+
+- Changed: Slack setup now gives the exact manifest-import sequence—open `https://api.slack.com/apps`, New App, From Manifest, paste the copied manifest, choose the workspace and Next, then Create. The copied manifest now matches the reviewed App Home, bot display name, organization deployment, Socket Mode, event, and scope configuration.
+
 ### 2026-09-01 — Discord Connection directory discovery — PR pending
 
 - Delivered: Discord now advertises directory discovery and lists the bot's guilds plus a selected guild's message channels, active human members, and non-default roles through credential-scoped, ten-minute cached provider reads. Member enumeration follows Discord pagination and filters bot accounts; channel choices exclude non-message channels.
@@ -60,7 +73,7 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
 - Delivered: Inbound Bot Framework tokens are now bound to the activity they arrive with. `verify_inbound_jwt` requires the `serviceurl` claim and matches it against the activity's `serviceUrl`, ignoring trailing-slash and case differences. Without it a forged activity could name an attacker-controlled `serviceUrl`, which the plugin then uses as the base URL for outbound calls carrying the bot's token. A dedicated `api/tests/unit/test_msteams_client.py` drives the verifier with real RS256 tokens rather than patching it at the plugin boundary, covering audience, issuer, expiry and clock-skew leeway, malformed input, and the new claim binding.
 - Changed: `TeamsAuthError` now derives from `ValueError`, so a rejected Azure credential reaches the Connection service's validation handler as a 400 instead of escaping as a 500 — matching every other plugin, whose credential rejection is already a plain `ValueError`. `TeamsPlatformPlugin.verify_webhook` translates it to `PermissionError`, the gateway's ingress contract, so a rejected webhook answers Microsoft with 401 instead of a 500 it would retry. The Bot Framework token cache is now keyed on a hash of the client secret alongside tenant and app id; keyed on tenant and app alone, credential validation — which runs through `acquire_token` — reported a rotated or revoked secret as valid until the cached token expired.
 - Notes: Slack no longer declares `APPLICATION_PROVISIONING`. It never implemented the `build_app_package` seam, so the capability-driven download button introduced alongside the Teams package rendered on Slack Connections and failed with an unhandled `NotImplementedError`. The service now maps that seam's `NotImplementedError` to a 400 as well, so a future declare-without-implement degrades cleanly.
-- Follow-up: `api/infrastructure/slack/manifest.py` is now imported only by its own tests — a remnant of the removed Slack app-creation flow, and the likely origin of the stale capability flag. Left in place; removable separately. The provider webhook route still has no integration coverage; the 401 mapping is asserted at the plugin seam only.
+- Follow-up: The provider webhook route still has no integration coverage; the 401 mapping is asserted at the plugin seam only.
 
 ### 2026-08-27 — Communications on OpenClaw agents could never receive inbound messages — PR pending
 
