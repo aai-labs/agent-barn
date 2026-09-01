@@ -79,6 +79,7 @@ def _outbound(text: str = "It is $20 per seat.", **metadata_overrides) -> Outbou
         "subject": "Question about pricing",
         "references": THREAD_ROOT,
         "recipient": AGENT_ADDRESS,
+        "agent_name": "Tommy",
     }
     metadata.update(metadata_overrides)
     return OutboundCommunicationEnvelope(
@@ -199,6 +200,17 @@ def test_the_agent_is_given_the_sender_and_subject_the_adapter_does_not_pass_thr
     assert "Jane Customer <jane@acme.com>" in envelope.text
     assert "Question about pricing" in envelope.text
     assert "What does the team plan cost?" in envelope.text
+
+
+def test_the_agent_is_told_the_message_is_addressed_to_it_and_that_its_reply_is_sent() -> None:
+    plugin = _plugin()
+
+    [envelope] = plugin.normalize_inbound(_settings(plugin), _inbound())
+
+    opening = envelope.text.splitlines()[0].lower()
+    assert "you" in opening
+    assert "reply" in envelope.text.lower()
+    assert envelope.text.lower().index("reply") < envelope.text.index("What does the team plan cost?")
 
 
 @pytest.mark.parametrize(
@@ -410,14 +422,18 @@ def test_a_reply_without_the_agent_address_is_rejected_rather_than_misaddressed(
         plugin.send(_settings(plugin), _credentials(plugin), _outbound(recipient=""))
 
 
-def test_a_reply_uses_the_configured_sender_display_name() -> None:
+def test_recipients_see_the_agents_own_name_without_anyone_configuring_it() -> None:
     client = RecordingEmailClient()
     plugin = _plugin(client)
 
-    plugin.send(
-        _settings(plugin, sender_display_name="Tommy from Acme"),
-        _credentials(plugin),
-        _outbound(),
-    )
+    assert _sent(plugin, client, _outbound(agent_name="Tommy the Helper")).from_name == "Tommy the Helper"
 
-    assert client.sent[0].from_name == "Tommy from Acme"
+
+def test_an_overlong_agent_name_is_trimmed_for_the_display_name() -> None:
+    client = RecordingEmailClient()
+    plugin = _plugin(client)
+
+    sent = _sent(plugin, client, _outbound(agent_name="A" * 400))
+
+    assert sent.from_name is not None
+    assert len(sent.from_name) <= DISPLAY_NAME_LIMIT

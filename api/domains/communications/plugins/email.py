@@ -29,6 +29,11 @@ SUBJECT_LIMIT = 998
 REFERENCES_HEADER_BYTE_LIMIT = 2048
 MAX_REFERENCES = 100
 MAX_BODY_CHARS = 100_000
+INBOUND_FRAMING = (
+    "You have received the email below and you are replying to it directly. "
+    "Write your reply to the sender as your whole response — it is sent to them "
+    "verbatim as the email reply, so do not describe the email or ask what to do with it."
+)
 UNATTENDED_LOCAL_PARTS = frozenset({"mailer-daemon", "postmaster", "no-reply", "noreply", "donotreply"})
 BULK_PRECEDENCE = frozenset({"bulk", "list", "junk"})
 QUOTED_HISTORY_PATTERNS = (
@@ -62,12 +67,6 @@ class EmailSettings(PlatformSettings):
             "Full addresses such as jane@acme.com, or a whole domain written as @acme.com. Used when Who may "
             "email this agent is Allowlist."
         ),
-    )
-    sender_display_name: str = Field(
-        default="",
-        max_length=255,
-        title="Sender display name",
-        description="The name recipients see next to the agent's address. Defaults to the platform sender name.",
     )
 
 
@@ -170,8 +169,7 @@ class EmailPlatformPlugin(PlatformPlugin):
         credentials: PlatformCredentials,
         envelope: OutboundCommunicationEnvelope,
     ) -> str:
-        assert isinstance(settings, EmailSettings)
-        del credentials
+        del settings, credentials
         metadata = envelope.provider_metadata
         agent_address = str(metadata.get("recipient") or "")
         if not agent_address:
@@ -190,7 +188,7 @@ class EmailPlatformPlugin(PlatformPlugin):
             subject=_reply_subject(str(metadata.get("subject") or "")),
             html_part="",
             text_part=envelope.text,
-            from_name=settings.sender_display_name or None,
+            from_name=str(metadata.get("agent_name") or "").strip()[:DISPLAY_NAME_LIMIT] or None,
             from_email=agent_address,
             reply_to=agent_address,
             headers=headers,
@@ -256,8 +254,14 @@ def _occurred_at(raw: Any) -> datetime:
 
 
 def _readable_message(sender: str, sender_name: str | None, subject: str, body: str) -> str:
+    """Frame the message as addressed to the Agent, not as a document handed to it.
+
+    A bare `From:`/`Subject:` block reads to a model like a forwarded artifact, and
+    Agents answered by summarising the mail back and asking what to do with it. The
+    Agent also cannot otherwise know its whole response is delivered verbatim.
+    """
     origin = f"{sender_name} <{sender}>" if sender_name else sender
-    return f"From: {origin}\nSubject: {subject}\n\n{_without_quoted_history(body)}"
+    return f"{INBOUND_FRAMING}\n\nFrom: {origin}\nSubject: {subject}\n\n{_without_quoted_history(body)}"
 
 
 def _without_quoted_history(body: str) -> str:

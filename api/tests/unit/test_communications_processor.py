@@ -50,7 +50,10 @@ def _processor(
         platform_key="slack",
         settings={},
         credentials_encrypted="ciphertext",
+        agent_id=uuid4(),
     )
+    agents = Mock()
+    agents.get_by_id.return_value = SimpleNamespace(name="Tommy")
     plugins = Mock()
     plugins.require.return_value = plugin
     gateway = Mock()
@@ -58,6 +61,7 @@ def _processor(
         config=cast(Config, SimpleNamespace(agent_token_encryption_key="key")),
         deliveries=deliveries,
         connections=connections,
+        agents=agents,
         plugins=plugins,
         gateway=gateway,
     )
