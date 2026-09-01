@@ -1,0 +1,24 @@
+name = "agentbarn-email-inbound"
+main = "src/index.js"
+compatibility_date = "2026-08-01"
+
+# INBOUND_URL is the Communications gateway endpoint. It must be reachable from
+# Cloudflare's edge, so a local k3d cluster needs a tunnel (see
+# docs/guidelines/operations.md).
+#
+# EMAIL_INBOUND_SECRET is NOT set here. Set it per environment with:
+#   wrangler secret put EMAIL_INBOUND_SECRET --env staging
+#   wrangler secret put EMAIL_INBOUND_SECRET --env production
+# It must match the value deployed to the cluster.
+
+[env.staging]
+name = "agentbarn-email-inbound-staging"
+
+[env.staging.vars]
+INBOUND_URL = "https://api-staging.agentbarn.dev/communications/v1/webhooks/email/inbound"
+
+[env.production]
+name = "agentbarn-email-inbound"
+
+[env.production.vars]
+INBOUND_URL = "https://api.agentbarn.dev/communications/v1/webhooks/email/inbound"

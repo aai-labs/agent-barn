@@ -285,6 +285,8 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           SENDER_EMAIL: ${{ github.ref_name == 'staging' && vars.STAGING_SENDER_EMAIL || vars.SENDER_EMAIL }}
+          AGENT_EMAIL_DOMAIN: ${{ github.ref_name == 'staging' && vars.STAGING_AGENT_EMAIL_DOMAIN || vars.AGENT_EMAIL_DOMAIN }}
+          EMAIL_INBOUND_SECRET: ${{ github.ref_name == 'staging' && secrets.STAGING_EMAIL_INBOUND_SECRET || secrets.EMAIL_INBOUND_SECRET }}
           API_HOST: ${{ needs.resolve-env.outputs.api_host }}
           UI_HOST: ${{ needs.resolve-env.outputs.ui_host }}
           KUBECONFIG_B64: ${{ github.ref_name == 'staging' && secrets.STAGING_KUBECONFIG_B64 || secrets.KUBECONFIG_B64 }}

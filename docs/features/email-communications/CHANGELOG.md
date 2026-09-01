@@ -2,16 +2,17 @@
 
 Status: Active
 Epic: AF-276 Email communication platform
-Related context: [Communications](../communications/CHANGELOG.md), [Agents](../agents.md), [Operations](../../guidelines/operations.md), [gateway ownership ADR](../../adr/2026-08-22-agent-barn-owned-communications-gateway.md)
+Related context: [Communications](../communications/CHANGELOG.md), [Agents](../agents.md), [Operations](../../guidelines/operations.md), [gateway ownership ADR](../../adr/2026-08-22-agent-barn-owned-communications-gateway.md), [inbound transport ADR](../../adr/2026-08-31-cloudflare-worker-for-inbound-email.md)
 
 ## Current state
 
 - Delivered: `Email` carries an optional per-message sender address, plain-text part, `Reply-To`, and custom headers, and `EmailClient` maps them onto the Cloudflare Email Sending REST payload. Configuration gates agent email behind `is_agent_email_enabled`. A shipped Email Platform Plugin normalizes inbound mail into thread-anchored envelopes, applies sender policy and automated-mail guards, and sends threaded plain-text replies addressed only to the inbound sender.
 - Delivered: Each Email Connection is allocated its own address, released on Connection retirement and on Agent deletion, with the local part claimed permanently so it is never reissued. An authenticated inbound route turns a parsed message into a Communication Delivery, completing the API half of the round trip.
 - Delivered: The Connection card shows the allocated address with a copy button, and platforms with no credentials no longer render an empty credentials form.
-- In transition: nothing outside Agent Barn can reach the inbound route yet — the Cloudflare Worker does not exist, so no routing rule can point anywhere. Every environment currently leaves `AGENT_EMAIL_DOMAIN` unset, which makes `validate_external` refuse Email Connections outright; the feature is inert until an operator configures the domain.
-- Next: the Cloudflare Worker, the environment plumbing for `AGENT_EMAIL_DOMAIN` and `EMAIL_INBOUND_SECRET`, and the operations documentation.
-- Blockers: none in code. Rollout needs `agents.agentbarn.dev` onboarded for both Email Routing and Email Sending in Cloudflare, which is dashboard work with up to 24 hours of verification latency.
+- Delivered: A Cloudflare Email Worker parses inbound MIME and posts to the gateway, and `AGENT_EMAIL_DOMAIN`/`EMAIL_INBOUND_SECRET` are threaded through local, Helm and CI configuration. Slice 1 is code-complete.
+- In transition: unverified end to end against real mail. Every environment still leaves `AGENT_EMAIL_DOMAIN` unset, which makes `validate_external` refuse Email Connections outright, so the feature stays inert until an operator configures the domain and deploys the Worker.
+- Next: end-to-end verification on a local k3d cluster, then a decision on automating the Worker deploy.
+- Blockers: rollout needs the agent subdomain onboarded for **both** Email Routing and Email Sending in Cloudflare — two separate dashboard flows, with Sending verification taking up to 24 hours. Until Sending is Verified, inbound works and every reply fails with a `550`-class error.
 
 ## Scope
 
@@ -30,6 +31,14 @@ Confirmed against Cloudflare's documentation while planning; recorded here becau
 - The Cloudflare daily send quota is **per account and shared with invites, password resets, staging and production** (`../../guidelines/operations.md`). Agent mail draws from the same pool.
 
 ## Changes
+
+### 2026-08-31 — AF-276 — Cloudflare Email Worker and environment plumbing — PR pending
+
+- Delivered: `workers/email-inbound/` — the repo's first Cloudflare Worker. It rejects oversized mail, parses MIME with `postal-mime`, truncates the body, and posts the compact JSON payload to the inbound route. `AGENT_EMAIL_DOMAIN` and `EMAIL_INBOUND_SECRET` are threaded through `.env.spec`, `.env.deploy.spec`, `helmfile.yaml.gotmpl`, the API chart values and Secret, and `deploy.yml`. An ADR records why inbound arrives through a Worker at all.
+- Changed: no change to `communications-deployment.yaml` was needed — it mounts the API's Secret with `envFrom`, so both new keys reach the deployment that actually serves the inbound route. `EMAIL_INBOUND_SECRET` is per-environment (`STAGING_` variant) unlike the shared `CLOUDFLARE_API_TOKEN`, because it is the only credential guarding mail injection.
+- Notes: The Worker is deliberately thin — parse, truncate, forward — because a new top-level `workers/` directory triggers no job in `ci.yml`, whose change detection covers only `api`/`ui`/`hermes`/`openclaw`. Every admission decision stays in the Python plugin, which is tested. It must never read `Authentication-Results`: Worker-delivered mail carries none, so a check there would pass everything.
+- Notes: A Worker runs on Cloudflare's edge and cannot reach a local k3d cluster. Local end-to-end testing either needs a tunnel, or skips the Cloudflare hop and posts the Worker's JSON straight at the inbound route — which exercises every part of Agent Barn including the real outbound reply.
+- Follow-up: **the Worker deploys by hand** (`wrangler deploy`), so the running Worker can silently drift from the committed source and a revert does not revert the deployment. Automating it needs a Cloudflare token scoped to `Workers Scripts: Edit`; the existing token is scoped to `Email Sending: Edit` and broadening it widens the blast radius of rotation. Deferred deliberately until the feature is proven end to end.
 
 ### 2026-08-31 — AF-276 — Agent email address in the UI — PR pending
 
