@@ -60,10 +60,7 @@ class WebChatRepository:
                     col(CommunicationDelivery.message_id).in_(message_ids)
                 )
             ).all()
-            return {
-                message_id: CommunicationDeliveryStatus(status)
-                for message_id, status in rows
-            }
+            return {message_id: CommunicationDeliveryStatus(status) for message_id, status in rows}
 
     def list_threads(
         self,

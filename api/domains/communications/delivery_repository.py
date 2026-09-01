@@ -340,10 +340,7 @@ class CommunicationDeliveryRepository:
             ).one_or_none()
             if source is None:
                 raise LookupError("Source Communication Delivery not found")
-            if (
-                source.cancel_requested_at is not None
-                or source.status == CommunicationDeliveryStatus.CANCELLED
-            ):
+            if source.cancel_requested_at is not None or source.status == CommunicationDeliveryStatus.CANCELLED:
                 raise CommunicationDeliveryCancelledError("Source Communication Delivery was cancelled")
             existing = session.exec(
                 select(CommunicationDelivery).where(
