@@ -12,6 +12,7 @@ from api.domains.web_chat.models import (
     WebChatMessageCreate,
     WebChatMessageRead,
     WebChatThreadRead,
+    WebChatThreadRename,
 )
 from api.domains.web_chat.service import WebChatService
 
@@ -28,6 +29,33 @@ def list_web_chat_threads(
     service: Annotated[WebChatService, Injected(WebChatService)],
 ) -> list[WebChatThreadRead]:
     return service.list_threads(agent_id, context)
+
+
+@web_chat_router.patch(
+    "/{agent_id}/web-chat/threads/{thread_id}",
+    response_model=WebChatThreadRead,
+)
+def rename_web_chat_thread(
+    agent_id: UUID,
+    thread_id: str,
+    data: WebChatThreadRename,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[WebChatService, Injected(WebChatService)],
+) -> WebChatThreadRead:
+    return service.rename_thread(agent_id, thread_id, data.display_name, context)
+
+
+@web_chat_router.delete(
+    "/{agent_id}/web-chat/threads/{thread_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def delete_web_chat_thread(
+    agent_id: UUID,
+    thread_id: str,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[WebChatService, Injected(WebChatService)],
+) -> None:
+    service.delete_thread(agent_id, thread_id, context)
 
 
 @web_chat_router.get(
@@ -47,14 +75,15 @@ def list_web_chat_messages(
 @web_chat_router.post(
     "/{agent_id}/web-chat/messages",
     status_code=status.HTTP_202_ACCEPTED,
+    response_model=WebChatMessageRead,
 )
 def send_web_chat_message(
     agent_id: UUID,
     data: WebChatMessageCreate,
     context: Annotated[CurrentUserContext, Depends(get_current_user())],
     service: Annotated[WebChatService, Injected(WebChatService)],
-) -> None:
-    service.send_message(agent_id, data.text, data.thread_id, context)
+) -> WebChatMessageRead:
+    return service.send_message(agent_id, data.text, data.thread_id, context)
 
 
 @web_chat_router.get("/{agent_id}/web-chat/stream")

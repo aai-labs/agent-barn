@@ -23,6 +23,7 @@ from api.domains.communications.repository import (
     CommunicationConnectionConflictError,
     CommunicationConnectionRepository,
 )
+from api.domains.conversations.models import MessageDirection
 from api.domains.rbac.catalog import PermissionKey
 from api.domains.web_chat.models import MAIN_THREAD_ID, WebChatMessageRead, WebChatThreadRead
 from api.domains.web_chat.repository import WebChatRepository
@@ -31,6 +32,7 @@ from api.infrastructure.crypto import encrypt_token
 WEB_CONNECTION_DISPLAY_NAME = "Web Chat"
 POLL_INTERVAL_SECONDS = 0.5
 HEARTBEAT_EVERY_TICKS = 30
+TITLE_PREVIEW_LENGTH = 48
 
 
 @inject
@@ -43,20 +45,38 @@ class WebChatService:
     web_chat_repository: WebChatRepository
     gateway: CommunicationsGatewayService
 
-    def send_message(self, agent_id: UUID, text: str, thread_id: str, context: CurrentUserContext) -> None:
+    def send_message(
+        self,
+        agent_id: UUID,
+        text: str,
+        thread_id: str,
+        context: CurrentUserContext,
+    ) -> WebChatMessageRead:
         agent = self.authorization.require_action(context, agent_id, PermissionKey.ACTIVITY_READ)
         connection = self._get_or_create_connection(agent.id, agent.organization_id)
+        location = self._location(context, thread_id)
+        self.web_chat_repository.restore_thread_if_deleted(
+            connection_id=connection.id,
+            channel_id=location.id,
+            thread_id=location.thread_id or MAIN_THREAD_ID,
+        )
         envelope = NormalizedCommunicationEnvelope(
             provider_message_id=secrets.token_urlsafe(16),
             occurred_at=datetime.now(UTC),
-            location=self._location(context, thread_id),
+            location=location,
             sender=CommunicationSender(
                 id=str(context.user.id),
                 display_name=context.user.full_name or context.user.email,
             ),
             text=text,
         )
-        self.gateway.accept_inbound(connection.id, envelope)
+        accepted = self.gateway.accept_inbound(connection.id, envelope)
+        return WebChatMessageRead(
+            id=accepted.message_id,
+            direction=MessageDirection.INBOUND,
+            content=envelope.text,
+            occurred_at=envelope.occurred_at,
+        )
 
     def list_messages(
         self,
@@ -79,18 +99,63 @@ class WebChatService:
     def list_threads(self, agent_id: UUID, context: CurrentUserContext) -> list[WebChatThreadRead]:
         agent = self.authorization.require_action(context, agent_id, PermissionKey.ACTIVITY_READ)
         connection = self._get_or_create_connection(agent.id, agent.organization_id)
-        summaries = self.web_chat_repository.list_threads(
+        channel_id = str(context.user.id)
+        summaries = self.web_chat_repository.list_threads(connection_id=connection.id, channel_id=channel_id)
+        metadata = self.web_chat_repository.list_thread_metadata(connection_id=connection.id, channel_id=channel_id)
+        threads = []
+        for summary in summaries:
+            meta = metadata.get(summary.thread_id)
+            threads.append(
+                WebChatThreadRead(
+                    thread_id=summary.thread_id,
+                    title=self._title_for(
+                        summary.thread_id,
+                        meta.display_name if meta else None,
+                        summary.first_content,
+                    ),
+                    last_occurred_at=summary.last_occurred_at,
+                    last_content=summary.last_content,
+                )
+            )
+        return threads
+
+    def rename_thread(
+        self,
+        agent_id: UUID,
+        thread_id: str,
+        display_name: str,
+        context: CurrentUserContext,
+    ) -> WebChatThreadRead:
+        agent = self.authorization.require_action(context, agent_id, PermissionKey.ACTIVITY_READ)
+        connection = self._get_or_create_connection(agent.id, agent.organization_id)
+        channel_id = str(context.user.id)
+        self.web_chat_repository.rename_thread(
+            connection_id=connection.id,
+            channel_id=channel_id,
+            thread_id=thread_id,
+            display_name=display_name.strip(),
+        )
+        threads = self.list_threads(agent_id, context)
+        for thread in threads:
+            if thread.thread_id == thread_id:
+                return thread
+        # No messages yet — nothing for list_threads to surface a preview
+        # from, but the rename itself is already durable.
+        return WebChatThreadRead(
+            thread_id=thread_id,
+            title=display_name.strip(),
+            last_occurred_at=None,
+            last_content=None,
+        )
+
+    def delete_thread(self, agent_id: UUID, thread_id: str, context: CurrentUserContext) -> None:
+        agent = self.authorization.require_action(context, agent_id, PermissionKey.ACTIVITY_READ)
+        connection = self._get_or_create_connection(agent.id, agent.organization_id)
+        self.web_chat_repository.soft_delete_thread(
             connection_id=connection.id,
             channel_id=str(context.user.id),
+            thread_id=thread_id,
         )
-        return [
-            WebChatThreadRead(
-                thread_id=summary.thread_id,
-                last_occurred_at=summary.last_occurred_at,
-                last_content=summary.last_content,
-            )
-            for summary in summaries
-        ]
 
     def stream_updates(self, agent_id: UUID, context: CurrentUserContext, thread_id: str) -> Iterator[str]:
         """Poll for new messages and yield them as Server-Sent Event frames.
@@ -117,6 +182,19 @@ class WebChatService:
             ticks += 1
             if not new_messages and ticks % HEARTBEAT_EVERY_TICKS == 0:
                 yield ": keep-alive\n\n"
+
+    @staticmethod
+    def _title_for(thread_id: str, display_name: str | None, first_content: str | None) -> str:
+        if display_name:
+            return display_name
+        if first_content:
+            collapsed = " ".join(first_content.split())
+            if len(collapsed) > TITLE_PREVIEW_LENGTH:
+                return collapsed[:TITLE_PREVIEW_LENGTH].rstrip() + "…"
+            return collapsed
+        if thread_id == MAIN_THREAD_ID:
+            return "Main chat"
+        return f"Chat {thread_id[:8]}"
 
     def _location(self, context: CurrentUserContext, thread_id: str) -> ConversationLocation:
         channel_id = str(context.user.id)

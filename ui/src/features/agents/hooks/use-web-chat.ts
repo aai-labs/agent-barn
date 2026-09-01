@@ -19,10 +19,6 @@ const MessagesListSchema = z.array(WebChatMessageSchema);
 const RECONNECT_BASE_MS = 1_000;
 const RECONNECT_MAX_MS = 15_000;
 
-function optimisticId() {
-  return `optimistic-${crypto.randomUUID()}`;
-}
-
 export function useWebChat(
   agentId: string,
   threadId: string,
@@ -53,65 +49,58 @@ export function useWebChat(
 
   const messages = useMemo(() => historyQuery.data ?? [], [historyQuery.data]);
 
-  // Optimistic sends and their SSE-confirmed counterparts live in the same
-  // query-cache array, updated by a single setQueryData call each time.
-  // Two separately-updated state containers (local "pending" state plus this
-  // cache) reconciled via two calls per message used to desync across
-  // renders — assistant-ui's stateful branch tracker read that desync as a
-  // new sibling message on every send, showing a phantom "2/2" branch
-  // picker. Keeping the optimistic id stable (never swapped for the real
-  // one) avoids the same problem from the id side: a same-position identity
-  // change reads as a new sibling too.
+  // True from the moment a message is sent until the Agent's reply lands via
+  // SSE — distinct from isSending (the POST round-trip, which resolves long
+  // before the Agent has actually replied). Drives the typing indicator so
+  // the panel doesn't just go blank while the Agent is working.
+  const [isWaitingForReply, setIsWaitingForReply] = useState(false);
+
+  // Reset when the thread itself changes, synchronously during render so one
+  // stale render cannot apply the previous thread's waiting state to the newly
+  // selected thread.
+  const [resetForThreadId, setResetForThreadId] = useState(threadId);
+  if (threadId !== resetForThreadId) {
+    setResetForThreadId(threadId);
+    setIsWaitingForReply(false);
+  }
+
   const appendMessage = useCallback(
     (message: WebChatMessage) => {
       queryClient.setQueryData<WebChatMessage[]>(queryKey, (current) => {
         const base = current ?? [];
         if (base.some((m) => m.id === message.id)) return base;
-        if (message.direction === "INBOUND") {
-          const optimisticIndex = base.findIndex((m) => m.id.startsWith("optimistic-"));
-          if (optimisticIndex !== -1) {
-            const next = [...base];
-            next[optimisticIndex] = { ...message, id: base[optimisticIndex].id };
-            return next;
-          }
-        }
         return [...base, message];
       });
+      if (message.direction === "OUTBOUND") {
+        setIsWaitingForReply(false);
+      }
     },
     [queryClient, queryKey],
   );
 
   const sendMutation = useMutation({
     mutationFn: async (text: string) => {
-      await api.post(`${orgApiBase}/agents/${agentId}/web-chat/messages`, {
-        text,
-        threadId,
-      });
+      const response = await api.post<WebChatMessage>(
+        `${orgApiBase}/agents/${agentId}/web-chat/messages`,
+        { text, threadId },
+        { schema: WebChatMessageSchema },
+      );
+      return response.data;
     },
   });
 
   const sendMessage = useCallback(
     async (text: string) => {
-      const optimistic: WebChatMessage = {
-        id: optimisticId(),
-        direction: "INBOUND",
-        content: text,
-        occurredAt: new Date().toISOString(),
-      };
-      queryClient.setQueryData<WebChatMessage[]>(queryKey, (current) => [
-        ...(current ?? []),
-        optimistic,
-      ]);
+      setIsWaitingForReply(true);
       try {
-        await sendMutation.mutateAsync(text);
+        const message = await sendMutation.mutateAsync(text);
+        appendMessage(message);
       } catch (err) {
-        queryClient.setQueryData<WebChatMessage[]>(queryKey, (current) =>
-          (current ?? []).filter((m) => m.id !== optimistic.id),
-        );
+        setIsWaitingForReply(false);
         throw err;
       }
     },
-    [sendMutation, queryClient, queryKey],
+    [appendMessage, sendMutation],
   );
 
   const [streamStatus, setStreamStatus] = useState<
@@ -219,8 +208,16 @@ export function useWebChat(
       error: historyQuery.error,
       streamStatus,
       sendMessage,
-      isSending: sendMutation.isPending,
+      isRunning: sendMutation.isPending || isWaitingForReply,
     }),
-    [messages, historyQuery.isPending, historyQuery.error, streamStatus, sendMessage, sendMutation.isPending],
+    [
+      messages,
+      historyQuery.isPending,
+      historyQuery.error,
+      streamStatus,
+      sendMessage,
+      sendMutation.isPending,
+      isWaitingForReply,
+    ],
   );
 }

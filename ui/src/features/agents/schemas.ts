@@ -214,8 +214,9 @@ export const WebChatMessageSchema = z.object({
 
 export const WebChatThreadSchema = z.object({
   threadId: z.string(),
-  lastOccurredAt: z.string(),
-  lastContent: z.string(),
+  title: z.string(),
+  lastOccurredAt: z.string().nullable(),
+  lastContent: z.string().nullable(),
 });
 
 export const ConversationsCursorSchema = z.object({

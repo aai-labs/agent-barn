@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { Maximize2, Minimize2, Plus } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Archive, Maximize2, MoreHorizontal, Minimize2, Pencil, Plus } from "lucide-react";
 import { useQueryState, parseAsString } from "nuqs";
 import {
   AssistantRuntimeProvider,
@@ -10,6 +10,22 @@ import {
 } from "@assistant-ui/react";
 
 import { Thread } from "@/components/assistant-ui/elements/thread.aui";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 
 import type { Agent, WebChatMessage } from "../schemas";
@@ -30,8 +46,146 @@ function convertMessage(message: WebChatMessage): ThreadMessageLike {
   };
 }
 
-function threadLabel(threadId: string) {
-  return threadId === MAIN_THREAD_ID ? "Main chat" : `Chat ${threadId.slice(0, 8)}`;
+interface ChatThreadProps {
+  messages: WebChatMessage[];
+  isRunning: boolean;
+  sendMessage: (text: string) => Promise<void>;
+  onSent: () => void;
+}
+
+function ChatThread({ messages, isRunning, sendMessage, onSent }: ChatThreadProps) {
+  const runtime = useExternalStoreRuntime<WebChatMessage>({
+    messages,
+    isRunning,
+    convertMessage,
+    onNew: async (message) => {
+      const part = message.content.find((candidate) => candidate.type === "text");
+      if (!part || part.type !== "text") return;
+      await sendMessage(part.text);
+      onSent();
+    },
+  });
+
+  return (
+    <AssistantRuntimeProvider runtime={runtime}>
+      <Thread />
+    </AssistantRuntimeProvider>
+  );
+}
+
+function fallbackTitle(threadId: string) {
+  return threadId === MAIN_THREAD_ID ? "Main chat" : "New chat";
+}
+
+interface SidebarThread {
+  threadId: string;
+  title: string;
+  lastContent: string | null;
+}
+
+interface ThreadListItemProps {
+  thread: SidebarThread;
+  active: boolean;
+  onSelect: () => void;
+  onRename: (title: string) => void;
+  onArchive: () => void;
+}
+
+function ThreadListItem({ thread, active, onSelect, onRename, onArchive }: ThreadListItemProps) {
+  const [isEditing, setIsEditing] = useState(false);
+  const [draft, setDraft] = useState(thread.title);
+  const [confirmArchiveOpen, setConfirmArchiveOpen] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  function startEditing() {
+    setDraft(thread.title);
+    setIsEditing(true);
+  }
+
+  function commitEdit() {
+    const trimmed = draft.trim();
+    setIsEditing(false);
+    if (trimmed && trimmed !== thread.title) onRename(trimmed);
+  }
+
+  if (isEditing) {
+    return (
+      <input
+        ref={inputRef}
+        autoFocus
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commitEdit}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            commitEdit();
+          } else if (e.key === "Escape") {
+            setIsEditing(false);
+          }
+        }}
+        className="w-full rounded-lg px-2.5 py-2 mb-0.5 text-[0.8125rem] font-medium outline-none"
+        style={{ background: "var(--bg-soft)", color: "var(--ink)", border: "1px solid var(--line)" }}
+      />
+    );
+  }
+
+  return (
+    <div
+      className="group relative w-full rounded-lg mb-0.5"
+      style={{ background: active ? "var(--bg-soft)" : "transparent" }}
+    >
+      <button
+        onClick={onSelect}
+        className="w-full rounded-lg px-2.5 py-2 pr-8 text-left"
+        style={{ color: active ? "var(--ink)" : "var(--ink-3)" }}
+      >
+        <div className="text-[0.8125rem] font-medium truncate">{thread.title}</div>
+        {thread.lastContent && (
+          <div className="text-[0.75rem] truncate" style={{ color: "var(--ink-3)" }}>
+            {thread.lastContent}
+          </div>
+        )}
+      </button>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <button
+            className="absolute right-1 top-1/2 -translate-y-1/2 rounded-md p-1 opacity-0 group-hover:opacity-100 data-[state=open]:opacity-100"
+            style={{ color: "var(--ink-3)" }}
+            aria-label="Thread options"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <MoreHorizontal size={14} />
+          </button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start">
+          <DropdownMenuItem onSelect={startEditing}>
+            <Pencil size={14} /> Rename
+          </DropdownMenuItem>
+          <DropdownMenuItem variant="destructive" onSelect={() => setConfirmArchiveOpen(true)}>
+            <Archive size={14} /> Archive
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+      <AlertDialog open={confirmArchiveOpen} onOpenChange={setConfirmArchiveOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Archive &ldquo;{thread.title}&rdquo;?</AlertDialogTitle>
+            <AlertDialogDescription>
+              It&rsquo;ll disappear from this list, but the conversation is kept — send a new
+              message on it later and it comes right back.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction variant="destructive" onClick={onArchive}>
+              Archive
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </div>
+  );
 }
 
 export function ChatTab({ agent }: ChatTabProps) {
@@ -40,12 +194,17 @@ export function ChatTab({ agent }: ChatTabProps) {
     parseAsString.withDefault(MAIN_THREAD_ID).withOptions({ history: "replace" }),
   );
 
-  const { messages, sendMessage, isSending, streamStatus } = useWebChat(
+  const { messages, sendMessage, isRunning, streamStatus } = useWebChat(
     agent.id,
     threadId,
     true,
   );
-  const { threads, refetch: refetchThreads } = useWebChatThreads(agent.id, true);
+  const {
+    threads,
+    refetch: refetchThreads,
+    renameThread,
+    deleteThread,
+  } = useWebChatThreads(agent.id, true);
 
   const [isMaximized, setIsMaximized] = useState(false);
 
@@ -66,18 +225,6 @@ export function ChatTab({ agent }: ChatTabProps) {
     void setThreadId(crypto.randomUUID());
   }
 
-  const runtime = useExternalStoreRuntime<WebChatMessage>({
-    messages,
-    isRunning: isSending,
-    convertMessage,
-    onNew: async (message) => {
-      const part = message.content.find((p) => p.type === "text");
-      if (!part || part.type !== "text") return;
-      await sendMessage(part.text);
-      void refetchThreads();
-    },
-  });
-
   const isLive = streamStatus === "streaming";
 
   // `threads` is already most-recent-first. A brand-new thread (no messages
@@ -86,16 +233,28 @@ export function ChatTab({ agent }: ChatTabProps) {
   // chat still always appears (even with zero messages, for discoverability
   // of the default thread), but only pinned to the end if nothing else put
   // it earlier.
-  const sidebarThreads = useMemo(() => {
+  const sidebarThreads = useMemo<SidebarThread[]>(() => {
     const known = new Map(threads.map((t) => [t.threadId, t]));
     const ids = [...threads.map((t) => t.threadId)];
     if (!known.has(threadId)) ids.unshift(threadId);
     if (!known.has(MAIN_THREAD_ID) && threadId !== MAIN_THREAD_ID) ids.push(MAIN_THREAD_ID);
-    return ids.map((id) => ({ threadId: id, lastContent: known.get(id)?.lastContent }));
+    return ids.map((id) => {
+      const meta = known.get(id);
+      return {
+        threadId: id,
+        title: meta?.title ?? fallbackTitle(id),
+        lastContent: meta?.lastContent ?? null,
+      };
+    });
   }, [threads, threadId]);
 
+  function handleArchive(archivedId: string) {
+    void deleteThread(archivedId).then(() => {
+      if (archivedId === threadId) void setThreadId(MAIN_THREAD_ID);
+    });
+  }
+
   return (
-    <AssistantRuntimeProvider runtime={runtime}>
       <div
         className={cn(
           "flex overflow-hidden",
@@ -126,29 +285,16 @@ export function ChatTab({ agent }: ChatTabProps) {
             >
               Threads
             </div>
-            {sidebarThreads.map((t) => {
-              const active = t.threadId === threadId;
-              return (
-                <button
-                  key={t.threadId}
-                  onClick={() => void setThreadId(t.threadId)}
-                  className="w-full rounded-lg px-2.5 py-2 text-left mb-0.5"
-                  style={{
-                    background: active ? "var(--bg-soft)" : "transparent",
-                    color: active ? "var(--ink)" : "var(--ink-3)",
-                  }}
-                >
-                  <div className="text-[0.8125rem] font-medium truncate">
-                    {threadLabel(t.threadId)}
-                  </div>
-                  {t.lastContent && (
-                    <div className="text-[0.75rem] truncate" style={{ color: "var(--ink-3)" }}>
-                      {t.lastContent}
-                    </div>
-                  )}
-                </button>
-              );
-            })}
+            {sidebarThreads.map((t) => (
+              <ThreadListItem
+                key={t.threadId}
+                thread={t}
+                active={t.threadId === threadId}
+                onSelect={() => void setThreadId(t.threadId)}
+                onRename={(title) => void renameThread(t.threadId, title)}
+                onArchive={() => handleArchive(t.threadId)}
+              />
+            ))}
           </div>
         </div>
 
@@ -175,12 +321,17 @@ export function ChatTab({ agent }: ChatTabProps) {
               <span
                 className="flex items-center gap-1.5 text-[0.75rem] font-medium"
                 style={{ color: isLive ? "var(--ok, #16a34a)" : "var(--ink-3)" }}
+                title="Whether this panel is receiving new messages in real time — independent of whether the Agent itself is running or reachable."
               >
                 <span
                   className="h-1.5 w-1.5 rounded-full"
                   style={{ background: isLive ? "var(--ok, #16a34a)" : "var(--ink-3)" }}
                 />
-                {isLive ? "Live" : streamStatus === "connecting" ? "Connecting…" : "Offline"}
+                {isLive
+                  ? "Live updates"
+                  : streamStatus === "connecting"
+                    ? "Connecting…"
+                    : "Updates paused"}
               </span>
               <button
                 type="button"
@@ -194,10 +345,15 @@ export function ChatTab({ agent }: ChatTabProps) {
           </div>
 
           <div className="flex-1 overflow-hidden">
-            <Thread key={threadId} />
+            <ChatThread
+              key={threadId}
+              messages={messages}
+              isRunning={isRunning}
+              sendMessage={sendMessage}
+              onSent={() => void refetchThreads()}
+            />
           </div>
         </div>
       </div>
-    </AssistantRuntimeProvider>
   );
 }
