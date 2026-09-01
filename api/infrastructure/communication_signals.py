@@ -115,7 +115,7 @@ class CommunicationSignalBus:
                 try:
                     signal_type = CommunicationSignalType(fields["type"])
                     delivery_id = UUID(fields["delivery_id"]) if fields.get("delivery_id") else None
-                except (KeyError, TypeError, ValueError):
+                except KeyError, TypeError, ValueError:
                     continue
                 signals.append(CommunicationSignal(type=signal_type, delivery_id=delivery_id))
         return next_cursor, signals

@@ -636,7 +636,5 @@ def test_cancelled_source_rejects_runtime_reply_atomically() -> None:
 
         delegate = context.injector.get(PostgresRepositoryDelegate)
         with Session(delegate.engine) as session:
-            leaked = session.exec(
-                select(AgentChatMessage).where(AgentChatMessage.content == "must not leak")
-            ).all()
+            leaked = session.exec(select(AgentChatMessage).where(AgentChatMessage.content == "must not leak")).all()
         assert_that(leaked, empty())

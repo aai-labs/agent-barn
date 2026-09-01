@@ -67,6 +67,7 @@ def test_run_delivery_posts_reply_then_completion(monkeypatch: pytest.MonkeyPatc
 def test_cancel_during_runtime_work_suppresses_reply(monkeypatch: pytest.MonkeyPatch) -> None:
     adapter = _load_adapter(monkeypatch)
     calls: list[tuple[str, dict | None]] = []
+
     def fake_request(_method: str, url: str, *, headers: dict[str, str], payload: dict | None = None):
         del headers
         calls.append((url, payload))
@@ -95,7 +96,7 @@ def test_control_stream_wakes_delivery_worker_and_routes_cancel(monkeypatch: pyt
     response = io.BytesIO(
         b'data: {"type":"delivery_available"}\n\n'
         b'data: {"type":"delivery_cancelled","delivery_id":"delivery-1"}\n\n'
-        b'data: not-json\n\n'
+        b"data: not-json\n\n"
     )
 
     class Response:
