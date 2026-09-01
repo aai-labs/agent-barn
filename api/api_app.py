@@ -43,6 +43,7 @@ from api.domains.tool_calls.routes import tool_calls_router
 from api.domains.users.organization_users.routes import member_router, platform_member_router
 from api.domains.users.routes import users_router
 from api.domains.users.service import UserService
+from api.domains.web_chat.routes import web_chat_router
 from api.infrastructure.email.logging_utils import (
     log_email_delivery_disabled_warning,
 )
@@ -104,6 +105,7 @@ def create_app(injector: Injector | None = None):
     subapi.include_router(auth_router)
     subapi.include_router(conversations_router)
     subapi.include_router(communications_router)
+    subapi.include_router(web_chat_router)
     subapi.include_router(costs_router)
     subapi.include_router(event_delivery_monitor_router)
     subapi.include_router(platform_stats_router)
