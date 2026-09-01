@@ -40,5 +40,8 @@ class WebPlatformPlugin(PlatformPlugin):
         settings: PlatformSettings,
         credentials: PlatformCredentials,
         envelope: OutboundCommunicationEnvelope,
+        *,
+        idempotency_key: str,
     ) -> str:
+        del settings, credentials, idempotency_key
         return f"web:{envelope.source_delivery_id}"

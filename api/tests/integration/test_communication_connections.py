@@ -149,7 +149,7 @@ def test_platform_catalog_lists_the_shipped_plugins() -> None:
             catalogue = response.json()
             assert_that(
                 [item["key"] for item in catalogue],
-                contains_inanyorder("discord", "slack", "teams", "telegram"),
+                contains_inanyorder("discord", "slack", "teams", "telegram", "web"),
             )
             hints = {item["key"]: item["setup_hint"] for item in catalogue}
             assert_that(
