@@ -96,7 +96,7 @@ class TeamsPlatformPlugin(PlatformPlugin):
     setup_hint = (
         "Credentials\n"
         "• Create an Azure Bot resource in the Azure Portal, then open Configuration and copy the Microsoft App ID.\n"
-        "• Open the linked app registration → Certificates & secrets → New client secret. Copy the secret Value "
+        "• Open Manage passwords near Microsoft App ID → Certificates & secrets → New client secret. Copy the secret Value "
         "immediately; it is masked once you leave the page, and the Secret ID is not the password.\n"
         "• Copy the Directory (tenant) ID from Microsoft Entra ID → Overview.\n\n"
         "Teams setup\n"
