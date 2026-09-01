@@ -77,12 +77,15 @@ export type ThreadComponents = {
 export type ThreadProps = {
   components?: ThreadComponents | undefined;
   autoFocus?: boolean | undefined;
+  workingMessage?: string | undefined;
 };
 
 const EMPTY_COMPONENTS: ThreadComponents = {};
+const DEFAULT_WORKING_MESSAGE = "Agent is working";
 
 const ThreadComponentsContext =
   createContext<ThreadComponents>(EMPTY_COMPONENTS);
+const ThreadWorkingMessageContext = createContext(DEFAULT_WORKING_MESSAGE);
 
 // Startup exposes a loading placeholder thread; treat it as a new chat so
 // the composer mounts centered. Loads after startup keep the docked layout.
@@ -121,12 +124,15 @@ const ThreadHistorySkeleton: FC = () => (
 export const Thread: FC<ThreadProps> = ({
   components = EMPTY_COMPONENTS,
   autoFocus = true,
+  workingMessage = DEFAULT_WORKING_MESSAGE,
 }) => {
   const isEmpty = useAuiState(isNewChatView);
 
   return (
     <ThreadComponentsContext.Provider value={components}>
-      <ThreadRoot isEmpty={isEmpty} autoFocus={autoFocus} />
+      <ThreadWorkingMessageContext.Provider value={workingMessage}>
+        <ThreadRoot isEmpty={isEmpty} autoFocus={autoFocus} />
+      </ThreadWorkingMessageContext.Provider>
     </ThreadComponentsContext.Provider>
   );
 };
@@ -435,15 +441,7 @@ const AssistantMessage: FC = () => {
                   </div>
                 );
               case "indicator":
-                return (
-                  <span
-                    data-slot="aui_assistant-message-indicator"
-                    className="animate-pulse font-sans"
-                    aria-label="Assistant is working"
-                  >
-                    {"●"}
-                  </span>
-                );
+                return <AssistantWorkingIndicator />;
               default:
                 return null;
             }
@@ -459,6 +457,26 @@ const AssistantMessage: FC = () => {
         <AssistantActionBar />
       </div>
     </MessagePrimitive.Root>
+  );
+};
+
+const AssistantWorkingIndicator: FC = () => {
+  const workingMessage = useContext(ThreadWorkingMessageContext);
+
+  return (
+    <span
+      data-slot="aui_assistant-message-indicator"
+      role="status"
+      aria-live="polite"
+      className="bg-muted text-muted-foreground inline-flex items-center gap-2 rounded-xl px-3 py-2 font-sans text-sm"
+    >
+      <span>{workingMessage}</span>
+      <span aria-hidden="true" className="inline-flex items-end gap-0.5">
+        <span className="size-1 animate-bounce rounded-full bg-current motion-reduce:animate-none [animation-delay:-300ms]" />
+        <span className="size-1 animate-bounce rounded-full bg-current motion-reduce:animate-none [animation-delay:-150ms]" />
+        <span className="size-1 animate-bounce rounded-full bg-current motion-reduce:animate-none" />
+      </span>
+    </span>
   );
 };
 

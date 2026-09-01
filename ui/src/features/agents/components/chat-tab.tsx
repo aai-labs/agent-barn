@@ -35,6 +35,7 @@ import { AgentAvatar } from "./agent-avatar";
 
 interface ChatTabProps {
   agent: Agent;
+  isAgentWorking: boolean;
 }
 
 function convertMessage(message: WebChatMessage): ThreadMessageLike {
@@ -47,16 +48,26 @@ function convertMessage(message: WebChatMessage): ThreadMessageLike {
 }
 
 interface ChatThreadProps {
+  agentName: string;
   messages: WebChatMessage[];
-  isRunning: boolean;
+  isAgentWorking: boolean;
+  isAwaitingReply: boolean;
   sendMessage: (text: string) => Promise<void>;
   onSent: () => void;
 }
 
-function ChatThread({ messages, isRunning, sendMessage, onSent }: ChatThreadProps) {
+function ChatThread({
+  agentName,
+  messages,
+  isAgentWorking,
+  isAwaitingReply,
+  sendMessage,
+  onSent,
+}: ChatThreadProps) {
   const runtime = useExternalStoreRuntime<WebChatMessage>({
     messages,
-    isRunning,
+    isDisabled: !isAgentWorking,
+    isRunning: isAgentWorking && isAwaitingReply,
     convertMessage,
     onNew: async (message) => {
       const part = message.content.find((candidate) => candidate.type === "text");
@@ -68,7 +79,7 @@ function ChatThread({ messages, isRunning, sendMessage, onSent }: ChatThreadProp
 
   return (
     <AssistantRuntimeProvider runtime={runtime}>
-      <Thread />
+      <Thread workingMessage={`${agentName} is working`} />
     </AssistantRuntimeProvider>
   );
 }
@@ -188,13 +199,13 @@ function ThreadListItem({ thread, active, onSelect, onRename, onArchive }: Threa
   );
 }
 
-export function ChatTab({ agent }: ChatTabProps) {
+export function ChatTab({ agent, isAgentWorking }: ChatTabProps) {
   const [threadId, setThreadId] = useQueryState(
     "thread",
     parseAsString.withDefault(MAIN_THREAD_ID).withOptions({ history: "replace" }),
   );
 
-  const { messages, sendMessage, isRunning, streamStatus } = useWebChat(
+  const { messages, sendMessage, isAwaitingReply, streamStatus } = useWebChat(
     agent.id,
     threadId,
     true,
@@ -262,7 +273,7 @@ export function ChatTab({ agent }: ChatTabProps) {
         )}
         style={{
           border: "1px solid var(--line)",
-          height: isMaximized ? undefined : "34rem",
+          height: isMaximized ? undefined : "min(760px, 80vh)",
           background: "var(--bg)",
         }}
       >
@@ -347,8 +358,10 @@ export function ChatTab({ agent }: ChatTabProps) {
           <div className="flex-1 overflow-hidden">
             <ChatThread
               key={threadId}
+              agentName={agent.name}
               messages={messages}
-              isRunning={isRunning}
+              isAgentWorking={isAgentWorking}
+              isAwaitingReply={isAwaitingReply}
               sendMessage={sendMessage}
               onSent={() => void refetchThreads()}
             />

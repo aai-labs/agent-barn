@@ -49,21 +49,6 @@ export function useWebChat(
 
   const messages = useMemo(() => historyQuery.data ?? [], [historyQuery.data]);
 
-  // True from the moment a message is sent until the Agent's reply lands via
-  // SSE — distinct from isSending (the POST round-trip, which resolves long
-  // before the Agent has actually replied). Drives the typing indicator so
-  // the panel doesn't just go blank while the Agent is working.
-  const [isWaitingForReply, setIsWaitingForReply] = useState(false);
-
-  // Reset when the thread itself changes, synchronously during render so one
-  // stale render cannot apply the previous thread's waiting state to the newly
-  // selected thread.
-  const [resetForThreadId, setResetForThreadId] = useState(threadId);
-  if (threadId !== resetForThreadId) {
-    setResetForThreadId(threadId);
-    setIsWaitingForReply(false);
-  }
-
   const appendMessage = useCallback(
     (message: WebChatMessage) => {
       queryClient.setQueryData<WebChatMessage[]>(queryKey, (current) => {
@@ -71,9 +56,6 @@ export function useWebChat(
         if (base.some((m) => m.id === message.id)) return base;
         return [...base, message];
       });
-      if (message.direction === "OUTBOUND") {
-        setIsWaitingForReply(false);
-      }
     },
     [queryClient, queryKey],
   );
@@ -91,14 +73,8 @@ export function useWebChat(
 
   const sendMessage = useCallback(
     async (text: string) => {
-      setIsWaitingForReply(true);
-      try {
-        const message = await sendMutation.mutateAsync(text);
-        appendMessage(message);
-      } catch (err) {
-        setIsWaitingForReply(false);
-        throw err;
-      }
+      const message = await sendMutation.mutateAsync(text);
+      appendMessage(message);
     },
     [appendMessage, sendMutation],
   );
@@ -201,6 +177,9 @@ export function useWebChat(
     };
   }, [agentId, threadId, enabled, historyQuery.isPending, orgApiBase, appendMessage]);
 
+  const isAwaitingReply =
+    sendMutation.isPending || messages.at(-1)?.direction === "INBOUND";
+
   return useMemo(
     () => ({
       messages,
@@ -208,7 +187,7 @@ export function useWebChat(
       error: historyQuery.error,
       streamStatus,
       sendMessage,
-      isRunning: sendMutation.isPending || isWaitingForReply,
+      isAwaitingReply,
     }),
     [
       messages,
@@ -216,8 +195,7 @@ export function useWebChat(
       historyQuery.error,
       streamStatus,
       sendMessage,
-      sendMutation.isPending,
-      isWaitingForReply,
+      isAwaitingReply,
     ],
   );
 }
