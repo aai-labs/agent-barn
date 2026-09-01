@@ -82,7 +82,7 @@ export class AuthInterceptor {
           originalRequest.headers.Authorization = `Bearer ${tokens.accessToken}`;
           return this.axiosInstance(originalRequest);
         }
-      } catch (_) {
+      } catch {
         this.config.onSessionExpired?.();
         throw ApiError.unauthorizedError("Token refresh failed.");
       }
@@ -155,7 +155,7 @@ export class AuthInterceptor {
 
       this.config.setTokens(newTokens);
       return newTokens;
-    } catch (_) {
+    } catch {
       this.config.onSessionExpired?.();
       throw new Error("Token refresh failed");
     }

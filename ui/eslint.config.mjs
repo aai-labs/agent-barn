@@ -9,7 +9,6 @@ const eslintConfig = defineConfig([
     files: ["src/shared/api/**/*.ts"],
     rules: {
       "@typescript-eslint/no-explicit-any": "off",
-      "@typescript-eslint/no-unused-vars": "off",
     },
   },
   // Override default ignores of eslint-config-next.
