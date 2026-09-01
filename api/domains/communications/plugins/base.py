@@ -238,6 +238,23 @@ class PlatformPlugin(ABC):
         del settings, credentials
         return envelopes
 
+    def list_directory_entries(
+        self,
+        settings: PlatformSettings,
+        credentials: PlatformCredentials,
+        *,
+        kind: str,
+        search: str | None = None,
+    ) -> list[dict[str, str | None]]:
+        """List safe provider-owned candidates for Connection settings.
+
+        A platform advertises DIRECTORY_DISCOVERY only when it implements this
+        seam. Returned values are display-only identifiers; credentials and
+        provider payloads never leave the plugin boundary.
+        """
+        del settings, credentials, kind, search
+        raise NotImplementedError(f"{self.key} does not implement directory discovery")
+
     def processing_feedback(
         self,
         settings: PlatformSettings,

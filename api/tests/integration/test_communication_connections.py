@@ -2,6 +2,7 @@ import io
 import json
 import zipfile
 from datetime import UTC, datetime, timedelta
+from unittest.mock import patch
 from uuid import UUID, uuid4
 
 import httpx
@@ -181,6 +182,43 @@ def test_platform_catalog_lists_the_shipped_plugins() -> None:
                     contains_string("webhook"),
                 ),
             )
+
+
+def test_slack_connection_directory_lists_safe_channels_and_users() -> None:
+    with given(_GIVEN) as context:
+        created = context.client.post(_base(context), json=_slack_payload(), headers=_auth(context))
+        connection_id = created.json()["id"]
+        with patch(
+            "api.infrastructure.slack.client.SlackClient.list_channels",
+            return_value=[{"id": "C1", "name": "ops", "is_private": True}],
+        ):
+            channels = context.client.get(
+                f"{_base(context)}/{connection_id}/directory/channels", headers=_auth(context)
+            )
+        with patch(
+            "api.infrastructure.slack.client.SlackClient.list_users",
+            return_value=[{"id": "U1", "name": "aria", "real_name": "Aria", "display_name": ""}],
+        ):
+            users = context.client.get(f"{_base(context)}/{connection_id}/directory/users", headers=_auth(context))
+
+        assert_that(channels.status_code, equal_to(status.HTTP_200_OK))
+        assert_that(channels.json(), equal_to([{"id": "C1", "label": "#ops", "detail": "Private channel"}]))
+        assert_that(users.status_code, equal_to(status.HTTP_200_OK))
+        assert_that(users.json(), equal_to([{"id": "U1", "label": "Aria", "detail": "@aria"}]))
+
+
+def test_agent_reads_project_distinct_active_connection_platforms() -> None:
+    with given(_GIVEN) as context:
+        context.client.post(_base(context), json=_slack_payload(), headers=_auth(context))
+        context.client.post(_base(context), json=_discord_payload(), headers=_auth(context))
+
+        response = context.client.get(
+            f"/api/v1/organizations/{context.organization.id}/agents/{context.agent.id}",
+            headers=_auth(context),
+        )
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+        assert_that(response.json()["configured_platform_keys"], equal_to(["discord", "slack"]))
 
 
 def test_list_connections_without_authentication_returns_401() -> None:

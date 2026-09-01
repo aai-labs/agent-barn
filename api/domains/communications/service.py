@@ -23,6 +23,7 @@ from api.domains.communications.models import (
     CommunicationConnectionUpdate,
     CommunicationDiagnosticsRead,
     CommunicationDirection,
+    CommunicationDirectoryEntryRead,
     CommunicationJournalEntryRead,
     CommunicationJournalStage,
     CommunicationReconnectRead,
@@ -68,6 +69,38 @@ class CommunicationsService:
         self.authorization.require_visible(context, agent_id)
         scope = self.authorization.authorization_scope(context, PermissionKey.AGENT_READ)
         return [self._read(connection) for connection in self.repository.list_active_for_agent(agent_id, scope)]
+
+    def list_connection_directory(
+        self,
+        agent_id: UUID,
+        connection_id: UUID,
+        kind: str,
+        search: str | None,
+        context: CurrentUserContext,
+    ) -> list[CommunicationDirectoryEntryRead]:
+        self.authorization.require_action(context, agent_id, PermissionKey.AGENT_UPDATE)
+        scope = self.authorization.authorization_scope(context, PermissionKey.AGENT_UPDATE)
+        connection = self.repository.get_active_in_scope(connection_id, agent_id, scope)
+        if connection is None:
+            self._raise_not_found(connection_id)
+        plugin = self._require_plugin(connection.platform_key)
+        if PlatformCapability.DIRECTORY_DISCOVERY not in plugin.capabilities:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="This platform does not support directory discovery",
+            )
+        try:
+            entries = plugin.list_directory_entries(
+                plugin.settings_model.model_validate(plugin.validate_stored_settings(connection.settings)),
+                plugin.credentials_model.model_validate(
+                    self._decrypt_credentials(plugin, connection.credentials_encrypted)
+                ),
+                kind=kind,
+                search=search,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        return [CommunicationDirectoryEntryRead.model_validate(entry) for entry in entries]
 
     def create_connection(
         self,

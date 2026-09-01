@@ -13,6 +13,7 @@ from api.domains.communications.models import (
     CommunicationConnectionUpdate,
     CommunicationDiagnosticsRead,
     CommunicationDirection,
+    CommunicationDirectoryEntryRead,
     CommunicationJournalEntryRead,
     CommunicationJournalStage,
     CommunicationReconnectRead,
@@ -46,6 +47,21 @@ def list_communication_connections(
     service: Annotated[CommunicationsService, Injected(CommunicationsService)],
 ):
     return service.list_connections(agent_id, context)
+
+
+@communications_router.get(
+    "/agents/{agent_id}/connections/{connection_id}/directory/{kind}",
+    response_model=list[CommunicationDirectoryEntryRead],
+)
+def list_communication_connection_directory(
+    agent_id: UUID,
+    connection_id: UUID,
+    kind: Literal["channels", "users"],
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[CommunicationsService, Injected(CommunicationsService)],
+    search: str | None = Query(default=None, max_length=255),
+):
+    return service.list_connection_directory(agent_id, connection_id, kind, search, context)
 
 
 @communications_router.post(

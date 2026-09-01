@@ -22,6 +22,12 @@ const CommunicationErrorDetailsSchema = z.object({
   requestId: z.string().nullable(),
 });
 
+export const CommunicationDirectoryEntrySchema = z.object({
+  id: z.string(),
+  label: z.string(),
+  detail: z.string().nullable().optional(),
+});
+
 export const CommunicationPlatformSchema = z.object({
   key: z.string(),
   displayName: z.string(),
@@ -169,6 +175,7 @@ export const CommunicationRetrySchema = z.object({
   requestedAt: z.string(),
 });
 
+export type CommunicationDirectoryEntry = z.infer<typeof CommunicationDirectoryEntrySchema>;
 export type CommunicationPlatform = z.infer<typeof CommunicationPlatformSchema>;
 export type CommunicationConnection = z.infer<typeof CommunicationConnectionSchema>;
 export type CommunicationDiagnostics = z.infer<typeof CommunicationDiagnosticsSchema>;

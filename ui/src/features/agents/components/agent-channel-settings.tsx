@@ -24,10 +24,11 @@ import {
 import {
   useCommunicationConnectionActions,
   useCommunicationConnections,
+  useCommunicationConnectionDirectory,
   useCommunicationPlatforms,
   useDownloadAppPackage,
 } from "@/features/communication-connections/hooks/use-communication-connections";
-import type { CommunicationConnection } from "@/features/communication-connections/schemas";
+import type { CommunicationConnection, CommunicationDirectoryEntry } from "@/features/communication-connections/schemas";
 
 import type { Agent } from "../schemas";
 import { AgentConfigurationSection } from "./agent-configuration-section";
@@ -167,26 +168,89 @@ function patternOptions(pattern?: string): string[] {
   return match?.[1]?.split("|") ?? [];
 }
 
+function SchemaArrayInput({
+  label,
+  value,
+  onChange,
+  suggestions = [],
+}: {
+  label: string;
+  value: unknown;
+  onChange: (value: string[]) => void;
+  suggestions?: CommunicationDirectoryEntry[];
+}) {
+  const values = Array.isArray(value) ? value.map(String) : [];
+  const [draft, setDraft] = useState("");
+  const commit = (next: string) => {
+    const additions = next.split(",").map((item) => item.trim()).filter(Boolean);
+    if (additions.length) onChange([...values, ...additions.filter((item) => !values.includes(item))]);
+    setDraft("");
+  };
+  const remove = (item: string) => onChange(values.filter((valueItem) => valueItem !== item));
+
+  return (
+    <div className="rounded-md border p-2" style={{ borderColor: "var(--line)", background: "var(--bg-elev)" }}>
+      {values.length > 0 && (
+        <div className="mb-2 flex flex-wrap gap-1.5">
+          {values.map((item) => {
+            const suggestion = suggestions.find((candidate) => candidate.id === item);
+            return <span key={item} className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs" style={{ background: "var(--bg-soft)", color: "var(--ink-2)" }}>
+              {suggestion?.label ?? item}
+              <button type="button" aria-label={`Remove ${suggestion?.label ?? item}`} className="cursor-pointer" onClick={() => remove(item)}>×</button>
+            </span>;
+          })}
+        </div>
+      )}
+      <input
+        className="af-input w-full border-0 p-0 shadow-none focus-visible:ring-0"
+        aria-label={label}
+        value={draft}
+        placeholder="Type a value, then press Enter or comma"
+        onChange={(event) => {
+          const next = event.target.value;
+          if (next.includes(",")) {
+            const segments = next.split(",");
+            commit(segments.slice(0, -1).join(","));
+            setDraft(segments.at(-1) ?? "");
+          } else setDraft(next);
+        }}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === ",") { event.preventDefault(); commit(draft); }
+          if (event.key === "Backspace" && !draft && values.length) remove(values.at(-1) ?? "");
+        }}
+        onBlur={() => commit(draft)}
+      />
+      {suggestions.length > 0 && (
+        <div className="mt-2 flex max-h-28 flex-wrap gap-1 overflow-y-auto">
+          {suggestions.filter((candidate) => !values.includes(candidate.id)).map((candidate) => (
+            <button key={candidate.id} type="button" className="rounded px-1.5 py-0.5 text-xs hover:bg-[var(--bg-soft)]" style={{ color: "var(--ink-3)" }} onClick={() => onChange([...values, candidate.id])}>
+              {candidate.label}{candidate.detail ? ` · ${candidate.detail}` : ""}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function SchemaTextInput({
   label,
   property,
   value,
   onChange,
   secret,
+  suggestions,
 }: {
   label: string;
   property: SchemaProperty;
   value: unknown;
   onChange: (value: unknown) => void;
   secret: boolean;
+  suggestions?: CommunicationDirectoryEntry[];
 }) {
   const [visible, setVisible] = useState(false);
-  const textValue = Array.isArray(value) ? value.join(", ") : String(value);
-
-  function updateValue(next: string) {
-    onChange(property.type === "array"
-      ? next.split(",").map((item) => item.trim()).filter(Boolean)
-      : next);
+  if (property.type === "array") {
+    return <SchemaArrayInput label={label} value={value} onChange={(next) => onChange(next)} suggestions={suggestions} />;
   }
 
   return (
@@ -196,9 +260,8 @@ function SchemaTextInput({
         type={secret && !visible ? "password" : "text"}
         autoComplete={secret ? "new-password" : undefined}
         spellCheck={false}
-        value={textValue}
-        placeholder={property.type === "array" ? "Comma-separated values" : undefined}
-        onChange={(event) => updateValue(event.target.value)}
+        value={String(value)}
+        onChange={(event) => onChange(event.target.value)}
       />
       {secret && (
         <button
@@ -221,11 +284,13 @@ function SchemaFields({
   values,
   onChange,
   secret = false,
+  arraySuggestions = {},
 }: {
   schema: Record<string, unknown>;
   values: Record<string, unknown>;
   onChange: (values: Record<string, unknown>) => void;
   secret?: boolean;
+  arraySuggestions?: Record<string, CommunicationDirectoryEntry[]>;
 }) {
   const required = new Set(Array.isArray(schema.required) ? schema.required.filter((item): item is string => typeof item === "string") : []);
   return schemaProperties(schema).map(([key, property]) => {
@@ -263,7 +328,7 @@ function SchemaFields({
     return (
       <label key={key} className="flex w-full flex-col gap-1.5 text-sm font-medium">
         {label}{required.has(key) ? " *" : ""}
-        <SchemaTextInput label={label} property={property} value={value} onChange={update} secret={secret} />
+        <SchemaTextInput label={label} property={property} value={value} onChange={update} secret={secret} suggestions={arraySuggestions[key]} />
         {hint}
       </label>
     );
@@ -298,6 +363,9 @@ export function AgentChannelSettings({
   const [editDisplayName, setEditDisplayName] = useState("");
   const [editSettings, setEditSettings] = useState<Record<string, unknown>>({});
   const [editCredentials, setEditCredentials] = useState<Record<string, unknown>>({});
+  const editingSlack = editingConnection?.platformKey === "slack";
+  const slackChannels = useCommunicationConnectionDirectory(agent.id, editingConnection?.id ?? "", "channels", "", editingSlack);
+  const slackUsers = useCommunicationConnectionDirectory(agent.id, editingConnection?.id ?? "", "users", "", editingSlack);
 
   const selectedPlatform = useMemo(
     () => platforms.data?.find((platform) => platform.key === platformKey),
@@ -528,7 +596,12 @@ export function AgentChannelSettings({
                     <>
                       <PlatformSetupHint hint={platform.setupHint} />
                       <div className="grid gap-3 sm:grid-cols-2">
-                        <SchemaFields schema={platform.settingsSchema} values={editSettings} onChange={setEditSettings} />
+                        <SchemaFields
+                        schema={platform.settingsSchema}
+                        values={editSettings}
+                        onChange={setEditSettings}
+                        arraySuggestions={connection.platformKey === "slack" ? { channel_ids: slackChannels.data ?? [], dm_user_ids: slackUsers.data ?? [] } : {}}
+                      />
                       </div>
                       <div className="rounded-lg p-3" style={{ border: "1px solid var(--line)" }}>
                         <div className="mb-1 text-xs font-semibold uppercase tracking-wide" style={{ color: "var(--ink-4)" }}>Replace credentials</div>

@@ -13,6 +13,12 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
 
 ## Changes
 
+### 2026-09-01 — Connection setup candidates and Agent platform indicators — PR pending
+
+- Delivered: Schema-backed multi-value Connection settings now use removable value tokens. Enter commits a value, typing or pasting comma-separated values commits each complete value, and the remaining text stays editable; raw IDs remain supported for every platform.
+- Delivered: Slack Connections now expose Agent-update-authorized, credential-backed directory reads for accessible channels and active users. Editing a Slack Connection offers those candidates for the channel and DM-sender allowlists while persisting only their provider IDs; the cached Slack client remains the only provider API boundary.
+- Delivered: Agent list and detail reads now carry their distinct active Connection platform keys, resolved through the same accessible-Agent predicates as the Agent collection. Agent cards and headers render those platform icons without issuing one Connection query per Agent.
+
 ### 2026-08-28 — Structured safe failure diagnostics — PR pending
 
 - Changed: Connection and Delivery failures now pass through one structured diagnostic normalizer before persistence. Recent failure details retain a safe category, operation, HTTP status, provider error code, retryability, bounded retry-after value, and provider request ID without storing provider URLs, credentials, headers, bodies, or exception text. Legacy error projections remain redacted when no validated diagnostic envelope exists.

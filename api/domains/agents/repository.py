@@ -381,6 +381,35 @@ class AgentRepository:
             )
             return list(session.exec(query).all()), total
 
+    def get_active_communication_platforms_for_agents(
+        self,
+        agent_ids: list[UUID],
+        authorization_scope: AuthorizationScope,
+    ) -> dict[UUID, list[str]]:
+        """Return distinct active Connection platform keys for visible Agents.
+
+        The visibility predicates remain in this repository query so the
+        decorative Agent projection cannot disclose a hidden Connection.
+        """
+        if not agent_ids:
+            return {}
+        with Session(self.delegate.engine) as session:
+            rows = session.exec(
+                select(CommunicationConnection.agent_id, CommunicationConnection.platform_key)
+                .join(Agent, col(Agent.id) == col(CommunicationConnection.agent_id))
+                .where(
+                    col(CommunicationConnection.agent_id).in_(agent_ids),
+                    col(CommunicationConnection.retired_at).is_(None),
+                    *agent_scope_predicates(authorization_scope),
+                )
+                .distinct()
+                .order_by(col(CommunicationConnection.agent_id), col(CommunicationConnection.platform_key))
+            ).all()
+        platforms: dict[UUID, list[str]] = {agent_id: [] for agent_id in agent_ids}
+        for agent_id, platform_key in rows:
+            platforms[agent_id].append(platform_key)
+        return platforms
+
     def find_agent_permissions(
         self,
         membership_id: UUID,

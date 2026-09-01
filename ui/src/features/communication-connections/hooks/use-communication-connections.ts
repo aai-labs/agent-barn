@@ -11,12 +11,14 @@ import { createQueryKeyStructure } from "@/shared/query-keys";
 
 import {
   CommunicationConnectionSchema,
+  CommunicationDirectoryEntrySchema,
   CommunicationDiagnosticsSchema,
   PaginatedCommunicationJournalEntriesSchema,
   CommunicationReconnectSchema,
   CommunicationRetrySchema,
   CommunicationPlatformSchema,
   type CommunicationConnection,
+  type CommunicationDirectoryEntry,
   type CommunicationPlatform,
   type CommunicationDiagnostics,
   type CommunicationJournalFilters,
@@ -66,6 +68,31 @@ export function useCommunicationConnections(agentId: string) {
       return response.data;
     },
     enabled: Boolean(agentId),
+  });
+}
+
+export function useCommunicationConnectionDirectory(
+  agentId: string,
+  connectionId: string,
+  kind: "channels" | "users",
+  search = "",
+  enabled = true,
+) {
+  const orgApiBase = useOrganizationApiBase();
+  const { selectedOrganization } = useOrganizationContext();
+  const organizationId = selectedOrganization?.id ?? "";
+  const params = new URLSearchParams();
+  if (search.trim()) params.set("search", search.trim());
+  return useQuery({
+    queryKey: communicationConnectionsKey.detail(`${organizationId}:${connectionId}:directory:${kind}:${search.trim()}`),
+    queryFn: async () => {
+      const response = await api.get<CommunicationDirectoryEntry[]>(
+        `${orgApiBase}/agents/${agentId}/connections/${connectionId}/directory/${kind}${params.size ? `?${params}` : ""}`,
+        { schema: z.array(CommunicationDirectoryEntrySchema) },
+      );
+      return response.data;
+    },
+    enabled: enabled && Boolean(agentId && connectionId),
   });
 }
 

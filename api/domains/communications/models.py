@@ -558,6 +558,14 @@ class PlatformDescriptorRead(PydanticBaseModel):
     post_setup_hint: str | None = None
 
 
+class CommunicationDirectoryEntryRead(PydanticBaseModel):
+    """One safe-to-display provider directory item used to configure a Connection."""
+
+    id: str = Field(min_length=1, max_length=512)
+    label: str = Field(min_length=1, max_length=255)
+    detail: str | None = Field(default=None, max_length=255)
+
+
 class CommunicationConnectionCreate(PydanticBaseModel):
     model_config = ConfigDict(extra="forbid")
 

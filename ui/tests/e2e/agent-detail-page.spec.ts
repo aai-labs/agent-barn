@@ -52,6 +52,11 @@ test.describe("Agent Detail Page", () => {
     await expect(agentDetailPage.agentName("Maya")).toBeVisible();
   });
 
+  test("shows configured messaging platform icons", async ({ page }) => {
+    await expect(page.getByAltText("Slack")).toBeVisible();
+    await expect(page.getByAltText("Discord")).toBeVisible();
+  });
+
   test("shows model name in header", async ({ page }) => {
     await expect(page.getByText("litellm/gpt-5-mini")).toBeVisible();
   });
@@ -656,7 +661,7 @@ test.describe("Agent Detail Page — Channels tab", () => {
   test("creates another same-platform Connection from the plugin schema", async () => {
     await agentDetailPage.addConnectionButton().click();
     await agentDetailPage.selectPlatformButton("Discord").click();
-    await agentDetailPage.connectionSettingsInput("Guild IDs").fill("guild-two");
+    await agentDetailPage.connectionSettingsInput("Guild IDs").fill("guild-two, guild-three");
     const botToken = agentDetailPage.credentialInput("Bot token");
     await botToken.fill("token-two");
     await expect(botToken).toHaveAttribute("type", "password");
@@ -670,7 +675,7 @@ test.describe("Agent Detail Page — Channels tab", () => {
       platform_key: "discord",
       display_name: "Discord",
       enabled: true,
-      settings: { guild_ids: ["guild-two"] },
+      settings: { guild_ids: ["guild-two", "guild-three"] },
       credentials: { bot_token: "token-two" },
     });
   });

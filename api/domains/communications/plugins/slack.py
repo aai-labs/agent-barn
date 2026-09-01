@@ -155,6 +155,37 @@ class SlackPlatformPlugin(PlatformPlugin):
         assert isinstance(credentials, SlackCredentials)
         return credentials.bot_token
 
+    def list_directory_entries(
+        self,
+        settings: PlatformSettings,
+        credentials: PlatformCredentials,
+        *,
+        kind: str,
+        search: str | None = None,
+    ) -> list[dict[str, str | None]]:
+        del settings
+        assert isinstance(credentials, SlackCredentials)
+        client = SlackClient(credentials.bot_token)
+        if kind == "channels":
+            return [
+                {
+                    "id": channel["id"],
+                    "label": f"#{channel['name']}" if channel["name"] else channel["id"],
+                    "detail": "Private channel" if channel["is_private"] else None,
+                }
+                for channel in client.list_channels(search)
+            ]
+        if kind == "users":
+            return [
+                {
+                    "id": user["id"],
+                    "label": user["display_name"] or user["real_name"] or user["name"] or user["id"],
+                    "detail": f"@{user['name']}" if user["name"] else None,
+                }
+                for user in client.list_users(search)
+            ]
+        raise ValueError(f"Unsupported Slack directory kind: {kind}")
+
     def send(
         self,
         settings: PlatformSettings,
