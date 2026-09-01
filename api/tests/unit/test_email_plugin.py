@@ -230,7 +230,7 @@ def test_quoted_reply_history_is_trimmed_from_the_body(quoted) -> None:
     assert "earlier message" not in envelope.text
 
 
-def test_an_overlong_sender_display_name_is_trimmed_rather_than_dropping_the_message() -> None:
+def test_an_overlong_inbound_sender_name_is_trimmed_rather_than_dropping_the_message() -> None:
     plugin = _plugin()
 
     [envelope] = plugin.normalize_inbound(_settings(plugin), _inbound(from_name="Jane " * 200))
