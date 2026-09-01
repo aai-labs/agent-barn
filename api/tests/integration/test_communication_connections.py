@@ -153,14 +153,30 @@ def test_platform_catalog_lists_the_shipped_plugins() -> None:
                 contains_inanyorder("discord", "slack", "teams", "telegram"),
             )
             hints = {item["key"]: item["setup_hint"] for item in catalogue}
+            manifests = {item["key"]: item["setup_manifest"] for item in catalogue}
             assert_that(
                 hints["slack"],
                 all_of(
+                    contains_string("1. Create the app"),
                     contains_string("xoxb-"),
                     contains_string("xapp-"),
                     contains_string("connections:write"),
-                    contains_string("channels:read"),
-                    contains_string("users:read"),
+                ),
+            )
+            assert_that(
+                manifests["slack"]["oauth_config"]["scopes"]["bot"],
+                contains_inanyorder(
+                    "channels:history",
+                    "channels:read",
+                    "chat:write",
+                    "groups:history",
+                    "groups:read",
+                    "im:history",
+                    "im:read",
+                    "mpim:history",
+                    "mpim:read",
+                    "reactions:write",
+                    "users:read",
                 ),
             )
             assert_that(

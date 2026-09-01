@@ -36,6 +36,7 @@ export const CommunicationPlatformSchema = z.object({
   settingsSchema: JsonSchemaSchema,
   credentialsSchema: JsonSchemaSchema,
   setupHint: z.string().nullable().optional(),
+  setupManifest: z.record(z.string(), z.unknown()).nullable().optional(),
   postSetupHint: z.string().nullable().optional(),
 });
 

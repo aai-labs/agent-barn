@@ -30,6 +30,7 @@ from api.domains.communications.plugins.base import (
     provider_idempotency_key,
 )
 from api.infrastructure.slack.client import SlackClient
+from api.infrastructure.slack.manifest import build_slack_app_manifest
 
 logger = logging.getLogger(__name__)
 
@@ -101,22 +102,22 @@ class SlackPlatformPlugin(PlatformPlugin):
     key = "slack"
     display_name = "Slack"
     setup_hint = (
-        "Credentials\n"
-        "• Bot token: In OAuth & Permissions → OAuth Tokens for Your Workspace, install/reinstall the app and copy "
-        "the xoxb- token.\n"
-        "• App-level token: In Basic Information → App-Level Tokens, create an xapp- token with connections:write "
-        "and enable Socket Mode.\n\n"
-        "Bot Token Scopes\n"
-        "• Messaging: chat:write, channels:history, groups:history, im:history, and mpim:history.\n"
-        "• Name resolution: channels:read, groups:read, im:read, mpim:read, and users:read.\n"
-        "• Processing feedback is optional but uses reactions:write.\n\n"
-        "Workspace setup\n"
-        "• Subscribe to message.channels, message.groups, message.im, and message.mpim events; the shipped Slack "
-        "manifest includes them.\n"
-        "• Invite the bot to every private channel or conversation it should handle; allowlists use channel IDs, "
-        "not channel names.\n"
-        "• After changing scopes, reinstall the app and replace the stored bot token."
+        "1. Create the app\n"
+        "In Slack API → Your Apps, choose Create New App → From a manifest, select the target workspace, and paste "
+        "the manifest below. It enables Socket Mode and the message events this Connection consumes.\n\n"
+        "2. Create the Socket Mode token\n"
+        "Open Basic Information → App-Level Tokens, create a token with connections:write, and copy the xapp- value. "
+        "Slack requires this manual step; manifests cannot create app-level tokens.\n\n"
+        "3. Install and copy the bot token\n"
+        "Open OAuth & Permissions, install or reinstall the app in the workspace, then copy the xoxb- token from OAuth "
+        "Tokens for Your Workspace. Reinstall after every scope change.\n\n"
+        "4. Add the credentials here\n"
+        "Paste the xoxb- bot token and xapp- app-level token into this Connection.\n\n"
+        "5. Grant channel access\n"
+        "Invite the bot to every private channel or conversation it should handle. Allowlist values are Slack IDs; use "
+        "the channel and user suggestions after saving this Connection."
     )
+    setup_manifest = build_slack_app_manifest()
     capabilities = frozenset(
         {
             PlatformCapability.ATTACHMENTS,

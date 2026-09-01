@@ -5,6 +5,7 @@ import { useMemo, useState } from "react";
 import {
   Check,
   CircleAlert,
+  Copy,
   Info,
   LockKeyhole,
   MessageCircleWarning,
@@ -14,6 +15,8 @@ import {
   RefreshCw,
   Trash2,
 } from "lucide-react";
+
+import { toast } from "sonner";
 
 import { ConfirmationDialog } from "@/components/confirmation-dialog";
 import { EyeIcon, EyeOffIcon } from "@/components/icons";
@@ -64,8 +67,16 @@ function ConnectionIcon({ platformKey, size = 16 }: { platformKey: string; size?
   return platformIcon(platformKey, { size }) ?? <Plug size={size} />;
 }
 
-function PlatformSetupHint({ hint, title = "Setup requirements" }: { hint?: string | null; title?: string }) {
-  if (!hint) return null;
+function PlatformSetupHint({
+  hint,
+  manifest,
+  title = "Setup requirements",
+}: {
+  hint?: string | null;
+  manifest?: Record<string, unknown> | null;
+  title?: string;
+}) {
+  if (!hint && !manifest) return null;
   return (
     <div
       className="flex items-start gap-2.5 rounded-xl p-3.5"
@@ -85,6 +96,15 @@ function PlatformSetupHint({ hint, title = "Setup requirements" }: { hint?: stri
         >
           {hint}
         </p>
+        {manifest && (
+          <button
+            type="button"
+            className="af-btn af-btn-sm mt-3"
+            onClick={() => void navigator.clipboard.writeText(JSON.stringify(manifest, null, 2)).then(() => toast.success("Slack manifest copied"))}
+          >
+            <Copy size={14} /> Copy Slack manifest
+          </button>
+        )}
       </div>
     </div>
   );
@@ -594,7 +614,7 @@ export function AgentChannelSettings({
                   </label>
                   {platform && (
                     <>
-                      <PlatformSetupHint hint={platform.setupHint} />
+                      <PlatformSetupHint hint={platform.setupHint} manifest={platform.setupManifest} />
                       <div className="grid gap-3 sm:grid-cols-2">
                         <SchemaFields
                         schema={platform.settingsSchema}
@@ -689,7 +709,7 @@ export function AgentChannelSettings({
                   </div>
 
                   <div className="mt-5 flex flex-col gap-4">
-                    <PlatformSetupHint hint={selectedPlatform.setupHint} />
+                    <PlatformSetupHint hint={selectedPlatform.setupHint} manifest={selectedPlatform.setupManifest} />
                     <label className="flex flex-col gap-1.5 text-sm font-medium">
                       Connection name
                       <input

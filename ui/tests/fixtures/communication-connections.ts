@@ -16,7 +16,7 @@ export const mockCommunicationPlatforms = [
     key: "discord",
     display_name: "Discord",
     setup_hint:
-      "Credential: Developer Portal → Applications → app → Bot → Token. Enable Message Content Intent; invite with OAuth2 bot scope and View Channels, Send Messages, Read Message History permissions. Use Developer Mode to copy IDs.",
+      "1. Create a bot\nOpen the Bot page and copy the Token.\n\n2. Enable the required intent\nEnable Message Content Intent.\n\n3. Invite the bot\nGrant View Channels, Send Messages, and Read Message History.",
     schema_version: 1,
     capabilities: ["MENTIONS"],
     settings_schema: {
@@ -33,7 +33,11 @@ export const mockCommunicationPlatforms = [
     key: "slack",
     display_name: "Slack",
     setup_hint:
-      "In Slack OAuth & Permissions → Bot Token Scopes, add channels:read for public channel names, groups:read for private channel names, im:read and mpim:read for direct-message names, and users:read for sender names. Reinstall the Slack app after adding scopes, then update the bot token here.",
+      "1. Create the app\nIn Slack API → Your Apps, choose Create New App → From a manifest.\n\n2. Create the Socket Mode token\nCreate an xapp- token with connections:write.\n\n3. Install and copy the bot token\nCopy the xoxb- token and reinstall after scope changes.",
+    setup_manifest: {
+      display_information: { name: "Agent Barn" },
+      settings: { socket_mode_enabled: true },
+    },
     schema_version: 1,
     capabilities: ["DIRECTORY_DISCOVERY"],
     settings_schema: { type: "object", properties: {} },

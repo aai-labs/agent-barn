@@ -633,22 +633,22 @@ test.describe("Agent Detail Page — Channels tab", () => {
     });
   });
 
-  test("shows provider setup requirements before connecting", async () => {
+  test("shows provider setup requirements before connecting", async ({ page }) => {
     await agentDetailPage.addConnectionButton().click();
     await agentDetailPage.selectPlatformButton("Slack").click();
 
-    const hint = agentDetailPage.setupHint(/Bot Token Scopes/);
+    const hint = agentDetailPage.setupHint(/Create the Socket Mode token/);
     await expect(hint).toBeVisible();
-    await expect(hint).toContainText("channels:read");
-    await expect(hint).toContainText("groups:read");
-    await expect(hint).toContainText("users:read");
-    await expect(hint).toContainText("Reinstall the Slack app");
+    await expect(hint).toContainText("1. Create the app");
+    await expect(hint).toContainText("connections:write");
+    await expect(hint).toContainText("xapp-");
+    await expect(page.getByRole("button", { name: "Copy Slack manifest" })).toBeVisible();
 
     await agentDetailPage.selectPlatformButton("Discord").click();
-    const discordHint = agentDetailPage.setupHint(/Message Content Intent/);
+    const discordHint = agentDetailPage.setupHint(/Enable the required intent/);
     await expect(discordHint).toBeVisible();
+    await expect(discordHint).toContainText("1. Create a bot");
     await expect(discordHint).toContainText("Read Message History");
-    await expect(discordHint).toContainText("Developer Mode");
 
     await agentDetailPage.selectPlatformButton("Telegram").click();
     const telegramHint = agentDetailPage.setupHint(/@BotFather/);

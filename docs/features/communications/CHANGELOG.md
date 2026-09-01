@@ -13,6 +13,11 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
 
 ## Changes
 
+### 2026-09-01 — Guided Slack and Discord Connection setup — PR pending
+
+- Delivered: Slack and Discord Connection setup hints now give ordered, provider-specific instructions instead of scope/permission inventories. The Slack flow explicitly separates manifest import, manual `xapp-` Socket Mode token creation, bot installation/token retrieval, credential entry, and channel access; Discord covers bot creation, Message Content Intent, OAuth installation permissions, token entry, and Connection policy.
+- Delivered: Slack's copyable setup manifest is now derived from the behavior the shipped plugin consumes: message events for channels, private channels, DMs, and group DMs; the read/history scopes needed for delivery and directory discovery; `chat:write`; and `reactions:write`. It intentionally excludes legacy broad scopes/events. Slack still requires an operator to create the `connections:write` app-level token after import because manifests cannot create one.
+
 ### 2026-09-01 — Connection setup candidates and Agent platform indicators — PR pending
 
 - Delivered: Schema-backed multi-value Connection settings now use removable value tokens. Enter commits a value, typing or pasting comma-separated values commits each complete value, and the remaining text stays editable; raw IDs remain supported for every platform.
