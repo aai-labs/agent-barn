@@ -7,6 +7,7 @@ from api.domains.communications.plugins.registry import PlatformPluginRegistry
 from api.domains.communications.plugins.slack import SlackPlatformPlugin
 from api.domains.communications.plugins.teams import TeamsPlatformPlugin
 from api.domains.communications.plugins.telegram import TelegramPlatformPlugin
+from api.domains.communications.plugins.web import WebPlatformPlugin
 from api.domains.events.constants import EVENT_DELIVERY_PROCESSING_STALE_SECONDS
 from api.domains.events.handlers import EventHandlerRegistry
 from api.domains.events.processor import EventDeliveryProcessor
@@ -44,6 +45,7 @@ class AppModule(Module):
                 SlackPlatformPlugin(config),
                 TeamsPlatformPlugin(config),
                 TelegramPlatformPlugin(config),
+                WebPlatformPlugin(),
             ]
         )
 
