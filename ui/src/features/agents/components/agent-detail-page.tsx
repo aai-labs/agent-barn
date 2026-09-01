@@ -25,6 +25,7 @@ import { toastError } from "@/shared/toast";
 import { AgentAvatar } from "./agent-avatar";
 import { AgentMetaBadges } from "./agent-meta-badges";
 import { StatusLine } from "./status-line";
+import { ChatTab } from "./chat-tab";
 import { ConversationsTab } from "./conversations-tab";
 import { ToolCallsTab } from "./tool-calls-tab";
 import { LogsTab } from "./logs-tab";
@@ -37,8 +38,9 @@ interface AgentDetailPageProps {
   agentId: string;
 }
 
-type Tab = "conversations" | "tool-calls" | "logs" | "work" | "about";
+type Tab = "chat" | "conversations" | "tool-calls" | "logs" | "work" | "about";
 const VALID_TABS: Tab[] = [
+  "chat",
   "conversations",
   "tool-calls",
   "logs",
@@ -59,7 +61,7 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
   const [tab, setTab] = useQueryState(
     "tab",
     parseAsStringEnum<Tab>(VALID_TABS)
-      .withDefault("conversations")
+      .withDefault("chat")
       .withOptions({ scroll: false, history: "replace" }),
   );
   const [, setChannel] = useQueryState(
@@ -76,6 +78,7 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
   const tabs: [Tab, string][] = [
     ...(canReadActivity
       ? ([
+          ["chat", "Chat"],
           ["conversations", "Conversations"],
           ["tool-calls", "Tool calls"],
           ["logs", "Logs"],
@@ -91,8 +94,14 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
   const canManageAccess = canAgent(agent, "agent.access.manage");
   const canManageConnections = canAgent(agent, "agent.update");
   const connections = useCommunicationConnections(agent?.id ?? "");
+  // The built-in Chat tab auto-provisions a "web" Connection on first use so
+  // people can try the Agent without setting anything up; it shouldn't count
+  // as a real messaging platform for this nudge.
+  const externalConnections = connections.data?.filter(
+    (connection) => connection.platformKey !== "web",
+  );
   const isUnreachable =
-    !connections.isPending && connections.data?.length === 0;
+    !connections.isPending && externalConnections?.length === 0;
   const [shareOpen, setShareOpen] = useState(false);
 
   const params = useParams();
@@ -296,6 +305,7 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
               ))}
             </div>
 
+            {resolvedTab === "chat" && <ChatTab agent={agent} />}
             {resolvedTab === "conversations" && (
               <ConversationsTab agent={agent} />
             )}
