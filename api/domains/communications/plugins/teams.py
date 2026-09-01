@@ -110,6 +110,13 @@ class TeamsPlatformPlugin(PlatformPlugin):
         "• Allowed DM senders use the sender's Microsoft Entra object ID; Allowed channels use the Teams channel "
         "conversation ID, which looks like 19:....@thread.tacv2."
     )
+    post_setup_hint = (
+        "• Paste the webhook URL above into the Azure Bot's Configuration → Messaging endpoint, then Apply. "
+        "The endpoint must be reachable from the public internet or Microsoft cannot deliver messages.\n"
+        "• Download the app package and upload it in Teams: Apps → Manage your apps → Upload a custom app. "
+        "Add it to every team and chat this Agent should serve — a bot cannot reach a channel it is not installed in.\n"
+        "• Re-upload the package after renaming the Agent to refresh how it appears in Teams."
+    )
     capabilities = frozenset(
         {
             PlatformCapability.APPLICATION_PROVISIONING,
