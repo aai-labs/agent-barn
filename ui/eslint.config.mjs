@@ -22,6 +22,9 @@ const eslintConfig = defineConfig([
     // Local e2e-test build output (gitignored); linting it after a local
     // test run drowns lint-ui in thousands of generated-code errors.
     ".next-e2e/**",
+    // Vendored from the assistant-ui registry (`npx assistant-ui add`), not
+    // hand-authored — upgrade by re-running the CLI, not by hand-editing.
+    "src/components/assistant-ui/**",
   ]),
 ]);
 
