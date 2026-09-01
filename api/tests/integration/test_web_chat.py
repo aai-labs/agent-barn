@@ -4,6 +4,7 @@ from fastapi import status
 from hamcrest import assert_that, contains_inanyorder, equal_to, has_length
 from starlette.testclient import TestClient
 
+from api.domains.agents.models import AgentStatus
 from api.tests.core.givenpy import given, then, when
 from api.tests.core.modules import (
     create_test_client,
@@ -79,6 +80,31 @@ def test_send_then_list_messages_round_trips_on_the_default_thread():
             assert_that(messages[0]["id"], equal_to(sent_message["id"]))
             assert_that(messages[0]["content"], equal_to("hello there"))
             assert_that(messages[0]["direction"], equal_to("INBOUND"))
+            assert_that(messages[0]["delivery_status"], equal_to("UNAVAILABLE"))
+
+
+def test_stop_generation_cancels_the_active_thread_delivery_idempotently():
+    with given([*_GIVEN[:-1], there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        client: TestClient = context.client
+        _send(context, "please stop this", thread_id="thread-a")
+
+        first_stop = client.post(
+            f"{_BASE}/{context.agent.id}/web-chat/threads/thread-a/stop",
+            headers=_auth(context),
+        )
+        second_stop = client.post(
+            f"{_BASE}/{context.agent.id}/web-chat/threads/thread-a/stop",
+            headers=_auth(context),
+        )
+        messages_response = client.get(
+            f"{_BASE}/{context.agent.id}/web-chat/messages",
+            headers=_auth(context),
+            params={"thread_id": "thread-a"},
+        )
+
+        assert_that(first_stop.status_code, equal_to(status.HTTP_204_NO_CONTENT))
+        assert_that(second_stop.status_code, equal_to(status.HTTP_204_NO_CONTENT))
+        assert_that(messages_response.json()[0]["delivery_status"], equal_to("CANCELLED"))
 
 
 def test_messages_sent_to_different_threads_stay_isolated():

@@ -53,8 +53,10 @@ export function useWebChat(
     (message: WebChatMessage) => {
       queryClient.setQueryData<WebChatMessage[]>(queryKey, (current) => {
         const base = current ?? [];
-        if (base.some((m) => m.id === message.id)) return base;
-        return [...base, message];
+        const existingIndex = base.findIndex((item) => item.id === message.id);
+        if (existingIndex === -1) return [...base, message];
+        if (base[existingIndex].deliveryStatus === message.deliveryStatus) return base;
+        return base.map((item, index) => (index === existingIndex ? message : item));
       });
     },
     [queryClient, queryKey],
@@ -78,6 +80,21 @@ export function useWebChat(
     },
     [appendMessage, sendMutation],
   );
+
+  const stopMutation = useMutation({
+    mutationFn: async () => {
+      await api.post(
+        `${orgApiBase}/agents/${agentId}/web-chat/threads/${threadId}/stop`,
+      );
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey, exact: true });
+    },
+  });
+
+  const stopGeneration = useCallback(async () => {
+    await stopMutation.mutateAsync();
+  }, [stopMutation]);
 
   const [streamStatus, setStreamStatus] = useState<
     "idle" | "connecting" | "streaming" | "disconnected"
@@ -177,8 +194,11 @@ export function useWebChat(
     };
   }, [agentId, threadId, enabled, historyQuery.isPending, orgApiBase, appendMessage]);
 
+  const latestMessage = messages.at(-1);
   const isAwaitingReply =
-    sendMutation.isPending || messages.at(-1)?.direction === "INBOUND";
+    sendMutation.isPending ||
+    (latestMessage?.direction === "INBOUND" &&
+      ["PENDING", "PROCESSING"].includes(latestMessage.deliveryStatus));
 
   return useMemo(
     () => ({
@@ -187,6 +207,7 @@ export function useWebChat(
       error: historyQuery.error,
       streamStatus,
       sendMessage,
+      stopGeneration,
       isAwaitingReply,
     }),
     [
@@ -195,6 +216,7 @@ export function useWebChat(
       historyQuery.error,
       streamStatus,
       sendMessage,
+      stopGeneration,
       isAwaitingReply,
     ],
   );

@@ -24,11 +24,13 @@ from api.domains.communications.models import (
 from api.domains.communications.plugins.base import InboundAdmissionResult, PlatformPlugin
 from api.domains.communications.plugins.registry import PlatformPluginRegistry
 from api.domains.communications.plugins.slack import SlackCredentials, SlackSettings
+from api.infrastructure.communication_signals import CommunicationSignalType
 
 
 def _connection() -> SimpleNamespace:
     return SimpleNamespace(
         id=uuid4(),
+        agent_id=uuid4(),
         enabled=True,
         platform_key="slack",
         settings={},
@@ -61,6 +63,7 @@ def _service(
         delivery_repository=deliveries,
         connection_repository=connections,
         plugins=plugins,
+        signals=Mock(),
         operations=operations,
     )
     return service, deliveries
@@ -103,6 +106,10 @@ def test_gateway_feedback_is_best_effort_after_inbound_acceptance() -> None:
     deliveries.accept_inbound.assert_called_once()
     plugin.processing_feedback.assert_called_once()
     assert plugin.processing_feedback.call_args.args[2].stage == ProcessingFeedbackStage.ACCEPTED
+    signals = cast(Mock, service.signals)
+    published_agent_id, published_signal = signals.publish.call_args.args
+    assert published_agent_id == connection.agent_id
+    assert published_signal.type == CommunicationSignalType.DELIVERY_AVAILABLE
 
 
 def test_gateway_enriches_inbound_envelopes_with_decrypted_credentials_before_acceptance() -> None:
@@ -238,6 +245,40 @@ def test_gateway_marks_claim_and_terminal_runtime_failure_at_lifecycle_seam() ->
     assert completed is True
     stages = [call.args[2].stage for call in plugin.processing_feedback.call_args_list]
     assert stages == [ProcessingFeedbackStage.CLAIMED, ProcessingFeedbackStage.FAILED]
+
+
+def test_cancel_persists_before_publishing_to_the_runtime_control_stream() -> None:
+    connection = cast(CommunicationConnection, _connection())
+    plugin = _feedback_plugin()
+    service, deliveries = _service(connection, plugin)
+    delivery_id = uuid4()
+    agent_id = uuid4()
+    deliveries.request_cancel.return_value = CommunicationDeliveryStatus.PROCESSING
+
+    assert service.request_cancel_delivery(agent_id, delivery_id) is True
+
+    deliveries.request_cancel.assert_called_once_with(delivery_id, agent_id=agent_id)
+    signals = cast(Mock, service.signals)
+    published_agent_id, published_signal = signals.publish.call_args.args
+    assert published_agent_id == agent_id
+    assert published_signal.type == CommunicationSignalType.DELIVERY_CANCELLED
+    assert published_signal.delivery_id == delivery_id
+
+
+def test_runtime_control_stream_replays_then_heartbeats_without_claim_polling() -> None:
+    connection = cast(CommunicationConnection, _connection())
+    plugin = _feedback_plugin()
+    service, _ = _service(connection, plugin)
+    agent = cast(Agent, SimpleNamespace(id=uuid4()))
+    signals = cast(Mock, service.signals)
+    signals.latest_cursor.return_value = "10-0"
+    signals.wait.return_value = ("10-0", [])
+
+    stream = service.stream_runtime_control(agent)
+
+    assert json.loads(next(stream).removeprefix("data: ")) == {"type": "delivery_available"}
+    assert next(stream) == ": keep-alive\n\n"
+    signals.wait.assert_called_once_with(agent.id, "10-0")
 
 
 def test_runtime_completion_is_not_blocked_by_feedback_context_lookup() -> None:

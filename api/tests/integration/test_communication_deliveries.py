@@ -2,10 +2,12 @@ from datetime import UTC, datetime
 from unittest.mock import patch
 from uuid import UUID
 
+import pytest
 from hamcrest import (
     assert_that,
     contains_inanyorder,
     contains_string,
+    empty,
     equal_to,
     greater_than,
     has_entries,
@@ -18,7 +20,10 @@ from sqlmodel import Session, col, select
 from starlette.testclient import TestClient
 
 from api.domains.agents.models import AgentStatus
-from api.domains.communications.delivery_repository import CommunicationDeliveryRepository
+from api.domains.communications.delivery_repository import (
+    CommunicationDeliveryCancelledError,
+    CommunicationDeliveryRepository,
+)
 from api.domains.communications.gateway_service import CommunicationsGatewayService
 from api.domains.communications.models import (
     CommunicationDelivery,
@@ -580,3 +585,58 @@ def test_outbound_recovery_preserves_conversation_order_and_delivery_identity() 
                     ).all()
                 )
             assert_that([delivery.id for delivery in outbound_deliveries], contains_inanyorder(first_id, second_id))
+
+
+def test_pending_inbound_cancel_is_terminal_and_never_claimed() -> None:
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        connection_id = _create_connection(context)
+        repository = context.injector.get(CommunicationDeliveryRepository)
+        accepted = repository.accept_inbound(connection_id=connection_id, envelope=_envelope("cancel-pending"))
+
+        status_after_cancel = repository.request_cancel(accepted.delivery_id, agent_id=context.agent.id)
+
+        assert_that(status_after_cancel, equal_to(CommunicationDeliveryStatus.CANCELLED))
+        assert_that(repository.claim_next_inbound(agent_id=context.agent.id), none())
+        assert_that(_delivery(context, accepted.delivery_id).completed_at, is_(not_(none())))
+
+
+def test_processing_cancel_wins_even_when_runtime_reports_success() -> None:
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        connection_id = _create_connection(context)
+        repository = context.injector.get(CommunicationDeliveryRepository)
+        accepted = repository.accept_inbound(connection_id=connection_id, envelope=_envelope("cancel-processing"))
+        claimed = repository.claim_next_inbound(agent_id=context.agent.id)
+        assert claimed is not None
+
+        repository.request_cancel(accepted.delivery_id, agent_id=context.agent.id)
+        completed = repository.complete_runtime_delivery(
+            claimed.delivery_id,
+            agent_id=context.agent.id,
+            succeeded=True,
+        )
+
+        assert_that(completed, is_(True))
+        assert_that(_delivery(context, claimed.delivery_id).status, equal_to(CommunicationDeliveryStatus.CANCELLED))
+
+
+def test_cancelled_source_rejects_runtime_reply_atomically() -> None:
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        connection_id = _create_connection(context)
+        repository = context.injector.get(CommunicationDeliveryRepository)
+        accepted = repository.accept_inbound(connection_id=connection_id, envelope=_envelope("cancel-reply"))
+        repository.claim_next_inbound(agent_id=context.agent.id)
+        repository.request_cancel(accepted.delivery_id, agent_id=context.agent.id)
+
+        with pytest.raises(CommunicationDeliveryCancelledError):
+            repository.enqueue_runtime_reply(
+                agent_id=context.agent.id,
+                source_delivery_id=accepted.delivery_id,
+                reply=RuntimeReplyCreate(idempotency_key="cancelled-reply", text="must not leak"),
+            )
+
+        delegate = context.injector.get(PostgresRepositoryDelegate)
+        with Session(delegate.engine) as session:
+            leaked = session.exec(
+                select(AgentChatMessage).where(AgentChatMessage.content == "must not leak")
+            ).all()
+        assert_that(leaked, empty())

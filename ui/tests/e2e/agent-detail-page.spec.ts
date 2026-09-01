@@ -89,6 +89,7 @@ test.describe("Agent Detail Page", () => {
               direction: "INBOUND",
               content: "Still working on this",
               occurred_at: "2026-09-01T08:00:00Z",
+              delivery_status: "PROCESSING",
             },
           ]),
         });
@@ -106,6 +107,47 @@ test.describe("Agent Detail Page", () => {
     await page.getByRole("button", { name: "Chat", exact: true }).click();
 
     await expect(page.getByRole("status").filter({ hasText: "Maya is working" })).toBeVisible();
+  });
+
+  test("stops the active web chat generation", async ({ page }) => {
+    let deliveryStatus = "PROCESSING";
+    let stopRequests = 0;
+    await page.route("**/api/v1/organizations/*/agents/*/web-chat/**", async (route) => {
+      const path = new URL(route.request().url()).pathname;
+      if (path.endsWith("/stop") && route.request().method() === "POST") {
+        stopRequests += 1;
+        deliveryStatus = "CANCELLED";
+        await route.fulfill({ status: 204, body: "" });
+        return;
+      }
+      if (path.endsWith("/messages")) {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify([
+            {
+              id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+              direction: "INBOUND",
+              content: "Stop this work",
+              occurred_at: "2026-09-01T08:00:00Z",
+              delivery_status: deliveryStatus,
+            },
+          ]),
+        });
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: path.endsWith("/stream") ? "text/event-stream" : "application/json",
+        body: path.endsWith("/stream") ? ": keep-alive\n\n" : "[]",
+      });
+    });
+
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await page.getByRole("button", { name: "Stop generating" }).click();
+
+    await expect.poll(() => stopRequests).toBe(1);
+    await expect(page.getByRole("button", { name: "Stop generating" })).not.toBeVisible();
   });
 
   test("guides an unreachable Agent to messaging setup", async ({ page }) => {

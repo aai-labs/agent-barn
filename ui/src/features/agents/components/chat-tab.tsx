@@ -10,6 +10,7 @@ import {
 } from "@assistant-ui/react";
 
 import { Thread } from "@/components/assistant-ui/elements/thread.aui";
+import { Badge } from "@/components/badge";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -53,6 +54,7 @@ interface ChatThreadProps {
   isAgentWorking: boolean;
   isAwaitingReply: boolean;
   sendMessage: (text: string) => Promise<void>;
+  stopGeneration: () => Promise<void>;
   onSent: () => void;
 }
 
@@ -62,6 +64,7 @@ function ChatThread({
   isAgentWorking,
   isAwaitingReply,
   sendMessage,
+  stopGeneration,
   onSent,
 }: ChatThreadProps) {
   const runtime = useExternalStoreRuntime<WebChatMessage>({
@@ -74,6 +77,9 @@ function ChatThread({
       if (!part || part.type !== "text") return;
       await sendMessage(part.text);
       onSent();
+    },
+    onCancel: async () => {
+      await stopGeneration();
     },
   });
 
@@ -205,7 +211,7 @@ export function ChatTab({ agent, isAgentWorking }: ChatTabProps) {
     parseAsString.withDefault(MAIN_THREAD_ID).withOptions({ history: "replace" }),
   );
 
-  const { messages, sendMessage, isAwaitingReply, streamStatus } = useWebChat(
+  const { messages, sendMessage, stopGeneration, isAwaitingReply, streamStatus } = useWebChat(
     agent.id,
     threadId,
     true,
@@ -317,11 +323,13 @@ export function ChatTab({ agent, isAgentWorking }: ChatTabProps) {
             <div className="flex items-center gap-2.5 min-w-0">
               <AgentAvatar agent={agent} size="sm" />
               <div className="min-w-0">
-                <div
-                  className="text-[0.875rem] font-medium leading-tight"
-                  style={{ color: "var(--ink)" }}
-                >
-                  Chat with {agent.name}
+                <div className="flex items-center gap-2 leading-tight">
+                  <span className="text-[0.875rem] font-medium" style={{ color: "var(--ink)" }}>
+                    Chat with {agent.name}
+                  </span>
+                  <Badge variant="warn" title="Web Chat is under active development and may change or break without notice.">
+                    Experimental
+                  </Badge>
                 </div>
                 <div className="text-[0.75rem]" style={{ color: "var(--ink-3)" }}>
                   Try the agent here before connecting a messaging platform.
@@ -363,6 +371,7 @@ export function ChatTab({ agent, isAgentWorking }: ChatTabProps) {
               isAgentWorking={isAgentWorking}
               isAwaitingReply={isAwaitingReply}
               sendMessage={sendMessage}
+              stopGeneration={stopGeneration}
               onSent={() => void refetchThreads()}
             />
           </div>

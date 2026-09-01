@@ -16,6 +16,7 @@ from api.domains.events.repository import OutboxMessageRepository
 from api.domains.events.security_audit import SecurityAuditProjection
 from api.domains.events.transport import EventDeliveryTransport
 from api.infrastructure.clock import Clock
+from api.infrastructure.communication_signals import CommunicationSignalBus
 from api.infrastructure.kubernetes.client import KubernetesClient
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 
@@ -35,6 +36,11 @@ class AppModule(Module):
     @singleton
     def provide_kubernetes_client(self, config: Config) -> KubernetesClient:
         return KubernetesClient(config)
+
+    @provider
+    @singleton
+    def provide_communication_signal_bus(self, config: Config) -> CommunicationSignalBus:
+        return CommunicationSignalBus(config)
 
     @provider
     @singleton

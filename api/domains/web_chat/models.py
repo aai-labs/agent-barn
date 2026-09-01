@@ -7,6 +7,7 @@ from pydantic import ConfigDict, Field
 from sqlmodel import Column
 from sqlmodel import Field as SqlField
 
+from api.domains.communications.models import CommunicationDeliveryStatus
 from api.domains.conversations.models import MessageDirection
 from api.infrastructure.postgres.models import BaseModel
 
@@ -55,6 +56,7 @@ class WebChatMessageRead(PydanticBaseModel):
     direction: MessageDirection
     content: str
     occurred_at: datetime
+    delivery_status: CommunicationDeliveryStatus
 
 
 class WebChatMessageCreate(PydanticBaseModel):
@@ -62,6 +64,10 @@ class WebChatMessageCreate(PydanticBaseModel):
 
     text: str = Field(min_length=1, max_length=20_000)
     thread_id: str = Field(default=MAIN_THREAD_ID, min_length=1, max_length=128)
+
+
+class WebChatMessageAccepted(PydanticBaseModel):
+    id: UUID
 
 
 class WebChatThreadRead(PydanticBaseModel):

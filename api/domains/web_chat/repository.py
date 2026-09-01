@@ -5,6 +5,7 @@ from uuid import UUID
 from injector import inject, singleton
 from sqlmodel import Session, col, select
 
+from api.domains.communications.models import CommunicationDelivery, CommunicationDeliveryStatus
 from api.domains.conversations.models import AgentChatMessage, MessageDirection
 from api.domains.web_chat.models import WebChatThread
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
@@ -46,6 +47,23 @@ class WebChatRepository:
                 query = query.where(col(AgentChatMessage.id) > after_id)
             query = query.order_by(col(AgentChatMessage.id).asc()).limit(limit)
             return list(session.exec(query))
+
+    def delivery_statuses_for_messages(
+        self,
+        message_ids: list[UUID],
+    ) -> dict[UUID, CommunicationDeliveryStatus]:
+        if not message_ids:
+            return {}
+        with Session(self.delegate.engine) as session:
+            rows = session.exec(
+                select(CommunicationDelivery.message_id, CommunicationDelivery.status).where(
+                    col(CommunicationDelivery.message_id).in_(message_ids)
+                )
+            ).all()
+            return {
+                message_id: CommunicationDeliveryStatus(status)
+                for message_id, status in rows
+            }
 
     def list_threads(
         self,

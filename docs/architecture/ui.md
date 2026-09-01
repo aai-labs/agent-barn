@@ -21,7 +21,7 @@ The active organization comes from `/dashboard/[orgId]`. Platform View lives und
 - Several organization-scoped keys do not include organization ID. `OrganizationProvider` removes the known organization-scoped query families on a genuine organization switch to prevent prior-organization data from remaining visible.
 - Adding an organization-scoped query family requires updating that eviction set or changing the key design so organization identity is represented safely.
 
-The agent log stream is an explicit exception to the normal client flow: a Next route handler proxies backend SSE through a `TransformStream`, and `../../ui/src/features/agents/hooks/use-agent-log-stream.ts` owns browser streaming and reconnection. The dedicated route avoids buffering in the ordinary Next.js rewrite path and resolves the internal API hostname server-side instead of exposing it to the browser.
+Streaming is an explicit exception to the normal client flow. The agent log stream uses a Next route handler and `../../ui/src/features/agents/hooks/use-agent-log-stream.ts`; Dashboard Web Chat connects to its authenticated organization-scoped SSE route through `../../ui/src/features/agents/hooks/use-web-chat.ts`. Each hook owns abort and bounded reconnection behavior. Web Chat messages are durable query data: SSE frames upsert by message ID so delivery-status changes such as cancellation update an existing inbound message rather than creating duplicates.
 
 ## Loading and errors
 

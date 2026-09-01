@@ -86,6 +86,19 @@ def send_web_chat_message(
     return service.send_message(agent_id, data.text, data.thread_id, context)
 
 
+@web_chat_router.post(
+    "/{agent_id}/web-chat/threads/{thread_id}/stop",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def stop_web_chat_generation(
+    agent_id: UUID,
+    thread_id: str,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[WebChatService, Injected(WebChatService)],
+) -> None:
+    service.stop_generation(agent_id, thread_id, context)
+
+
 @web_chat_router.get("/{agent_id}/web-chat/stream")
 def stream_web_chat_messages(
     agent_id: UUID,

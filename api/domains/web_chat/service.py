@@ -1,5 +1,4 @@
 import secrets
-import time
 from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -13,6 +12,7 @@ from api.domains.auth.models import CurrentUserContext
 from api.domains.communications.gateway_service import CommunicationsGatewayService
 from api.domains.communications.models import (
     CommunicationConnection,
+    CommunicationDeliveryStatus,
     CommunicationSender,
     ConnectionObservedStatus,
     ConversationLocation,
@@ -27,11 +27,10 @@ from api.domains.conversations.models import MessageDirection
 from api.domains.rbac.catalog import PermissionKey
 from api.domains.web_chat.models import MAIN_THREAD_ID, WebChatMessageRead, WebChatThreadRead
 from api.domains.web_chat.repository import WebChatRepository
+from api.infrastructure.communication_signals import CommunicationSignalBus
 from api.infrastructure.crypto import encrypt_token
 
 WEB_CONNECTION_DISPLAY_NAME = "Web Chat"
-POLL_INTERVAL_SECONDS = 0.5
-HEARTBEAT_EVERY_TICKS = 30
 TITLE_PREVIEW_LENGTH = 48
 
 
@@ -44,6 +43,7 @@ class WebChatService:
     connections: CommunicationConnectionRepository
     web_chat_repository: WebChatRepository
     gateway: CommunicationsGatewayService
+    signals: CommunicationSignalBus
 
     def send_message(
         self,
@@ -76,7 +76,22 @@ class WebChatService:
             direction=MessageDirection.INBOUND,
             content=envelope.text,
             occurred_at=envelope.occurred_at,
+            delivery_status=accepted.status,
         )
+
+    def stop_generation(
+        self,
+        agent_id: UUID,
+        thread_id: str,
+        context: CurrentUserContext,
+    ) -> bool:
+        agent = self.authorization.require_action(context, agent_id, PermissionKey.ACTIVITY_READ)
+        connection = self._get_or_create_connection(agent.id, agent.organization_id)
+        location = self._location(context, thread_id)
+        delivery_id = self.gateway.find_active_inbound_delivery(connection.id, location)
+        if delivery_id is None:
+            return False
+        return self.gateway.request_cancel_delivery(agent.id, delivery_id)
 
     def list_messages(
         self,
@@ -94,7 +109,17 @@ class WebChatService:
             thread_id=thread_id,
             after_id=after_id,
         )
-        return [WebChatMessageRead.model_validate(m) for m in messages]
+        statuses = self.web_chat_repository.delivery_statuses_for_messages([message.id for message in messages])
+        return [
+            WebChatMessageRead(
+                id=message.id,
+                direction=message.direction,
+                content=message.content,
+                occurred_at=message.occurred_at,
+                delivery_status=statuses.get(message.id, CommunicationDeliveryStatus.SUCCEEDED),
+            )
+            for message in messages
+        ]
 
     def list_threads(self, agent_id: UUID, context: CurrentUserContext) -> list[WebChatThreadRead]:
         agent = self.authorization.require_action(context, agent_id, PermissionKey.ACTIVITY_READ)
@@ -158,30 +183,25 @@ class WebChatService:
         )
 
     def stream_updates(self, agent_id: UUID, context: CurrentUserContext, thread_id: str) -> Iterator[str]:
-        """Poll for new messages and yield them as Server-Sent Event frames.
+        """Replay durable thread state, then wake only on committed signals."""
+        agent = self.authorization.require_action(context, agent_id, PermissionKey.ACTIVITY_READ)
+        cursor = self.signals.latest_cursor(agent.id)
+        emitted: dict[UUID, WebChatMessageRead] = {}
 
-        Outbound Agent replies land in agent_chat_message the moment the
-        Runtime posts them (see WebPlatformPlugin), so polling this table is
-        enough to deliver near-real-time updates without any cross-process
-        pub/sub — the outbound processor that "delivers" other platforms runs
-        in a separate worker process from this API, so an in-memory queue
-        would not see those writes.
-        """
-        last_id: UUID | None = None
         for message in self.list_messages(agent_id, context, thread_id, after_id=None):
-            last_id = message.id
+            emitted[message.id] = message
             yield f"data: {message.model_dump_json()}\n\n"
 
-        ticks = 0
         while True:
-            time.sleep(POLL_INTERVAL_SECONDS)
-            new_messages = self.list_messages(agent_id, context, thread_id, after_id=last_id)
-            for message in new_messages:
-                last_id = message.id
-                yield f"data: {message.model_dump_json()}\n\n"
-            ticks += 1
-            if not new_messages and ticks % HEARTBEAT_EVERY_TICKS == 0:
+            cursor, notifications = self.signals.wait(agent.id, cursor)
+            if not notifications:
                 yield ": keep-alive\n\n"
+                continue
+            for message in self.list_messages(agent_id, context, thread_id, after_id=None):
+                if emitted.get(message.id) == message:
+                    continue
+                emitted[message.id] = message
+                yield f"data: {message.model_dump_json()}\n\n"
 
     @staticmethod
     def _title_for(thread_id: str, display_name: str | None, first_content: str | None) -> str:

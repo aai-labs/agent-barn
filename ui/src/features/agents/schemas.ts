@@ -210,6 +210,14 @@ export const WebChatMessageSchema = z.object({
   direction: z.enum(["INBOUND", "OUTBOUND"]),
   content: z.string(),
   occurredAt: z.string(),
+  deliveryStatus: z.enum([
+    "PENDING",
+    "PROCESSING",
+    "SUCCEEDED",
+    "DEAD_LETTERED",
+    "CANCELLED",
+    "UNAVAILABLE",
+  ]),
 });
 
 export const WebChatThreadSchema = z.object({

@@ -1,11 +1,13 @@
 import json
 import logging
 import secrets
+from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
 from injector import inject, singleton
+from redis.exceptions import RedisError
 
 from api.core.config import Config
 from api.domains.agents.models import Agent, AgentStatus
@@ -19,6 +21,7 @@ from api.domains.communications.models import (
     CommunicationDirection,
     CommunicationJournalStage,
     CommunicationPolicyDisposition,
+    ConversationLocation,
     NormalizedCommunicationEnvelope,
     PlatformCapability,
     ProcessingFeedbackStage,
@@ -36,6 +39,11 @@ from api.domains.communications.plugins.base import (
 )
 from api.domains.communications.plugins.registry import PlatformPluginRegistry
 from api.domains.communications.repository import CommunicationConnectionRepository
+from api.infrastructure.communication_signals import (
+    CommunicationSignal,
+    CommunicationSignalBus,
+    CommunicationSignalType,
+)
 from api.infrastructure.crypto import decrypt_token
 
 logger = logging.getLogger(__name__)
@@ -50,6 +58,7 @@ class CommunicationsGatewayService:
     delivery_repository: CommunicationDeliveryRepository
     connection_repository: CommunicationConnectionRepository
     plugins: PlatformPluginRegistry
+    signals: CommunicationSignalBus
     operations: CommunicationOperationalRepository | None = None
 
     def accept_inbound(
@@ -57,10 +66,20 @@ class CommunicationsGatewayService:
         connection_id: UUID,
         envelope: NormalizedCommunicationEnvelope,
     ) -> AcceptedCommunicationRead:
-        return self.delivery_repository.accept_inbound(
+        accepted = self.delivery_repository.accept_inbound(
             connection_id=connection_id,
             envelope=envelope,
         )
+        connection = self.connection_repository.get_active(connection_id)
+        if connection is not None:
+            self._publish_signal(
+                connection.agent_id,
+                CommunicationSignal(
+                    type=CommunicationSignalType.DELIVERY_AVAILABLE,
+                    delivery_id=accepted.delivery_id,
+                ),
+            )
+        return accepted
 
     def authenticate_runtime(self, agent_id: UUID, provided_key: str) -> Agent:
         agent = self.agent_repository.get_by_id(agent_id)
@@ -76,6 +95,18 @@ class CommunicationsGatewayService:
             raise PermissionError("Invalid Communication Runtime credential")
         return agent
 
+    def stream_runtime_control(self, agent: Agent) -> Iterator[str]:
+        """Replay durable work, then block on Redis control wakeups."""
+        cursor = self.signals.latest_cursor(agent.id)
+        yield f"data: {CommunicationSignal(type=CommunicationSignalType.DELIVERY_AVAILABLE).as_json()}\n\n"
+        while True:
+            cursor, signals = self.signals.wait(agent.id, cursor)
+            if not signals:
+                yield ": keep-alive\n\n"
+                continue
+            for signal in signals:
+                yield f"data: {signal.as_json()}\n\n"
+
     def claim_runtime_delivery(self, agent: Agent) -> RuntimeDeliveryRead | None:
         if agent.status != AgentStatus.RUNNING:
             raise RuntimeError("Agent is not running")
@@ -90,6 +121,43 @@ class CommunicationsGatewayService:
                 )
             )
         return delivery
+
+    def find_active_inbound_delivery(
+        self,
+        connection_id: UUID,
+        location: ConversationLocation,
+    ) -> UUID | None:
+        return self.delivery_repository.find_active_inbound_delivery(
+            connection_id=connection_id,
+            ordering_key=self.delivery_repository.ordering_key_for_location(connection_id, location),
+        )
+
+    def request_cancel_delivery(self, agent_id: UUID, delivery_id: UUID) -> bool:
+        """Persist cancellation before waking the Agent's outbound control stream."""
+        delivery_status = self.delivery_repository.request_cancel(delivery_id, agent_id=agent_id)
+        if delivery_status is None:
+            return False
+        self._publish_signal(
+            agent_id,
+            CommunicationSignal(
+                type=CommunicationSignalType.DELIVERY_CANCELLED,
+                delivery_id=delivery_id,
+            ),
+        )
+        return True
+
+    def _publish_signal(self, agent_id: UUID, signal: CommunicationSignal) -> None:
+        try:
+            self.signals.publish(agent_id, signal)
+        except RedisError as exc:
+            # PostgreSQL is authoritative. A runtime/browser reconnect takes a
+            # stream cursor before replaying durable state, so notification
+            # failure must not roll back an accepted message or cancellation.
+            logger.warning(
+                "Communication signal publish failed for Agent %s (%s)",
+                agent_id,
+                type(exc).__name__,
+            )
 
     def complete_runtime_delivery(
         self,
@@ -114,8 +182,17 @@ class CommunicationsGatewayService:
             error_message=normalized_error.summary if normalized_error is not None else None,
             error_details=normalized_error.details if normalized_error is not None else None,
         )
-        if completed and not result.succeeded:
-            self._notify_runtime_failure_feedback(agent.id, delivery_id)
+        if completed:
+            # A successful completion also enqueues a reply, which publishes
+            # its own signal — but a failed/cancelled delivery ends here with
+            # no reply, so this is the only wakeup a waiting Web Chat stream
+            # ever gets for its terminal status.
+            self._publish_signal(
+                agent.id,
+                CommunicationSignal(type=CommunicationSignalType.MESSAGE_CHANGED, delivery_id=delivery_id),
+            )
+            if not result.succeeded:
+                self._notify_runtime_failure_feedback(agent.id, delivery_id)
         return completed
 
     def _notify_runtime_failure_feedback(self, agent_id: UUID, delivery_id: UUID) -> None:
@@ -150,11 +227,19 @@ class CommunicationsGatewayService:
         source_delivery_id: UUID,
         reply: RuntimeReplyCreate,
     ) -> UUID:
-        return self.delivery_repository.enqueue_runtime_reply(
+        delivery_id = self.delivery_repository.enqueue_runtime_reply(
             agent_id=agent.id,
             source_delivery_id=source_delivery_id,
             reply=reply,
         )
+        self._publish_signal(
+            agent.id,
+            CommunicationSignal(
+                type=CommunicationSignalType.MESSAGE_CHANGED,
+                delivery_id=delivery_id,
+            ),
+        )
+        return delivery_id
 
     def accept_driver_event(
         self,

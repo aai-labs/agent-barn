@@ -2,51 +2,54 @@
 
 import json
 import os
-import random
+import threading
 import time
 import urllib.error
 import urllib.request
-from collections.abc import Callable
 
 COMMUNICATIONS_URL = os.environ["COMMUNICATIONS_URL"].rstrip("/")
 COMMUNICATIONS_API_KEY = os.environ["COMMUNICATIONS_API_KEY"]
+COMMUNICATIONS_PROTOCOL_VERSION = os.environ.get("COMMUNICATIONS_PROTOCOL_VERSION", "2")
 AGENT_ID = os.environ["AGENT_ID"]
 RUNTIME_API_URL = os.environ["RUNTIME_API_URL"].rstrip("/")
 RUNTIME_API_KEY = os.environ["RUNTIME_API_KEY"]
 RUNTIME_MODEL = os.environ["RUNTIME_MODEL"]
 
 
-class IdleClaimBackoff:
-    """Bound idle claim cadence while retaining prompt bounded delivery."""
+class InFlightDelivery:
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._delivery_id: str | None = None
+        self._session_key: str | None = None
+        self._cancel_requested = False
 
-    def __init__(
-        self,
-        *,
-        initial_seconds: float = 0.5,
-        max_seconds: float = 5.0,
-        multiplier: float = 2.0,
-        jitter_ratio: float = 0.2,
-        random_value: Callable[[], float] = random.random,
-    ) -> None:
-        if initial_seconds <= 0 or max_seconds < initial_seconds:
-            raise ValueError("Idle claim backoff bounds are invalid")
-        if multiplier < 1 or not 0 <= jitter_ratio < 1:
-            raise ValueError("Idle claim backoff parameters are invalid")
-        self._initial_seconds = initial_seconds
-        self._max_seconds = max_seconds
-        self._multiplier = multiplier
-        self._jitter_ratio = jitter_ratio
-        self._random_value = random_value
-        self._current_seconds = initial_seconds
+    def begin(self, delivery_id: str, session_key: str) -> None:
+        with self._lock:
+            self._delivery_id = delivery_id
+            self._session_key = session_key
+            self._cancel_requested = False
 
-    def next_delay(self) -> float:
-        base = self._current_seconds
-        self._current_seconds = min(self._max_seconds, base * self._multiplier)
-        jitter = (self._random_value() * 2 - 1) * self._jitter_ratio
-        return min(self._max_seconds, max(0.0, base * (1 + jitter)))
+    def clear(self, delivery_id: str) -> None:
+        with self._lock:
+            if self._delivery_id != delivery_id:
+                return
+            self._delivery_id = None
+            self._session_key = None
+            self._cancel_requested = False
 
-    def reset(self) -> None:
-        self._current_seconds = self._initial_seconds
+    def request_cancel(self, delivery_id: str) -> str | None:
+        with self._lock:
+            if self._delivery_id != delivery_id:
+                return None
+            self._cancel_requested = True
+            return self._session_key
+
+    def is_cancel_requested(self, delivery_id: str) -> bool:
+        with self._lock:
+            return self._delivery_id == delivery_id and self._cancel_requested
+
+
+IN_FLIGHT = InFlightDelivery()
 
 
 def http_request(method: str, url: str, *, headers: dict[str, str], payload: dict | None = None):
@@ -67,9 +70,17 @@ def http_request(method: str, url: str, *, headers: dict[str, str], payload: dic
 def communications_headers() -> dict[str, str]:
     return {
         "Authorization": f"Bearer {COMMUNICATIONS_API_KEY}",
-        "X-AgentBarn-Communications-Version": "1",
+        "X-AgentBarn-Communications-Version": COMMUNICATIONS_PROTOCOL_VERSION,
         "Content-Type": "application/json",
     }
+
+
+def request_local_cancel(delivery_id: str) -> None:
+    # Neither pinned runtime exposes a proven abort handle for the OpenAI-style
+    # chat-completions request. Marking the in-flight turn is still immediate:
+    # its eventual result is suppressed locally and rejected atomically by the
+    # durable source-delivery check in Communications.
+    IN_FLIGHT.request_cancel(delivery_id)
 
 
 def run_delivery(delivery: dict) -> None:
@@ -79,6 +90,7 @@ def run_delivery(delivery: dict) -> None:
         f"connection:{delivery['connection_id']}:"
         f"{envelope['location']['id']}:{envelope['location'].get('thread_id') or 'root'}"
     )
+    IN_FLIGHT.begin(delivery_id, session_key)
     try:
         result = http_request(
             "POST",
@@ -97,46 +109,108 @@ def run_delivery(delivery: dict) -> None:
                 "messages": [{"role": "user", "content": envelope.get("text", "")}],
             },
         )
-        reply = result["choices"][0]["message"]["content"]
-        http_request(
-            "POST",
-            f"{COMMUNICATIONS_URL}/agents/{AGENT_ID}/deliveries/{delivery_id}/replies",
-            headers=communications_headers(),
-            payload={"idempotency_key": delivery_id, "text": reply},
-        )
-        completion = {"succeeded": True}
+        if IN_FLIGHT.is_cancel_requested(delivery_id):
+            completion = {
+                "succeeded": False,
+                "error_code": "CANCELLED",
+                "error_message": "Cancelled by user",
+            }
+        else:
+            reply = result["choices"][0]["message"]["content"]
+            http_request(
+                "POST",
+                f"{COMMUNICATIONS_URL}/agents/{AGENT_ID}/deliveries/{delivery_id}/replies",
+                headers=communications_headers(),
+                payload={"idempotency_key": delivery_id, "text": reply},
+            )
+            completion = {"succeeded": True}
     except Exception as exc:
         completion = {
             "succeeded": False,
             "error_code": type(exc).__name__,
             "error_message": str(exc)[:500],
         }
-    http_request(
-        "POST",
-        f"{COMMUNICATIONS_URL}/agents/{AGENT_ID}/deliveries/{delivery_id}/complete",
-        headers=communications_headers(),
-        payload=completion,
+    try:
+        http_request(
+            "POST",
+            f"{COMMUNICATIONS_URL}/agents/{AGENT_ID}/deliveries/{delivery_id}/complete",
+            headers=communications_headers(),
+            payload=completion,
+        )
+    finally:
+        IN_FLIGHT.clear(delivery_id)
+
+
+class DeliveryWorker:
+    """Drain durable claims when the control stream signals available work."""
+
+    def __init__(self) -> None:
+        self._wake = threading.Event()
+        self._thread = threading.Thread(target=self._run, name="communications-delivery", daemon=True)
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def wake(self) -> None:
+        self._wake.set()
+
+    def _run(self) -> None:
+        while True:
+            self._wake.wait()
+            self._wake.clear()
+            try:
+                while True:
+                    delivery = http_request(
+                        "POST",
+                        f"{COMMUNICATIONS_URL}/agents/{AGENT_ID}/deliveries/claim",
+                        headers=communications_headers(),
+                    )
+                    if delivery is None:
+                        break
+                    run_delivery(delivery)
+            except Exception as exc:
+                print(f"[communications-adapter] delivery worker: {exc}", flush=True)
+                time.sleep(2)
+                self._wake.set()
+
+
+def consume_control_stream(worker: DeliveryWorker) -> None:
+    req = urllib.request.Request(
+        f"{COMMUNICATIONS_URL}/agents/{AGENT_ID}/control",
+        method="GET",
+        headers={
+            "Authorization": f"Bearer {COMMUNICATIONS_API_KEY}",
+            "X-AgentBarn-Communications-Version": COMMUNICATIONS_PROTOCOL_VERSION,
+            "Accept": "text/event-stream",
+        },
     )
+    with urllib.request.urlopen(req, timeout=60) as response:
+        for raw_line in response:
+            line = raw_line.decode(errors="replace").strip()
+            if not line.startswith("data: "):
+                continue
+            try:
+                event = json.loads(line[6:])
+            except json.JSONDecodeError:
+                continue
+            if event.get("type") == "delivery_available":
+                worker.wake()
+            elif event.get("type") == "delivery_cancelled" and event.get("delivery_id"):
+                request_local_cancel(event["delivery_id"])
 
 
 def main() -> None:
-    idle_backoff = IdleClaimBackoff()
+    worker = DeliveryWorker()
+    worker.start()
+    reconnect_delay = 1
     while True:
         try:
-            delivery = http_request(
-                "POST",
-                f"{COMMUNICATIONS_URL}/agents/{AGENT_ID}/deliveries/claim",
-                headers=communications_headers(),
-            )
-            if delivery is None:
-                time.sleep(idle_backoff.next_delay())
-                continue
-            idle_backoff.reset()
-            run_delivery(delivery)
+            consume_control_stream(worker)
+            reconnect_delay = 1
         except Exception as exc:
-            print(f"[communications-adapter] {exc}", flush=True)
-            idle_backoff.reset()
-            time.sleep(2)
+            print(f"[communications-adapter] control stream: {exc}", flush=True)
+            time.sleep(reconnect_delay)
+            reconnect_delay = min(15, reconnect_delay * 2)
 
 
 if __name__ == "__main__":

@@ -154,7 +154,15 @@ class PlatformIngressSupervisor:
                         ConnectionObservedStatus.CONNECTED,
                     )
 
-                if PlatformCapability.WEBHOOK_INGRESS in plugin.capabilities:
+                if (
+                    PlatformCapability.WEBHOOK_INGRESS in plugin.capabilities
+                    or PlatformCapability.SUPERVISED_INGRESS not in plugin.capabilities
+                ):
+                    # Webhook-ingress plugins receive events out-of-band; plugins
+                    # that declare neither capability (e.g. Web Chat) have
+                    # nothing to supervise at all. Either way there is no
+                    # session to run, so `run_ingress` is never called and its
+                    # base-class NotImplementedError never surfaces as a fault.
                     await connected()
                     await asyncio.Event().wait()
 

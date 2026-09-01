@@ -538,7 +538,7 @@ export function AgentChannelSettings({
                 >
                   <ConnectionIcon platformKey={connection.platformKey} />
                 </span>
-                <div className="min-w-0">
+                <div className="min-w-0 flex-1">
                   <div className="font-medium" style={{ color: "var(--ink)" }}>
                     {connection.displayName}
                   </div>
