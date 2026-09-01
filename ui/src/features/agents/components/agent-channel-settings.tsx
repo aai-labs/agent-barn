@@ -13,7 +13,9 @@ import {
   Plug,
   Plus,
   RefreshCw,
+  Search,
   Trash2,
+  X,
 } from "lucide-react";
 
 import { toast } from "sonner";
@@ -31,8 +33,9 @@ import {
   useCommunicationPlatforms,
   useDownloadAppPackage,
 } from "@/features/communication-connections/hooks/use-communication-connections";
+import { DirectoryPickerDialog } from "@/features/communication-connections/components/directory-picker-dialog";
 import { SLACK_APP_MANIFEST } from "@/features/communication-connections/slack-manifest";
-import type { CommunicationConnection, CommunicationDirectoryEntry } from "@/features/communication-connections/schemas";
+import type { CommunicationConnection, CommunicationDirectoryEntry, CommunicationPlatform } from "@/features/communication-connections/schemas";
 
 import type { Agent } from "../schemas";
 import { AgentConfigurationSection } from "./agent-configuration-section";
@@ -208,66 +211,117 @@ function patternOptions(pattern?: string): string[] {
   return match?.[1]?.split("|") ?? [];
 }
 
+/** A directory the "Browse" button can search for a given array field. Entries are only
+ * ever a naming aid — the field itself always stores raw platform IDs. */
+type ArrayBrowseSource = {
+  noun: string;
+  entries: CommunicationDirectoryEntry[];
+  isLoading?: boolean;
+  error?: string | null;
+  /** Set when browsing cannot work yet (missing credentials, no server picked) — shown as a hint. */
+  disabledReason?: string | null;
+  /** Fired when the picker opens, so the caller can fetch the directory lazily. */
+  onOpen?: () => void;
+};
+
 function SchemaArrayInput({
   label,
   value,
   onChange,
-  suggestions = [],
+  browse,
 }: {
   label: string;
   value: unknown;
   onChange: (value: string[]) => void;
-  suggestions?: CommunicationDirectoryEntry[];
+  browse?: ArrayBrowseSource;
 }) {
   const values = Array.isArray(value) ? value.map(String) : [];
   const [draft, setDraft] = useState("");
+  const [picking, setPicking] = useState(false);
   const commit = (next: string) => {
     const additions = next.split(",").map((item) => item.trim()).filter(Boolean);
     if (additions.length) onChange([...values, ...additions.filter((item) => !values.includes(item))]);
     setDraft("");
   };
   const remove = (item: string) => onChange(values.filter((valueItem) => valueItem !== item));
+  const displayName = (id: string) => browse?.entries.find((candidate) => candidate.id === id)?.label ?? id;
 
   return (
-    <div className="rounded-md border p-2" style={{ borderColor: "var(--line)", background: "var(--bg-elev)" }}>
+    <div
+      className="flex flex-col gap-2 rounded-lg p-2"
+      style={{ border: "1px solid var(--line-strong)", background: "var(--bg-elev)" }}
+    >
       {values.length > 0 && (
-        <div className="mb-2 flex flex-wrap gap-1.5">
-          {values.map((item) => {
-            const suggestion = suggestions.find((candidate) => candidate.id === item);
-            return <span key={item} className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs" style={{ background: "var(--bg-soft)", color: "var(--ink-2)" }}>
-              {suggestion?.label ?? item}
-              <button type="button" aria-label={`Remove ${suggestion?.label ?? item}`} className="cursor-pointer" onClick={() => remove(item)}>×</button>
-            </span>;
-          })}
-        </div>
-      )}
-      <input
-        className="af-input w-full border-0 p-0 shadow-none focus-visible:ring-0"
-        aria-label={label}
-        value={draft}
-        placeholder="Type a value, then press Enter or comma"
-        onChange={(event) => {
-          const next = event.target.value;
-          if (next.includes(",")) {
-            const segments = next.split(",");
-            commit(segments.slice(0, -1).join(","));
-            setDraft(segments.at(-1) ?? "");
-          } else setDraft(next);
-        }}
-        onKeyDown={(event) => {
-          if (event.key === "Enter" || event.key === ",") { event.preventDefault(); commit(draft); }
-          if (event.key === "Backspace" && !draft && values.length) remove(values.at(-1) ?? "");
-        }}
-        onBlur={() => commit(draft)}
-      />
-      {suggestions.length > 0 && (
-        <div className="mt-2 flex max-h-28 flex-wrap gap-1 overflow-y-auto">
-          {suggestions.filter((candidate) => !values.includes(candidate.id)).map((candidate) => (
-            <button key={candidate.id} type="button" className="rounded px-1.5 py-0.5 text-xs hover:bg-[var(--bg-soft)]" style={{ color: "var(--ink-3)" }} onClick={() => onChange([...values, candidate.id])}>
-              {candidate.label}{candidate.detail ? ` · ${candidate.detail}` : ""}
-            </button>
+        <div className="flex flex-wrap gap-1.5">
+          {values.map((item) => (
+            <span
+              key={item}
+              className="inline-flex max-w-full items-center gap-1 rounded-md py-1 pl-2 pr-1 text-xs"
+              style={{ border: "1px solid var(--line)", background: "var(--bg-soft)", color: "var(--ink-2)" }}
+            >
+              <span className="truncate">{displayName(item)}</span>
+              <button
+                type="button"
+                aria-label={`Remove ${displayName(item)}`}
+                className="grid size-4 flex-shrink-0 cursor-pointer place-items-center rounded transition-colors hover:bg-[var(--bg-sunken)]"
+                style={{ color: "var(--ink-4)" }}
+                onClick={() => remove(item)}
+              >
+                <X size={11} strokeWidth={2.5} />
+              </button>
+            </span>
           ))}
         </div>
+      )}
+      <div className="flex items-center gap-2">
+        <input
+          className="min-w-0 flex-1 bg-transparent px-1 py-1 text-sm font-normal outline-none"
+          style={{ color: "var(--ink)" }}
+          aria-label={label}
+          value={draft}
+          placeholder="Add an ID…"
+          onChange={(event) => {
+            const next = event.target.value;
+            if (next.includes(",")) {
+              const segments = next.split(",");
+              commit(segments.slice(0, -1).join(","));
+              setDraft(segments.at(-1) ?? "");
+            } else setDraft(next);
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" || event.key === ",") { event.preventDefault(); commit(draft); }
+            if (event.key === "Backspace" && !draft && values.length) remove(values.at(-1) ?? "");
+          }}
+          onBlur={() => commit(draft)}
+        />
+        {browse && (
+          <button
+            type="button"
+            className="af-btn af-btn-sm flex-shrink-0"
+            aria-label={`Browse ${label}`}
+            disabled={Boolean(browse.disabledReason)}
+            onClick={() => { browse.onOpen?.(); setPicking(true); }}
+          >
+            <Search size={13} /> Browse
+          </button>
+        )}
+      </div>
+      {browse?.disabledReason && (
+        <p className="m-0 px-1 text-xs" style={{ color: "var(--ink-4)" }}>{browse.disabledReason}</p>
+      )}
+      {browse && (
+        <DirectoryPickerDialog
+          open={picking}
+          onOpenChange={setPicking}
+          title={`Select ${browse.noun}`}
+          description={`Search the connected directory and pick as many ${browse.noun} as you need. Only their IDs are saved.`}
+          searchPlaceholder={`Search ${browse.noun}…`}
+          entries={browse.entries}
+          selected={values}
+          isLoading={browse.isLoading}
+          error={browse.error}
+          onConfirm={onChange}
+        />
       )}
     </div>
   );
@@ -279,18 +333,18 @@ function SchemaTextInput({
   value,
   onChange,
   secret,
-  suggestions,
+  browse,
 }: {
   label: string;
   property: SchemaProperty;
   value: unknown;
   onChange: (value: unknown) => void;
   secret: boolean;
-  suggestions?: CommunicationDirectoryEntry[];
+  browse?: ArrayBrowseSource;
 }) {
   const [visible, setVisible] = useState(false);
   if (property.type === "array") {
-    return <SchemaArrayInput label={label} value={value} onChange={(next) => onChange(next)} suggestions={suggestions} />;
+    return <SchemaArrayInput label={label} value={value} onChange={(next) => onChange(next)} browse={browse} />;
   }
 
   return (
@@ -324,13 +378,13 @@ function SchemaFields({
   values,
   onChange,
   secret = false,
-  arraySuggestions = {},
+  arrayBrowse = {},
 }: {
   schema: Record<string, unknown>;
   values: Record<string, unknown>;
   onChange: (values: Record<string, unknown>) => void;
   secret?: boolean;
-  arraySuggestions?: Record<string, CommunicationDirectoryEntry[]>;
+  arrayBrowse?: Record<string, ArrayBrowseSource>;
 }) {
   const required = new Set(Array.isArray(schema.required) ? schema.required.filter((item): item is string => typeof item === "string") : []);
   return schemaProperties(schema).map(([key, property]) => {
@@ -368,7 +422,7 @@ function SchemaFields({
     return (
       <label key={key} className="flex w-full flex-col gap-1.5 text-sm font-medium">
         {label}{required.has(key) ? " *" : ""}
-        <SchemaTextInput label={label} property={property} value={value} onChange={update} secret={secret} suggestions={arraySuggestions[key]} />
+        <SchemaTextInput label={label} property={property} value={value} onChange={update} secret={secret} browse={arrayBrowse[key]} />
         {hint}
       </label>
     );
@@ -388,12 +442,14 @@ export function AgentChannelSettings({
 }) {
   const connections = useCommunicationConnections(agent.id);
   const platforms = useCommunicationPlatforms();
-  const { createConnection, updateConnection, retireConnection } = useCommunicationConnectionActions();
+  const { previewConnectionDirectory, createConnection, updateConnection, retireConnection } = useCommunicationConnectionActions();
   const [adding, setAdding] = useState(autoOpen && canEdit);
   const [platformKey, setPlatformKey] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [settings, setSettings] = useState<Record<string, unknown>>({});
   const [credentials, setCredentials] = useState<Record<string, unknown>>({});
+  const [slackPreview, setSlackPreview] = useState<{ channels: CommunicationDirectoryEntry[]; users: CommunicationDirectoryEntry[] } | null>(null);
+  const [slackPreviewError, setSlackPreviewError] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const [retiring, setRetiring] = useState<CommunicationConnection | null>(null);
   const downloadAppPackage = useDownloadAppPackage();
@@ -418,12 +474,79 @@ export function AgentChannelSettings({
     [platformKey, platforms.data],
   );
 
+  /** Wraps a directory query as a browse source for an array field. */
+  function queryBrowse(
+    noun: string,
+    query: { data?: CommunicationDirectoryEntry[]; isPending: boolean; error: unknown },
+    disabledReason?: string | null,
+  ): ArrayBrowseSource {
+    return {
+      noun,
+      entries: query.data ?? [],
+      isLoading: query.isPending,
+      error: query.error ? `Could not load ${noun}.` : null,
+      disabledReason: disabledReason ?? null,
+    };
+  }
+
+  /** Browse sources for the add form. Slack has no Connection to read from yet, so the
+   * directory is previewed from the credentials typed above.
+   * Keys are camelCase: the API client camelizes response bodies, including the
+   * property names inside a plugin's JSON settings schema. */
+  function addBrowseSources(platform: CommunicationPlatform): Record<string, ArrayBrowseSource> {
+    if (platform.key !== "slack") return {};
+    const missingCredentials = !credentials.botToken || !credentials.appToken;
+    const source = (noun: string, entries: CommunicationDirectoryEntry[]): ArrayBrowseSource => ({
+      noun,
+      entries,
+      isLoading: previewConnectionDirectory.isPending,
+      error: slackPreviewError,
+      disabledReason: missingCredentials ? "Add the bot token and app-level token above to browse." : null,
+      onOpen: () => {
+        if (slackPreview || previewConnectionDirectory.isPending) return;
+        setSlackPreviewError(null);
+        void previewConnectionDirectory
+          .mutateAsync({ agentId: agent.id, platformKey: "slack", settings, credentials })
+          .then(setSlackPreview)
+          .catch((error: unknown) =>
+            setSlackPreviewError(error instanceof Error ? error.message : "Could not load the Slack workspace."),
+          );
+      },
+    });
+    return {
+      channelIds: source("channels", slackPreview?.channels ?? []),
+      dmUserIds: source("people", slackPreview?.users ?? []),
+    };
+  }
+
+  /** Browse sources for the edit form, backed by the saved Connection's own directory. */
+  function editBrowseSources(platformKey: string): Record<string, ArrayBrowseSource> {
+    if (platformKey === "slack") {
+      return {
+        channelIds: queryBrowse("channels", slackChannels),
+        dmUserIds: queryBrowse("people", slackUsers),
+      };
+    }
+    if (platformKey === "discord") {
+      const needsGuild = discordGuildId ? null : "Choose a server above to browse.";
+      return {
+        guildIds: queryBrowse("servers", discordGuilds),
+        allowedChannelIds: queryBrowse("channels", discordChannels, needsGuild),
+        allowedUserIds: queryBrowse("people", discordUsers, needsGuild),
+        allowedRoleIds: queryBrowse("roles", discordRoles, needsGuild),
+      };
+    }
+    return {};
+  }
+
   function choosePlatform(key: string) {
     const platform = platforms.data?.find((candidate) => candidate.key === key);
     setPlatformKey(key);
     setDisplayName(platform?.displayName ?? key);
     setSettings(schemaDefaults(platform?.settingsSchema ?? {}));
     setCredentials(schemaDefaults(platform?.credentialsSchema ?? {}));
+    setSlackPreview(null);
+    setSlackPreviewError(null);
     setFormError(null);
   }
 
@@ -442,6 +565,8 @@ export function AgentChannelSettings({
       setDisplayName("");
       setSettings({});
       setCredentials({});
+      setSlackPreview(null);
+      setSlackPreviewError(null);
       setFormError(null);
     } catch (error) {
       setFormError(error instanceof Error ? error.message : "Could not create the connection.");
@@ -642,7 +767,7 @@ export function AgentChannelSettings({
                   {platform && (
                     <>
                       <PlatformSetupHint hint={platform.setupHint} platformKey={platform.key} />
-                      <div className="grid gap-3 sm:grid-cols-2">
+                      <div className="flex flex-col gap-4">
                         {connection.platformKey === "discord" && (
                         <label className="flex flex-col gap-1.5 text-sm font-medium">
                           Browse server
@@ -657,11 +782,7 @@ export function AgentChannelSettings({
                         schema={platform.settingsSchema}
                         values={editSettings}
                         onChange={setEditSettings}
-                        arraySuggestions={connection.platformKey === "slack"
-                          ? { channel_ids: slackChannels.data ?? [], dm_user_ids: slackUsers.data ?? [] }
-                          : connection.platformKey === "discord"
-                            ? { guild_ids: discordGuilds.data ?? [], allowed_channel_ids: discordChannels.data ?? [], allowed_user_ids: discordUsers.data ?? [], allowed_role_ids: discordRoles.data ?? [] }
-                            : {}}
+                        arrayBrowse={editBrowseSources(connection.platformKey)}
                       />
                       </div>
                       <div className="rounded-lg p-3" style={{ border: "1px solid var(--line)" }}>
@@ -745,12 +866,31 @@ export function AgentChannelSettings({
                     </span>
                     <div>
                       <div className="text-sm font-semibold" style={{ color: "var(--ink)" }}>Configure {selectedPlatform.displayName}</div>
-                      <p className="mb-0 mt-0.5 text-xs" style={{ color: "var(--ink-3)" }}>Give this connection a recognizable name, then add its credentials.</p>
+                      <p className="mb-0 mt-0.5 text-xs" style={{ color: "var(--ink-3)" }}>Add its credentials first, then name the connection and choose where it listens.</p>
                     </div>
                   </div>
 
                   <div className="mt-5 flex flex-col gap-4">
                     <PlatformSetupHint hint={selectedPlatform.setupHint} platformKey={selectedPlatform.key} />
+                    <div className="rounded-xl p-4" style={{ border: "1px solid var(--line)", background: "var(--bg-soft)" }}>
+                      <div className="flex items-start gap-2.5">
+                        <LockKeyhole size={16} className="mt-0.5 flex-shrink-0" style={{ color: "var(--accent-ink)" }} />
+                        <div>
+                          <div className="text-xs font-semibold uppercase tracking-[0.1em]" style={{ color: "var(--ink-2)" }}>Credentials</div>
+                          <p className="mb-0 mt-1 text-xs leading-relaxed" style={{ color: "var(--ink-3)" }}>
+                            Encrypted at rest and never shown again after you save this connection.
+                          </p>
+                        </div>
+                      </div>
+                      <div className="mt-4 flex w-full flex-col gap-3">
+                        <SchemaFields
+                          schema={selectedPlatform.credentialsSchema}
+                          values={credentials}
+                          onChange={(next) => { setCredentials(next); setSlackPreview(null); setSlackPreviewError(null); }}
+                          secret
+                        />
+                      </div>
+                    </div>
                     <label className="flex flex-col gap-1.5 text-sm font-medium">
                       Connection name
                       <input
@@ -764,25 +904,16 @@ export function AgentChannelSettings({
                     {schemaProperties(selectedPlatform.settingsSchema).length > 0 && (
                       <div className="flex flex-col gap-2">
                         <div className="text-xs font-semibold uppercase tracking-[0.1em]" style={{ color: "var(--ink-4)" }}>Connection settings</div>
-                        <div className="grid gap-3 sm:grid-cols-2">
-                          <SchemaFields schema={selectedPlatform.settingsSchema} values={settings} onChange={setSettings} />
+                        <div className="flex flex-col gap-4">
+                          <SchemaFields
+                            schema={selectedPlatform.settingsSchema}
+                            values={settings}
+                            onChange={setSettings}
+                            arrayBrowse={addBrowseSources(selectedPlatform)}
+                          />
                         </div>
                       </div>
                     )}
-                    <div className="rounded-xl p-4" style={{ border: "1px solid var(--line)", background: "var(--bg-soft)" }}>
-                      <div className="flex items-start gap-2.5">
-                        <LockKeyhole size={16} className="mt-0.5 flex-shrink-0" style={{ color: "var(--accent-ink)" }} />
-                        <div>
-                          <div className="text-xs font-semibold uppercase tracking-[0.1em]" style={{ color: "var(--ink-2)" }}>Credentials</div>
-                          <p className="mb-0 mt-1 text-xs leading-relaxed" style={{ color: "var(--ink-3)" }}>
-                            Encrypted at rest and never shown again after you save this connection.
-                          </p>
-                        </div>
-                      </div>
-                      <div className="mt-4 flex w-full flex-col gap-3">
-                        <SchemaFields schema={selectedPlatform.credentialsSchema} values={credentials} onChange={setCredentials} secret />
-                      </div>
-                    </div>
                   </div>
                 </div>
               )}

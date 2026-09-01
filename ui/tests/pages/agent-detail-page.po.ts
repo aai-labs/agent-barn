@@ -99,6 +99,26 @@ export class AgentDetailPage {
     return this.page.getByRole("button", { name: `${visible ? "Hide" : "Show"} ${label}`, exact: true });
   }
 
+  browseDirectoryButton(fieldLabel: string): Locator {
+    return this.page.getByRole("button", { name: `Browse ${fieldLabel}`, exact: true });
+  }
+
+  directoryPicker(): Locator {
+    return this.page.getByRole("dialog");
+  }
+
+  directoryPickerSearch(placeholder: string): Locator {
+    return this.directoryPicker().getByRole("combobox", { name: placeholder });
+  }
+
+  directoryPickerOption(name: string | RegExp): Locator {
+    return this.directoryPicker().getByRole("option", { name });
+  }
+
+  directoryPickerConfirmButton(): Locator {
+    return this.directoryPicker().getByRole("button", { name: "OK", exact: true });
+  }
+
   connectPlatformButton(platformName: string): Locator {
     return this.page.getByRole("button", { name: `Connect ${platformName}`, exact: true });
   }

@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Locator } from "@playwright/test";
 
 import { TEST_ORG_ID } from "../constants";
 import {
@@ -657,6 +657,58 @@ test.describe("Agent Detail Page — Channels tab", () => {
     await expect(telegramHint).toContainText("getUpdates");
     await expect(telegramHint).toContainText("/setprivacy");
     await expect(telegramHint).toContainText("webhook");
+  });
+
+  test("browses the Slack workspace to fill channel IDs from names", async ({ page }) => {
+    await agentDetailPage.addConnectionButton().click();
+    await agentDetailPage.selectPlatformButton("Slack").click();
+
+    // Browsing needs both tokens, so it stays disabled until the credentials are typed.
+    const browse = agentDetailPage.browseDirectoryButton("Allowed channels");
+    await expect(browse).toBeDisabled();
+    await expect(page.getByText("Add the bot token and app-level token above to browse.").first()).toBeVisible();
+
+    await agentDetailPage.credentialInput("Bot token").fill("xoxb-token");
+    await agentDetailPage.credentialInput("App-level token").fill("xapp-token");
+
+    const preview = page.waitForRequest(
+      (request) => request.method() === "POST" && request.url().includes("/connection-directory-preview"),
+    );
+    await browse.click();
+    expect((await preview).postDataJSON()).toMatchObject({
+      platform_key: "slack",
+      credentials: { bot_token: "xoxb-token", app_token: "xapp-token" },
+    });
+
+    // The picker searches names, but only the underlying platform IDs are stored.
+    await agentDetailPage.directoryPickerSearch("Search channels…").fill("ops");
+    await agentDetailPage.directoryPickerOption(/#ops/).click();
+    await agentDetailPage.directoryPickerConfirmButton().click();
+    await expect(agentDetailPage.directoryPicker()).toBeHidden();
+    await expect(page.getByRole("button", { name: "Remove #ops", exact: true })).toBeVisible();
+
+    const create = agentDetailPage.waitForConnectionMutation("POST");
+    await agentDetailPage.connectPlatformButton("Slack").click();
+    expect((await create).postDataJSON()).toEqual({
+      platform_key: "slack",
+      display_name: "Slack",
+      enabled: true,
+      settings: { channel_ids: ["C1"] },
+      credentials: { bot_token: "xoxb-token", app_token: "xapp-token" },
+    });
+  });
+
+  test("puts credentials above the Connection name in the add form", async ({ page }) => {
+    await agentDetailPage.addConnectionButton().click();
+    await agentDetailPage.selectPlatformButton("Slack").click();
+
+    const topOf = async (locator: Locator) => (await locator.boundingBox())?.y ?? Number.NaN;
+    const credentials = await topOf(page.getByText("Credentials", { exact: true }));
+    const connectionName = await topOf(page.getByPlaceholder("Slack connection"));
+    const connectionSettings = await topOf(page.getByText("Connection settings", { exact: true }));
+
+    expect(credentials).toBeLessThan(connectionName);
+    expect(connectionName).toBeLessThan(connectionSettings);
   });
 
   test("creates another same-platform Connection from the plugin schema", async () => {

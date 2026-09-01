@@ -46,6 +46,7 @@ from api.domains.rbac.catalog import AGENT_VIEWER_ROLE_ID
 from api.domains.users.organization_users.models import OrganizationRole
 from api.domains.users.organization_users.repository import OrganizationUserRepository
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
+from api.infrastructure.slack.errors import SlackFetchError
 from api.tests.core.givenpy import given, then, when
 from api.tests.core.modules import (
     create_test_client,
@@ -183,6 +184,68 @@ def test_platform_catalog_lists_the_shipped_plugins() -> None:
                     contains_string("webhook"),
                 ),
             )
+
+
+def test_slack_workspace_preview_loads_directory_without_creating_a_connection() -> None:
+    with given(_GIVEN) as context:
+        preview = {"platform_key": "slack", "credentials": _slack_payload()["credentials"]}
+        with patch(
+            "api.infrastructure.slack.client.SlackClient.list_channels",
+            return_value=[{"id": "C1", "name": "ops", "is_private": False}],
+        ):
+            with patch(
+                "api.infrastructure.slack.client.SlackClient.list_users",
+                return_value=[{"id": "U1", "name": "aria", "real_name": "Aria", "display_name": ""}],
+            ):
+                response = context.client.post(
+                    f"/api/v1/organizations/{context.organization.id}/agents/{context.agent.id}/connection-directory-preview",
+                    json=preview,
+                    headers=_auth(context),
+                )
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+        assert_that(response.json()["channels"], equal_to([{"id": "C1", "label": "#ops", "detail": None}]))
+        assert_that(response.json()["users"], equal_to([{"id": "U1", "label": "Aria", "detail": "@aria"}]))
+        assert_that(context.client.get(_base(context), headers=_auth(context)).json(), equal_to([]))
+
+
+def test_slack_workspace_preview_reports_a_provider_failure_instead_of_a_server_error() -> None:
+    with given(_GIVEN) as context:
+        preview = {"platform_key": "slack", "credentials": _slack_payload()["credentials"]}
+        with patch(
+            "api.infrastructure.slack.client.SlackClient.list_channels",
+            side_effect=SlackFetchError("conversations.list error: missing_scope"),
+        ):
+            response = context.client.post(
+                f"/api/v1/organizations/{context.organization.id}/agents/{context.agent.id}/connection-directory-preview",
+                json=preview,
+                headers=_auth(context),
+            )
+
+        # A bad token or a missing scope is the operator's input, not a bug, and 401/403
+        # would make the web client treat it as its own session expiring.
+        assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+        detail = response.json()["detail"]
+        assert_that(detail, contains_string("missing_scope"))
+        # The normalized summary already carries the code; it must not be appended twice.
+        assert_that(detail.count("missing_scope"), equal_to(1))
+
+
+def test_connection_directory_reports_a_provider_outage_as_bad_gateway() -> None:
+    with given(_GIVEN) as context:
+        created = context.client.post(_base(context), json=_slack_payload(), headers=_auth(context))
+        connection_id = created.json()["id"]
+        with patch(
+            "api.infrastructure.slack.client.SlackClient.list_channels",
+            side_effect=SlackFetchError("conversations.list request failed: connection refused"),
+        ):
+            response = context.client.get(
+                f"{_base(context)}/{connection_id}/directory/channels", headers=_auth(context)
+            )
+
+        assert_that(response.status_code, equal_to(status.HTTP_502_BAD_GATEWAY))
+        # Provider text must never be echoed back to the client.
+        assert_that(response.json()["detail"], not_(contains_string("connection refused")))
 
 
 def test_slack_connection_directory_lists_safe_channels_and_users() -> None:

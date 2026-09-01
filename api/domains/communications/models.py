@@ -566,6 +566,19 @@ class CommunicationDirectoryEntryRead(PydanticBaseModel):
     detail: str | None = Field(default=None, max_length=255)
 
 
+class CommunicationDirectoryPreview(PydanticBaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    platform_key: str = Field(min_length=1, max_length=64)
+    settings: dict[str, Any] = Field(default_factory=dict)
+    credentials: dict[str, Any]
+
+
+class CommunicationDirectoryPreviewRead(PydanticBaseModel):
+    channels: list[CommunicationDirectoryEntryRead] = Field(default_factory=list)
+    users: list[CommunicationDirectoryEntryRead] = Field(default_factory=list)
+
+
 class CommunicationConnectionCreate(PydanticBaseModel):
     model_config = ConfigDict(extra="forbid")
 

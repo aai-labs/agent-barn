@@ -13,6 +13,22 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
 
 ## Changes
 
+### 2026-09-01 — Directory failures are reported instead of crashing — PR pending
+
+- Fixed: A provider-side directory read that failed — a revoked token, a missing scope, a rate limit, an outage — escaped as an unhandled 500, because `SlackFetchError` is not a `ValueError`. Both the preview and saved-Connection directory endpoints now translate any provider failure through the existing error normalizer. Credential and scope problems answer 400, rate limits 429, timeouts 504, and outages 502; 401/403 are deliberately never used, since the web client treats them as its own session expiring and would sign the operator out over a bad Slack token. Provider text still never reaches the client — only the bounded summary and a validated provider code such as `missing_scope`.
+- Changed: The shared error classifier now recognizes the provider error codes that carry no matching English text of their own — `missing_scope`, `not_authed`, `token_revoked`, `token_expired`, `account_inactive`, and `ratelimited` — so they land in the right category instead of Unknown.
+
+### 2026-09-01 — Connection form reordered and directory Browse picker — PR pending
+
+- Changed: The add-Connection form now leads with Credentials, then the Connection name, then Connection settings, so the setup guidance flows directly into the tokens it describes.
+- Changed: Slack allowlists are no longer gated behind a separate workspace-validation step. Every directory-backed allowlist is an ID field again, paired with a Browse control that opens a searchable multi-select of channels, people, servers, or roles; confirming it writes only the platform IDs. Slack loads its directory from the draft credentials on first open; a saved Connection browses its own directory. Manual ID entry remains available at all times.
+- Changed: Connection settings are stacked full width rather than paired into two columns, for every platform. Directory-backed fields render as one bordered token field holding its chips, a compact ID input, and the Browse control, and the picker itself has room to breathe: a padded search box separated from the list, taller rows, and the selection count in the footer.
+- Fixed: Directory suggestions never appeared, and the Slack workspace-validation control could never enable, because both were keyed on snake_case plugin-schema property names. Responses are camelized in transit, so the keys are now camelCase.
+
+### 2026-09-01 — Pre-save Slack workspace preview — PR pending
+
+- Delivered: A user can now validate submitted Slack draft credentials and load workspace channel/user candidates before creating the Connection. The preview is Agent-update/secret-manage authorized, returns safe directory entries only, and never persists the submitted credentials or creates a Connection. Slack allowlists stay gated until that workspace load completes, with a manual-ID alternative for advanced setup.
+
 ### 2026-09-01 — Expanded Slack sample manifest — PR pending
 
 - Changed: The UI-local Slack sample manifest now includes the requested full bot-scope and event-subscription set, including app mentions, canvases, files, pins, reactions, and membership/channel events. This is a user-provided sample manifest rather than a statement of the minimum permissions consumed by the Communications plugin.

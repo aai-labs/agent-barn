@@ -14,6 +14,8 @@ from api.domains.communications.models import (
     CommunicationDiagnosticsRead,
     CommunicationDirection,
     CommunicationDirectoryEntryRead,
+    CommunicationDirectoryPreview,
+    CommunicationDirectoryPreviewRead,
     CommunicationJournalEntryRead,
     CommunicationJournalStage,
     CommunicationReconnectRead,
@@ -63,6 +65,19 @@ def list_communication_connection_directory(
     guild_id: str | None = Query(default=None, max_length=64),
 ):
     return service.list_connection_directory(agent_id, connection_id, kind, search, guild_id, context)
+
+
+@communications_router.post(
+    "/agents/{agent_id}/connection-directory-preview",
+    response_model=CommunicationDirectoryPreviewRead,
+)
+def preview_communication_connection_directory(
+    agent_id: UUID,
+    data: CommunicationDirectoryPreview,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[CommunicationsService, Injected(CommunicationsService)],
+):
+    return service.preview_connection_directory(agent_id, data, context)
 
 
 @communications_router.post(

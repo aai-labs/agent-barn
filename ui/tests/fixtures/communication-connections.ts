@@ -41,7 +41,13 @@ export const mockCommunicationPlatforms = [
       "## Create a Slack app\n\n1. Open [Slack app management](https://api.slack.com/apps).\n2. Click **New App**.\n3. Click **From Manifest**.\n\n## Create credentials\n\n1. Create an `xapp-` token with `connections:write`.\n2. Copy the `xoxb-` token and reinstall after scope changes.",
     schema_version: 1,
     capabilities: ["DIRECTORY_DISCOVERY"],
-    settings_schema: { type: "object", properties: {} },
+    settings_schema: {
+      type: "object",
+      properties: {
+        channel_ids: { title: "Allowed channels", type: "array", items: { type: "string" } },
+        dm_user_ids: { title: "Allowed DM senders", type: "array", items: { type: "string" } },
+      },
+    },
     credentials_schema: {
       type: "object",
       properties: {

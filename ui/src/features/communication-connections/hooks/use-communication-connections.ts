@@ -12,6 +12,7 @@ import { createQueryKeyStructure } from "@/shared/query-keys";
 import {
   CommunicationConnectionSchema,
   CommunicationDirectoryEntrySchema,
+  CommunicationDirectoryPreviewSchema,
   CommunicationDiagnosticsSchema,
   PaginatedCommunicationJournalEntriesSchema,
   CommunicationReconnectSchema,
@@ -19,6 +20,7 @@ import {
   CommunicationPlatformSchema,
   type CommunicationConnection,
   type CommunicationDirectoryEntry,
+  type CommunicationDirectoryPreview,
   type CommunicationPlatform,
   type CommunicationDiagnostics,
   type CommunicationJournalFilters,
@@ -269,6 +271,17 @@ export function useCommunicationConnectionActions() {
     return invalidate(agentId);
   }
 
+  const previewConnectionDirectory = useMutation({
+    mutationFn: async ({ agentId, platformKey, settings, credentials }: { agentId: string; platformKey: string; settings: Record<string, unknown>; credentials: Record<string, unknown> }) => {
+      const response = await api.post<CommunicationDirectoryPreview>(
+        `${orgApiBase}/agents/${agentId}/connection-directory-preview`,
+        { platformKey, settings, credentials },
+        { schema: CommunicationDirectoryPreviewSchema },
+      );
+      return response.data;
+    },
+  });
+
   const createConnection = useMutation({
     mutationFn: async ({ agentId, ...data }: CreateCommunicationConnection) => {
       const response = await api.post<CommunicationConnection>(
@@ -327,5 +340,5 @@ export function useCommunicationConnectionActions() {
     onSuccess: (_data, variables) => invalidateDiagnostics(variables.agentId),
   });
 
-  return { createConnection, updateConnection, retireConnection, reconnectConnection, retryDelivery };
+  return { previewConnectionDirectory, createConnection, updateConnection, retireConnection, reconnectConnection, retryDelivery };
 }

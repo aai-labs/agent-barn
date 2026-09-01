@@ -30,6 +30,14 @@ export class CommunicationConnectionDataSupport {
       });
     });
 
+    await this.page.route(`**/api/v1/organizations/*/agents/${agentId}/connection-directory-preview`, async (route) => {
+      if (route.request().method() !== "POST") {
+        await route.fallback();
+        return;
+      }
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ channels: [{ id: "C1", label: "#ops", detail: null }], users: [{ id: "U1", label: "Aria", detail: "@aria" }] }) });
+    });
+
     await this.page.route(`**/api/v1/organizations/*/agents/${agentId}/connections`, async (route) => {
       if (route.request().method() === "POST") {
         await route.fulfill({

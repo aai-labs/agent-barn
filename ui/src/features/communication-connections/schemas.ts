@@ -28,6 +28,11 @@ export const CommunicationDirectoryEntrySchema = z.object({
   detail: z.string().nullable().optional(),
 });
 
+export const CommunicationDirectoryPreviewSchema = z.object({
+  channels: z.array(CommunicationDirectoryEntrySchema),
+  users: z.array(CommunicationDirectoryEntrySchema),
+});
+
 export const CommunicationPlatformSchema = z.object({
   key: z.string(),
   displayName: z.string(),
@@ -176,6 +181,7 @@ export const CommunicationRetrySchema = z.object({
 });
 
 export type CommunicationDirectoryEntry = z.infer<typeof CommunicationDirectoryEntrySchema>;
+export type CommunicationDirectoryPreview = z.infer<typeof CommunicationDirectoryPreviewSchema>;
 export type CommunicationPlatform = z.infer<typeof CommunicationPlatformSchema>;
 export type CommunicationConnection = z.infer<typeof CommunicationConnectionSchema>;
 export type CommunicationDiagnostics = z.infer<typeof CommunicationDiagnosticsSchema>;
