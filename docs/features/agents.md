@@ -79,21 +79,21 @@ Share-management endpoints expose locked Agent Access Roles and one canonical Ag
 
 ## Source map
 
-| Concern                                    | Authoritative source                                                                                         |
-| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------ |
-| Persistence, enums, request/read contracts | `../../api/domains/agents/models.py`                                                                               |
-| Lifecycle and cross-domain orchestration   | `../../api/domains/agents/service.py`                                                                              |
-| Tenant/access-scoped persistence           | `../../api/domains/agents/repository.py`                                                                           |
-| Agent visibility and effective actions     | `../../api/domains/agents/authorization.py`                                                                        |
-| Agent Access workflows                     | `../../api/domains/agents/access_service.py`                                                                        |
-| HTTP routes                                | `../../api/domains/agents/routes.py` |
-| Communication Connections and Plugins     | `../../api/domains/communications/` |
-| Runtime resources                          | `../../api/domains/agents/builders/`                                                                               |
-| Integration and skill artifacts            | `../../api/domains/agents/aai_cli_artifacts.py`, `../../api/domains/agents/aai_cli_skills/bundled/skills/`, `../../api/domains/agents/gog_artifacts.py`                                  |
-| UI contracts and hooks                     | `../../ui/src/features/agents/schemas.ts`, `../../ui/src/features/agents/hooks/`                                         |
-| UI components                              | `../../ui/src/features/agents/components/`                                                                         |
-| Model inheritance and Organization defaults | `../../api/domains/agent_settings/`, [`agent-settings.md`](agent-settings.md) |
-| Integration coverage                       | `../../api/tests/integration/test_agents.py`, `../../api/tests/integration/test_agent_rbac.py`, `../../api/tests/integration/test_agent_general_access.py`, `../../api/tests/integration/test_agent_logs.py` |
+| Concern                                     | Authoritative source                                                                                                                                                                                         |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Persistence, enums, request/read contracts  | `../../api/domains/agents/models.py`                                                                                                                                                                         |
+| Lifecycle and cross-domain orchestration    | `../../api/domains/agents/service.py`                                                                                                                                                                        |
+| Tenant/access-scoped persistence            | `../../api/domains/agents/repository.py`                                                                                                                                                                     |
+| Agent visibility and effective actions      | `../../api/domains/agents/authorization.py`                                                                                                                                                                  |
+| Agent Access workflows                      | `../../api/domains/agents/access_service.py`                                                                                                                                                                 |
+| HTTP routes                                 | `../../api/domains/agents/routes.py`                                                                                                                                                                         |
+| Communication Connections and Plugins       | `../../api/domains/communications/`                                                                                                                                                                          |
+| Runtime resources                           | `../../api/domains/agents/builders/`                                                                                                                                                                         |
+| Integration and skill artifacts             | `../../api/domains/agents/aai_cli_artifacts.py`, `../../api/domains/agents/aai_cli_skills/bundled/skills/`, `../../api/domains/agents/gog_artifacts.py`                                                      |
+| UI contracts and hooks                      | `../../ui/src/features/agents/schemas.ts`, `../../ui/src/features/agents/hooks/`                                                                                                                             |
+| UI components                               | `../../ui/src/features/agents/components/`                                                                                                                                                                   |
+| Model inheritance and Organization defaults | `../../api/domains/agent_settings/`, [`agent-settings.md`](agent-settings.md)                                                                                                                                |
+| Integration coverage                        | `../../api/tests/integration/test_agents.py`, `../../api/tests/integration/test_agent_rbac.py`, `../../api/tests/integration/test_agent_general_access.py`, `../../api/tests/integration/test_agent_logs.py` |
 
 ## Related decisions
 

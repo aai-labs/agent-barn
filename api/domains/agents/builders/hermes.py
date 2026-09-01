@@ -159,6 +159,7 @@ def build_secret_hermes_runtime(
             "RUNTIME_API_KEY": runtime_api_key,
             "RUNTIME_API_URL": "http://127.0.0.1:8642",
             "RUNTIME_MODEL": agent_name,
+            "AGENT_RUNTIME_KIND": "hermes",
         },
     )
 
