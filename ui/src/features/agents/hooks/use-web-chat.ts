@@ -1,23 +1,20 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { camelizeKeys } from "humps";
 import { z } from "zod";
 
 import { api } from "@/shared/api";
-import { useAuthStore } from "@/auth/providers/auth-store";
 import { useOrganizationApiBase } from "@/features/organizations/hooks/use-organization-api-base";
 
 import { WebChatMessageSchema, type WebChatMessage } from "../schemas";
 import { agentsKey } from "../utils";
+import { useSseStream } from "./use-sse-stream";
 
 export const MAIN_THREAD_ID = "main";
 
 const MessagesListSchema = z.array(WebChatMessageSchema);
-
-const RECONNECT_BASE_MS = 1_000;
-const RECONNECT_MAX_MS = 15_000;
 
 export function useWebChat(
   agentId: string,
@@ -96,103 +93,27 @@ export function useWebChat(
     await stopMutation.mutateAsync();
   }, [stopMutation]);
 
-  const [streamStatus, setStreamStatus] = useState<
-    "idle" | "connecting" | "streaming" | "disconnected"
-  >("idle");
+  const streamReady = enabled && !!agentId && !!threadId && !historyQuery.isPending;
 
-  useEffect(() => {
-    if (!enabled || !agentId || !threadId || historyQuery.isPending) return;
-
-    const controller = new AbortController();
-    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-    let retries = 0;
-    let cancelled = false;
-
-    async function connect() {
-      if (cancelled) return;
-      setStreamStatus("connecting");
-
-      const tokens = useAuthStore.getState().authToken;
-      if (!tokens?.accessToken) {
-        setStreamStatus("disconnected");
-        return;
-      }
-
+  const onStreamLine = useCallback(
+    (line: string) => {
       try {
-        const response = await fetch(
-          `${orgApiBase}/agents/${agentId}/web-chat/stream?thread_id=${encodeURIComponent(threadId)}`,
-          {
-            headers: {
-              Authorization: `Bearer ${tokens.accessToken}`,
-              Accept: "text/event-stream",
-            },
-            signal: controller.signal,
-          },
-        );
-
-        if (!response.ok || !response.body) {
-          setStreamStatus("disconnected");
-          scheduleReconnect();
-          return;
-        }
-
-        setStreamStatus("streaming");
-        retries = 0;
-
-        const reader = response.body
-          .pipeThrough(new TextDecoderStream())
-          .getReader();
-
-        let buffer = "";
-        for (;;) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buffer += value;
-          const parts = buffer.split("\n\n");
-          buffer = parts.pop() ?? "";
-          for (const part of parts) {
-            for (const line of part.split("\n")) {
-              if (!line.startsWith("data: ")) continue;
-              try {
-                const parsed = WebChatMessageSchema.parse(
-                  camelizeKeys(JSON.parse(line.slice(6))),
-                );
-                appendMessage(parsed);
-              } catch {
-                // Ignore malformed frames rather than dropping the stream.
-              }
-            }
-          }
-        }
-
-        if (!cancelled) {
-          setStreamStatus("disconnected");
-          scheduleReconnect();
-        }
-      } catch (err) {
-        if ((err as DOMException).name === "AbortError") return;
-        if (!cancelled) {
-          setStreamStatus("disconnected");
-          scheduleReconnect();
-        }
+        const parsed = WebChatMessageSchema.parse(camelizeKeys(JSON.parse(line)));
+        appendMessage(parsed);
+      } catch {
+        // Ignore malformed frames rather than dropping the stream.
       }
-    }
+    },
+    [appendMessage],
+  );
 
-    function scheduleReconnect() {
-      if (cancelled) return;
-      const delay = Math.min(RECONNECT_BASE_MS * 2 ** retries, RECONNECT_MAX_MS);
-      retries += 1;
-      reconnectTimer = setTimeout(() => void connect(), delay);
-    }
-
-    void connect();
-
-    return () => {
-      cancelled = true;
-      controller.abort();
-      if (reconnectTimer) clearTimeout(reconnectTimer);
-    };
-  }, [agentId, threadId, enabled, historyQuery.isPending, orgApiBase, appendMessage]);
+  const { status: streamStatus } = useSseStream({
+    url: streamReady
+      ? `${orgApiBase}/agents/${agentId}/web-chat/stream?thread_id=${encodeURIComponent(threadId)}`
+      : null,
+    enabled: streamReady,
+    onLine: onStreamLine,
+  });
 
   const latestMessage = messages.at(-1);
   const isAwaitingReply =

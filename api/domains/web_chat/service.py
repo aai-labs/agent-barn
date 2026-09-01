@@ -52,7 +52,7 @@ class WebChatService:
         thread_id: str,
         context: CurrentUserContext,
     ) -> WebChatMessageRead:
-        agent = self.authorization.require_action(context, agent_id, PermissionKey.ACTIVITY_READ)
+        agent = self.authorization.require_action(context, agent_id, PermissionKey.AGENT_UPDATE)
         connection = self._get_or_create_connection(agent.id, agent.organization_id)
         location = self._location(context, thread_id)
         self.web_chat_repository.restore_thread_if_deleted(
@@ -85,7 +85,7 @@ class WebChatService:
         thread_id: str,
         context: CurrentUserContext,
     ) -> bool:
-        agent = self.authorization.require_action(context, agent_id, PermissionKey.ACTIVITY_READ)
+        agent = self.authorization.require_action(context, agent_id, PermissionKey.AGENT_UPDATE)
         connection = self._get_or_create_connection(agent.id, agent.organization_id)
         location = self._location(context, thread_id)
         delivery_id = self.gateway.find_active_inbound_delivery(connection.id, location)
@@ -151,7 +151,7 @@ class WebChatService:
         display_name: str,
         context: CurrentUserContext,
     ) -> WebChatThreadRead:
-        agent = self.authorization.require_action(context, agent_id, PermissionKey.ACTIVITY_READ)
+        agent = self.authorization.require_action(context, agent_id, PermissionKey.AGENT_UPDATE)
         connection = self._get_or_create_connection(agent.id, agent.organization_id)
         channel_id = str(context.user.id)
         self.web_chat_repository.rename_thread(
@@ -174,7 +174,7 @@ class WebChatService:
         )
 
     def delete_thread(self, agent_id: UUID, thread_id: str, context: CurrentUserContext) -> None:
-        agent = self.authorization.require_action(context, agent_id, PermissionKey.ACTIVITY_READ)
+        agent = self.authorization.require_action(context, agent_id, PermissionKey.AGENT_UPDATE)
         connection = self._get_or_create_connection(agent.id, agent.organization_id)
         self.web_chat_repository.soft_delete_thread(
             connection_id=connection.id,
