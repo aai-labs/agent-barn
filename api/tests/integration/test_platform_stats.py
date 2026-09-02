@@ -11,7 +11,8 @@ from uuid import uuid7
 from fastapi import status
 from hamcrest import assert_that, equal_to, greater_than, has_key, has_length, not_
 
-from api.domains.agents.models import AgentPlatform, AgentStatus
+from api.domains.agents.models import Agent, AgentStatus
+from api.domains.communications.models import CommunicationConnection, CommunicationPlatform
 from api.domains.conversations.models import AgentChatMessage, MessageDirection
 from api.domains.conversations.repository import ConversationRepository
 from api.domains.tool_calls.models import ToolCall, ToolCallStatus
@@ -71,13 +72,34 @@ def _auth(token: str) -> dict:
     return {"Authorization": f"Bearer {token}"}
 
 
-def _seed_message(context, *, agent_id, direction, occurred_at, suffix=""):
+def _seed_message(
+    context,
+    *,
+    agent_id,
+    direction,
+    occurred_at,
+    suffix="",
+    platform=CommunicationPlatform.SLACK,
+):
     """Insert one chat message directly — ingest itself is covered elsewhere."""
+    delegate: PostgresRepositoryDelegate = context.injector.get(PostgresRepositoryDelegate)
+    agent = delegate.find_by_id(Agent, agent_id)
+    assert agent is not None
+    connection = CommunicationConnection(
+        organization_id=agent.organization_id,
+        agent_id=agent_id,
+        platform_key=platform.value,
+        display_name=f"Stats {platform.value} {uuid7()}",
+        credentials_encrypted="test-credentials",
+        driver_key_encrypted="test-driver-key",
+    )
+    delegate.save(connection)
     repository: ConversationRepository = context.injector.get(ConversationRepository)
     repository.upsert_messages(
         [
             AgentChatMessage(
                 agent_id=agent_id,
+                connection_id=connection.id,
                 openclaw_msg_id=f"stats-{direction.value}-{occurred_at.isoformat()}-{suffix}",
                 session_key="agent:main:slack:channel:c1",
                 channel_id="CHANNEL:C1",
@@ -646,7 +668,7 @@ def test_stats_filter_by_agent_and_platform():
         [
             *_BASE_GIVEN,
             there_is_an_organization_with_user_and_access_token(email="owner-j@example.com"),
-            there_is_an_agent(name="Slack Agent", platform=AgentPlatform.SLACK),
+            there_is_an_agent(name="Slack Agent"),
             *_platform_admin("admin-agent-filter@example.com"),
         ]
     ) as context:
@@ -658,13 +680,14 @@ def test_stats_filter_by_agent_and_platform():
             occurred_at=now - timedelta(days=1),
             suffix="slack",
         )
-        there_is_an_agent(name="Telegram Agent", platform=AgentPlatform.TELEGRAM)(context)
+        there_is_an_agent(name="Telegram Agent")(context)
         _seed_message(
             context,
             agent_id=context.agent.id,
             direction=MessageDirection.INBOUND,
             occurred_at=now - timedelta(days=1),
             suffix="telegram",
+            platform=CommunicationPlatform.TELEGRAM,
         )
 
         with when("messages are narrowed to one Agent"):

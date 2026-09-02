@@ -9,8 +9,9 @@ from sqlalchemy import func
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlmodel import Session, col, select
 
-from api.domains.agents.models import Agent, AgentPlatform
+from api.domains.agents.models import Agent
 from api.domains.agents.repository import agent_scope_predicates
+from api.domains.communications.models import CommunicationConnection, CommunicationPlatform
 from api.domains.platform_admin.models import StatsGranularity
 from api.domains.rbac.policy import AuthorizationScope
 from api.domains.tool_calls.models import (
@@ -148,7 +149,7 @@ class ToolCallRepository:
         organization_id: UUID | None = None,
         agent_id: UUID | None = None,
         created_by_user_id: UUID | None = None,
-        platform: AgentPlatform | None = None,
+        platform: CommunicationPlatform | None = None,
     ) -> dict[datetime.datetime, set[UUID]]:
         """{iso_date: {agent_id}} — Agents that ran at least one tool that UTC
         day (AF-256).
@@ -180,7 +181,13 @@ class ToolCallRepository:
                 if created_by_user_id is not None:
                     query = query.where(col(Agent.created_by_user_id) == created_by_user_id)
                 if platform is not None:
-                    query = query.where(col(Agent.platform) == platform)
+                    query = query.where(
+                        sa.exists().where(
+                            col(CommunicationConnection.agent_id) == col(Agent.id),
+                            col(CommunicationConnection.platform_key) == platform.value,
+                            col(CommunicationConnection.retired_at).is_(None),
+                        )
+                    )
 
             query = query.distinct()
             rows = session.exec(query).all()  # type: ignore[call-overload]

@@ -17,15 +17,26 @@ def _name_slug_label(name: str, fallback_id: UUID) -> str:
     return slug or str(fallback_id)
 
 
-def _labels(agent_id: UUID, org_id: UUID) -> dict[str, str]:
+def _labels(agent_id: UUID, org_id: UUID, runtime: str = "") -> dict[str, str]:
     # agentbarn.io/component is the stable selector shared by every agent's
     # resources (Deployment/Service selectors keep matching on "app" only);
     # the monitoring stack discovers all agent Services through it.
-    return {
+    #
+    # agentbarn.io/runtime is what makes container memory series actionable:
+    # joined onto kube_pod_labels it separates Hermes from OpenClaw, which need
+    # different diagnoses at the same RSS -- an OpenClaw pod near 1Gi is usually
+    # V8 filling the heap its cgroup limit permits, which a lower limit fixes on
+    # its own, while a Hermes pod there is holding that much for real. Without
+    # this label the two are indistinguishable. Omitted when unset so callers
+    # that don't supply it keep their existing label set exactly.
+    labels = {
         "app": _resource_name(agent_id),
         "org-id": str(org_id),
         "agentbarn.io/component": "agent",
     }
+    if runtime:
+        labels["agentbarn.io/runtime"] = runtime
+    return labels
 
 
 def build_pvc(
@@ -33,12 +44,13 @@ def build_pvc(
     org_id: UUID,
     namespace: str,
     storage_class: str | None = None,
+    runtime: str = "",
 ) -> client.V1PersistentVolumeClaim:
     return client.V1PersistentVolumeClaim(
         metadata=client.V1ObjectMeta(
             name=_resource_name(agent_id),
             namespace=namespace,
-            labels=_labels(agent_id, org_id),
+            labels=_labels(agent_id, org_id, runtime),
         ),
         spec=client.V1PersistentVolumeClaimSpec(
             access_modes=["ReadWriteOnce"],
@@ -58,6 +70,7 @@ def build_service(
     include_webhook_port: bool = False,
     org_name: str = "",
     agent_name: str = "",
+    runtime: str = "",
 ) -> client.V1Service:
     ports = [
         client.V1ServicePort(port=80, target_port=8080, name="gateway"),
@@ -74,7 +87,7 @@ def build_service(
             # helm/monitoring) — they give every pod generation of an agent a
             # stable, human-readable identity on dashboards.
             labels={
-                **_labels(agent_id, org_id),
+                **_labels(agent_id, org_id, runtime),
                 "org-name": _name_slug_label(org_name, org_id),
                 "agent-name": _name_slug_label(agent_name, agent_id),
             },

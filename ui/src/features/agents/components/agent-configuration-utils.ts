@@ -1,7 +1,6 @@
 import type { PlatformTemplateFileKey } from "@/features/platform-templates/utils";
 
 import type {
-  Agent,
   AgentConfigurationVersion,
   AgentOverrideDraft,
   AgentOverrideVersion,
@@ -42,7 +41,7 @@ export const AGENT_CONFIGURATION_SECTIONS: AgentConfigurationSection[] = [
   },
   {
     key: "channels",
-    label: "Channels & endpoint",
+    label: "Messaging",
     description: "Where this Agent receives messages and sends replies.",
   },
   {
@@ -52,7 +51,7 @@ export const AGENT_CONFIGURATION_SECTIONS: AgentConfigurationSection[] = [
   },
   {
     key: "keys",
-    label: "Keys & integrations",
+    label: "Integrations",
     description: "Platform tokens and encrypted integration credentials.",
   },
   {
@@ -69,14 +68,7 @@ export const AGENT_CONFIGURATION_SECTIONS: AgentConfigurationSection[] = [
 
 export function configurationSectionLabel(
   key: AgentConfigurationSectionKey,
-  agent: Pick<Agent, "platform">,
 ): string {
-  if (key === "channels" && agent.platform === "telegram") {
-    return "Chats & endpoint";
-  }
-  if (key === "channels" && agent.platform === "teams") {
-    return "Endpoint";
-  }
   return AGENT_CONFIGURATION_SECTIONS.find((section) => section.key === key)?.label ?? key;
 }
 

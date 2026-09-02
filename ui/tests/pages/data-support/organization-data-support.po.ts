@@ -20,6 +20,18 @@ function org(overrides: Record<string, unknown> = {}) {
   };
 }
 
+export function agentSettings(overrides: Record<string, unknown> = {}) {
+  return {
+    default_model: null,
+    effective_default_model: "litellm/openrouter/z-ai/glm-5.2",
+    default_model_source: "platform",
+    inheriting_agent_count: 2,
+    override_agent_count: 1,
+    updated_at: null,
+    ...overrides,
+  };
+}
+
 function platformOrg(overrides: Record<string, unknown> = {}) {
   return {
     id: ORG_A_ID,
@@ -60,10 +72,12 @@ export class OrganizationDataSupport {
 
   async interceptListOrganizations({
     items,
+    pages,
     status = 200,
     detail = "Unable to load organizations",
   }: {
     items?: unknown[];
+    pages?: unknown[][];
     status?: number;
     detail?: string;
   } = {}) {
@@ -73,13 +87,16 @@ export class OrganizationDataSupport {
         await route.fallback();
         return;
       }
+      const page = Number(new URL(route.request().url()).searchParams.get("page") ?? "1");
+      const pageSize = Number(new URL(route.request().url()).searchParams.get("page_size") ?? "200");
+      const pageItems = pages?.[page - 1] ?? list;
       await route.fulfill({
         status,
         contentType: "application/json",
         body: JSON.stringify(
           status >= 400
             ? { detail, page: 1, page_size: 200, total: 0, items: [] }
-            : { page: 1, page_size: 200, total: list.length, items: list },
+            : { page, page_size: pageSize, total: pages?.flat().length ?? list.length, items: pageItems },
         ),
       });
     });
@@ -217,6 +234,45 @@ export class OrganizationDataSupport {
         status,
         contentType: "application/json",
         body: JSON.stringify(status >= 400 ? { detail } : (organization ?? org())),
+      });
+    });
+  }
+
+  async interceptAgentSettings({
+    settings,
+    status = 200,
+    detail = "Unable to load Agent settings",
+  }: {
+    settings?: Record<string, unknown>;
+    status?: number;
+    detail?: string;
+  } = {}) {
+    let current = { ...agentSettings(), ...(settings ?? {}) };
+    await this.page.route("**/api/v1/organizations/*/agent-settings", async (route) => {
+      const method = route.request().method();
+      if (method !== "GET" && method !== "PUT") {
+        await route.fallback();
+        return;
+      }
+      if (status >= 400) {
+        await route.fulfill({ status, contentType: "application/json", body: JSON.stringify({ detail }) });
+        return;
+      }
+      if (method === "PUT") {
+        // Mirror the server: a saved default becomes the organization's own choice.
+        const body = JSON.parse(route.request().postData() ?? "{}");
+        const chosen = body.default_model ?? null;
+        current = {
+          ...current,
+          default_model: chosen,
+          default_model_source: chosen ? "organization" : "platform",
+          effective_default_model: chosen ?? current.effective_default_model,
+        };
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(current),
       });
     });
   }

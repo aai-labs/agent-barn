@@ -20,6 +20,8 @@ test.describe("Settings — Skills panel", () => {
     await dataSupportPage.auth.interceptRefreshRequest();
     await dataSupportPage.users.interceptGetUserContextRequest();
     await dataSupportPage.users.interceptGetOrganizationsRequest();
+    // The Settings page opens on the Agents tab.
+    await dataSupportPage.organizations.interceptAgentSettings();
     await dataSupportPage.skills.interceptGetSkillsRequest();
     await dataSupportPage.agents.interceptGetTemplatesRequest();
 
@@ -31,6 +33,10 @@ test.describe("Settings — Skills panel", () => {
     await expect(
       page.getByText(/Built-in skills are provided by AAI Labs/),
     ).toBeVisible();
+  });
+
+  test("does not show an organization avatar in the settings header", async ({ page }) => {
+    await expect(page.getByText("AL", { exact: true })).toHaveCount(0);
   });
 
   test("shows search input and source filter", async ({ page }) => {
@@ -113,6 +119,8 @@ test.describe("Settings — Skills panel (empty state)", () => {
     await dataSupportPage.auth.interceptRefreshRequest();
     await dataSupportPage.users.interceptGetUserContextRequest();
     await dataSupportPage.users.interceptGetOrganizationsRequest();
+    // The Settings page opens on the Agents tab.
+    await dataSupportPage.organizations.interceptAgentSettings();
     await dataSupportPage.agents.interceptGetTemplatesRequest();
     await dataSupportPage.skills.interceptGetSkillsRequest({ body: [] });
 
@@ -131,6 +139,8 @@ test.describe("Settings — Skills panel (empty state)", () => {
     await dataSupportPage.auth.interceptRefreshRequest();
     await dataSupportPage.users.interceptGetUserContextRequest();
     await dataSupportPage.users.interceptGetOrganizationsRequest();
+    // The Settings page opens on the Agents tab.
+    await dataSupportPage.organizations.interceptAgentSettings();
     await dataSupportPage.agents.interceptGetTemplatesRequest();
     await dataSupportPage.skills.interceptGetSkillsRequest({
       status: 500,
@@ -154,6 +164,8 @@ test.describe("Settings — Skills panel (pagination)", () => {
     await dataSupportPage.auth.interceptRefreshRequest();
     await dataSupportPage.users.interceptGetUserContextRequest();
     await dataSupportPage.users.interceptGetOrganizationsRequest();
+    // The Settings page opens on the Agents tab.
+    await dataSupportPage.organizations.interceptAgentSettings();
   });
 
   test("shows pagination controls when results exceed one page", async ({ page }) => {

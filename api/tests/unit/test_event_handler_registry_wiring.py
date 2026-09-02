@@ -1,5 +1,7 @@
 from unittest.mock import Mock
 
+from hamcrest import assert_that, is_
+
 from api.domains.agents.event_handlers import AgentLifecycleEmailHandler
 from api.domains.events.catalog import (
     AGENT_ACCESS_GRANTED,
@@ -15,6 +17,11 @@ from api.domains.events.catalog import (
     AGENT_TEMPLATE_OVERRIDE_PUBLISHED,
     AGENT_TEMPLATE_OVERRIDE_SELECTED,
     AGENT_UPDATED,
+    COMMUNICATION_CONNECTION_HEALTH_CHANGED,
+    COMMUNICATION_CONNECTION_RECONNECT_REQUESTED,
+    COMMUNICATION_DELIVERY_DEAD_LETTERED,
+    COMMUNICATION_DELIVERY_RECOVERED,
+    COMMUNICATION_DELIVERY_RETRY_REQUESTED,
     EVENT_REGISTRY,
     ORGANIZATION_MEMBER_ADDED,
     ORGANIZATION_MEMBER_REMOVED,
@@ -70,6 +77,11 @@ def test_every_catalog_handler_name_has_a_registered_handler():
         ORGANIZATION_MEMBER_ADDED,
         ORGANIZATION_MEMBER_REMOVED,
         ORGANIZATION_OWNERSHIP_TRANSFERRED,
+        COMMUNICATION_CONNECTION_HEALTH_CHANGED,
+        COMMUNICATION_CONNECTION_RECONNECT_REQUESTED,
+        COMMUNICATION_DELIVERY_DEAD_LETTERED,
+        COMMUNICATION_DELIVERY_RETRY_REQUESTED,
+        COMMUNICATION_DELIVERY_RECOVERED,
     ):
         for handler_name in EVENT_REGISTRY.handler_names_for(event_name, 1):
-            assert handlers.supports(handler_name, event_name, 1)
+            assert_that(handlers.supports(handler_name, event_name, 1), is_(True))

@@ -26,8 +26,6 @@ _KEY = Fernet.generate_key().decode()
 
 _BASE_CREATE = {
     "name": "Agent",
-    "slack_bot_token": "xoxb-x",
-    "slack_app_token": "xapp-x",
     "template_key": "test-template",
 }
 

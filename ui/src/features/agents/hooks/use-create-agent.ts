@@ -10,38 +10,15 @@ import { agentsKey } from "../utils";
 
 export type CreateAgentData = {
   name: string;
-  platform: "slack" | "teams" | "telegram" | "discord";
   agentType?: "openclaw" | "hermes";
-  // Slack (required when platform=slack)
-  slackBotToken?: string;
-  slackAppToken?: string;
-  slackGroupPolicy?: "open" | "allowlist";
-  slackDmPolicy?: "off" | "open" | "allowlist";
-  slackVerboseMode?: boolean;
-  // Teams (required when platform=teams)
-  teamsAppId?: string;
-  teamsAppPassword?: string;
-  teamsTenantId?: string;
-  // Telegram (required when platform=telegram)
-  telegramBotToken?: string;
-  telegramGroupPolicy?: "open" | "allowlist";
-  telegramDmPolicy?: "off" | "open" | "allowlist";
-  // Discord (required when platform=discord)
-  discordBotToken?: string;
-  discordGuildIds?: string[];
-  discordAllowedChannelIds?: string[];
-  discordAllowedUserIds?: string[];
-  discordAllowedRoleIds?: string[];
-  discordAllowAllUsers?: boolean;
-  discordHomeChannelId?: string;
-  discordRequireMention?: boolean;
-  discordGroupPolicy?: "open" | "allowlist";
   // Template reference — pins to templateVersion if given, else latest.
   templateKey: string;
   templateVersion?: number;
   model?: string;
   // Skills to assign on creation
   skillIds?: string[];
+  // Exact versions required by the selected Template; optional skills default to latest.
+  skillVersions?: Array<{ skillId: string; version: number }>;
   // Integration credentials (provider + provider-specific content; name is server-stamped)
   secrets?: Array<{ provider: string; content: Record<string, string | string[] | boolean> }>;
   // Shared credentials to attach (by ID)

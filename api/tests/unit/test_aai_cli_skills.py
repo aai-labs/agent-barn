@@ -14,15 +14,19 @@ _EXPECTED_PROVIDER_NAMES = {
     "Confluence",
     "GitHub",
     "Bitbucket",
+    "Google Drive",
     "Excel",
+    "HubSpot",
+    "OpenPanel",
     "Zoho Mail",
-    "Slack",
     "Pipedrive",
+    "PostHog",
 }
 
-# Skills that intentionally need no credential. Excel operates on local .xlsx files, so
-# gating it on a provider would make it unreachable.
+# Excel intentionally needs no credential. The other four entries currently have
+# no Agent Farm SecretProvider model, so they remain explicit-only until that wiring exists.
 _CREDENTIAL_FREE_SKILLS = {"Excel"}
+_UNMANAGED_BUNDLED_SKILLS = {"Google Drive", "HubSpot", "OpenPanel", "PostHog"}
 
 
 def test_aai_cli_provider_skills_has_expected_entries():
@@ -32,17 +36,28 @@ def test_aai_cli_provider_skills_has_expected_entries():
 
 def test_each_provider_skill_has_required_providers():
     for skill_def in AAI_CLI_PROVIDER_SKILLS:
-        if skill_def["name"] in _CREDENTIAL_FREE_SKILLS:
+        if skill_def["name"] in _CREDENTIAL_FREE_SKILLS | _UNMANAGED_BUNDLED_SKILLS:
             continue
         assert skill_def["required_providers"], f"No required_providers for {skill_def['name']}"
 
 
 def test_credential_free_skills_declare_no_providers():
     """The empty list is the whole point — it keeps the skill selectable while stopping
-    _auto_mount_skills from attaching it to every agent."""
+    the provider auto-attach path from attaching it to every agent."""
     for skill_def in AAI_CLI_PROVIDER_SKILLS:
         if skill_def["name"] in _CREDENTIAL_FREE_SKILLS:
             assert skill_def["required_providers"] == []
+
+
+def test_each_bundled_skill_has_exactly_one_root_skill_md():
+    for skill_def in AAI_CLI_PROVIDER_SKILLS:
+        root_files = [
+            file["skill_file_path"]
+            for file in skill_def["files"]
+            if file["skill_file_path"] == f"{skill_def['bundle_dir']}/SKILL.md"
+        ]
+        assert root_files == [f"{skill_def['bundle_dir']}/SKILL.md"]
+        assert all(file["skill_file_path"].startswith(f"{skill_def['bundle_dir']}/") for file in skill_def["files"])
 
 
 def test_each_provider_skill_has_non_empty_files():
@@ -56,17 +71,20 @@ def test_each_provider_skill_entry_path_is_root_relative():
     """entry_path addresses a file inside the skill, so it must not repeat root_dir."""
     for skill_def in AAI_CLI_PROVIDER_SKILLS:
         entry = skill_def["entry_path"]
+        assert entry == skill_def["files"][0]["skill_file_path"].removeprefix(f"{skill_def['bundle_dir']}/")
         assert not entry.startswith(f"{AAI_CLI_ROOT_DIR}/"), f"{skill_def['name']} entry_path keeps its root prefix"
         declared = {f["skill_file_path"] for f in skill_def["files"]}
-        assert f"{AAI_CLI_ROOT_DIR}/{entry}" in declared, f"{skill_def['name']} entry_path names no shipped file"
+        assert f"{skill_def['bundle_dir']}/{entry}" in declared, f"{skill_def['name']} entry_path names no shipped file"
 
 
 def test_root_relative_files_strips_the_shared_mount_directory():
     skill_def = AAI_CLI_PROVIDER_SKILLS[0]
-    files = root_relative_files(skill_def["files"])
-    assert [path for path, _ in files] == [
-        f["skill_file_path"].removeprefix(f"{AAI_CLI_ROOT_DIR}/") for f in skill_def["files"]
-    ]
+    files = root_relative_files(
+        skill_def["files"],
+        entry_path=skill_def["entry_path"],
+        root_dir="jira",
+    )
+    assert [path for path, _ in files] == ["SKILL.md", "references/command-reference.md"]
 
 
 def _fake_skill(name: str, root_dir: str):
@@ -81,9 +99,18 @@ def test_build_skills_manifest_returns_sorted_path_content():
     skills = []
     files_by_skill_id = {}
     for skill_def in AAI_CLI_PROVIDER_SKILLS:
-        skill = _fake_skill(skill_def["name"], AAI_CLI_ROOT_DIR)
+        root_dir = skill_def["bundle_dir"]
+        skill = _fake_skill(skill_def["name"], root_dir)
         skills.append(skill)
-        files_by_skill_id[skill.id] = _fake_files(dict(root_relative_files(skill_def["files"])))
+        files_by_skill_id[skill.id] = _fake_files(
+            dict(
+                root_relative_files(
+                    skill_def["files"],
+                    entry_path=skill_def["entry_path"],
+                    root_dir=root_dir,
+                )
+            )
+        )
 
     manifest_str, collisions = build_skills_manifest(skills, files_by_skill_id)
     manifest = json.loads(manifest_str)
@@ -95,10 +122,14 @@ def test_build_skills_manifest_returns_sorted_path_content():
     for entry in manifest:
         assert set(entry.keys()) == {"path", "content"}, "Each manifest entry must have only 'path' and 'content'"
 
-    # The mounted path must still be root_dir + the stored relative path, i.e. exactly
-    # the paths the built-in tools_pointers have always referenced.
     expected = {
-        f["skill_file_path"]: f["skill_content"] for skill_def in AAI_CLI_PROVIDER_SKILLS for f in skill_def["files"]
+        f"{skill_def['bundle_dir']}/{path}": content
+        for skill_def in AAI_CLI_PROVIDER_SKILLS
+        for path, content in root_relative_files(
+            skill_def["files"],
+            entry_path=skill_def["entry_path"],
+            root_dir=skill_def["bundle_dir"],
+        )
     }
     for entry in manifest:
         assert entry["content"] == expected[entry["path"]], f"Content mismatch for {entry['path']}"

@@ -1,5 +1,4 @@
-import { DiscordIcon, SlackIcon, TeamsIcon, TelegramIcon } from "@/components/icons";
-import { OpenClawIcon, HermesIcon } from "@/components/brand-icons";
+import { OpenClawIcon, HermesIcon, platformIcon } from "@/components/brand-icons";
 import {
   Tooltip,
   TooltipContent,
@@ -8,29 +7,6 @@ import {
 import type { Agent } from "../schemas";
 
 type Variant = "icon" | "full";
-
-const PLATFORM_META = {
-  slack: {
-    label: "Slack",
-    Icon: SlackIcon,
-    tooltip: "Connected via Slack",
-  },
-  teams: {
-    label: "Teams",
-    Icon: TeamsIcon,
-    tooltip: "Connected via Microsoft Teams",
-  },
-  telegram: {
-    label: "Telegram",
-    Icon: TelegramIcon,
-    tooltip: "Connected via Telegram",
-  },
-  discord: {
-    label: "Discord",
-    Icon: DiscordIcon,
-    tooltip: "Connected via Discord",
-  },
-} as const;
 
 const TYPE_META = {
   hermes: {
@@ -83,11 +59,10 @@ export function AgentMetaBadges({
   variant = "icon",
   className,
 }: {
-  agent: Pick<Agent, "platform" | "agentType">;
+  agent: Pick<Agent, "agentType" | "configuredPlatformKeys">;
   variant?: Variant;
   className?: string;
 }) {
-  const platform = PLATFORM_META[agent.platform];
   const type = TYPE_META[agent.agentType];
 
   return (
@@ -98,12 +73,25 @@ export function AgentMetaBadges({
         tooltip={type.tooltip}
         variant={variant}
       />
-      <Badge
-        Icon={platform.Icon}
-        label={platform.label}
-        tooltip={platform.tooltip}
-        variant={variant}
-      />
+      {agent.configuredPlatformKeys.map((platformKey) => {
+        const icon = platformIcon(platformKey, { size: 13 });
+        if (!icon) return null;
+        const label = platformKey.charAt(0).toUpperCase() + platformKey.slice(1);
+        return (
+          <Tooltip key={platformKey}>
+            <TooltipTrigger asChild>
+              <span
+                className="inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[0.75rem]"
+                style={{ background: "var(--bg-soft)", border: "1px solid var(--line)", color: "var(--ink-3)" }}
+              >
+                {icon}
+                {variant === "full" && <span>{label}</span>}
+              </span>
+            </TooltipTrigger>
+            <TooltipContent>{label}</TooltipContent>
+          </Tooltip>
+        );
+      })}
     </div>
   );
 }

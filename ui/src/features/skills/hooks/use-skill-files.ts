@@ -3,23 +3,22 @@
 import { useQuery } from "@tanstack/react-query";
 
 import { api } from "@/shared/api";
-import { useOrganizationApiBase } from "@/features/organizations/hooks/use-organization-api-base";
 
 import { SkillDetailSchema, type SkillDetail } from "../schemas";
-import { skillsKey } from "../utils";
+import { useSkillsBasePath, type SkillScopeRef } from "../scope";
+import { skillDetailKey } from "../utils";
 
 /** Fetches a skill's published files. Skipped until a skill is actually selected. */
-export function useSkillFiles(skillId: string | null) {
-  const orgApiBase = useOrganizationApiBase();
+export function useSkillFiles(skillId: string | null, scope: SkillScopeRef) {
+  const basePath = useSkillsBasePath(scope);
 
   const query = useQuery({
-    queryKey: skillsKey.detail(skillId ?? "none"),
+    queryKey: skillDetailKey(skillId ?? "none", scope),
     enabled: skillId !== null,
     queryFn: async () => {
-      const response = await api.get<SkillDetail>(
-        `${orgApiBase}/skills/${skillId}/files`,
-        { schema: SkillDetailSchema },
-      );
+      const response = await api.get<SkillDetail>(`${basePath}/${skillId}/files`, {
+        schema: SkillDetailSchema,
+      });
       return response.data;
     },
   });

@@ -94,7 +94,7 @@ test.describe("Settings — Skill detail page", () => {
     await expect(page.getByRole("button", { name: "Discard" })).toBeVisible();
   });
 
-  test("custom skill shows Edit action with no lineage Delete", async ({ page }) => {
+  test("custom skill shows Edit and lineage Delete actions", async ({ page }) => {
     await dataSupportPage.skills.interceptGetSkillFilesRequest();
     await dataSupportPage.skills.interceptGetSkillVersionsRequest();
 
@@ -102,7 +102,32 @@ test.describe("Settings — Skill detail page", () => {
 
     await expect(page.getByRole("heading", { name: mockCustomSkill.name })).toBeVisible();
     await expect(page.getByRole("button", { name: "Edit" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Delete" })).not.toBeVisible();
+    await expect(page.getByRole("button", { name: "Delete", exact: true })).toBeEnabled();
+  });
+
+  test("Delete confirmation removes the lineage and returns to the skills list", async ({ page }) => {
+    await dataSupportPage.skills.interceptGetSkillFilesRequest();
+    await dataSupportPage.skills.interceptGetSkillVersionsRequest();
+    await dataSupportPage.skills.interceptDeleteSkillRequest();
+    await dataSupportPage.skills.interceptGetSkillsRequest({ body: [mockPlatformSkill] });
+
+    await page.goto(`/dashboard/${TEST_ORG_ID}/settings/skills/${MOCK_CUSTOM_SKILL_ID}`);
+    await page.getByRole("button", { name: "Delete", exact: true }).click();
+    await expect(page.getByText(`Permanently delete ${mockCustomSkill.name}`)).toBeVisible();
+    await page.getByRole("button", { name: "Delete skill" }).click();
+
+    await expect(page).toHaveURL(new RegExp("/settings[?]tab=skills$"));
+  });
+
+  test("lineage Delete is disabled while an Agent uses the Skill", async ({ page }) => {
+    await dataSupportPage.skills.interceptGetSkillFilesRequest({
+      skill: { ...mockCustomSkill, isAssignedToAgent: true },
+    });
+    await dataSupportPage.skills.interceptGetSkillVersionsRequest();
+
+    await page.goto(`/dashboard/${TEST_ORG_ID}/settings/skills/${MOCK_CUSTOM_SKILL_ID}`);
+
+    await expect(page.getByRole("button", { name: "Delete", exact: true })).toBeDisabled();
   });
 
   test("back link returns to the skills tab", async ({ page }) => {

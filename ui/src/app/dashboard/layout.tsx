@@ -12,7 +12,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
   return (
     <div className="min-h-screen flex flex-col" style={{ background: "var(--bg)" }}>
       <TopNav onHire={() => setHireOpen(true)} />
-      <main className="flex-1 overflow-y-auto">{children}</main>
+      <main className="flex-1">{children}</main>
 
       {hireOpen && (
         <HireDialog

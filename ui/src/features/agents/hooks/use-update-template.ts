@@ -24,6 +24,8 @@ export type UpdateTemplateData = {
   // "At least one of" requirement groups (e.g. GitHub OR Bitbucket). Omitting
   // this field inherits the prior version's groups.
   requiredSkillGroups?: { groupKey: string; skillIds: string[] }[];
+  /** Exact published version selected for each required Skill. */
+  requiredSkillVersions?: Record<string, number>;
 };
 
 export function useUpdateTemplate() {

@@ -1,6 +1,6 @@
 # Agent Barn
 
-# Agent Barn
+Platform for hiring, managing, and running AI agents across supported messaging platforms.
 
 **Six AI coworkers in Slack, Microsoft Teams, Telegram, and Discord, running on your infrastructure.**
 
@@ -13,8 +13,8 @@
 
 **Agents**
 
-- Hire agents on Slack or Microsoft Teams
-- Two runtimes: Hermes (Slack-only, lightweight) and OpenClaw (Slack + Teams)
+- Reach agents through Slack, Telegram, and Discord connections
+- Two provider-independent runtimes: Hermes and OpenClaw
 - Automatic Slack app creation via configuration tokens
 - Manual Slack app setup with manifest export
 - Start, stop, and monitor agents
@@ -83,7 +83,7 @@ cp .env.spec .env   # fill in the required values — see the table below
 
 `./run.sh` brings up the k3d cluster + LiteLLM, loads the agent base images
 (skipping any already in the cluster), runs database migrations, and starts
-db/redis/api/worker/ui in Docker — all with hot reload on source changes. If
+db/redis/api/worker/communications/ui in Docker — all with hot reload on source changes. If
 any required `.env` value is missing it fails immediately and lists exactly
 what to fill in, rather than partway through or at agent-start.
 
@@ -129,15 +129,16 @@ the ones you need in separate terminals alongside `make db-up` (and
 make setup        # one-time: uv sync + pnpm install
 make db-up         # Postgres only
 make migrate       # apply migrations
-make dev-api       # API on :8000, hot reload (also starts the ingest sink)
+make dev-api       # API on :8000; also starts Ingest :8001 and Communications :8002
 make dev-ui        # UI on :3000, hot reload
 make redis-up      # Redis, needed by the worker
 make dev-worker    # Dramatiq worker, hot reload
+make dev-communications # Communications only (normally started by dev-api)
 make reconcile     # one-shot repair pass for stuck/unpublished deliveries
 ```
 
 `make db-down` / `make redis-down` stop them; `make db-logs` / `db-restart`
-manage Postgres. This path uses the host ports (`3000`, `8000`, `8001`), so
+manage Postgres. This path uses the host ports (`3000`, `8000`, `8001`, `8002`), so
 don't run it alongside `./run.sh`'s containers at the same time.
 
 Starting agents still needs a running k3d cluster + loaded images even in
@@ -217,13 +218,13 @@ alongside the first:
 
 | Variable                                              | Default                         | What it names                   |
 | ----------------------------------------------------- | ------------------------------- | ------------------------------- |
-| `K3D_CLUSTER`                                         | `agentfarm-dev`                 | the k3d cluster                 |
+| `K3D_CLUSTER`                                         | `agentbarn-dev`                 | the k3d cluster                 |
 | `K3D_API_PORT`                                        | `16443`                         | host port for the k8s API       |
 | `LITELLM_PORT`                                        | `7070`                          | host port for the LiteLLM proxy |
 | `LITELLM_CONTAINER_NAME`, `LITELLM_DB_CONTAINER_NAME` | `aai_litellm`, `aai_litellm_db` | the LiteLLM containers          |
 
 ```bash
-K3D_CLUSTER=agentfarm-mytask K3D_API_PORT=16444 LITELLM_PORT=7071 \
+K3D_CLUSTER=agentbarn-mytask K3D_API_PORT=16444 LITELLM_PORT=7071 \
   LITELLM_CONTAINER_NAME=aai_litellm_mytask \
   LITELLM_DB_CONTAINER_NAME=aai_litellm_db_mytask \
   ./run.sh
@@ -260,6 +261,15 @@ kubectl run ingest-check --rm -it --restart=Never --image=curlimages/curl -- \
 pod with its own `INGEST_API_KEY`. A connection error means the hop is broken:
 in native mode, check `make dev-ingest` is running; on native Linux also check
 the host firewall allows the k3d bridge network to reach port 8001.
+
+### Communication connections
+
+Slack, Telegram, and Discord sessions run in the separately served
+Communications gateway on port `8002`. Agent pods claim and complete deliveries
+through `http://host.docker.internal:8002/communications/v1`, because the
+Compose service name is not resolvable from k3d. `./run.sh` and `make dev-api`
+start the gateway automatically. Override `COMMUNICATIONS_PORT` when the host
+port is already in use.
 
 ### Common pitfalls
 
@@ -299,7 +309,7 @@ private registry, so an image that was never imported cannot be pulled. Compare
 what's in the cluster against what the API asks for:
 
 ```bash
-docker exec k3d-${K3D_CLUSTER:-agentfarm-dev}-server-0 crictl images | grep -E 'openclaw|hermes'
+docker exec k3d-${K3D_CLUSTER:-agentbarn-dev}-server-0 crictl images | grep -E 'openclaw|hermes'
 grep -E '^(OPENCLAW|HERMES)_IMAGE=' .env
 ```
 
@@ -354,7 +364,7 @@ A maintainer responds to every `#support` post within 3 business days.
 
 ## Contributing
 
-Start with [`good first issue`](https://github.com/aai-labs/agent-farm/labels/good%20first%20issue).
+Start with [`good first issue`](https://github.com/aai-labs/agent-barn/labels/good%20first%20issue).
 Setup, conventions, and the review process are in [CONTRIBUTING.md](CONTRIBUTING.md).
 Repository-wide engineering rules live in [AGENTS.md](AGENTS.md) and
 [`docs/INDEX.md`](docs/INDEX.md); domain terminology is in [CONTEXT.md](CONTEXT.md).

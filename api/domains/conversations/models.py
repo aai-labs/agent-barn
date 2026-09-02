@@ -25,8 +25,20 @@ class AgentChatMessage(BaseModel, table=True):
     __tablename__: str = "agent_chat_message"
 
     __table_args__ = (
-        sa.UniqueConstraint("agent_id", "openclaw_msg_id", name="uq_agent_chat_message_agent_msg"),
-        sa.Index("ix_agent_chat_message_agent_channel", "agent_id", "channel_id"),
+        sa.Index(
+            "uq_agent_chat_message_connection_msg",
+            "connection_id",
+            "openclaw_msg_id",
+            unique=True,
+            postgresql_where=sa.text("connection_id IS NOT NULL"),
+        ),
+        sa.Index(
+            "ix_agent_chat_message_agent_connection_channel",
+            "agent_id",
+            "connection_id",
+            "channel_id",
+        ),
+        sa.Index("ix_agent_chat_message_connection_channel", "connection_id", "channel_id"),
         sa.Index("ix_agent_chat_message_agent_session", "agent_id", "session_key"),
         # Platform View stats (AF-256) read a trailing time window across all
         # Agents, which neither agent_id-prefixed index above can serve. agent_id
@@ -35,6 +47,11 @@ class AgentChatMessage(BaseModel, table=True):
     )
 
     agent_id: UUID = SqlField(foreign_key="agent.id", nullable=False, ondelete="CASCADE")
+    connection_id: UUID = SqlField(
+        foreign_key="communication_connection.id",
+        nullable=False,
+        ondelete="RESTRICT",
+    )
     openclaw_msg_id: str = SqlField(nullable=False)
     session_key: str = SqlField(nullable=False)
     channel_id: str = SqlField(nullable=False)
@@ -55,6 +72,7 @@ class ConversationMessageRead(PydanticBaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: UUID
+    connection_id: UUID
     direction: MessageDirection
     thread_id: str | None
     sender_id: str | None
@@ -66,6 +84,9 @@ class ConversationMessageRead(PydanticBaseModel):
 class ConversationChannelRead(PydanticBaseModel):
     model_config = ConfigDict(from_attributes=True)
 
+    connection_id: UUID
+    connection_name: str
+    platform_key: str
     channel_id: str
     channel_name: str | None
     conversation_type: ConversationType = ConversationType.CHANNEL

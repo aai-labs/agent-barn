@@ -16,6 +16,16 @@ depends_on: str | None = None
 
 
 def upgrade() -> None:
+    # This revision is retained for databases that reached the old staging
+    # merge point. The legacy table may already be absent when Alembic
+    # traverses the current communications branch.
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    if not inspector.has_table("agent_discord_config"):
+        return
+    if "allow_all_users" in {column["name"] for column in inspector.get_columns("agent_discord_config")}:
+        return
+
     op.add_column(
         "agent_discord_config",
         sa.Column("allow_all_users", sa.Boolean(), nullable=False, server_default=sa.true()),
@@ -36,4 +46,9 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_column("agent_discord_config", "allow_all_users")
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    if inspector.has_table("agent_discord_config") and "allow_all_users" in {
+        column["name"] for column in inspector.get_columns("agent_discord_config")
+    }:
+        op.drop_column("agent_discord_config", "allow_all_users")

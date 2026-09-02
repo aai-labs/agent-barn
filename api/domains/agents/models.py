@@ -1,5 +1,4 @@
 import enum
-import hashlib
 import json
 from datetime import datetime
 from typing import Literal, Self
@@ -31,13 +30,6 @@ class CommandApprovalMode(str, enum.Enum):
     OFF = "off"
 
 
-class AgentPlatform(str, enum.Enum):
-    SLACK = "slack"
-    TEAMS = "teams"
-    TELEGRAM = "telegram"
-    DISCORD = "discord"
-
-
 class AgentType(str, enum.Enum):
     OPENCLAW = "openclaw"
     HERMES = "hermes"
@@ -51,33 +43,6 @@ class AgentTemplateOverrideSourceType(str, enum.Enum):
 class AgentTemplatePinType(str, enum.Enum):
     SHARED = "shared"
     OVERRIDE = "override"
-
-
-class SlackGroupPolicy(str, enum.Enum):
-    OPEN = "open"
-    ALLOWLIST = "allowlist"
-
-
-class SlackDmPolicy(str, enum.Enum):
-    OFF = "off"
-    OPEN = "open"
-    ALLOWLIST = "allowlist"
-
-
-class TelegramGroupPolicy(str, enum.Enum):
-    OPEN = "open"
-    ALLOWLIST = "allowlist"
-
-
-class TelegramDmPolicy(str, enum.Enum):
-    OFF = "off"
-    OPEN = "open"
-    ALLOWLIST = "allowlist"
-
-
-class DiscordGroupPolicy(str, enum.Enum):
-    OPEN = "open"
-    ALLOWLIST = "allowlist"
 
 
 # --- Integration secrets ---
@@ -345,9 +310,12 @@ class Agent(BaseModel, table=True):
         ondelete="RESTRICT",
     )
     model: str = SqlField(nullable=False, default="")
-    platform: AgentPlatform = SqlField(
-        default=AgentPlatform.SLACK,
-        sa_column=Column(sa.String(10), nullable=False, server_default="slack"),
+    # The model this Agent's running pod was started on. The runtime reads its config
+    # once at container start, so this stays put while `model` and the Organization
+    # default move underneath it. Empty means "not running".
+    running_model: str = SqlField(
+        default="",
+        sa_column=Column(sa.String(), nullable=False, server_default=""),
     )
     agent_type: AgentType = SqlField(
         default=AgentType.OPENCLAW,
@@ -360,14 +328,11 @@ class Agent(BaseModel, table=True):
     )
 
     ingest_key_encrypted: str | None = SqlField(default=None, nullable=True)
+    communication_key_encrypted: str | None = SqlField(default=None, nullable=True)
     approval_mode: CommandApprovalMode = SqlField(
         default=CommandApprovalMode.AUTO,
         sa_column=Column(sa.String(10), nullable=False, server_default="auto"),
     )
-
-
-def compute_bot_token_hash(bot_token: str) -> str:
-    return hashlib.sha256(bot_token.encode("utf-8")).hexdigest()
 
 
 class AgentAccess(BaseModel, table=True):
@@ -406,123 +371,6 @@ class AgentAccess(BaseModel, table=True):
         foreign_key="agent_access_roles.id",
         nullable=False,
         ondelete="RESTRICT",
-    )
-
-
-class AgentSlackConfig(BaseModel, table=True):
-    __tablename__: str = "agent_slack_config"
-
-    __table_args__ = (
-        sa.Index(
-            "ix_agent_slack_config_bot_token_hash",
-            "bot_token_hash",
-            unique=True,
-            postgresql_where=sa.text("bot_token_hash IS NOT NULL"),
-        ),
-    )
-
-    agent_id: UUID = SqlField(foreign_key="agent.id", nullable=False, unique=True, ondelete="CASCADE")
-    bot_token_encrypted: str = SqlField(nullable=False)
-    app_token_encrypted: str = SqlField(nullable=False)
-    bot_token_hash: str | None = SqlField(default=None, nullable=True)
-    channel_ids: list[str] = SqlField(
-        default_factory=list,
-        sa_column=Column(sa.JSON(), nullable=False, server_default="[]"),
-    )
-    dm_user_ids: list[str] = SqlField(
-        default_factory=list,
-        sa_column=Column(sa.JSON(), nullable=False, server_default="[]"),
-    )
-    group_policy: SlackGroupPolicy = SqlField(
-        default=SlackGroupPolicy.ALLOWLIST,
-        sa_column=Column(sa.String(), nullable=False, server_default="allowlist"),
-    )
-    dm_policy: SlackDmPolicy = SqlField(
-        default=SlackDmPolicy.OFF,
-        sa_column=Column(sa.String(), nullable=False, server_default="off"),
-    )
-    verbose_mode: bool = SqlField(
-        default=True,
-        sa_column=Column(sa.Boolean(), nullable=False, server_default=sa.true()),
-    )
-
-
-class AgentTeamsConfig(BaseModel, table=True):
-    __tablename__: str = "agent_teams_config"
-
-    agent_id: UUID = SqlField(foreign_key="agent.id", nullable=False, unique=True, ondelete="CASCADE")
-    app_id_encrypted: str = SqlField(nullable=False)
-    app_password_encrypted: str = SqlField(nullable=False)
-    tenant_id: str = SqlField(nullable=False, max_length=255)
-
-
-class AgentTelegramConfig(BaseModel, table=True):
-    __tablename__: str = "agent_telegram_config"
-
-    agent_id: UUID = SqlField(foreign_key="agent.id", nullable=False, unique=True, ondelete="CASCADE")
-    bot_token_encrypted: str = SqlField(nullable=False)
-    bot_username: str = SqlField(nullable=False, max_length=255)
-    allowed_user_ids: list[str] = SqlField(
-        default_factory=list,
-        sa_column=Column(sa.JSON(), nullable=False, server_default="[]"),
-    )
-    allowed_chat_ids: list[str] = SqlField(
-        default_factory=list,
-        sa_column=Column(sa.JSON(), nullable=False, server_default="[]"),
-    )
-    group_policy: TelegramGroupPolicy = SqlField(
-        default=TelegramGroupPolicy.ALLOWLIST,
-        sa_column=Column(sa.String(), nullable=False, server_default="allowlist"),
-    )
-    dm_policy: TelegramDmPolicy = SqlField(
-        default=TelegramDmPolicy.OFF,
-        sa_column=Column(sa.String(), nullable=False, server_default="off"),
-    )
-
-
-class AgentDiscordConfig(BaseModel, table=True):
-    __tablename__: str = "agent_discord_config"
-
-    __table_args__ = (
-        sa.Index(
-            "ix_agent_discord_config_bot_token_hash",
-            "bot_token_hash",
-            unique=True,
-            postgresql_where=sa.text("bot_token_hash IS NOT NULL"),
-        ),
-    )
-
-    agent_id: UUID = SqlField(foreign_key="agent.id", nullable=False, unique=True, ondelete="CASCADE")
-    bot_token_encrypted: str = SqlField(nullable=False)
-    bot_token_hash: str | None = SqlField(default=None, nullable=True)
-    guild_ids: list[str] = SqlField(
-        default_factory=list,
-        sa_column=Column(sa.JSON(), nullable=False, server_default="[]"),
-    )
-    allowed_channel_ids: list[str] = SqlField(
-        default_factory=list,
-        sa_column=Column(sa.JSON(), nullable=False, server_default="[]"),
-    )
-    allowed_user_ids: list[str] = SqlField(
-        default_factory=list,
-        sa_column=Column(sa.JSON(), nullable=False, server_default="[]"),
-    )
-    allowed_role_ids: list[str] = SqlField(
-        default_factory=list,
-        sa_column=Column(sa.JSON(), nullable=False, server_default="[]"),
-    )
-    allow_all_users: bool = SqlField(
-        default=True,
-        sa_column=Column(sa.Boolean(), nullable=False, server_default=sa.true()),
-    )
-    home_channel_id: str | None = SqlField(default=None, nullable=True, max_length=32)
-    require_mention: bool = SqlField(
-        default=True,
-        sa_column=Column(sa.Boolean(), nullable=False, server_default=sa.true()),
-    )
-    group_policy: DiscordGroupPolicy = SqlField(
-        default=DiscordGroupPolicy.ALLOWLIST,
-        sa_column=Column(sa.String(), nullable=False, server_default="allowlist"),
     )
 
 
@@ -625,10 +473,17 @@ class AgentTemplateSkill(BaseModel, table=True):
     __table_args__ = (
         sa.UniqueConstraint("template_id", "skill_id", name="uq_agent_template_skill"),
         sa.Index("ix_agent_template_skill_template", "template_id"),
+        sa.ForeignKeyConstraint(
+            ["skill_id", "skill_version"],
+            ["skill_version.skill_id", "skill_version.version"],
+            ondelete="RESTRICT",
+            name="fk_agent_template_skill_version",
+        ),
     )
 
     template_id: UUID = SqlField(foreign_key="agent_template.id", nullable=False, ondelete="CASCADE")
     skill_id: UUID = SqlField(foreign_key="skill.id", nullable=False, ondelete="RESTRICT")
+    skill_version: int = SqlField(nullable=False)
     # Rows on the same template sharing a non-NULL group_key form an "at least
     # one of" requirement group (e.g. GitHub OR Bitbucket). NULL means the
     # skill is a standalone AND-required skill, as it always was before groups.
@@ -745,6 +600,12 @@ class AgentTemplateOverrideDraftSkill(BaseModel, table=True):
     __table_args__ = (
         sa.UniqueConstraint("draft_id", "skill_id", name="uq_agent_template_override_draft_skill"),
         sa.Index("ix_agent_template_override_draft_skill_draft", "draft_id"),
+        sa.ForeignKeyConstraint(
+            ["skill_id", "skill_version"],
+            ["skill_version.skill_id", "skill_version.version"],
+            ondelete="RESTRICT",
+            name="fk_agent_template_override_draft_skill_version",
+        ),
     )
 
     draft_id: UUID = SqlField(
@@ -753,6 +614,7 @@ class AgentTemplateOverrideDraftSkill(BaseModel, table=True):
         ondelete="CASCADE",
     )
     skill_id: UUID = SqlField(foreign_key="skill.id", nullable=False, ondelete="RESTRICT")
+    skill_version: int = SqlField(nullable=False)
     group_key: str | None = SqlField(default=None, nullable=True, max_length=100)
 
 
@@ -762,6 +624,12 @@ class AgentTemplateOverrideVersionSkill(BaseModel, table=True):
     __table_args__ = (
         sa.UniqueConstraint("version_id", "skill_id", name="uq_agent_template_override_version_skill"),
         sa.Index("ix_agent_template_override_version_skill_version", "version_id"),
+        sa.ForeignKeyConstraint(
+            ["skill_id", "skill_version"],
+            ["skill_version.skill_id", "skill_version.version"],
+            ondelete="RESTRICT",
+            name="fk_agent_template_override_version_skill_version",
+        ),
     )
 
     version_id: UUID = SqlField(
@@ -770,6 +638,7 @@ class AgentTemplateOverrideVersionSkill(BaseModel, table=True):
         ondelete="CASCADE",
     )
     skill_id: UUID = SqlField(foreign_key="skill.id", nullable=False, ondelete="RESTRICT")
+    skill_version: int = SqlField(nullable=False)
     group_key: str | None = SqlField(default=None, nullable=True, max_length=100)
 
 
@@ -779,10 +648,17 @@ class PlatformTemplateSkill(BaseModel, table=True):
     __table_args__ = (
         sa.UniqueConstraint("template_id", "skill_id", name="uq_platform_template_skill"),
         sa.Index("ix_platform_template_skill_template", "template_id"),
+        sa.ForeignKeyConstraint(
+            ["skill_id", "skill_version"],
+            ["skill_version.skill_id", "skill_version.version"],
+            ondelete="RESTRICT",
+            name="fk_platform_template_skill_version",
+        ),
     )
 
     template_id: UUID = SqlField(foreign_key="platform_template.id", nullable=False, ondelete="CASCADE")
     skill_id: UUID = SqlField(foreign_key="skill.id", nullable=False, ondelete="RESTRICT")
+    skill_version: int = SqlField(nullable=False)
     # Rows on the same template sharing a non-NULL group_key form an "at least
     # one of" requirement group (e.g. GitHub OR Bitbucket). NULL means the
     # skill is a standalone AND-required skill, as it always was before groups.
@@ -798,10 +674,17 @@ class PlatformTemplateDraftSkill(BaseModel, table=True):
     __table_args__ = (
         sa.UniqueConstraint("draft_id", "skill_id", name="uq_platform_template_draft_skill"),
         sa.Index("ix_platform_template_draft_skill_draft", "draft_id"),
+        sa.ForeignKeyConstraint(
+            ["skill_id", "skill_version"],
+            ["skill_version.skill_id", "skill_version.version"],
+            ondelete="RESTRICT",
+            name="fk_platform_template_draft_skill_version",
+        ),
     )
 
     draft_id: UUID = SqlField(foreign_key="platform_template_draft.id", nullable=False, ondelete="CASCADE")
     skill_id: UUID = SqlField(foreign_key="skill.id", nullable=False, ondelete="RESTRICT")
+    skill_version: int = SqlField(nullable=False)
     # None for a standalone (AND-required) skill; otherwise the key of the
     # "at least one of" group this skill belongs to on this draft.
     group_key: str | None = SqlField(default=None, nullable=True, max_length=100)
@@ -829,37 +712,10 @@ class SkillVersionPin(PydanticBaseModel):
 
 
 class AgentCreate(PydanticBaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     name: str = Field(min_length=1, max_length=255)
-    platform: AgentPlatform = AgentPlatform.SLACK
     agent_type: AgentType = AgentType.OPENCLAW
-    # Slack credentials (required when platform=slack)
-    slack_bot_token: str | None = Field(default=None, min_length=1)
-    slack_app_token: str | None = Field(default=None, min_length=1)
-    slack_channel_ids: list[str] = Field(default_factory=list)
-    slack_dm_user_ids: list[str] = Field(default_factory=list)
-    slack_group_policy: SlackGroupPolicy = SlackGroupPolicy.ALLOWLIST
-    slack_dm_policy: SlackDmPolicy = SlackDmPolicy.OFF
-    slack_verbose_mode: bool = True
-    # Teams credentials (required when platform=teams)
-    teams_app_id: str | None = Field(default=None, min_length=1)
-    teams_app_password: str | None = Field(default=None, min_length=1)
-    teams_tenant_id: str | None = Field(default=None, min_length=1)
-    # Telegram credentials (required when platform=telegram)
-    telegram_bot_token: str | None = Field(default=None, min_length=1)
-    telegram_allowed_user_ids: list[str] = Field(default_factory=list)
-    telegram_allowed_chat_ids: list[str] = Field(default_factory=list)
-    telegram_group_policy: TelegramGroupPolicy = TelegramGroupPolicy.ALLOWLIST
-    telegram_dm_policy: TelegramDmPolicy = TelegramDmPolicy.OFF
-    # Discord credentials (required when platform=discord)
-    discord_bot_token: str | None = Field(default=None, min_length=1)
-    discord_guild_ids: list[str] = Field(default_factory=list)
-    discord_allowed_channel_ids: list[str] = Field(default_factory=list)
-    discord_allowed_user_ids: list[str] = Field(default_factory=list)
-    discord_allowed_role_ids: list[str] = Field(default_factory=list)
-    discord_allow_all_users: bool = True
-    discord_home_channel_id: str | None = Field(default=None, min_length=1)
-    discord_require_mention: bool = True
-    discord_group_policy: DiscordGroupPolicy = DiscordGroupPolicy.ALLOWLIST
     # Template reference. The agent pins to template_version if given, else to
     # the lineage's latest version.
     template_key: str = Field(min_length=1, max_length=255)
@@ -876,30 +732,6 @@ class AgentCreate(PydanticBaseModel):
     approval_mode: CommandApprovalMode = CommandApprovalMode.AUTO
 
     @model_validator(mode="after")
-    def validate_platform_credentials(self) -> AgentCreate:
-        if self.agent_type == AgentType.HERMES and self.platform == AgentPlatform.TEAMS:
-            raise ValueError(f"Hermes agents do not support the {self.platform.value.title()} platform")
-        if self.platform == AgentPlatform.SLACK and (not self.slack_bot_token or not self.slack_app_token):
-            raise ValueError("slack_bot_token and slack_app_token are required for Slack agents")
-        elif self.platform == AgentPlatform.TEAMS:
-            if not self.teams_app_id or not self.teams_app_password or not self.teams_tenant_id:
-                raise ValueError("teams_app_id, teams_app_password, and teams_tenant_id are required for Teams agents")
-        elif self.platform == AgentPlatform.TELEGRAM and not self.telegram_bot_token:
-            raise ValueError("telegram_bot_token is required for Telegram agents")
-        elif self.platform == AgentPlatform.DISCORD and not self.discord_bot_token:
-            raise ValueError("discord_bot_token is required for Discord agents")
-        if (
-            self.platform == AgentPlatform.DISCORD
-            and not self.discord_allow_all_users
-            and not any(value.strip() for value in self.discord_allowed_user_ids)
-            and not any(value.strip() for value in self.discord_allowed_role_ids)
-        ):
-            raise ValueError(
-                "Discord access requires at least one allowed user or role when allow all users is disabled"
-            )
-        return self
-
-    @model_validator(mode="after")
     def validate_unique_secret_providers(self) -> AgentCreate:
         providers = [s.provider for s in self.secrets]
         if len(providers) != len(set(providers)):
@@ -908,35 +740,9 @@ class AgentCreate(PydanticBaseModel):
 
 
 class AgentUpdate(PydanticBaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     name: str | None = Field(default=None, min_length=1, max_length=255)
-    # Slack
-    slack_bot_token: str | None = Field(default=None, min_length=1)
-    slack_app_token: str | None = Field(default=None, min_length=1)
-    slack_channel_ids: list[str] | None = None
-    slack_dm_user_ids: list[str] | None = None
-    slack_group_policy: SlackGroupPolicy | None = None
-    slack_dm_policy: SlackDmPolicy | None = None
-    slack_verbose_mode: bool | None = None
-    # Teams
-    teams_app_id: str | None = Field(default=None, min_length=1)
-    teams_app_password: str | None = Field(default=None, min_length=1)
-    teams_tenant_id: str | None = Field(default=None, min_length=1)
-    # Telegram
-    telegram_bot_token: str | None = Field(default=None, min_length=1)
-    telegram_allowed_user_ids: list[str] | None = None
-    telegram_allowed_chat_ids: list[str] | None = None
-    telegram_group_policy: TelegramGroupPolicy | None = None
-    telegram_dm_policy: TelegramDmPolicy | None = None
-    # Discord
-    discord_bot_token: str | None = Field(default=None, min_length=1)
-    discord_guild_ids: list[str] | None = None
-    discord_allowed_channel_ids: list[str] | None = None
-    discord_allowed_user_ids: list[str] | None = None
-    discord_allowed_role_ids: list[str] | None = None
-    discord_allow_all_users: bool | None = None
-    discord_home_channel_id: str | None = Field(default=None, min_length=1)
-    discord_require_mention: bool | None = None
-    discord_group_policy: DiscordGroupPolicy | None = None
     # Template re-pin: point the agent at a different (key, version). Both must
     # be provided together. Per-agent markdown editing is no longer supported —
     # persona changes happen by editing templates in the catalog.
@@ -961,6 +767,13 @@ class AgentUpdate(PydanticBaseModel):
     def reject_legacy_template_slug(cls, values: object) -> object:
         if isinstance(values, dict) and "template_slug" in values:
             raise ValueError("template_slug is no longer supported; use template_key")
+        return values
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_null_approval_mode(cls, values: object) -> object:
+        if isinstance(values, dict) and values.get("approval_mode", ...) is None:
+            raise ValueError("approval_mode must be omitted rather than null")
         return values
 
     @model_validator(mode="after")
@@ -1008,6 +821,7 @@ class AgentTemplateOverrideRequiredSkillRead(PydanticBaseModel):
     source: str
     required_providers: list[str]
     tools_pointer: str | None
+    version: int
     group_key: str | None = None
     created_at: datetime
     updated_at: datetime
@@ -1153,46 +967,6 @@ class AgentConfigurationRead(PydanticBaseModel):
     override_versions: list[AgentTemplateOverrideVersionRead] = Field(default_factory=list)
 
 
-class AgentSlackConfigRead(PydanticBaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    channel_ids: list[str]
-    dm_user_ids: list[str]
-    group_policy: SlackGroupPolicy
-    dm_policy: SlackDmPolicy
-    verbose_mode: bool
-    bot_display_name: str | None = None  # fetched live from Slack, not persisted
-
-
-class AgentTeamsConfigRead(PydanticBaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    tenant_id: str
-
-
-class AgentTelegramConfigRead(PydanticBaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    allowed_user_ids: list[str]
-    allowed_chat_ids: list[str]
-    group_policy: TelegramGroupPolicy
-    dm_policy: TelegramDmPolicy
-    bot_username: str | None = None
-
-
-class AgentDiscordConfigRead(PydanticBaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    guild_ids: list[str]
-    allowed_channel_ids: list[str]
-    allowed_user_ids: list[str]
-    allowed_role_ids: list[str]
-    allow_all_users: bool
-    home_channel_id: str | None
-    require_mention: bool
-    group_policy: DiscordGroupPolicy
-
-
 class AgentSecretRead(PydanticBaseModel):  # label + provider only — no secret values
     model_config = ConfigDict(from_attributes=True)
 
@@ -1247,6 +1021,11 @@ class AgentAssignedSkillRead(PydanticBaseModel):
     id: UUID
     name: str
     source: str
+    # Which of the three owning tiers this Skill belongs to — not derived from a
+    # shared SkillScope enum (api.domains.skills.models already imports from this
+    # module, so importing back would cycle); the caller computes it from the
+    # same organization_id/agent_id presence rule skills.models.SkillRead uses.
+    scope: Literal["platform", "organization", "agent"]
     required_providers: list[str]
     tools_pointer: str | None
     created_at: datetime
@@ -1254,6 +1033,12 @@ class AgentAssignedSkillRead(PydanticBaseModel):
     required: bool = False
     # The exact skill version this agent is pinned to (explicit, like templates).
     version: int
+    update_available: bool = False
+    source_skill_id: UUID | None = None
+    source_skill_version: int | None = None
+
+
+AgentModelSource = Literal["default", "override"]
 
 
 class AgentRead(PydanticBaseModel):
@@ -1262,30 +1047,31 @@ class AgentRead(PydanticBaseModel):
     id: UUID
     name: str
     status: AgentStatus
-    platform: AgentPlatform
     agent_type: AgentType
     organization_id: UUID
     template_key: str
     template_version: int
     template_pin_type: AgentTemplatePinType = AgentTemplatePinType.SHARED
     override_version: int | None = None
+    # The stored value: empty means the Agent follows its Organization's default.
     model: str
-    slack_config: AgentSlackConfigRead | None = None
-    teams_config: AgentTeamsConfigRead | None = None
-    telegram_config: AgentTelegramConfigRead | None = None
-    discord_config: AgentDiscordConfigRead | None = None
+    # Resolved for the caller so no client re-derives inheritance, and so an
+    # inheriting Agent can name the model it will actually run.
+    model_source: AgentModelSource
+    #: What this Agent would start on now.
+    effective_model: str
+    #: What its running pod actually started on; "" when it is not running.
+    running_model: str
+    #: Set only when a running Agent's resolved model has moved since it started, so a
+    #: surface can say what a restart would switch it to without recomputing the rule.
+    pending_model: str
     secrets: list[AgentSecretRead] = Field(default_factory=list)
     skills: list[AgentAssignedSkillRead] = Field(default_factory=list)
+    configured_platform_keys: list[str] = Field(default_factory=list)
     approval_mode: CommandApprovalMode
-    webhook_url: str | None = None
     allowed_actions: list[PermissionKey] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
-
-
-class PairRequest(PydanticBaseModel):
-    platform: str = Field(min_length=1)
-    code: str = Field(min_length=1)
 
 
 class AgentFilter(PydanticBaseModel):

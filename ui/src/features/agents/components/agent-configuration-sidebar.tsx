@@ -8,7 +8,6 @@ import {
   UserRound,
 } from "lucide-react";
 
-import type { Agent } from "../schemas";
 import {
   AGENT_CONFIGURATION_SECTIONS,
   configurationSectionLabel,
@@ -26,11 +25,9 @@ const ICONS = {
 } as const;
 
 export function AgentConfigurationSidebar({
-  agent,
   activeSection,
   onSectionChange,
 }: {
-  agent: Pick<Agent, "platform">;
   activeSection: AgentConfigurationSectionKey;
   onSectionChange: (section: AgentConfigurationSectionKey) => void;
 }) {
@@ -57,7 +54,7 @@ export function AgentConfigurationSidebar({
               onClick={() => onSectionChange(section.key)}
             >
               <Icon size={15} aria-hidden />
-              <span>{configurationSectionLabel(section.key, agent)}</span>
+              <span>{configurationSectionLabel(section.key)}</span>
             </button>
           );
         })}

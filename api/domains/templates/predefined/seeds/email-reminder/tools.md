@@ -9,7 +9,7 @@ Read `email_platform` from USER.md, then use the matching tool:
 | `email_platform` | Tool | Reference |
 |---|---|---|
 | `google_workspace` | `gog gmail` (no `--profile`) | the Google Workspace block in AGENTS.md |
-| `zoho_mail` | `aai-cli email --profile zoho-mail-rest` | `./skills/aai-cli/zoho_mail_skill.md` |
+| `zoho_mail` | `aai-cli email --profile zoho-mail-rest` | `./skills/aai-zoho-mail/SKILL.md` |
 
 The two are different tools with different grammars: `gog` is already authenticated as the
 user's Google account and takes no profile flag, while `aai-cli` requires `--profile`. Do
@@ -25,7 +25,7 @@ gog gmail messages get <MESSAGE_ID>
 
 **Zoho Mail (`zoho_mail`)**
 
-Read `./skills/aai-cli/zoho_mail_skill.md` first — it documents the exact subcommands,
+Read `./skills/aai-zoho-mail/SKILL.md` first — it documents the exact subcommands,
 flags, and response shapes.
 ```
 aai-cli email messages list --received-after <YYYY-MM-DD> --profile zoho-mail-rest

@@ -2,7 +2,7 @@ import Link from "next/link";
 import { BuildingIcon, ServerIcon, UsersIcon } from "@/components/icons";
 import { PlatformAdminOnly } from "@/auth/components/platform-admin-only";
 import { PlatformStatsPanel } from "@/features/platform-stats/components/platform-stats-panel";
-import { FileText } from "lucide-react";
+import { FileText, Sparkles } from "lucide-react";
 
 const platformLinks = [
   {
@@ -30,6 +30,12 @@ const platformLinks = [
     title: "Platform Templates",
     description: "Author and publish the global agent prompt templates.",
     Icon: FileText,
+  },
+  {
+    href: "/dashboard/platform/skills",
+    title: "Platform Skills",
+    description: "Manage the global Skill catalogue, including the bundled aai-cli integrations.",
+    Icon: Sparkles,
   },
 ];
 

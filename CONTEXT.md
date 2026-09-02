@@ -1,6 +1,6 @@
 # Agent Barn
 
-Agent Barn manages organization-owned AI agents that operate in Slack, Microsoft Teams, Telegram, or Discord through a selected runtime and a versioned configuration.
+Agent Barn manages organization-owned AI agents that use a selected runtime and versioned configuration, and communicate through zero or more connections supplied by shipped Platform Plugins.
 
 ## Language
 
@@ -77,7 +77,7 @@ The user who originally created an Agent, retained as immutable provenance. Crea
 _Avoid_: Organization Owner, permanent Agent authority
 
 **Agent**:
-An organization-owned AI worker configured from one active shared Template Version or Agent Template Override Version, and executed by one Runtime on one Platform.
+An organization-owned AI worker configured from one active shared Template Version or Agent Template Override Version, executed by one Runtime, and reachable through zero or more Communication Connections.
 _Avoid_: bot, pod
 
 **Configured Model**:
@@ -93,8 +93,28 @@ The implementation that executes an agent. Agent Barn currently supports Hermes 
 _Avoid_: platform
 
 **Platform**:
-The chat system through which an agent interacts with people. Agent Barn currently supports Slack, Microsoft Teams, Telegram, and Discord.
+The chat system through which an Agent interacts with people. Agent Barn support for a Platform is supplied by a shipped Platform Plugin.
 _Avoid_: runtime
+
+**Communication Connection**:
+An Agent-owned configured relationship to one bot, application, account, or endpoint on a Platform. An Agent may have multiple Communication Connections, including several on the same Platform.
+_Avoid_: channel, integration, platform config
+
+**Connection Journal**:
+The append-only, content-free operational history for one Communication Connection. Its entries are either Delivery Transitions, which belong to one durable Communication Delivery, or Connection Events, which record provider connectivity and recovery without a Delivery.
+_Avoid_: message log, provider payload, diagnostics snapshot
+
+**Delivery Transition**:
+A Connection Journal entry describing one stage, error, or recovery attempt in a durable Communication Delivery's lifecycle.
+_Avoid_: Connection Event, Event Delivery
+
+**Connection Event**:
+A Connection Journal entry describing a provider connection, degradation, error, or reconnect request that does not belong to a Communication Delivery.
+_Avoid_: Delivery Transition, message failure
+
+**Platform Plugin**:
+A trusted, release-shipped module that supplies Agent Barn's support for one Platform.
+_Avoid_: integration, runtime plugin, dynamically installed plugin
 
 **Template**:
 A versioned Markdown configuration lineage used to create and run agents. Predefined templates are Platform Resources; custom templates belong to one Organization.
@@ -149,8 +169,36 @@ The manual action that clones an origin's newer Platform Template snapshot—inc
 _Avoid_: template merge, in-place sync
 
 **Skill**:
-A packaged set of agent instructions or references that can be assigned to an agent and required by a template.
-_Avoid_: integration, tool
+A packaged set of UTF-8 agent instructions or references that can be assigned to an Agent or required by a Template. A retained Skill is a stable lineage; immutable content is stored in Skill Versions and every published version has one root `SKILL.md`. A custom lineage may be hard-deleted with its draft and versions when no Agent pins any version and no Template, Override, or fork-source reference remains.
+_Avoid_: integration, tool, prompt blob
+
+**Platform Skill**:
+A Skill with no Organization or Agent owner. Platform Skills are managed by Platform Administrators and are visible to Organizations and Agents according to the additive visibility rules. The bundled aai-cli Platform Skills use isolated `aai-<integration>/SKILL.md` roots.
+_Avoid_: built-in ZIP, shared Organization Skill
+
+**Organization Skill**:
+A Skill owned by one Organization and visible to that Organization's Agents. Organization managers can author drafts, publish versions, delete an unused custom lineage, fork visible Platform Skills, and explicitly apply source updates.
+_Avoid_: global Skill, Agent Skill
+
+**Agent Skill**:
+A private Skill owned by one Agent and its Organization. It is visible only through that Agent's authorized scope; another Agent in the same Organization cannot see it. The Agent owner can delete the custom lineage when no Agent pins any of its versions.
+_Avoid_: personal integration, shared Skill
+
+**Skill Version**:
+An immutable, self-contained snapshot of one Skill lineage's files and declarative provider metadata. Agent assignments and Template requirements pin a specific Skill Version and never follow publication automatically.
+_Avoid_: mutable skill, latest skill pointer
+
+**Skill Draft**:
+The single mutable working snapshot for one Skill lineage. New Skills and forks start with a Draft and no published Version; publishing creates the next immutable Skill Version and clears the Draft.
+_Avoid_: published version, ZIP upload
+
+**Skill Lineage Deletion**:
+The owning-scope operation that permanently removes a custom Skill's Draft, all Skill Versions, and their files. It is allowed only when no `AgentSkill` row pins any version and no Template, Agent Template Override, or fork-source reference remains; built-in `aai_cli` lineages cannot be deleted.
+_Avoid_: version pruning, archive, soft-delete
+
+**Skill Source Update**:
+An explicit action that copies a newer direct source Skill Version into a fork. With no Draft it publishes immediately; with a Draft it replaces the Draft and leaves it unpublished. It never repins existing consumers automatically.
+_Avoid_: automatic merge, live sync
 
 **Agent Secret**:
 An encrypted, provider-specific credential payload assigned to one agent so its runtime can access an external service. May hold its own encrypted content or reference a Shared Credential.
@@ -222,17 +270,21 @@ _Avoid_: webhook
 
 ## Relationships
 
-- An **Organization** has many **Memberships**, **Agents**, **Templates**, custom **Skills**, and **Shared Credentials**.
+- An **Organization** has many **Memberships**, **Agents**, Organization/Agent-private **Skills**, and **Shared Credentials**; Platform Skills are global resources visible through additive scope rules.
 - An **Organization** has one immutable **Organization Creator**, and creation grants that user the initial Organization Owner **Membership**.
 - **Platform Oversight Data** may describe Organizations and their resources but never establishes an Active Organization or grants Organization authority.
 - A **Membership** links one user to one **Organization** with one **Organization Role**.
 - An **Organization Role** grants **Permissions** for Organization capabilities.
 - An **Agent Access Role** grants **Permissions** for one Agent aggregate.
-- An **Agent** belongs to one **Organization**, has one original **Agent Creator**, pins one active shared **Template Version** or **Agent Template Override Version**, uses one **Runtime**, and connects to one **Platform**.
+- An **Agent** belongs to one **Organization**, has one original **Agent Creator**, pins one active shared **Template Version** or **Agent Template Override Version**, uses one **Runtime**, and owns zero or more **Communication Connections**.
+- Each **Communication Connection** belongs to one **Agent**, targets one **Platform**, and is interpreted by that Platform's **Platform Plugin**.
 - An **Agent** has one current **Configured Model** and may have **Observed Model Usage** for multiple models over time.
 - A **Membership** may have **Agent Access** to many Agents, and each relationship carries one **Agent Access Role**; creating an Agent grants its creator explicit Agent Owner access without transferring Organization ownership.
 - An **Agent** has one **Agent General Access** setting whose Permissions combine with (never subtract from) explicit Agent Access grants.
-- A **Template Version** may require multiple **Skills**.
+- A **Template Version** may require multiple immutable **Skill Versions**.
+- A **Platform Skill** has no owner; an **Organization Skill** belongs to one Organization; an **Agent Skill** belongs to one Agent and retains its Organization for tenant isolation.
+- An **Agent** can see Platform Skills, its Organization's Skills, and its own Agent Skills, but never another Agent's private Skills. Agent assignments and Template requirements pin exact Skill Versions.
+- A custom **Skill Lineage** can be hard-deleted from its owning Platform, Organization, or Agent scope only when no Agent pins any of its versions and no Template, Override, or fork-source reference remains; the delete cascades the lineage's own Drafts, Versions, and files.
 - A Platform Template lineage has at most one **Draft Template Version**, authored only by a **Platform Administrator**; publishing it exposes the next Platform Template Version to every Organization.
 - A **Platform Administrator** can inspect any immutable Platform Template Version and use a **Template Restore** to seed a new Draft Template Version from it; the restore leaves version history and existing Agent pins unchanged.
 - An Organization Template fork tracks a **Fork Baseline Version**; the first fork is Organization v1 and a **Template Update** clones its origin's newer Platform Template snapshot into the next organization version.

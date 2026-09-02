@@ -323,7 +323,6 @@ def test_flushed_payload_satisfies_the_ingest_contract():
 
         with then("Ingest accepts it without coercion errors"):
             batch = IngestBatchRequest.model_validate(payload)
-            assert_that(batch.messages, has_length(2))
             assert_that(batch.tool_calls, has_length(1))
             assert_that(batch.tool_results, has_length(1))
 

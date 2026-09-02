@@ -1,5 +1,5 @@
 # Local dev stack only — prod runs via Helm (see helm/, helmfile.yaml.gotmpl).
-# api/worker/ui run with source bind-mounted and dev servers in watch mode, so
+# api/worker/communications/ui run with source bind-mounted and dev servers in watch mode, so
 # ./run.sh (which drives this file) gives you the same hot reload as
 # `make dev-api`/`dev-ui`/`dev-worker`, just fully containerized.
 
@@ -35,8 +35,6 @@ services:
     image: redis:7-alpine
     container_name: aai_redis
     restart: unless-stopped
-    ports:
-      - "${REDIS_PORT:-6379}:6379"
     volumes:
       - aai_redis_data:/data
     healthcheck:
@@ -53,7 +51,7 @@ services:
     restart: unless-stopped
     command: >
       sh -c "uvicorn api.ingest_main:app --host 0.0.0.0 --port 8001 --reload &
-             exec fastapi dev api/main.py --host 0.0.0.0 --port 8000"
+        exec fastapi dev api/main.py --host 0.0.0.0 --port 8000"
     depends_on:
       db:
         condition: service_healthy
@@ -66,6 +64,9 @@ services:
       - .env
     environment:
       <<: *api-env
+      # Agent pods run in k3d, outside this Compose network, so they reach the
+      # Communications gateway through the same host hop as Ingest and LiteLLM.
+      COMMUNICATIONS_BASE_URL: ${COMMUNICATIONS_BASE_URL:-http://host.docker.internal:${COMMUNICATIONS_PORT:-8002}/communications/v1}
       # The rest of the agent config (AGENT_*, LITELLM_SECRET_NAME, OPENCLAW_IMAGE,
       # ...) arrives via env_file above. Only the values that must differ inside
       # the container are overridden here.
@@ -127,6 +128,25 @@ services:
     volumes:
       - ./api:/app/api
 
+  communications:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    container_name: aai_communications
+    restart: unless-stopped
+    command: ["uvicorn", "api.communications_main:app", "--host", "0.0.0.0", "--port", "8002", "--reload"]
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      <<: *api-env
+    volumes:
+      - ./api:/app/api
+    ports:
+      - "${COMMUNICATIONS_PORT:-8002}:8002"
+
   ui:
     build:
       context: ./ui
@@ -147,7 +167,7 @@ services:
       - ./ui:/app
       - aai_ui_node_modules:/app/node_modules
     ports:
-      - "3000:3000"
+      - "${UI_PORT:-3000}:3000"
 
   # k3d runner — provides the k3d binary without requiring a host install.
   # Docker socket is mounted so k3d can create k3s containers as host siblings.

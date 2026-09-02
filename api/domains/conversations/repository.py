@@ -7,8 +7,9 @@ from injector import inject, singleton
 from sqlalchemy.dialects.postgresql import insert
 from sqlmodel import Session, and_, col, or_, select
 
-from api.domains.agents.models import Agent, AgentPlatform
+from api.domains.agents.models import Agent
 from api.domains.agents.repository import agent_scope_predicates
+from api.domains.communications.models import CommunicationConnection, CommunicationPlatform
 from api.domains.conversations.models import (
     AgentChatMessage,
     ConversationsCursor,
@@ -37,6 +38,7 @@ class ConversationRepository:
                     "created_at": m.created_at,
                     "updated_at": m.updated_at,
                     "agent_id": m.agent_id,
+                    "connection_id": m.connection_id,
                     "openclaw_msg_id": m.openclaw_msg_id,
                     "session_key": m.session_key,
                     "channel_id": m.channel_id,
@@ -53,11 +55,14 @@ class ConversationRepository:
             ]
             stmt = insert(AgentChatMessage).values(rows)
             stmt = stmt.on_conflict_do_update(
-                constraint="uq_agent_chat_message_agent_msg",
+                index_elements=["connection_id", "openclaw_msg_id"],
+                index_where=sa.text("connection_id IS NOT NULL"),
                 set_={
                     "thread_id": stmt.excluded.thread_id,
-                    "sender_name": stmt.excluded.sender_name,
-                    "channel_name": stmt.excluded.channel_name,
+                    # COALESCE so a later upsert with no resolved name (NULL)
+                    # never clears a name an earlier upsert already learned.
+                    "sender_name": sa.func.coalesce(col(AgentChatMessage.sender_name), stmt.excluded.sender_name),
+                    "channel_name": sa.func.coalesce(col(AgentChatMessage.channel_name), stmt.excluded.channel_name),
                     "content": stmt.excluded.content,
                     "updated_at": stmt.excluded.updated_at,
                 },
@@ -74,7 +79,7 @@ class ConversationRepository:
         organization_id: UUID | None = None,
         agent_id: UUID | None = None,
         created_by_user_id: UUID | None = None,
-        platform: AgentPlatform | None = None,
+        platform: CommunicationPlatform | None = None,
     ) -> list[tuple[datetime, int, int]]:
         """Daily inbound/outbound message counts for the stats surfaces (AF-256).
         Returns (iso_date, inbound, outbound) ordered by day.
@@ -117,7 +122,12 @@ class ConversationRepository:
         if created_by_user_id is not None:
             agent_predicates.append(col(Agent.created_by_user_id) == created_by_user_id)
         if platform is not None:
-            agent_predicates.append(col(Agent.platform) == platform)
+            message_predicates.append(
+                sa.exists().where(
+                    col(CommunicationConnection.id) == col(AgentChatMessage.connection_id),
+                    col(CommunicationConnection.platform_key) == platform.value,
+                )
+            )
 
         with Session(self.delegate.engine) as session:
             # Every bucket in the window is generated up front and left-joined,
@@ -172,7 +182,7 @@ class ConversationRepository:
         organization_id: UUID | None = None,
         agent_id: UUID | None = None,
         created_by_user_id: UUID | None = None,
-        platform: AgentPlatform | None = None,
+        platform: CommunicationPlatform | None = None,
     ) -> dict[datetime, set[UUID]]:
         """{iso_date: {agent_id}} — Agents that exchanged at least one message
         that UTC day (AF-256).
@@ -191,7 +201,12 @@ class ConversationRepository:
         if created_by_user_id is not None:
             agent_predicates.append(col(Agent.created_by_user_id) == created_by_user_id)
         if platform is not None:
-            agent_predicates.append(col(Agent.platform) == platform)
+            agent_predicates.append(
+                sa.exists().where(
+                    col(CommunicationConnection.id) == col(AgentChatMessage.connection_id),
+                    col(CommunicationConnection.platform_key) == platform.value,
+                )
+            )
 
         with Session(self.delegate.engine) as session:
             query = select(sa.func.timezone("UTC", day), col(AgentChatMessage.agent_id)).where(
@@ -213,35 +228,51 @@ class ConversationRepository:
 
     def distinct_channels(
         self, agent_id: UUID, authorization_scope: AuthorizationScope
-    ) -> list[tuple[str, str | None, ConversationType]]:
-        """Returns DISTINCT (channel_id, channel_name, conversation_type) per agent.
+    ) -> list[tuple[UUID, str, str, str, str | None, ConversationType]]:
+        """Return distinct connection-scoped conversation locations for an Agent.
 
-        Picks the latest non-null channel_name per channel_id.
+        Provider channel identifiers are unique only within one Connection. Picks
+        the latest non-null channel name for each (Connection, channel) pair.
         """
         with Session(self.delegate.engine) as session:
             query = (
-                select(
-                    AgentChatMessage.channel_id,
-                    AgentChatMessage.channel_name,
-                    AgentChatMessage.conversation_type,
-                )
+                select(AgentChatMessage, CommunicationConnection)
                 .join(Agent, col(Agent.id) == col(AgentChatMessage.agent_id))
+                .join(
+                    CommunicationConnection,
+                    col(CommunicationConnection.id) == col(AgentChatMessage.connection_id),
+                )
                 .where(
                     col(AgentChatMessage.agent_id) == agent_id,
                     *agent_scope_predicates(authorization_scope),
                 )
                 .order_by(
+                    col(AgentChatMessage.connection_id),
                     col(AgentChatMessage.channel_id),
                     col(AgentChatMessage.channel_name).desc().nulls_last(),
                 )
-                .distinct(col(AgentChatMessage.channel_id))
+                .distinct(
+                    col(AgentChatMessage.connection_id),
+                    col(AgentChatMessage.channel_id),
+                )
             )
             rows = session.exec(query).all()
-            return [(r[0], r[1], r[2]) for r in rows]
+            return [
+                (
+                    message.connection_id,
+                    connection.display_name,
+                    connection.platform_key,
+                    message.channel_id,
+                    message.channel_name,
+                    message.conversation_type,
+                )
+                for message, connection in rows
+            ]
 
     def find_channel_page(
         self,
         agent_id: UUID,
+        connection_id: UUID,
         channel_id: str,
         filter: ConversationsFilter,
         cursor: ConversationsCursor,
@@ -258,6 +289,7 @@ class ConversationRepository:
         with Session(self.delegate.engine) as session:
             filters = [
                 col(AgentChatMessage.agent_id) == agent_id,
+                col(AgentChatMessage.connection_id) == connection_id,
                 col(AgentChatMessage.channel_id) == channel_id,
             ]
             if filter.from_date is not None:
@@ -303,6 +335,7 @@ class ConversationRepository:
     def find_all_channel_messages(
         self,
         agent_id: UUID,
+        connection_id: UUID,
         channel_id: str,
         filter: ConversationsFilter,
         authorization_scope: AuthorizationScope,
@@ -311,6 +344,7 @@ class ConversationRepository:
         with Session(self.delegate.engine) as session:
             filters = [
                 col(AgentChatMessage.agent_id) == agent_id,
+                col(AgentChatMessage.connection_id) == connection_id,
                 col(AgentChatMessage.channel_id) == channel_id,
             ]
             if filter.from_date is not None:

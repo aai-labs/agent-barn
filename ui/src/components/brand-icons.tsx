@@ -49,3 +49,54 @@ export function OpenClawIcon(p: BrandIconProps) {
 export function HermesIcon(p: BrandIconProps) {
   return <MaskGlyph src="/brand/hermes.svg" {...p} />;
 }
+
+/**
+ * Renders a full-color brand mark as-is (unlike MaskGlyph, which tints a mark to
+ * the surrounding text color). Communication platforms are recognized by their
+ * real colors — Slack's mark is four colors, so masking it to one would flatten
+ * the exact thing that makes it recognizable at a glance.
+ */
+function ColorGlyph({
+  src,
+  size = 14,
+  className,
+  style,
+  label,
+}: BrandIconProps & { src: string; label: string }) {
+  return (
+    // eslint-disable-next-line @next/next/no-img-element -- small static local SVG, not a candidate for next/image optimization
+    <img
+      src={src}
+      alt={label}
+      className={className}
+      style={{ width: size, height: size, flexShrink: 0, ...style }}
+    />
+  );
+}
+
+export function SlackIcon(p: BrandIconProps) {
+  return <ColorGlyph src="/brand/slack.svg" label="Slack" {...p} />;
+}
+
+export function DiscordIcon(p: BrandIconProps) {
+  return <ColorGlyph src="/brand/discord.svg" label="Discord" {...p} />;
+}
+
+export function TelegramIcon(p: BrandIconProps) {
+  return <ColorGlyph src="/brand/telegram.svg" label="Telegram" {...p} />;
+}
+
+export function TeamsIcon(p: BrandIconProps) {
+  return <ColorGlyph src="/brand/teams.svg" label="Microsoft Teams" {...p} />;
+}
+
+/** Brand icon element for a communication platform key (e.g. "slack"), or null if unknown. */
+export function platformIcon(platformKey: string, props: BrandIconProps = {}): React.ReactNode | null {
+  switch (platformKey) {
+    case "slack": return <SlackIcon {...props} />;
+    case "discord": return <DiscordIcon {...props} />;
+    case "telegram": return <TelegramIcon {...props} />;
+    case "teams": return <TeamsIcon {...props} />;
+    default: return null;
+  }
+}

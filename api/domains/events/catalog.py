@@ -3,6 +3,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
 
+from api.domains.communications.models import CommunicationErrorDetails
 from api.domains.events.models import EventScope
 from api.domains.events.registry import DomainEventDefinition, DomainEventRegistry
 
@@ -25,11 +26,17 @@ TEMPLATE_CREATED = "template.created"
 TEMPLATE_UPDATED = "template.updated"
 TEMPLATE_DELETED = "template.deleted"
 ORGANIZATION_MODEL_ALLOWLIST_CHANGED = "organization.model_allowlist.changed"
+ORGANIZATION_AGENT_SETTINGS_CHANGED = "organization.agent_settings.changed"
 ORGANIZATION_MEMBER_ADDED = "organization.member.added"
 ORGANIZATION_MEMBER_REMOVED = "organization.member.removed"
 ORGANIZATION_OWNERSHIP_TRANSFERRED = "organization.ownership_transferred"
 PLATFORM_USER_PRIVILEGE_GRANTED = "platform.user_privilege.granted"
 PLATFORM_USER_PRIVILEGE_REVOKED = "platform.user_privilege.revoked"
+COMMUNICATION_CONNECTION_HEALTH_CHANGED = "communication.connection.health.changed"
+COMMUNICATION_CONNECTION_RECONNECT_REQUESTED = "communication.connection.reconnect.requested"
+COMMUNICATION_DELIVERY_DEAD_LETTERED = "communication.delivery.dead_lettered"
+COMMUNICATION_DELIVERY_RETRY_REQUESTED = "communication.delivery.retry.requested"
+COMMUNICATION_DELIVERY_RECOVERED = "communication.delivery.recovered"
 
 SECURITY_AUDIT_HANDLER = "security_audit.projection"
 AGENT_LIFECYCLE_EMAIL_HANDLER = "agent.lifecycle_email.notification"
@@ -102,7 +109,6 @@ class AgentCreatedPayload(BaseModel):
     agent_id: UUID
     agent_name: str
     created_by_user_id: UUID | None
-    platform: str
     runtime: str
 
 
@@ -114,7 +120,6 @@ class AgentLifecyclePayload(BaseModel):
     agent_name: str
     previous_status: str
     new_status: str
-    platform: str
     runtime: str
 
 
@@ -158,7 +163,6 @@ class AgentDeletedPayload(BaseModel):
     organization_id: UUID
     agent_id: UUID
     agent_name: str
-    platform: str
     runtime: str
     actor_display: str
     subject_display: str
@@ -233,6 +237,26 @@ class OrganizationModelAllowlistChangedPayload(BaseModel):
     subject_display: str
 
 
+class OrganizationAgentSettingsChangedPayload(BaseModel):
+    """One changed Agent Setting, named by `setting`, with its before/after values.
+
+    Unlike the allowlist event this can safely carry both values: a setting holds a
+    single bounded scalar (a model slug), not an unbounded list, so the payload
+    cannot grow into MAX_PAYLOAD_BYTES. `previous`/`current` are None when the
+    Organization was, or becomes, one that follows the platform default.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    organization_id: UUID
+    setting: str
+    previous: str | None
+    current: str | None
+    inheriting_agent_count: int
+    actor_display: str
+    subject_display: str
+
+
 class OrganizationMemberChangedPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -279,6 +303,72 @@ class PlatformUserPrivilegeChangedPayload(BaseModel):
     reason: str
 
 
+class CommunicationConnectionHealthChangedPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    organization_id: UUID
+    agent_id: UUID
+    connection_id: UUID
+    previous_status: str | None
+    new_status: str
+    error_code: str | None
+    error_summary: str | None
+    error_details: CommunicationErrorDetails | None = None
+    actor_display: str
+    subject_display: str
+
+
+class CommunicationConnectionReconnectRequestedPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    organization_id: UUID
+    agent_id: UUID
+    connection_id: UUID
+    actor_display: str
+    subject_display: str
+
+
+class CommunicationDeliveryDeadLetteredPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    organization_id: UUID
+    agent_id: UUID
+    connection_id: UUID
+    delivery_id: UUID
+    direction: str
+    attempt_number: int
+    error_code: str | None
+    error_summary: str | None
+    actor_display: str
+    subject_display: str
+
+
+class CommunicationDeliveryRetryRequestedPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    organization_id: UUID
+    agent_id: UUID
+    connection_id: UUID
+    delivery_id: UUID
+    direction: str
+    attempt_number: int
+    actor_display: str
+    subject_display: str
+
+
+class CommunicationDeliveryRecoveredPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    organization_id: UUID
+    agent_id: UUID
+    connection_id: UUID
+    delivery_id: UUID
+    direction: str
+    attempt_number: int
+    actor_display: str
+    subject_display: str
+
+
 def build_default_event_registry() -> DomainEventRegistry:
     registry = DomainEventRegistry()
     for event_name, payload_model in (
@@ -292,6 +382,7 @@ def build_default_event_registry() -> DomainEventRegistry:
         (TEMPLATE_UPDATED, TemplateUpdatedPayload),
         (TEMPLATE_DELETED, TemplateDeletedPayload),
         (ORGANIZATION_MODEL_ALLOWLIST_CHANGED, OrganizationModelAllowlistChangedPayload),
+        (ORGANIZATION_AGENT_SETTINGS_CHANGED, OrganizationAgentSettingsChangedPayload),
         (ORGANIZATION_OWNERSHIP_TRANSFERRED, OrganizationOwnershipTransferredPayload),
     ):
         registry.register(
@@ -366,6 +457,22 @@ def build_default_event_registry() -> DomainEventRegistry:
                 payload_model=PlatformUserPrivilegeChangedPayload,
                 handler_names=(SECURITY_AUDIT_HANDLER,),
                 event_scope=EventScope.PLATFORM,
+            )
+        )
+    for event_name, payload_model in (
+        (COMMUNICATION_CONNECTION_HEALTH_CHANGED, CommunicationConnectionHealthChangedPayload),
+        (COMMUNICATION_CONNECTION_RECONNECT_REQUESTED, CommunicationConnectionReconnectRequestedPayload),
+        (COMMUNICATION_DELIVERY_DEAD_LETTERED, CommunicationDeliveryDeadLetteredPayload),
+        (COMMUNICATION_DELIVERY_RETRY_REQUESTED, CommunicationDeliveryRetryRequestedPayload),
+        (COMMUNICATION_DELIVERY_RECOVERED, CommunicationDeliveryRecoveredPayload),
+    ):
+        registry.register(
+            DomainEventDefinition(
+                event_name=event_name,
+                schema_version=1,
+                payload_model=payload_model,
+                handler_names=(SECURITY_AUDIT_HANDLER,),
+                event_scope=EventScope.ORGANIZATION,
             )
         )
     return registry

@@ -10,14 +10,8 @@ from injector import Module, provider, singleton
 from api.domains.agents.models import (
     Agent,
     AgentAccess,
-    AgentDiscordConfig,
-    AgentPlatform,
-    AgentSlackConfig,
     AgentStatus,
-    AgentTeamsConfig,
-    AgentTelegramConfig,
     AgentType,
-    compute_bot_token_hash,
 )
 from api.domains.agents.repository import AgentRepository
 from api.domains.events import ActorIdentity, ActorIdentityType
@@ -40,9 +34,6 @@ from api.infrastructure.litellm.client import LiteLLMClient
 TEST_ENCRYPTION_KEY: str = Fernet.generate_key().decode()
 TEST_SLACK_BOT_TOKEN = "xoxb-test-bot-token"
 TEST_SLACK_APP_TOKEN = "xapp-1-test-app-token"
-TEST_TEAMS_APP_ID = "test-teams-app-id"
-TEST_TEAMS_APP_PASSWORD = "test-teams-app-password"
-TEST_TEAMS_TENANT_ID = "test-tenant-id"
 TEST_TELEGRAM_BOT_TOKEN = "123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11"
 TEST_DISCORD_BOT_TOKEN = "test-discord-bot-token"
 FAKE_LITELLM_KEY = "sk-fake-litellm-key-for-tests"
@@ -62,7 +53,7 @@ class MockLiteLLMModule(Module):
     def provide_litellm(self) -> LiteLLMClient:
         mock: Any = MagicMock(spec=LiteLLMClient)
         mock.generate_key.return_value = FAKE_LITELLM_KEY
-        mock.delete_key.return_value = None
+        mock.delete_key.return_value = True
         return mock
 
 
@@ -72,7 +63,7 @@ def there_is_an_agent(
     deleted: bool = False,
     organization_id: UUID | None = None,
     model: str = "",
-    platform: AgentPlatform = AgentPlatform.SLACK,
+    platform: str | None = None,
     agent_type: AgentType = AgentType.OPENCLAW,
     soul_md: str = "# Soul\n\nTest soul.",
     tools_md: str = DEFAULT_TOOLS_MD,
@@ -109,7 +100,6 @@ def there_is_an_agent(
             litellm_key_encrypted=encrypt_token(FAKE_LITELLM_KEY, TEST_ENCRYPTION_KEY),
             model=model,
             status=status,
-            platform=platform,
             agent_type=agent_type,
             agent_template_id=template.id,
         )
@@ -125,39 +115,6 @@ def there_is_an_agent(
                 creator_membership_id,
                 actor=ActorIdentity(type=ActorIdentityType.USER, id=created_by_user_id or uuid_mod.uuid4()),
             )
-
-        if platform == AgentPlatform.SLACK:
-            effective_bot_token = bot_token or f"xoxb-test-{uuid_mod.uuid4()}"
-            slack_config = AgentSlackConfig(
-                agent_id=agent.id,
-                bot_token_encrypted=encrypt_token(effective_bot_token, TEST_ENCRYPTION_KEY),
-                app_token_encrypted=encrypt_token(TEST_SLACK_APP_TOKEN, TEST_ENCRYPTION_KEY),
-                bot_token_hash=None if deleted else compute_bot_token_hash(effective_bot_token),
-            )
-            repository.save_slack_config(slack_config)
-        elif platform == AgentPlatform.TEAMS:
-            teams_config = AgentTeamsConfig(
-                agent_id=agent.id,
-                app_id_encrypted=encrypt_token(TEST_TEAMS_APP_ID, TEST_ENCRYPTION_KEY),
-                app_password_encrypted=encrypt_token(TEST_TEAMS_APP_PASSWORD, TEST_ENCRYPTION_KEY),
-                tenant_id=TEST_TEAMS_TENANT_ID,
-            )
-            repository.save_teams_config(teams_config)
-        elif platform == AgentPlatform.TELEGRAM:
-            telegram_config = AgentTelegramConfig(
-                agent_id=agent.id,
-                bot_token_encrypted=encrypt_token(TEST_TELEGRAM_BOT_TOKEN, TEST_ENCRYPTION_KEY),
-                bot_username="test_bot",
-            )
-            repository.save_telegram_config(telegram_config)
-        elif platform == AgentPlatform.DISCORD:
-            effective_bot_token = bot_token or TEST_DISCORD_BOT_TOKEN
-            discord_config = AgentDiscordConfig(
-                agent_id=agent.id,
-                bot_token_encrypted=encrypt_token(effective_bot_token, TEST_ENCRYPTION_KEY),
-                bot_token_hash=None if deleted else compute_bot_token_hash(effective_bot_token),
-            )
-            repository.save_discord_config(discord_config)
 
         context.agent = agent
 
@@ -336,8 +293,8 @@ def there_is_a_skill(
             organization_id=org_id,
             name=name,
             slug=slug,
-            # Built-ins share the aai-cli mount directory; custom skills get their own.
-            root_dir="aai-cli" if global_skill else slug,
+            # Every lineage gets an isolated runtime root, including built-ins.
+            root_dir=slug,
             entry_path="SKILL.md",
             source=source,
             required_providers=required_providers or [],

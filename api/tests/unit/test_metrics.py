@@ -15,7 +15,7 @@ from api.core.metrics import (
     refresh_openrouter_credits,
     render_metrics,
 )
-from api.domains.agents.models import Agent, AgentPlatform, AgentStatus, AgentType
+from api.domains.agents.models import Agent, AgentStatus, AgentType
 from api.domains.ingest.models import IngestBatchRequest, IngestToolResultEvent
 from api.domains.ingest.service import IngestService
 from api.domains.tool_calls.models import ToolCall, ToolCallStatus
@@ -35,7 +35,6 @@ def _make_agent() -> Agent:
         organization_id=uuid4(),
         name="test-agent",
         status=AgentStatus.RUNNING,
-        platform=AgentPlatform.SLACK,
         agent_type=AgentType.OPENCLAW,
         litellm_key_encrypted="encrypted",
         model="gpt-5",
@@ -61,7 +60,6 @@ def _make_tool_call(agent: Agent, tool_name: str, status: ToolCallStatus) -> Too
 def _make_service(tc_repo) -> IngestService:
     return IngestService(
         agent_repository=MagicMock(),
-        conversation_repository=MagicMock(),
         tool_call_repository=tc_repo,
     )
 

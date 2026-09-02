@@ -2,15 +2,16 @@ import datetime as dt
 import fnmatch
 import logging
 import secrets
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import Any
 from uuid import UUID
 
 from fastapi import HTTPException, status
 from injector import inject, singleton
 
 from api.core.config import Config
+from api.domains.agent_settings.lookup import AgentSettingsLookupService
 from api.domains.agents.aai_cli_artifacts import (
     PROFILE_SLUGS,
     build_config_toml,
@@ -26,27 +27,16 @@ from api.domains.agents.authorization import AgentAuthorization
 from api.domains.agents.builders import (
     build_config_map,
     build_deployment,
-    build_hermes_config,
-    build_hermes_config_discord,
     build_hermes_config_map,
-    build_hermes_config_telegram,
     build_hermes_deployment,
-    build_openclaw_config_overlay,
-    build_openclaw_config_overlay_discord,
-    build_openclaw_config_overlay_teams,
-    build_openclaw_config_overlay_telegram,
+    build_hermes_gateway_config,
+    build_openclaw_gateway_config,
     build_pvc,
-    build_secret_discord,
-    build_secret_hermes_discord,
-    build_secret_hermes_slack,
-    build_secret_hermes_telegram,
-    build_secret_slack,
-    build_secret_teams,
-    build_secret_telegram,
+    build_secret_hermes_runtime,
+    build_secret_runtime,
     build_service,
 )
 from api.domains.agents.error_messages import friendly_k8s_error, friendly_pod_reason
-from api.domains.agents.exceptions import BotTokenConflictHTTPException
 from api.domains.agents.gog_artifacts import build_gog_env, build_gog_policy_md, build_gog_setup_sh
 from api.domains.agents.models import (
     PROVIDER_DISPLAY_NAMES,
@@ -55,32 +45,24 @@ from api.domains.agents.models import (
     AgentConfigurationRead,
     AgentConfigurationVersionRead,
     AgentCreate,
-    AgentDiscordConfig,
-    AgentDiscordConfigRead,
     AgentFilter,
     AgentHealthRead,
     AgentLogHistoryRead,
     AgentLogSnapshot,
     AgentLogsRead,
     AgentOverrideAuthorRead,
-    AgentPlatform,
     AgentRead,
     AgentSecret,
     AgentSecretCreate,
     AgentSecretRead,
     AgentSkill,
-    AgentSlackConfig,
-    AgentSlackConfigRead,
     AgentStatus,
-    AgentTeamsConfig,
-    AgentTeamsConfigRead,
-    AgentTelegramConfig,
-    AgentTelegramConfigRead,
     AgentTemplateOverrideDraft,
     AgentTemplateOverrideDraftRead,
     AgentTemplateOverrideDraftUpdate,
     AgentTemplateOverridePublish,
     AgentTemplateOverrideRequiredSkillRead,
+    AgentTemplateOverrideSkillGroup,
     AgentTemplateOverrideSourceType,
     AgentTemplateOverrideVersion,
     AgentTemplateOverrideVersionRead,
@@ -88,14 +70,13 @@ from api.domains.agents.models import (
     AgentTemplateSelection,
     AgentType,
     AgentUpdate,
+    CommandApprovalMode,
     ConfluenceContent,
     FirecrawlContent,
     GoogleWorkspaceContent,
     JiraContent,
-    PairRequest,
     SecretProvider,
     SkillVersionPin,
-    compute_bot_token_hash,
     decrypt_content,
     encrypt_content,
     validate_content,
@@ -108,7 +89,6 @@ from api.domains.agents.override_repository import (
 from api.domains.agents.repository import AgentRepository
 from api.domains.agents.runtime_policy import build_chat_commands_policy_md, build_role_scope_policy_md
 from api.domains.auth.models import CurrentUserContext
-from api.domains.auth.token_service import SlackConfigTokenService
 from api.domains.events import ActorIdentity, ActorIdentityType, EventDeliveryDispatcher, resolve_actor_identity
 from api.domains.events.catalog import (
     AGENT_SECRET_ADDED,
@@ -119,7 +99,7 @@ from api.domains.events.catalog import (
 from api.domains.organizations.lookup import OrganizationLookupService
 from api.domains.rbac.catalog import PermissionKey
 from api.domains.shared_credentials.repository import SharedCredentialRepository
-from api.domains.skills.models import PinnedSkill, Skill, derive_tools_pointer
+from api.domains.skills.models import PinnedSkill, Skill, SkillVersion, derive_tools_pointer
 from api.domains.skills.repository import SkillRepository
 from api.domains.templates.models import AgentTemplate, PlatformTemplate, TemplateRead
 from api.domains.templates.renderer import render_template
@@ -138,76 +118,14 @@ from api.infrastructure.kubernetes.client import KubernetesClient
 from api.infrastructure.litellm.client import LiteLLMClient, LiteLLMError
 from api.infrastructure.openrouter.client import OpenRouterClient
 from api.infrastructure.shared.models import PaginatedItems, Pagination
-from api.infrastructure.slack.client import (
-    SlackClient,
-    SlackFetchError,
-)
-from api.infrastructure.slack.config_token import update_slack_app_name
-from api.infrastructure.telegram.client import (
-    validate_bot_token as validate_telegram_bot_token,
-)
 
 logger = logging.getLogger(__name__)
 
-# Bot display name cache: agent_id → (name, fetched_at). TTL = 60 s.
-_bot_name_cache: dict[str, tuple[str, dt.datetime]] = {}
-_BOT_NAME_TTL = dt.timedelta(seconds=60)
-
-
-_SLACK_CONFIG_FIELDS = frozenset(
-    {
-        "slack_bot_token",
-        "slack_app_token",
-        "slack_channel_ids",
-        "slack_dm_user_ids",
-        "slack_group_policy",
-        "slack_dm_policy",
-        "slack_verbose_mode",
-    }
-)
-
-_TEAMS_CONFIG_FIELDS = frozenset(
-    {
-        "teams_app_id",
-        "teams_app_password",
-        "teams_tenant_id",
-    }
-)
-
 _CREDENTIAL_FIELDS = frozenset(
     {
-        "slack_bot_token",
-        "slack_app_token",
-        "teams_app_id",
-        "teams_app_password",
-        "discord_bot_token",
         "secrets",
         "shared_credentials",
         "removed_secret_providers",
-    }
-)
-
-_TELEGRAM_CONFIG_FIELDS = frozenset(
-    {
-        "telegram_bot_token",
-        "telegram_allowed_user_ids",
-        "telegram_allowed_chat_ids",
-        "telegram_group_policy",
-        "telegram_dm_policy",
-    }
-)
-
-_DISCORD_CONFIG_FIELDS = frozenset(
-    {
-        "discord_bot_token",
-        "discord_guild_ids",
-        "discord_allowed_channel_ids",
-        "discord_allowed_user_ids",
-        "discord_allowed_role_ids",
-        "discord_allow_all_users",
-        "discord_home_channel_id",
-        "discord_require_mention",
-        "discord_group_policy",
     }
 )
 
@@ -278,10 +196,10 @@ class AgentService:
     openrouter: OpenRouterClient
     config: Config
     skill_repository: SkillRepository
-    slack_token_service: SlackConfigTokenService
     shared_credential_repository: SharedCredentialRepository
     event_delivery_dispatcher: EventDeliveryDispatcher
     organization_lookup: OrganizationLookupService
+    agent_settings_lookup: AgentSettingsLookupService
 
     def _org_id(self, context: CurrentUserContext) -> UUID:
         return context.require_current_user_organization().organization_id
@@ -315,17 +233,40 @@ class AgentService:
     def _ensure_model_allowed(self, model: str | None, org_id: UUID) -> None:
         """Rejects models outside the allowlist. litellm is cluster-internal, so
         create/update are the only paths that can set an agent's model; enforcing
-        here is sufficient. An empty/None model defers to the configured default.
+        here is sufficient. An empty/None model defers to the resolved default.
+
+        The resolved default is admitted whatever the allowlist says. When the
+        Organization set its own default that is already true by invariant; the case
+        this covers is an Organization following a platform default its allowlist
+        does not cover, where the model picker offers that default and rejecting it
+        would make the one pre-selected option unsavable.
         """
         if model:
             allowed_models = self.organization_lookup.get_allowed_models(org_id)
             if allowed_models is None:
                 raise HTTPException(status_code=404, detail="Organization not found")
-            if not is_model_allowed(model, allowed_models):
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Model '{model}' is not in the allowed model list",
-                )
+            if is_model_allowed(model, allowed_models):
+                return
+            if model == self.agent_settings_lookup.resolve_default_model(org_id):
+                return
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Model '{model}' is not in the allowed model list",
+            )
+
+    @staticmethod
+    def _ensure_approval_mode_supported(agent_type: AgentType, approval_mode: CommandApprovalMode | None) -> None:
+        """OpenClaw has no user-configurable command-approval control; only Hermes
+        maps approval_mode onto a runtime policy (see builders/hermes.py). An
+        omitted value defers to the AgentCreate/AgentUpdate default of AUTO, which
+        is a no-op for OpenClaw, but an explicit non-AUTO value would silently
+        have no effect, so it is rejected rather than accepted and ignored.
+        """
+        if agent_type == AgentType.OPENCLAW and approval_mode is not None and approval_mode != CommandApprovalMode.AUTO:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="OpenClaw does not support command approval; approval_mode is Hermes-only.",
+            )
 
     @staticmethod
     def _build_skill_pointers(skills: list[Skill]) -> str:
@@ -372,14 +313,11 @@ class AgentService:
         skill_ids: list[UUID],
         secrets_data: list[AgentSecretCreate],
         org_id: UUID,
-        platform: AgentPlatform,
         extra_providers: set[SecretProvider] | None = None,
     ) -> list[Skill]:
         if not skill_ids:
             return []
         submitted_providers = {item.provider for item in secrets_data}
-        if platform == AgentPlatform.SLACK:
-            submitted_providers = submitted_providers | {SecretProvider.SLACK}
         if extra_providers:
             submitted_providers |= extra_providers
         accessible = {s.id: s for s in self.skill_repository.find_accessible_for_org(org_id)}
@@ -390,11 +328,6 @@ class AgentService:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail=f"Skill {skill_id} not found",
-                )
-            if SecretProvider.SLACK in skill.required_providers and platform != AgentPlatform.SLACK:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Skill '{skill.name}' requires the agent to run on the Slack platform",
                 )
             missing = [p for p in skill.required_providers if p not in submitted_providers]
             if missing:
@@ -413,6 +346,7 @@ class AgentService:
         current_skill_ids: set[UUID],
         removed_skill_ids: list[UUID],
         org_id: UUID,
+        agent_id: UUID | None = None,
     ) -> list[SkillVersionPin]:
         """Resolve every agent assignment to an explicit pinned version.
 
@@ -449,7 +383,12 @@ class AgentService:
 
         requested_ids = set(skill_ids) | set(pin_map)
         if requested_ids:
-            accessible_ids = {skill.id for skill in self.skill_repository.find_accessible_for_org(org_id)}
+            visible_skills = (
+                self.skill_repository.find_visible_for_agent(agent_id, org_id)
+                if agent_id is not None
+                else self.skill_repository.find_accessible_for_org(org_id)
+            )
+            accessible_ids = {skill.id for skill in visible_skills}
             inaccessible_ids = requested_ids - accessible_ids
             if inaccessible_ids:
                 skill_id = min(inaccessible_ids, key=str)
@@ -484,6 +423,29 @@ class AgentService:
                 resolved_ids.add(pin.skill_id)
         return resolved
 
+    def _validate_required_skill_versions(
+        self,
+        required_map: Mapping[UUID, tuple[int, str | None]],
+        pinned_versions: Mapping[UUID, int],
+    ) -> None:
+        """Require Template Skills to be present at the Template's exact pin."""
+        standalone_ids, required_groups = split_requirements(required_map)
+        for skill_id in standalone_ids:
+            required_version, _ = required_map[skill_id]
+            if pinned_versions.get(skill_id) != required_version:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Required template Skill {skill_id} must be pinned to version {required_version}",
+                )
+        for member_ids in required_groups.values():
+            if any(pinned_versions.get(skill_id) == required_map[skill_id][0] for skill_id in member_ids):
+                continue
+            names = sorted(s.name for s in self.skill_repository.get_many_by_ids(list(member_ids)))
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"One of these template Skills must be pinned to its required version: {', '.join(names)}",
+            )
+
     def _validate_skill_update(
         self,
         agent: Agent,
@@ -493,7 +455,7 @@ class AgentService:
         """Validate that new skills are accessible and that all remaining skills
         have their required providers covered after the update is applied."""
         if data.skill_ids:
-            accessible = {s.id for s in self.skill_repository.find_accessible_for_org(org_id)}
+            accessible = {s.id for s in self.skill_repository.find_visible_for_agent(agent.id, org_id)}
             for skill_id in data.skill_ids:
                 if skill_id not in accessible:
                     raise HTTPException(
@@ -516,15 +478,7 @@ class AgentService:
             )
             shared_attach_providers = {c.provider for c in shared_creds}
         remaining_providers = (current_providers - removed_providers) | upsert_providers | shared_attach_providers
-        if agent.platform == AgentPlatform.SLACK:
-            remaining_providers = remaining_providers | {SecretProvider.SLACK}
-
         for skill in remaining_skills:
-            if SecretProvider.SLACK in skill.required_providers and agent.platform != AgentPlatform.SLACK:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Skill '{skill.name}' requires the agent to run on the Slack platform",
-                )
             missing = [p for p in skill.required_providers if p not in remaining_providers]
             if missing:
                 names = ", ".join(p for p in missing)
@@ -536,25 +490,19 @@ class AgentService:
     def _build_agent_read(
         self,
         agent: Agent,
-        slack_config: AgentSlackConfig | None = None,
-        teams_config: AgentTeamsConfig | None = None,
-        telegram_config: AgentTelegramConfig | None = None,
-        discord_config: AgentDiscordConfig | None = None,
         secrets: list[AgentSecret] | None = None,
         skills: list[PinnedSkill] | None = None,
-        required_skill_map: dict[UUID, str | None] | None = None,
+        required_skill_map: Mapping[UUID, str | None | tuple[int, str | None]] | None = None,
         allowed_actions: list[PermissionKey] | None = None,
         template_key: str = "",
         template_version: int = 0,
         template_pin_type: AgentTemplatePinType = AgentTemplatePinType.SHARED,
         override_version: int | None = None,
+        latest_versions: Mapping[UUID, SkillVersion] | None = None,
+        source_update_skill_ids: set[UUID] | None = None,
+        effective_default_model: str = "",
+        configured_platform_keys: list[str] | None = None,
     ) -> AgentRead:
-        slack_config_read = AgentSlackConfigRead.model_validate(slack_config) if slack_config else None
-        if slack_config_read and slack_config:
-            slack_config_read.bot_display_name = self._get_bot_display_name(str(agent.id), slack_config)
-        teams_config_read = AgentTeamsConfigRead.model_validate(teams_config) if teams_config else None
-        telegram_config_read = AgentTelegramConfigRead.model_validate(telegram_config) if telegram_config else None
-        discord_config_read = AgentDiscordConfigRead.model_validate(discord_config) if discord_config else None
         shared_ids = [s.shared_credential_id for s in (secrets or []) if s.shared_credential_id is not None]
         shared_creds_by_id = {}
         if shared_ids:
@@ -570,26 +518,42 @@ class AgentService:
             secrets_read.append(read)
         assigned_ids = {pinned.skill.id for pinned in (skills or [])}
         req_ids = effective_required_ids(required_skill_map or {}, assigned_ids)
-        skills_read = [
-            AgentAssignedSkillRead.model_validate(
-                {
-                    **pinned.skill.model_dump(),
-                    "version": pinned.version,
-                    "required": pinned.skill.id in req_ids,
-                }
+        skills_read = []
+        for pinned in skills or []:
+            latest = (
+                latest_versions.get(pinned.skill.id)
+                if latest_versions is not None
+                else self.skill_repository.get_latest_version(pinned.skill.id)
             )
-            for pinned in (skills or [])
-        ]
-        webhook_url = (
-            f"{self.config.api_external_url}/api/v1/webhooks/teams/{agent.id}/messages"
-            if agent.platform == AgentPlatform.TEAMS and self.config.api_external_url
-            else None
-        )
+            update_available = (
+                (latest is not None and latest.version > pinned.version) or pinned.skill.id in source_update_skill_ids
+                if source_update_skill_ids is not None
+                else self.skill_repository.has_update_for_pin(pinned.skill.id, pinned.version)
+            )
+            skills_read.append(
+                AgentAssignedSkillRead.model_validate(
+                    {
+                        **pinned.skill.model_dump(),
+                        "version": pinned.version,
+                        "required": pinned.skill.id in req_ids,
+                        "update_available": update_available,
+                        "source_skill_id": latest.source_skill_id if latest else None,
+                        "source_skill_version": latest.source_skill_version if latest else None,
+                        "scope": (
+                            "agent"
+                            if pinned.skill.agent_id is not None
+                            else "organization"
+                            if pinned.skill.organization_id is not None
+                            else "platform"
+                        ),
+                    }
+                )
+            )
+        resolved_model = agent.model or effective_default_model
         return AgentRead(
             id=agent.id,
             name=agent.name,
             status=agent.status,
-            platform=agent.platform,
             agent_type=agent.agent_type,
             organization_id=agent.organization_id,
             template_key=template_key,
@@ -597,32 +561,25 @@ class AgentService:
             template_pin_type=template_pin_type,
             override_version=override_version,
             model=agent.model,
-            approval_mode=agent.approval_mode,
-            slack_config=slack_config_read,
-            teams_config=teams_config_read,
-            telegram_config=telegram_config_read,
-            discord_config=discord_config_read,
+            model_source="override" if agent.model else "default",
+            effective_model=resolved_model,
+            running_model=agent.running_model,
+            # A running pod that started on something else is the only case a surface
+            # must not report the resolved value as current.
+            pending_model=(resolved_model if agent.running_model and agent.running_model != resolved_model else ""),
+            # OpenClaw ignores approval_mode; report the effective AUTO default
+            # instead of a stored value from before this became enforced, so
+            # reads stay truthful even for agents persisted prior to this check.
+            approval_mode=(agent.approval_mode if agent.agent_type == AgentType.HERMES else CommandApprovalMode.AUTO),
             secrets=secrets_read,
             skills=skills_read,
-            webhook_url=webhook_url,
+            configured_platform_keys=configured_platform_keys or [],
             allowed_actions=allowed_actions or [],
             created_at=agent.created_at,
             updated_at=agent.updated_at,
         )
 
     def _get_agent_read(self, agent: Agent, context: CurrentUserContext) -> AgentRead:
-        slack_config = None
-        teams_config = None
-        telegram_config = None
-        discord_config = None
-        if agent.platform == AgentPlatform.SLACK:
-            slack_config = self.repository.get_slack_config(agent.id)
-        elif agent.platform == AgentPlatform.TEAMS:
-            teams_config = self.repository.get_teams_config(agent.id)
-        elif agent.platform == AgentPlatform.TELEGRAM:
-            telegram_config = self.repository.get_telegram_config(agent.id)
-        elif agent.platform == AgentPlatform.DISCORD:
-            discord_config = self.repository.get_discord_config(agent.id)
         secrets = self.repository.get_secrets_for_agent(agent.id)
         skills = [
             PinnedSkill(skill=s, version=row.pinned_version)
@@ -641,70 +598,97 @@ class AgentService:
             template_key = template.source_template_key
         elif template is not None:
             template_key = template.template_key
+        read_scope = self.authorization.authorization_scope(context, PermissionKey.AGENT_READ)
+        configured_platform_keys = self.repository.get_active_communication_platforms_for_agents([agent.id], read_scope)
         return self._build_agent_read(
             agent,
-            slack_config,
-            teams_config,
-            telegram_config,
-            discord_config,
             secrets,
             skills,
             required_map,
             allowed_actions,
+            effective_default_model=self.agent_settings_lookup.resolve_default_model(agent.organization_id),
+            configured_platform_keys=configured_platform_keys.get(agent.id, []),
             template_key=template_key,
             template_version=template.version if template else 0,
             template_pin_type=pin_type,
             override_version=template.version if isinstance(template, AgentTemplateOverrideVersion) else None,
         )
 
-    def _get_bot_display_name(self, agent_id: str, slack_config: AgentSlackConfig) -> str | None:
-        now = dt.datetime.now(dt.UTC)
-        cached = _bot_name_cache.get(agent_id)
-        if cached and now - cached[1] < _BOT_NAME_TTL:
-            return cached[0]
+    def _release_unowned_litellm_key(
+        self,
+        agent: Agent,
+        error: BaseException,
+        *,
+        plaintext_key: str | None = None,
+    ) -> None:
+        """Best-effort cleanup for a LiteLLM key generated during a create_agent
+        call that ultimately failed. The key was never attached to a
+        successfully created Agent, so it is unowned: delete it outright
+        rather than blocking it, since there is no Agent history to preserve
+        (contrast with delete_agent, which blocks the key of an Agent that did
+        get created). If deletion fails, block the key as a safety fallback so
+        it can no longer be used even though it wasn't removed from LiteLLM.
+        ``plaintext_key`` is supplied when a failure happens after LiteLLM
+        returned the key but before its encrypted form was prepared. Never
+        raises and never logs the plaintext key.
+        """
+        if plaintext_key is None:
+            if not agent.litellm_key_encrypted:
+                return
+            try:
+                plaintext_key = decrypt_token(agent.litellm_key_encrypted, self.config.agent_token_encryption_key)
+            except Exception as cleanup_exc:
+                logger.warning(
+                    "Failed to release unowned LiteLLM key for agent %s (%s: %s)",
+                    agent.id,
+                    type(cleanup_exc).__name__,
+                    cleanup_exc,
+                )
+                return
+
+        def safe_message(exc: BaseException) -> str:
+            return str(exc).replace(plaintext_key, "[REDACTED]")
+
+        delete_error: BaseException | None = None
         try:
-            bot_token = decrypt_token(
-                slack_config.bot_token_encrypted,
-                self.config.agent_token_encryption_key,
+            if self.litellm.delete_key(plaintext_key):
+                return
+            delete_error = LiteLLMError("delete_key returned False")
+        except Exception as cleanup_exc:
+            delete_error = cleanup_exc
+
+        assert delete_error is not None
+        try:
+            self.litellm.block_key(plaintext_key)
+        except Exception as block_exc:
+            logger.warning(
+                "Failed to release unowned LiteLLM key for agent %s after failed create (%s: %s); "
+                "deletion failed (%s: %s), blocking also failed (%s: %s)",
+                agent.id,
+                type(error).__name__,
+                safe_message(error),
+                type(delete_error).__name__,
+                safe_message(delete_error),
+                type(block_exc).__name__,
+                safe_message(block_exc),
             )
-            info = SlackClient(bot_token).get_bot_info()
-            name = info.get("bot_name") or None
-            if name:
-                _bot_name_cache[agent_id] = (name, now)
-            return name
-        except Exception:
-            return cached[0] if cached else None
+            return
+
+        logger.warning(
+            "Failed to delete unowned LiteLLM key for agent %s after failed create (%s: %s); "
+            "deletion failed (%s: %s), blocked instead",
+            agent.id,
+            type(error).__name__,
+            safe_message(error),
+            type(delete_error).__name__,
+            safe_message(delete_error),
+        )
 
     def create_agent(self, data: AgentCreate, context: CurrentUserContext) -> AgentRead:
         org_id = self._org_id(context)
         self.authorization.require_collection_scope(context, PermissionKey.AGENT_CREATE)
         self._ensure_model_allowed(data.model, org_id)
-
-        if any(item.provider == SecretProvider.SLACK for item in data.secrets):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Slack credentials are derived from the agent's Slack bot token and managed automatically.",
-            )
-
-        if data.platform == AgentPlatform.SLACK:
-            assert data.slack_bot_token is not None
-            assert data.slack_app_token is not None
-            ok, reason = self._check_slack_tokens(data.slack_bot_token, data.slack_app_token)
-            if not ok:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=reason)
-            self._ensure_bot_token_unique(data.slack_bot_token, org_id)
-
-        if data.platform == AgentPlatform.DISCORD:
-            assert data.discord_bot_token is not None
-            self._ensure_discord_bot_token_unique(data.discord_bot_token, org_id)
-
-        telegram_bot_username: str | None = None
-        if data.platform == AgentPlatform.TELEGRAM:
-            assert data.telegram_bot_token is not None
-            ok, reason, bot_info = validate_telegram_bot_token(data.telegram_bot_token)
-            if not ok:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=reason)
-            telegram_bot_username = bot_info.get("username", "")
+        self._ensure_approval_mode_supported(data.agent_type, data.approval_mode)
 
         # Pin to the requested version, or the lineage's latest if unspecified.
         if data.template_version is not None:
@@ -721,47 +705,87 @@ class AgentService:
             created_by_user_id=context.user.id,
             name=data.name,
             model=data.model or "",
-            platform=data.platform,
             agent_type=data.agent_type,
             approval_mode=data.approval_mode,
         )
         self._set_pin(agent, template)
 
-        if self.config.litellm_base_url and self.config.litellm_secret_name:
-            try:
-                litellm_key = self.litellm.generate_key(str(agent.id), agent.name, str(agent.organization_id))
-                agent.litellm_key_encrypted = encrypt_token(litellm_key, self.config.agent_token_encryption_key)
-            except LiteLLMError as exc:
-                raise HTTPException(
-                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                    detail="LiteLLM key generation failed; cannot create agent.",
-                ) from exc
-
         # Validate that all template-required skills are present in the request:
         # every standalone-required skill, and at least one member of each
         # "at least one of" group (e.g. GitHub OR Bitbucket).
         required_map = self.template_repository.get_required_skill_map_for(template)
-        standalone_ids, required_groups = split_requirements(required_map)
-        selected_skill_ids = set(data.skill_ids)
-        if standalone_ids - selected_skill_ids:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Required template skills must be included in skill_ids",
-            )
-        for group_key in sorted(required_groups):
-            members = required_groups[group_key]
-            if not (members & selected_skill_ids):
-                names = sorted(s.name for s in self.skill_repository.get_many_by_ids(list(members)))
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"At least one of these template skills must be included in skill_ids: {', '.join(names)}",
-                )
-
         # Preflight skill version pins before any persistence so an invalid pin
         # (nonexistent version, pin for a skill not in the request) is rejected
         # atomically rather than after the agent, configs, and secrets are saved.
         resolved_pins = self._resolve_skill_pins(data.skill_ids, data.skill_versions, set(), [], org_id)
         resolved_pin_by_skill_id = {pin.skill_id: pin for pin in resolved_pins}
+        self._validate_required_skill_versions(
+            required_map,
+            {skill_id: pin.version for skill_id, pin in resolved_pin_by_skill_id.items()},
+        )
+
+        # Prepare Agent Secrets in memory without persisting them yet.
+        # Integration credentials are separate from Communication Connections.
+        prepared_secrets: list[AgentSecret] = []
+        live_validation_contents: list[tuple[SecretProvider, Any]] = []
+        for item in data.secrets:
+            content = _enrich_atlassian_content(validate_content(item.provider, item.content))
+            live_validation_contents.append((item.provider, content))
+            prepared_secrets.append(
+                AgentSecret(
+                    agent_id=agent.id,
+                    provider=item.provider,
+                    secret_name=PROVIDER_DISPLAY_NAMES[item.provider],
+                    content=encrypt_content(content, self.config.agent_token_encryption_key),
+                )
+            )
+
+        # Shared credentials: look up each, verify org ownership, and prepare
+        # link rows in memory. used_providers is recomputed every iteration so
+        # a duplicate provider across two shared credentials in the same
+        # request is rejected, not just a shared/manual collision.
+        for attach in data.shared_credentials:
+            shared_cred = self.shared_credential_repository.get_by_id_and_org(attach.shared_credential_id, org_id)
+            if shared_cred is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Shared credential {attach.shared_credential_id} not found",
+                )
+            used_providers = {s.provider for s in prepared_secrets}
+            if shared_cred.provider in used_providers:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Provider {shared_cred.provider} already has a credential in this request",
+                )
+            shared_content = decrypt_content(
+                shared_cred.provider,
+                shared_cred.content,
+                self.config.agent_token_encryption_key,
+            )
+            live_validation_contents.append((shared_cred.provider, shared_content))
+            prepared_secrets.append(
+                AgentSecret(
+                    agent_id=agent.id,
+                    provider=shared_cred.provider,
+                    secret_name=shared_cred.name,
+                    content=None,
+                    shared_credential_id=shared_cred.id,
+                )
+            )
+
+        # Resolve and validate skills now that all credentials are known.
+        shared_providers = {s.provider for s in prepared_secrets if s.shared_credential_id}
+        skills_to_assign = self._resolve_skills(
+            data.skill_ids,
+            data.secrets,
+            org_id,
+            extra_providers=shared_providers,
+        )
+        # Live validation runs only after all deterministic template, skill,
+        # provider-coverage, and shared-credential checks have passed. The list is
+        # built from this request, never from a client-side validation result.
+        for provider, content in live_validation_contents:
+            self._validate_live_integration(provider, content)
 
         # The creator always gets an explicit Owner AgentAccess row, even if they
         # currently have implicit full access as an Org Owner/Admin: it's what keeps
@@ -775,213 +799,69 @@ class AgentService:
             if persisted_membership is not None and persisted_membership.user_id == context.user.id
             else None
         )
-        created = self.repository.create_with_creator_access(
-            agent,
-            creator_membership_id,
-            actor=resolve_actor_identity(context, org_id),
-        )
-        created_delivery_ids = created.delivery_ids
-
-        slack_config = None
-        teams_config = None
-        telegram_config = None
-        discord_config = None
-
-        if data.platform == AgentPlatform.SLACK:
-            slack_config = AgentSlackConfig(
-                agent_id=agent.id,
-                bot_token_encrypted=encrypt_token(
-                    cast(str, data.slack_bot_token),
-                    self.config.agent_token_encryption_key,
-                ),
-                app_token_encrypted=encrypt_token(
-                    cast(str, data.slack_app_token),
-                    self.config.agent_token_encryption_key,
-                ),
-                bot_token_hash=compute_bot_token_hash(cast(str, data.slack_bot_token)),
-                channel_ids=data.slack_channel_ids,
-                dm_user_ids=data.slack_dm_user_ids,
-                group_policy=data.slack_group_policy,
-                dm_policy=data.slack_dm_policy,
-                verbose_mode=data.slack_verbose_mode,
-            )
-            try:
-                self.repository.save_slack_config(slack_config)
-            except BotTokenConflictHTTPException:
-                self.repository.hard_delete(agent.id)
-                raise
-        elif data.platform == AgentPlatform.TEAMS:
-            assert data.teams_app_id is not None
-            assert data.teams_app_password is not None
-            assert data.teams_tenant_id is not None
-            teams_config = AgentTeamsConfig(
-                agent_id=agent.id,
-                app_id_encrypted=encrypt_token(
-                    data.teams_app_id,
-                    self.config.agent_token_encryption_key,  # type: ignore[arg-type]
-                ),
-                app_password_encrypted=encrypt_token(
-                    data.teams_app_password,
-                    self.config.agent_token_encryption_key,  # type: ignore[arg-type]
-                ),
-                tenant_id=data.teams_tenant_id,
-            )
-            self.repository.save_teams_config(teams_config)
-        elif data.platform == AgentPlatform.TELEGRAM:
-            telegram_config = AgentTelegramConfig(
-                agent_id=agent.id,
-                bot_token_encrypted=encrypt_token(
-                    cast(str, data.telegram_bot_token),
-                    self.config.agent_token_encryption_key,
-                ),
-                bot_username=telegram_bot_username or "",
-                allowed_user_ids=data.telegram_allowed_user_ids,
-                allowed_chat_ids=data.telegram_allowed_chat_ids,
-                group_policy=data.telegram_group_policy,
-                dm_policy=data.telegram_dm_policy,
-            )
-            self.repository.save_telegram_config(telegram_config)
-        elif data.platform == AgentPlatform.DISCORD:
-            discord_config = AgentDiscordConfig(
-                agent_id=agent.id,
-                bot_token_encrypted=encrypt_token(
-                    cast(str, data.discord_bot_token), self.config.agent_token_encryption_key
-                ),
-                bot_token_hash=compute_bot_token_hash(cast(str, data.discord_bot_token)),
-                guild_ids=data.discord_guild_ids,
-                allowed_channel_ids=data.discord_allowed_channel_ids,
-                allowed_user_ids=data.discord_allowed_user_ids,
-                allowed_role_ids=data.discord_allowed_role_ids,
-                allow_all_users=data.discord_allow_all_users,
-                home_channel_id=data.discord_home_channel_id,
-                require_mention=data.discord_require_mention,
-                group_policy=data.discord_group_policy,
-            )
-            try:
-                self.repository.save_discord_config(discord_config)
-            except BotTokenConflictHTTPException:
-                self.repository.hard_delete(agent.id)
-                raise
-
-        # Integration secrets are platform-independent. Persist them before any
-        # Teams auto-start so they exist if/when the pod is later built.
         secret_actor = resolve_actor_identity(context, org_id)
         secret_actor_display = context.user.full_name or context.user.email
-        secrets: list[AgentSecret] = []
-        secret_delivery_ids: list[UUID] = []
-        for item in data.secrets:
-            content = _enrich_atlassian_content(validate_content(item.provider, item.content))
-            secret = AgentSecret(
+
+        # All deterministic, client-visible validation and in-memory preparation
+        # is complete. Allocate the LiteLLM key immediately before Agent
+        # persistence so a rejected create never allocates one (AF-272); any
+        # failure before the atomic create transaction commits releases the
+        # unowned key.
+        prepared_skills = [
+            AgentSkill(
                 agent_id=agent.id,
-                provider=item.provider,
-                secret_name=PROVIDER_DISPLAY_NAMES[item.provider],
-                content=encrypt_content(content, self.config.agent_token_encryption_key),
+                skill_id=s.id,
+                pinned_version=resolved_pin_by_skill_id[s.id].version,
             )
-            secret_delivery_ids += self.repository.save_secret_with_event(
-                secret,
-                event_name=AGENT_SECRET_ADDED,
-                organization_id=org_id,
-                agent_name=agent.name,
-                actor=secret_actor,
-                actor_display=secret_actor_display,
-            )
-            secrets.append(secret)
-
-        # Shared credentials: look up each, verify org ownership, create link rows
-        for attach in data.shared_credentials:
-            shared_cred = self.shared_credential_repository.get_by_id_and_org(attach.shared_credential_id, org_id)
-            if shared_cred is None:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"Shared credential {attach.shared_credential_id} not found",
-                )
-            used_providers = {s.provider for s in secrets}
-            if shared_cred.provider in used_providers:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Provider {shared_cred.provider} already has a credential in this request",
-                )
-            secret = AgentSecret(
-                agent_id=agent.id,
-                provider=shared_cred.provider,
-                secret_name=shared_cred.name,
-                content=None,
-                shared_credential_id=shared_cred.id,
-            )
-            secret_delivery_ids += self.repository.save_secret_with_event(
-                secret,
-                event_name=AGENT_SECRET_ADDED,
-                organization_id=org_id,
-                agent_name=agent.name,
-                actor=secret_actor,
-                actor_display=secret_actor_display,
-            )
-            secrets.append(secret)
-
-        # Resolve and validate skills after all other secrets (manual + shared)
-        # are known, so the Slack-derive check below sees the final skill set.
-        shared_providers = {s.provider for s in secrets if s.shared_credential_id}
-        skills_to_assign = self._resolve_skills(
-            data.skill_ids, data.secrets, org_id, data.platform, extra_providers=shared_providers
-        )
-
-        # The Slack Agent Secret used by aai-cli is never submitted by the client
-        # (see the rejection check above) — mirror it from the same gateway bot
-        # token whenever a resolved skill requires it. Runs after every other
-        # secret validation/persist step above, so a failure there never leaves
-        # this mirrored secret orphaned.
-        if data.platform == AgentPlatform.SLACK and any(
-            SecretProvider.SLACK in skill.required_providers for skill in skills_to_assign
-        ):
-            slack_content = validate_content(SecretProvider.SLACK, {"token": data.slack_bot_token})
-            slack_secret = AgentSecret(
-                agent_id=agent.id,
-                provider=SecretProvider.SLACK,
-                secret_name=PROVIDER_DISPLAY_NAMES[SecretProvider.SLACK],
-                content=encrypt_content(slack_content, self.config.agent_token_encryption_key),
-            )
-            secret_delivery_ids += self.repository.save_secret_with_event(
-                slack_secret,
-                event_name=AGENT_SECRET_ADDED,
-                organization_id=org_id,
-                agent_name=agent.name,
-                actor=secret_actor,
-                actor_display=secret_actor_display,
-            )
-            secrets.append(slack_secret)
-
-        if skills_to_assign:
-            self.repository.save_skills(
-                [
-                    AgentSkill(
-                        agent_id=agent.id,
-                        skill_id=s.id,
-                        pinned_version=resolved_pin_by_skill_id[s.id].version,
+            for s in skills_to_assign
+        ]
+        allocated_litellm_key: str | None = None
+        try:
+            if self.config.litellm_base_url and self.config.litellm_secret_name:
+                try:
+                    allocated_litellm_key = self.litellm.generate_key(
+                        str(agent.id), agent.name, str(agent.organization_id)
                     )
-                    for s in skills_to_assign
-                ]
+                except LiteLLMError as exc:
+                    raise HTTPException(
+                        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                        detail="LiteLLM key generation failed; cannot create agent.",
+                    ) from exc
+                agent.litellm_key_encrypted = encrypt_token(
+                    allocated_litellm_key,
+                    self.config.agent_token_encryption_key,
+                )
+
+            created = self.repository.create_with_creator_access(
+                agent,
+                creator_membership_id,
+                actor=secret_actor,
+                secrets=prepared_secrets,
+                skills=prepared_skills,
+                actor_display=secret_actor_display,
             )
+            created_delivery_ids = created.delivery_ids
+        except Exception as exc:
+            if allocated_litellm_key is not None:
+                self._release_unowned_litellm_key(agent, exc, plaintext_key=allocated_litellm_key)
+            raise
+
         skills_read_versions = [
             PinnedSkill(skill=s, version=resolved_pin_by_skill_id[s.id].version) for s in skills_to_assign
         ]
 
-        self.event_delivery_dispatcher.enqueue_immediate(created_delivery_ids + secret_delivery_ids)
+        self.event_delivery_dispatcher.enqueue_immediate(created_delivery_ids)
 
-        if data.platform == AgentPlatform.TEAMS:
-            return self.start_agent(agent.id, context)
         allowed_actions = self.authorization.allowed_actions(context, [agent])[agent.id]
         return self._build_agent_read(
             agent,
-            slack_config,
-            teams_config,
-            telegram_config,
-            discord_config,
-            secrets,
+            prepared_secrets,
             skills_read_versions,
             required_map,
             allowed_actions,
             template_key=template.template_key,
             template_version=template.version,
+            effective_default_model=self.agent_settings_lookup.resolve_default_model(org_id),
         )
 
     def get_agent(self, agent_id: UUID, context: CurrentUserContext) -> AgentRead:
@@ -1210,19 +1090,13 @@ class AgentService:
         skill_map = None
         if data.required_skill_ids is not None or data.required_skill_groups is not None:
             existing_map = self.override_repository.get_draft_skill_map_for_agent(agent.id, org_id)
-            if data.required_skill_ids is None:
-                standalone_ids = {skill_id for skill_id, group_key in existing_map.items() if group_key is None}
-            else:
-                standalone_ids = set(data.required_skill_ids)
-            if data.required_skill_groups is None:
-                groups_map = {
-                    skill_id: group_key for skill_id, group_key in existing_map.items() if group_key is not None
-                }
-            else:
-                groups_map = {
-                    skill_id: group.group_key for group in data.required_skill_groups for skill_id in group.skill_ids
-                }
-            skill_map = {skill_id: None for skill_id in standalone_ids} | groups_map
+            skill_map = self._resolve_override_skill_map(
+                agent,
+                existing_map,
+                data.required_skill_ids,
+                data.required_skill_groups,
+                org_id,
+            )
             self._validate_override_requirements(agent, skill_map, org_id)
         try:
             saved = self.override_repository.update_draft(
@@ -1296,7 +1170,7 @@ class AgentService:
         selected_id: UUID
         selected_template_key: str | None
         selected_version: int | None
-        required_map: dict[UUID, str | None]
+        required_map: Mapping[UUID, tuple[int, str | None]]
         if data.selection_type == "platform":
             assert data.template_key is not None and data.template_version is not None
             selected = self.template_repository.get_platform_template_by_key_version(
@@ -1363,19 +1237,32 @@ class AgentService:
     def _validate_override_requirements(
         self,
         agent: Agent,
-        required_map: dict[UUID, str | None],
+        required_map: Mapping[UUID, tuple[int, str | None]],
         org_id: UUID,
     ) -> None:
         if not required_map:
             return
-        accessible = {skill.id: skill for skill in self.skill_repository.find_accessible_for_org(org_id)}
+        accessible = {skill.id: skill for skill in self.skill_repository.find_visible_for_agent(agent.id, org_id)}
         missing_ids = set(required_map) - accessible.keys()
         if missing_ids:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Override requires a Skill that is no longer available to this Organization",
             )
-        assigned_ids = {skill.id for _, skill in self.skill_repository.get_agent_skills_with_details(agent.id)}
+        assigned_rows = self.skill_repository.get_agent_skills_with_details(agent.id)
+        assigned_versions = {skill.id: row.pinned_version for row, skill in assigned_rows}
+        assigned_ids = set(assigned_versions)
+        wrong_versions = {
+            skill_id
+            for skill_id, (required_version, _) in required_map.items()
+            if assigned_versions.get(skill_id) != required_version
+        }
+        if wrong_versions:
+            names = ", ".join(sorted(accessible[skill_id].name for skill_id in wrong_versions))
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Required template skills must use the pinned versions: {names}",
+            )
         standalone_ids, groups = split_requirements(required_map)
         if standalone_ids - assigned_ids:
             missing = ", ".join(sorted(accessible[skill_id].name for skill_id in standalone_ids - assigned_ids))
@@ -1391,8 +1278,6 @@ class AgentService:
                     detail=f"At least one of these template skills must be assigned to the Agent: {names}",
                 )
         providers = {secret.provider for secret in self.repository.get_secrets_for_agent(agent.id)}
-        if agent.platform == AgentPlatform.SLACK:
-            providers.add(SecretProvider.SLACK)
         for skill_id in required_map:
             missing_providers = set(accessible[skill_id].required_providers) - providers
             if missing_providers:
@@ -1402,11 +1287,72 @@ class AgentService:
                     detail=f"Required Skill '{accessible[skill_id].name}' needs configured providers: {names}",
                 )
 
+    def _resolve_override_skill_map(
+        self,
+        agent: Agent,
+        old_map: Mapping[UUID, tuple[int, str | None]],
+        standalone_ids: list[UUID] | None,
+        groups: list[AgentTemplateOverrideSkillGroup] | None,
+        org_id: UUID,
+    ) -> dict[UUID, tuple[int, str | None]]:
+        """Resolve one complete override requirement set without repinning omissions."""
+        effective_standalone_ids = (
+            standalone_ids
+            if standalone_ids is not None
+            else [skill_id for skill_id, (_, group_key) in old_map.items() if group_key is None]
+        )
+        if groups is not None:
+            effective_groups = groups
+        else:
+            grouped: dict[str, list[UUID]] = {}
+            for skill_id, (_, group_key) in old_map.items():
+                if group_key is not None:
+                    grouped.setdefault(group_key, []).append(skill_id)
+            effective_groups = [
+                AgentTemplateOverrideSkillGroup(group_key=group_key, skill_ids=skill_ids)
+                for group_key, skill_ids in grouped.items()
+            ]
+
+        group_ids = [skill_id for group in effective_groups for skill_id in group.skill_ids]
+        effective_ids = set(effective_standalone_ids) | set(group_ids)
+        overlap = set(effective_standalone_ids) & set(group_ids)
+        if overlap:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Skills cannot be both standalone required and part of an override group",
+            )
+
+        accessible_ids = {skill.id for skill in self.skill_repository.find_visible_for_agent(agent.id, org_id)}
+        missing_ids = effective_ids - accessible_ids
+        if missing_ids:
+            skill_id = min(missing_ids, key=str)
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Skill {skill_id} not found")
+
+        latest_versions = self.skill_repository.get_latest_version_numbers(list(effective_ids))
+        unpublished_ids = effective_ids - latest_versions.keys()
+        if unpublished_ids:
+            skill_id = min(unpublished_ids, key=str)
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Skill {skill_id} must have a published version before it can be required",
+            )
+
+        resolved: dict[UUID, tuple[int, str | None]] = {}
+        for skill_id in effective_standalone_ids:
+            resolved[skill_id] = (old_map.get(skill_id, (latest_versions[skill_id], None))[0], None)
+        for group in effective_groups:
+            for skill_id in group.skill_ids:
+                resolved[skill_id] = (
+                    old_map.get(skill_id, (latest_versions[skill_id], group.group_key))[0],
+                    group.group_key,
+                )
+        return resolved
+
     def _override_draft_read(
         self,
         draft: AgentTemplateOverrideDraft,
         *,
-        skills: list[tuple[Skill, str | None]],
+        skills: list[tuple[Skill, int, str | None]],
         author: User | None,
     ) -> AgentTemplateOverrideDraftRead:
         return AgentTemplateOverrideDraftRead(
@@ -1423,7 +1369,7 @@ class AgentService:
         self,
         version: AgentTemplateOverrideVersion,
         *,
-        skills: list[tuple[Skill, str | None]],
+        skills: list[tuple[Skill, int, str | None]],
         author: User | None,
     ) -> AgentTemplateOverrideVersionRead:
         values = self._override_snapshot_values(
@@ -1439,7 +1385,7 @@ class AgentService:
         self,
         version: AgentTemplateOverrideVersion,
         *,
-        skills: list[tuple[Skill, str | None]],
+        skills: list[tuple[Skill, int, str | None]],
         author: User | None,
     ) -> AgentConfigurationVersionRead:
         return AgentConfigurationVersionRead(
@@ -1457,6 +1403,7 @@ class AgentService:
     @staticmethod
     def _required_skill_read(
         skill: Skill,
+        skill_version: int,
         group_key: str | None,
     ) -> AgentTemplateOverrideRequiredSkillRead:
         source = skill.source.value if hasattr(skill.source, "value") else skill.source
@@ -1470,6 +1417,7 @@ class AgentService:
             source=source,
             required_providers=required_providers,
             tools_pointer=skill.tools_pointer,
+            version=skill_version,
             group_key=group_key,
             created_at=skill.created_at,
             updated_at=skill.updated_at,
@@ -1481,7 +1429,7 @@ class AgentService:
         *,
         agent_id: UUID,
         version: int | None,
-        skills: list[tuple[Skill, str | None]],
+        skills: list[tuple[Skill, int, str | None]],
         author: User | None,
     ) -> dict[str, Any]:
         return {
@@ -1514,7 +1462,9 @@ class AgentService:
                 if author is not None
                 else None
             ),
-            "required_skills": [self._required_skill_read(skill, group_key) for skill, group_key in skills],
+            "required_skills": [
+                self._required_skill_read(skill, skill_version, group_key) for skill, skill_version, group_key in skills
+            ],
             "created_at": snapshot.created_at,
             "updated_at": snapshot.updated_at,
         }
@@ -1523,7 +1473,7 @@ class AgentService:
         self,
         template: AgentTemplate | PlatformTemplate,
         agent: Agent,
-        skills: list[tuple[Skill, str | None]],
+        skills: list[tuple[Skill, int, str | None]],
     ) -> AgentConfigurationVersionRead:
         source_type = (
             AgentTemplateOverrideSourceType.PLATFORM
@@ -1552,7 +1502,9 @@ class AgentService:
             source_agent_template_id=template.id if isinstance(template, AgentTemplate) else None,
             created_by_user_id=None,
             author=None,
-            required_skills=[self._required_skill_read(skill, group_key) for skill, group_key in skills],
+            required_skills=[
+                self._required_skill_read(skill, skill_version, group_key) for skill, skill_version, group_key in skills
+            ],
             created_at=template.created_at,
             updated_at=template.updated_at,
             state="active" if self._is_active_shared_pin(agent, template.id) else "published",
@@ -1575,23 +1527,24 @@ class AgentService:
         allowed_actions = self.authorization.allowed_actions(context, agents)
 
         agent_ids = [a.id for a in agents]
-        slack_configs = self.repository.get_slack_configs_for_agents(agent_ids)
-        teams_configs = self.repository.get_teams_configs_for_agents(agent_ids)
-        telegram_configs = self.repository.get_telegram_configs_for_agents(agent_ids)
-        discord_configs = self.repository.get_discord_configs_for_agents(agent_ids)
         secrets_by_agent = self.repository.get_secrets_for_agents(agent_ids)
         skills_by_agent = self.skill_repository.get_skills_for_agents_with_versions(agent_ids)
+        assigned_skill_ids = list(
+            {pinned.skill.id for agent_skills in skills_by_agent.values() for pinned in agent_skills}
+        )
+        latest_versions = self.skill_repository.get_latest_versions(assigned_skill_ids)
+        source_update_skill_ids = self.skill_repository.get_source_update_skill_ids(latest_versions)
+        configured_platform_keys = self.repository.get_active_communication_platforms_for_agents(agent_ids, read_scope)
 
         req_maps_by_agent = self.template_repository.get_required_skill_map_for_agents(agents)
         pin_info = self.template_repository.get_pinned_template_info_for_agents(agents)
+        # Resolved once for the page. Every Agent in it belongs to the same
+        # Organization, so resolving per row would be one query per row.
+        effective_default_model = self.agent_settings_lookup.resolve_default_model(read_scope.organization_id)
 
         items = [
             self._build_agent_read(
                 agent,
-                slack_configs.get(agent.id),
-                teams_configs.get(agent.id),
-                telegram_configs.get(agent.id),
-                discord_configs.get(agent.id),
                 secrets_by_agent.get(agent.id, []),
                 skills_by_agent.get(agent.id, []),
                 req_maps_by_agent.get(agent.id, {}),
@@ -1604,6 +1557,10 @@ class AgentService:
                     else AgentTemplatePinType.SHARED
                 ),
                 override_version=pin_info.get(agent.id, ("", 0, "shared", None))[3],
+                latest_versions=latest_versions,
+                source_update_skill_ids=source_update_skill_ids,
+                effective_default_model=effective_default_model,
+                configured_platform_keys=configured_platform_keys.get(agent.id, []),
             )
             for agent in agents
         ]
@@ -1622,56 +1579,26 @@ class AgentService:
         if _CREDENTIAL_FIELDS & updated.keys():
             self.authorization.require_action_for_visible(context, agent, PermissionKey.AGENT_SECRET_MANAGE)
 
-        if any(item.provider == SecretProvider.SLACK for item in data.secrets or []) or (
-            SecretProvider.SLACK in (data.removed_secret_providers or [])
-        ):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Slack credentials are derived from the agent's Slack bot token and managed automatically.",
-            )
-
         if agent.status == AgentStatus.RUNNING:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=f"Agent {agent_id} must be stopped before updating",
             )
 
-        other_platform_fields = {
-            AgentPlatform.SLACK: [
-                (_TEAMS_CONFIG_FIELDS, "Teams"),
-                (_TELEGRAM_CONFIG_FIELDS, "Telegram"),
-                (_DISCORD_CONFIG_FIELDS, "Discord"),
-            ],
-            AgentPlatform.TEAMS: [
-                (_SLACK_CONFIG_FIELDS, "Slack"),
-                (_TELEGRAM_CONFIG_FIELDS, "Telegram"),
-                (_DISCORD_CONFIG_FIELDS, "Discord"),
-            ],
-            AgentPlatform.TELEGRAM: [
-                (_SLACK_CONFIG_FIELDS, "Slack"),
-                (_TEAMS_CONFIG_FIELDS, "Teams"),
-                (_DISCORD_CONFIG_FIELDS, "Discord"),
-            ],
-            AgentPlatform.DISCORD: [
-                (_SLACK_CONFIG_FIELDS, "Slack"),
-                (_TEAMS_CONFIG_FIELDS, "Teams"),
-                (_TELEGRAM_CONFIG_FIELDS, "Telegram"),
-            ],
-        }
-        for fields, label in other_platform_fields.get(agent.platform, []):
-            if fields & updated.keys():
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail=f"Cannot set {label} fields on a {agent.platform.title()} agent",
-                )
+        if "approval_mode" in updated:
+            self._ensure_approval_mode_supported(agent.agent_type, updated["approval_mode"])
 
-        # Preflight skill version pins before any persistence (template re-pin,
-        # config updates, secret updates) so an invalid pin is rejected atomically
-        # rather than after config/secrets are already saved.
+        # Validate every requested skill pin before mutating the Agent, its
+        # template pin, or any attached credential.
         current_skill_rows = self.repository.get_skills_for_agent(agent.id)
         current_skill_ids = {row.skill_id for row in current_skill_rows}
         resolved_skill_pins = self._resolve_skill_pins(
-            data.skill_ids, data.skill_versions, current_skill_ids, data.removed_skill_ids, org_id
+            data.skill_ids,
+            data.skill_versions,
+            current_skill_ids,
+            data.removed_skill_ids,
+            org_id,
+            agent.id,
         )
 
         # Re-pin the agent to a different template (key, version). The model
@@ -1690,12 +1617,13 @@ class AgentService:
 
         if "name" in updated:
             agent.name = updated["name"]
-            if agent.platform == AgentPlatform.SLACK:
-                self._try_rename_slack_app(agent, updated["name"], context)
 
         if "model" in updated:
             self._ensure_model_allowed(updated["model"], org_id)
-            agent.model = updated["model"]
+            # An explicit null (or empty string) clears the override and returns the
+            # Agent to its Organization's default. The column is non-nullable, so the
+            # sentinel is "", never None.
+            agent.model = updated["model"] or ""
 
         if "approval_mode" in updated:
             agent.approval_mode = updated["approval_mode"]
@@ -1752,126 +1680,12 @@ class AgentService:
                             ),
                         )
 
-        # Slack config updates
-        if agent.platform == AgentPlatform.SLACK and (_SLACK_CONFIG_FIELDS & updated.keys()):
-            ok, reason = self._check_slack_tokens(
-                bot_token=updated.get("slack_bot_token"),
-                app_token=updated.get("slack_app_token"),
-            )
-            if not ok:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=reason)
-
-            if "slack_bot_token" in updated:
-                self._ensure_bot_token_unique(updated["slack_bot_token"], org_id, exclude_agent_id=agent.id)
-
-            slack_config = self.repository.get_slack_config(agent.id)
-            if slack_config:
-                if "slack_bot_token" in updated:
-                    slack_config.bot_token_encrypted = encrypt_token(
-                        updated["slack_bot_token"],
-                        self.config.agent_token_encryption_key,
-                    )
-                    slack_config.bot_token_hash = compute_bot_token_hash(updated["slack_bot_token"])
-                    _bot_name_cache.pop(str(agent.id), None)
-                if "slack_app_token" in updated:
-                    slack_config.app_token_encrypted = encrypt_token(
-                        updated["slack_app_token"],
-                        self.config.agent_token_encryption_key,
-                    )
-                if "slack_channel_ids" in updated:
-                    slack_config.channel_ids = updated["slack_channel_ids"]
-                if "slack_dm_user_ids" in updated:
-                    slack_config.dm_user_ids = updated["slack_dm_user_ids"]
-                if "slack_group_policy" in updated:
-                    slack_config.group_policy = updated["slack_group_policy"]
-                if "slack_dm_policy" in updated:
-                    slack_config.dm_policy = updated["slack_dm_policy"]
-                if "slack_verbose_mode" in updated:
-                    slack_config.verbose_mode = updated["slack_verbose_mode"]
-                self.repository.save_slack_config(slack_config)
-                if "slack_channel_ids" in updated:
-                    self._join_public_channels(self._get_bot_token(agent), updated["slack_channel_ids"])
-
-        # Teams config updates
-        if agent.platform == AgentPlatform.TEAMS and (_TEAMS_CONFIG_FIELDS & updated.keys()):
-            teams_config = self.repository.get_teams_config(agent.id)
-            if teams_config:
-                if "teams_app_id" in updated:
-                    teams_config.app_id_encrypted = encrypt_token(
-                        updated["teams_app_id"], self.config.agent_token_encryption_key
-                    )
-                if "teams_app_password" in updated:
-                    teams_config.app_password_encrypted = encrypt_token(
-                        updated["teams_app_password"],
-                        self.config.agent_token_encryption_key,
-                    )
-                if "teams_tenant_id" in updated:
-                    teams_config.tenant_id = updated["teams_tenant_id"]
-                self.repository.save_teams_config(teams_config)
-
-        # Telegram config updates
-        if agent.platform == AgentPlatform.TELEGRAM and (_TELEGRAM_CONFIG_FIELDS & updated.keys()):
-            if "telegram_bot_token" in updated:
-                ok, reason, bot_info = validate_telegram_bot_token(updated["telegram_bot_token"])
-                if not ok:
-                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=reason)
-            telegram_config = self.repository.get_telegram_config(agent.id)
-            if telegram_config:
-                if "telegram_bot_token" in updated:
-                    telegram_config.bot_token_encrypted = encrypt_token(
-                        updated["telegram_bot_token"],
-                        self.config.agent_token_encryption_key,
-                    )
-                    telegram_config.bot_username = bot_info.get("username", "")
-                if "telegram_allowed_user_ids" in updated:
-                    telegram_config.allowed_user_ids = updated["telegram_allowed_user_ids"]
-                if "telegram_allowed_chat_ids" in updated:
-                    telegram_config.allowed_chat_ids = updated["telegram_allowed_chat_ids"]
-                if "telegram_group_policy" in updated:
-                    telegram_config.group_policy = updated["telegram_group_policy"]
-                if "telegram_dm_policy" in updated:
-                    telegram_config.dm_policy = updated["telegram_dm_policy"]
-                self.repository.save_telegram_config(telegram_config)
-
-        # Discord config updates
-        if agent.platform == AgentPlatform.DISCORD and (_DISCORD_CONFIG_FIELDS & updated.keys()):
-            if "discord_bot_token" in updated:
-                self._ensure_discord_bot_token_unique(updated["discord_bot_token"], org_id, exclude_agent_id=agent.id)
-            discord_config = self.repository.get_discord_config(agent.id)
-            if discord_config:
-                if "discord_bot_token" in updated:
-                    discord_config.bot_token_encrypted = encrypt_token(
-                        updated["discord_bot_token"], self.config.agent_token_encryption_key
-                    )
-                    discord_config.bot_token_hash = compute_bot_token_hash(updated["discord_bot_token"])
-                if "discord_guild_ids" in updated:
-                    discord_config.guild_ids = updated["discord_guild_ids"]
-                if "discord_allowed_channel_ids" in updated:
-                    discord_config.allowed_channel_ids = updated["discord_allowed_channel_ids"]
-                if "discord_allowed_user_ids" in updated:
-                    discord_config.allowed_user_ids = updated["discord_allowed_user_ids"]
-                if "discord_allowed_role_ids" in updated:
-                    discord_config.allowed_role_ids = updated["discord_allowed_role_ids"]
-                if "discord_allow_all_users" in updated:
-                    discord_config.allow_all_users = updated["discord_allow_all_users"]
-                if "discord_home_channel_id" in updated:
-                    discord_config.home_channel_id = updated["discord_home_channel_id"]
-                if "discord_require_mention" in updated:
-                    discord_config.require_mention = updated["discord_require_mention"]
-                if "discord_group_policy" in updated:
-                    discord_config.group_policy = updated["discord_group_policy"]
-                if (
-                    not discord_config.allow_all_users
-                    and not any(value.strip() for value in discord_config.allowed_user_ids)
-                    and not any(value.strip() for value in discord_config.allowed_role_ids)
-                ):
-                    raise HTTPException(
-                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                        detail=(
-                            "Discord access requires at least one allowed user or role when allow all users is disabled"
-                        ),
-                    )
-                self.repository.save_discord_config(discord_config)
+            if "template_key" in updated or data.skill_ids or data.skill_versions or data.removed_skill_ids:
+                effective_pins = {row.skill_id: row.pinned_version for row in current_skill_rows}
+                effective_pins.update({pin.skill_id: pin.version for pin in resolved_skill_pins})
+                for skill_id in data.removed_skill_ids:
+                    effective_pins.pop(skill_id, None)
+                self._validate_required_skill_versions(required_map, effective_pins)
 
         # Validate skills accessibility and secret coverage
         if data.skill_ids or data.removed_secret_providers:
@@ -1998,71 +1812,6 @@ class AgentService:
             else:
                 self.repository.add_skill(agent.id, pin.skill_id, pinned_version=pin.version)
 
-        # Keep the aai-cli Slack Agent Secret in sync with the gateway bot token:
-        # write/refresh it whenever a remaining skill requires it (covers skill add
-        # and bot token rotation), delete it when no remaining skill needs it
-        # anymore (covers skill removal). Runs last, after every other
-        # secret/skill validation and persistence step above, so a failure
-        # earlier in this method never leaves this mirrored secret orphaned.
-        # Goes through the event-emitting secret methods (not plain save/delete)
-        # so this mirrored write gets the same agent.secret.* audit coverage as
-        # every other secret mutation in this method.
-        if agent.platform == AgentPlatform.SLACK and (
-            data.skill_ids or data.removed_skill_ids or "slack_bot_token" in updated
-        ):
-            remaining_skills = self._remaining_skills(agent.id, [], [])
-            slack_required = any(SecretProvider.SLACK in skill.required_providers for skill in remaining_skills)
-
-            if slack_required:
-                if "slack_bot_token" in updated:
-                    bot_token = updated["slack_bot_token"]
-                else:
-                    existing_slack_config = self.repository.get_slack_config(agent.id)
-                    bot_token = (
-                        decrypt_token(existing_slack_config.bot_token_encrypted, self.config.agent_token_encryption_key)
-                        if existing_slack_config
-                        else None
-                    )
-                if bot_token:
-                    slack_secret_content = encrypt_content(
-                        validate_content(SecretProvider.SLACK, {"token": bot_token}),
-                        self.config.agent_token_encryption_key,
-                    )
-                    existing_slack_secret = self.repository.get_secret(agent.id, SecretProvider.SLACK)
-                    if existing_slack_secret:
-                        existing_slack_secret.content = slack_secret_content
-                        secret_delivery_ids += self.repository.save_secret_with_event(
-                            existing_slack_secret,
-                            event_name=AGENT_SECRET_UPDATED,
-                            organization_id=org_id,
-                            agent_name=agent.name,
-                            actor=secret_actor,
-                            actor_display=secret_actor_display,
-                        )
-                    else:
-                        secret_delivery_ids += self.repository.save_secret_with_event(
-                            AgentSecret(
-                                agent_id=agent.id,
-                                provider=SecretProvider.SLACK,
-                                secret_name=PROVIDER_DISPLAY_NAMES[SecretProvider.SLACK],
-                                content=slack_secret_content,
-                            ),
-                            event_name=AGENT_SECRET_ADDED,
-                            organization_id=org_id,
-                            agent_name=agent.name,
-                            actor=secret_actor,
-                            actor_display=secret_actor_display,
-                        )
-            else:
-                secret_delivery_ids += self.repository.delete_secret_with_event(
-                    agent.id,
-                    SecretProvider.SLACK,
-                    organization_id=org_id,
-                    agent_name=agent.name,
-                    actor=secret_actor,
-                    actor_display=secret_actor_display,
-                )
-
         update_result = self.repository.update_scalar_fields_with_event(
             agent, actor=secret_actor, actor_display=secret_actor_display
         )
@@ -2104,133 +1853,62 @@ class AgentService:
             if agent.litellm_key_encrypted
             else ""
         )
-        effective_model = agent.model or self.config.agent_default_model
+        effective_model = agent.model or self.agent_settings_lookup.resolve_default_model(org_id)
         llm_proxy_url = "http://localhost:8090"
 
         # Re-check the allowlist at start time, not just create/update: the org's
         # allowlist can change after the agent was created, and a model that was
         # valid then may no longer be permitted now.
-        allowed_models = self.organization_lookup.get_allowed_models(org_id)
-        if allowed_models is None or not is_model_allowed(effective_model, allowed_models):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Model '{effective_model}' is no longer in the organization's allowed model list",
-            )
-
-        overlay: dict | None = None
-        hermes_cfg: dict | None = None
-
-        if agent.platform == AgentPlatform.SLACK:
-            slack_config = self.repository.get_slack_config(agent.id)
-            if not slack_config:
+        #
+        # Only an explicit override is re-checked. An Agent that inherits is running
+        # the Organization's policy rather than a user's choice: when the Organization
+        # set its own default, the allowlist invariant already keeps that model inside
+        # the list, and when it did not, the model is the platform default the
+        # Organization has no way to police. Failing the start in either case would
+        # punish the Agent for a decision nobody made about it.
+        if agent.model:
+            allowed_models = self.organization_lookup.get_allowed_models(org_id)
+            if allowed_models is None or not is_model_allowed(agent.model, allowed_models):
                 raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail=f"Slack config missing for agent {agent_id}",
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Model '{agent.model}' is no longer in the organization's allowed model list",
                 )
-            bot_token = decrypt_token(slack_config.bot_token_encrypted, self.config.agent_token_encryption_key)
-            app_token = decrypt_token(slack_config.app_token_encrypted, self.config.agent_token_encryption_key)
-            ok, reason = self._check_slack_tokens(bot_token=bot_token, app_token=app_token)
-            if not ok:
-                agent.last_error = reason
-                agent.status = AgentStatus.ERROR
-                self.repository.save(agent)
-                return agent
 
-            if slack_config.channel_ids:
-                self._join_public_channels(bot_token, slack_config.channel_ids)
-            service = build_service(agent.id, org_id, ns, org_name=org_name, agent_name=agent.name)
-
-            if agent.agent_type == AgentType.HERMES:
-                api_server_key = secrets.token_urlsafe(32)
-                hermes_cfg = build_hermes_config(
-                    effective_model,
-                    llm_proxy_url,
-                    dm_policy=str(slack_config.dm_policy),
-                    group_policy=str(slack_config.group_policy),
-                    verbose_mode=slack_config.verbose_mode,
-                    approval_mode=str(agent.approval_mode),
-                )
-                secret = build_secret_hermes_slack(
-                    agent_id=agent.id,
-                    org_id=org_id,
-                    namespace=ns,
-                    agent_name=agent.name,
-                    slack_bot_token=bot_token,
-                    slack_app_token=app_token,
-                    litellm_api_key=litellm_key,
-                    litellm_base_url=llm_proxy_url,
-                    api_server_key=api_server_key,
-                    channel_ids=slack_config.channel_ids,
-                    dm_user_ids=slack_config.dm_user_ids,
-                    dm_policy=str(slack_config.dm_policy),
-                )
-                deployment = build_hermes_deployment(
-                    agent.id,
-                    org_id,
-                    ns,
-                    self.config.hermes_image,
-                    self.config.agent_image_pull_secret,
-                )
-            else:
-                overlay = build_openclaw_config_overlay(
-                    effective_model,
-                    llm_proxy_url,
-                    slack_channel_ids=slack_config.channel_ids,
-                    slack_dm_user_ids=slack_config.dm_user_ids,
-                    slack_group_policy=str(slack_config.group_policy),
-                    slack_dm_policy=str(slack_config.dm_policy),
-                    approval_mode=str(agent.approval_mode),
-                )
-                secret = build_secret_slack(
-                    agent_id=agent.id,
-                    org_id=org_id,
-                    namespace=ns,
-                    slack_bot_token=bot_token,
-                    slack_app_token=app_token,
-                    litellm_api_key=litellm_key,
-                    litellm_base_url=llm_proxy_url,
-                )
-                deployment = build_deployment(
-                    agent.id,
-                    org_id,
-                    ns,
-                    self.config.openclaw_image,
-                    self.config.agent_image_pull_secret,
-                )
-        elif agent.platform == AgentPlatform.TEAMS:
-            teams_config = self.repository.get_teams_config(agent.id)
-            if not teams_config:
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail=f"Teams config missing for agent {agent_id}",
-                )
-            app_id = decrypt_token(teams_config.app_id_encrypted, self.config.agent_token_encryption_key)
-            app_password = decrypt_token(
-                teams_config.app_password_encrypted,
-                self.config.agent_token_encryption_key,
-            )
-            overlay = build_openclaw_config_overlay_teams(
+        runtime_api_key = secrets.token_urlsafe(32)
+        service = build_service(agent.id, org_id, ns, org_name=org_name, agent_name=agent.name)
+        if agent.agent_type == AgentType.HERMES:
+            overlay = None
+            hermes_cfg = build_hermes_gateway_config(
                 effective_model,
                 llm_proxy_url,
                 approval_mode=str(agent.approval_mode),
             )
-            secret = build_secret_teams(
-                agent_id=agent.id,
-                org_id=org_id,
-                namespace=ns,
-                msteams_app_id=app_id,
-                msteams_app_password=app_password,
-                msteams_tenant_id=teams_config.tenant_id,
-                litellm_api_key=litellm_key,
-                litellm_base_url=llm_proxy_url,
-            )
-            service = build_service(
+            secret = build_secret_hermes_runtime(
                 agent.id,
                 org_id,
                 ns,
-                include_webhook_port=True,
-                org_name=org_name,
-                agent_name=agent.name,
+                agent.name,
+                runtime_api_key=runtime_api_key,
+                litellm_api_key=litellm_key,
+                litellm_base_url=llm_proxy_url,
+            )
+            deployment = build_hermes_deployment(
+                agent.id,
+                org_id,
+                ns,
+                self.config.hermes_image,
+                self.config.agent_image_pull_secret,
+            )
+        else:
+            overlay = build_openclaw_gateway_config(effective_model, llm_proxy_url)
+            hermes_cfg = None
+            secret = build_secret_runtime(
+                agent.id,
+                org_id,
+                ns,
+                runtime_api_key=runtime_api_key,
+                litellm_api_key=litellm_key,
+                litellm_base_url=llm_proxy_url,
             )
             deployment = build_deployment(
                 agent.id,
@@ -2238,140 +1916,6 @@ class AgentService:
                 ns,
                 self.config.openclaw_image,
                 self.config.agent_image_pull_secret,
-            )
-        elif agent.platform == AgentPlatform.TELEGRAM:
-            telegram_config = self.repository.get_telegram_config(agent.id)
-            if not telegram_config:
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail=f"Telegram config missing for agent {agent_id}",
-                )
-            bot_token = decrypt_token(
-                telegram_config.bot_token_encrypted,
-                self.config.agent_token_encryption_key,
-            )
-            ok, reason, _ = validate_telegram_bot_token(bot_token)
-            if not ok:
-                agent.last_error = reason
-                agent.status = AgentStatus.ERROR
-                self.repository.save(agent)
-                return agent
-
-            service = build_service(agent.id, org_id, ns, org_name=org_name, agent_name=agent.name)
-
-            if agent.agent_type == AgentType.HERMES:
-                api_server_key = secrets.token_urlsafe(32)
-                hermes_cfg = build_hermes_config_telegram(
-                    effective_model,
-                    llm_proxy_url,
-                    dm_policy=str(telegram_config.dm_policy),
-                    group_policy=str(telegram_config.group_policy),
-                    approval_mode=str(agent.approval_mode),
-                )
-                secret = build_secret_hermes_telegram(
-                    agent_id=agent.id,
-                    org_id=org_id,
-                    namespace=ns,
-                    agent_name=agent.name,
-                    telegram_bot_token=bot_token,
-                    litellm_api_key=litellm_key,
-                    litellm_base_url=llm_proxy_url,
-                    api_server_key=api_server_key,
-                    dm_policy=str(telegram_config.dm_policy),
-                    allowed_user_ids=telegram_config.allowed_user_ids,
-                    allowed_chat_ids=telegram_config.allowed_chat_ids,
-                )
-                deployment = build_hermes_deployment(
-                    agent.id,
-                    org_id,
-                    ns,
-                    self.config.hermes_image,
-                    self.config.agent_image_pull_secret,
-                )
-            else:
-                overlay = build_openclaw_config_overlay_telegram(
-                    effective_model,
-                    llm_proxy_url,
-                    dm_policy=str(telegram_config.dm_policy),
-                    group_policy=str(telegram_config.group_policy),
-                    allowed_user_ids=telegram_config.allowed_user_ids,
-                    allowed_chat_ids=telegram_config.allowed_chat_ids,
-                    approval_mode=str(agent.approval_mode),
-                )
-                secret = build_secret_telegram(
-                    agent_id=agent.id,
-                    org_id=org_id,
-                    namespace=ns,
-                    telegram_bot_token=bot_token,
-                    litellm_api_key=litellm_key,
-                    litellm_base_url=llm_proxy_url,
-                )
-                deployment = build_deployment(
-                    agent.id,
-                    org_id,
-                    ns,
-                    self.config.openclaw_image,
-                    self.config.agent_image_pull_secret,
-                )
-        elif agent.platform == AgentPlatform.DISCORD:
-            discord_config = self.repository.get_discord_config(agent.id)
-            if not discord_config:
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail=f"Discord config missing for agent {agent_id}",
-                )
-            bot_token = decrypt_token(discord_config.bot_token_encrypted, self.config.agent_token_encryption_key)
-            service = build_service(agent.id, org_id, ns, org_name=org_name, agent_name=agent.name)
-            if agent.agent_type == AgentType.HERMES:
-                api_server_key = secrets.token_urlsafe(32)
-                hermes_cfg = build_hermes_config_discord(
-                    effective_model,
-                    llm_proxy_url,
-                    require_mention=discord_config.require_mention,
-                    group_policy=str(discord_config.group_policy),
-                    approval_mode=str(agent.approval_mode),
-                )
-                secret = build_secret_hermes_discord(
-                    agent.id,
-                    org_id,
-                    ns,
-                    agent.name,
-                    bot_token,
-                    litellm_key,
-                    llm_proxy_url,
-                    api_server_key,
-                    discord_config.allowed_channel_ids,
-                    discord_config.allowed_user_ids,
-                    discord_config.allowed_role_ids,
-                    discord_config.allow_all_users,
-                    discord_config.home_channel_id,
-                    discord_config.guild_ids,
-                )
-                deployment = build_hermes_deployment(
-                    agent.id, org_id, ns, self.config.hermes_image, self.config.agent_image_pull_secret
-                )
-            else:
-                overlay = build_openclaw_config_overlay_discord(
-                    effective_model,
-                    llm_proxy_url,
-                    guild_ids=discord_config.guild_ids,
-                    allowed_channel_ids=discord_config.allowed_channel_ids,
-                    allowed_user_ids=discord_config.allowed_user_ids,
-                    allowed_role_ids=discord_config.allowed_role_ids,
-                    allow_all_users=discord_config.allow_all_users,
-                    home_channel_id=discord_config.home_channel_id,
-                    require_mention=discord_config.require_mention,
-                    group_policy=str(discord_config.group_policy),
-                    approval_mode=str(agent.approval_mode),
-                )
-                secret = build_secret_discord(agent.id, org_id, ns, bot_token, litellm_key, llm_proxy_url)
-                deployment = build_deployment(
-                    agent.id, org_id, ns, self.config.openclaw_image, self.config.agent_image_pull_secret
-                )
-        else:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Unsupported platform: {agent.platform}",
             )
 
         # aai-cli integration secrets — all agent types.
@@ -2469,11 +2013,15 @@ class AgentService:
                 }
 
         ingest_key = secrets.token_urlsafe(32)
+        communication_key = secrets.token_urlsafe(32)
         secret.string_data.update(
             {
                 "AGENT_ID": str(agent.id),
                 "INGEST_URL": self.config.ingest_base_url,
                 "INGEST_API_KEY": ingest_key,
+                "COMMUNICATIONS_URL": self.config.communications_base_url,
+                "COMMUNICATIONS_API_KEY": communication_key,
+                "COMMUNICATIONS_PROTOCOL_VERSION": "1",
                 "LITELLM_PROXY_TARGET": self.config.agent_litellm_base_url,
             }
         )
@@ -2550,7 +2098,6 @@ class AgentService:
                 aai_cli_setup_sh=aai_setup_sh,
                 gog_setup_sh=gog_setup_sh,
                 skills_json=skills_json,
-                platform=str(agent.platform),
             )
         else:
             config_map = build_config_map(
@@ -2595,7 +2142,15 @@ class AgentService:
 
         agent.status = AgentStatus.RUNNING
         agent.last_error = None
+        # Pin what this pod was started on. The runtime reads its config once, so this
+        # is the model it serves until someone restarts it — however the Organization
+        # default moves in the meantime.
+        agent.running_model = effective_model
         agent.ingest_key_encrypted = encrypt_token(ingest_key, self.config.agent_token_encryption_key)
+        agent.communication_key_encrypted = encrypt_token(
+            communication_key,
+            self.config.agent_token_encryption_key,
+        )
         result = self.repository.save_with_lifecycle_event(
             agent,
             event_name=AGENT_STARTED,
@@ -2738,6 +2293,7 @@ class AgentService:
         self.k8s.delete_secret(name, ns)
 
         agent.status = AgentStatus.STOPPED
+        agent.running_model = ""
         result = self.repository.save_with_lifecycle_event(
             agent,
             event_name=AGENT_STOPPED,
@@ -2791,16 +2347,6 @@ class AgentService:
         self.k8s.delete_secret(name, ns)
         self.k8s.delete_config_map(name, ns)
 
-        slack_config = self.repository.get_slack_config(agent.id)
-        if slack_config:
-            slack_config.bot_token_hash = None
-            self.repository.save_slack_config(slack_config)
-
-        discord_config = self.repository.get_discord_config(agent.id)
-        if discord_config:
-            discord_config.bot_token_hash = None
-            self.repository.save_discord_config(discord_config)
-
         delete_result = self.repository.soft_delete_with_event(
             agent,
             actor=resolve_actor_identity(context, agent.organization_id),
@@ -2815,104 +2361,15 @@ class AgentService:
             except Exception:
                 logger.warning("Could not block LiteLLM key for agent %s", agent_id)
 
-    def pair_agent(self, agent_id: UUID, data: PairRequest, context: CurrentUserContext) -> str:
-        agent = self.authorization.require_action(context, agent_id, PermissionKey.AGENT_UPDATE)
-
-        if agent.agent_type == AgentType.HERMES:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Pairing is not supported for Hermes agents",
-            )
-        if agent.platform in (AgentPlatform.SLACK, AgentPlatform.TEAMS):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Pairing is not supported for this platform",
-            )
-
-        if agent.status != AgentStatus.RUNNING:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=f"Agent {agent_id} is not running",
-            )
-
-        ns = self.config.k8s_namespace
-        name = f"agent-{agent.id}"
-
-        pod_name = self.k8s.get_pod_name_for_deployment(name, ns)
-        if not pod_name:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=f"No running pod found for agent {agent_id}",
-            )
-
-        try:
-            output = self.k8s.exec_command(
-                pod_name,
-                ns,
-                ["openclaw", "pairing", "approve", data.platform, data.code],
-            )
-        except Exception as exc:
-            logger.exception("Pairing exec failed for agent %s", agent_id)
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Failed to execute pairing command in agent {agent_id}",
-            ) from exc
-
-        return output
-
-    def _check_slack_tokens(self, bot_token: str | None = None, app_token: str | None = None) -> tuple[bool, str]:
-        """Validates whichever tokens are provided. Always ok when skip_slack_token_validation is set."""
-        if self.config.skip_slack_token_validation:
-            return True, ""
-        client = SlackClient(bot_token or "", app_token=app_token)
-        if bot_token is not None:
-            ok, reason = client.validate_bot_token()
-            if not ok:
-                return ok, reason
-        if app_token is not None:
-            ok, reason = client.validate_app_token()
-            if not ok:
-                return ok, reason
-        return True, ""
-
-    def _ensure_bot_token_unique(
-        self,
-        bot_token: str,
-        org_id: UUID,
-        exclude_agent_id: UUID | None = None,
-    ) -> None:
-        token_hash = compute_bot_token_hash(bot_token)
-        conflicting = self.repository.find_active_agent_by_bot_token_hash(token_hash, exclude_agent_id=exclude_agent_id)
-        if conflicting:
-            name = conflicting.name if conflicting.organization_id == org_id else "another agent"
-            raise BotTokenConflictHTTPException(name)
-
-    def _ensure_discord_bot_token_unique(
-        self,
-        bot_token: str,
-        org_id: UUID,
-        exclude_agent_id: UUID | None = None,
-    ) -> None:
-        token_hash = compute_bot_token_hash(bot_token)
-        conflicting = self.repository.find_active_discord_agent_by_bot_token_hash(
-            token_hash, exclude_agent_id=exclude_agent_id
-        )
-        if conflicting:
-            name = conflicting.name if conflicting.organization_id == org_id else "another agent"
-            raise BotTokenConflictHTTPException(name, platform="Discord")
-
-    def _join_public_channels(self, bot_token: str, channel_ids: list[str]) -> None:
-        client = SlackClient(bot_token)
-        for channel_id in channel_ids:
-            try:
-                client.join_channel(channel_id)
-            except Exception as e:
-                logger.warning("Unexpected error joining channel %s: %s", channel_id, e)
-
     def list_models(self, context: CurrentUserContext, catalog: bool = False) -> list[dict]:
-        """Returns the allowlisted OpenRouter models as picker options. The
-        configured default (AGENT_DEFAULT_MODEL) is guaranteed present, flagged
-        is_default, and listed first so the frontend and backend agree on it.
+        """Returns the allowlisted OpenRouter models as picker options.
+
+        The Organization's resolved default model is guaranteed present, flagged
+        is_default, and listed first, so the frontend and backend agree on which
+        model an Agent inherits without a second request. It is normally already in
+        the filtered list, since an Organization picks its default from its own
+        allowlist; the append only fires for an Organization following a platform
+        default its allowlist does not cover.
         """
         org_id = self._org_id(context)
         self.authorization.require_collection_scope(context, PermissionKey.AGENT_CREATE)
@@ -2941,7 +2398,7 @@ class AgentService:
             for model in allowed
         ]
 
-        default_value = self.config.agent_default_model
+        default_value = self.agent_settings_lookup.resolve_default_model(org_id)
         if default_value and not any(o["value"] == default_value for o in options):
             options.append(
                 {
@@ -2958,48 +2415,58 @@ class AgentService:
             option["isDefault"] = option["value"] == default_value
         return options
 
-    def list_slack_channels(self, agent_id: UUID, context: CurrentUserContext, search: str | None = None) -> list[dict]:
-        agent = self.authorization.require_action(context, agent_id, PermissionKey.AGENT_UPDATE)
-        if agent.platform != AgentPlatform.SLACK:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Slack channels are only available for Slack agents",
-            )
-        try:
-            return SlackClient(self._get_bot_token(agent)).list_channels(search=search)
-        except SlackFetchError as exc:
-            logger.warning("Failed to list Slack channels for agent %s: %s", agent_id, exc)
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Could not load Slack channels right now. Please try again.",
-            ) from exc
-
-    def list_slack_users(self, agent_id: UUID, context: CurrentUserContext, search: str | None = None) -> list[dict]:
-        agent = self.authorization.require_action(context, agent_id, PermissionKey.AGENT_UPDATE)
-        if agent.platform != AgentPlatform.SLACK:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Slack users are only available for Slack agents",
-            )
-        try:
-            return SlackClient(self._get_bot_token(agent)).list_users(search=search)
-        except SlackFetchError as exc:
-            logger.warning("Failed to list Slack users for agent %s: %s", agent_id, exc)
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Could not load Slack users right now. Please try again.",
-            ) from exc
-
     def _backfill_google_client_credentials(self, decrypted: dict[SecretProvider, Any]) -> None:
-        """Secrets created via the Google OAuth flow store only the refresh token; inject
-        the app-owned client id/secret from config. Backfill only when empty so a
-        user-supplied client (the one the refresh token was issued under) keeps working."""
+        """Inject the server-owned OAuth client when a Google Workspace secret omits it.
+
+        Backfill only when empty so a user-supplied client (the one the refresh token
+        was issued under) keeps working.
+        """
         content = decrypted.get(SecretProvider.GOOGLE_WORKSPACE)
         if isinstance(content, GoogleWorkspaceContent):
             if not content.client_id:
                 content.client_id = self.config.google_cloud_client_id
             if not content.client_secret:
                 content.client_secret = self.config.google_cloud_client_secret
+
+    def _validate_live_integration(self, provider: SecretProvider, content: Any) -> None:
+        """Validate submitted credentials with the provider before they are persisted.
+
+        The browser can be modified, so any client-side preflight is advisory only. This
+        method receives the exact content from the current request and runs the provider
+        validator before Agent creation allocates a LiteLLM key or opens its persistence
+        transaction. Providers without a live validator still receive schema validation;
+        their credentials remain eligible for the existing on-demand validation endpoint.
+        """
+        validator = PROVIDER_VALIDATORS.get(provider)
+        if validator is None:
+            return
+
+        validation_content = content
+        if provider == SecretProvider.GOOGLE_WORKSPACE and isinstance(content, GoogleWorkspaceContent):
+            # The stored payload may intentionally omit the deployment-owned OAuth client;
+            # validate with the same server-side backfill used during runtime materialization
+            # without changing the caller's encrypted payload.
+            validation_content = content.model_copy(deep=True)
+            self._backfill_google_client_credentials({provider: validation_content})
+
+        try:
+            result = validator(validation_content)
+        except Exception as exc:
+            logger.warning(
+                "Live integration validation raised for provider %s (%s)",
+                provider.value,
+                type(exc).__name__,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=f"{PROVIDER_DISPLAY_NAMES[provider]} could not be validated; try again.",
+            ) from exc
+
+        if not result.valid:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(result.error or f"{PROVIDER_DISPLAY_NAMES[provider]} credential is invalid."),
+            )
 
     def validate_integration(self, agent_id: UUID, provider: SecretProvider, context: CurrentUserContext) -> dict:
         """Validate an existing secret on demand. Never persists — returns result directly."""
@@ -3032,54 +2499,6 @@ class AgentService:
         self._backfill_google_client_credentials({provider: content})
         result = validator(content)  # type: ignore[arg-type]
         return format_validation_result(result)
-
-    def _try_rename_slack_app(self, agent: Agent, new_name: str, context: CurrentUserContext) -> None:
-        """Best-effort: rename the Slack app to match the new agent name. Never raises."""
-        try:
-            bot_token = self._get_bot_token(agent)
-            bot_info = SlackClient(bot_token).get_bot_info()
-            app_id = bot_info.get("app_id", "")
-            if not app_id:
-                return
-            access_token = self.slack_token_service.get_usable_access_token(context.user.id)
-            update_slack_app_name(access_token, app_id, new_name)
-        except Exception:
-            logger.warning(
-                "Could not rename Slack app for agent %s to %r",
-                agent.id,
-                new_name,
-                exc_info=True,
-            )
-
-    def _get_bot_token(self, agent: Agent) -> str:
-        slack_config = self.repository.get_slack_config(agent.id)
-        if not slack_config:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Slack config missing for agent {agent.id}",
-            )
-        return decrypt_token(slack_config.bot_token_encrypted, self.config.agent_token_encryption_key)
-
-    def relay_teams_webhook(
-        self, agent_id: UUID, body: bytes, headers: dict[str, str]
-    ) -> tuple[int, bytes, dict[str, str]]:
-        agent = self.repository.get_by_id(agent_id)
-        if not agent or agent.deleted_at or agent.platform != AgentPlatform.TEAMS:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
-        if agent.status != AgentStatus.RUNNING:
-            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE)
-        return self.k8s.proxy_to_agent(
-            f"agent-{agent.id}",
-            self.config.k8s_namespace,
-            3978,
-            "/api/messages",
-            "POST",
-            body,
-            {
-                "Content-Type": headers.get("content-type", "application/json"),
-                "Authorization": headers.get("authorization", ""),
-            },
-        )
 
     def get_agent_health(self, agent_id: UUID, context: CurrentUserContext) -> AgentHealthRead:
         agent = self.authorization.require_action(context, agent_id, PermissionKey.ACTIVITY_READ)

@@ -71,6 +71,8 @@ class AgentTemplate(BaseModel, table=True):
 
 
 class TemplateRequiredSkillRead(SkillRead):
+    # The exact immutable Skill Version required by this Template Version.
+    version: int
     # None for a standalone (AND-required) skill; otherwise the key of the
     # "at least one of" group this skill belongs to on this template.
     group_key: str | None = None
@@ -224,6 +226,7 @@ class TemplateCreate(PydanticBaseModel):
     heartbeat_md: str | None = None
     required_skill_ids: list[UUID] = Field(default_factory=list)
     required_skill_groups: list[TemplateSkillGroup] = Field(default_factory=list)
+    required_skill_versions: dict[UUID, int] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def validate_skill_groups(self) -> TemplateCreate:
@@ -245,6 +248,7 @@ class TemplateUpdate(PydanticBaseModel):
     heartbeat_md: str | None = None
     required_skill_ids: list[UUID] | None = None
     required_skill_groups: list[TemplateSkillGroup] | None = None
+    required_skill_versions: dict[UUID, int] | None = None
 
     @model_validator(mode="after")
     def validate_not_empty(self) -> TemplateUpdate:
@@ -277,6 +281,7 @@ class PlatformTemplateDraftCreate(PydanticBaseModel):
     heartbeat_md: str | None = None
     required_skill_ids: list[UUID] = Field(default_factory=list)
     required_skill_groups: list[TemplateSkillGroup] = Field(default_factory=list)
+    required_skill_versions: dict[UUID, int] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def validate_skill_groups(self) -> PlatformTemplateDraftCreate:
@@ -296,6 +301,7 @@ class PlatformTemplateDraftUpdate(PydanticBaseModel):
     heartbeat_md: str | None = None
     required_skill_ids: list[UUID] | None = None
     required_skill_groups: list[TemplateSkillGroup] | None = None
+    required_skill_versions: dict[UUID, int] | None = None
 
     @model_validator(mode="after")
     def validate_not_empty(self) -> PlatformTemplateDraftUpdate:

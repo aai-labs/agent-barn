@@ -11,6 +11,8 @@ Costs provides organization and per-agent spend views by querying LiteLLM and jo
 ## Invariants
 
 - Organization summaries consider active and soft-deleted agents so historical spend remains attributable, but omit agents that have no LiteLLM key.
+- Per-Agent LiteLLM keys are encrypted at rest. A key allocated for a failed, unowned Agent create is deleted; if deletion fails, the key is blocked as a safety fallback.
+- Deleting an existing Agent blocks its LiteLLM key rather than deleting it. Blocking preserves the key identity and therefore historical LiteLLM spend attribution for the deleted Agent.
 - The service obtains a LiteLLM spend report and joins records to agents through the identity derived from each decrypted per-agent LiteLLM key.
 - Summary output aggregates total spend, model spend, daily spend, and per-agent spend.
 - Per-Agent detail requires `cost.read` through the effective Agent Access Role. Agent Viewer, Editor, and Owner can read accessible active-Agent costs; Organization Owner/Admin may also read deleted-Agent history.

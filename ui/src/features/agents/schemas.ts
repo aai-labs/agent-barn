@@ -1,38 +1,7 @@
 import { z } from "zod";
 
 import { OrganizationRoleSchema } from "@/features/organizations/schemas";
-
-export const AgentSlackConfigSchema = z.object({
-  channelIds: z.array(z.string()),
-  dmUserIds: z.array(z.string()),
-  groupPolicy: z.enum(["open", "allowlist"]),
-  dmPolicy: z.enum(["off", "open", "allowlist"]),
-  verboseMode: z.boolean().default(true),
-  botDisplayName: z.string().nullable().optional(),
-});
-
-export const AgentTeamsConfigSchema = z.object({
-  tenantId: z.string(),
-});
-
-export const AgentTelegramConfigSchema = z.object({
-  allowedUserIds: z.array(z.string()),
-  allowedChatIds: z.array(z.string()),
-  groupPolicy: z.enum(["open", "allowlist"]),
-  dmPolicy: z.enum(["off", "open", "allowlist"]),
-  botUsername: z.string().nullable().optional(),
-});
-
-export const AgentDiscordConfigSchema = z.object({
-  guildIds: z.array(z.string()),
-  allowedChannelIds: z.array(z.string()),
-  allowedUserIds: z.array(z.string()),
-  allowedRoleIds: z.array(z.string()),
-  allowAllUsers: z.boolean().default(true),
-  homeChannelId: z.string().nullable(),
-  requireMention: z.boolean(),
-  groupPolicy: z.enum(["open", "allowlist"]),
-});
+import { SkillScopeSchema } from "@/features/skills/schemas";
 
 export const AgentSecretReadSchema = z.object({
   provider: z.string(),
@@ -55,6 +24,9 @@ export const AgentAssignedSkillSchema = z.object({
   id: z.string().uuid(),
   name: z.string(),
   source: z.string(),
+  // Optional: present on an Agent's actual assigned-skill reads, absent on the
+  // narrower Template-required-skill snapshot this schema is also reused for.
+  scope: SkillScopeSchema.optional(),
   requiredProviders: z.array(z.string()),
   toolsPointer: z.string().nullable(),
   required: z.boolean().default(false),
@@ -63,6 +35,9 @@ export const AgentAssignedSkillSchema = z.object({
   // The exact skill version this agent is pinned to (explicit, like templates).
   // Optional so template required-skill reads (which don't carry a pin) still parse.
   version: z.number().int().optional().default(1),
+  updateAvailable: z.boolean().default(false),
+  sourceSkillId: z.string().uuid().nullable().optional(),
+  sourceSkillVersion: z.number().int().nullable().optional(),
 });
 
 // A template's required skill. groupKey is null for a standalone
@@ -117,22 +92,26 @@ export const AgentSchema = z.object({
   id: z.string().uuid(),
   name: z.string(),
   status: z.enum(["STOPPED", "RUNNING", "ERROR"]),
-  platform: z.enum(["slack", "teams", "telegram", "discord"]),
   agentType: z.enum(["openclaw", "hermes"]).default("openclaw"),
   organizationId: z.string().uuid(),
   templateKey: z.string(),
   templateVersion: z.number().int(),
   templatePinType: z.enum(["shared", "override"]).default("shared"),
   overrideVersion: z.number().int().nullable().optional(),
+  // The stored value: empty means the Agent follows its organization's default.
   model: z.string(),
+  // Resolved server-side so nothing here has to re-derive inheritance, and an
+  // inheriting Agent can still name the model it will actually run.
+  modelSource: z.enum(["default", "override"]).default("override"),
+  effectiveModel: z.string().default(""),
+  /** What the running pod actually started on; "" when the Agent is not running. */
+  runningModel: z.string().default(""),
+  /** Set only when a restart would move a running Agent onto a different model. */
+  pendingModel: z.string().default(""),
   approvalMode: z.enum(["manual", "auto", "off"]).default("auto"),
-  slackConfig: AgentSlackConfigSchema.nullable().optional(),
-  teamsConfig: AgentTeamsConfigSchema.nullable().optional(),
-  telegramConfig: AgentTelegramConfigSchema.nullable().optional(),
-  discordConfig: AgentDiscordConfigSchema.nullable().optional(),
   secrets: z.array(AgentSecretReadSchema).optional(),
   skills: z.array(AgentAssignedSkillSchema).default([]),
-  webhookUrl: z.string().nullable().optional(),
+  configuredPlatformKeys: z.array(z.string()).default([]),
   allowedActions: z.array(AgentPermissionKeySchema).default([]),
   createdAt: z.string(),
   updatedAt: z.string(),
@@ -209,6 +188,7 @@ export const PaginatedToolCallsSchema = z.object({
 
 export const ConversationMessageSchema = z.object({
   id: z.string().uuid(),
+  connectionId: z.string().uuid(),
   direction: z.enum(["INBOUND", "OUTBOUND"]),
   threadId: z.string().nullable(),
   senderId: z.string().nullable(),
@@ -218,6 +198,9 @@ export const ConversationMessageSchema = z.object({
 });
 
 export const ConversationChannelSchema = z.object({
+  connectionId: z.string().uuid(),
+  connectionName: z.string(),
+  platformKey: z.string(),
   channelId: z.string(),
   channelName: z.string().nullable(),
   conversationType: z.enum(["CHANNEL", "DM"]),
@@ -243,19 +226,6 @@ export const ConversationThreadsPageSchema = z.object({
   threads: z.array(ConversationThreadSchema),
   hasMore: z.boolean(),
   nextCursor: ConversationsCursorSchema.nullable(),
-});
-
-export const SlackChannelSchema = z.object({
-  id: z.string(),
-  name: z.string(),
-  isPrivate: z.boolean().optional(),
-});
-
-export const SlackUserSchema = z.object({
-  id: z.string(),
-  name: z.string(),
-  realName: z.string(),
-  displayName: z.string(),
 });
 
 export const ModelOptionSchema = z.object({
@@ -354,9 +324,6 @@ export type AgentPermissionKey = z.infer<typeof AgentPermissionKeySchema>;
 export type Agent = z.infer<typeof AgentSchema>;
 export type AgentAssignedSkill = z.infer<typeof AgentAssignedSkillSchema>;
 export type TemplateRequiredSkill = z.infer<typeof TemplateRequiredSkillSchema>;
-export type AgentSlackConfig = z.infer<typeof AgentSlackConfigSchema>;
-export type AgentTeamsConfig = z.infer<typeof AgentTeamsConfigSchema>;
-export type AgentTelegramConfig = z.infer<typeof AgentTelegramConfigSchema>;
 export type AgentHealth = z.infer<typeof AgentHealthSchema>;
 export type AgentTemplateRead = z.infer<typeof AgentTemplateReadSchema>;
 export type TemplateSource = AgentTemplateRead["templateSource"];
@@ -376,8 +343,6 @@ export type ConversationThread = z.infer<typeof ConversationThreadSchema>;
 export type ConversationThreadsPage = z.infer<typeof ConversationThreadsPageSchema>;
 export type ToolCall = z.infer<typeof ToolCallSchema>;
 export type PaginatedToolCalls = z.infer<typeof PaginatedToolCallsSchema>;
-export type SlackChannel = z.infer<typeof SlackChannelSchema>;
-export type SlackUser = z.infer<typeof SlackUserSchema>;
 export type ModelOption = z.infer<typeof ModelOptionSchema>;
 export type AgentLogHistoryRead = z.infer<typeof AgentLogHistoryReadSchema>;
 export type AgentLogsRead = z.infer<typeof AgentLogsReadSchema>;

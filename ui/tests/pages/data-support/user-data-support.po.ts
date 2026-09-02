@@ -45,11 +45,13 @@ export class UserDataSupport {
     status = 200,
     detail = "Unable to load users",
     body,
+    pages,
     failAfterRequests = 0,
   }: {
     status?: number;
     detail?: string;
     body?: unknown;
+    pages?: unknown[][];
     failAfterRequests?: number;
   } = {}) {
     let requestCount = 0;
@@ -62,6 +64,8 @@ export class UserDataSupport {
 
       requestCount += 1;
       const shouldFail = status >= 400 && requestCount > failAfterRequests;
+      const page = Number(new URL(route.request().url()).searchParams.get("page") ?? "1");
+      const pageItems = pages?.[page - 1] ?? [];
 
       await route.fulfill({
         status: shouldFail ? status : 200,
@@ -70,16 +74,16 @@ export class UserDataSupport {
           shouldFail
             ? {
                 detail,
-                page: 1,
+                page,
                 page_size: 20,
                 total: 0,
                 items: [],
-              }
+            }
             : (body ?? {
-                page: 1,
+                page,
                 page_size: 20,
-                total: 1,
-                items: [
+                total: pages?.flat().length ?? 1,
+                items: pages ? pageItems : [
                   {
                     id: "11111111-1111-4111-8111-111111111111",
                     created_at: "2024-01-01T00:00:00Z",

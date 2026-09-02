@@ -218,25 +218,6 @@ tests:
         alertname: AgentUnhealthy
         exp_alerts: []
 
-  # --- AgentSlackTokensInvalid ---
-  - interval: 1m
-    input_series:
-      - series: 'agent_slack_tokens_ok{job="agent", app="agent-abc", agent_name="abby", org_name="acme"}'
-        values: "0x15"
-    alert_rule_test:
-      - eval_time: 12m
-        alertname: AgentSlackTokensInvalid
-        exp_alerts:
-          - exp_labels:
-              severity: warning
-              job: agent
-              app: agent-abc
-              agent_name: abby
-              org_name: acme
-            exp_annotations:
-              summary: Agent abby (org acme) has invalid Slack tokens.
-              description: Slack token validation is failing for agent abby (agent-abc) in org acme; the agent cannot serve its workspace.
-
   # --- AgentsInErrorState: max() — a fresh replica's default-0 gauge must
   # not mask the real count, and no pod labels leak into the alert ---
   - interval: 1m

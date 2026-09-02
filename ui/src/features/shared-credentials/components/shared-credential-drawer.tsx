@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { CheckIcon, XIcon } from "@/components/icons";
+import { CredentialErrorAlert } from "@/features/agents/components/credential-error-alert";
 import { IntegrationFields } from "@/features/agents/components/integration-fields";
 import {
   coerceBooleanFields,
@@ -65,6 +66,11 @@ export function SharedCredentialDrawer({
 
   const isPending = createMutation.isPending || updateMutation.isPending;
   const mutationError = createMutation.error ?? updateMutation.error;
+  const mutationErrorMessage = mutationError instanceof Error
+    ? mutationError.message
+    : mutationError
+      ? "Could not save credential"
+      : null;
 
   const hasContent = Object.values(content).some((v) =>
     Array.isArray(v) ? v.length > 0 : v.trim().length > 0,
@@ -285,19 +291,18 @@ export function SharedCredentialDrawer({
                     provider={providerSpec}
                     draft={{ provider, content }}
                     namePrefix="shared-"
+                    credentialError={mutationErrorMessage}
                     onFieldChange={(key, value) => setField(key, value)}
                     onListChange={(key, values) => setField(key, values)}
                   />
                 </div>
               )}
 
-              {mutationError && (
-                <div
-                  className="text-[0.8125rem]"
-                  style={{ color: "var(--err)" }}
-                >
-                  {mutationError.message}
-                </div>
+              {mutationErrorMessage && !providerSpec && (
+                <CredentialErrorAlert
+                  title="Could not save credential"
+                  message={mutationErrorMessage}
+                />
               )}
             </div>
           ) : (
@@ -351,12 +356,14 @@ export function SharedCredentialDrawer({
                 </div>
               )}
               {validateMutation.error && (
-                <div
-                  className="text-[0.8125rem] rounded-xl px-3.5 py-3"
-                  style={{ background: "var(--bg-soft)", color: "var(--err)" }}
-                >
-                  Validation failed: {validateMutation.error.message}
-                </div>
+                <CredentialErrorAlert
+                  title="Credential validation failed"
+                  message={
+                    validateMutation.error instanceof Error
+                      ? validateMutation.error.message
+                      : "Validation failed"
+                  }
+                />
               )}
             </div>
           )}

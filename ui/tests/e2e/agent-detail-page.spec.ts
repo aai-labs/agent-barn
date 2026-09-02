@@ -1,6 +1,12 @@
-import { TEST_ORG_ID } from "../constants";
-import { expect, test } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 
+import { TEST_ORG_ID } from "../constants";
+import {
+  COMMUNICATION_DELIVERY_ID,
+  mockCommunicationConnection,
+  SAFE_ERROR_DETAILS,
+  SAFE_PROVIDER_ERROR,
+} from "../fixtures/communication-connections";
 import {
   MOCK_AGENT_ID,
   MOCK_ORG_ID,
@@ -16,6 +22,7 @@ import {
 import { mockCustomSkill, mockPlatformSkill, MOCK_PLATFORM_SKILL_ID } from "../pages/data-support/skill-data-support.po";
 import { DataSupport } from "../pages/data-support/data-support.po";
 import { AgentDetailPage } from "../pages/agent-detail-page.po";
+import { CommunicationConnectionDetailPage } from "../pages/communication-connection-detail-page.po";
 
 test.describe("Agent Detail Page", () => {
   test.describe.configure({ mode: "serial" });
@@ -46,8 +53,32 @@ test.describe("Agent Detail Page", () => {
     await expect(agentDetailPage.agentName("Maya")).toBeVisible();
   });
 
+  test("shows configured messaging platform icons", async ({ page }) => {
+    await expect(page.getByAltText("Slack")).toBeVisible();
+    await expect(page.getByAltText("Discord")).toBeVisible();
+  });
+
   test("shows model name in header", async ({ page }) => {
     await expect(page.getByText("litellm/gpt-5-mini")).toBeVisible();
+  });
+
+  test("guides an unreachable Agent to messaging setup", async ({ page }) => {
+    await page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}/connections`, async (route) => {
+      if (route.request().method() !== "GET") {
+        await route.fallback();
+        return;
+      }
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([]) });
+    });
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+
+    await expect(page.getByText("Messaging setup", { exact: true })).toBeVisible();
+    await expect(page.getByText("Make Maya reachable", { exact: true })).toBeVisible();
+    await expect(page.getByText("Not connected", { exact: true })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Add connection" })).toHaveAttribute(
+      "href",
+      /configuration\?section=channels&connect=true/,
+    );
   });
 
   test("shows error state when agent fails to load", async ({ page }) => {
@@ -454,12 +485,14 @@ test.describe("Agent Detail Page — Template tab (re-pin)", () => {
 test.describe("Agent Detail Page — Channels tab", () => {
   test.describe.configure({ mode: "serial" });
   let agentDetailPage: AgentDetailPage;
+  let connectionDetailPage: CommunicationConnectionDetailPage;
   let dataSupportPage: DataSupport;
 
   test.use({ storageState: { cookies: [], origins: [] } });
 
   test.beforeEach(async ({ page }) => {
     agentDetailPage = new AgentDetailPage(page);
+    connectionDetailPage = new CommunicationConnectionDetailPage(page);
     dataSupportPage = new DataSupport(page);
 
     await dataSupportPage.auth.interceptRefreshRequest();
@@ -469,81 +502,292 @@ test.describe("Agent Detail Page — Channels tab", () => {
       body: { ...mockAgent, status: "STOPPED" },
     });
     await dataSupportPage.agents.interceptGetAgentTemplateRequest();
-    await dataSupportPage.agents.interceptSlackChannelsRequest();
-    await dataSupportPage.agents.interceptSlackUsersRequest();
-    await dataSupportPage.agents.interceptUpdateAgentRequest();
     await dataSupportPage.agents.interceptGetConversationChannelsRequest();
     await dataSupportPage.agents.interceptGetTemplatesRequest();
     await dataSupportPage.agents.interceptGetAgentConfigurationRequest();
     await dataSupportPage.agents.interceptGetModelsRequest();
-
+    await dataSupportPage.communicationConnections.interceptChannelsRequests({ agentId: MOCK_AGENT_ID });
     await agentDetailPage.goto(MOCK_AGENT_ID);
     await agentDetailPage.configureButton().click();
     await agentDetailPage.channelsTab().click();
-    await agentDetailPage.editButton().click();
   });
 
-  test("shows group and DM policy dropdowns with the agent's current values", async () => {
-    await expect(agentDetailPage.groupPolicySelect()).toHaveValue("allowlist");
-    await expect(agentDetailPage.dmPolicySelect()).toHaveValue("off");
+  test("lists Connection identity and health independently of the Agent runtime", async () => {
+    await expect(agentDetailPage.connectionIdentity("validation-skipped")).toBeVisible();
+    await expect(agentDetailPage.connectionProviderStatus("Connected")).toBeVisible();
   });
 
-  test("uses the card footer for cancel and apply actions", async ({ page }) => {
-    const footer = page.locator('section[aria-label="Channels & endpoint"] footer');
-
-    await expect(footer.getByRole("button", { name: "Cancel", exact: true })).toBeVisible();
-    await expect(footer.getByRole("button", { name: "Apply", exact: true })).toBeDisabled();
-
-    await agentDetailPage.groupPolicySelect().selectOption("open");
-    await expect(footer.getByRole("button", { name: "Apply", exact: true })).toBeEnabled();
-
-    await footer.getByRole("button", { name: "Cancel", exact: true }).click();
-    await expect(page.getByRole("button", { name: "Edit", exact: true })).toBeVisible();
+  test("shows a redacted provider error at full width", async () => {
+    const providerError = agentDetailPage.providerErrorAlert();
+    const errorMessage = agentDetailPage.providerErrorMessage();
+    await expect(errorMessage).toHaveText(SAFE_PROVIDER_ERROR);
+    expect(await errorMessage.evaluate((element) => getComputedStyle(element).getPropertyValue("-webkit-line-clamp"))).toBe("none");
+    expect(await providerError.evaluate((element) => getComputedStyle(element).maxWidth)).toBe("none");
+    const widths = await providerError.evaluate((element) => ({
+      alert: element.getBoundingClientRect().width,
+      content: element.parentElement?.getBoundingClientRect().width ?? 0,
+    }));
+    expect(widths.alert).toBeCloseTo(widths.content, 0);
   });
 
-  test("shows Discord routing and write-only token controls", async ({ page }) => {
-    await dataSupportPage.agents.interceptGetAgentRequest({
-      body: {
-        ...mockAgent,
-        status: "STOPPED",
-        platform: "discord",
-        slack_config: null,
-        discord_config: {
-          guild_ids: ["guild-1"],
-          allowed_channel_ids: ["channel-1"],
-          allowed_user_ids: ["user-1"],
-          allowed_role_ids: ["role-1"],
-          allow_all_users: false,
-          home_channel_id: "channel-1",
-          require_mention: true,
-          group_policy: "allowlist",
-        },
-      },
+  test("shows delivery activity, lets an operator copy an error, and confirms a reconnect request", async ({ context }) => {
+    await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+    // Delivery transitions are the primary activity surface. Connection
+    // failures are explained inline from the diagnostics read model.
+    const initialDeliveryRequest = connectionDetailPage.waitForJournalRequest("delivery");
+    const journalRequests = connectionDetailPage.startJournalRequestCapture();
+    await agentDetailPage.connectionDetailsLink().click();
+    const deliveryRequest = await initialDeliveryRequest;
+    journalRequests.stop();
+    expect(journalRequests.urls.some((url) => url.includes("kind=connection"))).toBe(false);
+    const deliveryWindow = new URL(deliveryRequest.url()).searchParams;
+    expect(deliveryWindow.get("since")).toBe("2025-12-31T00:00:00Z");
+    expect(deliveryWindow.get("until")).toBe("2026-01-01T00:00:00Z");
+
+    await expect(connectionDetailPage.summaryMetric("Provider connectivity")).toBeVisible();
+    await expect(connectionDetailPage.summaryMetric("End-to-end delivery")).toBeVisible();
+    // AF-273 acceptance criteria: the diagnostics view exposes a pipeline
+    // summary and the latest transitions (delivery and connection-scoped) from
+    // the summary read model — no separate kind=connection journal request.
+    await expect(connectionDetailPage.pipelineSummary()).toBeVisible();
+    await expect(connectionDetailPage.pipelineStage("providerObserved")).toContainText("2");
+    await expect(connectionDetailPage.pipelineStage("providerDelivered")).toContainText("2");
+    await expect(connectionDetailPage.latestTransitionsPanel()).toBeVisible();
+    await expect(connectionDetailPage.latestTransitionRow("provider_delivered")).toContainText("Provider Delivered");
+    await expect(connectionDetailPage.latestTransitionRow("connection_connected")).toContainText("Connection");
+    await expect(connectionDetailPage.summaryMetric("Health signals")).toBeVisible();
+    await expect(connectionDetailPage.summaryMetric("Connection health")).toBeVisible();
+    await expect(connectionDetailPage.summaryMetric("Recent incidents")).toBeVisible();
+    await expect(connectionDetailPage.connectionHealthSummary()).toBeVisible();
+    await expect(connectionDetailPage.summaryMetric("Consecutive delivery failures")).toBeVisible();
+    await expect(connectionDetailPage.summaryMetric("Delivery success rate")).toBeVisible();
+    await expect(connectionDetailPage.summaryMetric("Recent failures")).toBeVisible();
+    await expect(connectionDetailPage.recentFailureCards()).toHaveCount(1);
+    const failureCard = connectionDetailPage.recentFailureCard();
+    await expect(failureCard).toContainText("×2");
+    await expect(failureCard).toContainText(SAFE_PROVIDER_ERROR);
+    await expect(connectionDetailPage.failureDetailsToggle()).toHaveText("Show details");
+    await connectionDetailPage.failureDetailsToggle().click();
+    await expect(failureCard).toContainText("Error details");
+    await expect(failureCard).toContainText("provider_error");
+    await expect(failureCard).toContainText(COMMUNICATION_DELIVERY_ID);
+    await expect(failureCard).toContainText("HTTP status");
+    await expect(failureCard).toContainText(String(SAFE_ERROR_DETAILS.http_status));
+    await expect(failureCard).toContainText(SAFE_ERROR_DETAILS.provider_code);
+    await expect(failureCard).toContainText("Retryable");
+    await expect(failureCard).toContainText("Yes");
+    await expect(failureCard).toContainText(SAFE_ERROR_DETAILS.request_id);
+    await expect(failureCard).not.toContainText("Occurrences");
+    await expect(connectionDetailPage.failureDetailsToggle()).toHaveText("Hide details");
+    await expect(connectionDetailPage.deliveryEventCount(1)).toBeVisible();
+    const deliveryRow = connectionDetailPage.deliveryTransitionRow(/provider delivered/i);
+    await expect(deliveryRow).toContainText("Outbound");
+    await expect(deliveryRow).toContainText(/dead lettered/i);
+    await deliveryRow.click();
+    await expect(connectionDetailPage.deliveryTiming()).toBeVisible();
+    await expect(connectionDetailPage.waitBeforeAttempt()).toBeVisible();
+    const copyError = connectionDetailPage.copyErrorButton("provider delivered");
+    await expect(copyError).toBeVisible();
+    await copyError.click();
+    await expect(copyError).toHaveText("Copied");
+    expect(await connectionDetailPage.readClipboard()).toBe("provider_error: " + SAFE_PROVIDER_ERROR);
+
+    const failedOnlyRequest = connectionDetailPage.waitForFailedOnlyRequest();
+    await connectionDetailPage.failedOnlyCheckbox().check();
+    await failedOnlyRequest;
+
+    await connectionDetailPage.failedOnlyCheckbox().uncheck();
+
+    const reconnect = connectionDetailPage.waitForReconnectRequest();
+    await connectionDetailPage.reconnectButton().click();
+    await expect(connectionDetailPage.reconnectDialog()).toBeVisible();
+    await connectionDetailPage.confirmReconnectButton().click();
+    await reconnect;
+  });
+
+  test("drills down into a Delivery's full lifecycle from a transition row", async () => {
+    await agentDetailPage.connectionDetailsLink().click();
+    await connectionDetailPage.deliveryTransitionRow(/provider delivered/i).click();
+
+    const lifecycleRequest = connectionDetailPage.waitForDeliveryLifecycleRequest(COMMUNICATION_DELIVERY_ID);
+    const lifecyclePageTwoRequest = connectionDetailPage.waitForDeliveryLifecyclePageRequest(COMMUNICATION_DELIVERY_ID, 2);
+    await connectionDetailPage.deliveryTimelineButton().click();
+    await lifecycleRequest;
+    await lifecyclePageTwoRequest;
+
+    await expect(connectionDetailPage.summaryMetric("Delivery timeline")).toBeVisible();
+    await expect(connectionDetailPage.timelineStage("reply queued")).toBeVisible();
+    await expect(connectionDetailPage.timelineStage("provider delivered")).toBeVisible();
+    await expect(connectionDetailPage.timelineStage("recovered")).toBeVisible();
+  });
+
+  test("edits Connection name and plugin settings without resending credentials", async () => {
+    await agentDetailPage.editConnectionButton("Customer Discord").click();
+    await agentDetailPage.connectionNameInput().fill("Renamed Discord");
+    // Array settings are chip inputs: clear the existing chip ("Community" is the
+    // directory label for guild-one), then add the new ID.
+    await agentDetailPage.removeArraySettingChip("Community").click();
+    await agentDetailPage.connectionSettingsInput("Guild IDs").fill("guild-updated");
+    const update = agentDetailPage.waitForConnectionMutation("PATCH");
+    await agentDetailPage.saveConnectionButton().click();
+    expect((await update).postDataJSON()).toEqual({
+      revision: 3,
+      display_name: "Renamed Discord",
+      settings: { guild_ids: ["guild-updated"] },
     });
+  });
+
+  test("shows provider setup requirements before connecting", async ({ page }) => {
+    await agentDetailPage.addConnectionButton().click();
+    await agentDetailPage.selectPlatformButton("Slack").click();
+
+    const hint = agentDetailPage.setupHint(/Create credentials/);
+    await expect(hint).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Create a Slack app" })).toBeVisible();
+    await expect(page.getByText("connections:write", { exact: true })).toBeVisible();
+    await expect(page.getByText("xapp-", { exact: true })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Slack app management" })).toHaveAttribute("href", "https://api.slack.com/apps");
+    await expect(page.getByRole("button", { name: "Copy Slack manifest" })).toBeVisible();
+
+    await agentDetailPage.selectPlatformButton("Discord").click();
+    const discordHint = agentDetailPage.setupHint(/Invite the bot/);
+    await expect(discordHint).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Create a bot" })).toBeVisible();
+    await expect(page.getByText("Read Message History", { exact: true })).toBeVisible();
+
+    await agentDetailPage.selectPlatformButton("Telegram").click();
+    const telegramHint = agentDetailPage.setupHint(/@BotFather/);
+    await expect(telegramHint).toBeVisible();
+    await expect(telegramHint).toContainText("getUpdates");
+    await expect(telegramHint).toContainText("/setprivacy");
+    await expect(telegramHint).toContainText("webhook");
+  });
+
+  /** A saved Slack Connection, served in place of the default Discord one. */
+  const savedSlackConnection = {
+    ...mockCommunicationConnection,
+    platform_key: "slack",
+    display_name: "Team Slack",
+    settings: { channel_ids: ["C1"], dm_user_ids: [] },
+  };
+
+  async function serveSavedSlackConnection(page: Page) {
+    // Registered after the shared intercepts, and the last matching route wins.
+    await page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}/connections`, async (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify([savedSlackConnection]),
+      });
+    });
+    // Re-run the beforeEach navigation so the list refetches through the new route.
     await agentDetailPage.goto(MOCK_AGENT_ID);
     await agentDetailPage.configureButton().click();
     await agentDetailPage.channelsTab().click();
-    await agentDetailPage.editButton().click();
+  }
 
-    await expect(page.getByRole("textbox", { name: "Allowed server IDs" })).toHaveValue("guild-1");
-    await expect(page.getByRole("textbox", { name: "Allowed role IDs" })).toHaveValue("role-1");
+  test("browses a saved Connection's own directory when editing it", async ({ page }) => {
+    await serveSavedSlackConnection(page);
+    await agentDetailPage.editConnectionButton("Team Slack").click();
 
-    await page.getByRole("button", { name: "Keys & integrations", exact: true }).click();
-    await agentDetailPage.editButton().click();
-    await expect(page.getByPlaceholder("Leave blank to keep existing token")).toBeVisible();
+    await agentDetailPage.browseDirectoryButton("Allowed channels").click();
+
+    // Names come from the saved Connection's own directory; the field still stores IDs.
+    await agentDetailPage.directoryPickerOption(/#general/).click();
+    await agentDetailPage.directoryPickerConfirmButton().click();
+    await expect(agentDetailPage.directoryPicker()).toBeHidden();
+    await expect(page.getByRole("button", { name: "Remove #general", exact: true })).toBeVisible();
   });
 
+  test("shows why a directory read failed instead of an empty picker", async ({ page }) => {
+    await serveSavedSlackConnection(page);
+    await page.route("**/directory/channels*", async (route) => {
+      await route.fulfill({
+        status: 400,
+        contentType: "application/json",
+        body: JSON.stringify({ detail: "Provider denied the requested operation (missing_scope)" }),
+      });
+    });
 
-  test("focusing the channel search shows mocked channels in the dropdown", async ({
-    page,
-  }) => {
-    await agentDetailPage.groupPolicySelect().selectOption("allowlist");
-    await agentDetailPage.channelSearchInput().focus();
+    await agentDetailPage.editConnectionButton("Team Slack").click();
+    await agentDetailPage.browseDirectoryButton("Allowed channels").click();
 
-    await expect(page.getByRole("button", { name: /#general/ })).toBeVisible();
-    await expect(
-      page.getByRole("button", { name: /#engineering/ }),
-    ).toBeVisible();
+    await expect(agentDetailPage.directoryPicker()).toContainText("missing_scope");
+  });
+
+  test("browses the Slack workspace to fill channel IDs from names", async ({ page }) => {
+    await agentDetailPage.addConnectionButton().click();
+    await agentDetailPage.selectPlatformButton("Slack").click();
+
+    // Browsing needs both tokens, so it stays disabled until the credentials are typed.
+    const browse = agentDetailPage.browseDirectoryButton("Allowed channels");
+    await expect(browse).toBeDisabled();
+    await expect(page.getByText("Add the bot token and app-level token above to browse.").first()).toBeVisible();
+
+    await agentDetailPage.credentialInput("Bot token").fill("xoxb-token");
+    await agentDetailPage.credentialInput("App-level token").fill("xapp-token");
+
+    const preview = page.waitForRequest(
+      (request) => request.method() === "POST" && request.url().includes("/connection-directory-preview"),
+    );
+    await browse.click();
+    expect((await preview).postDataJSON()).toMatchObject({
+      platform_key: "slack",
+      credentials: { bot_token: "xoxb-token", app_token: "xapp-token" },
+    });
+
+    // The picker searches names, but only the underlying platform IDs are stored.
+    await agentDetailPage.directoryPickerSearch("Search channels…").fill("ops");
+    await agentDetailPage.directoryPickerOption(/#ops/).click();
+    await agentDetailPage.directoryPickerConfirmButton().click();
+    await expect(agentDetailPage.directoryPicker()).toBeHidden();
+    await expect(page.getByRole("button", { name: "Remove #ops", exact: true })).toBeVisible();
+
+    const create = agentDetailPage.waitForConnectionMutation("POST");
+    await agentDetailPage.connectPlatformButton("Slack").click();
+    expect((await create).postDataJSON()).toEqual({
+      platform_key: "slack",
+      display_name: "Slack",
+      enabled: true,
+      settings: { channel_ids: ["C1"] },
+      credentials: { bot_token: "xoxb-token", app_token: "xapp-token" },
+    });
+  });
+
+  test("puts credentials above the Connection name in the add form", async ({ page }) => {
+    await agentDetailPage.addConnectionButton().click();
+    await agentDetailPage.selectPlatformButton("Slack").click();
+
+    const topOf = async (locator: Locator) => (await locator.boundingBox())?.y ?? Number.NaN;
+    const credentials = await topOf(page.getByText("Credentials", { exact: true }));
+    const connectionName = await topOf(page.getByPlaceholder("Slack connection"));
+    const connectionSettings = await topOf(page.getByText("Connection settings", { exact: true }));
+
+    expect(credentials).toBeLessThan(connectionName);
+    expect(connectionName).toBeLessThan(connectionSettings);
+  });
+
+  test("creates another same-platform Connection from the plugin schema", async () => {
+    await agentDetailPage.addConnectionButton().click();
+    await agentDetailPage.selectPlatformButton("Discord").click();
+    await agentDetailPage.connectionSettingsInput("Guild IDs").fill("guild-two, guild-three");
+    const botToken = agentDetailPage.credentialInput("Bot token");
+    await botToken.fill("token-two");
+    await expect(botToken).toHaveAttribute("type", "password");
+    await agentDetailPage.credentialVisibilityButton("Bot token", false).click();
+    await expect(botToken).toHaveAttribute("type", "text");
+    await agentDetailPage.credentialVisibilityButton("Bot token", true).click();
+    await expect(botToken).toHaveAttribute("type", "password");
+    const create = agentDetailPage.waitForConnectionMutation("POST");
+    await agentDetailPage.connectPlatformButton("Discord").click();
+    expect((await create).postDataJSON()).toEqual({
+      platform_key: "discord",
+      display_name: "Discord",
+      enabled: true,
+      settings: { guild_ids: ["guild-two", "guild-three"] },
+      credentials: { bot_token: "token-two" },
+    });
   });
 });
 
@@ -566,6 +810,7 @@ test.describe("Agent Detail Page — Skills tab", () => {
     });
     await dataSupportPage.agents.interceptGetAgentTemplateRequest();
     await dataSupportPage.skills.interceptGetSkillsRequest();
+    await dataSupportPage.skills.interceptGetAgentSkillsRequest();
     await dataSupportPage.agents.interceptGetConversationChannelsRequest();
     await dataSupportPage.agents.interceptGetTemplatesRequest();
     await dataSupportPage.agents.interceptGetAgentConfigurationRequest();
@@ -575,11 +820,10 @@ test.describe("Agent Detail Page — Skills tab", () => {
     await agentDetailPage.goto(MOCK_AGENT_ID);
     await agentDetailPage.configureButton().click();
     await agentDetailPage.skillsTab().click();
-    await agentDetailPage.editButton().click();
   });
 
-  test("Skills tab is clickable and shows the tab panel", async ({ page }) => {
-    await expect(page.getByText("No skills assigned yet.")).toBeVisible();
+  test("Skills tab is clickable and shows the tab panel", async () => {
+    await expect(agentDetailPage.skillsSearchInput()).toBeVisible();
   });
 
   test("shows assigned skills when agent has skills", async ({ page }) => {
@@ -589,29 +833,142 @@ test.describe("Agent Detail Page — Skills tab", () => {
     await agentDetailPage.goto(MOCK_AGENT_ID);
     await agentDetailPage.configureButton().click();
     await agentDetailPage.skillsTab().click();
-    await agentDetailPage.editButton().click();
 
-    await expect(page.getByText("Assigned", { exact: true })).toBeVisible();
+    const assignedSkillLink = page.locator(
+      `a[href="/dashboard/${TEST_ORG_ID}/agents/${MOCK_AGENT_ID}/skills/${mockAssignedSkill.id}"]`,
+    );
+    await expect(assignedSkillLink.getByText("In use", { exact: true })).toBeVisible();
     await expect(agentDetailPage.removeSkillButton()).toBeVisible();
   });
 
+  test("opens an assigned skill detail page from its card", async ({ page }) => {
+    await dataSupportPage.agents.interceptGetAgentRequest({
+      body: { ...mockAgent, status: "STOPPED", skills: [mockAssignedSkill] },
+    });
+    await dataSupportPage.skills.interceptGetSkillFilesRequest({
+      skillId: mockAssignedSkill.id,
+      scope: "agent",
+      agentId: MOCK_AGENT_ID,
+      skill: {
+        ...mockCustomSkill,
+        id: mockAssignedSkill.id,
+        name: mockAssignedSkill.name,
+        organizationId: MOCK_ORG_ID,
+        isAssignedToAgent: true,
+      },
+      files: [{ path: "SKILL.md", content: "# GitHub" }],
+    });
+    await dataSupportPage.skills.interceptGetSkillVersionsRequest({
+      skillId: mockAssignedSkill.id,
+      scope: "agent",
+      agentId: MOCK_AGENT_ID,
+    });
+
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await agentDetailPage.configureButton().click();
+    await agentDetailPage.skillsTab().click();
+
+    const assignedSkillLink = page.locator(
+      `a[href="/dashboard/${TEST_ORG_ID}/agents/${MOCK_AGENT_ID}/skills/${mockAssignedSkill.id}"]`,
+    );
+    await expect(assignedSkillLink).toBeVisible();
+    await assignedSkillLink.click();
+
+    await expect(page).toHaveURL(
+      new RegExp(`/agents/${MOCK_AGENT_ID}/skills/${mockAssignedSkill.id}$`),
+    );
+    await expect(page.getByRole("heading", { name: mockAssignedSkill.name })).toBeVisible();
+
+    const backLink = page.getByRole("link", { name: "Agent skills" });
+    await expect(backLink).toHaveAttribute(
+      "href",
+      `/dashboard/${TEST_ORG_ID}/agents/${MOCK_AGENT_ID}/configuration?section=skills`,
+    );
+  });
+
   test("shows available skills with source badges", async ({ page }) => {
-    await expect(page.getByText("Add skills")).toBeVisible();
-    await expect(page.getByText(mockPlatformSkill.name, { exact: true })).toBeVisible();
-    await expect(page.getByText(mockCustomSkill.name)).toBeVisible();
+    await expect(agentDetailPage.skillsSearchInput()).toBeVisible();
+    const platformSkillCard = page.getByRole("link", { name: /github/ }).first();
+    await expect(platformSkillCard).toBeVisible();
+    await expect(platformSkillCard.getByText("Built in")).toBeVisible();
+    await expect(page.getByRole("link", { name: /my-tool/ }).first()).toBeVisible();
+    await expect(page.getByRole("button", { name: "Add", exact: true })).toHaveCount(4);
+    await expect(
+      page.getByRole("link", { name: `View details for ${mockPlatformSkill.name}` }),
+    ).toHaveCount(0);
+    await expect(agentDetailPage.skillsSearchInput()).toBeVisible();
+  });
+
+  test("opens an available skill detail page and returns to Agent skills", async ({ page }) => {
+    await page.route(
+      `**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}/skills/${MOCK_PLATFORM_SKILL_ID}/files`,
+      async (route) => {
+        if (route.request().method() !== "GET") {
+          await route.fallback();
+          return;
+        }
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            ...mockPlatformSkill,
+            files: [{ path: "github_skill.md", content: "# GitHub" }],
+          }),
+        });
+      },
+    );
+    await page.route(
+      `**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}/skills/${MOCK_PLATFORM_SKILL_ID}/versions`,
+      async (route) => {
+        if (route.request().method() !== "GET") {
+          await route.fallback();
+          return;
+        }
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify([
+            {
+              version: 1,
+              created_by: null,
+              created_at: "2026-01-01T00:00:00Z",
+              is_pinned_by_agent: false,
+            },
+          ]),
+        });
+      },
+    );
+
+    await page.getByRole("link", { name: /github/ }).click();
+
+    await expect(page).toHaveURL(
+      new RegExp(`/agents/${MOCK_AGENT_ID}/skills/${MOCK_PLATFORM_SKILL_ID}$`),
+    );
+    await expect(page.getByRole("heading", { name: mockPlatformSkill.name })).toBeVisible();
+
+    const backLink = page.getByRole("link", { name: "Agent skills" });
+    await expect(backLink).toHaveAttribute(
+      "href",
+      `/dashboard/${TEST_ORG_ID}/agents/${MOCK_AGENT_ID}/configuration?section=skills`,
+    );
+    await backLink.click();
+    await expect(page).toHaveURL(
+      new RegExp(`/agents/${MOCK_AGENT_ID}/configuration\\?section=skills$`),
+    );
     await expect(agentDetailPage.skillsSearchInput()).toBeVisible();
   });
 
   test("search filters available skills", async ({ page }) => {
     await agentDetailPage.skillsSearchInput().fill(mockCustomSkill.name);
-    await expect(page.getByText(mockCustomSkill.name)).toBeVisible();
-    await expect(page.getByText(mockPlatformSkill.name, { exact: true })).not.toBeVisible();
+    await expect(page.getByRole("link", { name: /my-tool/ })).toBeVisible();
+    await expect(page.getByRole("link", { name: /github/ })).not.toBeVisible();
   });
 
-  test("adding a skill moves it to the pending Assigned section", async ({ page }) => {
+  test("adding a skill marks its card In use while pending", async ({ page }) => {
     await agentDetailPage.addSkillButton().first().click();
 
-    await expect(page.getByText("Assigned", { exact: true })).toBeVisible();
+    const pendingCard = page.locator("article").filter({ hasText: "· Adding" });
+    await expect(pendingCard.getByText("In use", { exact: true })).toBeVisible();
     await expect(page.getByText("· Adding")).toBeVisible();
     await expect(agentDetailPage.cancelSkillButton()).toBeVisible();
     await expect(agentDetailPage.saveSkillsButton()).toBeVisible();
@@ -627,16 +984,18 @@ test.describe("Agent Detail Page — Skills tab", () => {
     await expect(agentDetailPage.saveSkillsButton()).toBeDisabled();
   });
 
-  test("removing an assigned skill shows it struck-through with Undo", async () => {
+  test("removing an assigned skill shows it struck-through with Undo", async ({ page }) => {
     await dataSupportPage.agents.interceptGetAgentRequest({
       body: { ...mockAgent, status: "STOPPED", skills: [mockAssignedSkill] },
     });
     await agentDetailPage.goto(MOCK_AGENT_ID);
     await agentDetailPage.configureButton().click();
     await agentDetailPage.skillsTab().click();
-    await agentDetailPage.editButton().click();
 
     await agentDetailPage.removeSkillButton().click();
+    await expect(page.getByRole("dialog")).toBeVisible();
+    await expect(page.getByRole("dialog").getByRole("heading", { name: "Remove github?" })).toBeVisible();
+    await agentDetailPage.confirmRemoveSkillButton().click();
 
     await expect(agentDetailPage.undoSkillButton()).toBeVisible();
     await expect(agentDetailPage.saveSkillsButton()).toBeVisible();
@@ -649,9 +1008,9 @@ test.describe("Agent Detail Page — Skills tab", () => {
     await agentDetailPage.goto(MOCK_AGENT_ID);
     await agentDetailPage.configureButton().click();
     await agentDetailPage.skillsTab().click();
-    await agentDetailPage.editButton().click();
 
     await agentDetailPage.removeSkillButton().click();
+    await agentDetailPage.confirmRemoveSkillButton().click();
     await agentDetailPage.undoSkillButton().click();
 
     await expect(agentDetailPage.removeSkillButton()).toBeVisible();
@@ -663,7 +1022,9 @@ test.describe("Agent Detail Page — Skills tab", () => {
     await agentDetailPage.addSkillButton().first().click();
 
     await expect(page.getByText("Required credentials")).toBeVisible();
-    await expect(page.getByText("GitHub", { exact: true })).toBeVisible();
+    await expect(
+      page.getByText("Required credentials").locator("..").getByText("GitHub", { exact: true }),
+    ).toBeVisible();
   });
 
   test("save button is disabled when required credentials are incomplete", async () => {
@@ -675,11 +1036,11 @@ test.describe("Agent Detail Page — Skills tab", () => {
   test("saving skills calls the update API", async ({ page }) => {
     await dataSupportPage.agents.interceptUpdateAgentRequest();
     await dataSupportPage.skills.interceptGetSkillsRequest({ body: [mockCustomSkill] });
+    await dataSupportPage.skills.interceptGetAgentSkillsRequest({ body: [mockCustomSkill] });
 
     await agentDetailPage.goto(MOCK_AGENT_ID);
     await agentDetailPage.configureButton().click();
     await agentDetailPage.skillsTab().click();
-    await agentDetailPage.editButton().click();
 
     await agentDetailPage.addSkillButton().last().click(); // custom skill — no required providers
 
@@ -700,7 +1061,6 @@ test.describe("Agent Detail Page — Skills tab", () => {
     await agentDetailPage.goto(MOCK_AGENT_ID);
     await agentDetailPage.configureButton().click();
     await agentDetailPage.skillsTab().click();
-    await agentDetailPage.editButton().click();
 
     await expect(page.getByText("Required", { exact: true })).toBeVisible();
     await expect(agentDetailPage.removeSkillButton()).toBeDisabled();
@@ -713,7 +1073,6 @@ test.describe("Agent Detail Page — Skills tab", () => {
     await agentDetailPage.goto(MOCK_AGENT_ID);
     await agentDetailPage.configureButton().click();
     await agentDetailPage.skillsTab().click();
-    await agentDetailPage.editButton().click();
 
     await agentDetailPage.removeSkillButton().hover();
 
@@ -751,50 +1110,8 @@ test.describe("Agent Detail Page — Keys tab", () => {
     await agentDetailPage.editButton().click();
   });
 
-  test("shows app-level token and bot token inputs", async () => {
-    await expect(agentDetailPage.appTokenInput()).toBeVisible();
-    await expect(agentDetailPage.botTokenInput()).toBeVisible();
-  });
-
-  test("Save tokens button is disabled when both fields are empty", async () => {
-    await expect(agentDetailPage.saveTokensButton()).toBeDisabled();
-  });
-
-  test("filling a token field enables Save tokens", async () => {
-    await agentDetailPage.appTokenInput().fill("xapp-1-test");
-    await expect(agentDetailPage.saveTokensButton()).toBeEnabled();
-  });
-
-  test("saving tokens calls the update API", async ({ page }) => {
-    await dataSupportPage.agents.interceptUpdateAgentRequest();
-
-    await agentDetailPage.appTokenInput().fill("xapp-1-test");
-
-    const updatePromise = page.waitForRequest(
-      (req) => req.url().includes(`/agents/${MOCK_AGENT_ID}`) && req.method() === "PATCH",
-    );
-    await agentDetailPage.saveTokensButton().click();
-    await agentDetailPage.applyAndRestartConfirmationButton().click();
-    await updatePromise;
-  });
-
-  test("shows error near Save tokens when token save fails", async ({ page }) => {
-    await dataSupportPage.agents.interceptUpdateAgentRequest({
-      status: 422,
-      detail: "Invalid token format",
-    });
-
-    await agentDetailPage.appTokenInput().fill("bad-token");
-    await agentDetailPage.saveTokensButton().click();
-    await agentDetailPage.applyAndRestartConfirmationButton().click();
-
-    await expect(
-      page.locator('section[aria-label="Keys & integrations"]').getByText("Invalid token format"),
-    ).toBeVisible();
-  });
-
   test("shows Integrations section", async ({ page }) => {
-    await expect(page.getByText("Integration credentials", { exact: true })).toBeVisible();
+    await expect(page.getByText("Add an integration", { exact: true })).toBeVisible();
   });
 
   test("Save integrations is disabled when nothing is staged", async () => {
@@ -813,27 +1130,6 @@ test.describe("Agent Detail Page — Keys tab", () => {
 
     await expect(page.getByText("Value hidden")).toBeVisible();
     await expect(agentDetailPage.removeCredentialButton()).toBeVisible();
-  });
-
-  test("validating a configured integration shows its identity", async ({ page }) => {
-    await dataSupportPage.agents.interceptGetAgentRequest({
-      body: { ...mockAgent, status: "STOPPED", secrets: [mockSecret] },
-    });
-    await dataSupportPage.agents.interceptValidateIntegrationRequest({
-      status: 200,
-      body: {
-        validation_status: "valid",
-        validation_identity: "alice@example.com",
-        validation_error: null,
-        missing_scopes: [],
-      },
-    });
-    await agentDetailPage.goto(MOCK_AGENT_ID);
-    await agentDetailPage.configureButton().click();
-    await agentDetailPage.keysTab().click();
-
-    await page.getByRole("button", { name: "Validate" }).click();
-    await expect(page.getByText("Status: valid · alice@example.com")).toBeVisible();
   });
 
   test("clicking Remove shows credential as pending removal with Undo", async ({ page }) => {
@@ -892,24 +1188,11 @@ test.describe("Agent Detail Page — Keys tab", () => {
     await agentDetailPage.applyAndRestartConfirmationButton().click();
 
     await expect(
-      page.locator('section[aria-label="Keys & integrations"]').getByText("Secret is used by a skill"),
+      page.locator('section[aria-label="Integrations"]').getByText("Secret is used by a skill"),
     ).toBeVisible();
     await expect(page.getByText("Will be removed")).toBeVisible();
   });
 
-  test("error from token save does not appear in integrations section", async ({ page }) => {
-    await dataSupportPage.agents.interceptUpdateAgentRequest({
-      status: 500,
-      detail: "Token save failed",
-    });
-
-    await agentDetailPage.appTokenInput().fill("xapp-1-test");
-    await agentDetailPage.saveTokensButton().click();
-    await agentDetailPage.applyAndRestartConfirmationButton().click();
-
-    await expect(page.getByText("Token save failed")).toHaveCount(1);
-    await expect(agentDetailPage.saveIntegrationsButton()).toBeEnabled();
-  });
 });
 
 test.describe("Agent Detail Page — Personality tab (approval mode)", () => {
@@ -965,5 +1248,48 @@ test.describe("Agent Detail Page — Personality tab (approval mode)", () => {
     const body = (await patchPromise).postDataJSON() as Record<string, unknown>;
 
     expect(body.approval_mode).toBe("off");
+  });
+});
+
+test.describe("Agent Detail Page — Personality tab (approval mode, OpenClaw)", () => {
+  test.describe.configure({ mode: "serial" });
+  let agentDetailPage: AgentDetailPage;
+  let dataSupportPage: DataSupport;
+
+  test.use({ storageState: { cookies: [], origins: [] } });
+
+  test.beforeEach(async ({ page }) => {
+    agentDetailPage = new AgentDetailPage(page);
+    dataSupportPage = new DataSupport(page);
+
+    await dataSupportPage.auth.interceptRefreshRequest();
+    await dataSupportPage.users.interceptGetUserContextRequest();
+    await dataSupportPage.users.interceptGetOrganizationsRequest();
+    await dataSupportPage.agents.interceptGetAgentRequest({
+      body: { ...mockAgent, status: "STOPPED", agent_type: "openclaw" },
+    });
+    await dataSupportPage.agents.interceptGetAgentTemplateRequest();
+    await dataSupportPage.agents.interceptGetTemplatesRequest();
+    await dataSupportPage.agents.interceptGetTemplateVersionsRequest();
+    await dataSupportPage.agents.interceptGetAgentConfigurationRequest();
+    await dataSupportPage.agents.interceptUpdateAgentRequest();
+    await dataSupportPage.agents.interceptGetConversationChannelsRequest();
+    await dataSupportPage.agents.interceptGetModelsRequest();
+    await dataSupportPage.agents.interceptStartAgentRequest();
+
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await agentDetailPage.configureButton().click();
+    await page.getByRole("button", { name: "Profile", exact: true }).click();
+  });
+
+  test("shows Managed by OpenClaw instead of a command approval value", async ({ page }) => {
+    await expect(page.getByText("Managed by OpenClaw")).toBeVisible();
+    await expect(page.getByRole("combobox", { name: "Command approval" })).toHaveCount(0);
+  });
+
+  test("editing the profile does not offer a command approval control", async ({ page }) => {
+    await agentDetailPage.editButton().click();
+
+    await expect(page.getByRole("combobox", { name: "Command approval" })).toHaveCount(0);
   });
 });

@@ -56,13 +56,16 @@ def normalize_path(raw: str) -> str:
     return path
 
 
-def validate_files(files: Sequence[tuple[str, str]], *, entry_path: str | None = None) -> list[tuple[str, str]]:
-    """Normalize and validate a full set of skill files.
+def validate_files(files: Sequence[tuple[str, str]], *, entry_path: str = DEFAULT_ENTRY_PATH) -> list[tuple[str, str]]:
+    """Normalize and validate a full set of Skill files.
 
-    ``files`` is a list of (path, content). When ``entry_path`` is given, that file
-    must be present — custom skills always require a SKILL.md entry point.
+    Every published Skill version has exactly one root ``SKILL.md`` entry point.
+    Legacy custom entry names are normalized by the migration before they reach
+    this boundary; callers cannot create another entry-point convention.
     Returns the normalized list sorted by path.
     """
+    if entry_path != DEFAULT_ENTRY_PATH:
+        raise ValueError(f"A skill's entry-point file must be {DEFAULT_ENTRY_PATH!r}")
     if not files:
         raise ValueError("A skill must contain at least one file")
     if len(files) > MAX_FILES:
@@ -90,7 +93,7 @@ def validate_files(files: Sequence[tuple[str, str]], *, entry_path: str | None =
 
         normalized.append((path, content))
 
-    if entry_path is not None and not any(p == entry_path for p, _ in normalized):
-        raise ValueError(f"A skill must include its entry-point file {entry_path!r}")
+    if not any(p == DEFAULT_ENTRY_PATH for p, _ in normalized):
+        raise ValueError(f"A skill must include its entry-point file {DEFAULT_ENTRY_PATH!r}")
 
     return sorted(normalized, key=lambda pair: pair[0])

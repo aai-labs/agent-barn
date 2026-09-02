@@ -2,7 +2,7 @@
 
 ## Read when
 
-Read before changing provider credential schemas, encryption, Slack app setup, Google OAuth, aai-cli configuration, provider-derived skills, or runtime secret injection.
+Read before changing tool-provider credential schemas, encryption, Google OAuth, aai-cli or gog configuration, provider-derived Skills, or runtime secret injection. Chat-platform credentials belong to Communication Connections; follow the Communications route in `../INDEX.md` for those changes.
 
 ## Role in the system
 
@@ -10,9 +10,9 @@ Integrations make external services available to an Agent. Agent Secrets hold en
 
 ## Supported providers
 
-Provider credential contracts are defined by `SecretProvider` and its content models in `../../api/domains/agents/models.py`. Current providers cover GitHub, Jira, Confluence, Bitbucket, Google Workspace, Zoho Mail, Zoho Calendar, Firecrawl, Slack, and Pipedrive. The per-service Google providers (Gmail, Google Calendar, Google Sheets) are retired: their enum members, content models, credential rows, and seeded skills were deleted by migration. Affected agents must reconnect through Google Workspace, and the retired providers are absent from the UI.
+Provider credential contracts are defined by `SecretProvider` and its content models in `../../api/domains/agents/models.py`. Current providers cover GitHub, Jira, Confluence, Bitbucket, Google Workspace, Zoho Mail, Zoho Calendar, Firecrawl, Slack, and Pipedrive. The per-service Google providers (Gmail, Google Calendar, Google Sheets) are retired; affected agents must reconnect through Google Workspace.
 
-Providers reach their service through one of two CLIs: aai-cli (all of the above except Google Workspace) or the gog CLI (Google Workspace only). The two share nothing — no profiles, no secret store — and each has its own runtime artifacts and its own agent policy block.
+Providers reach their service through one of two CLIs: aai-cli (all of the above except Google Workspace) or gog (Google Workspace only). The two have separate runtime artifacts, secret stores, and agent policy blocks.
 
 ## Shared credentials
 
@@ -28,35 +28,29 @@ Shared Credentials are org-scoped, admin-managed credential payloads that any me
 
 ## Invariants
 
-- Agent Secret payloads are validated against provider-specific schemas before encryption and again after decryption.
+- Agent Secret payloads are validated against provider-specific schemas before encryption and again after decryption. Agent creation does not trust client-side validation: for providers with a live validator, the service validates the exact submitted manual or shared credential before allocating a LiteLLM key or persisting the Agent. Providers without a live validator remain schema-validated and can be checked through the on-demand validation endpoint.
 - An agent has at most one Agent Secret per provider.
 - Duplicate providers in create/update payloads are rejected.
 - Read APIs return provider and display label, not credential contents.
 - Agent updates validate that remaining skill provider requirements are satisfied. Updating a Skill's provider metadata later does not revalidate existing agents.
 - Eligible built-in aai-cli skills are mounted at start when their provider credential is configured.
 - A built-in skill may declare no required providers when it needs no credential (Excel operates on local `.xlsx` files). Such a skill is never auto-mounted — an empty requirement list is trivially satisfied, so it would otherwise attach to every agent — and is mounted only when explicitly assigned.
-- Application deployment secrets, per-user Slack configuration tokens, per-agent Agent Secrets, and Shared Credentials are distinct credential classes with different ownership and lifecycles.
+- Application deployment secrets, Agent Secrets, Shared Credentials, and Communication Connection credentials are distinct credential classes with different ownership and lifecycles. Connection credentials are owned and validated by shipped Platform Plugins and never become runtime Integration secrets.
 - Firecrawl is an infrastructure-level capability: when `AGENT_FIRECRAWL_BASE_URL` and `AGENT_FIRECRAWL_API_KEY` are configured, all agents receive web-fetch/search by default (analogous to LiteLLM). Agents with a per-agent Firecrawl Agent Secret override the platform key.
-
-## Slack setup
-
-Per-user Slack configuration tokens support automated Slack app creation. They are encrypted at rest, exposed only as masked previews, validated when saved, and rotated through their refresh token when used. Agent Slack bot/app tokens are separate per-agent credentials.
 
 ## Google OAuth
 
-The flow serves Google Workspace, the only Google-backed provider. The authorize and exchange operations require an authenticated user. The caller names the provider it is connecting, which is carried inside the signed state because the callback receives nothing from Google but the code and state; a state naming a retired provider no longer resolves. The callback accepts a signed, typed, short-lived state and forwards the authorization code to the web application; authenticated exchange returns a refresh token. Persistence then occurs through the normal Agent Secret create/update flow.
+The flow serves Google Workspace, the only Google-backed provider. The authorize and exchange operations require an authenticated user. The caller names the provider and selects services plus read-only access; those choices are carried inside the signed state because Google's callback returns only the code and state. The callback accepts a signed, typed, short-lived state and forwards the authorization code to the web application; authenticated exchange returns a refresh token, the account email, and the granted scopes. Persistence then occurs through the normal Agent Secret create/update flow.
 
-Scopes are derived per request from the caller's service selection and read-only choice rather than being fixed per provider, so `/authorize-url` accepts `services` and `read_only`, and rejects any provider other than Google Workspace rather than serving scopes no integration can use. The scope sets mirror the pinned gog release's own derivation, because the services recorded in the credential are re-declared to gog at agent start. Stored `services` and `read_only` must remain covered by the recorded consent scopes; this is validated before the credential is encrypted. And because gog keys stored tokens by account email, the flow always requests the identity scopes and `/token` returns the `email` claim decoded from the id_token — unverified, since the token arrives directly from Google's token endpoint in our own server-to-server exchange. `/token` also returns `granted_scopes`; the consent screen lets a user withhold individual scopes, so what was granted can be narrower than what was requested, and the credential records the granted set.
-
-A user-supplied Web-application OAuth client is the expected setup for Google Workspace rather than an option. Google caps any app requesting unverified sensitive or restricted scopes at 100 grant-users for the lifetime of the project, and that cap cannot be reset — so a server-owned client only suits a verified deployment or a Workspace-internal app. Consent-screen publishing status matters too: apps left in Testing get refresh tokens that expire after 7 days, which is what the validator's `invalid_grant` message points at.
+Scopes are derived per request from the selected services and access level rather than being fixed per provider. Stored services, read-only mode, and granted scopes are validated together before encryption. Google Workspace uses the gog CLI and its own credential materialization, separate from aai-cli. A user-supplied Web-application OAuth client is the expected setup; server-owned credentials remain supported where configured.
 
 ## Runtime materialization
 
-At start, Agent Service decrypts provider payloads, backfills configured Google client credentials where applicable, builds aai-cli configuration and secret-store setup, injects provider environment, mounts provider skills, and appends tool/integration policy to rendered template content. Provider handling is not complete until both storage validation and runtime materialization are updated.
+At start, Agent Service decrypts provider payloads, backfills configured Google Workspace client credentials where applicable, builds aai-cli configuration and secret-store setup, injects provider environment, mounts the Agent's exact Skill Version pins plus eligible bundled aai-cli Skills, and appends tool/integration policy to rendered template content. Provider handling is not complete until both storage validation and runtime materialization are updated.
 
-The aai-cli integrations policy block is gated on providers that actually have a profile, not on any secret being present: an agent whose only integrations are profile-less would otherwise be told that aai-cli is the only way to reach them and that `--profile` is mandatory, above an empty list.
+The aai-cli integrations policy is gated on providers that actually have an aai-cli profile. An agent whose only integration is profile-less Google Workspace must not receive instructions claiming that aai-cli profiles are required.
 
-Google Workspace materializes through its own builders (`gog_artifacts.py`): the pod Secret carries the OAuth client and refresh token as `GOG_*` environment, and a ConfigMap-mounted `gog-setup.sh` — secret-free, entirely env-driven — installs the client and imports the token at boot. `GOG_HOME` is on the container filesystem, deliberately not the PVC, and is wiped and rebuilt on every start: the encrypted credential row is the single source of truth, the keyring password is regenerated per start, and removing the credential removes pod access at the next restart with nothing left behind. Note that `start_agent` also computes an `aai_home` that *is* the Hermes PVC (`/opt/data`); the two are different concepts and must not be unified. The integration ships no skill file, so the AGENTS.md block built by `build_gog_policy_md` is the only place an agent learns gog exists.
+Google Workspace materializes through `gog_artifacts.py`: the pod Secret carries the OAuth client and refresh token as `GOG_*` environment, while a ConfigMap-mounted `gog-setup.sh` rebuilds gog state at boot. `GOG_HOME` is on the container filesystem and is wiped and rebuilt on every start; the encrypted Agent Secret remains the source of truth.
 
 ## Source map
 
@@ -65,15 +59,15 @@ Google Workspace materializes through its own builders (`gog_artifacts.py`): the
 | Provider enum, content schemas, encryption helpers | `../../api/domains/agents/models.py`                                                                                                                |
 | Shared Credential CRUD and lifecycle               | `../../api/domains/shared_credentials/`                                                                                                             |
 | Agent Secret persistence and lifecycle             | `../../api/domains/agents/service.py`, `../../api/domains/agents/repository.py`                                                                     |
-| aai-cli runtime materialization                    | `../../api/domains/agents/aai_cli_artifacts.py`, `../../api/domains/agents/aai_cli_skills/`                                                         |
-| gog runtime materialization (Google Workspace)     | `../../api/domains/agents/gog_artifacts.py`; `gog` binary pinned in `../../openclaw-base/Dockerfile` and `../../hermes-base/Dockerfile`             |
-| Built-in skill definitions                         | `../../api/domains/agents/aai_cli_skills/`                                                                                                          |
-| Slack configuration token lifecycle                | `../../api/domains/auth/token_service.py`, `../../api/domains/auth/routes.py`                                                                       |
+| aai-cli runtime materialization                    | `../../api/domains/agents/aai_cli_artifacts.py`, `../../api/domains/agents/aai_cli_skills/bundled/skills/`                                         |
+| gog runtime materialization                        | `../../api/domains/agents/gog_artifacts.py`; gog is pinned in `../../openclaw-base/Dockerfile` and `../../hermes-base/Dockerfile`                 |
+| Built-in skill definitions                         | `../../api/domains/agents/aai_cli_skills/bundled/skills/`, `../../api/domains/skills/skill_seeder.py`                                               |
+| Communication platform credentials                 | `../../api/domains/communications/`, [`communications/CHANGELOG.md`](communications/CHANGELOG.md)                                                   |
 | Google OAuth (Google Workspace)                    | `../../api/domains/integrations/google_oauth/routes.py`                                                                                             |
 | Firecrawl runtime wiring                           | `../../api/domains/agents/service.py` (platform-default + per-agent override)                                                                       |
 | UI credential forms                                | `../../ui/src/features/agents/`, `../../ui/src/features/account/`                                                                                   |
-| Tests                                              | `../../api/tests/integration/test_agents.py`, `../../api/tests/integration/test_shared_credentials.py`, `../../api/tests/integration/test_slack_config_token.py`, `../../api/tests/unit/test_google_oauth.py`, `../../api/tests/unit/test_gog_artifacts.py` |
+| Tests                                              | `../../api/tests/integration/test_agents.py`, `../../api/tests/integration/test_shared_credentials.py`, `../../api/tests/integration/test_communication_connections.py`, `../../api/tests/unit/test_google_oauth.py` |
 
 ## Change impact
 
-A provider addition or schema change affects request validation, encrypted compatibility, runtime environment/config generation, built-in skill seeding, UI forms/Zod schemas, and agent start tests. Encryption-key changes require an explicit migration/rotation plan because stored Agent Secrets and Slack configuration tokens depend on the existing key.
+A tool Integration provider addition or schema change affects request validation, encrypted compatibility, runtime environment/config generation, built-in Skill seeding, UI forms/Zod schemas, and Agent start tests. Platform additions instead use the shipped Platform Plugin seam. Encryption-key changes require an explicit migration/rotation plan because Agent Secrets, Shared Credentials, and Communication Connection credentials depend on the existing key.

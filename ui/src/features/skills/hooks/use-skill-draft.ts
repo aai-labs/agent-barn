@@ -3,9 +3,9 @@
 import { useQuery } from "@tanstack/react-query";
 
 import { api } from "@/shared/api";
-import { useOrganizationApiBase } from "@/features/organizations/hooks/use-organization-api-base";
 
 import { SkillDraftSchema, type SkillDraft } from "../schemas";
+import { useSkillsBasePath, type SkillScopeRef } from "../scope";
 import { skillDraftKey } from "../utils";
 
 /**
@@ -13,14 +13,14 @@ import { skillDraftKey } from "../utils";
  * a draft exists (e.g. Skill.hasDraft) — there's at most one per skill, so probing
  * this speculatively would mean treating a routine 404 as an error.
  */
-export function useSkillDraft(skillId: string | null, enabled: boolean) {
-  const orgApiBase = useOrganizationApiBase();
+export function useSkillDraft(skillId: string | null, enabled: boolean, scope: SkillScopeRef) {
+  const basePath = useSkillsBasePath(scope);
 
   const query = useQuery({
-    queryKey: skillDraftKey(skillId ?? "none"),
+    queryKey: skillDraftKey(skillId ?? "none", scope),
     enabled: skillId !== null && enabled,
     queryFn: async () => {
-      const response = await api.get<SkillDraft>(`${orgApiBase}/skills/${skillId}/draft`, {
+      const response = await api.get<SkillDraft>(`${basePath}/${skillId}/draft`, {
         schema: SkillDraftSchema,
       });
       return response.data;

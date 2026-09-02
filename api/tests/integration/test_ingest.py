@@ -1,17 +1,10 @@
-import os
 from datetime import UTC, datetime
-from unittest.mock import patch
 
 from fastapi import status
-from hamcrest import assert_that, empty, equal_to, has_length, is_
+from hamcrest import assert_that, equal_to
 from starlette.testclient import TestClient
 
 from api.domains.agents.repository import AgentRepository
-from api.domains.conversations.models import (
-    ConversationsFilter,
-    MessageDirection,
-)
-from api.domains.conversations.repository import ConversationRepository
 from api.domains.rbac.policy import AuthorizationScope
 from api.domains.tool_calls.repository import ToolCallRepository
 from api.infrastructure.crypto import encrypt_token
@@ -20,16 +13,6 @@ from api.tests.core.givenpy import given, then, when
 from api.tests.core.modules import (
     prepare_injector,
     set_env_variable,
-)
-from api.tests.helpers.telemetry_plugins import (
-    dispatch,
-    flush_and_capture,
-    load_hermes_plugin,
-    make_message_event,
-    make_session_entry,
-    make_session_store,
-    post_llm_call,
-    register_hermes_plugin,
 )
 from api.tests.steps.agent import (
     TEST_ENCRYPTION_KEY,
@@ -88,23 +71,6 @@ def _url(context) -> str:
     return f"/ingest/v1/agents/{context.agent.id}/events"
 
 
-def _message_payload(msg_id="msg-1", content="hello"):
-    return {
-        "messages": [
-            {
-                "msg_id": msg_id,
-                "session_key": "agent:main:slack:dm:U123",
-                "channel_id": "D123",
-                "direction": "INBOUND",
-                "conversation_type": "DM",
-                "sender_id": "U123",
-                "content": content,
-                "occurred_at": datetime.now(UTC).isoformat(),
-            }
-        ]
-    }
-
-
 def _tool_call_payload(external_id="tc-1"):
     now = datetime.now(UTC).isoformat()
     return {
@@ -145,54 +111,12 @@ def test_ingest_wrong_key_returns_401():
         with when("I post with a wrong key"):
             response = context.ingest_client.post(
                 _url(context),
-                json=_message_payload(),
+                json={},
                 headers={"Authorization": "Bearer wrong-key"},
             )
 
         with then("it returns 401"):
             assert_that(response.status_code, equal_to(status.HTTP_401_UNAUTHORIZED))
-
-
-# --- messages ---
-
-
-def test_ingest_messages_returns_204_and_persists():
-    with given([*_GIVEN, there_is_an_agent(), _set_ingest_key(), _create_ingest_client()]) as context:
-        with when("I post a message event"):
-            response = context.ingest_client.post(
-                _url(context),
-                json=_message_payload(),
-                headers=_auth(context),
-            )
-
-        with then("it returns 204 and the message is in the DB"):
-            assert_that(response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
-            conv_repo: ConversationRepository = context.injector.get(ConversationRepository)
-            channels = conv_repo.distinct_channels(
-                context.agent.id,
-                AuthorizationScope(organization_id=context.organization.id),
-            )
-            assert_that(channels, has_length(1))
-
-
-def test_ingest_duplicate_messages_are_idempotent():
-    with given([*_GIVEN, there_is_an_agent(), _set_ingest_key(), _create_ingest_client()]) as context:
-        payload = _message_payload(msg_id="dup-1")
-
-        with when("I post the same message twice"):
-            context.ingest_client.post(_url(context), json=payload, headers=_auth(context))
-            response = context.ingest_client.post(_url(context), json=payload, headers=_auth(context))
-
-        with then("both return 204 and only one row exists"):
-            assert_that(response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
-            conv_repo: ConversationRepository = context.injector.get(ConversationRepository)
-            messages = conv_repo.find_all_channel_messages(
-                agent_id=context.agent.id,
-                channel_id="D123",
-                filter=ConversationsFilter(),
-                authorization_scope=AuthorizationScope(organization_id=context.organization.id),
-            )
-            assert_that(messages, has_length(1))
 
 
 # --- tool calls ---
@@ -238,72 +162,3 @@ def test_ingest_empty_batch_returns_204():
 
         with then("it returns 204"):
             assert_that(response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
-
-
-# --- chat attribution ---
-
-
-def _hermes_interleaved_payload():
-    """Telemetry the real Hermes plugin produces when two chats overlap.
-
-    Produced rather than hand-written: a literal payload would be attributed
-    correctly by construction and could not fail for the defect under test.
-    """
-    env = {
-        "AGENT_ID": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
-        "INGEST_URL": "http://localhost:8001/ingest/v1",
-        "INGEST_API_KEY": "test-key-123",
-    }
-    with patch.dict(os.environ, env, clear=True):
-        mod = load_hermes_plugin()
-        hooks, _ = register_hermes_plugin(mod)
-
-    store = make_session_store(
-        make_session_entry("sess-a", "C_AAA"),
-        make_session_entry("sess-b", "C_BBB"),
-    )
-    dispatch(hooks, make_message_event(text="from A", chat_id="C_AAA"), store)
-    dispatch(hooks, make_message_event(text="from B", chat_id="C_BBB"), store)
-    post_llm_call(hooks, "sess-a", response="reply for A")
-    return flush_and_capture(mod)
-
-
-def _channel_messages(context, channel_id):
-    conv_repo: ConversationRepository = context.injector.get(ConversationRepository)
-    return conv_repo.find_all_channel_messages(
-        agent_id=context.agent.id,
-        channel_id=channel_id,
-        filter=ConversationsFilter(),
-        authorization_scope=AuthorizationScope(organization_id=context.organization.id),
-    )
-
-
-def test_reply_is_readable_only_under_its_own_chat():
-    with given([*_GIVEN, there_is_an_agent(), _set_ingest_key(), _create_ingest_client()]) as context:
-        payload = _hermes_interleaved_payload()
-
-        with when("telemetry from two overlapping chats is ingested"):
-            response = context.ingest_client.post(_url(context), json=payload, headers=_auth(context))
-
-        with then("the reply is readable under chat A and absent from chat B"):
-            assert_that(response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
-            replies_in_a = [
-                m.content for m in _channel_messages(context, "C_AAA") if m.direction == MessageDirection.OUTBOUND
-            ]
-            replies_in_b = [
-                m.content for m in _channel_messages(context, "C_BBB") if m.direction == MessageDirection.OUTBOUND
-            ]
-            assert_that(replies_in_a, equal_to(["reply for A"]))
-            assert_that(replies_in_b, is_(empty()))
-
-
-def test_both_chats_keep_their_own_inbound_messages():
-    with given([*_GIVEN, there_is_an_agent(), _set_ingest_key(), _create_ingest_client()]) as context:
-        payload = _hermes_interleaved_payload()
-
-        with when("telemetry from two overlapping chats is ingested"):
-            context.ingest_client.post(_url(context), json=payload, headers=_auth(context))
-
-        with then("each chat lists exactly its own inbound message"):
-            assert_that([m.content for m in _channel_messages(context, "C_AAA")], equal_to(["from A", "reply for A"]))
-            assert_that([m.content for m in _channel_messages(context, "C_BBB")], equal_to(["from B"]))

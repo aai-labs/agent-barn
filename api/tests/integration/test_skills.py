@@ -1,7 +1,7 @@
-from uuid import uuid7
+from uuid import UUID, uuid7
 
 from fastapi import status
-from hamcrest import assert_that, contains_string, equal_to, has_item, has_items, not_
+from hamcrest import assert_that, contains_string, equal_to, has_item, has_items, not_, starts_with
 from starlette.testclient import TestClient
 
 from api.domains.agents.models import SecretProvider
@@ -21,6 +21,7 @@ from api.tests.steps.agent import (
     skill_is_assigned_to_agent,
     there_is_a_skill,
     there_is_a_skill_for_another_org,
+    there_is_agent_access,
     there_is_an_agent,
     use_org_for_auth,
 )
@@ -29,10 +30,12 @@ from api.tests.steps.organization import (
     there_is_an_organization_with_user_and_access_token,
 )
 from api.tests.steps.rbac import role_lacks_permission
+from api.tests.steps.template import there_is_a_template, there_is_a_template_skill
 from api.tests.steps.user import there_is_a_user, there_is_an_access_token_for_user
 
 _BASE = "/api/v1/organizations/{organization_id}/skills"
 _PLATFORM_BASE = "/api/v1/platform/skills"
+_AGENT_BASE = "/api/v1/organizations/{organization_id}/agents/{agent_id}/skills"
 
 _GIVEN = [
     set_env_variable(
@@ -487,6 +490,26 @@ def test_list_skills_requires_auth():
             assert_that(response.status_code, equal_to(status.HTTP_401_UNAUTHORIZED))
 
 
+def test_aai_cli_seeder_publishes_the_bundled_skill_tree():
+    with given(_GIVEN) as context:
+        from api.domains.skills.repository import SkillRepository
+        from api.domains.skills.skill_seeder import seed_aai_cli_skills
+
+        repository: SkillRepository = context.injector.get(SkillRepository)
+        seed_aai_cli_skills(repository)
+        skills = repository.find_all_global()
+
+        assert_that(len(skills), equal_to(11))
+        for skill in skills:
+            assert_that(skill.slug, starts_with("aai-"))
+            assert_that(skill.root_dir, equal_to(skill.slug))
+            assert_that(skill.entry_path, equal_to("SKILL.md"))
+            version = repository.get_latest_version(skill.id)
+            assert version is not None
+            paths = [file.path for file in repository.get_files(version.id)]
+            assert_that(paths, has_items("SKILL.md", "references/command-reference.md"))
+
+
 def test_platform_admin_can_list_global_skills():
     platform_admin_id = uuid7()
     with given(
@@ -506,6 +529,143 @@ def test_platform_admin_can_list_global_skills():
 
         assert_that(response.status_code, equal_to(status.HTTP_200_OK))
         assert_that([skill["name"] for skill in response.json()], has_item("Global Platform Skill"))
+
+
+def test_platform_admin_can_create_and_publish_platform_skill():
+    platform_admin_id = uuid7()
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_user(
+                id=platform_admin_id,
+                email="platform-skill-author@example.com",
+                role=OrganizationRole.MEMBER,
+                is_platform_admin=True,
+            ),
+            there_is_an_access_token_for_user(user_id=platform_admin_id),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        response = client.post(
+            _PLATFORM_BASE,
+            json={"name": "Platform Authored Skill", "files": _files(content="# Platform v1")},
+            headers=_auth(context),
+        )
+        assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+        body = response.json()
+        assert_that(body["scope"], equal_to("platform"))
+        assert_that(body["version"], equal_to(None))
+        assert_that(body["has_draft"], equal_to(True))
+        skill_id = body["id"]
+
+        publish = client.post(f"{_PLATFORM_BASE}/{skill_id}/draft/publish", headers=_auth(context))
+        assert_that(publish.status_code, equal_to(status.HTTP_201_CREATED))
+        assert_that(publish.json()["version"], equal_to(1))
+        assert_that(publish.json()["has_draft"], equal_to(False))
+
+        versions = client.get(f"{_PLATFORM_BASE}/{skill_id}/versions", headers=_auth(context))
+        assert_that(versions.status_code, equal_to(status.HTTP_200_OK))
+        assert_that(versions.json()[0]["is_pinned_by_agent"], equal_to(False))
+
+        rename = client.patch(
+            f"{_PLATFORM_BASE}/{skill_id}",
+            json={"name": "Platform Authored Renamed"},
+            headers=_auth(context),
+        )
+        assert_that(rename.status_code, equal_to(status.HTTP_200_OK))
+        assert_that(rename.json()["name"], equal_to("Platform Authored Renamed"))
+
+
+def test_platform_admin_can_delete_unused_custom_platform_skill_lineage():
+    platform_admin_id = uuid7()
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_user(
+                id=platform_admin_id,
+                email="platform-skill-deleter@example.com",
+                role=OrganizationRole.MEMBER,
+                is_platform_admin=True,
+            ),
+            there_is_an_access_token_for_user(user_id=platform_admin_id),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        created = client.post(
+            _PLATFORM_BASE,
+            json={"name": "Unused Platform Skill", "files": _files(content="# Platform v1")},
+            headers=_auth(context),
+        )
+        skill_id = created.json()["id"]
+        published = client.post(f"{_PLATFORM_BASE}/{skill_id}/draft/publish", headers=_auth(context))
+        client.post(f"{_PLATFORM_BASE}/{skill_id}/draft", headers=_auth(context))
+
+        with when("the platform administrator deletes an unused custom Platform Skill"):
+            response = client.delete(f"{_PLATFORM_BASE}/{skill_id}", headers=_auth(context))
+
+        with then("the Platform Skill lineage, version, and draft are gone"):
+            assert_that(created.status_code, equal_to(status.HTTP_201_CREATED))
+            assert_that(published.status_code, equal_to(status.HTTP_201_CREATED))
+            assert_that(response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
+            assert_that(
+                client.get(f"{_PLATFORM_BASE}/{skill_id}/files", headers=_auth(context)).status_code,
+                equal_to(status.HTTP_404_NOT_FOUND),
+            )
+
+
+def test_platform_admin_cannot_delete_builtin_skill_lineage():
+    platform_admin_id = uuid7()
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_skill(name="Built-in Platform Skill", global_skill=True),
+            there_is_a_user(
+                id=platform_admin_id,
+                email="platform-builtin-deleter@example.com",
+                role=OrganizationRole.MEMBER,
+                is_platform_admin=True,
+            ),
+            there_is_an_access_token_for_user(user_id=platform_admin_id),
+        ]
+    ) as context:
+        response = context.client.delete(f"{_PLATFORM_BASE}/{context.skill.id}", headers=_auth(context))
+
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+
+
+def test_platform_skill_lineage_delete_is_blocked_when_any_agent_uses_it():
+    platform_admin_id = uuid7()
+    with given(
+        [
+            *_GIVEN,
+            there_is_an_agent(),
+            there_is_a_user(
+                id=platform_admin_id,
+                email="platform-assigned-skill-deleter@example.com",
+                role=OrganizationRole.MEMBER,
+                is_platform_admin=True,
+            ),
+            there_is_an_access_token_for_user(user_id=platform_admin_id),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        created = client.post(
+            _PLATFORM_BASE,
+            json={"name": "Assigned Platform Skill", "files": _files(content="# Platform")},
+            headers=_auth(context),
+        )
+        skill_id = created.json()["id"]
+        published = client.post(f"{_PLATFORM_BASE}/{skill_id}/draft/publish", headers=_auth(context))
+
+        from api.domains.agents.repository import AgentRepository
+
+        context.injector.get(AgentRepository).add_skill(context.agent.id, UUID(skill_id), pinned_version=1)
+
+        response = client.delete(f"{_PLATFORM_BASE}/{skill_id}", headers=_auth(context))
+
+        assert_that(published.status_code, equal_to(status.HTTP_201_CREATED))
+        assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
+        assert_that(response.json()["detail"], contains_string("Agent"))
 
 
 def test_non_platform_admin_cannot_list_global_skills():
@@ -875,7 +1035,7 @@ def test_fork_builtin_skill_creates_org_custom_skill_seeded_from_the_builtin():
             assert_that(body["root_dir"], equal_to(body["slug"]))
             assert_that(body["root_dir"], not_(equal_to("aai-cli")))
             assert_that(body["files"], equal_to([{"path": "SKILL.md", "content": "# Built-in Tool"}]))
-            assert_that(body["version"], equal_to(1))
+            assert_that(body["version"], equal_to(None))
             assert_that(body["has_draft"], equal_to(True))
 
         with then("the fork is its own lineage and the built-in stays untouched"):
@@ -885,6 +1045,44 @@ def test_fork_builtin_skill_creates_org_custom_skill_seeded_from_the_builtin():
             assert_that(builtin["source"], equal_to("aai_cli"))
             assert_that(builtin["version"], equal_to(1))
             assert_that(builtin["has_draft"], equal_to(False))
+
+
+def test_forked_skill_can_apply_a_source_update_without_repinning_existing_agents():
+    with given([*_GIVEN, there_is_a_skill(name="Built-in Tool", global_skill=True)]) as context:
+        client: TestClient = context.client
+        source_id = context.skill.id
+        fork = client.post(f"{_BASE}/{source_id}/fork", headers=_auth(context)).json()
+        fork_id = fork["id"]
+        client.post(f"{_BASE}/{fork_id}/draft/publish", headers=_auth(context))
+
+        from api.domains.skills.repository import SkillRepository
+
+        repository: SkillRepository = context.injector.get(SkillRepository)
+        repository.publish_version(source_id, [("SKILL.md", "# Source v2")])
+
+        before = client.get(f"{_BASE}/{fork_id}", headers=_auth(context)).json()
+        assert_that(before["update_available"], equal_to(True))
+
+        response = client.post(f"{_BASE}/{fork_id}/source-update", headers=_auth(context))
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+        assert_that(response.json()["version"], equal_to(2))
+        assert_that(response.json()["source_skill_version"], equal_to(2))
+        assert_that(response.json()["update_available"], equal_to(False))
+        assert_that(response.json()["files"], equal_to([{"path": "SKILL.md", "content": "# Source v2"}]))
+
+        repository.publish_version(source_id, [("SKILL.md", "# Source v3")])
+        client.post(f"{_BASE}/{fork_id}/draft", headers=_auth(context))
+        client.patch(
+            f"{_BASE}/{fork_id}/draft",
+            json={"files": _files(content="# Local draft")},
+            headers=_auth(context),
+        )
+        draft_update = client.post(f"{_BASE}/{fork_id}/source-update", headers=_auth(context))
+        assert_that(draft_update.status_code, equal_to(status.HTTP_200_OK))
+        assert_that(draft_update.json()["version"], equal_to(2))
+        assert_that(draft_update.json()["has_draft"], equal_to(True))
+        assert_that(draft_update.json()["update_available"], equal_to(False))
+        assert_that(draft_update.json()["files"], equal_to([{"path": "SKILL.md", "content": "# Source v3"}]))
 
 
 def test_fork_builtin_skill_opens_a_draft_seeded_from_the_fork():
@@ -898,6 +1096,26 @@ def test_fork_builtin_skill_opens_a_draft_seeded_from_the_fork():
         with then("it carries the built-in's content, ready to edit"):
             assert_that(draft.status_code, equal_to(status.HTTP_200_OK))
             assert_that(draft.json()["files"], equal_to([{"path": "SKILL.md", "content": "# Built-in Tool"}]))
+
+
+def test_unpublished_fork_can_apply_a_newer_source_update_to_its_draft():
+    with given([*_GIVEN, there_is_a_skill(name="Built-in Tool", global_skill=True)]) as context:
+        client: TestClient = context.client
+        source_id = context.skill.id
+        fork = client.post(f"{_BASE}/{source_id}/fork", headers=_auth(context)).json()
+
+        from api.domains.skills.repository import SkillRepository
+
+        context.injector.get(SkillRepository).publish_version(source_id, [("SKILL.md", "# Built-in Tool v2")])
+
+        with when("the upstream publishes before the fork's initial draft is published"):
+            updated = client.post(f"{_BASE}/{fork['id']}/source-update", headers=_auth(context))
+
+        with then("Apply Update replaces the fork draft instead of reporting no update"):
+            assert_that(updated.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(updated.json()["version"], equal_to(None))
+            assert_that(updated.json()["has_draft"], equal_to(True))
+            assert_that(updated.json()["files"], equal_to(_files(content="# Built-in Tool v2")))
 
 
 def test_fork_builtin_skill_disambiguates_name_when_org_already_has_one():
@@ -919,13 +1137,246 @@ def test_fork_builtin_skill_disambiguates_name_when_org_already_has_one():
             assert_that(response.json()["root_dir"], equal_to(response.json()["slug"]))
 
 
-def test_fork_custom_skill_returns_400():
+def test_fork_custom_skill_creates_an_independent_draft():
     with given([*_GIVEN, there_is_a_skill(name="Custom Tool")]) as context:
-        with when("I try to fork a custom skill"):
+        with when("I fork a custom skill"):
             response = context.client.post(f"{_BASE}/{context.skill.id}/fork", headers=_auth(context))
 
-        with then("it returns 400 because custom skills are edited directly"):
-            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+        with then("it creates an independent draft"):
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+            assert_that(response.json()["source"], equal_to("custom"))
+            assert_that(response.json()["version"], equal_to(None))
+            assert_that(response.json()["has_draft"], equal_to(True))
+
+
+def test_agent_owner_can_create_private_skill_and_org_list_cannot_see_it():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        agent_base = _AGENT_BASE.format(organization_id=context.organization.id, agent_id=context.agent.id)
+        response = context.client.post(
+            agent_base,
+            json={"name": "Private Skill", "files": [{"path": "SKILL.md", "content": "# Private"}]},
+            headers=_auth(context),
+        )
+
+        assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+        body = response.json()
+        assert_that(body["scope"], equal_to("agent"))
+        assert_that(body["agent_id"], equal_to(str(context.agent.id)))
+        assert_that(body["version"], equal_to(None))
+        assert_that(body["has_draft"], equal_to(True))
+
+        org_response = context.client.get(_BASE, headers=_auth(context))
+        assert_that([skill["id"] for skill in org_response.json()["items"]], not_(has_item(body["id"])))
+
+
+def test_agent_owner_can_delete_unused_private_skill_lineage():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        agent_base = _AGENT_BASE.format(organization_id=context.organization.id, agent_id=context.agent.id)
+        created = client.post(
+            agent_base,
+            json={"name": "Unused Private Skill", "files": _files(content="# Private")},
+            headers=_auth(context),
+        )
+        skill_id = created.json()["id"]
+
+        with when("the owner deletes an unused private Skill with its initial draft"):
+            response = client.delete(f"{agent_base}/{skill_id}", headers=_auth(context))
+
+        with then("the private Skill lineage and its draft are gone"):
+            assert_that(response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
+            assert_that(
+                client.get(f"{agent_base}/{skill_id}/files", headers=_auth(context)).status_code,
+                equal_to(status.HTTP_404_NOT_FOUND),
+            )
+
+
+def test_agent_private_skill_lineage_delete_is_blocked_when_any_version_is_assigned():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        agent_base = _AGENT_BASE.format(organization_id=context.organization.id, agent_id=context.agent.id)
+        created = client.post(
+            agent_base,
+            json={"name": "Assigned Private Skill", "files": _files(content="# Private v1")},
+            headers=_auth(context),
+        )
+        skill_id = created.json()["id"]
+        published_v1 = client.post(f"{agent_base}/{skill_id}/draft/publish", headers=_auth(context))
+        assert_that(published_v1.status_code, equal_to(status.HTTP_201_CREATED))
+
+        from api.domains.skills.repository import SkillRepository
+
+        skill_repository: SkillRepository = context.injector.get(SkillRepository)
+        context.skill = skill_repository.get_by_id(UUID(skill_id))
+        assert context.skill is not None
+        skill_is_assigned_to_agent()(context)
+
+        client.post(f"{agent_base}/{skill_id}/draft", headers=_auth(context))
+        client.patch(
+            f"{agent_base}/{skill_id}/draft",
+            json={"files": _files(content="# Private v2")},
+            headers=_auth(context),
+        )
+        published_v2 = client.post(f"{agent_base}/{skill_id}/draft/publish", headers=_auth(context))
+
+        with when("the owner deletes a private Skill whose historical version is assigned"):
+            response = client.delete(f"{agent_base}/{skill_id}", headers=_auth(context))
+
+        with then("the lineage remains because an Agent still pins one of its versions"):
+            assert_that(published_v2.status_code, equal_to(status.HTTP_201_CREATED))
+            assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
+            assert_that(response.json()["detail"], contains_string("Agent"))
+
+
+def test_agent_owner_can_list_private_skill_with_visible_shared_skills():
+    with given([*_GIVEN, there_is_an_agent(), there_is_a_skill(name="Shared Skill")]) as context:
+        agent_base = _AGENT_BASE.format(organization_id=context.organization.id, agent_id=context.agent.id)
+        private = context.client.post(
+            agent_base,
+            json={"name": "Private Skill", "files": [{"path": "SKILL.md", "content": "# Private"}]},
+            headers=_auth(context),
+        ).json()
+
+        response = context.client.get(agent_base, headers=_auth(context))
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+        ids = [skill["id"] for skill in response.json()["items"]]
+        assert_that(ids, has_items(private["id"], str(context.skill.id)))
+
+
+def test_agent_owner_can_draft_publish_read_and_prune_private_skill_versions():
+    """Agent-private lifecycle endpoints must use the Agent visibility path,
+    rather than accidentally falling back to Organization-owned lookup rules."""
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        agent_base = _AGENT_BASE.format(organization_id=context.organization.id, agent_id=context.agent.id)
+
+        with when("the owner creates a private Skill and publishes its first draft"):
+            created = client.post(
+                agent_base,
+                json={"name": "Private Lifecycle", "files": _files(content="# Private draft")},
+                headers=_auth(context),
+            )
+            skill_id = created.json()["id"]
+            draft = client.get(f"{agent_base}/{skill_id}/draft", headers=_auth(context))
+            published_v1 = client.post(f"{agent_base}/{skill_id}/draft/publish", headers=_auth(context))
+
+        with then("draft and published content remain accessible through Agent routes"):
+            assert_that(created.status_code, equal_to(status.HTTP_201_CREATED))
+            assert_that(draft.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(draft.json()["files"], equal_to(_files(content="# Private draft")))
+            assert_that(published_v1.status_code, equal_to(status.HTTP_201_CREATED))
+            assert_that(published_v1.json()["version"], equal_to(1))
+            assert_that(
+                client.get(f"{agent_base}/{skill_id}/versions/1", headers=_auth(context)).json()["files"],
+                equal_to(_files(content="# Private draft")),
+            )
+
+        client.post(f"{agent_base}/{skill_id}/draft", headers=_auth(context))
+        client.patch(
+            f"{agent_base}/{skill_id}/draft",
+            json={"files": _files(content="# Private v2")},
+            headers=_auth(context),
+        )
+        published_v2 = client.post(f"{agent_base}/{skill_id}/draft/publish", headers=_auth(context))
+
+        with when("the owner prunes an unpinned historical version"):
+            deleted = client.delete(f"{agent_base}/{skill_id}/versions/1", headers=_auth(context))
+            versions = client.get(f"{agent_base}/{skill_id}/versions", headers=_auth(context))
+
+        with then("only the current immutable version remains"):
+            assert_that(published_v2.status_code, equal_to(status.HTTP_201_CREATED))
+            assert_that(deleted.status_code, equal_to(status.HTTP_204_NO_CONTENT))
+            assert_that([version["version"] for version in versions.json()], equal_to([2]))
+
+
+def test_agent_owner_can_fork_and_apply_update_from_a_visible_shared_skill():
+    with given([*_GIVEN, there_is_an_agent(), there_is_a_skill(name="Platform Source", global_skill=True)]) as context:
+        client: TestClient = context.client
+        agent_base = _AGENT_BASE.format(organization_id=context.organization.id, agent_id=context.agent.id)
+        source_id = context.skill.id
+
+        with when("the owner forks a Platform Skill into the Agent scope"):
+            fork = client.post(f"{agent_base}/{source_id}/fork", headers=_auth(context))
+            fork_id = fork.json()["id"]
+            published = client.post(f"{agent_base}/{fork_id}/draft/publish", headers=_auth(context))
+
+        with then("the fork is Agent-private and tracks its source version"):
+            assert_that(fork.status_code, equal_to(status.HTTP_201_CREATED))
+            assert_that(fork.json()["scope"], equal_to("agent"))
+            assert_that(published.status_code, equal_to(status.HTTP_201_CREATED))
+            assert_that(published.json()["source_skill_id"], equal_to(str(source_id)))
+            assert_that(published.json()["source_skill_version"], equal_to(1))
+
+        from api.domains.skills.repository import SkillRepository
+
+        repository: SkillRepository = context.injector.get(SkillRepository)
+        repository.publish_version(source_id, [("SKILL.md", "# Platform source v2")])
+
+        with when("the owner applies the newer direct-source version"):
+            updated = client.post(f"{agent_base}/{fork_id}/source-update", headers=_auth(context))
+
+        with then("the Agent fork publishes the selected source snapshot"):
+            assert_that(updated.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(updated.json()["version"], equal_to(2))
+            assert_that(updated.json()["source_skill_version"], equal_to(2))
+            assert_that(updated.json()["files"], equal_to(_files(content="# Platform source v2")))
+
+
+def test_member_without_agent_access_cannot_create_private_skill():
+    with given([*_GIVEN, there_is_an_agent(), _there_is_a_member_actor()]) as context:
+        agent_base = _AGENT_BASE.format(organization_id=context.organization.id, agent_id=context.agent.id)
+        response = context.client.post(
+            agent_base,
+            json={"name": "Private Skill", "files": [{"path": "SKILL.md", "content": "# Private"}]},
+            headers=_auth(context),
+        )
+        # Agent visibility is intentionally fail-closed to avoid leaking an
+        # inaccessible Agent's existence.
+        assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
+
+
+def test_agent_private_skill_routes_hide_another_agents_skills_from_a_same_org_member():
+    with given([*_GIVEN, there_is_an_agent(name="Private Skill Owner")]) as context:
+        client: TestClient = context.client
+        private_agent = context.agent
+        private_base = _AGENT_BASE.format(organization_id=context.organization.id, agent_id=private_agent.id)
+
+        created = client.post(
+            private_base,
+            json={"name": "Private Skill", "files": _files(content="# Private")},
+            headers=_auth(context),
+        )
+        skill_id = created.json()["id"]
+        client.post(f"{private_base}/{skill_id}/draft/publish", headers=_auth(context))
+        client.post(f"{private_base}/{skill_id}/draft", headers=_auth(context))
+
+        there_is_an_agent(name="Accessible Agent")(context)
+        accessible_agent = context.agent
+        accessible_base = _AGENT_BASE.format(organization_id=context.organization.id, agent_id=accessible_agent.id)
+        _there_is_a_member_actor()(context)
+        there_is_agent_access(agent_id=accessible_agent.id)(context)
+
+        with when("a member with access to a different Agent requests the private Skill routes"):
+            accessible_list = client.get(accessible_base, headers=_auth(context))
+            responses = [
+                client.get(private_base, headers=_auth(context)),
+                client.get(f"{private_base}/{skill_id}/files", headers=_auth(context)),
+                client.get(f"{private_base}/{skill_id}/versions", headers=_auth(context)),
+                client.get(f"{private_base}/{skill_id}/versions/1", headers=_auth(context)),
+                client.get(f"{private_base}/{skill_id}/draft", headers=_auth(context)),
+                client.patch(
+                    f"{private_base}/{skill_id}/draft",
+                    json={"files": _files(content="# Unauthorized")},
+                    headers=_auth(context),
+                ),
+                client.delete(f"{private_base}/{skill_id}", headers=_auth(context)),
+                client.delete(f"{private_base}/{skill_id}/versions/1", headers=_auth(context)),
+            ]
+
+        with then("their access to the other Agent does not reveal or mutate the private Skill"):
+            assert_that(created.status_code, equal_to(status.HTTP_201_CREATED))
+            assert_that(accessible_list.status_code, equal_to(status.HTTP_200_OK))
+            assert_that([response.status_code for response in responses], equal_to([status.HTTP_404_NOT_FOUND] * 8))
 
 
 def test_member_cannot_fork_builtin_skill():
@@ -1177,6 +1628,114 @@ def test_member_cannot_publish_skill_draft():
         response = context.client.post(f"{_BASE}/{context.skill.id}/draft/publish", headers=_auth(context))
 
         assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+
+
+def test_delete_unused_organization_skill_lineage_removes_all_versions_and_draft():
+    with given([*_GIVEN, there_is_a_skill(name="Unused Organization Skill")]) as context:
+        client: TestClient = context.client
+        from api.domains.skills.repository import SkillRepository
+
+        repository: SkillRepository = context.injector.get(SkillRepository)
+        _publish_new_version(client, context, "# v2")
+        draft = client.post(f"{_BASE}/{context.skill.id}/draft", headers=_auth(context))
+
+        with when("the organization manager deletes an unused custom Skill lineage"):
+            response = client.delete(f"{_BASE}/{context.skill.id}", headers=_auth(context))
+
+        with then("the Skill, every version, and its draft are deleted"):
+            assert_that(draft.status_code, equal_to(status.HTTP_201_CREATED))
+            assert_that(response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
+            assert_that(
+                client.get(f"{_BASE}/{context.skill.id}", headers=_auth(context)).status_code,
+                equal_to(status.HTTP_404_NOT_FOUND),
+            )
+            assert_that(
+                client.get(f"{_BASE}/{context.skill.id}/versions", headers=_auth(context)).status_code,
+                equal_to(status.HTTP_404_NOT_FOUND),
+            )
+            assert_that(repository.get_by_id(context.skill.id), equal_to(None))
+            assert_that(repository.list_versions(context.skill.id), equal_to([]))
+            assert_that(repository.get_draft(context.skill.id), equal_to(None))
+
+
+def test_delete_organization_skill_requires_skill_manage_permission():
+    with given([*_GIVEN, there_is_a_skill(name="Member Cannot Delete"), _there_is_a_member_actor()]) as context:
+        response = context.client.delete(f"{_BASE}/{context.skill.id}", headers=_auth(context))
+
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+
+
+def test_delete_organization_skill_requires_authentication():
+    with given([*_GIVEN, there_is_a_skill(name="Unauthenticated Delete")]) as context:
+        response = context.client.delete(f"{_BASE}/{context.skill.id}")
+
+        assert_that(response.status_code, equal_to(status.HTTP_401_UNAUTHORIZED))
+
+
+def test_delete_organization_skill_not_found_returns_404():
+    with given(_GIVEN) as context:
+        response = context.client.delete(f"{_BASE}/{uuid7()}", headers=_auth(context))
+
+        assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
+
+
+def test_delete_organization_builtin_skill_returns_403():
+    with given([*_GIVEN, there_is_a_skill(name="Built-in Skill", global_skill=True)]) as context:
+        response = context.client.delete(f"{_BASE}/{context.skill.id}", headers=_auth(context))
+
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+
+
+def test_delete_organization_skill_is_blocked_when_any_version_is_pinned_by_an_agent():
+    with given(
+        [
+            *_GIVEN,
+            there_is_an_agent(),
+            there_is_a_skill(name="Pinned Historical Skill"),
+            skill_is_assigned_to_agent(),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        _publish_new_version(client, context, "# v2")
+
+        with when("the organization manager deletes a Skill whose historical version is pinned"):
+            response = client.delete(f"{_BASE}/{context.skill.id}", headers=_auth(context))
+
+        with then("the whole lineage remains and the response identifies the Agent usage"):
+            assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
+            assert_that(response.json()["detail"], contains_string("Agent"))
+            assert_that(
+                client.get(f"{_BASE}/{context.skill.id}/versions", headers=_auth(context)).status_code,
+                equal_to(status.HTTP_200_OK),
+            )
+
+
+def test_delete_organization_skill_is_blocked_when_required_by_a_template():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_skill(name="Template Required Skill"),
+            there_is_a_template(),
+            there_is_a_template_skill(),
+        ]
+    ) as context:
+        response = context.client.delete(f"{_BASE}/{context.skill.id}", headers=_auth(context))
+
+        assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
+        assert_that(response.json()["detail"], contains_string("Template"))
+
+
+def test_delete_organization_skill_is_blocked_when_used_as_a_fork_source():
+    with given([*_GIVEN, there_is_a_skill(name="Fork Source Skill")]) as context:
+        client: TestClient = context.client
+        source_id = context.skill.id
+        fork = client.post(f"{_BASE}/{source_id}/fork", headers=_auth(context))
+
+        response = client.delete(f"{_BASE}/{source_id}", headers=_auth(context))
+
+        assert_that(fork.status_code, equal_to(status.HTTP_201_CREATED))
+        assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
+        assert_that(response.json()["detail"], contains_string("fork"))
 
 
 def test_member_cannot_delete_skill_version():

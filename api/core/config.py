@@ -2,7 +2,7 @@ from functools import lru_cache
 from pathlib import Path
 
 from dotenv import load_dotenv
-from pydantic import PostgresDsn
+from pydantic import Field, PostgresDsn
 from pydantic_settings import BaseSettings
 
 ROOT_ENV_PATH = Path(__file__).resolve().parents[2] / ".env"
@@ -50,9 +50,23 @@ class Config(BaseSettings):
     # Agent workloads and the API run in the same namespace, so the short Service
     # name is portable between staging and production.
     ingest_base_url: str = "http://agentbarn-api:8001/ingest/v1"
+    communications_base_url: str = (
+        "http://agentbarn-api-communications.agent-farm.svc.cluster.local:8002/communications/v1"
+    )
     skip_slack_token_validation: bool = False
     skip_telegram_token_validation: bool = False
+    skip_discord_token_validation: bool = False
+    skip_teams_token_validation: bool = False
+    # Shown to Teams administrators reviewing a generated app package. Must be
+    # publicly reachable or Teams rejects the upload.
+    teams_publisher_name: str = "Agent Barn"
+    teams_publisher_website_url: str = "https://agentbarn.dev"
+    teams_privacy_url: str = "https://aai-labs.com/privacy"
+    teams_terms_url: str = "https://aai-labs.com/terms"
     slack_directory_cache_ttl_seconds: int = 600
+    # Content-free Communication journal history is pruned by the gateway
+    # supervisor after this many days.
+    communication_journal_retention_days: int = Field(default=31, ge=1, le=3650)
     # Socket timeout for Slack Web API calls. Large sweeps (e.g. users.list can be
     # ~320KB) are slow over a poor link; too tight a timeout cuts the body off
     # mid-stream (IncompleteRead). Generous default; in-cluster latency is low.

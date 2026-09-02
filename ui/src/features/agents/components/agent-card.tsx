@@ -1,7 +1,9 @@
 "use client";
 
 import type { Agent } from "../schemas";
-import { formatModelName } from "../utils";
+import { currentModelOf, formatModelName } from "../utils";
+import { ModelSourceBadge } from "./model-source-badge";
+import { PendingModelNote } from "./pending-model-note";
 import { useAgentHealth } from "../hooks/use-agent-health";
 import { AgentAvatar } from "./agent-avatar";
 import { AgentMetaBadges } from "./agent-meta-badges";
@@ -26,15 +28,14 @@ export function AgentCard({ agent, onOpen }: AgentCardProps) {
           <div className="font-semibold text-[1.1875rem] tracking-tight" style={{ color: "var(--ink)" }}>
             {agent.name}
           </div>
-          {agent.model && (
-            <div className="text-[0.844rem] mt-0.5 font-mono truncate" style={{ color: "var(--ink-3)" }}>
-              {formatModelName(agent.model)}
-            </div>
-          )}
-          {agent.slackConfig?.botDisplayName && (
-            <div className="text-[0.813rem] mt-0.5 truncate" style={{ color: "var(--ink-4)" }}>
-              @{agent.slackConfig.botDisplayName}
-            </div>
+          {currentModelOf(agent) && (
+            <>
+              <div className="mt-0.5 flex items-center gap-1.5 text-[0.844rem]" style={{ color: "var(--ink-3)" }}>
+                <span className="truncate font-mono">{formatModelName(currentModelOf(agent))}</span>
+                <ModelSourceBadge source={agent.modelSource} />
+              </div>
+              <PendingModelNote pendingModel={agent.pendingModel} />
+            </>
           )}
           <AgentMetaBadges agent={agent} className="mt-2" />
         </div>

@@ -146,45 +146,6 @@
       }
     },
     {
-      "id": 4,
-      "type": "stat",
-      "title": "Slack tokens failing",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${datasource}"
-      },
-      "gridPos": {
-        "h": 5,
-        "w": 6,
-        "x": 18,
-        "y": 0
-      },
-      "targets": [
-        {
-          "expr": "count(min by (app) (agent_slack_tokens_ok{job=\"agent\", org_name=~\"$org\"}) == 0) or vector(0)",
-          "refId": "A"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "red",
-                "value": 1
-              }
-            ]
-          }
-        },
-        "overrides": []
-      }
-    },
-    {
       "id": 5,
       "type": "timeseries",
       "title": "Runtime connectivity by agent",
