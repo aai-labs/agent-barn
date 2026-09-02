@@ -8,7 +8,7 @@ vulnerability.**
 Use either channel:
 
 - **Email [tadas@aai-labs.com](mailto:tadas@aai-labs.com)**
-- **[GitHub private vulnerability reporting](https://github.com/aai-labs/agent-farm/security/advisories/new)**, which opens a private thread visible only to you and the maintainers
+- **[GitHub private vulnerability reporting](https://github.com/aai-labs/agent-barn/security/advisories/new)**, which opens a private thread visible only to you and the maintainers
 
 Both reach the same people. Use email if you would rather not create a GitHub
 account or your disclosure process requires a mailbox.
