@@ -62,9 +62,19 @@ RUN npm install -g openclaw@2026.6.11
 # gog (gogcli) — Google Workspace CLI used by the google_workspace integration. Pinned:
 # the OAuth scopes the API requests mirror this version's service map, and auth-state
 # formats have changed across releases.
+#
+# Downloaded to a file rather than piped into tar: /bin/sh has no pipefail, so in a
+# pipeline the step's exit status is tar's, and a curl that dies mid-transfer could
+# leave a truncated-but-extractable binary behind a passing build. Staging the
+# tarball lets gzip's CRC reject a partial download before anything is unpacked.
+# The retries cover github.com resetting the connection, which has failed CI builds
+# on its own (release assets are served from a CDN that occasionally drops us).
 ARG GOG_VERSION=0.37.0
-RUN curl -fsSL "https://github.com/openclaw/gogcli/releases/download/v${GOG_VERSION}/gogcli_${GOG_VERSION}_linux_amd64.tar.gz" \
-      | tar -xz -C /usr/local/bin ./gog && \
+RUN curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 --connect-timeout 15 \
+      -o /tmp/gogcli.tar.gz \
+      "https://github.com/openclaw/gogcli/releases/download/v${GOG_VERSION}/gogcli_${GOG_VERSION}_linux_amd64.tar.gz" && \
+    tar -xzf /tmp/gogcli.tar.gz -C /usr/local/bin ./gog && \
+    rm -f /tmp/gogcli.tar.gz && \
     chmod 755 /usr/local/bin/gog
 
 ARG CLOUD_CLIS=false
@@ -74,17 +84,20 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     if [ "$CLOUD_CLIS" = "true" ]; then \
         apt-get update && \
         apt-get install -y --no-install-recommends gnupg unzip && \
-        curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip && \
+        curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 --connect-timeout 15 \
+            "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip && \
         unzip -q /tmp/awscliv2.zip -d /tmp && \
         /tmp/aws/install && \
         rm -rf /tmp/awscliv2.zip /tmp/aws && \
-        curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg \
+        curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 --connect-timeout 15 \
+            https://packages.cloud.google.com/apt/doc/apt-key.gpg \
             | gpg --dearmor -o /usr/share/keyrings/cloud.google.gpg && \
         echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" \
             > /etc/apt/sources.list.d/google-cloud-sdk.list && \
         apt-get update && \
         apt-get install -y --no-install-recommends google-cloud-cli && \
-        curl -fsSL https://packages.microsoft.com/keys/microsoft.asc \
+        curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 --connect-timeout 15 \
+            https://packages.microsoft.com/keys/microsoft.asc \
             | gpg --dearmor -o /usr/share/keyrings/microsoft.gpg && \
         echo "deb [arch=amd64 signed-by=/usr/share/keyrings/microsoft.gpg] https://packages.microsoft.com/repos/azure-cli/ bookworm main" \
             > /etc/apt/sources.list.d/azure-cli.list && \
