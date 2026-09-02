@@ -1,7 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useMemo } from "react";
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { useCallback, useEffect, useState } from "react";
+import { usePathname, useSearchParams } from "next/navigation";
 
 import {
   type AgentPlatform,
@@ -44,45 +44,52 @@ function readInstant(raw: string | null): string | null {
   return Number.isNaN(new Date(raw).getTime()) ? null : raw;
 }
 
+function parse(params: URLSearchParams): StatsUrlState {
+  const fallback = defaultWindow();
+  const platform = AgentPlatformSchema.safeParse(params.get("app"));
+  const direction = MessageDirectionSchema.safeParse(params.get("direction"));
+
+  return {
+    from: readInstant(params.get("from")) ?? fallback.from,
+    to: readInstant(params.get("to")) ?? fallback.to,
+    organizationId: params.get("org"),
+    platform: platform.success ? platform.data : null,
+    direction: direction.success ? direction.data : "all",
+  };
+}
+
+function toQuery(state: StatsUrlState): string {
+  const params = new URLSearchParams();
+  params.set("from", state.from);
+  params.set("to", state.to);
+  if (state.organizationId) params.set("org", state.organizationId);
+  if (state.platform) params.set("app", state.platform);
+  if (state.direction !== "all") params.set("direction", state.direction);
+  return params.toString();
+}
+
+/**
+ * Panel state, seeded from the query string and mirrored back to it.
+ *
+ * State is local and authoritative. The URL is written with the History API
+ * rather than `router.replace`, which would navigate: on a prerendered route
+ * `useSearchParams` does not observe that write, so anything waiting to read
+ * its own value back never settles.
+ */
 export function useStatsUrlState() {
-  const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
 
-  const state: StatsUrlState = useMemo(() => {
-    const fallback = defaultWindow();
-    const from = readInstant(searchParams.get("from"));
-    const to = readInstant(searchParams.get("to"));
-    const platform = AgentPlatformSchema.safeParse(searchParams.get("app"));
-    const direction = MessageDirectionSchema.safeParse(searchParams.get("direction"));
+  const [state, setState] = useState<StatsUrlState>(() => parse(searchParams));
 
-    return {
-      from: from ?? fallback.from,
-      to: to ?? fallback.to,
-      organizationId: searchParams.get("org"),
-      platform: platform.success ? platform.data : null,
-      direction: direction.success ? direction.data : "all",
-    };
-  }, [searchParams]);
+  useEffect(() => {
+    window.history.replaceState(null, "", `${pathname}?${toQuery(state)}`);
+  }, [pathname, state]);
 
   const write = useCallback(
-    (next: Partial<StatsUrlState>) => {
-      const merged = { ...state, ...next };
-      const params = new URLSearchParams();
-      params.set("from", merged.from);
-      params.set("to", merged.to);
-      if (merged.organizationId) params.set("org", merged.organizationId);
-      if (merged.platform) params.set("app", merged.platform);
-      if (merged.direction !== "all") params.set("direction", merged.direction);
-      router.replace(`${pathname}?${params.toString()}`, { scroll: false });
-    },
-    [router, pathname, state],
+    (next: Partial<StatsUrlState>) => setState((prev) => ({ ...prev, ...next })),
+    [],
   );
-
-  const hasBounds = searchParams.has("from") && searchParams.has("to");
-  useEffect(() => {
-    if (!hasBounds) write({});
-  }, [hasBounds, write]);
 
   return { state, write };
 }

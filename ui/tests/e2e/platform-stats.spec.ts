@@ -87,6 +87,39 @@ test.describe("Platform Stats Page", () => {
     await expect(platformPage.statTile("Messages")).toHaveText("120");
   });
 
+  test("mirrors filters to the URL without navigating", async ({ page }) => {
+    await platformPage.goto();
+    await expect(platformPage.statTile("Messages")).toHaveText("200");
+
+    // A router navigation refetches the RSC payload. Filters must not: on a
+    // prerendered route that write is not observed, so anything reading it back
+    // re-fires forever.
+    const navigations: string[] = [];
+    page.on("request", (request) => {
+      if (request.url().includes("_rsc=")) navigations.push(request.url());
+    });
+
+    await platformPage.directionSelect().click();
+    await platformPage.chooseOption("Received only");
+    await expect(platformPage.statTile("Sent")).toHaveText("0");
+
+    await platformPage.messagingAppSelect().click();
+    await platformPage.chooseOption("Telegram");
+    await expect(page).toHaveURL(/app=telegram/);
+
+    expect(navigations).toHaveLength(0);
+  });
+
+  test("keeps a filter pressed immediately after load", async ({ page }) => {
+    // Deliberately no settling: this races the default-window write.
+    await page.goto("/dashboard/platform");
+    await platformPage.directionSelect().click();
+    await platformPage.chooseOption("Received only");
+
+    await expect(platformPage.statTile("Sent")).toHaveText("0");
+    await expect(page).toHaveURL(/direction=inbound/);
+  });
+
   test("shows the error state when stats endpoints fail", async () => {
     await dataSupport.platformStats.interceptGetMessageStatsRequest({
       status: 500,
