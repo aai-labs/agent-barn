@@ -477,15 +477,29 @@ export function AgentChannelSettings({
   /** Wraps a directory query as a browse source for an array field. */
   function queryBrowse(
     noun: string,
-    query: { data?: CommunicationDirectoryEntry[]; isPending: boolean; error: unknown },
+    query: {
+      data?: CommunicationDirectoryEntry[];
+      isPending: boolean;
+      error: unknown;
+      refetch: () => unknown;
+    },
     disabledReason?: string | null,
   ): ArrayBrowseSource {
     return {
       noun,
       entries: query.data ?? [],
       isLoading: query.isPending,
-      error: query.error ? `Could not load ${noun}.` : null,
+      // Surface what the provider actually said (a revoked token, a missing scope) rather
+      // than a generic failure — the whole point of the API's bounded error detail.
+      error: query.error
+        ? query.error instanceof Error
+          ? query.error.message
+          : `Could not load ${noun}.`
+        : null,
       disabledReason: disabledReason ?? null,
+      // A directory read that already failed is cached as an error, so re-opening the
+      // picker would show the same stale failure forever without this.
+      onOpen: () => { if (query.error) query.refetch(); },
     };
   }
 

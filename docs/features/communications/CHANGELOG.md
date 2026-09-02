@@ -23,7 +23,8 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
 - Changed: The add-Connection form now leads with Credentials, then the Connection name, then Connection settings, so the setup guidance flows directly into the tokens it describes.
 - Changed: Slack allowlists are no longer gated behind a separate workspace-validation step. Every directory-backed allowlist is an ID field again, paired with a Browse control that opens a searchable multi-select of channels, people, servers, or roles; confirming it writes only the platform IDs. Slack loads its directory from the draft credentials on first open; a saved Connection browses its own directory. Manual ID entry remains available at all times.
 - Changed: Connection settings are stacked full width rather than paired into two columns, for every platform. Directory-backed fields render as one bordered token field holding its chips, a compact ID input, and the Browse control, and the picker itself has room to breathe: a padded search box separated from the list, taller rows, and the selection count in the footer.
-- Fixed: Directory suggestions never appeared, and the Slack workspace-validation control could never enable, because both were keyed on snake_case plugin-schema property names. Responses are camelized in transit, so the keys are now camelCase.
+- Fixed: Directory suggestions never appeared, saved allowlist chips showed raw IDs instead of names, and the Slack workspace-validation control could never enable, because all three were keyed on snake_case plugin-schema property names. Responses are camelized in transit, so the keys are now camelCase.
+- Fixed: When a directory read failed while editing a saved Connection, the picker reported a generic "could not load" and cached that failure, so reopening it never retried. It now shows the reason the API returned and re-reads the directory on reopen.
 
 ### 2026-09-01 — Pre-save Slack workspace preview — PR pending
 

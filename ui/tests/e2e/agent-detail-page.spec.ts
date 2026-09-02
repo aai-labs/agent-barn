@@ -1,8 +1,9 @@
-import { expect, test, type Locator } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 
 import { TEST_ORG_ID } from "../constants";
 import {
   COMMUNICATION_DELIVERY_ID,
+  mockCommunicationConnection,
   SAFE_ERROR_DETAILS,
   SAFE_PROVIDER_ERROR,
 } from "../fixtures/communication-connections";
@@ -660,6 +661,59 @@ test.describe("Agent Detail Page — Channels tab", () => {
     await expect(telegramHint).toContainText("getUpdates");
     await expect(telegramHint).toContainText("/setprivacy");
     await expect(telegramHint).toContainText("webhook");
+  });
+
+  /** A saved Slack Connection, served in place of the default Discord one. */
+  const savedSlackConnection = {
+    ...mockCommunicationConnection,
+    platform_key: "slack",
+    display_name: "Team Slack",
+    settings: { channel_ids: ["C1"], dm_user_ids: [] },
+  };
+
+  async function serveSavedSlackConnection(page: Page) {
+    // Registered after the shared intercepts, and the last matching route wins.
+    await page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}/connections`, async (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify([savedSlackConnection]),
+      });
+    });
+    // Re-run the beforeEach navigation so the list refetches through the new route.
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await agentDetailPage.configureButton().click();
+    await agentDetailPage.channelsTab().click();
+  }
+
+  test("browses a saved Connection's own directory when editing it", async ({ page }) => {
+    await serveSavedSlackConnection(page);
+    await agentDetailPage.editConnectionButton("Team Slack").click();
+
+    await agentDetailPage.browseDirectoryButton("Allowed channels").click();
+
+    // Names come from the saved Connection's own directory; the field still stores IDs.
+    await agentDetailPage.directoryPickerOption(/#general/).click();
+    await agentDetailPage.directoryPickerConfirmButton().click();
+    await expect(agentDetailPage.directoryPicker()).toBeHidden();
+    await expect(page.getByRole("button", { name: "Remove #general", exact: true })).toBeVisible();
+  });
+
+  test("shows why a directory read failed instead of an empty picker", async ({ page }) => {
+    await serveSavedSlackConnection(page);
+    await page.route("**/directory/channels*", async (route) => {
+      await route.fulfill({
+        status: 400,
+        contentType: "application/json",
+        body: JSON.stringify({ detail: "Provider denied the requested operation (missing_scope)" }),
+      });
+    });
+
+    await agentDetailPage.editConnectionButton("Team Slack").click();
+    await agentDetailPage.browseDirectoryButton("Allowed channels").click();
+
+    await expect(agentDetailPage.directoryPicker()).toContainText("missing_scope");
   });
 
   test("browses the Slack workspace to fill channel IDs from names", async ({ page }) => {
