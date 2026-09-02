@@ -56,6 +56,20 @@ test.describe("Platform Stats Page", () => {
     ]);
   });
 
+  test("leaves an anchored period open so its window keeps advancing", async ({
+    page,
+  }) => {
+    const statsRequest = page.waitForRequest((request) =>
+      request.url().includes("/api/v1/platform/stats/messages"),
+    );
+
+    await platformPage.goto();
+
+    const url = new URL((await statsRequest).url());
+    expect(url.searchParams.get("from_date")).not.toBeNull();
+    expect(url.searchParams.get("to_date")).toBeNull();
+  });
+
   test("shows the error state when stats endpoints fail", async () => {
     await dataSupport.platformStats.interceptGetMessageStatsRequest({
       status: 500,

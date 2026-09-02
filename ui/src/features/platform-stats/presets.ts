@@ -40,20 +40,14 @@ function iso(d: Date): string {
   return d.toISOString();
 }
 
-/** `end`, nudged so an open-ended preset is never zero-width. */
-function atLeastAMinuteAfter(start: Date, end: Date): Date {
-  const floor = new Date(start.getTime() + 60_000);
-  return end > floor ? end : floor;
-}
-
 /**
  * `now` floored to the minute.
  *
- * The open-ended presets end at "now", and that value becomes part of the
- * query key. Taken at millisecond resolution it differs on every render, so
- * the key never repeats and the query refetches forever. Flooring makes the
- * key stable within a minute; the useMemo at the call site keeps it stable
- * across renders regardless.
+ * The rolling presets start at an offset from "now", and that value becomes
+ * part of the query key. Taken at millisecond resolution it differs on every
+ * render, so the key never repeats and the query refetches forever. Flooring
+ * makes the key stable within a minute; the useMemo at the call site keeps it
+ * stable across renders regardless.
  */
 function nowFloored(now: Date): Date {
   const x = new Date(now);
@@ -73,7 +67,7 @@ export const PRESETS: { id: PresetId; label: string }[] = [
 
 export const DEFAULT_PRESET: PresetId = "thisMonth";
 
-/** Absolute [from, to) bounds for a preset, or null for `custom`. */
+/** Bounds for a preset, or null for `custom`. Anchored presets leave `toDate` to the server. */
 export function presetRange(id: PresetId, at: Date = new Date()): StatsRange | null {
   const now = nowFloored(at);
 
@@ -84,18 +78,12 @@ export function presetRange(id: PresetId, at: Date = new Date()): StatsRange | n
       return { fromDate: iso(addHours(now, -6)), toDate: iso(now) };
     case "last12h":
       return { fromDate: iso(addHours(now, -12)), toDate: iso(now) };
-    case "thisWeek": {
-      const weekStart = startOfWeek(now);
-      return { fromDate: iso(weekStart), toDate: iso(atLeastAMinuteAfter(weekStart, now)) };
-    }
-    case "thisMonth": {
-      const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-      return { fromDate: iso(monthStart), toDate: iso(atLeastAMinuteAfter(monthStart, now)) };
-    }
-    case "thisYear": {
-      const yearStart = new Date(now.getFullYear(), 0, 1);
-      return { fromDate: iso(yearStart), toDate: iso(atLeastAMinuteAfter(yearStart, now)) };
-    }
+    case "thisWeek":
+      return { fromDate: iso(startOfWeek(now)) };
+    case "thisMonth":
+      return { fromDate: iso(new Date(now.getFullYear(), now.getMonth(), 1)) };
+    case "thisYear":
+      return { fromDate: iso(new Date(now.getFullYear(), 0, 1)) };
     case "custom":
       return null;
   }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { AppErrorState } from "@/components/app-error-state";
 import { DateRangePicker } from "@/components/date-range-picker";
@@ -72,18 +72,24 @@ export function PlatformStatsPanel() {
   // The combobox shows a name, the API takes an id, so both are tracked.
   const [org, setOrg] = useState<{ id: string; name: string } | null>(null);
 
+  const [minute, setMinute] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setMinute(Date.now()), 60_000);
+    return () => clearInterval(timer);
+  }, []);
+
   const isCustom = preset === "custom";
   // Memoised because the range is part of the query key: a fresh object with a
   // fresh `now` on every render means a new key every render, which refetches
-  // in a loop. Only a preset or date change should move it.
+  // in a loop. Only a preset, date or minute change should move it.
   const range: StatsRange = useMemo(() => {
-    if (!isCustom) return presetRange(preset) ?? {};
+    if (!isCustom) return presetRange(preset, new Date(minute)) ?? {};
     // The picker hands back local start-of-day / end-of-day already.
     return {
       fromDate: custom.from || undefined,
       toDate: custom.to || undefined,
     };
-  }, [isCustom, preset, custom.from, custom.to]);
+  }, [isCustom, preset, minute, custom.from, custom.to]);
 
   const messages = usePlatformMessageStats(filters, range);
   const agents = usePlatformAgentStats(filters, range);
@@ -124,7 +130,8 @@ export function PlatformStatsPanel() {
             Overview
           </h2>
           <p className="mt-1.5 text-[13.5px]" style={{ color: "var(--ink-3)" }}>
-            Current counts, narrowed by the filters below.
+            Current counts. Agent totals follow the filters below; the
+            Organization count is platform-wide.
           </p>
         </div>
         <div
