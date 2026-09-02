@@ -4,19 +4,13 @@ export type PresetId =
   | "lastHour"
   | "last6h"
   | "last12h"
-  | "today"
-  | "yesterday"
-  | "last7"
-  | "last30"
   | "thisWeek"
-  | "lastWeek"
   | "thisMonth"
-  | "lastMonth"
   | "thisYear"
   | "custom";
 
-// Boundaries are computed in the viewer's local timezone, because "today"
-// means their today. They are sent as absolute instants, so the server still
+// Boundaries are computed in the viewer's local timezone, because "this month"
+// means their month. They are sent as absolute instants, so the server still
 // buckets in UTC — near midnight a bucket label can therefore sit on the
 // adjacent UTC day even though the totals are right.
 function startOfDay(d: Date): Date {
@@ -71,14 +65,8 @@ export const PRESETS: { id: PresetId; label: string }[] = [
   { id: "lastHour", label: "Last hour" },
   { id: "last6h", label: "Last 6 hours" },
   { id: "last12h", label: "Last 12 hours" },
-  { id: "today", label: "Today" },
-  { id: "yesterday", label: "Yesterday" },
-  { id: "last7", label: "Last 7 days" },
-  { id: "last30", label: "Last 30 days" },
   { id: "thisWeek", label: "This week" },
-  { id: "lastWeek", label: "Last week" },
   { id: "thisMonth", label: "This month" },
-  { id: "lastMonth", label: "Last month" },
   { id: "thisYear", label: "This year" },
   { id: "custom", label: "Custom range" },
 ];
@@ -88,7 +76,6 @@ export const DEFAULT_PRESET: PresetId = "thisMonth";
 /** Absolute [from, to) bounds for a preset, or null for `custom`. */
 export function presetRange(id: PresetId, at: Date = new Date()): StatsRange | null {
   const now = nowFloored(at);
-  const today = startOfDay(now);
 
   switch (id) {
     case "lastHour":
@@ -97,30 +84,13 @@ export function presetRange(id: PresetId, at: Date = new Date()): StatsRange | n
       return { fromDate: iso(addHours(now, -6)), toDate: iso(now) };
     case "last12h":
       return { fromDate: iso(addHours(now, -12)), toDate: iso(now) };
-    case "today":
-      return { fromDate: iso(today), toDate: iso(atLeastAMinuteAfter(today, now)) };
-    case "yesterday":
-      return { fromDate: iso(addDays(today, -1)), toDate: iso(today) };
-    case "last7":
-      return { fromDate: iso(addDays(today, -6)), toDate: iso(atLeastAMinuteAfter(addDays(today, -6), now)) };
-    case "last30":
-      return { fromDate: iso(addDays(today, -29)), toDate: iso(atLeastAMinuteAfter(addDays(today, -29), now)) };
     case "thisWeek": {
       const weekStart = startOfWeek(now);
       return { fromDate: iso(weekStart), toDate: iso(atLeastAMinuteAfter(weekStart, now)) };
     }
-    case "lastWeek": {
-      const thisWeek = startOfWeek(now);
-      return { fromDate: iso(addDays(thisWeek, -7)), toDate: iso(thisWeek) };
-    }
     case "thisMonth": {
       const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
       return { fromDate: iso(monthStart), toDate: iso(atLeastAMinuteAfter(monthStart, now)) };
-    }
-    case "lastMonth": {
-      const firstOfThis = new Date(now.getFullYear(), now.getMonth(), 1);
-      const firstOfLast = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-      return { fromDate: iso(firstOfLast), toDate: iso(firstOfThis) };
     }
     case "thisYear": {
       const yearStart = new Date(now.getFullYear(), 0, 1);

@@ -22,4 +22,16 @@ export class PlatformStatsPage {
   activityHeading(): Locator {
     return this.page.getByRole("heading", { name: "Activity" });
   }
+
+  periodSelect(): Locator {
+    return this.page.getByRole("combobox", { name: "Reporting period" });
+  }
+
+  messagingAppSelect(): Locator {
+    return this.page.getByRole("combobox", { name: "Filter by messaging app" });
+  }
+
+  openOptions(): Locator {
+    return this.page.getByRole("listbox").getByRole("option");
+  }
 }

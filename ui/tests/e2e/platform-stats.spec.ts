@@ -28,6 +28,34 @@ test.describe("Platform Stats Page", () => {
     await expect(platformPage.activityHeading()).toBeVisible();
   });
 
+  test("offers reporting periods that do not overlap each other", async () => {
+    await platformPage.goto();
+    await platformPage.periodSelect().click();
+
+    await expect(platformPage.openOptions()).toHaveText([
+      "Last hour",
+      "Last 6 hours",
+      "Last 12 hours",
+      "This week",
+      "This month",
+      "This year",
+      "Custom range",
+    ]);
+  });
+
+  test("offers every messaging app an agent can be connected to", async () => {
+    await platformPage.goto();
+    await platformPage.messagingAppSelect().click();
+
+    await expect(platformPage.openOptions()).toHaveText([
+      "All messaging apps",
+      "Slack",
+      "Teams",
+      "Telegram",
+      "Discord",
+    ]);
+  });
+
   test("shows the error state when stats endpoints fail", async () => {
     await dataSupport.platformStats.interceptGetMessageStatsRequest({
       status: 500,
