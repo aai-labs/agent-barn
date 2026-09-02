@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 
 import { AppErrorState } from "@/components/app-error-state";
 import { DateRangePicker } from "@/components/date-range-picker";
@@ -13,17 +13,25 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useInfiniteOrganizations } from "@/features/organizations/hooks/use-infinite-organizations";
+import { usePlatformOrganization } from "@/features/organizations/hooks/use-platform-organization";
 
 import {
   usePlatformAgentStats,
   usePlatformMessageStats,
 } from "../hooks/use-platform-stats";
+import { useStatsUrlState } from "../hooks/use-stats-url-state";
 import { perBucketLabel, withinLabel } from "../format";
-import { DEFAULT_PRESET, PRESETS, type PresetId, presetRange } from "../presets";
-import type { AgentPlatform, StatsFilters, StatsRange } from "../schemas";
-import { MESSAGING_APP_OPTIONS } from "../utils";
+import type {
+  AgentPlatform,
+  MessageDirection,
+  StatsFilters,
+  StatsRange,
+} from "../schemas";
+import { DIRECTION_OPTIONS, MESSAGING_APP_OPTIONS, maskDirection } from "../utils";
 import { AgentsChart } from "./agents-chart";
 import { MessagesChart } from "./messages-chart";
+
+const MAX_RANGE_DAYS = 366;
 
 function StatTile({
   label,
@@ -48,6 +56,7 @@ function StatTile({
         <div
           className="text-[26px] font-semibold tracking-tight leading-none"
           style={{ color: "var(--ink)" }}
+          data-testid={`stat-tile-${label}`}
         >
           {(value ?? 0).toLocaleString()}
         </div>
@@ -66,33 +75,38 @@ const CONTROL_CLASS =
 const TRIGGER_CLASS = `${CONTROL_CLASS} data-[size=default]:h-[33px] gap-2 font-normal shadow-none focus-visible:ring-0`;
 
 export function PlatformStatsPanel() {
-  const [preset, setPreset] = useState<PresetId>(DEFAULT_PRESET);
-  const [filters, setFilters] = useState<StatsFilters>({});
-  const [custom, setCustom] = useState<{ from: string; to: string }>({ from: "", to: "" });
-  // The combobox shows a name, the API takes an id, so both are tracked.
-  const [org, setOrg] = useState<{ id: string; name: string } | null>(null);
+  const { state, write } = useStatsUrlState();
 
-  const [minute, setMinute] = useState(() => Date.now());
-  useEffect(() => {
-    const timer = setInterval(() => setMinute(Date.now()), 60_000);
-    return () => clearInterval(timer);
-  }, []);
+  const filters: StatsFilters = useMemo(
+    () => ({
+      organizationId: state.organizationId ?? undefined,
+      platform: state.platform ?? undefined,
+    }),
+    [state.organizationId, state.platform],
+  );
 
-  const isCustom = preset === "custom";
-  // Memoised because the range is part of the query key: a fresh object with a
-  // fresh `now` on every render means a new key every render, which refetches
-  // in a loop. Only a preset, date or minute change should move it.
-  const range: StatsRange = useMemo(() => {
-    if (!isCustom) return presetRange(preset, new Date(minute)) ?? {};
-    // The picker hands back local start-of-day / end-of-day already.
-    return {
-      fromDate: custom.from || undefined,
-      toDate: custom.to || undefined,
-    };
-  }, [isCustom, preset, minute, custom.from, custom.to]);
+  // Memoised because the range is part of the query key: a fresh object on
+  // every render means a new key every render, which refetches in a loop.
+  const range: StatsRange = useMemo(
+    () => ({ fromDate: state.from, toDate: state.to }),
+    [state.from, state.to],
+  );
+
+  const { organization } = usePlatformOrganization(state.organizationId ?? "");
 
   const messages = usePlatformMessageStats(filters, range);
   const agents = usePlatformAgentStats(filters, range);
+
+  const counts = useMemo(() => {
+    if (!messages.stats) return null;
+    const { inbound, outbound } = maskDirection(messages.stats, state.direction);
+    return { inbound, outbound, total: inbound + outbound };
+  }, [messages.stats, state.direction]);
+
+  const messageSeries = useMemo(
+    () => (messages.stats?.series ?? []).map((p) => maskDirection(p, state.direction)),
+    [messages.stats, state.direction],
+  );
   // pageSize 1 because only the total is wanted here — the combobox pages the
   // list itself. This replaces eagerly fetching 200 Organizations for a count.
   const { total: organizationCount, isLoading: orgsLoading } =
@@ -181,23 +195,17 @@ export function PlatformStatsPanel() {
 
         <div className="flex items-center gap-2 flex-wrap">
           <OrganizationCombobox
-            organizationId={org?.id ?? null}
-            organizationName={org?.name ?? null}
-            onChange={(next) => {
-              setOrg(next);
-              setFilters((f) => ({ ...f, organizationId: next?.id }));
-            }}
+            organizationId={state.organizationId}
+            organizationName={organization?.name ?? null}
+            onChange={(next) => write({ organizationId: next?.id ?? null })}
             className={CONTROL_CLASS}
             width=""
           />
 
           <Select
-            value={filters.platform ?? "__all__"}
+            value={state.platform ?? "__all__"}
             onValueChange={(v) =>
-              setFilters((f) => ({
-                ...f,
-                platform: v === "__all__" ? undefined : (v as AgentPlatform),
-              }))
+              write({ platform: v === "__all__" ? null : (v as AgentPlatform) })
             }
           >
             <SelectTrigger
@@ -217,34 +225,33 @@ export function PlatformStatsPanel() {
           </Select>
 
           <Select
-            value={preset}
-            onValueChange={(v) => setPreset(v as PresetId)}
+            value={state.direction}
+            onValueChange={(v) => write({ direction: v as MessageDirection })}
           >
             <SelectTrigger
-              aria-label="Reporting period"
+              aria-label="Filter by direction"
               className={TRIGGER_CLASS}
             >
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              {PRESETS.map(({ id, label }) => (
-                <SelectItem key={id} value={id}>
+              {DIRECTION_OPTIONS.map(({ value, label }) => (
+                <SelectItem key={value} value={value}>
                   {label}
                 </SelectItem>
               ))}
             </SelectContent>
           </Select>
 
-          {isCustom && (
-            <DateRangePicker
-              from={custom.from}
-              to={custom.to}
-              onChange={(from, to) => setCustom({ from, to })}
-              placeholder="Pick a range"
-              className={CONTROL_CLASS}
-              width=""
-            />
-          )}
+          <DateRangePicker
+            from={state.from}
+            to={state.to}
+            onChange={(from, to) => write({ from, to })}
+            ariaLabel="Reporting date range"
+            maxRangeDays={MAX_RANGE_DAYS}
+            className={CONTROL_CLASS}
+            width=""
+          />
         </div>
       </div>
 
@@ -255,17 +262,17 @@ export function PlatformStatsPanel() {
       >
         <StatTile
           label="Messages"
-          value={messages.stats?.total ?? null}
+          value={counts?.total ?? null}
           isLoading={messages.isLoading}
         />
         <StatTile
           label="Received"
-          value={messages.stats?.inbound ?? null}
+          value={counts?.inbound ?? null}
           isLoading={messages.isLoading}
         />
         <StatTile
           label="Sent"
-          value={messages.stats?.outbound ?? null}
+          value={counts?.outbound ?? null}
           isLoading={messages.isLoading}
         />
         <StatTile
@@ -290,7 +297,7 @@ export function PlatformStatsPanel() {
             />
           ) : (
             <MessagesChart
-              series={messages.stats?.series ?? []}
+              series={messageSeries}
               granularity={messages.stats?.granularity ?? "day"}
             />
           )}

@@ -55,6 +55,8 @@ export const PlatformAgentStatsSchema = z.object({
 
 export const AgentPlatformSchema = z.enum(["slack", "teams", "telegram", "discord"]);
 
+export const MessageDirectionSchema = z.enum(["all", "inbound", "outbound"]);
+
 // Narrowing dimensions the oversight boundary allows. There is deliberately no
 // "who sent the message" filter: sender identity is excluded from these
 // projections, so the API cannot answer it.
@@ -63,14 +65,15 @@ export type StatsFilters = {
   platform?: AgentPlatform;
 };
 
-// A custom range wins over the preset; both bounds are optional so a lone
-// `from` runs to now and a lone `to` backs off by the preset's length.
+// Both bounds are optional so a lone `from` runs to now and a lone `to` backs
+// off by the default period's length.
 export type StatsRange = {
   fromDate?: string;
   toDate?: string;
 };
 
 export type AgentPlatform = z.infer<typeof AgentPlatformSchema>;
+export type MessageDirection = z.infer<typeof MessageDirectionSchema>;
 export type PlatformAgentSeriesPoint = z.infer<
   typeof PlatformAgentSeriesPointSchema
 >;

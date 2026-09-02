@@ -28,19 +28,33 @@ test.describe("Platform Stats Page", () => {
     await expect(platformPage.activityHeading()).toBeVisible();
   });
 
-  test("offers reporting periods that do not overlap each other", async () => {
+  test("narrows by an explicit date range rather than preset periods", async () => {
     await platformPage.goto();
-    await platformPage.periodSelect().click();
 
-    await expect(platformPage.openOptions()).toHaveText([
-      "Last hour",
-      "Last 6 hours",
-      "Last 12 hours",
-      "This week",
-      "This month",
-      "This year",
-      "Custom range",
-    ]);
+    await expect(platformPage.periodSelect()).toHaveCount(0);
+    await expect(platformPage.dateRangePicker()).toBeVisible();
+  });
+
+  test("puts a thirty day window in the URL on first load", async ({ page }) => {
+    await platformPage.goto();
+
+    await expect(page).toHaveURL(/[?&]from=/);
+    const params = new URL(page.url()).searchParams;
+    const spanDays = Math.round(
+      (new Date(params.get("to")!).getTime() -
+        new Date(params.get("from")!).getTime()) /
+        86_400_000,
+    );
+    expect(spanDays).toBe(30);
+  });
+
+  test("restores the whole view from a shared link", async ({ page }) => {
+    await page.goto(
+      "/dashboard/platform?from=2026-07-01T00:00:00.000Z&to=2026-07-31T23:59:59.999Z&app=telegram&direction=inbound",
+    );
+
+    await expect(platformPage.messagingAppSelect()).toContainText("Telegram");
+    await expect(platformPage.directionSelect()).toContainText("Received only");
   });
 
   test("offers every messaging app an agent can be connected to", async () => {
@@ -56,18 +70,21 @@ test.describe("Platform Stats Page", () => {
     ]);
   });
 
-  test("leaves an anchored period open so its window keeps advancing", async ({
-    page,
-  }) => {
-    const statsRequest = page.waitForRequest((request) =>
-      request.url().includes("/api/v1/platform/stats/messages"),
-    );
-
+  test("zeroes the other direction when one is selected", async () => {
     await platformPage.goto();
+    await platformPage.directionSelect().click();
 
-    const url = new URL((await statsRequest).url());
-    expect(url.searchParams.get("from_date")).not.toBeNull();
-    expect(url.searchParams.get("to_date")).toBeNull();
+    await expect(platformPage.openOptions()).toHaveText([
+      "All messages",
+      "Received only",
+      "Sent only",
+    ]);
+
+    await platformPage.chooseOption("Received only");
+
+    await expect(platformPage.statTile("Received")).toHaveText("120");
+    await expect(platformPage.statTile("Sent")).toHaveText("0");
+    await expect(platformPage.statTile("Messages")).toHaveText("120");
   });
 
   test("shows the error state when stats endpoints fail", async () => {
