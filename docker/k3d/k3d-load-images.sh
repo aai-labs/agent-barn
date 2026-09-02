@@ -154,8 +154,25 @@ import_image() {
   step "Importing ${tag} → k3d cluster '${CLUSTER}'"
   # k3d-runner sees the host Docker daemon via the mounted socket, so it can
   # find the locally built image and stream it into the cluster's containerd.
-  ${COMPOSE} run --rm k3d-runner k3d image import "${tag}" --cluster "${CLUSTER}"
-  green "  imported"
+  #
+  # k3d exits 0 even when the per-node import failed — it logs the node error
+  # and still prints "Successfully imported image(s)". Left unchecked that turns
+  # a failed import into a green run, and the first agent pod to schedule fails
+  # with an opaque "Failed to pull the agent image" instead. So verify, and
+  # retry once: the failure mode we have seen is the tools node exiting 0
+  # without writing the tarball, which a second attempt clears.
+  local attempt
+  for attempt in 1 2; do
+    ${COMPOSE} run --rm k3d-runner k3d image import "${tag}" --cluster "${CLUSTER}"
+    if image_loaded_in_cluster "${tag}"; then
+      green "  imported"
+      return 0
+    fi
+    if [[ "${attempt}" == 1 ]]; then
+      printf '\033[33m  %s\033[0m\n' "import reported success but ${tag} is not in the cluster — retrying"
+    fi
+  done
+  red "Failed to import ${tag} into cluster '${CLUSTER}': k3d reported success but the image is not in the node's containerd store. Check the k3d output above for a per-node import error."
 }
 
 # ── main ──────────────────────────────────────────────────────────────────────
