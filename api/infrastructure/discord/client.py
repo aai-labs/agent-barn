@@ -9,6 +9,7 @@ _BASE = "https://discord.com/api/v10"
 _TIMEOUT_SECONDS = 15
 _DIRECTORY_CACHE_TTL_SECONDS = 600
 _MESSAGE_CHANNEL_TYPES = {0, 5, 10, 11, 12, 15}
+_MAX_NONCE_LENGTH = 25
 
 
 class DiscordClient:
@@ -61,7 +62,10 @@ class DiscordClient:
     ) -> str:
         payload: dict[str, Any] = {"content": text, "allowed_mentions": {"parse": []}}
         if idempotency_key:
-            payload["nonce"] = idempotency_key
+            # Discord rejects a nonce longer than 25 characters with 400/50035, and the
+            # provider key is a 64-character digest. The prefix stays deterministic per
+            # Delivery, so retries still de-duplicate.
+            payload["nonce"] = idempotency_key[:_MAX_NONCE_LENGTH]
             payload["enforce_nonce"] = True
         if reply_to_id:
             payload["message_reference"] = {
