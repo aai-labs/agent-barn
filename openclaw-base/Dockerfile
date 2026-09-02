@@ -29,8 +29,7 @@ FROM node:22-bookworm-slim
 ARG APT_MIRROR
 COPY --from=rust-build /out/bin/ /usr/local/bin/
 
-ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright \
-    UV_PYTHON_INSTALL_DIR=/opt/python \
+ENV UV_PYTHON_INSTALL_DIR=/opt/python \
     PIP_BREAK_SYSTEM_PACKAGES=1
 
 RUN set -eu; \
@@ -49,10 +48,14 @@ RUN uv python install 3.12 && \
     ln -sf "$(uv python find 3.12)" /usr/local/bin/python3 && \
     chmod -R o+rX /opt/python
 
-RUN --mount=type=cache,target=/root/.cache/pip \
-    python3 -m pip install playwright && \
-    python3 -m playwright install chromium --with-deps && \
-    chmod -R o+rX /opt/playwright
+# Chromium is deliberately absent. Web access goes through the shared firecrawl
+# service, which every agent already resolves (service.py gates on fc_api_key and
+# fc_base_url; helmfile wires FIRECRAWL_API_KEY into agentFirecrawlApiKey and
+# values.yaml defaults agentFirecrawlBaseUrl to the ClusterIP), so a per-agent
+# browser is redundant. It is also what makes the 1Gi memory limit viable: a
+# gateway idles near 240MiB, but launching chromium and loading two real pages
+# measured 573MiB in-pod, which a 1Gi cap cannot absorb alongside V8's heap.
+# Removing it drops ~1.47GB from the image.
 
 RUN npm install -g openclaw@2026.6.11
 

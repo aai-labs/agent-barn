@@ -86,3 +86,22 @@ def test_build_service_org_name_slug_fits_k8s_label_limits():
     assert_that(len(slug) <= 63, equal_to(True))
     assert_that(slug.endswith("-"), equal_to(False))
     assert_that(slug.startswith("-"), equal_to(False))
+
+
+def test_labels_carry_the_runtime_so_metrics_can_split_hermes_from_openclaw():
+    """Container memory series are only actionable per-runtime: a Hermes pod over
+    1Gi is unbounded context growth, an OpenClaw pod over 1Gi is V8 filling the
+    heap its cgroup limit allows. Without this label the two are indistinguishable
+    in Grafana and get the opposite fix."""
+    service = build_service(_AGENT_ID, _ORG_ID, _NS, runtime="openclaw")
+    assert_that(service.metadata.labels, has_entries({"agentbarn.io/runtime": "openclaw"}))
+
+    pvc = build_pvc(_AGENT_ID, _ORG_ID, _NS, runtime="hermes")
+    assert_that(pvc.metadata.labels, has_entries({"agentbarn.io/runtime": "hermes"}))
+
+
+def test_labels_omit_runtime_when_not_supplied():
+    """The label is additive: existing callers that pass no runtime must keep
+    producing exactly the labels they did before."""
+    service = build_service(_AGENT_ID, _ORG_ID, _NS)
+    assert_that("agentbarn.io/runtime" in service.metadata.labels, equal_to(False))

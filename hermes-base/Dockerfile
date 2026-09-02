@@ -26,8 +26,6 @@ ARG APT_MIRROR
 
 COPY --from=rust-build /out/bin/ /usr/local/bin/
 
-ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright
-
 RUN set -eu; \
     if [ "$APT_MIRROR" != "deb.debian.org" ]; then \
       sed -i "s|deb\.debian\.org|${APT_MIRROR}|g" /etc/apt/sources.list 2>/dev/null || true; \
@@ -56,9 +54,13 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 # Hermes, but make the CLI load Debian's matching library explicitly.
 COPY --chmod=0755 sqlite3-wrapper /usr/local/bin/sqlite3
 
-RUN uv pip install --python /opt/hermes/.venv playwright && \
-    /opt/hermes/.venv/bin/python -m playwright install chromium --with-deps && \
-    chmod -R o+rX /opt/playwright
+# Chromium and the playwright package are deliberately absent. service.py sets
+# browser.cloud_provider=firecrawl for every agent, and firecrawl is a registered
+# provider in this runtime (tools/browser_tool.py maps "firecrawl" ->
+# FirecrawlProvider; agent/browser_registry.py documents the config key), so the
+# browser tool routes to the shared service instead of a local browser.
+# browser_tool.py imports playwright lazily -- only on the local-mode path -- so
+# the package itself is unused here. Removing both drops ~1.24GB.
 
 # gog (gogcli) — Google Workspace CLI used by the google_workspace integration. Pinned:
 # the OAuth scopes the API requests mirror this version's service map, and auth-state

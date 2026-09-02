@@ -94,3 +94,28 @@ def test_start_sh_does_not_move_the_gateway_off_its_default_port() -> None:
     # pinning the gateway elsewhere breaks the health probe and leaves every
     # agent stuck reporting "initializing".
     assert "--port" not in START_SH
+
+
+def test_deployment_declares_explicit_resources_rather_than_inheriting_limitrange() -> None:
+    """Without a resources block the namespace LimitRange defaults every agent to
+    512Mi/2Gi. requests.memory (20Gi quota) is the binding axis, so the request is
+    what governs how many agents fit; the 1Gi limit both halves limits.memory
+    consumption and caps V8's heap, which Node sizes at ~51% of the cgroup limit."""
+    deployment = build_deployment(_AGENT_ID, _ORG_ID, _NS, "openclaw:test")
+    resources = deployment.spec.template.spec.containers[0].resources
+
+    assert resources is not None
+    assert resources.requests == {"memory": "320Mi", "cpu": "50m"}
+    assert resources.limits == {"memory": "1Gi", "cpu": "500m"}
+
+
+def test_deployment_recreates_rather_than_rolling_update() -> None:
+    """replicas=1 on a ReadWriteOnce PVC: a RollingUpdate surge briefly wants two
+    pods, doubling the agent's memory and deadlocking on the volume."""
+    deployment = build_deployment(_AGENT_ID, _ORG_ID, _NS, "openclaw:test")
+    assert deployment.spec.strategy.type == "Recreate"
+
+
+def test_deployment_carries_the_openclaw_runtime_label() -> None:
+    deployment = build_deployment(_AGENT_ID, _ORG_ID, _NS, "openclaw:test")
+    assert deployment.metadata.labels["agentbarn.io/runtime"] == "openclaw"

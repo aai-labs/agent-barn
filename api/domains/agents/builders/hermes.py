@@ -6,6 +6,20 @@ from kubernetes import client
 
 from .common import _labels, _resource_name
 
+# Matches OpenClaw, so limits.memory (100Gi quota) never binds before
+# requests.memory (20Gi). Note the asymmetry in what the limit *does*: OpenClaw
+# is Node, and V8 derives its heap ceiling from the cgroup limit (measured
+# 259/524/1048 MiB at 512m/1g/2g), so a lower limit makes it collect sooner.
+# CPython collects promptly too, but its policy is allocation-count based and
+# never reads the cgroup, so here the limit is a hard cap on the real working
+# set rather than a GC trigger. No Hermes pod is known to exceed 1Gi -- the
+# runtime label added alongside this is what will confirm it -- so watch for
+# OOMKilled on Hermes after rollout.
+AGENT_RESOURCES = client.V1ResourceRequirements(
+    requests={"memory": "320Mi", "cpu": "50m"},
+    limits={"memory": "1Gi", "cpu": "500m"},
+)
+
 _SCRIPTS = Path(__file__).parent.parent / "scripts" / "hermes"
 _COMMON_SCRIPTS = _SCRIPTS.parent
 _TELEMETRY_PUSH = _SCRIPTS / "plugins" / "telemetry-push"
@@ -171,7 +185,7 @@ def build_hermes_deployment(
     image_pull_secret: str = "",
 ) -> client.V1Deployment:
     name = _resource_name(agent_id)
-    labels = _labels(agent_id, org_id)
+    labels = _labels(agent_id, org_id, runtime="hermes")
 
     return client.V1Deployment(
         metadata=client.V1ObjectMeta(
@@ -181,6 +195,9 @@ def build_hermes_deployment(
         ),
         spec=client.V1DeploymentSpec(
             replicas=1,
+            # See the OpenClaw builder: RWO PVC + surge = doubled memory and a
+            # volume deadlock on every config change.
+            strategy=client.V1DeploymentStrategy(type="Recreate"),
             selector=client.V1LabelSelector(match_labels={"app": name}),
             template=client.V1PodTemplateSpec(
                 metadata=client.V1ObjectMeta(labels=labels),
@@ -193,6 +210,7 @@ def build_hermes_deployment(
                             name="agent",
                             image=image,
                             command=["sh", "/app/config/start.sh"],
+                            resources=AGENT_RESOURCES,
                             readiness_probe=client.V1Probe(
                                 http_get=client.V1HTTPGetAction(
                                     path="/ready",
