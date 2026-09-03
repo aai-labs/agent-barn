@@ -78,7 +78,9 @@ class MintedToken:
     """A short-lived upstream credential produced by a ``TOKEN_BROKER`` plugin."""
 
     value: str
-    expires_at: float
+    #: Seconds of remaining validity at the moment of minting. The pod re-fetches rather
+    #: than tracking wall-clock expiry, so a relative lifetime avoids clock-skew bugs.
+    expires_in: int
     scopes: frozenset[str] = frozenset()
 
 
@@ -152,6 +154,10 @@ class IntegrationPlugin[ContentT: SecretContent](ABC):
 
     # --- TOKEN_BROKER seam ---
 
-    async def mint_upstream_token(self, content: ContentT, *, scopes: frozenset[str]) -> MintedToken:
-        """Mint a short-lived upstream token for the agent pod to use directly."""
+    def mint_upstream_token(self, content: ContentT) -> MintedToken:
+        """Mint a short-lived upstream token for the agent pod to use directly.
+
+        Synchronous to match ``apply_upstream_auth``, which also performs provider I/O.
+        The gateway runs both off the event loop.
+        """
         raise NotImplementedError(f"{self.key} is not a {EgressMode.TOKEN_BROKER.value} provider")

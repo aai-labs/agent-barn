@@ -4503,6 +4503,53 @@ def test_start_agent_gog_state_is_not_on_the_hermes_pvc():
             assert_that(config_map.data, has_key("gog-setup.sh"))
 
 
+_GIVEN_WITH_GATEWAY = [
+    set_env_variable(
+        {
+            "AGENT_TOKEN_ENCRYPTION_KEY": TEST_ENCRYPTION_KEY,
+            "LITELLM_BASE_URL": "http://litellm:4000",
+            "LITELLM_SECRET_NAME": "litellm",
+            "AGENT_DEFAULT_MODEL": "litellm/gpt-5-mini",
+            "AGENT_LITELLM_BASE_URL": "http://litellm:4000",
+            "API_EXTERNAL_URL": "https://api.test.com",
+            "SKIP_SLACK_TOKEN_VALIDATION": "true",
+            "CREDENTIAL_GATEWAY_ENABLED": "true",
+        }
+    ),
+    *_GIVEN[1:],
+]
+
+
+def test_start_agent_brokered_google_workspace_leaves_no_renewable_credential_in_the_pod():
+    """The point of brokering: gog gets a token per invocation, not the grant itself."""
+    with given([*_GIVEN_WITH_GATEWAY, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        k8s: MagicMock = context.injector.get(KubernetesClient)
+
+        with when("I start an agent whose Google Workspace credential is brokered"):
+            _configure_gws(client, context)
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("the refresh token and OAuth client secret are absent from the pod Secret"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            secret = k8s.create_secret.call_args.args[1]
+            assert_that(secret.string_data, is_not(has_key("GOG_TOKEN_JSON")))
+            assert_that(secret.string_data, is_not(has_key("GOG_CLIENT_JSON")))
+            assert_that(secret.string_data, is_not(has_key("GOG_KEYRING_PASSWORD")))
+            assert_that(str(secret.string_data), is_not(contains_string("gws-refresh-token")))
+
+        with then("the pod instead carries its Gateway Token and the mint endpoint"):
+            assert_that(len(secret.string_data["AF_GATEWAY_TOKEN_GOOGLE_WORKSPACE"]), greater_than(0))
+            assert_that(secret.string_data["AF_GATEWAY_TOKEN_URL"], contains_string("/token"))
+
+        with then("the shim is mounted instead of the credential-importing setup script"):
+            config_map = k8s.create_config_map.call_args.args[1]
+            assert_that(config_map.data, has_key("gog-shim.sh"))
+            assert_that(config_map.data["gog-shim.sh"], contains_string("exec /usr/local/bin/gog"))
+            assert_that(config_map.data["gog-setup.sh"], is_not(contains_string("gog auth tokens import")))
+            assert_that(config_map.data["gog-setup.sh"], contains_string(".local/bin/gog"))
+
+
 def test_start_agent_without_google_workspace_has_no_gog_artifacts():
     with given([*_GIVEN, there_is_an_agent()]) as context:
         client: TestClient = context.client

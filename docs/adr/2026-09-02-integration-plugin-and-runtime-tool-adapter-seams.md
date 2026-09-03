@@ -1,7 +1,8 @@
 # Integrations extend through two seams: Integration Plugin and Runtime Tool Adapter
 
-Status: Proposed
+Status: Accepted
 Date: 2026-09-02
+Implemented: 2026-09-03
 Origin: follows the shipped Platform Plugin boundary in Communications
 
 Adding a tool Integration becomes one plugin file plus a skill, mirroring the Platform Plugin boundary in Communications. Unlike platforms, integrations vary along two independent axes — the credential/provider and the agent-side CLI that reaches it — so they get two seams rather than one: `IntegrationPlugin` per provider and `RuntimeToolAdapter` per CLI.
@@ -22,7 +23,7 @@ Add both seams under `api/domains/integrations/plugins/`.
 
 **`IntegrationPlugin`** — one per provider. Carries `key` (replacing the `SecretProvider` member), `display_name`, `schema_version`, `credentials_model`, `egress_mode`, `runtime_tool`, `shared_credential_eligible`, and `bundled_skill_keys`. Declares `validate_external` for live credential checks; `upstream_base_url` and `apply_upstream_auth` for `GATEWAY_PROXY` providers; `mint_upstream_token` for `TOKEN_BROKER` providers; and an optional `tool_context_md`.
 
-`apply_upstream_auth` is a method rather than a declarative scheme table covering bearer, basic, custom header, and query parameter. Writing Jira's `Basic base64(email:token)` and a future request-signing provider costs the same amount of interface, and no configuration language has to be extended to reach the second one.
+`apply_upstream_auth` is a method rather than a declarative scheme table covering bearer, basic, custom header, and query parameter. Implementation bore this out: the shipped providers needed bearer, Basic, a custom `x-api-token` header, credential-derived upstream hosts with per-provider SSRF constraints, and a cached OAuth token exchange — no single table would have covered them. Writing Jira's `Basic base64(email:token)` and a future request-signing provider costs the same amount of interface, and no configuration language has to be extended to reach the second one.
 
 **`RuntimeToolAdapter`** — one per CLI. `materialize(bindings, home_dir, gateway_base_url) -> RuntimeArtifacts`, where `RuntimeArtifacts` is files, environment, and an `agents_md` policy block, and carries no Kubernetes types — preserving the existing "pure string/dict builders" convention. Three implementations: `AaiCliAdapter`, `GogAdapter`, and `NoToolAdapter` for env-only providers such as Firecrawl.
 

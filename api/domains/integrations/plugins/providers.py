@@ -14,6 +14,8 @@ import base64
 import re
 from urllib.parse import urlsplit, urlunsplit
 
+import httpx
+
 from api.domains.agents.models import (
     BitbucketContent,
     ConfluenceContent,
@@ -33,7 +35,9 @@ from api.domains.integrations.plugins.aai_cli_support import (
 from api.domains.integrations.plugins.base import (
     EgressMode,
     IntegrationPlugin,
+    MintedToken,
     OutboundRequest,
+    UpstreamAuthenticationError,
 )
 from api.infrastructure.integration_validators.bitbucket import validate_bitbucket
 from api.infrastructure.integration_validators.confluence import validate_confluence
@@ -50,6 +54,7 @@ GOG = "gog"
 NO_TOOL = "none"
 
 _PIPEDRIVE_DOMAIN = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
+_GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 _ATLASSIAN_CLOUD_ID = re.compile(r"^[A-Za-z0-9-]+$")
 
 
@@ -416,6 +421,7 @@ class GoogleWorkspacePlugin(IntegrationPlugin[GoogleWorkspaceContent]):
     """
 
     key = "google_workspace"
+    egress_mode = EgressMode.TOKEN_BROKER
     provider = SecretProvider.GOOGLE_WORKSPACE
     display_name = "Google Workspace credential"
     credentials_model = GoogleWorkspaceContent
@@ -427,6 +433,53 @@ class GoogleWorkspacePlugin(IntegrationPlugin[GoogleWorkspaceContent]):
 
     def validate_external(self, content: GoogleWorkspaceContent) -> IntegrationValidationResult:
         return validate_google_workspace(content)
+
+    def mint_upstream_token(self, content: GoogleWorkspaceContent) -> MintedToken:
+        """Exchange the stored refresh token for a short-lived Google access token.
+
+        Brokered rather than proxied because gog exposes no base-URL override but does
+        accept a pre-minted token, so the pod can be handed an expiring credential
+        without any gog change. The refresh token and OAuth client secret — the
+        renewable half of the grant — stay here.
+
+        Not cached: each mint is one request per agent process start, not per API call,
+        and a cache keyed on the credential would hold live Google tokens in gateway
+        memory for an hour with no way to drop them on revocation.
+        """
+        if not content.client_id or not content.client_secret:
+            raise UpstreamAuthenticationError("Google OAuth client is not configured for this credential")
+        try:
+            response = httpx.post(
+                _GOOGLE_TOKEN_URL,
+                data={
+                    "grant_type": "refresh_token",
+                    "refresh_token": content.refresh_token,
+                    "client_id": content.client_id,
+                    "client_secret": content.client_secret,
+                },
+                timeout=10,
+            )
+        except httpx.HTTPError as exc:
+            raise UpstreamAuthenticationError("Google token endpoint could not be reached") from exc
+        if response.status_code != 200:
+            raise UpstreamAuthenticationError("Google rejected the stored OAuth credential")
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise UpstreamAuthenticationError("Google returned an invalid token response") from exc
+        token = payload.get("access_token")
+        if not isinstance(token, str) or not token:
+            raise UpstreamAuthenticationError("Google token response omitted access_token")
+        try:
+            expires_in = int(payload.get("expires_in", 3600))
+        except TypeError, ValueError:
+            expires_in = 3600
+        # Report the granted scopes rather than the stored ones: a user can trim the
+        # grant at myaccount.google.com after consent, and the pod should see what it
+        # actually has.
+        granted = payload.get("scope", "")
+        scopes = frozenset(granted.split()) if granted else frozenset(content.scopes)
+        return MintedToken(value=token, expires_in=max(1, expires_in), scopes=scopes)
 
 
 class FirecrawlPlugin(IntegrationPlugin[FirecrawlContent]):

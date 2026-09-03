@@ -12,15 +12,17 @@ from typing import Annotated
 
 from fastapi import APIRouter, Header, HTTPException, Request, Response, status
 from fastapi_injector import Injected
+from starlette.concurrency import run_in_threadpool
 
 from api.domains.credential_gateway.forwarding import UpstreamUnreachable
-from api.domains.credential_gateway.models import GatewayTokenResolution
+from api.domains.credential_gateway.models import BrokeredTokenRead, GatewayTokenResolution
 from api.domains.credential_gateway.service import (
     CredentialGatewayService,
     ForwardRequest,
     GatewayForwardRefused,
     GatewayTokenRejected,
 )
+from api.domains.integrations.plugins.base import UpstreamAuthenticationError
 
 SUPPORTED_GATEWAY_PROTOCOL_VERSION = "1"
 
@@ -28,7 +30,7 @@ gateway_router = APIRouter(tags=["credential-gateway"])
 
 
 @gateway_router.get("/identity", response_model=GatewayTokenResolution)
-def resolve_identity(
+async def resolve_identity(
     service: Annotated[CredentialGatewayService, Injected(CredentialGatewayService)],
     authorization: Annotated[str | None, Header()] = None,
 ) -> GatewayTokenResolution:
@@ -38,7 +40,7 @@ def resolve_identity(
     before any request forwarding lands. Returns no credential material.
     """
     try:
-        return service.resolve(authorization)
+        return await run_in_threadpool(service.resolve, authorization)
     except GatewayTokenRejected as exc:
         # One structured 403 for every rejection: an agent must not be able to tell an
         # unknown token from a revoked one. The distinction lives in the audit trail.
@@ -70,7 +72,8 @@ async def forward_to_provider(
     """
     body = await request.body()
     try:
-        upstream = service.forward(
+        upstream = await run_in_threadpool(
+            service.forward,
             authorization,
             ForwardRequest(
                 provider_key=provider_key,
@@ -95,4 +98,31 @@ async def forward_to_provider(
         content=upstream.content,
         status_code=upstream.status_code,
         headers=upstream.headers,
+    )
+
+
+@gateway_router.get("/token", response_model=BrokeredTokenRead)
+async def mint_upstream_token(
+    service: Annotated[CredentialGatewayService, Injected(CredentialGatewayService)],
+    authorization: Annotated[str | None, Header()] = None,
+) -> BrokeredTokenRead:
+    """Mint a short-lived upstream credential for a ``TOKEN_BROKER`` provider.
+
+    Used by the agent-side `gog` shim, which exports the result as ``GOG_ACCESS_TOKEN``
+    and execs the real binary. The refresh token and OAuth client secret never leave the
+    gateway; only this expiring access token does.
+    """
+    try:
+        minted = await run_in_threadpool(service.mint_upstream_token, authorization)
+    except (GatewayTokenRejected, GatewayForwardRefused) as exc:
+        raise _refused("The presented gateway token is not valid for this request.") from exc
+    except UpstreamAuthenticationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={"error": "upstream_unreachable", "message": "The provider could not be reached."},
+        ) from exc
+    return BrokeredTokenRead(
+        access_token=minted.value,
+        expires_in=minted.expires_in,
+        scopes=sorted(minted.scopes),
     )

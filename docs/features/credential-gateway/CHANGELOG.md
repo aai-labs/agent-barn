@@ -6,12 +6,22 @@ Related context: [`../../adr/2026-09-02-credential-gateway-egress-modes.md`](../
 
 ## Current state
 
-- **Delivered:** the Integration Plugin seam; the credential gateway as a separate deployment; token issue/revoke/resolve; the `GATEWAY_PROXY` forward path; and gateway support for every shipped aai-cli provider without changing aai-cli.
+- **Delivered:** the Integration Plugin seam; the credential gateway as a separate deployment; token issue/revoke/resolve; the `GATEWAY_PROXY` forward path for every shipped aai-cli provider without changing aai-cli; and `TOKEN_BROKER` for Google Workspace. **No provider now materializes a renewable credential into an agent pod.**
 - **In transition:** Helm and new local environments enable the gateway; existing local `.env` files must opt in with `CREDENTIAL_GATEWAY_ENABLED=true`. `PROVIDER_DISPLAY_NAMES`, `PROVIDER_CONTENT_MODELS`, and `PROVIDER_VALIDATORS` still live outside the plugins (import cycle) and are pinned by contract test rather than derived.
-- **Next:** Google Workspace token brokering, so gog receives only a short-lived access token instead of OAuth client credentials and a renewable refresh token.
+- **Next:** durable audit spool (below).
 - **Blockers:** none.
+- **Deferred:** resolution audit is still a structured log line plus a Prometheus counter. The durable buffering/disk spool that survives an ingest outage replaces the `GatewayAuditSink` implementation without touching call sites.
 
 ## Changes
+
+### 2026-09-03 — Google Workspace brokers a short-lived token
+
+- **Delivered:** `GoogleWorkspacePlugin` is `EgressMode.TOKEN_BROKER` and implements `mint_upstream_token`; `GET /gateway/v1/token` mints one for the presenting agent. Brokered rather than proxied because gog exposes no base-URL override but does accept a pre-minted token (`GOG_ACCESS_TOKEN`), so no gog change is needed.
+- **Removed from the pod:** the OAuth refresh token, the client secret, the file keyring and its password, and the token-import setup script. This was the last and worst credential in any agent pod — a refresh token is a renewable grant, not a single secret.
+- **Pod side:** a ConfigMap-mounted `gog-shim.sh` installs onto `PATH` ahead of `/usr/local/bin` and exchanges the Gateway Token for an access token on every invocation, then execs the real binary by absolute path. Per-invocation rather than per-boot because a Google access token lasts about an hour while agents run for days, and because it makes revocation effective on the next command. `start.sh` prepends the install directory for both runtimes.
+- **Not cached:** each mint is one request per gog invocation, and a cache keyed on the credential would hold live Google tokens in gateway memory for an hour with no way to drop them on revocation.
+- **Residual exposure, stated plainly:** this is the one provider where the pod still holds an upstream credential — expiring and non-renewable rather than none. That is the trade `TOKEN_BROKER` makes for a CLI that cannot be redirected.
+- **Also fixed:** the gateway's async routes were calling blocking database and HTTP work directly on the event loop, which would serialise every request through one worker. Resolution, forwarding and minting now run via `run_in_threadpool`.
 
 ### 2026-09-03 — Zoho removed as a tool Integration
 

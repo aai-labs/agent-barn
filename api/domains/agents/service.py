@@ -37,7 +37,13 @@ from api.domains.agents.builders import (
     build_service,
 )
 from api.domains.agents.error_messages import friendly_k8s_error, friendly_pod_reason
-from api.domains.agents.gog_artifacts import build_gog_env, build_gog_policy_md, build_gog_setup_sh
+from api.domains.agents.gog_artifacts import (
+    build_gog_env,
+    build_gog_policy_md,
+    build_gog_setup_sh,
+    build_gog_shim_install_sh,
+    build_gog_shim_sh,
+)
 from api.domains.agents.models import (
     PROVIDER_DISPLAY_NAMES,
     Agent,
@@ -98,6 +104,8 @@ from api.domains.events.catalog import (
     AGENT_STARTED,
     AGENT_STOPPED,
 )
+from api.domains.integrations.plugins.base import EgressMode
+from api.domains.integrations.plugins.registry import INTEGRATION_PLUGINS, effective_egress_mode
 from api.domains.organizations.lookup import OrganizationLookupService
 from api.domains.rbac.catalog import PermissionKey
 from api.domains.shared_credentials.repository import SharedCredentialRepository
@@ -1981,12 +1989,32 @@ class AgentService:
         # this secret on every boot. GOG_HOME is deliberately the container filesystem,
         # not the PVC that aai_home points at for Hermes.
         gog_setup_sh = None
+        gog_shim_sh = None
         if isinstance(gws_content, GoogleWorkspaceContent):
             gog_home_dir = "/home/hermes" if agent.agent_type == AgentType.HERMES else "/home/node"
-            secret.string_data.update(
-                build_gog_env(gws_content, gog_home_dir, secrets.token_urlsafe(32)),
+            gog_brokered = (
+                effective_egress_mode(
+                    INTEGRATION_PLUGINS.require(SecretProvider.GOOGLE_WORKSPACE),
+                    self.config.credential_gateway_enabled,
+                )
+                is EgressMode.TOKEN_BROKER
             )
-            gog_setup_sh = build_gog_setup_sh()
+            secret.string_data.update(
+                build_gog_env(
+                    gws_content,
+                    gog_home_dir,
+                    secrets.token_urlsafe(32),
+                    gateway_enabled=gog_brokered,
+                    gateway_base_url=self.config.credential_gateway_base_url,
+                ),
+            )
+            if gog_brokered:
+                # No keyring, no stored OAuth client and no token to import: installing
+                # the wrapper on PATH is the whole of boot-time setup.
+                gog_setup_sh = build_gog_shim_install_sh(gog_home_dir)
+                gog_shim_sh = build_gog_shim_sh()
+            else:
+                gog_setup_sh = build_gog_setup_sh()
 
         fc_content = decrypted.get(SecretProvider.FIRECRAWL)
         fc_api_key = (
@@ -2119,6 +2147,7 @@ class AgentService:
                 aai_cli_config_toml=aai_config_toml,
                 aai_cli_setup_sh=aai_setup_sh,
                 gog_setup_sh=gog_setup_sh,
+                gog_shim_sh=gog_shim_sh,
                 skills_json=skills_json,
             )
         else:
@@ -2138,6 +2167,7 @@ class AgentService:
                 aai_cli_config_toml=aai_config_toml,
                 aai_cli_setup_sh=aai_setup_sh,
                 gog_setup_sh=gog_setup_sh,
+                gog_shim_sh=gog_shim_sh,
                 skills_json=skills_json,
             )
 

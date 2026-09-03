@@ -14,7 +14,8 @@ removing the credential removes access at the next restart.
 
 import json
 
-from api.domains.agents.models import GoogleWorkspaceContent
+from api.domains.agents.models import GoogleWorkspaceContent, SecretProvider
+from api.domains.credential_gateway.models import gateway_token_env_var
 
 # Where gog keeps credentials.json + the encrypted file keyring, relative to a runtime's
 # home dir. Deliberately on the container filesystem and NOT on the PVC: it is a
@@ -50,17 +51,41 @@ def gog_home(home_dir: str) -> str:
     return f"{home_dir}/{_CONFIG_SUBDIR}"
 
 
+#: The shim exports this before exec'ing the real binary. gog reads it as a root flag
+#: (internal/cmd/root.go) and uses it as a static token source, checked before any of its
+#: own auth dependencies, so no keyring or stored client is needed.
+GOG_ACCESS_TOKEN_ENV = "GOG_ACCESS_TOKEN"
+
+
 def build_gog_env(
     content: GoogleWorkspaceContent,
     home_dir: str,
     keyring_password: str,
+    *,
+    gateway_enabled: bool = False,
+    gateway_base_url: str = "",
 ) -> dict[str, str]:
     """Env carrying everything ``gog-setup.sh`` needs to rebuild gog's state in the pod.
 
     ``GOG_TOKEN_JSON`` is the exact payload ``gog auth tokens import`` accepts on stdin
     (internal/cmd/auth_tokens.go). It carries the refresh token, so this whole mapping
     belongs in the pod Secret — never a ConfigMap.
+
+    Under the gateway that whole shape disappears: the refresh token and OAuth client
+    secret stay in the gateway, the pod gets only its Gateway Token, and the shim
+    exchanges that for a short-lived access token at each invocation. No keyring exists
+    to protect, so ``GOG_KEYRING_*`` goes too.
     """
+    if gateway_enabled:
+        env = {
+            "GOG_HOME": gog_home(home_dir),
+            "GOG_ACCOUNT_EMAIL": content.email,
+            "AF_GATEWAY_TOKEN_URL": f"{gateway_base_url.rstrip('/')}/token",
+        }
+        if content.read_only:
+            env["GOG_READONLY"] = "1"
+        return env
+
     client_json = json.dumps(
         {
             _CLIENT_JSON_KEY: {
@@ -94,6 +119,75 @@ def build_gog_env(
         # so an unconditional "0" would work but leaves a misleading env var in the pod.
         env["GOG_READONLY"] = "1"
     return env
+
+
+#: Where the shim is installed. Prepended to PATH by each runtime's start.sh, so every
+#: command the agent runs resolves `gog` here before /usr/local/bin.
+SHIM_BIN_SUBDIR = ".local/bin"
+#: The real binary, installed by the base images.
+_REAL_GOG = "/usr/local/bin/gog"
+
+
+def shim_bin_dir(home_dir: str) -> str:
+    return f"{home_dir}/{SHIM_BIN_SUBDIR}"
+
+
+def build_gog_shim_sh() -> str:
+    """Render the ``gog`` wrapper that fetches a short-lived token before each call.
+
+    Installed ahead of the real binary on PATH and exec's it by absolute path, so there
+    is no recursion. Env-driven and secret-free, so it ships in the ConfigMap like the
+    other start-up scripts.
+
+    Fetching per invocation rather than once at boot is deliberate: a Google access token
+    lasts about an hour and agents run for days, so a boot-time fetch would work until it
+    silently stopped. It also means revoking the Agent Secret takes effect on the next
+    command rather than the next restart.
+
+    Failures name the real problem instead of letting gog report a confusing Google
+    error, and are distinguished so a missing credential does not look like an outage.
+    """
+    token_env = gateway_token_env_var(SecretProvider.GOOGLE_WORKSPACE)
+    return f"""#!/bin/sh
+set -eu
+umask 077
+
+if [ -z "${{{token_env}:-}}" ] || [ -z "${{AF_GATEWAY_TOKEN_URL:-}}" ]; then
+  echo "gog: no Google Workspace credential is configured for this agent" >&2
+  exit 78
+fi
+
+if ! response=$(curl -fsS -H "Authorization: Bearer ${token_env}" "$AF_GATEWAY_TOKEN_URL"); then
+  echo "gog: the credential gateway refused or could not supply Google authorization" >&2
+  exit 77
+fi
+
+{GOG_ACCESS_TOKEN_ENV}=$(printf '%s' "$response" | sed -n 's/.*"access_token"[[:space:]]*:[[:space:]]*"\\([^"]*\\)".*/\\1/p')
+if [ -z "${GOG_ACCESS_TOKEN_ENV}" ]; then
+  echo "gog: the credential gateway returned no access token" >&2
+  exit 77
+fi
+export {GOG_ACCESS_TOKEN_ENV}
+
+exec {_REAL_GOG} "$@"
+"""
+
+
+def build_gog_shim_install_sh(home_dir: str) -> str:
+    """Render the boot script that puts the shim on PATH.
+
+    Replaces the credential-importing setup script under the gateway: there is no
+    keyring, no stored OAuth client and no token to import, so installing the wrapper is
+    the whole job.
+    """
+    bin_dir = shim_bin_dir(home_dir)
+    return f"""#!/bin/sh
+set -e
+umask 077
+mkdir -p {bin_dir}
+cp /app/config/gog-shim.sh {bin_dir}/gog
+chmod 755 {bin_dir}/gog
+"""
 
 
 def build_gog_setup_sh() -> str:

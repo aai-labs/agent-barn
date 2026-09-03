@@ -5,7 +5,7 @@ credential applied, and that credential is never in the agent's possession.
 """
 
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi import status
@@ -19,10 +19,12 @@ from api.domains.agents.models import (
     BitbucketContent,
     ConfluenceContent,
     GithubContent,
+    GoogleWorkspaceContent,
     JiraContent,
     PipedriveContent,
     SecretProvider,
     encrypt_content,
+    required_service_scopes,
 )
 from api.domains.credential_gateway.forwarding import UpstreamForwarder, UpstreamResponse
 from api.domains.credential_gateway.models import GatewayToken, hash_token, issue_token_value
@@ -377,3 +379,101 @@ def test_issuance_follows_plugin_modes_when_the_gateway_is_enabled():
                 equal_to([SecretProvider.GITHUB, SecretProvider.JIRA]),
             )
             assert_that(issued[0].value, is_not(equal_to("")))
+
+
+# --- token brokering (Google Workspace) ---
+
+_GOOGLE_REFRESH_TOKEN = "1//09_the_renewable_grant"
+_GOOGLE_CLIENT_SECRET = "GOCSPX-the_client_secret"
+
+
+def _google_secret(context) -> None:
+    _provider_secret(
+        context,
+        SecretProvider.GOOGLE_WORKSPACE,
+        GoogleWorkspaceContent(
+            email="user@example.com",
+            services=["gmail", "sheets"],
+            scopes=sorted(required_service_scopes(["gmail", "sheets"], False)),
+            refresh_token=_GOOGLE_REFRESH_TOKEN,
+            client_id="client-id.apps.googleusercontent.com",
+            client_secret=_GOOGLE_CLIENT_SECRET,
+        ),
+    )
+
+
+def _google_token_response(payload: dict, status_code: int = 200):
+    response = MagicMock(status_code=status_code)
+    response.json.return_value = payload
+    return response
+
+
+def test_the_pod_gets_a_short_lived_google_token_and_never_the_refresh_token():
+    with given(_ALL_AAI_GIVEN) as context:
+        _google_secret(context)
+        token = _token_for(context, SecretProvider.GOOGLE_WORKSPACE)
+        upstream = _google_token_response({"access_token": "ya29.minted", "expires_in": 3599, "scope": "a b"})
+
+        with when("the gog shim asks the gateway for authorization"):
+            with patch("api.domains.integrations.plugins.providers.httpx.post", return_value=upstream):
+                response = context.gateway_client.get("/gateway/v1/token", headers=_auth(token))
+
+        with then("it receives an expiring access token and nothing renewable"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            body = response.json()
+            assert_that(body["access_token"], equal_to("ya29.minted"))
+            assert_that(body["expires_in"], equal_to(3599))
+            assert_that(_GOOGLE_REFRESH_TOKEN in response.text, is_(False))
+            assert_that(_GOOGLE_CLIENT_SECRET in response.text, is_(False))
+
+
+def test_revoking_the_credential_stops_the_next_mint():
+    with given(_ALL_AAI_GIVEN) as context:
+        _google_secret(context)
+        token = _token_for(context, SecretProvider.GOOGLE_WORKSPACE)
+
+        with when("the Agent's tokens are revoked"):
+            context.injector.get(CredentialGatewayService).revoke_for_agent(
+                context.agent.id, context.agent.organization_id
+            )
+
+        with then("the shim can no longer obtain Google authorization"):
+            response = context.gateway_client.get("/gateway/v1/token", headers=_auth(token))
+            assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+
+
+def test_a_proxy_provider_token_cannot_mint_an_upstream_credential():
+    # GitHub is GATEWAY_PROXY; minting for it would hand the pod a credential the
+    # proxy path exists specifically to withhold.
+    with given(_ALL_AAI_GIVEN) as context:
+        _github_secret(context)
+        token = _token_for(context, SecretProvider.GITHUB)
+
+        response = context.gateway_client.get("/gateway/v1/token", headers=_auth(token))
+
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+
+
+def test_a_google_token_cannot_be_used_on_the_proxy_path():
+    with given(_ALL_AAI_GIVEN) as context:
+        _google_secret(context)
+        token = _token_for(context, SecretProvider.GOOGLE_WORKSPACE)
+
+        response = context.gateway_client.get("/gateway/v1/p/github/user", headers=_auth(token))
+
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+        assert_that(context.injector.get(UpstreamForwarder).send.called, is_(False))
+
+
+def test_google_rejecting_the_stored_credential_is_a_502_not_a_403():
+    # A 403 would tell the agent its own Gateway Token is bad; the actual failure is
+    # upstream and needs a different operator response.
+    with given(_ALL_AAI_GIVEN) as context:
+        _google_secret(context)
+        token = _token_for(context, SecretProvider.GOOGLE_WORKSPACE)
+        upstream = _google_token_response({"error": "invalid_grant"}, status_code=400)
+
+        with patch("api.domains.integrations.plugins.providers.httpx.post", return_value=upstream):
+            response = context.gateway_client.get("/gateway/v1/token", headers=_auth(token))
+
+        assert_that(response.status_code, equal_to(status.HTTP_502_BAD_GATEWAY))

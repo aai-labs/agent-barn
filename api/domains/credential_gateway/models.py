@@ -112,3 +112,15 @@ class GatewayTokenResolution(PydanticBaseModel):
     agent_id: UUID
     organization_id: UUID
     provider: SecretProvider
+
+
+class BrokeredTokenRead(PydanticBaseModel):
+    """A short-lived upstream credential handed to the agent pod.
+
+    Carries a relative lifetime rather than an absolute expiry so the pod does not have
+    to agree with the gateway about the clock.
+    """
+
+    access_token: str
+    expires_in: int
+    scopes: list[str] = []

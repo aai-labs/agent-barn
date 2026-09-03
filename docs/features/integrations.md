@@ -64,7 +64,13 @@ All shipped aai-cli providers support this mode: GitHub, Jira, Confluence, Bitbu
 
 Credential isolation does not impose an agent egress policy. Hermes and OpenClaw retain unrestricted internet access; the gateway changes where provider credentials live and where authenticated provider requests are executed, not which unrelated destinations an agent may reach.
 
-Google Workspace materializes through `gog_artifacts.py`: the pod Secret carries the OAuth client and refresh token as `GOG_*` environment, while a ConfigMap-mounted `gog-setup.sh` rebuilds gog state at boot. `GOG_HOME` is on the container filesystem and is wiped and rebuilt on every start; the encrypted Agent Secret remains the source of truth.
+Google Workspace materializes through `gog_artifacts.py` in one of two shapes.
+
+Without the gateway, the pod Secret carries the OAuth client and refresh token as `GOG_*` environment, while a ConfigMap-mounted `gog-setup.sh` rebuilds gog state at boot. `GOG_HOME` is on the container filesystem and is wiped and rebuilt on every start; the encrypted Agent Secret remains the source of truth.
+
+With the gateway, Google Workspace is `EgressMode.TOKEN_BROKER` rather than `GATEWAY_PROXY`, because gog exposes no base-URL override but does accept a pre-minted token. The refresh token and OAuth client secret stay in the gateway; the pod receives only its Gateway Token and the mint URL, and there is no keyring, no stored OAuth client and nothing to import. A ConfigMap-mounted `gog-shim.sh` is installed onto `PATH` ahead of `/usr/local/bin` and, on every invocation, exchanges the Gateway Token for a short-lived Google access token which it exports as `GOG_ACCESS_TOKEN` before exec'ing the real binary. Fetching per invocation rather than once at boot matters: a Google access token lasts about an hour and agents run for days, and it makes revocation take effect on the next command rather than the next restart.
+
+This is the one provider where the pod still holds an upstream credential. That is the trade `TOKEN_BROKER` makes — an expiring, non-renewable access token instead of a renewable grant plus a client secret — and it is what allows a CLI that cannot be redirected to be covered at all.
 
 A read-only Google Workspace credential also sets `GOG_READONLY=1`, which makes gog reject mutating API requests locally before dispatch. This is a defence-in-depth backstop layered on the read-only OAuth scopes, not a replacement for them: it is an environment variable, so an agent with a shell can unset it.
 

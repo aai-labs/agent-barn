@@ -33,7 +33,12 @@ from api.domains.credential_gateway.models import (
     issue_token_value,
 )
 from api.domains.credential_gateway.repository import GatewayTokenRepository
-from api.domains.integrations.plugins.base import EgressMode, OutboundRequest, UpstreamAuthenticationError
+from api.domains.integrations.plugins.base import (
+    EgressMode,
+    MintedToken,
+    OutboundRequest,
+    UpstreamAuthenticationError,
+)
 from api.domains.integrations.plugins.registry import INTEGRATION_PLUGINS, effective_egress_mode
 from api.domains.shared_credentials.repository import SharedCredentialRepository
 
@@ -213,6 +218,34 @@ class CredentialGatewayService:
             content=request.body,
             sensitive_headers=outbound.sensitive_headers,
         )
+
+    # --- token brokering, called once per agent process start ---
+
+    def mint_upstream_token(self, authorization: str | None) -> MintedToken:
+        """Mint a short-lived upstream credential for a ``TOKEN_BROKER`` provider.
+
+        The pod uses the result directly against the provider, so unlike the proxy path
+        the gateway is not on the request path afterwards. That is the trade this mode
+        makes: the pod holds an expiring credential instead of none, in exchange for
+        working with a CLI that cannot be redirected.
+        """
+        resolution = self.resolve(authorization)
+        plugin = INTEGRATION_PLUGINS.require(resolution.provider)
+        if effective_egress_mode(plugin, self.config.credential_gateway_enabled) is not EgressMode.TOKEN_BROKER:
+            raise GatewayForwardRefused(f"{plugin.key} does not broker upstream tokens")
+
+        content = self._decrypt_credential(resolution.agent_id, resolution.organization_id, resolution.provider)
+        if content is None:
+            raise GatewayForwardRefused(f"no {plugin.key} credential for this agent")
+
+        minted = plugin.mint_upstream_token(content)
+        self.audit.record_lifecycle(
+            "minted",
+            provider=resolution.provider,
+            agent_id=resolution.agent_id,
+            organization_id=resolution.organization_id,
+        )
+        return minted
 
     def _decrypt_credential(
         self,

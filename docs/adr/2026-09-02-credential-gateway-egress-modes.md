@@ -1,7 +1,8 @@
 # Agent pods never hold provider credentials
 
-Status: Proposed
+Status: Accepted
 Date: 2026-09-02
+Implemented: 2026-09-03
 
 Agent pods stop receiving real provider credentials. A credential gateway holds the encrypted credential and either substitutes the real authorization on a forwarded request (`gateway_proxy`) or mints a short-lived upstream token for the pod (`token_broker`). Agent pods hold only a revocable gateway token or a short-lived upstream token. Their general internet access remains unrestricted because removing provider credentials—not restricting agent capability—is the security boundary of this feature.
 
@@ -40,10 +41,12 @@ Residual `TOKEN_BROKER` exposure is narrowed two ways: minting per-subcommand sc
 ## Consequences
 
 - `gog-setup.sh`, the file keyring, and the wipe-and-rebuild `GOG_HOME` machinery are deleted. The encrypted Agent Secret remains the source of truth without a per-boot pod-side reconstruction.
+- Redirecting a CLI needed no new client-side authentication mode: the generated profile reuses aai-cli's existing endpoint override and environment-backed bearer fields, and the gateway additionally accepts its own token as a Basic-auth password for transports that cannot send a bearer header.
 - Provider auth schemes become code on a provider plugin rather than gateway configuration, so schemes beyond bearer, basic, header, and query parameter — request signing, for example — need no gateway change. See [`2026-09-02-integration-plugin-and-runtime-tool-adapter-seams.md`](2026-09-02-integration-plugin-and-runtime-tool-adapter-seams.md).
 - The gateway lands on the request path of every tool call. It is in the blast radius of all agent tool use, and its availability budget must match agent availability.
 - Cross-host redirects become the gateway's responsibility for `GATEWAY_PROXY` providers so the gateway can remove provider credential headers before contacting the redirect target. This is credential-boundary enforcement, not network confinement.
 - Agent pods retain unrestricted internet access. Egress confinement would be a separate product capability with different requirements and is not implied by use of the credential gateway.
+- A provider's `EgressMode` is the single per-provider decision. `CREDENTIAL_GATEWAY_ENABLED` is a global operational switch for rollback only, not a per-provider allowlist: onboarding a provider stays local to its plugin rather than needing a second registration in deployment configuration.
 - Any CLI added later must expose a base-URL override or a direct-token seam, or it is confined to `DIRECT`.
 - Third-party binaries that are not ours — `git` over HTTPS is the immediate one — need their own answer. A gateway-backed credential helper covers git; a broader population of uncontrolled binaries would need this decision revisited.
 
