@@ -88,14 +88,15 @@ class WebChatService:
         agent_id: UUID,
         thread_id: str,
         context: CurrentUserContext,
-    ) -> bool:
+    ) -> None:
+        """Request cancellation, treating an already-inactive turn as a no-op."""
         agent = self.authorization.require_action(context, agent_id, PermissionKey.AGENT_UPDATE)
         connection = self._get_or_create_connection(agent.id, agent.organization_id)
         location = self._location(context, thread_id)
         delivery_id = self.gateway.find_active_inbound_delivery(connection.id, location)
         if delivery_id is None:
-            return False
-        return self.gateway.request_cancel_delivery(agent.id, delivery_id)
+            return
+        self.gateway.request_cancel_delivery(agent.id, delivery_id)
 
     def list_messages(
         self,
