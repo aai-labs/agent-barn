@@ -1,6 +1,7 @@
 """Integration tests for the built-in Web Chat channel."""
 
-from uuid import UUID
+from datetime import UTC, datetime
+from uuid import UUID, uuid7
 
 from fastapi import status
 from hamcrest import assert_that, contains_inanyorder, equal_to, has_length, is_, none, not_
@@ -9,7 +10,8 @@ from starlette.testclient import TestClient
 
 from api.domains.agents.models import AgentStatus
 from api.domains.communications.delivery_repository import CommunicationDeliveryRepository
-from api.domains.communications.models import CommunicationDelivery
+from api.domains.communications.models import CommunicationConnection, CommunicationDelivery
+from api.domains.conversations.models import AgentChatMessage, ConversationType, MessageDirection
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.tests.core.givenpy import given, then, when
 from api.tests.core.modules import (
@@ -156,6 +158,62 @@ def test_messages_sent_to_different_threads_stay_isolated():
             messages = response.json()
             assert_that(messages, has_length(1))
             assert_that(messages[0]["content"], equal_to("message on a"))
+
+
+def test_list_messages_returns_the_newest_500_messages_in_chronological_order():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+        seed = _send(context, "seed", thread_id="thread-a")
+        seed_id = UUID(str(seed["id"]))
+        history_ids = [uuid7() for _ in range(501)]
+        content_by_id = {seed_id: "seed"}
+        delegate = context.injector.get(PostgresRepositoryDelegate)
+        with Session(delegate.engine) as session:
+            connection = session.exec(
+                select(CommunicationConnection).where(
+                    CommunicationConnection.agent_id == context.agent.id,
+                    CommunicationConnection.platform_key == "web",
+                )
+            ).one()
+
+        messages = []
+        for index, message_id in enumerate(history_ids):
+            content = f"history-{index}"
+            content_by_id[message_id] = content
+            messages.append(
+                AgentChatMessage(
+                    id=message_id,
+                    agent_id=context.agent.id,
+                    connection_id=connection.id,
+                    openclaw_msg_id=f"history-{index}",
+                    session_key="web-chat:thread-a",
+                    channel_id=str(context.user.id),
+                    thread_id="thread-a",
+                    direction=MessageDirection.INBOUND,
+                    conversation_type=ConversationType.DM,
+                    content=content,
+                    occurred_at=datetime.now(UTC),
+                )
+            )
+
+        with Session(delegate.engine) as session:
+            session.add_all(messages)
+            session.commit()
+
+        response = client.get(
+            f"{_BASE}/{context.agent.id}/web-chat/messages",
+            headers=_auth(context),
+            params={"thread_id": "thread-a"},
+        )
+
+        expected_ids = sorted([seed_id, *history_ids])[-500:]
+        returned_ids = [UUID(message["id"]) for message in response.json()]
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+        assert_that(returned_ids, equal_to(expected_ids))
+        assert_that(
+            [message["content"] for message in response.json()],
+            equal_to([content_by_id[message_id] for message_id in expected_ids]),
+        )
 
 
 def test_list_threads_returns_every_thread_the_user_has_started():

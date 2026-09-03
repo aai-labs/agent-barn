@@ -51,8 +51,14 @@ class WebChatRepository:
             # timestamp comparison.
             if after_id is not None:
                 query = query.where(col(AgentChatMessage.id) > after_id)
-            query = query.order_by(col(AgentChatMessage.id).asc()).limit(limit)
-            return list(session.exec(query))
+                query = query.order_by(col(AgentChatMessage.id).asc()).limit(limit)
+                return list(session.exec(query))
+
+            # The initial page is a bounded history window. Read newest-first
+            # so PostgreSQL can stop after `limit` rows, then restore the
+            # chronological order expected by the UI.
+            query = query.order_by(col(AgentChatMessage.id).desc()).limit(limit)
+            return list(reversed(session.exec(query).all()))
 
     def delivery_statuses_for_messages(
         self,
