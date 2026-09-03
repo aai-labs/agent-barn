@@ -1,5 +1,7 @@
+import asyncio
 import enum
 import json
+import time
 from dataclasses import dataclass, field
 from typing import Any, cast
 from uuid import UUID
@@ -7,6 +9,7 @@ from uuid import UUID
 from injector import inject, singleton
 from redis import Redis
 from redis.asyncio import Redis as AsyncRedis
+from redis.exceptions import RedisError
 from redis.exceptions import TimeoutError as RedisTimeoutError
 
 from api.core.config import Config
@@ -15,6 +18,7 @@ _SIGNAL_STREAM_PREFIX = "agentbarn:communications:agent"
 _SIGNAL_STREAM_MAX_LENGTH = 1_000
 _SIGNAL_STREAM_TTL_SECONDS = 86_400
 _SIGNAL_SOCKET_TIMEOUT_SECONDS = 20
+_SIGNAL_RECOVERY_POLL_SECONDS = 5
 
 
 class CommunicationSignalType(str, enum.Enum):
@@ -87,7 +91,13 @@ class CommunicationSignalBus:
         pipeline.execute()
 
     def latest_cursor(self, agent_id: UUID) -> str:
-        entries = self._client.xrevrange(self._stream_key(agent_id), count=1)
+        try:
+            entries = self._client.xrevrange(self._stream_key(agent_id), count=1)
+        except RedisError:
+            # Redis is only a wakeup optimization. Starting from zero makes a
+            # later read replay whatever remains, while durable state supplies
+            # the actual recovery data.
+            return "0-0"
         if not entries:
             return "0-0"
         cursor = entries[0][0]
@@ -114,6 +124,12 @@ class CommunicationSignalBus:
             # stream consumers: preserve the cursor and let the caller emit a
             # heartbeat rather than tearing down the SSE response.
             return cursor, []
+        except RedisError:
+            # A connection outage must not strand durable deliveries or browser
+            # updates. Wait briefly, then ask consumers to replay PostgreSQL;
+            # this is deliberately not a Redis retry loop with no delay.
+            time.sleep(min(timeout_seconds, _SIGNAL_RECOVERY_POLL_SECONDS))
+            return cursor, [CommunicationSignal(type=CommunicationSignalType.DELIVERY_AVAILABLE)]
         signals: list[CommunicationSignal] = []
         next_cursor = cursor
         for _, messages in entries:
@@ -128,7 +144,12 @@ class CommunicationSignalBus:
         return next_cursor, signals
 
     async def latest_cursor_async(self, agent_id: UUID) -> str:
-        entries = await self._async_client.xrevrange(self._stream_key(agent_id), count=1)
+        try:
+            entries = await self._async_client.xrevrange(self._stream_key(agent_id), count=1)
+        except RedisError:
+            # See latest_cursor: PostgreSQL remains authoritative when Redis is
+            # unavailable, and a zero cursor allows replay after recovery.
+            return "0-0"
         if not entries:
             return "0-0"
         cursor = entries[0][0]
@@ -155,6 +176,11 @@ class CommunicationSignalBus:
             # stream consumers: preserve the cursor and let the caller emit a
             # heartbeat rather than tearing down the SSE response.
             return cursor, []
+        except RedisError:
+            # Keep long-lived consumers alive and turn the outage into a
+            # bounded durable-state replay rather than dropping the stream.
+            await asyncio.sleep(min(timeout_seconds, _SIGNAL_RECOVERY_POLL_SECONDS))
+            return cursor, [CommunicationSignal(type=CommunicationSignalType.DELIVERY_AVAILABLE)]
         signals: list[CommunicationSignal] = []
         next_cursor = cursor
         for _, messages in entries:

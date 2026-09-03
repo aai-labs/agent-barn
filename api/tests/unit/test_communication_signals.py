@@ -4,6 +4,7 @@ from typing import cast
 from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
+from redis.exceptions import RedisError
 from redis.exceptions import TimeoutError as RedisTimeoutError
 
 from api.core.config import Config
@@ -94,6 +95,25 @@ def test_wait_treats_the_redis_socket_timeout_as_a_heartbeat() -> None:
     assert signals == []
 
 
+def test_cursor_falls_back_to_durable_replay_when_redis_is_unavailable() -> None:
+    bus, client = _bus()
+    agent_id = uuid4()
+    client.xrevrange.side_effect = RedisError("redis is down")
+
+    assert bus.latest_cursor(agent_id) == "0-0"
+
+
+def test_wait_requests_durable_replay_when_redis_is_unavailable() -> None:
+    bus, client = _bus()
+    agent_id = uuid4()
+    client.xread.side_effect = RedisError("redis is down")
+
+    next_cursor, signals = bus.wait(agent_id, "10-0", timeout_seconds=0)
+
+    assert next_cursor == "10-0"
+    assert signals == [CommunicationSignal(type=CommunicationSignalType.DELIVERY_AVAILABLE)]
+
+
 def test_async_cursor_then_wait_decodes_valid_signals_and_skips_malformed_entries() -> None:
     bus, client = _async_bus()
     agent_id = uuid4()
@@ -138,3 +158,22 @@ def test_async_wait_treats_the_redis_socket_timeout_as_a_heartbeat() -> None:
 
     assert next_cursor == "10-0"
     assert signals == []
+
+
+def test_async_cursor_falls_back_to_durable_replay_when_redis_is_unavailable() -> None:
+    bus, client = _async_bus()
+    agent_id = uuid4()
+    client.xrevrange.side_effect = RedisError("redis is down")
+
+    assert asyncio.run(bus.latest_cursor_async(agent_id)) == "0-0"
+
+
+def test_async_wait_requests_durable_replay_when_redis_is_unavailable() -> None:
+    bus, client = _async_bus()
+    agent_id = uuid4()
+    client.xread.side_effect = RedisError("redis is down")
+
+    next_cursor, signals = asyncio.run(bus.wait_async(agent_id, "10-0", timeout_seconds=0))
+
+    assert next_cursor == "10-0"
+    assert signals == [CommunicationSignal(type=CommunicationSignalType.DELIVERY_AVAILABLE)]
