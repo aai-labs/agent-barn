@@ -2,7 +2,7 @@ import importlib.util
 import io
 from pathlib import Path
 from types import ModuleType
-from unittest.mock import Mock
+from unittest.mock import Mock, call
 
 import pytest
 
@@ -114,6 +114,21 @@ def test_control_stream_wakes_delivery_worker_and_routes_cancel(monkeypatch: pyt
 
     worker.wake.assert_called_once_with()
     cancel.assert_called_once_with("delivery-1")
+
+
+def test_main_backs_off_after_a_clean_control_stream_close(monkeypatch: pytest.MonkeyPatch) -> None:
+    adapter = _load_adapter(monkeypatch)
+    worker = Mock()
+    monkeypatch.setattr(adapter, "DeliveryWorker", lambda: worker)
+    monkeypatch.setattr(adapter, "consume_control_stream", Mock(side_effect=[None, KeyboardInterrupt]))
+    sleep = Mock()
+    monkeypatch.setattr(adapter.time, "sleep", sleep)
+
+    with pytest.raises(KeyboardInterrupt):
+        adapter.main()
+
+    worker.start.assert_called_once_with()
+    sleep.assert_has_calls([call(1)])
 
 
 def test_delivery_worker_safety_poll_claims_without_a_control_signal(monkeypatch: pytest.MonkeyPatch) -> None:

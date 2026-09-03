@@ -213,11 +213,11 @@ def main() -> None:
     while True:
         try:
             consume_control_stream(worker)
-            reconnect_delay = 1
+            print("[communications-adapter] control stream closed; reconnecting", flush=True)
         except Exception as exc:
             print(f"[communications-adapter] control stream: {exc}", flush=True)
-            time.sleep(reconnect_delay)
-            reconnect_delay = min(15, reconnect_delay * 2)
+        time.sleep(reconnect_delay)
+        reconnect_delay = min(15, reconnect_delay * 2)
 
 
 if __name__ == "__main__":
