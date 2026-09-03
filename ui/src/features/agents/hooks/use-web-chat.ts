@@ -84,7 +84,7 @@ export function useWebChat(
   const stopMutation = useMutation({
     mutationFn: async () => {
       await api.post(
-        `${orgApiBase}/agents/${agentId}/web-chat/threads/${threadId}/stop`,
+        `${orgApiBase}/agents/${agentId}/web-chat/threads/${encodeURIComponent(threadId)}/stop`,
       );
     },
     onSuccess: async () => {

@@ -119,6 +119,25 @@ def test_reading_web_chat_does_not_auto_provision_a_connection():
         assert_that(web_connection, none())
 
 
+def test_thread_mutation_paths_reject_overlong_thread_ids():
+    with given(_GIVEN) as context:
+        thread_id = "x" * 129
+        headers = _auth(context)
+        base = f"{_BASE}/{context.agent.id}/web-chat/threads/{thread_id}"
+
+        rename_response = context.client.patch(
+            base,
+            headers=headers,
+            json={"display_name": "Too long"},
+        )
+        delete_response = context.client.delete(base, headers=headers)
+        stop_response = context.client.post(f"{base}/stop", headers=headers)
+
+        assert_that(rename_response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_ENTITY))
+        assert_that(delete_response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_ENTITY))
+        assert_that(stop_response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_ENTITY))
+
+
 def test_stop_generation_cancels_the_active_thread_delivery_idempotently():
     with given([*_GIVEN[:-1], there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
         client: TestClient = context.client

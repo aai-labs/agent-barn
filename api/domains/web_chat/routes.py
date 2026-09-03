@@ -1,7 +1,7 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, Path, Query, status
 from fastapi.responses import StreamingResponse
 from fastapi_injector import Injected
 
@@ -37,7 +37,7 @@ def list_web_chat_threads(
 )
 def rename_web_chat_thread(
     agent_id: UUID,
-    thread_id: str,
+    thread_id: Annotated[str, Path(min_length=1, max_length=128)],
     data: WebChatThreadRename,
     context: Annotated[CurrentUserContext, Depends(get_current_user())],
     service: Annotated[WebChatService, Injected(WebChatService)],
@@ -51,7 +51,7 @@ def rename_web_chat_thread(
 )
 def delete_web_chat_thread(
     agent_id: UUID,
-    thread_id: str,
+    thread_id: Annotated[str, Path(min_length=1, max_length=128)],
     context: Annotated[CurrentUserContext, Depends(get_current_user())],
     service: Annotated[WebChatService, Injected(WebChatService)],
 ) -> None:
@@ -92,7 +92,7 @@ def send_web_chat_message(
 )
 def stop_web_chat_generation(
     agent_id: UUID,
-    thread_id: str,
+    thread_id: Annotated[str, Path(min_length=1, max_length=128)],
     context: Annotated[CurrentUserContext, Depends(get_current_user())],
     service: Annotated[WebChatService, Injected(WebChatService)],
 ) -> None:
