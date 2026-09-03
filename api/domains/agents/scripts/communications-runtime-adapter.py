@@ -14,6 +14,7 @@ AGENT_ID = os.environ["AGENT_ID"]
 RUNTIME_API_URL = os.environ["RUNTIME_API_URL"].rstrip("/")
 RUNTIME_API_KEY = os.environ["RUNTIME_API_KEY"]
 RUNTIME_MODEL = os.environ["RUNTIME_MODEL"]
+CLAIM_SAFETY_POLL_INTERVAL_SECONDS = 5
 
 
 class InFlightDelivery:
@@ -142,7 +143,7 @@ def run_delivery(delivery: dict) -> None:
 
 
 class DeliveryWorker:
-    """Drain durable claims when the control stream signals available work."""
+    """Drain durable claims on signals, with a bounded lost-wakeup fallback."""
 
     def __init__(self) -> None:
         self._wake = threading.Event()
@@ -156,22 +157,28 @@ class DeliveryWorker:
 
     def _run(self) -> None:
         while True:
-            self._wake.wait()
+            # Redis is only a wakeup optimization. A publish can fail after
+            # PostgreSQL commits, so periodically retry the durable claim even
+            # when the control stream has not delivered a signal.
+            self._wake.wait(timeout=CLAIM_SAFETY_POLL_INTERVAL_SECONDS)
             self._wake.clear()
             try:
-                while True:
-                    delivery = http_request(
-                        "POST",
-                        f"{COMMUNICATIONS_URL}/agents/{AGENT_ID}/deliveries/claim",
-                        headers=communications_headers(),
-                    )
-                    if delivery is None:
-                        break
-                    run_delivery(delivery)
+                self._drain()
             except Exception as exc:
                 print(f"[communications-adapter] delivery worker: {exc}", flush=True)
                 time.sleep(2)
                 self._wake.set()
+
+    def _drain(self) -> None:
+        while True:
+            delivery = http_request(
+                "POST",
+                f"{COMMUNICATIONS_URL}/agents/{AGENT_ID}/deliveries/claim",
+                headers=communications_headers(),
+            )
+            if delivery is None:
+                return
+            run_delivery(delivery)
 
 
 def consume_control_stream(worker: DeliveryWorker) -> None:

@@ -15,9 +15,9 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
 
 ### 2026-09-01 — Event-driven runtime control and Web Chat cancellation — PR pending
 
-- Delivered: Communications protocol version 2 adds an Agent-initiated SSE control stream. Content-free Redis Streams wake the connected runtime for durable PostgreSQL delivery claims and carry cancellation requests without idle claim polling, a reverse control-plane connection, or an HTTP admin server in every Agent pod. Version-1 delivery routes remain accepted during rolling Agent rebuilds.
+- Delivered: Communications protocol version 2 adds an Agent-initiated SSE control stream. Content-free Redis Streams wake the connected runtime for durable PostgreSQL delivery claims and carry cancellation requests without continuous idle claim polling, a reverse control-plane connection, or an HTTP admin server in every Agent pod. Version-1 delivery routes remain accepted during rolling Agent rebuilds.
 - Delivered: Dashboard Web Chat SSE now takes a Redis cursor, replays durable messages, and waits on Agent-scoped stream notifications instead of polling PostgreSQL. Delivery status is included in the Web Chat message read model so waiting state survives remounts and clears durably after cancellation.
-- Changed: Cancellation is persisted before notification, takes precedence over late successful completion, and atomically prevents reply creation from a cancelled source. Both pinned runtimes currently soft-cancel by suppressing the eventual result because neither exposes a proven abort handle for this chat-completions path. Redis remains a wakeup mechanism only—PostgreSQL owns claims, leases, cancellation, idempotency, and reconnect replay.
+- Changed: Cancellation is persisted before notification, takes precedence over late successful completion, and atomically prevents reply creation from a cancelled source. Both pinned runtimes currently soft-cancel by suppressing the eventual result because neither exposes a proven abort handle for this chat-completions path. Redis remains a wakeup mechanism only—PostgreSQL owns claims, leases, cancellation, idempotency, and reconnect replay—and the runtime adapter uses a bounded five-second safety claim poll for lost wakeups.
 
 ### 2026-08-28 — Structured safe failure diagnostics — PR pending
 

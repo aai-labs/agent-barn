@@ -114,3 +114,39 @@ def test_control_stream_wakes_delivery_worker_and_routes_cancel(monkeypatch: pyt
 
     worker.wake.assert_called_once_with()
     cancel.assert_called_once_with("delivery-1")
+
+
+def test_delivery_worker_safety_poll_claims_without_a_control_signal(monkeypatch: pytest.MonkeyPatch) -> None:
+    adapter = _load_adapter(monkeypatch)
+    delivery = _delivery()
+    responses: list[dict | None] = [delivery, None]
+    claim = Mock(side_effect=lambda *_args, **_kwargs: responses.pop(0))
+    run_delivery = Mock()
+    monkeypatch.setattr(adapter, "http_request", claim)
+    monkeypatch.setattr(adapter, "run_delivery", run_delivery)
+
+    class Wake:
+        def __init__(self) -> None:
+            self.wait_calls: list[float] = []
+            self.wait_count = 0
+
+        def wait(self, *, timeout: float) -> bool:
+            self.wait_calls.append(timeout)
+            self.wait_count += 1
+            if self.wait_count == 1:
+                return False
+            raise KeyboardInterrupt
+
+        def clear(self) -> None:
+            return None
+
+    wake = Wake()
+    worker = adapter.DeliveryWorker()
+    worker._wake = wake
+
+    with pytest.raises(KeyboardInterrupt):
+        worker._run()
+
+    assert wake.wait_calls == [adapter.CLAIM_SAFETY_POLL_INTERVAL_SECONDS] * 2
+    assert claim.call_count == 2
+    run_delivery.assert_called_once_with(delivery)
