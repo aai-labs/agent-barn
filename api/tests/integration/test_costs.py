@@ -376,6 +376,27 @@ def test_cost_history_survives_a_hard_deleted_agent():
             assert_that(items[0]["agent_name"], equal_to(context.agent.name))
 
 
+def test_an_org_caller_cannot_widen_scope_with_an_organization_id_param():
+    """The org surface pins the organization itself.
+
+    `get_cost_filter` does not accept organization_id at all, and the service
+    overwrites it regardless — two layers, because this is the one parameter that
+    would turn an org-scoped page into a platform-wide one.
+    """
+    with given([*_GIVEN, there_are_cost_records(count=1, spend="2.00")]) as context:
+        client: TestClient = context.client
+        someone_else = uuid7()
+
+        with when("I pass another organization's id"):
+            response = client.get(f"{_BASE}?organization_id={someone_else}", headers=_auth(context))
+            summary = client.get(f"{_BASE}/summary?organization_id={someone_else}", headers=_auth(context))
+
+        with then("the parameter is ignored and my own organization is returned"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(response.json()["total"], equal_to(1))
+            assert_that(summary.json()["total_spend"], equal_to(2.0))
+
+
 def test_get_costs_summary_requires_auth():
     with given(_GIVEN) as context:
         client: TestClient = context.client

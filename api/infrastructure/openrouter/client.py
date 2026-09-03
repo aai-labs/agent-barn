@@ -19,16 +19,24 @@ _cache: dict[str, tuple[float, list[dict]]] = {}
 _cache_lock = threading.Lock()
 _key_locks: dict[str, threading.Lock] = {}
 
+# Remaining credit, cached separately from the catalogue: it changes constantly,
+# whereas the catalogue barely moves, so they cannot share a TTL.
+_credits_cache: tuple[float, float | None] | None = None
+_credits_lock = threading.Lock()
+
 
 class OpenRouterError(Exception):
     pass
 
 
 def clear_models_cache() -> None:
-    """Drops the cached catalogue. Intended for tests."""
+    """Drops the cached catalogue and credit reading. Intended for tests."""
+    global _credits_cache
     with _cache_lock:
         _cache.clear()
         _key_locks.clear()
+    with _credits_lock:
+        _credits_cache = None
 
 
 def _key_lock(key: str) -> threading.Lock:
@@ -72,6 +80,45 @@ class OpenRouterClient:
     def list_models(self) -> list[dict]:
         """Returns the OpenRouter catalogue as {id, name, context_length, pricing}."""
         return _cached(self.config.openrouter_base_url, self._fetch_models)
+
+    def get_credits_remaining(self) -> float | None:
+        """Credit left on the inference key, or None when there is no answer.
+
+        None covers two different situations on purpose, and neither should be shown
+        as a number: the key has no credit limit set (OpenRouter reports null), or
+        the poll failed. Runway is undefined in both cases, and inventing a figure
+        for a page about money is worse than admitting we do not know.
+
+        Reads GET /key rather than the account-wide /credits endpoint, which needs a
+        management key that can also mint and delete keys — too much privilege for a
+        read. Cached for the same TTL as the credits metric.
+        """
+        global _credits_cache
+        ttl = self.config.openrouter_credits_cache_ttl_seconds
+        now = time.monotonic()
+        with _credits_lock:
+            if _credits_cache is not None and now - _credits_cache[0] < ttl:
+                return _credits_cache[1]
+
+        remaining: float | None = None
+        if self.config.openrouter_api_key:
+            try:
+                resp = httpx.get(
+                    f"{self.config.openrouter_base_url.rstrip('/')}/key",
+                    headers={"Authorization": f"Bearer {self.config.openrouter_api_key}"},
+                    timeout=10,
+                )
+                resp.raise_for_status()
+                limit_remaining = resp.json()["data"]["limit_remaining"]
+                remaining = None if limit_remaining is None else float(limit_remaining)
+            except Exception:
+                # Never let a credit poll fail a cost page. The caller renders
+                # "unknown" runway and everything else on the page still works.
+                logger.warning("Failed to read OpenRouter credit balance", exc_info=True)
+
+        with _credits_lock:
+            _credits_cache = (time.monotonic(), remaining)
+        return remaining
 
     def get_generation(self, generation_id: str) -> dict | None:
         """Return the true cost and token counts OpenRouter recorded for one call.

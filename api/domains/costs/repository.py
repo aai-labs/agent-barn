@@ -492,6 +492,51 @@ class CostRepository:
         # narrowed return type true rather than merely intended.
         return [(row[0], row[1], row[2]) for row in rows if row[0] is not None]
 
+    def spend_by_organization(
+        self,
+        window: StatsWindow,
+        filters: CostFilter,
+    ) -> list[tuple[UUID | None, str | None, Decimal, int, int]]:
+        """Organizations ranked by spend, biggest first.
+
+        The NULL group is kept rather than filtered out: it is the unattributed
+        bucket, and hiding it would make the platform total silently exceed the sum
+        of the rows shown beneath it.
+        """
+        # sa.select: sqlmodel's typed overloads stop short of five columns.
+        query = (
+            sa.select(
+                col(CostRecord.organization_id),
+                sa.func.max(col(CostRecord.organization_name)),
+                sa.func.coalesce(sa.func.sum(col(CostRecord.spend)), 0).label("spend"),
+                sa.func.count(),
+                sa.func.count(sa.distinct(col(CostRecord.agent_id))),
+            )
+            .where(*self._predicates(window, filters))
+            .group_by(col(CostRecord.organization_id))
+            .order_by(sa.desc("spend"))
+        )
+        with self.delegate.engine.connect() as connection:
+            rows = connection.execute(query).all()
+        return [(row[0], row[1], Decimal(str(row[2])), int(row[3]), int(row[4])) for row in rows]
+
+    def unattributed_totals(self, window: StatsWindow, filters: CostFilter) -> tuple[Decimal, int]:
+        """Spend that resolved to no agent — the honest gap in attribution.
+
+        Measured at 0.09% of production rows. Worth surfacing rather than folding
+        into the total, because a growing number here means key decryption or agent
+        bookkeeping has drifted, not that someone is spending more.
+        """
+        predicates = [*self._predicates(window, filters), col(CostRecord.agent_id).is_(None)]
+        with Session(self.delegate.engine) as session:
+            row = session.exec(
+                select(
+                    sa.func.coalesce(sa.func.sum(col(CostRecord.spend)), 0),
+                    sa.func.count(),
+                ).where(*predicates)
+            ).one()
+        return Decimal(str(row[0])), int(row[1])
+
     def _bucket_series(self, window: StatsWindow):
         unit = window.granularity.value
         return select(

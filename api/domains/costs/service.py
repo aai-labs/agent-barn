@@ -76,40 +76,7 @@ class CostService:
         filters: CostFilter,
     ) -> CostSummaryRead:
         scoped = self._scoped(self._authorized_org(context), filters)
-        return self._build_summary(window, scoped)
-
-    def _build_summary(self, window: StatsWindow, scoped: CostFilter) -> CostSummaryRead:
-        totals = self.repository.totals(window, scoped)
-        top = self.repository.top_model(window, scoped)
-        return CostSummaryRead(
-            total_spend=float(totals.spend),
-            total_calls=totals.calls,
-            active_agents=totals.agents,
-            top_model=top[0] if top else None,
-            top_model_spend=float(top[1]) if top else 0.0,
-            avg_cost_per_call=float(totals.spend) / totals.calls if totals.calls else 0.0,
-            avg_prompt_tokens=totals.avg_prompt_tokens,
-            spend_over_time=[
-                CostSeriesPoint(bucket=bucket, spend=float(spend), calls=calls)
-                for bucket, spend, calls in self.repository.spend_series(window, scoped)
-            ],
-            avg_prompt_tokens_over_time=[
-                TokenSeriesPoint(bucket=bucket, avg_prompt_tokens=value)
-                for bucket, value in self.repository.avg_prompt_tokens_series(window, scoped)
-            ],
-            spend_by_agent_over_time=[
-                AgentSpendSeriesPoint(bucket=bucket, agent_id=agent_id, agent_name=name, spend=float(spend))
-                for bucket, agent_id, name, spend in self.repository.spend_by_agent_series(window, scoped)
-            ],
-            cost_per_call_histogram=[
-                CostHistogramBucket(
-                    lower=float(lower),
-                    upper=float(upper) if upper is not None else None,
-                    calls=calls,
-                )
-                for lower, upper, calls in self.repository.cost_per_call_histogram(window, scoped)
-            ],
-        )
+        return build_cost_summary(self.repository, window, scoped)
 
     def list_org_costs(
         self,
@@ -227,4 +194,48 @@ def _to_cost_record_read(record: CostRecord) -> CostRecordRead:
         agent_id=record.agent_id,
         agent_name=record.agent_name,
         healed=record.source == CostRecordSource.OPENROUTER_BACKFILL,
+    )
+
+
+def build_cost_summary(
+    repository: CostRepository,
+    window: StatsWindow,
+    scoped: CostFilter,
+) -> CostSummaryRead:
+    """The stat cards and charts, built from one filter.
+
+    A free function rather than a method: the org and platform surfaces build the
+    identical summary from the identical predicate, and the only difference between
+    them is what the filter is allowed to say.
+    """
+    totals = repository.totals(window, scoped)
+    top = repository.top_model(window, scoped)
+    return CostSummaryRead(
+        total_spend=float(totals.spend),
+        total_calls=totals.calls,
+        active_agents=totals.agents,
+        top_model=top[0] if top else None,
+        top_model_spend=float(top[1]) if top else 0.0,
+        avg_cost_per_call=float(totals.spend) / totals.calls if totals.calls else 0.0,
+        avg_prompt_tokens=totals.avg_prompt_tokens,
+        spend_over_time=[
+            CostSeriesPoint(bucket=bucket, spend=float(spend), calls=calls)
+            for bucket, spend, calls in repository.spend_series(window, scoped)
+        ],
+        avg_prompt_tokens_over_time=[
+            TokenSeriesPoint(bucket=bucket, avg_prompt_tokens=value)
+            for bucket, value in repository.avg_prompt_tokens_series(window, scoped)
+        ],
+        spend_by_agent_over_time=[
+            AgentSpendSeriesPoint(bucket=bucket, agent_id=agent_id, agent_name=name, spend=float(spend))
+            for bucket, agent_id, name, spend in repository.spend_by_agent_series(window, scoped)
+        ],
+        cost_per_call_histogram=[
+            CostHistogramBucket(
+                lower=float(lower),
+                upper=float(upper) if upper is not None else None,
+                calls=calls,
+            )
+            for lower, upper, calls in repository.cost_per_call_histogram(window, scoped)
+        ],
     )

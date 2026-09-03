@@ -284,3 +284,34 @@ class CostSummaryRead(PydanticBaseModel):
     avg_prompt_tokens_over_time: list[TokenSeriesPoint] = Field(default_factory=list)
     spend_by_agent_over_time: list[AgentSpendSeriesPoint] = Field(default_factory=list)
     cost_per_call_histogram: list[CostHistogramBucket] = Field(default_factory=list)
+
+
+class OrganizationSpendRead(PydanticBaseModel):
+    """One organization's slice of platform spend.
+
+    `organization_id` is None for the unattributed bucket, which is kept in the
+    ranking rather than filtered out: hiding it would let the platform total silently
+    exceed the sum of the rows shown beneath it.
+    """
+
+    organization_id: UUID | None = None
+    organization_name: str | None = None
+    spend: float
+    calls: int
+    agents: int
+
+
+class PlatformCostSummaryRead(CostSummaryRead):
+    """The org summary plus the figures only a platform admin sees."""
+
+    # Spend over the window divided by its length in days.
+    daily_burn_rate: float = 0.0
+    # Credit left on the OpenRouter key. None means either no credit limit is set or
+    # the poll failed — both are "we don't know", and neither should render as a number.
+    credits_remaining: float | None = None
+    # Days of credit left at the current burn rate. None whenever either input is
+    # unknown or nothing has been spent.
+    runway_days: float | None = None
+    unattributed_spend: float = 0.0
+    unattributed_calls: int = 0
+    organizations: list[OrganizationSpendRead] = Field(default_factory=list)
