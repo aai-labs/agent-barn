@@ -28,6 +28,9 @@ from api.infrastructure.discord.client import DiscordClient
 
 logger = logging.getLogger(__name__)
 
+_INSTALL_OAUTH_SCOPES = "bot%20applications.commands"
+_INSTALL_PERMISSIONS = 274878286912
+
 
 class DiscordValidationConfig(Protocol):
     skip_discord_token_validation: bool
@@ -96,9 +99,11 @@ class DiscordPlatformPlugin(PlatformPlugin):
         "2. Under **Bot → Privileged Gateway Intents**, enable **Message Content Intent**. Enable **Server Members Intent** "
         "too when you want the Connection editor to suggest server members.\n\n"
         "## Invite the bot\n\n"
-        "1. Under **OAuth2 → URL Generator**, choose the bot scope and invite it to each server.\n"
-        "2. Grant **View Channels**, **Send Messages**, and **Read Message History**; also grant **Send Messages in Threads** "
-        "when threads are used.\n\n"
+        "1. After saving this Connection, use **Install bot to server** on its card to add the bot to each server "
+        "with the recommended permissions.\n"
+        "2. To invite manually instead, open **OAuth2 → URL Generator**, choose the bot scope, and grant **View "
+        "Channels**, **Send Messages**, and **Read Message History**; also grant **Send Messages in Threads** when "
+        "threads are used.\n\n"
         "## Finish the Connection\n\n"
         "1. Paste the Bot Token into this Connection and save it.\n"
         "2. The bot must belong to each allowed server and view every allowed channel. Enable **Developer Mode** to copy "
@@ -109,6 +114,7 @@ class DiscordPlatformPlugin(PlatformPlugin):
     capabilities = frozenset(
         {
             PlatformCapability.DIRECTORY_DISCOVERY,
+            PlatformCapability.INSTALL_LINK,
             PlatformCapability.ATTACHMENTS,
             PlatformCapability.MENTIONS,
             PlatformCapability.THREADS,
@@ -129,6 +135,15 @@ class DiscordPlatformPlugin(PlatformPlugin):
         username = str(bot.get("username") or "")
         discriminator = str(bot.get("discriminator") or "")
         return f"@{username}#{discriminator}" if discriminator and discriminator != "0" else f"@{username}"
+
+    def build_install_link(self, settings: PlatformSettings, credentials: PlatformCredentials) -> str:
+        del settings
+        assert isinstance(credentials, DiscordCredentials)
+        application = DiscordClient(credentials.bot_token).get_current_application()
+        return (
+            "https://discord.com/oauth2/authorize"
+            f"?client_id={application['id']}&scope={_INSTALL_OAUTH_SCOPES}&permissions={_INSTALL_PERMISSIONS}"
+        )
 
     def fingerprint_material(self, credentials: PlatformCredentials) -> str:
         assert isinstance(credentials, DiscordCredentials)

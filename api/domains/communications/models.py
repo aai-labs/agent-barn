@@ -34,6 +34,7 @@ class CommunicationPlatform(str, enum.Enum):
 class PlatformCapability(str, enum.Enum):
     DIRECTORY_DISCOVERY = "directory_discovery"
     APPLICATION_PROVISIONING = "application_provisioning"
+    INSTALL_LINK = "install_link"
     WEBHOOK_INGRESS = "webhook_ingress"
     ATTACHMENTS = "attachments"
     THREADS = "threads"
@@ -625,3 +626,9 @@ class CommunicationConnectionRead(PydanticBaseModel):
     revision: int
     created_at: datetime
     updated_at: datetime
+
+
+class CommunicationInstallLinkRead(PydanticBaseModel):
+    """Provider-built install URL for a saved Connection's bot."""
+
+    url: str

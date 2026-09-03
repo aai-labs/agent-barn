@@ -28,6 +28,7 @@ from api.domains.communications.models import (
     CommunicationDirectoryPreview,
     CommunicationDirectoryPreviewRead,
     CommunicationErrorCategory,
+    CommunicationInstallLinkRead,
     CommunicationJournalEntryRead,
     CommunicationJournalStage,
     CommunicationReconnectRead,
@@ -438,6 +439,40 @@ class CommunicationsService:
             attempt_count=delivery.attempt_count,
             requested_at=datetime.now(UTC),
         )
+
+    def build_install_link(
+        self,
+        agent_id: UUID,
+        connection_id: UUID,
+        context: CurrentUserContext,
+    ) -> CommunicationInstallLinkRead:
+        self.authorization.require_action(context, agent_id, PermissionKey.AGENT_UPDATE)
+        scope = self.authorization.authorization_scope(context, PermissionKey.AGENT_UPDATE)
+        connection = self.repository.get_active_in_scope(connection_id, agent_id, scope)
+        if connection is None:
+            self._raise_not_found(connection_id)
+
+        plugin = self._require_plugin(connection.platform_key)
+        if PlatformCapability.INSTALL_LINK not in plugin.capabilities:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"{plugin.display_name} does not provide a bot install link",
+            )
+        try:
+            url = plugin.build_install_link(
+                plugin.settings_model.model_validate(connection.settings),
+                plugin.credentials_model.model_validate(
+                    self._decrypt_credentials(plugin, connection.credentials_encrypted)
+                ),
+            )
+            return CommunicationInstallLinkRead(url=url)
+        except NotImplementedError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"{plugin.display_name} does not provide a bot install link",
+            ) from exc
+        except (ValidationError, ValueError) as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
     def build_app_package(
         self,

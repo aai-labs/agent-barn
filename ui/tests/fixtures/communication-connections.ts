@@ -18,7 +18,7 @@ export const mockCommunicationPlatforms = [
     setup_hint:
       "## Create a bot\n\n1. Open the **Bot** page and copy the Token.\n2. Enable **Message Content Intent**.\n\n## Invite the bot\n\n1. Grant **View Channels**, **Send Messages**, and **Read Message History**.",
     schema_version: 1,
-    capabilities: ["MENTIONS", "DIRECTORY_DISCOVERY"],
+    capabilities: ["MENTIONS", "DIRECTORY_DISCOVERY", "install_link"],
     settings_schema: {
       type: "object",
       properties: {

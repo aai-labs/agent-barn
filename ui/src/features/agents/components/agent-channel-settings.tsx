@@ -32,6 +32,7 @@ import {
   useCommunicationConnectionDirectory,
   useCommunicationPlatforms,
   useDownloadAppPackage,
+  useInstallLink,
 } from "@/features/communication-connections/hooks/use-communication-connections";
 import { DirectoryPickerDialog } from "@/features/communication-connections/components/directory-picker-dialog";
 import { SLACK_APP_MANIFEST } from "@/features/communication-connections/slack-manifest";
@@ -453,8 +454,12 @@ export function AgentChannelSettings({
   const [formError, setFormError] = useState<string | null>(null);
   const [retiring, setRetiring] = useState<CommunicationConnection | null>(null);
   const downloadAppPackage = useDownloadAppPackage();
+  const fetchInstallLink = useInstallLink();
   const [packageBusyId, setPackageBusyId] = useState<string | null>(null);
   const [packageError, setPackageError] = useState<string | null>(null);
+  const [installLinks, setInstallLinks] = useState<Record<string, string>>({});
+  const [installBusyId, setInstallBusyId] = useState<string | null>(null);
+  const [installError, setInstallError] = useState<string | null>(null);
   const [editingConnection, setEditingConnection] = useState<CommunicationConnection | null>(null);
   const [editDisplayName, setEditDisplayName] = useState("");
   const [editSettings, setEditSettings] = useState<Record<string, unknown>>({});
@@ -720,6 +725,46 @@ export function AgentChannelSettings({
                   )}
                   {packageError && packageBusyId === null && (
                     <div className="mt-2 text-xs" style={{ color: "var(--err)" }}>{packageError}</div>
+                  )}
+                  {platforms.data
+                    ?.find((p) => p.key === connection.platformKey)
+                    ?.capabilities.includes("install_link") && (
+                    <div className="mt-2 flex items-center gap-2 text-xs" style={{ color: "var(--ink-3)" }}>
+                      <span>Add the bot to a server with the recommended permissions.</span>
+                      {installLinks[connection.id] ? (
+                        <a
+                          href={installLinks[connection.id]}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="af-btn af-btn-sm flex-shrink-0"
+                        >
+                          Install bot to server ↗
+                        </a>
+                      ) : (
+                        <button
+                          type="button"
+                          className="af-btn af-btn-sm flex-shrink-0"
+                          disabled={installBusyId === connection.id}
+                          onClick={() => {
+                            setInstallBusyId(connection.id);
+                            setInstallError(null);
+                            void fetchInstallLink(agent.id, connection.id)
+                              .then((url) => setInstallLinks((previous) => ({ ...previous, [connection.id]: url })))
+                              .catch((cause: unknown) =>
+                                setInstallError(
+                                  cause instanceof Error ? cause.message : "Could not build the install link.",
+                                ),
+                              )
+                              .finally(() => setInstallBusyId(null));
+                          }}
+                        >
+                          {installBusyId === connection.id ? "Preparing…" : "Get install link"}
+                        </button>
+                      )}
+                    </div>
+                  )}
+                  {installError && installBusyId === null && (
+                    <div className="mt-2 text-xs" style={{ color: "var(--err)" }}>{installError}</div>
                   )}
                   <div className="mt-3">
                     <PlatformSetupHint
