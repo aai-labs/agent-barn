@@ -2,7 +2,6 @@
 
 import { useCallback, useMemo } from "react";
 import { RefreshCw } from "lucide-react";
-import { parseAsString, parseAsStringEnum, useQueryStates } from "nuqs";
 
 import { OrganizationCombobox } from "@/components/organization-combobox";
 
@@ -14,7 +13,7 @@ import {
   usePlatformCostSummary,
   usePlatformCosts,
 } from "../hooks/use-platform-costs";
-import { CostSortDirectionSchema } from "../schemas";
+import { useCostUrlFilters } from "../hooks/use-cost-url-filters";
 import type { CostFilters } from "../utils";
 import { CostChartsPanel } from "./cost-charts-panel";
 import { CostFilterBar } from "./cost-filter-bar";
@@ -22,22 +21,18 @@ import { CostList } from "./cost-list";
 import { CostSummaryCards, StatCard } from "./cost-summary-cards";
 import { OrganizationsBySpend } from "./organizations-by-spend";
 
-const filterParsers = {
-  q: parseAsString.withDefault(""),
-  orgId: parseAsString.withDefault(""),
-  orgName: parseAsString.withDefault(""),
-  agentId: parseAsString.withDefault(""),
-  model: parseAsString.withDefault(""),
-  period: parseAsString.withDefault(DEFAULT_COST_PERIOD),
-  sort: parseAsStringEnum(CostSortDirectionSchema.options).withDefault(
-    "newest_first",
-  ),
+const FILTER_DEFAULTS = {
+  q: "",
+  orgId: "",
+  orgName: "",
+  agentId: "",
+  model: "",
+  period: DEFAULT_COST_PERIOD,
+  sort: "newest_first",
 };
 
 export function PlatformCostsPage() {
-  const [urlFilters, setUrlFilters] = useQueryStates(filterParsers, {
-    history: "replace",
-  });
+  const [urlFilters, setUrlFilters] = useCostUrlFilters(FILTER_DEFAULTS);
 
   const filters: CostFilters = useMemo(
     () => ({
@@ -46,7 +41,7 @@ export function PlatformCostsPage() {
       agentId: urlFilters.agentId || undefined,
       model: urlFilters.model || undefined,
       period: urlFilters.period,
-      sort: urlFilters.sort,
+      sort: urlFilters.sort as CostFilters["sort"],
     }),
     [urlFilters],
   );
@@ -178,7 +173,7 @@ export function PlatformCostsPage() {
           agentId: urlFilters.agentId,
           model: urlFilters.model,
           period: urlFilters.period,
-          sort: urlFilters.sort,
+          sort: urlFilters.sort as CostFilters["sort"],
         }}
         agentOptions={agentOptions}
         modelOptions={modelOptions}
