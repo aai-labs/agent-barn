@@ -197,6 +197,7 @@ class AgentRepository:
         agent_id: UUID | None,
         created_by_user_id: UUID | None,
         platform: CommunicationPlatform | None,
+        include_retired_connections: bool = False,
     ) -> list[Any]:
         """Shared narrowing for the stats aggregates (AF-256). Deliberately does
         not include a deleted_at predicate — callers decide that, since inventory
@@ -209,13 +210,13 @@ class AgentRepository:
         if created_by_user_id is not None:
             predicates.append(col(Agent.created_by_user_id) == created_by_user_id)
         if platform is not None:
-            predicates.append(
-                exists().where(
-                    col(CommunicationConnection.agent_id) == col(Agent.id),
-                    col(CommunicationConnection.platform_key) == platform.value,
-                    col(CommunicationConnection.retired_at).is_(None),
-                )
-            )
+            connection_predicates = [
+                col(CommunicationConnection.agent_id) == col(Agent.id),
+                col(CommunicationConnection.platform_key) == platform.value,
+            ]
+            if not include_retired_connections:
+                connection_predicates.append(col(CommunicationConnection.retired_at).is_(None))
+            predicates.append(exists().where(*connection_predicates))
         return predicates
 
     def count_agents_for_stats(
@@ -278,7 +279,13 @@ class AgentRepository:
         two-year one is not seven hundred. It also drives the generate_series
         step, so the empty buckets are filled in at the same resolution.
         """
-        predicates = self._stats_predicates(organization_id, agent_id, created_by_user_id, platform)
+        predicates = self._stats_predicates(
+            organization_id,
+            agent_id,
+            created_by_user_id,
+            platform,
+            include_retired_connections=True,
+        )
         step = sa.text(f"interval '1 {unit.value}'")
         created_utc = sa.func.timezone("UTC", col(Agent.created_at))
         deleted_utc = sa.func.timezone("UTC", col(Agent.deleted_at))

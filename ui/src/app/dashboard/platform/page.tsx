@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { Suspense } from "react";
 import { BuildingIcon, ServerIcon, UsersIcon } from "@/components/icons";
 import { PlatformAdminOnly } from "@/auth/components/platform-admin-only";
 import { PlatformStatsPanel } from "@/features/platform-stats/components/platform-stats-panel";
@@ -86,7 +87,9 @@ export default function PlatformPage() {
           ))}
         </div>
 
-        <PlatformStatsPanel />
+        <Suspense fallback={null}>
+          <PlatformStatsPanel />
+        </Suspense>
       </div>
     </PlatformAdminOnly>
   );

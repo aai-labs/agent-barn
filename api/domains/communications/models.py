@@ -27,6 +27,7 @@ class CommunicationPlatform(str, enum.Enum):
     """Stable keys for the communication plugins shipped with Agent Barn."""
 
     SLACK = "slack"
+    TEAMS = "teams"
     TELEGRAM = "telegram"
     DISCORD = "discord"
 
