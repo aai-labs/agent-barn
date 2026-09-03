@@ -88,6 +88,16 @@ def test_cancel_during_runtime_work_suppresses_reply(monkeypatch: pytest.MonkeyP
     }
 
 
+def test_cancel_before_delivery_start_is_applied_when_delivery_begins(monkeypatch: pytest.MonkeyPatch) -> None:
+    adapter = _load_adapter(monkeypatch)
+    in_flight = adapter.InFlightDelivery()
+
+    assert in_flight.request_cancel("delivery-1") is None
+    in_flight.begin("delivery-1", "session-1")
+
+    assert in_flight.is_cancel_requested("delivery-1") is True
+
+
 def test_control_stream_wakes_delivery_worker_and_routes_cancel(monkeypatch: pytest.MonkeyPatch) -> None:
     adapter = _load_adapter(monkeypatch)
     worker = Mock()

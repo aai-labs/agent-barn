@@ -15,6 +15,8 @@ RUNTIME_API_URL = os.environ["RUNTIME_API_URL"].rstrip("/")
 RUNTIME_API_KEY = os.environ["RUNTIME_API_KEY"]
 RUNTIME_MODEL = os.environ["RUNTIME_MODEL"]
 CLAIM_SAFETY_POLL_INTERVAL_SECONDS = 5
+PENDING_CANCEL_TTL_SECONDS = 900
+MAX_PENDING_CANCEL_REQUESTS = 1_024
 
 
 class InFlightDelivery:
@@ -23,12 +25,15 @@ class InFlightDelivery:
         self._delivery_id: str | None = None
         self._session_key: str | None = None
         self._cancel_requested = False
+        self._pending_cancel_requests: dict[str, float] = {}
 
     def begin(self, delivery_id: str, session_key: str) -> None:
         with self._lock:
+            now = time.monotonic()
+            self._prune_pending_cancels(now)
             self._delivery_id = delivery_id
             self._session_key = session_key
-            self._cancel_requested = False
+            self._cancel_requested = self._pending_cancel_requests.pop(delivery_id, None) is not None
 
     def clear(self, delivery_id: str) -> None:
         with self._lock:
@@ -37,10 +42,17 @@ class InFlightDelivery:
             self._delivery_id = None
             self._session_key = None
             self._cancel_requested = False
+            self._pending_cancel_requests.pop(delivery_id, None)
 
     def request_cancel(self, delivery_id: str) -> str | None:
         with self._lock:
             if self._delivery_id != delivery_id:
+                now = time.monotonic()
+                self._prune_pending_cancels(now)
+                self._pending_cancel_requests[delivery_id] = now
+                if len(self._pending_cancel_requests) > MAX_PENDING_CANCEL_REQUESTS:
+                    oldest_delivery_id = min(self._pending_cancel_requests.items(), key=lambda item: item[1])[0]
+                    del self._pending_cancel_requests[oldest_delivery_id]
                 return None
             self._cancel_requested = True
             return self._session_key
@@ -48,6 +60,12 @@ class InFlightDelivery:
     def is_cancel_requested(self, delivery_id: str) -> bool:
         with self._lock:
             return self._delivery_id == delivery_id and self._cancel_requested
+
+    def _prune_pending_cancels(self, now: float) -> None:
+        cutoff = now - PENDING_CANCEL_TTL_SECONDS
+        for delivery_id, requested_at in list(self._pending_cancel_requests.items()):
+            if requested_at < cutoff:
+                del self._pending_cancel_requests[delivery_id]
 
 
 IN_FLIGHT = InFlightDelivery()
