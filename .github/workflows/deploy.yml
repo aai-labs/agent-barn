@@ -26,6 +26,7 @@ jobs:
       ui: ${{ steps.changes.outputs.ui }}
       hermes: ${{ steps.changes.outputs.hermes }}
       openclaw: ${{ steps.changes.outputs.openclaw }}
+      worker: ${{ steps.changes.outputs.worker }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -43,11 +44,12 @@ jobs:
               echo "ui=true"
               echo "hermes=true"
               echo "openclaw=true"
+              echo "worker=true"
             } >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          api=false; ui=false; hermes=false; openclaw=false
+          api=false; ui=false; hermes=false; openclaw=false; worker=false
 
           # A failed deploy must not become the baseline for the next run. Find
           # the last successful deploy on this branch and compare the whole
@@ -77,12 +79,13 @@ jobs:
           fi
 
           if [ "$build_all" = true ]; then
-            api=true; ui=true; hermes=true; openclaw=true
+            api=true; ui=true; hermes=true; openclaw=true; worker=true
           else
             if grep -qE '^(api/|Makefile$)' /tmp/changed.txt; then api=true; fi
             if grep -qE '^(ui/|Makefile$)' /tmp/changed.txt; then ui=true; fi
             if grep -q '^hermes-base/' /tmp/changed.txt; then hermes=true; fi
             if grep -q '^openclaw-base/' /tmp/changed.txt; then openclaw=true; fi
+            if grep -q '^workers/' /tmp/changed.txt; then worker=true; fi
           fi
 
           {
@@ -90,6 +93,7 @@ jobs:
             echo "ui=$ui"
             echo "hermes=$hermes"
             echo "openclaw=$openclaw"
+            echo "worker=$worker"
           } >> "$GITHUB_OUTPUT"
 
   # ═══════════════════════════════════════════════════════════════
@@ -298,3 +302,19 @@ jobs:
           GRAFANA_ADMIN_PASSWORD: ${{ github.ref_name == 'staging' && secrets.STAGING_GRAFANA_ADMIN_PASSWORD || secrets.GRAFANA_ADMIN_PASSWORD }}
           GRAFANA_HOST: ${{ github.ref_name == 'staging' && vars.STAGING_GRAFANA_HOST || vars.GRAFANA_HOST }}
         run: helmfile -f helmfile.yaml.gotmpl sync --wait
+
+  # ═══════════════════════════════════════════════════════════════
+  # Phase 5: Publish the Cloudflare Email Worker
+  # ═══════════════════════════════════════════════════════════════
+
+  # Runs after `deploy` on purpose: the Worker posts inbound mail into the
+  # Communications service, so the cluster must already hold the matching
+  # EMAIL_INBOUND_SECRET before the Worker starts presenting it.
+  deploy-worker:
+    needs: [detect-changes, resolve-env, deploy]
+    if: ${{ needs.detect-changes.outputs.worker == 'true' && needs.deploy.result == 'success' }}
+    uses: ./.github/workflows/worker.yml
+    secrets: inherit
+    with:
+      deploy: true
+      environment: ${{ needs.resolve-env.outputs.environment }}

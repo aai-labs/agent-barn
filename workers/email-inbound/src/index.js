@@ -1,7 +1,8 @@
 import PostalMime from "postal-mime";
 
+import { buildPayload } from "./payload.js";
+
 const MAX_INBOUND_BYTES = 25 * 1024 * 1024;
-const MAX_BODY_CHARS = 100_000;
 const REQUEST_TIMEOUT_MS = 15_000;
 
 // Agent Barn owns every admission decision — sender policy, automated-mail guards,
@@ -11,14 +12,6 @@ const REQUEST_TIMEOUT_MS = 15_000;
 // ARC-Authentication-Results of only "arc=none" (cloudflare/workerd#6740), so reading
 // them would pass everything. Cloudflare's MX already rejects DMARC failures upstream.
 
-function header(headers, name) {
-  return headers.get(name) ?? "";
-}
-
-function referenceList(raw) {
-  return raw.split(/\s+/).filter((entry) => entry.startsWith("<"));
-}
-
 export default {
   async email(message, env) {
     if (message.rawSize > MAX_INBOUND_BYTES) {
@@ -27,23 +20,7 @@ export default {
     }
 
     const parsed = await PostalMime.parse(message.raw);
-    const body = (parsed.text || parsed.html || "").slice(0, MAX_BODY_CHARS);
-    const sender = parsed.from ?? {};
-
-    const payload = {
-      to: message.to,
-      from: sender.address ?? message.from,
-      from_name: sender.name ?? "",
-      subject: parsed.subject ?? "",
-      text: body,
-      message_id: parsed.messageId ?? "",
-      in_reply_to: parsed.inReplyTo ?? "",
-      references: referenceList(parsed.references ?? ""),
-      auto_submitted: header(message.headers, "auto-submitted"),
-      precedence: header(message.headers, "precedence"),
-      list_id: header(message.headers, "list-id"),
-      received_at: (parsed.date ? new Date(parsed.date) : new Date()).toISOString(),
-    };
+    const payload = buildPayload(parsed, message.to, message.headers);
 
     let response;
     try {

@@ -26,6 +26,7 @@ jobs:
       ui: ${{ steps.changes.outputs.ui }}
       hermes: ${{ steps.changes.outputs.hermes }}
       openclaw: ${{ steps.changes.outputs.openclaw }}
+      worker: ${{ steps.changes.outputs.worker }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -33,7 +34,7 @@ jobs:
       - name: Detect changed components
         id: changes
         run: |
-          api=false; ui=false; hermes=false; openclaw=false
+          api=false; ui=false; hermes=false; openclaw=false; worker=false
 
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             range="${{ github.event.pull_request.base.sha }} ${{ github.event.pull_request.head.sha }}"
@@ -42,7 +43,7 @@ jobs:
           fi
 
           if ! git diff --name-only $range > /tmp/changed.txt 2>/dev/null; then
-            api=true; ui=true; hermes=true; openclaw=true
+            api=true; ui=true; hermes=true; openclaw=true; worker=true
           else
             if grep -qE '^(api/|Makefile$)' /tmp/changed.txt; then api=true; fi
             if grep -qE '^(ui/|Makefile$)' /tmp/changed.txt; then ui=true; fi
@@ -51,12 +52,14 @@ jobs:
             # to rebuild them too -- not just run the API suite.
             if grep -qE '^(hermes-base/|api/domains/agents/scripts/hermes/plugins/|api/tests/fixtures/hermes_session_store_driver\.py)' /tmp/changed.txt; then hermes=true; fi
             if grep -qE '^(openclaw-base/|api/domains/agents/scripts/openclaw/plugins/)' /tmp/changed.txt; then openclaw=true; fi
+            if grep -qE '^workers/' /tmp/changed.txt; then worker=true; fi
           fi
 
           echo "api=$api" >> "$GITHUB_OUTPUT"
           echo "ui=$ui" >> "$GITHUB_OUTPUT"
           echo "hermes=$hermes" >> "$GITHUB_OUTPUT"
           echo "openclaw=$openclaw" >> "$GITHUB_OUTPUT"
+          echo "worker=$worker" >> "$GITHUB_OUTPUT"
 
   # ═══════════════════════════════════════════════════════════════
   # Phase 2: Lint, test, build each changed component (no push)
@@ -84,4 +87,10 @@ jobs:
     needs: [detect-changes]
     if: ${{ needs.detect-changes.outputs.openclaw == 'true' }}
     uses: ./.github/workflows/openclaw-base.yml
+    secrets: inherit
+
+  ci-worker:
+    needs: [detect-changes]
+    if: ${{ needs.detect-changes.outputs.worker == 'true' }}
+    uses: ./.github/workflows/worker.yml
     secrets: inherit

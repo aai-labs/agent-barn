@@ -165,5 +165,3 @@ docs/plans
 
 # Internal implementation plan docs (Jira links, design notes) — not for the repo.
 *_plan.md
-
-workers/email-inbound/pnpm-lock.yaml
