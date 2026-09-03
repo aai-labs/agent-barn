@@ -1,5 +1,3 @@
-import datetime
-import hashlib
 import logging
 from dataclasses import dataclass
 from uuid import UUID
@@ -7,7 +5,6 @@ from uuid import UUID
 from fastapi import HTTPException, status
 from injector import inject, singleton
 
-from api.core.config import Config
 from api.domains.agents.authorization import AgentAuthorization
 from api.domains.agents.models import Agent
 from api.domains.agents.repository import AgentRepository
@@ -15,19 +12,24 @@ from api.domains.auth.models import CurrentUserContext
 from api.domains.costs.models import (
     AgentCostRead,
     AgentModelBreakdown,
-    CostByModelRead,
-    CostTimeSeriesPoint,
-    OrgCostSummaryRead,
+    AgentSpendSeriesPoint,
+    CostFilter,
+    CostFilterOption,
+    CostHistogramBucket,
+    CostRecord,
+    CostRecordRead,
+    CostRecordSource,
+    CostSeriesPoint,
+    CostSummaryRead,
+    TokenSeriesPoint,
 )
+from api.domains.costs.repository import CostRepository
+from api.domains.platform_admin.models import StatsWindow
 from api.domains.rbac.catalog import PermissionKey
 from api.domains.rbac.policy import PermissionPolicy
-from api.infrastructure.crypto import decrypt_token
-from api.infrastructure.litellm.client import LiteLLMClient
+from api.infrastructure.shared.models import PaginatedItems, Pagination
 
 logger = logging.getLogger(__name__)
-
-# Default look-back window — used when no explicit date range is provided.
-_SPEND_LOOKBACK_DAYS = 365
 
 
 @inject
@@ -37,61 +39,19 @@ class CostService:
     agent_repository: AgentRepository
     agent_authorization: AgentAuthorization
     permission_policy: PermissionPolicy
-    litellm: LiteLLMClient
-    config: Config
+    repository: CostRepository
 
     def _org_id(self, context: CurrentUserContext) -> UUID:
         return context.require_current_user_organization().organization_id
 
-    def _decrypt_key(self, encrypted: str) -> str:
-        return decrypt_token(encrypted, self.config.agent_token_encryption_key)
+    # --- Org cost surface --------------------------------------------------
+    #
+    # These read our own cost_record table, not LiteLLM. Reading the proxy at request
+    # time meant a failed query rendered as a confident $0.00, corrected figures had
+    # nowhere to live, and server-side filtering was impossible because the endpoint
+    # it used is not paginated.
 
-    def _date_range(self, days: int = _SPEND_LOOKBACK_DAYS) -> tuple[str, str]:
-        end = datetime.datetime.now(datetime.UTC).date()
-        start = end - datetime.timedelta(days=days)
-        return start.isoformat(), end.isoformat()
-
-    def _build_agent_cost_read_from_info(self, agent: Agent, details: dict) -> AgentCostRead:
-        spend = float(details.get("spend", 0.0))
-        prompt_tokens = int(details.get("total_input_tokens", 0) or 0)
-        completion_tokens = int(details.get("total_output_tokens", 0) or 0)
-        total_tokens = prompt_tokens + completion_tokens
-
-        # build per-model breakdown
-        models_breakdown = []
-        for model_name, m in details.get("models", {}).items():
-            models_breakdown.append(
-                AgentModelBreakdown(
-                    model=model_name,
-                    total_cost=float(m.get("spend", 0.0)),
-                    prompt_tokens=int(m.get("prompt_tokens", 0)),
-                    completion_tokens=int(m.get("completion_tokens", 0)),
-                )
-            )
-
-        if getattr(agent, "deleted_at", None) is not None:
-            mapped_status = "deleted"
-        else:
-            status_map = {"RUNNING": "active", "STOPPED": "stopped", "ERROR": "error"}
-            mapped_status = status_map.get(agent.status.value, "unknown") if hasattr(agent, "status") else "unknown"
-        return AgentCostRead(
-            agent_id=agent.id,
-            agent_name=agent.name,
-            model=agent.model,
-            status=mapped_status,
-            total_cost=spend,
-            total_tokens=total_tokens,
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-            models_breakdown=models_breakdown,
-        )
-
-    def get_org_cost_summary(
-        self,
-        context: CurrentUserContext,
-        start_date: str | None = None,
-        end_date: str | None = None,
-    ) -> OrgCostSummaryRead:
+    def _authorized_org(self, context: CurrentUserContext) -> UUID:
         org_id = self._org_id(context)
         self.permission_policy.require_organization(
             context,
@@ -99,69 +59,113 @@ class CostService:
             PermissionKey.COST_READ,
             detail="You don't have permission to view organization costs.",
         )
-        if start_date and end_date:
-            start_str, end_str = start_date, end_date
-        else:
-            start_str, end_str = self._date_range()
+        return org_id
 
-        agent_costs: list[AgentCostRead] = []
-        total_cost = 0.0
-        by_model: dict[str, float] = {}
-        daily_costs: dict[str, float] = {}
+    def _scoped(self, org_id: UUID, filters: CostFilter) -> CostFilter:
+        """Pin the filter to this organization.
 
-        # --- Cost data for all agents: live and deleted ---
-        all_agents = self.agent_repository.find_all_for_org(org_id)
-        global_spend = self.litellm.get_global_spend_report(start_str, end_str)
+        Set here rather than taken from the query string: a caller must never be able
+        to widen their own scope by passing an organization_id.
+        """
+        return filters.model_copy(update={"organization_id": org_id})
 
-        for agent in all_agents:
-            if not agent.litellm_key_encrypted:
-                continue
+    def get_org_cost_summary(
+        self,
+        context: CurrentUserContext,
+        window: StatsWindow,
+        filters: CostFilter,
+    ) -> CostSummaryRead:
+        scoped = self._scoped(self._authorized_org(context), filters)
+        return self._build_summary(window, scoped)
 
-            try:
-                key = self._decrypt_key(agent.litellm_key_encrypted)
-                key_hash = hashlib.sha256(key.encode()).hexdigest()
-                details = global_spend.get(key_hash, {})
-            except Exception as exc:
-                logger.warning("Failed to fetch spend details for agent %s: %s", agent.id, exc)
-                details = {}
-
-            spend = float(details.get("spend", 0.0))
-
-            cost_read = self._build_agent_cost_read_from_info(agent, details)
-            agent_costs.append(cost_read)
-            total_cost += spend
-
-            # Extract the actual models used from the LiteLLM details dictionary
-            models_dict = details.get("models", {})
-
-            if models_dict:
-                # If we have a breakdown, distribute the spend to the actual models used
-                for actual_model_name, m_data in models_dict.items():
-                    m_spend = float(m_data.get("spend", 0.0))
-                    short_model = actual_model_name.split("/")[-1]
-                    by_model[short_model] = by_model.get(short_model, 0.0) + m_spend
-            else:
-                # Fallback: if there is spend but no model breakdown data is available yet
-                model_key = agent.model or "unknown"
-                short_model = model_key.split("/")[-1]
-                by_model[short_model] = by_model.get(short_model, 0.0) + spend
-
-            agent_daily = details.get("daily_spend", {})
-            for date_str, row_spend in agent_daily.items():
-                if len(date_str) == 10:
-                    daily_costs[date_str] = daily_costs.get(date_str, 0.0) + row_spend
-
-        time_series = [CostTimeSeriesPoint(date=d, cost=c) for d, c in sorted(daily_costs.items())]
-        by_model_list = [CostByModelRead(model=m, total_cost=c) for m, c in by_model.items()]
-
-        return OrgCostSummaryRead(
-            totalCost=total_cost,
-            agents=agent_costs,
-            byModel=by_model_list,
-            timeSeries=time_series,
+    def _build_summary(self, window: StatsWindow, scoped: CostFilter) -> CostSummaryRead:
+        totals = self.repository.totals(window, scoped)
+        top = self.repository.top_model(window, scoped)
+        return CostSummaryRead(
+            total_spend=float(totals.spend),
+            total_calls=totals.calls,
+            active_agents=totals.agents,
+            top_model=top[0] if top else None,
+            top_model_spend=float(top[1]) if top else 0.0,
+            avg_cost_per_call=float(totals.spend) / totals.calls if totals.calls else 0.0,
+            avg_prompt_tokens=totals.avg_prompt_tokens,
+            spend_over_time=[
+                CostSeriesPoint(bucket=bucket, spend=float(spend), calls=calls)
+                for bucket, spend, calls in self.repository.spend_series(window, scoped)
+            ],
+            avg_prompt_tokens_over_time=[
+                TokenSeriesPoint(bucket=bucket, avg_prompt_tokens=value)
+                for bucket, value in self.repository.avg_prompt_tokens_series(window, scoped)
+            ],
+            spend_by_agent_over_time=[
+                AgentSpendSeriesPoint(bucket=bucket, agent_id=agent_id, agent_name=name, spend=float(spend))
+                for bucket, agent_id, name, spend in self.repository.spend_by_agent_series(window, scoped)
+            ],
+            cost_per_call_histogram=[
+                CostHistogramBucket(
+                    lower=float(lower),
+                    upper=float(upper) if upper is not None else None,
+                    calls=calls,
+                )
+                for lower, upper, calls in self.repository.cost_per_call_histogram(window, scoped)
+            ],
         )
 
-    def get_agent_cost(self, agent_id: UUID, context: CurrentUserContext) -> AgentCostRead:
+    def list_org_costs(
+        self,
+        context: CurrentUserContext,
+        window: StatsWindow,
+        filters: CostFilter,
+        *,
+        page: int,
+        page_size: int,
+    ) -> PaginatedItems[CostRecordRead]:
+        scoped = self._scoped(self._authorized_org(context), filters)
+        found = self.repository.find_paginated(window, scoped, Pagination(page=page, size=page_size))
+        return PaginatedItems(
+            page=found.page,
+            page_size=found.page_size,
+            total=found.total,
+            items=[_to_cost_record_read(record) for record in found.items],
+        )
+
+    def list_org_agent_options(
+        self,
+        context: CurrentUserContext,
+        window: StatsWindow,
+        filters: CostFilter,
+    ) -> list[CostFilterOption]:
+        scoped = self._scoped(self._authorized_org(context), filters)
+        return [
+            CostFilterOption(value=str(agent_id), label=name or "Unnamed agent")
+            for agent_id, name, _org_name in self.repository.distinct_agents(window, scoped)
+        ]
+
+    def list_org_model_options(
+        self,
+        context: CurrentUserContext,
+        window: StatsWindow,
+        filters: CostFilter,
+    ) -> list[CostFilterOption]:
+        scoped = self._scoped(self._authorized_org(context), filters)
+        return [
+            CostFilterOption(value=model, label=model.split("/")[-1])
+            for model in self.repository.distinct_models(window, scoped)
+        ]
+
+    def get_agent_cost(
+        self,
+        agent_id: UUID,
+        context: CurrentUserContext,
+        window: StatsWindow,
+    ) -> AgentCostRead:
+        """Spend for one agent over the requested window.
+
+        Previously read LiteLLM's /key/info, which reports a key's lifetime spend and
+        ignores the date range entirely — so this endpoint answered a different
+        question from the one it was asked. Reading our own table fixes that, and
+        keeps working after the agent's key has been deleted.
+        """
         try:
             agent = self.agent_authorization.require_action(context, agent_id, PermissionKey.COST_READ)
         except HTTPException as exc:
@@ -177,22 +181,50 @@ class CostService:
             if agent is None:
                 raise
 
-        if not agent.litellm_key_encrypted:
-            return AgentCostRead(
-                agent_id=agent.id,
-                agent_name=agent.name,
-                model=agent.model,
-                status="stopped",
-                total_cost=0.0,
-                total_tokens=0,
-                prompt_tokens=0,
-                completion_tokens=0,
-            )
+        filters = CostFilter(organization_id=agent.organization_id, agent_id=agent.id)
+        totals = self.repository.totals(window, filters)
+        breakdown = self.repository.model_breakdown(window, filters)
 
-        key = self._decrypt_key(agent.litellm_key_encrypted)
-        try:
-            info = self.litellm.get_key_info(key)
-        except Exception as exc:
-            logger.warning("Failed to fetch key info for agent %s: %s", agent.id, exc)
-            info = {}
-        return self._build_agent_cost_read_from_info(agent, info)
+        return AgentCostRead(
+            agent_id=agent.id,
+            agent_name=agent.name,
+            model=agent.model,
+            status=_display_status(agent),
+            total_cost=float(totals.spend),
+            total_tokens=totals.prompt_tokens + totals.completion_tokens,
+            prompt_tokens=totals.prompt_tokens,
+            completion_tokens=totals.completion_tokens,
+            models_breakdown=[
+                AgentModelBreakdown(
+                    model=model,
+                    total_cost=float(spend),
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                )
+                for model, spend, prompt_tokens, completion_tokens in breakdown
+            ],
+        )
+
+
+def _display_status(agent: Agent) -> str:
+    if agent.deleted_at is not None:
+        return "deleted"
+    status_map = {"RUNNING": "active", "STOPPED": "stopped", "ERROR": "error"}
+    return status_map.get(agent.status.value, "unknown")
+
+
+def _to_cost_record_read(record: CostRecord) -> CostRecordRead:
+    return CostRecordRead(
+        request_id=record.request_id,
+        occurred_at=record.occurred_at,
+        spend=float(record.spend),
+        prompt_tokens=record.prompt_tokens,
+        completion_tokens=record.completion_tokens,
+        total_tokens=record.total_tokens,
+        model=record.model,
+        status=record.status,
+        request_duration_ms=record.request_duration_ms,
+        agent_id=record.agent_id,
+        agent_name=record.agent_name,
+        healed=record.source == CostRecordSource.OPENROUTER_BACKFILL,
+    )

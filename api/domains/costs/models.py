@@ -4,6 +4,7 @@ from decimal import Decimal
 from uuid import UUID
 
 import sqlalchemy as sa
+from fastapi import Query
 from pydantic import BaseModel as PydanticBaseModel
 from pydantic import ConfigDict, Field
 from sqlmodel import Column
@@ -135,26 +136,151 @@ class AgentCostRead(PydanticBaseModel):
     models_breakdown: list[AgentModelBreakdown] = Field(default_factory=list)
 
 
-class CostByModelRead(PydanticBaseModel):
-    """Aggregated cost for one model across all agents."""
+# ---------------------------------------------------------------------------
+# Filters
+# ---------------------------------------------------------------------------
 
+
+class CostSortDirection(str, enum.Enum):
+    NEWEST_FIRST = "newest_first"
+    OLDEST_FIRST = "oldest_first"
+    MOST_EXPENSIVE = "most_expensive"
+
+
+class CostFilter(PydanticBaseModel):
+    """Narrowing dimensions shared by the row list and every aggregate.
+
+    The same filter drives both, so a stat card and the table under it can never
+    disagree about what is being counted.
+
+    `organization_id` is set by the route, never by the caller: on the org surface it
+    is pinned to the caller's org, and on the platform surface it is the admin's
+    chosen filter. Keeping it here means one query builder serves both.
+    """
+
+    organization_id: UUID | None = None
+    agent_id: UUID | None = None
+    model: str | None = None
+    search: str | None = None
+    sort: CostSortDirection = CostSortDirection.NEWEST_FIRST
+
+
+def get_cost_filter(
+    agent_id: UUID | None = Query(default=None),
+    model: str | None = Query(default=None),
+    search: str | None = Query(default=None),
+    sort: CostSortDirection = Query(default=CostSortDirection.NEWEST_FIRST),
+) -> CostFilter:
+    return CostFilter(agent_id=agent_id, model=model, search=search, sort=sort)
+
+
+def get_platform_cost_filter(
+    organization_id: UUID | None = Query(default=None),
+    agent_id: UUID | None = Query(default=None),
+    model: str | None = Query(default=None),
+    search: str | None = Query(default=None),
+    sort: CostSortDirection = Query(default=CostSortDirection.NEWEST_FIRST),
+) -> CostFilter:
+    """Same filter, plus the organization dimension only a platform admin may choose."""
+    return CostFilter(
+        organization_id=organization_id,
+        agent_id=agent_id,
+        model=model,
+        search=search,
+        sort=sort,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Read models
+# ---------------------------------------------------------------------------
+#
+# Cost is stored as NUMERIC and read out as float. Exactness matters when deciding
+# whether a row still needs healing; it does not matter for a number rendered to a
+# few decimal places. Measured drift across 40,674 production rows was 8e-13.
+
+
+class CostRecordRead(PydanticBaseModel):
+    """One billed LLM call, as an organization sees it."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    request_id: str
+    occurred_at: datetime
+    spend: float
+    prompt_tokens: int
+    completion_tokens: int
+    total_tokens: int
     model: str
-    total_cost: float
+    status: str
+    request_duration_ms: int | None = None
+    agent_id: UUID | None = None
+    agent_name: str | None = None
+    # True when the figure was recovered from OpenRouter rather than reported by the
+    # proxy. Worth showing: it explains why a historical total can go up.
+    healed: bool = False
 
 
-class CostTimeSeriesPoint(PydanticBaseModel):
-    """A single data point in a cost time-series chart."""
+class PlatformCostRecordRead(CostRecordRead):
+    """The platform admin's view of a call.
 
-    date: str
-    cost: float
+    A separate type rather than an optional field on the org one, per the oversight
+    ADR's dedicated-read-model rule: the org surface must not be able to return an
+    organization name by accident.
+    """
+
+    organization_id: UUID | None = None
+    organization_name: str | None = None
 
 
-class OrgCostSummaryRead(PydanticBaseModel):
-    """Top-level cost summary returned to the frontend."""
+class CostSeriesPoint(PydanticBaseModel):
+    bucket: datetime
+    spend: float
+    calls: int
 
-    total_cost: float = Field(alias="totalCost")
-    agents: list[AgentCostRead]
-    by_model: list[CostByModelRead] = Field(alias="byModel")
-    time_series: list[CostTimeSeriesPoint] = Field(alias="timeSeries")
 
-    model_config = ConfigDict(populate_by_name=True)
+class AgentSpendSeriesPoint(PydanticBaseModel):
+    bucket: datetime
+    agent_id: UUID | None = None
+    agent_name: str | None = None
+    spend: float
+
+
+class TokenSeriesPoint(PydanticBaseModel):
+    bucket: datetime
+    avg_prompt_tokens: float
+
+
+class CostHistogramBucket(PydanticBaseModel):
+    """One bar of the cost-per-call distribution.
+
+    `upper` is None for the final open-ended bucket — a handful of very expensive
+    calls is exactly what this chart exists to show, and clamping them would hide it.
+    """
+
+    lower: float
+    upper: float | None
+    calls: int
+
+
+class CostFilterOption(PydanticBaseModel):
+    """One selectable value, already labelled for display."""
+
+    value: str
+    label: str
+
+
+class CostSummaryRead(PydanticBaseModel):
+    """Everything above the table on the org cost page, under the same filter."""
+
+    total_spend: float
+    total_calls: int
+    active_agents: int
+    top_model: str | None = None
+    top_model_spend: float = 0.0
+    avg_cost_per_call: float = 0.0
+    avg_prompt_tokens: float = 0.0
+    spend_over_time: list[CostSeriesPoint] = Field(default_factory=list)
+    avg_prompt_tokens_over_time: list[TokenSeriesPoint] = Field(default_factory=list)
+    spend_by_agent_over_time: list[AgentSpendSeriesPoint] = Field(default_factory=list)
+    cost_per_call_histogram: list[CostHistogramBucket] = Field(default_factory=list)
