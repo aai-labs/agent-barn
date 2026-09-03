@@ -96,7 +96,7 @@ def _outbound(text: str = "It is $20 per seat.", **metadata_overrides) -> Outbou
 
 
 def _sent(plugin: EmailPlatformPlugin, client: RecordingEmailClient, envelope) -> Email:
-    plugin.send(_settings(plugin), _credentials(plugin), envelope)
+    plugin.send(_settings(plugin), _credentials(plugin), envelope, idempotency_key="reply-1")
     return client.sent[0]
 
 
@@ -447,7 +447,12 @@ def test_a_reply_without_the_agent_address_is_rejected_rather_than_misaddressed(
     plugin = _plugin()
 
     with pytest.raises(ValueError):
-        plugin.send(_settings(plugin), _credentials(plugin), _outbound(recipient=""))
+        plugin.send(
+            _settings(plugin),
+            _credentials(plugin),
+            _outbound(recipient=""),
+            idempotency_key="reply-1",
+        )
 
 
 def test_recipients_see_the_agents_own_name_without_anyone_configuring_it() -> None:

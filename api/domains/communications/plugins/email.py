@@ -7,6 +7,7 @@ from typing import Any, Protocol
 from pydantic import Field
 
 from api.domains.communications.models import (
+    CommunicationPolicyDisposition,
     CommunicationSender,
     ConversationLocation,
     CredentialUniquenessScope,
@@ -15,6 +16,7 @@ from api.domains.communications.models import (
     PlatformCapability,
 )
 from api.domains.communications.plugins.base import (
+    InboundAdmissionResult,
     PlatformCredentials,
     PlatformPlugin,
     PlatformSettings,
@@ -120,54 +122,62 @@ class EmailPlatformPlugin(PlatformPlugin):
         self,
         settings: PlatformSettings,
         payload: dict[str, Any],
-    ) -> list[NormalizedCommunicationEnvelope]:
+    ) -> InboundAdmissionResult:
         assert isinstance(settings, EmailSettings)
         sender = _address(payload.get("from"))
         recipient = _address(payload.get("to"))
         message_id = str(payload.get("message_id") or "").strip()
         if not sender or not recipient or not message_id:
-            return []
+            return InboundAdmissionResult(CommunicationPolicyDisposition.MALFORMED_PAYLOAD)
         if len(sender) > ADDRESS_LIMIT or len(recipient) > ADDRESS_LIMIT:
-            return []
+            return InboundAdmissionResult(CommunicationPolicyDisposition.MALFORMED_PAYLOAD)
+        # Autoresponders, bulk senders and unattended mailboxes are machine traffic,
+        # so they carry the same disposition as a provider's own bot echo.
         if _is_unattended(payload, sender):
-            return []
+            return InboundAdmissionResult(CommunicationPolicyDisposition.BOT_IGNORED)
 
         references = _reference_chain(payload)
+        # A runaway reference chain is a reply loop, not a malformed message.
         if len(references) > MAX_REFERENCES:
-            return []
+            return InboundAdmissionResult(CommunicationPolicyDisposition.EVENT_IGNORED)
         if not _sender_admitted(settings, sender):
-            return []
+            return InboundAdmissionResult(CommunicationPolicyDisposition.USER_DENIED)
 
         subject = str(payload.get("subject") or "").strip()[:SUBJECT_LIMIT]
         sender_name = str(payload.get("from_name") or "").strip()[:DISPLAY_NAME_LIMIT] or None
         thread_id = references[0] if references else (str(payload.get("in_reply_to") or "").strip() or message_id)
 
-        return [
-            NormalizedCommunicationEnvelope(
-                provider_message_id=_bounded_identity(message_id),
-                occurred_at=_occurred_at(payload.get("received_at")),
-                location=ConversationLocation(
-                    id=sender,
-                    type="DM",
-                    display_name=(sender_name or sender)[:DISPLAY_NAME_LIMIT],
-                    thread_id=_bounded_identity(thread_id),
+        return InboundAdmissionResult(
+            CommunicationPolicyDisposition.ACCEPTED,
+            (
+                NormalizedCommunicationEnvelope(
+                    provider_message_id=_bounded_identity(message_id),
+                    occurred_at=_occurred_at(payload.get("received_at")),
+                    location=ConversationLocation(
+                        id=sender,
+                        type="DM",
+                        display_name=(sender_name or sender)[:DISPLAY_NAME_LIMIT],
+                        thread_id=_bounded_identity(thread_id),
+                    ),
+                    sender=CommunicationSender(id=sender, display_name=sender_name),
+                    text=_readable_message(sender, sender_name, subject, str(payload.get("text") or "")),
+                    provider_metadata={
+                        "message_id": message_id,
+                        "subject": subject,
+                        "references": " ".join(references),
+                        "recipient": recipient,
+                    },
                 ),
-                sender=CommunicationSender(id=sender, display_name=sender_name),
-                text=_readable_message(sender, sender_name, subject, str(payload.get("text") or "")),
-                provider_metadata={
-                    "message_id": message_id,
-                    "subject": subject,
-                    "references": " ".join(references),
-                    "recipient": recipient,
-                },
-            )
-        ]
+            ),
+        )
 
     def send(
         self,
         settings: PlatformSettings,
         credentials: PlatformCredentials,
         envelope: OutboundCommunicationEnvelope,
+        *,
+        idempotency_key: str,
     ) -> str:
         del settings, credentials
         metadata = envelope.provider_metadata
@@ -194,7 +204,11 @@ class EmailPlatformPlugin(PlatformPlugin):
             headers=headers,
         )
         self._client.send(email)
-        return f"outbound:{envelope.source_delivery_id}"
+        # Cloudflare's send API accepts no idempotency field and returns no message
+        # id, so unlike the other platforms there is nothing to pass through and
+        # nothing to report back. The delivery's own key is stable across retries
+        # and correlates the row, which is the only useful identity available.
+        return idempotency_key
 
 
 def _address(raw: Any) -> str:

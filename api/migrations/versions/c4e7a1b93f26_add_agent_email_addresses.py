@@ -1,7 +1,7 @@
 """add agent email addresses
 
 Revision ID: c4e7a1b93f26
-Revises: af0a523a3dd6
+Revises: 87ec190e0f7d
 Create Date: 2026-08-31 12:00:00.000000
 
 """
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "c4e7a1b93f26"
-down_revision: str | Sequence[str] | None = "af0a523a3dd6"
+down_revision: str | Sequence[str] | None = "87ec190e0f7d"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
