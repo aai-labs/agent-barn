@@ -89,6 +89,8 @@ from api.domains.agents.override_repository import (
 from api.domains.agents.repository import AgentRepository
 from api.domains.agents.runtime_policy import build_chat_commands_policy_md, build_role_scope_policy_md
 from api.domains.auth.models import CurrentUserContext
+from api.domains.credential_gateway.models import gateway_token_env_var
+from api.domains.credential_gateway.service import CredentialGatewayService
 from api.domains.events import ActorIdentity, ActorIdentityType, EventDeliveryDispatcher, resolve_actor_identity
 from api.domains.events.catalog import (
     AGENT_SECRET_ADDED,
@@ -200,6 +202,7 @@ class AgentService:
     event_delivery_dispatcher: EventDeliveryDispatcher
     organization_lookup: OrganizationLookupService
     agent_settings_lookup: AgentSettingsLookupService
+    credential_gateway: CredentialGatewayService
 
     def _org_id(self, context: CurrentUserContext) -> UUID:
         return context.require_current_user_organization().organization_id
@@ -2014,6 +2017,14 @@ class AgentService:
 
         ingest_key = secrets.token_urlsafe(32)
         communication_key = secrets.token_urlsafe(32)
+        # Rotates the Agent's gateway tokens and revokes any left from a previous start.
+        # Empty while every provider is EgressMode.DIRECT; a provider's slice flipping its
+        # egress mode is what starts populating this, with no change here.
+        gateway_tokens = self.credential_gateway.issue_for_agent(agent.id, agent.organization_id, set(decrypted.keys()))
+        for issued in gateway_tokens:
+            secret.string_data[gateway_token_env_var(issued.provider)] = issued.value
+        if gateway_tokens:
+            secret.string_data["AF_GATEWAY_URL"] = self.config.credential_gateway_base_url
         secret.string_data.update(
             {
                 "AGENT_ID": str(agent.id),
@@ -2291,6 +2302,9 @@ class AgentService:
         self.k8s.delete_deployment(name, ns)
         self.k8s.delete_config_map(name, ns)
         self.k8s.delete_secret(name, ns)
+        # The pod is gone, so its gateway tokens must stop resolving even if a copy of
+        # the Secret was taken while it ran.
+        self.credential_gateway.revoke_for_agent(agent.id, agent.organization_id)
 
         agent.status = AgentStatus.STOPPED
         agent.running_model = ""
