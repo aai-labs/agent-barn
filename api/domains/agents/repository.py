@@ -20,7 +20,9 @@ from api.domains.agents.models import (
     AgentStatus,
     SecretProvider,
 )
+from api.domains.communications.email_address_repository import release_agent_email_addresses
 from api.domains.communications.models import (
+    AgentEmailAddress,
     CommunicationConnection,
     CommunicationDelivery,
     CommunicationDeliveryStatus,
@@ -960,6 +962,7 @@ class AgentRepository:
                     last_error_message="Communication Connection was retired",
                 )
             )
+            session.exec(release_agent_email_addresses(now).where(col(AgentEmailAddress.agent_id) == persisted.id))
             event = EVENT_REGISTRY.build_event(
                 event_name=AGENT_DELETED,
                 schema_version=1,

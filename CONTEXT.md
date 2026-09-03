@@ -116,6 +116,10 @@ _Avoid_: Delivery Transition, message failure
 A trusted, release-shipped module that supplies Agent Barn's support for one Platform.
 _Avoid_: integration, runtime plugin, dynamically installed plugin
 
+**Agent Email Address**:
+The email address Agent Barn allocates to one Communication Connection on a Platform that is reached by mailbox rather than by a per-Connection endpoint. It is claimed when the Connection is created and released when the Connection is retired or its Agent is deleted; a released address stops routing, but its local part is never reissued, so a former correspondent can never reach a different Agent.
+_Avoid_: mailbox, alias, inbox
+
 **Template**:
 A versioned Markdown configuration lineage used to create and run agents. Predefined templates are Platform Resources; custom templates belong to one Organization.
 _Avoid_: prompt, preset
@@ -278,6 +282,7 @@ _Avoid_: webhook
 - An **Agent Access Role** grants **Permissions** for one Agent aggregate.
 - An **Agent** belongs to one **Organization**, has one original **Agent Creator**, pins one active shared **Template Version** or **Agent Template Override Version**, uses one **Runtime**, and owns zero or more **Communication Connections**.
 - Each **Communication Connection** belongs to one **Agent**, targets one **Platform**, and is interpreted by that Platform's **Platform Plugin**.
+- A **Communication Connection** on a mailbox-addressed **Platform** holds at most one active **Agent Email Address**.
 - An **Agent** has one current **Configured Model** and may have **Observed Model Usage** for multiple models over time.
 - A **Membership** may have **Agent Access** to many Agents, and each relationship carries one **Agent Access Role**; creating an Agent grants its creator explicit Agent Owner access without transferring Organization ownership.
 - An **Agent** has one **Agent General Access** setting whose Permissions combine with (never subtract from) explicit Agent Access grants.

@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -10,8 +11,10 @@ from sqlmodel import Session, col, select
 
 from api.domains.agents.models import Agent
 from api.domains.agents.repository import agent_scope_predicates
+from api.domains.communications.email_address_repository import release_agent_email_addresses
 from api.domains.communications.error_details import error_code_from_details
 from api.domains.communications.models import (
+    AgentEmailAddress,
     CommunicationConnection,
     CommunicationDelivery,
     CommunicationDeliveryStatus,
@@ -27,6 +30,8 @@ from api.domains.events.catalog import (
 from api.domains.events.models import ActorIdentity, ActorIdentityType, SubjectIdentity, SubjectIdentityType
 from api.domains.rbac.policy import AuthorizationScope
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
+
+ADDRESS_CLAIM_ATTEMPTS = 5
 
 
 class CommunicationConnectionConflictError(RuntimeError):
@@ -325,15 +330,48 @@ class CommunicationConnectionRepository:
             )
             session.commit()
 
-    def create(self, connection: CommunicationConnection) -> CommunicationConnection:
+    def create(
+        self,
+        connection: CommunicationConnection,
+        *,
+        allocate_address: Callable[[UUID], AgentEmailAddress] | None = None,
+    ) -> CommunicationConnection:
         try:
             with Session(self.delegate.engine) as session:
                 session.add(connection)
+                session.flush()
+                if allocate_address is not None:
+                    self._claim_address(session, allocate_address, connection.id)
                 session.commit()
                 session.refresh(connection)
                 return connection
         except IntegrityError as exc:
             raise CommunicationConnectionConflictError(self._conflict_detail(exc)) from exc
+
+    @staticmethod
+    def _claim_address(
+        session: Session,
+        allocate_address: Callable[[UUID], AgentEmailAddress],
+        connection_id: UUID,
+    ) -> None:
+        """Claim a generated address inside the Connection's own transaction.
+
+        Each attempt runs in a savepoint so a local-part collision rolls back only
+        the address insert, leaving the Connection row and the outer transaction
+        intact for the next generated candidate.
+        """
+        for attempt in range(ADDRESS_CLAIM_ATTEMPTS):
+            savepoint = session.begin_nested()
+            try:
+                session.add(allocate_address(connection_id))
+                session.flush()
+            except IntegrityError:
+                savepoint.rollback()
+                if attempt == ADDRESS_CLAIM_ATTEMPTS - 1:
+                    raise
+            else:
+                savepoint.commit()
+                return
 
     def update(
         self,
@@ -412,6 +450,9 @@ class CommunicationConnectionRepository:
                     last_error_code="CONNECTION_RETIRED",
                     last_error_message="Communication Connection was retired",
                 )
+            )
+            session.exec(
+                release_agent_email_addresses(now).where(col(AgentEmailAddress.connection_id) == connection_id)
             )
             session.commit()
             return True

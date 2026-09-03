@@ -117,6 +117,19 @@ def accept_driver_event(
     return {"accepted": accepted}
 
 
+@provider_webhook_router.post("/email/inbound", status_code=status.HTTP_202_ACCEPTED)
+def accept_email_inbound(
+    payload: dict[str, Any],
+    service: Annotated[CommunicationsGatewayService, Injected(CommunicationsGatewayService)],
+    authorization: Annotated[str, Header()],
+) -> dict[str, list[AcceptedCommunicationRead]]:
+    try:
+        accepted = service.accept_email_inbound(payload, authorization)
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Webhook authentication failed") from exc
+    return {"accepted": accepted}
+
+
 @provider_webhook_router.post("/{connection_id}", status_code=status.HTTP_202_ACCEPTED)
 def accept_provider_webhook(
     connection_id: UUID,

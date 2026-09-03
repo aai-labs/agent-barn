@@ -59,6 +59,7 @@ export const CommunicationConnectionSchema = z.object({
   lastErrorMessage: z.string().nullable(),
   lastErrorDetails: CommunicationErrorDetailsSchema.nullable().optional(),
   webhookUrl: z.string().url().nullable(),
+  managedAddress: z.string().nullable(),
   revision: z.number().int().positive(),
   createdAt: z.string(),
   updatedAt: z.string(),

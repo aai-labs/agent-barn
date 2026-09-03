@@ -71,6 +71,17 @@ CLOUDFLARE_ACCOUNT_ID=
 CLOUDFLARE_API_TOKEN=
 SENDER_EMAIL=
 
+# ── Per-Agent email addresses ────────────────────────────────────────────────
+# Leave blank to keep the Email platform disabled; Agent Barn then refuses new Email
+# Communication Connections and nothing else changes. Both are required on top of the
+# three values above.
+# AGENT_EMAIL_DOMAIN must be onboarded for BOTH Email Routing and Email Sending in the
+# same Cloudflare account, e.g. agents.agentbarn.dev.
+# EMAIL_INBOUND_SECRET is the bearer token the inbound Email Worker presents. Generate
+# with `openssl rand -hex 32` and set the same value as a Wrangler secret on the Worker.
+AGENT_EMAIL_DOMAIN=
+EMAIL_INBOUND_SECRET=
+
 # ── URLs / ingress hosts ─────────────────────────────────────────────────────
 # Hostnames the ingress serves. Point DNS (or /etc/hosts) at the cluster.
 API_HOST=api.agentbarn.local

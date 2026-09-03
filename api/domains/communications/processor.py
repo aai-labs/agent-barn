@@ -6,6 +6,7 @@ from uuid import UUID
 from injector import inject, singleton
 
 from api.core.config import Config
+from api.domains.agents.repository import AgentRepository
 from api.domains.communications.delivery_repository import CommunicationDeliveryRepository
 from api.domains.communications.error_details import normalize_communication_error
 from api.domains.communications.gateway_service import CommunicationsGatewayService
@@ -30,6 +31,7 @@ class OutboundCommunicationProcessor:
     config: Config
     deliveries: CommunicationDeliveryRepository
     connections: CommunicationConnectionRepository
+    agents: AgentRepository
     plugins: PlatformPluginRegistry
     gateway: CommunicationsGatewayService
 
@@ -53,10 +55,13 @@ class OutboundCommunicationProcessor:
                     )
                 )
             )
+            agent = self.agents.get_by_id(connection.agent_id)
+            if agent is None:
+                raise RuntimeError("Agent is unavailable")
             provider_message_id = plugin.send(
                 settings,
                 credentials,
-                outbound,
+                self._with_agent_identity(outbound, agent.name),
                 idempotency_key=delivery.idempotency_key,
             )
         except Exception as exc:
@@ -78,6 +83,22 @@ class OutboundCommunicationProcessor:
             if completed and outbound is not None and self._is_succeeded(delivery.id):
                 self._notify_feedback(delivery.connection_id, outbound, ProcessingFeedbackStage.SUCCEEDED)
         return True
+
+    @staticmethod
+    def _with_agent_identity(
+        outbound: OutboundCommunicationEnvelope,
+        agent_name: str,
+    ) -> OutboundCommunicationEnvelope:
+        """Add the Agent's name to the outbound envelope's provider metadata.
+
+        Platforms that address a reply as the Agent itself (currently only email,
+        whose `From` display name is the Agent) need an identity the stored
+        envelope does not carry. Resolved here per delivery rather than stored on
+        the Connection, so renaming an Agent shows on its next reply.
+        """
+        return outbound.model_copy(
+            update={"provider_metadata": {**outbound.provider_metadata, "agent_name": agent_name}}
+        )
 
     def _is_dead_lettered(self, delivery_id: UUID) -> bool:
         return self._is_status(delivery_id, CommunicationDeliveryStatus.DEAD_LETTERED)

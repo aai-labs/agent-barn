@@ -1,0 +1,87 @@
+name: Email inbound Worker
+
+on:
+  # Reusable only -- called by ci.yml (PRs/branches, deploy: false) and by
+  # deploy.yml (staging/main, deploy: true) after the cluster deploy succeeds.
+  workflow_call:
+    inputs:
+      deploy:
+        description: Whether to publish the Worker to Cloudflare
+        required: false
+        type: boolean
+        default: false
+      environment:
+        description: Wrangler environment to target (staging or production)
+        required: false
+        type: string
+        default: ""
+
+jobs:
+  check:
+    name: Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v5
+        with:
+          package_json_file: workers/email-inbound/package.json
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+          cache: pnpm
+          cache-dependency-path: workers/email-inbound/pnpm-lock.yaml
+      - name: Install dependencies
+        working-directory: workers/email-inbound
+        run: pnpm install --frozen-lockfile
+      # `deploy --dry-run` bundles and resolves vars without contacting Cloudflare,
+      # so this needs no credentials and works on pull requests from forks. Both
+      # deployable environments are checked: a fault confined to one env block
+      # would otherwise reach that environment unverified.
+      - name: Bundle the Worker (staging)
+        working-directory: workers/email-inbound
+        run: pnpm exec wrangler deploy --dry-run --env staging
+      - name: Bundle the Worker (production)
+        working-directory: workers/email-inbound
+        run: pnpm exec wrangler deploy --dry-run --env production
+
+  publish:
+    name: Publish
+    if: inputs.deploy
+    needs: [check]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v5
+        with:
+          package_json_file: workers/email-inbound/package.json
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+          cache: pnpm
+          cache-dependency-path: workers/email-inbound/pnpm-lock.yaml
+      # `A && B || C` yields C when B is an empty string, so an unset staging
+      # secret would silently publish the production one. The cluster resolves the
+      # same expression, so the two would still agree and mail would flow — staging
+      # would just be running on production's credential. Fail loudly instead.
+      - name: Require a staging-specific inbound secret
+        env:
+          STAGING_SECRET: ${{ secrets.STAGING_EMAIL_INBOUND_SECRET }}
+        run: |
+          if [ "$GITHUB_REF_NAME" = "staging" ] && [ -z "$STAGING_SECRET" ]; then
+            echo "::error::STAGING_EMAIL_INBOUND_SECRET is unset; staging would fall back to the production secret."
+            exit 1
+          fi
+      # `secrets` uploads EMAIL_INBOUND_SECRET on every publish, so the Worker and
+      # the cluster Secret are written from the same GitHub secret in one run and
+      # cannot drift apart. A mismatch would 401 every inbound message.
+      - uses: cloudflare/wrangler-action@v4
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_WORKERS_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: workers/email-inbound
+          packageManager: pnpm
+          environment: ${{ inputs.environment }}
+          secrets: |
+            EMAIL_INBOUND_SECRET
+        env:
+          EMAIL_INBOUND_SECRET: ${{ github.ref_name == 'staging' && secrets.STAGING_EMAIL_INBOUND_SECRET || secrets.EMAIL_INBOUND_SECRET }}

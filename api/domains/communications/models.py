@@ -29,12 +29,14 @@ class CommunicationPlatform(str, enum.Enum):
     SLACK = "slack"
     TELEGRAM = "telegram"
     DISCORD = "discord"
+    EMAIL = "email"
 
 
 class PlatformCapability(str, enum.Enum):
     DIRECTORY_DISCOVERY = "directory_discovery"
     APPLICATION_PROVISIONING = "application_provisioning"
     WEBHOOK_INGRESS = "webhook_ingress"
+    MANAGED_ADDRESS = "managed_address"
     ATTACHMENTS = "attachments"
     THREADS = "threads"
     MENTIONS = "mentions"
@@ -218,6 +220,36 @@ class CommunicationConnection(BaseModel, table=True):
         sa_column=Column(sa.Integer(), nullable=False, server_default="1"),
     )
     retired_at: datetime | None = SqlField(
+        default=None,
+        nullable=True,
+        sa_type=sa.DateTime(timezone=True),  # type: ignore
+    )
+
+
+class AgentEmailAddress(BaseModel, table=True):
+    __tablename__: str = "agent_email_address"
+    __table_args__ = (
+        sa.ForeignKeyConstraint(
+            ["connection_id", "organization_id"],
+            ["communication_connection.id", "communication_connection.organization_id"],
+            name="fk_agent_email_address_connection_organization",
+            ondelete="CASCADE",
+        ),
+        sa.UniqueConstraint("connection_id", name="uq_agent_email_address_connection"),
+        sa.Index(
+            "uq_agent_email_address_local_part",
+            sa.func.lower(sa.column("local_part")),
+            unique=True,
+        ),
+        sa.Index("ix_agent_email_address_agent", "agent_id"),
+    )
+
+    organization_id: UUID = SqlField(nullable=False)
+    agent_id: UUID = SqlField(foreign_key="agent.id", nullable=False, ondelete="CASCADE")
+    connection_id: UUID = SqlField(nullable=False)
+    local_part: str = SqlField(nullable=False, max_length=128)
+    address: str = SqlField(nullable=False, max_length=254)
+    released_at: datetime | None = SqlField(
         default=None,
         nullable=True,
         sa_type=sa.DateTime(timezone=True),  # type: ignore
@@ -622,6 +654,7 @@ class CommunicationConnectionRead(PydanticBaseModel):
     last_error_message: str | None
     last_error_details: CommunicationErrorDetails | None = None
     webhook_url: str | None = None
+    managed_address: str | None = None
     revision: int
     created_at: datetime
     updated_at: datetime

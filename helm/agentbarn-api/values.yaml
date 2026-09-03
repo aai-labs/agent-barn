@@ -42,6 +42,15 @@ cloudflareAccountId: ""
 cloudflareApiToken: ""
 senderEmail: ""
 
+# Per-Agent email addresses. Blank leaves the Email platform disabled — Agent Barn
+# refuses new Email Communication Connections and nothing else changes. Both are needed
+# on top of the three values above. agentEmailDomain must be onboarded for BOTH Email
+# Routing and Email Sending in the same Cloudflare account; emailInboundSecret is the
+# bearer token the inbound Email Worker presents, and reaches the Communications
+# deployment through the same Secret as the API.
+agentEmailDomain: ""
+emailInboundSecret: ""
+
 # Shared Google OAuth 2.0 "Web application" client for the Gmail "Authenticate with
 # Google" flow. Leave blank to disable the flow. Registered redirect URI must be
 # "<webAppUrl>/api/v1/integrations/google/callback".
