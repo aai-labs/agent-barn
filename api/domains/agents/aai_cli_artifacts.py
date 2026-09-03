@@ -12,13 +12,15 @@ profile block, secret-store entries, and agents_md lines.
 from collections.abc import Iterable, Mapping
 
 from api.domains.agents.models import SecretContent, SecretProvider
+from api.domains.credential_gateway.models import gateway_token_env_var
 from api.domains.integrations.plugins.aai_cli_support import (
     AaiCliPlugin,
     env_var_for,
     secrets_dir,
 )
+from api.domains.integrations.plugins.base import EgressMode
 from api.domains.integrations.plugins.providers import AAI_CLI
-from api.domains.integrations.plugins.registry import INTEGRATION_PLUGINS
+from api.domains.integrations.plugins.registry import INTEGRATION_PLUGINS, effective_egress_mode
 
 __all__ = [
     "CONFIG_PATH",
@@ -33,6 +35,7 @@ __all__ = [
     "build_tool_context_md",
     "env_var_for",
     "provider_secrets_map",
+    "store_providers_for",
 ]
 
 
@@ -212,6 +215,9 @@ def build_integrations_policy_md(
 def build_config_toml(
     decrypted: Mapping[SecretProvider, SecretContent],
     home_dir: str = "/home/node",
+    *,
+    gateway_providers: frozenset[str] | None = None,
+    gateway_base_url: str = "",
 ) -> str:
     """Render config.toml with one profile per provider present in ``decrypted``.
 
@@ -220,10 +226,21 @@ def build_config_toml(
     """
     dir_path = secrets_dir(home_dir)
     blocks = [_header(dir_path)]
+    enabled = gateway_providers or frozenset()
     for provider in SecretProvider:
         content = decrypted.get(provider)
         plugin = _plugin_for(provider)
-        if content is not None and plugin is not None:
+        if content is None or plugin is None:
+            continue
+        if effective_egress_mode(plugin, enabled) is EgressMode.GATEWAY_PROXY:
+            blocks.append(
+                plugin.aai_cli_gateway_profile_block(
+                    content,
+                    base_url=f"{gateway_base_url.rstrip('/')}/p/{plugin.key}",
+                    token_env=gateway_token_env_var(provider),
+                )
+            )
+        else:
             blocks.append(plugin.aai_cli_profile_block(content))
     return "\n".join(blocks)
 
@@ -268,3 +285,25 @@ def build_env(
         for secret_name, attr in provider_secrets_map.get(provider.value, []):
             env[env_var_for(secret_name)] = getattr(content, attr)
     return env
+
+
+def store_providers_for(
+    decrypted: Mapping[SecretProvider, SecretContent],
+    gateway_providers: frozenset[str] | None = None,
+) -> dict[SecretProvider, SecretContent]:
+    """Narrow a provider map to the ones whose credential still belongs in the pod.
+
+    A provider routed through the gateway is excluded here, which is what actually keeps
+    its real credential out of the pod Secret and out of ``aai-secrets.enc.json`` — the
+    profile block alone would not.
+    """
+    enabled = gateway_providers or frozenset()
+    keep: dict[SecretProvider, SecretContent] = {}
+    for provider, content in decrypted.items():
+        plugin = _plugin_for(provider)
+        if plugin is None or provider.value not in provider_secrets_map:
+            continue
+        if effective_egress_mode(plugin, enabled) is EgressMode.GATEWAY_PROXY:
+            continue
+        keep[provider] = content
+    return keep

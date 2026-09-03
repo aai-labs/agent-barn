@@ -1,8 +1,9 @@
 """The shipped Integration Plugins, one class per provider.
 
-Every provider is currently ``EgressMode.DIRECT`` — the credential is materialized into
-the agent pod, exactly as before this seam existed. Flipping a provider to
-``GATEWAY_PROXY`` or ``TOKEN_BROKER`` is a change to its plugin and nothing else.
+``egress_mode`` states what a provider *supports*, not what is switched on: routing a
+provider through the gateway additionally requires its key in
+``Config.credential_gateway_providers``. That split keeps rollout and rollback a config
+change rather than a deploy, and keeps a provider ``DIRECT`` until someone enables it.
 
 Plugins are trusted release artifacts, not dynamically installed packages: adding one is
 a merged PR, never runtime registration.
@@ -28,7 +29,7 @@ from api.domains.integrations.plugins.aai_cli_support import (
     quote,
     repo_scoped_profile_line,
 )
-from api.domains.integrations.plugins.base import IntegrationPlugin
+from api.domains.integrations.plugins.base import EgressMode, IntegrationPlugin, OutboundRequest
 from api.infrastructure.integration_validators.bitbucket import validate_bitbucket
 from api.infrastructure.integration_validators.confluence import validate_confluence
 from api.infrastructure.integration_validators.github import validate_github
@@ -46,6 +47,7 @@ NO_TOOL = "none"
 
 class GithubPlugin(AaiCliPlugin[GithubContent]):
     key = "github"
+    egress_mode = EgressMode.GATEWAY_PROXY
     provider = SecretProvider.GITHUB
     display_name = "GitHub credential"
     credentials_model = GithubContent
@@ -60,6 +62,21 @@ class GithubPlugin(AaiCliPlugin[GithubContent]):
     def validate_external(self, content: GithubContent) -> IntegrationValidationResult:
         return validate_github(content)
 
+    def upstream_base_url(self, content: GithubContent) -> str:
+        del content
+        return "https://api.github.com"
+
+    def apply_upstream_auth(self, content: GithubContent, request: OutboundRequest) -> OutboundRequest:
+        # Same three headers the live validator sends. Pinning the API version here
+        # rather than letting the agent choose keeps one provider contract per plugin.
+        return request.with_headers(
+            {
+                "Authorization": f"Bearer {content.token}",
+                "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28",
+            }
+        )
+
     def aai_cli_profile_block(self, content: GithubContent) -> str:
         blocks = []
         for name, repo in profile_repo_pairs(self.aai_cli_slug, content.repos):
@@ -68,6 +85,23 @@ class GithubPlugin(AaiCliPlugin[GithubContent]):
                 'provider = "github"\n',
                 'auth_type = "bearer_token"\n',
                 'token_secret = "github.token"\n',
+                f"owner = {quote(content.owner)}\n",
+            ]
+            if repo is not None:
+                lines.append(f"repo = {quote(repo)}\n")
+            lines.append(f"org = {quote(content.org)}\n")
+            blocks.append("".join(lines))
+        return "\n".join(blocks)
+
+    def aai_cli_gateway_profile_block(self, content: GithubContent, *, base_url: str, token_env: str) -> str:
+        blocks = []
+        for name, repo in profile_repo_pairs(self.aai_cli_slug, content.repos):
+            lines = [
+                f"[profiles.{name}]\n",
+                'provider = "github"\n',
+                'auth_type = "gateway"\n',
+                f"base_url = {quote(base_url)}\n",
+                f"token_env = {quote(token_env)}\n",
                 f"owner = {quote(content.owner)}\n",
             ]
             if repo is not None:

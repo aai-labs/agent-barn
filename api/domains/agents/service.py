@@ -20,7 +20,7 @@ from api.domains.agents.aai_cli_artifacts import (
     build_local_tools_policy_md,
     build_setup_sh,
     build_tool_context_md,
-    provider_secrets_map,
+    store_providers_for,
 )
 from api.domains.agents.aai_cli_skills import build_skills_manifest
 from api.domains.agents.authorization import AgentAuthorization
@@ -1954,13 +1954,25 @@ class AgentService:
                     "Authenticate with Google, or configure google_cloud_client_id/secret."
                 ),
             )
-        store = {p: c for p, c in decrypted.items() if p.value in provider_secrets_map}
+        # A gateway-routed provider is excluded from the store, which is what actually
+        # keeps its real credential out of the pod Secret and aai-secrets.enc.json.
+        gateway_providers = self.config.gateway_enabled_providers
+        store = store_providers_for(decrypted, gateway_providers)
         aai_home = "/opt/data" if agent.agent_type == AgentType.HERMES else "/home/node"
         # Gated on providers that actually get an aai-cli profile: an agent whose only
         # integrations are profile-less (google_workspace, firecrawl) would otherwise get
         # a config.toml holding nothing but the store header.
         has_aai_profiles = bool(decrypted.keys() & set(PROFILE_SLUGS))
-        aai_config_toml = build_config_toml(decrypted, home_dir=aai_home) if has_aai_profiles else None
+        aai_config_toml = (
+            build_config_toml(
+                decrypted,
+                home_dir=aai_home,
+                gateway_providers=gateway_providers,
+                gateway_base_url=self.config.credential_gateway_base_url,
+            )
+            if has_aai_profiles
+            else None
+        )
         aai_setup_sh = build_setup_sh(list(store), home_dir=aai_home) if has_aai_profiles else None
         if store:
             secret.string_data.update(build_env(store))

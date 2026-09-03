@@ -12,8 +12,15 @@ from uuid import UUID
 
 from injector import inject, singleton
 
-from api.domains.agents.models import SecretProvider
+from api.core.config import Config
+from api.domains.agents.models import SecretContent, SecretProvider, decrypt_content
+from api.domains.agents.repository import AgentRepository
 from api.domains.credential_gateway.audit import GatewayAuditSink, ResolutionOutcome
+from api.domains.credential_gateway.forwarding import (
+    UpstreamForwarder,
+    UpstreamResponse,
+    sanitize_request_headers,
+)
 from api.domains.credential_gateway.models import (
     TOKEN_PREFIX,
     GatewayToken,
@@ -23,8 +30,9 @@ from api.domains.credential_gateway.models import (
     issue_token_value,
 )
 from api.domains.credential_gateway.repository import GatewayTokenRepository
-from api.domains.integrations.plugins.base import EgressMode
-from api.domains.integrations.plugins.registry import INTEGRATION_PLUGINS
+from api.domains.integrations.plugins.base import EgressMode, OutboundRequest
+from api.domains.integrations.plugins.registry import INTEGRATION_PLUGINS, effective_egress_mode
+from api.domains.shared_credentials.repository import SharedCredentialRepository
 
 
 class GatewayTokenRejected(Exception):
@@ -41,15 +49,24 @@ class GatewayTokenRejected(Exception):
 class CredentialGatewayService:
     repository: GatewayTokenRepository
     audit: GatewayAuditSink
+    config: Config
+    agent_repository: AgentRepository
+    shared_credential_repository: SharedCredentialRepository
+    forwarder: UpstreamForwarder
 
     # --- issuance, called from agent start ---
 
     def providers_needing_a_token(self, providers: set[SecretProvider]) -> set[SecretProvider]:
-        """Narrow an Agent's configured providers to those the gateway serves."""
+        """Narrow an Agent's configured providers to those the gateway currently serves.
+
+        Resolved through ``effective_egress_mode``, so issuance and the aai-cli artifact
+        builders cannot disagree about where a credential goes.
+        """
+        enabled = self.config.gateway_enabled_providers
         return {
             provider
             for provider in providers
-            if INTEGRATION_PLUGINS.require(provider).egress_mode is not EgressMode.DIRECT
+            if effective_egress_mode(INTEGRATION_PLUGINS.require(provider), enabled) is not EgressMode.DIRECT
         }
 
     def issue_for_agent(
@@ -145,6 +162,73 @@ class CredentialGatewayService:
             provider=token.provider,
         )
 
+    # --- forwarding, called per agent request ---
+
+    def forward(self, authorization: str | None, request: ForwardRequest) -> UpstreamResponse:
+        """Re-authorize one agent request with the real provider credential and send it.
+
+        Resolution comes first, so an absent or revoked token never reaches a decrypt.
+        """
+        resolution = self.resolve(authorization)
+
+        # The token names a provider and so does the path. A GitHub token must not be
+        # usable against the Jira upstream, so a mismatch is refused rather than
+        # resolved in favour of either one.
+        if resolution.provider.value != request.provider_key:
+            raise GatewayForwardRefused(f"token is for {resolution.provider.value}, not {request.provider_key}")
+
+        plugin = INTEGRATION_PLUGINS.require(resolution.provider)
+        if effective_egress_mode(plugin, self.config.gateway_enabled_providers) is not EgressMode.GATEWAY_PROXY:
+            # A live token for a provider since rolled back. Refuse rather than forward
+            # unauthenticated: the pod still holds that provider's real credential.
+            raise GatewayForwardRefused(f"{plugin.key} is not routed through the gateway")
+
+        content = self._decrypt_credential(resolution.agent_id, resolution.organization_id, resolution.provider)
+        if content is None:
+            raise GatewayForwardRefused(f"no {plugin.key} credential for this agent")
+
+        outbound = plugin.apply_upstream_auth(
+            content,
+            OutboundRequest(
+                method=request.method,
+                path=request.path,
+                headers=sanitize_request_headers(request.headers),
+                query=dict(request.params),
+            ),
+        )
+        base = plugin.upstream_base_url(content).rstrip("/")
+        url = f"{base}/{request.path.lstrip('/')}"
+        return self.forwarder.send(
+            outbound.method,
+            url,
+            headers=outbound.headers,
+            params=outbound.query,
+            content=request.body,
+        )
+
+    def _decrypt_credential(
+        self,
+        agent_id: UUID,
+        organization_id: UUID,
+        provider: SecretProvider,
+    ) -> SecretContent | None:
+        """Load and decrypt one Agent Secret, following a Shared Credential when set."""
+        secrets = [s for s in self.agent_repository.get_secrets_for_agent(agent_id) if s.provider == provider.value]
+        if not secrets:
+            return None
+        secret = secrets[0]
+        ciphertext = secret.content
+        if secret.shared_credential_id is not None:
+            shared = self.shared_credential_repository.get_by_ids_and_org(
+                [secret.shared_credential_id], organization_id
+            )
+            if not shared:
+                return None
+            ciphertext = shared[0].content
+        if ciphertext is None:
+            return None
+        return decrypt_content(provider, ciphertext, self.config.agent_token_encryption_key)
+
 
 def _bearer_value(authorization: str | None) -> str | None:
     if not authorization:
@@ -156,3 +240,19 @@ def _bearer_value(authorization: str | None) -> str | None:
     # The prefix check is a cheap reject for a credential meant for something else
     # (a LiteLLM key, a Communications key) so it never reaches a hash lookup.
     return value if value.startswith(TOKEN_PREFIX) else None
+
+
+class GatewayForwardRefused(Exception):
+    """The request cannot be forwarded: wrong provider, not gateway-routed, or no credential."""
+
+
+@dataclass(frozen=True)
+class ForwardRequest:
+    """One agent request to re-authorize and send upstream."""
+
+    provider_key: str
+    path: str
+    method: str
+    headers: dict[str, str]
+    params: dict[str, str]
+    body: bytes

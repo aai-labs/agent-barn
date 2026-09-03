@@ -6,12 +6,21 @@ Related context: [`../../adr/2026-09-02-credential-gateway-egress-modes.md`](../
 
 ## Current state
 
-- **Delivered:** the Integration Plugin seam with all ten providers ported; the credential gateway as a separate deployment, resolving Gateway Tokens to `(Agent, Organization, provider)`; `GOG_READONLY=1` for read-only Google Workspace credentials.
-- **In transition:** every provider is `EgressMode.DIRECT`, so credentials still materialize into agent pods and **agent start issues no Gateway Tokens**. The gateway is deployed and correct but carries no production traffic until a provider flips. `PROVIDER_DISPLAY_NAMES`, `PROVIDER_CONTENT_MODELS`, and `PROVIDER_VALIDATORS` still live outside the plugins (import cycle) and are pinned by contract test rather than derived.
-- **Next:** `GATEWAY_PROXY` forward path for GitHub (Slice 3). Unblocked.
-- **Blockers:** none. NetworkPolicy default-deny (Slice 4) must not land until Slice 3 is live for at least one provider.
+- **Delivered:** the Integration Plugin seam; the credential gateway as a separate deployment; token issue/revoke/resolve; and the `GATEWAY_PROXY` forward path, with GitHub as the first provider that supports it.
+- **In transition:** `CREDENTIAL_GATEWAY_PROVIDERS` is empty by default, so every provider is effectively `DIRECT` and nothing changes until an operator opts GitHub in. `PROVIDER_DISPLAY_NAMES`, `PROVIDER_CONTENT_MODELS`, and `PROVIDER_VALIDATORS` still live outside the plugins (import cycle) and are pinned by contract test rather than derived.
+- **Next:** NetworkPolicy default-deny egress (Slice 4), then the remaining aai-cli providers (Slice 5) and the Google token broker (Slice 6).
+- **Blockers:** none. Slice 4 must not land until GitHub is actually enabled in at least one environment, or agents lose access to everything not yet migrated. `aai-cli` must ship `auth_type = "gateway"` before GitHub can be enabled anywhere real — the API emits that profile shape today, but the CLI is a separate repo.
 
 ## Changes
+
+### 2026-09-02 — Slice 3 — GATEWAY_PROXY forward path for GitHub
+
+- **Delivered:** `ANY /gateway/v1/p/{provider}/{path}` resolves the Gateway Token, decrypts the Agent Secret (following a Shared Credential when set), strips the agent's `Authorization` and hop-by-hop headers, applies the real provider credential through `apply_upstream_auth`, forwards, and returns the upstream status and body unchanged. `GithubPlugin` gained `upstream_base_url` and `apply_upstream_auth`.
+- **Rollout model:** `egress_mode` on a plugin is a *capability*; `Config.credential_gateway_providers` is the *switch*. `effective_egress_mode` is the single place the two combine, so Gateway Token issuance and the aai-cli artifact builders cannot disagree about where a credential goes. Enabling and rolling back are config changes, not deploys.
+- **What actually removes the credential:** `store_providers_for` excludes gateway-routed providers from the aai-cli secret store, so the real token is in neither the pod Secret nor `aai-secrets.enc.json`. The profile block alone would not have done it.
+- **Refusals:** wrong-provider path, rolled-back provider, missing credential, unknown and revoked tokens all return the same opaque 403 as `/identity`, so an agent cannot probe which applies. An unreachable upstream is a 502 and is distinguished from an upstream error status, which passes through untouched.
+- **Redirects:** followed gateway-side, because NetworkPolicy will deny the pod any egress except the gateway. Authorization is re-applied only while the redirect stays on the origin host — carrying a provider credential to a redirect target would hand it to whoever controls that host. Bounded at 5 hops.
+- **Follow-up:** `aai-cli` needs to implement `auth_type = "gateway"` in its own repo before GitHub can be enabled outside tests.
 
 ### 2026-09-02 — Slack retired as a tool Integration
 

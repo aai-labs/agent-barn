@@ -82,6 +82,15 @@ class AaiCliIntegration[ContentT: SecretContent]:
         """Render this provider's ``[profiles.<slug>]`` block for config.toml."""
         raise NotImplementedError
 
+    def aai_cli_gateway_profile_block(self, content: ContentT, *, base_url: str, token_env: str) -> str:
+        """Render the ``[profiles.<slug>]`` block for a gateway-routed provider.
+
+        The profile points aai-cli at the credential gateway and names the environment
+        variable holding this Agent's Gateway Token. It carries no ``*_secret``
+        reference, because no provider credential is materialized into the pod at all.
+        """
+        raise NotImplementedError
+
     def aai_cli_context_line(self, content: ContentT) -> str:
         """Line for the "Configured Integrations" block in tools_md.
 

@@ -58,6 +58,8 @@ At start, Agent Service decrypts provider payloads, backfills configured Google 
 
 The aai-cli integrations policy is gated on providers that actually have an aai-cli profile. An agent whose only integration is profile-less Google Workspace must not receive instructions claiming that aai-cli profiles are required.
 
+A provider whose Integration Plugin declares `EgressMode.GATEWAY_PROXY` **and** whose key appears in `CREDENTIAL_GATEWAY_PROVIDERS` is routed through the credential gateway instead. Its aai-cli profile becomes `auth_type = "gateway"` with a `base_url` pointing at `/p/<provider>` and a `token_env` naming `AF_GATEWAY_TOKEN_<PROVIDER>`, and the provider is excluded from the aai-cli secret store — so its real credential is in neither the pod Secret nor `aai-secrets.enc.json`. `egress_mode` is a capability and the config list is the switch, so enabling and rolling back a provider are config changes rather than deploys. GitHub is the first provider to support it.
+
 Google Workspace materializes through `gog_artifacts.py`: the pod Secret carries the OAuth client and refresh token as `GOG_*` environment, while a ConfigMap-mounted `gog-setup.sh` rebuilds gog state at boot. `GOG_HOME` is on the container filesystem and is wiped and rebuilt on every start; the encrypted Agent Secret remains the source of truth.
 
 A read-only Google Workspace credential also sets `GOG_READONLY=1`, which makes gog reject mutating API requests locally before dispatch. This is a defence-in-depth backstop layered on the read-only OAuth scopes, not a replacement for them: it is an environment variable, so an agent with a shell can unset it.

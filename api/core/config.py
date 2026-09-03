@@ -56,6 +56,12 @@ class Config(BaseSettings):
     # The credential gateway is a separate deployment because it sits on the request path
     # of every agent tool call; agent workloads reach it by Service name in-namespace.
     credential_gateway_base_url: str = "http://agentbarn-api-gateway.agent-farm.svc.cluster.local:8003/gateway/v1"
+    # Comma-separated Integration provider keys routed through the credential gateway,
+    # e.g. "github". A provider absent from this list keeps materializing its credential
+    # into the agent pod, so enabling and rolling back are config changes rather than
+    # deploys. A key naming a provider whose plugin does not support gateway egress has
+    # no effect.
+    credential_gateway_providers: str = ""
     skip_slack_token_validation: bool = False
     skip_telegram_token_validation: bool = False
     skip_discord_token_validation: bool = False
@@ -98,6 +104,10 @@ class Config(BaseSettings):
 
     agent_firecrawl_base_url: str = ""
     agent_firecrawl_api_key: str = ""
+
+    @property
+    def gateway_enabled_providers(self) -> frozenset[str]:
+        return frozenset(p.strip() for p in self.credential_gateway_providers.split(",") if p.strip())
 
     @property
     def is_email_delivery_enabled(self) -> bool:
