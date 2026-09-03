@@ -1,3 +1,4 @@
+import ast
 import importlib.util
 import io
 from pathlib import Path
@@ -38,6 +39,10 @@ def _delivery() -> dict:
             "location": {"id": "user-1", "thread_id": "thread-1"},
         },
     }
+
+
+def test_adapter_source_parses_for_the_oldest_runtime_image() -> None:
+    ast.parse(_ADAPTER_PATH.read_text(), filename=str(_ADAPTER_PATH), feature_version=(3, 12))
 
 
 def test_run_delivery_posts_reply_then_completion(monkeypatch: pytest.MonkeyPatch) -> None:
