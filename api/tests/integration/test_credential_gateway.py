@@ -1,5 +1,7 @@
 """Gateway Token issue / resolve / revoke round-trip against the real gateway app."""
 
+import base64
+
 from fastapi import status
 from hamcrest import assert_that, empty, equal_to, is_, not_none
 from starlette.testclient import TestClient
@@ -59,9 +61,8 @@ _GIVEN = [
 def _issue(context, agent, provider=SecretProvider.GITHUB):
     """Issue a token directly through the service.
 
-    Bypasses the egress-mode gate deliberately: every shipped provider is still
-    EgressMode.DIRECT, so `issue_for_agent` correctly issues nothing today. The gateway's
-    own identity contract has to be provable before the first provider flips.
+    Bypasses the rollout-config gate deliberately so the gateway's identity contract
+    remains independently testable when no provider is enabled in the environment.
     """
     from api.domains.credential_gateway.models import GatewayToken
     from api.domains.credential_gateway.repository import GatewayTokenRepository
@@ -102,6 +103,17 @@ def test_a_live_token_resolves_to_its_agent_organization_and_provider():
             assert_that(body["organization_id"], equal_to(str(agent.organization_id)))
             assert_that(body["provider"], equal_to("github"))
             assert_that(set(body), equal_to({"agent_id", "organization_id", "provider"}))
+
+
+def test_a_basic_auth_transport_can_present_the_token_as_its_password():
+    with given(_GIVEN) as context:
+        token = _issue(context, context.agent)
+        encoded = base64.b64encode(f"calendar-user:{token}".encode()).decode()
+
+        response = context.gateway_client.get(_IDENTITY, headers={"Authorization": f"Basic {encoded}"})
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+        assert_that(response.json()["provider"], equal_to("github"))
 
 
 def test_a_revoked_token_stops_resolving():

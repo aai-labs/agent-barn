@@ -17,9 +17,9 @@ API configuration is read from the repository root `.env`; tests may use `.env.s
 
 ```bash
 make db-up       # PostgreSQL only
-make dev-api     # product API on :8000 plus Ingest :8001 and Communications :8002
+make dev-api     # product API :8000, Ingest :8001, Communications :8002, credential gateway :8003
 make dev-ui      # UI on :3000
-./run.sh         # full Docker stack (db/redis/api/worker/ui/communications + k3d), including the separately served Ingest app
+./run.sh         # full Docker stack (db/redis/api/worker/ui/communications/credential gateway + k3d)
 make restart-ui  # refresh the Docker UI dev server's route manifest after adding an App Router directory
 ./stop.sh        # stop it; ./stop.sh --clean also deletes the k3d cluster
 ```

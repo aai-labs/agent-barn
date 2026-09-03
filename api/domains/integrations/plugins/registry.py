@@ -84,15 +84,14 @@ def _overrides(plugin: IntegrationPlugin, method: str) -> bool:
 INTEGRATION_PLUGINS = IntegrationPluginRegistry(SHIPPED_PLUGINS)
 
 
-def effective_egress_mode(plugin: IntegrationPlugin, enabled_providers: frozenset[str]) -> EgressMode:
+def effective_egress_mode(plugin: IntegrationPlugin, gateway_enabled: bool) -> EgressMode:
     """What a provider actually does right now, as opposed to what it supports.
 
-    A plugin's ``egress_mode`` is a capability: it says the plugin implements the seam.
-    A provider only leaves ``DIRECT`` once an operator lists its key in
-    ``Config.credential_gateway_providers``, so enabling and rolling back are config
-    changes. Both Gateway Token issuance and the aai-cli artifact builders resolve the
-    mode through here, so they can never disagree about where a credential goes.
+    A plugin's ``egress_mode`` owns the provider decision. The global switch exists only
+    for operational rollback. Both Gateway Token issuance and runtime artifact builders
+    resolve the mode here, so they cannot disagree about where a credential goes and a
+    new provider needs no second registration in deployment configuration.
     """
     if plugin.egress_mode is EgressMode.DIRECT:
         return EgressMode.DIRECT
-    return plugin.egress_mode if plugin.key in enabled_providers else EgressMode.DIRECT
+    return plugin.egress_mode if gateway_enabled else EgressMode.DIRECT

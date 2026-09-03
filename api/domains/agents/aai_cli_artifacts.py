@@ -216,7 +216,7 @@ def build_config_toml(
     decrypted: Mapping[SecretProvider, SecretContent],
     home_dir: str = "/home/node",
     *,
-    gateway_providers: frozenset[str] | None = None,
+    gateway_enabled: bool = False,
     gateway_base_url: str = "",
 ) -> str:
     """Render config.toml with one profile per provider present in ``decrypted``.
@@ -226,13 +226,12 @@ def build_config_toml(
     """
     dir_path = secrets_dir(home_dir)
     blocks = [_header(dir_path)]
-    enabled = gateway_providers or frozenset()
     for provider in SecretProvider:
         content = decrypted.get(provider)
         plugin = _plugin_for(provider)
         if content is None or plugin is None:
             continue
-        if effective_egress_mode(plugin, enabled) is EgressMode.GATEWAY_PROXY:
+        if effective_egress_mode(plugin, gateway_enabled) is EgressMode.GATEWAY_PROXY:
             blocks.append(
                 plugin.aai_cli_gateway_profile_block(
                     content,
@@ -289,7 +288,7 @@ def build_env(
 
 def store_providers_for(
     decrypted: Mapping[SecretProvider, SecretContent],
-    gateway_providers: frozenset[str] | None = None,
+    gateway_enabled: bool = False,
 ) -> dict[SecretProvider, SecretContent]:
     """Narrow a provider map to the ones whose credential still belongs in the pod.
 
@@ -297,13 +296,12 @@ def store_providers_for(
     its real credential out of the pod Secret and out of ``aai-secrets.enc.json`` — the
     profile block alone would not.
     """
-    enabled = gateway_providers or frozenset()
     keep: dict[SecretProvider, SecretContent] = {}
     for provider, content in decrypted.items():
         plugin = _plugin_for(provider)
         if plugin is None or provider.value not in provider_secrets_map:
             continue
-        if effective_egress_mode(plugin, enabled) is EgressMode.GATEWAY_PROXY:
+        if effective_egress_mode(plugin, gateway_enabled) is EgressMode.GATEWAY_PROXY:
             continue
         keep[provider] = content
     return keep

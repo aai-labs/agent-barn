@@ -6,21 +6,29 @@ Related context: [`../../adr/2026-09-02-credential-gateway-egress-modes.md`](../
 
 ## Current state
 
-- **Delivered:** the Integration Plugin seam; the credential gateway as a separate deployment; token issue/revoke/resolve; and the `GATEWAY_PROXY` forward path, with GitHub as the first provider that supports it.
-- **In transition:** `CREDENTIAL_GATEWAY_PROVIDERS` is empty by default, so every provider is effectively `DIRECT` and nothing changes until an operator opts GitHub in. `PROVIDER_DISPLAY_NAMES`, `PROVIDER_CONTENT_MODELS`, and `PROVIDER_VALIDATORS` still live outside the plugins (import cycle) and are pinned by contract test rather than derived.
-- **Next:** NetworkPolicy default-deny egress (Slice 4), then the remaining aai-cli providers (Slice 5) and the Google token broker (Slice 6).
-- **Blockers:** none. Slice 4 must not land until GitHub is actually enabled in at least one environment, or agents lose access to everything not yet migrated. `aai-cli` must ship `auth_type = "gateway"` before GitHub can be enabled anywhere real — the API emits that profile shape today, but the CLI is a separate repo.
+- **Delivered:** the Integration Plugin seam; the credential gateway as a separate deployment; token issue/revoke/resolve; the `GATEWAY_PROXY` forward path; and gateway support for every shipped aai-cli provider without changing aai-cli.
+- **In transition:** Helm and new local environments enable the gateway; existing local `.env` files must opt in with `CREDENTIAL_GATEWAY_ENABLED=true`. `PROVIDER_DISPLAY_NAMES`, `PROVIDER_CONTENT_MODELS`, and `PROVIDER_VALIDATORS` still live outside the plugins (import cycle) and are pinned by contract test rather than derived.
+- **Next:** NetworkPolicy default-deny egress, then the Google token broker.
+- **Blockers:** none.
 
 ## Changes
+
+### 2026-09-03 — All aai-cli providers use the credential gateway
+
+- **Delivered:** Jira, Confluence, Bitbucket, Zoho Mail REST, Zoho Calendar CalDAV, and Pipedrive now implement the same provider-plugin proxy contract as GitHub. Their gateway profiles use only existing aai-cli endpoint and environment-authentication fields.
+- **Provider authentication:** the gateway applies Atlassian and Bitbucket Basic auth, Pipedrive's `x-api-token`, Zoho CalDAV Basic auth, and a cached short-lived Zoho Mail OAuth access token. Renewable and long-lived provider credentials never enter the agent pod.
+- **Transport compatibility:** ordinary HTTP integrations present their Gateway Token as Bearer auth. CalDAV presents it as the password in its existing Basic-auth shape; Gateway Token resolution accepts that carrier and replaces the whole header before forwarding.
+- **Upstream safety:** stored Atlassian and Zoho CalDAV URLs are constrained to trusted HTTPS provider hosts before the gateway connects. Invalid stored upstream configuration is refused without forwarding.
+- **Rollout:** the Helm chart and new local configuration enable the gateway globally. Provider routing comes only from each plugin's `egress_mode`; `CREDENTIAL_GATEWAY_ENABLED=false` is the emergency rollback switch. There is no provider allowlist to synchronize when a plugin is added.
 
 ### 2026-09-02 — Slice 3 — GATEWAY_PROXY forward path for GitHub
 
 - **Delivered:** `ANY /gateway/v1/p/{provider}/{path}` resolves the Gateway Token, decrypts the Agent Secret (following a Shared Credential when set), strips the agent's `Authorization` and hop-by-hop headers, applies the real provider credential through `apply_upstream_auth`, forwards, and returns the upstream status and body unchanged. `GithubPlugin` gained `upstream_base_url` and `apply_upstream_auth`.
-- **Rollout model:** `egress_mode` on a plugin is a *capability*; `Config.credential_gateway_providers` is the *switch*. `effective_egress_mode` is the single place the two combine, so Gateway Token issuance and the aai-cli artifact builders cannot disagree about where a credential goes. Enabling and rolling back are config changes, not deploys.
+- **Rollout model:** `egress_mode` on a plugin is the provider-level source of truth; `Config.credential_gateway_enabled` is only a global operational switch. `effective_egress_mode` is the single place the two combine, so Gateway Token issuance and runtime artifact builders cannot disagree. A new provider requires no duplicate deployment registration, while global rollback remains a config change.
 - **What actually removes the credential:** `store_providers_for` excludes gateway-routed providers from the aai-cli secret store, so the real token is in neither the pod Secret nor `aai-secrets.enc.json`. The profile block alone would not have done it.
+- **CLI contract:** the generated profile uses aai-cli's existing endpoint override and environment-backed Bearer authentication. The Gateway Token authenticates only the pod-to-gateway hop; `apply_upstream_auth` replaces it with GitHub's real credential for the upstream hop. No gateway-specific aai-cli authentication mode is introduced.
 - **Refusals:** wrong-provider path, rolled-back provider, missing credential, unknown and revoked tokens all return the same opaque 403 as `/identity`, so an agent cannot probe which applies. An unreachable upstream is a 502 and is distinguished from an upstream error status, which passes through untouched.
-- **Redirects:** followed gateway-side, because NetworkPolicy will deny the pod any egress except the gateway. Authorization is re-applied only while the redirect stays on the origin host — carrying a provider credential to a redirect target would hand it to whoever controls that host. Bounded at 5 hops.
-- **Follow-up:** `aai-cli` needs to implement `auth_type = "gateway"` in its own repo before GitHub can be enabled outside tests.
+- **Redirects:** followed gateway-side, because NetworkPolicy will deny the pod any egress except the gateway. Provider credential headers are retained only while the redirect stays on the origin host — carrying one to a redirect target would hand it to whoever controls that host. Bounded at 5 hops.
 
 ### 2026-09-02 — Slack retired as a tool Integration
 

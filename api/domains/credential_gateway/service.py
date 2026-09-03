@@ -6,6 +6,8 @@ it. Flipping a provider to ``GATEWAY_PROXY`` or ``TOKEN_BROKER`` starts issuance
 provider with no change here.
 """
 
+import base64
+import binascii
 import datetime
 from dataclasses import dataclass
 from uuid import UUID
@@ -19,6 +21,7 @@ from api.domains.credential_gateway.audit import GatewayAuditSink, ResolutionOut
 from api.domains.credential_gateway.forwarding import (
     UpstreamForwarder,
     UpstreamResponse,
+    UpstreamUnreachable,
     sanitize_request_headers,
 )
 from api.domains.credential_gateway.models import (
@@ -30,7 +33,7 @@ from api.domains.credential_gateway.models import (
     issue_token_value,
 )
 from api.domains.credential_gateway.repository import GatewayTokenRepository
-from api.domains.integrations.plugins.base import EgressMode, OutboundRequest
+from api.domains.integrations.plugins.base import EgressMode, OutboundRequest, UpstreamAuthenticationError
 from api.domains.integrations.plugins.registry import INTEGRATION_PLUGINS, effective_egress_mode
 from api.domains.shared_credentials.repository import SharedCredentialRepository
 
@@ -62,11 +65,11 @@ class CredentialGatewayService:
         Resolved through ``effective_egress_mode``, so issuance and the aai-cli artifact
         builders cannot disagree about where a credential goes.
         """
-        enabled = self.config.gateway_enabled_providers
         return {
             provider
             for provider in providers
-            if effective_egress_mode(INTEGRATION_PLUGINS.require(provider), enabled) is not EgressMode.DIRECT
+            if effective_egress_mode(INTEGRATION_PLUGINS.require(provider), self.config.credential_gateway_enabled)
+            is not EgressMode.DIRECT
         }
 
     def issue_for_agent(
@@ -79,8 +82,7 @@ class CredentialGatewayService:
 
         Called on every agent start, so it is also the rotation path: the previous
         token is revoked in the same operation and the pod receives the new value.
-        Returns an empty list when no configured provider is served by the gateway,
-        which is the current state of every provider.
+        Returns an empty list when no configured provider is served by the gateway.
         """
         needed = self.providers_needing_a_token(providers)
         # Always revoke the full set first: a provider removed from the Agent since the
@@ -135,7 +137,7 @@ class CredentialGatewayService:
         one structured 403 so an unknown token and a revoked token are indistinguishable
         to the agent while staying distinct in the audit trail.
         """
-        value = _bearer_value(authorization)
+        value = _gateway_token_value(authorization)
         if value is None:
             self.audit.record_resolution(ResolutionOutcome.MALFORMED)
             raise GatewayTokenRejected(ResolutionOutcome.MALFORMED)
@@ -178,7 +180,7 @@ class CredentialGatewayService:
             raise GatewayForwardRefused(f"token is for {resolution.provider.value}, not {request.provider_key}")
 
         plugin = INTEGRATION_PLUGINS.require(resolution.provider)
-        if effective_egress_mode(plugin, self.config.gateway_enabled_providers) is not EgressMode.GATEWAY_PROXY:
+        if effective_egress_mode(plugin, self.config.credential_gateway_enabled) is not EgressMode.GATEWAY_PROXY:
             # A live token for a provider since rolled back. Refuse rather than forward
             # unauthenticated: the pod still holds that provider's real credential.
             raise GatewayForwardRefused(f"{plugin.key} is not routed through the gateway")
@@ -187,16 +189,21 @@ class CredentialGatewayService:
         if content is None:
             raise GatewayForwardRefused(f"no {plugin.key} credential for this agent")
 
-        outbound = plugin.apply_upstream_auth(
-            content,
-            OutboundRequest(
-                method=request.method,
-                path=request.path,
-                headers=sanitize_request_headers(request.headers),
-                query=dict(request.params),
-            ),
-        )
-        base = plugin.upstream_base_url(content).rstrip("/")
+        try:
+            outbound = plugin.apply_upstream_auth(
+                content,
+                OutboundRequest(
+                    method=request.method,
+                    path=request.path,
+                    headers=sanitize_request_headers(request.headers),
+                    query=dict(request.params),
+                ),
+            )
+            base = plugin.upstream_base_url(content).rstrip("/")
+        except UpstreamAuthenticationError as exc:
+            raise UpstreamUnreachable("provider authorization could not be established") from exc
+        except ValueError as exc:
+            raise GatewayForwardRefused(f"invalid upstream configuration for {plugin.key}") from exc
         url = f"{base}/{request.path.lstrip('/')}"
         return self.forwarder.send(
             outbound.method,
@@ -204,6 +211,7 @@ class CredentialGatewayService:
             headers=outbound.headers,
             params=outbound.query,
             content=request.body,
+            sensitive_headers=outbound.sensitive_headers,
         )
 
     def _decrypt_credential(
@@ -230,13 +238,23 @@ class CredentialGatewayService:
         return decrypt_content(provider, ciphertext, self.config.agent_token_encryption_key)
 
 
-def _bearer_value(authorization: str | None) -> str | None:
+def _gateway_token_value(authorization: str | None) -> str | None:
     if not authorization:
         return None
     scheme, _, rest = authorization.partition(" ")
-    if scheme.lower() != "bearer":
+    if scheme.lower() == "bearer":
+        value = rest.strip()
+    elif scheme.lower() == "basic":
+        try:
+            decoded = base64.b64decode(rest.strip(), validate=True).decode("utf-8")
+        except binascii.Error, UnicodeDecodeError:
+            return None
+        _, separator, value = decoded.partition(":")
+        if not separator:
+            return None
+        value = value.strip()
+    else:
         return None
-    value = rest.strip()
     # The prefix check is a cheap reject for a credential meant for something else
     # (a LiteLLM key, a Communications key) so it never reaches a hash lookup.
     return value if value.startswith(TOKEN_PREFIX) else None

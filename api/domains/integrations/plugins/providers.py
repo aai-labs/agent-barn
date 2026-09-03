@@ -1,15 +1,23 @@
 """The shipped Integration Plugins, one class per provider.
 
-``egress_mode`` states what a provider *supports*, not what is switched on: routing a
-provider through the gateway additionally requires its key in
-``Config.credential_gateway_providers``. That split keeps rollout and rollback a config
-change rather than a deploy, and keeps a provider ``DIRECT`` until someone enables it.
+``egress_mode`` owns how a provider sends credentials. The global gateway switch is an
+operational rollback only; it does not duplicate provider registration. Adding a new
+gateway provider therefore stays local to its plugin.
 
 Plugins are trusted release artifacts, not dynamically installed packages: adding one is
 a merged PR, never runtime registration.
 """
 
 from __future__ import annotations
+
+import base64
+import hashlib
+import re
+import threading
+import time
+from urllib.parse import urlsplit, urlunsplit
+
+import httpx
 
 from api.domains.agents.models import (
     BitbucketContent,
@@ -29,7 +37,12 @@ from api.domains.integrations.plugins.aai_cli_support import (
     quote,
     repo_scoped_profile_line,
 )
-from api.domains.integrations.plugins.base import EgressMode, IntegrationPlugin, OutboundRequest
+from api.domains.integrations.plugins.base import (
+    EgressMode,
+    IntegrationPlugin,
+    OutboundRequest,
+    UpstreamAuthenticationError,
+)
 from api.infrastructure.integration_validators.bitbucket import validate_bitbucket
 from api.infrastructure.integration_validators.confluence import validate_confluence
 from api.infrastructure.integration_validators.github import validate_github
@@ -43,6 +56,77 @@ GOG = "gog"
 #: Providers reached by no agent-side CLI: the credential is platform infrastructure
 #: injected as plain environment.
 NO_TOOL = "none"
+
+_ZOHO_TOKEN_URL = "https://accounts.zoho.com/oauth/v2/token"
+_ZOHO_MAIL_BASE_URL = "https://mail.zoho.com"
+_ZOHO_CALENDAR_HOSTS = frozenset(
+    {
+        "calendar.zoho.com",
+        "calendar.zoho.eu",
+        "calendar.zoho.in",
+        "calendar.zoho.com.au",
+        "calendar.zoho.jp",
+        "calendar.zoho.ca",
+        "calendar.zoho.sa",
+    }
+)
+_PIPEDRIVE_DOMAIN = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
+_ATLASSIAN_CLOUD_ID = re.compile(r"^[A-Za-z0-9-]+$")
+
+
+def _basic_auth(username: str, password: str) -> str:
+    encoded = base64.b64encode(f"{username}:{password}".encode()).decode()
+    return f"Basic {encoded}"
+
+
+def _gateway_bearer_lines(*, endpoint_field: str, base_url: str, token_env: str) -> list[str]:
+    """Existing aai-cli fields for the pod-to-gateway HTTP hop."""
+    return [
+        'auth_type = "bearer_token"\n',
+        f"{endpoint_field} = {quote(base_url)}\n",
+        f"token_env = {quote(token_env)}\n",
+    ]
+
+
+def _atlassian_base(site_url: str) -> str:
+    """Return a tenant origin while preventing stored URLs from turning into SSRF."""
+    parsed = urlsplit(site_url)
+    hostname = (parsed.hostname or "").lower()
+    if (
+        parsed.scheme != "https"
+        or not hostname.endswith(".atlassian.net")
+        or hostname == ".atlassian.net"
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.port is not None
+        or parsed.path not in {"", "/"}
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise ValueError("Atlassian site URL must be an https *.atlassian.net origin")
+    return urlunsplit(("https", hostname, "", "", ""))
+
+
+def _atlassian_cloud_gateway(service: str, cloud_id: str) -> str:
+    if service not in {"jira", "confluence"} or not _ATLASSIAN_CLOUD_ID.fullmatch(cloud_id):
+        raise ValueError("Atlassian cloud_id is not valid")
+    return f"https://api.atlassian.com/ex/{service}/{cloud_id}"
+
+
+def _trusted_zoho_calendar_url(caldav_url: str) -> str:
+    parsed = urlsplit(caldav_url)
+    hostname = (parsed.hostname or "").lower()
+    if (
+        parsed.scheme != "https"
+        or hostname not in _ZOHO_CALENDAR_HOSTS
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.port is not None
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise ValueError("Zoho CalDAV URL is not on a supported calendar.zoho host")
+    return urlunsplit(("https", hostname, parsed.path, "", ""))
 
 
 class GithubPlugin(AaiCliPlugin[GithubContent]):
@@ -67,15 +151,16 @@ class GithubPlugin(AaiCliPlugin[GithubContent]):
         return "https://api.github.com"
 
     def apply_upstream_auth(self, content: GithubContent, request: OutboundRequest) -> OutboundRequest:
-        # Same three headers the live validator sends. Pinning the API version here
-        # rather than letting the agent choose keeps one provider contract per plugin.
-        return request.with_headers(
-            {
-                "Authorization": f"Bearer {content.token}",
-                "Accept": "application/vnd.github+json",
-                "X-GitHub-Api-Version": "2022-11-28",
-            }
-        )
+        headers = {
+            "Authorization": f"Bearer {content.token}",
+            "X-GitHub-Api-Version": "2022-11-28",
+        }
+        # Preserve aai-cli's media-type requests for diffs, raw files, and archive
+        # downloads. Ordinary JSON requests receive the same default as validation.
+        accept = next((value for name, value in request.headers.items() if name.lower() == "accept"), None)
+        if accept in {None, "*/*"}:
+            headers["Accept"] = "application/vnd.github+json"
+        return request.with_headers(headers, sensitive=True)
 
     def aai_cli_profile_block(self, content: GithubContent) -> str:
         blocks = []
@@ -99,9 +184,7 @@ class GithubPlugin(AaiCliPlugin[GithubContent]):
             lines = [
                 f"[profiles.{name}]\n",
                 'provider = "github"\n',
-                'auth_type = "gateway"\n',
-                f"base_url = {quote(base_url)}\n",
-                f"token_env = {quote(token_env)}\n",
+                *_gateway_bearer_lines(endpoint_field="base_url", base_url=base_url, token_env=token_env),
                 f"owner = {quote(content.owner)}\n",
             ]
             if repo is not None:
@@ -128,6 +211,7 @@ class GithubPlugin(AaiCliPlugin[GithubContent]):
 
 class JiraPlugin(AaiCliPlugin[JiraContent]):
     key = "jira"
+    egress_mode = EgressMode.GATEWAY_PROXY
     provider = SecretProvider.JIRA
     display_name = "Jira credential"
     credentials_model = JiraContent
@@ -141,6 +225,19 @@ class JiraPlugin(AaiCliPlugin[JiraContent]):
 
     def validate_external(self, content: JiraContent) -> IntegrationValidationResult:
         return validate_jira(content)
+
+    def upstream_base_url(self, content: JiraContent) -> str:
+        if content.use_scoped_token:
+            if not content.cloud_id:
+                raise ValueError("scoped Jira credential is missing cloud_id")
+            return _atlassian_cloud_gateway("jira", content.cloud_id)
+        return _atlassian_base(content.site_url)
+
+    def apply_upstream_auth(self, content: JiraContent, request: OutboundRequest) -> OutboundRequest:
+        return request.with_headers(
+            {"Authorization": _basic_auth(content.email, content.api_token)},
+            sensitive=True,
+        )
 
     def aai_cli_profile_block(self, content: JiraContent) -> str:
         site_url = content.site_url
@@ -159,12 +256,22 @@ class JiraPlugin(AaiCliPlugin[JiraContent]):
             'api_token_secret = "jira.api_token"\n'
         )
 
+    def aai_cli_gateway_profile_block(self, content: JiraContent, *, base_url: str, token_env: str) -> str:
+        return "".join(
+            [
+                f"[profiles.{self.aai_cli_slug}]\n",
+                *_gateway_bearer_lines(endpoint_field="site_url", base_url=base_url, token_env=token_env),
+                f"email = {quote(content.email)}\n",
+            ]
+        )
+
     def aai_cli_context_line(self, content: JiraContent) -> str:
         return f"- **Jira** (`{self.aai_cli_slug}`): {content.site_url} ({content.email})"
 
 
 class ConfluencePlugin(AaiCliPlugin[ConfluenceContent]):
     key = "confluence"
+    egress_mode = EgressMode.GATEWAY_PROXY
     provider = SecretProvider.CONFLUENCE
     display_name = "Confluence credential"
     credentials_model = ConfluenceContent
@@ -178,6 +285,19 @@ class ConfluencePlugin(AaiCliPlugin[ConfluenceContent]):
 
     def validate_external(self, content: ConfluenceContent) -> IntegrationValidationResult:
         return validate_confluence(content)
+
+    def upstream_base_url(self, content: ConfluenceContent) -> str:
+        if content.use_scoped_token:
+            if not content.cloud_id:
+                raise ValueError("scoped Confluence credential is missing cloud_id")
+            return _atlassian_cloud_gateway("confluence", content.cloud_id)
+        return _atlassian_base(content.site_url)
+
+    def apply_upstream_auth(self, content: ConfluenceContent, request: OutboundRequest) -> OutboundRequest:
+        return request.with_headers(
+            {"Authorization": _basic_auth(content.email, content.api_token)},
+            sensitive=True,
+        )
 
     def aai_cli_profile_block(self, content: ConfluenceContent) -> str:
         site_url = content.site_url
@@ -193,12 +313,22 @@ class ConfluencePlugin(AaiCliPlugin[ConfluenceContent]):
             'api_token_secret = "confluence.api_token"\n'
         )
 
+    def aai_cli_gateway_profile_block(self, content: ConfluenceContent, *, base_url: str, token_env: str) -> str:
+        return "".join(
+            [
+                f"[profiles.{self.aai_cli_slug}]\n",
+                *_gateway_bearer_lines(endpoint_field="site_url", base_url=base_url, token_env=token_env),
+                f"email = {quote(content.email)}\n",
+            ]
+        )
+
     def aai_cli_context_line(self, content: ConfluenceContent) -> str:
         return f"- **Confluence** (`{self.aai_cli_slug}`): {content.site_url} ({content.email})"
 
 
 class BitbucketPlugin(AaiCliPlugin[BitbucketContent]):
     key = "bitbucket"
+    egress_mode = EgressMode.GATEWAY_PROXY
     provider = SecretProvider.BITBUCKET
     display_name = "Bitbucket credential"
     credentials_model = BitbucketContent
@@ -213,6 +343,16 @@ class BitbucketPlugin(AaiCliPlugin[BitbucketContent]):
     def validate_external(self, content: BitbucketContent) -> IntegrationValidationResult:
         return validate_bitbucket(content)
 
+    def upstream_base_url(self, content: BitbucketContent) -> str:
+        del content
+        return "https://api.bitbucket.org/2.0"
+
+    def apply_upstream_auth(self, content: BitbucketContent, request: OutboundRequest) -> OutboundRequest:
+        return request.with_headers(
+            {"Authorization": _basic_auth(content.email, content.api_token)},
+            sensitive=True,
+        )
+
     def aai_cli_profile_block(self, content: BitbucketContent) -> str:
         blocks = []
         for name, repo in profile_repo_pairs(self.aai_cli_slug, content.repos):
@@ -225,6 +365,20 @@ class BitbucketPlugin(AaiCliPlugin[BitbucketContent]):
                 lines.append(f"repo = {quote(repo)}\n")
             lines.append(f"email = {quote(content.email)}\n")
             lines.append('api_token_secret = "bitbucket.api_token"\n')
+            blocks.append("".join(lines))
+        return "\n".join(blocks)
+
+    def aai_cli_gateway_profile_block(self, content: BitbucketContent, *, base_url: str, token_env: str) -> str:
+        blocks = []
+        for name, repo in profile_repo_pairs(self.aai_cli_slug, content.repos):
+            lines = [
+                f"[profiles.{name}]\n",
+                *_gateway_bearer_lines(endpoint_field="base_url", base_url=base_url, token_env=token_env),
+                f"workspace = {quote(content.workspace)}\n",
+            ]
+            if repo is not None:
+                lines.append(f"repo = {quote(repo)}\n")
+            lines.append(f"email = {quote(content.email)}\n")
             blocks.append("".join(lines))
         return "\n".join(blocks)
 
@@ -246,6 +400,7 @@ class BitbucketPlugin(AaiCliPlugin[BitbucketContent]):
 
 class ZohoMailPlugin(AaiCliPlugin[ZohoMailContent]):
     key = "zoho_mail"
+    egress_mode = EgressMode.GATEWAY_PROXY
     provider = SecretProvider.ZOHO_MAIL
     display_name = "Zoho Mail credential"
     credentials_model = ZohoMailContent
@@ -260,6 +415,63 @@ class ZohoMailPlugin(AaiCliPlugin[ZohoMailContent]):
         ("zoho.mail_refresh_token", "refresh_token"),
     )
 
+    def __init__(self) -> None:
+        self._token_cache: dict[str, tuple[str, float]] = {}
+        self._token_cache_lock = threading.Lock()
+
+    def upstream_base_url(self, content: ZohoMailContent) -> str:
+        del content
+        return _ZOHO_MAIL_BASE_URL
+
+    def apply_upstream_auth(self, content: ZohoMailContent, request: OutboundRequest) -> OutboundRequest:
+        return request.with_headers(
+            {"Authorization": f"Zoho-oauthtoken {self._access_token(content)}"},
+            sensitive=True,
+        )
+
+    def _access_token(self, content: ZohoMailContent) -> str:
+        cache_key = hashlib.sha256(
+            f"{content.client_id}\0{content.client_secret}\0{content.refresh_token}".encode()
+        ).hexdigest()
+        now = time.monotonic()
+        with self._token_cache_lock:
+            cached = self._token_cache.get(cache_key)
+        if cached is not None and cached[1] > now:
+            return cached[0]
+
+        # Do not hold the cache lock across provider I/O: one tenant's slow refresh
+        # must not block another tenant whose credential has a different cache key.
+        try:
+            response = httpx.post(
+                _ZOHO_TOKEN_URL,
+                data={
+                    "grant_type": "refresh_token",
+                    "refresh_token": content.refresh_token,
+                    "client_id": content.client_id,
+                    "client_secret": content.client_secret,
+                },
+                timeout=10,
+            )
+        except httpx.HTTPError as exc:
+            raise UpstreamAuthenticationError("Zoho token endpoint could not be reached") from exc
+        if response.status_code != 200:
+            raise UpstreamAuthenticationError("Zoho rejected the stored OAuth credential")
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise UpstreamAuthenticationError("Zoho returned an invalid token response") from exc
+        token = payload.get("access_token")
+        if not isinstance(token, str) or not token:
+            raise UpstreamAuthenticationError("Zoho token response omitted access_token")
+        expires_in = payload.get("expires_in_sec", payload.get("expires_in", 3600))
+        try:
+            ttl = float(expires_in)
+        except TypeError, ValueError:
+            ttl = 3600.0
+        with self._token_cache_lock:
+            self._token_cache[cache_key] = (token, now + max(1.0, ttl - 60.0))
+        return token
+
     def aai_cli_profile_block(self, content: ZohoMailContent) -> str:
         return (
             f"[profiles.{self.aai_cli_slug}]\n"
@@ -272,9 +484,21 @@ class ZohoMailPlugin(AaiCliPlugin[ZohoMailContent]):
             'refresh_token_secret = "zoho.mail_refresh_token"\n'
         )
 
+    def aai_cli_gateway_profile_block(self, content: ZohoMailContent, *, base_url: str, token_env: str) -> str:
+        return "".join(
+            [
+                f"[profiles.{self.aai_cli_slug}]\n",
+                'provider = "zoho"\n',
+                *_gateway_bearer_lines(endpoint_field="base_url", base_url=base_url, token_env=token_env),
+                f"email = {quote(content.email)}\n",
+                f"account_id = {quote(content.account_id)}\n",
+            ]
+        )
+
 
 class ZohoCalendarPlugin(AaiCliPlugin[ZohoCalendarContent]):
     key = "zoho_calendar"
+    egress_mode = EgressMode.GATEWAY_PROXY
     provider = SecretProvider.ZOHO_CALENDAR
     display_name = "Zoho Calendar credential"
     credentials_model = ZohoCalendarContent
@@ -284,6 +508,15 @@ class ZohoCalendarPlugin(AaiCliPlugin[ZohoCalendarContent]):
 
     aai_cli_slug = "zoho-calendar-work"
     aai_cli_label = "Zoho Calendar"
+
+    def upstream_base_url(self, content: ZohoCalendarContent) -> str:
+        return _trusted_zoho_calendar_url(content.caldav_url)
+
+    def apply_upstream_auth(self, content: ZohoCalendarContent, request: OutboundRequest) -> OutboundRequest:
+        return request.with_headers(
+            {"Authorization": _basic_auth(content.username, content.app_password)},
+            sensitive=True,
+        )
 
     def aai_cli_profile_block(self, content: ZohoCalendarContent) -> str:
         return (
@@ -297,9 +530,25 @@ class ZohoCalendarPlugin(AaiCliPlugin[ZohoCalendarContent]):
             f"caldav_url = {quote(content.caldav_url)}\n"
         )
 
+    def aai_cli_gateway_profile_block(self, content: ZohoCalendarContent, *, base_url: str, token_env: str) -> str:
+        # CalDAV has its own aai-cli transport and always emits Basic auth. Supplying
+        # the Gateway Token as its password preserves that existing CLI contract; the
+        # gateway extracts the password and replaces the entire Authorization header.
+        return (
+            f"[profiles.{self.aai_cli_slug}]\n"
+            'provider = "zoho"\n'
+            'transport = "caldav"\n'
+            'auth_type = "app_password"\n'
+            f"username = {quote(content.username)}\n"
+            f"email = {quote(content.email)}\n"
+            f"password_env = {quote(token_env)}\n"
+            f"caldav_url = {quote(base_url)}\n"
+        )
+
 
 class PipedrivePlugin(AaiCliPlugin[PipedriveContent]):
     key = "pipedrive"
+    egress_mode = EgressMode.GATEWAY_PROXY
     provider = SecretProvider.PIPEDRIVE
     display_name = "Pipedrive credential"
     credentials_model = PipedriveContent
@@ -313,6 +562,17 @@ class PipedrivePlugin(AaiCliPlugin[PipedriveContent]):
     def validate_external(self, content: PipedriveContent) -> IntegrationValidationResult:
         return validate_pipedrive(content)
 
+    def upstream_base_url(self, content: PipedriveContent) -> str:
+        if not content.domain:
+            return "https://api.pipedrive.com"
+        domain = content.domain.lower()
+        if not _PIPEDRIVE_DOMAIN.fullmatch(domain):
+            raise ValueError("Pipedrive domain is not a valid tenant subdomain")
+        return f"https://{domain}.pipedrive.com"
+
+    def apply_upstream_auth(self, content: PipedriveContent, request: OutboundRequest) -> OutboundRequest:
+        return request.with_headers({"x-api-token": content.api_token}, sensitive=True)
+
     def aai_cli_profile_block(self, content: PipedriveContent) -> str:
         lines = [
             f"[profiles.{self.aai_cli_slug}]\n",
@@ -322,6 +582,15 @@ class PipedrivePlugin(AaiCliPlugin[PipedriveContent]):
             lines.append(f"base_url = {quote(f'https://{content.domain}.pipedrive.com')}\n")
         lines.append('api_token_secret = "pipedrive.api_token"\n')
         return "".join(lines)
+
+    def aai_cli_gateway_profile_block(self, content: PipedriveContent, *, base_url: str, token_env: str) -> str:
+        del content
+        return "".join(
+            [
+                f"[profiles.{self.aai_cli_slug}]\n",
+                *_gateway_bearer_lines(endpoint_field="base_url", base_url=base_url, token_env=token_env),
+            ]
+        )
 
 
 class GoogleWorkspacePlugin(IntegrationPlugin[GoogleWorkspaceContent]):

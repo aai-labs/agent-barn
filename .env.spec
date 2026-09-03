@@ -116,3 +116,10 @@ INGEST_PORT=
 # Optional. Host port for the Communications gateway. Agent pods reach it
 # through host.docker.internal; defaults to 8002.
 COMMUNICATIONS_PORT=
+
+# Credential gateway. When enabled, each Integration Plugin's egress mode decides how
+# that provider is handled; set false for an emergency rollback to direct credential
+# materialization. Agent pods in local k3d reach it through the host-published port.
+GATEWAY_PORT=8003
+CREDENTIAL_GATEWAY_BASE_URL=http://host.docker.internal:8003/gateway/v1
+CREDENTIAL_GATEWAY_ENABLED=true

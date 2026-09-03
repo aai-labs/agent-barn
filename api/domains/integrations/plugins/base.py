@@ -32,9 +32,8 @@ class EgressMode(str, enum.Enum):
     #: The gateway mints a short-lived upstream token the pod uses directly. The pod
     #: never holds a renewable grant.
     TOKEN_BROKER = "token_broker"
-    #: The credential is materialized into the pod. Current behavior for every provider;
-    #: retained as the migration path and as the recorded escape hatch for a CLI whose
-    #: auth cannot be redirected.
+    #: The credential is materialized into the pod. Retained as the rollout fallback
+    #: and as the recorded escape hatch for a CLI whose auth cannot be redirected.
     DIRECT = "direct"
 
 
@@ -50,12 +49,28 @@ class OutboundRequest:
     path: str
     headers: dict[str, str] = field(default_factory=dict)
     query: dict[str, str] = field(default_factory=dict)
+    sensitive_headers: frozenset[str] = frozenset()
 
-    def with_headers(self, headers: dict[str, str]) -> OutboundRequest:
-        return OutboundRequest(self.method, self.path, {**self.headers, **headers}, dict(self.query))
+    def with_headers(self, headers: dict[str, str], *, sensitive: bool = False) -> OutboundRequest:
+        sensitive_headers = self.sensitive_headers
+        if sensitive:
+            sensitive_headers |= frozenset(name.lower() for name in headers)
+        return OutboundRequest(
+            self.method,
+            self.path,
+            {**self.headers, **headers},
+            dict(self.query),
+            sensitive_headers,
+        )
 
     def with_query(self, query: dict[str, str]) -> OutboundRequest:
-        return OutboundRequest(self.method, self.path, dict(self.headers), {**self.query, **query})
+        return OutboundRequest(
+            self.method,
+            self.path,
+            dict(self.headers),
+            {**self.query, **query},
+            self.sensitive_headers,
+        )
 
 
 @dataclass(frozen=True)
@@ -65,6 +80,10 @@ class MintedToken:
     value: str
     expires_at: float
     scopes: frozenset[str] = frozenset()
+
+
+class UpstreamAuthenticationError(Exception):
+    """A plugin could not obtain the short-lived authorization needed to proxy."""
 
 
 @dataclass(frozen=True)

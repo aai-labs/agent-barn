@@ -1956,8 +1956,8 @@ class AgentService:
             )
         # A gateway-routed provider is excluded from the store, which is what actually
         # keeps its real credential out of the pod Secret and aai-secrets.enc.json.
-        gateway_providers = self.config.gateway_enabled_providers
-        store = store_providers_for(decrypted, gateway_providers)
+        gateway_enabled = self.config.credential_gateway_enabled
+        store = store_providers_for(decrypted, gateway_enabled)
         aai_home = "/opt/data" if agent.agent_type == AgentType.HERMES else "/home/node"
         # Gated on providers that actually get an aai-cli profile: an agent whose only
         # integrations are profile-less (google_workspace, firecrawl) would otherwise get
@@ -1967,7 +1967,7 @@ class AgentService:
             build_config_toml(
                 decrypted,
                 home_dir=aai_home,
-                gateway_providers=gateway_providers,
+                gateway_enabled=gateway_enabled,
                 gateway_base_url=self.config.credential_gateway_base_url,
             )
             if has_aai_profiles
@@ -2030,8 +2030,7 @@ class AgentService:
         ingest_key = secrets.token_urlsafe(32)
         communication_key = secrets.token_urlsafe(32)
         # Rotates the Agent's gateway tokens and revokes any left from a previous start.
-        # Empty while every provider is EgressMode.DIRECT; a provider's slice flipping its
-        # egress mode is what starts populating this, with no change here.
+        # The configured rollout set decides which supported providers receive one.
         gateway_tokens = self.credential_gateway.issue_for_agent(agent.id, agent.organization_id, set(decrypted.keys()))
         for issued in gateway_tokens:
             secret.string_data[gateway_token_env_var(issued.provider)] = issued.value

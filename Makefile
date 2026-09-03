@@ -3,7 +3,7 @@ COMPOSE := docker compose -f compose.yml
 .PHONY: \
 	setup run stop stop-clean \
 	restart-ui \
-	dev-api dev-ingest dev-communications dev-ui dev-worker reconcile seed-event-deliveries seed-agent-overrides migrate merge-heads rollback makemigrations test-api test-ui lint-ui check-ui coverage check-api check-migrations check-monitoring fix-api test check fix \
+	dev-api dev-ingest dev-communications dev-gateway dev-ui dev-worker reconcile seed-event-deliveries seed-agent-overrides migrate merge-heads rollback makemigrations test-api test-ui lint-ui check-ui coverage check-api check-migrations check-monitoring fix-api test check fix \
 	db-up db-down db-logs db-restart redis-up redis-down redis-logs
 
 # One-command local dev: validates .env, brings up k3d + LiteLLM, loads agent
@@ -44,10 +44,12 @@ INGEST_PORT ?= 8001
 INGEST_BASE_URL ?= http://host.docker.internal:$(INGEST_PORT)/ingest/v1
 COMMUNICATIONS_PORT ?= 8002
 COMMUNICATIONS_BASE_URL ?= http://host.docker.internal:$(COMMUNICATIONS_PORT)/communications/v1
+GATEWAY_PORT ?= 8003
+CREDENTIAL_GATEWAY_BASE_URL ?= http://host.docker.internal:$(GATEWAY_PORT)/gateway/v1
 # Overridable so a second worktree can run its own stack without port clashes.
 API_DEV_PORT ?= 8000
 
-# Runs Ingest and Communications alongside the main app so native development
+# Runs Ingest, Communications, and the credential gateway alongside the main app so native development
 # has the same service topology as Docker and Helm. The trap kills every child
 # on Ctrl-C; stray listeners otherwise break the next run confusingly.
 dev-api:
@@ -55,7 +57,8 @@ dev-api:
 	trap 'kill 0' EXIT INT TERM; \
 	uv run python -m fastapi dev ingest_main.py --host 0.0.0.0 --port $(INGEST_PORT) & \
 	uv run python -m fastapi dev communications_main.py --host 0.0.0.0 --port $(COMMUNICATIONS_PORT) & \
-	INGEST_BASE_URL=$(INGEST_BASE_URL) COMMUNICATIONS_BASE_URL=$(COMMUNICATIONS_BASE_URL) uv run python -m fastapi dev main.py --host 0.0.0.0 --port $(API_DEV_PORT)
+	uv run python -m fastapi dev gateway_main.py --host 0.0.0.0 --port $(GATEWAY_PORT) & \
+	INGEST_BASE_URL=$(INGEST_BASE_URL) COMMUNICATIONS_BASE_URL=$(COMMUNICATIONS_BASE_URL) CREDENTIAL_GATEWAY_BASE_URL=$(CREDENTIAL_GATEWAY_BASE_URL) uv run python -m fastapi dev main.py --host 0.0.0.0 --port $(API_DEV_PORT)
 
 # Ingest on its own — `make dev-api` already starts it; use this to run or
 # restart the telemetry sink independently.
@@ -66,6 +69,10 @@ dev-ingest:
 # Communications on its own — `make dev-api` already starts it.
 dev-communications:
 	cd api && uv run python -m fastapi dev communications_main.py --host 0.0.0.0 --port $(COMMUNICATIONS_PORT)
+
+# Credential gateway on its own — `make dev-api` already starts it.
+dev-gateway:
+	cd api && uv run python -m fastapi dev gateway_main.py --host 0.0.0.0 --port $(GATEWAY_PORT)
 
 dev-ui:
 	cd ui && pnpm dev

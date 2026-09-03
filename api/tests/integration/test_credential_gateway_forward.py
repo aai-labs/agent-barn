@@ -5,8 +5,9 @@ credential applied, and that credential is never in the agent's possession.
 """
 
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
+import pytest
 from fastapi import status
 from hamcrest import assert_that, equal_to, is_, is_not
 from injector import Module, provider, singleton
@@ -15,8 +16,14 @@ from starlette.testclient import TestClient
 from api.domains.agents.models import (
     PROVIDER_DISPLAY_NAMES,
     AgentSecret,
+    BitbucketContent,
+    ConfluenceContent,
     GithubContent,
+    JiraContent,
+    PipedriveContent,
     SecretProvider,
+    ZohoCalendarContent,
+    ZohoMailContent,
     encrypt_content,
 )
 from api.domains.credential_gateway.forwarding import UpstreamForwarder, UpstreamResponse
@@ -66,8 +73,7 @@ _GIVEN = [
             "LITELLM_SECRET_NAME": "litellm",
             "AGENT_DEFAULT_MODEL": "litellm/gpt-5-mini",
             "AGENT_LITELLM_BASE_URL": "http://litellm:4000",
-            # GitHub opted in to gateway routing.
-            "CREDENTIAL_GATEWAY_PROVIDERS": "github",
+            "CREDENTIAL_GATEWAY_ENABLED": "true",
         }
     ),
     prepare_injector(modules=[MockK8sModule(), MockLiteLLMModule(), RecordingForwarderModule()]),
@@ -83,16 +89,23 @@ _GIVEN = [
 
 
 def _github_secret(context) -> None:
+    _provider_secret(
+        context,
+        SecretProvider.GITHUB,
+        GithubContent(token=REAL_TOKEN, owner="acme", repos=["r1"], org="acme-org"),
+    )
+
+
+def _provider_secret(context, provider: SecretProvider, content) -> None:
     from sqlmodel import Session
 
     delegate = context.injector.get(PostgresRepositoryDelegate)
-    content = GithubContent(token=REAL_TOKEN, owner="acme", repos=["r1"], org="acme-org")
     with Session(delegate.engine) as session:
         session.add(
             AgentSecret(
                 agent_id=context.agent.id,
-                provider=SecretProvider.GITHUB,
-                secret_name=PROVIDER_DISPLAY_NAMES[SecretProvider.GITHUB],
+                provider=provider,
+                secret_name=PROVIDER_DISPLAY_NAMES[provider],
                 content=encrypt_content(content, TEST_ENCRYPTION_KEY),
             )
         )
@@ -145,6 +158,113 @@ def test_the_agent_reaches_github_without_ever_holding_the_credential():
 
         with then("the agent's own gateway token never went upstream"):
             assert_that(token in str(_sent(context).kwargs["headers"]), is_(False))
+
+
+_ALL_AAI_GIVEN = [step for step in _GIVEN]
+_ALL_AAI_GIVEN[0] = set_env_variable(
+    {
+        "AGENT_TOKEN_ENCRYPTION_KEY": TEST_ENCRYPTION_KEY,
+        "LITELLM_BASE_URL": "http://litellm:4000",
+        "LITELLM_SECRET_NAME": "litellm",
+        "AGENT_DEFAULT_MODEL": "litellm/gpt-5-mini",
+        "AGENT_LITELLM_BASE_URL": "http://litellm:4000",
+        "CREDENTIAL_GATEWAY_ENABLED": "true",
+    }
+)
+
+
+@pytest.mark.parametrize(
+    ("provider", "content", "path", "expected_url", "auth_header", "auth_value"),
+    [
+        (
+            SecretProvider.JIRA,
+            JiraContent(site_url="https://acme.atlassian.net", email="jira@example.com", api_token="jira-real"),
+            "rest/api/3/issue/AF-1",
+            "https://acme.atlassian.net/rest/api/3/issue/AF-1",
+            "Authorization",
+            "Basic amlyYUBleGFtcGxlLmNvbTpqaXJhLXJlYWw=",
+        ),
+        (
+            SecretProvider.CONFLUENCE,
+            ConfluenceContent(site_url="https://acme.atlassian.net", email="conf@example.com", api_token="conf-real"),
+            "wiki/api/v2/spaces",
+            "https://acme.atlassian.net/wiki/api/v2/spaces",
+            "Authorization",
+            "Basic Y29uZkBleGFtcGxlLmNvbTpjb25mLXJlYWw=",
+        ),
+        (
+            SecretProvider.BITBUCKET,
+            BitbucketContent(workspace="acme", repos=["app"], email="bb@example.com", api_token="bb-real"),
+            "repositories/acme/app/pullrequests",
+            "https://api.bitbucket.org/2.0/repositories/acme/app/pullrequests",
+            "Authorization",
+            "Basic YmJAZXhhbXBsZS5jb206YmItcmVhbA==",
+        ),
+        (
+            SecretProvider.PIPEDRIVE,
+            PipedriveContent(api_token="pd-real", domain="acme"),
+            "v1/deals",
+            "https://acme.pipedrive.com/v1/deals",
+            "x-api-token",
+            "pd-real",
+        ),
+        (
+            SecretProvider.ZOHO_CALENDAR,
+            ZohoCalendarContent(
+                username="calendar-user",
+                email="calendar@example.com",
+                app_password="calendar-real",
+                caldav_url="https://calendar.zoho.com/caldav/acme/events",
+            ),
+            "event-1.ics",
+            "https://calendar.zoho.com/caldav/acme/events/event-1.ics",
+            "Authorization",
+            "Basic Y2FsZW5kYXItdXNlcjpjYWxlbmRhci1yZWFs",
+        ),
+    ],
+)
+def test_each_non_oauth_aai_provider_is_reauthorized_and_forwarded(
+    provider, content, path, expected_url, auth_header, auth_value
+):
+    with given(_ALL_AAI_GIVEN) as context:
+        _provider_secret(context, provider, content)
+        token = _token_for(context, provider)
+
+        response = context.gateway_client.get(f"/gateway/v1/p/{provider.value}/{path}", headers=_auth(token))
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+        call = _sent(context)
+        assert_that(call.args[1], equal_to(expected_url))
+        assert_that(call.kwargs["headers"][auth_header], equal_to(auth_value))
+        assert_that(token in str(call.kwargs["headers"]), is_(False))
+
+
+def test_zoho_mail_refreshes_upstream_auth_inside_the_gateway():
+    content = ZohoMailContent(
+        email="mail@example.com",
+        account_id="123",
+        client_id="zoho-client",
+        client_secret="zoho-secret",
+        refresh_token="zoho-refresh",
+    )
+    token_response = MagicMock(status_code=200)
+    token_response.json.return_value = {"access_token": "zoho-access", "expires_in": 3600}
+
+    with given(_ALL_AAI_GIVEN) as context:
+        _provider_secret(context, SecretProvider.ZOHO_MAIL, content)
+        token = _token_for(context, SecretProvider.ZOHO_MAIL)
+
+        with patch("api.domains.integrations.plugins.providers.httpx.post", return_value=token_response):
+            response = context.gateway_client.get(
+                "/gateway/v1/p/zoho_mail/api/accounts/123/messages",
+                headers=_auth(token),
+            )
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+        call = _sent(context)
+        assert_that(call.args[1], equal_to("https://mail.zoho.com/api/accounts/123/messages"))
+        assert_that(call.kwargs["headers"]["Authorization"], equal_to("Zoho-oauthtoken zoho-access"))
+        assert_that(token in str(call.kwargs["headers"]), is_(False))
 
 
 def test_query_parameters_survive_the_hop():
@@ -262,15 +382,15 @@ _ROLLED_BACK[0] = set_env_variable(
         "LITELLM_SECRET_NAME": "litellm",
         "AGENT_DEFAULT_MODEL": "litellm/gpt-5-mini",
         "AGENT_LITELLM_BASE_URL": "http://litellm:4000",
-        "CREDENTIAL_GATEWAY_PROVIDERS": "",
+        "CREDENTIAL_GATEWAY_ENABLED": "false",
     }
 )
 
 
 def test_rolling_a_provider_back_refuses_its_live_tokens():
-    # Rollback is a config change, so tokens issued before it are still in pods. They
+    # Rollback is one config change, so tokens issued before it are still in pods. They
     # must stop working: the pod now holds the real credential again, and forwarding
-    # under a provider nobody enabled would be an unaudited second path to it.
+    # must not remain an unaudited second path to the credential.
     with given(_ROLLED_BACK) as context:
         _github_secret(context)
         token = _token_for(context)
@@ -283,7 +403,7 @@ def test_rolling_a_provider_back_refuses_its_live_tokens():
             assert_that(context.injector.get(UpstreamForwarder).send.called, is_(False))
 
 
-def test_issuance_follows_the_rollout_flag():
+def test_issuance_follows_plugin_modes_when_the_gateway_is_enabled():
     with given(_GIVEN) as context:
         service = context.injector.get(CredentialGatewayService)
 
@@ -294,6 +414,9 @@ def test_issuance_follows_the_rollout_flag():
                 {SecretProvider.GITHUB, SecretProvider.JIRA},
             )
 
-        with then("only GitHub gets one"):
-            assert_that([i.provider for i in issued], equal_to([SecretProvider.GITHUB]))
+        with then("every gateway-proxy plugin gets one without a provider allowlist"):
+            assert_that(
+                [i.provider for i in issued],
+                equal_to([SecretProvider.GITHUB, SecretProvider.JIRA]),
+            )
             assert_that(issued[0].value, is_not(equal_to("")))

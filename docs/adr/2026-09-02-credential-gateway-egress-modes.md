@@ -21,7 +21,9 @@ Introduce a credential gateway and an `EgressMode` declared per provider.
 
 - **`GATEWAY_PROXY`** — the CLI is configured with the gateway as its base URL and an `AF_GATEWAY_TOKEN` bearer. The gateway resolves the token to `(agent, provider)`, decrypts the credential, **strips the incoming gateway token**, applies the real upstream authorization, forwards, and audits. The real credential never enters the pod. This is the mode for all aai-cli providers.
 - **`TOKEN_BROKER`** — the gateway holds the refresh token or service-account key and mints a short-lived, scope-narrowed upstream access token that the pod uses directly. The pod holds an expiring token but never a renewable grant. This is the mode for Google Workspace.
-- **`DIRECT`** — today's behavior. Retained as the migration path and as the explicit escape hatch for a CLI whose auth cannot be redirected, so that such a case is recorded rather than bolted on as a special case.
+- **`DIRECT`** — credential materialization into the pod. Retained as the global rollback behavior and as the explicit escape hatch for a CLI whose auth cannot be redirected, so that such a case is recorded rather than bolted on as a special case.
+
+The plugin's mode is the only provider-level routing decision. A global `CREDENTIAL_GATEWAY_ENABLED` operational switch can temporarily collapse every effective mode to `DIRECT`; there is deliberately no provider allowlist that must be kept synchronized with the plugin registry.
 
 The gateway token is openly a credential to Agent Barn, not a disguised provider token. Revocation, scoping, and audit are all clearer when the agent's identity is ours to interpret.
 

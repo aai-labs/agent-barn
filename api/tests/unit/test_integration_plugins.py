@@ -88,25 +88,18 @@ def test_plugin_bundled_skill_slugs_exist_in_the_seeded_bundle(plugin: Integrati
 
 
 @pytest.mark.parametrize("plugin", ALL_PLUGINS, ids=_ids(ALL_PLUGINS))
-def test_a_plugin_declaring_gateway_egress_is_still_direct_until_enabled(plugin: IntegrationPlugin):
-    # egress_mode is a capability, not a switch. Nothing changes where a credential goes
-    # until an operator lists the provider in credential_gateway_providers, so the
-    # default configuration must leave every provider DIRECT.
-    assert_that(effective_egress_mode(plugin, frozenset()), is_(equal_to(EgressMode.DIRECT)))
+def test_global_gateway_rollback_makes_every_plugin_direct(plugin: IntegrationPlugin):
+    assert_that(effective_egress_mode(plugin, False), is_(equal_to(EgressMode.DIRECT)))
 
 
-def test_github_is_the_only_provider_that_supports_gateway_egress_so_far():
-    # Guards the rollout order: a provider gains gateway support in its own slice, with
-    # the forwarding tests that go with it.
-    supported = [p.key for p in ALL_PLUGINS if p.egress_mode is not EgressMode.DIRECT]
-    assert_that(supported, is_(equal_to(["github"])))
+def test_every_aai_cli_provider_supports_gateway_egress():
+    supported = [p.key for p in AAI_CLI_PLUGINS if p.egress_mode is EgressMode.GATEWAY_PROXY]
+    assert_that(supported, is_(equal_to([p.key for p in AAI_CLI_PLUGINS])))
 
 
-def test_enabling_a_provider_that_cannot_proxy_leaves_it_direct():
-    # A typo or a stale config entry must not route a provider whose plugin has no
-    # upstream behavior — that would 500 on the hot path instead of being a no-op.
-    jira = INTEGRATION_PLUGINS.require(SecretProvider.JIRA)
-    assert_that(effective_egress_mode(jira, frozenset({"jira"})), is_(equal_to(EgressMode.DIRECT)))
+def test_enabling_the_gateway_leaves_a_direct_plugin_direct():
+    firecrawl = INTEGRATION_PLUGINS.require(SecretProvider.FIRECRAWL)
+    assert_that(effective_egress_mode(firecrawl, True), is_(equal_to(EgressMode.DIRECT)))
 
 
 @pytest.mark.parametrize("plugin", AAI_CLI_PLUGINS, ids=_ids(AAI_CLI_PLUGINS))

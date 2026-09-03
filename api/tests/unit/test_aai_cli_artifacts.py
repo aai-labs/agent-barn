@@ -1,5 +1,7 @@
 from typing import cast
 
+import pytest
+
 from api.domains.agents.aai_cli_artifacts import (
     CONFIG_PATH,
     PROFILE_SLUGS,
@@ -10,6 +12,7 @@ from api.domains.agents.aai_cli_artifacts import (
     build_setup_sh,
     build_tool_context_md,
     env_var_for,
+    store_providers_for,
 )
 from api.domains.agents.models import (
     FirecrawlContent,
@@ -69,6 +72,15 @@ _PIPEDRIVE_WITH_DOMAIN = cast(
     PipedriveContent,
     validate_content(SecretProvider.PIPEDRIVE, {"api_token": "pd_tok", "domain": "aai-labs"}),
 )
+_ZOHO_CALENDAR = validate_content(
+    SecretProvider.ZOHO_CALENDAR,
+    {
+        "username": "calendar-user",
+        "email": "calendar@example.com",
+        "app_password": "real-app-password",
+        "caldav_url": "https://calendar.zoho.com/caldav/example/events",
+    },
+)
 
 
 def test_config_toml_jira_scoped_token_uses_gateway_url():
@@ -87,6 +99,71 @@ def test_config_toml_jira_scoped_token_uses_gateway_url():
     assert 'auth_type = "basic_api_token"' in toml
     assert 'site_url = "https://api.atlassian.com/ex/jira/cloud-abc"' in toml
     assert 'email = "svc-account@x.com"' in toml
+
+
+def test_config_toml_gateway_github_uses_existing_aai_cli_contract():
+    toml = build_config_toml(
+        {SecretProvider.GITHUB: _GITHUB},
+        gateway_enabled=True,
+        gateway_base_url="http://credential-gateway:8003/gateway/v1",
+    )
+
+    assert 'auth_type = "bearer_token"' in toml
+    assert 'base_url = "http://credential-gateway:8003/gateway/v1/p/github"' in toml
+    assert 'token_env = "AF_GATEWAY_TOKEN_GITHUB"' in toml
+    assert 'token_secret = "github.token"' not in toml
+    assert "ghp_tok" not in toml
+
+
+@pytest.mark.parametrize(
+    ("provider", "content", "endpoint_field"),
+    [
+        (SecretProvider.JIRA, _JIRA, "site_url"),
+        (SecretProvider.CONFLUENCE, _CONFLUENCE, "site_url"),
+        (SecretProvider.BITBUCKET, _BITBUCKET, "base_url"),
+        (SecretProvider.ZOHO_MAIL, _ZOHO_MAIL, "base_url"),
+        (SecretProvider.PIPEDRIVE, _PIPEDRIVE, "base_url"),
+    ],
+)
+def test_config_toml_gateway_http_provider_uses_existing_bearer_contract(provider, content, endpoint_field):
+    toml = build_config_toml(
+        {provider: content},
+        gateway_enabled=True,
+        gateway_base_url="http://credential-gateway:8003/gateway/v1",
+    )
+
+    assert 'auth_type = "bearer_token"' in toml
+    assert f'{endpoint_field} = "http://credential-gateway:8003/gateway/v1/p/{provider.value}"' in toml
+    assert f'token_env = "AF_GATEWAY_TOKEN_{provider.value.upper()}"' in toml
+    assert "_secret =" not in toml
+
+
+def test_config_toml_gateway_caldav_uses_gateway_token_as_existing_password_env():
+    toml = build_config_toml(
+        {SecretProvider.ZOHO_CALENDAR: _ZOHO_CALENDAR},
+        gateway_enabled=True,
+        gateway_base_url="http://credential-gateway:8003/gateway/v1",
+    )
+
+    assert 'transport = "caldav"' in toml
+    assert 'auth_type = "app_password"' in toml
+    assert 'password_env = "AF_GATEWAY_TOKEN_ZOHO_CALENDAR"' in toml
+    assert 'caldav_url = "http://credential-gateway:8003/gateway/v1/p/zoho_calendar"' in toml
+    assert "real-app-password" not in toml
+
+
+def test_store_excludes_every_gateway_aai_cli_provider_when_gateway_is_enabled():
+    decrypted = {
+        SecretProvider.GITHUB: _GITHUB,
+        SecretProvider.JIRA: _JIRA,
+        SecretProvider.CONFLUENCE: _CONFLUENCE,
+        SecretProvider.BITBUCKET: _BITBUCKET,
+        SecretProvider.ZOHO_MAIL: _ZOHO_MAIL,
+        SecretProvider.ZOHO_CALENDAR: _ZOHO_CALENDAR,
+        SecretProvider.PIPEDRIVE: _PIPEDRIVE,
+    }
+
+    assert store_providers_for(decrypted, gateway_enabled=True) == {}
 
 
 def test_config_toml_jira_scoped_token_missing_cloud_id_skips_profile():
