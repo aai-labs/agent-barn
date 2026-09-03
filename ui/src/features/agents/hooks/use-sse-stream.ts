@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { useAuthStore } from "@/auth/providers/auth-store";
+import { api } from "@/shared/api";
 
 export type SseStreamStatus = "idle" | "connecting" | "streaming" | "disconnected";
 
@@ -61,22 +61,26 @@ export function useSseStream({ url, enabled, onLine }: UseSseStreamOptions) {
       abortRef.current = controller;
       setStatus("connecting");
 
-      const tokens = useAuthStore.getState().authToken;
-      if (!tokens?.accessToken) {
-        setStatus("disconnected");
-        return;
-      }
-
       try {
+        const authHeaders = await api.getAuthHeaders();
+        if (!authHeaders.Authorization) {
+          setStatus("disconnected");
+          return;
+        }
+        if (!mountedRef.current || controller.signal.aborted) return;
+
         const response = await fetch(url as string, {
           headers: {
-            Authorization: `Bearer ${tokens.accessToken}`,
+            ...authHeaders,
             Accept: "text/event-stream",
           },
           signal: controller.signal,
         });
 
         if (!response.ok || !response.body) {
+          if (response.status === 401) {
+            await api.getAuthHeaders(true);
+          }
           setStatus("disconnected");
           scheduleReconnect();
           return;

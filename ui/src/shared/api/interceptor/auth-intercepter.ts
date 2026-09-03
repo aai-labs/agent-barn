@@ -168,4 +168,8 @@ export class AuthInterceptor {
   public async getTokens(): Promise<AuthTokens | null> {
     return this.getValidTokens();
   }
+
+  public async refresh(): Promise<AuthTokens | null> {
+    return this.refreshTokens();
+  }
 }

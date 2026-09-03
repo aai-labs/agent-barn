@@ -90,6 +90,7 @@ test.describe("Agent Detail Page", () => {
               content: "Still working on this",
               occurred_at: "2026-09-01T08:00:00Z",
               delivery_status: "PROCESSING",
+              cancel_requested_at: null,
             },
           ]),
         });
@@ -131,6 +132,7 @@ test.describe("Agent Detail Page", () => {
               content: "Stop this work",
               occurred_at: "2026-09-01T08:00:00Z",
               delivery_status: deliveryStatus,
+              cancel_requested_at: null,
             },
           ]),
         });
