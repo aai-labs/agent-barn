@@ -171,7 +171,6 @@ def build_secret_runtime(
             "RUNTIME_API_KEY": runtime_api_key,
             "RUNTIME_API_URL": f"http://127.0.0.1:{OPENCLAW_GATEWAY_PORT}",
             "RUNTIME_MODEL": "openclaw/default",
-            "AGENT_RUNTIME_KIND": "openclaw",
             "LITELLM_API_KEY": litellm_api_key,
             "LITELLM_BASE_URL": litellm_base_url,
         },

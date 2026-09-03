@@ -19,7 +19,6 @@ def _load_adapter(monkeypatch: pytest.MonkeyPatch) -> ModuleType:
         "RUNTIME_API_URL": "http://runtime.test",
         "RUNTIME_API_KEY": "runtime-key",
         "RUNTIME_MODEL": "test-model",
-        "AGENT_RUNTIME_KIND": "hermes",
     }.items():
         monkeypatch.setenv(key, value)
     spec = importlib.util.spec_from_file_location("communications_runtime_adapter_test", _ADAPTER_PATH)

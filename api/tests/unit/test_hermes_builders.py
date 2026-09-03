@@ -76,6 +76,7 @@ def test_runtime_secret_contains_only_runtime_and_llm_credentials() -> None:
 
     assert secret.string_data["RUNTIME_API_KEY"] == "runtime-key"
     assert secret.string_data["API_SERVER_KEY"] == "runtime-key"
+    assert "AGENT_RUNTIME_KIND" not in secret.string_data
     assert not any(key.startswith(("SLACK_", "TELEGRAM_", "DISCORD_", "MSTEAMS_")) for key in secret.string_data)
 
 
