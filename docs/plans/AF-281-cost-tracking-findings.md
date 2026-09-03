@@ -4,6 +4,8 @@
 **Author:** Samuel Birhanu
 **Scope:** Why agent cost tracking under-reported actual spend, what fixed it, and what is still broken.
 **Status:** Root cause identified, independently reproduced, and confirmed catalog-independent. Primary defect already fixed in production by **AF-233** (Ananiya, `75204002`). Scope and priorities agreed with the team lead on 2026-09-02; secondary defects open.
+**Implemented by:** AF-281. The defects below are addressed by the `cost_record` table, the cost sync and healing CronJob, and the org and platform cost pages. This document is kept as the evidence behind those decisions and describes the system as it was during the investigation; `docs/features/costs.md` describes it as it is now.
+
 **Prior work:** AF-233 identified and fixed the LiteLLM defect. This document independently reproduces it, quantifies the loss over the affected window, and covers what AF-233 did not: the surrounding defects that let a 100% under-count go unnoticed for three months.
 
 ---
