@@ -93,10 +93,14 @@ test.describe("Platform Stats Page", () => {
 
     // A router navigation refetches the RSC payload. Filters must not: on a
     // prerendered route that write is not observed, so anything reading it back
-    // re-fires forever.
+    // re-fires forever. Scoped to this route because a production build also
+    // prefetches the sibling admin links, which are not navigations of it.
     const navigations: string[] = [];
     page.on("request", (request) => {
-      if (request.url().includes("_rsc=")) navigations.push(request.url());
+      const url = new URL(request.url());
+      if (url.pathname === "/dashboard/platform" && url.searchParams.has("_rsc")) {
+        navigations.push(request.url());
+      }
     });
 
     await platformPage.directionSelect().click();
