@@ -144,3 +144,31 @@ def test_reconcile_failure_does_not_end_the_supervisor() -> None:
 
     asyncio.run(exercise())
     assert_that(connections.list_enabled.call_count, equal_to(2))
+
+
+def test_reconcile_does_not_lease_a_connection_without_supervised_ingress() -> None:
+    connection = CommunicationConnection(
+        organization_id=uuid4(),
+        agent_id=uuid4(),
+        platform_key="web",
+        display_name="Web Chat",
+        credentials_encrypted="unused",
+        driver_key_encrypted="unused",
+    )
+    connections = Mock()
+    connections.list_enabled.return_value = [connection]
+    plugins = Mock()
+    plugins.require.return_value = SimpleNamespace(capabilities=frozenset())
+    supervisor = PlatformIngressSupervisor(
+        config=cast(Config, SimpleNamespace(agent_token_encryption_key="test-key")),
+        connections=connections,
+        gateway=Mock(),
+        plugins=plugins,
+    )
+    tasks: dict = {}
+
+    asyncio.run(supervisor._reconcile(tasks))
+
+    assert tasks == {}
+    connections.claim_ingress_lease.assert_not_called()
+    plugins.require.assert_called_once_with("web")

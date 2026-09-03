@@ -91,7 +91,11 @@ class PlatformIngressSupervisor:
                 )
             self._last_journal_prune_at = now
         enabled_connections = await asyncio.to_thread(self.connections.list_enabled)
-        enabled = {connection.id: connection for connection in enabled_connections}
+        enabled = {
+            connection.id: connection
+            for connection in enabled_connections
+            if self._needs_ingress_supervision(connection)
+        }
         for connection_id, (revision, task) in list(tasks.items()):
             current = enabled.get(connection_id)
             lease_held = current is not None and await asyncio.to_thread(
@@ -122,6 +126,18 @@ class PlatformIngressSupervisor:
                         name=f"communications-{connection.platform_key}-{connection.id}",
                     ),
                 )
+
+    def _needs_ingress_supervision(self, connection: CommunicationConnection) -> bool:
+        try:
+            plugin = self.plugins.require(connection.platform_key)
+        except KeyError:
+            # Preserve the existing error-reporting path for stale or unknown
+            # platform rows; _maintain() records the configuration failure.
+            return True
+        return (
+            PlatformCapability.SUPERVISED_INGRESS in plugin.capabilities
+            and PlatformCapability.WEBHOOK_INGRESS not in plugin.capabilities
+        )
 
     async def _maintain(self, connection: CommunicationConnection) -> None:
         backoff_seconds = _RETRY_BACKOFF_INITIAL_SECONDS
