@@ -1,36 +1,29 @@
+"use client";
+
 import { useQuery } from "@tanstack/react-query";
 
-import { api } from "@/shared/api";
 import { useOrganizationApiBase } from "@/features/organizations/hooks/use-organization-api-base";
-import { createQueryKeyStructure } from "@/shared/query-keys";
-import { costSummarySchema, type CostSummary } from "../schemas";
+import { api } from "@/shared/api";
 
-export const costKey = createQueryKeyStructure("cost");
+import { CostSummarySchema, type CostSummary } from "../schemas";
+import { costFilterParams, costKey, type CostFilters } from "../utils";
 
-interface UseCostSummaryOptions {
-  startDate?: string;
-  endDate?: string;
-}
-
-export function useCostSummary({ startDate, endDate }: UseCostSummaryOptions = {}) {
+export function useCostSummary(filters: CostFilters) {
   const orgApiBase = useOrganizationApiBase();
-  const params = new URLSearchParams();
-  if (startDate) params.set("start_date", startDate);
-  if (endDate) params.set("end_date", endDate);
-  const queryString = params.toString();
-
   const query = useQuery({
-    queryKey: costKey.detail(`${startDate ?? "all"}-${endDate ?? "all"}`),
-    queryFn: () =>
-      api.get<CostSummary>(
-        `${orgApiBase}/costs/summary${queryString ? `?${queryString}` : ""}`,
-        { schema: costSummarySchema }
-      ),
+    queryKey: costKey.list({ scope: { view: "summary" }, filters }),
+    queryFn: async () => {
+      const response = await api.get<CostSummary>(
+        `${orgApiBase}/costs/summary?${costFilterParams(filters).toString()}`,
+        { schema: CostSummarySchema },
+      );
+      return response.data;
+    },
   });
 
   return {
-    summary: query.data?.data ?? null,
-    isLoadingSummary: query.isLoading,
+    summary: query.data ?? null,
+    isLoading: query.isPending,
     error: query.error,
     refetch: query.refetch,
   };

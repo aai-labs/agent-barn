@@ -211,6 +211,10 @@ def build_cost_summary(
     totals = repository.totals(window, scoped)
     top = repository.top_model(window, scoped)
     return CostSummaryRead(
+        period=window.period,
+        from_date=window.start,
+        to_date=window.end,
+        granularity=window.granularity,
         total_spend=float(totals.spend),
         total_calls=totals.calls,
         active_agents=totals.agents,

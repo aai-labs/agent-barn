@@ -10,6 +10,7 @@ from pydantic import ConfigDict, Field
 from sqlmodel import Column
 from sqlmodel import Field as SqlField
 
+from api.domains.platform_admin.models import StatsGranularity, StatsPeriod
 from api.infrastructure.postgres.models import BaseModel
 
 # ---------------------------------------------------------------------------
@@ -272,6 +273,14 @@ class CostFilterOption(PydanticBaseModel):
 
 class CostSummaryRead(PydanticBaseModel):
     """Everything above the table on the org cost page, under the same filter."""
+
+    # The resolved window, echoed back. The charts cannot label a bucket without
+    # knowing the resolution it was grouped at, and a client that asked for a preset
+    # needs the dates it turned into.
+    period: StatsPeriod | None = None
+    from_date: datetime
+    to_date: datetime
+    granularity: StatsGranularity
 
     total_spend: float
     total_calls: int
