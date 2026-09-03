@@ -64,6 +64,17 @@ def test_env_carries_every_key_gog_setup_needs():
     }
 
 
+def test_env_enables_the_gog_readonly_guard_for_a_read_only_credential():
+    # Scopes alone leave the write refusal to Google; GOG_READONLY makes gog reject
+    # mutating requests locally, before dispatch.
+    env = build_gog_env(_content(read_only=True), "/home/node", "kr-pass")
+    assert env["GOG_READONLY"] == "1"
+
+
+def test_env_omits_the_readonly_guard_for_a_read_write_credential():
+    assert "GOG_READONLY" not in build_gog_env(_content(), "/home/node", "kr-pass")
+
+
 def test_env_uses_file_keyring_with_the_given_password():
     # The file backend is what makes gog usable headless; the password is generated per
     # start by the caller, so the builder must pass it through untouched.

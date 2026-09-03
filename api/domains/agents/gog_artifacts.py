@@ -78,7 +78,7 @@ def build_gog_env(
             "refresh_token": content.refresh_token,
         }
     )
-    return {
+    env = {
         "GOG_HOME": gog_home(home_dir),
         "GOG_KEYRING_BACKEND": "file",
         "GOG_KEYRING_PASSWORD": keyring_password,
@@ -86,6 +86,14 @@ def build_gog_env(
         "GOG_TOKEN_JSON": token_json,
         "GOG_ACCOUNT_EMAIL": content.email,
     }
+    if content.read_only:
+        # gog's own runtime guard: it rejects mutating API requests before dispatch,
+        # independently of the OAuth scopes we requested. Without it a read-only
+        # credential relies entirely on Google refusing the write. Set only when
+        # read-only — gog reads this with a true-set parser ("1"/"true"/"yes"/"y"/"on"),
+        # so an unconditional "0" would work but leaves a misleading env var in the pod.
+        env["GOG_READONLY"] = "1"
+    return env
 
 
 def build_gog_setup_sh() -> str:
@@ -154,8 +162,9 @@ def build_gog_policy_md(content: GoogleWorkspaceContent | None) -> str:
     if content.read_only:
         lines.append(
             "**This credential is read-only.** Attempts to send, create, modify, or "
-            "delete anything will be refused by Google. Do not promise the user a write "
-            "action — tell them the connection is read-only.\n"
+            "delete anything are rejected by `gog` before the request reaches Google. "
+            "Do not promise the user a write action — tell them the connection is "
+            "read-only.\n"
         )
     lines.append("Available now:\n")
     lines.extend(f"- **{_SERVICE_GUIDE[s][0]}**: `{_SERVICE_GUIDE[s][1]}`" for s in services)

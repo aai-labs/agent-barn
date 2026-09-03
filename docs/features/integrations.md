@@ -8,6 +8,14 @@ Read before changing tool-provider credential schemas, encryption, Google OAuth,
 
 Integrations make external services available to an Agent. Agent Secrets hold encrypted provider-specific credentials; agent start converts them into runtime environment, aai-cli secret-store setup, configuration, skill availability, and policy context.
 
+## Provider extension seam
+
+Per-provider behavior lives on an Integration Plugin in `../../api/domains/integrations/plugins/`: one class per provider carrying its credential model, live validator, Shared Credential eligibility, bundled skill binding, egress mode, and — for aai-cli providers — its `--profile` slug, config.toml block, secret-store entries, and agents_md lines. A provider is reached by exactly one runtime tool (`aai-cli`, `gog`, or none), and that tool's adapter owns file layout, ordering, and shared prose rather than branching per provider.
+
+The registry validates plugin coherence at import, so a malformed or half-added provider fails process startup rather than one Agent's start. `SHARED_CREDENTIAL_ALLOWED_PROVIDERS`, the aai-cli profile slugs, the secret-store map, and each bundled skill's required providers are all derived from the plugins. `PROVIDER_DISPLAY_NAMES`, `PROVIDER_CONTENT_MODELS`, and `PROVIDER_VALIDATORS` remain where they are to avoid an import cycle, and `../../api/tests/unit/test_integration_plugins.py` pins them against the plugins so they cannot drift.
+
+Plugins are trusted release artifacts, not dynamically installed packages: adding a provider is a merged PR, never runtime registration.
+
 ## Supported providers
 
 Provider credential contracts are defined by `SecretProvider` and its content models in `../../api/domains/agents/models.py`. Current providers cover GitHub, Jira, Confluence, Bitbucket, Google Workspace, Zoho Mail, Zoho Calendar, Firecrawl, Slack, and Pipedrive. The per-service Google providers (Gmail, Google Calendar, Google Sheets) are retired; affected agents must reconnect through Google Workspace.
@@ -52,11 +60,14 @@ The aai-cli integrations policy is gated on providers that actually have an aai-
 
 Google Workspace materializes through `gog_artifacts.py`: the pod Secret carries the OAuth client and refresh token as `GOG_*` environment, while a ConfigMap-mounted `gog-setup.sh` rebuilds gog state at boot. `GOG_HOME` is on the container filesystem and is wiped and rebuilt on every start; the encrypted Agent Secret remains the source of truth.
 
+A read-only Google Workspace credential also sets `GOG_READONLY=1`, which makes gog reject mutating API requests locally before dispatch. This is a defence-in-depth backstop layered on the read-only OAuth scopes, not a replacement for them: it is an environment variable, so an agent with a shell can unset it.
+
 ## Source map
 
 | Concern                                            | Authoritative source                                                                                                                                |
 | -------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Provider enum, content schemas, encryption helpers | `../../api/domains/agents/models.py`                                                                                                                |
+| Per-provider behavior (Integration Plugins)        | `../../api/domains/integrations/plugins/`                                                                                                           |
 | Shared Credential CRUD and lifecycle               | `../../api/domains/shared_credentials/`                                                                                                             |
 | Agent Secret persistence and lifecycle             | `../../api/domains/agents/service.py`, `../../api/domains/agents/repository.py`                                                                     |
 | aai-cli runtime materialization                    | `../../api/domains/agents/aai_cli_artifacts.py`, `../../api/domains/agents/aai_cli_skills/bundled/skills/`                                         |
@@ -66,8 +77,8 @@ Google Workspace materializes through `gog_artifacts.py`: the pod Secret carries
 | Google OAuth (Google Workspace)                    | `../../api/domains/integrations/google_oauth/routes.py`                                                                                             |
 | Firecrawl runtime wiring                           | `../../api/domains/agents/service.py` (platform-default + per-agent override)                                                                       |
 | UI credential forms                                | `../../ui/src/features/agents/`, `../../ui/src/features/account/`                                                                                   |
-| Tests                                              | `../../api/tests/integration/test_agents.py`, `../../api/tests/integration/test_shared_credentials.py`, `../../api/tests/integration/test_communication_connections.py`, `../../api/tests/unit/test_google_oauth.py` |
+| Tests                                              | `../../api/tests/unit/test_integration_plugins.py`, `../../api/tests/integration/test_agents.py`, `../../api/tests/integration/test_shared_credentials.py`, `../../api/tests/integration/test_communication_connections.py`, `../../api/tests/unit/test_google_oauth.py` |
 
 ## Change impact
 
-A tool Integration provider addition or schema change affects request validation, encrypted compatibility, runtime environment/config generation, built-in Skill seeding, UI forms/Zod schemas, and Agent start tests. Platform additions instead use the shipped Platform Plugin seam. Encryption-key changes require an explicit migration/rotation plan because Agent Secrets, Shared Credentials, and Communication Connection credentials depend on the existing key.
+A tool Integration provider addition is one Integration Plugin plus its bundled Skill, its content model, and the UI form. A schema change still affects request validation, encrypted compatibility, runtime environment/config generation, built-in Skill seeding, UI forms/Zod schemas, and Agent start tests. A provider reached by a new CLI also needs that CLI's adapter and plugin surface; it does not touch existing providers. Platform additions instead use the shipped Platform Plugin seam. Encryption-key changes require an explicit migration/rotation plan because Agent Secrets, Shared Credentials, and Communication Connection credentials depend on the existing key.

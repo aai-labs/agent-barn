@@ -9,16 +9,13 @@ from sqlmodel import Column
 from sqlmodel import Field as SqlField
 
 from api.domains.agents.models import SecretProvider
+from api.domains.integrations.plugins.registry import INTEGRATION_PLUGINS
 from api.infrastructure.postgres.models import BaseModel
 
+# Manual-entry providers only: an OAuth-based provider's consent is per-agent, so it
+# cannot be shared org-wide. Declared per provider on its Integration Plugin.
 SHARED_CREDENTIAL_ALLOWED_PROVIDERS: frozenset[SecretProvider] = frozenset(
-    {
-        SecretProvider.GITHUB,
-        SecretProvider.JIRA,
-        SecretProvider.CONFLUENCE,
-        SecretProvider.BITBUCKET,
-        SecretProvider.ZOHO_MAIL,
-    }
+    plugin.provider for plugin in INTEGRATION_PLUGINS.all() if plugin.shared_credential_eligible
 )
 
 
