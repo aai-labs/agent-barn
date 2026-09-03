@@ -44,6 +44,29 @@ export function formatHistogramBand(lower: number, upper: number | null): string
   return `${formatSpendCompact(lower)}–${formatSpendCompact(upper)}`;
 }
 
+/** Whole dollars stay whole: "$1", not "$1.00", when the axis is this tight. */
+function formatDollarsTerse(value: number): string {
+  return `$${value % 1 === 0 ? value : value.toFixed(2)}`;
+}
+
+/** The same band, shortened until nine of them fit across a half-width card.
+ *
+ *  Two things buy the space. A band is fully described by its top edge, so the
+ *  lower bound goes — it is the previous tick. And below a dollar the label
+ *  switches to cents, where "0.1¢" says in four characters what "$0.001" needs
+ *  six to say, and the sub-cent end stops being a row of zeros to count.
+ *
+ *  "≤" is what keeps a bare edge from reading as the band's midpoint. The
+ *  tooltip still gives the exact range, so nothing is lost by shortening here. */
+export function formatHistogramTick(lower: number, upper: number | null): string {
+  if (upper === null) return `>${formatDollarsTerse(lower)}`;
+  if (upper >= 1) return `≤${formatDollarsTerse(upper)}`;
+  const cents = upper * 100;
+  // toFixed then back through Number drops the float dust: 0.0001 * 100 is
+  // 0.010000000000000002, which would otherwise print in full.
+  return `≤${Number(cents.toFixed(2))}¢`;
+}
+
 export function formatDuration(ms: number | null): string {
   if (ms === null) return "—";
   if (ms < 1000) return `${ms}ms`;

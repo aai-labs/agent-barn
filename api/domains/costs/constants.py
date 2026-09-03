@@ -36,5 +36,7 @@ COST_HISTOGRAM_BOUNDS = (
 )
 
 # A line per agent stops being readable long before an organization stops having
-# agents, so the spend-by-agent chart shows only the biggest spenders.
-TOP_AGENTS_IN_SERIES = 8
+# agents, so the spend-by-agent chart shows only the biggest spenders. This caps the
+# chart only: the agent filter still lists every agent that spent anything, so an
+# agent outside the top few is still reachable by selecting it.
+TOP_AGENTS_IN_SERIES = 6

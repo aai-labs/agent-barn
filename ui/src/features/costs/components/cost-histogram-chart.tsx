@@ -9,7 +9,7 @@ import {
   ChartTooltipContent,
 } from "@/components/ui/chart";
 
-import { formatHistogramBand } from "../format";
+import { formatHistogramBand, formatHistogramTick } from "../format";
 import type { CostHistogramBucket } from "../schemas";
 import { EmptyChart } from "./spend-over-time-chart";
 
@@ -35,8 +35,11 @@ export function CostHistogramChart({ buckets }: CostHistogramChartProps) {
     return <EmptyChart>No calls in this period.</EmptyChart>;
   }
 
+  // `band` is the full range and stays the category key, so the tooltip can name
+  // the exact span. `tick` is the terse version the axis draws.
   const data = buckets.map((bucket) => ({
     band: formatHistogramBand(bucket.lower, bucket.upper),
+    tick: formatHistogramTick(bucket.lower, bucket.upper),
     calls: bucket.calls,
   }));
 
@@ -44,8 +47,12 @@ export function CostHistogramChart({ buckets }: CostHistogramChartProps) {
     <ChartContainer config={CHART_CONFIG} className="h-[220px] w-full">
       <BarChart data={data} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
         <CartesianGrid strokeDasharray="3 3" vertical={false} />
+        {/* Ticks are drawn from `tick`, not the category key, so the axis can be
+            terse while the tooltip stays exact. Indexing by position rather than
+            by label keeps the two in step even if two bands ever render alike. */}
         <XAxis
           dataKey="band"
+          tickFormatter={(_value, index) => data[index]?.tick ?? ""}
           tickLine={false}
           axisLine={false}
           interval={0}

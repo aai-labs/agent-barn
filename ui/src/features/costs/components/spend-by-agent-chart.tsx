@@ -112,7 +112,26 @@ export function SpendByAgentChart({ series, granularity }: SpendByAgentChartProp
               labelFormatter={(value) =>
                 formatBucketLong(String(value), granularity)
               }
-              formatter={(value) => formatSpendCompact(Number(value))}
+              // ChartTooltipContent hands the whole row to `formatter`, indicator and
+              // name included — returning only the value would leave a column of
+              // bare dollar amounts with no way to tell which agent each belongs to.
+              // So the row is rebuilt here: swatch, agent name, then the amount.
+              formatter={(value, name, item) => (
+                <>
+                  <div
+                    className="h-2.5 w-2.5 shrink-0 rounded-[2px]"
+                    style={{ backgroundColor: item?.color }}
+                  />
+                  <div className="flex flex-1 items-center justify-between gap-3 leading-none">
+                    <span className="text-muted-foreground">
+                      {config[String(name)]?.label ?? String(name)}
+                    </span>
+                    <span className="font-mono font-medium text-foreground tabular-nums">
+                      {formatSpendCompact(Number(value))}
+                    </span>
+                  </div>
+                </>
+              )}
             />
           }
         />
