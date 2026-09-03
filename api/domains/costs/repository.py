@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
+from uuid import UUID
 
 import sqlalchemy as sa
 from injector import inject, singleton
@@ -14,6 +15,7 @@ from api.domains.costs.models import (
     CostRecord,
     CostRecordSource,
 )
+from api.domains.organizations.models import Organization
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 
 logger = logging.getLogger(__name__)
@@ -171,6 +173,17 @@ class CostRepository:
             result = session.exec(statement)  # type: ignore[call-overload]
             session.commit()
             return result.rowcount > 0
+
+    def find_organization_names(self) -> dict[UUID, str]:
+        """id -> name for every organization, for denormalising attribution at write.
+
+        Read straight from here rather than through OrganizationRepository: that one
+        pulls in the outbox and its whole dependency chain, which a CronJob that only
+        needs names has no business constructing.
+        """
+        with Session(self.delegate.engine) as session:
+            rows = session.exec(select(Organization.id, Organization.name)).all()
+            return {row[0]: row[1] for row in rows}
 
     def count_heal_candidates(self) -> int:
         """Size of the heal queue — logged each run so the backlog's progress is visible."""

@@ -80,10 +80,11 @@ class OpenRouterClient:
         generation metadata does not consume credits — a 260-request benchmark moved
         the account total by $0.00000000.
 
-        Returns None when OpenRouter has no such generation (HTTP 404), which is a
-        terminal answer: there is nothing to recover. Every other failure raises, so
-        the caller leaves the row a candidate and tries again next run rather than
-        recording a wrong number.
+        Returns None when OpenRouter has no such generation (HTTP 404). The caller
+        decides what that means; the cost sync treats it as retryable and leaves the
+        row alone, because writing a zero would claim "this call was free" when the
+        truth is "we could not find out". Every other failure raises, for the same
+        reason.
         """
         url = f"{self.config.openrouter_base_url}/generation"
         headers = {}
