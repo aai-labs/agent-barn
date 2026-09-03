@@ -39,7 +39,7 @@ from api.domains.integrations.plugins.base import (
     OutboundRequest,
     UpstreamAuthenticationError,
 )
-from api.domains.integrations.plugins.registry import INTEGRATION_PLUGINS, effective_egress_mode
+from api.domains.integrations.plugins.registry import INTEGRATION_PLUGINS
 from api.domains.shared_credentials.repository import SharedCredentialRepository
 
 
@@ -65,16 +65,11 @@ class CredentialGatewayService:
     # --- issuance, called from agent start ---
 
     def providers_needing_a_token(self, providers: set[SecretProvider]) -> set[SecretProvider]:
-        """Narrow an Agent's configured providers to those the gateway currently serves.
-
-        Resolved through ``effective_egress_mode``, so issuance and the aai-cli artifact
-        builders cannot disagree about where a credential goes.
-        """
+        """Narrow an Agent's configured providers to those the gateway currently serves."""
         return {
             provider
             for provider in providers
-            if effective_egress_mode(INTEGRATION_PLUGINS.require(provider), self.config.credential_gateway_enabled)
-            is not EgressMode.DIRECT
+            if INTEGRATION_PLUGINS.require(provider).egress_mode is not EgressMode.DIRECT
         }
 
     def issue_for_agent(
@@ -185,9 +180,9 @@ class CredentialGatewayService:
             raise GatewayForwardRefused(f"token is for {resolution.provider.value}, not {request.provider_key}")
 
         plugin = INTEGRATION_PLUGINS.require(resolution.provider)
-        if effective_egress_mode(plugin, self.config.credential_gateway_enabled) is not EgressMode.GATEWAY_PROXY:
-            # A live token for a provider since rolled back. Refuse rather than forward
-            # unauthenticated: the pod still holds that provider's real credential.
+        if plugin.egress_mode is not EgressMode.GATEWAY_PROXY:
+            # A live token for a provider whose mode changed since issuance (a deploy
+            # landed between them). Refuse rather than forward unauthenticated.
             raise GatewayForwardRefused(f"{plugin.key} is not routed through the gateway")
 
         content = self._decrypt_credential(resolution.agent_id, resolution.organization_id, resolution.provider)
@@ -231,7 +226,7 @@ class CredentialGatewayService:
         """
         resolution = self.resolve(authorization)
         plugin = INTEGRATION_PLUGINS.require(resolution.provider)
-        if effective_egress_mode(plugin, self.config.credential_gateway_enabled) is not EgressMode.TOKEN_BROKER:
+        if plugin.egress_mode is not EgressMode.TOKEN_BROKER:
             raise GatewayForwardRefused(f"{plugin.key} does not broker upstream tokens")
 
         content = self._decrypt_credential(resolution.agent_id, resolution.organization_id, resolution.provider)

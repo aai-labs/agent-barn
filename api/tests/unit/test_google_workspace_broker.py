@@ -103,14 +103,8 @@ def test_a_credential_without_an_oauth_client_cannot_mint():
 # --- pod artifacts ---
 
 
-def test_brokered_pods_receive_no_refresh_token_client_secret_or_keyring():
-    env = build_gog_env(
-        _content(),
-        "/home/node",
-        "kr-pass",
-        gateway_enabled=True,
-        gateway_base_url="https://gw/gateway/v1",
-    )
+def test_pods_receive_no_refresh_token_client_secret_or_keyring():
+    env = build_gog_env(_content(), "/home/node", gateway_base_url="https://gw/gateway/v1")
     serialized = repr(sorted(env.items()))
     assert_that(REFRESH_TOKEN in serialized, is_(False))
     assert_that(CLIENT_SECRET in serialized, is_(False))
@@ -118,28 +112,8 @@ def test_brokered_pods_receive_no_refresh_token_client_secret_or_keyring():
     assert_that(env["AF_GATEWAY_TOKEN_URL"], equal_to("https://gw/gateway/v1/token"))
 
 
-def test_direct_pods_still_receive_the_full_gog_state():
-    # The gateway is a rollout switch, so the previous shape has to remain intact.
-    env = build_gog_env(_content(), "/home/node", "kr-pass")
-    assert_that(
-        set(env),
-        equal_to(
-            {
-                "GOG_HOME",
-                "GOG_KEYRING_BACKEND",
-                "GOG_KEYRING_PASSWORD",
-                "GOG_CLIENT_JSON",
-                "GOG_TOKEN_JSON",
-                "GOG_ACCOUNT_EMAIL",
-            }
-        ),
-    )
-
-
 def test_the_readonly_guard_survives_brokering():
-    env = build_gog_env(
-        _content(read_only=True), "/home/node", "p", gateway_enabled=True, gateway_base_url="https://gw/gateway/v1"
-    )
+    env = build_gog_env(_content(read_only=True), "/home/node", gateway_base_url="https://gw/gateway/v1")
     assert_that(env["GOG_READONLY"], equal_to("1"))
 
 

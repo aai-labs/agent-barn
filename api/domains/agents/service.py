@@ -40,7 +40,6 @@ from api.domains.agents.error_messages import friendly_k8s_error, friendly_pod_r
 from api.domains.agents.gog_artifacts import (
     build_gog_env,
     build_gog_policy_md,
-    build_gog_setup_sh,
     build_gog_shim_install_sh,
     build_gog_shim_sh,
 )
@@ -104,8 +103,6 @@ from api.domains.events.catalog import (
     AGENT_STARTED,
     AGENT_STOPPED,
 )
-from api.domains.integrations.plugins.base import EgressMode
-from api.domains.integrations.plugins.registry import INTEGRATION_PLUGINS, effective_egress_mode
 from api.domains.organizations.lookup import OrganizationLookupService
 from api.domains.rbac.catalog import PermissionKey
 from api.domains.shared_credentials.repository import SharedCredentialRepository
@@ -1964,8 +1961,7 @@ class AgentService:
             )
         # A gateway-routed provider is excluded from the store, which is what actually
         # keeps its real credential out of the pod Secret and aai-secrets.enc.json.
-        gateway_enabled = self.config.credential_gateway_enabled
-        store = store_providers_for(decrypted, gateway_enabled)
+        store = store_providers_for(decrypted)
         aai_home = "/opt/data" if agent.agent_type == AgentType.HERMES else "/home/node"
         # Gated on providers that actually get an aai-cli profile: an agent whose only
         # integrations are profile-less (google_workspace, firecrawl) would otherwise get
@@ -1975,7 +1971,6 @@ class AgentService:
             build_config_toml(
                 decrypted,
                 home_dir=aai_home,
-                gateway_enabled=gateway_enabled,
                 gateway_base_url=self.config.credential_gateway_base_url,
             )
             if has_aai_profiles
@@ -1985,36 +1980,23 @@ class AgentService:
         if store:
             secret.string_data.update(build_env(store))
 
-        # gog (Google Workspace) — its own CLI with its own on-disk state, rebuilt from
-        # this secret on every boot. GOG_HOME is deliberately the container filesystem,
-        # not the PVC that aai_home points at for Hermes.
+        # gog (Google Workspace) — always brokered through the gateway: no keyring, no
+        # stored OAuth client and no token to import, so installing the shim on PATH is
+        # the whole of boot-time setup. GOG_HOME is deliberately the container
+        # filesystem, not the PVC that aai_home points at for Hermes.
         gog_setup_sh = None
         gog_shim_sh = None
         if isinstance(gws_content, GoogleWorkspaceContent):
             gog_home_dir = "/home/hermes" if agent.agent_type == AgentType.HERMES else "/home/node"
-            gog_brokered = (
-                effective_egress_mode(
-                    INTEGRATION_PLUGINS.require(SecretProvider.GOOGLE_WORKSPACE),
-                    self.config.credential_gateway_enabled,
-                )
-                is EgressMode.TOKEN_BROKER
-            )
             secret.string_data.update(
                 build_gog_env(
                     gws_content,
                     gog_home_dir,
-                    secrets.token_urlsafe(32),
-                    gateway_enabled=gog_brokered,
                     gateway_base_url=self.config.credential_gateway_base_url,
                 ),
             )
-            if gog_brokered:
-                # No keyring, no stored OAuth client and no token to import: installing
-                # the wrapper on PATH is the whole of boot-time setup.
-                gog_setup_sh = build_gog_shim_install_sh(gog_home_dir)
-                gog_shim_sh = build_gog_shim_sh()
-            else:
-                gog_setup_sh = build_gog_setup_sh()
+            gog_setup_sh = build_gog_shim_install_sh(gog_home_dir)
+            gog_shim_sh = build_gog_shim_sh()
 
         fc_content = decrypted.get(SecretProvider.FIRECRAWL)
         fc_api_key = (

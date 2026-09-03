@@ -6,13 +6,21 @@ Related context: [`../../adr/2026-09-02-credential-gateway-egress-modes.md`](../
 
 ## Current state
 
-- **Delivered:** the Integration Plugin seam; the credential gateway as a separate deployment; token issue/revoke/resolve; the `GATEWAY_PROXY` forward path for every shipped aai-cli provider without changing aai-cli; and `TOKEN_BROKER` for Google Workspace. **No provider now materializes a renewable credential into an agent pod.**
-- **In transition:** Helm and new local environments enable the gateway; existing local `.env` files must opt in with `CREDENTIAL_GATEWAY_ENABLED=true`. `PROVIDER_DISPLAY_NAMES`, `PROVIDER_CONTENT_MODELS`, and `PROVIDER_VALIDATORS` still live outside the plugins (import cycle) and are pinned by contract test rather than derived.
+- **Delivered:** the Integration Plugin seam; the credential gateway as a separate deployment; token issue/revoke/resolve; the `GATEWAY_PROXY` forward path for every shipped aai-cli provider without changing aai-cli; and `TOKEN_BROKER` for Google Workspace. **No provider now materializes a renewable credential into an agent pod.** The gateway is unconditional — `CREDENTIAL_GATEWAY_ENABLED` is gone, and each plugin's `egress_mode` is the sole, permanent routing decision.
+- **In transition:** `PROVIDER_DISPLAY_NAMES`, `PROVIDER_CONTENT_MODELS`, and `PROVIDER_VALIDATORS` still live outside the plugins (import cycle) and are pinned by contract test rather than derived.
 - **Next:** durable audit spool (below).
 - **Blockers:** none.
 - **Deferred:** resolution audit is still a structured log line plus a Prometheus counter. The durable buffering/disk spool that survives an ingest outage replaces the `GatewayAuditSink` implementation without touching call sites.
 
 ## Changes
+
+### 2026-09-03 — CREDENTIAL_GATEWAY_ENABLED removed
+
+- **Why:** the flag existed only as a rollout/rollback lever while providers were migrated one slice at a time. Every shipped provider now has a gateway-served `egress_mode` (`GATEWAY_PROXY` or `TOKEN_BROKER`), so there is nothing left to roll back to and the flag was pure risk — a stray unset env var would have silently reinstated real credentials in every agent pod.
+- **Removed:** `Config.credential_gateway_enabled` and `effective_egress_mode` (the function that combined it with a plugin's `egress_mode`); call sites now read `plugin.egress_mode` directly. The `CREDENTIAL_GATEWAY_ENABLED` env var in both Helm Deployments.
+- **Also removed as a consequence — the DIRECT gog materialization path:** it was reachable only when the flag was off, and Google Workspace's plugin is permanently `TOKEN_BROKER`, so it was dead code once the flag left. `build_gog_setup_sh`, the file keyring, `GOG_CLIENT_JSON`/`GOG_TOKEN_JSON` construction, and the keyring password are gone from `gog_artifacts.py`; `build_gog_env` now only builds the brokered shape.
+- **Not removed:** the `DIRECT`/`aai_cli_profile_block` path in `aai_cli_artifacts.py` and the provider plugins. Unlike gog's, that branch was never flag-gated — it is keyed on each plugin's own `egress_mode` and remains the seam a future not-yet-gateway-integrated aai-cli provider would use.
+- **Tests:** the rollback scenario (`test_rolling_a_provider_back_refuses_its_live_tokens`) is gone — there is no rollback to test. Tests that exercised the direct-profile branch for now-permanently-`GATEWAY_PROXY` providers (Jira/Confluence scoped-token URLs, Pipedrive domain handling) now call the plugin's `aai_cli_profile_block` directly instead of going through `build_config_toml`, since that dispatch path is unreachable for them.
 
 ### 2026-09-03 — Google Workspace brokers a short-lived token
 

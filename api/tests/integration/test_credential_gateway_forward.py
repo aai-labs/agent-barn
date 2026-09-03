@@ -73,7 +73,6 @@ _GIVEN = [
             "LITELLM_SECRET_NAME": "litellm",
             "AGENT_DEFAULT_MODEL": "litellm/gpt-5-mini",
             "AGENT_LITELLM_BASE_URL": "http://litellm:4000",
-            "CREDENTIAL_GATEWAY_ENABLED": "true",
         }
     ),
     prepare_injector(modules=[MockK8sModule(), MockLiteLLMModule(), RecordingForwarderModule()]),
@@ -168,7 +167,6 @@ _ALL_AAI_GIVEN[0] = set_env_variable(
         "LITELLM_SECRET_NAME": "litellm",
         "AGENT_DEFAULT_MODEL": "litellm/gpt-5-mini",
         "AGENT_LITELLM_BASE_URL": "http://litellm:4000",
-        "CREDENTIAL_GATEWAY_ENABLED": "true",
     }
 )
 
@@ -330,39 +328,7 @@ def test_the_refusal_shape_matches_the_identity_endpoint():
             assert_that(forward.json(), equal_to(identity.json()))
 
 
-# --- rollback ---
-
-
-_ROLLED_BACK = [step for step in _GIVEN]
-_ROLLED_BACK[0] = set_env_variable(
-    {
-        "AGENT_TOKEN_ENCRYPTION_KEY": TEST_ENCRYPTION_KEY,
-        "LITELLM_BASE_URL": "http://litellm:4000",
-        "LITELLM_SECRET_NAME": "litellm",
-        "AGENT_DEFAULT_MODEL": "litellm/gpt-5-mini",
-        "AGENT_LITELLM_BASE_URL": "http://litellm:4000",
-        "CREDENTIAL_GATEWAY_ENABLED": "false",
-    }
-)
-
-
-def test_rolling_a_provider_back_refuses_its_live_tokens():
-    # Rollback is one config change, so tokens issued before it are still in pods. They
-    # must stop working: the pod now holds the real credential again, and forwarding
-    # must not remain an unaudited second path to the credential.
-    with given(_ROLLED_BACK) as context:
-        _github_secret(context)
-        token = _token_for(context)
-
-        with when("GitHub is no longer routed through the gateway"):
-            response = context.gateway_client.get("/gateway/v1/p/github/user", headers=_auth(token))
-
-        with then("the live token is refused"):
-            assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
-            assert_that(context.injector.get(UpstreamForwarder).send.called, is_(False))
-
-
-def test_issuance_follows_plugin_modes_when_the_gateway_is_enabled():
+def test_issuance_follows_plugin_modes():
     with given(_GIVEN) as context:
         service = context.injector.get(CredentialGatewayService)
 

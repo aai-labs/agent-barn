@@ -59,10 +59,10 @@ _GIVEN = [
 
 
 def _issue(context, agent, provider=SecretProvider.GITHUB):
-    """Issue a token directly through the service.
+    """Issue a token directly through the repository.
 
-    Bypasses the rollout-config gate deliberately so the gateway's identity contract
-    remains independently testable when no provider is enabled in the environment.
+    Bypasses ``issue_for_agent``'s egress-mode policy deliberately, so the gateway's
+    identity contract is testable independently of which providers it currently serves.
     """
     from api.domains.credential_gateway.models import GatewayToken
     from api.domains.credential_gateway.repository import GatewayTokenRepository
@@ -184,16 +184,14 @@ def test_a_credential_for_another_service_is_refused():
 
 
 def test_issuance_skips_providers_whose_credential_still_lives_in_the_pod():
-    # Every shipped provider is EgressMode.DIRECT, so agent start must not mint tokens
-    # nobody uses. This is what makes the slice additive.
+    # Firecrawl is EgressMode.DIRECT (platform infrastructure, not a per-agent OAuth
+    # grant), so agent start must not mint a token nobody uses.
     with given(_GIVEN) as context:
         agent = context.agent
         service = context.injector.get(CredentialGatewayService)
 
-        with when("start issues tokens for a fully DIRECT provider set"):
-            issued = service.issue_for_agent(
-                agent.id, agent.organization_id, {SecretProvider.GITHUB, SecretProvider.JIRA}
-            )
+        with when("start issues tokens including a DIRECT provider"):
+            issued = service.issue_for_agent(agent.id, agent.organization_id, {SecretProvider.FIRECRAWL})
 
         with then("nothing is issued"):
             assert_that(issued, is_(empty()))

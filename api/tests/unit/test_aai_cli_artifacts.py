@@ -15,11 +15,14 @@ from api.domains.agents.aai_cli_artifacts import (
     store_providers_for,
 )
 from api.domains.agents.models import (
+    ConfluenceContent,
     FirecrawlContent,
+    JiraContent,
     PipedriveContent,
     SecretProvider,
     validate_content,
 )
+from api.domains.integrations.plugins.providers import ConfluencePlugin, JiraPlugin, PipedrivePlugin
 
 _GITHUB = validate_content(
     SecretProvider.GITHUB,
@@ -60,7 +63,13 @@ _PIPEDRIVE_WITH_DOMAIN = cast(
 )
 
 
-def test_config_toml_jira_scoped_token_uses_gateway_url():
+# Every shipped aai-cli plugin is permanently EgressMode.GATEWAY_PROXY (see
+# providers.py), so build_config_toml never takes the direct-profile branch for them.
+# aai_cli_profile_block still exists as the seam a future non-gateway provider would
+# use, and is exercised directly here rather than through build_config_toml.
+
+
+def test_jira_direct_profile_scoped_token_uses_atlassian_cloud_gateway_url():
     jira_scoped = validate_content(
         SecretProvider.JIRA,
         {
@@ -71,17 +80,16 @@ def test_config_toml_jira_scoped_token_uses_gateway_url():
             "cloud_id": "cloud-abc",
         },
     )
-    toml = build_config_toml({SecretProvider.JIRA: jira_scoped})
-    assert "[profiles.jira-work]" in toml
-    assert 'auth_type = "basic_api_token"' in toml
-    assert 'site_url = "https://api.atlassian.com/ex/jira/cloud-abc"' in toml
-    assert 'email = "svc-account@x.com"' in toml
+    block = JiraPlugin().aai_cli_profile_block(cast(JiraContent, jira_scoped))
+    assert "[profiles.jira-work]" in block
+    assert 'auth_type = "basic_api_token"' in block
+    assert 'site_url = "https://api.atlassian.com/ex/jira/cloud-abc"' in block
+    assert 'email = "svc-account@x.com"' in block
 
 
 def test_config_toml_gateway_github_uses_existing_aai_cli_contract():
     toml = build_config_toml(
         {SecretProvider.GITHUB: _GITHUB},
-        gateway_enabled=True,
         gateway_base_url="http://credential-gateway:8003/gateway/v1",
     )
 
@@ -104,7 +112,6 @@ def test_config_toml_gateway_github_uses_existing_aai_cli_contract():
 def test_config_toml_gateway_http_provider_uses_existing_bearer_contract(provider, content, endpoint_field):
     toml = build_config_toml(
         {provider: content},
-        gateway_enabled=True,
         gateway_base_url="http://credential-gateway:8003/gateway/v1",
     )
 
@@ -114,7 +121,7 @@ def test_config_toml_gateway_http_provider_uses_existing_bearer_contract(provide
     assert "_secret =" not in toml
 
 
-def test_store_excludes_every_gateway_aai_cli_provider_when_gateway_is_enabled():
+def test_store_excludes_every_gateway_aai_cli_provider():
     decrypted = {
         SecretProvider.GITHUB: _GITHUB,
         SecretProvider.JIRA: _JIRA,
@@ -123,10 +130,10 @@ def test_store_excludes_every_gateway_aai_cli_provider_when_gateway_is_enabled()
         SecretProvider.PIPEDRIVE: _PIPEDRIVE,
     }
 
-    assert store_providers_for(decrypted, gateway_enabled=True) == {}
+    assert store_providers_for(decrypted) == {}
 
 
-def test_config_toml_jira_scoped_token_missing_cloud_id_skips_profile():
+def test_jira_direct_profile_scoped_token_missing_cloud_id_skips_profile():
     jira_scoped_no_cloud_id = validate_content(
         SecretProvider.JIRA,
         {
@@ -136,12 +143,12 @@ def test_config_toml_jira_scoped_token_missing_cloud_id_skips_profile():
             "use_scoped_token": True,
         },
     )
-    toml = build_config_toml({SecretProvider.JIRA: jira_scoped_no_cloud_id})
-    assert "[profiles.jira-work]" not in toml
-    assert "cloud_id missing" in toml
+    block = JiraPlugin().aai_cli_profile_block(cast(JiraContent, jira_scoped_no_cloud_id))
+    assert "[profiles.jira-work]" not in block
+    assert "cloud_id missing" in block
 
 
-def test_config_toml_confluence_scoped_token_uses_gateway_url():
+def test_confluence_direct_profile_scoped_token_uses_atlassian_cloud_gateway_url():
     confluence_scoped = validate_content(
         SecretProvider.CONFLUENCE,
         {
@@ -152,26 +159,26 @@ def test_config_toml_confluence_scoped_token_uses_gateway_url():
             "cloud_id": "cloud-abc",
         },
     )
-    toml = build_config_toml({SecretProvider.CONFLUENCE: confluence_scoped})
-    assert "[profiles.confluence-work]" in toml
-    assert 'auth_type = "basic_api_token"' in toml
-    assert 'site_url = "https://api.atlassian.com/ex/confluence/cloud-abc"' in toml
-    assert 'email = "svc-account@x.com"' in toml
+    block = ConfluencePlugin().aai_cli_profile_block(cast(ConfluenceContent, confluence_scoped))
+    assert "[profiles.confluence-work]" in block
+    assert 'auth_type = "basic_api_token"' in block
+    assert 'site_url = "https://api.atlassian.com/ex/confluence/cloud-abc"' in block
+    assert 'email = "svc-account@x.com"' in block
 
 
-def test_config_toml_pipedrive_without_domain_omits_base_url():
-    toml = build_config_toml({SecretProvider.PIPEDRIVE: _PIPEDRIVE})
-    assert "[profiles.pipedrive-work]" in toml
-    assert 'auth_type = "pipedrive_personal_token"' in toml
-    assert 'api_token_secret = "pipedrive.api_token"' in toml
-    assert "base_url" not in toml
-    assert "pd_tok" not in toml
+def test_pipedrive_direct_profile_without_domain_omits_base_url():
+    block = PipedrivePlugin().aai_cli_profile_block(_PIPEDRIVE)
+    assert "[profiles.pipedrive-work]" in block
+    assert 'auth_type = "pipedrive_personal_token"' in block
+    assert 'api_token_secret = "pipedrive.api_token"' in block
+    assert "base_url" not in block
+    assert "pd_tok" not in block
 
 
-def test_config_toml_pipedrive_with_domain_emits_base_url():
-    toml = build_config_toml({SecretProvider.PIPEDRIVE: _PIPEDRIVE_WITH_DOMAIN})
-    assert "[profiles.pipedrive-work]" in toml
-    assert 'base_url = "https://aai-labs.pipedrive.com"' in toml
+def test_pipedrive_direct_profile_with_domain_emits_base_url():
+    block = PipedrivePlugin().aai_cli_profile_block(_PIPEDRIVE_WITH_DOMAIN)
+    assert "[profiles.pipedrive-work]" in block
+    assert 'base_url = "https://aai-labs.pipedrive.com"' in block
 
 
 def test_setup_sh_cp_always_and_secrets_set_per_store_provider():
@@ -536,7 +543,8 @@ def test_config_toml_emits_only_present_store_profiles():
             SecretProvider.JIRA: _JIRA,
             SecretProvider.CONFLUENCE: _CONFLUENCE,
             SecretProvider.GITHUB: _GITHUB,
-        }
+        },
+        gateway_base_url="http://credential-gateway:8003/gateway/v1",
     )
     assert 'secrets_file = "/home/node/.config/aai-cli/aai-secrets.enc.json"' in toml
     assert 'key_file = "/home/node/.config/aai-cli/key"' in toml
@@ -545,9 +553,9 @@ def test_config_toml_emits_only_present_store_profiles():
     assert "[profiles.github-work]" in toml
     assert "[profiles.bitbucket-work]" not in toml
     assert "[profiles.pipedrive-work]" not in toml
-    assert 'api_token_secret = "jira.api_token"' in toml
-    assert 'token_secret = "github.token"' in toml
-    assert 'site_url = "https://x.atlassian.net"' in toml
+    assert 'token_env = "AF_GATEWAY_TOKEN_JIRA"' in toml
+    assert 'token_env = "AF_GATEWAY_TOKEN_GITHUB"' in toml
+    assert 'site_url = "http://credential-gateway:8003/gateway/v1/p/jira"' in toml
     assert 'owner = "aai-labs"' in toml
     # token values never appear in the config
     assert "jira_tok" not in toml

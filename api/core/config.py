@@ -56,9 +56,6 @@ class Config(BaseSettings):
     # The credential gateway is a separate deployment because it sits on the request path
     # of every agent tool call; agent workloads reach it by Service name in-namespace.
     credential_gateway_base_url: str = "http://agentbarn-api-gateway.agent-farm.svc.cluster.local:8003/gateway/v1"
-    # Global operational switch. Individual provider behavior is owned by each
-    # Integration Plugin's egress_mode, so onboarding a provider needs no config list.
-    credential_gateway_enabled: bool = False
     skip_slack_token_validation: bool = False
     skip_telegram_token_validation: bool = False
     skip_discord_token_validation: bool = False

@@ -18,11 +18,7 @@ from api.domains.agents.models import (
 from api.domains.integrations.plugins.aai_cli_support import AaiCliIntegration, AaiCliPlugin
 from api.domains.integrations.plugins.base import EgressMode, IntegrationPlugin, OutboundRequest
 from api.domains.integrations.plugins.providers import AAI_CLI, GOG, NO_TOOL
-from api.domains.integrations.plugins.registry import (
-    INTEGRATION_PLUGINS,
-    IntegrationPluginRegistry,
-    effective_egress_mode,
-)
+from api.domains.integrations.plugins.registry import INTEGRATION_PLUGINS, IntegrationPluginRegistry
 from api.infrastructure.integration_validators import PROVIDER_VALIDATORS
 
 ALL_PLUGINS = INTEGRATION_PLUGINS.all()
@@ -87,19 +83,9 @@ def test_plugin_bundled_skill_slugs_exist_in_the_seeded_bundle(plugin: Integrati
         assert_that(slug in seeded, is_(True), f"{plugin.key} names unseeded skill {slug!r}")
 
 
-@pytest.mark.parametrize("plugin", ALL_PLUGINS, ids=_ids(ALL_PLUGINS))
-def test_global_gateway_rollback_makes_every_plugin_direct(plugin: IntegrationPlugin):
-    assert_that(effective_egress_mode(plugin, False), is_(equal_to(EgressMode.DIRECT)))
-
-
 def test_every_aai_cli_provider_supports_gateway_egress():
     supported = [p.key for p in AAI_CLI_PLUGINS if p.egress_mode is EgressMode.GATEWAY_PROXY]
     assert_that(supported, is_(equal_to([p.key for p in AAI_CLI_PLUGINS])))
-
-
-def test_enabling_the_gateway_leaves_a_direct_plugin_direct():
-    firecrawl = INTEGRATION_PLUGINS.require(SecretProvider.FIRECRAWL)
-    assert_that(effective_egress_mode(firecrawl, True), is_(equal_to(EgressMode.DIRECT)))
 
 
 @pytest.mark.parametrize("plugin", AAI_CLI_PLUGINS, ids=_ids(AAI_CLI_PLUGINS))

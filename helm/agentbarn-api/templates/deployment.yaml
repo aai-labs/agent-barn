@@ -79,8 +79,6 @@ spec:
               value: "http://{{ .Release.Name }}-communications:{{ .Values.communications.service.port }}/communications/v1"
             - name: CREDENTIAL_GATEWAY_BASE_URL
               value: "http://{{ .Release.Name }}-gateway:{{ .Values.gateway.service.port }}/gateway/v1"
-            - name: CREDENTIAL_GATEWAY_ENABLED
-              value: {{ .Values.gateway.enabled | quote }}
             - name: AGENT_IMAGE_PULL_SECRET
               value: "{{ .Values.agentImagePullSecret }}"
             - name: AGENT_MODEL_ALLOWLIST

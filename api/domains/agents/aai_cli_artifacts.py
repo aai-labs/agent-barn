@@ -20,7 +20,7 @@ from api.domains.integrations.plugins.aai_cli_support import (
 )
 from api.domains.integrations.plugins.base import EgressMode
 from api.domains.integrations.plugins.providers import AAI_CLI
-from api.domains.integrations.plugins.registry import INTEGRATION_PLUGINS, effective_egress_mode
+from api.domains.integrations.plugins.registry import INTEGRATION_PLUGINS
 
 __all__ = [
     "CONFIG_PATH",
@@ -216,7 +216,6 @@ def build_config_toml(
     decrypted: Mapping[SecretProvider, SecretContent],
     home_dir: str = "/home/node",
     *,
-    gateway_enabled: bool = False,
     gateway_base_url: str = "",
 ) -> str:
     """Render config.toml with one profile per provider present in ``decrypted``.
@@ -231,7 +230,7 @@ def build_config_toml(
         plugin = _plugin_for(provider)
         if content is None or plugin is None:
             continue
-        if effective_egress_mode(plugin, gateway_enabled) is EgressMode.GATEWAY_PROXY:
+        if plugin.egress_mode is EgressMode.GATEWAY_PROXY:
             blocks.append(
                 plugin.aai_cli_gateway_profile_block(
                     content,
@@ -288,7 +287,6 @@ def build_env(
 
 def store_providers_for(
     decrypted: Mapping[SecretProvider, SecretContent],
-    gateway_enabled: bool = False,
 ) -> dict[SecretProvider, SecretContent]:
     """Narrow a provider map to the ones whose credential still belongs in the pod.
 
@@ -301,7 +299,7 @@ def store_providers_for(
         plugin = _plugin_for(provider)
         if plugin is None or provider.value not in provider_secrets_map:
             continue
-        if effective_egress_mode(plugin, gateway_enabled) is EgressMode.GATEWAY_PROXY:
+        if plugin.egress_mode is EgressMode.GATEWAY_PROXY:
             continue
         keep[provider] = content
     return keep

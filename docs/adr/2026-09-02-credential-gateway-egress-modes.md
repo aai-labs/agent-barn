@@ -22,9 +22,9 @@ Introduce a credential gateway and an `EgressMode` declared per provider.
 
 - **`GATEWAY_PROXY`** — the CLI is configured with the gateway as its base URL and an `AF_GATEWAY_TOKEN` bearer. The gateway resolves the token to `(agent, provider)`, decrypts the credential, **strips the incoming gateway token**, applies the real upstream authorization, forwards, and audits. The real credential never enters the pod. This is the mode for all aai-cli providers.
 - **`TOKEN_BROKER`** — the gateway holds the refresh token or service-account key and mints a short-lived, scope-narrowed upstream access token that the pod uses directly. The pod holds an expiring token but never a renewable grant. This is the mode for Google Workspace.
-- **`DIRECT`** — credential materialization into the pod. Retained as the global rollback behavior and as the explicit escape hatch for a CLI whose auth cannot be redirected, so that such a case is recorded rather than bolted on as a special case.
+- **`DIRECT`** — credential materialization into the pod. The explicit escape hatch for a CLI whose auth cannot be redirected, so that such a case is recorded rather than bolted on as a special case.
 
-The plugin's mode is the only provider-level routing decision. A global `CREDENTIAL_GATEWAY_ENABLED` operational switch can temporarily collapse every effective mode to `DIRECT`; there is deliberately no provider allowlist that must be kept synchronized with the plugin registry.
+The plugin's `egress_mode` is the only provider-level routing decision, and it is permanent: there is no global switch to collapse it back to `DIRECT`, and deliberately no provider allowlist that must be kept synchronized with the plugin registry. (An earlier `CREDENTIAL_GATEWAY_ENABLED` operational rollback switch was removed on 2026-09-03 once every shipped provider had a gateway-served mode — see the CHANGELOG.)
 
 The gateway token is openly a credential to Agent Barn, not a disguised provider token. Revocation, scoping, and audit are all clearer when the agent's identity is ours to interpret.
 
@@ -46,7 +46,7 @@ Residual `TOKEN_BROKER` exposure is narrowed two ways: minting per-subcommand sc
 - The gateway lands on the request path of every tool call. It is in the blast radius of all agent tool use, and its availability budget must match agent availability.
 - Cross-host redirects become the gateway's responsibility for `GATEWAY_PROXY` providers so the gateway can remove provider credential headers before contacting the redirect target. This is credential-boundary enforcement, not network confinement.
 - Agent pods retain unrestricted internet access. Egress confinement would be a separate product capability with different requirements and is not implied by use of the credential gateway.
-- A provider's `EgressMode` is the single per-provider decision. `CREDENTIAL_GATEWAY_ENABLED` is a global operational switch for rollback only, not a per-provider allowlist: onboarding a provider stays local to its plugin rather than needing a second registration in deployment configuration.
+- A provider's `EgressMode` is the single per-provider decision, with no global switch and no allowlist: onboarding a provider stays local to its plugin rather than needing a second registration in deployment configuration.
 - Any CLI added later must expose a base-URL override or a direct-token seam, or it is confined to `DIRECT`.
 - Third-party binaries that are not ours — `git` over HTTPS is the immediate one — need their own answer. A gateway-backed credential helper covers git; a broader population of uncontrolled binaries would need this decision revisited.
 

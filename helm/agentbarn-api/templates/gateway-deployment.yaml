@@ -42,9 +42,6 @@ spec:
           envFrom:
             - secretRef:
                 name: {{ .Values.secretName }}
-          env:
-            - name: CREDENTIAL_GATEWAY_ENABLED
-              value: "true"
           readinessProbe:
             httpGet:
               path: /health
