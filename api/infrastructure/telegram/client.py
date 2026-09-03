@@ -81,15 +81,27 @@ def get_chat_display_name(bot_token: str, chat_id: str) -> str | None:
     )
 
 
-def send_message(bot_token: str, chat_id: str, text: str, *, thread_id: str | None = None) -> str:
+def send_message(
+    bot_token: str,
+    chat_id: str,
+    text: str,
+    *,
+    thread_id: str | None = None,
+    idempotency_key: str | None = None,
+) -> str:
     payload: dict[str, str | int] = {"chat_id": chat_id, "text": text}
     if thread_id:
         payload["message_thread_id"] = int(thread_id)
+    headers = {"Content-Type": "application/json"}
+    if idempotency_key:
+        # Keep the stable key on the transport boundary for deployments that
+        # front Telegram with an idempotency-aware egress proxy.
+        headers["Idempotency-Key"] = idempotency_key
     response = resilient_request(
         "POST",
         f"{_BASE}/bot{bot_token}/sendMessage",
         content=json.dumps(payload).encode(),
-        headers={"Content-Type": "application/json"},
+        headers=headers,
         timeout=_TIMEOUT_SECONDS,
         label="Telegram sendMessage",
         retry_server_errors=True,

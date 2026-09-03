@@ -6,6 +6,16 @@ from kubernetes import client
 
 from .common import _labels, _resource_name
 
+# Explicit so agents stop inheriting the namespace LimitRange default of
+# 512Mi request / 2Gi limit. requests.memory is the binding quota axis
+# (20Gi hard), so the request sets how many agents fit; the 1Gi limit halves
+# limits.memory consumption and caps V8, which sizes its heap at ~51% of the
+# cgroup limit -- a 2Gi limit invites a 1Gi heap with no leak involved.
+AGENT_RESOURCES = client.V1ResourceRequirements(
+    requests={"memory": "320Mi", "cpu": "50m"},
+    limits={"memory": "1Gi", "cpu": "500m"},
+)
+
 _SCRIPTS = Path(__file__).parent.parent / "scripts" / "openclaw"
 _COMMON_SCRIPTS = _SCRIPTS.parent
 _TELEMETRY_PUSH = _SCRIPTS / "plugins" / "telemetry-push"
@@ -185,7 +195,7 @@ def build_deployment(
     image_pull_secret: str = "",
 ) -> client.V1Deployment:
     name = _resource_name(agent_id)
-    labels = _labels(agent_id, org_id)
+    labels = _labels(agent_id, org_id, runtime="openclaw")
 
     return client.V1Deployment(
         metadata=client.V1ObjectMeta(
@@ -195,6 +205,10 @@ def build_deployment(
         ),
         spec=client.V1DeploymentSpec(
             replicas=1,
+            # replicas=1 backed by a ReadWriteOnce PVC: RollingUpdate's surge wants
+            # a second pod, which doubles the agent's memory and then deadlocks
+            # waiting for a volume the outgoing pod still holds.
+            strategy=client.V1DeploymentStrategy(type="Recreate"),
             selector=client.V1LabelSelector(match_labels={"app": name}),
             template=client.V1PodTemplateSpec(
                 metadata=client.V1ObjectMeta(labels=labels),
@@ -223,6 +237,7 @@ def build_deployment(
                             name="agent",
                             image=image,
                             command=["sh", "/app/config/start.sh"],
+                            resources=AGENT_RESOURCES,
                             readiness_probe=client.V1Probe(
                                 http_get=client.V1HTTPGetAction(
                                     path="/ready",

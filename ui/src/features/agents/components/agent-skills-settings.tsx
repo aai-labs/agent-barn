@@ -39,18 +39,25 @@ export function AgentSkillsSettings({
       onApply={applyChanges}
       applyDisabled={!isDirty || !isValid}
       restartOnApply={agent.status === "RUNNING"}
+      unstyled={canEdit}
+      actionsRenderer={
+        canEdit
+          ? (actions) => (
+              <AgentSkillsTab
+                ref={panelRef}
+                agent={agent}
+                isRunning={false}
+                applyActions={actions}
+                onDirtyChange={(dirty, valid = true) => {
+                  setIsDirty(dirty);
+                  setIsValid(valid);
+                }}
+              />
+            )
+          : undefined
+      }
     >
-      {canEdit ? (
-        <AgentSkillsTab
-          ref={panelRef}
-          agent={agent}
-          isRunning={false}
-          onDirtyChange={(dirty, valid = true) => {
-            setIsDirty(dirty);
-            setIsValid(valid);
-          }}
-        />
-      ) : agent.skills.length > 0 ? (
+      {canEdit ? null : agent.skills.length > 0 ? (
         <div className="flex flex-col gap-2">
           {agent.skills.map((skill) => (
             <div key={skill.id} className="flex flex-wrap items-center justify-between gap-2 rounded-xl px-3.5 py-3" style={{ border: "1px solid var(--line)", background: "var(--bg-soft)" }}>

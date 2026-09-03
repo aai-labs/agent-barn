@@ -35,8 +35,6 @@ services:
     image: redis:7-alpine
     container_name: aai_redis
     restart: unless-stopped
-    ports:
-      - "${REDIS_PORT:-6379}:6379"
     volumes:
       - aai_redis_data:/data
     healthcheck:
@@ -53,7 +51,7 @@ services:
     restart: unless-stopped
     command: >
       sh -c "uvicorn api.ingest_main:app --host 0.0.0.0 --port 8001 --reload &
-             exec fastapi dev api/main.py --host 0.0.0.0 --port 8000"
+        exec fastapi dev api/main.py --host 0.0.0.0 --port 8000"
     depends_on:
       db:
         condition: service_healthy
@@ -169,7 +167,7 @@ services:
       - ./ui:/app
       - aai_ui_node_modules:/app/node_modules
     ports:
-      - "3000:3000"
+      - "${UI_PORT:-3000}:3000"
 
   # k3d runner — provides the k3d binary without requiring a host install.
   # Docker socket is mounted so k3d can create k3s containers as host siblings.

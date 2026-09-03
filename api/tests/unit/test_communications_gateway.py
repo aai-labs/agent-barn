@@ -4,6 +4,8 @@ from typing import cast
 from unittest.mock import Mock, patch
 from uuid import uuid4
 
+from hamcrest import assert_that, empty
+
 from api.core.config import Config
 from api.domains.agents.models import Agent, AgentStatus
 from api.domains.communications.gateway_service import CommunicationsGatewayService
@@ -11,6 +13,7 @@ from api.domains.communications.models import (
     AcceptedCommunicationRead,
     CommunicationConnection,
     CommunicationDeliveryStatus,
+    CommunicationPolicyDisposition,
     ConversationLocation,
     NormalizedCommunicationEnvelope,
     PlatformCapability,
@@ -18,7 +21,7 @@ from api.domains.communications.models import (
     RuntimeDeliveryRead,
     RuntimeDeliveryResult,
 )
-from api.domains.communications.plugins.base import PlatformPlugin
+from api.domains.communications.plugins.base import InboundAdmissionResult, PlatformPlugin
 from api.domains.communications.plugins.registry import PlatformPluginRegistry
 from api.domains.communications.plugins.slack import SlackCredentials, SlackSettings
 
@@ -42,7 +45,12 @@ def _envelope() -> NormalizedCommunicationEnvelope:
     )
 
 
-def _service(connection: CommunicationConnection, plugin: Mock) -> tuple[CommunicationsGatewayService, Mock]:
+def _service(
+    connection: CommunicationConnection,
+    plugin: Mock,
+    *,
+    operations: Mock | None = None,
+) -> tuple[CommunicationsGatewayService, Mock]:
     deliveries = Mock()
     connections = Mock()
     connections.get_active.return_value = connection
@@ -54,6 +62,7 @@ def _service(connection: CommunicationConnection, plugin: Mock) -> tuple[Communi
         connection_repository=connections,
         email_addresses=Mock(),
         plugins=plugins,
+        operations=operations,
     )
     return service, deliveries
 
@@ -66,7 +75,10 @@ def _feedback_plugin() -> Mock:
     plugin.capabilities = frozenset({PlatformCapability.PROCESSING_FEEDBACK})
     plugin.settings_model = SlackSettings
     plugin.credentials_model = SlackCredentials
-    plugin.admit_inbound.return_value = [_envelope()]
+    plugin.admit_inbound.return_value = InboundAdmissionResult(
+        CommunicationPolicyDisposition.ACCEPTED,
+        (_envelope(),),
+    )
     plugin.enrich_inbound.side_effect = lambda settings, credentials, envelopes: envelopes
     return plugin
 
@@ -162,6 +174,36 @@ def test_gateway_enrichment_validation_warning_does_not_log_credential_values(ca
     assert len(accepted) == 1
     assert "super-secret-token" not in caplog.text
     deliveries.accept_inbound.assert_called_once_with(connection_id=connection.id, envelope=_envelope())
+
+
+def test_gateway_does_not_create_a_delivery_for_a_denied_admission() -> None:
+    connection = cast(CommunicationConnection, _connection())
+    plugin = _feedback_plugin()
+    plugin.admit_inbound.return_value = InboundAdmissionResult(CommunicationPolicyDisposition.USER_DENIED)
+    service, deliveries = _service(connection, plugin)
+
+    with patch("api.domains.communications.metrics.record_policy_disposition") as record_disposition:
+        accepted = service._accept_admitted_payload(connection, plugin, SlackSettings(), {})
+
+    assert_that(accepted, empty())
+    deliveries.accept_inbound.assert_not_called()
+    record_disposition.assert_called_once_with(CommunicationPolicyDisposition.USER_DENIED)
+
+
+def test_gateway_journal_failure_does_not_drop_an_event() -> None:
+    connection = cast(CommunicationConnection, _connection())
+    connection.organization_id = uuid4()
+    connection.agent_id = uuid4()
+    plugin = _feedback_plugin()
+    operations = Mock()
+    operations.record_journal.side_effect = RuntimeError("database unavailable")
+    service, deliveries = _service(connection, plugin, operations=operations)
+
+    accepted = service._accept_admitted_payload(connection, plugin, SlackSettings(), {})
+
+    assert len(accepted) == 1
+    deliveries.accept_inbound.assert_called_once_with(connection_id=connection.id, envelope=_envelope())
+    plugin.admit_inbound.assert_called_once()
 
 
 def test_gateway_marks_claim_and_terminal_runtime_failure_at_lifecycle_seam() -> None:

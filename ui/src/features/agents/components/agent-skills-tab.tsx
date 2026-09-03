@@ -1,9 +1,10 @@
 "use client";
 
 import { forwardRef, useEffect, useImperativeHandle, useState } from "react";
+import type { ReactNode } from "react";
 import Link from "next/link";
 import { useDebouncedValue } from "@tanstack/react-pacer";
-import { Loader2, Plus, Trash2 } from "lucide-react";
+import { AlertCircle, Loader2, Plus, Trash2 } from "lucide-react";
 
 import { AppErrorState } from "@/components/app-error-state";
 import { Badge } from "@/components/badge";
@@ -27,6 +28,7 @@ import { SKILL_PROVIDER_LABELS } from "@/features/skills/utils";
 import { skillDetailHref, skillNewHref, type SkillScopeRef } from "@/features/skills/scope";
 import { SkillCard } from "@/features/skills/components/skill-card";
 import { useLoadMoreOnScroll } from "@/hooks/use-load-more-on-scroll";
+import type { SharedCredentialBrief } from "@/features/shared-credentials/schemas";
 import type { Skill } from "@/features/skills/schemas";
 
 import {
@@ -36,6 +38,7 @@ import {
   hasIncompleteIntegration,
   type IntegrationDraft,
 } from "../integrations";
+import type { GoogleOAuthResult } from "../hooks/use-google-oauth";
 import { useUpdateAgent } from "../hooks/use-update-agent";
 import type { Agent, AgentAssignedSkill } from "../schemas";
 import type { AgentConfigurationEditHandle } from "./agent-configuration-utils";
@@ -46,12 +49,13 @@ interface AgentSkillsTabProps {
   agent: Agent;
   isRunning: boolean;
   onDirtyChange?: (isDirty: boolean, isValid?: boolean) => void;
+  applyActions?: ReactNode;
 }
 
 export const AgentSkillsTab = forwardRef<
   AgentConfigurationEditHandle,
   AgentSkillsTabProps
->(function AgentSkillsTab({ agent, isRunning, onDirtyChange }, ref) {
+>(function AgentSkillsTab({ agent, isRunning, onDirtyChange, applyActions }, ref) {
   const scope: SkillScopeRef = { kind: "agent", agentId: agent.id };
   const [search, setSearch] = useState("");
   const [debouncedSearch] = useDebouncedValue(search, { wait: 300 });
@@ -159,10 +163,6 @@ export const AgentSkillsTab = forwardRef<
     if (!skillToRemove) return;
     markForRemoval(skillToRemove.id);
     setSkillToRemove(null);
-  }
-
-  function undoRemoval(skillId: string) {
-    setPendingRemoveIds((prev) => prev.filter((id) => id !== skillId));
   }
 
   function setField(provider: string, key: string, value: string) {
@@ -301,6 +301,21 @@ export const AgentSkillsTab = forwardRef<
 
   return (
     <div className="flex flex-col gap-5">
+      <div className="af-card flex flex-col gap-5 p-5">
+      {hasPendingChanges && (
+        <div
+          className="flex items-start gap-3 rounded-xl px-4 py-3"
+          role="status"
+          style={{ border: "1px solid var(--warn)", background: "var(--warn-soft, var(--bg-soft))" }}
+        >
+          <AlertCircle size={17} className="mt-0.5 flex-shrink-0" style={{ color: "var(--warn)" }} />
+          <div className="text-[0.8125rem]" style={{ color: "var(--ink-2)" }}>
+            <strong className="font-semibold">Skills changes are staged.</strong>{" "}
+            Click the <strong className="font-semibold">Apply</strong> button below to save them.
+          </div>
+        </div>
+      )}
+
       {/* Skills currently in use by this Agent */}
       <div className="flex flex-col gap-2">
         {hasAnything && <SectionLabel>In use</SectionLabel>}
@@ -337,61 +352,93 @@ export const AgentSkillsTab = forwardRef<
               const skill = agent.skills.find((s) => s.id === id);
               if (!skill) return null;
               return (
+                <div key={`removing-${id}`} className="rounded-xl" style={{ border: "1px solid var(--err)" }}>
+                  <SkillCard
+                    skill={skill}
+                    href={skillDetailHref(scope, agent.organizationId, skill.id)}
+                    badges={<Badge variant="warn">Marked for Removal</Badge>}
+                    footer={
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-[0.75rem]" style={{ color: "var(--ink-3)" }}>
+                          Pending removal
+                        </span>
+                        <button
+                          type="button"
+                          className="af-btn af-btn-sm af-btn-ghost"
+                          onClick={() => setPendingRemoveIds((prev) => prev.filter((skillId) => skillId !== id))}
+                        >
+                          Undo
+                        </button>
+                      </div>
+                    }
+                  />
+                </div>
+              );
+            })}
+
+            {pendingAddSkills.map((skill) => {
+              const credentialProviders = skill.requiredProviders.filter(
+                (provider) => !existingSecretProviders.has(provider),
+              );
+              const card = (
                 <SkillCard
-                  key={`removing-${id}`}
                   skill={skill}
                   href={skillDetailHref(scope, agent.organizationId, skill.id)}
                   badges={
                     <>
                       <Badge variant="ok">In use</Badge>
-                      <Badge variant="warn">Removing</Badge>
+                      <Badge variant="accent">Adding</Badge>
                     </>
+                  }
+                  details={
+                    credentialProviders.length > 0 ? (
+                      <CredentialSetup
+                        providerIds={credentialProviders}
+                        drafts={newSecretDrafts}
+                        credentialError={credentialError}
+                        errorProviderId={newlyRequiredProviderIds[0]}
+                        onSwitchToManual={switchToManual}
+                        onSwitchToShared={switchToShared}
+                        onPickShared={handlePickShared}
+                        onFieldChange={setField}
+                        onListChange={setRepos}
+                        onOAuthConnected={(provider, result) =>
+                          setFields(provider, {
+                            refreshToken: result.refreshToken,
+                            clientId: result.clientId,
+                            clientSecret: result.clientSecret,
+                            email: result.email,
+                            scopes: result.scopes,
+                          })
+                        }
+                      />
+                    ) : undefined
                   }
                   footer={
                     <div className="flex items-center justify-between gap-2">
-                      <span className="text-[0.75rem] line-through" style={{ color: "var(--ink-3)" }}>
-                        {skill.name}
+                      <span className="text-[0.75rem]" style={{ color: "var(--ink-3)" }}>
+                        · Adding
                       </span>
                       <button
                         type="button"
                         className="af-btn af-btn-sm af-btn-ghost"
-                        onClick={() => undoRemoval(id)}
+                        onClick={() => cancelAdd(skill.id)}
                       >
-                        Undo
+                        Cancel
                       </button>
                     </div>
                   }
                 />
               );
-            })}
 
-            {pendingAddSkills.map((skill) => (
-              <SkillCard
-                key={`adding-${skill.id}`}
-                skill={skill}
-                href={skillDetailHref(scope, agent.organizationId, skill.id)}
-                badges={
-                  <>
-                    <Badge variant="ok">In use</Badge>
-                    <Badge variant="accent">Adding</Badge>
-                  </>
-                }
-                footer={
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="text-[0.75rem]" style={{ color: "var(--ink-3)" }}>
-                      · Adding
-                    </span>
-                    <button
-                      type="button"
-                      className="af-btn af-btn-sm af-btn-ghost"
-                      onClick={() => cancelAdd(skill.id)}
-                    >
-                      Cancel
-                    </button>
-                  </div>
-                }
-              />
-            ))}
+              return credentialProviders.length > 0 ? (
+                <div key={`adding-${skill.id}`} className="col-span-full">
+                  {card}
+                </div>
+              ) : (
+                <div key={`adding-${skill.id}`}>{card}</div>
+              );
+            })}
           </div>
         ) : (
           <div
@@ -402,96 +449,19 @@ export const AgentSkillsTab = forwardRef<
           </div>
         )}
       </div>
-
-      {/* Required credentials for newly added skills */}
-      {newlyRequiredProviderIds.length > 0 && (
-        <div className="flex flex-col gap-3">
-          <SectionLabel>Required credentials</SectionLabel>
-          {newlyRequiredProviderIds.map((providerId) => {
-            const providerSpec = getIntegrationProvider(providerId);
-            const draft = newSecretDrafts.find((d) => d.provider === providerId);
-            if (!draft) return null;
-
-            if (!providerSpec) {
-              return (
-                <div
-                  key={providerId}
-                  className="px-4 py-3 rounded-2xl text-[0.8125rem]"
-                  style={{
-                    border: "1px solid var(--line)",
-                    background: "var(--bg-soft)",
-                    color: "var(--ink-3)",
-                  }}
-                >
-                  {credentialError && providerId === newlyRequiredProviderIds[0] && (
-                    <CredentialErrorAlert
-                      title="Could not save credentials"
-                      message={credentialError}
-                    />
-                  )}
-                  <span className="font-medium" style={{ color: "var(--ink)" }}>
-                    {SKILL_PROVIDER_LABELS[providerId] ?? providerId}
-                  </span>{" "}
-                  — not yet configurable from the UI.
-                </div>
-              );
-            }
-
-            const isSharedEligible = !!SHARED_CREDENTIAL_PROVIDER_LABELS[providerId];
-            const useShared = draft.sharedCredentialId !== undefined;
-            const showCredentialError = Boolean(
-              credentialError && providerId === newlyRequiredProviderIds[0],
-            );
-
-            return (
-              <div
-                key={providerId}
-                className="flex flex-col gap-3.5 p-4 rounded-2xl"
-                style={{ border: "1px solid var(--line)", background: "var(--bg-soft)" }}
-              >
-                <div className="font-semibold text-[0.844rem]" style={{ color: "var(--ink)" }}>
-                  {providerSpec.label}
-                </div>
-
-                {isSharedEligible && (
-                  <SharedManualToggle
-                    provider={providerId}
-                    useShared={useShared}
-                    selectedId={draft.sharedCredentialId || undefined}
-                    onSwitchToManual={() => switchToManual(providerId)}
-                    onSwitchToShared={() => switchToShared(providerId)}
-                    onPickShared={(brief) => handlePickShared(providerId, brief)}
-                  />
-                )}
-
-                {showCredentialError && useShared && credentialError && (
-                  <CredentialErrorAlert
-                    title="Could not save credentials"
-                    message={credentialError}
-                  />
-                )}
-
-                {!useShared && (
-                  <IntegrationFields
-                    provider={providerSpec}
-                    draft={draft}
-                    namePrefix="tab-"
-                    credentialError={showCredentialError ? credentialError : undefined}
-                    onFieldChange={(key, value) => setField(providerId, key, value)}
-                    onListChange={(key, values) => setRepos(providerId, key, values)}
-                    onOAuthConnected={({ refreshToken, clientId, clientSecret, email, scopes }) => {
-                      setFields(providerId, { refreshToken, clientId, clientSecret, email, scopes });
-                    }}
-                  />
-                )}
-              </div>
-            );
-          })}
-        </div>
+      {applyActions && (
+        <footer
+          className="flex flex-wrap items-center justify-end gap-2 border-t pt-4"
+          style={{ borderColor: "var(--line)" }}
+        >
+          {applyActions}
+        </footer>
       )}
+      </div>
 
-      {/* Skills */}
-      <div className="flex flex-col gap-2">
+      {/* Skills available to add */}
+      <div className="af-card flex flex-col gap-2 p-5">
+        <div className="flex flex-col gap-2">
         <div className="flex items-center justify-between gap-2">
           <SectionLabel>Add skills</SectionLabel>
           <Link
@@ -539,7 +509,7 @@ export const AgentSkillsTab = forwardRef<
                 key={skill.id}
                 skill={skill}
                 href={skillDetailHref(scope, agent.organizationId, skill.id)}
-                addDisabled={isRunning}
+                addDisabled={isRunning || skill.version === null}
                 onAdd={() => addSkill(skill)}
               />
             ))}
@@ -563,6 +533,7 @@ export const AgentSkillsTab = forwardRef<
             )}
           </div>
         )}
+        </div>
       </div>
 
       {credentialError && newlyRequiredProviderIds.length === 0 && (
@@ -599,6 +570,96 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
       style={{ color: "var(--ink-4)" }}
     >
       {children}
+    </div>
+  );
+}
+
+function CredentialSetup({
+  providerIds,
+  drafts,
+  credentialError,
+  errorProviderId,
+  onSwitchToManual,
+  onSwitchToShared,
+  onPickShared,
+  onFieldChange,
+  onListChange,
+  onOAuthConnected,
+}: {
+  providerIds: string[];
+  drafts: IntegrationDraft[];
+  credentialError: string | null;
+  errorProviderId?: string;
+  onSwitchToManual: (provider: string) => void;
+  onSwitchToShared: (provider: string) => void;
+  onPickShared: (provider: string, brief: SharedCredentialBrief | null) => void;
+  onFieldChange: (provider: string, key: string, value: string) => void;
+  onListChange: (provider: string, key: string, values: string[]) => void;
+  onOAuthConnected: (provider: string, result: GoogleOAuthResult) => void;
+}) {
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="text-[0.8125rem] font-semibold" style={{ color: "var(--ink)" }}>
+        Required credentials
+      </div>
+      {providerIds.map((providerId) => {
+        const providerSpec = getIntegrationProvider(providerId);
+        const draft = drafts.find((item) => item.provider === providerId);
+        if (!draft) return null;
+
+        if (!providerSpec) {
+          return (
+            <div key={providerId} className="text-[0.8125rem]" style={{ color: "var(--ink-3)" }}>
+              {credentialError && providerId === errorProviderId && (
+                <CredentialErrorAlert title="Could not save credentials" message={credentialError} />
+              )}
+              <span className="font-medium" style={{ color: "var(--ink)" }}>
+                {SKILL_PROVIDER_LABELS[providerId] ?? providerId}
+              </span>{" "}
+              — not yet configurable from the UI.
+            </div>
+          );
+        }
+
+        const isSharedEligible = !!SHARED_CREDENTIAL_PROVIDER_LABELS[providerId];
+        const useShared = draft.sharedCredentialId !== undefined;
+        const showCredentialError = Boolean(credentialError && providerId === errorProviderId);
+
+        return (
+          <div key={providerId} className="flex flex-col gap-3.5">
+            <div className="font-semibold text-[0.844rem]" style={{ color: "var(--ink)" }}>
+              {providerSpec.label}
+            </div>
+
+            {isSharedEligible && (
+              <SharedManualToggle
+                provider={providerId}
+                useShared={useShared}
+                selectedId={draft.sharedCredentialId || undefined}
+                onSwitchToManual={() => onSwitchToManual(providerId)}
+                onSwitchToShared={() => onSwitchToShared(providerId)}
+                onPickShared={(brief) => onPickShared(providerId, brief)}
+              />
+            )}
+
+            {showCredentialError && useShared && credentialError && (
+              <CredentialErrorAlert title="Could not save credentials" message={credentialError} />
+            )}
+
+            {!useShared && (
+              <IntegrationFields
+                provider={providerSpec}
+                draft={draft}
+                namePrefix={`skill-${providerId}-`}
+                credentialError={showCredentialError ? credentialError : undefined}
+                onFieldChange={(key, value) => onFieldChange(providerId, key, value)}
+                onListChange={(key, values) => onListChange(providerId, key, values)}
+                onOAuthConnected={(result) => onOAuthConnected(providerId, result)}
+              />
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }

@@ -499,7 +499,7 @@ def test_aai_cli_seeder_publishes_the_bundled_skill_tree():
         seed_aai_cli_skills(repository)
         skills = repository.find_all_global()
 
-        assert_that(len(skills), equal_to(12))
+        assert_that(len(skills), equal_to(11))
         for skill in skills:
             assert_that(skill.slug, starts_with("aai-"))
             assert_that(skill.root_dir, equal_to(skill.slug))

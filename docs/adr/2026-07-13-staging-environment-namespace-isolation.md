@@ -9,7 +9,7 @@ Agent Farm gained a staging environment isolated by Kubernetes namespace (`agent
 ## Considered alternatives
 
 - **GitHub Environments** for per-environment secrets/vars and protection rules. Rejected: the GitHub Free plan on a private repo cannot gate Environments, so this would add configuration without the deployment gate it exists to provide. Per-environment config instead lives in `STAGING_`-prefixed secrets/vars selected by a `github.ref_name` ternary in the workflow.
-- **A second cluster.** Rejected as unnecessary cost/operational overhead: Kubernetes short-name service DNS is namespace-relative, so the existing hardcoded connection strings (`postgres-app`, `postgres-litellm`, `litellm:4000`) and fixed secret/SA names resolve correctly per-namespace without chart or DNS edits.
+- **A second cluster.** Rejected as unnecessary cost/operational overhead *for staging*: Kubernetes short-name service DNS is namespace-relative, so the existing hardcoded connection strings (`postgres-app`, `postgres-litellm`, `litellm:4000`) and fixed secret/SA names resolve correctly per-namespace without chart or DNS edits. A later decision uses a second cluster for **hosted public production**, not for staging; see [`2026-08-27-public-cluster-release-tags.md`](2026-08-27-public-cluster-release-tags.md).
 
 ## Consequences
 

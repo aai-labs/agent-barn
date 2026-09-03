@@ -24,14 +24,11 @@ check rg             rg --version
 check curl           curl --version
 check tini           tini -h
 
-check chromium python3 -c "
-from playwright.sync_api import sync_playwright
-with sync_playwright() as p:
-    b = p.chromium.launch()
-    pg = b.new_page()
-    pg.goto('data:text/html,ok')
-    b.close()
-"
+# Chromium is deliberately absent -- web access goes through the shared firecrawl
+# service. Assert the absence so a future change cannot quietly reintroduce a
+# ~1.5GB per-agent browser, and so the 1Gi memory limit stays viable (a gateway
+# idles near 240MiB; launching chromium and loading two pages measured 573MiB).
+check no-chromium sh -c '! command -v chromium >/dev/null 2>&1 && [ ! -d /opt/playwright ]'
 
 # The telemetry-push plugin correlates a reply to its chat through sessionKey /
 # runId, and pairs tool results through toolCallId. OpenClaw exposes hook names

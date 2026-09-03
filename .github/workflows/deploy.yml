@@ -1,5 +1,8 @@
 name: Deploy to k3s
 
+# AAI Labs testing ground (k3s). Pushes to staging/main deploy here.
+# Public hosted Agent Barn is .github/workflows/deploy-public.yml (release tags).
+
 on:
   workflow_dispatch:
   push:

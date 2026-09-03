@@ -84,3 +84,26 @@ def test_deployment_runs_one_headless_runtime_container() -> None:
 
     assert deployment.spec.replicas == 1
     assert deployment.spec.template.spec.containers[0].name == "agent"
+
+
+def test_deployment_declares_explicit_resources_matching_openclaw() -> None:
+    """Both runtimes get 1Gi so limits.memory (100Gi quota) never binds before
+    requests.memory (20Gi) -- a 2Gi Hermes limit would cap an all-Hermes fleet at
+    50 agents instead of 64. Unlike OpenClaw's V8 heap, this is a hard cap on
+    Hermes' real working set, not a GC trigger."""
+    deployment = build_hermes_deployment(_AGENT_ID, _ORG_ID, _NS, "hermes:test")
+    resources = deployment.spec.template.spec.containers[0].resources
+
+    assert resources is not None
+    assert resources.requests == {"memory": "320Mi", "cpu": "50m"}
+    assert resources.limits == {"memory": "1Gi", "cpu": "500m"}
+
+
+def test_deployment_recreates_rather_than_rolling_update() -> None:
+    deployment = build_hermes_deployment(_AGENT_ID, _ORG_ID, _NS, "hermes:test")
+    assert deployment.spec.strategy.type == "Recreate"
+
+
+def test_deployment_carries_the_hermes_runtime_label() -> None:
+    deployment = build_hermes_deployment(_AGENT_ID, _ORG_ID, _NS, "hermes:test")
+    assert deployment.metadata.labels["agentbarn.io/runtime"] == "hermes"

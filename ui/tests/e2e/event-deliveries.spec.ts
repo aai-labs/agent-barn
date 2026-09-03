@@ -78,6 +78,48 @@ test.describe("Event Delivery Monitor (platform_admin)", () => {
     await expect(page.getByText("handler.20")).toBeVisible();
   });
 
+  test("does not render duplicate deliveries when pages overlap", async ({ page }) => {
+    const firstPage = Array.from({ length: 20 }, (_, index) =>
+      delivery({
+        id: `77777777-7777-4777-8777-${String(index).padStart(12, "0")}`,
+        handler_name: `handler.${index}`,
+      }),
+    );
+    const overlappingDelivery = delivery({
+      // The virtualizer keeps the final overscan window mounted after page 2 loads,
+      // so place the overlap inside that window to reproduce React's sibling-key check.
+      id: firstPage[15].id,
+      handler_name: "handler.overlap",
+    });
+    const duplicateKeyWarnings: string[] = [];
+    page.on("console", (message) => {
+      if (message.text().includes("Encountered two children with the same key")) {
+        duplicateKeyWarnings.push(message.text());
+      }
+    });
+
+    await data.eventDeliveries.interceptSummary({ summary: summaryWithCounts() });
+    await data.eventDeliveries.interceptList({
+      pages: [firstPage, [overlappingDelivery]],
+      total: 21,
+    });
+
+    const secondPageResponse = page.waitForResponse((response) => {
+      const url = new URL(response.url());
+      return (
+        url.pathname.endsWith("/api/v1/platform/event-deliveries") &&
+        url.searchParams.get("page") === "2"
+      );
+    });
+    await page.goto(MONITOR_URL);
+    await expect(page.getByText("handler.0")).toBeVisible();
+    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+    await secondPageResponse;
+
+    await expect(page.getByText("handler.overlap")).toHaveCount(1);
+    expect(duplicateKeyWarnings).toHaveLength(0);
+  });
+
   test("keeps a follow-up page failure local and lets the user retry", async ({ page }) => {
     const firstPage = Array.from({ length: 20 }, (_, index) =>
       delivery({

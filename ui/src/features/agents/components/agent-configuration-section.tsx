@@ -24,6 +24,8 @@ export function AgentConfigurationSection({
   onApplied?: () => void;
   applyDisabled?: boolean;
   restartOnApply?: boolean;
+  actionsRenderer?: (actions: ReactNode) => ReactNode;
+  unstyled?: boolean;
   children: ReactNode;
 }) {
   return (

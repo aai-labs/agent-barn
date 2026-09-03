@@ -11,6 +11,7 @@ from pydantic import Field
 from websockets.asyncio.client import connect
 
 from api.domains.communications.models import (
+    CommunicationPolicyDisposition,
     CommunicationSender,
     ConversationLocation,
     CredentialUniquenessScope,
@@ -21,10 +22,12 @@ from api.domains.communications.models import (
 )
 from api.domains.communications.plugins.base import (
     InboundAdmissionContext,
+    InboundAdmissionResult,
     PlatformCredentials,
     PlatformPlugin,
     PlatformSettings,
     ProcessingFeedbackContext,
+    provider_idempotency_key,
 )
 from api.infrastructure.slack.client import SlackClient
 
@@ -98,21 +101,22 @@ class SlackPlatformPlugin(PlatformPlugin):
     key = "slack"
     display_name = "Slack"
     setup_hint = (
-        "Credentials\n"
-        "• Bot token: In OAuth & Permissions → OAuth Tokens for Your Workspace, install/reinstall the app and copy "
-        "the xoxb- token.\n"
-        "• App-level token: In Basic Information → App-Level Tokens, create an xapp- token with connections:write "
-        "and enable Socket Mode.\n\n"
-        "Bot Token Scopes\n"
-        "• Messaging: chat:write, channels:history, groups:history, im:history, and mpim:history.\n"
-        "• Name resolution: channels:read, groups:read, im:read, mpim:read, and users:read.\n"
-        "• Processing feedback is optional but uses reactions:write.\n\n"
-        "Workspace setup\n"
-        "• Subscribe to message.channels, message.groups, message.im, and message.mpim events; the shipped Slack "
-        "manifest includes them.\n"
-        "• Invite the bot to every private channel or conversation it should handle; allowlists use channel IDs, "
-        "not channel names.\n"
-        "• After changing scopes, reinstall the app and replace the stored bot token."
+        "## Create a Slack app\n\n"
+        "1. Open [Slack app management](https://api.slack.com/apps).\n"
+        "2. Click **New App**.\n"
+        "3. Click **From Manifest**.\n"
+        "4. Copy and paste the provided manifest using **Copy Slack manifest** below.\n"
+        "5. Select a workspace and click **Next**.\n"
+        "6. Click **Create**.\n\n"
+        "## Create credentials\n\n"
+        "1. In **Basic Information → App-Level Tokens**, create a token with `connections:write` and copy the `xapp-` "
+        "value. Slack requires this manual step; manifests cannot create app-level tokens.\n"
+        "2. In **OAuth & Permissions**, install or reinstall the app in the workspace, then copy the `xoxb-` token from "
+        "**OAuth Tokens for Your Workspace**. Reinstall after every scope change.\n"
+        "3. Paste the `xoxb-` bot token and `xapp-` app-level token into this Connection.\n\n"
+        "## Grant channel access\n\n"
+        "Invite the bot to every private channel or conversation it should handle. Allowlist values are Slack IDs; use "
+        "the channel and user suggestions after saving this Connection."
     )
     capabilities = frozenset(
         {
@@ -152,17 +156,52 @@ class SlackPlatformPlugin(PlatformPlugin):
         assert isinstance(credentials, SlackCredentials)
         return credentials.bot_token
 
+    def list_directory_entries(
+        self,
+        settings: PlatformSettings,
+        credentials: PlatformCredentials,
+        *,
+        kind: str,
+        search: str | None = None,
+        guild_id: str | None = None,
+    ) -> list[dict[str, str | None]]:
+        del settings, guild_id
+        assert isinstance(credentials, SlackCredentials)
+        client = SlackClient(credentials.bot_token)
+        if kind == "channels":
+            return [
+                {
+                    "id": channel["id"],
+                    "label": f"#{channel['name']}" if channel["name"] else channel["id"],
+                    "detail": "Private channel" if channel["is_private"] else None,
+                }
+                for channel in client.list_channels(search)
+            ]
+        if kind == "users":
+            return [
+                {
+                    "id": user["id"],
+                    "label": user["display_name"] or user["real_name"] or user["name"] or user["id"],
+                    "detail": f"@{user['name']}" if user["name"] else None,
+                }
+                for user in client.list_users(search)
+            ]
+        raise ValueError(f"Unsupported Slack directory kind: {kind}")
+
     def send(
         self,
         settings: PlatformSettings,
         credentials: PlatformCredentials,
         envelope: OutboundCommunicationEnvelope,
+        *,
+        idempotency_key: str,
     ) -> str:
         assert isinstance(credentials, SlackCredentials)
         return SlackClient(credentials.bot_token).send_message(
             envelope.location.id,
             envelope.text,
             thread_id=envelope.location.thread_id,
+            idempotency_key=provider_idempotency_key(idempotency_key),
         )
 
     def processing_feedback(
@@ -238,48 +277,53 @@ class SlackPlatformPlugin(PlatformPlugin):
         try:
             callback()
         except Exception as exc:
-            detail = " ".join(str(exc).split())[:160]
             logger.warning(
-                "Slack processing feedback %s failed for channel %s thread %s (%s): %s",
+                "Slack processing feedback %s failed for channel %s thread %s (%s)",
                 action,
                 context.location.id,
                 context.location.thread_id or "root",
                 type(exc).__name__,
-                detail,
             )
 
     def normalize_inbound(
         self,
         settings: PlatformSettings,
         payload: dict[str, Any],
-    ) -> list[NormalizedCommunicationEnvelope]:
+    ) -> InboundAdmissionResult:
         assert isinstance(settings, SlackSettings)
         event = payload.get("event")
         # Slack emits both app_mention and message events for a mentioned
         # channel message when both subscriptions are enabled. We consume the
         # message event only; accepting app_mention here would create a second
         # delivery for the same provider timestamp before persistence dedupes it.
-        if (
-            not isinstance(event, dict)
-            or event.get("type") != "message"
-            or event.get("subtype")
-            or event.get("bot_id")
-            or event.get("is_bot")
-        ):
-            return []
+        if not isinstance(event, dict):
+            return InboundAdmissionResult(CommunicationPolicyDisposition.MALFORMED_PAYLOAD)
+        if event.get("bot_id") or event.get("is_bot"):
+            return InboundAdmissionResult(CommunicationPolicyDisposition.BOT_IGNORED)
+        # Slack emits both app_mention and message events for a mentioned
+        # channel message. We consume the message event only; accepting
+        # app_mention here would create a second delivery for the same event.
+        # Non-message events (reactions, membership changes, edits/deletes) are
+        # neither bot output nor malformed — they are events the policy simply
+        # does not handle, so they get their own disposition instead of
+        # polluting the bot_ignored signal.
+        if event.get("type") != "message" or event.get("subtype"):
+            return InboundAdmissionResult(CommunicationPolicyDisposition.EVENT_IGNORED)
         channel_id = str(event.get("channel") or "")
         sender_id = str(event.get("user") or "")
         bot_user_id = self._bot_user_id(payload)
-        if not sender_id or (bot_user_id and sender_id == bot_user_id):
-            return []
+        if not sender_id:
+            return InboundAdmissionResult(CommunicationPolicyDisposition.MALFORMED_PAYLOAD)
+        if bot_user_id and sender_id == bot_user_id:
+            return InboundAdmissionResult(CommunicationPolicyDisposition.BOT_IGNORED)
         is_dm = event.get("channel_type") == "im"
         if is_dm:
             if settings.dm_policy == "off":
-                return []
+                return InboundAdmissionResult(CommunicationPolicyDisposition.USER_DENIED)
             if settings.dm_policy == "allowlist" and sender_id not in settings.dm_user_ids:
-                return []
+                return InboundAdmissionResult(CommunicationPolicyDisposition.USER_DENIED)
         elif settings.group_policy == "allowlist" and channel_id not in settings.channel_ids:
-            return []
+            return InboundAdmissionResult(CommunicationPolicyDisposition.CHANNEL_DENIED)
         # Slack reactions address messages by their provider timestamp. Keep
         # that timestamp as the canonical message identity so lifecycle
         # feedback can reliably target the inbound message; the optional
@@ -287,31 +331,34 @@ class SlackPlatformPlugin(PlatformPlugin):
         # message reference.
         message_id = str(event.get("ts") or "")
         if not channel_id or not message_id:
-            return []
+            return InboundAdmissionResult(CommunicationPolicyDisposition.MALFORMED_PAYLOAD)
         try:
             occurred_at = datetime.fromtimestamp(float(event.get("ts", "0")), tz=UTC)
-        except TypeError, ValueError, OSError:
-            return []
+        except (TypeError, ValueError, OSError) as _:
+            return InboundAdmissionResult(CommunicationPolicyDisposition.MALFORMED_PAYLOAD)
         text = str(event.get("text") or "")
-        return [
-            NormalizedCommunicationEnvelope(
-                provider_message_id=message_id,
-                occurred_at=occurred_at,
-                location=ConversationLocation(
-                    id=channel_id,
-                    type="DM" if is_dm else "CHANNEL",
-                    thread_id=str(event.get("thread_ts") or event.get("ts") or "") or None,
+        return InboundAdmissionResult(
+            CommunicationPolicyDisposition.ACCEPTED,
+            (
+                NormalizedCommunicationEnvelope(
+                    provider_message_id=message_id,
+                    occurred_at=occurred_at,
+                    location=ConversationLocation(
+                        id=channel_id,
+                        type="DM" if is_dm else "CHANNEL",
+                        thread_id=str(event.get("thread_ts") or event.get("ts") or "") or None,
+                    ),
+                    sender=CommunicationSender(id=sender_id or None),
+                    text=text,
+                    mentions=self._mentioned_user_ids(text),
+                    provider_metadata={
+                        "team_id": str(payload.get("team_id") or ""),
+                        "event_id": str(payload.get("event_id") or ""),
+                        "client_msg_id": str(event.get("client_msg_id") or ""),
+                    },
                 ),
-                sender=CommunicationSender(id=sender_id or None),
-                text=text,
-                mentions=self._mentioned_user_ids(text),
-                provider_metadata={
-                    "team_id": str(payload.get("team_id") or ""),
-                    "event_id": str(payload.get("event_id") or ""),
-                    "client_msg_id": str(event.get("client_msg_id") or ""),
-                },
-            )
-        ]
+            ),
+        )
 
     def admit_inbound(
         self,
@@ -319,25 +366,27 @@ class SlackPlatformPlugin(PlatformPlugin):
         payload: dict[str, Any],
         *,
         context: InboundAdmissionContext,
-    ) -> list[NormalizedCommunicationEnvelope]:
+    ) -> InboundAdmissionResult:
         assert isinstance(settings, SlackSettings)
-        envelopes = self.normalize_inbound(settings, payload)
-        if not envelopes:
-            return []
+        result = self.normalize_inbound(settings, payload)
+        if result.disposition != CommunicationPolicyDisposition.ACCEPTED or not result.envelopes:
+            return result
 
         event = payload.get("event")
         if not isinstance(event, dict):
-            return []
+            return InboundAdmissionResult(CommunicationPolicyDisposition.MALFORMED_PAYLOAD)
         is_thread_reply = bool(str(event.get("thread_ts") or ""))
         bot_user_id = self._bot_user_id(payload)
         if not bot_user_id:
             # Channel admission fails closed if ingress did not capture the
             # bot identity. DMs remain governed by dm_policy and do not need a
             # mention, but accepting an unknown channel mention is unsafe.
-            return [envelope for envelope in envelopes if envelope.location.type == "DM"]
+            if all(envelope.location.type == "DM" for envelope in result.envelopes):
+                return result
+            return InboundAdmissionResult(CommunicationPolicyDisposition.MENTION_REQUIRED)
 
         admitted: list[NormalizedCommunicationEnvelope] = []
-        for envelope in envelopes:
+        for envelope in result.envelopes:
             if envelope.location.type == "DM" or bot_user_id in envelope.mentions:
                 admitted.append(envelope)
                 continue
@@ -347,7 +396,9 @@ class SlackPlatformPlugin(PlatformPlugin):
                 and context.thread_is_agent_owned(envelope.location)
             ):
                 admitted.append(envelope)
-        return admitted
+        if admitted:
+            return InboundAdmissionResult(CommunicationPolicyDisposition.ACCEPTED, tuple(admitted))
+        return InboundAdmissionResult(CommunicationPolicyDisposition.MENTION_REQUIRED)
 
     @classmethod
     def _mentioned_user_ids(cls, text: str) -> list[str]:
@@ -419,13 +470,11 @@ class SlackPlatformPlugin(PlatformPlugin):
         try:
             return callback()
         except Exception as exc:
-            detail = " ".join(str(exc).split())[:160]
             logger.warning(
-                "Slack inbound enrichment %s failed for message %s (%s): %s",
+                "Slack inbound enrichment %s failed for message %s (%s)",
                 action,
                 envelope.provider_message_id,
                 type(exc).__name__,
-                detail,
             )
             return None
 

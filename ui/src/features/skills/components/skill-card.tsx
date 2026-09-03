@@ -26,6 +26,7 @@ export function SkillCard({
   skill,
   href,
   badges,
+  details,
   footer,
   onAdd,
   addDisabled = false,
@@ -33,6 +34,8 @@ export function SkillCard({
   skill: SkillCardSkill;
   href: string;
   badges?: ReactNode;
+  /** Optional expanded content rendered between metadata and the footer. */
+  details?: ReactNode;
   footer?: ReactNode;
   onAdd?: () => void;
   addDisabled?: boolean;
@@ -93,6 +96,12 @@ export function SkillCard({
         )}
 
       </Link>
+
+      {details ? (
+        <div className="border-t px-4 py-4" style={{ borderColor: "var(--line)" }}>
+          {details}
+        </div>
+      ) : null}
 
       {footer ? (
         <div

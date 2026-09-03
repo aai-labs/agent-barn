@@ -119,6 +119,7 @@ export function SkillDetailPage({
   }
 
   const latestVersion = versions.length > 0 ? Math.max(...versions.map((v) => v.version)) : (detail?.version ?? 0);
+  const hasPublishedVersion = detail?.version !== null && detail?.version !== undefined || versions.length > 0;
   const viewingHistorical = selectedVersion !== null && selectedVersion !== latestVersion;
   const { files: historicalFiles, isLoading: historicalLoading } = useSkillVersionDetail(
     viewingHistorical ? skillId : null,
@@ -189,7 +190,8 @@ export function SkillDetailPage({
   const canDeleteLineage = canEdit && detail.source === "custom";
   const deleteBlocked = detail.isAssignedToAgent;
   const draftFiles = existingDraft?.files.map((f) => ({ path: f.path, content: f.content })) ?? [];
-  const showDraftPreview = !editing && viewingDraft && existingDraft && detail.hasDraft;
+  const showDraftPreview =
+    !editing && existingDraft && detail.hasDraft && (viewingDraft || !hasPublishedVersion);
   const displayedFiles = showDraftPreview
     ? draftFiles
     : viewingHistorical
@@ -573,7 +575,7 @@ export function SkillDetailPage({
                 style={{ borderColor: "var(--line)" }}
               >
                 <div className="flex items-center gap-3">
-                  {detail.hasDraft && (
+                  {detail.hasDraft && hasPublishedVersion ? (
                     <div className="inline-flex rounded-lg" style={{ border: "1px solid var(--line)" }}>
                       <button
                         type="button"
@@ -601,8 +603,12 @@ export function SkillDetailPage({
                         Draft
                       </button>
                     </div>
-                  )}
-                  {(!detail.hasDraft || !viewingDraft) && (
+                  ) : detail.hasDraft ? (
+                    <span className="text-[13px] font-medium" style={{ color: "var(--ink-3)" }}>
+                      Draft
+                    </span>
+                  ) : null}
+                  {hasPublishedVersion && (!detail.hasDraft || !viewingDraft) && (
                     <p className="text-[13px] leading-[1.5] m-0" style={{ color: "var(--ink-3)" }}>
                       This published version is read-only.
                     </p>
@@ -612,7 +618,7 @@ export function SkillDetailPage({
                   Edit/Publish (Draft). Wrapped in a min-height container so
                   switching tabs doesn't cause a layout jump. */}
                 <div className="flex items-center gap-2 min-h-[36px]">
-                  {(!detail.hasDraft || !viewingDraft) && versions.length > 0 && (
+                  {hasPublishedVersion && (!detail.hasDraft || !viewingDraft) && versions.length > 0 && (
                     <>
                       <Select
                         value={String(selectedVersion ?? latestVersion)}

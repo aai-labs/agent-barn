@@ -2,6 +2,8 @@ import json
 import secrets
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
+from typing import NoReturn
 from uuid import UUID
 
 from fastapi import HTTPException, status
@@ -13,24 +15,60 @@ from api.domains.agents.authorization import AgentAuthorization
 from api.domains.agents.models import Agent
 from api.domains.auth.models import CurrentUserContext
 from api.domains.communications.addressing import build_local_part, compose_address
+from api.domains.communications.delivery_repository import (
+    CommunicationDeliveryRepository,
+    CommunicationDeliveryRetryError,
+)
 from api.domains.communications.email_address_repository import AgentEmailAddressRepository
+from api.domains.communications.error_details import normalize_communication_error
 from api.domains.communications.models import (
     AgentEmailAddress,
     CommunicationConnection,
     CommunicationConnectionCreate,
     CommunicationConnectionRead,
     CommunicationConnectionUpdate,
+    CommunicationDiagnosticsRead,
+    CommunicationDirection,
+    CommunicationDirectoryEntryRead,
+    CommunicationDirectoryPreview,
+    CommunicationDirectoryPreviewRead,
+    CommunicationErrorCategory,
+    CommunicationJournalEntryRead,
+    CommunicationJournalStage,
+    CommunicationReconnectRead,
+    CommunicationRetryRead,
     ConnectionObservedStatus,
     PlatformCapability,
     PlatformDescriptorRead,
 )
+from api.domains.communications.operations import CommunicationOperationalRepository
 from api.domains.communications.plugins.registry import PlatformPluginRegistry
 from api.domains.communications.repository import (
     CommunicationConnectionConflictError,
     CommunicationConnectionRepository,
 )
+from api.domains.events import resolve_actor_identity
 from api.domains.rbac.catalog import PermissionKey
 from api.infrastructure.crypto import decrypt_token, encrypt_token
+from api.infrastructure.shared.models import PaginatedItems, Pagination
+
+MAX_DIAGNOSTICS_WINDOW_DAYS = 90
+
+# A directory read talks to the provider, so a failure is usually the operator's
+# credentials or scopes rather than a bug. 401/403 are deliberately never used:
+# the web client treats them as its own session expiring and would sign the user
+# out because a Slack token was wrong.
+_DIRECTORY_ERROR_STATUS = {
+    CommunicationErrorCategory.AUTHENTICATION: status.HTTP_400_BAD_REQUEST,
+    CommunicationErrorCategory.AUTHORIZATION: status.HTTP_400_BAD_REQUEST,
+    CommunicationErrorCategory.CONFIGURATION: status.HTTP_400_BAD_REQUEST,
+    CommunicationErrorCategory.PROVIDER_REJECTED: status.HTTP_400_BAD_REQUEST,
+    CommunicationErrorCategory.RATE_LIMITED: status.HTTP_429_TOO_MANY_REQUESTS,
+    CommunicationErrorCategory.TIMEOUT: status.HTTP_504_GATEWAY_TIMEOUT,
+    CommunicationErrorCategory.NETWORK: status.HTTP_502_BAD_GATEWAY,
+    CommunicationErrorCategory.PROVIDER_UNAVAILABLE: status.HTTP_502_BAD_GATEWAY,
+    CommunicationErrorCategory.UNKNOWN: status.HTTP_502_BAD_GATEWAY,
+}
 
 
 @inject
@@ -42,6 +80,8 @@ class CommunicationsService:
     repository: CommunicationConnectionRepository
     addresses: AgentEmailAddressRepository
     plugins: PlatformPluginRegistry
+    delivery_repository: CommunicationDeliveryRepository | None = None
+    operations: CommunicationOperationalRepository | None = None
 
     def list_platforms(self, context: CurrentUserContext) -> list[PlatformDescriptorRead]:
         context.require_current_user_organization()
@@ -57,6 +97,89 @@ class CommunicationsService:
         connections = self.repository.list_active_for_agent(agent_id, scope)
         addresses = self.addresses.addresses_for([connection.id for connection in connections])
         return [self._read(connection, addresses) for connection in connections]
+
+    def _raise_directory_error(self, exc: Exception, operation: str) -> NoReturn:
+        """Translate a provider-side directory failure into a bounded HTTP error.
+
+        Provider text never reaches the client: only the normalized summary, which
+        carries a validated provider code (for example `missing_scope`) when there is
+        one — the difference between "your token lacks a scope" and an opaque 500.
+        """
+        normalized = normalize_communication_error(exc, operation=operation)
+        category = normalized.details.category if normalized.details else CommunicationErrorCategory.UNKNOWN
+        raise HTTPException(
+            status_code=_DIRECTORY_ERROR_STATUS.get(category, status.HTTP_502_BAD_GATEWAY),
+            # The summary already carries the HTTP status and provider code when known.
+            detail=normalized.summary or "The provider reported an error",
+        )
+
+    def list_connection_directory(
+        self,
+        agent_id: UUID,
+        connection_id: UUID,
+        kind: str,
+        search: str | None,
+        guild_id: str | None,
+        context: CurrentUserContext,
+    ) -> list[CommunicationDirectoryEntryRead]:
+        self.authorization.require_action(context, agent_id, PermissionKey.AGENT_UPDATE)
+        scope = self.authorization.authorization_scope(context, PermissionKey.AGENT_UPDATE)
+        connection = self.repository.get_active_in_scope(connection_id, agent_id, scope)
+        if connection is None:
+            self._raise_not_found(connection_id)
+        plugin = self._require_plugin(connection.platform_key)
+        if PlatformCapability.DIRECTORY_DISCOVERY not in plugin.capabilities:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="This platform does not support directory discovery",
+            )
+        try:
+            entries = plugin.list_directory_entries(
+                plugin.settings_model.model_validate(plugin.validate_stored_settings(connection.settings)),
+                plugin.credentials_model.model_validate(
+                    self._decrypt_credentials(plugin, connection.credentials_encrypted)
+                ),
+                kind=kind,
+                search=search,
+                guild_id=guild_id,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        except HTTPException:
+            raise
+        except Exception as exc:
+            self._raise_directory_error(exc, f"list_directory_{kind}")
+        return [CommunicationDirectoryEntryRead.model_validate(entry) for entry in entries]
+
+    def preview_connection_directory(
+        self,
+        agent_id: UUID,
+        data: CommunicationDirectoryPreview,
+        context: CurrentUserContext,
+    ) -> CommunicationDirectoryPreviewRead:
+        agent = self.authorization.require_action(context, agent_id, PermissionKey.AGENT_UPDATE)
+        self.authorization.require_action_for_visible(context, agent, PermissionKey.AGENT_SECRET_MANAGE)
+        plugin = self._require_plugin(data.platform_key)
+        if plugin.key != "slack" or PlatformCapability.DIRECTORY_DISCOVERY not in plugin.capabilities:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Workspace preview is available for Slack only",
+            )
+        try:
+            settings = plugin.settings_model.model_validate(data.settings)
+            credentials = plugin.credentials_model.model_validate(data.credentials)
+            channels = plugin.list_directory_entries(settings, credentials, kind="channels")
+            users = plugin.list_directory_entries(settings, credentials, kind="users")
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        except HTTPException:
+            raise
+        except Exception as exc:
+            self._raise_directory_error(exc, "preview_directory")
+        return CommunicationDirectoryPreviewRead(
+            channels=[CommunicationDirectoryEntryRead.model_validate(entry) for entry in channels],
+            users=[CommunicationDirectoryEntryRead.model_validate(entry) for entry in users],
+        )
 
     def create_connection(
         self,
@@ -133,7 +256,6 @@ class CommunicationsService:
         connection = self.repository.get_active_in_scope(connection_id, agent_id, action_scope)
         if connection is None:
             self._raise_not_found(connection_id)
-        assert connection is not None
 
         if data.credentials is not None:
             self.authorization.require_action_for_visible(context, agent, PermissionKey.AGENT_SECRET_MANAGE)
@@ -160,6 +282,7 @@ class CommunicationsService:
         connection.observed_status = ConnectionObservedStatus.PENDING if connection.enabled else None
         connection.last_error_code = None
         connection.last_error_message = None
+        connection.last_error_details = None
         try:
             updated = self.repository.update(connection, expected_revision=data.revision)
             return self._read(updated)
@@ -184,6 +307,170 @@ class CommunicationsService:
         except CommunicationConnectionConflictError as exc:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
+    def get_connection_summary(
+        self,
+        agent_id: UUID,
+        connection_id: UUID,
+        context: CurrentUserContext,
+        *,
+        since: datetime | None = None,
+        until: datetime | None = None,
+        window_minutes: int | None = None,
+    ) -> CommunicationDiagnosticsRead:
+        self.authorization.require_visible(context, agent_id)
+        read_scope = self.authorization.authorization_scope(context, PermissionKey.AGENT_READ)
+        connection = self.repository.get_active_in_scope(connection_id, agent_id, read_scope)
+        if connection is None:
+            self._raise_not_found(connection_id)
+
+        window_end = self._as_utc(until) if until is not None else datetime.now(UTC)
+        default_minutes = window_minutes or 24 * 60
+        window_start = self._as_utc(since) if since is not None else window_end - timedelta(minutes=default_minutes)
+        self._validate_window(window_start, window_end)
+        operations = self.operations or getattr(self.repository, "operations", None)
+        if operations is None:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Diagnostics are unavailable")
+        snapshot = operations.diagnostics_snapshot(
+            organization_id=connection.organization_id,
+            agent_id=agent_id,
+            connection_id=connection.id,
+            authorization_scope=read_scope,
+            window_start=window_start,
+            window_end=window_end,
+        )
+        return CommunicationDiagnosticsRead(
+            connection=self._read(connection),
+            provider_connectivity=connection.observed_status,
+            end_to_end_health=operations.end_to_end_health(
+                connection.observed_status,
+                snapshot.delivery_counts,
+                oldest_pending_delivery_age_seconds=snapshot.oldest_pending_delivery_age_seconds,
+            ),
+            pipeline=snapshot.pipeline,
+            delivery_counts=snapshot.delivery_counts,
+            queue_depth=snapshot.queue_depth,
+            oldest_queued_age_seconds=snapshot.oldest_queued_age_seconds,
+            oldest_pending_delivery_age_seconds=snapshot.oldest_pending_delivery_age_seconds,
+            latency=snapshot.latency,
+            last_successful_connection_at=snapshot.last_successful_connection_at,
+            current_error_age_seconds=snapshot.current_error_age_seconds,
+            consecutive_failure_count=snapshot.consecutive_failure_count,
+            delivery_success_rate=snapshot.delivery_success_rate,
+            recent_failures=snapshot.recent_failures,
+            latest_transitions=snapshot.latest_transitions,
+            connection_history=snapshot.connection_history,
+            connection_incidents=snapshot.connection_incidents,
+            reconnect_count=snapshot.reconnect_count,
+            median_connect_time_ms=snapshot.median_connect_time_ms,
+            longest_outage_ms=snapshot.longest_outage_ms,
+            window_start=window_start,
+            window_end=window_end,
+        )
+
+    def list_journal_entries(
+        self,
+        agent_id: UUID,
+        connection_id: UUID,
+        context: CurrentUserContext,
+        *,
+        page: int,
+        page_size: int,
+        kind: str,
+        since: datetime | None = None,
+        until: datetime | None = None,
+        stage: CommunicationJournalStage | None = None,
+        failed_only: bool = False,
+        retryable_only: bool = False,
+        direction: CommunicationDirection | None = None,
+        delivery_id: UUID | None = None,
+        order: str = "desc",
+    ) -> PaginatedItems[CommunicationJournalEntryRead]:
+        self.authorization.require_visible(context, agent_id)
+        read_scope = self.authorization.authorization_scope(context, PermissionKey.AGENT_READ)
+        connection = self.repository.get_active_in_scope(connection_id, agent_id, read_scope)
+        if connection is None:
+            self._raise_not_found(connection_id)
+        operations = self.operations or getattr(self.repository, "operations", None)
+        if operations is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Connection activity is unavailable"
+            )
+        normalized_since = self._as_utc(since) if since is not None else None
+        normalized_until = self._as_utc(until) if until is not None else None
+        self._validate_window(normalized_since, normalized_until)
+        return operations.find_journal_page(
+            organization_id=connection.organization_id,
+            agent_id=agent_id,
+            connection_id=connection.id,
+            authorization_scope=read_scope,
+            pagination=Pagination(page=page, size=page_size),
+            kind=kind,
+            since=normalized_since,
+            until=normalized_until,
+            stage=stage,
+            failed_only=failed_only,
+            retryable_only=retryable_only,
+            direction=direction,
+            delivery_id=delivery_id,
+            order=order,
+        )
+
+    def reconnect_connection(
+        self,
+        agent_id: UUID,
+        connection_id: UUID,
+        context: CurrentUserContext,
+    ) -> CommunicationReconnectRead:
+        agent = self.authorization.require_action(context, agent_id, PermissionKey.AGENT_UPDATE)
+        action_scope = self.authorization.authorization_scope(context, PermissionKey.AGENT_UPDATE)
+        connection = self.repository.get_active_in_scope(connection_id, agent_id, action_scope)
+        if connection is None:
+            self._raise_not_found(connection_id)
+        if not connection.enabled:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Enable the Communication Connection before reconnecting it",
+            )
+        updated = self.repository.request_reconnect(
+            connection_id,
+            actor=resolve_actor_identity(context, agent.organization_id),
+        )
+        if updated is None:
+            self._raise_not_found(connection_id)
+        return CommunicationReconnectRead(
+            connection=self._read(updated),
+            requested_at=datetime.now(UTC),
+        )
+
+    def retry_delivery(
+        self,
+        agent_id: UUID,
+        connection_id: UUID,
+        delivery_id: UUID,
+        context: CurrentUserContext,
+    ) -> CommunicationRetryRead:
+        agent = self.authorization.require_action(context, agent_id, PermissionKey.AGENT_UPDATE)
+        action_scope = self.authorization.authorization_scope(context, PermissionKey.AGENT_UPDATE)
+        if self.repository.get_active_in_scope(connection_id, agent_id, action_scope) is None:
+            self._raise_not_found(connection_id)
+        if self.delivery_repository is None:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Recovery is unavailable")
+        try:
+            delivery = self.delivery_repository.retry_dead_lettered(
+                delivery_id,
+                agent_id=agent.id,
+                connection_id=connection_id,
+                actor=resolve_actor_identity(context, agent.organization_id),
+            )
+        except CommunicationDeliveryRetryError as exc:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+        return CommunicationRetryRead(
+            delivery_id=delivery.id,
+            status=delivery.status,
+            attempt_count=delivery.attempt_count,
+            requested_at=datetime.now(UTC),
+        )
+
     def build_app_package(
         self,
         agent_id: UUID,
@@ -195,7 +482,6 @@ class CommunicationsService:
         connection = self.repository.get_active_in_scope(connection_id, agent_id, scope)
         if connection is None:
             self._raise_not_found(connection_id)
-        assert connection is not None
 
         plugin = self._require_plugin(connection.platform_key)
         if PlatformCapability.APPLICATION_PROVISIONING not in plugin.capabilities:
@@ -275,13 +561,42 @@ class CommunicationsService:
             if addresses is None:
                 addresses = self.addresses.addresses_for([connection.id])
             managed_address = addresses.get(connection.id)
-        return CommunicationConnectionRead.model_validate(connection).model_copy(
-            update={"webhook_url": webhook_url, "managed_address": managed_address}
+        read = CommunicationConnectionRead.model_validate(connection)
+        safe_details = CommunicationOperationalRepository.safe_error_details(connection.last_error_details)
+        return read.model_copy(
+            update={
+                "last_error_code": CommunicationOperationalRepository.safe_error_code(read.last_error_code),
+                "last_error_message": CommunicationOperationalRepository.safe_error_summary(
+                    read.last_error_message,
+                    details=safe_details,
+                ),
+                "last_error_details": safe_details,
+                "webhook_url": webhook_url,
+                "managed_address": managed_address,
+            }
         )
 
     @staticmethod
-    def _raise_not_found(connection_id: UUID) -> None:
+    def _raise_not_found(connection_id: UUID) -> NoReturn:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Communication Connection {connection_id} not found",
         )
+
+    @staticmethod
+    def _as_utc(value: datetime) -> datetime:
+        return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+
+    @staticmethod
+    def _validate_window(window_start: datetime | None, window_end: datetime | None) -> None:
+        if window_start is not None and window_end is not None and window_start > window_end:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Diagnostics window is invalid")
+        if (
+            window_start is not None
+            and window_end is not None
+            and window_end - window_start > timedelta(days=MAX_DIAGNOSTICS_WINDOW_DAYS)
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Diagnostics window cannot exceed {MAX_DIAGNOSTICS_WINDOW_DAYS} days",
+            )

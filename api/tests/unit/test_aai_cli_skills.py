@@ -19,7 +19,6 @@ _EXPECTED_PROVIDER_NAMES = {
     "HubSpot",
     "OpenPanel",
     "Zoho Mail",
-    "Slack",
     "Pipedrive",
     "PostHog",
 }

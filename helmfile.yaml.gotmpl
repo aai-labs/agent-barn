@@ -232,6 +232,11 @@ releases:
         value: {{ env "GIT_SHA" | default "" | quote }}
       - name: ingress.hosts
         value: {{ env "UI_HOST" | required "UI_HOST is required" | quote }}
+      # Same Secret the API chart creates. The UI default name
+      # (registry-pull-secret) is not installed on Talos, so the private
+      # registry pull fails without this.
+      - name: imagePullSecrets[0].name
+        value: "agentbarn-api-registry-pull-secret"
     needs:
       - {{ env "NAMESPACE" | default "agent-farm" }}/agentbarn-api
 

@@ -1,9 +1,8 @@
 name: Client Release
 
-# Builds every Agent Barn image and pushes it to the client-facing registry.
-# Manual only. Distinct from deploy.yml: it uses the docker/* actions (no hand
-# -rolled docker login/build/push) and a matrix over the images rather than a
-# step per image.
+# Builds every Agent Barn image and pushes it to the client-facing registry
+# (self-host customers). Manual only. Distinct from deploy.yml (k3s testing
+# ground) and deploy-public.yml (hosted public cluster on release tags).
 
 on:
   workflow_dispatch:

@@ -1,7 +1,7 @@
 import hashlib
 import json
 from abc import ABC, abstractmethod
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
@@ -9,6 +9,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict
 
 from api.domains.communications.models import (
+    CommunicationPolicyDisposition,
     ConversationLocation,
     CredentialUniquenessScope,
     NormalizedCommunicationEnvelope,
@@ -17,6 +18,18 @@ from api.domains.communications.models import (
     PlatformDescriptorRead,
     ProcessingFeedbackStage,
 )
+
+
+def provider_idempotency_key(delivery_key: str) -> str:
+    """Return a bounded opaque key safe to pass to a provider adapter.
+
+    Runtime reply keys are user/runtime input and may be long or contain
+    provider-sensitive characters. The delivery row remains the source of
+    truth, while adapters receive the same deterministic, non-secret token on
+    every retry.
+    """
+
+    return hashlib.sha256(f"agentbarn:communication:{delivery_key}".encode()).hexdigest()
 
 
 class PlatformSettings(BaseModel):
@@ -60,10 +73,40 @@ class ProcessingFeedbackContext:
     source_delivery_id: UUID | None = None
 
 
+@dataclass(frozen=True)
+class InboundAdmissionResult(Sequence[NormalizedCommunicationEnvelope]):
+    """Typed provider admission outcome with list-compatible envelopes.
+
+    The sequence behavior keeps existing plugin integrations source-compatible
+    while making an ignored or denied payload observable to the gateway and
+    diagnostics instead of silently returning an empty list.
+    """
+
+    disposition: CommunicationPolicyDisposition
+    envelopes: tuple[NormalizedCommunicationEnvelope, ...] = ()
+
+    def __iter__(self):
+        return iter(self.envelopes)
+
+    def __len__(self) -> int:
+        return len(self.envelopes)
+
+    def __getitem__(self, index):
+        return self.envelopes[index]
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, InboundAdmissionResult):
+            return self.disposition == other.disposition and self.envelopes == other.envelopes
+        if isinstance(other, Sequence):
+            return list(self.envelopes) == list(other)
+        return NotImplemented
+
+
 class PlatformPlugin(ABC):
     key: str
     display_name: str
     setup_hint: str | None = None
+    post_setup_hint: str | None = None
     schema_version: int = 1
     capabilities: frozenset[PlatformCapability] = frozenset()
     settings_model: type[PlatformSettings]
@@ -76,6 +119,7 @@ class PlatformPlugin(ABC):
             key=self.key,
             display_name=self.display_name,
             setup_hint=self.setup_hint,
+            post_setup_hint=self.post_setup_hint,
             schema_version=self.schema_version,
             capabilities=sorted(self.capabilities, key=lambda item: item.value),
             settings_schema=self.settings_model.model_json_schema(),
@@ -139,8 +183,14 @@ class PlatformPlugin(ABC):
         settings: PlatformSettings,
         credentials: PlatformCredentials,
         envelope: OutboundCommunicationEnvelope,
+        *,
+        idempotency_key: str,
     ) -> str:
         """Deliver one normalized reply and return the provider message id.
+
+        ``idempotency_key`` is stable for the durable Delivery across leases
+        and manual retries. Provider adapters must pass it to the provider's
+        native deduplication field or idempotency transport header.
 
         A shipped plugin that cannot provide outbound delivery is not eligible for
         an enabled Communication Connection.
@@ -151,9 +201,10 @@ class PlatformPlugin(ABC):
         self,
         settings: PlatformSettings,
         payload: dict[str, Any],
-    ) -> list[NormalizedCommunicationEnvelope]:
+    ) -> InboundAdmissionResult:
         """Verify/filter a provider-decoded event and map it to protocol envelopes."""
-        raise NotImplementedError(f"{self.key} does not implement inbound normalization")
+        del settings, payload
+        return InboundAdmissionResult(CommunicationPolicyDisposition.MALFORMED_PAYLOAD)
 
     def admit_inbound(
         self,
@@ -161,7 +212,7 @@ class PlatformPlugin(ABC):
         payload: dict[str, Any],
         *,
         context: InboundAdmissionContext,
-    ) -> list[NormalizedCommunicationEnvelope]:
+    ) -> InboundAdmissionResult:
         """Apply provider admission policy before durable delivery acceptance.
 
         Most plugins only need normalization. Plugins with conversation-scoped
@@ -186,6 +237,24 @@ class PlatformPlugin(ABC):
         """
         del settings, credentials
         return envelopes
+
+    def list_directory_entries(
+        self,
+        settings: PlatformSettings,
+        credentials: PlatformCredentials,
+        *,
+        kind: str,
+        search: str | None = None,
+        guild_id: str | None = None,
+    ) -> list[dict[str, str | None]]:
+        """List safe provider-owned candidates for Connection settings.
+
+        A platform advertises DIRECTORY_DISCOVERY only when it implements this
+        seam. Returned values are display-only identifiers; credentials and
+        provider payloads never leave the plugin boundary.
+        """
+        del settings, credentials, kind, search, guild_id
+        raise NotImplementedError(f"{self.key} does not implement directory discovery")
 
     def processing_feedback(
         self,

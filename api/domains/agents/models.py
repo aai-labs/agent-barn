@@ -1067,6 +1067,7 @@ class AgentRead(PydanticBaseModel):
     pending_model: str
     secrets: list[AgentSecretRead] = Field(default_factory=list)
     skills: list[AgentAssignedSkillRead] = Field(default_factory=list)
+    configured_platform_keys: list[str] = Field(default_factory=list)
     approval_mode: CommandApprovalMode
     allowed_actions: list[PermissionKey] = Field(default_factory=list)
     created_at: datetime

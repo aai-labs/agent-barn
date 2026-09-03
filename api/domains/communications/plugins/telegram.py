@@ -7,6 +7,7 @@ import httpx
 from pydantic import Field
 
 from api.domains.communications.models import (
+    CommunicationPolicyDisposition,
     CommunicationSender,
     ConversationLocation,
     CredentialUniquenessScope,
@@ -15,9 +16,11 @@ from api.domains.communications.models import (
     PlatformCapability,
 )
 from api.domains.communications.plugins.base import (
+    InboundAdmissionResult,
     PlatformCredentials,
     PlatformPlugin,
     PlatformSettings,
+    provider_idempotency_key,
 )
 from api.infrastructure.telegram.client import get_chat_display_name, send_message, validate_bot_token
 
@@ -68,19 +71,19 @@ class TelegramPlatformPlugin(PlatformPlugin):
     key = "telegram"
     display_name = "Telegram"
     setup_hint = (
-        "Credential\n"
-        "• Bot token: Open @BotFather, run /newbot, and copy the token in the <bot-id>:<secret> format. Keep it "
-        "private; Telegram has no separate app token or OAuth credential for this connection.\n\n"
-        "Telegram setup\n"
-        "• This integration uses long polling through getUpdates. Remove any existing webhook and stop other "
-        "services polling the same bot token before connecting.\n"
-        "• Add the bot to every group or channel it should handle. For all ordinary group messages, use @BotFather "
-        "/setprivacy → Disable; privacy mode otherwise delivers mainly commands, replies, and mentions.\n"
-        "• For channels, make the bot an administrator so it can receive channel posts and send replies.\n\n"
-        "Connection settings\n"
-        "• Direct messages default to Off; set Direct messages to Open or Allowlist when DMs are needed.\n"
-        "• Allowed groups and Allowed DM senders use numeric Telegram IDs, not usernames; group and supergroup IDs "
-        "are often negative."
+        "## Create a bot\n\n"
+        "1. Open [@BotFather](https://t.me/BotFather), run `/newbot`, and copy the token in the `<bot-id>:<secret>` "
+        "format. Keep it private; Telegram has no separate app token or OAuth credential for this Connection.\n\n"
+        "## Configure Telegram\n\n"
+        "1. This integration uses `getUpdates` long polling. Remove any existing webhook and stop other services polling "
+        "the same bot token before connecting.\n"
+        "2. Add the bot to every group or channel it should handle. For ordinary group messages, use **@BotFather → "
+        "/setprivacy → Disable**; privacy mode otherwise delivers mainly commands, replies, and mentions.\n"
+        "3. For channels, make the bot an administrator so it can receive channel posts and send replies.\n\n"
+        "## Set Connection access\n\n"
+        "1. Direct messages default to Off; set Direct messages to Open or Allowlist when DMs are needed.\n"
+        "2. Allowed groups and Allowed DM senders use numeric Telegram IDs, not usernames; group and supergroup IDs are "
+        "often negative."
     )
     capabilities = frozenset(
         {
@@ -115,6 +118,8 @@ class TelegramPlatformPlugin(PlatformPlugin):
         settings: PlatformSettings,
         credentials: PlatformCredentials,
         envelope: OutboundCommunicationEnvelope,
+        *,
+        idempotency_key: str,
     ) -> str:
         assert isinstance(credentials, TelegramCredentials)
         return send_message(
@@ -122,57 +127,71 @@ class TelegramPlatformPlugin(PlatformPlugin):
             envelope.location.id,
             envelope.text,
             thread_id=envelope.location.thread_id,
+            idempotency_key=provider_idempotency_key(idempotency_key),
         )
 
     def normalize_inbound(
         self,
         settings: PlatformSettings,
         payload: dict[str, Any],
-    ) -> list[NormalizedCommunicationEnvelope]:
+    ) -> InboundAdmissionResult:
         assert isinstance(settings, TelegramSettings)
         message = payload.get("message") or payload.get("channel_post")
         if not isinstance(message, dict):
-            return []
+            return InboundAdmissionResult(CommunicationPolicyDisposition.MALFORMED_PAYLOAD)
         chat = message.get("chat")
         sender = message.get("from") or {}
         if not isinstance(chat, dict) or not isinstance(sender, dict):
-            return []
+            return InboundAdmissionResult(CommunicationPolicyDisposition.MALFORMED_PAYLOAD)
+        if sender.get("is_bot"):
+            return InboundAdmissionResult(CommunicationPolicyDisposition.BOT_IGNORED)
         chat_id = str(chat.get("id") or "")
         sender_id = str(sender.get("id") or "")
         is_dm = chat.get("type") == "private"
         if is_dm:
             if settings.dm_policy == "off":
-                return []
+                return InboundAdmissionResult(CommunicationPolicyDisposition.USER_DENIED)
             if settings.dm_policy == "allowlist" and sender_id not in settings.allowed_user_ids:
-                return []
+                return InboundAdmissionResult(CommunicationPolicyDisposition.USER_DENIED)
         elif settings.group_policy == "allowlist" and chat_id not in settings.allowed_chat_ids:
-            return []
+            return InboundAdmissionResult(CommunicationPolicyDisposition.CHANNEL_DENIED)
         message_id = str(message.get("message_id") or "")
         if not chat_id or not message_id:
-            return []
+            return InboundAdmissionResult(CommunicationPolicyDisposition.MALFORMED_PAYLOAD)
         display_name = " ".join(
             part for part in (str(sender.get("first_name") or ""), str(sender.get("last_name") or "")) if part
         )
-        return [
-            NormalizedCommunicationEnvelope(
-                provider_message_id=message_id,
-                occurred_at=datetime.fromtimestamp(int(message.get("date") or 0), tz=UTC),
-                location=ConversationLocation(
-                    id=chat_id,
-                    type="DM" if is_dm else "CHANNEL",
-                    display_name=str(chat.get("title") or chat.get("username") or "") or None,
-                    thread_id=str(message.get("message_thread_id") or "") or None,
+        raw_date = message.get("date")
+        if raw_date is None:
+            return InboundAdmissionResult(CommunicationPolicyDisposition.MALFORMED_PAYLOAD)
+        try:
+            occurred_at = datetime.fromtimestamp(int(raw_date), tz=UTC)
+            update_id = int(payload.get("update_id") or 0)
+        except (TypeError, ValueError, OSError) as _:
+            return InboundAdmissionResult(CommunicationPolicyDisposition.MALFORMED_PAYLOAD)
+        return InboundAdmissionResult(
+            CommunicationPolicyDisposition.ACCEPTED,
+            (
+                NormalizedCommunicationEnvelope(
+                    provider_message_id=message_id,
+                    occurred_at=occurred_at,
+                    location=ConversationLocation(
+                        id=chat_id,
+                        type="DM" if is_dm else "CHANNEL",
+                        display_name=str(chat.get("title") or chat.get("username") or "") or None,
+                        thread_id=str(message.get("message_thread_id") or "") or None,
+                    ),
+                    sender=CommunicationSender(id=sender_id or None, display_name=display_name or None),
+                    text=str(message.get("text") or message.get("caption") or ""),
+                    reply_to_provider_message_id=(
+                        str(message.get("reply_to_message", {}).get("message_id"))
+                        if isinstance(message.get("reply_to_message"), dict)
+                        else None
+                    ),
+                    provider_metadata={"update_id": update_id},
                 ),
-                sender=CommunicationSender(id=sender_id or None, display_name=display_name or None),
-                text=str(message.get("text") or message.get("caption") or ""),
-                reply_to_provider_message_id=(
-                    str(message.get("reply_to_message", {}).get("message_id"))
-                    if isinstance(message.get("reply_to_message"), dict)
-                    else None
-                ),
-                provider_metadata={"update_id": int(payload.get("update_id") or 0)},
-            )
-        ]
+            ),
+        )
 
     def enrich_inbound(
         self,
@@ -222,13 +241,11 @@ class TelegramPlatformPlugin(PlatformPlugin):
         try:
             return callback()
         except Exception as exc:
-            detail = " ".join(str(exc).split())[:160]
             logger.warning(
-                "Telegram inbound enrichment %s failed for message %s (%s): %s",
+                "Telegram inbound enrichment %s failed for message %s (%s)",
                 action,
                 envelope.provider_message_id,
                 type(exc).__name__,
-                detail,
             )
             return None
 

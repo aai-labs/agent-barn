@@ -6,6 +6,7 @@ from uuid import UUID
 from pydantic import Field
 
 from api.domains.communications.models import (
+    CommunicationPolicyDisposition,
     CommunicationSender,
     ConversationLocation,
     CredentialUniquenessScope,
@@ -14,9 +15,11 @@ from api.domains.communications.models import (
     PlatformCapability,
 )
 from api.domains.communications.plugins.base import (
+    InboundAdmissionResult,
     PlatformCredentials,
     PlatformPlugin,
     PlatformSettings,
+    provider_idempotency_key,
 )
 from api.infrastructure.msteams.client import (
     TeamsAuthError,
@@ -91,21 +94,29 @@ class TeamsPlatformPlugin(PlatformPlugin):
     key = "teams"
     display_name = "Microsoft Teams"
     setup_hint = (
-        "Credentials\n"
-        "• Create an Azure Bot resource in the Azure Portal, then open Configuration and copy the Microsoft App ID.\n"
-        "• Open the linked app registration → Certificates & secrets → New client secret. Copy the secret Value "
-        "immediately; it is masked once you leave the page, and the Secret ID is not the password.\n"
-        "• Copy the Directory (tenant) ID from Microsoft Entra ID → Overview.\n\n"
-        "Teams setup\n"
-        "• In the Azure Bot resource, open Channels and enable Microsoft Teams.\n"
-        "• After saving this connection, paste its webhook URL into the Azure Bot's Configuration → Messaging "
-        "endpoint. The endpoint must be reachable from the public internet or Microsoft cannot deliver messages.\n"
-        "• Install the bot in Teams for the chats and teams it should serve.\n\n"
-        "Connection settings\n"
-        "• Direct messages default to Off; set Direct messages to Open or Allowlist when DMs are needed.\n"
-        "• Teams delivers channel and group-chat messages only when the bot is @mentioned.\n"
-        "• Allowed DM senders use the sender's Microsoft Entra object ID; Allowed channels use the Teams channel "
-        "conversation ID, which looks like 19:....@thread.tacv2."
+        "## Create credentials\n\n"
+        "1. Create an Azure Bot resource in the Azure Portal, then open **Configuration** and copy the Microsoft App ID.\n"
+        "2. Open **Manage passwords → Certificates & secrets → New client secret**. Copy the secret **Value** immediately; "
+        "it is masked once you leave the page, and the Secret ID is not the password.\n"
+        "3. Copy the Directory (tenant) ID from **Microsoft Entra ID → Overview**.\n\n"
+        "## Configure Teams\n\n"
+        "1. In the Azure Bot resource, open **Channels** and enable Microsoft Teams.\n"
+        "2. After saving this Connection, paste its webhook URL into the Azure Bot's **Configuration → Messaging endpoint**. "
+        "The endpoint must be reachable from the public internet.\n"
+        "3. Install the bot in Teams for the chats and teams it should serve.\n\n"
+        "## Set Connection access\n\n"
+        "1. Direct messages default to Off; set Direct messages to Open or Allowlist when DMs are needed.\n"
+        "2. Teams delivers channel and group-chat messages only when the bot is @mentioned.\n"
+        "3. Allowed DM senders use the sender's Microsoft Entra object ID; Allowed channels use the Teams channel "
+        "conversation ID, which looks like `19:....@thread.tacv2`."
+    )
+    post_setup_hint = (
+        "## Finish setup\n\n"
+        "1. Paste the webhook URL above into the Azure Bot's **Configuration → Messaging endpoint**, then Apply. The endpoint "
+        "must be reachable from the public internet.\n"
+        "2. Download the app package and upload it in Teams: **Apps → Manage your apps → Upload a custom app**. Add it to "
+        "every team and chat this Agent should serve.\n"
+        "3. Re-upload the package after renaming the Agent to refresh how it appears in Teams."
     )
     capabilities = frozenset(
         {
@@ -178,6 +189,8 @@ class TeamsPlatformPlugin(PlatformPlugin):
         settings: PlatformSettings,
         credentials: PlatformCredentials,
         envelope: OutboundCommunicationEnvelope,
+        *,
+        idempotency_key: str,
     ) -> str:
         assert isinstance(credentials, TeamsCredentials)
         metadata = envelope.provider_metadata
@@ -201,7 +214,13 @@ class TeamsPlatformPlugin(PlatformPlugin):
             activity["replyToId"] = envelope.reply_to_provider_message_id
 
         token = acquire_token(credentials.tenant_id, credentials.app_id, credentials.app_password)
-        return send_activity(service_url, conversation_id, activity, token)
+        return send_activity(
+            service_url,
+            conversation_id,
+            activity,
+            token,
+            idempotency_key=provider_idempotency_key(idempotency_key),
+        )
 
     def enrich_inbound(
         self,
@@ -231,12 +250,10 @@ class TeamsPlatformPlugin(PlatformPlugin):
             token = acquire_token(credentials.tenant_id, credentials.app_id, credentials.app_password)
             channels = list_team_channels(service_url, team_id, token)
         except Exception as exc:
-            detail = " ".join(str(exc).split())[:160]
             logger.warning(
-                "Teams inbound enrichment resolve channel name failed for message %s (%s): %s",
+                "Teams inbound enrichment resolve channel name failed for message %s (%s)",
                 envelope.provider_message_id,
                 type(exc).__name__,
-                detail,
             )
             return envelope
 
@@ -253,25 +270,27 @@ class TeamsPlatformPlugin(PlatformPlugin):
         self,
         settings: PlatformSettings,
         payload: dict[str, Any],
-    ) -> list[NormalizedCommunicationEnvelope]:
+    ) -> InboundAdmissionResult:
         assert isinstance(settings, TeamsSettings)
         if payload.get("type") != "message":
-            return []
+            return InboundAdmissionResult(CommunicationPolicyDisposition.MALFORMED_PAYLOAD)
 
         conversation = payload.get("conversation")
         sender = payload.get("from")
         if not isinstance(conversation, dict) or not isinstance(sender, dict):
-            return []
+            return InboundAdmissionResult(CommunicationPolicyDisposition.MALFORMED_PAYLOAD)
 
         bot_id = str((payload.get("recipient") or {}).get("id") or "")
         sender_id = str(sender.get("aadObjectId") or sender.get("id") or "")
-        if not sender_id or (bot_id and sender_id == bot_id):
-            return []
+        if not sender_id:
+            return InboundAdmissionResult(CommunicationPolicyDisposition.MALFORMED_PAYLOAD)
+        if bot_id and sender_id == bot_id:
+            return InboundAdmissionResult(CommunicationPolicyDisposition.BOT_IGNORED)
 
         raw_conversation_id = str(conversation.get("id") or "")
         message_id = str(payload.get("id") or "")
         if not raw_conversation_id or not message_id:
-            return []
+            return InboundAdmissionResult(CommunicationPolicyDisposition.MALFORMED_PAYLOAD)
 
         # Teams appends ";messageid=<id>" to a channel conversation id for thread
         # replies. Left in place it would split one channel into a conversation
@@ -281,11 +300,11 @@ class TeamsPlatformPlugin(PlatformPlugin):
 
         if is_dm:
             if settings.dm_policy == "off":
-                return []
+                return InboundAdmissionResult(CommunicationPolicyDisposition.USER_DENIED)
             if settings.dm_policy == "allowlist" and sender_id not in settings.dm_user_ids:
-                return []
+                return InboundAdmissionResult(CommunicationPolicyDisposition.USER_DENIED)
         elif settings.group_policy == "allowlist" and conversation_id not in settings.channel_ids:
-            return []
+            return InboundAdmissionResult(CommunicationPolicyDisposition.CHANNEL_DENIED)
 
         thread_id = thread_suffix or str(payload.get("replyToId") or "") or None
         sender_name = str(sender.get("name") or "") or None
@@ -293,29 +312,28 @@ class TeamsPlatformPlugin(PlatformPlugin):
         # channel has no name to show without Microsoft Graph.
         display_name = str(conversation.get("name") or "") or (sender_name if is_dm else None)
 
-        return [
-            NormalizedCommunicationEnvelope(
-                provider_message_id=message_id,
-                occurred_at=_occurred_at(payload.get("timestamp")),
-                location=ConversationLocation(
-                    id=conversation_id,
-                    type="DM" if is_dm else "CHANNEL",
-                    display_name=display_name,
-                    thread_id=thread_id,
-                ),
-                sender=CommunicationSender(id=sender_id, display_name=sender_name),
-                text=_without_own_mention(str(payload.get("text") or ""), payload.get("entities"), bot_id),
-                mentions=_mentioned_ids(payload.get("entities")),
-                provider_metadata={
-                    "service_url": str(payload.get("serviceUrl") or ""),
-                    "conversation_id": raw_conversation_id,
-                    "from_id": str(sender.get("id") or ""),
-                    "recipient_id": bot_id,
-                    "team_id": str(((payload.get("channelData") or {}).get("team") or {}).get("id") or ""),
-                    "tenant_id": str(((payload.get("channelData") or {}).get("tenant") or {}).get("id") or ""),
-                },
-            )
-        ]
+        envelope = NormalizedCommunicationEnvelope(
+            provider_message_id=message_id,
+            occurred_at=_occurred_at(payload.get("timestamp")),
+            location=ConversationLocation(
+                id=conversation_id,
+                type="DM" if is_dm else "CHANNEL",
+                display_name=display_name,
+                thread_id=thread_id,
+            ),
+            sender=CommunicationSender(id=sender_id, display_name=sender_name),
+            text=_without_own_mention(str(payload.get("text") or ""), payload.get("entities"), bot_id),
+            mentions=_mentioned_ids(payload.get("entities")),
+            provider_metadata={
+                "service_url": str(payload.get("serviceUrl") or ""),
+                "conversation_id": raw_conversation_id,
+                "from_id": str(sender.get("id") or ""),
+                "recipient_id": bot_id,
+                "team_id": str(((payload.get("channelData") or {}).get("team") or {}).get("id") or ""),
+                "tenant_id": str(((payload.get("channelData") or {}).get("tenant") or {}).get("id") or ""),
+            },
+        )
+        return InboundAdmissionResult(CommunicationPolicyDisposition.ACCEPTED, (envelope,))
 
 
 def _occurred_at(raw: Any) -> datetime:
