@@ -8,10 +8,16 @@ Related context: [`../../adr/2026-09-02-credential-gateway-egress-modes.md`](../
 
 - **Delivered:** the Integration Plugin seam; the credential gateway as a separate deployment; token issue/revoke/resolve; the `GATEWAY_PROXY` forward path; and gateway support for every shipped aai-cli provider without changing aai-cli.
 - **In transition:** Helm and new local environments enable the gateway; existing local `.env` files must opt in with `CREDENTIAL_GATEWAY_ENABLED=true`. `PROVIDER_DISPLAY_NAMES`, `PROVIDER_CONTENT_MODELS`, and `PROVIDER_VALIDATORS` still live outside the plugins (import cycle) and are pinned by contract test rather than derived.
-- **Next:** NetworkPolicy default-deny egress, then the Google token broker.
+- **Next:** Google Workspace token brokering, so gog receives only a short-lived access token instead of OAuth client credentials and a renewable refresh token.
 - **Blockers:** none.
 
 ## Changes
+
+### 2026-09-03 — Preserve unrestricted agent internet access
+
+- **Scope:** credential isolation removes real provider credentials from agent pods; it does not restrict the destinations agents may reach.
+- **Decision:** agent internet access remains unrestricted. A default-deny egress `NetworkPolicy` is not part of this feature because it would remove a critical runtime capability without being necessary to keep provider credentials out of pods.
+- **Redirects:** the gateway continues to follow provider redirects itself so credential headers remain under gateway control. It strips those headers on cross-host redirects; this behavior does not depend on pod network confinement.
 
 ### 2026-09-03 — All aai-cli providers use the credential gateway
 
@@ -28,7 +34,7 @@ Related context: [`../../adr/2026-09-02-credential-gateway-egress-modes.md`](../
 - **What actually removes the credential:** `store_providers_for` excludes gateway-routed providers from the aai-cli secret store, so the real token is in neither the pod Secret nor `aai-secrets.enc.json`. The profile block alone would not have done it.
 - **CLI contract:** the generated profile uses aai-cli's existing endpoint override and environment-backed Bearer authentication. The Gateway Token authenticates only the pod-to-gateway hop; `apply_upstream_auth` replaces it with GitHub's real credential for the upstream hop. No gateway-specific aai-cli authentication mode is introduced.
 - **Refusals:** wrong-provider path, rolled-back provider, missing credential, unknown and revoked tokens all return the same opaque 403 as `/identity`, so an agent cannot probe which applies. An unreachable upstream is a 502 and is distinguished from an upstream error status, which passes through untouched.
-- **Redirects:** followed gateway-side, because NetworkPolicy will deny the pod any egress except the gateway. Provider credential headers are retained only while the redirect stays on the origin host — carrying one to a redirect target would hand it to whoever controls that host. Bounded at 5 hops.
+- **Redirects:** followed gateway-side so provider credential headers remain under gateway control. Those headers are retained only while the redirect stays on the origin host — carrying one to a redirect target would hand it to whoever controls that host. Bounded at 5 hops.
 
 ### 2026-09-02 — Slack retired as a tool Integration
 

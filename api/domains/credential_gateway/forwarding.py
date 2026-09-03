@@ -77,12 +77,13 @@ class UpstreamForwarder:
     ) -> UpstreamResponse:
         """Send one upstream request, following redirects with care.
 
-        Redirects are followed here rather than handed back to the agent so the pending
-        NetworkPolicy confinement can deny direct pod egress without breaking downloads
-        such as GitHub archives. Credential headers are retained only while the redirect
-        stays on the same host: carrying one onto a host the provider redirected us to
-        would hand it to whoever controls that host. Plugins identify provider-specific
-        credential headers such as Pipedrive's ``x-api-token``.
+        Redirects are followed here rather than handed back to the agent so credential
+        handling stays inside the gateway. Credential headers are retained only while
+        the redirect stays on the same host: carrying one onto a host the provider
+        redirected us to would hand it to whoever controls that host. Plugins identify
+        provider-specific credential headers such as Pipedrive's ``x-api-token``. Agent
+        internet access remains unrestricted; redirect handling does not rely on egress
+        confinement.
         """
         try:
             with httpx.Client(timeout=_TIMEOUT, follow_redirects=False) as client:
