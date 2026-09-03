@@ -70,7 +70,7 @@ export function CostRow({ record, grid, showOrganization }: CostRowProps) {
         {record.healed && (
           <Sparkles
             size={11}
-            style={{ color: "var(--acc)" }}
+            style={{ color: "var(--accent-color)" }}
             aria-label="Cost recovered from OpenRouter"
           />
         )}

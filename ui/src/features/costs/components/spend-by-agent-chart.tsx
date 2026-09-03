@@ -23,17 +23,21 @@ interface SpendByAgentChartProps {
   granularity: Granularity;
 }
 
-// One colour per line, cycled. The server already caps the number of agents it
-// returns, so this list only has to be as long as that cap.
+// One colour per line, cycled. The server caps the number of agents it returns
+// (TOP_AGENTS_IN_SERIES), so this list only has to be as long as that cap.
+//
+// Every entry must be a token that actually exists and is dark enough to read
+// against a white card. Both rules were broken before: `--acc` is not a token
+// at all — the name is `--accent-color` — so that line resolved to no stroke
+// and simply never drew, and `--ink-5` (#c4beb2) is a pale beige that all but
+// disappeared. The muted end of the ink ramp is deliberately not used here.
 const LINE_COLORS = [
   "var(--ink-2)",
-  "var(--ink-3)",
-  "var(--ink-4)",
-  "var(--ink-5)",
-  "var(--acc)",
+  "var(--accent-color)",
   "var(--ok)",
-  "var(--warn)",
   "var(--err)",
+  "var(--warn)",
+  "var(--ink-3)",
 ];
 
 /** Per-agent spend over time.
