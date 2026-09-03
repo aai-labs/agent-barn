@@ -1,6 +1,6 @@
 """Integration tests for the built-in Web Chat channel."""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid7
 
 from fastapi import status
@@ -285,6 +285,52 @@ def test_list_threads_returns_every_thread_the_user_has_started():
             previews = {t["thread_id"]: t["last_content"] for t in threads}
             assert_that(previews["thread-a"], equal_to("first thread"))
             assert_that(previews["thread-b"], equal_to("second thread"))
+
+
+def test_list_threads_applies_the_limit_before_returning_rows():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+        _send(context, "oldest", thread_id="thread-000")
+        delegate = context.injector.get(PostgresRepositoryDelegate)
+        with Session(delegate.engine) as session:
+            connection = session.exec(
+                select(CommunicationConnection).where(
+                    CommunicationConnection.agent_id == context.agent.id,
+                    CommunicationConnection.platform_key == "web",
+                )
+            ).one()
+
+        now = datetime.now(UTC)
+        messages = [
+            AgentChatMessage(
+                id=uuid7(),
+                agent_id=context.agent.id,
+                connection_id=connection.id,
+                openclaw_msg_id=f"thread-{index:03d}",
+                session_key=f"web-chat:thread-{index:03d}",
+                channel_id=str(context.user.id),
+                thread_id=f"thread-{index:03d}",
+                direction=MessageDirection.INBOUND,
+                conversation_type=ConversationType.DM,
+                content=f"message-{index}",
+                occurred_at=now.replace(microsecond=0) + timedelta(seconds=index),
+            )
+            for index in range(1, 102)
+        ]
+        with Session(delegate.engine) as session:
+            session.add_all(messages)
+            session.commit()
+
+        response = client.get(
+            f"{_BASE}/{context.agent.id}/web-chat/threads",
+            headers=_auth(context),
+        )
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+        assert_that(
+            [thread["thread_id"] for thread in response.json()],
+            equal_to([f"thread-{index:03d}" for index in range(101, 1, -1)]),
+        )
 
 
 def test_thread_title_falls_back_to_the_first_message_when_unrenamed():

@@ -133,37 +133,43 @@ class WebChatRepository:
         Threads soft-deleted via WebChatThread.deleted_at are excluded.
         """
         with Session(self.delegate.engine) as session:
-            deleted_ids = set(
-                session.exec(
-                    select(WebChatThread.thread_id).where(
-                        col(WebChatThread.connection_id) == connection_id,
-                        col(WebChatThread.channel_id) == channel_id,
-                        col(WebChatThread.deleted_at).is_not(None),
-                    )
-                ).all()
+            deleted_thread_ids = select(WebChatThread.thread_id).where(
+                col(WebChatThread.connection_id) == connection_id,
+                col(WebChatThread.channel_id) == channel_id,
+                col(WebChatThread.deleted_at).is_not(None),
             )
 
             # Postgres DISTINCT ON picks the first row per thread_id under the
-            # given ORDER BY, so ordering by (thread_id, occurred_at desc, id
-            # desc) yields exactly the latest message per thread in one query
-            # — no aggregate needed (max() over a uuid column isn't defined).
-            last_rows = session.exec(
-                select(AgentChatMessage)
+            # given ORDER BY. Select only those message IDs in the inner query,
+            # then apply the user-facing recency order and limit to the outer
+            # query so PostgreSQL never materializes every thread row in Python.
+            latest_message_ids = (
+                select(AgentChatMessage.id)
                 .distinct(col(AgentChatMessage.thread_id))
                 .where(
                     col(AgentChatMessage.connection_id) == connection_id,
                     col(AgentChatMessage.channel_id) == channel_id,
                     col(AgentChatMessage.thread_id).is_not(None),
+                    ~col(AgentChatMessage.thread_id).in_(deleted_thread_ids),
                 )
                 .order_by(
                     col(AgentChatMessage.thread_id),
                     col(AgentChatMessage.occurred_at).desc(),
                     col(AgentChatMessage.id).desc(),
                 )
+                .subquery()
+            )
+            last_rows = session.exec(
+                select(AgentChatMessage)
+                .where(col(AgentChatMessage.id).in_(select(latest_message_ids.c.id)))
+                .order_by(col(AgentChatMessage.occurred_at).desc(), col(AgentChatMessage.id).desc())
+                .limit(limit)
             ).all()
 
-            # Same DISTINCT ON trick, ascending, restricted to the user's own
-            # messages — the opening line, used as a fallback title.
+            # Same DISTINCT ON trick, ascending, restricted to the selected
+            # threads and the user's own messages — the opening line, used as a
+            # fallback title.
+            selected_thread_ids = [row.thread_id for row in last_rows if row.thread_id is not None]
             first_rows = session.exec(
                 select(AgentChatMessage)
                 .distinct(col(AgentChatMessage.thread_id))
@@ -172,6 +178,7 @@ class WebChatRepository:
                     col(AgentChatMessage.channel_id) == channel_id,
                     col(AgentChatMessage.thread_id).is_not(None),
                     col(AgentChatMessage.direction) == MessageDirection.INBOUND,
+                    col(AgentChatMessage.thread_id).in_(selected_thread_ids),
                 )
                 .order_by(
                     col(AgentChatMessage.thread_id),
@@ -189,13 +196,8 @@ class WebChatRepository:
                     first_content=first_content_by_thread.get(row.thread_id),
                 )
                 for row in last_rows
-                if row.thread_id not in deleted_ids
             ]
-            summaries.sort(
-                key=lambda s: s.last_occurred_at or datetime.min.replace(tzinfo=UTC),
-                reverse=True,
-            )
-            return summaries[:limit]
+            return summaries
 
     def get_thread_metadata(
         self,
