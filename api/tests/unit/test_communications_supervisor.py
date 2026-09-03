@@ -1,7 +1,7 @@
 import asyncio
 from types import SimpleNamespace
 from typing import Any, cast
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 from uuid import uuid4
 
 import pytest
@@ -12,6 +12,7 @@ from api.domains.communications.models import (
     CommunicationConnection,
     ConnectionObservedStatus,
 )
+from api.domains.communications.plugins.web import WebPlatformPlugin
 from api.domains.communications.repository import _emits_health_event
 from api.domains.communications.supervisor import PlatformIngressSupervisor
 
@@ -172,3 +173,35 @@ def test_reconcile_does_not_lease_a_connection_without_supervised_ingress() -> N
     assert tasks == {}
     connections.claim_ingress_lease.assert_not_called()
     plugins.require.assert_called_once_with("web")
+
+
+def test_unsupported_supervised_ingress_fails_closed_as_degraded() -> None:
+    connection = CommunicationConnection(
+        organization_id=uuid4(),
+        agent_id=uuid4(),
+        platform_key="web",
+        display_name="Web Chat",
+        credentials_encrypted="unused",
+        driver_key_encrypted="unused",
+    )
+    connections = Mock()
+    plugins = Mock()
+    plugins.require.return_value = WebPlatformPlugin()
+    supervisor = PlatformIngressSupervisor(
+        config=cast(Config, SimpleNamespace(agent_token_encryption_key="test-key")),
+        connections=connections,
+        gateway=Mock(),
+        plugins=plugins,
+    )
+
+    async def exercise() -> None:
+        with pytest.raises(TimeoutError):
+            await asyncio.wait_for(supervisor._maintain(connection), timeout=0.05)
+
+    with patch("api.domains.communications.supervisor.decrypt_token", return_value="{}"):
+        asyncio.run(exercise())
+
+    statuses = [call.args[1] for call in connections.record_health.call_args_list]
+    assert_that(statuses, contains_exactly(ConnectionObservedStatus.CONNECTING, ConnectionObservedStatus.DEGRADED))
+    error_call = connections.record_health.call_args_list[-1]
+    assert_that(error_call.kwargs["error_code"], equal_to("INGRESS_NOT_SUPERVISED"))

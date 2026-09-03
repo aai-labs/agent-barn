@@ -92,9 +92,7 @@ class PlatformIngressSupervisor:
             self._last_journal_prune_at = now
         enabled_connections = await asyncio.to_thread(self.connections.list_enabled)
         enabled = {
-            connection.id: connection
-            for connection in enabled_connections
-            if self._needs_ingress_supervision(connection)
+            connection.id: connection for connection in enabled_connections if self._needs_ingress_task(connection)
         }
         for connection_id, (revision, task) in list(tasks.items()):
             current = enabled.get(connection_id)
@@ -127,7 +125,7 @@ class PlatformIngressSupervisor:
                     ),
                 )
 
-    def _needs_ingress_supervision(self, connection: CommunicationConnection) -> bool:
+    def _needs_ingress_task(self, connection: CommunicationConnection) -> bool:
         try:
             plugin = self.plugins.require(connection.platform_key)
         except KeyError:
@@ -136,7 +134,7 @@ class PlatformIngressSupervisor:
             return True
         return (
             PlatformCapability.SUPERVISED_INGRESS in plugin.capabilities
-            and PlatformCapability.WEBHOOK_INGRESS not in plugin.capabilities
+            or PlatformCapability.WEBHOOK_INGRESS in plugin.capabilities
         )
 
     async def _maintain(self, connection: CommunicationConnection) -> None:
@@ -170,17 +168,15 @@ class PlatformIngressSupervisor:
                         ConnectionObservedStatus.CONNECTED,
                     )
 
-                if (
-                    PlatformCapability.WEBHOOK_INGRESS in plugin.capabilities
-                    or PlatformCapability.SUPERVISED_INGRESS not in plugin.capabilities
-                ):
-                    # Webhook-ingress plugins receive events out-of-band; plugins
-                    # that declare neither capability (e.g. Web Chat) have
-                    # nothing to supervise at all. Either way there is no
-                    # session to run, so `run_ingress` is never called and its
-                    # base-class NotImplementedError never surfaces as a fault.
+                if PlatformCapability.WEBHOOK_INGRESS in plugin.capabilities:
+                    # Webhook-ingress plugins receive events out-of-band. Keep
+                    # their health connected while the gateway handles HTTP
+                    # delivery; there is no provider session to run.
                     await connected()
                     await asyncio.Event().wait()
+
+                if PlatformCapability.SUPERVISED_INGRESS not in plugin.capabilities:
+                    raise NotImplementedError(f"{plugin.key} does not declare supervised ingress")
 
                 await plugin.run_ingress(settings, credentials, emit, connected)
                 raise RuntimeError("Platform ingress session ended unexpectedly")
