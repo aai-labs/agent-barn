@@ -24,11 +24,14 @@ from api.domains.communications.repository import (
     CommunicationConnectionConflictError,
     CommunicationConnectionRepository,
 )
-from api.domains.conversations.models import MessageDirection
+from api.domains.conversations.models import AgentChatMessage, MessageDirection
 from api.domains.rbac.catalog import PermissionKey
 from api.domains.web_chat.models import MAIN_THREAD_ID, WebChatMessageRead, WebChatThreadRead
-from api.domains.web_chat.repository import WebChatRepository
-from api.infrastructure.communication_signals import CommunicationSignalBus
+from api.domains.web_chat.repository import WebChatDeliveryState, WebChatRepository
+from api.infrastructure.communication_signals import (
+    CommunicationSignalBus,
+    CommunicationSignalType,
+)
 from api.infrastructure.crypto import encrypt_token
 
 WEB_CONNECTION_DISPLAY_NAME = "Web Chat"
@@ -104,30 +107,29 @@ class WebChatService:
         agent = self.authorization.require_action(context, agent_id, PermissionKey.ACTIVITY_READ)
         connection = self._get_or_create_connection(agent.id, agent.organization_id)
         location = self._location(context, thread_id)
-        messages = self.web_chat_repository.list_thread_messages(
+        return self._list_messages_for_connection(
             connection_id=connection.id,
             channel_id=location.id,
+            thread_id=location.thread_id or MAIN_THREAD_ID,
+            after_id=after_id,
+        )
+
+    def _list_messages_for_connection(
+        self,
+        *,
+        connection_id: UUID,
+        channel_id: str,
+        thread_id: str,
+        after_id: UUID | None,
+    ) -> list[WebChatMessageRead]:
+        messages = self.web_chat_repository.list_thread_messages(
+            connection_id=connection_id,
+            channel_id=channel_id,
             thread_id=thread_id,
             after_id=after_id,
         )
         delivery_states = self.web_chat_repository.delivery_statuses_for_messages([message.id for message in messages])
-        return [
-            WebChatMessageRead(
-                id=message.id,
-                direction=message.direction,
-                content=message.content,
-                occurred_at=message.occurred_at,
-                delivery_status=(
-                    delivery_states[message.id].status
-                    if message.id in delivery_states
-                    else CommunicationDeliveryStatus.SUCCEEDED
-                ),
-                cancel_requested_at=(
-                    delivery_states[message.id].cancel_requested_at if message.id in delivery_states else None
-                ),
-            )
-            for message in messages
-        ]
+        return [self._message_read(message, delivery_states.get(message.id)) for message in messages]
 
     def list_threads(self, agent_id: UUID, context: CurrentUserContext) -> list[WebChatThreadRead]:
         agent = self.authorization.require_action(context, agent_id, PermissionKey.ACTIVITY_READ)
@@ -192,16 +194,34 @@ class WebChatService:
 
     def stream_updates(self, agent_id: UUID, context: CurrentUserContext, thread_id: str) -> AsyncIterator[str]:
         """Authorize eagerly, then replay and asynchronously await committed signals."""
-        self.authorization.require_action(context, agent_id, PermissionKey.ACTIVITY_READ)
-        return self._stream_updates(agent_id, context, thread_id)
+        agent = self.authorization.require_action(context, agent_id, PermissionKey.ACTIVITY_READ)
+        connection = self._get_or_create_connection(agent.id, agent.organization_id)
+        location = self._location(context, thread_id)
+        return self._stream_updates(
+            agent_id=agent.id,
+            connection_id=connection.id,
+            channel_id=location.id,
+            thread_id=location.thread_id or MAIN_THREAD_ID,
+        )
 
-    async def _stream_updates(self, agent_id: UUID, context: CurrentUserContext, thread_id: str) -> AsyncIterator[str]:
+    async def _stream_updates(
+        self,
+        *,
+        agent_id: UUID,
+        connection_id: UUID,
+        channel_id: str,
+        thread_id: str,
+    ) -> AsyncIterator[str]:
         cursor = await self.signals.latest_cursor_async(agent_id)
-        emitted: dict[UUID, WebChatMessageRead] = {}
-
-        messages = await asyncio.to_thread(self.list_messages, agent_id, context, thread_id, after_id=None)
+        messages = await asyncio.to_thread(
+            self._list_messages_for_connection,
+            connection_id=connection_id,
+            channel_id=channel_id,
+            thread_id=thread_id,
+            after_id=None,
+        )
+        last_message_id = messages[-1].id if messages else None
         for message in messages:
-            emitted[message.id] = message
             yield f"data: {message.model_dump_json()}\n\n"
 
         while True:
@@ -209,12 +229,75 @@ class WebChatService:
             if not notifications:
                 yield ": keep-alive\n\n"
                 continue
-            messages = await asyncio.to_thread(self.list_messages, agent_id, context, thread_id, after_id=None)
+
+            refreshed_ids: set[UUID] = set()
+            messages = await asyncio.to_thread(
+                self._list_messages_for_connection,
+                connection_id=connection_id,
+                channel_id=channel_id,
+                thread_id=thread_id,
+                after_id=last_message_id,
+            )
             for message in messages:
-                if emitted.get(message.id) == message:
-                    continue
-                emitted[message.id] = message
+                last_message_id = message.id
+                refreshed_ids.add(message.id)
                 yield f"data: {message.model_dump_json()}\n\n"
+
+            for signal in notifications:
+                if (
+                    signal.type
+                    not in {
+                        CommunicationSignalType.DELIVERY_CANCELLED,
+                        CommunicationSignalType.MESSAGE_CHANGED,
+                    }
+                    or signal.delivery_id is None
+                ):
+                    continue
+                message = await asyncio.to_thread(
+                    self._message_for_delivery,
+                    delivery_id=signal.delivery_id,
+                    connection_id=connection_id,
+                    channel_id=channel_id,
+                    thread_id=thread_id,
+                )
+                if message is None or message.id in refreshed_ids:
+                    continue
+                yield f"data: {message.model_dump_json()}\n\n"
+
+    def _message_for_delivery(
+        self,
+        *,
+        delivery_id: UUID,
+        connection_id: UUID,
+        channel_id: str,
+        thread_id: str,
+    ) -> WebChatMessageRead | None:
+        result = self.web_chat_repository.get_message_for_delivery(
+            delivery_id=delivery_id,
+            connection_id=connection_id,
+            channel_id=channel_id,
+            thread_id=thread_id,
+        )
+        if result is None:
+            return None
+        message, delivery_state = result
+        return self._message_read(message, delivery_state)
+
+    @staticmethod
+    def _message_read(
+        message: AgentChatMessage,
+        delivery_state: WebChatDeliveryState | None,
+    ) -> WebChatMessageRead:
+        return WebChatMessageRead(
+            id=message.id,
+            direction=message.direction,
+            content=message.content,
+            occurred_at=message.occurred_at,
+            delivery_status=(
+                delivery_state.status if delivery_state is not None else CommunicationDeliveryStatus.SUCCEEDED
+            ),
+            cancel_requested_at=delivery_state.cancel_requested_at if delivery_state is not None else None,
+        )
 
     @staticmethod
     def _title_for(thread_id: str, display_name: str | None, first_content: str | None) -> str:

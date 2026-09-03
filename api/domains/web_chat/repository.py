@@ -82,6 +82,45 @@ class WebChatRepository:
                 for message_id, status, cancel_requested_at in rows
             }
 
+    def get_message_for_delivery(
+        self,
+        *,
+        delivery_id: UUID,
+        connection_id: UUID,
+        channel_id: str,
+        thread_id: str,
+    ) -> tuple[AgentChatMessage, WebChatDeliveryState] | None:
+        """Return one message and its current delivery state, scoped to Web Chat."""
+        with Session(self.delegate.engine) as session:
+            delivery_row = session.exec(
+                select(
+                    CommunicationDelivery.message_id,
+                    CommunicationDelivery.status,
+                    CommunicationDelivery.cancel_requested_at,
+                ).where(
+                    col(CommunicationDelivery.id) == delivery_id,
+                    col(CommunicationDelivery.connection_id) == connection_id,
+                )
+            ).one_or_none()
+            if delivery_row is None:
+                return None
+
+            message_id, status, cancel_requested_at = delivery_row
+            message = session.exec(
+                select(AgentChatMessage).where(
+                    col(AgentChatMessage.id) == message_id,
+                    col(AgentChatMessage.connection_id) == connection_id,
+                    col(AgentChatMessage.channel_id) == channel_id,
+                    col(AgentChatMessage.thread_id) == thread_id,
+                )
+            ).one_or_none()
+            if message is None:
+                return None
+            return message, WebChatDeliveryState(
+                status=CommunicationDeliveryStatus(status),
+                cancel_requested_at=cancel_requested_at,
+            )
+
     def list_threads(
         self,
         *,
