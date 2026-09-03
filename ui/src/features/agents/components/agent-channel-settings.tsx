@@ -37,7 +37,7 @@ import type { CommunicationConnection } from "@/features/communication-connectio
 import type { Agent } from "../schemas";
 import { AgentConfigurationSection } from "./agent-configuration-section";
 
-/** Built-in, auto-provisioned, one-per-agent, immutable — never user-added or user-edited. */
+/** Built-in, lazily provisioned, one-per-agent, immutable — never user-added or user-edited. */
 const WEB_PLATFORM_KEY = "web";
 
 function titleCase(text: string): string {
@@ -394,7 +394,7 @@ export function AgentChannelSettings({
 }) {
   const connections = useCommunicationConnections(agent.id);
   const platforms = useCommunicationPlatforms();
-  // Web Chat is auto-provisioned once per Agent and can't be added by hand.
+  // Web Chat is lazily provisioned on first send and can't be added by hand.
   const addablePlatforms = useMemo(
     () => platforms.data?.filter((platform) => platform.key !== WEB_PLATFORM_KEY),
     [platforms.data],

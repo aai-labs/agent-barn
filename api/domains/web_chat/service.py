@@ -105,7 +105,9 @@ class WebChatService:
         after_id: UUID | None = None,
     ) -> list[WebChatMessageRead]:
         agent = self.authorization.require_action(context, agent_id, PermissionKey.ACTIVITY_READ)
-        connection = self._get_or_create_connection(agent.id, agent.organization_id)
+        connection = self._get_existing_connection(agent.id)
+        if connection is None:
+            return []
         location = self._location(context, thread_id)
         return self._list_messages_for_connection(
             connection_id=connection.id,
@@ -133,7 +135,9 @@ class WebChatService:
 
     def list_threads(self, agent_id: UUID, context: CurrentUserContext) -> list[WebChatThreadRead]:
         agent = self.authorization.require_action(context, agent_id, PermissionKey.ACTIVITY_READ)
-        connection = self._get_or_create_connection(agent.id, agent.organization_id)
+        connection = self._get_existing_connection(agent.id)
+        if connection is None:
+            return []
         channel_id = str(context.user.id)
         summaries = self.web_chat_repository.list_threads(connection_id=connection.id, channel_id=channel_id)
         metadata = self.web_chat_repository.list_thread_metadata(connection_id=connection.id, channel_id=channel_id)
@@ -195,11 +199,11 @@ class WebChatService:
     def stream_updates(self, agent_id: UUID, context: CurrentUserContext, thread_id: str) -> AsyncIterator[str]:
         """Authorize eagerly, then replay and asynchronously await committed signals."""
         agent = self.authorization.require_action(context, agent_id, PermissionKey.ACTIVITY_READ)
-        connection = self._get_or_create_connection(agent.id, agent.organization_id)
+        connection = self._get_existing_connection(agent.id)
         location = self._location(context, thread_id)
         return self._stream_updates(
             agent_id=agent.id,
-            connection_id=connection.id,
+            connection_id=connection.id if connection is not None else None,
             channel_id=location.id,
             thread_id=location.thread_id or MAIN_THREAD_ID,
         )
@@ -208,17 +212,27 @@ class WebChatService:
         self,
         *,
         agent_id: UUID,
-        connection_id: UUID,
+        connection_id: UUID | None,
         channel_id: str,
         thread_id: str,
     ) -> AsyncIterator[str]:
         cursor = await self.signals.latest_cursor_async(agent_id)
-        messages = await asyncio.to_thread(
-            self._list_messages_for_connection,
-            connection_id=connection_id,
-            channel_id=channel_id,
-            thread_id=thread_id,
-            after_id=None,
+        # A stream is a GET path too: opening it must not create the built-in
+        # Connection. Re-check after taking the cursor so a first send racing
+        # stream setup is still included in the initial replay.
+        if connection_id is None:
+            connection = await asyncio.to_thread(self._get_existing_connection, agent_id)
+            connection_id = connection.id if connection is not None else None
+        messages = (
+            await asyncio.to_thread(
+                self._list_messages_for_connection,
+                connection_id=connection_id,
+                channel_id=channel_id,
+                thread_id=thread_id,
+                after_id=None,
+            )
+            if connection_id is not None
+            else []
         )
         last_message_id = messages[-1].id if messages else None
         for message in messages:
@@ -229,6 +243,12 @@ class WebChatService:
             if not notifications:
                 yield ": keep-alive\n\n"
                 continue
+
+            if connection_id is None:
+                connection = await asyncio.to_thread(self._get_existing_connection, agent_id)
+                connection_id = connection.id if connection is not None else None
+                if connection_id is None:
+                    continue
 
             refreshed_ids: set[UUID] = set()
             messages = await asyncio.to_thread(
@@ -316,8 +336,11 @@ class WebChatService:
         channel_id = str(context.user.id)
         return ConversationLocation(id=channel_id, type="DM", thread_id=thread_id or MAIN_THREAD_ID)
 
+    def _get_existing_connection(self, agent_id: UUID) -> CommunicationConnection | None:
+        return self.connections.get_active_by_platform_key(agent_id, WebPlatformPlugin.key)
+
     def _get_or_create_connection(self, agent_id: UUID, organization_id: UUID) -> CommunicationConnection:
-        existing = self.connections.get_active_by_platform_key(agent_id, WebPlatformPlugin.key)
+        existing = self._get_existing_connection(agent_id)
         if existing is not None:
             return existing
         connection = CommunicationConnection(
@@ -340,7 +363,7 @@ class WebChatService:
         except CommunicationConnectionConflictError:
             # Lost a create race against another request for the same Agent's
             # first message; the winner's row is what we want.
-            existing = self.connections.get_active_by_platform_key(agent_id, WebPlatformPlugin.key)
+            existing = self._get_existing_connection(agent_id)
             if existing is None:
                 raise
             return existing

@@ -95,9 +95,9 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
   const canManageAccess = canAgent(agent, "agent.access.manage");
   const canManageConnections = canAgent(agent, "agent.update");
   const connections = useCommunicationConnections(agent?.id ?? "");
-  // The built-in Chat tab auto-provisions a "web" Connection on first use so
-  // people can try the Agent without setting anything up; it shouldn't count
-  // as a real messaging platform for this nudge.
+  // The built-in Chat tab lazily provisions a "web" Connection on first send
+  // so people can try the Agent without setting anything up; it shouldn't
+  // count as a real messaging platform for this nudge.
   const externalConnections = connections.data?.filter(
     (connection) => connection.platformKey !== "web",
   );

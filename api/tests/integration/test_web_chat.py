@@ -91,6 +91,34 @@ def test_send_then_list_messages_round_trips_on_the_default_thread():
             assert_that(messages[0]["delivery_status"], equal_to("UNAVAILABLE"))
 
 
+def test_reading_web_chat_does_not_auto_provision_a_connection():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+        messages_response = client.get(
+            f"{_BASE}/{context.agent.id}/web-chat/messages",
+            headers=_auth(context),
+        )
+        threads_response = client.get(
+            f"{_BASE}/{context.agent.id}/web-chat/threads",
+            headers=_auth(context),
+        )
+
+        delegate = context.injector.get(PostgresRepositoryDelegate)
+        with Session(delegate.engine) as session:
+            web_connection = session.exec(
+                select(CommunicationConnection).where(
+                    CommunicationConnection.agent_id == context.agent.id,
+                    CommunicationConnection.platform_key == "web",
+                )
+            ).one_or_none()
+
+        assert_that(messages_response.status_code, equal_to(status.HTTP_200_OK))
+        assert_that(messages_response.json(), equal_to([]))
+        assert_that(threads_response.status_code, equal_to(status.HTTP_200_OK))
+        assert_that(threads_response.json(), equal_to([]))
+        assert_that(web_connection, none())
+
+
 def test_stop_generation_cancels_the_active_thread_delivery_idempotently():
     with given([*_GIVEN[:-1], there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
         client: TestClient = context.client

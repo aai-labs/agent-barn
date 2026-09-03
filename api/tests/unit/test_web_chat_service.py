@@ -52,6 +52,34 @@ def test_stream_updates_authorizes_before_returning_async_stream() -> None:
     signals.wait_async.assert_awaited_once_with(agent_id, "10-0")
 
 
+def test_stream_updates_does_not_create_a_connection_for_a_read() -> None:
+    agent_id = uuid4()
+    context = cast(CurrentUserContext, SimpleNamespace(user=SimpleNamespace(id=uuid4())))
+    authorization = Mock()
+    authorization.require_action.return_value = SimpleNamespace(id=agent_id, organization_id=uuid4())
+    connections = Mock()
+    connections.get_active_by_platform_key.return_value = None
+    signals = Mock()
+    signals.latest_cursor_async = AsyncMock(return_value="10-0")
+    signals.wait_async = AsyncMock(return_value=("10-0", []))
+    service = WebChatService(
+        config=cast(Config, SimpleNamespace(agent_token_encryption_key="key")),
+        authorization=authorization,
+        connections=connections,
+        web_chat_repository=Mock(),
+        gateway=Mock(),
+        signals=cast(CommunicationSignalBus, signals),
+    )
+
+    stream = service.stream_updates(agent_id, context, "thread-1")
+
+    async def read_heartbeat() -> str:
+        return await stream.__anext__()
+
+    assert asyncio.run(read_heartbeat()) == ": keep-alive\n\n"
+    connections.create.assert_not_called()
+
+
 def test_stream_updates_uses_incremental_reads_and_targeted_status_refreshes() -> None:
     agent_id = uuid4()
     connection_id = uuid4()
