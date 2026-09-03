@@ -1,7 +1,7 @@
 import json
 import logging
 import secrets
-from collections.abc import Iterator
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
@@ -95,12 +95,12 @@ class CommunicationsGatewayService:
             raise PermissionError("Invalid Communication Runtime credential")
         return agent
 
-    def stream_runtime_control(self, agent: Agent) -> Iterator[str]:
-        """Replay durable work, then block on Redis control wakeups."""
-        cursor = self.signals.latest_cursor(agent.id)
+    async def stream_runtime_control(self, agent: Agent) -> AsyncIterator[str]:
+        """Replay durable work, then asynchronously block on Redis wakeups."""
+        cursor = await self.signals.latest_cursor_async(agent.id)
         yield f"data: {CommunicationSignal(type=CommunicationSignalType.DELIVERY_AVAILABLE).as_json()}\n\n"
         while True:
-            cursor, signals = self.signals.wait(agent.id, cursor)
+            cursor, signals = await self.signals.wait_async(agent.id, cursor)
             if not signals:
                 yield ": keep-alive\n\n"
                 continue

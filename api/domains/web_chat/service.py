@@ -1,5 +1,6 @@
+import asyncio
 import secrets
-from collections.abc import Iterator
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import UUID
@@ -182,22 +183,27 @@ class WebChatService:
             thread_id=thread_id,
         )
 
-    def stream_updates(self, agent_id: UUID, context: CurrentUserContext, thread_id: str) -> Iterator[str]:
-        """Replay durable thread state, then wake only on committed signals."""
-        agent = self.authorization.require_action(context, agent_id, PermissionKey.ACTIVITY_READ)
-        cursor = self.signals.latest_cursor(agent.id)
+    def stream_updates(self, agent_id: UUID, context: CurrentUserContext, thread_id: str) -> AsyncIterator[str]:
+        """Authorize eagerly, then replay and asynchronously await committed signals."""
+        self.authorization.require_action(context, agent_id, PermissionKey.ACTIVITY_READ)
+        return self._stream_updates(agent_id, context, thread_id)
+
+    async def _stream_updates(self, agent_id: UUID, context: CurrentUserContext, thread_id: str) -> AsyncIterator[str]:
+        cursor = await self.signals.latest_cursor_async(agent_id)
         emitted: dict[UUID, WebChatMessageRead] = {}
 
-        for message in self.list_messages(agent_id, context, thread_id, after_id=None):
+        messages = await asyncio.to_thread(self.list_messages, agent_id, context, thread_id, after_id=None)
+        for message in messages:
             emitted[message.id] = message
             yield f"data: {message.model_dump_json()}\n\n"
 
         while True:
-            cursor, notifications = self.signals.wait(agent.id, cursor)
+            cursor, notifications = await self.signals.wait_async(agent_id, cursor)
             if not notifications:
                 yield ": keep-alive\n\n"
                 continue
-            for message in self.list_messages(agent_id, context, thread_id, after_id=None):
+            messages = await asyncio.to_thread(self.list_messages, agent_id, context, thread_id, after_id=None)
+            for message in messages:
                 if emitted.get(message.id) == message:
                     continue
                 emitted[message.id] = message

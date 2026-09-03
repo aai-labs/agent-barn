@@ -1,7 +1,8 @@
+import asyncio
 import json
 from types import SimpleNamespace
 from typing import cast
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 from uuid import uuid4
 
 from hamcrest import assert_that, empty
@@ -271,14 +272,22 @@ def test_runtime_control_stream_replays_then_heartbeats_without_claim_polling() 
     service, _ = _service(connection, plugin)
     agent = cast(Agent, SimpleNamespace(id=uuid4()))
     signals = cast(Mock, service.signals)
-    signals.latest_cursor.return_value = "10-0"
-    signals.wait.return_value = ("10-0", [])
+    signals.latest_cursor_async = AsyncMock(return_value="10-0")
+    signals.wait_async = AsyncMock(return_value=("10-0", []))
 
     stream = service.stream_runtime_control(agent)
 
-    assert json.loads(next(stream).removeprefix("data: ")) == {"type": "delivery_available"}
-    assert next(stream) == ": keep-alive\n\n"
-    signals.wait.assert_called_once_with(agent.id, "10-0")
+    async def read_frames() -> tuple[str, str]:
+        return await stream.__anext__(), await stream.__anext__()
+
+    first, second = asyncio.run(read_frames())
+
+    assert json.loads(first.removeprefix("data: ")) == {"type": "delivery_available"}
+    assert second == ": keep-alive\n\n"
+    signals.latest_cursor_async.assert_awaited_once_with(agent.id)
+    signals.wait_async.assert_awaited_once_with(agent.id, "10-0")
+    signals.latest_cursor.assert_not_called()
+    signals.wait.assert_not_called()
 
 
 def test_runtime_completion_is_not_blocked_by_feedback_context_lookup() -> None:

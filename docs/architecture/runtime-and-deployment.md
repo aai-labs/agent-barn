@@ -31,6 +31,8 @@ Both Hermes and OpenClaw consume the same versioned Communications protocol. A s
 
 Protocol version 2 replaces idle claim polling with that persistent control stream. Redis Streams carry content-free, Agent-scoped delivery and cancellation wakeups between API replicas; PostgreSQL remains authoritative for claims, leases, idempotency, cancellation, and reconnect replay. The server takes a Redis cursor before emitting an unconditional replay wakeup, so commits before the cursor are found by the durable claim and commits after it are found in the stream. Existing version-1 claim/reply/complete routes remain accepted while already-running Agents are rebuilt.
 
+The runtime-control and Web Chat SSE responses use async body iterators, so an idle Redis stream read does not consume an AnyIO request-worker token. Web Chat's synchronous PostgreSQL reads are explicitly offloaded as short operations between signal waits.
+
 Cancellation is durable before it is signalled. A cancelled source cannot enqueue a reply, and cancellation wins over a late successful runtime completion. Neither pinned runtime exposes a proven abort handle for its OpenAI-style chat-completions request, so cancellation is currently soft: local computation may finish, but its result is suppressed and the Delivery is terminally `CANCELLED`. Agent pods expose no Communications control listener or admin Service port.
 
 Runtime is persisted as `agent_type`. Platform is not an Agent field: an Agent may be headless or own any number of Communication Connections independently of whether Hermes or OpenClaw executes it.
