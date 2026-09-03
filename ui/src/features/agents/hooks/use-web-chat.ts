@@ -52,7 +52,10 @@ export function useWebChat(
         const base = current ?? [];
         const existingIndex = base.findIndex((item) => item.id === message.id);
         if (existingIndex === -1) return [...base, message];
-        if (base[existingIndex].deliveryStatus === message.deliveryStatus) return base;
+        if (
+          base[existingIndex].deliveryStatus === message.deliveryStatus
+          && base[existingIndex].cancelRequestedAt === message.cancelRequestedAt
+        ) return base;
         return base.map((item, index) => (index === existingIndex ? message : item));
       });
     },
@@ -119,7 +122,8 @@ export function useWebChat(
   const isAwaitingReply =
     sendMutation.isPending ||
     (latestMessage?.direction === "INBOUND" &&
-      ["PENDING", "PROCESSING"].includes(latestMessage.deliveryStatus));
+      ["PENDING", "PROCESSING"].includes(latestMessage.deliveryStatus) &&
+      !latestMessage.cancelRequestedAt);
 
   return useMemo(
     () => ({

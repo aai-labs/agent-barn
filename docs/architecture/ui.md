@@ -21,7 +21,7 @@ The active organization comes from `/dashboard/[orgId]`. Platform View lives und
 - Several organization-scoped keys do not include organization ID. `OrganizationProvider` removes the known organization-scoped query families on a genuine organization switch to prevent prior-organization data from remaining visible.
 - Adding an organization-scoped query family requires updating that eviction set or changing the key design so organization identity is represented safely.
 
-Streaming is an explicit exception to the normal client flow. The agent log stream uses a Next route handler and `../../ui/src/features/agents/hooks/use-agent-log-stream.ts`; Dashboard Web Chat connects to its authenticated organization-scoped SSE route through `../../ui/src/features/agents/hooks/use-web-chat.ts`. Each hook owns abort and bounded reconnection behavior. Web Chat messages are durable query data: SSE frames upsert by message ID so delivery-status changes such as cancellation update an existing inbound message rather than creating duplicates.
+Streaming is an explicit exception to the normal client flow. The agent log stream uses a Next route handler and `../../ui/src/features/agents/hooks/use-agent-log-stream.ts`; Dashboard Web Chat connects to its authenticated organization-scoped SSE route through `../../ui/src/features/agents/hooks/use-web-chat.ts`. Each hook owns abort and bounded reconnection behavior. Web Chat messages are durable query data: SSE frames upsert by message ID so delivery-status or `cancel_requested_at` changes update an existing inbound message rather than creating duplicates. A processing message with `cancel_requested_at` is no longer treated as awaiting a reply while the runtime finishes its soft cancellation.
 
 ## Loading and errors
 

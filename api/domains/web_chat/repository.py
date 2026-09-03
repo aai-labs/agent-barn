@@ -19,6 +19,12 @@ class ThreadSummary:
     first_content: str | None
 
 
+@dataclass(frozen=True)
+class WebChatDeliveryState:
+    status: CommunicationDeliveryStatus
+    cancel_requested_at: datetime | None
+
+
 @inject
 @singleton
 @dataclass
@@ -51,16 +57,24 @@ class WebChatRepository:
     def delivery_statuses_for_messages(
         self,
         message_ids: list[UUID],
-    ) -> dict[UUID, CommunicationDeliveryStatus]:
+    ) -> dict[UUID, WebChatDeliveryState]:
         if not message_ids:
             return {}
         with Session(self.delegate.engine) as session:
             rows = session.exec(
-                select(CommunicationDelivery.message_id, CommunicationDelivery.status).where(
-                    col(CommunicationDelivery.message_id).in_(message_ids)
-                )
+                select(
+                    CommunicationDelivery.message_id,
+                    CommunicationDelivery.status,
+                    CommunicationDelivery.cancel_requested_at,
+                ).where(col(CommunicationDelivery.message_id).in_(message_ids))
             ).all()
-            return {message_id: CommunicationDeliveryStatus(status) for message_id, status in rows}
+            return {
+                message_id: WebChatDeliveryState(
+                    status=CommunicationDeliveryStatus(status),
+                    cancel_requested_at=cancel_requested_at,
+                )
+                for message_id, status, cancel_requested_at in rows
+            }
 
     def list_threads(
         self,

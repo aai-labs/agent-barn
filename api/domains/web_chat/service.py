@@ -110,14 +110,21 @@ class WebChatService:
             thread_id=thread_id,
             after_id=after_id,
         )
-        statuses = self.web_chat_repository.delivery_statuses_for_messages([message.id for message in messages])
+        delivery_states = self.web_chat_repository.delivery_statuses_for_messages([message.id for message in messages])
         return [
             WebChatMessageRead(
                 id=message.id,
                 direction=message.direction,
                 content=message.content,
                 occurred_at=message.occurred_at,
-                delivery_status=statuses.get(message.id, CommunicationDeliveryStatus.SUCCEEDED),
+                delivery_status=(
+                    delivery_states[message.id].status
+                    if message.id in delivery_states
+                    else CommunicationDeliveryStatus.SUCCEEDED
+                ),
+                cancel_requested_at=(
+                    delivery_states[message.id].cancel_requested_at if message.id in delivery_states else None
+                ),
             )
             for message in messages
         ]

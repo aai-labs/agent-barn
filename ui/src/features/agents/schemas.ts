@@ -218,6 +218,7 @@ export const WebChatMessageSchema = z.object({
     "CANCELLED",
     "UNAVAILABLE",
   ]),
+  cancelRequestedAt: z.string().nullable(),
 });
 
 export const WebChatThreadSchema = z.object({

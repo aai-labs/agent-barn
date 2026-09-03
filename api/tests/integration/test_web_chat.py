@@ -1,10 +1,16 @@
 """Integration tests for the built-in Web Chat channel."""
 
+from uuid import UUID
+
 from fastapi import status
-from hamcrest import assert_that, contains_inanyorder, equal_to, has_length
+from hamcrest import assert_that, contains_inanyorder, equal_to, has_length, is_, none, not_
+from sqlmodel import Session, select
 from starlette.testclient import TestClient
 
 from api.domains.agents.models import AgentStatus
+from api.domains.communications.delivery_repository import CommunicationDeliveryRepository
+from api.domains.communications.models import CommunicationDelivery
+from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.tests.core.givenpy import given, then, when
 from api.tests.core.modules import (
     create_test_client,
@@ -105,6 +111,33 @@ def test_stop_generation_cancels_the_active_thread_delivery_idempotently():
         assert_that(first_stop.status_code, equal_to(status.HTTP_204_NO_CONTENT))
         assert_that(second_stop.status_code, equal_to(status.HTTP_204_NO_CONTENT))
         assert_that(messages_response.json()[0]["delivery_status"], equal_to("CANCELLED"))
+
+
+def test_processing_stop_exposes_cancel_request_before_runtime_completion():
+    with given([*_GIVEN[:-1], there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        client: TestClient = context.client
+        sent_message = _send(context, "please stop this while it runs", thread_id="thread-a")
+        delegate = context.injector.get(PostgresRepositoryDelegate)
+        with Session(delegate.engine) as session:
+            delivery = session.exec(
+                select(CommunicationDelivery).where(CommunicationDelivery.message_id == UUID(str(sent_message["id"])))
+            ).one()
+        claimed = context.injector.get(CommunicationDeliveryRepository).claim_next_inbound(agent_id=context.agent.id)
+
+        stop_response = client.post(
+            f"{_BASE}/{context.agent.id}/web-chat/threads/thread-a/stop",
+            headers=_auth(context),
+        )
+        messages_response = client.get(
+            f"{_BASE}/{context.agent.id}/web-chat/messages",
+            headers=_auth(context),
+            params={"thread_id": "thread-a"},
+        )
+
+        assert_that(claimed.delivery_id if claimed is not None else None, equal_to(delivery.id))
+        assert_that(stop_response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
+        assert_that(messages_response.json()[0]["delivery_status"], equal_to("PROCESSING"))
+        assert_that(messages_response.json()[0]["cancel_requested_at"], is_(not_(none())))
 
 
 def test_messages_sent_to_different_threads_stay_isolated():

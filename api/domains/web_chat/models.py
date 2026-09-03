@@ -57,6 +57,7 @@ class WebChatMessageRead(PydanticBaseModel):
     content: str
     occurred_at: datetime
     delivery_status: CommunicationDeliveryStatus
+    cancel_requested_at: datetime | None = None
 
 
 class WebChatMessageCreate(PydanticBaseModel):
