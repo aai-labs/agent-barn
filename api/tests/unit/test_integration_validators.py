@@ -14,7 +14,6 @@ from api.domains.agents.models import (
     GoogleWorkspaceContent,
     JiraContent,
     PipedriveContent,
-    SlackContent,
 )
 from api.infrastructure.integration_validators.bitbucket import validate_bitbucket
 from api.infrastructure.integration_validators.confluence import validate_confluence
@@ -23,7 +22,6 @@ from api.infrastructure.integration_validators.google_workspace import validate_
 from api.infrastructure.integration_validators.jira import validate_jira
 from api.infrastructure.integration_validators.pipedrive import validate_pipedrive
 from api.infrastructure.integration_validators.result import IntegrationValidationResult
-from api.infrastructure.integration_validators.slack import validate_slack
 
 # ── fixtures ──────────────────────────────────────────────────────────────────
 
@@ -54,7 +52,6 @@ _CONFLUENCE_SCOPED = ConfluenceContent(
     use_scoped_token=True,
 )
 _BB = BitbucketContent(workspace="acme", repos=["backend"], email="alice@acme.com", api_token="bb-tok")
-_SLACK = SlackContent(token="xoxb-test-token")
 _PD = PipedriveContent(api_token="pd-tok")
 _PD_WITH_DOMAIN = PipedriveContent(api_token="pd-tok", domain="aai-labs")
 
@@ -736,55 +733,6 @@ def test_confluence_identity_falls_back_to_content_email_when_absent():
 
     assert result.valid is True
     assert _CONFLUENCE.email in (result.identity or "")
-
-
-# ── Slack ─────────────────────────────────────────────────────────────────────
-
-_SLACK_MOD = "api.infrastructure.integration_validators.slack.httpx.post"
-
-
-def test_slack_valid_token_returns_identity():
-    ok_body = {"ok": True, "team": "AAI Labs", "user": "test-bot", "team_id": "T1", "user_id": "U1"}
-    with patch(_SLACK_MOD, return_value=_resp(ok_body)):
-        result = validate_slack(_SLACK)
-
-    assert result.valid is True
-    assert result.identity == "test-bot @ AAI Labs"
-    assert result.error is None
-
-
-def test_slack_invalid_auth_returns_error():
-    with patch(_SLACK_MOD, return_value=_resp({"ok": False, "error": "invalid_auth"})):
-        result = validate_slack(_SLACK)
-
-    assert result.valid is False
-    assert "invalid" in (result.error or "").lower()
-
-
-def test_slack_missing_scope_returns_error():
-    with patch(_SLACK_MOD, return_value=_resp({"ok": False, "error": "missing_scope"})):
-        result = validate_slack(_SLACK)
-
-    assert result.valid is False
-    assert "missing_scope" in (result.error or "")
-
-
-def test_slack_unexpected_status_returns_error():
-    with patch(_SLACK_MOD, return_value=_resp({}, status=500)):
-        result = validate_slack(_SLACK)
-
-    assert result.valid is False
-    assert "500" in (result.error or "")
-
-
-def test_slack_network_error_returns_error():
-    with patch(_SLACK_MOD, side_effect=_connect_error()):
-        result = validate_slack(_SLACK)
-
-    assert result.valid is False
-    assert result.error is not None
-    assert "slack" in result.error.lower()
-    assert result.identity is None
 
 
 # ── Pipedrive ─────────────────────────────────────────────────────────────────

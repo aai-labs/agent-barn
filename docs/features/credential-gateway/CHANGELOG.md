@@ -13,6 +13,15 @@ Related context: [`../../adr/2026-09-02-credential-gateway-egress-modes.md`](../
 
 ## Changes
 
+### 2026-09-02 — Slack retired as a tool Integration
+
+Not a gateway slice; recorded here because it landed mid-epic and changed the plugin catalogue from ten providers to nine.
+
+- **Why:** the shipped Slack Platform Plugin replaces the Slack tool Integration outright, and it owns that credential. Keeping a second Slack credential class meant two places to configure, validate, and revoke the same access.
+- **Delivered:** `SecretProvider.SLACK`, `SlackContent`, `SlackPlugin`, `validate_slack`, and the UI credential form are removed. A Slack credential is now only ever a Communication Connection credential and never an Agent Secret.
+- **Migration `59bd5956b22a`:** deletes `agent_secret` and `shared_credential` rows with `provider = 'slack'`. This destroys credential material deliberately — no runtime could use those tokens any more, and leaving them would raise `ValueError` when agent start coerces the stored string back to the enum.
+- **Tests:** 15 Slack-specific tests removed. Four general tests that merely used Slack as their example (`test_env_var_for`, `test_config_toml_emits_only_present_store_profiles`, `test_tool_context_md_lists_providers_without_metadata`, `test_integrations_policy_md_never_leaks_tokens`) were kept and re-pointed at Pipedrive.
+
 ### 2026-09-02 — Slice 2 — Credential gateway, identity only
 
 - **Decided:** the gateway is a **separate Deployment** (own Service, port 8003, independent replicas and resources), because it lands on the request path of every agent tool call and its availability and scaling should not be coupled to the product API's. It ships in the **same image**, so the Integration Plugins it imports need no separate packaging — the concern that made this decision blocking does not arise.

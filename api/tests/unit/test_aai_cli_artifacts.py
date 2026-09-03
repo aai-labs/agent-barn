@@ -61,7 +61,6 @@ _ZOHO_MAIL = cast(
         },
     ),
 )
-_SLACK = validate_content(SecretProvider.SLACK, {"token": "xoxb-slack-tok"})
 _PIPEDRIVE = cast(
     PipedriveContent,
     validate_content(SecretProvider.PIPEDRIVE, {"api_token": "pd_tok"}),
@@ -70,39 +69,6 @@ _PIPEDRIVE_WITH_DOMAIN = cast(
     PipedriveContent,
     validate_content(SecretProvider.PIPEDRIVE, {"api_token": "pd_tok", "domain": "aai-labs"}),
 )
-
-
-def test_env_var_for():
-    assert env_var_for("jira.api_token") == "AAI_SECRET_JIRA_API_TOKEN"
-    assert env_var_for("github.token") == "AAI_SECRET_GITHUB_TOKEN"
-    assert env_var_for("zoho.client_secret") == "AAI_SECRET_ZOHO_CLIENT_SECRET"
-    assert env_var_for("zoho.mail_refresh_token") == "AAI_SECRET_ZOHO_MAIL_REFRESH_TOKEN"
-    assert env_var_for("slack.token") == "AAI_SECRET_SLACK_TOKEN"
-    assert env_var_for("pipedrive.api_token") == "AAI_SECRET_PIPEDRIVE_API_TOKEN"
-
-
-def test_config_toml_emits_only_present_store_profiles():
-    toml = build_config_toml(
-        {
-            SecretProvider.JIRA: _JIRA,
-            SecretProvider.CONFLUENCE: _CONFLUENCE,
-            SecretProvider.GITHUB: _GITHUB,
-        }
-    )
-    assert 'secrets_file = "/home/node/.config/aai-cli/aai-secrets.enc.json"' in toml
-    assert 'key_file = "/home/node/.config/aai-cli/key"' in toml
-    assert "[profiles.jira-work]" in toml
-    assert "[profiles.confluence-work]" in toml
-    assert "[profiles.github-work]" in toml
-    assert "[profiles.bitbucket-work]" not in toml
-    assert "[profiles.slack-work]" not in toml
-    assert 'api_token_secret = "jira.api_token"' in toml
-    assert 'token_secret = "github.token"' in toml
-    assert 'site_url = "https://x.atlassian.net"' in toml
-    assert 'owner = "aai-labs"' in toml
-    # token values never appear in the config
-    assert "jira_tok" not in toml
-    assert "ghp_tok" not in toml
 
 
 def test_config_toml_jira_scoped_token_uses_gateway_url():
@@ -212,20 +178,6 @@ def test_setup_sh_zoho_mail_sets_both_secrets():
     )
 
 
-def test_config_toml_slack_uses_bearer_token_profile():
-    toml = build_config_toml({SecretProvider.SLACK: _SLACK})
-    assert "[profiles.slack-work]" in toml
-    assert 'provider = "slack"' in toml
-    assert 'auth_type = "bearer_token"' in toml
-    assert 'token_secret = "slack.token"' in toml
-    assert "xoxb-slack-tok" not in toml
-
-
-def test_setup_sh_slack_sets_secret():
-    setup = build_setup_sh([SecretProvider.SLACK])
-    assert f"printf '%s' \"$AAI_SECRET_SLACK_TOKEN\" | aai-cli --config {CONFIG_PATH} secrets set slack.token" in setup
-
-
 def test_setup_sh_pipedrive_sets_secret():
     setup = build_setup_sh([SecretProvider.PIPEDRIVE])
     assert (
@@ -254,11 +206,6 @@ def test_build_env_zoho_mail_emits_both_secrets():
         "AAI_SECRET_ZOHO_CLIENT_SECRET": "z_client_secret",
         "AAI_SECRET_ZOHO_MAIL_REFRESH_TOKEN": "z_refresh_tok",
     }
-
-
-def test_build_env_slack_maps_token():
-    env = build_env({SecretProvider.SLACK: _SLACK})
-    assert env == {"AAI_SECRET_SLACK_TOKEN": "xoxb-slack-tok"}
 
 
 def test_build_env_pipedrive_emits_secret():
@@ -338,23 +285,10 @@ def test_tool_context_md_lists_bitbucket_profile():
     assert "my-workspace/my-repo" in md
 
 
-def test_tool_context_md_lists_providers_without_metadata():
-    # Providers with no per-secret metadata worth printing (no site URL, no
-    # owner/workspace) are still listed. The block's job is "credentials are already in
-    # place", and that matters most for exactly these: a Slack-only agent used
-    # to get no block at all and would tell the user it had no access.
-    md = build_tool_context_md({SecretProvider.SLACK: _SLACK})
-    assert "- **Slack** (`slack-work`)" in md
-
-
 def test_tool_context_md_empty_when_only_firecrawl():
     # Firecrawl has no aai-cli profile, so it is not an "integration" in this sense.
     md = build_tool_context_md({SecretProvider.FIRECRAWL: FirecrawlContent(api_key="fc-x")})
     assert md == ""
-
-
-def test_tool_context_md_lists_slack():
-    assert "- **Slack** (`slack-work`)" in build_tool_context_md({SecretProvider.SLACK: _SLACK})
 
 
 def test_tool_context_md_lists_pipedrive():
@@ -438,17 +372,6 @@ def test_integrations_policy_md_includes_nested_command_grammar():
 def test_integrations_policy_md_emits_profile_line_per_provider():
     md = build_integrations_policy_md({SecretProvider.JIRA: _JIRA})
     assert "--profile jira-work" in md
-
-
-def test_integrations_policy_md_states_what_slack_can_do():
-    # A bare `--profile slack-work` gave the agent nothing to match a user's question
-    # against, so it would deny having Slack access while holding a working profile.
-    # The line has to name the capability, not just the slug.
-    md = build_integrations_policy_md({SecretProvider.SLACK: _SLACK})
-    assert "--profile slack-work" in md
-    assert "files" in md
-    assert "canvases" in md
-    assert "read-only" in md
 
 
 def test_integrations_policy_md_appends_capability_to_repo_scoped_line():
@@ -560,11 +483,6 @@ def test_integrations_policy_md_covers_non_store_providers():
     assert "--profile zoho-mail-rest" in md
 
 
-def test_integrations_policy_md_covers_slack():
-    md = build_integrations_policy_md({SecretProvider.SLACK: _SLACK})
-    assert "--profile slack-work" in md
-
-
 def test_integrations_policy_md_pipedrive_emits_profile_line():
     md = build_integrations_policy_md({SecretProvider.PIPEDRIVE: _PIPEDRIVE})
     assert "--profile pipedrive-work" in md
@@ -577,22 +495,6 @@ def test_profile_slugs_are_single_source_of_truth_for_jira():
     slug = PROFILE_SLUGS[SecretProvider.JIRA]
     assert f"[profiles.{slug}]" in build_config_toml({SecretProvider.JIRA: _JIRA})
     assert f"--profile {slug}" in build_integrations_policy_md({SecretProvider.JIRA: _JIRA})
-
-
-def test_integrations_policy_md_never_leaks_tokens():
-    md = build_integrations_policy_md(
-        {
-            SecretProvider.GITHUB: _GITHUB,
-            SecretProvider.JIRA: _JIRA,
-            SecretProvider.ZOHO_MAIL: _ZOHO_MAIL,
-            SecretProvider.SLACK: _SLACK,
-        }
-    )
-    assert "ghp_tok" not in md
-    assert "jira_tok" not in md
-    assert "z_client_secret" not in md
-    assert "z_refresh_tok" not in md
-    assert "xoxb-slack-tok" not in md
 
 
 def test_local_tools_block_names_credential_free_capabilities():
@@ -610,7 +512,7 @@ def test_local_tools_block_names_credential_free_capabilities():
 def test_local_tools_block_is_empty_when_the_skill_is_not_mounted():
     """It is opt-in: advertising a skill the agent has not been given would send it after
     a file reference that was never mounted."""
-    assert build_local_tools_policy_md(["Slack", "Jira"]) == ""
+    assert build_local_tools_policy_md(["GitHub", "Jira"]) == ""
     assert build_local_tools_policy_md([]) == ""
 
 
@@ -649,3 +551,60 @@ def test_local_tools_block_forbids_the_python_fallback():
     assert "openpyxl" in md
     assert "Do not write Python" in md
     assert "only supported way" in md
+
+
+def test_env_var_for():
+    assert env_var_for("jira.api_token") == "AAI_SECRET_JIRA_API_TOKEN"
+    assert env_var_for("github.token") == "AAI_SECRET_GITHUB_TOKEN"
+    assert env_var_for("zoho.client_secret") == "AAI_SECRET_ZOHO_CLIENT_SECRET"
+    assert env_var_for("zoho.mail_refresh_token") == "AAI_SECRET_ZOHO_MAIL_REFRESH_TOKEN"
+    assert env_var_for("pipedrive.api_token") == "AAI_SECRET_PIPEDRIVE_API_TOKEN"
+
+
+def test_config_toml_emits_only_present_store_profiles():
+    toml = build_config_toml(
+        {
+            SecretProvider.JIRA: _JIRA,
+            SecretProvider.CONFLUENCE: _CONFLUENCE,
+            SecretProvider.GITHUB: _GITHUB,
+        }
+    )
+    assert 'secrets_file = "/home/node/.config/aai-cli/aai-secrets.enc.json"' in toml
+    assert 'key_file = "/home/node/.config/aai-cli/key"' in toml
+    assert "[profiles.jira-work]" in toml
+    assert "[profiles.confluence-work]" in toml
+    assert "[profiles.github-work]" in toml
+    assert "[profiles.bitbucket-work]" not in toml
+    assert "[profiles.pipedrive-work]" not in toml
+    assert 'api_token_secret = "jira.api_token"' in toml
+    assert 'token_secret = "github.token"' in toml
+    assert 'site_url = "https://x.atlassian.net"' in toml
+    assert 'owner = "aai-labs"' in toml
+    # token values never appear in the config
+    assert "jira_tok" not in toml
+    assert "ghp_tok" not in toml
+
+
+def test_tool_context_md_lists_providers_without_metadata():
+    # Providers with no per-secret metadata worth printing (no site URL, no
+    # owner/workspace) are still listed. The block's job is "credentials are already in
+    # place", and that matters most for exactly these: such an agent used to get no
+    # block at all and would tell the user it had no access.
+    md = build_tool_context_md({SecretProvider.PIPEDRIVE: _PIPEDRIVE})
+    assert "- **Pipedrive** (`pipedrive-work`)" in md
+
+
+def test_integrations_policy_md_never_leaks_tokens():
+    md = build_integrations_policy_md(
+        {
+            SecretProvider.GITHUB: _GITHUB,
+            SecretProvider.JIRA: _JIRA,
+            SecretProvider.ZOHO_MAIL: _ZOHO_MAIL,
+            SecretProvider.PIPEDRIVE: _PIPEDRIVE,
+        }
+    )
+    assert "ghp_tok" not in md
+    assert "jira_tok" not in md
+    assert "z_client_secret" not in md
+    assert "z_refresh_tok" not in md
+    assert "pd_tok" not in md

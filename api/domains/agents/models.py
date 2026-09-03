@@ -56,7 +56,6 @@ class SecretProvider(str, enum.Enum):
     ZOHO_MAIL = "zoho_mail"
     ZOHO_CALENDAR = "zoho_calendar"
     FIRECRAWL = "firecrawl"
-    SLACK = "slack"
     PIPEDRIVE = "pipedrive"
     GOOGLE_WORKSPACE = "google_workspace"
 
@@ -75,7 +74,6 @@ PROVIDER_DISPLAY_NAMES: dict[SecretProvider, str] = {
     SecretProvider.ZOHO_MAIL: "Zoho Mail credential",
     SecretProvider.ZOHO_CALENDAR: "Zoho Calendar credential",
     SecretProvider.FIRECRAWL: "Firecrawl credential",
-    SecretProvider.SLACK: "Slack credential",
     SecretProvider.PIPEDRIVE: "Pipedrive credential",
     SecretProvider.GOOGLE_WORKSPACE: "Google Workspace credential",
 }
@@ -201,10 +199,6 @@ class FirecrawlContent(SecretContent):
     base_url: str = ""
 
 
-class SlackContent(SecretContent):
-    token: str
-
-
 class PipedriveContent(SecretContent):
     api_token: str
     # Bare subdomain, e.g. "aai-labs" (-> https://aai-labs.pipedrive.com). Optional: a
@@ -221,7 +215,6 @@ PROVIDER_CONTENT_MODELS: dict[SecretProvider, type[SecretContent]] = {
     SecretProvider.ZOHO_MAIL: ZohoMailContent,
     SecretProvider.ZOHO_CALENDAR: ZohoCalendarContent,
     SecretProvider.FIRECRAWL: FirecrawlContent,
-    SecretProvider.SLACK: SlackContent,
     SecretProvider.PIPEDRIVE: PipedriveContent,
     SecretProvider.GOOGLE_WORKSPACE: GoogleWorkspaceContent,
 }

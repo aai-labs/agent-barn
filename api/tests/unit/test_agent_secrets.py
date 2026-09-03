@@ -14,7 +14,6 @@ from api.domains.agents.models import (
     JiraContent,
     PipedriveContent,
     SecretProvider,
-    SlackContent,
     ZohoMailContent,
     decrypt_content,
     encrypt_content,
@@ -282,34 +281,6 @@ def test_retired_google_providers_are_gone():
     for retired in ("gmail", "google_calendar", "google_sheets"):
         with pytest.raises(ValueError):
             SecretProvider(retired)
-
-
-# --- Slack (AF-209) ---
-
-_SLACK_BASE = {"token": "xoxb-test-token"}
-
-
-def test_slack_content_validates_token():
-    content = validate_content(SecretProvider.SLACK, _SLACK_BASE)
-    assert isinstance(content, SlackContent)
-    assert content.token == "xoxb-test-token"
-
-
-def test_slack_content_rejects_missing_token():
-    with pytest.raises(ValidationError):
-        validate_content(SecretProvider.SLACK, {})
-
-
-def test_slack_content_rejects_extra_fields():
-    with pytest.raises(ValidationError):
-        validate_content(SecretProvider.SLACK, {**_SLACK_BASE, "extra": "nope"})
-
-
-def test_slack_encrypt_decrypt_round_trip():
-    original = validate_content(SecretProvider.SLACK, _SLACK_BASE)
-    blob = encrypt_content(original, _KEY)
-    assert "xoxb-test-token" not in blob
-    assert decrypt_content(SecretProvider.SLACK, blob, _KEY) == original
 
 
 # --- google_workspace ---

@@ -48,14 +48,6 @@ export function isAutoConfiguredProvider(providerId: string): boolean {
 
 export const INTEGRATION_PROVIDERS: IntegrationProvider[] = [
   {
-    id: "slack",
-    label: "Slack tool access",
-    scopeNote: "A tool credential is separate from Communication Connection credentials and is exposed only to the Agent's Slack skill.",
-    fields: [
-      { key: "token", label: "Bot or user token", type: "secret", required: true, placeholder: "xoxb-… or xoxp-…" },
-    ],
-  },
-  {
     id: "github",
     label: "GitHub",
     scopeNote: "Classic PAT: repo, read:user, read:org — Fine-grained PAT: Contents (read), Pull requests (read + write), Metadata (read, mandatory)",

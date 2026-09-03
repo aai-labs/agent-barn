@@ -18,7 +18,7 @@ Plugins are trusted release artifacts, not dynamically installed packages: addin
 
 ## Supported providers
 
-Provider credential contracts are defined by `SecretProvider` and its content models in `../../api/domains/agents/models.py`. Current providers cover GitHub, Jira, Confluence, Bitbucket, Google Workspace, Zoho Mail, Zoho Calendar, Firecrawl, Slack, and Pipedrive. The per-service Google providers (Gmail, Google Calendar, Google Sheets) are retired; affected agents must reconnect through Google Workspace.
+Provider credential contracts are defined by `SecretProvider` and its content models in `../../api/domains/agents/models.py`. Current providers cover GitHub, Jira, Confluence, Bitbucket, Google Workspace, Zoho Mail, Zoho Calendar, Firecrawl, and Pipedrive. The per-service Google providers (Gmail, Google Calendar, Google Sheets) are retired; affected agents must reconnect through Google Workspace. Slack is retired as a tool Integration: the shipped Slack Platform Plugin replaces it and owns that credential, so a Slack credential is always a Communication Connection credential and never an Agent Secret.
 
 Providers reach their service through one of two CLIs: aai-cli (all of the above except Google Workspace) or gog (Google Workspace only). The two have separate runtime artifacts, secret stores, and agent policy blocks.
 
