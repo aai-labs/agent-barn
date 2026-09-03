@@ -73,6 +73,37 @@ class OpenRouterClient:
         """Returns the OpenRouter catalogue as {id, name, context_length, pricing}."""
         return _cached(self.config.openrouter_base_url, self._fetch_models)
 
+    def get_generation(self, generation_id: str) -> dict | None:
+        """Return the true cost and token counts OpenRouter recorded for one call.
+
+        Used to recover spend that LiteLLM dropped on streamed responses. Reading
+        generation metadata does not consume credits — a 260-request benchmark moved
+        the account total by $0.00000000.
+
+        Returns None when OpenRouter has no such generation (HTTP 404), which is a
+        terminal answer: there is nothing to recover. Every other failure raises, so
+        the caller leaves the row a candidate and tries again next run rather than
+        recording a wrong number.
+        """
+        url = f"{self.config.openrouter_base_url}/generation"
+        headers = {}
+        if self.config.openrouter_api_key:
+            headers["Authorization"] = f"Bearer {self.config.openrouter_api_key}"
+        try:
+            resp = httpx.get(url, params={"id": generation_id}, headers=headers, timeout=30)
+            if resp.status_code == httpx.codes.NOT_FOUND:
+                return None
+            resp.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            raise OpenRouterError(f"OpenRouter generation lookup failed with {exc.response.status_code}") from exc
+        except httpx.HTTPError as exc:
+            raise OpenRouterError(f"OpenRouter generation lookup failed: {exc}") from exc
+
+        data = resp.json().get("data")
+        if not isinstance(data, dict):
+            raise OpenRouterError(f"Unexpected /generation response for {generation_id}")
+        return data
+
     def _fetch_models(self) -> list[dict]:
         url = f"{self.config.openrouter_base_url}/models"
         headers = {}

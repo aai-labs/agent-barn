@@ -186,6 +186,54 @@ class LiteLLMClient:
         except Exception as exc:
             raise LiteLLMError(f"Failed to fetch spend logs: {exc}") from exc
 
+    def get_spend_logs_v2(
+        self,
+        start_date: str,
+        end_date: str,
+        page: int = 1,
+        page_size: int = 1000,
+    ) -> dict:
+        """Return one page of per-request spend logs.
+
+        This is LiteLLM's paginated public spend API. `/spend/logs` is deprecated and
+        aggregates rather than listing rows; `/spend/logs/ui` is internal and absent
+        from the OpenAPI schema, so neither is safe to depend on in client-deployed
+        installs. `/spend/logs/v2` is present in v1.83 and v1.96 alike.
+
+        Dates must be `YYYY-MM-DD HH:MM:SS` — a bare date returns HTTP 400.
+
+        Rows come back oldest-first. That is deliberate and load-bearing: the sync
+        watermark is `max(occurred_at)` of what we have stored, so ascending order
+        makes the watermark double as a resume cursor. Under LiteLLM's default
+        `desc`, a run that stopped partway would land only the newest rows, push the
+        watermark to ~now, and skip everything older for good.
+
+        Returns the raw envelope: {data, total, page, page_size, total_pages,
+        total_is_capped}.
+        """
+        master_key = self._master_key()
+        try:
+            resp = httpx.get(
+                f"{self.config.litellm_base_url}/spend/logs/v2",
+                params={
+                    "start_date": start_date,
+                    "end_date": end_date,
+                    "page": page,
+                    "page_size": page_size,
+                    "sort_by": "startTime",
+                    "sort_order": "asc",
+                },
+                headers=self._headers(master_key),
+                timeout=60,
+            )
+            resp.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise LiteLLMError(f"Failed to fetch spend logs page {page}: {exc}") from exc
+        payload = resp.json()
+        if not isinstance(payload, dict):
+            raise LiteLLMError(f"Unexpected /spend/logs/v2 response type: {type(payload).__name__}")
+        return payload
+
     def get_global_spend_report(self, start_date: str, end_date: str) -> dict[str, dict]:
         """
         Fetch aggregated spend+token data per API key hash using /user/daily/activity/aggregated.

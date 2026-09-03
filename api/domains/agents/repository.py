@@ -1208,6 +1208,18 @@ class AgentRepository:
             query = select(Agent).where(col(Agent.organization_id) == org_id).order_by(col(Agent.created_at).asc())
             return list(session.exec(query).all())
 
+    def find_all_with_litellm_keys(self) -> list[Agent]:
+        """Every agent that has ever held a LiteLLM key, across all organizations.
+
+        Deleted agents are included on purpose: their keys still appear in historical
+        spend logs, and dropping them would push real cost into the unattributed
+        bucket. Platform-wide by design — the cost sync builds one key-hash map per
+        run rather than querying per organization.
+        """
+        with Session(self.delegate.engine) as session:
+            query = select(Agent).where(col(Agent.litellm_key_encrypted) != "").order_by(col(Agent.created_at).asc())
+            return list(session.exec(query).all())
+
     # --- Integration secrets ---
 
     def get_secret(self, agent_id: UUID, provider: SecretProvider) -> AgentSecret | None:
