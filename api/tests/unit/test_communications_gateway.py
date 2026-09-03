@@ -21,6 +21,7 @@ from api.domains.communications.models import (
     ProcessingFeedbackStage,
     RuntimeDeliveryRead,
     RuntimeDeliveryResult,
+    RuntimeReplyCreate,
 )
 from api.domains.communications.plugins.base import InboundAdmissionResult, PlatformPlugin
 from api.domains.communications.plugins.registry import PlatformPluginRegistry
@@ -246,6 +247,10 @@ def test_gateway_marks_claim_and_terminal_runtime_failure_at_lifecycle_seam() ->
     assert completed is True
     stages = [call.args[2].stage for call in plugin.processing_feedback.call_args_list]
     assert stages == [ProcessingFeedbackStage.CLAIMED, ProcessingFeedbackStage.FAILED]
+    published_agent_id, published_signal = cast(Mock, service.signals).publish.call_args.args
+    assert published_agent_id == agent.id
+    assert published_signal.type == CommunicationSignalType.MESSAGE_CHANGED
+    assert published_signal.delivery_id == delivery.delivery_id
 
 
 def test_cancel_persists_before_publishing_to_the_runtime_control_stream() -> None:
@@ -264,6 +269,30 @@ def test_cancel_persists_before_publishing_to_the_runtime_control_stream() -> No
     assert published_agent_id == agent_id
     assert published_signal.type == CommunicationSignalType.DELIVERY_CANCELLED
     assert published_signal.delivery_id == delivery_id
+
+
+def test_runtime_reply_publishes_message_changed_for_the_new_outbound_delivery() -> None:
+    connection = cast(CommunicationConnection, _connection())
+    plugin = _feedback_plugin()
+    service, deliveries = _service(connection, plugin)
+    agent = cast(Agent, SimpleNamespace(id=uuid4()))
+    source_delivery_id = uuid4()
+    outbound_delivery_id = uuid4()
+    deliveries.enqueue_runtime_reply.return_value = outbound_delivery_id
+    reply = RuntimeReplyCreate(idempotency_key="reply-1", text="agent reply")
+
+    returned_delivery_id = service.enqueue_runtime_reply(agent, source_delivery_id, reply)
+
+    assert returned_delivery_id == outbound_delivery_id
+    deliveries.enqueue_runtime_reply.assert_called_once_with(
+        agent_id=agent.id,
+        source_delivery_id=source_delivery_id,
+        reply=reply,
+    )
+    published_agent_id, published_signal = cast(Mock, service.signals).publish.call_args.args
+    assert published_agent_id == agent.id
+    assert published_signal.type == CommunicationSignalType.MESSAGE_CHANGED
+    assert published_signal.delivery_id == outbound_delivery_id
 
 
 def test_runtime_control_stream_replays_then_heartbeats_without_claim_polling() -> None:
