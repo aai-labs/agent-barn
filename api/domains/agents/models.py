@@ -53,8 +53,6 @@ class SecretProvider(str, enum.Enum):
     JIRA = "jira"
     CONFLUENCE = "confluence"
     BITBUCKET = "bitbucket"
-    ZOHO_MAIL = "zoho_mail"
-    ZOHO_CALENDAR = "zoho_calendar"
     FIRECRAWL = "firecrawl"
     PIPEDRIVE = "pipedrive"
     GOOGLE_WORKSPACE = "google_workspace"
@@ -71,8 +69,6 @@ PROVIDER_DISPLAY_NAMES: dict[SecretProvider, str] = {
     SecretProvider.JIRA: "Jira credential",
     SecretProvider.CONFLUENCE: "Confluence credential",
     SecretProvider.BITBUCKET: "Bitbucket credential",
-    SecretProvider.ZOHO_MAIL: "Zoho Mail credential",
-    SecretProvider.ZOHO_CALENDAR: "Zoho Calendar credential",
     SecretProvider.FIRECRAWL: "Firecrawl credential",
     SecretProvider.PIPEDRIVE: "Pipedrive credential",
     SecretProvider.GOOGLE_WORKSPACE: "Google Workspace credential",
@@ -179,21 +175,6 @@ class GoogleWorkspaceContent(SecretContent):
         return self
 
 
-class ZohoMailContent(SecretContent):
-    email: str
-    account_id: str
-    client_id: str
-    client_secret: str
-    refresh_token: str
-
-
-class ZohoCalendarContent(SecretContent):
-    username: str
-    email: str
-    app_password: str
-    caldav_url: str
-
-
 class FirecrawlContent(SecretContent):
     api_key: str
     base_url: str = ""
@@ -212,8 +193,6 @@ PROVIDER_CONTENT_MODELS: dict[SecretProvider, type[SecretContent]] = {
     SecretProvider.JIRA: JiraContent,
     SecretProvider.CONFLUENCE: ConfluenceContent,
     SecretProvider.BITBUCKET: BitbucketContent,
-    SecretProvider.ZOHO_MAIL: ZohoMailContent,
-    SecretProvider.ZOHO_CALENDAR: ZohoCalendarContent,
     SecretProvider.FIRECRAWL: FirecrawlContent,
     SecretProvider.PIPEDRIVE: PipedriveContent,
     SecretProvider.GOOGLE_WORKSPACE: GoogleWorkspaceContent,

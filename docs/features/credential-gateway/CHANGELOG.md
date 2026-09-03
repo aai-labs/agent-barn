@@ -13,6 +13,14 @@ Related context: [`../../adr/2026-09-02-credential-gateway-egress-modes.md`](../
 
 ## Changes
 
+### 2026-09-03 — Zoho removed as a tool Integration
+
+- **Why:** Zoho Calendar never worked. Its CalDAV verbs — `PROPFIND`, `REPORT`, `MKCALENDAR`, `MOVE` — were rejected by the gateway's method list, and a probe confirmed all four returned 405 while only `GET` passed; the parametrized test passed solely because it used `GET`. It had already been disabled in the UI as "not currently offered". Zoho Mail is withdrawn alongside it.
+- **Removed:** `SecretProvider.ZOHO_MAIL` / `ZOHO_CALENDAR`, both content models, both plugins, the Zoho OAuth token exchange and cache, the CalDAV host allowlist, the `aai-zoho-mail` bundled skill, and the UI credential forms. The `email-reminder` predefined template is now Google Workspace only.
+- **Migration `a85f48650d6a`:** deletes `agent_secret` and `shared_credential` rows for both providers. This destroys credential material deliberately — no runtime can use those credentials, and leaving them would raise `ValueError` when agent start coerces the stored provider string back to the enum.
+- **Kept:** `UpstreamAuthenticationError` and its handler in the forward path. No shipped plugin raises it now, but it is the contract the Google Workspace token broker needs next.
+- **Tests:** Zoho-specific tests removed. Three general tests that merely used Zoho as their example were preserved rather than deleted — `build_env` ignoring non-store providers is now proved against Firecrawl, and the "provider without a capability clause" case became a registry contract test asserting every shipped aai-cli provider supplies one.
+
 ### 2026-09-03 — Preserve unrestricted agent internet access
 
 - **Scope:** credential isolation removes real provider credentials from agent pods; it does not restrict the destinations agents may reach.
@@ -21,10 +29,10 @@ Related context: [`../../adr/2026-09-02-credential-gateway-egress-modes.md`](../
 
 ### 2026-09-03 — All aai-cli providers use the credential gateway
 
-- **Delivered:** Jira, Confluence, Bitbucket, Zoho Mail REST, Zoho Calendar CalDAV, and Pipedrive now implement the same provider-plugin proxy contract as GitHub. Their gateway profiles use only existing aai-cli endpoint and environment-authentication fields.
-- **Provider authentication:** the gateway applies Atlassian and Bitbucket Basic auth, Pipedrive's `x-api-token`, Zoho CalDAV Basic auth, and a cached short-lived Zoho Mail OAuth access token. Renewable and long-lived provider credentials never enter the agent pod.
+- **Delivered:** Jira, Confluence, Bitbucket, and Pipedrive now implement the same provider-plugin proxy contract as GitHub. (Zoho Mail and Zoho Calendar were also delivered here and removed the same day — see below.) Their gateway profiles use only existing aai-cli endpoint and environment-authentication fields.
+- **Provider authentication:** the gateway applies Atlassian and Bitbucket Basic auth and Pipedrive's `x-api-token`. Long-lived provider credentials never enter the agent pod.
 - **Transport compatibility:** ordinary HTTP integrations present their Gateway Token as Bearer auth. CalDAV presents it as the password in its existing Basic-auth shape; Gateway Token resolution accepts that carrier and replaces the whole header before forwarding.
-- **Upstream safety:** stored Atlassian and Zoho CalDAV URLs are constrained to trusted HTTPS provider hosts before the gateway connects. Invalid stored upstream configuration is refused without forwarding.
+- **Upstream safety:** stored Atlassian URLs are constrained to trusted HTTPS provider hosts before the gateway connects. Invalid stored upstream configuration is refused without forwarding.
 - **Rollout:** the Helm chart and new local configuration enable the gateway globally. Provider routing comes only from each plugin's `egress_mode`; `CREDENTIAL_GATEWAY_ENABLED=false` is the emergency rollback switch. There is no provider allowlist to synchronize when a plugin is added.
 
 ### 2026-09-02 — Slice 3 — GATEWAY_PROXY forward path for GitHub

@@ -18,7 +18,6 @@ from api.domains.agents.models import (
     FirecrawlContent,
     PipedriveContent,
     SecretProvider,
-    ZohoMailContent,
     validate_content,
 )
 
@@ -51,19 +50,6 @@ _BITBUCKET = validate_content(
         "api_token": "bb_tok",
     },
 )
-_ZOHO_MAIL = cast(
-    ZohoMailContent,
-    validate_content(
-        SecretProvider.ZOHO_MAIL,
-        {
-            "email": "samuel@aai-labs.com",
-            "account_id": "56218000000008002",
-            "client_id": "1000.WNPJ721D9UHU9SIHFSU4WA2P04W9LI",
-            "client_secret": "z_client_secret",
-            "refresh_token": "z_refresh_tok",
-        },
-    ),
-)
 _PIPEDRIVE = cast(
     PipedriveContent,
     validate_content(SecretProvider.PIPEDRIVE, {"api_token": "pd_tok"}),
@@ -71,15 +57,6 @@ _PIPEDRIVE = cast(
 _PIPEDRIVE_WITH_DOMAIN = cast(
     PipedriveContent,
     validate_content(SecretProvider.PIPEDRIVE, {"api_token": "pd_tok", "domain": "aai-labs"}),
-)
-_ZOHO_CALENDAR = validate_content(
-    SecretProvider.ZOHO_CALENDAR,
-    {
-        "username": "calendar-user",
-        "email": "calendar@example.com",
-        "app_password": "real-app-password",
-        "caldav_url": "https://calendar.zoho.com/caldav/example/events",
-    },
 )
 
 
@@ -121,7 +98,6 @@ def test_config_toml_gateway_github_uses_existing_aai_cli_contract():
         (SecretProvider.JIRA, _JIRA, "site_url"),
         (SecretProvider.CONFLUENCE, _CONFLUENCE, "site_url"),
         (SecretProvider.BITBUCKET, _BITBUCKET, "base_url"),
-        (SecretProvider.ZOHO_MAIL, _ZOHO_MAIL, "base_url"),
         (SecretProvider.PIPEDRIVE, _PIPEDRIVE, "base_url"),
     ],
 )
@@ -138,28 +114,12 @@ def test_config_toml_gateway_http_provider_uses_existing_bearer_contract(provide
     assert "_secret =" not in toml
 
 
-def test_config_toml_gateway_caldav_uses_gateway_token_as_existing_password_env():
-    toml = build_config_toml(
-        {SecretProvider.ZOHO_CALENDAR: _ZOHO_CALENDAR},
-        gateway_enabled=True,
-        gateway_base_url="http://credential-gateway:8003/gateway/v1",
-    )
-
-    assert 'transport = "caldav"' in toml
-    assert 'auth_type = "app_password"' in toml
-    assert 'password_env = "AF_GATEWAY_TOKEN_ZOHO_CALENDAR"' in toml
-    assert 'caldav_url = "http://credential-gateway:8003/gateway/v1/p/zoho_calendar"' in toml
-    assert "real-app-password" not in toml
-
-
 def test_store_excludes_every_gateway_aai_cli_provider_when_gateway_is_enabled():
     decrypted = {
         SecretProvider.GITHUB: _GITHUB,
         SecretProvider.JIRA: _JIRA,
         SecretProvider.CONFLUENCE: _CONFLUENCE,
         SecretProvider.BITBUCKET: _BITBUCKET,
-        SecretProvider.ZOHO_MAIL: _ZOHO_MAIL,
-        SecretProvider.ZOHO_CALENDAR: _ZOHO_CALENDAR,
         SecretProvider.PIPEDRIVE: _PIPEDRIVE,
     }
 
@@ -199,24 +159,6 @@ def test_config_toml_confluence_scoped_token_uses_gateway_url():
     assert 'email = "svc-account@x.com"' in toml
 
 
-def test_config_toml_zoho_mail_uses_oauth_rest_profile():
-    toml = build_config_toml({SecretProvider.ZOHO_MAIL: _ZOHO_MAIL})
-    assert "[profiles.zoho-mail-rest]" in toml
-    assert 'provider = "zoho"' in toml
-    assert 'auth_type = "zoho_oauth"' in toml
-    assert f'email = "{_ZOHO_MAIL.email}"' in toml
-    assert f'account_id = "{_ZOHO_MAIL.account_id}"' in toml
-    assert f'client_id = "{_ZOHO_MAIL.client_id}"' in toml
-    assert 'client_secret_secret = "zoho.client_secret"' in toml
-    assert 'refresh_token_secret = "zoho.mail_refresh_token"' in toml
-    # secret values must not appear in the config
-    assert "z_client_secret" not in toml
-    assert "z_refresh_tok" not in toml
-    # must not generate the old smtp_imap profile
-    assert "zoho-mail-work" not in toml
-    assert "smtp_imap" not in toml
-
-
 def test_config_toml_pipedrive_without_domain_omits_base_url():
     toml = build_config_toml({SecretProvider.PIPEDRIVE: _PIPEDRIVE})
     assert "[profiles.pipedrive-work]" in toml
@@ -243,18 +185,6 @@ def test_setup_sh_cp_always_and_secrets_set_per_store_provider():
     assert "jira_tok" not in setup
 
 
-def test_setup_sh_zoho_mail_sets_both_secrets():
-    setup = build_setup_sh([SecretProvider.ZOHO_MAIL])
-    assert (
-        f"printf '%s' \"$AAI_SECRET_ZOHO_CLIENT_SECRET\" | "
-        f"aai-cli --config {CONFIG_PATH} secrets set zoho.client_secret" in setup
-    )
-    assert (
-        f"printf '%s' \"$AAI_SECRET_ZOHO_MAIL_REFRESH_TOKEN\" | "
-        f"aai-cli --config {CONFIG_PATH} secrets set zoho.mail_refresh_token" in setup
-    )
-
-
 def test_setup_sh_pipedrive_sets_secret():
     setup = build_setup_sh([SecretProvider.PIPEDRIVE])
     assert (
@@ -277,31 +207,16 @@ def test_build_env_maps_tokens_to_env_vars():
     }
 
 
-def test_build_env_zoho_mail_emits_both_secrets():
-    env = build_env({SecretProvider.ZOHO_MAIL: _ZOHO_MAIL})
-    assert env == {
-        "AAI_SECRET_ZOHO_CLIENT_SECRET": "z_client_secret",
-        "AAI_SECRET_ZOHO_MAIL_REFRESH_TOKEN": "z_refresh_tok",
-    }
-
-
 def test_build_env_pipedrive_emits_secret():
     env = build_env({SecretProvider.PIPEDRIVE: _PIPEDRIVE})
     assert env == {"AAI_SECRET_PIPEDRIVE_API_TOKEN": "pd_tok"}
 
 
-def test_build_env_ignores_non_store_providers():
-    # ZOHO_CALENDAR uses password_env, not the secret store
-    zoho_calendar = validate_content(
-        SecretProvider.ZOHO_CALENDAR,
-        {
-            "username": "samuel",
-            "email": "samuel@aai-labs.com",
-            "app_password": "zc_pw",
-            "caldav_url": "https://calendar.zoho.com/caldav/",
-        },
-    )
-    assert build_env({SecretProvider.ZOHO_CALENDAR: zoho_calendar}) == {}
+def test_build_env_ignores_providers_that_do_not_use_the_secret_store():
+    # Firecrawl is platform infrastructure injected as plain env, so a mixed provider
+    # map can be passed to build_env safely.
+    firecrawl = validate_content(SecretProvider.FIRECRAWL, {"api_key": "fc_key"})
+    assert build_env({SecretProvider.FIRECRAWL: firecrawl}) == {}
 
 
 def test_config_toml_hermes_home_dir_uses_opt_data_paths():
@@ -463,22 +378,6 @@ def test_integrations_policy_md_appends_capability_to_repo_scoped_line():
     assert "Actions runs" in md
 
 
-def test_integrations_policy_md_omits_capability_for_providers_without_one():
-    # Zoho Calendar ships no aai-cli skill doc, so there is no verified command surface
-    # to describe — the line renders exactly as before rather than inventing one.
-    calendar = validate_content(
-        SecretProvider.ZOHO_CALENDAR,
-        {
-            "username": "samuel",
-            "email": "samuel@aai-labs.com",
-            "app_password": "zc_pw",
-            "caldav_url": "https://calendar.zoho.com/caldav/",
-        },
-    )
-    md = build_integrations_policy_md({SecretProvider.ZOHO_CALENDAR: calendar})
-    assert "- **Zoho Calendar**: `--profile zoho-calendar-work`\n" in md
-
-
 def test_integrations_policy_md_github_multi_repo_lists_all_profiles():
     github = validate_content(
         SecretProvider.GITHUB,
@@ -555,11 +454,6 @@ def test_integrations_policy_md_bitbucket_no_repo_guides_repo_flag():
     assert "--repo" in md
 
 
-def test_integrations_policy_md_covers_non_store_providers():
-    md = build_integrations_policy_md({SecretProvider.ZOHO_MAIL: _ZOHO_MAIL})
-    assert "--profile zoho-mail-rest" in md
-
-
 def test_integrations_policy_md_pipedrive_emits_profile_line():
     md = build_integrations_policy_md({SecretProvider.PIPEDRIVE: _PIPEDRIVE})
     assert "--profile pipedrive-work" in md
@@ -633,8 +527,6 @@ def test_local_tools_block_forbids_the_python_fallback():
 def test_env_var_for():
     assert env_var_for("jira.api_token") == "AAI_SECRET_JIRA_API_TOKEN"
     assert env_var_for("github.token") == "AAI_SECRET_GITHUB_TOKEN"
-    assert env_var_for("zoho.client_secret") == "AAI_SECRET_ZOHO_CLIENT_SECRET"
-    assert env_var_for("zoho.mail_refresh_token") == "AAI_SECRET_ZOHO_MAIL_REFRESH_TOKEN"
     assert env_var_for("pipedrive.api_token") == "AAI_SECRET_PIPEDRIVE_API_TOKEN"
 
 
@@ -676,12 +568,9 @@ def test_integrations_policy_md_never_leaks_tokens():
         {
             SecretProvider.GITHUB: _GITHUB,
             SecretProvider.JIRA: _JIRA,
-            SecretProvider.ZOHO_MAIL: _ZOHO_MAIL,
             SecretProvider.PIPEDRIVE: _PIPEDRIVE,
         }
     )
     assert "ghp_tok" not in md
     assert "jira_tok" not in md
-    assert "z_client_secret" not in md
-    assert "z_refresh_tok" not in md
     assert "pd_tok" not in md

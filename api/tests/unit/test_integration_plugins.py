@@ -109,6 +109,14 @@ def test_aai_cli_plugins_implement_the_aai_cli_seam(plugin: AaiCliPlugin):
     assert_that(plugin.aai_cli_label, is_(not_none()))
 
 
+def test_every_aai_cli_provider_describes_its_command_surface():
+    # The agents_md line appends a one-clause capability so an agent can connect a user's
+    # question to the right --profile; a bare slug never told it what the profile was for.
+    # Every shipped provider now has one, so a new provider must supply it too.
+    missing = [p.key for p in AAI_CLI_PLUGINS if not p.aai_cli_capability]
+    assert_that(missing, is_(equal_to([])))
+
+
 def test_aai_cli_profile_slugs_are_unique():
     slugs = [p.aai_cli_slug for p in AAI_CLI_PLUGINS]
     assert_that(sorted(slugs), is_(equal_to(sorted(set(slugs)))))

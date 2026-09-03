@@ -14,7 +14,6 @@ from api.domains.agents.models import (
     JiraContent,
     PipedriveContent,
     SecretProvider,
-    ZohoMailContent,
     decrypt_content,
     encrypt_content,
     validate_content,
@@ -60,23 +59,6 @@ def test_encrypt_decrypt_round_trip():
     blob = encrypt_content(original, _KEY)
     assert "secret-token" not in blob  # whole payload is ciphertext, not plaintext
     assert decrypt_content(SecretProvider.JIRA, blob, _KEY) == original
-
-
-def test_zoho_mail_content_validates_oauth_fields():
-    content = validate_content(
-        SecretProvider.ZOHO_MAIL,
-        {
-            "email": "u@z.com",
-            "account_id": "56218000000008002",
-            "client_id": "1000.CLIENTID",
-            "client_secret": "z_secret",
-            "refresh_token": "z_refresh",
-        },
-    )
-    assert isinstance(content, ZohoMailContent)
-    assert content.email == "u@z.com"
-    assert content.account_id == "56218000000008002"
-    assert content.client_id == "1000.CLIENTID"
 
 
 def test_display_names_cover_every_provider():

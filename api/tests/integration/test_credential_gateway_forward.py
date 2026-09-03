@@ -5,7 +5,7 @@ credential applied, and that credential is never in the agent's possession.
 """
 
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 from fastapi import status
@@ -22,8 +22,6 @@ from api.domains.agents.models import (
     JiraContent,
     PipedriveContent,
     SecretProvider,
-    ZohoCalendarContent,
-    ZohoMailContent,
     encrypt_content,
 )
 from api.domains.credential_gateway.forwarding import UpstreamForwarder, UpstreamResponse
@@ -208,19 +206,6 @@ _ALL_AAI_GIVEN[0] = set_env_variable(
             "x-api-token",
             "pd-real",
         ),
-        (
-            SecretProvider.ZOHO_CALENDAR,
-            ZohoCalendarContent(
-                username="calendar-user",
-                email="calendar@example.com",
-                app_password="calendar-real",
-                caldav_url="https://calendar.zoho.com/caldav/acme/events",
-            ),
-            "event-1.ics",
-            "https://calendar.zoho.com/caldav/acme/events/event-1.ics",
-            "Authorization",
-            "Basic Y2FsZW5kYXItdXNlcjpjYWxlbmRhci1yZWFs",
-        ),
     ],
 )
 def test_each_non_oauth_aai_provider_is_reauthorized_and_forwarded(
@@ -236,34 +221,6 @@ def test_each_non_oauth_aai_provider_is_reauthorized_and_forwarded(
         call = _sent(context)
         assert_that(call.args[1], equal_to(expected_url))
         assert_that(call.kwargs["headers"][auth_header], equal_to(auth_value))
-        assert_that(token in str(call.kwargs["headers"]), is_(False))
-
-
-def test_zoho_mail_refreshes_upstream_auth_inside_the_gateway():
-    content = ZohoMailContent(
-        email="mail@example.com",
-        account_id="123",
-        client_id="zoho-client",
-        client_secret="zoho-secret",
-        refresh_token="zoho-refresh",
-    )
-    token_response = MagicMock(status_code=200)
-    token_response.json.return_value = {"access_token": "zoho-access", "expires_in": 3600}
-
-    with given(_ALL_AAI_GIVEN) as context:
-        _provider_secret(context, SecretProvider.ZOHO_MAIL, content)
-        token = _token_for(context, SecretProvider.ZOHO_MAIL)
-
-        with patch("api.domains.integrations.plugins.providers.httpx.post", return_value=token_response):
-            response = context.gateway_client.get(
-                "/gateway/v1/p/zoho_mail/api/accounts/123/messages",
-                headers=_auth(token),
-            )
-
-        assert_that(response.status_code, equal_to(status.HTTP_200_OK))
-        call = _sent(context)
-        assert_that(call.args[1], equal_to("https://mail.zoho.com/api/accounts/123/messages"))
-        assert_that(call.kwargs["headers"]["Authorization"], equal_to("Zoho-oauthtoken zoho-access"))
         assert_that(token in str(call.kwargs["headers"]), is_(False))
 
 

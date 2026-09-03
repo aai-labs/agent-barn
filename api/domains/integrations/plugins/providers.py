@@ -11,13 +11,8 @@ a merged PR, never runtime registration.
 from __future__ import annotations
 
 import base64
-import hashlib
 import re
-import threading
-import time
 from urllib.parse import urlsplit, urlunsplit
-
-import httpx
 
 from api.domains.agents.models import (
     BitbucketContent,
@@ -28,8 +23,6 @@ from api.domains.agents.models import (
     JiraContent,
     PipedriveContent,
     SecretProvider,
-    ZohoCalendarContent,
-    ZohoMailContent,
 )
 from api.domains.integrations.plugins.aai_cli_support import (
     AaiCliPlugin,
@@ -41,7 +34,6 @@ from api.domains.integrations.plugins.base import (
     EgressMode,
     IntegrationPlugin,
     OutboundRequest,
-    UpstreamAuthenticationError,
 )
 from api.infrastructure.integration_validators.bitbucket import validate_bitbucket
 from api.infrastructure.integration_validators.confluence import validate_confluence
@@ -57,19 +49,6 @@ GOG = "gog"
 #: injected as plain environment.
 NO_TOOL = "none"
 
-_ZOHO_TOKEN_URL = "https://accounts.zoho.com/oauth/v2/token"
-_ZOHO_MAIL_BASE_URL = "https://mail.zoho.com"
-_ZOHO_CALENDAR_HOSTS = frozenset(
-    {
-        "calendar.zoho.com",
-        "calendar.zoho.eu",
-        "calendar.zoho.in",
-        "calendar.zoho.com.au",
-        "calendar.zoho.jp",
-        "calendar.zoho.ca",
-        "calendar.zoho.sa",
-    }
-)
 _PIPEDRIVE_DOMAIN = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 _ATLASSIAN_CLOUD_ID = re.compile(r"^[A-Za-z0-9-]+$")
 
@@ -111,22 +90,6 @@ def _atlassian_cloud_gateway(service: str, cloud_id: str) -> str:
     if service not in {"jira", "confluence"} or not _ATLASSIAN_CLOUD_ID.fullmatch(cloud_id):
         raise ValueError("Atlassian cloud_id is not valid")
     return f"https://api.atlassian.com/ex/{service}/{cloud_id}"
-
-
-def _trusted_zoho_calendar_url(caldav_url: str) -> str:
-    parsed = urlsplit(caldav_url)
-    hostname = (parsed.hostname or "").lower()
-    if (
-        parsed.scheme != "https"
-        or hostname not in _ZOHO_CALENDAR_HOSTS
-        or parsed.username is not None
-        or parsed.password is not None
-        or parsed.port is not None
-        or parsed.query
-        or parsed.fragment
-    ):
-        raise ValueError("Zoho CalDAV URL is not on a supported calendar.zoho host")
-    return urlunsplit(("https", hostname, parsed.path, "", ""))
 
 
 class GithubPlugin(AaiCliPlugin[GithubContent]):
@@ -398,154 +361,6 @@ class BitbucketPlugin(AaiCliPlugin[BitbucketContent]):
         return repo_scoped_profile_line("Bitbucket", self.aai_cli_slug, content.workspace, "workspace", content.repos)
 
 
-class ZohoMailPlugin(AaiCliPlugin[ZohoMailContent]):
-    key = "zoho_mail"
-    egress_mode = EgressMode.GATEWAY_PROXY
-    provider = SecretProvider.ZOHO_MAIL
-    display_name = "Zoho Mail credential"
-    credentials_model = ZohoMailContent
-    shared_credential_eligible = True
-    bundled_skill_slugs = ("aai-zoho-mail",)
-
-    aai_cli_slug = "zoho-mail-rest"
-    aai_cli_label = "Zoho Mail"
-    aai_cli_capability = "read and search mail (read-only)"
-    aai_cli_secret_entries = (
-        ("zoho.client_secret", "client_secret"),
-        ("zoho.mail_refresh_token", "refresh_token"),
-    )
-
-    def __init__(self) -> None:
-        self._token_cache: dict[str, tuple[str, float]] = {}
-        self._token_cache_lock = threading.Lock()
-
-    def upstream_base_url(self, content: ZohoMailContent) -> str:
-        del content
-        return _ZOHO_MAIL_BASE_URL
-
-    def apply_upstream_auth(self, content: ZohoMailContent, request: OutboundRequest) -> OutboundRequest:
-        return request.with_headers(
-            {"Authorization": f"Zoho-oauthtoken {self._access_token(content)}"},
-            sensitive=True,
-        )
-
-    def _access_token(self, content: ZohoMailContent) -> str:
-        cache_key = hashlib.sha256(
-            f"{content.client_id}\0{content.client_secret}\0{content.refresh_token}".encode()
-        ).hexdigest()
-        now = time.monotonic()
-        with self._token_cache_lock:
-            cached = self._token_cache.get(cache_key)
-        if cached is not None and cached[1] > now:
-            return cached[0]
-
-        # Do not hold the cache lock across provider I/O: one tenant's slow refresh
-        # must not block another tenant whose credential has a different cache key.
-        try:
-            response = httpx.post(
-                _ZOHO_TOKEN_URL,
-                data={
-                    "grant_type": "refresh_token",
-                    "refresh_token": content.refresh_token,
-                    "client_id": content.client_id,
-                    "client_secret": content.client_secret,
-                },
-                timeout=10,
-            )
-        except httpx.HTTPError as exc:
-            raise UpstreamAuthenticationError("Zoho token endpoint could not be reached") from exc
-        if response.status_code != 200:
-            raise UpstreamAuthenticationError("Zoho rejected the stored OAuth credential")
-        try:
-            payload = response.json()
-        except ValueError as exc:
-            raise UpstreamAuthenticationError("Zoho returned an invalid token response") from exc
-        token = payload.get("access_token")
-        if not isinstance(token, str) or not token:
-            raise UpstreamAuthenticationError("Zoho token response omitted access_token")
-        expires_in = payload.get("expires_in_sec", payload.get("expires_in", 3600))
-        try:
-            ttl = float(expires_in)
-        except TypeError, ValueError:
-            ttl = 3600.0
-        with self._token_cache_lock:
-            self._token_cache[cache_key] = (token, now + max(1.0, ttl - 60.0))
-        return token
-
-    def aai_cli_profile_block(self, content: ZohoMailContent) -> str:
-        return (
-            f"[profiles.{self.aai_cli_slug}]\n"
-            'provider = "zoho"\n'
-            'auth_type = "zoho_oauth"\n'
-            f"email = {quote(content.email)}\n"
-            f"account_id = {quote(content.account_id)}\n"
-            f"client_id = {quote(content.client_id)}\n"
-            'client_secret_secret = "zoho.client_secret"\n'
-            'refresh_token_secret = "zoho.mail_refresh_token"\n'
-        )
-
-    def aai_cli_gateway_profile_block(self, content: ZohoMailContent, *, base_url: str, token_env: str) -> str:
-        return "".join(
-            [
-                f"[profiles.{self.aai_cli_slug}]\n",
-                'provider = "zoho"\n',
-                *_gateway_bearer_lines(endpoint_field="base_url", base_url=base_url, token_env=token_env),
-                f"email = {quote(content.email)}\n",
-                f"account_id = {quote(content.account_id)}\n",
-            ]
-        )
-
-
-class ZohoCalendarPlugin(AaiCliPlugin[ZohoCalendarContent]):
-    key = "zoho_calendar"
-    egress_mode = EgressMode.GATEWAY_PROXY
-    provider = SecretProvider.ZOHO_CALENDAR
-    display_name = "Zoho Calendar credential"
-    credentials_model = ZohoCalendarContent
-    #: CalDAV rather than REST, and the only aai-cli provider that injects its
-    #: credential as plain env (``password_env``) instead of the secret store.
-    bundled_skill_slugs = ()
-
-    aai_cli_slug = "zoho-calendar-work"
-    aai_cli_label = "Zoho Calendar"
-
-    def upstream_base_url(self, content: ZohoCalendarContent) -> str:
-        return _trusted_zoho_calendar_url(content.caldav_url)
-
-    def apply_upstream_auth(self, content: ZohoCalendarContent, request: OutboundRequest) -> OutboundRequest:
-        return request.with_headers(
-            {"Authorization": _basic_auth(content.username, content.app_password)},
-            sensitive=True,
-        )
-
-    def aai_cli_profile_block(self, content: ZohoCalendarContent) -> str:
-        return (
-            f"[profiles.{self.aai_cli_slug}]\n"
-            'provider = "zoho"\n'
-            'transport = "caldav"\n'
-            'auth_type = "app_password"\n'
-            f"username = {quote(content.username)}\n"
-            f"email = {quote(content.email)}\n"
-            'password_env = "ZOHO_CALENDAR_APP_PASSWORD"\n'
-            f"caldav_url = {quote(content.caldav_url)}\n"
-        )
-
-    def aai_cli_gateway_profile_block(self, content: ZohoCalendarContent, *, base_url: str, token_env: str) -> str:
-        # CalDAV has its own aai-cli transport and always emits Basic auth. Supplying
-        # the Gateway Token as its password preserves that existing CLI contract; the
-        # gateway extracts the password and replaces the entire Authorization header.
-        return (
-            f"[profiles.{self.aai_cli_slug}]\n"
-            'provider = "zoho"\n'
-            'transport = "caldav"\n'
-            'auth_type = "app_password"\n'
-            f"username = {quote(content.username)}\n"
-            f"email = {quote(content.email)}\n"
-            f"password_env = {quote(token_env)}\n"
-            f"caldav_url = {quote(base_url)}\n"
-        )
-
-
 class PipedrivePlugin(AaiCliPlugin[PipedriveContent]):
     key = "pipedrive"
     egress_mode = EgressMode.GATEWAY_PROXY
@@ -633,8 +448,6 @@ SHIPPED_PLUGINS: tuple[IntegrationPlugin, ...] = (
     JiraPlugin(),
     ConfluencePlugin(),
     BitbucketPlugin(),
-    ZohoMailPlugin(),
-    ZohoCalendarPlugin(),
     FirecrawlPlugin(),
     PipedrivePlugin(),
     GoogleWorkspacePlugin(),

@@ -51,8 +51,8 @@ def _plugin_for(provider: SecretProvider) -> AaiCliPlugin | None:
 
 
 # Maps each provider to its (secret_name, content_attr) pairs for the aai-cli encrypted
-# secret store. Providers not listed here don't use the store (env-based only, e.g.
-# zoho_calendar). Derived from the plugins so a new provider cannot forget to appear.
+# secret store. Providers not listed here don't use the store. Derived from the plugins
+# so a new provider cannot forget to appear.
 provider_secrets_map: dict[str, list[tuple[str, str]]] = {
     p.key: list(p.aai_cli_secret_entries) for p in _aai_cli_plugins() if p.aai_cli_secret_entries
 }
@@ -74,10 +74,10 @@ def _header(dir_path: str) -> str:
 
 
 # Every provider reachable through an aai-cli --profile gets a "Configured Integrations"
-# line. This was previously limited to the four repo/issue trackers, which left Slack,
-# Gmail, Zoho Mail, Pipedrive, and the calendars with no "credentials are already in
-# place" note at all — so those agents would tell the user they had no access, or ask for
-# a token that was already mounted.
+# line. This was previously limited to the four repo/issue trackers, which left providers
+# such as Pipedrive with no "credentials are already in place" note at all — so those
+# agents would tell the user they had no access, or ask for a token that was already
+# mounted.
 _TOOL_CONTEXT_PROVIDERS = frozenset(PROFILE_SLUGS)
 
 

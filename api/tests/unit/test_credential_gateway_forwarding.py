@@ -12,8 +12,6 @@ from api.domains.agents.models import (
     GithubContent,
     JiraContent,
     PipedriveContent,
-    ZohoCalendarContent,
-    ZohoMailContent,
 )
 from api.domains.credential_gateway.forwarding import (
     UpstreamForwarder,
@@ -28,8 +26,6 @@ from api.domains.integrations.plugins.providers import (
     GithubPlugin,
     JiraPlugin,
     PipedrivePlugin,
-    ZohoCalendarPlugin,
-    ZohoMailPlugin,
 )
 
 _GITHUB = GithubContent(token="ghp_real_secret", owner="acme", repos=["r1"], org="acme-org")
@@ -110,17 +106,6 @@ def test_github_upstream_is_the_public_api_host():
             "https://api.bitbucket.org/2.0",
             "Basic YmJAZXhhbXBsZS5jb206YmItcmVhbA==",
         ),
-        (
-            ZohoCalendarPlugin(),
-            ZohoCalendarContent(
-                username="calendar-user",
-                email="calendar@example.com",
-                app_password="calendar-real",
-                caldav_url="https://calendar.zoho.com/caldav/acme/events",
-            ),
-            "https://calendar.zoho.com/caldav/acme/events",
-            "Basic Y2FsZW5kYXItdXNlcjpjYWxlbmRhci1yZWFs",
-        ),
     ],
 )
 def test_basic_auth_providers_apply_the_real_credential(plugin, content, expected_base, expected_authorization):
@@ -158,15 +143,6 @@ def test_scoped_atlassian_credentials_use_the_cloud_gateway_bases():
             JiraPlugin(),
             JiraContent(site_url="http://169.254.169.254", email="jira@example.com", api_token="jira-real"),
         ),
-        (
-            ZohoCalendarPlugin(),
-            ZohoCalendarContent(
-                username="calendar-user",
-                email="calendar@example.com",
-                app_password="calendar-real",
-                caldav_url="https://calendar.zoho.example/caldav/acme/events",
-            ),
-        ),
     ],
 )
 def test_credential_owned_upstream_urls_cannot_target_untrusted_hosts(plugin, content):
@@ -179,28 +155,6 @@ def test_pipedrive_applies_its_real_custom_header():
     outbound = PipedrivePlugin().apply_upstream_auth(content, OutboundRequest("GET", "/v1/users/me"))
     assert_that(PipedrivePlugin().upstream_base_url(content), equal_to("https://acme.pipedrive.com"))
     assert_that(outbound.headers["x-api-token"], equal_to("pd-real"))
-
-
-def test_zoho_mail_exchanges_and_caches_the_refresh_token_in_the_gateway():
-    content = ZohoMailContent(
-        email="mail@example.com",
-        account_id="123",
-        client_id="zoho-client",
-        client_secret="zoho-secret",
-        refresh_token="zoho-refresh",
-    )
-    response = MagicMock(status_code=200)
-    response.json.return_value = {"access_token": "zoho-access", "expires_in": 3600}
-    plugin = ZohoMailPlugin()
-
-    with patch("api.domains.integrations.plugins.providers.httpx.post", return_value=response) as post:
-        first = plugin.apply_upstream_auth(content, OutboundRequest("GET", "/api/accounts/123/messages"))
-        second = plugin.apply_upstream_auth(content, OutboundRequest("GET", "/api/accounts/123/messages/2"))
-
-    assert_that(plugin.upstream_base_url(content), equal_to("https://mail.zoho.com"))
-    assert_that(first.headers["Authorization"], equal_to("Zoho-oauthtoken zoho-access"))
-    assert_that(second.headers["Authorization"], equal_to("Zoho-oauthtoken zoho-access"))
-    assert_that(post.call_count, equal_to(1))
 
 
 # --- redirects ---

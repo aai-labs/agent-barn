@@ -492,6 +492,7 @@ def test_list_skills_requires_auth():
 
 def test_aai_cli_seeder_publishes_the_bundled_skill_tree():
     with given(_GIVEN) as context:
+        from api.domains.agents.aai_cli_skills import AAI_CLI_PROVIDER_SKILLS
         from api.domains.skills.repository import SkillRepository
         from api.domains.skills.skill_seeder import seed_aai_cli_skills
 
@@ -499,7 +500,10 @@ def test_aai_cli_seeder_publishes_the_bundled_skill_tree():
         seed_aai_cli_skills(repository)
         skills = repository.find_all_global()
 
-        assert_that(len(skills), equal_to(11))
+        # Derived from the bundle rather than hardcoded: the seeder's job is to publish
+        # every bundled skill, and a literal count goes stale whenever one is added or
+        # withdrawn.
+        assert_that(len(skills), equal_to(len(AAI_CLI_PROVIDER_SKILLS)))
         for skill in skills:
             assert_that(skill.slug, starts_with("aai-"))
             assert_that(skill.root_dir, equal_to(skill.slug))
