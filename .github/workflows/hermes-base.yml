@@ -53,7 +53,7 @@ jobs:
             -v "${{ github.workspace }}/hermes-base/smoke-test.sh:/smoke-test.sh:ro" \
             hermes-base:ci \
             /bin/sh /smoke-test.sh
-      - name: Skill discovery contract
+      - name: API runtime tests
         run: HERMES_TEST_IMAGE=hermes-base:ci make test-api-runtime
       # Runs the telemetry-push plugin against the runtime's real SessionStore.
       # Unit tests can only prove our own routing logic against fakes; this is
@@ -128,7 +128,7 @@ jobs:
             -v "${{ github.workspace }}/hermes-base/smoke-test.sh:/smoke-test.sh:ro" \
             ${{ vars.REGISTRY_URL }}/agentbarn-hermes-base:${{ steps.tag.outputs.value }} \
             /bin/sh /smoke-test.sh
-      - name: Skill discovery contract
+      - name: API runtime tests
         run: |
           HERMES_TEST_IMAGE=${{ vars.REGISTRY_URL }}/agentbarn-hermes-base:${{ steps.tag.outputs.value }} \
             make test-api-runtime
