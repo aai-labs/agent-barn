@@ -21,6 +21,12 @@
 - `CONTEXT.md` owns domain terminology.
 - `docs/INDEX.md` routes product, architecture, feature, and engineering
   context.
+- `docs/guidelines/code.md` owns API structure and layering;
+  `docs/guidelines/webapp.md` owns UI feature structure and shared-client
+  boundaries.
+- `docs/guidelines/testing.md` owns verification guidance;
+  `docs/guidelines/operations.md` owns local setup, migrations, deployment, and
+  releases.
 - `docs/adr/README.md` owns ADR qualification and format.
 
 ## Repository-wide guardrails
