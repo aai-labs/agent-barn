@@ -209,7 +209,11 @@ def build_hermes_deployment(
                         client.V1Container(
                             name="fix-pvc-owner",
                             image=image,
-                            command=["/usr/local/bin/fix-hermes-pvc-owner"],
+                            command=[
+                                "sh",
+                                "-c",
+                                "mkdir -p /opt/data/workspace && chown -R hermes:hermes /opt/data",
+                            ],
                             security_context=client.V1SecurityContext(run_as_user=0),
                             volume_mounts=[
                                 client.V1VolumeMount(name="data", mount_path="/opt/data"),
