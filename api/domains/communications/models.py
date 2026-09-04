@@ -29,6 +29,7 @@ class CommunicationPlatform(str, enum.Enum):
     SLACK = "slack"
     TELEGRAM = "telegram"
     DISCORD = "discord"
+    WEB = "web"
 
 
 class PlatformCapability(str, enum.Enum):
@@ -40,6 +41,7 @@ class PlatformCapability(str, enum.Enum):
     THREADS = "threads"
     MENTIONS = "mentions"
     PROCESSING_FEEDBACK = "processing_feedback"
+    SUPERVISED_INGRESS = "supervised_ingress"
 
 
 class ProcessingFeedbackStage(str, enum.Enum):
@@ -277,6 +279,7 @@ class CommunicationDelivery(BaseModel, table=True):
     provider_message_id: str | None = SqlField(default=None, nullable=True, max_length=512)
     last_error_code: str | None = SqlField(default=None, nullable=True, max_length=100)
     last_error_message: str | None = SqlField(default=None, nullable=True, max_length=500)
+    cancel_requested_at: datetime | None = SqlField(default=None, nullable=True, sa_type=sa.DateTime(timezone=True))  # type: ignore
     envelope: dict[str, Any] = SqlField(sa_column=Column(JSONB, nullable=False))
 
 

@@ -109,6 +109,16 @@ class CommunicationConnectionRepository:
                 )
             ).one_or_none()
 
+    def get_active_by_platform_key(self, agent_id: UUID, platform_key: str) -> CommunicationConnection | None:
+        with Session(self.delegate.engine) as session:
+            return session.exec(
+                select(CommunicationConnection).where(
+                    col(CommunicationConnection.agent_id) == agent_id,
+                    col(CommunicationConnection.platform_key) == platform_key,
+                    col(CommunicationConnection.retired_at).is_(None),
+                )
+            ).one_or_none()
+
     def list_enabled(self) -> list[CommunicationConnection]:
         with Session(self.delegate.engine) as session:
             return list(

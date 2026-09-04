@@ -1,7 +1,8 @@
+import asyncio
 import json
 from types import SimpleNamespace
 from typing import cast
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 from uuid import uuid4
 
 from hamcrest import assert_that, empty
@@ -20,15 +21,18 @@ from api.domains.communications.models import (
     ProcessingFeedbackStage,
     RuntimeDeliveryRead,
     RuntimeDeliveryResult,
+    RuntimeReplyCreate,
 )
 from api.domains.communications.plugins.base import InboundAdmissionResult, PlatformPlugin
 from api.domains.communications.plugins.registry import PlatformPluginRegistry
 from api.domains.communications.plugins.slack import SlackCredentials, SlackSettings
+from api.infrastructure.communication_signals import CommunicationSignalType
 
 
 def _connection() -> SimpleNamespace:
     return SimpleNamespace(
         id=uuid4(),
+        agent_id=uuid4(),
         enabled=True,
         platform_key="slack",
         settings={},
@@ -61,6 +65,7 @@ def _service(
         delivery_repository=deliveries,
         connection_repository=connections,
         plugins=plugins,
+        signals=Mock(),
         operations=operations,
     )
     return service, deliveries
@@ -103,6 +108,10 @@ def test_gateway_feedback_is_best_effort_after_inbound_acceptance() -> None:
     deliveries.accept_inbound.assert_called_once()
     plugin.processing_feedback.assert_called_once()
     assert plugin.processing_feedback.call_args.args[2].stage == ProcessingFeedbackStage.ACCEPTED
+    signals = cast(Mock, service.signals)
+    published_agent_id, published_signal = signals.publish.call_args.args
+    assert published_agent_id == connection.agent_id
+    assert published_signal.type == CommunicationSignalType.DELIVERY_AVAILABLE
 
 
 def test_gateway_enriches_inbound_envelopes_with_decrypted_credentials_before_acceptance() -> None:
@@ -238,6 +247,76 @@ def test_gateway_marks_claim_and_terminal_runtime_failure_at_lifecycle_seam() ->
     assert completed is True
     stages = [call.args[2].stage for call in plugin.processing_feedback.call_args_list]
     assert stages == [ProcessingFeedbackStage.CLAIMED, ProcessingFeedbackStage.FAILED]
+    published_agent_id, published_signal = cast(Mock, service.signals).publish.call_args.args
+    assert published_agent_id == agent.id
+    assert published_signal.type == CommunicationSignalType.MESSAGE_CHANGED
+    assert published_signal.delivery_id == delivery.delivery_id
+
+
+def test_cancel_persists_before_publishing_to_the_runtime_control_stream() -> None:
+    connection = cast(CommunicationConnection, _connection())
+    plugin = _feedback_plugin()
+    service, deliveries = _service(connection, plugin)
+    delivery_id = uuid4()
+    agent_id = uuid4()
+    deliveries.request_cancel.return_value = CommunicationDeliveryStatus.PROCESSING
+
+    assert service.request_cancel_delivery(agent_id, delivery_id) is True
+
+    deliveries.request_cancel.assert_called_once_with(delivery_id, agent_id=agent_id)
+    signals = cast(Mock, service.signals)
+    published_agent_id, published_signal = signals.publish.call_args.args
+    assert published_agent_id == agent_id
+    assert published_signal.type == CommunicationSignalType.DELIVERY_CANCELLED
+    assert published_signal.delivery_id == delivery_id
+
+
+def test_runtime_reply_publishes_message_changed_for_the_new_outbound_delivery() -> None:
+    connection = cast(CommunicationConnection, _connection())
+    plugin = _feedback_plugin()
+    service, deliveries = _service(connection, plugin)
+    agent = cast(Agent, SimpleNamespace(id=uuid4()))
+    source_delivery_id = uuid4()
+    outbound_delivery_id = uuid4()
+    deliveries.enqueue_runtime_reply.return_value = outbound_delivery_id
+    reply = RuntimeReplyCreate(idempotency_key="reply-1", text="agent reply")
+
+    returned_delivery_id = service.enqueue_runtime_reply(agent, source_delivery_id, reply)
+
+    assert returned_delivery_id == outbound_delivery_id
+    deliveries.enqueue_runtime_reply.assert_called_once_with(
+        agent_id=agent.id,
+        source_delivery_id=source_delivery_id,
+        reply=reply,
+    )
+    published_agent_id, published_signal = cast(Mock, service.signals).publish.call_args.args
+    assert published_agent_id == agent.id
+    assert published_signal.type == CommunicationSignalType.MESSAGE_CHANGED
+    assert published_signal.delivery_id == outbound_delivery_id
+
+
+def test_runtime_control_stream_replays_then_heartbeats_without_claim_polling() -> None:
+    connection = cast(CommunicationConnection, _connection())
+    plugin = _feedback_plugin()
+    service, _ = _service(connection, plugin)
+    agent = cast(Agent, SimpleNamespace(id=uuid4()))
+    signals = cast(Mock, service.signals)
+    signals.latest_cursor_async = AsyncMock(return_value="10-0")
+    signals.wait_async = AsyncMock(return_value=("10-0", []))
+
+    stream = service.stream_runtime_control(agent)
+
+    async def read_frames() -> tuple[str, str]:
+        return await stream.__anext__(), await stream.__anext__()
+
+    first, second = asyncio.run(read_frames())
+
+    assert json.loads(first.removeprefix("data: ")) == {"type": "delivery_available"}
+    assert second == ": keep-alive\n\n"
+    signals.latest_cursor_async.assert_awaited_once_with(agent.id)
+    signals.wait_async.assert_awaited_once_with(agent.id, "10-0")
+    signals.latest_cursor.assert_not_called()
+    signals.wait.assert_not_called()
 
 
 def test_runtime_completion_is_not_blocked_by_feedback_context_lookup() -> None:

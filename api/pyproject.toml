@@ -54,6 +54,7 @@ line-length = 120
 [tool.ruff.per-file-target-version]
 "domains/agents/scripts/openclaw/**" = "py312"
 "domains/agents/scripts/hermes/**" = "py313"
+"domains/agents/scripts/communications-runtime-adapter.py" = "py312"
 
 [tool.ruff.lint]
 # B008   - FastAPI dependency injection relies on function calls in default

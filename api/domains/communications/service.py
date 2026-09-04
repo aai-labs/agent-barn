@@ -183,6 +183,7 @@ class CommunicationsService:
         agent = self.authorization.require_action(context, agent_id, PermissionKey.AGENT_UPDATE)
         self.authorization.require_action_for_visible(context, agent, PermissionKey.AGENT_SECRET_MANAGE)
         plugin = self._require_plugin(data.platform_key)
+        self._reject_web_chat_mutation(plugin.key)
         validated = self._validate(
             plugin,
             data.settings,
@@ -225,6 +226,7 @@ class CommunicationsService:
         connection = self.repository.get_active_in_scope(connection_id, agent_id, action_scope)
         if connection is None:
             self._raise_not_found(connection_id)
+        self._reject_web_chat_mutation(connection.platform_key)
 
         if data.credentials is not None:
             self.authorization.require_action_for_visible(context, agent, PermissionKey.AGENT_SECRET_MANAGE)
@@ -268,8 +270,10 @@ class CommunicationsService:
         agent = self.authorization.require_action(context, agent_id, PermissionKey.AGENT_UPDATE)
         self.authorization.require_action_for_visible(context, agent, PermissionKey.AGENT_SECRET_MANAGE)
         action_scope = self.authorization.authorization_scope(context, PermissionKey.AGENT_UPDATE)
-        if self.repository.get_active_in_scope(connection_id, agent_id, action_scope) is None:
+        connection = self.repository.get_active_in_scope(connection_id, agent_id, action_scope)
+        if connection is None:
             self._raise_not_found(connection_id)
+        self._reject_web_chat_mutation(connection.platform_key)
         try:
             if not self.repository.retire(connection_id, expected_revision=revision):
                 self._raise_not_found(connection_id)
@@ -510,6 +514,14 @@ class CommunicationsService:
             ) from exc
         except (ValidationError, ValueError) as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    @staticmethod
+    def _reject_web_chat_mutation(platform_key: str) -> None:
+        if platform_key == "web":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="The built-in Web Chat connection is managed by Agent Barn",
+            )
 
     def _require_plugin(self, key: str):
         try:

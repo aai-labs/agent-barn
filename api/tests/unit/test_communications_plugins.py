@@ -29,6 +29,7 @@ from api.domains.communications.plugins.registry import PlatformPluginRegistry
 from api.domains.communications.plugins.slack import SlackPlatformPlugin
 from api.domains.communications.plugins.teams import TeamsPlatformPlugin
 from api.domains.communications.plugins.telegram import TelegramPlatformPlugin
+from api.domains.communications.plugins.web import WebPlatformPlugin
 from api.infrastructure.msteams.client import TeamsAuthError
 
 _TEAMS_BOT_ID = "28:c9e8c047-2a74-40a2-b28a-b162d5f5327c"
@@ -59,9 +60,16 @@ def test_registry_lists_shipped_plugins_in_stable_order() -> None:
             DiscordPlatformPlugin(config),
             SlackPlatformPlugin(config),
             TeamsPlatformPlugin(config),
+            WebPlatformPlugin(),
         ]
     )
-    assert [descriptor.key for descriptor in registry.descriptors()] == ["discord", "slack", "teams", "telegram"]
+    assert [descriptor.key for descriptor in registry.descriptors()] == [
+        "discord",
+        "slack",
+        "teams",
+        "telegram",
+        "web",
+    ]
     assert PlatformCapability.DIRECTORY_DISCOVERY in registry.require("slack").descriptor.capabilities
 
 

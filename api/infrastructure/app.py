@@ -7,6 +7,7 @@ from api.domains.communications.plugins.registry import PlatformPluginRegistry
 from api.domains.communications.plugins.slack import SlackPlatformPlugin
 from api.domains.communications.plugins.teams import TeamsPlatformPlugin
 from api.domains.communications.plugins.telegram import TelegramPlatformPlugin
+from api.domains.communications.plugins.web import WebPlatformPlugin
 from api.domains.events.constants import EVENT_DELIVERY_PROCESSING_STALE_SECONDS
 from api.domains.events.handlers import EventHandlerRegistry
 from api.domains.events.processor import EventDeliveryProcessor
@@ -15,6 +16,7 @@ from api.domains.events.repository import OutboxMessageRepository
 from api.domains.events.security_audit import SecurityAuditProjection
 from api.domains.events.transport import EventDeliveryTransport
 from api.infrastructure.clock import Clock
+from api.infrastructure.communication_signals import CommunicationSignalBus
 from api.infrastructure.kubernetes.client import KubernetesClient
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 
@@ -37,6 +39,11 @@ class AppModule(Module):
 
     @provider
     @singleton
+    def provide_communication_signal_bus(self, config: Config) -> CommunicationSignalBus:
+        return CommunicationSignalBus(config)
+
+    @provider
+    @singleton
     def provide_platform_plugin_registry(self, config: Config) -> PlatformPluginRegistry:
         return PlatformPluginRegistry(
             [
@@ -44,6 +51,7 @@ class AppModule(Module):
                 SlackPlatformPlugin(config),
                 TeamsPlatformPlugin(config),
                 TelegramPlatformPlugin(config),
+                WebPlatformPlugin(),
             ]
         )
 

@@ -50,8 +50,9 @@ test.describe("Agent Detail Page", () => {
     await agentDetailPage.goto(MOCK_AGENT_ID);
   });
 
-  test("should load agent detail page", async () => {
+  test("should load agent detail page", async ({ page }) => {
     await expect(agentDetailPage.agentName("Maya")).toBeVisible();
+    await expect(page.getByLabel("Message input")).toBeEnabled();
   });
 
   test("shows configured messaging platform icons", async ({ page }) => {
@@ -61,6 +62,101 @@ test.describe("Agent Detail Page", () => {
 
   test("shows model name in header", async ({ page }) => {
     await expect(page.getByText("litellm/gpt-5-mini")).toBeVisible();
+  });
+
+  test("disables web chat until the Agent is working", async ({ page }) => {
+    await dataSupportPage.agents.interceptGetAgentHealthRequest({
+      body: { status: "initializing" },
+    });
+    await page.route("**/api/v1/organizations/*/agents/*/web-chat/**", async (route) => {
+      const path = new URL(route.request().url()).pathname;
+      const body = path.endsWith("/threads") || path.endsWith("/messages") ? [] : ": keep-alive\n\n";
+      await route.fulfill({
+        status: 200,
+        contentType: path.endsWith("/stream") ? "text/event-stream" : "application/json",
+        body: typeof body === "string" ? body : JSON.stringify(body),
+      });
+    });
+
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+
+    await expect(page.getByLabel("Message input")).toBeDisabled();
+  });
+
+  test("restores the Agent working indicator from message history", async ({ page }) => {
+    await page.route("**/api/v1/organizations/*/agents/*/web-chat/**", async (route) => {
+      const path = new URL(route.request().url()).pathname;
+      if (path.endsWith("/messages")) {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify([
+            {
+              id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+              direction: "INBOUND",
+              content: "Still working on this",
+              occurred_at: "2026-09-01T08:00:00Z",
+              delivery_status: "PROCESSING",
+              cancel_requested_at: null,
+            },
+          ]),
+        });
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: path.endsWith("/stream") ? "text/event-stream" : "application/json",
+        body: path.endsWith("/stream") ? ": keep-alive\n\n" : "[]",
+      });
+    });
+
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await page.getByRole("button", { name: "About", exact: true }).click();
+    await page.getByRole("button", { name: "Chat", exact: true }).click();
+
+    await expect(page.getByRole("status").filter({ hasText: "Maya is working" })).toBeVisible();
+  });
+
+  test("stops the active web chat generation", async ({ page }) => {
+    let deliveryStatus = "PROCESSING";
+    let stopRequests = 0;
+    await page.route("**/api/v1/organizations/*/agents/*/web-chat/**", async (route) => {
+      const path = new URL(route.request().url()).pathname;
+      if (path.endsWith("/stop") && route.request().method() === "POST") {
+        stopRequests += 1;
+        deliveryStatus = "CANCELLED";
+        await route.fulfill({ status: 204, body: "" });
+        return;
+      }
+      if (path.endsWith("/messages")) {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify([
+            {
+              id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+              direction: "INBOUND",
+              content: "Stop this work",
+              occurred_at: "2026-09-01T08:00:00Z",
+              delivery_status: deliveryStatus,
+              cancel_requested_at: null,
+            },
+          ]),
+        });
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: path.endsWith("/stream") ? "text/event-stream" : "application/json",
+        body: path.endsWith("/stream") ? ": keep-alive\n\n" : "[]",
+      });
+    });
+
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await page.getByRole("button", { name: "Stop generating" }).click();
+
+    await expect.poll(() => stopRequests).toBe(1);
+    await expect(page.getByRole("button", { name: "Stop generating" })).not.toBeVisible();
   });
 
   test("guides an unreachable Agent to messaging setup", async ({ page }) => {
@@ -74,9 +170,9 @@ test.describe("Agent Detail Page", () => {
     await agentDetailPage.goto(MOCK_AGENT_ID);
 
     await expect(page.getByText("Messaging setup", { exact: true })).toBeVisible();
-    await expect(page.getByText("Make Maya reachable", { exact: true })).toBeVisible();
-    await expect(page.getByText("Not connected", { exact: true })).toBeVisible();
-    await expect(page.getByRole("link", { name: "Add connection" })).toHaveAttribute(
+    await expect(page.getByText("Bring Maya to your messaging tools", { exact: true })).toBeVisible();
+    await expect(page.getByText("Web chat only", { exact: true })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Add messaging connection" })).toHaveAttribute(
       "href",
       /configuration\?section=channels&connect=true/,
     );

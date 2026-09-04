@@ -2021,7 +2021,7 @@ class AgentService:
                 "INGEST_API_KEY": ingest_key,
                 "COMMUNICATIONS_URL": self.config.communications_base_url,
                 "COMMUNICATIONS_API_KEY": communication_key,
-                "COMMUNICATIONS_PROTOCOL_VERSION": "1",
+                "COMMUNICATIONS_PROTOCOL_VERSION": "2",
                 "LITELLM_PROXY_TARGET": self.config.agent_litellm_base_url,
             }
         )
