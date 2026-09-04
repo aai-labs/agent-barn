@@ -70,6 +70,22 @@ Optional additions include `providers/`, `stores/`, `constants.ts`, and a small 
 - Prefer `@/*` aliases for internal imports.
 - Reuse existing UI primitives before introducing new ones.
 
+## UI feature workflow
+
+For a typical UI feature:
+
+1. Add or update Zod schemas and inferred types.
+2. Add or update centralized query keys.
+3. Add query and mutation hooks through the shared API client.
+4. Build feature components.
+5. Compose them from `../../ui/src/app/` routes.
+6. Add or update Playwright coverage using the guidance in
+   [`testing.md`](testing.md#ui-and-browser-tests).
+7. Run the applicable UI checks listed in
+   [`testing.md`](testing.md#verification-commands).
+8. Apply the version rules in [`operations.md`](operations.md#versioning-and-releases)
+   only when release preparation is requested.
+
 ## Maintaining conventions
 
 When a repeatable frontend convention changes, update this file once rather than copying the rule into feature docs. Feature docs under `../features/` own product invariants and boundaries, not generic React or query guidance.

@@ -68,6 +68,22 @@ The permission-backed model in
 that accesses or mutates an Agent or subordinate resource. Read it before
 designing the query, service permission check, or HTTP response.
 
+## API feature workflow
+
+For a typical API feature:
+
+1. Update the domain and API models.
+2. Add repository behavior, including tenant-aware visibility where required.
+3. Add service logic, authorization, and error translation.
+4. Add or update thin routes.
+5. Register a new router in the appropriate composition root when needed.
+6. Add and review an Alembic migration for schema changes.
+7. Add tests using the coverage guidance in [`testing.md`](testing.md).
+8. Run the applicable API checks and tests listed in
+   [`testing.md`](testing.md#verification-commands).
+9. Apply the version rules in [`operations.md`](operations.md#versioning-and-releases)
+   only when release preparation is requested.
+
 ## Code style
 
 - Follow Ruff formatting and lint rules.
@@ -75,3 +91,18 @@ designing the query, service permission check, or HTTP response.
 - Keep control flow direct; extract a module only when it creates a useful boundary.
 - Use canonical domain terms from `../../CONTEXT.md`.
 - Comments should explain a non-obvious constraint, not narrate the implementation.
+
+## API review priorities
+
+After applying the repository-wide review protocol in `../../AGENTS.md`, review
+API changes in this order:
+
+1. Correctness and regressions.
+2. Data-contract, migration, and schema safety.
+3. Tenant isolation, authentication, and authorization, including the Agent
+   Access/Permission rules in
+   `../features/rbac/IMPLEMENTATION-BRIEF.md` for Agent and subordinate-resource
+   surfaces.
+4. Transaction boundaries and external-system failure behavior.
+5. Test coverage gaps.
+6. Maintainability and style.
