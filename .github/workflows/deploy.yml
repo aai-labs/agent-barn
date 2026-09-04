@@ -84,7 +84,7 @@ jobs:
           else
             if grep -qE '^(api/|Makefile$)' /tmp/changed.txt; then api=true; fi
             if grep -qE '^(ui/|Makefile$)' /tmp/changed.txt; then ui=true; fi
-            if grep -qE '^(hermes-base/|api/domains/agents/builders/hermes\.py)' /tmp/changed.txt; then hermes=true; fi
+            if grep -q '^hermes-base/' /tmp/changed.txt; then hermes=true; fi
             if grep -q '^openclaw-base/' /tmp/changed.txt; then openclaw=true; fi
           fi
 
