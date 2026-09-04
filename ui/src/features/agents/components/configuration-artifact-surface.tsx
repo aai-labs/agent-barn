@@ -3,8 +3,8 @@
 import { useState } from "react";
 
 import { Textarea } from "@/components/ui/textarea";
-import type { PlatformTemplateFileKey } from "@/features/platform-templates/utils";
-import { PlatformTemplateArtifactTabs } from "@/features/platform-templates/components/platform-template-artifact-tabs";
+import type { PlatformTemplateFileKey } from "@/features/templates/utils";
+import { PlatformTemplateArtifactTabs } from "@/features/templates/components/platform-template-artifact-tabs";
 
 import type { Snapshot } from "./agent-configuration-utils";
 

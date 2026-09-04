@@ -4,18 +4,21 @@ import { useQuery } from "@tanstack/react-query";
 
 import { api } from "@/shared/api";
 
-import {
-  PlatformTemplateReadSchema,
-  type PlatformTemplate,
-} from "../schemas";
-import { platformTemplateVersionsKey } from "../utils";
+import { PlatformTemplateReadSchema, type PlatformTemplate } from "../schemas";
+import { useTemplatesBasePath, type TemplateScopeRef } from "../scope";
+import { templateVersionsKey } from "../utils";
 
-export function usePlatformTemplateVersions(templateKey: string | null, enabled = true) {
+export function useTemplateVersions(
+  scope: TemplateScopeRef,
+  templateKey: string | null,
+  enabled = true,
+) {
+  const basePath = useTemplatesBasePath(scope);
   const query = useQuery({
-    queryKey: platformTemplateVersionsKey.detail(templateKey ?? ""),
+    queryKey: templateVersionsKey(templateKey ?? "", scope),
     queryFn: async () => {
       const response = await api.get<PlatformTemplate[]>(
-        `/api/v1/platform/templates/${templateKey}/versions`,
+        `${basePath}/${templateKey}/versions`,
         { schema: PlatformTemplateReadSchema.array() },
       );
       return response.data;

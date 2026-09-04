@@ -5,13 +5,15 @@ import { useQuery } from "@tanstack/react-query";
 import { api } from "@/shared/api";
 
 import { PlatformSkillListSchema, type PlatformSkill } from "../schemas";
-import { platformTemplatesKey } from "../utils";
+import { useTemplateSkillsBasePath, type TemplateScopeRef } from "../scope";
+import { templateSkillsKey } from "../utils";
 
-export function usePlatformSkills(enabled = true) {
+export function useTemplateSkills(scope: TemplateScopeRef, enabled = true) {
+  const basePath = useTemplateSkillsBasePath(scope);
   const query = useQuery({
-    queryKey: [...platformTemplatesKey.all, "skills"],
+    queryKey: templateSkillsKey(scope),
     queryFn: async () => {
-      const response = await api.get<PlatformSkill[]>("/api/v1/platform/skills", {
+      const response = await api.get<PlatformSkill[]>(basePath, {
         schema: PlatformSkillListSchema,
       });
       return response.data;

@@ -17,13 +17,15 @@ import type {
   PlatformTemplateAdminSummary,
   PlatformTemplate as PublishedPlatformTemplate,
 } from "../schemas";
+import { type TemplateScopeRef } from "../scope";
 import {
   formFromDraft,
   type PlatformTemplateFileKey,
 } from "../utils";
 import { PlatformTemplateArtifactTabs } from "./platform-template-artifact-tabs";
 
-export function PlatformTemplatePublishedView({
+export function TemplatePublishedView({
+  scope,
   lineage,
   template,
   versions,
@@ -36,6 +38,7 @@ export function PlatformTemplatePublishedView({
   onStartEditing,
   onClose,
 }: {
+  scope: TemplateScopeRef;
   lineage: PlatformTemplateAdminSummary | null;
   template: PublishedPlatformTemplate | undefined;
   versions: PublishedPlatformTemplate[];
@@ -60,7 +63,7 @@ export function PlatformTemplatePublishedView({
   return (
     <div className="max-w-[1100px] mx-auto px-4 sm:px-8 lg:px-10 pt-8 pb-24">
       <button className="af-btn af-btn-sm mb-6" onClick={onClose}>
-        <ArrowLeft size={14} /> Platform templates
+        <ArrowLeft size={14} /> {scope.kind === "platform" ? "Platform templates" : "Templates"}
       </button>
 
       {isLoading && (
@@ -79,7 +82,7 @@ export function PlatformTemplatePublishedView({
       {!isLoading && Boolean(error) && (
         <AppErrorState
           error={error}
-          title="We couldn't load this platform template"
+          title="We couldn&apos;t load this template"
           description="The published template content is unavailable right now."
           onRetry={onRetry}
           retryLabel="Retry template"

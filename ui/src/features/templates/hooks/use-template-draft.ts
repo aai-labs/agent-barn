@@ -4,18 +4,21 @@ import { useQuery } from "@tanstack/react-query";
 
 import { api } from "@/shared/api";
 
-import {
-  PlatformTemplateDraftReadSchema,
-  type PlatformTemplateDraft,
-} from "../schemas";
-import { platformTemplatesKey } from "../utils";
+import { PlatformTemplateDraftReadSchema, type PlatformTemplateDraft } from "../schemas";
+import { useTemplatesBasePath, type TemplateScopeRef } from "../scope";
+import { templateDraftKey } from "../utils";
 
-export function usePlatformTemplateDraft(templateKey: string | null, enabled = true) {
+export function useTemplateDraft(
+  scope: TemplateScopeRef,
+  templateKey: string | null,
+  enabled = true,
+) {
+  const basePath = useTemplatesBasePath(scope);
   const query = useQuery({
-    queryKey: platformTemplatesKey.detail(templateKey ?? ""),
+    queryKey: templateDraftKey(templateKey ?? "", scope),
     queryFn: async () => {
       const response = await api.get<PlatformTemplateDraft>(
-        `/api/v1/platform/templates/${templateKey}/draft`,
+        `${basePath}/${templateKey}/draft`,
         { schema: PlatformTemplateDraftReadSchema },
       );
       return response.data;

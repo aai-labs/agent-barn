@@ -1,4 +1,4 @@
-import type { PlatformTemplateFileKey } from "@/features/platform-templates/utils";
+import type { PlatformTemplateFileKey } from "@/features/templates/utils";
 
 import type {
   AgentConfigurationVersion,

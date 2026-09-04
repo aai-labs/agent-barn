@@ -1,11 +1,16 @@
 "use client";
 
 import { FileText, Loader2, Pencil, Plus } from "lucide-react";
-import { useRouter } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 
 import { AppErrorState } from "@/components/app-error-state";
 
-import { usePlatformTemplateLineages } from "../hooks/use-platform-template-lineages";
+import { useTemplateLineages } from "../hooks/use-template-lineages";
+import {
+  templateDetailHref,
+  templateNewHref,
+  type TemplateScopeRef,
+} from "../scope";
 
 function LoadingLineageCard() {
   return (
@@ -26,43 +31,39 @@ function LoadingLineageCard() {
   );
 }
 
-export function PlatformTemplatesPage() {
+export function TemplatesPanel({
+  scope,
+  canManage = true,
+}: {
+  scope: TemplateScopeRef;
+  canManage?: boolean;
+}) {
   const router = useRouter();
-  const { lineages, isLoading, error, refetch } = usePlatformTemplateLineages();
+  const params = useParams();
+  const orgId = typeof params?.orgId === "string" ? params.orgId : null;
+  const { lineages, isLoading, error, refetch } = useTemplateLineages(scope);
+  const newHref = templateNewHref(scope, orgId);
 
   return (
-    <div className="max-w-[1200px] mx-auto px-10 pt-9 pb-24">
-      <div className="flex flex-wrap items-start justify-between gap-3 mb-8">
-        <div>
-          <h1
-            className="text-[28px] font-semibold tracking-tight m-0 mb-1"
-            style={{ color: "var(--ink)" }}
-          >
-            Platform templates
-          </h1>
-          <p className="text-[14px] m-0" style={{ color: "var(--ink-3)" }}>
-            Author the global agent prompts that organizations can use.
-          </p>
-        </div>
-        <button
-          className="af-btn af-btn-primary"
-          onClick={() => router.push("/dashboard/platform/templates/new")}
-        >
-          <Plus size={15} /> New template
-        </button>
-      </div>
-
+    <>
       <div className="flex items-center justify-between mb-4">
         <p className="text-[13px] m-0" style={{ color: "var(--ink-4)" }}>
           {lineages.length} {lineages.length === 1 ? "template lineage" : "template lineages"}
         </p>
-        <button
-          className="af-btn af-btn-sm"
-          onClick={() => void refetch()}
-          disabled={isLoading}
-        >
-          {isLoading ? <Loader2 size={13} className="animate-spin" /> : "Refresh"}
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            className="af-btn af-btn-sm"
+            onClick={() => void refetch()}
+            disabled={isLoading}
+          >
+            {isLoading ? <Loader2 size={13} className="animate-spin" /> : "Refresh"}
+          </button>
+          {canManage && (
+            <button className="af-btn af-btn-primary" onClick={() => router.push(newHref)}>
+              <Plus size={15} /> New template
+            </button>
+          )}
+        </div>
       </div>
 
       {isLoading && (
@@ -79,8 +80,8 @@ export function PlatformTemplatesPage() {
       {!isLoading && Boolean(error) && (
         <AppErrorState
           error={error}
-          title="We couldn't load platform templates"
-          description="The platform template catalog is unavailable right now."
+          title="We couldn't load templates"
+          description="The template catalog is unavailable right now."
           onRetry={() => void refetch()}
           retryLabel="Retry templates"
           className="min-h-[260px] p-0"
@@ -97,17 +98,16 @@ export function PlatformTemplatesPage() {
             className="font-medium text-[15px] mt-3 mb-1"
             style={{ color: "var(--ink)" }}
           >
-            No platform templates yet
+            No templates yet
           </div>
           <div className="text-[13.5px] mb-4" style={{ color: "var(--ink-3)" }}>
-            Start a draft to create the first global agent template.
+            Start a draft to create the first agent template.
           </div>
-          <button
-            className="af-btn af-btn-primary"
-            onClick={() => router.push("/dashboard/platform/templates/new")}
-          >
-            <Plus size={15} /> Create template
-          </button>
+          {canManage && (
+            <button className="af-btn af-btn-primary" onClick={() => router.push(newHref)}>
+              <Plus size={15} /> Create template
+            </button>
+          )}
         </div>
       )}
 
@@ -121,9 +121,7 @@ export function PlatformTemplatesPage() {
               key={lineage.templateKey}
               type="button"
               className="af-card af-card-hover px-5 py-5 text-left w-full"
-              onClick={() =>
-                router.push(`/dashboard/platform/templates/${lineage.templateKey}`)
-              }
+              onClick={() => router.push(templateDetailHref(scope, orgId, lineage.templateKey))}
             >
               <div className="flex items-start justify-between gap-3 mb-3">
                 <div className="flex items-center gap-2 min-w-0">
@@ -174,6 +172,6 @@ export function PlatformTemplatesPage() {
           ))}
         </div>
       )}
-    </div>
+    </>
   );
 }

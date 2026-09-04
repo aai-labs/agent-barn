@@ -1,7 +1,19 @@
 import { createQueryKeyStructure } from "@/shared/query-keys";
 
-export const platformTemplatesKey = createQueryKeyStructure("platform-templates");
-export const platformTemplateVersionsKey = createQueryKeyStructure("platform-template-versions");
+import { templateScopeCacheKey, type TemplateScopeRef } from "./scope";
+
+export const templatesKey = createQueryKeyStructure("templates");
+
+export const templateDetailKey = (templateKey: string, scope: TemplateScopeRef) =>
+  [...templatesKey.detail(templateKey), templateScopeCacheKey(scope)] as const;
+export const templateDraftKey = (templateKey: string, scope: TemplateScopeRef) =>
+  [...templateDetailKey(templateKey, scope), "draft"] as const;
+export const templateVersionsKey = (templateKey: string, scope: TemplateScopeRef) =>
+  [...templateDetailKey(templateKey, scope), "versions"] as const;
+export const templateLineagesKey = (scope: TemplateScopeRef) =>
+  templatesKey.list({ scope: { scope: templateScopeCacheKey(scope) } });
+export const templateSkillsKey = (scope: TemplateScopeRef) =>
+  [...templatesKey.all, "skills", templateScopeCacheKey(scope)] as const;
 
 export const PLATFORM_TEMPLATE_FILES = [
   { key: "soulMd", label: "SOUL.md" },
