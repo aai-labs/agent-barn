@@ -78,6 +78,10 @@ hooks are called directly. Shared setup lives in
   base-image smoke tests and the plugin-contract step in
   `../../.github/workflows/hermes-base.yml`. Those run on version bumps, which is
   when such assumptions break.
+- The Hermes base-image workflow also starts Agent Barn's generated runtime
+  configuration in the real image and proves materialized Agent Skills are
+  visible through Hermes' `skills_list` and `skill_view`. CI selects this
+  workflow when the Hermes builder, startup scripts, or base image changes.
 
 ## UI and browser tests
 
