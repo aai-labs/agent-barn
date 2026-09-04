@@ -1,6 +1,6 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { memo, type ReactNode } from "react";
 
 import { SearchInput } from "@/components/search-input";
 
@@ -27,7 +27,10 @@ interface CostFilterBarProps {
   organizationFilter?: ReactNode;
 }
 
-export function CostFilterBar({
+/** Memoised: the pages above re-render whenever Next's router context changes,
+ *  and re-rendering this bar remounts the comboboxes' portals and rewrites the
+ *  search box's attributes for no reason. Its props are all stable references. */
+export const CostFilterBar = memo(function CostFilterBar({
   values,
   agentOptions,
   modelOptions,
@@ -103,4 +106,4 @@ export function CostFilterBar({
       )}
     </div>
   );
-}
+});

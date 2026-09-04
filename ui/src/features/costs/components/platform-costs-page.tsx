@@ -101,6 +101,19 @@ export function PlatformCostsPage() {
     });
   }, [setUrlFilters]);
 
+  // Held stable so the memoised filter bar is not handed a fresh element tree
+  // on every render, which would defeat the memo.
+  const organizationFilter = useMemo(
+    () => (
+      <OrganizationCombobox
+        organizationId={urlFilters.orgId || null}
+        organizationName={urlFilters.orgName || null}
+        onChange={handleOrganizationChange}
+      />
+    ),
+    [urlFilters.orgId, urlFilters.orgName, handleOrganizationChange],
+  );
+
   const handleRefresh = useCallback(() => {
     void refetchSummary();
     void refetch();
@@ -168,25 +181,13 @@ export function PlatformCostsPage() {
       </CostSummaryCards>
 
       <CostFilterBar
-        values={{
-          q: urlFilters.q,
-          agentId: urlFilters.agentId,
-          model: urlFilters.model,
-          period: urlFilters.period,
-          sort: urlFilters.sort as CostFilters["sort"],
-        }}
+        values={urlFilters}
         agentOptions={agentOptions}
         modelOptions={modelOptions}
         onChange={handleChange}
         hasActiveFilters={hasActiveFilters}
         onClear={handleClear}
-        organizationFilter={
-          <OrganizationCombobox
-            organizationId={urlFilters.orgId || null}
-            organizationName={urlFilters.orgName || null}
-            onChange={handleOrganizationChange}
-          />
-        }
+        organizationFilter={organizationFilter}
       />
 
       <OrganizationsBySpend

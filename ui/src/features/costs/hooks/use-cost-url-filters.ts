@@ -28,18 +28,27 @@ export function useCostUrlFilters<T extends Record<string, string>>(
   const pathname = usePathname();
   const searchParams = useSearchParams();
 
+  // Keyed on the query string, not on the `searchParams` object. Next hands back
+  // a fresh instance whenever the router re-renders, which in dev it does a few
+  // times a second; depending on that identity rebuilt this object every time,
+  // and a new object here becomes new filters, new query arguments and a fresh
+  // render of every chart below. Comparing the string means an unchanged URL
+  // returns the same object, and the work downstream simply does not happen.
+  const query = searchParams.toString();
+
   const values = useMemo(() => {
+    const params = new URLSearchParams(query);
     const next = {} as T;
     for (const key of Object.keys(defaults) as (keyof T)[]) {
-      const raw = searchParams.get(key as string);
+      const raw = params.get(key as string);
       next[key] = (raw ?? defaults[key]) as T[keyof T];
     }
     return next;
-  }, [searchParams, defaults]);
+  }, [query, defaults]);
 
   const setValues = useCallback(
     (patch: Partial<Record<keyof T, string | null>>) => {
-      const next = new URLSearchParams(searchParams.toString());
+      const next = new URLSearchParams(query);
       for (const [key, value] of Object.entries(patch)) {
         // A value equal to its default carries no information, so it is dropped
         // rather than written — otherwise clearing a filter would leave the URL
@@ -47,12 +56,12 @@ export function useCostUrlFilters<T extends Record<string, string>>(
         if (!value || value === defaults[key as keyof T]) next.delete(key);
         else next.set(key, value);
       }
-      const query = next.toString();
-      router.replace(query ? `${pathname}?${query}` : pathname, {
+      const nextQuery = next.toString();
+      router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname, {
         scroll: false,
       });
     },
-    [router, pathname, searchParams, defaults],
+    [router, pathname, query, defaults],
   );
 
   return [values, setValues] as const;

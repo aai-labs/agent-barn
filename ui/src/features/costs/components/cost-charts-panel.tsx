@@ -1,5 +1,7 @@
 "use client";
 
+import { memo } from "react";
+
 import { Skeleton } from "@/components/ui/skeleton";
 
 import type { CostSummary } from "../schemas";
@@ -14,8 +16,16 @@ interface CostChartsPanelProps {
 }
 
 /** The four charts, in the order a reader needs them: how much, per agent, how
- *  big the prompts were, and how the per-call cost is distributed. */
-export function CostChartsPanel({ summary, isLoading }: CostChartsPanelProps) {
+ *  big the prompts were, and how the per-call cost is distributed.
+ *
+ *  Memoised because recharts rebuilds its SVG from scratch on every render, and
+ *  the pages above re-render whenever Next's router context changes — which in
+ *  dev is a couple of times a second, with nobody touching the page. With the
+ *  summary unchanged there is nothing to redraw, so this skips it. */
+export const CostChartsPanel = memo(function CostChartsPanel({
+  summary,
+  isLoading,
+}: CostChartsPanelProps) {
   if (isLoading || !summary) {
     return (
       <div className="grid gap-4 mb-6 lg:grid-cols-2" data-testid="cost-charts-skeleton">
@@ -60,7 +70,7 @@ export function CostChartsPanel({ summary, isLoading }: CostChartsPanelProps) {
       </ChartCard>
     </div>
   );
-}
+});
 
 function ChartCard({
   title,

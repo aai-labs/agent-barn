@@ -106,13 +106,7 @@ export function CostsPage() {
       <CostSummaryCards summary={summary} isLoading={isLoadingSummary} />
 
       <CostFilterBar
-        values={{
-          q: urlFilters.q,
-          agentId: urlFilters.agentId,
-          model: urlFilters.model,
-          period: urlFilters.period,
-          sort: urlFilters.sort as CostFilters["sort"],
-        }}
+        values={urlFilters}
         agentOptions={agentOptions}
         modelOptions={modelOptions}
         onChange={handleChange}
