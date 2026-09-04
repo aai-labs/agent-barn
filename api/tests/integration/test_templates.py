@@ -1925,10 +1925,10 @@ def test_newer_platform_version_does_not_replace_an_org_fork_in_the_catalog():
             assert_that(get_response.status_code, equal_to(status.HTTP_200_OK))
             assert_that(get_response.json()["soul_md"], equal_to("organization soul"))
 
-        with then("version history keeps the organization version for the shared number"):
+        with then("version history lists only the organization's own versions"):
             versions_response = client.get(f"{_BASE}/manual/versions", headers=_auth(context))
-            assert_that([version["version"] for version in versions_response.json()], equal_to([3, 1]))
-            assert_that(versions_response.json()[1]["soul_md"], equal_to("organization soul"))
+            assert_that([version["version"] for version in versions_response.json()], equal_to([1]))
+            assert_that(versions_response.json()[0]["soul_md"], equal_to("organization soul"))
 
 
 def test_platform_template_update_requires_a_newer_platform_version():
@@ -2737,3 +2737,65 @@ def test_publishing_or_discarding_without_a_draft_returns_404():
                 client.delete(f"{_BASE}/alpha/draft", headers=_auth(context)).status_code,
                 equal_to(status.HTTP_404_NOT_FOUND),
             )
+
+
+def test_version_history_falls_back_to_platform_for_a_never_edited_builtin():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+        repository: TemplateRepository = context.injector.get(TemplateRepository)
+        repository.save_platform_template(_platform_version("untouched", 1))
+        repository.save_platform_template(_platform_version("untouched", 2))
+
+        with when("the organization lists versions for a lineage it has never edited"):
+            response = client.get(f"{_BASE}/untouched/versions", headers=_auth(context))
+
+        with then("the platform lineage's own history is returned"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            body = response.json()
+            assert_that([version["version"] for version in body], equal_to([2, 1]))
+            assert_that([version["organization_id"] for version in body], equal_to([None, None]))
+
+
+def test_version_history_switches_to_organization_only_on_first_publish():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+        repository: TemplateRepository = context.injector.get(TemplateRepository)
+        repository.save_platform_template(_platform_version("switching", 1))
+        repository.save_platform_template(_platform_version("switching", 2))
+
+        with when("the organization has not edited the lineage"):
+            before = client.get(f"{_BASE}/switching/versions", headers=_auth(context)).json()
+
+        with when("the organization publishes its first version"):
+            _start_org_draft(client, context, "switching")
+            client.patch(f"{_BASE}/switching/draft", json={"soul_md": "# Ours"}, headers=_auth(context))
+            client.post(f"{_BASE}/switching/draft/publish", headers=_auth(context))
+            after = client.get(f"{_BASE}/switching/versions", headers=_auth(context)).json()
+
+        with then("history stops showing the platform lineage and shows Org v1 alone"):
+            assert_that([version["version"] for version in before], equal_to([2, 1]))
+            assert_that([version["version"] for version in after], equal_to([1]))
+            assert_that(after[0]["organization_id"], equal_to(str(context.organization.id)))
+            assert_that(after[0]["soul_md"], equal_to("# Ours"))
+
+
+def test_agent_configuration_still_offers_both_lineages_for_the_active_pin():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+        repository: TemplateRepository = context.injector.get(TemplateRepository)
+        repository.save_platform_template(_platform_version("shared", 1))
+        agent = client.post(
+            _AGENTS_BASE,
+            json={"name": "Shared Agent", "template_key": "shared"},
+            headers=_auth(context),
+        ).json()
+        _start_org_draft(client, context, "shared")
+        client.patch(f"{_BASE}/shared/draft", json={"soul_md": "# Org copy"}, headers=_auth(context))
+        client.post(f"{_BASE}/shared/draft/publish", headers=_auth(context))
+
+        with when("the agent configuration is read after the organization forked the lineage"):
+            configuration = client.get(f"{_AGENTS_BASE}/{agent['id']}/configuration", headers=_auth(context)).json()
+
+        with then("shared_versions still exposes both the platform and organization rows"):
+            source_types = {version["source_type"] for version in configuration["shared_versions"]}
+            assert_that(source_types, equal_to({"platform", "organization"}))

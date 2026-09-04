@@ -1095,15 +1095,7 @@ class TemplateRepository:
 
     def resolve_versions(self, org_id: UUID, template_key: str) -> list[AgentTemplate | PlatformTemplate]:
         org_versions = self.find_org_versions(org_id, template_key)
-        platform_versions = self.find_platform_versions(template_key)
-        # Version numbers are shared across the platform lineage and an org
-        # fork. When both tables contain a number, the org version shadows the
-        # platform row just as it does for latest-template resolution.
-        by_version: dict[int, AgentTemplate | PlatformTemplate] = {
-            template.version: template for template in platform_versions
-        }
-        by_version.update({template.version: template for template in org_versions})
-        return sorted(by_version.values(), key=lambda template: template.version, reverse=True)
+        return list(org_versions) if org_versions else list(self.find_platform_versions(template_key))
 
     def get_shared_versions(self, org_id: UUID, template_key: str) -> list[AgentTemplate | PlatformTemplate]:
         """Return both shared source tables for one lineage without shadowing IDs.
