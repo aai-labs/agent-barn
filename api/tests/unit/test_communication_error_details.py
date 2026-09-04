@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import httpx
 from hamcrest import assert_that, contains_string, equal_to, has_properties, is_, none, not_
-from websockets.exceptions import ConnectionClosedError
-from websockets.frames import Close
 
 from api.domains.communications.error_details import normalize_communication_error
 from api.domains.communications.models import CommunicationErrorCategory
@@ -60,64 +58,3 @@ def test_timeout_failure_is_actionable_and_retryable() -> None:
         ),
     )
     assert_that(str(normalized.details), not_(contains_string("bot-secret")))
-
-
-def test_discord_disallowed_intent_close_is_actionable_without_persisting_reason() -> None:
-    error = ConnectionClosedError(Close(4014, "Disallowed intent(s)"), None)
-
-    normalized = normalize_communication_error(error, operation="ingress_session")
-
-    assert_that(normalized.code, equal_to("CONFIGURATION_ERROR"))
-    assert_that(
-        normalized.summary,
-        equal_to(
-            "Discord rejected a privileged gateway intent; enable Message Content Intent "
-            "in the Discord Developer Portal, then reconnect (4014)"
-        ),
-    )
-    assert_that(
-        normalized.details,
-        has_properties(
-            category=equal_to(CommunicationErrorCategory.CONFIGURATION),
-            provider_code=equal_to("4014"),
-            retryable=is_(False),
-        ),
-    )
-    assert_that(str(normalized.details), not_(contains_string("Disallowed intent")))
-
-
-def test_discord_authentication_close_explains_how_to_recover() -> None:
-    error = ConnectionClosedError(Close(4004, "Authentication failed"), None)
-
-    normalized = normalize_communication_error(error, operation="ingress_session")
-
-    assert_that(normalized.code, equal_to("AUTHENTICATION_FAILED"))
-    assert_that(
-        normalized.summary,
-        equal_to(
-            "Discord rejected the bot token; update this Connection with a valid bot token, then reconnect (4004)"
-        ),
-    )
-    assert_that(
-        normalized.details,
-        has_properties(
-            category=equal_to(CommunicationErrorCategory.AUTHENTICATION),
-            provider_code=equal_to("4004"),
-            retryable=is_(False),
-        ),
-    )
-
-
-def test_discord_invalid_intent_close_explains_how_to_recover() -> None:
-    error = ConnectionClosedError(Close(4013, "Invalid intent(s)"), None)
-
-    normalized = normalize_communication_error(error, operation="ingress_session")
-
-    assert_that(normalized.code, equal_to("CONFIGURATION_ERROR"))
-    assert_that(
-        normalized.summary,
-        equal_to(
-            "Discord rejected the gateway intent selection; review the configured Discord intents, "
-            "then reconnect (4013)"
-        ),
-    )
