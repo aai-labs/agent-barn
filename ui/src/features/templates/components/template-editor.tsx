@@ -66,6 +66,7 @@ function emptyForm(): PlatformTemplateForm {
 
 export function TemplateEditor({
   scope,
+  canManage = true,
   isNew,
   templateKey,
   lineage,
@@ -74,6 +75,7 @@ export function TemplateEditor({
   onChanged,
 }: {
   scope: TemplateScopeRef;
+  canManage?: boolean;
   isNew: boolean;
   templateKey: string | null;
   lineage: PlatformTemplateAdminSummary | null;
@@ -85,7 +87,7 @@ export function TemplateEditor({
   const skillScope = templateSkillScope(scope);
   const hasPublishedVersion =
     !isNew && Boolean(lineage && lineage.latestPublishedVersion !== null);
-  const [isEditing, setIsEditing] = useState(isNew || !hasPublishedVersion);
+  const [isEditing, setIsEditing] = useState(canManage && (isNew || !hasPublishedVersion));
   const [started, setStarted] = useState(false);
   const [selectedVersion, setSelectedVersion] = useState<number | null>(null);
   const shouldLoadDraft =
@@ -493,6 +495,7 @@ export function TemplateEditor({
     return (
       <TemplatePublishedView
         scope={scope}
+        canManage={canManage}
         lineage={lineage}
         template={publishedTemplate}
         isLoading={isPublishedLoading}

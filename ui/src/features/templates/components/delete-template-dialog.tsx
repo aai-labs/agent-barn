@@ -13,10 +13,10 @@ import {
 import { toastError } from "@/shared/toast";
 
 import { useDeleteTemplate } from "../hooks/use-delete-template";
-import type { AgentTemplateRead } from "../schemas";
+import type { PlatformTemplate } from "../schemas";
 
 interface DeleteTemplateDialogProps {
-  template: AgentTemplateRead | null;
+  template: PlatformTemplate | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onDeleted?: () => void;

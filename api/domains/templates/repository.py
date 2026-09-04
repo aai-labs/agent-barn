@@ -845,6 +845,15 @@ class TemplateRepository:
             required_skills=required_skills,
         )
 
+    def get_org_draft_names_by_key(self, org_id: UUID) -> dict[str, str]:
+        with Session(self.delegate.engine) as session:
+            rows = session.exec(
+                select(AgentTemplateDraft.template_key, AgentTemplateDraft.template_name)
+                .where(col(AgentTemplateDraft.organization_id) == org_id)
+                .order_by(col(AgentTemplateDraft.template_name).asc())
+            ).all()
+        return {template_key: name for template_key, name in rows}
+
     def get_org_draft(self, org_id: UUID, template_key: str) -> AgentTemplateDraft | None:
         with Session(self.delegate.engine) as session:
             query = (
@@ -853,6 +862,34 @@ class TemplateRepository:
                 .where(col(AgentTemplateDraft.template_key) == template_key)
             )
             return session.exec(query).first()
+
+    def save_new_org_draft_with_skills(
+        self,
+        draft: AgentTemplateDraft,
+        group_keys_by_skill_id: SkillRequirementInput,
+    ) -> AgentTemplateDraft:
+        """Persist a new org lineage draft, with a globally unique key, and its
+        required skills atomically. Raises TemplateKeyCollisionError so callers
+        retry with a fresh key (see TemplateService._allocate_unique_key)."""
+        with Session(self.delegate.engine) as session:
+            self._lock_template_key_allocation(session)
+            if self._template_key_exists(session, draft.template_key):
+                raise TemplateKeyCollisionError(draft.template_key)
+            session.add(draft)
+            session.flush()
+            resolved = _resolve_skill_versions(session, group_keys_by_skill_id)
+            for skill_id, (skill_version, group_key) in resolved.items():
+                session.add(
+                    AgentTemplateDraftSkill(
+                        draft_id=draft.id,
+                        skill_id=skill_id,
+                        skill_version=skill_version,
+                        group_key=group_key,
+                    )
+                )
+            session.commit()
+            session.refresh(draft)
+        return draft
 
     def save_org_draft_with_skills(
         self,

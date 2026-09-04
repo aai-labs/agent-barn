@@ -28,6 +28,7 @@ from api.domains.templates.models import (
     AgentTemplate,
     AgentTemplateDraft,
     AgentTemplateDraftRead,
+    OrganizationTemplateLineageSummary,
     PlatformTemplate,
     PlatformTemplateAdminSummary,
     PlatformTemplateDraft,
@@ -61,6 +62,7 @@ _TEMPLATE_CONTENT_FIELDS = (
     "heartbeat_md",
 )
 _MAX_KEY_GENERATION_ATTEMPTS = 5
+_LINEAGE_PAGE_SIZE = 500
 _KEY_COLLISION_ERRORS = (TemplateKeyCollisionError, IntegrityError)
 
 _T = TypeVar("_T")
@@ -245,6 +247,48 @@ class TemplateService:
             items=self._mark_platform_updates(reads),
         )
 
+    def list_org_template_lineages(self, context: CurrentUserContext) -> list[OrganizationTemplateLineageSummary]:
+        org_id = self._org_id(context)
+        self.permission_policy.require_organization(context, org_id, PermissionKey.TEMPLATE_READ)
+        reads = self.list_templates(
+            template_filter=TemplateFilter(),
+            pagination=Pagination(page=1, size=_LINEAGE_PAGE_SIZE),
+            context=context,
+        ).items
+        draft_names = self.repository.get_org_draft_names_by_key(org_id)
+        summaries = [
+            OrganizationTemplateLineageSummary(
+                template_key=read.template_key,
+                template_name=read.template_name,
+                latest_published_version=read.version,
+                has_draft=read.template_key in draft_names,
+                template_source=read.template_source,
+                is_fork=read.forked_from_platform_template_id is not None,
+                platform_update_available=read.platform_update_available,
+                in_use=read.in_use,
+            )
+            for read in reads
+        ]
+        published_keys = {summary.template_key for summary in summaries}
+        summaries.extend(
+            OrganizationTemplateLineageSummary(
+                template_key=template_key,
+                template_name=name,
+                latest_published_version=None,
+                has_draft=True,
+                template_source=TemplateSource.CUSTOM,
+            )
+            for template_key, name in draft_names.items()
+            if template_key not in published_keys
+        )
+        summaries.sort(
+            key=lambda summary: (
+                0 if summary.template_source == TemplateSource.PRE_DEFINED else 1,
+                summary.template_name,
+            )
+        )
+        return summaries
+
     def get_template(self, template_key: str, context: CurrentUserContext) -> TemplateRead:
         org_id = self._org_id(context)
         template = self._get_latest_or_404(org_id, template_key)
@@ -266,7 +310,9 @@ class TemplateService:
         reads = [self._to_read_with_skills(v).model_copy(update={"in_use": in_use}) for v in versions]
         return self._mark_platform_updates(reads)
 
-    def create_template(self, data: TemplateCreate, context: CurrentUserContext) -> TemplateRead:
+    def create_new_org_template_draft(
+        self, data: TemplateCreate, context: CurrentUserContext
+    ) -> AgentTemplateDraftRead:
         org_id = self._org_id(context)
         self.permission_policy.require_organization(context, org_id, PermissionKey.TEMPLATE_MANAGE)
         skills_map = self._resolve_skill_map(
@@ -276,13 +322,12 @@ class TemplateService:
             requested_versions=data.required_skill_versions,
         )
 
-        def build(template_key: str) -> AgentTemplate:
-            return AgentTemplate(
+        def build(template_key: str) -> AgentTemplateDraft:
+            return AgentTemplateDraft(
                 organization_id=org_id,
                 template_key=template_key,
                 template_name=data.template_name,
                 template_source=TemplateSource.CUSTOM,
-                version=1,
                 description=data.description,
                 soul_md=data.soul_md or DEFAULT_SOUL_MD,
                 identity_md=data.identity_md or DEFAULT_IDENTITY_MD,
@@ -294,17 +339,11 @@ class TemplateService:
                 heartbeat_md=data.heartbeat_md or DEFAULT_HEARTBEAT_MD,
             )
 
-        result = self._allocate_unique_key(
+        draft = self._allocate_unique_key(
             build,
-            lambda t: self.repository.save_new_org_template_with_skills_and_event(
-                t,
-                skills_map,
-                actor=resolve_actor_identity(context, org_id),
-                actor_display=context.user.full_name or context.user.email,
-            ),
+            lambda d: self.repository.save_new_org_draft_with_skills(d, skills_map),
         )
-        self.event_delivery_dispatcher.enqueue_immediate(result.delivery_ids)
-        return self._to_read_with_skills(result.template)
+        return self._org_draft_read(draft)
 
     def update_template(self, template_key: str, data: TemplateUpdate, context: CurrentUserContext) -> TemplateRead:
         org_id = self._org_id(context)

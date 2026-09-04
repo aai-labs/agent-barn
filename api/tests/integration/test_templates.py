@@ -845,18 +845,27 @@ def test_create_template_returns_201_v1_custom():
                 headers=_auth(context),
             )
 
-        with then("it returns 201 with a generated template_key, v1, custom source"):
+        with then("it returns 201 with a generated template_key and an unpublished draft"):
             assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
             body = response.json()
             assert_that(body["template_key"], matches_regexp(r"^tpl-[0-9a-f]{12}$"))
             assert_that(body["template_name"], equal_to("My Helper!"))
-            assert_that(body["version"], equal_to(1))
             assert_that(body["template_source"], equal_to("custom"))
             assert_that(body["soul_md"], equal_to("# Soul"))
+            assert_that("version" in body, equal_to(False))
 
         with then("missing md fields fall back to defaults"):
             assert_that(body["user_md"], is_not(equal_to("")))
             assert_that(body["tools_md"], is_not(equal_to("")))
+
+        with then("nothing is published until the draft is published"):
+            assert_that(
+                client.get(f"{_BASE}/{body['template_key']}", headers=_auth(context)).status_code,
+                equal_to(status.HTTP_404_NOT_FOUND),
+            )
+            published = client.post(f"{_BASE}/{body['template_key']}/draft/publish", headers=_auth(context))
+            assert_that(published.json()["version"], equal_to(1))
+            assert_that(published.json()["template_source"], equal_to("custom"))
 
 
 def test_create_template_duplicate_name_gets_a_distinct_generated_key():
@@ -934,14 +943,15 @@ def test_create_template_with_required_skills_stores_them():
                 headers=_auth(context),
             )
 
-        with then("it returns 201 with required_skills populated"):
+        with then("it returns 201 with required_skills populated on the draft"):
             assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
             body = response.json()
             assert_that(len(body["required_skills"]), equal_to(1))
             assert_that(body["required_skills"][0]["id"], equal_to(str(context.skill.id)))
             assert_that(body["required_skills"][0]["name"], equal_to("Jira"))
 
-        with then("GET also returns the required skill"):
+        with then("publishing carries the requirement onto the published version"):
+            client.post(f"{_BASE}/{body['template_key']}/draft/publish", headers=_auth(context))
             get_resp = client.get(f"{_BASE}/{body['template_key']}", headers=_auth(context))
             assert_that(len(get_resp.json()["required_skills"]), equal_to(1))
 
@@ -2188,8 +2198,9 @@ def test_create_template_emits_created_domain_event():
     with given(_GIVEN) as context:
         client: TestClient = context.client
 
-        with when("I create a template"):
+        with when("I create a template and publish its draft"):
             response = client.post(_BASE, json={"template_name": "My Template"}, headers=_auth(context))
+            client.post(f"{_BASE}/{response.json()['template_key']}/draft/publish", headers=_auth(context))
 
         with then("a template.created Domain Event is persisted"):
             assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
@@ -2269,9 +2280,10 @@ def test_template_created_event_projects_to_durable_security_audit_record():
     with given(_GIVEN) as context:
         client: TestClient = context.client
 
-        with when("I create a template and the delivery is processed"):
+        with when("I create a template, publish it, and the delivery is processed"):
             response = client.post(_BASE, json={"template_name": "My Template"}, headers=_auth(context))
             assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+            client.post(f"{_BASE}/{response.json()['template_key']}/draft/publish", headers=_auth(context))
             outbox_repository = context.injector.get(OutboxMessageRepository)
             messages = _outbox_messages(context)
             created_event = next(m for m in messages if m.event_name == TEMPLATE_CREATED)
@@ -2799,3 +2811,115 @@ def test_agent_configuration_still_offers_both_lineages_for_the_active_pin():
         with then("shared_versions still exposes both the platform and organization rows"):
             source_types = {version["source_type"] for version in configuration["shared_versions"]}
             assert_that(source_types, equal_to({"platform", "organization"}))
+
+
+def test_org_lineages_lists_published_and_draft_only_lineages():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_template(template_key="published", name="Published One", version=1),
+            there_is_an_org_template_draft(template_key="draft-only", name="Draft Only"),
+        ]
+    ) as context:
+        client: TestClient = context.client
+
+        with when("I list template lineages"):
+            response = client.get(f"{_BASE}/lineages", headers=_auth(context))
+
+        with then("both the published lineage and the draft-only lineage appear"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            by_key = {row["template_key"]: row for row in response.json()}
+            assert_that(by_key["published"]["latest_published_version"], equal_to(1))
+            assert_that(by_key["published"]["has_draft"], equal_to(False))
+            assert_that(by_key["draft-only"]["latest_published_version"], none())
+            assert_that(by_key["draft-only"]["has_draft"], equal_to(True))
+
+
+def test_org_lineages_reports_has_draft_for_a_published_lineage():
+    with given([*_GIVEN, there_is_a_template(template_key="alpha", name="Alpha", version=1)]) as context:
+        client: TestClient = context.client
+        _start_org_draft(client, context, "alpha")
+
+        with when("I list lineages while a draft is open"):
+            rows = client.get(f"{_BASE}/lineages", headers=_auth(context)).json()
+
+        with then("the lineage reports both its published version and its draft"):
+            row = next(row for row in rows if row["template_key"] == "alpha")
+            assert_that(row["latest_published_version"], equal_to(1))
+            assert_that(row["has_draft"], equal_to(True))
+
+
+def test_org_lineages_reports_fork_source_and_platform_update():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+        repository: TemplateRepository = context.injector.get(TemplateRepository)
+        repository.save_platform_template(_platform_version("shared", 1))
+        _start_org_draft(client, context, "shared")
+        client.patch(f"{_BASE}/shared/draft", json={"soul_md": "# Org"}, headers=_auth(context))
+        client.post(f"{_BASE}/shared/draft/publish", headers=_auth(context))
+        repository.save_platform_template(_platform_version("shared", 2))
+
+        with when("I list lineages after the platform publishes a newer version"):
+            rows = client.get(f"{_BASE}/lineages", headers=_auth(context)).json()
+
+        with then("the lineage is flagged as a fork with an available platform update"):
+            row = next(row for row in rows if row["template_key"] == "shared")
+            assert_that(row["template_source"], equal_to("pre-defined"))
+            assert_that(row["is_fork"], equal_to(True))
+            assert_that(row["platform_update_available"], equal_to(True))
+
+
+def test_org_lineages_reports_in_use_for_a_hired_lineage():
+    with given([*_GIVEN, there_is_a_template(template_key="alpha", name="Alpha", version=1)]) as context:
+        client: TestClient = context.client
+        client.post(
+            _AGENTS_BASE,
+            json={"name": "Lineage Agent", "template_key": "alpha"},
+            headers=_auth(context),
+        )
+
+        with when("I list lineages while an agent is pinned to one"):
+            rows = client.get(f"{_BASE}/lineages", headers=_auth(context)).json()
+
+        with then("that lineage reports in_use"):
+            row = next(row for row in rows if row["template_key"] == "alpha")
+            assert_that(row["in_use"], equal_to(True))
+
+
+def test_org_lineages_is_scoped_to_the_calling_organization():
+    with given([*_GIVEN, there_is_a_template(template_key="mine", name="Mine", version=1)]) as context:
+        client: TestClient = context.client
+        org_repository: OrganizationRepository = context.injector.get(OrganizationRepository)
+        other_org = Organization(name="Other Org")
+        org_repository.save(other_org)
+        there_is_a_template(template_key="theirs", name="Theirs", organization_id=other_org.id)(context)
+        there_is_an_org_template_draft(template_key="their-draft", name="Their Draft", organization_id=other_org.id)(
+            context
+        )
+
+        with when("I list lineages"):
+            rows = client.get(f"{_BASE}/lineages", headers=_auth(context)).json()
+
+        with then("only my organization's lineages are returned"):
+            keys = {row["template_key"] for row in rows}
+            assert_that("mine" in keys, equal_to(True))
+            assert_that("theirs" in keys, equal_to(False))
+            assert_that("their-draft" in keys, equal_to(False))
+
+
+def test_org_lineages_requires_template_read_permission():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_template(template_key="alpha", name="Alpha", version=1),
+            role_lacks_permission(OrganizationRole.MEMBER, PermissionKey.TEMPLATE_READ),
+            _there_is_a_member_actor(),
+        ]
+    ) as context:
+        client: TestClient = context.client
+
+        with when("a role without template.read lists lineages"):
+            response = client.get(f"{_BASE}/lineages", headers=_auth(context))
+
+        with then("it is forbidden"):
+            assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))

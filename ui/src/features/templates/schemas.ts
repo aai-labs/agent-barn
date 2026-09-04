@@ -23,6 +23,10 @@ export const PlatformTemplateAdminSummarySchema = z.object({
   templateName: z.string(),
   latestPublishedVersion: z.number().int().nullable(),
   hasDraft: z.boolean(),
+  templateSource: z.enum(["pre-defined", "custom"]).optional(),
+  isFork: z.boolean().optional(),
+  platformUpdateAvailable: z.boolean().optional(),
+  inUse: z.boolean().optional(),
 });
 
 export const PlatformTemplateAdminSummariesSchema = z.array(

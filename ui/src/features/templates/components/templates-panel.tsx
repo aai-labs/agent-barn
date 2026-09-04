@@ -135,7 +135,33 @@ export function TemplatesPanel({
                   >
                     {lineage.templateName}
                   </span>
+                  {lineage.templateSource === "pre-defined" && (
+                    <span
+                      className="flex-shrink-0 text-[0.6875rem] font-semibold uppercase tracking-wide px-2 py-0.5 rounded-full"
+                      style={
+                        lineage.isFork
+                          ? { color: "var(--accent-ink)", background: "var(--accent-soft)" }
+                          : { color: "var(--ink-3)", background: "var(--line)" }
+                      }
+                      title={
+                        lineage.isFork
+                          ? "Organization fork of a Platform Template"
+                          : "Platform Template"
+                      }
+                    >
+                      {lineage.isFork ? "Org fork" : "Built-in"}
+                    </span>
+                  )}
                 </div>
+                {lineage.platformUpdateAvailable && (
+                  <span
+                    data-testid={`template-update-available-${lineage.templateKey}`}
+                    className="flex-shrink-0 text-[0.72rem] font-semibold px-2 py-0.5 rounded-full"
+                    style={{ color: "var(--accent-ink)", background: "var(--accent-soft)" }}
+                  >
+                    Platform update available
+                  </span>
+                )}
                 {lineage.hasDraft ? (
                   <span
                     className="flex-shrink-0 text-[11.5px] font-semibold px-2 py-0.5 rounded-full"

@@ -402,6 +402,13 @@ class PlatformTemplateAdminSummary(PydanticBaseModel):
     has_draft: bool
 
 
+class OrganizationTemplateLineageSummary(PlatformTemplateAdminSummary):
+    template_source: TemplateSource
+    is_fork: bool = False
+    platform_update_available: bool = False
+    in_use: bool = False
+
+
 class TemplateFilter(PydanticBaseModel):
     search: str | None = None
     source: TemplateSource | None = None

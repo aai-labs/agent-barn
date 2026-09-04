@@ -7,6 +7,7 @@ from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.utils import get_current_user, require_platform_admin
 from api.domains.templates.models import (
     AgentTemplateDraftRead,
+    OrganizationTemplateLineageSummary,
     PlatformTemplateAdminSummary,
     PlatformTemplateDraftCreate,
     PlatformTemplateDraftRead,
@@ -39,13 +40,21 @@ def list_templates(
     )
 
 
-@templates_router.post("", response_model=TemplateRead, status_code=status.HTTP_201_CREATED)
+@templates_router.post("", response_model=AgentTemplateDraftRead, status_code=status.HTTP_201_CREATED)
 def create_template(
     data: TemplateCreate,
     context: Annotated[CurrentUserContext, Depends(get_current_user())],
     service: Annotated[TemplateService, Injected(TemplateService)],
 ):
-    return service.create_template(data, context)
+    return service.create_new_org_template_draft(data, context)
+
+
+@templates_router.get("/lineages", response_model=list[OrganizationTemplateLineageSummary])
+def list_org_template_lineages(
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[TemplateService, Injected(TemplateService)],
+):
+    return service.list_org_template_lineages(context)
 
 
 @templates_router.get("/{template_key}", response_model=TemplateRead)

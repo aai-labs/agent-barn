@@ -13,10 +13,12 @@ export function TemplateEditorPage({
   scope,
   templateKey,
   isNew = false,
+  canManage = true,
 }: {
   scope: TemplateScopeRef;
   templateKey?: string;
   isNew?: boolean;
+  canManage?: boolean;
 }) {
   const router = useRouter();
   const params = useParams();
@@ -84,6 +86,7 @@ export function TemplateEditorPage({
   return (
     <TemplateEditor
       scope={scope}
+      canManage={canManage}
       isNew={isNew}
       templateKey={isNew ? null : (templateKey ?? null)}
       lineage={lineage}

@@ -27,7 +27,7 @@ export function useTemplateLineages(scope: TemplateScopeRef, enabled = true) {
 
   return {
     lineages: query.data ?? [],
-    isLoading: query.isPending,
+    isLoading: query.isLoading,
     error: query.error,
     refetch: query.refetch,
   };
