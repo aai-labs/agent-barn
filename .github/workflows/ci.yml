@@ -49,7 +49,7 @@ jobs:
             # The base-image workflows verify that each runtime still supplies
             # what its telemetry-push plugin reads, so a plugin-only change has
             # to rebuild them too -- not just run the API suite.
-            if grep -qE '^(hermes-base/|api/domains/agents/scripts/hermes/plugins/|api/tests/fixtures/hermes_session_store_driver\.py)' /tmp/changed.txt; then hermes=true; fi
+            if grep -qE '^(hermes-base/|api/domains/agents/builders/hermes\.py|api/domains/agents/scripts/hermes/plugins/|api/tests/fixtures/hermes_(pvc_permissions|session_store)_driver\.py)' /tmp/changed.txt; then hermes=true; fi
             if grep -qE '^(openclaw-base/|api/domains/agents/scripts/openclaw/plugins/)' /tmp/changed.txt; then openclaw=true; fi
           fi
 

@@ -104,6 +104,12 @@ hooks directly. Shared setup lives in
   `../../.github/workflows/openclaw-base.yml` smoke-test their base images. CI
   selects the matching workflow when base-image or telemetry-plugin paths
   change.
+- `../../hermes-base/test-image.sh` is the single entrypoint for Hermes image
+  verification. It runs the image smoke test, builds the real Deployment spec
+  and exercises its init container against a fresh root-owned Docker volume,
+  verifies non-root writes to startup state and workspace, and runs the
+  telemetry plugin against the real SessionStore. The workflow invokes this
+  entrypoint when either the Hermes builder or base image changes.
 
 ## UI and browser tests
 
