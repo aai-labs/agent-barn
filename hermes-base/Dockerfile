@@ -53,6 +53,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 # executable was compiled against. Keep the upstream library available to
 # Hermes, but make the CLI load Debian's matching library explicitly.
 COPY --chmod=0755 sqlite3-wrapper /usr/local/bin/sqlite3
+COPY --chmod=0755 fix-pvc-owner.sh /usr/local/bin/fix-hermes-pvc-owner
 
 # Chromium and the playwright package are deliberately absent. service.py sets
 # browser.cloud_provider=firecrawl for every agent, and firecrawl is a registered

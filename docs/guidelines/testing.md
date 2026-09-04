@@ -104,6 +104,11 @@ hooks directly. Shared setup lives in
   `../../.github/workflows/openclaw-base.yml` smoke-test their base images. CI
   selects the matching workflow when base-image or telemetry-plugin paths
   change.
+- The Hermes base-image workflow also builds the real Deployment spec and runs
+  its init container against a fresh root-owned Docker volume, then starts the
+  image as its default `hermes` user and verifies writes to the startup state
+  directories and persistent workspace. This contract must run when either the
+  Hermes builder or base image changes.
 
 ## UI and browser tests
 

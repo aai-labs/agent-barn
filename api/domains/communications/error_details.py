@@ -9,6 +9,7 @@ from typing import Any
 
 import httpx
 from pydantic import ValidationError
+from websockets.exceptions import ConnectionClosed
 
 from api.domains.communications.models import CommunicationErrorCategory, CommunicationErrorDetails
 
@@ -56,6 +57,14 @@ _SUMMARY_BY_CATEGORY = {
     CommunicationErrorCategory.RATE_LIMITED: "The provider rate-limited the request",
     CommunicationErrorCategory.TIMEOUT: "The provider did not respond before the request timed out",
     CommunicationErrorCategory.UNKNOWN: "The provider reported an error",
+}
+_SUMMARY_BY_PROVIDER_CODE = {
+    "4004": "Discord rejected the bot token; update this Connection with a valid bot token, then reconnect",
+    "4013": "Discord rejected the gateway intent selection; review the configured Discord intents, then reconnect",
+    "4014": (
+        "Discord rejected a privileged gateway intent; enable Message Content Intent "
+        "in the Discord Developer Portal, then reconnect"
+    ),
 }
 _HTTP_PROVIDER_CODE_KEYS = ("error", "code", "error_code", "type")
 _REQUEST_ID_HEADERS = ("x-request-id", "x-correlation-id", "request-id", "x-slack-req-id", "cf-ray")
@@ -110,6 +119,8 @@ def normalize_communication_error(
     raw_message = error_message if error_message is not None else (str(error) if error is not None else "")
     http_status, provider_code, retry_after_seconds, request_id = _http_metadata(error)
     if provider_code is None:
+        provider_code = _websocket_provider_code(error)
+    if provider_code is None:
         provider_code = _safe_identifier(_provider_code_from_message(raw_message))
 
     category = _classify_error(
@@ -117,6 +128,7 @@ def normalize_communication_error(
         code=raw_code,
         message=raw_message,
         http_status=http_status,
+        provider_code=provider_code,
     )
     details = CommunicationErrorDetails(
         category=category,
@@ -163,7 +175,10 @@ def error_summary_from_details(details: CommunicationErrorDetails | Mapping[str,
     safe_details = safe_error_details(details)
     if safe_details is None:
         return _REDACTED_ERROR_SUMMARY
-    summary = _SUMMARY_BY_CATEGORY[safe_details.category]
+    summary = _SUMMARY_BY_PROVIDER_CODE.get(
+        safe_details.provider_code or "",
+        _SUMMARY_BY_CATEGORY[safe_details.category],
+    )
     qualifiers: list[str] = []
     if safe_details.http_status is not None:
         qualifiers.append(f"HTTP {safe_details.http_status}")
@@ -222,6 +237,7 @@ def _classify_error(
     code: str | None,
     message: str,
     http_status: int | None,
+    provider_code: str | None,
 ) -> CommunicationErrorCategory:
     if http_status == 401:
         return CommunicationErrorCategory.AUTHENTICATION
@@ -236,7 +252,11 @@ def _classify_error(
     if http_status is not None and 400 <= http_status < 500:
         return CommunicationErrorCategory.PROVIDER_REJECTED
 
-    normalized = f"{code or ''} {message}".casefold()
+    normalized = f"{code or ''} {message} {provider_code or ''}".casefold()
+    if provider_code in {"4013", "4014"}:
+        return CommunicationErrorCategory.CONFIGURATION
+    if provider_code == "4004":
+        return CommunicationErrorCategory.AUTHENTICATION
     if isinstance(error, (httpx.TimeoutException, TimeoutError)) or _contains_any(
         normalized, "timeout", "timed out", "deadline exceeded"
     ):
@@ -308,6 +328,16 @@ def _provider_code_from_message(value: str) -> str | None:
     if match is None:
         return None
     return match.group(1)
+
+
+def _websocket_provider_code(error: BaseException | None) -> str | None:
+    """Return only the numeric close code; never persist a provider reason."""
+    if not isinstance(error, ConnectionClosed):
+        return None
+    close = error.rcvd or error.sent
+    if close is None:
+        return None
+    return _safe_identifier(str(int(close.code)))
 
 
 def _safe_identifier(value: str | None) -> str | None:
