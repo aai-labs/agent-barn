@@ -86,11 +86,15 @@ make check-api       # Ruff check/format check and Python type checking
 make fix-api         # Ruff autofix and formatting
 make test-api        # API tests excluding Kubernetes integration
 make test-api-k8s    # Kubernetes integration tests
+make test-api-runtime # Runtime contracts against explicitly selected built images
 make coverage        # API coverage
 make lint-ui         # ESLint
 make check-ui        # TypeScript type check
 make test-ui         # Playwright
 ```
+
+Runtime contracts require Docker and the image environment variable required
+by the selected test, such as `HERMES_TEST_IMAGE`.
 
 From `../../ui/` when debugging Playwright:
 
@@ -144,7 +148,7 @@ hooks are called directly. Shared setup lives in
   base-image smoke tests and the plugin-contract step in
   `../../.github/workflows/hermes-base.yml`. Those run on version bumps, which is
   when such assumptions break.
-- The Hermes base-image workflow also starts Agent Barn's generated runtime
+- The separate `../../api/runtime_tests/` pytest suite starts Agent Barn's generated runtime
   configuration in the real image and proves materialized Agent Skills are
   visible through Hermes' `skills_list` and `skill_view`. CI selects this
   workflow when the Hermes builder, startup scripts, or base image changes.

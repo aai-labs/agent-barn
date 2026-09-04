@@ -54,8 +54,7 @@ jobs:
             hermes-base:ci \
             /bin/sh /smoke-test.sh
       - name: Skill discovery contract
-        working-directory: api
-        run: uv run --frozen python tests/fixtures/hermes_skill_discovery_driver.py hermes-base:ci
+        run: HERMES_TEST_IMAGE=hermes-base:ci make test-api-runtime
       # Runs the telemetry-push plugin against the runtime's real SessionStore.
       # Unit tests can only prove our own routing logic against fakes; this is
       # what proves the runtime still behaves the way those fakes assume.
@@ -130,10 +129,9 @@ jobs:
             ${{ vars.REGISTRY_URL }}/agentbarn-hermes-base:${{ steps.tag.outputs.value }} \
             /bin/sh /smoke-test.sh
       - name: Skill discovery contract
-        working-directory: api
         run: |
-          uv run --frozen python tests/fixtures/hermes_skill_discovery_driver.py \
-            ${{ vars.REGISTRY_URL }}/agentbarn-hermes-base:${{ steps.tag.outputs.value }}
+          HERMES_TEST_IMAGE=${{ vars.REGISTRY_URL }}/agentbarn-hermes-base:${{ steps.tag.outputs.value }} \
+            make test-api-runtime
       - name: Plugin contract
         run: |
           docker run --rm \

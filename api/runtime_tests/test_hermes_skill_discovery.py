@@ -3,18 +3,16 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
-import sys
-import tempfile
 import textwrap
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from uuid import UUID
 
+import pytest
 from hamcrest import assert_that, contains_string, equal_to, has_item, is_
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from api.domains.agents.builders.hermes import build_hermes_config_map, build_hermes_gateway_config
 from api.tests.core.givenpy import LambdaWith, given, then, when
@@ -65,6 +63,14 @@ def image_is_built(image: str):
         context.image = image
 
     return step
+
+
+@pytest.fixture
+def hermes_image() -> str:
+    image = os.environ.get("HERMES_TEST_IMAGE")
+    if not image:
+        pytest.fail("HERMES_TEST_IMAGE must name an already-built Hermes image")
+    return image
 
 
 def empty_agent_workspace_is_present(root: Path):
@@ -120,13 +126,13 @@ def hermes_runtime_is_configured():
 
 
 def test_assigned_workspace_skill_should_be_discoverable_and_loadable_by_hermes(
-    image: str,
-    root: Path,
+    hermes_image: str,
+    tmp_path: Path,
 ) -> None:
     with given(
         [
-            image_is_built(image),
-            empty_agent_workspace_is_present(root),
+            image_is_built(hermes_image),
+            empty_agent_workspace_is_present(tmp_path),
             skill_is_present(_SKILL_INPUT),
             hermes_runtime_is_configured(),
         ]
@@ -271,19 +277,3 @@ def skill_discovery_probe() -> str:
         print("{_RESULT_PREFIX}" + json.dumps(observation))
         """
     )
-
-
-def main(image: str) -> None:
-    with tempfile.TemporaryDirectory() as temp_root:
-        test_assigned_workspace_skill_should_be_discoverable_and_loadable_by_hermes(
-            image,
-            Path(temp_root),
-        )
-
-    print("Hermes Skill discovery test passed")
-
-
-if __name__ == "__main__":
-    if len(sys.argv) != 2:
-        raise SystemExit("usage: hermes_skill_discovery_driver.py IMAGE")
-    main(sys.argv[1])

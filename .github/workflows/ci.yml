@@ -49,7 +49,7 @@ jobs:
             # The base-image workflows verify the runtime-facing builder,
             # startup, Skill-discovery, and telemetry contracts, so changes at
             # those seams must run them too -- not just the API suite.
-            if grep -qE '^(hermes-base/|api/domains/agents/builders/hermes\.py|api/domains/agents/scripts/hermes/|api/tests/fixtures/hermes_(session_store|skill_discovery)_driver\.py)' /tmp/changed.txt; then hermes=true; fi
+            if grep -qE '^(hermes-base/|api/domains/agents/builders/hermes\.py|api/domains/agents/scripts/hermes/|api/runtime_tests/|api/tests/fixtures/hermes_session_store_driver\.py)' /tmp/changed.txt; then hermes=true; fi
             if grep -qE '^(openclaw-base/|api/domains/agents/scripts/openclaw/plugins/)' /tmp/changed.txt; then openclaw=true; fi
           fi
 
