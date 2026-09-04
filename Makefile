@@ -120,6 +120,9 @@ test-api:
 test-api-k8s:
 	cd api && uv run python -m pytest tests/integration/test_kubernetes_client.py -v
 
+test-api-runtime:
+	cd api && uv run python -m pytest runtime_tests -v
+
 test-ui:
 	cd ui && pnpm test
 

@@ -27,6 +27,10 @@ jobs:
           tool-cache: false
           docker-images: false
       - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.14"
+          enable-cache: true
       - uses: docker/setup-buildx-action@v4
       - uses: docker/build-push-action@v7
         with:
@@ -49,6 +53,8 @@ jobs:
             -v "${{ github.workspace }}/hermes-base/smoke-test.sh:/smoke-test.sh:ro" \
             hermes-base:ci \
             /bin/sh /smoke-test.sh
+      - name: API runtime tests
+        run: HERMES_TEST_IMAGE=hermes-base:ci make test-api-runtime
       # Runs the telemetry-push plugin against the runtime's real SessionStore.
       # Unit tests can only prove our own routing logic against fakes; this is
       # what proves the runtime still behaves the way those fakes assume.
@@ -81,6 +87,10 @@ jobs:
           tool-cache: false
           docker-images: false
       - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.14"
+          enable-cache: true
       - name: Log in to registry
         uses: docker/login-action@v4
         with:
@@ -118,6 +128,10 @@ jobs:
             -v "${{ github.workspace }}/hermes-base/smoke-test.sh:/smoke-test.sh:ro" \
             ${{ vars.REGISTRY_URL }}/agentbarn-hermes-base:${{ steps.tag.outputs.value }} \
             /bin/sh /smoke-test.sh
+      - name: API runtime tests
+        run: |
+          HERMES_TEST_IMAGE=${{ vars.REGISTRY_URL }}/agentbarn-hermes-base:${{ steps.tag.outputs.value }} \
+            make test-api-runtime
       - name: Plugin contract
         run: |
           docker run --rm \

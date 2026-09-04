@@ -3,10 +3,79 @@
 ## Core principles
 
 - Changed behavior needs coverage at the lowest layer that proves the contract reliably.
+- Assert meaningful outputs and durable state, not implementation details or a mock's internal state.
 - Test happy paths, authorization/permission failures, important validation failures, and not-found/conflict behavior.
 - Regression fixes SHOULD include a test that fails for the original defect.
 - Keep setup reusable, interactions centralized, and assertions close to the behavior being specified.
 - Run repository `make` targets when available.
+
+## Behavior-first regression tests
+
+A regression test must reproduce the reported failure before it is used to
+justify a fix. Establish the observable contract, run the test against the
+unfixed code, and record the failure at the intended assertion. Source
+inspection can suggest a cause, but is not reproduction evidence.
+
+- Test at the real boundary where the defect occurs. A unit assertion on a
+  generated configuration proves only the generator; behavior that depends on
+  a runtime image, database, subprocess, protocol, or browser needs a contract
+  test at that boundary.
+- Make preconditions explicit before asserting the failed behavior. For
+  example, prove that startup succeeded and a Skill file was materialized
+  before asserting that the runtime lists and loads it. This distinguishes a
+  discovery defect from provisioning, mounting, or permissions failures.
+- Do not count a harness failure as reproduction. Fix import paths, fixture
+  permissions, cleanup, dependency setup, and process invocation until the
+  test fails specifically on the reported behavior.
+- Run the same test red and green: it must fail on the original behavior and
+  pass after the fix without weakening or replacing its assertions.
+
+Prefer assertions on responses, persisted rows, emitted events, posted
+payloads, rendered UI, files visible to a consumer, or results returned by the
+real dependency. Mocks and fakes MAY isolate unrelated boundaries or make
+failure modes deterministic, but an assertion against calls recorded by a mock
+is insufficient when the contract concerns what another component actually
+accepts or produces. Do not test a fake's behavior and infer that the real
+runtime behaves the same way.
+
+## GivenPy scenarios
+
+Python tests use the lightweight GivenPy-style helpers in
+`../../api/tests/core/givenpy.py` with pytest and PyHamcrest. GivenPy structures
+a test; it does not replace the test runner or assertions.
+
+- `given([...])` composes setup steps that state domain facts. Steps SHOULD be
+  higher-order functions such as `skill_is_present(content)` so they can accept
+  inputs and be reused. Store produced objects on `context`; keep JSON
+  serialization, Docker commands, HTTP construction, and similar mechanics in
+  dedicated helpers.
+- A setup step MAY return a context manager such as `LambdaWith` when it owns
+  cleanup. GivenPy exits returned context managers in reverse setup order.
+- `when(...)` names one meaningful action and SHOULD contain one short call.
+  Hide command construction, probe installation, execution, and output parsing
+  behind an action helper such as `start_hermes_agent(context)`.
+- `then(...)` asserts observable outcomes with PyHamcrest. Use separate,
+  readable `then` blocks for closely ordered evidence such as “the file was
+  materialized,” “the Skill was listed,” and “the Skill was loaded.”
+
+```python
+with given(
+    [
+        image_is_built(image),
+        skill_is_present(skill_content),
+        hermes_runtime_is_configured(),
+    ]
+) as context:
+    with when("the Hermes agent starts"):
+        result = start_hermes_agent(context)
+
+    with then("Agent Barn should materialize the assigned Skill"):
+        assert_that(result.workspace_file_exists, is_(True))
+
+    with then("Hermes should list and load the assigned Skill"):
+        assert_that(result.listed_skills, has_item(skill_name))
+        assert_that(result.skill_loaded, is_(True), result.skill_error)
+```
 
 ## Verification commands
 
@@ -17,11 +86,15 @@ make check-api       # Ruff check/format check and Python type checking
 make fix-api         # Ruff autofix and formatting
 make test-api        # API tests excluding Kubernetes integration
 make test-api-k8s    # Kubernetes integration tests
+make test-api-runtime # Runtime contracts against explicitly selected built images
 make coverage        # API coverage
 make lint-ui         # ESLint
 make check-ui        # TypeScript type check
 make test-ui         # Playwright
 ```
+
+Runtime contracts require Docker and the image environment variable required
+by the selected test, such as `HERMES_TEST_IMAGE`.
 
 From `../../ui/` when debugging Playwright:
 
@@ -42,11 +115,8 @@ API behavior changes MUST cover:
 - Not-found and conflict behavior.
 - Migration behavior when the database schema changes.
 
-Integration tests use the real FastAPI app, migrated PostgreSQL, and additive Injector overrides. Follow the existing Given/When/Then style in `../../api/tests/integration/`:
+Integration tests use the real FastAPI app, migrated PostgreSQL, and additive Injector overrides. Follow the [GivenPy scenario conventions](#givenpy-scenarios) used in `../../api/tests/integration/`:
 
-- `given(...)` assembles reusable setup steps.
-- `when(...)` names the action.
-- `then(...)` contains assertions.
 - Use PyHamcrest `assert_that` and matchers instead of bare `assert` statements.
 - Each test SHOULD prove one behavior. Split independent assertion clusters into focused tests; grouping closely related fields into one matcher is appropriate when they describe one outcome.
 
@@ -78,6 +148,10 @@ hooks are called directly. Shared setup lives in
   base-image smoke tests and the plugin-contract step in
   `../../.github/workflows/hermes-base.yml`. Those run on version bumps, which is
   when such assumptions break.
+- The separate `../../api/runtime_tests/` pytest suite starts Agent Barn's generated runtime
+  configuration in the real image and proves materialized Agent Skills are
+  visible through Hermes' `skills_list` and `skill_view`. CI selects this
+  workflow when the Hermes builder, startup scripts, or base image changes.
 
 ## UI and browser tests
 
