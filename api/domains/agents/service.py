@@ -77,7 +77,6 @@ from api.domains.agents.models import (
     AgentUpdate,
     CommandApprovalMode,
     ConfluenceContent,
-    FirecrawlContent,
     GoogleWorkspaceContent,
     JiraContent,
     SecretProvider,
@@ -1959,6 +1958,12 @@ class AgentService:
                     "Authenticate with Google, or configure google_cloud_client_id/secret."
                 ),
             )
+        # Rotates the Agent's gateway tokens and revokes any left from a previous start.
+        # Computed here (rather than where it's written into the Secret, below) because
+        # the Firecrawl block also needs to know its own token, if one was issued.
+        gateway_tokens = self.credential_gateway.issue_for_agent(agent.id, agent.organization_id, set(decrypted.keys()))
+        gateway_tokens_by_provider = {issued.provider: issued.value for issued in gateway_tokens}
+
         # A gateway-routed provider is excluded from the store, which is what actually
         # keeps its real credential out of the pod Secret and aai-secrets.enc.json.
         store = store_providers_for(decrypted)
@@ -1998,15 +2003,18 @@ class AgentService:
             gog_setup_sh = build_gog_shim_install_sh(gog_home_dir)
             gog_shim_sh = build_gog_shim_sh()
 
-        fc_content = decrypted.get(SecretProvider.FIRECRAWL)
-        fc_api_key = (
-            fc_content.api_key if isinstance(fc_content, FirecrawlContent) else self.config.agent_firecrawl_api_key
-        )
-        fc_base_url = (
-            fc_content.base_url
-            if isinstance(fc_content, FirecrawlContent) and fc_content.base_url
-            else self.config.agent_firecrawl_base_url
-        )
+        fc_gateway_token = gateway_tokens_by_provider.get(SecretProvider.FIRECRAWL)
+        if fc_gateway_token is not None:
+            # A stored credential is always gateway-routed: the real key never enters
+            # the pod. The pod's Firecrawl clients already read whatever value is here.
+            fc_api_key = fc_gateway_token
+            fc_base_url = f"{self.config.credential_gateway_base_url.rstrip('/')}/p/firecrawl"
+        else:
+            # No stored credential for this agent: the server-operator-configured
+            # platform default, injected directly as it always has been. Outside the
+            # Agent Secret model entirely, so the gateway has nothing to decrypt here.
+            fc_api_key = self.config.agent_firecrawl_api_key
+            fc_base_url = self.config.agent_firecrawl_base_url
         if fc_api_key and fc_base_url:
             secret.string_data["FIRECRAWL_API_KEY"] = fc_api_key
             if hermes_cfg is not None:
@@ -2039,9 +2047,6 @@ class AgentService:
 
         ingest_key = secrets.token_urlsafe(32)
         communication_key = secrets.token_urlsafe(32)
-        # Rotates the Agent's gateway tokens and revokes any left from a previous start.
-        # The configured rollout set decides which supported providers receive one.
-        gateway_tokens = self.credential_gateway.issue_for_agent(agent.id, agent.organization_id, set(decrypted.keys()))
         for issued in gateway_tokens:
             secret.string_data[gateway_token_env_var(issued.provider)] = issued.value
         if gateway_tokens:

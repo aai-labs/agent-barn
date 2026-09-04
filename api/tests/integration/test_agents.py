@@ -3561,7 +3561,7 @@ def test_start_hermes_agent_with_platform_firecrawl():
             )
 
 
-def test_start_agent_per_agent_firecrawl_overrides_platform():
+def test_start_agent_per_agent_firecrawl_is_routed_through_the_gateway_not_the_platform_key():
     with given([*_GIVEN_WITH_FIRECRAWL, there_is_an_agent()]) as context:
         client: TestClient = context.client
         k8s: MagicMock = context.injector.get(KubernetesClient)
@@ -3574,18 +3574,32 @@ def test_start_agent_per_agent_firecrawl_overrides_platform():
             )
             response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
 
-        with then("the per-agent key is used instead of the platform key"):
+        with then("neither the real per-agent key nor the platform key reaches the pod"):
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
             secret = k8s.create_secret.call_args.args[1]
-            assert_that(secret.string_data["FIRECRAWL_API_KEY"], equal_to("fc-my-key"))
+            assert_that(secret.string_data["FIRECRAWL_API_KEY"], is_not(equal_to("fc-my-key")))
+            assert_that(secret.string_data["FIRECRAWL_API_KEY"], is_not(equal_to("fc-platform-key")))
+
+        with then("the pod instead carries a Gateway Token and the forwarding URL"):
+            assert_that(
+                secret.string_data["FIRECRAWL_API_KEY"],
+                equal_to(secret.string_data["AF_GATEWAY_TOKEN_FIRECRAWL"]),
+            )
+            config_map = k8s.create_config_map.call_args.args[1]
+            overlay = json.loads(config_map.data["openclaw-config-overlay.json"])
+            fc_cfg = overlay["plugins"]["entries"]["firecrawl"]["config"]
+            assert_that(fc_cfg["webSearch"]["baseUrl"], contains_string("/p/firecrawl"))
 
 
-def test_start_agent_per_agent_firecrawl_overrides_base_url():
+def test_start_agent_per_agent_firecrawl_ignores_a_stored_self_hosted_base_url():
+    # The gateway pins the upstream to api.firecrawl.dev regardless of what a stored
+    # credential's base_url says — that field could otherwise redirect the shared
+    # platform key to a host the credential's owner controls.
     with given([*_GIVEN_WITH_FIRECRAWL, there_is_an_agent()]) as context:
         client: TestClient = context.client
         k8s: MagicMock = context.injector.get(KubernetesClient)
 
-        with when("I add a per-agent firecrawl secret with base_url and start"):
+        with when("I add a per-agent firecrawl secret naming a different base_url and start"):
             client.patch(
                 f"{_BASE}/{context.agent.id}",
                 json={
@@ -3594,7 +3608,7 @@ def test_start_agent_per_agent_firecrawl_overrides_base_url():
                             "provider": "firecrawl",
                             "content": {
                                 "api_key": "fc-cloud-key",
-                                "base_url": "https://api.firecrawl.dev",
+                                "base_url": "https://self-hosted.example.com",
                             },
                         }
                     ]
@@ -3603,17 +3617,15 @@ def test_start_agent_per_agent_firecrawl_overrides_base_url():
             )
             response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
 
-        with then("both the key and base URL are overridden"):
+        with then("the pod still points at the gateway, not the stored base_url"):
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
             secret = k8s.create_secret.call_args.args[1]
-            assert_that(secret.string_data["FIRECRAWL_API_KEY"], equal_to("fc-cloud-key"))
+            assert_that(secret.string_data["FIRECRAWL_API_KEY"], is_not(equal_to("fc-cloud-key")))
             config_map = k8s.create_config_map.call_args.args[1]
             overlay = json.loads(config_map.data["openclaw-config-overlay.json"])
             fc_cfg = overlay["plugins"]["entries"]["firecrawl"]["config"]
-            assert_that(
-                fc_cfg["webSearch"]["baseUrl"],
-                equal_to("https://api.firecrawl.dev"),
-            )
+            assert_that(fc_cfg["webSearch"]["baseUrl"], contains_string("/p/firecrawl"))
+            assert_that(fc_cfg["webSearch"]["baseUrl"], is_not(contains_string("self-hosted.example.com")))
 
 
 _GIVEN_WITHOUT_FIRECRAWL = [

@@ -3,7 +3,7 @@
 import base64
 
 from fastapi import status
-from hamcrest import assert_that, empty, equal_to, is_, not_none
+from hamcrest import assert_that, equal_to, is_, not_none
 from starlette.testclient import TestClient
 
 from api.domains.agents.models import SecretProvider
@@ -181,20 +181,11 @@ def test_a_credential_for_another_service_is_refused():
 
 
 # --- issuance ---
-
-
-def test_issuance_skips_providers_whose_credential_still_lives_in_the_pod():
-    # Firecrawl is EgressMode.DIRECT (platform infrastructure, not a per-agent OAuth
-    # grant), so agent start must not mint a token nobody uses.
-    with given(_GIVEN) as context:
-        agent = context.agent
-        service = context.injector.get(CredentialGatewayService)
-
-        with when("start issues tokens including a DIRECT provider"):
-            issued = service.issue_for_agent(agent.id, agent.organization_id, {SecretProvider.FIRECRAWL})
-
-        with then("nothing is issued"):
-            assert_that(issued, is_(empty()))
+#
+# `issue_for_agent` skips any provider whose plugin is EgressMode.DIRECT (see
+# providers_needing_a_token). There is no such provider left in the shipped catalogue to
+# demonstrate that against — every plugin now has a gateway-served mode — so the
+# behavior is covered only by test_integration_plugins.py's registry contract tests.
 
 
 def test_reissuing_revokes_the_previous_token():

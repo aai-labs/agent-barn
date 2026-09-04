@@ -177,6 +177,9 @@ class GoogleWorkspaceContent(SecretContent):
 
 class FirecrawlContent(SecretContent):
     api_key: str
+    # Self-hosted override. Kept for backward-compatible decryption of already-stored
+    # content (SecretContent forbids extra fields) but no longer read by anything —
+    # FirecrawlPlugin.upstream_base_url ignores it. See that plugin for why.
     base_url: str = ""
 
 

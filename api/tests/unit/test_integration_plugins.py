@@ -117,7 +117,10 @@ def test_non_aai_cli_providers_do_not_carry_a_profile():
 
 
 # --- egress seams are unimplemented until a provider's slice flips it ---
-
+#
+# Every shipped plugin now has a gateway-served mode, so this list — and the
+# parametrized test below it — is currently empty (0 collected, not a failure). It
+# exists for whichever provider ships next without one.
 
 _DIRECT_ONLY = [p for p in ALL_PLUGINS if p.egress_mode is EgressMode.DIRECT]
 

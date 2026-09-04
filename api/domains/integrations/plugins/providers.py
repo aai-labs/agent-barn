@@ -483,17 +483,29 @@ class GoogleWorkspacePlugin(IntegrationPlugin[GoogleWorkspaceContent]):
 
 
 class FirecrawlPlugin(IntegrationPlugin[FirecrawlContent]):
-    """Infrastructure-level web fetch/search, injected as plain environment.
+    """Infrastructure-level web fetch/search, reached by the pod's built-in web backend
+    and the openclaw firecrawl plugin rather than any CLI.
 
-    Reached by no agent-side CLI, so it has no adapter behavior beyond its env.
+    ``FirecrawlContent.base_url`` (a self-hosted override) is not honored here on
+    purpose: the same actor who can set it could otherwise redirect the shared platform
+    API key to a host they control, since unlike Jira/Confluence there is no fixed
+    tenant suffix to constrain it to. Upstream is pinned to the managed API.
     """
 
     key = "firecrawl"
+    egress_mode = EgressMode.GATEWAY_PROXY
     provider = SecretProvider.FIRECRAWL
     display_name = "Firecrawl credential"
     credentials_model = FirecrawlContent
     runtime_tool = NO_TOOL
     bundled_skill_slugs = ()
+
+    def upstream_base_url(self, content: FirecrawlContent) -> str:
+        del content
+        return "https://api.firecrawl.dev"
+
+    def apply_upstream_auth(self, content: FirecrawlContent, request: OutboundRequest) -> OutboundRequest:
+        return request.with_headers({"Authorization": f"Bearer {content.api_key}"}, sensitive=True)
 
 
 SHIPPED_PLUGINS: tuple[IntegrationPlugin, ...] = (
