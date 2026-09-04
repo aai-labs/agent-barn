@@ -6,7 +6,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useCurrentUser } from "@/auth/providers/user-context-provider";
 import { useLogout } from "@/auth/hooks/use-logout";
 import { PlusIcon, UserIcon, UsersIcon, BuildingIcon, LogOutIcon, ShieldIcon, ServerIcon } from "@/components/icons";
-import { FileText, Sparkles } from "lucide-react";
+import { FileText, Menu, Sparkles, X } from "lucide-react";
 import { LogoMark } from "@/components/logo-mark";
 import { OrgSwitcher } from "@/features/organizations/components/org-switcher";
 import { useActiveOrgRole } from "@/features/organizations/hooks/use-active-org-role";
@@ -46,7 +46,12 @@ export function TopNav({ onHire }: TopNavProps) {
         { href: `${orgBase}/settings`, label: "Settings" },
       ];
   const [menuOpen, setMenuOpen] = useState(false);
+  const [mobileOpen, setMobileOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    setMobileOpen(false);
+  }, [pathname]);
 
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
@@ -75,55 +80,58 @@ export function TopNav({ onHire }: TopNavProps) {
 
   return (
     <header
-      className="flex items-center gap-9 px-10 sticky top-0 z-10 h-[61px] flex-shrink-0"
+      className="sticky top-0 z-20 flex flex-col flex-shrink-0"
       style={{ borderBottom: "1px solid var(--line)", background: "var(--bg)" }}
     >
-      <div className="flex items-center gap-2.5 font-semibold text-[15.5px] tracking-tight" style={{ color: "var(--ink)" }}>
-        <LogoMark size={26} />
-        Agent Barn
-      </div>
-
-      <OrgSwitcher />
-
-      <nav className="flex gap-0.5 flex-1">
-        {navTabs.map(({ href, label }) => (
-          <Link
-            key={href}
-            href={href}
-            className="px-3.5 py-[7px] rounded-lg text-[14px] font-medium transition-colors"
-            style={{
-              color: isActive(href) ? "var(--ink)" : "var(--ink-3)",
-              fontWeight: isActive(href) ? 600 : 500,
-              background: "transparent",
-            }}
-            onMouseEnter={(e) => {
-              if (!isActive(href))
-                (e.currentTarget as HTMLElement).style.background = "var(--bg-soft)";
-            }}
-            onMouseLeave={(e) => {
-              (e.currentTarget as HTMLElement).style.background = "transparent";
-            }}
-          >
-            {label}
+      <div className="flex items-center justify-between gap-3 px-4 md:gap-9 md:px-10 h-[61px] w-full">
+        <div className="flex items-center gap-3 md:gap-9 min-w-0">
+          <Link href="/" className="flex items-center gap-2.5 font-semibold text-[15.5px] tracking-tight flex-shrink-0" style={{ color: "var(--ink)" }}>
+            <LogoMark size={26} />
+            <span className="hidden sm:inline">Agent Barn</span>
           </Link>
-        ))}
-      </nav>
 
-      <div className="flex items-center gap-2.5">
-        {!isPlatformView && (
-          <button className="af-btn af-btn-primary" onClick={onHire}>
-          <PlusIcon /> Hire agent
-          </button>
-        )}
-        <div ref={menuRef} className="relative">
-          <button
-            className="w-[30px] h-[30px] rounded-full grid place-items-center text-[11.5px] font-semibold text-white flex-shrink-0"
-            style={{ background: "linear-gradient(135deg, #4338ca, #7c3aed)" }}
-            title={user.fullName ?? user.email}
-            onClick={() => setMenuOpen((v) => !v)}
-          >
-            {initials}
-          </button>
+          <OrgSwitcher />
+
+          <nav className="hidden md:flex gap-0.5 flex-1">
+            {navTabs.map(({ href, label }) => (
+              <Link
+                key={href}
+                href={href}
+                className="px-3.5 py-[7px] rounded-lg text-[14px] font-medium transition-colors"
+                style={{
+                  color: isActive(href) ? "var(--ink)" : "var(--ink-3)",
+                  fontWeight: isActive(href) ? 600 : 500,
+                  background: "transparent",
+                }}
+                onMouseEnter={(e) => {
+                  if (!isActive(href))
+                    (e.currentTarget as HTMLElement).style.background = "var(--bg-soft)";
+                }}
+                onMouseLeave={(e) => {
+                  (e.currentTarget as HTMLElement).style.background = "transparent";
+                }}
+              >
+                {label}
+              </Link>
+            ))}
+          </nav>
+        </div>
+
+        <div className="flex items-center gap-2 md:gap-2.5 flex-shrink-0">
+          {!isPlatformView && (
+            <button className="af-btn af-btn-primary hidden sm:inline-flex" onClick={onHire}>
+              <PlusIcon /> Hire agent
+            </button>
+          )}
+          <div ref={menuRef} className="relative">
+            <button
+              className="w-[30px] h-[30px] rounded-full grid place-items-center text-[11.5px] font-semibold text-white flex-shrink-0"
+              style={{ background: "linear-gradient(135deg, #4338ca, #7c3aed)" }}
+              title={user.fullName ?? user.email}
+              onClick={() => setMenuOpen((v) => !v)}
+            >
+              {initials}
+            </button>
 
           {menuOpen && (
             <div
@@ -237,7 +245,58 @@ export function TopNav({ onHire }: TopNavProps) {
             </div>
           )}
         </div>
+
+        <button
+          type="button"
+          className="md:hidden flex items-center justify-center p-1.5 rounded-lg transition-colors"
+          style={{ color: "var(--ink-3)" }}
+          aria-label={mobileOpen ? "Close navigation menu" : "Open navigation menu"}
+          onClick={() => setMobileOpen((v) => !v)}
+        >
+          {mobileOpen ? <X size={20} /> : <Menu size={20} />}
+        </button>
       </div>
+    </div>
+
+      {mobileOpen && (
+        <nav
+          className="md:hidden border-t px-4 py-3 space-y-1 w-full"
+          style={{
+            background: "var(--bg-elev)",
+            borderColor: "var(--line)",
+            boxShadow: "var(--shadow-pop)",
+          }}
+        >
+          {!isPlatformView && (
+            <div className="pb-2 sm:hidden">
+              <button
+                className="af-btn af-btn-primary w-full justify-center"
+                onClick={() => {
+                  setMobileOpen(false);
+                  onHire();
+                }}
+              >
+                <PlusIcon /> Hire agent
+              </button>
+            </div>
+          )}
+          {navTabs.map(({ href, label }) => (
+            <Link
+              key={href}
+              href={href}
+              className="block px-3 py-2 rounded-lg text-[14px] font-medium transition-colors"
+              style={{
+                color: isActive(href) ? "var(--ink)" : "var(--ink-3)",
+                fontWeight: isActive(href) ? 600 : 500,
+                background: isActive(href) ? "var(--bg-soft)" : "transparent",
+              }}
+              onClick={() => setMobileOpen(false)}
+            >
+              {label}
+            </Link>
+          ))}
+        </nav>
+      )}
     </header>
   );
 }
