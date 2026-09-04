@@ -186,78 +186,50 @@ class LiteLLMClient:
         except Exception as exc:
             raise LiteLLMError(f"Failed to fetch spend logs: {exc}") from exc
 
-    def get_global_spend_report(self, start_date: str, end_date: str) -> dict[str, dict]:
-        """
-        Fetch aggregated spend+token data per API key hash using /user/daily/activity/aggregated.
-        Returns: {
-            "key_hash": {
-                "spend": 0.0, "total_input_tokens": 0, "total_output_tokens": 0, "total_tokens": 0,
-                "daily_spend": {"2026-06-23": 0.01},
-                "models": {
-                    "openrouter/z-ai/glm-5.2": {"spend": 0.0, "prompt_tokens": 0, "completion_tokens": 0}
-                }
-            }
-        }
+    def get_spend_logs_v2(
+        self,
+        start_date: str,
+        end_date: str,
+        page: int = 1,
+        page_size: int = 1000,
+    ) -> dict:
+        """Return one page of per-request spend logs.
+
+        This is LiteLLM's paginated public spend API. `/spend/logs` is deprecated and
+        aggregates rather than listing rows; `/spend/logs/ui` is internal and absent
+        from the OpenAPI schema, so neither is safe to depend on in client-deployed
+        installs. `/spend/logs/v2` is present in v1.83 and v1.96 alike.
+
+        Dates must be `YYYY-MM-DD HH:MM:SS` — a bare date returns HTTP 400.
+
+        Rows come back oldest-first. That is deliberate and load-bearing: the sync
+        watermark is `max(occurred_at)` of what we have stored, so ascending order
+        makes the watermark double as a resume cursor. Under LiteLLM's default
+        `desc`, a run that stopped partway would land only the newest rows, push the
+        watermark to ~now, and skip everything older for good.
+
+        Returns the raw envelope: {data, total, page, page_size, total_pages,
+        total_is_capped}.
         """
         master_key = self._master_key()
-        aggregated: dict[str, dict] = {}
         try:
             resp = httpx.get(
-                f"{self.config.litellm_base_url}/user/daily/activity/aggregated",
-                params={"start_date": start_date, "end_date": end_date},
+                f"{self.config.litellm_base_url}/spend/logs/v2",
+                params={
+                    "start_date": start_date,
+                    "end_date": end_date,
+                    "page": page,
+                    "page_size": page_size,
+                    "sort_by": "startTime",
+                    "sort_order": "asc",
+                },
                 headers=self._headers(master_key),
-                timeout=30,
+                timeout=60,
             )
             resp.raise_for_status()
-            data = resp.json()
-            results = data.get("results", [])
-            for day in results:
-                date_str = day.get("date")
-                api_keys = day.get("breakdown", {}).get("api_keys", {})
-                for key_hash, key_data in api_keys.items():
-                    if key_hash == "no-key-required":
-                        continue
-                    metrics = key_data.get("metrics", {})
-                    if key_hash not in aggregated:
-                        aggregated[key_hash] = {
-                            "spend": 0.0,
-                            "total_input_tokens": 0,
-                            "total_output_tokens": 0,
-                            "total_tokens": 0,
-                            "daily_spend": {},
-                            "models": {},  # <-- THIS WAS MISSING
-                        }
-                    day_spend = float(metrics.get("spend") or 0.0)
-                    aggregated[key_hash]["spend"] += day_spend
-                    aggregated[key_hash]["total_input_tokens"] += int(metrics.get("prompt_tokens") or 0)
-                    aggregated[key_hash]["total_output_tokens"] += int(metrics.get("completion_tokens") or 0)
-                    aggregated[key_hash]["total_tokens"] += int(metrics.get("total_tokens") or 0)
-                    if date_str:
-                        existing = aggregated[key_hash]["daily_spend"].get(date_str, 0.0)
-                        aggregated[key_hash]["daily_spend"][date_str] = existing + day_spend
-
-                    # Per-model breakdown for this key  <-- THIS BLOCK WAS MISSING
-                    models_in_day = day.get("breakdown", {}).get("models", {})
-                    for model_name, model_data in models_in_day.items():
-                        model_api_keys = model_data.get("api_key_breakdown", {})
-                        if key_hash not in model_api_keys:
-                            continue
-                        m_metrics = model_api_keys[key_hash].get("metrics", {})
-                        if model_name not in aggregated[key_hash]["models"]:
-                            aggregated[key_hash]["models"][model_name] = {
-                                "spend": 0.0,
-                                "prompt_tokens": 0,
-                                "completion_tokens": 0,
-                            }
-                        aggregated[key_hash]["models"][model_name]["spend"] += float(m_metrics.get("spend") or 0.0)
-                        aggregated[key_hash]["models"][model_name]["prompt_tokens"] += int(
-                            m_metrics.get("prompt_tokens") or 0
-                        )
-                        aggregated[key_hash]["models"][model_name]["completion_tokens"] += int(
-                            m_metrics.get("completion_tokens") or 0
-                        )
-
-            return aggregated
-        except Exception as exc:
-            logger.warning("Failed to fetch aggregated daily activity: %s", exc)
-            return {}
+        except httpx.HTTPError as exc:
+            raise LiteLLMError(f"Failed to fetch spend logs page {page}: {exc}") from exc
+        payload = resp.json()
+        if not isinstance(payload, dict):
+            raise LiteLLMError(f"Unexpected /spend/logs/v2 response type: {type(payload).__name__}")
+        return payload

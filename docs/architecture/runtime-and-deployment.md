@@ -61,7 +61,7 @@ Cron delivery is automatic. When a scheduled run has nothing actionable to deliv
 
 ## Telemetry and costs
 
-Agent runtimes report messages and tool-call state to the separate Ingest API using the per-start ingest key. Ingest authentication currently remains valid after stop because status is not checked and the stored key is not cleared. Costs follow a separate path: the API queries LiteLLM and attributes spend through each agent's LiteLLM key identity.
+Agent runtimes report messages and tool-call state to the separate Ingest API using the per-start ingest key. Ingest authentication currently remains valid after stop because status is not checked and the stored key is not cleared. Costs follow a separate path: a CronJob syncs LiteLLM's spend log into the `cost_record` table every 15 minutes, attributes each row through each agent's LiteLLM key identity, and recovers costs LiteLLM failed to record by asking OpenRouter what it charged. The API reads that table, not the proxy.
 
 ## Service deployment
 

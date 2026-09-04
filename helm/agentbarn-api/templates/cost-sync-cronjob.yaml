@@ -1,0 +1,74 @@
+{{- if .Values.costs.sync.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ .Release.Name }}-cost-sync
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "agentbarn-api.labels" . | nindent 4 }}
+    app.kubernetes.io/component: cost-sync
+spec:
+  # Must stay longer than COST_SYNC_MAX_RUNTIME_SECONDS (api/domains/costs/constants.py).
+  # Under Forbid, a run that outlives its window does not overlap — it silently
+  # costs the next tick instead, and the backlog stops draining without any error.
+  schedule: {{ .Values.costs.sync.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            {{- include "agentbarn-api.selectorLabels" . | nindent 12 }}
+            app.kubernetes.io/component: cost-sync
+        spec:
+          restartPolicy: OnFailure
+          # Unlike the event reconciler, this job talks to the Kubernetes API: it
+          # reads the LiteLLM master key out of the `litellm` Secret. That needs the
+          # service account, the namespace, and the mounted kubeconfig below —
+          # without them the pod dies on its first run with
+          # "LiteLLMError: Secret 'litellm' not found".
+          serviceAccountName: {{ .Release.Name }}
+          imagePullSecrets:
+            {{- toYaml .Values.imagePullSecrets | nindent 12 }}
+          containers:
+            - name: cost-sync
+              image: "{{ .Values.registryPrefix }}/{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+              imagePullPolicy: {{ .Values.image.pullPolicy }}
+              # Not `python -m api.domains.costs.sync`: running the module as
+              # __main__ re-imports it under a second module name, so its
+              # CostSynchronizer class no longer matches the one AppModule's
+              # @provider registered a binding for — injector falls back to raw
+              # construction and fails on the Protocol-typed args.
+              command:
+                - python
+                - -c
+                - "from api.domains.costs.sync import main; main()"
+              envFrom:
+                # Carries DB_CONNECTION_URL, AGENT_TOKEN_ENCRYPTION_KEY (to resolve
+                # agent keys to owners) and OPENROUTER_API_KEY (to recover lost costs).
+                - secretRef:
+                    name: {{ .Values.secretName }}
+              env:
+                - name: K8S_NAMESPACE
+                  value: {{ .Release.Namespace }}
+                - name: K8S_KUBECONFIG_PATH
+                  value: /etc/kubeconfig/kubeconfig
+                # Not in the Secret — the Deployment sets it from values too.
+                # /spend/logs/v2 needs the master key, which the virtual key in
+                # litellmApiKeySecretName cannot authenticate, so that secret is
+                # deliberately not mounted here.
+                - name: LITELLM_BASE_URL
+                  value: "{{ .Values.litellmBaseUrl }}"
+              volumeMounts:
+                - name: kubeconfig
+                  mountPath: /etc/kubeconfig
+                  readOnly: true
+              resources:
+                {{- toYaml .Values.worker.resources | nindent 16 }}
+          volumes:
+            - name: kubeconfig
+              secret:
+                secretName: {{ .Values.kubeconfigSecretName | default (printf "%s-kubeconfig" .Release.Name) }}
+{{- end }}

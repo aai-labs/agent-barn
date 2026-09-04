@@ -129,6 +129,16 @@ eventDelivery:
     enabled: true
     schedule: "*/5 * * * *"
 
+costs:
+  sync:
+    enabled: true
+    # Every 15 minutes. Two phases per run: pull LiteLLM's spend log into
+    # cost_record, then recover costs LiteLLM dropped by asking OpenRouter what it
+    # actually charged. The interval must stay above
+    # COST_SYNC_MAX_RUNTIME_SECONDS (api/domains/costs/constants.py) — the job runs
+    # under concurrencyPolicy: Forbid, so an overrunning pass costs the next tick.
+    schedule: "*/15 * * * *"
+
 worker:
   enabled: true
   replicaCount: 1

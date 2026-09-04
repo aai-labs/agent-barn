@@ -6,7 +6,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useCurrentUser } from "@/auth/providers/user-context-provider";
 import { useLogout } from "@/auth/hooks/use-logout";
 import { PlusIcon, UserIcon, UsersIcon, BuildingIcon, LogOutIcon, ShieldIcon, ServerIcon } from "@/components/icons";
-import { FileText, Sparkles } from "lucide-react";
+import { FileText, Receipt, Sparkles } from "lucide-react";
 import { LogoMark } from "@/components/logo-mark";
 import { OrgSwitcher } from "@/features/organizations/components/org-switcher";
 import { useActiveOrgRole } from "@/features/organizations/hooks/use-active-org-role";
@@ -36,6 +36,7 @@ export function TopNav({ onHire }: TopNavProps) {
         { href: "/dashboard/platform/users", label: "Users" },
         { href: "/dashboard/platform/organizations", label: "Organizations" },
         { href: "/dashboard/platform/event-deliveries", label: "Event Deliveries" },
+        { href: "/dashboard/platform/costs", label: "Costs" },
         { href: "/dashboard/platform/templates", label: "Templates" },
         { href: "/dashboard/platform/skills", label: "Skills" },
       ]
@@ -200,6 +201,14 @@ export function TopNav({ onHire }: TopNavProps) {
                     onClick={() => setMenuOpen(false)}
                   >
                     <ServerIcon /> Event Deliveries
+                  </Link>
+                  <Link
+                    href="/dashboard/platform/costs"
+                    className="af-hover-bg w-full text-left flex items-center gap-2.5 px-3.5 py-2 text-[13.5px]"
+                    style={{ color: "var(--ink-2)" }}
+                    onClick={() => setMenuOpen(false)}
+                  >
+                    <Receipt size={14} /> Costs
                   </Link>
                   <Link
                     href="/dashboard/platform/templates"
