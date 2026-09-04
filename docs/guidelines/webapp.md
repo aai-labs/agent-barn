@@ -2,14 +2,9 @@
 
 ## Project-defining frontend rules
 
-- Feature logic lives under `../../ui/src/features/<feature>/`.
-- Normal application API calls use `../../ui/src/shared/api`.
-- Important API responses are validated with feature-local Zod schemas.
-- Query keys use centralized helpers rather than scattered literal arrays.
 - Server Components are the App Router default; add `"use client"` only for client-owned behavior.
 - Use the shared branded `ConfirmationDialog` from `../../ui/src/components/confirmation-dialog.tsx` for every user confirmation, including publish, discard, destructive, and unsaved-change flows. Never use browser-native `window.confirm`, `window.alert`, or `alert()` in the UI.
 - Use the shadcn `Select` primitives from `../../ui/src/components/ui/select.tsx` for user-facing option selectors; do not add native `<select>` controls. Keep `SelectItem` elements inside a `SelectGroup`.
-- Select loading and error boundaries according to who owns the asynchronous work.
 
 Read `../architecture/ui.md` before changing authentication, organization scoping, provider composition, query-cache isolation, or SSE behavior.
 
@@ -34,8 +29,9 @@ Optional additions include `providers/`, `stores/`, `constants.ts`, and a small 
 
 - Export a Zod schema and its inferred type from the same feature-local file.
 - Avoid handwritten interfaces that duplicate schema-inferred API types.
-- Use the shared client's existing snake_case/camelCase transformations.
-- Do not introduce ad hoc fetch wrappers or Axios instances for ordinary app API calls.
+- Route ordinary app HTTP calls through `../../ui/src/shared/api`, reusing its
+  snake_case/camelCase transformations; do not add ad hoc fetch wrappers or
+  Axios instances.
 - Supply a Zod schema to the API client for important responses.
 - Keep the SSE log proxy as an explicit streaming exception; do not generalize it into the normal request pattern.
 
@@ -76,14 +72,19 @@ Optional additions include `providers/`, `stores/`, `constants.ts`, and a small 
 
 ## UI feature workflow
 
+For a typical UI feature:
+
 1. Add or update Zod schemas and inferred types.
 2. Add or update centralized query keys.
 3. Add query and mutation hooks through the shared API client.
 4. Build feature components.
 5. Compose them from `../../ui/src/app/` routes.
-6. Add or update Playwright coverage following `testing.md`.
-7. Run the UI checks listed in `testing.md`.
-8. Apply UI versioning rules from `operations.md` when release preparation is requested.
+6. Add or update Playwright coverage using the guidance in
+   [`testing.md`](testing.md#ui-and-browser-tests).
+7. Run the applicable UI checks listed in
+   [`testing.md`](testing.md#verification-commands).
+8. Apply the version rules in [`operations.md`](operations.md#versioning-and-releases)
+   only when release preparation is requested.
 
 ## Maintaining conventions
 

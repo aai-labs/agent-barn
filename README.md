@@ -9,7 +9,7 @@
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
 [![Discord](https://img.shields.io/badge/discord-join-5865F2)](https://discord.gg/A3vJF5ZKnu)
 
-[Website](https://agentbarn.dev) · [Docs](https://agentbarn.dev/guide) · [Recipes](https://agentbarn.dev/recipes) · [Discord](https://discord.gg/A3vJF5ZKnu)
+[Website](https://agentbarn.dev) · [Docs](https://agentbarn.dev/guides) · [Recipes](https://agentbarn.dev/recipes) · [Discord](https://discord.gg/A3vJF5ZKnu)
 
 </div>
 
@@ -39,7 +39,7 @@ Credentials are encrypted at rest in your own PostgreSQL.
 - [Development](#development) — [native](#native-non-docker-development), [k3d](#local-kubernetes-k3d), [migrations](#database-migrations), [tests](#tests-and-checks), [troubleshooting](#troubleshooting)
 - [Deploying to Kubernetes](#deploying-to-kubernetes)
 - [Repository layout](#repository-layout)
-- [Getting help](#getting-help) · [Contributing](#contributing)
+- [Getting help and contributing](#getting-help-and-contributing)
 
 ## Quick start
 
@@ -52,9 +52,12 @@ version with screenshots is at
 
 **Required software**
 
-- **Docker** — everything runs in containers, including the local Kubernetes cluster.
+- **Git** — used to clone the repository.
+- **Docker with Compose v2** — everything runs in containers, including the local Kubernetes cluster.
 - **`bash`** — `run.sh` and `stop.sh` are shell scripts. On Windows, see [Windows](#windows).
 - **`kubectl`** — used to seed the cluster namespace and secret.
+- **OpenSSL** — used below to generate local keys.
+- **curl** — used by the verification steps.
 
 Python and Node.js are **not** needed to run the app; they're only for the
 native `dev-*` targets, tests, and lint (see [Development](#development)).
@@ -62,7 +65,10 @@ native `dev-*` targets, tests, and lint (see [Development](#development)).
 **Required credentials**
 
 1. An **[OpenRouter](https://openrouter.ai) API key** — every agent's model calls route through it.
-2. A **GitHub PAT** with read access to [`aai-labs/aai-cli`](https://github.com/aai-labs/aai-cli) — the agent base-image build clones that repository.
+2. A **GitHub token** — the current agent base-image Dockerfiles use it for an
+   authenticated clone of the public
+   [`aai-labs/aai-cli`](https://github.com/aai-labs/aai-cli) repository. It does
+   not need private-repository access.
 
 **Local ports** — these must be free:
 
@@ -76,8 +82,8 @@ native `dev-*` targets, tests, and lint (see [Development](#development)).
 | `8002`  | Communications gateway     |
 | `16443` | k3d Kubernetes API         |
 
-Every one of these is overridable — see [Multiple clusters](#local-kubernetes-k3d)
-if something already has the port.
+Make sure these ports are free before starting the full stack. The configurable
+ports are identified in `.env.spec` and the k3d helper scripts.
 
 ### 1. Clone the repository
 
@@ -97,21 +103,23 @@ anything not listed here has a working local default:
 
 | Variable                                                             | What to put in it                                                                                                       |
 | -------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`, `POSTGRES_PORT` | anything you like — the database is created on first run                                                                |
+| `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`                  | local credentials and a database name; the database is created on first run                                             |
+| `POSTGRES_PORT`                                                     | a free host port; keep the default `5432` when available                                                                |
 | `SECRET_SIGNING_KEY`                                                 | any random string                                                                                                       |
 | `PLATFORM_ADMIN_CREDENTIALS`                                         | `email:password` for the admin account created at startup — the password needs 8+ characters, upper, lower, and a digit |
 | `ENVIRONMENT`, `UI_APP_URL`, `API_PORT`                              | leave the `.env.spec` defaults                                                                                          |
 | `AGENT_TOKEN_ENCRYPTION_KEY`                                         | a Fernet key — generate it below                                                                                        |
 | `OPENROUTER_API_KEY`                                                 | your OpenRouter key; passed to LiteLLM and used for the model picker                                                    |
 | `LITELLM_MASTER_KEY`                                                 | a **stable** admin key — generate it below                                                                              |
+| `AGENT_LITELLM_BASE_URL`                                             | `http://host.docker.internal:7070` so agent pods can reach LiteLLM through the host                                    |
 | `OPENCLAW_IMAGE`, `HERMES_IMAGE`                                     | full `name:tag`; each tag must equal the matching `openclaw-base/VERSION` / `hermes-base/VERSION`                       |
-| `GH_TOKEN`                                                           | your GitHub PAT from above                                                                                              |
+| `GH_TOKEN`                                                           | the GitHub token from above; no private-repository access is required                                                   |
 
 Generate the two keys:
 
 ```bash
 # AGENT_TOKEN_ENCRYPTION_KEY — encrypts platform credentials at rest
-python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+openssl rand -base64 32 | tr '+/' '-_'
 
 # LITELLM_MASTER_KEY
 echo "sk-$(openssl rand -hex 16)"
@@ -132,13 +140,13 @@ the cluster is up.
 ```
 
 This validates `.env`, brings up the k3d cluster and LiteLLM, builds and loads
-the agent base images, runs database migrations, then starts `db`, `redis`,
-`api`, `worker`, `communications`, and `ui` — all with hot reload — and follows
+the agent base images, starts `db` and `redis`, runs database migrations, then
+starts `api`, `worker`, `communications`, and `ui` with hot reload and follows
 the logs. `Ctrl-C` detaches without stopping anything; use `./run.sh --detach`
 to skip the logs entirely.
 
-If a required `.env` value is missing, `run.sh` fails immediately and lists
-exactly which ones, rather than partway through or at agent-start.
+If a startup value checked by `run.sh` is missing, the script fails immediately
+and lists it.
 
 > [!NOTE]
 > The **first** run builds both agent base images from scratch and takes a
@@ -200,6 +208,7 @@ Communication Connection; the UI walks through each platform's setup.
 | `./run.sh --detach` | same, without following logs                                            |
 | `./stop.sh`         | stop containers; DB/redis data and the k3d cluster survive              |
 | `./stop.sh --clean` | also delete the k3d cluster (images reload next run); volumes untouched |
+| `make restart-ui`   | refresh the running Docker UI after adding an App Router directory      |
 
 `make run`, `make stop`, and `make stop-clean` are thin wrappers around the same
 scripts. Volumes are never deleted by either script.
@@ -247,7 +256,7 @@ auto-attached — Excel needs no credential at all, since it works on local file
 Agents also reach a self-hosted Firecrawl for web retrieval.
 
 Building one is a
-[contribution we'd welcome](CONTRIBUTING.md#contributing-a-template-or-skill).
+[contribution we'd welcome](CONTRIBUTING.md#contribute-a-template-or-bundled-skill).
 Open a Discussion first so we can tell you if one is already in progress.
 
 ### Runtimes
@@ -282,34 +291,36 @@ builders that turn an agent record into Kubernetes resources.
 ## Development
 
 `./run.sh` is enough for most work. For faster iteration, or to run only part of
-the stack, use the native path below. Repository-wide engineering rules are in
-[AGENTS.md](AGENTS.md) and [`docs/INDEX.md`](docs/INDEX.md); domain terminology
-is in [CONTEXT.md](CONTEXT.md).
+the stack, use the native path below. The contribution workflow and engineering
+context routes start in [CONTRIBUTING.md](CONTRIBUTING.md).
 
-Native development, tests, and lint additionally need Python `>=3.14` +
-[uv](https://github.com/astral-sh/uv) and Node.js `24` + [pnpm](https://pnpm.io/).
+Native development, tests, and lint additionally need Make, Python `3.14` +
+[uv](https://github.com/astral-sh/uv) and Node.js `24` +
+[pnpm `11.17.0`](https://pnpm.io/), matching the repository and CI pins.
 
 ### Native (non-Docker) development
 
-Each command watches its own source. Run the ones you need in separate
-terminals, alongside `make db-up` (and `make redis-up` for the worker):
+Each `dev-*` service target watches its own source. Run the ones you need in
+separate terminals, alongside `make db-up`:
 
 ```bash
-make setup         # one-time: uv sync + pnpm install, and copies .env.spec to .env
+make setup         # uv sync + pnpm install; creates .env from .env.spec if absent
 make db-up         # Postgres only
 make migrate       # apply migrations
 make dev-api       # API on :8000; also starts Ingest :8001 and Communications :8002
 make dev-ui        # UI on :3000, hot reload
-make redis-up      # Redis, needed by the worker
 make dev-worker    # Dramatiq worker, hot reload
 make dev-ingest    # Ingest only (normally started by dev-api)
 make dev-communications  # Communications only (normally started by dev-api)
 make reconcile     # one-shot repair pass for stuck/unpublished deliveries
 ```
 
-`make db-down` / `make redis-down` stop them; `make db-logs` / `db-restart`
-manage Postgres. This path uses host ports `3000`, `8000`, `8001`, and `8002`,
-so don't run it alongside `./run.sh`'s containers.
+`make db-down` stops PostgreSQL; `make db-logs` and `make db-restart` manage it.
+The worker and reconciliation command also need a Redis server reachable at the
+`REDIS_URL` in `.env`. The Compose Redis service does not publish a host port,
+so `make redis-up` alone cannot serve those host-run processes. This path uses
+host ports `3000`, `8000`, `8001`, and `8002`, so don't run it alongside
+`./run.sh`'s containers.
 
 Two gotchas specific to this path:
 
@@ -320,7 +331,7 @@ Two gotchas specific to this path:
 - **Set `LITELLM_BASE_URL=http://127.0.0.1:7070`.** It's blank in `.env.spec`,
   and unlike the Docker path nothing here fills it in. `create_agent` silently
   skips minting a LiteLLM key when it's empty
-  ([`service.py:820`](api/domains/agents/service.py#L820), no error either way),
+  ([agent service](api/domains/agents/service.py), no error either way),
   so the agent is created and _looks_ fine but can never answer.
 
 Starting agents still needs a k3d cluster with loaded images, even natively.
@@ -328,8 +339,8 @@ Bring one up with `bash docker/k3d/k3d-up.sh` and
 `bash docker/k3d/k3d-load-images.sh`, then point the host API at it:
 
 ```bash
-export KUBECONFIG=.k3d/kubeconfig-host.yaml
-export K8S_KUBECONFIG_PATH=.k3d/kubeconfig-host.yaml
+export KUBECONFIG="$PWD/.k3d/kubeconfig-host.yaml"
+export K8S_KUBECONFIG_PATH="$PWD/.k3d/kubeconfig-host.yaml"
 ```
 
 ### Local Kubernetes (k3d)
@@ -337,8 +348,8 @@ export K8S_KUBECONFIG_PATH=.k3d/kubeconfig-host.yaml
 Agents run as Kubernetes resources, so `./run.sh` brings up a cluster
 automatically. We use [k3d](https://k3d.io) (k3s in Docker) from a helper
 container, so no host `k3d` or `helm` install is needed — only Docker and
-`kubectl`. It's [supported in GitHub Actions](https://github.com/AbsaOSS/k3d-action),
-so the same setup backs CI (the `test-k8s` job in `.github/workflows/api.yml`).
+`kubectl`. The Kubernetes integration job provisions its own k3d cluster with
+[`AbsaOSS/k3d-action`](https://github.com/AbsaOSS/k3d-action).
 
 `./run.sh` drives `docker/k3d/k3d-up.sh` (cluster + LiteLLM) and
 `docker/k3d/k3d-load-images.sh` (agent base images). Both are idempotent and
@@ -364,8 +375,9 @@ reached differently depending on where the client runs:
   API running **inside** Docker (`run.sh` points `API_K8S_KUBECONFIG_PATH` here
   automatically).
 
-Agent pods inside k3d reach LiteLLM at `http://host.docker.internal:7070` — set
-`AGENT_LITELLM_BASE_URL` to that in `.env` if you override the default port. On
+Agent pods inside k3d reach LiteLLM at `http://host.docker.internal:7070`, so
+`AGENT_LITELLM_BASE_URL` must use that address (and the selected LiteLLM port).
+On
 Docker Desktop that name resolves inside pods automatically; on a native Linux
 docker engine, `k3d-up.sh` adds a CoreDNS entry (via the `coredns-custom` config
 map) mapping it to the cluster network gateway. No manual setup on either
@@ -415,74 +427,38 @@ port is already in use.
 </details>
 
 <details>
-<summary><b>Multiple clusters (e.g. one per worktree)</b></summary>
+<summary><b>Parallel worktrees</b></summary>
 
-The cluster name and its two host ports default to a single shared environment.
-Override them as environment variables (not in `.env`) to run a second cluster
-alongside the first:
-
-| Variable                                              | Default                         | What it names                   |
-| ----------------------------------------------------- | ------------------------------- | ------------------------------- |
-| `K3D_CLUSTER`                                         | `agentfarm-dev`                 | the k3d cluster                 |
-| `K3D_API_PORT`                                        | `16443`                         | host port for the k8s API       |
-| `LITELLM_PORT`                                        | `7070`                          | host port for the LiteLLM proxy |
-| `LITELLM_CONTAINER_NAME`, `LITELLM_DB_CONTAINER_NAME` | `aai_litellm`, `aai_litellm_db` | the LiteLLM containers          |
-
-```bash
-K3D_CLUSTER=agentfarm-mytask K3D_API_PORT=16444 LITELLM_PORT=7071 \
-  LITELLM_CONTAINER_NAME=aai_litellm_mytask \
-  LITELLM_DB_CONTAINER_NAME=aai_litellm_db_mytask \
-  ./run.sh
-```
-
-Without an override this **adopts an existing cluster of the default name**
-rather than creating a new one — starting it if stopped and re-applying the
-namespace and `litellm` secret. That's what you want for one shared environment,
-and not what you want in a second worktree.
+The k3d and LiteLLM helpers expose environment-variable overrides for their
+names and ports, but the full Compose application still uses shared container
+names, volumes, and ports. Two complete `./run.sh` stacks therefore cannot run
+side by side. Share one full stack, or run only the required native services
+against separately named dependencies.
 
 </details>
 
 ### Windows
 
 The k3d flow needs **`bash`** — `run.sh`/`stop.sh` and the underlying
-`docker/k3d/*.sh` scripts are shell scripts. Two supported ways:
+`docker/k3d/*.sh` scripts are shell scripts. Two practical options:
 
-- **WSL2 (recommended)** — Docker Desktop already uses the WSL2 backend, so
-  `./run.sh` works unchanged, and that's the path CI exercises. Docker Desktop
-  publishes container ports to `localhost` inside both Windows and your WSL2
-  distro, so no manual port forwarding is needed.
+- **WSL2 (recommended)** — enable Docker Desktop integration for the distro,
+  then run `./run.sh` inside WSL2.
 - **`bash` on `PATH`** — e.g. Git Bash or MSYS2; run `./run.sh` from that shell.
 
 Requires Docker Desktop in Linux-container mode (the default).
 
 ### Database migrations
 
-Alembic, run from `api/`. The Makefile wraps every command, and `./run.sh`
-applies migrations for you before starting the stack.
-
-```bash
-make migrate          # apply everything up to head
-make makemigrations   # autogenerate a revision (prompts for the message)
-make rollback         # downgrade one revision
-make merge-heads      # merge divergent heads after a branchy merge
-make check-migrations # CI guard: fail unless there is exactly one head
-```
+`./run.sh` applies pending migrations after the database is ready and before
+starting the application services. Migration authoring, review, and verification
+commands live in the
+[operations guidelines](docs/guidelines/operations.md#database-migrations).
 
 ### Tests and checks
 
-```bash
-make test-api      # unit + integration, minus the k8s client test
-                   # (integration needs Docker for Testcontainers)
-make test-api-k8s  # the Kubernetes client integration test, on its own
-make test-ui       # UI unit tests
-make check-api     # ruff lint + format check + ty type-check
-make lint-ui       # UI lint
-make check-ui      # UI type-check (tsc --noEmit)
-make coverage      # API tests with a coverage report
-```
-
-Conventions and what CI enforces: [CONTRIBUTING.md](CONTRIBUTING.md#tests) and
-[`docs/guidelines/testing.md`](docs/guidelines/testing.md).
+The authoritative command list, prerequisites, and change-to-check matrix live
+in the [testing guidelines](docs/guidelines/testing.md).
 
 ### Troubleshooting
 
@@ -567,11 +543,11 @@ above.
 <details>
 <summary><b>Agent pod <code>CrashLoopBackOff</code> with <code>OOMKilled</code> / exit code 137</b></summary>
 
-The Docker VM ran out of memory, not the pod's own limit — agent pods declare
-none, so the kernel picks whichever process spikes, often while the runtime
-unpacks a plugin. Check `docker stats --no-stream` and the Docker Desktop memory
-allocation; a full local stack plus a k3d cluster plus agents wants noticeably
-more than 8 GiB.
+Hermes and OpenClaw pods request `320Mi` and have a `1Gi` memory limit. Inspect
+the pod with `kubectl -n agent-farm describe pod POD_NAME` to see whether it
+hit that limit. Exit code 137 can also result from memory pressure on the k3d
+node or Docker VM; check `docker stats --no-stream` and the Docker Desktop
+memory allocation too.
 
 </details>
 
@@ -604,11 +580,12 @@ APT_MIRROR=mirror.csclub.uwaterloo.ca bash docker/k3d/k3d-load-images.sh
 
 Requires a cluster with an ingress controller, a cert-manager `ClusterIssuer`, a
 `StorageClass`, and an OpenRouter API key. On your machine: `kubectl`, Helm 3,
-[Helmfile](https://helmfile.readthedocs.io/) 0.171+, and the `helm-diff` plugin.
+[Helmfile](https://helmfile.readthedocs.io/) `0.171.0` (the CI-pinned version),
+and the `helm-diff` plugin.
 
 ```bash
 cp .env.deploy.spec .env.deploy
-# fill in registry, image tags, passwords, hosts, and keys
+# replace every example image tag; fill in registry, passwords, hosts, and keys
 
 ./deploy.sh         # kubectl apply of the deploy RBAC, then helmfile sync
 ```
@@ -623,9 +600,10 @@ Ordering, values, and secrets live in
 AAI Labs runs two deploy paths of its own on top of the same charts:
 `deploy.yml` ships every `staging`/`main` push to the k3s testing-ground cluster,
 and `deploy-public.yml` deploys a `vX.Y.Z` tag to the hosted public Talos
-cluster, pushing images pinned to that tag to `registry.agentbarn.dev`. A manual
-dispatch of `deploy-public.yml` takes an existing tag, and its `skip_build` input
-reuses the images already in the registry for it.
+cluster. It pushes API/UI images under that release tag and runtime images under
+their independent `VERSION` tags to `registry.agentbarn.dev`. A manual dispatch
+of `deploy-public.yml` takes an existing release tag, and its `skip_build` input
+reuses the explicitly tagged images already in the registry.
 
 Background:
 [`docs/architecture/runtime-and-deployment.md`](docs/architecture/runtime-and-deployment.md)
@@ -647,26 +625,17 @@ and [`docs/guidelines/operations.md`](docs/guidelines/operations.md).
 
 Two dependencies live outside it: the Hermes and OpenClaw runtimes are upstream
 projects, and `aai-cli`, the tool the bundled skills drive, is built from a
-separate AAI Labs repository at base-image build time. You can run and deploy the
-published base images without it; rebuilding them yourself needs access to that
-repository. Third-party components keep their own licences.
+separate public AAI Labs repository at base-image build time. You can run and
+deploy the published base images without rebuilding them. The current local
+builder requires a GitHub token only to authenticate that public clone; it does
+not require private-source permission. Third-party components keep their own
+licences.
 
-## Getting help
+## Getting help and contributing
 
-| What                                    | Where                                                                                                     |
-| --------------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| Questions, setup help, "is this a bug?" | [Discord `#support`](https://discord.gg/A3vJF5ZKnu)                                                       |
-| Confirmed bugs                          | [GitHub Issues](https://github.com/aai-labs/agent-barn/issues)                                            |
-| Feature requests and design debate      | [GitHub Discussions](https://github.com/aai-labs/agent-barn/discussions)                                  |
-| Security vulnerabilities                | [Private reporting](https://github.com/aai-labs/agent-barn/security/advisories/new), never a public issue |
-
-A maintainer responds to every `#support` post within 3 business days.
-
-## Contributing
-
-Start with [`good first issue`](https://github.com/aai-labs/agent-barn/labels/good%20first%20issue).
-Setup, conventions, and the review process are in [CONTRIBUTING.md](CONTRIBUTING.md).
-Get a PR merged and you get the Contributor role in Discord.
+Support, issue, discussion, and pull-request routes are collected in
+[CONTRIBUTING.md](CONTRIBUTING.md). Report vulnerabilities privately by
+following [SECURITY.md](SECURITY.md).
 
 ## Licence
 

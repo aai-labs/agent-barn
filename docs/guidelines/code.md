@@ -1,21 +1,10 @@
 # Code guidelines
 
-## Project-defining rules
+## Scope and context
 
-- API routes stay thin: authenticate, parse, delegate, return.
-- Services own business rules, permission-sensitive behavior, and cross-domain orchestration.
-- Repositories own query composition and persistence details.
-- Reuse dependency injection and `PostgresRepositoryDelegate` unless a workflow needs explicit transaction control.
-- Keep database models and API DTOs as distinct types.
-- Keep changes scoped; broad refactors require an explicit request.
-
-For current domain relationships and API runtime behavior, follow `../INDEX.md` rather than restating architecture here.
-
-## Rule language
-
-- `MUST`: mandatory unless the user explicitly requests otherwise.
-- `SHOULD`: strong default; deviate only for a concrete reason.
-- `MAY`: optional and situational.
+For current domain relationships and API runtime behavior, follow
+`../INDEX.md` rather than restating architecture here. Keep changes scoped;
+broad refactors require an explicit request.
 
 ## API domain structure
 
@@ -28,7 +17,11 @@ service.py      # business rules and orchestration
 routes.py       # HTTP handlers and dependency wiring
 ```
 
-Add extra files only for a real responsibility such as exceptions, parsers, builders, or provider-specific behavior. Register product routers in `../../api/api_app.py`; Ingest routes use the separate composition described in `../architecture/api.md`.
+Add extra files only for a real responsibility such as exceptions, parsers,
+builders, or provider-specific behavior. Register product routers in
+`../../api/api_app.py`, Ingest routers in `../../api/ingest_app.py`, and
+Communications routers in `../../api/communications_app.py`. Their separate
+composition roots are described in `../architecture/api.md`.
 
 Public service and repository methods MUST have explicit type hints. New abstractions SHOULD match the neighboring domain before introducing a new pattern.
 
@@ -70,26 +63,26 @@ Before changing tenant ownership, authorization, or cross-domain relationships, 
 
 ## Authorization enforcement
 
-Any code that lets a user access, list, or mutate an Agent or a subordinate resource (conversations, tool calls, activity, logs, costs, Secrets, Skills, configuration) MUST enforce the permission-backed RBAC model in `../features/rbac/IMPLEMENTATION-BRIEF.md`, not just tenant isolation:
-
-- Visibility MUST be enforced in the repository query (accessible-Agent join), never by fetching then filtering in the service.
-- Mutations MUST check the actor's effective Permission through Organization authority or Agent Access, resolved fresh per request; never trust a cached role name or a client-supplied flag.
-- New subordinate-resource endpoints MUST reuse the existing accessible-Agent query pattern rather than writing an independent visibility check.
-- Use `404` for absent/inaccessible resources and `403` for visible-but-unauthorized operations, per the brief's HTTP semantics.
-
-This applies even when the change looks unrelated to RBAC on its surface (e.g. a new activity or cost endpoint) — new resource surfaces are a common place for authorization gaps to slip in silently.
+The permission-backed model in
+`../features/rbac/IMPLEMENTATION-BRIEF.md` is authoritative for every surface
+that accesses or mutates an Agent or subordinate resource. Read it before
+designing the query, service permission check, or HTTP response.
 
 ## API feature workflow
 
-1. Update domain and API models.
-2. Add repository behavior.
-3. Add service logic and authorization.
+For a typical API feature:
+
+1. Update the domain and API models.
+2. Add repository behavior, including tenant-aware visibility where required.
+3. Add service logic, authorization, and error translation.
 4. Add or update thin routes.
-5. Register a new router when needed.
-6. Add a migration for schema changes.
-7. Add tests following `testing.md`.
-8. Run the API checks and tests listed in `testing.md`.
-9. Apply service versioning rules from `operations.md` when release preparation is requested.
+5. Register a new router in the appropriate composition root when needed.
+6. Add and review an Alembic migration for schema changes.
+7. Add tests using the coverage guidance in [`testing.md`](testing.md).
+8. Run the applicable API checks and tests listed in
+   [`testing.md`](testing.md#verification-commands).
+9. Apply the version rules in [`operations.md`](operations.md#versioning-and-releases)
+   only when release preparation is requested.
 
 ## Code style
 
@@ -99,24 +92,17 @@ This applies even when the change looks unrelated to RBAC on its surface (e.g. a
 - Use canonical domain terms from `../../CONTEXT.md`.
 - Comments should explain a non-obvious constraint, not narrate the implementation.
 
-## Review priorities
+## API review priorities
 
-Review in this order:
+After applying the repository-wide review protocol in `../../AGENTS.md`, review
+API changes in this order:
 
 1. Correctness and regressions.
-2. Data-contract and schema safety.
-3. Tenant isolation, authentication, and authorization, including Agent Access/Permission enforcement per `../features/rbac/IMPLEMENTATION-BRIEF.md` for any Agent or subordinate-resource surface, even when the diff is not framed as an RBAC change.
-4. Transaction and external-system failure behavior.
+2. Data-contract, migration, and schema safety.
+3. Tenant isolation, authentication, and authorization, including the Agent
+   Access/Permission rules in
+   `../features/rbac/IMPLEMENTATION-BRIEF.md` for Agent and subordinate-resource
+   surfaces.
+4. Transaction boundaries and external-system failure behavior.
 5. Test coverage gaps.
 6. Maintainability and style.
-
-## Definition of done
-
-- Behavior covers the happy path and important edge cases.
-- Validation, tenancy, and authorization are correct.
-- Required tests pass.
-- Lint, formatting, and type checks pass for touched areas.
-- Schema changes include a migration.
-- Agent-facing docs are updated when invariants, boundaries, or state models change.
-- Release versions are updated only when requested and according to `operations.md`.
-- The diff contains no unrelated refactor or style churn.

@@ -40,11 +40,13 @@ We do not currently run a paid bug bounty.
 
 In scope:
 
-- The control plane: the API, its Dramatiq worker, and the ingest app
+- The control plane: the API, its Dramatiq worker, the ingest app, and the
+  Communications gateway
 - The web UI
 - The Helm charts, Helmfile, and cluster RBAC manifests in this repository
-- The agent base images we publish, including their start scripts, health and
-  metrics endpoints, and telemetry plugins
+- The agent runtime packaging we publish: base images, start scripts, health
+  and metrics endpoints, and telemetry plugins delivered through runtime
+  configuration
 - The bundled agent templates and skill documentation, including prompt-level
   issues that let an agent escape the policy it is given
 
@@ -71,15 +73,15 @@ triage an out-of-scope report than miss an in-scope one.
 
 ## Supported versions
 
-There is no single product version number yet. The API and UI ship as separately
-tagged container images, each Helm chart carries its own packaging version, and
-the commit is what identifies a deployment.
+Public releases use a `vX.Y.Z` git tag that identifies the API and UI deployment
+bundle. Helm charts and the Hermes and OpenClaw runtime images retain independent
+versions.
 
 | What | Supported |
 |---|---|
-| Current `main` | Yes. Security fixes land here first |
-| The latest published API and UI image tags | Yes |
-| Older image tags | No. Upgrade to the current tags |
+| Current `main` | Yes; this is the development head |
+| Latest published `vX.Y.Z` release | Yes |
+| Older releases or image tags | No; upgrade to a supported version |
 
 Before 1.0, expect the supported window to be short. Track `main` and stay
 current.
@@ -94,23 +96,27 @@ yours:
   `AGENT_TOKEN_ENCRYPTION_KEY` are the roots of that trust: keep them out of
   version control and treat rotation as a migration, since existing tokens and
   encrypted values depend on the current keys
-- The API and UI ingresses are internet-facing by design, with TLS from your
-  cert-manager issuer. Put your own network controls in front of them if that is
-  not what you want, and set a real Grafana admin password if you deploy the
-  monitoring chart, whose Grafana is also ingress-exposed
+- The API, UI, and Communications provider-webhook ingress are internet-facing
+  by design, with TLS from your cert-manager issuer. The Communications runtime
+  endpoints and Ingest stay internal. Put your own network controls in front of
+  public routes if that is not what you want, and set a real Grafana admin
+  password if you deploy the monitoring chart, whose Grafana is also
+  ingress-exposed
 - Model traffic leaves your network. Agents call the LiteLLM proxy in your
   namespace, which forwards to OpenRouter. Scope that key and set a credit limit
   on it
 - Database encryption at rest, network policy, and node hardening are your
   cluster's concern
-- The deploy and the control plane use namespace-scoped Kubernetes credentials.
-  Keep them namespace-scoped; the API creates agent workloads in its own
-  namespace and does not need more
+- Initial bootstrap credentials may need permission to create the namespace and
+  RBAC prerequisites. Give routine deploys only the permissions they need, and
+  use a separate namespace-scoped identity for the API pod; it creates agent
+  workloads only in its own namespace
 - Agents act with the permissions of the credentials you give them. Scope those
   credentials as narrowly as the task allows, and use the per-agent channel
   allowlists and DM policies rather than relying on the prompt alone
 
 [`docs/architecture/runtime-and-deployment.md`](docs/architecture/runtime-and-deployment.md)
 and [`docs/guidelines/operations.md`](docs/guidelines/operations.md) cover each of
-these, and the [self-hosting guide](https://agentbarn.dev/guide) walks through a
+these, and the
+[self-hosting guide](https://agentbarn.dev/guides/self-hosting) walks through a
 deployment end to end.
