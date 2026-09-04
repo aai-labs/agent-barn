@@ -1,7 +1,5 @@
 "use client";
 
-import { Sparkles } from "lucide-react";
-
 import { formatCallSpend, formatDuration, formatTokens } from "../format";
 import type { CostRecord, PlatformCostRecord } from "../schemas";
 
@@ -61,19 +59,14 @@ export function CostRow({ record, grid, showOrganization }: CostRowProps) {
         {formatDuration(record.requestDurationMs)}
       </span>
 
+      {/* Where a cost came from — LiteLLM directly, or recovered from OpenRouter
+          afterwards — is our plumbing, not something a reader can act on, so the
+          row shows the amount and nothing else. The `healed` flag is still on the
+          record for support and debugging. */}
       <span
-        className="text-right font-medium flex items-center justify-end gap-1"
+        className="text-right font-medium"
         style={{ color: failed ? "var(--ink-4)" : "var(--ink)" }}
       >
-        {/* A recovered cost is worth marking: it is why a historical total can
-            go up between two views of the same period. */}
-        {record.healed && (
-          <Sparkles
-            size={11}
-            style={{ color: "var(--accent-color)" }}
-            aria-label="Cost recovered from OpenRouter"
-          />
-        )}
         {failed ? "—" : formatCallSpend(record.spend)}
       </span>
     </div>

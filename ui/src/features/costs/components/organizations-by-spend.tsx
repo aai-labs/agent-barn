@@ -1,7 +1,20 @@
 "use client";
 
+import { Fragment } from "react";
+
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+
 import { formatSpend } from "../format";
 import type { OrganizationSpend } from "../schemas";
+
+/** Plain-English answer to "why is there a row with no organization?". */
+const UNATTRIBUTED_HINT =
+  "Spend we can't trace to a specific agent, so it can't be billed to an " +
+  "organization. Mostly failed calls that cost nothing.";
 
 interface OrganizationsBySpendProps {
   organizations: OrganizationSpend[];
@@ -37,15 +50,24 @@ export function OrganizationsBySpend({
           const name = organization.organizationName ?? "Unattributed";
           const width = top > 0 ? (organization.spend / top) * 100 : 0;
 
-          return (
+          const isUnattributed = id === null;
+
+          const row = (
             <button
-              key={id ?? "unattributed"}
               type="button"
-              // The unattributed bucket has no organization to filter by.
-              disabled={id === null}
-              onClick={() => onSelect(isActive ? null : { id: id!, name })}
+              // The unattributed bucket has no organization to filter by. It is
+              // marked rather than `disabled` because a disabled button emits no
+              // pointer events and takes no focus, which would put its tooltip out
+              // of reach of both the mouse and the keyboard.
+              aria-disabled={isUnattributed}
+              onClick={() => {
+                if (isUnattributed) return;
+                onSelect(isActive ? null : { id: id!, name });
+              }}
               data-testid="organization-spend-row"
-              className="relative grid grid-cols-[minmax(140px,1fr)_90px_90px_110px] items-center gap-3 px-2 py-2 text-left text-[13px] rounded disabled:cursor-default"
+              className={`relative grid grid-cols-[minmax(140px,1fr)_90px_90px_110px] items-center gap-3 px-2 py-2 text-left text-[13px] rounded${
+                isUnattributed ? " cursor-default" : ""
+              }`}
               style={{
                 background: isActive ? "var(--surface-2)" : "transparent",
               }}
@@ -79,6 +101,17 @@ export function OrganizationsBySpend({
                 {formatSpend(organization.spend)}
               </span>
             </button>
+          );
+
+          return isUnattributed ? (
+            <Tooltip key="unattributed">
+              <TooltipTrigger asChild>{row}</TooltipTrigger>
+              <TooltipContent className="max-w-64 text-balance">
+                {UNATTRIBUTED_HINT}
+              </TooltipContent>
+            </Tooltip>
+          ) : (
+            <Fragment key={id}>{row}</Fragment>
           );
         })}
       </div>

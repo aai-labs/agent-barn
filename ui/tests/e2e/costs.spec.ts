@@ -119,22 +119,6 @@ test.describe("Organization costs", () => {
     );
   });
 
-  test("a recovered cost is marked, so a rising total is explainable", async ({
-    page,
-  }) => {
-    await data.costs.interceptOrgSummary();
-    await data.costs.interceptOrgList({
-      items: [costRecord({ healed: true })],
-      total: 1,
-    });
-
-    await page.goto(COSTS_URL);
-
-    await expect(
-      page.getByLabel("Cost recovered from OpenRouter"),
-    ).toBeVisible();
-  });
-
   test("a failed list shows an error state with a retry", async ({ page }) => {
     await data.costs.interceptOrgSummary();
     await data.costs.interceptOrgList({ status: 500 });
