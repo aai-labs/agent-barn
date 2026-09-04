@@ -6,6 +6,7 @@ from fastapi_injector import Injected
 from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.utils import get_current_user, require_platform_admin
 from api.domains.templates.models import (
+    AgentTemplateDraftRead,
     PlatformTemplateAdminSummary,
     PlatformTemplateDraftCreate,
     PlatformTemplateDraftRead,
@@ -73,6 +74,58 @@ def update_template(
     service: Annotated[TemplateService, Injected(TemplateService)],
 ):
     return service.update_template(template_key, data, context)
+
+
+@templates_router.get("/{template_key}/draft", response_model=AgentTemplateDraftRead)
+def get_org_draft(
+    template_key: str,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[TemplateService, Injected(TemplateService)],
+):
+    return service.get_org_draft(template_key, context)
+
+
+@templates_router.post(
+    "/{template_key}/draft", response_model=AgentTemplateDraftRead, status_code=status.HTTP_201_CREATED
+)
+def start_org_draft(
+    template_key: str,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[TemplateService, Injected(TemplateService)],
+    source_version: Annotated[int | None, Query(ge=1)] = None,
+):
+    return service.start_org_draft(template_key, source_version, context)
+
+
+@templates_router.patch("/{template_key}/draft", response_model=AgentTemplateDraftRead)
+def update_org_draft(
+    template_key: str,
+    data: TemplateUpdate,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[TemplateService, Injected(TemplateService)],
+):
+    return service.update_org_draft(template_key, data, context)
+
+
+@templates_router.delete("/{template_key}/draft", status_code=status.HTTP_204_NO_CONTENT)
+def discard_org_draft(
+    template_key: str,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[TemplateService, Injected(TemplateService)],
+):
+    service.discard_org_draft(template_key, context)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@templates_router.post(
+    "/{template_key}/draft/publish", response_model=TemplateRead, status_code=status.HTTP_201_CREATED
+)
+def publish_org_draft(
+    template_key: str,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[TemplateService, Injected(TemplateService)],
+):
+    return service.publish_org_draft(template_key, context)
 
 
 @templates_router.post(

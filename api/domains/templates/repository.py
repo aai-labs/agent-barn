@@ -10,6 +10,7 @@ from sqlmodel import Session, col, delete, select, update
 
 from api.domains.agents.models import (
     Agent,
+    AgentTemplateDraftSkill,
     AgentTemplateOverrideVersion,
     AgentTemplateOverrideVersionSkill,
     AgentTemplateSkill,
@@ -27,6 +28,8 @@ from api.domains.events.repository import OutboxMessageRepository
 from api.domains.skills.models import Skill, SkillVersion
 from api.domains.templates.models import (
     AgentTemplate,
+    AgentTemplateDraft,
+    AgentTemplateDraftRead,
     PlatformTemplate,
     PlatformTemplateAdminSummary,
     PlatformTemplateDraft,
@@ -337,7 +340,7 @@ class TemplateRepository:
 
     @staticmethod
     def _template_key_exists(session: Session, template_key: str) -> bool:
-        for model in (AgentTemplate, PlatformTemplate, PlatformTemplateDraft):
+        for model in (AgentTemplate, PlatformTemplate, PlatformTemplateDraft, AgentTemplateDraft):
             if (
                 session.exec(select(model.id).where(col(model.template_key) == template_key).limit(1)).first()
                 is not None
@@ -800,6 +803,224 @@ class TemplateRepository:
                 skill_id: (skill_version, group_key) for skill_id, skill_version, group_key in session.exec(query).all()
             }
 
+    # --- organization drafts -------------------------------------------------
+    #
+    # Mirrors the platform draft block above. Two differences: every query is
+    # organization-scoped, and the draft carries the fork baseline it copied so
+    # publishing is a pure copy of what the author saw.
+
+    @staticmethod
+    def to_org_draft_read(
+        draft: AgentTemplateDraft,
+        skills: list[tuple[Skill, int, str | None]] | None = None,
+    ) -> AgentTemplateDraftRead:
+        from api.domains.skills.models import SkillRead
+
+        required_skills = [
+            TemplateRequiredSkillRead(
+                **SkillRead.model_validate(skill).model_dump(), version=version, group_key=group_key
+            )
+            for skill, version, group_key in (skills or [])
+        ]
+        return AgentTemplateDraftRead(
+            id=draft.id,
+            organization_id=draft.organization_id,
+            template_key=draft.template_key,
+            template_name=draft.template_name,
+            template_source=draft.template_source,
+            forked_from_platform_template_id=draft.forked_from_platform_template_id,
+            fork_baseline_platform_template_id=draft.fork_baseline_platform_template_id,
+            fork_baseline_platform_version=draft.fork_baseline_platform_version,
+            description=draft.description,
+            soul_md=draft.soul_md,
+            identity_md=draft.identity_md,
+            user_md=draft.user_md,
+            tools_md=draft.tools_md,
+            agents_md=draft.agents_md,
+            boot_md=draft.boot_md,
+            bootstrap_md=draft.bootstrap_md,
+            heartbeat_md=draft.heartbeat_md,
+            created_at=draft.created_at,
+            updated_at=draft.updated_at,
+            required_skills=required_skills,
+        )
+
+    def get_org_draft(self, org_id: UUID, template_key: str) -> AgentTemplateDraft | None:
+        with Session(self.delegate.engine) as session:
+            query = (
+                select(AgentTemplateDraft)
+                .where(col(AgentTemplateDraft.organization_id) == org_id)
+                .where(col(AgentTemplateDraft.template_key) == template_key)
+            )
+            return session.exec(query).first()
+
+    def save_org_draft_with_skills(
+        self,
+        draft: AgentTemplateDraft,
+        group_keys_by_skill_id: SkillRequirementInput,
+    ) -> AgentTemplateDraft:
+        """Persist a draft seeded from an existing lineage, and its required
+        skills, atomically. The draft's template_key intentionally reuses the
+        source lineage's key, so no uniqueness check runs here."""
+        with Session(self.delegate.engine) as session:
+            session.add(draft)
+            session.flush()
+            resolved = _resolve_skill_versions(session, group_keys_by_skill_id)
+            for skill_id, (skill_version, group_key) in resolved.items():
+                session.add(
+                    AgentTemplateDraftSkill(
+                        draft_id=draft.id,
+                        skill_id=skill_id,
+                        skill_version=skill_version,
+                        group_key=group_key,
+                    )
+                )
+            session.commit()
+            session.refresh(draft)
+        return draft
+
+    def update_org_draft_with_skills(
+        self,
+        draft: AgentTemplateDraft,
+        group_keys_by_skill_id: SkillRequirementInput,
+    ) -> AgentTemplateDraft:
+        """Persist edits to an existing draft and diff-sync its required-skill
+        rows atomically (see _diff_sync_skill_rows)."""
+        with Session(self.delegate.engine) as session:
+            session.add(draft)
+            session.flush()
+            existing_rows = session.exec(
+                select(AgentTemplateDraftSkill).where(col(AgentTemplateDraftSkill.draft_id) == draft.id)
+            ).all()
+            _diff_sync_skill_rows(
+                session,
+                existing_rows,
+                group_keys_by_skill_id,
+                lambda skill_id, version, group_key: AgentTemplateDraftSkill(
+                    draft_id=draft.id,
+                    skill_id=skill_id,
+                    skill_version=version,
+                    group_key=group_key,
+                ),
+            )
+            session.commit()
+            session.refresh(draft)
+        return draft
+
+    def delete_org_draft(self, draft_id: UUID) -> None:
+        with Session(self.delegate.engine) as session:
+            purge = delete(AgentTemplateDraft).where(col(AgentTemplateDraft.id) == draft_id)
+            session.exec(purge)  # type: ignore[call-overload]
+            session.commit()
+
+    def get_org_draft_required_skills(self, draft_id: UUID) -> list[tuple[Skill, int, str | None]]:
+        with Session(self.delegate.engine) as session:
+            query = (
+                select(Skill, AgentTemplateDraftSkill.skill_version, AgentTemplateDraftSkill.group_key)
+                .join(
+                    AgentTemplateDraftSkill,
+                    col(AgentTemplateDraftSkill.skill_id) == col(Skill.id),
+                )
+                .where(col(AgentTemplateDraftSkill.draft_id) == draft_id)
+                .order_by(col(AgentTemplateDraftSkill.group_key).nulls_first(), col(Skill.name))
+            )
+            return list(session.exec(query).all())
+
+    def get_org_draft_required_skill_map(self, draft_id: UUID) -> SkillRequirementMap:
+        with Session(self.delegate.engine) as session:
+            query = select(
+                AgentTemplateDraftSkill.skill_id,
+                AgentTemplateDraftSkill.skill_version,
+                AgentTemplateDraftSkill.group_key,
+            ).where(col(AgentTemplateDraftSkill.draft_id) == draft_id)
+            return {
+                skill_id: (skill_version, group_key) for skill_id, skill_version, group_key in session.exec(query).all()
+            }
+
+    def publish_org_draft_with_skills(
+        self,
+        published: AgentTemplate,
+        draft_id: UUID,
+        group_keys_by_skill_id: SkillRequirementInput,
+        *,
+        event_name: str,
+        previous_version: int | None,
+        field_changes: dict[str, dict[str, Any]],
+        actor: ActorIdentity,
+        actor_display: str | None = None,
+        correlation_id: UUID | None = None,
+    ) -> TemplateLifecycleEventResult:
+        """Insert the newly published organization version, its required-skill
+        rows, the draft's deletion, and the lifecycle event in one transaction.
+
+        Fuses publish_draft_with_skills (platform) with
+        save_template_with_updated_event (org), because an organization publish
+        has to do both. `event_name` is TEMPLATE_CREATED for a lineage's first
+        version and TEMPLATE_UPDATED afterwards; as in
+        save_template_with_updated_event, an update with no audit-worthy
+        field_changes stages no event."""
+        with Session(self.delegate.engine, expire_on_commit=False) as session:
+            session.add(published)
+            session.flush()
+            resolved = _resolve_skill_versions(session, group_keys_by_skill_id)
+            for skill_id, (skill_version, group_key) in resolved.items():
+                session.add(
+                    AgentTemplateSkill(
+                        template_id=published.id,
+                        skill_id=skill_id,
+                        skill_version=skill_version,
+                        group_key=group_key,
+                    )
+                )
+            purge = delete(AgentTemplateDraft).where(col(AgentTemplateDraft.id) == draft_id)
+            session.exec(purge)  # type: ignore[call-overload]
+
+            if event_name == TEMPLATE_CREATED:
+                payload: dict[str, Any] = {
+                    "organization_id": published.organization_id,
+                    "template_id": published.id,
+                    "template_key": published.template_key,
+                    "template_name": published.template_name,
+                    "version": published.version,
+                    "actor_display": actor_display or actor.type.value,
+                    "subject_display": published.template_name,
+                }
+            elif field_changes:
+                payload = {
+                    "organization_id": published.organization_id,
+                    "template_id": published.id,
+                    "template_key": published.template_key,
+                    "previous_version": previous_version,
+                    "new_version": published.version,
+                    "field_changes": field_changes,
+                    "actor_display": actor_display or actor.type.value,
+                    "subject_display": published.template_name,
+                }
+            else:
+                session.commit()
+                session.refresh(published)
+                return TemplateLifecycleEventResult(template=published, delivery_ids=[])
+
+            event = EVENT_REGISTRY.build_event(
+                event_name=event_name,
+                schema_version=1,
+                occurred_at=datetime.now(UTC),
+                organization_id=published.organization_id,
+                actor=actor,
+                subject=SubjectIdentity(
+                    type=SubjectIdentityType.TEMPLATE,
+                    id=published.id,
+                    organization_id=published.organization_id,
+                ),
+                correlation_id=correlation_id or uuid4(),
+                payload=payload,
+            )
+            self.outbox_repository.stage(session=session, registry=EVENT_REGISTRY, event=event)
+            delivery_ids = list(session.exec(select(EventDelivery.id).where(EventDelivery.event_id == event.event_id)))
+            session.commit()
+            session.refresh(published)
+            return TemplateLifecycleEventResult(template=published, delivery_ids=delivery_ids)
+
     def list_platform_lineages_for_admin(self) -> list[PlatformTemplateAdminSummary]:
         """Every Platform Template lineage plus its draft status, for the admin authoring catalogue.
 
@@ -1058,8 +1279,9 @@ class TemplateRepository:
         actor_display: str | None = None,
         correlation_id: UUID | None = None,
     ) -> list[UUID]:
-        """Delete every org-scoped version, detaching soft-deleted agents first,
-        and stage a template.deleted event in the same transaction.
+        """Delete every org-scoped version and any in-progress draft, detaching
+        soft-deleted agents first, and stage a template.deleted event in the
+        same transaction.
 
         Live agents retain their RESTRICT pin and are checked before purge.
         Soft-deleted agents keep their row for audit/history, but no longer
@@ -1073,6 +1295,14 @@ class TemplateRepository:
             ).all()
             if not rows:
                 return []
+            # Drop the draft with the lineage, or the deleted lineage would
+            # reappear as a draft-only row in the catalogue.
+            purge_draft = (
+                delete(AgentTemplateDraft)
+                .where(col(AgentTemplateDraft.organization_id) == org_id)
+                .where(col(AgentTemplateDraft.template_key) == template_key)
+            )
+            session.exec(purge_draft)  # type: ignore[call-overload]
             template_ids = [row[0] for row in rows]
             versions_deleted = sorted(row[1] for row in rows)
             latest_id, _, latest_name = max(rows, key=lambda row: row[1])

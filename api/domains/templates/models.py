@@ -157,6 +157,58 @@ class PlatformTemplateDraft(BaseModel, table=True):
     heartbeat_md: str = SqlField(nullable=False)
 
 
+class AgentTemplateDraft(BaseModel, table=True):
+    __tablename__: str = "agent_template_draft"
+
+    # An unpublished, in-progress next version of an organization's Template
+    # lineage. Mirrors PlatformTemplateDraft, but organization-scoped: two
+    # organizations can hold a draft for the same forked template_key, so
+    # uniqueness is (organization_id, template_key). Publishing turns it into
+    # the next immutable agent_template row and deletes this row.
+    #
+    # The fork columns are stored rather than re-derived at publish: a Platform
+    # Template can be published between seeding this draft and publishing it,
+    # so the baseline recorded here is the one the author actually copied.
+    __table_args__ = (
+        sa.Index("ix_agent_template_draft_organization_id", "organization_id"),
+        sa.UniqueConstraint(
+            "organization_id",
+            "template_key",
+            name="uq_agent_template_draft_org_key",
+        ),
+    )
+
+    organization_id: UUID = SqlField(foreign_key="organization.id", nullable=False, ondelete="CASCADE")
+    forked_from_platform_template_id: UUID | None = SqlField(
+        default=None,
+        foreign_key="platform_template.id",
+        nullable=True,
+        ondelete="SET NULL",
+    )
+    fork_baseline_platform_template_id: UUID | None = SqlField(
+        default=None,
+        foreign_key="platform_template.id",
+        nullable=True,
+        ondelete="SET NULL",
+    )
+    fork_baseline_platform_version: int | None = SqlField(default=None, nullable=True)
+    template_key: str = SqlField(nullable=False, max_length=255)
+    template_name: str = SqlField(nullable=False, max_length=255)
+    template_source: TemplateSource = SqlField(
+        default=TemplateSource.CUSTOM,
+        sa_column=Column(sa.String(20), nullable=False, server_default="custom"),
+    )
+    description: str | None = SqlField(default=None, nullable=True, max_length=500)
+    soul_md: str = SqlField(nullable=False)
+    identity_md: str = SqlField(nullable=False)
+    user_md: str = SqlField(nullable=False)
+    tools_md: str = SqlField(nullable=False)
+    agents_md: str = SqlField(nullable=False)
+    boot_md: str = SqlField(nullable=False)
+    bootstrap_md: str = SqlField(nullable=False)
+    heartbeat_md: str = SqlField(nullable=False)
+
+
 class TemplateRead(PydanticBaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -199,6 +251,31 @@ class PlatformTemplateDraftRead(PydanticBaseModel):
     id: UUID
     template_key: str
     template_name: str
+    description: str | None
+    soul_md: str
+    identity_md: str
+    user_md: str
+    tools_md: str
+    agents_md: str
+    boot_md: str
+    bootstrap_md: str
+    heartbeat_md: str
+    created_at: datetime
+    updated_at: datetime
+    required_skills: list[TemplateRequiredSkillRead] = Field(default_factory=list)
+
+
+class AgentTemplateDraftRead(PydanticBaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    organization_id: UUID
+    template_key: str
+    template_name: str
+    template_source: TemplateSource
+    forked_from_platform_template_id: UUID | None = None
+    fork_baseline_platform_template_id: UUID | None = None
+    fork_baseline_platform_version: int | None = None
     description: str | None
     soul_md: str
     identity_md: str
