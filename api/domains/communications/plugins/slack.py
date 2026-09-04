@@ -101,21 +101,22 @@ class SlackPlatformPlugin(PlatformPlugin):
     key = "slack"
     display_name = "Slack"
     setup_hint = (
-        "Credentials\n"
-        "• Bot token: In OAuth & Permissions → OAuth Tokens for Your Workspace, install/reinstall the app and copy "
-        "the xoxb- token.\n"
-        "• App-level token: In Basic Information → App-Level Tokens, create an xapp- token with connections:write "
-        "and enable Socket Mode.\n\n"
-        "Bot Token Scopes\n"
-        "• Messaging: chat:write, channels:history, groups:history, im:history, and mpim:history.\n"
-        "• Name resolution: channels:read, groups:read, im:read, mpim:read, and users:read.\n"
-        "• Processing feedback is optional but uses reactions:write.\n\n"
-        "Workspace setup\n"
-        "• Subscribe to message.channels, message.groups, message.im, and message.mpim events; the shipped Slack "
-        "manifest includes them.\n"
-        "• Invite the bot to every private channel or conversation it should handle; allowlists use channel IDs, "
-        "not channel names.\n"
-        "• After changing scopes, reinstall the app and replace the stored bot token."
+        "## Create a Slack app\n\n"
+        "1. Open [Slack app management](https://api.slack.com/apps).\n"
+        "2. Click **New App**.\n"
+        "3. Click **From Manifest**.\n"
+        "4. Copy and paste the provided manifest using **Copy Slack manifest** below.\n"
+        "5. Select a workspace and click **Next**.\n"
+        "6. Click **Create**.\n\n"
+        "## Create credentials\n\n"
+        "1. In **Basic Information → App-Level Tokens**, create a token with `connections:write` and copy the `xapp-` "
+        "value. Slack requires this manual step; manifests cannot create app-level tokens.\n"
+        "2. In **OAuth & Permissions**, install or reinstall the app in the workspace, then copy the `xoxb-` token from "
+        "**OAuth Tokens for Your Workspace**. Reinstall after every scope change.\n"
+        "3. Paste the `xoxb-` bot token and `xapp-` app-level token into this Connection.\n\n"
+        "## Grant channel access\n\n"
+        "Invite the bot to every private channel or conversation it should handle. Allowlist values are Slack IDs; use "
+        "the channel and user suggestions after saving this Connection."
     )
     capabilities = frozenset(
         {
@@ -155,6 +156,38 @@ class SlackPlatformPlugin(PlatformPlugin):
     def fingerprint_material(self, credentials: PlatformCredentials) -> str:
         assert isinstance(credentials, SlackCredentials)
         return credentials.bot_token
+
+    def list_directory_entries(
+        self,
+        settings: PlatformSettings,
+        credentials: PlatformCredentials,
+        *,
+        kind: str,
+        search: str | None = None,
+        guild_id: str | None = None,
+    ) -> list[dict[str, str | None]]:
+        del settings, guild_id
+        assert isinstance(credentials, SlackCredentials)
+        client = SlackClient(credentials.bot_token)
+        if kind == "channels":
+            return [
+                {
+                    "id": channel["id"],
+                    "label": f"#{channel['name']}" if channel["name"] else channel["id"],
+                    "detail": "Private channel" if channel["is_private"] else None,
+                }
+                for channel in client.list_channels(search)
+            ]
+        if kind == "users":
+            return [
+                {
+                    "id": user["id"],
+                    "label": user["display_name"] or user["real_name"] or user["name"] or user["id"],
+                    "detail": f"@{user['name']}" if user["name"] else None,
+                }
+                for user in client.list_users(search)
+            ]
+        raise ValueError(f"Unsupported Slack directory kind: {kind}")
 
     def send(
         self,

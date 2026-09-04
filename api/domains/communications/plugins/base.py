@@ -238,6 +238,24 @@ class PlatformPlugin(ABC):
         del settings, credentials
         return envelopes
 
+    def list_directory_entries(
+        self,
+        settings: PlatformSettings,
+        credentials: PlatformCredentials,
+        *,
+        kind: str,
+        search: str | None = None,
+        guild_id: str | None = None,
+    ) -> list[dict[str, str | None]]:
+        """List safe provider-owned candidates for Connection settings.
+
+        A platform advertises DIRECTORY_DISCOVERY only when it implements this
+        seam. Returned values are display-only identifiers; credentials and
+        provider payloads never leave the plugin boundary.
+        """
+        del settings, credentials, kind, search, guild_id
+        raise NotImplementedError(f"{self.key} does not implement directory discovery")
+
     def processing_feedback(
         self,
         settings: PlatformSettings,
@@ -291,3 +309,16 @@ class PlatformPlugin(ABC):
         credential material.
         """
         raise NotImplementedError(f"{self.key} does not implement application provisioning")
+
+    def build_install_link(
+        self,
+        settings: PlatformSettings,
+        credentials: PlatformCredentials,
+    ) -> str:
+        """Build the provider install URL that adds this Connection's bot to a server.
+
+        Platforms whose bot is installed through a generated provider URL
+        implement this seam and declare INSTALL_LINK. The returned URL must
+        carry only non-secret material (client id, scopes, permissions).
+        """
+        raise NotImplementedError(f"{self.key} does not implement bot install links")

@@ -11,13 +11,19 @@ import { createQueryKeyStructure } from "@/shared/query-keys";
 
 import {
   CommunicationConnectionSchema,
+  CommunicationDirectoryEntrySchema,
+  CommunicationDirectoryPreviewSchema,
   CommunicationDiagnosticsSchema,
   PaginatedCommunicationJournalEntriesSchema,
   CommunicationReconnectSchema,
   CommunicationRetrySchema,
   CommunicationPlatformSchema,
+  CommunicationInstallLinkSchema,
   type CommunicationConnection,
+  type CommunicationDirectoryEntry,
+  type CommunicationDirectoryPreview,
   type CommunicationPlatform,
+  type CommunicationInstallLink,
   type CommunicationDiagnostics,
   type CommunicationJournalFilters,
   type CommunicationJournalKind,
@@ -66,6 +72,33 @@ export function useCommunicationConnections(agentId: string) {
       return response.data;
     },
     enabled: Boolean(agentId),
+  });
+}
+
+export function useCommunicationConnectionDirectory(
+  agentId: string,
+  connectionId: string,
+  kind: "guilds" | "channels" | "users" | "roles",
+  search = "",
+  enabled = true,
+  guildId?: string,
+) {
+  const orgApiBase = useOrganizationApiBase();
+  const { selectedOrganization } = useOrganizationContext();
+  const organizationId = selectedOrganization?.id ?? "";
+  const params = new URLSearchParams();
+  if (search.trim()) params.set("search", search.trim());
+  if (guildId) params.set("guild_id", guildId);
+  return useQuery({
+    queryKey: communicationConnectionsKey.detail(`${organizationId}:${connectionId}:directory:${kind}:${guildId ?? ""}:${search.trim()}`),
+    queryFn: async () => {
+      const response = await api.get<CommunicationDirectoryEntry[]>(
+        `${orgApiBase}/agents/${agentId}/connections/${connectionId}/directory/${kind}${params.size ? `?${params}` : ""}`,
+        { schema: z.array(CommunicationDirectoryEntrySchema) },
+      );
+      return response.data;
+    },
+    enabled: enabled && Boolean(agentId && connectionId),
   });
 }
 
@@ -199,6 +232,18 @@ export function useCommunicationDeliveryLifecycle(
   return { ...query, entries };
 }
 
+export function useInstallLink() {
+  const orgApiBase = useOrganizationApiBase();
+
+  return async function fetchInstallLink(agentId: string, connectionId: string) {
+    const response = await api.get<CommunicationInstallLink>(
+      `${orgApiBase}/agents/${agentId}/connections/${connectionId}/install-link`,
+      { schema: CommunicationInstallLinkSchema },
+    );
+    return response.data.url;
+  };
+}
+
 export function useDownloadAppPackage() {
   const orgApiBase = useOrganizationApiBase();
 
@@ -239,6 +284,17 @@ export function useCommunicationConnectionActions() {
     void queryClient.invalidateQueries({ queryKey: communicationJournalKey.all });
     return invalidate(agentId);
   }
+
+  const previewConnectionDirectory = useMutation({
+    mutationFn: async ({ agentId, platformKey, settings, credentials }: { agentId: string; platformKey: string; settings: Record<string, unknown>; credentials: Record<string, unknown> }) => {
+      const response = await api.post<CommunicationDirectoryPreview>(
+        `${orgApiBase}/agents/${agentId}/connection-directory-preview`,
+        { platformKey, settings, credentials },
+        { schema: CommunicationDirectoryPreviewSchema },
+      );
+      return response.data;
+    },
+  });
 
   const createConnection = useMutation({
     mutationFn: async ({ agentId, ...data }: CreateCommunicationConnection) => {
@@ -298,5 +354,5 @@ export function useCommunicationConnectionActions() {
     onSuccess: (_data, variables) => invalidateDiagnostics(variables.agentId),
   });
 
-  return { createConnection, updateConnection, retireConnection, reconnectConnection, retryDelivery };
+  return { previewConnectionDirectory, createConnection, updateConnection, retireConnection, reconnectConnection, retryDelivery };
 }

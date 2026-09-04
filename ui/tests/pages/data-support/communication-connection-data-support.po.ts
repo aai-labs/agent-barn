@@ -30,6 +30,14 @@ export class CommunicationConnectionDataSupport {
       });
     });
 
+    await this.page.route(`**/api/v1/organizations/*/agents/${agentId}/connection-directory-preview`, async (route) => {
+      if (route.request().method() !== "POST") {
+        await route.fallback();
+        return;
+      }
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ channels: [{ id: "C1", label: "#ops", detail: null }], users: [{ id: "U1", label: "Aria", detail: "@aria" }] }) });
+    });
+
     await this.page.route(`**/api/v1/organizations/*/agents/${agentId}/connections`, async (route) => {
       if (route.request().method() === "POST") {
         await route.fulfill({
@@ -51,6 +59,18 @@ export class CommunicationConnectionDataSupport {
     });
 
     await this.page.route(`**/api/v1/organizations/*/agents/${agentId}/connections/*`, async (route) => {
+      const url = new URL(route.request().url());
+      if (route.request().method() === "GET" && url.pathname.includes("/directory/")) {
+        const kind = url.pathname.split("/directory/")[1];
+        const entries = {
+          guilds: [{ id: "guild-one", label: "Community", detail: null }],
+          channels: [{ id: "channel-one", label: "#general", detail: null }],
+          users: [{ id: "user-one", label: "Aria", detail: null }],
+          roles: [{ id: "role-one", label: "@Maintainer", detail: null }],
+        }[kind] ?? [];
+        await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(entries) });
+        return;
+      }
       if (route.request().method() !== "GET" && route.request().method() !== "PATCH") {
         await route.fallback();
         return;
@@ -97,6 +117,21 @@ export class CommunicationConnectionDataSupport {
               : mockCommunicationDeliveryJournalPage,
         ),
       });
+    });
+
+    await this.page.route(new RegExp(`/agents/${agentId}/connections/[^/]+/directory/[^/?]+`), async (route) => {
+      if (route.request().method() !== "GET") {
+        await route.fallback();
+        return;
+      }
+      const kind = new URL(route.request().url()).pathname.split("/directory/")[1];
+      const entries = {
+        guilds: [{ id: "guild-one", label: "Community", detail: null }],
+        channels: [{ id: "channel-one", label: "#general", detail: null }],
+        users: [{ id: "user-one", label: "Aria", detail: null }],
+        roles: [{ id: "role-one", label: "@Maintainer", detail: null }],
+      }[kind] ?? [];
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(entries) });
     });
 
     await this.page.route(`**/api/v1/organizations/*/agents/${agentId}/connections/*/reconnect`, async (route) => {

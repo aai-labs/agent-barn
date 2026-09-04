@@ -16,12 +16,17 @@ export const mockCommunicationPlatforms = [
     key: "discord",
     display_name: "Discord",
     setup_hint:
-      "Credential: Developer Portal → Applications → app → Bot → Token. Enable Message Content Intent; invite with OAuth2 bot scope and View Channels, Send Messages, Read Message History permissions. Use Developer Mode to copy IDs.",
+      "## Create a bot\n\n1. Open the **Bot** page and copy the Token.\n2. Enable **Message Content Intent**.\n\n## Invite the bot\n\n1. Grant **View Channels**, **Send Messages**, and **Read Message History**.",
     schema_version: 1,
-    capabilities: ["MENTIONS"],
+    capabilities: ["MENTIONS", "DIRECTORY_DISCOVERY", "install_link"],
     settings_schema: {
       type: "object",
-      properties: { guild_ids: { title: "Guild IDs", type: "array", items: { type: "string" } } },
+      properties: {
+        guild_ids: { title: "Guild IDs", type: "array", items: { type: "string" } },
+        allowed_channel_ids: { title: "Allowed channels", type: "array", items: { type: "string" } },
+        allowed_user_ids: { title: "Allowed users", type: "array", items: { type: "string" } },
+        allowed_role_ids: { title: "Allowed roles", type: "array", items: { type: "string" } },
+      },
     },
     credentials_schema: {
       type: "object",
@@ -33,10 +38,16 @@ export const mockCommunicationPlatforms = [
     key: "slack",
     display_name: "Slack",
     setup_hint:
-      "In Slack OAuth & Permissions → Bot Token Scopes, add channels:read for public channel names, groups:read for private channel names, im:read and mpim:read for direct-message names, and users:read for sender names. Reinstall the Slack app after adding scopes, then update the bot token here.",
+      "## Create a Slack app\n\n1. Open [Slack app management](https://api.slack.com/apps).\n2. Click **New App**.\n3. Click **From Manifest**.\n\n## Create credentials\n\n1. Create an `xapp-` token with `connections:write`.\n2. Copy the `xoxb-` token and reinstall after scope changes.",
     schema_version: 1,
     capabilities: ["DIRECTORY_DISCOVERY"],
-    settings_schema: { type: "object", properties: {} },
+    settings_schema: {
+      type: "object",
+      properties: {
+        channel_ids: { title: "Allowed channels", type: "array", items: { type: "string" } },
+        dm_user_ids: { title: "Allowed DM senders", type: "array", items: { type: "string" } },
+      },
+    },
     credentials_schema: {
       type: "object",
       properties: {

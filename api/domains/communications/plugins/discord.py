@@ -28,6 +28,9 @@ from api.infrastructure.discord.client import DiscordClient
 
 logger = logging.getLogger(__name__)
 
+_INSTALL_OAUTH_SCOPES = "bot%20applications.commands"
+_INSTALL_PERMISSIONS = 274878286912
+
 
 class DiscordValidationConfig(Protocol):
     skip_discord_token_validation: bool
@@ -89,22 +92,29 @@ class DiscordPlatformPlugin(PlatformPlugin):
     key = "discord"
     display_name = "Discord"
     setup_hint = (
-        "Credential\n"
-        "• Bot token: In Developer Portal → Applications → your app → Bot, reset/copy the Token. Do not use the "
-        "Application ID, public key, client secret, or an OAuth invite URL.\n\n"
-        "Developer Portal setup\n"
-        "• Under Bot → Privileged Gateway Intents, enable Message Content Intent. This integration requests the "
-        "GUILDS, GUILD_MESSAGES, DIRECT_MESSAGES, and MESSAGE_CONTENT intents.\n"
-        "• Under OAuth2 → URL Generator, select the bot scope and invite the bot to each server. Grant View Channels, "
-        "Send Messages, and Read Message History; grant Send Messages in Threads when using threads.\n\n"
-        "Connection settings\n"
-        "• The bot must be a member of every allowed server and able to view each allowed channel. Guild, channel, "
-        "user, and role allowlists use Discord IDs (snowflakes); enable Developer Mode to copy them.\n"
-        "• Direct messages default to Off; set Direct messages to Open or Allowlist when DMs are needed.\n"
-        "• When Require @mention is enabled, mention the bot in server messages."
+        "## Create and configure a bot\n\n"
+        "1. In [Discord Developer Portal](https://discord.com/developers/applications), create or open an Application and "
+        "open its **Bot** page. Reset/copy the Token; do not use the Application ID, public key, client secret, or an "
+        "OAuth invite URL.\n"
+        "2. Under **Bot → Privileged Gateway Intents**, enable **Message Content Intent**. Enable **Server Members Intent** "
+        "too when you want the Connection editor to suggest server members.\n\n"
+        "## Invite the bot\n\n"
+        "1. After saving this Connection, use **Install bot to server** on its card to add the bot to each server "
+        "with the recommended permissions.\n"
+        "2. To invite manually instead, open **OAuth2 → URL Generator**, choose the bot scope, and grant **View "
+        "Channels**, **Send Messages**, and **Read Message History**; also grant **Send Messages in Threads** when "
+        "threads are used.\n\n"
+        "## Finish the Connection\n\n"
+        "1. Paste the Bot Token into this Connection and save it.\n"
+        "2. The bot must belong to each allowed server and view every allowed channel. Enable **Developer Mode** to copy "
+        "guild, channel, user, and role IDs.\n"
+        "3. Direct messages are Off by default; enable them only when needed. When **Require @mention** is on, people must "
+        "mention the bot in server messages."
     )
     capabilities = frozenset(
         {
+            PlatformCapability.DIRECTORY_DISCOVERY,
+            PlatformCapability.INSTALL_LINK,
             PlatformCapability.ATTACHMENTS,
             PlatformCapability.SUPERVISED_INGRESS,
             PlatformCapability.MENTIONS,
@@ -127,9 +137,51 @@ class DiscordPlatformPlugin(PlatformPlugin):
         discriminator = str(bot.get("discriminator") or "")
         return f"@{username}#{discriminator}" if discriminator and discriminator != "0" else f"@{username}"
 
+    def build_install_link(self, settings: PlatformSettings, credentials: PlatformCredentials) -> str:
+        del settings
+        assert isinstance(credentials, DiscordCredentials)
+        application = DiscordClient(credentials.bot_token).get_current_application()
+        return (
+            "https://discord.com/oauth2/authorize"
+            f"?client_id={application['id']}&scope={_INSTALL_OAUTH_SCOPES}&permissions={_INSTALL_PERMISSIONS}"
+        )
+
     def fingerprint_material(self, credentials: PlatformCredentials) -> str:
         assert isinstance(credentials, DiscordCredentials)
         return credentials.bot_token
+
+    def list_directory_entries(
+        self,
+        settings: PlatformSettings,
+        credentials: PlatformCredentials,
+        *,
+        kind: str,
+        search: str | None = None,
+        guild_id: str | None = None,
+    ) -> list[dict[str, str | None]]:
+        del settings
+        assert isinstance(credentials, DiscordCredentials)
+        client = DiscordClient(credentials.bot_token)
+        if kind == "guilds":
+            entries = client.list_guilds()
+            prefix = ""
+        elif kind == "channels" and guild_id:
+            entries = client.list_guild_channels(guild_id)
+            prefix = "#"
+        elif kind == "users" and guild_id:
+            entries = client.list_guild_members(guild_id)
+            prefix = ""
+        elif kind == "roles" and guild_id:
+            entries = client.list_guild_roles(guild_id)
+            prefix = "@"
+        else:
+            raise ValueError("Choose a Discord server before browsing channels, users, or roles")
+        query = search.lower() if search else ""
+        return [
+            {"id": entry["id"], "label": f"{prefix}{entry['name']}", "detail": None}
+            for entry in entries
+            if not query or query in entry["id"].lower() or query in entry["name"].lower()
+        ]
 
     def send(
         self,

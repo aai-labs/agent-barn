@@ -16,6 +16,7 @@ from api.domains.communications.delivery_repository import (
     CommunicationDeliveryRepository,
     CommunicationDeliveryRetryError,
 )
+from api.domains.communications.error_details import normalize_communication_error
 from api.domains.communications.models import (
     CommunicationConnection,
     CommunicationConnectionCreate,
@@ -23,6 +24,11 @@ from api.domains.communications.models import (
     CommunicationConnectionUpdate,
     CommunicationDiagnosticsRead,
     CommunicationDirection,
+    CommunicationDirectoryEntryRead,
+    CommunicationDirectoryPreview,
+    CommunicationDirectoryPreviewRead,
+    CommunicationErrorCategory,
+    CommunicationInstallLinkRead,
     CommunicationJournalEntryRead,
     CommunicationJournalStage,
     CommunicationReconnectRead,
@@ -43,6 +49,22 @@ from api.infrastructure.crypto import decrypt_token, encrypt_token
 from api.infrastructure.shared.models import PaginatedItems, Pagination
 
 MAX_DIAGNOSTICS_WINDOW_DAYS = 90
+
+# A directory read talks to the provider, so a failure is usually the operator's
+# credentials or scopes rather than a bug. 401/403 are deliberately never used:
+# the web client treats them as its own session expiring and would sign the user
+# out because a Slack token was wrong.
+_DIRECTORY_ERROR_STATUS = {
+    CommunicationErrorCategory.AUTHENTICATION: status.HTTP_400_BAD_REQUEST,
+    CommunicationErrorCategory.AUTHORIZATION: status.HTTP_400_BAD_REQUEST,
+    CommunicationErrorCategory.CONFIGURATION: status.HTTP_400_BAD_REQUEST,
+    CommunicationErrorCategory.PROVIDER_REJECTED: status.HTTP_400_BAD_REQUEST,
+    CommunicationErrorCategory.RATE_LIMITED: status.HTTP_429_TOO_MANY_REQUESTS,
+    CommunicationErrorCategory.TIMEOUT: status.HTTP_504_GATEWAY_TIMEOUT,
+    CommunicationErrorCategory.NETWORK: status.HTTP_502_BAD_GATEWAY,
+    CommunicationErrorCategory.PROVIDER_UNAVAILABLE: status.HTTP_502_BAD_GATEWAY,
+    CommunicationErrorCategory.UNKNOWN: status.HTTP_502_BAD_GATEWAY,
+}
 
 
 @inject
@@ -68,6 +90,89 @@ class CommunicationsService:
         self.authorization.require_visible(context, agent_id)
         scope = self.authorization.authorization_scope(context, PermissionKey.AGENT_READ)
         return [self._read(connection) for connection in self.repository.list_active_for_agent(agent_id, scope)]
+
+    def _raise_directory_error(self, exc: Exception, operation: str) -> NoReturn:
+        """Translate a provider-side directory failure into a bounded HTTP error.
+
+        Provider text never reaches the client: only the normalized summary, which
+        carries a validated provider code (for example `missing_scope`) when there is
+        one — the difference between "your token lacks a scope" and an opaque 500.
+        """
+        normalized = normalize_communication_error(exc, operation=operation)
+        category = normalized.details.category if normalized.details else CommunicationErrorCategory.UNKNOWN
+        raise HTTPException(
+            status_code=_DIRECTORY_ERROR_STATUS.get(category, status.HTTP_502_BAD_GATEWAY),
+            # The summary already carries the HTTP status and provider code when known.
+            detail=normalized.summary or "The provider reported an error",
+        )
+
+    def list_connection_directory(
+        self,
+        agent_id: UUID,
+        connection_id: UUID,
+        kind: str,
+        search: str | None,
+        guild_id: str | None,
+        context: CurrentUserContext,
+    ) -> list[CommunicationDirectoryEntryRead]:
+        self.authorization.require_action(context, agent_id, PermissionKey.AGENT_UPDATE)
+        scope = self.authorization.authorization_scope(context, PermissionKey.AGENT_UPDATE)
+        connection = self.repository.get_active_in_scope(connection_id, agent_id, scope)
+        if connection is None:
+            self._raise_not_found(connection_id)
+        plugin = self._require_plugin(connection.platform_key)
+        if PlatformCapability.DIRECTORY_DISCOVERY not in plugin.capabilities:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="This platform does not support directory discovery",
+            )
+        try:
+            entries = plugin.list_directory_entries(
+                plugin.settings_model.model_validate(plugin.validate_stored_settings(connection.settings)),
+                plugin.credentials_model.model_validate(
+                    self._decrypt_credentials(plugin, connection.credentials_encrypted)
+                ),
+                kind=kind,
+                search=search,
+                guild_id=guild_id,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        except HTTPException:
+            raise
+        except Exception as exc:
+            self._raise_directory_error(exc, f"list_directory_{kind}")
+        return [CommunicationDirectoryEntryRead.model_validate(entry) for entry in entries]
+
+    def preview_connection_directory(
+        self,
+        agent_id: UUID,
+        data: CommunicationDirectoryPreview,
+        context: CurrentUserContext,
+    ) -> CommunicationDirectoryPreviewRead:
+        agent = self.authorization.require_action(context, agent_id, PermissionKey.AGENT_UPDATE)
+        self.authorization.require_action_for_visible(context, agent, PermissionKey.AGENT_SECRET_MANAGE)
+        plugin = self._require_plugin(data.platform_key)
+        if plugin.key != "slack" or PlatformCapability.DIRECTORY_DISCOVERY not in plugin.capabilities:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Workspace preview is available for Slack only",
+            )
+        try:
+            settings = plugin.settings_model.model_validate(data.settings)
+            credentials = plugin.credentials_model.model_validate(data.credentials)
+            channels = plugin.list_directory_entries(settings, credentials, kind="channels")
+            users = plugin.list_directory_entries(settings, credentials, kind="users")
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        except HTTPException:
+            raise
+        except Exception as exc:
+            self._raise_directory_error(exc, "preview_directory")
+        return CommunicationDirectoryPreviewRead(
+            channels=[CommunicationDirectoryEntryRead.model_validate(entry) for entry in channels],
+            users=[CommunicationDirectoryEntryRead.model_validate(entry) for entry in users],
+        )
 
     def create_connection(
         self,
@@ -338,6 +443,40 @@ class CommunicationsService:
             attempt_count=delivery.attempt_count,
             requested_at=datetime.now(UTC),
         )
+
+    def build_install_link(
+        self,
+        agent_id: UUID,
+        connection_id: UUID,
+        context: CurrentUserContext,
+    ) -> CommunicationInstallLinkRead:
+        self.authorization.require_action(context, agent_id, PermissionKey.AGENT_UPDATE)
+        scope = self.authorization.authorization_scope(context, PermissionKey.AGENT_UPDATE)
+        connection = self.repository.get_active_in_scope(connection_id, agent_id, scope)
+        if connection is None:
+            self._raise_not_found(connection_id)
+
+        plugin = self._require_plugin(connection.platform_key)
+        if PlatformCapability.INSTALL_LINK not in plugin.capabilities:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"{plugin.display_name} does not provide a bot install link",
+            )
+        try:
+            url = plugin.build_install_link(
+                plugin.settings_model.model_validate(connection.settings),
+                plugin.credentials_model.model_validate(
+                    self._decrypt_credentials(plugin, connection.credentials_encrypted)
+                ),
+            )
+            return CommunicationInstallLinkRead(url=url)
+        except NotImplementedError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"{plugin.display_name} does not provide a bot install link",
+            ) from exc
+        except (ValidationError, ValueError) as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
     def build_app_package(
         self,

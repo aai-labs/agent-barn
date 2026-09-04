@@ -1,8 +1,10 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 
 import { TEST_ORG_ID } from "../constants";
 import {
+  COMMUNICATION_CONNECTION_ID,
   COMMUNICATION_DELIVERY_ID,
+  mockCommunicationConnection,
   SAFE_ERROR_DETAILS,
   SAFE_PROVIDER_ERROR,
 } from "../fixtures/communication-connections";
@@ -51,6 +53,11 @@ test.describe("Agent Detail Page", () => {
   test("should load agent detail page", async ({ page }) => {
     await expect(agentDetailPage.agentName("Maya")).toBeVisible();
     await expect(page.getByLabel("Message input")).toBeEnabled();
+  });
+
+  test("shows configured messaging platform icons", async ({ page }) => {
+    await expect(page.getByAltText("Slack")).toBeVisible();
+    await expect(page.getByAltText("Discord")).toBeVisible();
   });
 
   test("shows model name in header", async ({ page }) => {
@@ -607,6 +614,30 @@ test.describe("Agent Detail Page — Channels tab", () => {
     await expect(agentDetailPage.connectionProviderStatus("Connected")).toBeVisible();
   });
 
+  test("builds the recommended install link on demand for a Discord Connection", async ({ page }) => {
+    const installUrl =
+      "https://discord.com/oauth2/authorize?client_id=123456789012345678&scope=bot%20applications.commands&permissions=274878286912";
+    await page.route(
+      `**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}/connections/${COMMUNICATION_CONNECTION_ID}/install-link`,
+      async (route) => {
+        await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ url: installUrl }) });
+      },
+    );
+
+    await expect(agentDetailPage.getInstallLinkButton()).toBeVisible();
+    await agentDetailPage.getInstallLinkButton().click();
+
+    const installLink = agentDetailPage.installBotServerLink();
+    await expect(installLink).toBeVisible();
+    await expect(installLink).toHaveAttribute("href", installUrl);
+  });
+
+  test("hides the install link action when the platform provides none", async ({ page }) => {
+    await serveSavedSlackConnection(page);
+
+    await expect(agentDetailPage.getInstallLinkButton()).toHaveCount(0);
+  });
+
   test("shows a redacted provider error at full width", async () => {
     const providerError = agentDetailPage.providerErrorAlert();
     const errorMessage = agentDetailPage.providerErrorMessage();
@@ -714,6 +745,9 @@ test.describe("Agent Detail Page — Channels tab", () => {
   test("edits Connection name and plugin settings without resending credentials", async () => {
     await agentDetailPage.editConnectionButton("Customer Discord").click();
     await agentDetailPage.connectionNameInput().fill("Renamed Discord");
+    // Array settings are chip inputs: clear the existing chip ("Community" is the
+    // directory label for guild-one), then add the new ID.
+    await agentDetailPage.removeArraySettingChip("Community").click();
     await agentDetailPage.connectionSettingsInput("Guild IDs").fill("guild-updated");
     const update = agentDetailPage.waitForConnectionMutation("PATCH");
     await agentDetailPage.saveConnectionButton().click();
@@ -724,22 +758,23 @@ test.describe("Agent Detail Page — Channels tab", () => {
     });
   });
 
-  test("shows provider setup requirements before connecting", async () => {
+  test("shows provider setup requirements before connecting", async ({ page }) => {
     await agentDetailPage.addConnectionButton().click();
     await agentDetailPage.selectPlatformButton("Slack").click();
 
-    const hint = agentDetailPage.setupHint(/Bot Token Scopes/);
+    const hint = agentDetailPage.setupHint(/Create credentials/);
     await expect(hint).toBeVisible();
-    await expect(hint).toContainText("channels:read");
-    await expect(hint).toContainText("groups:read");
-    await expect(hint).toContainText("users:read");
-    await expect(hint).toContainText("Reinstall the Slack app");
+    await expect(page.getByRole("heading", { name: "Create a Slack app" })).toBeVisible();
+    await expect(page.getByText("connections:write", { exact: true })).toBeVisible();
+    await expect(page.getByText("xapp-", { exact: true })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Slack app management" })).toHaveAttribute("href", "https://api.slack.com/apps");
+    await expect(page.getByRole("button", { name: "Copy Slack manifest" })).toBeVisible();
 
     await agentDetailPage.selectPlatformButton("Discord").click();
-    const discordHint = agentDetailPage.setupHint(/Message Content Intent/);
+    const discordHint = agentDetailPage.setupHint(/Invite the bot/);
     await expect(discordHint).toBeVisible();
-    await expect(discordHint).toContainText("Read Message History");
-    await expect(discordHint).toContainText("Developer Mode");
+    await expect(page.getByRole("heading", { name: "Create a bot" })).toBeVisible();
+    await expect(page.getByText("Read Message History", { exact: true })).toBeVisible();
 
     await agentDetailPage.selectPlatformButton("Telegram").click();
     const telegramHint = agentDetailPage.setupHint(/@BotFather/);
@@ -749,10 +784,115 @@ test.describe("Agent Detail Page — Channels tab", () => {
     await expect(telegramHint).toContainText("webhook");
   });
 
+  /** A saved Slack Connection, served in place of the default Discord one. */
+  const savedSlackConnection = {
+    ...mockCommunicationConnection,
+    platform_key: "slack",
+    display_name: "Team Slack",
+    settings: { channel_ids: ["C1"], dm_user_ids: [] },
+  };
+
+  async function serveSavedSlackConnection(page: Page) {
+    // Registered after the shared intercepts, and the last matching route wins.
+    await page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}/connections`, async (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify([savedSlackConnection]),
+      });
+    });
+    // Re-run the beforeEach navigation so the list refetches through the new route.
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await agentDetailPage.configureButton().click();
+    await agentDetailPage.channelsTab().click();
+  }
+
+  test("browses a saved Connection's own directory when editing it", async ({ page }) => {
+    await serveSavedSlackConnection(page);
+    await agentDetailPage.editConnectionButton("Team Slack").click();
+
+    await agentDetailPage.browseDirectoryButton("Allowed channels").click();
+
+    // Names come from the saved Connection's own directory; the field still stores IDs.
+    await agentDetailPage.directoryPickerOption(/#general/).click();
+    await agentDetailPage.directoryPickerConfirmButton().click();
+    await expect(agentDetailPage.directoryPicker()).toBeHidden();
+    await expect(page.getByRole("button", { name: "Remove #general", exact: true })).toBeVisible();
+  });
+
+  test("shows why a directory read failed instead of an empty picker", async ({ page }) => {
+    await serveSavedSlackConnection(page);
+    await page.route("**/directory/channels*", async (route) => {
+      await route.fulfill({
+        status: 400,
+        contentType: "application/json",
+        body: JSON.stringify({ detail: "Provider denied the requested operation (missing_scope)" }),
+      });
+    });
+
+    await agentDetailPage.editConnectionButton("Team Slack").click();
+    await agentDetailPage.browseDirectoryButton("Allowed channels").click();
+
+    await expect(agentDetailPage.directoryPicker()).toContainText("missing_scope");
+  });
+
+  test("browses the Slack workspace to fill channel IDs from names", async ({ page }) => {
+    await agentDetailPage.addConnectionButton().click();
+    await agentDetailPage.selectPlatformButton("Slack").click();
+
+    // Browsing needs both tokens, so it stays disabled until the credentials are typed.
+    const browse = agentDetailPage.browseDirectoryButton("Allowed channels");
+    await expect(browse).toBeDisabled();
+    await expect(page.getByText("Add the bot token and app-level token above to browse.").first()).toBeVisible();
+
+    await agentDetailPage.credentialInput("Bot token").fill("xoxb-token");
+    await agentDetailPage.credentialInput("App-level token").fill("xapp-token");
+
+    const preview = page.waitForRequest(
+      (request) => request.method() === "POST" && request.url().includes("/connection-directory-preview"),
+    );
+    await browse.click();
+    expect((await preview).postDataJSON()).toMatchObject({
+      platform_key: "slack",
+      credentials: { bot_token: "xoxb-token", app_token: "xapp-token" },
+    });
+
+    // The picker searches names, but only the underlying platform IDs are stored.
+    await agentDetailPage.directoryPickerSearch("Search channels…").fill("ops");
+    await agentDetailPage.directoryPickerOption(/#ops/).click();
+    await agentDetailPage.directoryPickerConfirmButton().click();
+    await expect(agentDetailPage.directoryPicker()).toBeHidden();
+    await expect(page.getByRole("button", { name: "Remove #ops", exact: true })).toBeVisible();
+
+    const create = agentDetailPage.waitForConnectionMutation("POST");
+    await agentDetailPage.connectPlatformButton("Slack").click();
+    expect((await create).postDataJSON()).toEqual({
+      platform_key: "slack",
+      display_name: "Slack",
+      enabled: true,
+      settings: { channel_ids: ["C1"] },
+      credentials: { bot_token: "xoxb-token", app_token: "xapp-token" },
+    });
+  });
+
+  test("puts credentials above the Connection name in the add form", async ({ page }) => {
+    await agentDetailPage.addConnectionButton().click();
+    await agentDetailPage.selectPlatformButton("Slack").click();
+
+    const topOf = async (locator: Locator) => (await locator.boundingBox())?.y ?? Number.NaN;
+    const credentials = await topOf(page.getByText("Credentials", { exact: true }));
+    const connectionName = await topOf(page.getByPlaceholder("Slack connection"));
+    const connectionSettings = await topOf(page.getByText("Connection settings", { exact: true }));
+
+    expect(credentials).toBeLessThan(connectionName);
+    expect(connectionName).toBeLessThan(connectionSettings);
+  });
+
   test("creates another same-platform Connection from the plugin schema", async () => {
     await agentDetailPage.addConnectionButton().click();
     await agentDetailPage.selectPlatformButton("Discord").click();
-    await agentDetailPage.connectionSettingsInput("Guild IDs").fill("guild-two");
+    await agentDetailPage.connectionSettingsInput("Guild IDs").fill("guild-two, guild-three");
     const botToken = agentDetailPage.credentialInput("Bot token");
     await botToken.fill("token-two");
     await expect(botToken).toHaveAttribute("type", "password");
@@ -766,7 +906,7 @@ test.describe("Agent Detail Page — Channels tab", () => {
       platform_key: "discord",
       display_name: "Discord",
       enabled: true,
-      settings: { guild_ids: ["guild-two"] },
+      settings: { guild_ids: ["guild-two", "guild-three"] },
       credentials: { bot_token: "token-two" },
     });
   });

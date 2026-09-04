@@ -111,6 +111,7 @@ export const AgentSchema = z.object({
   approvalMode: z.enum(["manual", "auto", "off"]).default("auto"),
   secrets: z.array(AgentSecretReadSchema).optional(),
   skills: z.array(AgentAssignedSkillSchema).default([]),
+  configuredPlatformKeys: z.array(z.string()).default([]),
   allowedActions: z.array(AgentPermissionKeySchema).default([]),
   createdAt: z.string(),
   updatedAt: z.string(),

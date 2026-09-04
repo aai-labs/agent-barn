@@ -77,12 +77,26 @@ export class AgentDetailPage {
     return this.page.getByRole("button", { name: `Edit ${connectionName}`, exact: true });
   }
 
+  getInstallLinkButton(): Locator {
+    return this.page.getByRole("button", { name: "Get install link", exact: true });
+  }
+
+  installBotServerLink(): Locator {
+    return this.page.getByRole("link", { name: "Install bot to server" });
+  }
+
   connectionNameInput(): Locator {
     return this.page.getByLabel("Connection name", { exact: true });
   }
 
   connectionSettingsInput(label: string): Locator {
     return this.page.getByLabel(label, { exact: true });
+  }
+
+  removeArraySettingChip(label: string): Locator {
+    // Array settings render committed values as chips named after the directory
+    // label they display (falling back to the raw platform ID when unknown).
+    return this.page.getByRole("button", { name: `Remove ${label}`, exact: true });
   }
 
   saveConnectionButton(): Locator {
@@ -97,6 +111,26 @@ export class AgentDetailPage {
 
   credentialVisibilityButton(label: string, visible: boolean): Locator {
     return this.page.getByRole("button", { name: `${visible ? "Hide" : "Show"} ${label}`, exact: true });
+  }
+
+  browseDirectoryButton(fieldLabel: string): Locator {
+    return this.page.getByRole("button", { name: `Browse ${fieldLabel}`, exact: true });
+  }
+
+  directoryPicker(): Locator {
+    return this.page.getByRole("dialog");
+  }
+
+  directoryPickerSearch(placeholder: string): Locator {
+    return this.directoryPicker().getByRole("combobox", { name: placeholder });
+  }
+
+  directoryPickerOption(name: string | RegExp): Locator {
+    return this.directoryPicker().getByRole("option", { name });
+  }
+
+  directoryPickerConfirmButton(): Locator {
+    return this.directoryPicker().getByRole("button", { name: "OK", exact: true });
   }
 
   connectPlatformButton(platformName: string): Locator {

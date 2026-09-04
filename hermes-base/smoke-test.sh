@@ -96,13 +96,15 @@ with tempfile.TemporaryDirectory() as temp_home:
         raise SystemExit('USER.md content was not rendered into the system prompt')
 "
 
-check chromium python3 -c "
-from playwright.sync_api import sync_playwright
-with sync_playwright() as p:
-    b = p.chromium.launch()
-    pg = b.new_page()
-    pg.goto('data:text/html,ok')
-    b.close()
+# Chromium is deliberately absent -- browser.cloud_provider=firecrawl routes the
+# browser tool to the shared service. Assert both the absence and that firecrawl
+# is genuinely registered in this runtime: a Hermes upgrade that drops the
+# provider must fail here, on the version bump, not on a live agent.
+check no-chromium sh -c '! command -v chromium >/dev/null 2>&1 && [ ! -d /opt/playwright ]'
+check firecrawl-browser-provider python3 -c "
+from tools.browser_tool import _PROVIDER_REGISTRY
+if 'firecrawl' not in _PROVIDER_REGISTRY:
+    raise SystemExit('firecrawl is no longer a registered browser cloud provider')
 "
 
 # The telemetry-push plugin resolves a reply's chat through the gateway's

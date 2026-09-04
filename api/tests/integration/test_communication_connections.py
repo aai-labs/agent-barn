@@ -2,6 +2,7 @@ import io
 import json
 import zipfile
 from datetime import UTC, datetime, timedelta
+from unittest.mock import patch
 from uuid import UUID, uuid4
 
 import httpx
@@ -45,6 +46,7 @@ from api.domains.rbac.catalog import AGENT_VIEWER_ROLE_ID
 from api.domains.users.organization_users.models import OrganizationRole
 from api.domains.users.organization_users.repository import OrganizationUserRepository
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
+from api.infrastructure.slack.errors import SlackFetchError
 from api.tests.core.givenpy import given, then, when
 from api.tests.core.modules import (
     create_test_client,
@@ -155,11 +157,12 @@ def test_platform_catalog_lists_the_shipped_plugins() -> None:
             assert_that(
                 hints["slack"],
                 all_of(
+                    contains_string("## Create a Slack app"),
+                    contains_string("[Slack app management](https://api.slack.com/apps)"),
+                    contains_string("**From Manifest**"),
                     contains_string("xoxb-"),
                     contains_string("xapp-"),
                     contains_string("connections:write"),
-                    contains_string("channels:read"),
-                    contains_string("users:read"),
                 ),
             )
             assert_that(
@@ -169,6 +172,7 @@ def test_platform_catalog_lists_the_shipped_plugins() -> None:
                     contains_string("View Channels"),
                     contains_string("Read Message History"),
                     contains_string("Developer Mode"),
+                    contains_string("Install bot to server"),
                 ),
             )
             assert_that(
@@ -181,6 +185,128 @@ def test_platform_catalog_lists_the_shipped_plugins() -> None:
                     contains_string("webhook"),
                 ),
             )
+
+
+def test_slack_workspace_preview_loads_directory_without_creating_a_connection() -> None:
+    with given(_GIVEN) as context:
+        preview = {"platform_key": "slack", "credentials": _slack_payload()["credentials"]}
+        with patch(
+            "api.infrastructure.slack.client.SlackClient.list_channels",
+            return_value=[{"id": "C1", "name": "ops", "is_private": False}],
+        ):
+            with patch(
+                "api.infrastructure.slack.client.SlackClient.list_users",
+                return_value=[{"id": "U1", "name": "aria", "real_name": "Aria", "display_name": ""}],
+            ):
+                response = context.client.post(
+                    f"/api/v1/organizations/{context.organization.id}/agents/{context.agent.id}/connection-directory-preview",
+                    json=preview,
+                    headers=_auth(context),
+                )
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+        assert_that(response.json()["channels"], equal_to([{"id": "C1", "label": "#ops", "detail": None}]))
+        assert_that(response.json()["users"], equal_to([{"id": "U1", "label": "Aria", "detail": "@aria"}]))
+        assert_that(context.client.get(_base(context), headers=_auth(context)).json(), equal_to([]))
+
+
+def test_slack_workspace_preview_reports_a_provider_failure_instead_of_a_server_error() -> None:
+    with given(_GIVEN) as context:
+        preview = {"platform_key": "slack", "credentials": _slack_payload()["credentials"]}
+        with patch(
+            "api.infrastructure.slack.client.SlackClient.list_channels",
+            side_effect=SlackFetchError("conversations.list error: missing_scope"),
+        ):
+            response = context.client.post(
+                f"/api/v1/organizations/{context.organization.id}/agents/{context.agent.id}/connection-directory-preview",
+                json=preview,
+                headers=_auth(context),
+            )
+
+        # A bad token or a missing scope is the operator's input, not a bug, and 401/403
+        # would make the web client treat it as its own session expiring.
+        assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+        detail = response.json()["detail"]
+        assert_that(detail, contains_string("missing_scope"))
+        # The normalized summary already carries the code; it must not be appended twice.
+        assert_that(detail.count("missing_scope"), equal_to(1))
+
+
+def test_connection_directory_reports_a_provider_outage_as_bad_gateway() -> None:
+    with given(_GIVEN) as context:
+        created = context.client.post(_base(context), json=_slack_payload(), headers=_auth(context))
+        connection_id = created.json()["id"]
+        with patch(
+            "api.infrastructure.slack.client.SlackClient.list_channels",
+            side_effect=SlackFetchError("conversations.list request failed: connection refused"),
+        ):
+            response = context.client.get(
+                f"{_base(context)}/{connection_id}/directory/channels", headers=_auth(context)
+            )
+
+        assert_that(response.status_code, equal_to(status.HTTP_502_BAD_GATEWAY))
+        # Provider text must never be echoed back to the client.
+        assert_that(response.json()["detail"], not_(contains_string("connection refused")))
+
+
+def test_slack_connection_directory_lists_safe_channels_and_users() -> None:
+    with given(_GIVEN) as context:
+        created = context.client.post(_base(context), json=_slack_payload(), headers=_auth(context))
+        connection_id = created.json()["id"]
+        with patch(
+            "api.infrastructure.slack.client.SlackClient.list_channels",
+            return_value=[{"id": "C1", "name": "ops", "is_private": True}],
+        ):
+            channels = context.client.get(
+                f"{_base(context)}/{connection_id}/directory/channels", headers=_auth(context)
+            )
+        with patch(
+            "api.infrastructure.slack.client.SlackClient.list_users",
+            return_value=[{"id": "U1", "name": "aria", "real_name": "Aria", "display_name": ""}],
+        ):
+            users = context.client.get(f"{_base(context)}/{connection_id}/directory/users", headers=_auth(context))
+
+        assert_that(channels.status_code, equal_to(status.HTTP_200_OK))
+        assert_that(channels.json(), equal_to([{"id": "C1", "label": "#ops", "detail": "Private channel"}]))
+        assert_that(users.status_code, equal_to(status.HTTP_200_OK))
+        assert_that(users.json(), equal_to([{"id": "U1", "label": "Aria", "detail": "@aria"}]))
+
+
+def test_discord_connection_directory_requires_a_guild_for_nested_candidates() -> None:
+    with given(_GIVEN) as context:
+        created = context.client.post(_base(context), json=_discord_payload(), headers=_auth(context))
+        connection_id = created.json()["id"]
+        with patch(
+            "api.infrastructure.discord.client.DiscordClient.list_guilds",
+            return_value=[{"id": "guild-1", "name": "Community"}],
+        ):
+            guilds = context.client.get(f"{_base(context)}/{connection_id}/directory/guilds", headers=_auth(context))
+        with patch(
+            "api.infrastructure.discord.client.DiscordClient.list_guild_members",
+            return_value=[{"id": "user-1", "name": "Aria"}],
+        ):
+            users = context.client.get(
+                f"{_base(context)}/{connection_id}/directory/users?guild_id=guild-1", headers=_auth(context)
+            )
+
+        assert_that(guilds.status_code, equal_to(status.HTTP_200_OK))
+        assert_that(guilds.json(), equal_to([{"id": "guild-1", "label": "Community", "detail": None}]))
+        assert_that(users.status_code, equal_to(status.HTTP_200_OK))
+        assert_that(users.json(), equal_to([{"id": "user-1", "label": "Aria", "detail": None}]))
+
+
+def test_agent_reads_project_distinct_active_connection_platforms() -> None:
+    with given(_GIVEN) as context:
+        context.client.post(_base(context), json=_slack_payload(), headers=_auth(context))
+        context.client.post(_base(context), json=_discord_payload(), headers=_auth(context))
+
+        response = context.client.get(
+            f"/api/v1/organizations/{context.organization.id}/agents/{context.agent.id}",
+            headers=_auth(context),
+        )
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+        assert_that(response.json()["configured_platform_keys"], equal_to(["discord", "slack"]))
 
 
 def test_list_connections_without_authentication_returns_401() -> None:
@@ -921,6 +1047,68 @@ def _teams_payload(name: str = "Microsoft Teams") -> dict:
             "tenant_id": "22222222-2222-4222-8222-222222222222",
         },
     }
+
+
+def test_install_link_returns_the_recommended_url_for_a_discord_connection() -> None:
+    with given(_GIVEN) as context:
+        created = context.client.post(_base(context), json=_discord_payload(), headers=_auth(context))
+        connection_id = created.json()["id"]
+
+        with when("I request the install link for the saved Connection"):
+            with patch(
+                "api.infrastructure.discord.client.DiscordClient.get_current_application",
+                return_value={"id": "123456789012345678"},
+            ):
+                response = context.client.get(
+                    f"{_base(context)}/{connection_id}/install-link",
+                    headers=_auth(context),
+                )
+
+        with then("the recommended least-privilege install URL is returned"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(
+                response.json(),
+                equal_to(
+                    {
+                        "url": (
+                            "https://discord.com/oauth2/authorize"
+                            "?client_id=123456789012345678&scope=bot%20applications.commands&permissions=274878286912"
+                        )
+                    }
+                ),
+            )
+
+
+def test_install_link_is_rejected_for_a_platform_without_the_capability() -> None:
+    with given(_GIVEN) as context:
+        created = context.client.post(_base(context), json=_slack_payload(), headers=_auth(context))
+        connection_id = created.json()["id"]
+
+        with when("I request an install link for a Slack Connection"):
+            response = context.client.get(
+                f"{_base(context)}/{connection_id}/install-link",
+                headers=_auth(context),
+            )
+
+        with then("the platform reports it provides no bot install link"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+            assert_that(response.json()["detail"], contains_string("does not provide a bot install link"))
+
+
+def test_install_link_is_concealed_across_organizations() -> None:
+    with given(_GIVEN) as context:
+        created = context.client.post(_base(context), json=_discord_payload(), headers=_auth(context))
+        connection_id = created.json()["id"]
+        other_agent_id = uuid4()
+
+        with when("I request the install link through another Agent's path"):
+            response = context.client.get(
+                f"{_base_for_agent(context, other_agent_id)}/{connection_id}/install-link",
+                headers=_auth(context),
+            )
+
+        with then("the Connection is concealed"):
+            assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
 
 
 def test_teams_connection_serves_a_downloadable_app_package() -> None:

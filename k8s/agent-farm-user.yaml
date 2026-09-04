@@ -10,6 +10,13 @@ apiVersion: v1
 kind: Namespace
 metadata:
   name: agent-farm
+  labels:
+    # Talos Kyverno ns-psa-labels mutates unlabeled namespaces to restricted.
+    # This is the hosted control-plane namespace (postgres/redis/API), not a
+    # sandbox farm — it must stay off restricted or those pods never schedule.
+    pod-security.kubernetes.io/enforce: privileged
+    pod-security.kubernetes.io/audit: privileged
+    pod-security.kubernetes.io/warn: privileged
 ---
 apiVersion: v1
 kind: ServiceAccount

@@ -501,6 +501,7 @@ class AgentService:
         latest_versions: Mapping[UUID, SkillVersion] | None = None,
         source_update_skill_ids: set[UUID] | None = None,
         effective_default_model: str = "",
+        configured_platform_keys: list[str] | None = None,
     ) -> AgentRead:
         shared_ids = [s.shared_credential_id for s in (secrets or []) if s.shared_credential_id is not None]
         shared_creds_by_id = {}
@@ -572,6 +573,7 @@ class AgentService:
             approval_mode=(agent.approval_mode if agent.agent_type == AgentType.HERMES else CommandApprovalMode.AUTO),
             secrets=secrets_read,
             skills=skills_read,
+            configured_platform_keys=configured_platform_keys or [],
             allowed_actions=allowed_actions or [],
             created_at=agent.created_at,
             updated_at=agent.updated_at,
@@ -596,6 +598,8 @@ class AgentService:
             template_key = template.source_template_key
         elif template is not None:
             template_key = template.template_key
+        read_scope = self.authorization.authorization_scope(context, PermissionKey.AGENT_READ)
+        configured_platform_keys = self.repository.get_active_communication_platforms_for_agents([agent.id], read_scope)
         return self._build_agent_read(
             agent,
             secrets,
@@ -603,6 +607,7 @@ class AgentService:
             required_map,
             allowed_actions,
             effective_default_model=self.agent_settings_lookup.resolve_default_model(agent.organization_id),
+            configured_platform_keys=configured_platform_keys.get(agent.id, []),
             template_key=template_key,
             template_version=template.version if template else 0,
             template_pin_type=pin_type,
@@ -1529,6 +1534,7 @@ class AgentService:
         )
         latest_versions = self.skill_repository.get_latest_versions(assigned_skill_ids)
         source_update_skill_ids = self.skill_repository.get_source_update_skill_ids(latest_versions)
+        configured_platform_keys = self.repository.get_active_communication_platforms_for_agents(agent_ids, read_scope)
 
         req_maps_by_agent = self.template_repository.get_required_skill_map_for_agents(agents)
         pin_info = self.template_repository.get_pinned_template_info_for_agents(agents)
@@ -1554,6 +1560,7 @@ class AgentService:
                 latest_versions=latest_versions,
                 source_update_skill_ids=source_update_skill_ids,
                 effective_default_model=effective_default_model,
+                configured_platform_keys=configured_platform_keys.get(agent.id, []),
             )
             for agent in agents
         ]

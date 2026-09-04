@@ -35,6 +35,7 @@ class CommunicationPlatform(str, enum.Enum):
 class PlatformCapability(str, enum.Enum):
     DIRECTORY_DISCOVERY = "directory_discovery"
     APPLICATION_PROVISIONING = "application_provisioning"
+    INSTALL_LINK = "install_link"
     WEBHOOK_INGRESS = "webhook_ingress"
     ATTACHMENTS = "attachments"
     THREADS = "threads"
@@ -561,6 +562,27 @@ class PlatformDescriptorRead(PydanticBaseModel):
     post_setup_hint: str | None = None
 
 
+class CommunicationDirectoryEntryRead(PydanticBaseModel):
+    """One safe-to-display provider directory item used to configure a Connection."""
+
+    id: str = Field(min_length=1, max_length=512)
+    label: str = Field(min_length=1, max_length=255)
+    detail: str | None = Field(default=None, max_length=255)
+
+
+class CommunicationDirectoryPreview(PydanticBaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    platform_key: str = Field(min_length=1, max_length=64)
+    settings: dict[str, Any] = Field(default_factory=dict)
+    credentials: dict[str, Any]
+
+
+class CommunicationDirectoryPreviewRead(PydanticBaseModel):
+    channels: list[CommunicationDirectoryEntryRead] = Field(default_factory=list)
+    users: list[CommunicationDirectoryEntryRead] = Field(default_factory=list)
+
+
 class CommunicationConnectionCreate(PydanticBaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -607,3 +629,9 @@ class CommunicationConnectionRead(PydanticBaseModel):
     revision: int
     created_at: datetime
     updated_at: datetime
+
+
+class CommunicationInstallLinkRead(PydanticBaseModel):
+    """Provider-built install URL for a saved Connection's bot."""
+
+    url: str

@@ -241,13 +241,31 @@ def _classify_error(
         normalized, "timeout", "timed out", "deadline exceeded"
     ):
         return CommunicationErrorCategory.TIMEOUT
+    # The bare identifiers here are provider error codes (Slack's `missing_scope`,
+    # `not_authed`, `ratelimited`, …) that carry no matching English text of their own.
     if isinstance(error, PermissionError) or _contains_any(
-        normalized, "forbidden", "permission denied", "access denied", "not authorized"
+        normalized,
+        "forbidden",
+        "permission denied",
+        "access denied",
+        "not authorized",
+        "missing_scope",
+        "missing scope",
     ):
         return CommunicationErrorCategory.AUTHORIZATION
-    if _contains_any(normalized, "invalid_auth", "unauthorized", "invalid credential", "credential rejected"):
+    if _contains_any(
+        normalized,
+        "invalid_auth",
+        "unauthorized",
+        "invalid credential",
+        "credential rejected",
+        "not_authed",
+        "token_revoked",
+        "token_expired",
+        "account_inactive",
+    ):
         return CommunicationErrorCategory.AUTHENTICATION
-    if _contains_any(normalized, "rate_limit", "rate limited", "too many requests", "throttl"):
+    if _contains_any(normalized, "rate_limit", "ratelimited", "rate limited", "too many requests", "throttl"):
         return CommunicationErrorCategory.RATE_LIMITED
     if isinstance(error, (httpx.TransportError, ConnectionError)) or _contains_any(
         normalized, "network", "connecterror", "connection refused", "dns", "socket", "transport"

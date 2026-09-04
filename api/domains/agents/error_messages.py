@@ -35,6 +35,13 @@ def friendly_k8s_error(exc: Exception) -> str:
             parsed = json.loads(body) if isinstance(body, (str, bytes)) else body
             msg = parsed.get("message") or parsed.get("reason") or ""
             if msg:
+                # A full ResourceQuota and a missing RoleBinding both come back as
+                # 403 Forbidden. Reporting quota exhaustion as an RBAC fault sends
+                # operators to the service account when the namespace has simply
+                # run out of limits.memory (or requests.memory) -- so match the
+                # quota wording first and keep the exhausted axis in the message.
+                if "exceeded quota" in msg:
+                    return f"Agent could not start — the namespace resource quota is exhausted. ({msg})"
                 friendly = _K8S_STATUS_MESSAGES.get(status_code) if isinstance(status_code, int) else None
                 return f"{friendly} ({msg})" if friendly else msg
         except Exception:
