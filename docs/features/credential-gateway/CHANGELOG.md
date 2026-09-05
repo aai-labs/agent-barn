@@ -6,13 +6,20 @@ Related context: [`../../adr/2026-09-02-credential-gateway-egress-modes.md`](../
 
 ## Current state
 
-- **Delivered:** the Integration Plugin seam; the credential gateway as a separate deployment; token issue/revoke/resolve; the `GATEWAY_PROXY` forward path for every shipped aai-cli provider without changing aai-cli; `TOKEN_BROKER` for Google Workspace; and `GATEWAY_PROXY` for Firecrawl. **No shipped plugin is `EgressMode.DIRECT` any more — no provider materializes a real credential into an agent pod.** The gateway is unconditional — `CREDENTIAL_GATEWAY_ENABLED` is gone, and each plugin's `egress_mode` is the sole, permanent routing decision.
+- **Delivered:** the Integration Plugin seam; the credential gateway as a separate deployment; token issue/revoke/resolve; the `GATEWAY_PROXY` forward path for every shipped aai-cli provider without changing aai-cli; `TOKEN_BROKER` for Google Workspace; `GATEWAY_PROXY` for Firecrawl; and a durable audit trail for every resolution and lifecycle event. **No shipped plugin is `EgressMode.DIRECT` any more — no provider materializes a real credential into an agent pod.** The gateway is unconditional — `CREDENTIAL_GATEWAY_ENABLED` is gone, and each plugin's `egress_mode` is the sole, permanent routing decision.
 - **In transition:** `PROVIDER_DISPLAY_NAMES`, `PROVIDER_CONTENT_MODELS`, and `PROVIDER_VALIDATORS` still live outside the plugins (import cycle) and are pinned by contract test rather than derived.
-- **Next:** durable audit spool (below).
+- **Next:** none open.
 - **Blockers:** none.
-- **Deferred:** resolution audit is still a structured log line plus a Prometheus counter. The durable buffering/disk spool that survives an ingest outage replaces the `GatewayAuditSink` implementation without touching call sites.
 
 ## Changes
+
+### 2026-09-05 — Durable audit trail for gateway resolution and lifecycle events
+
+- **Why:** resolution and lifecycle events previously produced only a structured log line and a Prometheus counter — enough for live dashboards, but not something a compliance review could query after the fact, and not guaranteed to survive whatever collects container logs having a bad day. Slice 8 called for "buffering and disk spool so audit events survive an ingest outage."
+- **Decision:** skip the spool. Both `resolve()` (token lookup, `touch_last_used`) and `issue_for_agent`/`revoke_for_agent` already depend on Postgres being up to do their real work, so writing the audit row to that same Postgres, in the same request, removes the premise of a separate "ingest" that can be down while the operation it is auditing succeeds — if Postgres is unreachable, resolution already fails before there is anything to audit. No queue, no background worker, no new dependency.
+- **Delivered:** a `gateway_audit_event` table (`kind`, `detail`, `provider`, `agent_id`, `organization_id`, no foreign keys — matching `SecurityAuditRecord`, audit evidence must survive later deletion of the Agent or org it names). `GatewayAuditSink` now writes a row alongside the existing log line and counter, on every resolution and lifecycle event. The write is best-effort like `touch_last_used`: a failed insert is logged and swallowed, never turned into a 403 for a validly resolved token.
+- **Not delivered:** retention or partitioning for the table. It grows one row per tool call; that is a real future concern but not a now one — add pruning when row count is actually a problem.
+- **Tests:** `test_credential_gateway.py` asserts a durable row is written for a successful resolution, an unknown-token resolution (no identity to attach), and both issuance and revocation.
 
 ### 2026-09-03 — Firecrawl routed through the gateway (last DIRECT provider)
 

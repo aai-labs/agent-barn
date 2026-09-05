@@ -4,11 +4,13 @@ import base64
 
 from fastapi import status
 from hamcrest import assert_that, equal_to, is_, not_none
+from sqlmodel import Session, col, select
 from starlette.testclient import TestClient
 
 from api.domains.agents.models import SecretProvider
 from api.domains.credential_gateway.models import (
     TOKEN_PREFIX,
+    GatewayAuditEvent,
     gateway_token_env_var,
     hash_token,
     issue_token_value,
@@ -254,3 +256,59 @@ def test_the_pod_env_var_is_scoped_per_provider():
         gateway_token_env_var(SecretProvider.GOOGLE_WORKSPACE),
         equal_to("AF_GATEWAY_TOKEN_GOOGLE_WORKSPACE"),
     )
+
+
+# --- durable audit trail ---
+#
+# The row rides the same Postgres the resolution/issuance hot paths already depend on,
+# so there is no separate ingest step to lose it to.
+
+
+def _audit_events(context, kind: str) -> list[GatewayAuditEvent]:
+    with Session(context.postgres_delegate.engine) as session:
+        query = select(GatewayAuditEvent).where(col(GatewayAuditEvent.kind) == kind)
+        return list(session.exec(query).all())
+
+
+def test_a_successful_resolution_persists_a_durable_row():
+    with given(_GIVEN) as context:
+        agent = context.agent
+        token = _issue(context, agent)
+
+        with when("the agent presents its gateway token"):
+            context.gateway_client.get(_IDENTITY, headers=_auth(token))
+
+        with then("a durable resolution row is written, not just the log and counter"):
+            events = _audit_events(context, "resolution")
+            assert_that(len(events), equal_to(1))
+            assert_that(events[0].detail, equal_to("resolved"))
+            assert_that(events[0].provider, equal_to("github"))
+            assert_that(events[0].agent_id, equal_to(agent.id))
+            assert_that(events[0].organization_id, equal_to(agent.organization_id))
+
+
+def test_an_unknown_token_persists_a_row_with_no_identity():
+    with given(_GIVEN) as context:
+        with when("a well-formed but unissued token is presented"):
+            context.gateway_client.get(_IDENTITY, headers=_auth(issue_token_value()))
+
+        with then("the row records the outcome without an agent or provider to name"):
+            events = _audit_events(context, "resolution")
+            assert_that(len(events), equal_to(1))
+            assert_that(events[0].detail, equal_to("unknown"))
+            assert_that(events[0].provider, is_(None))
+            assert_that(events[0].agent_id, is_(None))
+
+
+def test_issuing_and_revoking_persist_durable_lifecycle_rows():
+    with given(_GIVEN) as context:
+        agent = context.agent
+        service = context.injector.get(CredentialGatewayService)
+
+        with when("a token is issued and then revoked"):
+            service.issue_for_agent(agent.id, agent.organization_id, {SecretProvider.GITHUB})
+            service.revoke_for_agent(agent.id, agent.organization_id)
+
+        with then("both lifecycle transitions are durably recorded"):
+            events = {e.detail for e in _audit_events(context, "lifecycle")}
+            assert_that(events, equal_to({"issued", "revoked"}))

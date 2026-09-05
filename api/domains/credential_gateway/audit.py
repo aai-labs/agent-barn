@@ -1,9 +1,13 @@
 """Audit seam for the credential gateway.
 
-Resolution happens on every agent tool call, so this is a hot path. The sink is a seam
-rather than a direct write: today it emits a structured log line and a counter, and the
-buffering/disk-spool implementation that has to survive an ingest outage replaces it
-without changing any call site.
+Resolution happens on every agent tool call, so this is a hot path. Every event gets a
+structured log line and a counter, plus a durable row in ``gateway_audit_event`` — no
+buffering or disk spool, because the row is written through the same Postgres that
+resolution itself already depends on (``GatewayTokenRepository.find_active_by_hash``,
+``touch_last_used``). If Postgres is down, resolution already fails before an audit
+event would be recorded, so there is no separate "ingest" that can be down while
+resolution succeeds. The row write is best-effort like ``touch_last_used``: a failure to
+persist it never turns a valid resolution into a failed one.
 
 Lifecycle events (issue, revoke) are low-volume and security-relevant; resolution events
 are high-volume and operational. Both go through here so one implementation change
@@ -17,9 +21,12 @@ import logging
 from dataclasses import dataclass
 from uuid import UUID
 
+from injector import inject, singleton
 from prometheus_client import Counter
 
 from api.domains.agents.models import SecretProvider
+from api.domains.credential_gateway.models import GatewayAuditEvent
+from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 
 logger = logging.getLogger("api.credential_gateway.audit")
 
@@ -47,9 +54,13 @@ class ResolutionOutcome(str, enum.Enum):
     MALFORMED = "malformed"
 
 
+@inject
+@singleton
 @dataclass(frozen=True)
 class GatewayAuditSink:
-    """Default sink: structured log plus counter."""
+    """Default sink: structured log, counter, and a durable Postgres row."""
+
+    delegate: PostgresRepositoryDelegate
 
     def record_resolution(
         self,
@@ -69,6 +80,15 @@ class GatewayAuditSink:
                 "agent_id": str(agent_id) if agent_id else None,
                 "organization_id": str(organization_id) if organization_id else None,
             },
+        )
+        self._save(
+            GatewayAuditEvent(
+                kind="resolution",
+                detail=outcome.value,
+                provider=provider.value if provider is not None else None,
+                agent_id=agent_id,
+                organization_id=organization_id,
+            )
         )
 
     def record_lifecycle(
@@ -90,3 +110,23 @@ class GatewayAuditSink:
                 "organization_id": str(organization_id),
             },
         )
+        self._save(
+            GatewayAuditEvent(
+                kind="lifecycle",
+                detail=action,
+                provider=provider.value,
+                agent_id=agent_id,
+                organization_id=organization_id,
+            )
+        )
+
+    def _save(self, event: GatewayAuditEvent) -> None:
+        """Best-effort, like ``GatewayTokenRepository.touch_last_used``.
+
+        Never gates authorization: an audit-row write failure must not turn a valid
+        resolution into a failed one.
+        """
+        try:
+            self.delegate.save(event)
+        except Exception:
+            logger.exception("failed to persist gateway audit event")

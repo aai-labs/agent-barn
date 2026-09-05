@@ -99,6 +99,26 @@ class GatewayToken(BaseModel, table=True):
     )
 
 
+class GatewayAuditEvent(BaseModel, table=True):
+    """A durable row for one resolution or lifecycle event.
+
+    No foreign keys on ``agent_id``/``organization_id``: audit evidence must survive
+    later deletion of the Agent or org it names, matching ``SecurityAuditRecord``.
+    """
+
+    __tablename__: str = "gateway_audit_event"
+    __table_args__ = (sa.Index("ix_gateway_audit_event_organization", "organization_id"),)
+
+    #: "resolution" or "lifecycle".
+    kind: str = SqlField(sa_column=Column(sa.String(20), nullable=False))
+    #: A ``ResolutionOutcome`` value for a resolution event, or the lifecycle action
+    #: ("issued", "revoked") for a lifecycle event.
+    detail: str = SqlField(sa_column=Column(sa.String(20), nullable=False))
+    provider: str | None = SqlField(default=None, sa_column=Column(sa.String(50), nullable=True))
+    agent_id: UUID | None = SqlField(default=None, nullable=True)
+    organization_id: UUID | None = SqlField(default=None, nullable=True)
+
+
 class IssuedGatewayToken(PydanticBaseModel):
     """One freshly issued token. The plaintext exists only here and in the pod Secret."""
 
