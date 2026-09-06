@@ -26,6 +26,7 @@ export type UpdateAgentData = {
   sharedCredentials?: Array<{ sharedCredentialId: string }>;
   removedSecretProviders?: string[];
   approvalMode?: "manual" | "auto" | "off";
+  verboseMode?: boolean;
 };
 
 export function useUpdateAgent() {

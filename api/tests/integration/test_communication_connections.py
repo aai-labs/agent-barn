@@ -172,6 +172,7 @@ def test_platform_catalog_lists_the_shipped_plugins() -> None:
                     contains_string("View Channels"),
                     contains_string("Read Message History"),
                     contains_string("Developer Mode"),
+                    contains_string("Install bot to server"),
                 ),
             )
             assert_that(
@@ -1046,6 +1047,68 @@ def _teams_payload(name: str = "Microsoft Teams") -> dict:
             "tenant_id": "22222222-2222-4222-8222-222222222222",
         },
     }
+
+
+def test_install_link_returns_the_recommended_url_for_a_discord_connection() -> None:
+    with given(_GIVEN) as context:
+        created = context.client.post(_base(context), json=_discord_payload(), headers=_auth(context))
+        connection_id = created.json()["id"]
+
+        with when("I request the install link for the saved Connection"):
+            with patch(
+                "api.infrastructure.discord.client.DiscordClient.get_current_application",
+                return_value={"id": "123456789012345678"},
+            ):
+                response = context.client.get(
+                    f"{_base(context)}/{connection_id}/install-link",
+                    headers=_auth(context),
+                )
+
+        with then("the recommended least-privilege install URL is returned"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(
+                response.json(),
+                equal_to(
+                    {
+                        "url": (
+                            "https://discord.com/oauth2/authorize"
+                            "?client_id=123456789012345678&scope=bot%20applications.commands&permissions=274878286912"
+                        )
+                    }
+                ),
+            )
+
+
+def test_install_link_is_rejected_for_a_platform_without_the_capability() -> None:
+    with given(_GIVEN) as context:
+        created = context.client.post(_base(context), json=_slack_payload(), headers=_auth(context))
+        connection_id = created.json()["id"]
+
+        with when("I request an install link for a Slack Connection"):
+            response = context.client.get(
+                f"{_base(context)}/{connection_id}/install-link",
+                headers=_auth(context),
+            )
+
+        with then("the platform reports it provides no bot install link"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+            assert_that(response.json()["detail"], contains_string("does not provide a bot install link"))
+
+
+def test_install_link_is_concealed_across_organizations() -> None:
+    with given(_GIVEN) as context:
+        created = context.client.post(_base(context), json=_discord_payload(), headers=_auth(context))
+        connection_id = created.json()["id"]
+        other_agent_id = uuid4()
+
+        with when("I request the install link through another Agent's path"):
+            response = context.client.get(
+                f"{_base_for_agent(context, other_agent_id)}/{connection_id}/install-link",
+                headers=_auth(context),
+            )
+
+        with then("the Connection is concealed"):
+            assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
 
 
 def test_teams_connection_serves_a_downloadable_app_package() -> None:

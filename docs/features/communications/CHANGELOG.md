@@ -13,6 +13,28 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
 
 ## Changes
 
+### 2026-09-06 — Hermes DM history continuity — PR pending
+
+- Fixed: Consecutive Hermes deliveries now explicitly resume the persisted Connection/location/thread session through `/v1/runs`. Previously the shared session ID selected persistence identity but supplied no prior messages to inference, so the Agent treated each DM as its first turn despite history remaining in SQLite.
+- Changed: The Hermes base image adds an opt-in session-history patch preserving native tool messages and compaction lineage. Storage failures fail the turn rather than erasing its context. The adapter and patched image must roll out together; OpenClaw delivery is unchanged.
+- Verified: Existing PVC history is reused without a migration.
+
+### 2026-09-04 — Provider gateway close diagnostics — PR pending
+
+- Changed: WebSocket provider close codes are now retained as bounded
+  `provider_code` diagnostics while free-form close reasons remain excluded.
+  Discord close codes for disallowed or invalid intents (`4014`/`4013`) are
+  classified as configuration failures, and authentication close code `4004`
+  is classified as an authentication failure, so gateway setup problems no
+  longer surface only as opaque `PROVIDER_ERROR` incidents. Their summaries
+  include a concrete recovery action—enable Message Content Intent, review the
+  intent selection, or replace the bot token—and tell the operator to reconnect.
+
+### 2026-09-03 — Discord bot install link — PR pending
+
+- Delivered: A saved Discord Connection can regenerate its bot install URL on demand. The Connection card's **Get install link** action calls a new `install-link` endpoint, which resolves the bot's application through Discord's `GET /oauth2/applications/@me` using the stored bot token and returns the recommended least-privilege authorize URL — View Channels, Send Messages, Read Message History, and Send Messages in Threads, plus reactions, embeds, attachments, and external emoji. The URL is never persisted, so permission recommendations in code apply to every existing Connection immediately, and the action follows the app-package contract: authorized with `AGENT_UPDATE`, concealed cross-Organization, and rejected with 400 for platforms without the capability.
+- Changed: The install link follows the Teams app-package pattern — a new optional `build_install_link` Platform Plugin seam gated by the `INSTALL_LINK` capability, declared and implemented only by Discord. No Connection persistence, validation flow, or read-model shape changed, restoring the simple install workflow the pre-AF-271 wizard offered without its separate Application ID entry. The Discord setup hint now leads with the card action, keeping the OAuth2 URL Generator as the manual alternative.
+
 ### 2026-09-01 — Directory failures are reported instead of crashing — PR pending
 
 - Fixed: A provider-side directory read that failed — a revoked token, a missing scope, a rate limit, an outage — escaped as an unhandled 500, because `SlackFetchError` is not a `ValueError`. Both the preview and saved-Connection directory endpoints now translate any provider failure through the existing error normalizer. Credential and scope problems answer 400, rate limits 429, timeouts 504, and outages 502; 401/403 are deliberately never used, since the web client treats them as its own session expiring and would sign the operator out over a bad Slack token. Provider text still never reaches the client — only the bounded summary and a validated provider code such as `missing_scope`.

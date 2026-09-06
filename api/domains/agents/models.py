@@ -308,6 +308,10 @@ class Agent(BaseModel, table=True):
         default=CommandApprovalMode.AUTO,
         sa_column=Column(sa.String(10), nullable=False, server_default="auto"),
     )
+    verbose_mode: bool = SqlField(
+        default=False,
+        sa_column=Column(sa.Boolean(), nullable=False, server_default=sa.false()),
+    )
 
 
 class AgentAccess(BaseModel, table=True):
@@ -705,6 +709,7 @@ class AgentCreate(PydanticBaseModel):
     # pin here are pinned to their latest version at creation time.
     skill_versions: list[SkillVersionPin] = Field(default_factory=list)
     approval_mode: CommandApprovalMode = CommandApprovalMode.AUTO
+    verbose_mode: bool = False
 
     @model_validator(mode="after")
     def validate_unique_secret_providers(self) -> AgentCreate:
@@ -736,6 +741,7 @@ class AgentUpdate(PydanticBaseModel):
     shared_credentials: list[AgentSharedCredentialAttach] | None = None
     removed_secret_providers: list[SecretProvider] | None = None
     approval_mode: CommandApprovalMode | None = None
+    verbose_mode: bool | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -749,6 +755,13 @@ class AgentUpdate(PydanticBaseModel):
     def reject_null_approval_mode(cls, values: object) -> object:
         if isinstance(values, dict) and values.get("approval_mode", ...) is None:
             raise ValueError("approval_mode must be omitted rather than null")
+        return values
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_null_verbose_mode(cls, values: object) -> object:
+        if isinstance(values, dict) and values.get("verbose_mode", ...) is None:
+            raise ValueError("verbose_mode must be omitted rather than null")
         return values
 
     @model_validator(mode="after")
@@ -1044,6 +1057,7 @@ class AgentRead(PydanticBaseModel):
     skills: list[AgentAssignedSkillRead] = Field(default_factory=list)
     configured_platform_keys: list[str] = Field(default_factory=list)
     approval_mode: CommandApprovalMode
+    verbose_mode: bool
     allowed_actions: list[PermissionKey] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime

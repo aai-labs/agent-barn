@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 from uuid import UUID
 
@@ -168,6 +168,94 @@ def test_runtime_claim_serializes_one_conversation() -> None:
                 second.envelope.provider_message_id if second is not None else None,
                 equal_to("provider-2"),
             )
+
+
+def test_runtime_claim_reclaims_an_inbound_delivery_whose_lease_expired() -> None:
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        connection_id = _create_connection(context)
+        repository = context.injector.get(CommunicationDeliveryRepository)
+        accepted = repository.accept_inbound(connection_id=connection_id, envelope=_envelope("provider-1"))
+        delegate = context.injector.get(PostgresRepositoryDelegate)
+
+        with when("the runtime claims it but its lease expires without a /complete call"):
+            claimed = repository.claim_next_inbound(agent_id=context.agent.id)
+            with Session(delegate.engine) as session:
+                stuck = session.get(CommunicationDelivery, accepted.delivery_id)
+                assert stuck is not None
+                stuck.lease_expires_at = datetime.now(UTC) - timedelta(seconds=1)
+                session.add(stuck)
+                session.commit()
+            # The reclaim applies a short backoff before the row is claimable
+            # again (same as an explicit failed completion would), so this
+            # call flips it back to PENDING but won't hand it out yet.
+            immediately_reclaimed = repository.claim_next_inbound(agent_id=context.agent.id)
+            with Session(delegate.engine) as session:
+                backed_off = session.get(CommunicationDelivery, accepted.delivery_id)
+                assert backed_off is not None
+                assert_that(backed_off.status, equal_to(CommunicationDeliveryStatus.PENDING))
+                backed_off.available_at = datetime.now(UTC) - timedelta(seconds=1)
+                session.add(backed_off)
+                session.commit()
+            reclaimed = repository.claim_next_inbound(agent_id=context.agent.id)
+
+        with then("the stale claim is handed out again instead of staying stuck forever"):
+            assert_that(claimed, is_(not_(none())))
+            assert_that(immediately_reclaimed, none())
+            assert_that(reclaimed, is_(not_(none())))
+            assert_that(
+                reclaimed.delivery_id if reclaimed is not None else None,
+                equal_to(claimed.delivery_id if claimed is not None else None),
+            )
+            assert_that(reclaimed.attempt_count if reclaimed is not None else None, equal_to(2))
+
+
+def _expire_lease(delegate: PostgresRepositoryDelegate, delivery_id: UUID) -> None:
+    with Session(delegate.engine) as session:
+        row = session.get(CommunicationDelivery, delivery_id)
+        assert row is not None
+        row.lease_expires_at = datetime.now(UTC) - timedelta(seconds=1)
+        session.add(row)
+        session.commit()
+
+
+def _clear_backoff(delegate: PostgresRepositoryDelegate, delivery_id: UUID) -> None:
+    with Session(delegate.engine) as session:
+        row = session.get(CommunicationDelivery, delivery_id)
+        assert row is not None
+        row.available_at = datetime.now(UTC) - timedelta(seconds=1)
+        session.add(row)
+        session.commit()
+
+
+def test_runtime_claim_dead_letters_an_inbound_delivery_after_repeated_lease_expiry() -> None:
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        connection_id = _create_connection(context)
+        repository = context.injector.get(CommunicationDeliveryRepository)
+        accepted = repository.accept_inbound(connection_id=connection_id, envelope=_envelope("provider-1"))
+        delegate = context.injector.get(PostgresRepositoryDelegate)
+
+        claimed = repository.claim_next_inbound(agent_id=context.agent.id, max_attempts=5)
+        assert_that(claimed, is_(not_(none())))
+        for _ in range(4):
+            _expire_lease(delegate, accepted.delivery_id)
+            # This call performs the reclaim (PROCESSING -> PENDING with a
+            # backoff window) internally but can't claim in the same pass,
+            # since the backoff pushes available_at into the future.
+            assert_that(repository.claim_next_inbound(agent_id=context.agent.id, max_attempts=5), none())
+            _clear_backoff(delegate, accepted.delivery_id)
+            claimed = repository.claim_next_inbound(agent_id=context.agent.id, max_attempts=5)
+            assert_that(claimed, is_(not_(none())))
+
+        with when("the delivery's lease expires a fifth time"):
+            _expire_lease(delegate, accepted.delivery_id)
+            final_claim = repository.claim_next_inbound(agent_id=context.agent.id, max_attempts=5)
+
+        with then("it dead-letters instead of retrying forever"):
+            assert_that(claimed.attempt_count, equal_to(5))
+            assert_that(final_claim, none())
+            final = _delivery(context, accepted.delivery_id)
+            assert_that(final.status, equal_to(CommunicationDeliveryStatus.DEAD_LETTERED))
+            assert_that(final.last_error_code, equal_to("LEASE_EXPIRED"))
 
 
 def test_thread_state_is_durable_and_connection_scoped() -> None:

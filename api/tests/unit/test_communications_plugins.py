@@ -110,6 +110,31 @@ def test_telegram_plugin_returns_safe_external_identity_when_validation_is_skipp
     assert validated.credentials == {"bot_token": "123:token"}
 
 
+def test_discord_plugin_builds_the_recommended_install_link_from_the_application() -> None:
+    plugin = DiscordPlatformPlugin(ValidationConfig())
+    credentials = plugin.credentials_model.model_validate({"bot_token": "bot-value"})
+
+    with patch("api.domains.communications.plugins.discord.DiscordClient") as client_type:
+        client_type.return_value.get_current_application.return_value = {"id": "123456789012345678"}
+        url = plugin.build_install_link(plugin.settings_model.model_validate({}), credentials)
+
+    assert_that(
+        url,
+        equal_to(
+            "https://discord.com/oauth2/authorize"
+            "?client_id=123456789012345678&scope=bot%20applications.commands&permissions=274878286912"
+        ),
+    )
+
+
+def test_platforms_without_install_links_reject_the_seam() -> None:
+    plugin = TelegramPlatformPlugin(ValidationConfig())
+    credentials = plugin.credentials_model.model_validate({"bot_token": "123:token"})
+
+    with pytest.raises(NotImplementedError, match="telegram does not implement bot install links"):
+        plugin.build_install_link(plugin.settings_model.model_validate({}), credentials)
+
+
 def test_discord_plugin_normalizes_an_allowed_message_create_event() -> None:
     config = ValidationConfig()
     plugin = DiscordPlatformPlugin(config)

@@ -76,6 +76,11 @@ def _hermes_config_core(
         "plugins": {
             "enabled": enabled_plugins,
         },
+        # Agent Barn materializes pinned Skills in the persistent workspace,
+        # while Hermes otherwise scans only $HERMES_HOME/skills.
+        "skills": {
+            "external_dirs": ["/workspace/skills"],
+        },
         "approvals": {
             "mode": _HERMES_APPROVAL_MODE.get(approval_mode, "smart"),
         },
@@ -159,6 +164,7 @@ def build_secret_hermes_runtime(
     runtime_api_key: str,
     litellm_api_key: str,
     litellm_base_url: str,
+    verbose_mode: bool = False,
 ) -> client.V1Secret:
     return client.V1Secret(
         metadata=client.V1ObjectMeta(
@@ -178,6 +184,8 @@ def build_secret_hermes_runtime(
             "RUNTIME_API_KEY": runtime_api_key,
             "RUNTIME_API_URL": "http://127.0.0.1:8642",
             "RUNTIME_MODEL": agent_name,
+            "RUNTIME_KIND": "hermes",
+            "VERBOSE_MODE": "true" if verbose_mode else "false",
         },
     )
 
@@ -210,6 +218,21 @@ def build_hermes_deployment(
                     image_pull_secrets=(
                         [client.V1LocalObjectReference(name=image_pull_secret)] if image_pull_secret else None
                     ),
+                    init_containers=[
+                        client.V1Container(
+                            name="fix-pvc-owner",
+                            image=image,
+                            command=[
+                                "sh",
+                                "-c",
+                                "mkdir -p /opt/data/workspace && chown -R hermes:hermes /opt/data",
+                            ],
+                            security_context=client.V1SecurityContext(run_as_user=0),
+                            volume_mounts=[
+                                client.V1VolumeMount(name="data", mount_path="/opt/data"),
+                            ],
+                        )
+                    ],
                     containers=[
                         client.V1Container(
                             name="agent",

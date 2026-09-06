@@ -16,6 +16,7 @@ from api.domains.communications.models import (
     CommunicationDirectoryEntryRead,
     CommunicationDirectoryPreview,
     CommunicationDirectoryPreviewRead,
+    CommunicationInstallLinkRead,
     CommunicationJournalEntryRead,
     CommunicationJournalStage,
     CommunicationReconnectRead,
@@ -111,6 +112,19 @@ def download_communication_app_package(
         media_type="application/zip",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+@communications_router.get(
+    "/agents/{agent_id}/connections/{connection_id}/install-link",
+    response_model=CommunicationInstallLinkRead,
+)
+def get_communication_install_link(
+    agent_id: UUID,
+    connection_id: UUID,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[CommunicationsService, Injected(CommunicationsService)],
+):
+    return service.build_install_link(agent_id, connection_id, context)
 
 
 @communications_router.patch(
