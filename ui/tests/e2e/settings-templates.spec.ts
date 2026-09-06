@@ -95,7 +95,7 @@ test.describe("Settings · Templates", () => {
     const saved = await savePayload;
     expect(saved.postDataJSON().soul_md).toBe("# Edited by the org");
 
-    await page.getByRole("button", { name: "Publish" }).click();
+    await page.getByRole("button", { name: "Publish", exact: true }).click();
     const publishRequest = page.waitForRequest(
       (request) =>
         request.method() === "POST" &&
@@ -114,7 +114,7 @@ test.describe("Settings · Templates", () => {
     await page.getByRole("button", { name: /Continue editing draft|Start draft/ }).click();
     await page.getByLabel("SOUL.md content").fill("# Unsaved");
 
-    await expect(page.getByRole("button", { name: "Publish" })).toBeDisabled();
+    await expect(page.getByRole("button", { name: "Publish", exact: true })).toBeDisabled();
 
     await page.getByRole("button", { name: "Templates", exact: true }).first().click();
     await expect(page.getByRole("dialog")).toContainText(/Close without saving|unsaved/i);
@@ -128,7 +128,7 @@ test.describe("Settings · Templates", () => {
     await page.goto(`${TEMPLATES_TAB}/templates/${MOCK_ORG_TEMPLATE_KEY}`);
 
     await page.getByRole("button", { name: /Continue editing draft|Start draft/ }).click();
-    await page.getByRole("button", { name: "Discard" }).click();
+    await page.getByRole("button", { name: "Discard", exact: true }).click();
 
     const discardRequest = page.waitForRequest(
       (request) =>
@@ -165,14 +165,14 @@ test.describe("Settings · Templates", () => {
     await dataSupport.orgTemplates.interceptDeleteTemplate();
     await page.goto(`${TEMPLATES_TAB}/templates/${MOCK_ORG_TEMPLATE_KEY}`);
 
-    await page.getByRole("button", { name: "Delete" }).click();
+    await page.getByRole("button", { name: "Delete", exact: true }).click();
 
     const deleteRequest = page.waitForRequest(
       (request) =>
         request.method() === "DELETE" &&
         request.url().endsWith(`/templates/${MOCK_ORG_TEMPLATE_KEY}`),
     );
-    await page.getByRole("button", { name: /Delete template|Delete/ }).last().click();
+    await page.getByRole("dialog").getByRole("button", { name: "Delete", exact: true }).click();
     await deleteRequest;
   });
 

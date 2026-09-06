@@ -56,7 +56,7 @@ export const PlatformTemplateReadSchema = z.object({
   organizationId: z.string().uuid().nullable(),
   templateKey: z.string(),
   templateName: z.string(),
-  templateSource: z.literal("pre-defined"),
+  templateSource: z.enum(["pre-defined", "custom"]),
   forkedFromPlatformTemplateId: z.string().uuid().nullable().optional(),
   forkBaselinePlatformTemplateId: z.string().uuid().nullable().optional(),
   forkBaselinePlatformVersion: z.number().int().nullable().optional(),
