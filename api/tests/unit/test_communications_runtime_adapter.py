@@ -3,6 +3,7 @@ import json
 import threading
 from pathlib import Path
 from types import ModuleType
+from typing import Any
 
 import pytest
 
@@ -71,7 +72,7 @@ class _FakeSSEResponse:
         return False
 
 
-_DELIVERY = {
+_DELIVERY: dict[str, Any] = {
     "delivery_id": "delivery-1",
     "connection_id": "conn-1",
     "envelope": {"text": "hello", "location": {"id": "chan-1", "thread_id": None}},
@@ -79,7 +80,7 @@ _DELIVERY = {
 
 
 def _fake_urlopen(events: list[tuple[str, dict]], *, then_block: bool = False):
-    def _urlopen(_req, timeout=900):  # noqa: ARG001
+    def _urlopen(_req, timeout=900):
         return _FakeSSEResponse(_sse_bytes(events), then_block=then_block)
 
     return _urlopen
@@ -136,7 +137,7 @@ def test_hermes_run_completed_relays_only_the_final_reply_by_default(monkeypatch
     adapter = _load_adapter(monkeypatch, runtime_kind="hermes", verbose_mode=False)
     calls: list[tuple[str, dict | None]] = []
 
-    def fake_http_request(method, url, *, headers, payload=None):  # noqa: ARG001
+    def fake_http_request(method, url, *, headers, payload=None):
         calls.append((url, payload))
         if url.endswith("/v1/runs"):
             return {"run_id": "run-1"}
@@ -156,7 +157,7 @@ def test_hermes_run_completed_relays_only_the_final_reply_by_default(monkeypatch
 
     adapter._run_and_drain(_DELIVERY, adapter.session_key_for(_DELIVERY))
 
-    reply_texts = [payload["text"] for url, payload in calls if url.endswith("/replies")]
+    reply_texts = [payload["text"] for url, payload in calls if url.endswith("/replies") and payload is not None]
     assert reply_texts == ["final answer"]
     complete_calls = [payload for url, payload in calls if url.endswith("/complete")]
     assert complete_calls == [{"succeeded": True}]
@@ -166,7 +167,7 @@ def test_hermes_verbose_mode_relays_progress_events_when_enabled(monkeypatch: py
     adapter = _load_adapter(monkeypatch, runtime_kind="hermes", verbose_mode=True)
     calls: list[tuple[str, dict | None]] = []
 
-    def fake_http_request(method, url, *, headers, payload=None):  # noqa: ARG001
+    def fake_http_request(method, url, *, headers, payload=None):
         calls.append((url, payload))
         if url.endswith("/v1/runs"):
             return {"run_id": "run-1"}
@@ -186,7 +187,7 @@ def test_hermes_verbose_mode_relays_progress_events_when_enabled(monkeypatch: py
 
     adapter._run_and_drain(_DELIVERY, adapter.session_key_for(_DELIVERY))
 
-    reply_texts = [payload["text"] for url, payload in calls if url.endswith("/replies")]
+    reply_texts = [payload["text"] for url, payload in calls if url.endswith("/replies") and payload is not None]
     assert reply_texts == ['Searching the codebase for files matching "rbac"', "final answer"]
 
 
@@ -210,8 +211,7 @@ def test_progress_line_renders_full_sentences_for_known_tools(monkeypatch: pytes
         == "Saving a note to memory: Remembered word: pineapple"
     )
     assert (
-        adapter._progress_line("subagent.start", {"goal": "audit RBAC"})
-        == "Starting a subagent to work on: audit RBAC"
+        adapter._progress_line("subagent.start", {"goal": "audit RBAC"}) == "Starting a subagent to work on: audit RBAC"
     )
     assert adapter._progress_line("tool.started", {"tool": "web_search", "preview": "hermes docs"}) == (
         "Running web_search: hermes docs"
@@ -228,7 +228,7 @@ def test_hermes_reasoning_available_is_never_relayed_even_with_verbose_mode(
     adapter = _load_adapter(monkeypatch, runtime_kind="hermes", verbose_mode=True)
     calls: list[tuple[str, dict | None]] = []
 
-    def fake_http_request(method, url, *, headers, payload=None):  # noqa: ARG001
+    def fake_http_request(method, url, *, headers, payload=None):
         calls.append((url, payload))
         if url.endswith("/v1/runs"):
             return {"run_id": "run-1"}
@@ -241,14 +241,17 @@ def test_hermes_reasoning_available_is_never_relayed_even_with_verbose_mode(
         _fake_urlopen(
             [
                 ("reasoning.available", {"text": "Here are 4 things rback could mean:\n\n1. RBAC — a common sec"}),
-                ("run.completed", {"output": "Here are 4 things rback could mean:\n\n1. RBAC — a common security model..."}),
+                (
+                    "run.completed",
+                    {"output": "Here are 4 things rback could mean:\n\n1. RBAC — a common security model..."},
+                ),
             ]
         ),
     )
 
     adapter._run_and_drain(_DELIVERY, adapter.session_key_for(_DELIVERY))
 
-    reply_texts = [payload["text"] for url, payload in calls if url.endswith("/replies")]
+    reply_texts = [payload["text"] for url, payload in calls if url.endswith("/replies") and payload is not None]
     assert reply_texts == ["Here are 4 things rback could mean:\n\n1. RBAC — a common security model..."]
 
 
@@ -263,8 +266,9 @@ def test_hermes_reclaim_does_not_start_a_second_concurrent_run_for_the_same_sess
     run_calls: list[dict] = []
     release = threading.Event()
 
-    def fake_http_request(method, url, *, headers, payload=None):  # noqa: ARG001
+    def fake_http_request(method, url, *, headers, payload=None):
         if url.endswith("/v1/runs"):
+            assert payload is not None
             run_calls.append(payload)
             release.wait(timeout=5)
             return {"run_id": "run-1"}
@@ -291,7 +295,7 @@ def test_hermes_approval_request_relays_regardless_of_verbose_mode(monkeypatch: 
     adapter = _load_adapter(monkeypatch, runtime_kind="hermes", verbose_mode=False)
     calls: list[tuple[str, dict | None]] = []
 
-    def fake_http_request(method, url, *, headers, payload=None):  # noqa: ARG001
+    def fake_http_request(method, url, *, headers, payload=None):
         calls.append((url, payload))
         if url.endswith("/v1/runs"):
             return {"run_id": "run-1"}
@@ -313,7 +317,7 @@ def test_hermes_approval_request_relays_regardless_of_verbose_mode(monkeypatch: 
     with pytest.raises(_StreamStillOpen):
         adapter._run_and_drain(_DELIVERY, session_key)
 
-    reply_calls = [payload for url, payload in calls if url.endswith("/replies")]
+    reply_calls = [payload for url, payload in calls if url.endswith("/replies") and payload is not None]
     assert len(reply_calls) == 1
     assert "rm -rf /tmp/x" in reply_calls[0]["text"]
     assert not any(url.endswith("/complete") for url, _ in calls)
@@ -330,9 +334,8 @@ def test_hermes_second_delivery_for_pending_session_resolves_approval(monkeypatc
     }
     calls: list[tuple[str, dict | None]] = []
 
-    def fake_http_request(method, url, *, headers, payload=None):  # noqa: ARG001
+    def fake_http_request(method, url, *, headers, payload=None):
         calls.append((url, payload))
-        return None
 
     monkeypatch.setattr(adapter, "http_request", fake_http_request)
     monkeypatch.setattr(
@@ -363,7 +366,7 @@ def test_hermes_stream_closing_without_a_terminal_event_fails_the_delivery(monke
     adapter = _load_adapter(monkeypatch, runtime_kind="hermes")
     calls: list[tuple[str, dict | None]] = []
 
-    def fake_http_request(method, url, *, headers, payload=None):  # noqa: ARG001
+    def fake_http_request(method, url, *, headers, payload=None):
         calls.append((url, payload))
         if url.endswith("/v1/runs"):
             return {"run_id": "run-1"}
@@ -379,7 +382,9 @@ def test_hermes_stream_closing_without_a_terminal_event_fails_the_delivery(monke
     adapter._run_and_drain(_DELIVERY, adapter.session_key_for(_DELIVERY))
 
     complete_calls = [payload for url, payload in calls if url.endswith("/complete")]
-    assert complete_calls == [{"succeeded": False, "error_code": "RuntimeError", "error_message": "Run run-1 events stream ended early"}]
+    assert complete_calls == [
+        {"succeeded": False, "error_code": "RuntimeError", "error_message": "Run run-1 events stream ended early"}
+    ]
 
 
 def test_hermes_delivery_explicitly_resumes_its_durable_session(monkeypatch: pytest.MonkeyPatch) -> None:

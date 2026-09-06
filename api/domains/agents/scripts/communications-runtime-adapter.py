@@ -204,7 +204,7 @@ def resolve_pending_approval(session_key: str, delivery: dict) -> bool:
             post_reply(delivery_id, f"Please reply with one of: {choices}")
             complete_delivery(delivery_id, succeeded=True)
             return True
-        if message.startswith("HTTP 404") or message.startswith("HTTP 409"):
+        if message.startswith(("HTTP 404", "HTTP 409")):
             # The run resolved some other way (e.g. Hermes's own approval
             # timeout). Drop the stale entry and let the caller start a fresh run.
             with _PENDING_APPROVALS_LOCK:
