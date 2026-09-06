@@ -88,7 +88,11 @@ export function TemplatePublishedView({
 
   return (
     <div className="max-w-[1100px] mx-auto px-4 sm:px-8 lg:px-10 pt-8 pb-24">
-      <button className="af-btn af-btn-sm mb-6" onClick={onClose}>
+      <button
+        className="inline-flex items-center gap-1.5 text-[0.8125rem] mb-6 px-2 py-1 -ml-2 rounded-lg hover:bg-[var(--bg-soft)] transition-colors"
+        style={{ color: "var(--ink-3)" }}
+        onClick={onClose}
+      >
         <ArrowLeft size={14} /> {scope.kind === "platform" ? "Platform templates" : "Templates"}
       </button>
 

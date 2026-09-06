@@ -73,7 +73,8 @@ export function TemplateEditorPage({
             your account.
           </p>
           <button
-            className="af-btn"
+            className="inline-flex items-center gap-1.5 text-[0.8125rem] px-2 py-1 -ml-2 rounded-lg hover:bg-[var(--bg-soft)] transition-colors"
+            style={{ color: "var(--ink-3)" }}
             onClick={() => router.push(listHref)}
           >
             <ArrowLeft size={14} /> Back to templates

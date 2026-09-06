@@ -516,9 +516,10 @@ export function TemplateEditor({
 
   return (
     <div className="max-w-[1100px] mx-auto px-4 sm:px-8 lg:px-10 pt-8 pb-24">
-      <div className="flex flex-wrap gap-2 mb-6">
+      <div className="flex flex-wrap items-center gap-2 mb-6">
         <button
-          className="af-btn af-btn-sm"
+          className="inline-flex items-center gap-1.5 text-[0.8125rem] px-2 py-1 -ml-2 rounded-lg hover:bg-[var(--bg-soft)] transition-colors disabled:opacity-60"
+          style={{ color: "var(--ink-3)" }}
           onClick={requestClose}
           disabled={pending}
         >
