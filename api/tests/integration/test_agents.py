@@ -374,6 +374,34 @@ def test_create_agent_default_approval_mode_is_auto():
             assert_that(response.json()["approval_mode"], equal_to("auto"))
 
 
+def test_create_agent_default_verbose_mode_is_false():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+
+        with when("I create an agent without specifying verbose_mode"):
+            response = client.post(_BASE, json=_VALID_CREATE, headers=_auth(context))
+
+        with then("the response has verbose_mode set to false"):
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+            assert_that(response.json()["verbose_mode"], equal_to(False))
+
+
+def test_create_hermes_agent_with_verbose_mode_true():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+
+        with when("I create a Hermes agent with verbose_mode true"):
+            response = client.post(
+                _BASE,
+                json={**_VALID_CREATE_HERMES, "verbose_mode": True},
+                headers=_auth(context),
+            )
+
+        with then("the response has verbose_mode set to true"):
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+            assert_that(response.json()["verbose_mode"], equal_to(True))
+
+
 def test_create_openclaw_agent_with_approval_mode_off_returns_400():
     with given(_GIVEN) as context:
         client: TestClient = context.client
@@ -668,6 +696,23 @@ def test_patch_hermes_agent_approval_mode_to_manual():
         with then("the response reflects the new approval_mode"):
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
             assert_that(response.json()["approval_mode"], equal_to("manual"))
+
+
+def test_patch_hermes_agent_verbose_mode_to_true():
+    with given([*_GIVEN, there_is_an_agent(agent_type=AgentType.HERMES)]) as context:
+        client: TestClient = context.client
+        agent_id = str(context.agent.id)
+
+        with when("I update the Hermes agent's verbose_mode to true"):
+            response = client.patch(
+                f"{_BASE}/{agent_id}",
+                json={"verbose_mode": True},
+                headers=_auth(context),
+            )
+
+        with then("the response reflects the new verbose_mode"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(response.json()["verbose_mode"], equal_to(True))
 
 
 def test_patch_hermes_agent_approval_mode_to_off():

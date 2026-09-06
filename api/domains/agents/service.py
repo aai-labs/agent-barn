@@ -571,6 +571,7 @@ class AgentService:
             # instead of a stored value from before this became enforced, so
             # reads stay truthful even for agents persisted prior to this check.
             approval_mode=(agent.approval_mode if agent.agent_type == AgentType.HERMES else CommandApprovalMode.AUTO),
+            verbose_mode=agent.verbose_mode,
             secrets=secrets_read,
             skills=skills_read,
             configured_platform_keys=configured_platform_keys or [],
@@ -707,6 +708,7 @@ class AgentService:
             model=data.model or "",
             agent_type=data.agent_type,
             approval_mode=data.approval_mode,
+            verbose_mode=data.verbose_mode,
         )
         self._set_pin(agent, template)
 
@@ -1628,6 +1630,9 @@ class AgentService:
         if "approval_mode" in updated:
             agent.approval_mode = updated["approval_mode"]
 
+        if "verbose_mode" in updated:
+            agent.verbose_mode = updated["verbose_mode"]
+
         # Validate skill changes against the effective template's required skills
         if effective_template is None:
             effective_template = self.template_repository.get_pinned_template(agent)
@@ -1891,6 +1896,7 @@ class AgentService:
                 runtime_api_key=runtime_api_key,
                 litellm_api_key=litellm_key,
                 litellm_base_url=llm_proxy_url,
+                verbose_mode=agent.verbose_mode,
             )
             deployment = build_hermes_deployment(
                 agent.id,
