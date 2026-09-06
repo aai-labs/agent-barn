@@ -402,6 +402,22 @@ def test_create_hermes_agent_with_verbose_mode_true():
             assert_that(response.json()["verbose_mode"], equal_to(True))
 
 
+def test_create_openclaw_agent_with_verbose_mode_true_returns_400():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+
+        with when("I create an OpenClaw agent with verbose_mode true"):
+            response = client.post(
+                _BASE,
+                json={**_VALID_CREATE, "verbose_mode": True},
+                headers=_auth(context),
+            )
+
+        with then("it returns 400 because OpenClaw does not support verbose progress messages"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+            assert_that(response.json()["detail"], contains_string("OpenClaw"))
+
+
 def test_create_openclaw_agent_with_approval_mode_off_returns_400():
     with given(_GIVEN) as context:
         client: TestClient = context.client
