@@ -76,6 +76,11 @@ def _hermes_config_core(
         "plugins": {
             "enabled": enabled_plugins,
         },
+        # Agent Barn materializes pinned Skills in the persistent workspace,
+        # while Hermes otherwise scans only $HERMES_HOME/skills.
+        "skills": {
+            "external_dirs": ["/workspace/skills"],
+        },
         "approvals": {
             "mode": _HERMES_APPROVAL_MODE.get(approval_mode, "smart"),
         },

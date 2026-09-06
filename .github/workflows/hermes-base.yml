@@ -49,6 +49,8 @@ jobs:
             gh_token=${{ secrets.AAI_CLI_REPO_ACCESS_TOKEN }}
       - name: Image contract tests
         run: sh hermes-base/test-image.sh hermes-base:ci
+      - name: API runtime tests
+        run: HERMES_TEST_IMAGE=hermes-base:ci make test-api-runtime
 
   push:
     name: Push
@@ -106,6 +108,10 @@ jobs:
         run: |
           sh hermes-base/test-image.sh \
             ${{ vars.REGISTRY_URL }}/agentbarn-hermes-base:${{ steps.tag.outputs.value }}
+      - name: API runtime tests
+        run: |
+          HERMES_TEST_IMAGE=${{ vars.REGISTRY_URL }}/agentbarn-hermes-base:${{ steps.tag.outputs.value }} \
+            make test-api-runtime
       - name: Push
         uses: docker/build-push-action@v7
         with:
