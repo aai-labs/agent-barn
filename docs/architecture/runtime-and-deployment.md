@@ -25,6 +25,8 @@ A Kubernetes/runtime start failure can place the Agent in `ERROR`; successful st
 
 Command approval (the persisted `approval_mode` field) is mapped onto a runtime policy only for Hermes: `builders/hermes.py` maps `manual`→`manual`, `auto`→`smart`, and `off`→`off` into the Hermes `approvals.mode` config. OpenClaw has no user-configurable command-approval control — `build_openclaw_gateway_config` never receives or emits an approvals block — so the API rejects an explicit non-default `approval_mode` for an OpenClaw Agent instead of accepting and silently ignoring it. OpenClaw-specific command approval is tracked as a separate follow-up.
 
+Hermes uses `/workspace` as its terminal and messaging working directory while its managed state remains under `/opt/data`. Agent Barn materializes assigned Skills under `/workspace/skills` and declares that directory in Hermes' `skills.external_dirs`, because the runtime's native discovery root is `/opt/data/skills`.
+
 ## Runtime-neutral communications
 
 Both Hermes and OpenClaw consume the same versioned Communications protocol. A sidecar-style runtime adapter claims inbound Communication Deliveries, invokes the runtime's local chat-completions endpoint with a Connection-scoped session key, submits the reply against the source delivery, and completes the delivery. Runtimes never receive provider tokens and contain no Slack, Telegram, or Discord transport configuration.
