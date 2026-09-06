@@ -27,7 +27,11 @@ Command approval (the persisted `approval_mode` field) is mapped onto a runtime 
 
 ## Runtime-neutral communications
 
-Both Hermes and OpenClaw consume the same versioned Communications protocol. A sidecar-style runtime adapter claims inbound Communication Deliveries, invokes the runtime's local chat-completions endpoint with a Connection-scoped session key, submits the reply against the source delivery, and completes the delivery. Runtimes never receive provider tokens and contain no Slack, Telegram, or Discord transport configuration.
+Both Hermes and OpenClaw consume the same versioned Communications protocol. A sidecar-style runtime adapter claims inbound Communication Deliveries, invokes the runtime's local API with a Connection-scoped session key, submits the reply against the source delivery, and completes the delivery. Runtimes never receive provider tokens and contain no Slack, Telegram, or Discord transport configuration.
+
+Hermes deliveries use `/v1/runs` so command approvals and progress remain available. Each turn explicitly sends `resume_session: true` with the stable Connection/location/thread session identity. The Hermes base image carries `hermes-base/patch-run-session-history.py`: the pinned upstream endpoint otherwise persists under `session_id` but starts with empty history. The patch loads native SQLite conversation history, follows compaction lineage, preserves tool-call metadata, and fails on unavailable history storage instead of silently starting over. New sessions legitimately have empty history. Explicit caller-supplied history cannot be combined with resume mode. OpenClaw retains its chat-completions path.
+
+This requires deploying the patched Hermes image together with the adapter. Existing Hermes session data remains on the Agent PVC and becomes available again on the next turn; no database migration or transcript reconstruction is required. The image patch fails the build if its upstream source anchor changes.
 
 The shared runtime adapter uses bounded exponential idle backoff with jitter for empty claim responses, starting at 500 ms and capping at 5 seconds. A successful claim resets the backoff before the next claim, so prompt delivery remains bounded without a tight HTTP or PostgreSQL polling loop. This is client-side cadence only: the Communications protocol version, claim ordering, delivery leases, and idempotency contract remain unchanged for Hermes and OpenClaw.
 

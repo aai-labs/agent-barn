@@ -13,6 +13,12 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
 
 ## Changes
 
+### 2026-09-06 — Hermes DM history continuity — PR pending
+
+- Fixed: Consecutive Hermes deliveries now explicitly resume the persisted Connection/location/thread session through `/v1/runs`. Previously the shared session ID selected persistence identity but supplied no prior messages to inference, so the Agent treated each DM as its first turn despite history remaining in SQLite.
+- Changed: The Hermes base image adds an opt-in session-history patch preserving native tool messages and compaction lineage. Storage failures fail the turn rather than erasing its context. The adapter and patched image must roll out together; OpenClaw delivery is unchanged.
+- Verified: Existing PVC history is reused without a migration.
+
 ### 2026-09-03 — Discord bot install link — PR pending
 
 - Delivered: A saved Discord Connection can regenerate its bot install URL on demand. The Connection card's **Get install link** action calls a new `install-link` endpoint, which resolves the bot's application through Discord's `GET /oauth2/applications/@me` using the stored bot token and returns the recommended least-privilege authorize URL — View Channels, Send Messages, Read Message History, and Send Messages in Threads, plus reactions, embeds, attachments, and external emoji. The URL is never persisted, so permission recommendations in code apply to every existing Connection immediately, and the action follows the app-package contract: authorized with `AGENT_UPDATE`, concealed cross-Organization, and rejected with 400 for platforms without the capability.
