@@ -165,10 +165,40 @@ class CommunicationDeliveryRepository:
         *,
         agent_id: UUID,
         lease_seconds: int = 120,
+        max_attempts: int = 5,
     ) -> RuntimeDeliveryRead | None:
         now = datetime.now(UTC)
         active_ordering = aliased(CommunicationDelivery)
         with Session(self.delegate.engine) as session:
+            # A claim whose lease expired without a `/complete` call (adapter crash
+            # or hang) would otherwise stay PROCESSING forever and permanently
+            # block every later delivery on the same ordering_key, since the
+            # exists() guard below treats any PROCESSING row as still in flight.
+            # Mirrors the reclaim `claim_next_outbound` already does, but routes
+            # through the same completion path as an explicit failure so a
+            # delivery that keeps timing out dead-letters after max_attempts
+            # instead of being reset to PENDING and retried forever.
+            expired = session.exec(
+                select(CommunicationDelivery)
+                .where(
+                    col(CommunicationDelivery.direction) == CommunicationDirection.INBOUND,
+                    col(CommunicationDelivery.status) == CommunicationDeliveryStatus.PROCESSING,
+                    col(CommunicationDelivery.lease_expires_at) < now,
+                )
+                .with_for_update(skip_locked=True)
+            ).all()
+            for stale in expired:
+                self._apply_completion(
+                    stale,
+                    succeeded=False,
+                    now=now,
+                    max_attempts=max_attempts,
+                    error_code="LEASE_EXPIRED",
+                    error_message="Runtime did not complete this delivery before its claim lease expired",
+                    error_details=None,
+                )
+                session.add(stale)
+                self._stage_completion_journal(session, stale, now=now)
             query = (
                 select(CommunicationDelivery)
                 .where(
@@ -191,6 +221,7 @@ class CommunicationDeliveryRepository:
             )
             delivery = session.exec(query).one_or_none()
             if delivery is None:
+                session.commit()
                 return None
             delivery.status = CommunicationDeliveryStatus.PROCESSING
             delivery.claimed_at = now
