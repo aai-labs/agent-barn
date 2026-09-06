@@ -75,16 +75,6 @@ def list_template_versions(
     return service.list_template_versions(template_key, context)
 
 
-@templates_router.patch("/{template_key}", response_model=TemplateRead)
-def update_template(
-    template_key: str,
-    data: TemplateUpdate,
-    context: Annotated[CurrentUserContext, Depends(get_current_user())],
-    service: Annotated[TemplateService, Injected(TemplateService)],
-):
-    return service.update_template(template_key, data, context)
-
-
 @templates_router.get("/{template_key}/draft", response_model=AgentTemplateDraftRead)
 def get_org_draft(
     template_key: str,

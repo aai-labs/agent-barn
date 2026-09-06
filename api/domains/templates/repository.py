@@ -22,7 +22,6 @@ from api.domains.events.catalog import (
     EVENT_REGISTRY,
     TEMPLATE_CREATED,
     TEMPLATE_DELETED,
-    TEMPLATE_UPDATED,
 )
 from api.domains.events.repository import OutboxMessageRepository
 from api.domains.skills.models import Skill, SkillVersion
@@ -446,69 +445,6 @@ class TemplateRepository:
                 ),
             )
             session.commit()
-
-    def save_template_with_updated_event(
-        self,
-        template: AgentTemplate,
-        skills_map: SkillRequirementInput,
-        *,
-        previous_version: int,
-        field_changes: dict[str, dict[str, Any]],
-        actor: ActorIdentity,
-        actor_display: str | None = None,
-        correlation_id: UUID | None = None,
-    ) -> TemplateLifecycleEventResult:
-        """Insert the new immutable version row, its required-skill rows, and a
-        template.updated event in one transaction. `field_changes` is caller-supplied
-        (scoped to template_name/description only — see TemplateService.update_template)
-        rather than diffed here, since which fields count as audit-worthy is a product
-        decision, not a repository concern. No event is staged when field_changes is
-        empty (skills/markdown-only edits are covered elsewhere or excluded by design)."""
-        with Session(self.delegate.engine, expire_on_commit=False) as session:
-            session.add(template)
-            session.flush()
-            resolved = _resolve_skill_versions(session, skills_map)
-            for skill_id, (skill_version, group_key) in resolved.items():
-                session.add(
-                    AgentTemplateSkill(
-                        template_id=template.id,
-                        skill_id=skill_id,
-                        skill_version=skill_version,
-                        group_key=group_key,
-                    )
-                )
-            if not field_changes:
-                session.commit()
-                session.refresh(template)
-                return TemplateLifecycleEventResult(template=template, delivery_ids=[])
-            event = EVENT_REGISTRY.build_event(
-                event_name=TEMPLATE_UPDATED,
-                schema_version=1,
-                occurred_at=datetime.now(UTC),
-                organization_id=template.organization_id,
-                actor=actor,
-                subject=SubjectIdentity(
-                    type=SubjectIdentityType.TEMPLATE,
-                    id=template.id,
-                    organization_id=template.organization_id,
-                ),
-                correlation_id=correlation_id or uuid4(),
-                payload={
-                    "organization_id": template.organization_id,
-                    "template_id": template.id,
-                    "template_key": template.template_key,
-                    "previous_version": previous_version,
-                    "new_version": template.version,
-                    "field_changes": field_changes,
-                    "actor_display": actor_display or actor.type.value,
-                    "subject_display": template.template_name,
-                },
-            )
-            self.outbox_repository.stage(session=session, registry=EVENT_REGISTRY, event=event)
-            delivery_ids = list(session.exec(select(EventDelivery.id).where(EventDelivery.event_id == event.event_id)))
-            session.commit()
-            session.refresh(template)
-            return TemplateLifecycleEventResult(template=template, delivery_ids=delivery_ids)
 
     def get_org_required_skills(self, template_id: UUID) -> list[tuple[Skill, int, str | None]]:
         with Session(self.delegate.engine) as session:

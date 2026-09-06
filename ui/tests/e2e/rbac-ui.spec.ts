@@ -280,8 +280,10 @@ test.describe("RBAC-aware shared resource controls", () => {
     const rbac = new RbacUiPage(page);
     await data.auth.interceptRefreshRequest();
     await data.users.interceptGetUserContextRequest({ userContext: memberContext() });
-    await data.agents.interceptGetTemplatesRequest();
-    await data.agents.interceptGetTemplateVersionsRequest();
+    await data.orgTemplates.interceptGetLineages();
+    await data.orgTemplates.interceptGetVersions();
+    await data.orgTemplates.interceptGetDraft({ status: 404 });
+    await data.orgTemplates.interceptGetOrgSkills();
     await data.skills.interceptGetSkillsRequest();
 
     await rbac.gotoSettings();
@@ -290,7 +292,8 @@ test.describe("RBAC-aware shared resource controls", () => {
     await expect(rbac.newTemplateButton()).toHaveCount(0);
     await rbac.openTemplate("My Custom");
     await expect(page.getByRole("heading", { name: "My Custom" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Edit template" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: /Start draft|Continue editing draft/ })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Delete", exact: true })).toHaveCount(0);
     await rbac.closeTemplate();
 
     await rbac.openSettingsSection("Skills");

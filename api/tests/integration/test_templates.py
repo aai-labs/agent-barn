@@ -1115,23 +1115,6 @@ def test_create_template_rejects_duplicate_group_keys():
 # --- update ---
 
 
-def test_member_cannot_update_template():
-    with given(
-        [
-            *_GIVEN,
-            there_is_a_template(template_key="alpha", name="Alpha"),
-            _there_is_a_member_actor(),
-        ]
-    ) as context:
-        response = context.client.patch(
-            f"{_BASE}/alpha",
-            json={"description": "Changed"},
-            headers=_auth(context),
-        )
-
-        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
-
-
 def test_update_template_creates_new_version_with_merge():
     with given(
         [
@@ -1142,14 +1125,16 @@ def test_update_template_creates_new_version_with_merge():
         client: TestClient = context.client
 
         with when("I update only the soul"):
-            response = client.patch(
-                f"{_BASE}/alpha",
+            _start_org_draft(client, context, "alpha")
+            client.patch(
+                f"{_BASE}/alpha/draft",
                 json={"soul_md": "# New Soul"},
                 headers=_auth(context),
             )
+            response = client.post(f"{_BASE}/alpha/draft/publish", headers=_auth(context))
 
         with then("a new version is created, untouched fields carried over"):
-            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
             body = response.json()
             assert_that(body["version"], equal_to(2))
             assert_that(body["soul_md"], equal_to("# New Soul"))
@@ -1162,11 +1147,13 @@ def test_update_template_name_is_inherited_not_editable():
         client: TestClient = context.client
 
         with when("I edit content and attempt to rename in the same request"):
-            response = client.patch(
-                f"{_BASE}/alpha",
+            _start_org_draft(client, context, "alpha")
+            client.patch(
+                f"{_BASE}/alpha/draft",
                 json={"soul_md": "# New", "template_name": "Alpha Renamed"},
                 headers=_auth(context),
             )
+            response = client.post(f"{_BASE}/alpha/draft/publish", headers=_auth(context))
 
         with then("the new version inherits the v1 name; the rename is ignored"):
             body = response.json()
@@ -1186,11 +1173,13 @@ def test_update_predefined_template_keeps_source():
         client: TestClient = context.client
 
         with when("I update a pre-defined template"):
-            response = client.patch(
-                f"{_BASE}/seeded",
+            _start_org_draft(client, context, "seeded")
+            client.patch(
+                f"{_BASE}/seeded/draft",
                 json={"soul_md": "# Edited"},
                 headers=_auth(context),
             )
+            response = client.post(f"{_BASE}/seeded/draft/publish", headers=_auth(context))
 
         with then("the new version stays pre-defined"):
             body = response.json()
@@ -1214,28 +1203,19 @@ def test_update_template_does_not_touch_agent_pins():
             assert_that(agent["template_version"], equal_to(1))
 
         with when("the templates page publishes a new version of that lineage"):
-            response = client.patch(
-                f"{_BASE}/test-template",
+            _start_org_draft(client, context, "test-template")
+            client.patch(
+                f"{_BASE}/test-template/draft",
                 json={"soul_md": "# v2"},
                 headers=_auth(context),
             )
+            response = client.post(f"{_BASE}/test-template/draft/publish", headers=_auth(context))
 
         with then("the agent stays pinned to its original version"):
-            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
             assert_that(response.json()["version"], equal_to(2))
             agent_response = client.get(f"{_AGENTS_BASE}/{agent['id']}", headers=_auth(context))
             assert_that(agent_response.json()["template_version"], equal_to(1))
-
-
-def test_update_template_unknown_key_returns_404():
-    with given(_GIVEN) as context:
-        client: TestClient = context.client
-
-        with when("I update a non-existent template"):
-            response = client.patch(f"{_BASE}/nope", json={"soul_md": "# X"}, headers=_auth(context))
-
-        with then("it returns 404"):
-            assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
 
 
 def test_update_template_empty_body_returns_422():
@@ -1243,7 +1223,8 @@ def test_update_template_empty_body_returns_422():
         client: TestClient = context.client
 
         with when("I send an empty update"):
-            response = client.patch(f"{_BASE}/alpha", json={}, headers=_auth(context))
+            _start_org_draft(client, context, "alpha")
+            response = client.patch(f"{_BASE}/alpha/draft", json={}, headers=_auth(context))
 
         with then("it returns 422"):
             assert_that(response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_ENTITY))
@@ -1261,14 +1242,16 @@ def test_update_template_inherits_skills_by_default():
         client: TestClient = context.client
 
         with when("I update the template without specifying required_skill_ids"):
-            response = client.patch(
-                f"{_BASE}/alpha",
+            _start_org_draft(client, context, "alpha")
+            client.patch(
+                f"{_BASE}/alpha/draft",
                 json={"soul_md": "# Updated"},
                 headers=_auth(context),
             )
+            response = client.post(f"{_BASE}/alpha/draft/publish", headers=_auth(context))
 
         with then("the new version carries over the required skills from v1"):
-            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
             body = response.json()
             assert_that(body["version"], equal_to(2))
             assert_that(len(body["required_skills"]), equal_to(1))
@@ -1289,14 +1272,16 @@ def test_update_template_replaces_skills():
         confluence_id = str(context.skill.id)
 
         with when("I update the template replacing required skills"):
-            response = client.patch(
-                f"{_BASE}/alpha",
+            _start_org_draft(client, context, "alpha")
+            client.patch(
+                f"{_BASE}/alpha/draft",
                 json={"soul_md": "# Updated", "required_skill_ids": [confluence_id]},
                 headers=_auth(context),
             )
+            response = client.post(f"{_BASE}/alpha/draft/publish", headers=_auth(context))
 
         with then("the new version has only the replacement skill"):
-            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
             body = response.json()
             assert_that(body["version"], equal_to(2))
             assert_that(len(body["required_skills"]), equal_to(1))
@@ -1338,13 +1323,15 @@ def test_update_template_resolves_standalone_and_group_versions_together():
         assert_that(create.status_code, equal_to(status.HTTP_201_CREATED))
         template_key = create.json()["template_key"]
 
-        response = client.patch(
-            f"{_BASE}/{template_key}",
+        _start_org_draft(client, context, f"{template_key}")
+        client.patch(
+            f"{_BASE}/{template_key}/draft",
             json={"soul_md": "# Updated", **payload},
             headers=_auth(context),
         )
+        response = client.post(f"{_BASE}/{template_key}/draft/publish", headers=_auth(context))
 
-        assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+        assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
         required = {item["id"]: item for item in response.json()["required_skills"]}
         assert_that(required[str(standalone.id)]["version"], equal_to(1))
         assert_that(required[str(group_a.id)]["version"], equal_to(1))
@@ -1363,14 +1350,16 @@ def test_update_template_clears_skills():
         client: TestClient = context.client
 
         with when("I update the template clearing required skills"):
-            response = client.patch(
-                f"{_BASE}/alpha",
+            _start_org_draft(client, context, "alpha")
+            client.patch(
+                f"{_BASE}/alpha/draft",
                 json={"soul_md": "# Updated", "required_skill_ids": []},
                 headers=_auth(context),
             )
+            response = client.post(f"{_BASE}/alpha/draft/publish", headers=_auth(context))
 
         with then("the new version has no required skills"):
-            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
             body = response.json()
             assert_that(body["version"], equal_to(2))
             assert_that(body["required_skills"], equal_to([]))
@@ -1387,14 +1376,16 @@ def test_update_template_inherits_groups_when_field_unset():
         client: TestClient = context.client
 
         with when("I update other fields without touching required_skill_groups"):
-            response = client.patch(
-                f"{_BASE}/alpha",
+            _start_org_draft(client, context, "alpha")
+            client.patch(
+                f"{_BASE}/alpha/draft",
                 json={"soul_md": "# Updated"},
                 headers=_auth(context),
             )
+            response = client.post(f"{_BASE}/alpha/draft/publish", headers=_auth(context))
 
         with then("the new version keeps the inherited group"):
-            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
             body = response.json()
             assert_that(body["version"], equal_to(2))
             assert_that(len(body["required_skills"]), equal_to(2))
@@ -1415,17 +1406,19 @@ def test_update_template_replaces_groups():
         jira_id = str(context.skill.id)
 
         with when("I replace the required_skill_groups with a different group"):
-            response = client.patch(
-                f"{_BASE}/alpha",
+            _start_org_draft(client, context, "alpha")
+            client.patch(
+                f"{_BASE}/alpha/draft",
                 json={
                     "soul_md": "# Updated",
                     "required_skill_groups": [{"group_key": "solo-jira", "skill_ids": [jira_id]}],
                 },
                 headers=_auth(context),
             )
+            response = client.post(f"{_BASE}/alpha/draft/publish", headers=_auth(context))
 
         with then("the new version only has the replacement group"):
-            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
             body = response.json()
             assert_that(len(body["required_skills"]), equal_to(1))
             assert_that(body["required_skills"][0]["name"], equal_to("Jira"))
@@ -1443,14 +1436,16 @@ def test_update_template_clears_groups():
         client: TestClient = context.client
 
         with when("I clear required_skill_groups explicitly"):
-            response = client.patch(
-                f"{_BASE}/alpha",
+            _start_org_draft(client, context, "alpha")
+            client.patch(
+                f"{_BASE}/alpha/draft",
                 json={"soul_md": "# Updated", "required_skill_groups": []},
                 headers=_auth(context),
             )
+            response = client.post(f"{_BASE}/alpha/draft/publish", headers=_auth(context))
 
         with then("the new version has no required skills"):
-            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
             assert_that(response.json()["required_skills"], equal_to([]))
 
 
@@ -1466,11 +1461,13 @@ def test_update_template_rejects_overlap_with_inherited_group():
         github_skill = context.template_skill_group["skills"][0]
 
         with when("required_skill_ids is set to a skill already inherited as a group member"):
-            response = client.patch(
-                f"{_BASE}/alpha",
+            _start_org_draft(client, context, "alpha")
+            client.patch(
+                f"{_BASE}/alpha/draft",
                 json={"soul_md": "# Updated", "required_skill_ids": [str(github_skill.id)]},
                 headers=_auth(context),
             )
+            response = client.post(f"{_BASE}/alpha/draft/publish", headers=_auth(context))
 
         with then("it returns 422"):
             assert_that(response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_ENTITY))
@@ -1713,11 +1710,13 @@ def test_seed_does_not_clobber_edited_predefined_template():
         service.seed_predefined_templates()
 
         with when("I edit scrum-master and reseed"):
+            _start_org_draft(client, context, "scrum-master")
             client.patch(
-                f"{_BASE}/scrum-master",
+                f"{_BASE}/scrum-master/draft",
                 json={"soul_md": "# Edited Soul"},
                 headers=_auth(context),
             )
+            client.post(f"{_BASE}/scrum-master/draft/publish", headers=_auth(context))
             service.seed_predefined_templates()
 
         with then("the edited org fork stays the latest"):
@@ -1731,11 +1730,13 @@ def test_seed_does_not_clobber_edited_predefined_template():
             assert_that(latest.fork_baseline_platform_version, equal_to(1))
 
         with when("the organization edits the fork again"):
-            response = client.patch(
-                f"{_BASE}/scrum-master",
+            _start_org_draft(client, context, "scrum-master")
+            client.patch(
+                f"{_BASE}/scrum-master/draft",
                 json={"tools_md": "# Edited Tools"},
                 headers=_auth(context),
             )
+            response = client.post(f"{_BASE}/scrum-master/draft/publish", headers=_auth(context))
 
         with then("the new org version preserves the original fork and its baseline"):
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
@@ -1822,17 +1823,19 @@ def test_platform_template_update_clones_the_new_platform_snapshot_and_preserves
             assert_that(agent_response.json()["template_version"], equal_to(1))
 
         with when("the organization creates a fork with a soul and skill override"):
-            fork_response = client.patch(
-                f"{_BASE}/manual",
+            _start_org_draft(client, context, "manual")
+            client.patch(
+                f"{_BASE}/manual/draft",
                 json={
                     "soul_md": "organization soul",
                     "required_skill_ids": [str(override_skill.id)],
                 },
                 headers=_auth(context),
             )
+            fork_response = client.post(f"{_BASE}/manual/draft/publish", headers=_auth(context))
 
         with then("the fork is created at org version 1"):
-            assert_that(fork_response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(fork_response.status_code, equal_to(status.HTTP_201_CREATED))
             assert_that(fork_response.json()["version"], equal_to(1))
             assert_that(fork_response.json()["fork_baseline_platform_version"], equal_to(1))
 
@@ -1880,12 +1883,14 @@ def test_platform_update_availability_uses_latest_org_version_not_history():
         repository: TemplateRepository = context.injector.get(TemplateRepository)
         repository.save_platform_template(_platform_version("manual", 1))
 
-        fork_response = client.patch(
-            f"{_BASE}/manual",
+        _start_org_draft(client, context, "manual")
+        client.patch(
+            f"{_BASE}/manual/draft",
             json={"soul_md": "organization soul"},
             headers=_auth(context),
         )
-        assert_that(fork_response.status_code, equal_to(status.HTTP_200_OK))
+        fork_response = client.post(f"{_BASE}/manual/draft/publish", headers=_auth(context))
+        assert_that(fork_response.status_code, equal_to(status.HTTP_201_CREATED))
 
         repository.save_platform_template(_platform_version("manual", 2, soul_md="platform soul 2"))
         update_v2 = client.post(f"{_BASE}/manual/platform-update", headers=_auth(context))
@@ -1914,12 +1919,14 @@ def test_newer_platform_version_does_not_replace_an_org_fork_in_the_catalog():
         repository: TemplateRepository = context.injector.get(TemplateRepository)
         repository.save_platform_template(_platform_version("manual", 1))
 
-        fork_response = client.patch(
-            f"{_BASE}/manual",
+        _start_org_draft(client, context, "manual")
+        client.patch(
+            f"{_BASE}/manual/draft",
             json={"soul_md": "organization soul"},
             headers=_auth(context),
         )
-        assert_that(fork_response.status_code, equal_to(status.HTTP_200_OK))
+        fork_response = client.post(f"{_BASE}/manual/draft/publish", headers=_auth(context))
+        assert_that(fork_response.status_code, equal_to(status.HTTP_201_CREATED))
         repository.save_platform_template(_platform_version("manual", 3, soul_md="platform soul 3"))
 
         with when("the organization lists its templates after a newer platform publish"):
@@ -1947,12 +1954,14 @@ def test_platform_template_update_requires_a_newer_platform_version():
         repository: TemplateRepository = context.injector.get(TemplateRepository)
         repository.save_platform_template(_platform_version("manual", 1))
 
-        fork_response = client.patch(
-            f"{_BASE}/manual",
+        _start_org_draft(client, context, "manual")
+        client.patch(
+            f"{_BASE}/manual/draft",
             json={"soul_md": "organization soul"},
             headers=_auth(context),
         )
-        assert_that(fork_response.status_code, equal_to(status.HTTP_200_OK))
+        fork_response = client.post(f"{_BASE}/manual/draft/publish", headers=_auth(context))
+        assert_that(fork_response.status_code, equal_to(status.HTTP_201_CREATED))
 
         with when("the organization applies an update while the platform is still at the baseline"):
             response = client.post(f"{_BASE}/manual/platform-update", headers=_auth(context))
@@ -2217,47 +2226,6 @@ def test_create_template_emits_created_domain_event():
             # Regression: actor_display must be the acting user's name, not the
             # ActorIdentity type string ("MEMBERSHIP"/"USER").
             assert_that(created_events[0].payload["actor_display"], equal_to("Test User"))
-
-
-def test_update_template_description_emits_updated_domain_event_with_field_changes():
-    with given([*_GIVEN, there_is_a_template(template_key="alpha", name="Alpha")]) as context:
-        client: TestClient = context.client
-        client.patch(f"{_BASE}/alpha", json={"description": "Old description"}, headers=_auth(context))
-
-        with when("I update only the description again"):
-            response = client.patch(
-                f"{_BASE}/alpha",
-                json={"description": "New description"},
-                headers=_auth(context),
-            )
-
-        with then("a template.updated Domain Event carries the before/after description"):
-            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
-            messages = _outbox_messages(context)
-            # Two template.updated events exist: setting the description the first
-            # time (v1->v2, from the setup PATCH above) and this test's own change
-            # (v2->v3) — select the latter by its new_version.
-            updated_events = [m for m in messages if m.event_name == TEMPLATE_UPDATED]
-            assert_that(len(updated_events), equal_to(2))
-            event = next(m for m in updated_events if m.payload["new_version"] == 3)
-            field_changes = event.payload["field_changes"]
-            assert_that(field_changes["description"]["previous"], equal_to("Old description"))
-            assert_that(field_changes["description"]["new"], equal_to("New description"))
-            assert_that(event.payload["previous_version"], equal_to(2))
-
-
-def test_update_template_body_only_emits_no_updated_event():
-    with given([*_GIVEN, there_is_a_template(template_key="alpha", name="Alpha", soul_md="# Old")]) as context:
-        client: TestClient = context.client
-
-        with when("I update only a markdown body, not name/description"):
-            response = client.patch(f"{_BASE}/alpha", json={"soul_md": "# New"}, headers=_auth(context))
-
-        with then("no template.updated Domain Event is staged"):
-            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
-            messages = _outbox_messages(context)
-            updated_events = [m for m in messages if m.event_name == TEMPLATE_UPDATED]
-            assert_that(len(updated_events), equal_to(0))
 
 
 def test_delete_template_emits_deleted_domain_event():
@@ -2923,3 +2891,15 @@ def test_org_lineages_requires_template_read_permission():
 
         with then("it is forbidden"):
             assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+
+
+def test_patch_template_endpoint_is_gone():
+    """Content edits are draft-gated; the direct publish-on-save endpoint is removed."""
+    with given([*_GIVEN, there_is_a_template(template_key="alpha", name="Alpha", version=1)]) as context:
+        client: TestClient = context.client
+
+        with when("I call the removed direct update endpoint"):
+            response = client.patch(f"{_BASE}/alpha", json={"soul_md": "# X"}, headers=_auth(context))
+
+        with then("the method is no longer allowed"):
+            assert_that(response.status_code, equal_to(status.HTTP_405_METHOD_NOT_ALLOWED))

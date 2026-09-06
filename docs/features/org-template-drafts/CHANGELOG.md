@@ -1,15 +1,17 @@
 # AF-282 Organization Template drafts — change log
 
-Status: Active
+Status: Completed
 Epic: AF-282
 Related context: [`../templates-and-skills.md`](../templates-and-skills.md), [`../../adr/2026-09-04-organization-templates-use-draft-publish.md`](../../adr/2026-09-04-organization-templates-use-draft-publish.md), [`../../adr/2026-08-04-platform-template-restores-create-new-versions.md`](../../adr/2026-08-04-platform-template-restores-create-new-versions.md), [`../../guidelines/epics.md`](../../guidelines/epics.md)
 
 ## Current state
 
-- Delivered: the decision record; the `agent_template_draft` / `agent_template_draft_skill` tables with their cross-domain reference guards; and the Organization draft endpoints (`POST`/`GET`/`PATCH`/`DELETE /{template_key}/draft` and `POST /{template_key}/draft/publish`). The UI does not call them yet.
-- In transition: **two ways to publish an Organization version coexist.** `PATCH /{template_key}` still publishes on every save and is what the side drawer uses; the draft endpoints are the replacement and are so far exercised only by tests. `docs/features/templates-and-skills.md` and `CONTEXT.md` still describe the version-per-save contract, which stays accurate until `PATCH` is removed in the final slice. Both write paths produce identical `agent_template` rows and identical fork bookkeeping, so no data written during this window needs migrating.
-- Next: narrow `resolve_versions` so a lineage lists only its own versions, then the frontend scope module.
+- Delivered: Organization Templates are draft-gated end to end. `agent_template_draft` / `agent_template_draft_skill` hold one draft per `(organization_id, template_key)`; the draft endpoints create, read, edit, discard and publish it; `GET /{template_key}/lineages` backs the catalogue; version history is per-scope; the side drawer is gone, replaced by `settings/templates/{template_key}` and `settings/templates/new` rendered from the scope-parameterized `ui/src/features/templates/`; and `PATCH /{template_key}` is removed.
+- In transition: nothing. `PATCH /{template_key}` now returns 405 and no code path publishes an Organization version outside `POST /{template_key}/draft/publish` and `POST /{template_key}/platform-update`.
+- Next: none.
 - Blockers: none.
+
+Out of scope by design, and unchanged: `POST /{template_key}/platform-update` still publishes directly, because Platform Templates have no source-update to mirror. Organization-only behavior (forks, lineage deletion, Domain Events, RBAC) kept its existing semantics and only moved from the drawer to the page.
 
 ## Slice plan
 
@@ -29,6 +31,33 @@ Out of scope, by the rule that Organization Templates adopt only what Platform T
 
 ## Changes
 
+### 2026-09-04 — AF-282-07
+
+- Delivered: `PATCH /{template_key}` removed and returning 405; `TemplateService.update_template`, `TemplateRepository.save_template_with_updated_event` and `ui/src/features/agents/hooks/use-update-template.ts` deleted. `save_org_template_version_with_skills` is kept — `update_from_platform` still uses it.
+- Changed: the 13 tests covering publish-on-save were relocated onto start-draft -> edit-draft -> publish rather than deleted, so every behaviour they asserted still has coverage; four duplicated by AF-282-03's draft tests were dropped. `rbac-ui` navigates to the editor route instead of the drawer.
+- Changed: `templates-and-skills.md` (draft-gated invariant, the four association tables, per-scope version history, draft permissions, an "Author Organization Templates" flow, source map), `CONTEXT.md` (Draft Template Version and Template Restore are no longer platform-only), `docs/INDEX.md` (UI path).
+- Decision: Template Update stays as it is. Two earlier proposals — seed-a-draft-and-409, then mirror `SkillService.apply_source_update` — were both rejected as invented behaviour; Platform Templates define no source-update, so there is nothing to bring across.
+
+### 2026-09-04 — AF-282-06
+
+- Delivered: the cutover. `GET /{template_key}/lineages`, `POST ""` returning a draft, `settings/templates/{template_key}` and `settings/templates/new`, the Settings tab rendering the shared panel, and the 940-line side drawer deleted.
+- Changed: delete, Apply platform update, the fork banner and the source badges were rebuilt on the published view — deleting the drawer had removed them from the product, which nothing but manual inspection caught.
+- Observed: `PlatformTemplateReadSchema` pinned `templateSource: z.literal("pre-defined")`. Once AF-282-05 made that schema serve both scopes it rejected every **custom** Organization template with a response-validation error. Widened to an enum; this was a real defect, not a test artefact.
+- Coverage: `settings-templates.spec.ts` rewritten in place, 13 tests; 6 `GET /lineages` integration tests; the create/event tests updated for draft semantics.
+
+### 2026-09-04 — AF-282-05
+
+- Delivered: `ui/src/features/platform-templates/` moved to `ui/src/features/templates/` as a scope-parameterized module — `scope.ts`, scoped hooks, a chrome-free `TemplatesPanel` plus a thin `PlatformTemplatesPage` wrapper, mirroring `ui/src/features/skills/`. All 14 files moved as git renames; no code duplicated.
+- Changed: `platform-template-skill-checkbox.tsx` gained a `scope` prop, fixing a live defect — `configuration-draft-editor.tsx` was already feeding it Organization skills while it queried `/api/v1/platform/skills/{id}/versions`, which cannot resolve an org lineage.
+- Decision: query keys mirror `skills/utils.ts` exactly — one `templates` base key with the scope folded in as a segment. An earlier split into two base keys was justified as protecting the byte-unchanged platform spec; that reasoning was wrong, since the spec intercepts HTTP and never observes query keys.
+- Coverage: `platform-templates.spec.ts` passed byte-unchanged, which is the proof the refactor changed no platform behaviour. It caught one regression on the way: converting the lineage cards from `button` to `Link` changed their ARIA role.
+
+### 2026-09-04 — AF-282-04
+
+- Delivered: `resolve_versions` returns a lineage's own history — the organization's `1..N` sequence once any organization row exists, falling back to the platform lineage otherwise.
+- Changed: the Agent re-pin panel now consumes `configuration.sharedVersions`, which the API already returned and the UI had never used, so the active lineage still offers both Platform and Organization rows.
+- Observed: the blast radius was one existing test, not the nine the plan predicted. `get_shared_versions` is untouched.
+
 ### 2026-09-04 — AF-282-03
 
 - Delivered: `POST /{template_key}/draft` (get-or-create, `409` when a draft exists *and* `source_version` is given), `GET`/`PATCH`/`DELETE /{template_key}/draft`, and `POST /{template_key}/draft/publish`. Additive only — `POST ""`, `PATCH /{template_key}` and `platform-update` are untouched, so the side drawer keeps working.
@@ -46,6 +75,6 @@ Out of scope, by the rule that Organization Templates adopt only what Platform T
 ### 2026-09-04 — AF-282-01
 
 - Delivered: [`../../adr/2026-09-04-organization-templates-use-draft-publish.md`](../../adr/2026-09-04-organization-templates-use-draft-publish.md), this change log, and the context-map route to it.
-- Decision: Organization Templates adopt the Platform Template draft/publish model rather than keeping version-per-save. The draft carries its own fork baseline, Template Update seeds a draft instead of publishing, and version history stops merging Organization and Platform rows. Rationale and consequences are in the ADR.
+- Decision: Organization Templates adopt the Platform Template draft/publish model rather than keeping version-per-save. The draft carries its own fork baseline and version history stops merging Organization and Platform rows. Rationale and consequences are in the ADR. (A first draft of this slice also proposed changing Template Update to seed a draft; that was reverted in AF-282-07 as out of scope, since Platform Templates have no source-update to mirror.)
 - Changed: documentation only.
 - Follow-up: the context map still routes the Templates UI concern at `../ui/src/features/platform-templates/`. That path is correct until slice 5 creates `../ui/src/features/templates/`, and is repointed in that slice rather than ahead of it.
