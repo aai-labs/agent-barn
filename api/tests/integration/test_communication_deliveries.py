@@ -234,18 +234,19 @@ def test_runtime_claim_dead_letters_an_inbound_delivery_after_repeated_lease_exp
         accepted = repository.accept_inbound(connection_id=connection_id, envelope=_envelope("provider-1"))
         delegate = context.injector.get(PostgresRepositoryDelegate)
 
-        with when("the runtime claims it and its lease expires 5 times in a row"):
+        claimed = repository.claim_next_inbound(agent_id=context.agent.id, max_attempts=5)
+        assert_that(claimed, is_(not_(none())))
+        for _ in range(4):
+            _expire_lease(delegate, accepted.delivery_id)
+            # This call performs the reclaim (PROCESSING -> PENDING with a
+            # backoff window) internally but can't claim in the same pass,
+            # since the backoff pushes available_at into the future.
+            assert_that(repository.claim_next_inbound(agent_id=context.agent.id, max_attempts=5), none())
+            _clear_backoff(delegate, accepted.delivery_id)
             claimed = repository.claim_next_inbound(agent_id=context.agent.id, max_attempts=5)
-            assert claimed is not None
-            for _ in range(4):
-                _expire_lease(delegate, accepted.delivery_id)
-                # This call performs the reclaim (PROCESSING -> PENDING with a
-                # backoff window) internally but can't claim in the same pass,
-                # since the backoff pushes available_at into the future.
-                assert repository.claim_next_inbound(agent_id=context.agent.id, max_attempts=5) is None
-                _clear_backoff(delegate, accepted.delivery_id)
-                claimed = repository.claim_next_inbound(agent_id=context.agent.id, max_attempts=5)
-                assert claimed is not None
+            assert_that(claimed, is_(not_(none())))
+
+        with when("the delivery's lease expires a fifth time"):
             _expire_lease(delegate, accepted.delivery_id)
             final_claim = repository.claim_next_inbound(agent_id=context.agent.id, max_attempts=5)
 

@@ -181,6 +181,7 @@ class CommunicationDeliveryRepository:
             expired = session.exec(
                 select(CommunicationDelivery)
                 .where(
+                    col(CommunicationDelivery.agent_id) == agent_id,
                     col(CommunicationDelivery.direction) == CommunicationDirection.INBOUND,
                     col(CommunicationDelivery.status) == CommunicationDeliveryStatus.PROCESSING,
                     col(CommunicationDelivery.lease_expires_at) < now,
