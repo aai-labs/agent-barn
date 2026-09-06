@@ -79,22 +79,42 @@ with given(
 
 ## Verification commands
 
-From the repository root:
+Complete the [README development setup](../../README.md#development), then
+invoke verification from the repository root.
+
+| Command | Coverage | Additional prerequisites |
+| --- | --- | --- |
+| `make check-api` | Ruff lint/format check and Python type checking | None |
+| `make fix-api` | Ruff autofix and formatting; modifies files | None |
+| `make check-migrations` | Exactly one Alembic head | None |
+| `make test-api` | API unit and integration tests, excluding the Kubernetes client test | Docker for Testcontainers PostgreSQL, plus Node.js for the OpenClaw plugin test |
+| `make test-api-k8s` | Kubernetes client integration test | Docker plus a configured, disposable Kubernetes cluster whose target namespace already exists |
+| `make test-api-runtime` | Runtime contract tests against an explicitly selected built image | Docker and the image variable required by the selected test, such as `HERMES_TEST_IMAGE` |
+| `make coverage` | All API tests with terminal and XML coverage, including the Kubernetes client test | Docker, Node.js, and the Kubernetes prerequisites above |
+| `make lint-ui` | ESLint | None |
+| `make check-ui` | TypeScript type check | None |
+| `make test-ui` | Playwright end-to-end suite | Installed Chromium browser |
+| `make check-monitoring` | Prometheus rule tests and dashboard PromQL parsing | uv, Helm, Docker, and built chart dependencies |
+
+Install the Playwright browser once after dependency setup:
 
 ```bash
-make check-api       # Ruff check/format check and Python type checking
-make fix-api         # Ruff autofix and formatting
-make test-api        # API tests excluding Kubernetes integration
-make test-api-k8s    # Kubernetes integration tests
-make test-api-runtime # Runtime contracts against explicitly selected built images
-make coverage        # API coverage
-make lint-ui         # ESLint
-make check-ui        # TypeScript type check
-make test-ui         # Playwright
+(cd ui && pnpm exec playwright install chromium)
 ```
 
-Runtime contracts require Docker and the image environment variable required
-by the selected test, such as `HERMES_TEST_IMAGE`.
+On Linux, use
+`(cd ui && pnpm exec playwright install --with-deps chromium)` when the host
+also needs Playwright's system packages.
+
+Before `make check-monitoring`, prepare the pinned chart dependencies:
+
+```bash
+helm dependency build helm/monitoring
+```
+
+The Kubernetes test creates and deletes resources in `K8S_NAMESPACE`, which
+defaults to `agent-farm`. Confirm `kubectl config current-context` and use a
+disposable local cluster and namespace; never point this test at production.
 
 From `../../ui/` when debugging Playwright:
 
@@ -132,9 +152,10 @@ Representative sources:
 
 ## Runtime plugin tests
 
-The Hermes and OpenClaw telemetry plugins ship inside agent images rather than
-being importable modules, so they are loaded from their source path and their
-hooks are called directly. Shared setup lives in
+The Hermes and OpenClaw telemetry plugins run inside agent containers but are
+delivered from repository source through runtime configuration, rather than as
+importable API modules. Tests load them from their source paths and call their
+hooks directly. Shared setup lives in
 `../../api/tests/helpers/telemetry_plugins.py`.
 
 - Assert on the payload a plugin **posts**, not on its internal buffer, and
@@ -144,14 +165,23 @@ hooks are called directly. Shared setup lives in
   subprocess-and-real-HTTP pattern as `../../api/tests/unit/test_healthz_server_metrics.py`.
   `node` is required; a missing `node` MUST fail rather than skip.
 - Fakes of runtime objects can only prove our own logic. Anything that depends
-  on runtime behavior MUST also be checked inside the pinned image — see the
-  base-image smoke tests and the plugin-contract step in
-  `../../.github/workflows/hermes-base.yml`. Those run on version bumps, which is
-  when such assumptions break.
-- The separate `../../api/runtime_tests/` pytest suite starts Agent Barn's generated runtime
-  configuration in the real image and proves materialized Agent Skills are
-  visible through Hermes' `skills_list` and `skill_view`. CI selects this
-  workflow when the Hermes builder, startup scripts, or base image changes.
+  on runtime behavior MUST also be checked inside the pinned image. The Hermes
+  SessionStore, PVC, and image smoke contracts run through
+  `../../hermes-base/test-image.sh`, invoked by
+  `../../.github/workflows/hermes-base.yml`. Both that workflow and
+  `../../.github/workflows/openclaw-base.yml` smoke-test their base images. CI
+  selects the matching workflow when base-image, builder, startup, or
+  telemetry-plugin paths change.
+- `../../hermes-base/test-image.sh` is the single entrypoint for Hermes image
+  verification. It runs the image smoke test, builds the real Deployment spec
+  and exercises its init container against a fresh root-owned Docker volume,
+  verifies non-root writes to startup state and workspace, and runs the
+  telemetry plugin against the real SessionStore. The workflow invokes this
+  entrypoint when either the Hermes builder or base image changes.
+- The separate `../../api/runtime_tests/` pytest suite starts Agent Barn's
+  generated runtime configuration in the real image and proves materialized
+  Agent Skills are visible through Hermes' `skills_list` and `skill_view`. The
+  workflow runs it against the same image after the image contract tests.
 
 ## UI and browser tests
 
@@ -182,11 +212,11 @@ Avoid assertions inside page objects. Avoid feature-specific network interceptio
 | API route/auth contract      | Integration test                                              |
 | Database schema              | Migration plus integration coverage                           |
 | Parser or runtime builder    | Focused unit tests; integration where wiring matters          |
-| Runtime plugin behavior      | Unit tests asserting the payload the plugin posts, plus a contract check inside the pinned runtime image |
+| Runtime plugin behavior      | Unit tests asserting the posted payload; add a pinned-image contract when behavior depends on runtime internals |
 | UI interaction or navigation | Playwright when regression risk is meaningful                 |
 | UI schema/query hook         | Typecheck, lint, and focused browser coverage                 |
 | Helm/Kubernetes behavior     | Chart/render checks and Kubernetes integration when available |
-| Agent-facing docs only       | Link/path/format validation; application tests are optional   |
+| Contributor-facing documentation only | Link/path/format validation; application tests are optional |
 
 ## Failure handling
 
