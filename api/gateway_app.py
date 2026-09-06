@@ -36,9 +36,9 @@ def create_gateway_app(injector: Injector | None = None) -> FastAPI:
             media_type=CONTENT_TYPE_LATEST,
         )
 
-    @app.get("/health")
+    @app.get("/health", status_code=204)
     async def health():
-        return {"status": "ok"}
+        return None
 
     attach_injector(app, injector)
     attach_injector(subapi, injector)

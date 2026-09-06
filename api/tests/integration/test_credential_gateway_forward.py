@@ -278,7 +278,9 @@ def test_revoking_the_credential_stops_the_next_request():
         gateway: TestClient = context.gateway_client
         _github_secret(context)
         token = _token_for(context)
-        assert gateway.get("/gateway/v1/p/github/user", headers=_auth(token)).status_code == status.HTTP_200_OK
+        assert_that(
+            gateway.get("/gateway/v1/p/github/user", headers=_auth(token)).status_code, equal_to(status.HTTP_200_OK)
+        )
 
         with when("the Agent's tokens are revoked mid-session"):
             context.injector.get(CredentialGatewayService).revoke_for_agent(

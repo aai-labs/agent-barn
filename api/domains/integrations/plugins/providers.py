@@ -1,8 +1,7 @@
 """The shipped Integration Plugins, one class per provider.
 
-``egress_mode`` owns how a provider sends credentials. The global gateway switch is an
-operational rollback only; it does not duplicate provider registration. Adding a new
-gateway provider therefore stays local to its plugin.
+``egress_mode`` owns how a provider sends credentials; adding a new gateway provider
+stays local to its plugin.
 
 Plugins are trusted release artifacts, not dynamically installed packages: adding one is
 a merged PR, never runtime registration.
@@ -95,6 +94,11 @@ def _atlassian_cloud_gateway(service: str, cloud_id: str) -> str:
     if service not in {"jira", "confluence"} or not _ATLASSIAN_CLOUD_ID.fullmatch(cloud_id):
         raise ValueError("Atlassian cloud_id is not valid")
     return f"https://api.atlassian.com/ex/{service}/{cloud_id}"
+
+
+def _atlassian_scoped_gateway_url(service: str, cloud_id: str | None) -> str | None:
+    """Resolve the API Gateway URL for a scoped Jira/Confluence token, or None if unusable."""
+    return _atlassian_cloud_gateway(service, cloud_id) if cloud_id else None
 
 
 class GithubPlugin(AaiCliPlugin[GithubContent]):
@@ -196,9 +200,10 @@ class JiraPlugin(AaiCliPlugin[JiraContent]):
 
     def upstream_base_url(self, content: JiraContent) -> str:
         if content.use_scoped_token:
-            if not content.cloud_id:
+            url = _atlassian_scoped_gateway_url("jira", content.cloud_id)
+            if url is None:
                 raise ValueError("scoped Jira credential is missing cloud_id")
-            return _atlassian_cloud_gateway("jira", content.cloud_id)
+            return url
         return _atlassian_base(content.site_url)
 
     def apply_upstream_auth(self, content: JiraContent, request: OutboundRequest) -> OutboundRequest:
@@ -213,9 +218,10 @@ class JiraPlugin(AaiCliPlugin[JiraContent]):
             # Scoped tokens are still Basic Auth, but must go through the API Gateway
             # (keyed by cloud_id) rather than the site URL directly.
             # If cloud_id is missing, skip the profile — the user must re-save the integration.
-            if not content.cloud_id:
+            scoped_url = _atlassian_scoped_gateway_url("jira", content.cloud_id)
+            if scoped_url is None:
                 return "# jira-work profile skipped: cloud_id missing\n"
-            site_url = f"https://api.atlassian.com/ex/jira/{content.cloud_id}"
+            site_url = scoped_url
         return (
             f"[profiles.{self.aai_cli_slug}]\n"
             'auth_type = "basic_api_token"\n'
@@ -256,9 +262,10 @@ class ConfluencePlugin(AaiCliPlugin[ConfluenceContent]):
 
     def upstream_base_url(self, content: ConfluenceContent) -> str:
         if content.use_scoped_token:
-            if not content.cloud_id:
+            url = _atlassian_scoped_gateway_url("confluence", content.cloud_id)
+            if url is None:
                 raise ValueError("scoped Confluence credential is missing cloud_id")
-            return _atlassian_cloud_gateway("confluence", content.cloud_id)
+            return url
         return _atlassian_base(content.site_url)
 
     def apply_upstream_auth(self, content: ConfluenceContent, request: OutboundRequest) -> OutboundRequest:
@@ -270,9 +277,10 @@ class ConfluencePlugin(AaiCliPlugin[ConfluenceContent]):
     def aai_cli_profile_block(self, content: ConfluenceContent) -> str:
         site_url = content.site_url
         if content.use_scoped_token:
-            if not content.cloud_id:
+            scoped_url = _atlassian_scoped_gateway_url("confluence", content.cloud_id)
+            if scoped_url is None:
                 return "# confluence-work profile skipped: cloud_id missing\n"
-            site_url = f"https://api.atlassian.com/ex/confluence/{content.cloud_id}"
+            site_url = scoped_url
         return (
             f"[profiles.{self.aai_cli_slug}]\n"
             'auth_type = "basic_api_token"\n'
