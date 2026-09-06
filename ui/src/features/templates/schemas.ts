@@ -84,6 +84,13 @@ export const PlatformTemplatePublishedReadSchema = z.object({
 
 export const PlatformSkillListSchema = z.array(PlatformSkillSchema);
 
+export const PaginatedPlatformSkillsSchema = z.object({
+  page: z.number().int(),
+  pageSize: z.number().int(),
+  total: z.number().int(),
+  items: z.array(PlatformSkillSchema),
+});
+
 export type PlatformTemplateAdminSummary = z.infer<
   typeof PlatformTemplateAdminSummarySchema
 >;

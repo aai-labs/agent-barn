@@ -239,8 +239,9 @@ export class OrgTemplateDataSupport {
     });
   }
 
-  async interceptGetOrgSkills({ body = [] }: { body?: unknown } = {}) {
-    await this.page.route(`**/api/v1/organizations/${TEST_ORG_ID}/skills`, async (route) => {
+  async interceptGetOrgSkills({ items = [] }: { items?: unknown[] } = {}) {
+    const body = { page: 1, page_size: 200, total: items.length, items };
+    await this.page.route(`**/api/v1/organizations/${TEST_ORG_ID}/skills*`, async (route) => {
       if (route.request().method() !== "GET") {
         await route.fallback();
         return;

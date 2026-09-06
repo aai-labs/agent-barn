@@ -765,7 +765,7 @@ export function TemplateEditor({
                     className="text-[12.5px]"
                     style={{ color: "var(--err)" }}
                   >
-                    Global skills could not be loaded.
+                    {isPlatform ? "Global skills" : "Skills"} could not be loaded.
                   </div>
                 )}
                 {!isSkillsLoading && !skillsError && (

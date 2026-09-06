@@ -1462,14 +1462,13 @@ def test_update_template_rejects_overlap_with_inherited_group():
 
         with when("required_skill_ids is set to a skill already inherited as a group member"):
             _start_org_draft(client, context, "alpha")
-            client.patch(
+            response = client.patch(
                 f"{_BASE}/alpha/draft",
                 json={"soul_md": "# Updated", "required_skill_ids": [str(github_skill.id)]},
                 headers=_auth(context),
             )
-            response = client.post(f"{_BASE}/alpha/draft/publish", headers=_auth(context))
 
-        with then("it returns 422"):
+        with then("the draft edit is rejected before anything can be published"):
             assert_that(response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_ENTITY))
 
 
@@ -1739,7 +1738,7 @@ def test_seed_does_not_clobber_edited_predefined_template():
             response = client.post(f"{_BASE}/scrum-master/draft/publish", headers=_auth(context))
 
         with then("the new org version preserves the original fork and its baseline"):
-            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
             latest_again = repository.get_latest_org_template(org_id, "scrum-master")
             assert latest_again is not None
             assert_that(latest_again.version, equal_to(2))
