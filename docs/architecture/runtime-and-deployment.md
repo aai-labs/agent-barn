@@ -37,7 +37,7 @@ Hermes deliveries use `/v1/runs` so command approvals and progress remain availa
 
 This requires deploying the patched Hermes image together with the adapter. Existing Hermes session data remains on the Agent PVC and becomes available again on the next turn; no database migration or transcript reconstruction is required. The image patch fails the build if its upstream source anchor changes.
 
-The shared runtime adapter uses bounded exponential idle backoff with jitter for empty claim responses, starting at 500 ms and capping at 5 seconds. A successful claim resets the backoff before the next claim, so prompt delivery remains bounded without a tight HTTP or PostgreSQL polling loop. This is client-side cadence only: the Communications protocol version, claim ordering, delivery leases, and idempotency contract remain unchanged for Hermes and OpenClaw.
+The shared runtime adapter uses bounded exponential idle backoff with jitter for empty claim responses, starting at 500 ms and capping at 5 seconds. A successful claim resets the backoff before the next claim, so prompt delivery remains bounded without a tight HTTP or PostgreSQL polling loop. Claims last 120 seconds; Hermes renews its authenticated live claim every 60 seconds while an async run or approval is active, while OpenClaw retains the original bounded-turn lease behavior. Expired claims still use bounded retry and terminal failure feedback. Claim ordering and reply idempotency remain unchanged for both runtimes.
 
 Runtime is persisted as `agent_type`. Platform is not an Agent field: an Agent may be headless or own any number of Communication Connections independently of whether Hermes or OpenClaw executes it.
 

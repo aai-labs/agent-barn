@@ -1,5 +1,7 @@
 """Bridge the Agent Barn Communications protocol to a local runtime HTTP API."""
 
+from __future__ import annotations
+
 import json
 import os
 import random
@@ -31,7 +33,22 @@ _PENDING_APPROVALS: dict[str, dict] = {}
 # reclaimed delivery (lease expired while a run is still genuinely in
 # progress) from starting a second concurrent run against the same session.
 _ACTIVE_RUNS_LOCK = threading.Lock()
-_ACTIVE_RUNS: dict[str, threading.Thread] = {}
+_ACTIVE_RUNS: dict[str, ActiveRun] = {}
+
+_LEASE_HEARTBEAT_SECONDS = 60
+_PROGRESS_RELAY_MIN_SECONDS = 3
+
+
+class ActiveRun:
+    def __init__(self, delivery_id: str, thread: threading.Thread) -> None:
+        self.delivery_id = delivery_id
+        self.thread = thread
+
+    def is_alive(self) -> bool:
+        return self.thread.is_alive()
+
+    def join(self, timeout: float | None = None) -> None:
+        self.thread.join(timeout)
 
 
 class IdleClaimBackoff:
@@ -131,6 +148,33 @@ def complete_delivery(delivery_id: str, *, succeeded: bool, error: Exception | N
     )
 
 
+def renew_delivery_lease(delivery_id: str) -> None:
+    http_request(
+        "POST",
+        f"{COMMUNICATIONS_URL}/agents/{AGENT_ID}/deliveries/{delivery_id}/renew",
+        headers=communications_headers(),
+    )
+
+
+def _heartbeat_delivery_lease(delivery_id: str, stopped: threading.Event) -> None:
+    while not stopped.wait(_LEASE_HEARTBEAT_SECONDS):
+        try:
+            renew_delivery_lease(delivery_id)
+        except Exception as exc:
+            # A transient renewal failure must not interrupt a healthy Hermes
+            # run; the next heartbeat can still extend its original lease.
+            print(f"[communications-adapter] lease renewal failed: {exc}", flush=True)
+
+
+def post_reply_best_effort(delivery_id: str, text: str, *, suffix: str = "") -> None:
+    try:
+        post_reply(delivery_id, text, suffix=suffix)
+    except Exception as exc:
+        # Progress and approval notices improve visibility, but neither is the
+        # turn result. Keep draining so the final response can still arrive.
+        print(f"[communications-adapter] progress relay failed: {exc}", flush=True)
+
+
 def run_delivery_chat_completions(delivery: dict) -> None:
     """Original single blocking-turn path, kept for OpenClaw pods."""
     delivery_id = delivery["delivery_id"]
@@ -223,24 +267,38 @@ def run_delivery_hermes(delivery: dict) -> None:
     session_key = session_key_for(delivery)
     if resolve_pending_approval(session_key, delivery):
         return
+    active_delivery_id: str | None = None
     with _ACTIVE_RUNS_LOCK:
         existing = _ACTIVE_RUNS.get(session_key)
         if existing is not None and existing.is_alive():
-            # The claim lease expired and this delivery got reclaimed while a
-            # run for the same session is still genuinely in progress (e.g. a
-            # slow agentic turn past the 120s lease). Starting a second run
-            # here would double the work and race two runs against the same
-            # session's memory. The live thread will reply/complete this same
-            # delivery_id once it finishes.
-            return
-        thread = threading.Thread(target=_run_and_drain, args=(delivery, session_key), daemon=True)
-        _ACTIVE_RUNS[session_key] = thread
+            if existing.delivery_id == delivery["delivery_id"]:
+                # This is the same lease-reclaimed delivery. Its live owner
+                # will produce the reply and completion once the run ends.
+                return
+            active_delivery_id = existing.delivery_id
+        else:
+            thread = threading.Thread(target=_run_and_drain, args=(delivery, session_key), daemon=True)
+            _ACTIVE_RUNS[session_key] = ActiveRun(delivery_id=delivery["delivery_id"], thread=thread)
+    if active_delivery_id is not None:
+        # A later message is a distinct durable delivery, not a reclaim.
+        # Acknowledge it immediately instead of letting it churn through lease
+        # expiry while preserving session ordering.
+        post_reply(delivery["delivery_id"], "I'm still working on your previous message. Please try again shortly.")
+        complete_delivery(delivery["delivery_id"], succeeded=True)
+        return
     thread.start()
 
 
 def _run_and_drain(delivery: dict, session_key: str) -> None:
     delivery_id = delivery["delivery_id"]
     text = delivery["envelope"].get("text", "")
+    heartbeat_stopped = threading.Event()
+    heartbeat = threading.Thread(
+        target=_heartbeat_delivery_lease,
+        args=(delivery_id, heartbeat_stopped),
+        daemon=True,
+    )
+    heartbeat.start()
     try:
         started = http_request(
             "POST",
@@ -254,8 +312,10 @@ def _run_and_drain(delivery: dict, session_key: str) -> None:
             _PENDING_APPROVALS.pop(session_key, None)
         complete_delivery(delivery_id, succeeded=False, error=exc)
     finally:
+        heartbeat_stopped.set()
         with _ACTIVE_RUNS_LOCK:
-            if _ACTIVE_RUNS.get(session_key) is threading.current_thread():
+            active = _ACTIVE_RUNS.get(session_key)
+            if active is not None and active.thread is threading.current_thread():
                 del _ACTIVE_RUNS[session_key]
 
 
@@ -304,6 +364,7 @@ def _drain_run(run_id: str, delivery_id: str, session_key: str) -> None:
         },
     )
     sequence = 0
+    last_progress_at = float("-inf")
     with urllib.request.urlopen(req, timeout=900) as response:
         for sse_event, data in iter_sse_events(response):
             if not data:
@@ -323,7 +384,7 @@ def _drain_run(run_id: str, delivery_id: str, session_key: str) -> None:
                         "choices": choices,
                     }
                 description = payload.get("command") or payload.get("description") or "A command needs approval"
-                post_reply(
+                post_reply_best_effort(
                     delivery_id,
                     f"{description}\nReply with one of: {', '.join(choices)}",
                     suffix=str(sequence),
@@ -335,8 +396,9 @@ def _drain_run(run_id: str, delivery_id: str, session_key: str) -> None:
             # a distinct "thinking" step), so it always either duplicates or
             # cuts off the real final reply below.
             if event in ("tool.started", "subagent.start", "subagent.complete"):
-                if VERBOSE_MODE:
-                    post_reply(delivery_id, _progress_line(event, payload), suffix=str(sequence))
+                if VERBOSE_MODE and time.monotonic() - last_progress_at >= _PROGRESS_RELAY_MIN_SECONDS:
+                    post_reply_best_effort(delivery_id, _progress_line(event, payload), suffix=str(sequence))
+                    last_progress_at = time.monotonic()
                 continue
 
             if event == "run.completed":

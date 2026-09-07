@@ -166,40 +166,13 @@ class CommunicationDeliveryRepository:
         agent_id: UUID,
         lease_seconds: int = 120,
         max_attempts: int = 5,
+        reclaim_expired: bool = True,
     ) -> RuntimeDeliveryRead | None:
+        if reclaim_expired:
+            self.reclaim_expired_inbound(agent_id=agent_id, max_attempts=max_attempts)
         now = datetime.now(UTC)
         active_ordering = aliased(CommunicationDelivery)
         with Session(self.delegate.engine) as session:
-            # A claim whose lease expired without a `/complete` call (adapter crash
-            # or hang) would otherwise stay PROCESSING forever and permanently
-            # block every later delivery on the same ordering_key, since the
-            # exists() guard below treats any PROCESSING row as still in flight.
-            # Mirrors the reclaim `claim_next_outbound` already does, but routes
-            # through the same completion path as an explicit failure so a
-            # delivery that keeps timing out dead-letters after max_attempts
-            # instead of being reset to PENDING and retried forever.
-            expired = session.exec(
-                select(CommunicationDelivery)
-                .where(
-                    col(CommunicationDelivery.agent_id) == agent_id,
-                    col(CommunicationDelivery.direction) == CommunicationDirection.INBOUND,
-                    col(CommunicationDelivery.status) == CommunicationDeliveryStatus.PROCESSING,
-                    col(CommunicationDelivery.lease_expires_at) < now,
-                )
-                .with_for_update(skip_locked=True)
-            ).all()
-            for stale in expired:
-                self._apply_completion(
-                    stale,
-                    succeeded=False,
-                    now=now,
-                    max_attempts=max_attempts,
-                    error_code="LEASE_EXPIRED",
-                    error_message="Runtime did not complete this delivery before its claim lease expired",
-                    error_details=None,
-                )
-                session.add(stale)
-                self._stage_completion_journal(session, stale, now=now)
             query = (
                 select(CommunicationDelivery)
                 .where(
@@ -248,6 +221,83 @@ class CommunicationDeliveryRepository:
                 attempt_count=delivery.attempt_count,
                 envelope=NormalizedCommunicationEnvelope.model_validate(delivery.envelope),
             )
+
+    def reclaim_expired_inbound(
+        self,
+        *,
+        agent_id: UUID,
+        max_attempts: int = 5,
+    ) -> list[RuntimeDeliveryRead]:
+        """Reclaim stale runtime leases and return newly terminal deliveries."""
+        now = datetime.now(UTC)
+        dead_lettered: list[RuntimeDeliveryRead] = []
+        reclaimed: list[CommunicationDelivery] = []
+        with Session(self.delegate.engine, expire_on_commit=False) as session:
+            expired = session.exec(
+                select(CommunicationDelivery)
+                .where(
+                    col(CommunicationDelivery.agent_id) == agent_id,
+                    col(CommunicationDelivery.direction) == CommunicationDirection.INBOUND,
+                    col(CommunicationDelivery.status) == CommunicationDeliveryStatus.PROCESSING,
+                    col(CommunicationDelivery.lease_expires_at) < now,
+                )
+                .with_for_update(skip_locked=True)
+            ).all()
+            for stale in expired:
+                self._apply_completion(
+                    stale,
+                    succeeded=False,
+                    now=now,
+                    max_attempts=max_attempts,
+                    error_code="LEASE_EXPIRED",
+                    error_message="Runtime did not complete this delivery before its claim lease expired",
+                    error_details=None,
+                )
+                session.add(stale)
+                self._stage_completion_journal(session, stale, now=now)
+                reclaimed.append(stale)
+                if stale.status == CommunicationDeliveryStatus.DEAD_LETTERED:
+                    dead_lettered.append(
+                        RuntimeDeliveryRead(
+                            delivery_id=stale.id,
+                            message_id=stale.message_id,
+                            connection_id=stale.connection_id,
+                            attempt_count=stale.attempt_count,
+                            envelope=NormalizedCommunicationEnvelope.model_validate(stale.envelope),
+                        )
+                    )
+            session.commit()
+        for stale in reclaimed:
+            self._record_completion_metric(stale)
+        return dead_lettered
+
+    def renew_runtime_delivery_lease(
+        self,
+        delivery_id: UUID,
+        *,
+        agent_id: UUID,
+        lease_seconds: int = 120,
+    ) -> bool:
+        """Extend a live runtime claim without allowing an expired claim to revive."""
+        now = datetime.now(UTC)
+        with Session(self.delegate.engine) as session:
+            delivery = session.exec(
+                select(CommunicationDelivery)
+                .where(
+                    col(CommunicationDelivery.id) == delivery_id,
+                    col(CommunicationDelivery.agent_id) == agent_id,
+                    col(CommunicationDelivery.direction) == CommunicationDirection.INBOUND,
+                    col(CommunicationDelivery.status) == CommunicationDeliveryStatus.PROCESSING,
+                    col(CommunicationDelivery.lease_expires_at) > now,
+                )
+                .with_for_update()
+            ).one_or_none()
+            if delivery is None:
+                return False
+            delivery.lease_expires_at = now + timedelta(seconds=lease_seconds)
+            session.add(delivery)
+            session.commit()
+            return True
 
     def thread_has_agent_state(
         self,
