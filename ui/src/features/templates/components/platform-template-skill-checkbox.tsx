@@ -5,7 +5,7 @@ import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectVa
 import { useSkillVersions } from "@/features/skills/hooks/use-skill-versions";
 import type { SkillScopeRef } from "@/features/skills/scope";
 
-import type { PlatformSkill } from "../schemas";
+import type { TemplateSkill } from "../schemas";
 
 export function PlatformTemplateSkillCheckbox({
   skill,
@@ -17,7 +17,7 @@ export function PlatformTemplateSkillCheckbox({
   disabled = false,
   scope = { kind: "platform" },
 }: {
-  skill: PlatformSkill;
+  skill: TemplateSkill;
   checked: boolean;
   onChange: () => void;
   version?: number | null;

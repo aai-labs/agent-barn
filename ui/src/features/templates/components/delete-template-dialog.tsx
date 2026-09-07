@@ -1,22 +1,16 @@
 "use client";
 
+import { Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+import { ConfirmationDialog } from "@/components/confirmation-dialog";
 import { toastError } from "@/shared/toast";
 
 import { useDeleteTemplate } from "../hooks/use-delete-template";
-import type { PlatformTemplate } from "../schemas";
+import type { TemplateRead } from "../schemas";
 
 interface DeleteTemplateDialogProps {
-  template: PlatformTemplate | null;
+  template: TemplateRead | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onDeleted?: () => void;
@@ -45,36 +39,22 @@ export function DeleteTemplateDialog({
   };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>Delete template</DialogTitle>
-          <DialogDescription>This action cannot be undone.</DialogDescription>
-        </DialogHeader>
-
-        <p className="text-[14px]" style={{ color: "var(--ink-2)" }}>
-          Are you sure you want to delete <strong>{template?.templateName}</strong>?
-          This permanently deletes all versions of this template.
-        </p>
-
-        <DialogFooter>
-          <button
-            type="button"
-            className="af-btn"
-            onClick={() => onOpenChange(false)}
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            className="af-btn af-btn-danger"
-            onClick={handleDelete}
-            disabled={deleteTemplate.isPending}
-          >
-            {deleteTemplate.isPending ? "Deleting..." : "Delete"}
-          </button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+    <ConfirmationDialog
+      open={open}
+      onOpenChange={onOpenChange}
+      title="Delete template?"
+      description={
+        <>
+          This permanently deletes every version of{" "}
+          <strong>{template?.templateName}</strong>. This action cannot be undone.
+        </>
+      }
+      confirmLabel="Delete template"
+      pendingLabel="Deleting…"
+      onConfirm={handleDelete}
+      isPending={deleteTemplate.isPending}
+      variant="destructive"
+      icon={<Trash2 size={18} />}
+    />
   );
 }

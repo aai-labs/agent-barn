@@ -296,6 +296,11 @@ test.describe("RBAC-aware shared resource controls", () => {
     await expect(page.getByRole("button", { name: "Delete", exact: true })).toHaveCount(0);
     await rbac.closeTemplate();
 
+    await page.goto(`/dashboard/${TEST_ORG_ID}/settings/templates/new`);
+    await expect(page).toHaveURL(new RegExp(`/dashboard/${TEST_ORG_ID}/settings\\?tab=templates$`));
+    await expect(page.getByRole("button", { name: "Save draft" })).toHaveCount(0);
+    await expect(page.getByLabel(/Template name/i)).toHaveCount(0);
+
     await rbac.openSettingsSection("Skills");
     await expect(rbac.newSkillButton()).toHaveCount(0);
     await rbac.openSkill("my-tool");

@@ -5,9 +5,9 @@ import { useQuery } from "@tanstack/react-query";
 import { api } from "@/shared/api";
 
 import {
-  PaginatedPlatformSkillsSchema,
-  PlatformSkillListSchema,
-  type PlatformSkill,
+  PaginatedTemplateSkillsSchema,
+  TemplateSkillListSchema,
+  type TemplateSkill,
 } from "../schemas";
 import { useTemplateSkillsBasePath, type TemplateScopeRef } from "../scope";
 import { templateSkillsKey } from "../utils";
@@ -19,16 +19,16 @@ export function useTemplateSkills(scope: TemplateScopeRef, enabled = true) {
   const isPlatform = scope.kind === "platform";
   const query = useQuery({
     queryKey: templateSkillsKey(scope),
-    queryFn: async (): Promise<PlatformSkill[]> => {
+    queryFn: async (): Promise<TemplateSkill[]> => {
       if (isPlatform) {
-        const response = await api.get<PlatformSkill[]>(basePath, {
-          schema: PlatformSkillListSchema,
+        const response = await api.get<TemplateSkill[]>(basePath, {
+          schema: TemplateSkillListSchema,
         });
         return response.data;
       }
-      const response = await api.get<{ items: PlatformSkill[] }>(
+      const response = await api.get<{ items: TemplateSkill[] }>(
         `${basePath}?page_size=${ORG_SKILLS_PAGE_SIZE}`,
-        { schema: PaginatedPlatformSkillsSchema },
+        { schema: PaginatedTemplateSkillsSchema },
       );
       return response.data.items;
     },

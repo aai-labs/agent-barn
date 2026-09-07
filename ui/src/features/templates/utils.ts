@@ -15,7 +15,7 @@ export const templateLineagesKey = (scope: TemplateScopeRef) =>
 export const templateSkillsKey = (scope: TemplateScopeRef) =>
   [...templatesKey.all, "skills", templateScopeCacheKey(scope)] as const;
 
-export const PLATFORM_TEMPLATE_FILES = [
+export const TEMPLATE_FILES = [
   { key: "soulMd", label: "SOUL.md" },
   { key: "identityMd", label: "IDENTITY.md" },
   { key: "userMd", label: "USER.md" },
@@ -26,28 +26,28 @@ export const PLATFORM_TEMPLATE_FILES = [
   { key: "heartbeatMd", label: "HEARTBEAT.md" },
 ] as const;
 
-export type PlatformTemplateFileKey = (typeof PLATFORM_TEMPLATE_FILES)[number]["key"];
+export type TemplateFileKey = (typeof TEMPLATE_FILES)[number]["key"];
 
-export type PlatformTemplateFileValues = Record<PlatformTemplateFileKey, string>;
+export type TemplateFileValues = Record<TemplateFileKey, string>;
 
 export type SkillGroupDraft = {
   groupKey: string;
   skillIds: string[];
 };
 
-export type PlatformTemplateForm = {
+export type TemplateForm = {
   templateName: string;
   description: string;
-  files: PlatformTemplateFileValues;
+  files: TemplateFileValues;
   standaloneSkillIds: string[];
   skillGroups: SkillGroupDraft[];
   skillVersions: Record<string, number>;
 };
 
-export function blankPlatformTemplateFiles(): PlatformTemplateFileValues {
+export function blankTemplateFiles(): TemplateFileValues {
   return Object.fromEntries(
-    PLATFORM_TEMPLATE_FILES.map(({ key }) => [key, ""]),
-  ) as PlatformTemplateFileValues;
+    TEMPLATE_FILES.map(({ key }) => [key, ""]),
+  ) as TemplateFileValues;
 }
 
 export function formFromDraft(draft: {
@@ -62,7 +62,7 @@ export function formFromDraft(draft: {
   bootstrapMd: string;
   heartbeatMd: string;
   requiredSkills: Array<{ id: string; version: number | null; groupKey?: string | null }>;
-}): PlatformTemplateForm {
+}): TemplateForm {
   const grouped = new Map<string, string[]>();
   const standaloneSkillIds: string[] = [];
   const skillVersions: Record<string, number> = {};
@@ -95,7 +95,7 @@ export function formFromDraft(draft: {
   };
 }
 
-export function requiredSkillPayload(form: PlatformTemplateForm) {
+export function requiredSkillPayload(form: TemplateForm) {
   const selectedSkillIds = new Set([
     ...form.standaloneSkillIds,
     ...form.skillGroups.flatMap((group) => group.skillIds),

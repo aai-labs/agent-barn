@@ -4,7 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 
 import { api } from "@/shared/api";
 
-import { PlatformTemplateReadSchema, type PlatformTemplate } from "../schemas";
+import { TemplateReadSchema, type TemplateRead } from "../schemas";
 import { useTemplatesBasePath, type TemplateScopeRef } from "../scope";
 import { templateVersionsKey } from "../utils";
 
@@ -17,9 +17,9 @@ export function useTemplateVersions(
   const query = useQuery({
     queryKey: templateVersionsKey(templateKey ?? "", scope),
     queryFn: async () => {
-      const response = await api.get<PlatformTemplate[]>(
+      const response = await api.get<TemplateRead[]>(
         `${basePath}/${templateKey}/versions`,
-        { schema: PlatformTemplateReadSchema.array() },
+        { schema: TemplateReadSchema.array() },
       );
       return response.data;
     },

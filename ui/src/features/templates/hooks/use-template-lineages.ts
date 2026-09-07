@@ -5,8 +5,8 @@ import { useQuery } from "@tanstack/react-query";
 import { api } from "@/shared/api";
 
 import {
-  PlatformTemplateAdminSummariesSchema,
-  type PlatformTemplateAdminSummary,
+  TemplateLineageSummariesSchema,
+  type TemplateLineageSummary,
 } from "../schemas";
 import { useTemplatesBasePath, type TemplateScopeRef } from "../scope";
 import { templateLineagesKey } from "../utils";
@@ -17,8 +17,8 @@ export function useTemplateLineages(scope: TemplateScopeRef, enabled = true) {
   const query = useQuery({
     queryKey: templateLineagesKey(scope),
     queryFn: async () => {
-      const response = await api.get<PlatformTemplateAdminSummary[]>(path, {
-        schema: PlatformTemplateAdminSummariesSchema,
+      const response = await api.get<TemplateLineageSummary[]>(path, {
+        schema: TemplateLineageSummariesSchema,
       });
       return response.data;
     },

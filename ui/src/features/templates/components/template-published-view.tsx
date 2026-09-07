@@ -23,13 +23,13 @@ import {
 } from "@/components/ui/select";
 
 import type {
-  PlatformTemplateAdminSummary,
-  PlatformTemplate as PublishedPlatformTemplate,
+  TemplateLineageSummary,
+  TemplateRead as PublishedPlatformTemplate,
 } from "../schemas";
 import { type TemplateScopeRef } from "../scope";
 import {
   formFromDraft,
-  type PlatformTemplateFileKey,
+  type TemplateFileKey,
 } from "../utils";
 import { useUpdateTemplateFromPlatform } from "../hooks/use-update-template-from-platform";
 import { DeleteTemplateDialog } from "./delete-template-dialog";
@@ -51,7 +51,7 @@ export function TemplatePublishedView({
   onClose,
 }: {
   scope: TemplateScopeRef;
-  lineage: PlatformTemplateAdminSummary | null;
+  lineage: TemplateLineageSummary | null;
   template: PublishedPlatformTemplate | undefined;
   versions: PublishedPlatformTemplate[];
   selectedVersion: number | null;
@@ -65,7 +65,7 @@ export function TemplatePublishedView({
   onClose: () => void;
 }) {
   const [selectedFile, setSelectedFile] =
-    useState<PlatformTemplateFileKey>("soulMd");
+    useState<TemplateFileKey>("soulMd");
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [updateOpen, setUpdateOpen] = useState(false);
   const applyPlatformUpdate = useUpdateTemplateFromPlatform();

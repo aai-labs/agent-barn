@@ -172,7 +172,7 @@ test.describe("Settings · Templates", () => {
         request.method() === "DELETE" &&
         request.url().endsWith(`/templates/${MOCK_ORG_TEMPLATE_KEY}`),
     );
-    await page.getByRole("dialog").getByRole("button", { name: "Delete", exact: true }).click();
+    await page.getByRole("button", { name: "Delete template", exact: true }).click();
     await deleteRequest;
   });
 

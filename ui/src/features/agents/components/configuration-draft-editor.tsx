@@ -7,7 +7,7 @@ import { Label } from "@/components/ui/label";
 import { useSkills } from "@/features/skills/hooks/use-skills";
 import { PlatformTemplateSkillCheckbox } from "@/features/templates/components/platform-template-skill-checkbox";
 import { PlatformTemplateSkillGroup } from "@/features/templates/components/platform-template-skill-group";
-import { PLATFORM_TEMPLATE_FILES } from "@/features/templates/utils";
+import { TEMPLATE_FILES } from "@/features/templates/utils";
 
 import type { AgentOverrideDraft } from "../schemas";
 import {
@@ -43,7 +43,7 @@ export function AgentOverrideDraftEditor({
   const { skills, isLoading: skillsLoading } = useSkills({ scope: { kind: "organization" }, pageSize: 100 });
   const original = draftToForm(draft);
   const isDirty =
-    PLATFORM_TEMPLATE_FILES.some(({ key }) => form[key] !== original[key]) ||
+    TEMPLATE_FILES.some(({ key }) => form[key] !== original[key]) ||
     form.templateName !== original.templateName ||
     form.description !== original.description ||
     JSON.stringify(form.requiredSkillIds) !==

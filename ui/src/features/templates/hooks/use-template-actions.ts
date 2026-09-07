@@ -5,11 +5,11 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/shared/api";
 
 import {
-  PlatformTemplateDraftReadSchema,
-  PlatformTemplatePublishedReadSchema,
-  type CreatePlatformTemplateDraft,
-  type PlatformTemplateDraft,
-  type PlatformTemplateDraftFields,
+  TemplateDraftReadSchema,
+  TemplatePublishedReadSchema,
+  type CreateTemplateDraft,
+  type TemplateDraft,
+  type TemplateDraftFields,
 } from "../schemas";
 import { useTemplatesBasePath, type TemplateScopeRef } from "../scope";
 import { templateDraftKey, templateLineagesKey, templateVersionsKey } from "../utils";
@@ -19,9 +19,9 @@ export function useCreateTemplateDraft(scope: TemplateScopeRef) {
   const basePath = useTemplatesBasePath(scope);
 
   return useMutation({
-    mutationFn: async (data: CreatePlatformTemplateDraft) => {
-      const response = await api.post<PlatformTemplateDraft>(basePath, data, {
-        schema: PlatformTemplateDraftReadSchema,
+    mutationFn: async (data: CreateTemplateDraft) => {
+      const response = await api.post<TemplateDraft>(basePath, data, {
+        schema: TemplateDraftReadSchema,
       });
       return response.data;
     },
@@ -45,10 +45,10 @@ export function useStartTemplateDraft(scope: TemplateScopeRef) {
       sourceVersion?: number;
     }) => {
       const query = sourceVersion === undefined ? "" : `?source_version=${sourceVersion}`;
-      const response = await api.post<PlatformTemplateDraft>(
+      const response = await api.post<TemplateDraft>(
         `${basePath}/${templateKey}/draft${query}`,
         undefined,
-        { schema: PlatformTemplateDraftReadSchema },
+        { schema: TemplateDraftReadSchema },
       );
       return response.data;
     },
@@ -67,11 +67,11 @@ export function useUpdateTemplateDraft(scope: TemplateScopeRef) {
     mutationFn: async ({
       templateKey,
       ...data
-    }: PlatformTemplateDraftFields & { templateKey: string }) => {
-      const response = await api.patch<PlatformTemplateDraft>(
+    }: TemplateDraftFields & { templateKey: string }) => {
+      const response = await api.patch<TemplateDraft>(
         `${basePath}/${templateKey}/draft`,
         data,
-        { schema: PlatformTemplateDraftReadSchema },
+        { schema: TemplateDraftReadSchema },
       );
       return response.data;
     },
@@ -107,7 +107,7 @@ export function usePublishTemplateDraft(scope: TemplateScopeRef) {
       const response = await api.post<{ id: string; templateKey: string; version: number }>(
         `${basePath}/${templateKey}/draft/publish`,
         undefined,
-        { schema: PlatformTemplatePublishedReadSchema },
+        { schema: TemplatePublishedReadSchema },
       );
       return response.data;
     },

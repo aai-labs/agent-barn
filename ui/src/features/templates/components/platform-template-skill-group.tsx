@@ -1,6 +1,6 @@
 import type { SkillScopeRef } from "@/features/skills/scope";
 
-import type { PlatformSkill } from "../schemas";
+import type { TemplateSkill } from "../schemas";
 import type { SkillGroupDraft } from "../utils";
 import { PlatformTemplateSkillCheckbox } from "./platform-template-skill-checkbox";
 
@@ -17,8 +17,8 @@ export function PlatformTemplateSkillGroup({
   scope = { kind: "platform" },
 }: {
   group: SkillGroupDraft;
-  skills: PlatformSkill[];
-  skillMap: Map<string, PlatformSkill>;
+  skills: TemplateSkill[];
+  skillMap: Map<string, TemplateSkill>;
   selectedSkillIds: Set<string>;
   onToggle: (skillId: string) => void;
   skillVersions?: Record<string, number>;
@@ -29,7 +29,7 @@ export function PlatformTemplateSkillGroup({
 }) {
   const groupSkills = group.skillIds
     .map((id) => skillMap.get(id))
-    .filter((skill): skill is PlatformSkill => Boolean(skill));
+    .filter((skill): skill is TemplateSkill => Boolean(skill));
   const visibleGroupSkills = skills.filter((skill) =>
     group.skillIds.includes(skill.id),
   );

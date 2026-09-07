@@ -25,14 +25,14 @@ import {
 import { useTemplateSkills } from "../hooks/use-template-skills";
 import { useTemplateDraft } from "../hooks/use-template-draft";
 import { useTemplateVersions } from "../hooks/use-template-versions";
-import type { PlatformTemplateAdminSummary } from "../schemas";
+import type { TemplateLineageSummary } from "../schemas";
 import { type TemplateScopeRef, templateSkillScope } from "../scope";
 import {
-  blankPlatformTemplateFiles,
+  blankTemplateFiles,
   formFromDraft,
   requiredSkillPayload,
-  type PlatformTemplateFileKey,
-  type PlatformTemplateForm,
+  type TemplateFileKey,
+  type TemplateForm,
 } from "../utils";
 import { PlatformTemplateArtifactTabs } from "./platform-template-artifact-tabs";
 import { TemplatePublishedView } from "./template-published-view";
@@ -53,11 +53,11 @@ type ConfirmationConfig = {
   children?: ReactNode;
 };
 
-function emptyForm(): PlatformTemplateForm {
+function emptyForm(): TemplateForm {
   return {
     templateName: "",
     description: "",
-    files: blankPlatformTemplateFiles(),
+    files: blankTemplateFiles(),
     standaloneSkillIds: [],
     skillGroups: [],
     skillVersions: {},
@@ -78,7 +78,7 @@ export function TemplateEditor({
   canManage?: boolean;
   isNew: boolean;
   templateKey: string | null;
-  lineage: PlatformTemplateAdminSummary | null;
+  lineage: TemplateLineageSummary | null;
   onClose: () => void;
   onCreated: (templateKey: string) => void;
   onChanged: () => void;
@@ -116,9 +116,9 @@ export function TemplateEditor({
   const updateDraft = useUpdateTemplateDraft(scope);
   const discardDraft = useDiscardTemplateDraft(scope);
   const publishDraft = usePublishTemplateDraft(scope);
-  const [form, setForm] = useState<PlatformTemplateForm>(emptyForm);
+  const [form, setForm] = useState<TemplateForm>(emptyForm);
   const [selectedFile, setSelectedFile] =
-    useState<PlatformTemplateFileKey>("soulMd");
+    useState<TemplateFileKey>("soulMd");
   const [skillSearch, setSkillSearch] = useState("");
   const [dirty, setDirty] = useState(false);
   const [confirmation, setConfirmation] = useState<ConfirmationKind | null>(
@@ -170,7 +170,7 @@ export function TemplateEditor({
   }, [skillSearch, skills]);
 
   function patchForm(
-    updater: (previous: PlatformTemplateForm) => PlatformTemplateForm,
+    updater: (previous: TemplateForm) => TemplateForm,
   ) {
     setForm((previous) => updater(previous));
     setDirty(true);

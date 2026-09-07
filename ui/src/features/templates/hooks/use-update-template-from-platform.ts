@@ -5,7 +5,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/shared/api";
 import { useOrganizationApiBase } from "@/features/organizations/hooks/use-organization-api-base";
 
-import { PlatformTemplateReadSchema, type PlatformTemplate } from "../schemas";
+import { TemplateReadSchema, type TemplateRead } from "../schemas";
 import { templatesKey } from "../utils";
 
 export function useUpdateTemplateFromPlatform() {
@@ -14,10 +14,10 @@ export function useUpdateTemplateFromPlatform() {
 
   return useMutation({
     mutationFn: async (templateKey: string) => {
-      const response = await api.post<PlatformTemplate>(
+      const response = await api.post<TemplateRead>(
         `${orgApiBase}/templates/${templateKey}/platform-update`,
         undefined,
-        { schema: PlatformTemplateReadSchema },
+        { schema: TemplateReadSchema },
       );
       return response.data;
     },
