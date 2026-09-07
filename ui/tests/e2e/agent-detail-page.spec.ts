@@ -1403,8 +1403,8 @@ test.describe("Agent Detail Page — Personality tab (approval mode, OpenClaw)",
     await page.getByRole("button", { name: "Profile", exact: true }).click();
   });
 
-  test("shows Managed by OpenClaw instead of a command approval value", async ({ page }) => {
-    await expect(page.getByText("Managed by OpenClaw")).toBeVisible();
+  test("shows full access instead of a command approval value", async ({ page }) => {
+    await expect(page.getByText("Full access — no approval prompts")).toBeVisible();
     await expect(page.getByRole("combobox", { name: "Command approval" })).toHaveCount(0);
   });
 

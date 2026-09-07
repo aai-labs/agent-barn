@@ -76,8 +76,24 @@ def test_runtime_secret_contains_only_runtime_and_llm_credentials() -> None:
 
     assert secret.string_data["RUNTIME_API_KEY"] == "runtime-key"
     assert secret.string_data["API_SERVER_KEY"] == "runtime-key"
-    assert "AGENT_RUNTIME_KIND" not in secret.string_data
+    assert secret.string_data["RUNTIME_KIND"] == "hermes"
+    assert secret.string_data["VERBOSE_MODE"] == "false"
     assert not any(key.startswith(("SLACK_", "TELEGRAM_", "DISCORD_", "MSTEAMS_")) for key in secret.string_data)
+
+
+def test_runtime_secret_verbose_mode_toggle() -> None:
+    secret = build_secret_hermes_runtime(
+        _AGENT_ID,
+        _ORG_ID,
+        _NS,
+        "Test Agent",
+        runtime_api_key="runtime-key",
+        litellm_api_key="llm-key",
+        litellm_base_url="http://litellm:4000",
+        verbose_mode=True,
+    )
+
+    assert secret.string_data["VERBOSE_MODE"] == "true"
 
 
 def test_deployment_runs_one_headless_runtime_container() -> None:

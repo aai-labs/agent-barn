@@ -110,7 +110,17 @@ class CommunicationsGatewayService:
     def claim_runtime_delivery(self, agent: Agent) -> RuntimeDeliveryRead | None:
         if agent.status != AgentStatus.RUNNING:
             raise RuntimeError("Agent is not running")
-        delivery = self.delivery_repository.claim_next_inbound(agent_id=agent.id)
+        expired = self.delivery_repository.reclaim_expired_inbound(agent_id=agent.id)
+        for stale in expired:
+            self.notify_processing_feedback(
+                ProcessingFeedbackContext(
+                    connection_id=stale.connection_id,
+                    stage=ProcessingFeedbackStage.FAILED,
+                    location=stale.envelope.location,
+                    provider_message_id=stale.envelope.provider_message_id,
+                )
+            )
+        delivery = self.delivery_repository.claim_next_inbound(agent_id=agent.id, reclaim_expired=False)
         if delivery is not None:
             self.notify_processing_feedback(
                 ProcessingFeedbackContext(
@@ -194,6 +204,11 @@ class CommunicationsGatewayService:
             if not result.succeeded:
                 self._notify_runtime_failure_feedback(agent.id, delivery_id)
         return completed
+
+    def renew_runtime_delivery_lease(self, agent: Agent, delivery_id: UUID) -> bool:
+        if agent.status != AgentStatus.RUNNING:
+            raise RuntimeError("Agent is not running")
+        return self.delivery_repository.renew_runtime_delivery_lease(delivery_id, agent_id=agent.id)
 
     def _notify_runtime_failure_feedback(self, agent_id: UUID, delivery_id: UUID) -> None:
         """Notify terminal runtime failure without coupling it to completion."""
