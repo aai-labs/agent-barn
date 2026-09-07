@@ -47,6 +47,22 @@ HONCHO_RECALL_TIMEOUT_MS: int = 60000
 _MEMORY_CORE = "memory-core"
 _MEMORY_HONCHO = "openclaw-honcho"
 
+# The Honcho plugin runs an internal memory-search sub-agent, and its turns — the
+# sub-agent's own instruction prompt and its bounded "NONE" replies — are captured
+# and derived into conclusions as if the user had said them ("owner instructs the
+# agent to return NONE…"). On a fresh Agent that scaffolding outnumbers real memory
+# before a single genuine message. These patterns drop those turns at capture: the
+# plugin merges them with its defaults and `shouldSkipMessage` treats a `/…/`
+# entry as a regex tested anywhere in the message. Every phrase is one no human
+# types into a chat, so they target the sub-agent without touching real content.
+_MEMORY_NOISE_PATTERNS = [
+    "/memory search agent/i",
+    "/return exactly one of two forms/i",
+    "/compact plain-text summary/i",
+    "/reply with (?:the word )?NONE/i",
+    "/^NONE\\.?$/i",
+]
+
 
 def _memory_plugin(honcho_workspace_id: str | None) -> str:
     """Honcho occupies the single memory slot rather than running beside
@@ -64,6 +80,9 @@ def _memory_entry(honcho_base_url: str | None, honcho_workspace_id: str | None) 
             "config": {
                 "baseUrl": honcho_base_url,
                 "workspaceId": honcho_workspace_id,
+                # Merged with the plugin's own defaults; drops the memory-search
+                # sub-agent's turns before they are ever stored (see above).
+                "noisePatterns": _MEMORY_NOISE_PATTERNS,
             },
             "hooks": {
                 # Without this the runtime blocks the plugin's `agent_end` hook, so

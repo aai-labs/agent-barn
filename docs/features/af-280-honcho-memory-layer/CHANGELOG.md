@@ -13,6 +13,15 @@ Related context: [`../agents.md`](../agents.md), [`../costs.md`](../costs.md), [
 
 ## Changes
 
+### 2026-09-07 — AF-280 — cut memory noise at the source, drop the Facts-only filter
+
+Fixed the two sources of memory bloat and removed the UI heuristic that was hiding them.
+
+- OpenClaw scaffolding: the Honcho plugin's memory-search sub-agent was capturing its own instruction prompt and "NONE" replies as conclusions about the user — the bulk of a fresh Agent's memory. The builder now passes the plugin's own `noisePatterns` (regex form, merged with its defaults) to drop those turns at capture. Every pattern targets phrases no human types, so real content is untouched. Covered by a builder test; not live-verified, since that needs a fresh pod and conversation.
+- Deriver bloat: agents recorded "the peer asked X" as facts because Honcho's extraction prompt says to capture everything. `start_agent` now sets a per-workspace deriver instruction to record only durable facts, best-effort so a memory-off or unreachable Honcho never fails a start. Runs on every start, so it backfills existing agents on their next restart. Verified live — restarting an agent wrote the instruction onto its workspace; A/B earlier showed it cuts a mixed message from three conclusions to the one real fact.
+- Dropped the "Facts only" filter. It was a client-side band-aid over the deriver bloat, matched by wording, and caught real facts as false positives. With the bloat gone at the source it is unnecessary — the list is clean without it.
+- Coverage: 1711 tests pass; check-api/check-ui/lint-ui and the design detector clean. New tests for the noise patterns, the client's create-then-update call shape, and the shipped instruction text.
+
 ### 2026-09-07 — AF-280 — Costs page shows a true total
 
 - Added the all-in figure the page was missing: "Total Spend" is now model plus memory, the headline card. The old model-only card is renamed "Model Spend", and "Memory Cost" is unchanged, so the three read Total = Model + Memory and the numbers visibly add up.

@@ -225,3 +225,25 @@ def test_start_sh_does_not_report_an_already_installed_plugin_as_a_failure() -> 
     """The plugin lives on the PVC, so every restart after the first re-reports it
     as already present — the healthy steady state, not a failure."""
     assert "honcho plugin already installed" in START_SH
+
+
+def test_honcho_config_ships_noise_patterns_for_the_memory_subagent() -> None:
+    """The plugin's memory-search sub-agent otherwise captures its own instruction
+    prompt as conclusions about the user. The patterns drop those turns; a regex
+    entry (leading "/") is what the plugin tests anywhere in a message, so plain
+    substrings would not catch a phrase mid-prompt."""
+    config = build_openclaw_gateway_config(
+        "litellm/gpt-5",
+        "http://litellm:4000",
+        honcho_base_url="http://honcho:8000",
+        honcho_workspace_id="af-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+    )
+    patterns = config["plugins"]["entries"]["openclaw-honcho"]["config"]["noisePatterns"]
+    assert any("memory search agent" in p for p in patterns)
+    assert all(p.startswith("/") for p in patterns), "content-anywhere match needs regex form"
+
+
+def test_noise_patterns_absent_when_honcho_is_not_configured() -> None:
+    """memory-core has no such sub-agent, so the patterns would be meaningless."""
+    config = build_openclaw_gateway_config("litellm/gpt-5", "http://litellm:4000")
+    assert "openclaw-honcho" not in config["plugins"]["entries"]

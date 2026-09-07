@@ -72,6 +72,32 @@ class HonchoClient:
             )
         return created
 
+    # Told to the deriver, per workspace, to keep it from recording transient
+    # conversational actions ("the peer asked X") as durable facts. Honcho's base
+    # extraction prompt says "extract ALL observations", so without this a question
+    # becomes a memory; measured live, it cut a mixed message from three
+    # conclusions to the one real fact.
+    DERIVER_INSTRUCTIONS = (
+        "Record only durable facts, preferences, decisions, and commitments about the peer. "
+        "Do not record that the peer asked a question, requested something, greeted, or that a "
+        "message was sent — transient conversational actions are not facts worth remembering."
+    )
+
+    def ensure_deriver_instructions(self, workspace_id: str, instructions: str) -> None:
+        """Set the deriver's custom instructions on a workspace, creating it if needed.
+
+        The runtime creates the workspace lazily on first conversation, so this
+        both creates it (idempotent get-or-create) and sets the configuration —
+        the create call does not update an already-existing workspace's config, so
+        the update is sent explicitly and also backfills workspaces that predate
+        this. Configuration resolves workspace-wide, below any per-session override.
+        """
+        body = {"configuration": {"reasoning": {"custom_instructions": instructions}}}
+        # get-or-create; on a brand-new workspace this already applies the config.
+        self._request("POST", "/workspaces", json={"id": workspace_id, **body})
+        # explicit update so an existing workspace picks it up too.
+        self._request("PUT", f"/workspaces/{workspace_id}", json=body)
+
     def list_sessions(self, workspace_id: str) -> list[str]:
         payload = self._request("POST", f"/workspaces/{workspace_id}/sessions/list", json={})
         if not isinstance(payload, dict):

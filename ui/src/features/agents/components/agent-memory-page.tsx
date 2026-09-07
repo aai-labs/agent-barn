@@ -18,16 +18,11 @@ import { ShareMemoryDialog } from "./share-memory-dialog";
 
 const PAGE_SIZE = 50;
 
-/** Honcho derives a conclusion from every message, including ones that only record
- *  that something was asked — "operator asked where the runbooks live". On a real
- *  agent these outnumber actual knowledge, so the view offers to set them aside.
- *  A heuristic on wording, not a Honcho distinction: it hides rows, never deletes
- *  them, and "All" is one click away. */
-const QUESTION_NOTE = /\b(asked|instructed|repeatedly asks|querying)\b/i;
-
-function isQuestionNote(item: AgentMemoryItem): boolean {
-  return QUESTION_NOTE.test(item.content);
-}
+// A "Facts only" toggle used to live here, filtering out "the agent was asked X"
+// noise by wording. That was a client-side band-aid; the deriver is now told at
+// the source (per workspace) not to record transient conversational actions, and
+// the OpenClaw memory plugin drops its own sub-agent scaffolding at capture — so
+// the list is clean without a heuristic that also caught real facts.
 
 /** Only notable origins get a chip. Nearly every memory is plainly stated, so a
  *  chip saying so on every row is weight without signal — it would bury the shared
@@ -107,7 +102,6 @@ export function AgentMemoryPage({ agentId, agentName }: { agentId: string; agent
   const [sharing, setSharing] = useState<AgentMemoryItem | null>(null);
   const [draft, setDraft] = useState("");
   const [search, setSearch] = useState("");
-  const [factsOnly, setFactsOnly] = useState(false);
   const searchQuery = useAgentMemorySearch(agentId, search);
   const isSearching = search.trim().length > 2;
 
@@ -121,12 +115,7 @@ export function AgentMemoryPage({ agentId, agentName }: { agentId: string; agent
     () => (isSearching ? (searchQuery.data ?? []) : (memory?.items ?? [])),
     [isSearching, searchQuery.data, memory?.items],
   );
-  const filtered = useMemo(
-    () => (factsOnly ? loaded.filter((item) => !isQuestionNote(item)) : loaded),
-    [loaded, factsOnly],
-  );
-  const rows = useMemo(() => collapse(filtered), [filtered]);
-  const setAside = loaded.length - filtered.length;
+  const rows = useMemo(() => collapse(loaded), [loaded]);
   const total = memory?.total ?? 0;
   const pageCount = Math.ceil(total / PAGE_SIZE);
 
@@ -179,62 +168,31 @@ export function AgentMemoryPage({ agentId, agentName }: { agentId: string; agent
 
   return (
     <div className="space-y-5">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div className="relative w-full sm:max-w-sm">
-          <Search
-            size={15}
-            aria-hidden
-            className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2"
+      <div className="relative w-full sm:max-w-sm">
+        <Search
+          size={15}
+          aria-hidden
+          className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2"
+          style={{ color: "var(--ink-4)" }}
+        />
+        <Input
+          placeholder="Search this agent's memory…"
+          aria-label="Search this agent's memory"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          className="pl-9"
+        />
+        {search.length > 0 && (
+          <button
+            type="button"
+            onClick={() => setSearch("")}
+            aria-label="Clear search"
+            className="absolute top-1/2 right-2 -translate-y-1/2 rounded-full p-1 transition-colors duration-150 hover:bg-[var(--bg-sunken)]"
             style={{ color: "var(--ink-4)" }}
-          />
-          <Input
-            placeholder="Search this agent's memory…"
-            aria-label="Search this agent's memory"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="pl-9"
-          />
-          {search.length > 0 && (
-            <button
-              type="button"
-              onClick={() => setSearch("")}
-              aria-label="Clear search"
-              className="absolute top-1/2 right-2 -translate-y-1/2 rounded-full p-1 transition-colors duration-150 hover:bg-[var(--bg-sunken)]"
-              style={{ color: "var(--ink-4)" }}
-            >
-              <X size={14} />
-            </button>
-          )}
-        </div>
-
-        <div
-          className="inline-flex shrink-0 self-start rounded-full p-0.5 sm:self-auto"
-          style={{ background: "var(--bg-soft)", border: "1px solid var(--line)" }}
-          role="group"
-          aria-label="Filter by kind"
-        >
-          {(
-            [
-              ["All", false],
-              ["Facts only", true],
-            ] as const
-          ).map(([label, value]) => (
-            <button
-              key={label}
-              type="button"
-              onClick={() => setFactsOnly(value)}
-              aria-pressed={factsOnly === value}
-              className="rounded-full px-3 py-1 text-[0.8125rem] transition-colors duration-150"
-              style={
-                factsOnly === value
-                  ? { background: "var(--bg-elev)", color: "var(--ink)", boxShadow: "var(--shadow-sm)" }
-                  : { color: "var(--ink-3)" }
-              }
-            >
-              {label}
-            </button>
-          ))}
-        </div>
+          >
+            <X size={14} />
+          </button>
+        )}
       </div>
 
       {/* Peer facets. Hidden while searching, which spans every peer already, and
@@ -273,26 +231,6 @@ export function AgentMemoryPage({ agentId, agentName }: { agentId: string; agent
         ) : (
           `${total} ${total === 1 ? "memory" : "memories"}`
         )}
-        {setAside > 0 && (
-          <>
-            {" · "}
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button
-                  type="button"
-                  onClick={() => setFactsOnly(false)}
-                  className="underline decoration-dotted underline-offset-2"
-                >
-                  {setAside} on this page hidden
-                </button>
-              </TooltipTrigger>
-              <TooltipContent className="max-w-xs">
-                Notes about questions that were asked, rather than anything the agent learned. Hidden here,
-                not deleted.
-              </TooltipContent>
-            </Tooltip>
-          </>
-        )}
       </p>
 
       {isLoading ? (
@@ -323,14 +261,14 @@ export function AgentMemoryPage({ agentId, agentName }: { agentId: string; agent
           style={{ background: "var(--bg-soft)", border: "1px dashed var(--line-strong)" }}
         >
           <p className="text-sm font-medium" style={{ color: "var(--ink-2)" }}>
-            {isSearching ? "No memories match that search" : "Nothing on this page after filtering"}
+            {isSearching ? "No memories match that search" : "Nothing here"}
           </p>
           <p className="mt-1.5 text-sm" style={{ color: "var(--ink-3)" }}>
             {isSearching ? (
               "Try fewer or broader words."
             ) : (
-              <button type="button" onClick={() => setFactsOnly(false)} className="underline underline-offset-2">
-                Show everything on this page
+              <button type="button" onClick={() => selectPeer(null)} className="underline underline-offset-2">
+                Show everyone
               </button>
             )}
           </p>

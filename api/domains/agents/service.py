@@ -108,7 +108,7 @@ from api.domains.templates.repository import TemplateRepository
 from api.domains.templates.requirements import effective_required_ids, split_requirements
 from api.domains.users.models import User
 from api.infrastructure.crypto import decrypt_token, encrypt_token
-from api.infrastructure.honcho.client import workspace_id_for_agent
+from api.infrastructure.honcho.client import HonchoClient, HonchoError, workspace_id_for_agent
 from api.infrastructure.integration_validators import (
     PROVIDER_VALIDATORS,
     format_validation_result,
@@ -202,6 +202,7 @@ class AgentService:
     event_delivery_dispatcher: EventDeliveryDispatcher
     organization_lookup: OrganizationLookupService
     agent_settings_lookup: AgentSettingsLookupService
+    honcho: HonchoClient
 
     def _org_id(self, context: CurrentUserContext) -> UUID:
         return context.require_current_user_organization().organization_id
@@ -2161,6 +2162,17 @@ class AgentService:
 
         agent.status = AgentStatus.RUNNING
         agent.last_error = None
+        # Tell this Agent's memory deriver to keep transient conversational actions
+        # ("the peer asked X") out of stored memory. Done on every start so it also
+        # backfills Agents that predate it, and best-effort: memory is opt-in and
+        # its store may be unreachable, neither of which should fail an Agent start.
+        if self.config.honcho_enabled:
+            try:
+                self.honcho.ensure_deriver_instructions(
+                    workspace_id_for_agent(agent.id), self.honcho.DERIVER_INSTRUCTIONS
+                )
+            except HonchoError:
+                logger.warning("Could not set memory deriver instructions for agent %s", agent_id, exc_info=True)
         # Pin what this pod was started on. The runtime reads its config once, so this
         # is the model it serves until someone restarts it — however the Organization
         # default moves in the meantime.
