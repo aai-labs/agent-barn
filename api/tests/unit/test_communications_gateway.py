@@ -4,7 +4,7 @@ from typing import cast
 from unittest.mock import Mock, patch
 from uuid import uuid4
 
-from hamcrest import assert_that, empty
+from hamcrest import assert_that, empty, is_
 
 from api.core.config import Config
 from api.domains.agents.models import Agent, AgentStatus
@@ -60,6 +60,7 @@ def _service(
         agent_repository=Mock(),
         delivery_repository=deliveries,
         connection_repository=connections,
+        email_addresses=Mock(),
         plugins=plugins,
         operations=operations,
     )
@@ -103,6 +104,19 @@ def test_gateway_feedback_is_best_effort_after_inbound_acceptance() -> None:
     deliveries.accept_inbound.assert_called_once()
     plugin.processing_feedback.assert_called_once()
     assert plugin.processing_feedback.call_args.args[2].stage == ProcessingFeedbackStage.ACCEPTED
+
+
+def test_gateway_renews_only_the_authenticated_agents_live_delivery() -> None:
+    connection = cast(CommunicationConnection, _connection())
+    service, deliveries = _service(connection, _feedback_plugin())
+    agent = cast(Agent, SimpleNamespace(id=uuid4(), status=AgentStatus.RUNNING))
+    deliveries.renew_runtime_delivery_lease.return_value = True
+
+    renewed = service.renew_runtime_delivery_lease(agent, uuid4())
+
+    assert_that(renewed, is_(True))
+    deliveries.renew_runtime_delivery_lease.assert_called_once()
+    assert deliveries.renew_runtime_delivery_lease.call_args.kwargs["agent_id"] == agent.id
 
 
 def test_gateway_enriches_inbound_envelopes_with_decrypted_credentials_before_acceptance() -> None:
@@ -218,6 +232,7 @@ def test_gateway_marks_claim_and_terminal_runtime_failure_at_lifecycle_seam() ->
         envelope=envelope,
     )
     deliveries.claim_next_inbound.return_value = delivery
+    deliveries.reclaim_expired_inbound.return_value = []
     deliveries.get_inbound_runtime_delivery.return_value = delivery
     deliveries.complete_runtime_delivery.return_value = True
     deliveries.delivery_status.return_value = CommunicationDeliveryStatus.DEAD_LETTERED
@@ -238,6 +253,30 @@ def test_gateway_marks_claim_and_terminal_runtime_failure_at_lifecycle_seam() ->
     assert completed is True
     stages = [call.args[2].stage for call in plugin.processing_feedback.call_args_list]
     assert stages == [ProcessingFeedbackStage.CLAIMED, ProcessingFeedbackStage.FAILED]
+
+
+def test_gateway_reports_a_dead_letter_created_by_lease_reclaim() -> None:
+    connection = cast(CommunicationConnection, _connection())
+    plugin = _feedback_plugin()
+    service, deliveries = _service(connection, plugin)
+    stale = RuntimeDeliveryRead(
+        delivery_id=uuid4(),
+        message_id=uuid4(),
+        connection_id=connection.id,
+        attempt_count=5,
+        envelope=_envelope(),
+    )
+    deliveries.reclaim_expired_inbound.return_value = [stale]
+    deliveries.claim_next_inbound.return_value = None
+    agent = cast(Agent, SimpleNamespace(id=uuid4(), status=AgentStatus.RUNNING))
+
+    with patch(
+        "api.domains.communications.gateway_service.decrypt_token",
+        return_value=json.dumps({"bot_token": "xoxb-token", "app_token": "xapp-token"}),
+    ):
+        assert service.claim_runtime_delivery(agent) is None
+
+    assert plugin.processing_feedback.call_args.args[2].stage == ProcessingFeedbackStage.FAILED
 
 
 def test_runtime_completion_is_not_blocked_by_feedback_context_lookup() -> None:

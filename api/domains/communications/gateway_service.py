@@ -10,7 +10,9 @@ from injector import inject, singleton
 from api.core.config import Config
 from api.domains.agents.models import Agent, AgentStatus
 from api.domains.agents.repository import AgentRepository
+from api.domains.communications.addressing import extract_local_part
 from api.domains.communications.delivery_repository import CommunicationDeliveryRepository
+from api.domains.communications.email_address_repository import AgentEmailAddressRepository
 from api.domains.communications.error_details import normalize_communication_error
 from api.domains.communications.models import (
     AcceptedCommunicationRead,
@@ -49,6 +51,7 @@ class CommunicationsGatewayService:
     agent_repository: AgentRepository
     delivery_repository: CommunicationDeliveryRepository
     connection_repository: CommunicationConnectionRepository
+    email_addresses: AgentEmailAddressRepository
     plugins: PlatformPluginRegistry
     operations: CommunicationOperationalRepository | None = None
 
@@ -79,7 +82,17 @@ class CommunicationsGatewayService:
     def claim_runtime_delivery(self, agent: Agent) -> RuntimeDeliveryRead | None:
         if agent.status != AgentStatus.RUNNING:
             raise RuntimeError("Agent is not running")
-        delivery = self.delivery_repository.claim_next_inbound(agent_id=agent.id)
+        expired = self.delivery_repository.reclaim_expired_inbound(agent_id=agent.id)
+        for stale in expired:
+            self.notify_processing_feedback(
+                ProcessingFeedbackContext(
+                    connection_id=stale.connection_id,
+                    stage=ProcessingFeedbackStage.FAILED,
+                    location=stale.envelope.location,
+                    provider_message_id=stale.envelope.provider_message_id,
+                )
+            )
+        delivery = self.delivery_repository.claim_next_inbound(agent_id=agent.id, reclaim_expired=False)
         if delivery is not None:
             self.notify_processing_feedback(
                 ProcessingFeedbackContext(
@@ -117,6 +130,11 @@ class CommunicationsGatewayService:
         if completed and not result.succeeded:
             self._notify_runtime_failure_feedback(agent.id, delivery_id)
         return completed
+
+    def renew_runtime_delivery_lease(self, agent: Agent, delivery_id: UUID) -> bool:
+        if agent.status != AgentStatus.RUNNING:
+            raise RuntimeError("Agent is not running")
+        return self.delivery_repository.renew_runtime_delivery_lease(delivery_id, agent_id=agent.id)
 
     def _notify_runtime_failure_feedback(self, agent_id: UUID, delivery_id: UUID) -> None:
         """Notify terminal runtime failure without coupling it to completion."""
@@ -376,6 +394,32 @@ class CommunicationsGatewayService:
         from api.domains.communications.metrics import record_policy_disposition
 
         record_policy_disposition(disposition)
+
+    def accept_email_inbound(
+        self,
+        payload: dict[str, Any],
+        authorization: str,
+    ) -> list[AcceptedCommunicationRead]:
+        """Accept one parsed inbound message from the email ingress Worker.
+
+        Authenticated by a gateway-level shared secret rather than the
+        per-Connection driver key: the Worker is addressed by mailbox and knows
+        only the recipient address, never a Connection id. An address that does
+        not resolve returns an empty acceptance rather than an error, so the
+        endpoint cannot be used to enumerate which agent addresses exist.
+        """
+        secret = self.config.email_inbound_secret.strip()
+        provided = authorization.removeprefix("Bearer ").strip()
+        if not secret or not secrets.compare_digest(secret, provided):
+            raise PermissionError("Invalid email ingress credential")
+
+        local_part = extract_local_part(self.config.agent_email_mailbox, str(payload.get("to") or ""))
+        if not local_part:
+            return []
+        connection_id = self.email_addresses.resolve(local_part)
+        if connection_id is None:
+            return []
+        return self.accept_plugin_payload(connection_id, payload)
 
     def accept_provider_webhook(
         self,
