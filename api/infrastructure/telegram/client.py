@@ -11,22 +11,43 @@ logger = logging.getLogger(__name__)
 _BASE = "https://api.telegram.org"
 _TIMEOUT_SECONDS = 15
 _CHAT_CACHE_TTL_SECONDS = 600
-# Telegram's hard sendMessage text limit. Longer text is rejected outright
-# with HTTP 400 ("message is too long") rather than truncated by the API.
+# Telegram's hard sendMessage text limit, measured in UTF-16 code units.
+# Longer text is rejected outright with HTTP 400 ("message is too long")
+# rather than truncated by the API.
 _MAX_MESSAGE_LENGTH = 4096
 
 
+def _utf16_length(text: str) -> int:
+    return len(text.encode("utf-16-le")) // 2
+
+
+def _prefix_within_utf16_limit(text: str, limit: int) -> int:
+    """Return the largest prefix whose UTF-16 length does not exceed limit."""
+    units = 0
+    for index, character in enumerate(text):
+        character_units = 2 if ord(character) > 0xFFFF else 1
+        if units + character_units > limit:
+            return index
+        units += character_units
+    return len(text)
+
+
 def _chunk_text(text: str, limit: int = _MAX_MESSAGE_LENGTH) -> list[str]:
-    if len(text) <= limit:
+    if _utf16_length(text) <= limit:
         return [text]
     chunks = []
     remaining = text
-    while len(remaining) > limit:
-        split_at = remaining.rfind("\n", 0, limit)
-        if split_at <= 0:
-            split_at = limit
+    while _utf16_length(remaining) > limit:
+        split_at = _prefix_within_utf16_limit(remaining, limit)
+        newline_at = remaining.rfind("\n", 0, split_at)
+        if newline_at >= 0:
+            split_at = newline_at + 1
+        if split_at == 0:
+            # A single Unicode scalar cannot exceed Telegram's real 4096-unit
+            # limit, but retain progress for callers using a smaller test limit.
+            split_at = 1
         chunks.append(remaining[:split_at])
-        remaining = remaining[split_at:].lstrip("\n")
+        remaining = remaining[split_at:]
     if remaining:
         chunks.append(remaining)
     return chunks
