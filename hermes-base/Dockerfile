@@ -24,6 +24,10 @@ RUN --mount=type=secret,id=gh_token \
 FROM nousresearch/hermes-agent:v2026.8.19
 ARG APT_MIRROR
 
+# Keep /v1/runs approvals while explicitly resuming durable DM/thread history.
+COPY patch-run-session-history.py /tmp/patch-run-session-history.py
+RUN python3 /tmp/patch-run-session-history.py && rm /tmp/patch-run-session-history.py
+
 COPY --from=rust-build /out/bin/ /usr/local/bin/
 
 RUN set -eu; \
