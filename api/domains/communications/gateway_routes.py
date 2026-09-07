@@ -77,6 +77,27 @@ def complete_runtime_delivery(
 
 
 @runtime_communications_router.post(
+    "/{agent_id}/deliveries/{delivery_id}/renew",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def renew_runtime_delivery_lease(
+    agent_id: UUID,
+    delivery_id: UUID,
+    service: Annotated[CommunicationsGatewayService, Injected(CommunicationsGatewayService)],
+    authorization: Annotated[str, Header()],
+    protocol_version: Annotated[str, Header(alias="X-AgentBarn-Communications-Version")],
+) -> Response:
+    agent = _authenticate(service, agent_id, authorization, protocol_version)
+    try:
+        renewed = service.renew_runtime_delivery_lease(agent, delivery_id)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    if not renewed:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Communication Delivery not found")
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@runtime_communications_router.post(
     "/{agent_id}/deliveries/{delivery_id}/replies",
     status_code=status.HTTP_202_ACCEPTED,
 )

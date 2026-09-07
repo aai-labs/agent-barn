@@ -77,6 +77,14 @@ export class AgentDetailPage {
     return this.page.getByRole("button", { name: `Edit ${connectionName}`, exact: true });
   }
 
+  getInstallLinkButton(): Locator {
+    return this.page.getByRole("button", { name: "Get install link", exact: true });
+  }
+
+  installBotServerLink(): Locator {
+    return this.page.getByRole("link", { name: "Install bot to server" });
+  }
+
   connectionNameInput(): Locator {
     return this.page.getByLabel("Connection name", { exact: true });
   }

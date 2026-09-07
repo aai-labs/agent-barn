@@ -3,25 +3,118 @@
 ## Core principles
 
 - Changed behavior needs coverage at the lowest layer that proves the contract reliably.
+- Assert meaningful outputs and durable state, not implementation details or a mock's internal state.
 - Test happy paths, authorization/permission failures, important validation failures, and not-found/conflict behavior.
 - Regression fixes SHOULD include a test that fails for the original defect.
 - Keep setup reusable, interactions centralized, and assertions close to the behavior being specified.
 - Run repository `make` targets when available.
 
+## Behavior-first regression tests
+
+A regression test must reproduce the reported failure before it is used to
+justify a fix. Establish the observable contract, run the test against the
+unfixed code, and record the failure at the intended assertion. Source
+inspection can suggest a cause, but is not reproduction evidence.
+
+- Test at the real boundary where the defect occurs. A unit assertion on a
+  generated configuration proves only the generator; behavior that depends on
+  a runtime image, database, subprocess, protocol, or browser needs a contract
+  test at that boundary.
+- Make preconditions explicit before asserting the failed behavior. For
+  example, prove that startup succeeded and a Skill file was materialized
+  before asserting that the runtime lists and loads it. This distinguishes a
+  discovery defect from provisioning, mounting, or permissions failures.
+- Do not count a harness failure as reproduction. Fix import paths, fixture
+  permissions, cleanup, dependency setup, and process invocation until the
+  test fails specifically on the reported behavior.
+- Run the same test red and green: it must fail on the original behavior and
+  pass after the fix without weakening or replacing its assertions.
+
+Prefer assertions on responses, persisted rows, emitted events, posted
+payloads, rendered UI, files visible to a consumer, or results returned by the
+real dependency. Mocks and fakes MAY isolate unrelated boundaries or make
+failure modes deterministic, but an assertion against calls recorded by a mock
+is insufficient when the contract concerns what another component actually
+accepts or produces. Do not test a fake's behavior and infer that the real
+runtime behaves the same way.
+
+## GivenPy scenarios
+
+Python tests use the lightweight GivenPy-style helpers in
+`../../api/tests/core/givenpy.py` with pytest and PyHamcrest. GivenPy structures
+a test; it does not replace the test runner or assertions.
+
+- `given([...])` composes setup steps that state domain facts. Steps SHOULD be
+  higher-order functions such as `skill_is_present(content)` so they can accept
+  inputs and be reused. Store produced objects on `context`; keep JSON
+  serialization, Docker commands, HTTP construction, and similar mechanics in
+  dedicated helpers.
+- A setup step MAY return a context manager such as `LambdaWith` when it owns
+  cleanup. GivenPy exits returned context managers in reverse setup order.
+- `when(...)` names one meaningful action and SHOULD contain one short call.
+  Hide command construction, probe installation, execution, and output parsing
+  behind an action helper such as `start_hermes_agent(context)`.
+- `then(...)` asserts observable outcomes with PyHamcrest. Use separate,
+  readable `then` blocks for closely ordered evidence such as “the file was
+  materialized,” “the Skill was listed,” and “the Skill was loaded.”
+
+```python
+with given(
+    [
+        image_is_built(image),
+        skill_is_present(skill_content),
+        hermes_runtime_is_configured(),
+    ]
+) as context:
+    with when("the Hermes agent starts"):
+        result = start_hermes_agent(context)
+
+    with then("Agent Barn should materialize the assigned Skill"):
+        assert_that(result.workspace_file_exists, is_(True))
+
+    with then("Hermes should list and load the assigned Skill"):
+        assert_that(result.listed_skills, has_item(skill_name))
+        assert_that(result.skill_loaded, is_(True), result.skill_error)
+```
+
 ## Verification commands
 
-From the repository root:
+Complete the [README development setup](../../README.md#development), then
+invoke verification from the repository root.
+
+| Command | Coverage | Additional prerequisites |
+| --- | --- | --- |
+| `make check-api` | Ruff lint/format check and Python type checking | None |
+| `make fix-api` | Ruff autofix and formatting; modifies files | None |
+| `make check-migrations` | Exactly one Alembic head | None |
+| `make test-api` | API unit and integration tests, excluding the Kubernetes client test | Docker for Testcontainers PostgreSQL, plus Node.js for the OpenClaw plugin test |
+| `make test-api-k8s` | Kubernetes client integration test | Docker plus a configured, disposable Kubernetes cluster whose target namespace already exists |
+| `make test-api-runtime` | Runtime contract tests against an explicitly selected built image | Docker and the image variable required by the selected test, such as `HERMES_TEST_IMAGE` |
+| `make coverage` | All API tests with terminal and XML coverage, including the Kubernetes client test | Docker, Node.js, and the Kubernetes prerequisites above |
+| `make lint-ui` | ESLint | None |
+| `make check-ui` | TypeScript type check | None |
+| `make test-ui` | Playwright end-to-end suite | Installed Chromium browser |
+| `make check-monitoring` | Prometheus rule tests and dashboard PromQL parsing | uv, Helm, Docker, and built chart dependencies |
+
+Install the Playwright browser once after dependency setup:
 
 ```bash
-make check-api       # Ruff check/format check and Python type checking
-make fix-api         # Ruff autofix and formatting
-make test-api        # API tests excluding Kubernetes integration
-make test-api-k8s    # Kubernetes integration tests
-make coverage        # API coverage
-make lint-ui         # ESLint
-make check-ui        # TypeScript type check
-make test-ui         # Playwright
+(cd ui && pnpm exec playwright install chromium)
 ```
+
+On Linux, use
+`(cd ui && pnpm exec playwright install --with-deps chromium)` when the host
+also needs Playwright's system packages.
+
+Before `make check-monitoring`, prepare the pinned chart dependencies:
+
+```bash
+helm dependency build helm/monitoring
+```
+
+The Kubernetes test creates and deletes resources in `K8S_NAMESPACE`, which
+defaults to `agent-farm`. Confirm `kubectl config current-context` and use a
+disposable local cluster and namespace; never point this test at production.
 
 From `../../ui/` when debugging Playwright:
 
@@ -42,11 +135,8 @@ API behavior changes MUST cover:
 - Not-found and conflict behavior.
 - Migration behavior when the database schema changes.
 
-Integration tests use the real FastAPI app, migrated PostgreSQL, and additive Injector overrides. Follow the existing Given/When/Then style in `../../api/tests/integration/`:
+Integration tests use the real FastAPI app, migrated PostgreSQL, and additive Injector overrides. Follow the [GivenPy scenario conventions](#givenpy-scenarios) used in `../../api/tests/integration/`:
 
-- `given(...)` assembles reusable setup steps.
-- `when(...)` names the action.
-- `then(...)` contains assertions.
 - Use PyHamcrest `assert_that` and matchers instead of bare `assert` statements.
 - Each test SHOULD prove one behavior. Split independent assertion clusters into focused tests; grouping closely related fields into one matcher is appropriate when they describe one outcome.
 
@@ -62,9 +152,10 @@ Representative sources:
 
 ## Runtime plugin tests
 
-The Hermes and OpenClaw telemetry plugins ship inside agent images rather than
-being importable modules, so they are loaded from their source path and their
-hooks are called directly. Shared setup lives in
+The Hermes and OpenClaw telemetry plugins run inside agent containers but are
+delivered from repository source through runtime configuration, rather than as
+importable API modules. Tests load them from their source paths and call their
+hooks directly. Shared setup lives in
 `../../api/tests/helpers/telemetry_plugins.py`.
 
 - Assert on the payload a plugin **posts**, not on its internal buffer, and
@@ -74,10 +165,23 @@ hooks are called directly. Shared setup lives in
   subprocess-and-real-HTTP pattern as `../../api/tests/unit/test_healthz_server_metrics.py`.
   `node` is required; a missing `node` MUST fail rather than skip.
 - Fakes of runtime objects can only prove our own logic. Anything that depends
-  on runtime behavior MUST also be checked inside the pinned image — see the
-  base-image smoke tests and the plugin-contract step in
-  `../../.github/workflows/hermes-base.yml`. Those run on version bumps, which is
-  when such assumptions break.
+  on runtime behavior MUST also be checked inside the pinned image. The Hermes
+  SessionStore, PVC, and image smoke contracts run through
+  `../../hermes-base/test-image.sh`, invoked by
+  `../../.github/workflows/hermes-base.yml`. Both that workflow and
+  `../../.github/workflows/openclaw-base.yml` smoke-test their base images. CI
+  selects the matching workflow when base-image, builder, startup, or
+  telemetry-plugin paths change.
+- `../../hermes-base/test-image.sh` is the single entrypoint for Hermes image
+  verification. It runs the image smoke test, builds the real Deployment spec
+  and exercises its init container against a fresh root-owned Docker volume,
+  verifies non-root writes to startup state and workspace, and runs the
+  telemetry plugin against the real SessionStore. The workflow invokes this
+  entrypoint when either the Hermes builder or base image changes.
+- The separate `../../api/runtime_tests/` pytest suite starts Agent Barn's
+  generated runtime configuration in the real image and proves materialized
+  Agent Skills are visible through Hermes' `skills_list` and `skill_view`. The
+  workflow runs it against the same image after the image contract tests.
 
 ## UI and browser tests
 
@@ -108,11 +212,11 @@ Avoid assertions inside page objects. Avoid feature-specific network interceptio
 | API route/auth contract      | Integration test                                              |
 | Database schema              | Migration plus integration coverage                           |
 | Parser or runtime builder    | Focused unit tests; integration where wiring matters          |
-| Runtime plugin behavior      | Unit tests asserting the payload the plugin posts, plus a contract check inside the pinned runtime image |
+| Runtime plugin behavior      | Unit tests asserting the posted payload; add a pinned-image contract when behavior depends on runtime internals |
 | UI interaction or navigation | Playwright when regression risk is meaningful                 |
 | UI schema/query hook         | Typecheck, lint, and focused browser coverage                 |
 | Helm/Kubernetes behavior     | Chart/render checks and Kubernetes integration when available |
-| Agent-facing docs only       | Link/path/format validation; application tests are optional   |
+| Contributor-facing documentation only | Link/path/format validation; application tests are optional |
 
 ## Failure handling
 

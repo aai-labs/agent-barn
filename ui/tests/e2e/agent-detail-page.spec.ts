@@ -2,6 +2,7 @@ import { expect, test, type Locator, type Page } from "@playwright/test";
 
 import { TEST_ORG_ID } from "../constants";
 import {
+  COMMUNICATION_CONNECTION_ID,
   COMMUNICATION_DELIVERY_ID,
   mockCommunicationConnection,
   SAFE_ERROR_DETAILS,
@@ -515,6 +516,30 @@ test.describe("Agent Detail Page — Channels tab", () => {
   test("lists Connection identity and health independently of the Agent runtime", async () => {
     await expect(agentDetailPage.connectionIdentity("validation-skipped")).toBeVisible();
     await expect(agentDetailPage.connectionProviderStatus("Connected")).toBeVisible();
+  });
+
+  test("builds the recommended install link on demand for a Discord Connection", async ({ page }) => {
+    const installUrl =
+      "https://discord.com/oauth2/authorize?client_id=123456789012345678&scope=bot%20applications.commands&permissions=274878286912";
+    await page.route(
+      `**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}/connections/${COMMUNICATION_CONNECTION_ID}/install-link`,
+      async (route) => {
+        await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ url: installUrl }) });
+      },
+    );
+
+    await expect(agentDetailPage.getInstallLinkButton()).toBeVisible();
+    await agentDetailPage.getInstallLinkButton().click();
+
+    const installLink = agentDetailPage.installBotServerLink();
+    await expect(installLink).toBeVisible();
+    await expect(installLink).toHaveAttribute("href", installUrl);
+  });
+
+  test("hides the install link action when the platform provides none", async ({ page }) => {
+    await serveSavedSlackConnection(page);
+
+    await expect(agentDetailPage.getInstallLinkButton()).toHaveCount(0);
   });
 
   test("shows a redacted provider error at full width", async () => {
@@ -1375,8 +1400,8 @@ test.describe("Agent Detail Page — Personality tab (approval mode, OpenClaw)",
     await page.getByRole("button", { name: "Profile", exact: true }).click();
   });
 
-  test("shows Managed by OpenClaw instead of a command approval value", async ({ page }) => {
-    await expect(page.getByText("Managed by OpenClaw")).toBeVisible();
+  test("shows full access instead of a command approval value", async ({ page }) => {
+    await expect(page.getByText("Full access — no approval prompts")).toBeVisible();
     await expect(page.getByRole("combobox", { name: "Command approval" })).toHaveCount(0);
   });
 

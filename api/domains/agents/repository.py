@@ -838,6 +838,7 @@ class AgentRepository:
         "name",
         "model",
         "approval_mode",
+        "verbose_mode",
         "agent_template_id",
         "platform_template_id",
     )
