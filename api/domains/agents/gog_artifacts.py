@@ -1,40 +1,27 @@
-"""Builders for the gog CLI's runtime artifacts (env, setup script, agent policy).
+"""Builders for the gog CLI's runtime artifacts (env, shim, agent policy).
 
 Parallel to ``aai_cli_artifacts`` but for a different tool: gog (gogcli) reaches Google
-Workspace with its own OAuth refresh token and its own on-disk state, so it shares
-nothing with aai-cli's profile/secret-store machinery. These are pure string/dict
-builders consumed by ``start_agent``.
+Workspace, so it shares nothing with aai-cli's profile/secret-store machinery. These are
+pure string/dict builders consumed by ``start_agent``.
 
-The design that these builders encode (see
-``docs/features/integrations.md``): the encrypted Agent Secret is the
-single source of truth, and the pod's gog state is rebuilt from it on every boot. Nothing
-gog-related is persisted in the pod, so the keyring password is regenerated per start and
-removing the credential removes access at the next restart.
+gog is always brokered through the credential gateway (see
+``docs/features/integrations.md``): the refresh token and OAuth client secret never leave
+the gateway, and the pod's ``gog-shim.sh`` exchanges its Gateway Token for a short-lived
+access token on every invocation. Nothing gog-related is persisted in the pod.
 """
 
-import json
+from api.domains.agents.models import GoogleWorkspaceContent, SecretProvider
+from api.domains.credential_gateway.models import gateway_token_env_var
 
-from api.domains.agents.models import GoogleWorkspaceContent
-
-# Where gog keeps credentials.json + the encrypted file keyring, relative to a runtime's
-# home dir. Deliberately on the container filesystem and NOT on the PVC: it is a
-# per-boot cache of the DB row, not state worth persisting. Note that ``start_agent``
-# separately computes an ``aai_home`` that IS the Hermes PVC (/opt/data) — these are two
-# different "home" concepts and must not be unified.
+# Where gog keeps its runtime state, relative to a runtime's home dir. Deliberately on
+# the container filesystem and NOT on the PVC. Note that ``start_agent`` separately
+# computes an ``aai_home`` that IS the Hermes PVC (/opt/data) — these are two different
+# "home" concepts and must not be unified.
 #
 # The caller passes /home/node (OpenClaw) or /home/hermes (Hermes). /home/hermes exists
 # only because hermes-base creates and chowns it: the hermes user's actual home is the
 # PVC, and /home is root-owned, so the agent could not write here otherwise.
 _CONFIG_SUBDIR = ".config/gogcli"
-
-# gog reads only client_id/client_secret out of a Google client JSON, and accepts either
-# an "installed" or a "web" wrapper key (internal/config/credentials.go). The platform
-# consent flow uses a Web-application client, so that is what we synthesize.
-_CLIENT_JSON_KEY = "web"
-
-# gog buckets tokens per named OAuth client; the unnamed default bucket is what a plain
-# `gog ...` invocation reads (internal/config.DefaultClientName).
-_DEFAULT_CLIENT_NAME = "default"
 
 # Human-facing labels and one worked example per service, for the agent policy block.
 _SERVICE_GUIDE: dict[str, tuple[str, str]] = {
@@ -50,69 +37,106 @@ def gog_home(home_dir: str) -> str:
     return f"{home_dir}/{_CONFIG_SUBDIR}"
 
 
+#: The shim exports this before exec'ing the real binary. gog reads it as a root flag
+#: (internal/cmd/root.go) and uses it as a static token source, checked before any of its
+#: own auth dependencies, so no keyring or stored client is needed.
+GOG_ACCESS_TOKEN_ENV = "GOG_ACCESS_TOKEN"
+
+
 def build_gog_env(
     content: GoogleWorkspaceContent,
     home_dir: str,
-    keyring_password: str,
+    *,
+    gateway_base_url: str,
 ) -> dict[str, str]:
-    """Env carrying everything ``gog-setup.sh`` needs to rebuild gog's state in the pod.
+    """Env the gog shim needs: where to find gog's state dir and where to mint a token.
 
-    ``GOG_TOKEN_JSON`` is the exact payload ``gog auth tokens import`` accepts on stdin
-    (internal/cmd/auth_tokens.go). It carries the refresh token, so this whole mapping
-    belongs in the pod Secret — never a ConfigMap.
+    The refresh token and OAuth client secret stay in the gateway; the pod gets only its
+    Gateway Token (injected separately as ``AF_GATEWAY_TOKEN_GOOGLE_WORKSPACE``) and the
+    mint URL, and the shim exchanges those for a short-lived access token on every
+    invocation. No keyring exists to protect, so nothing else belongs here.
     """
-    client_json = json.dumps(
-        {
-            _CLIENT_JSON_KEY: {
-                "client_id": content.client_id,
-                "client_secret": content.client_secret,
-            }
-        }
-    )
-    token_json = json.dumps(
-        {
-            "email": content.email,
-            "client": _DEFAULT_CLIENT_NAME,
-            "services": content.services,
-            "scopes": content.scopes,
-            "refresh_token": content.refresh_token,
-        }
-    )
-    return {
+    env = {
         "GOG_HOME": gog_home(home_dir),
-        "GOG_KEYRING_BACKEND": "file",
-        "GOG_KEYRING_PASSWORD": keyring_password,
-        "GOG_CLIENT_JSON": client_json,
-        "GOG_TOKEN_JSON": token_json,
         "GOG_ACCOUNT_EMAIL": content.email,
+        "AF_GATEWAY_TOKEN_URL": f"{gateway_base_url.rstrip('/')}/token",
     }
+    if content.read_only:
+        # gog's own runtime guard: it rejects mutating API requests before dispatch,
+        # independently of the OAuth scopes we requested. Without it a read-only
+        # credential relies entirely on Google refusing the write. Set only when
+        # read-only — gog reads this with a true-set parser ("1"/"true"/"yes"/"y"/"on"),
+        # so an unconditional "0" would work but leaves a misleading env var in the pod.
+        env["GOG_READONLY"] = "1"
+    return env
 
 
-def build_gog_setup_sh() -> str:
-    """Render the in-pod setup script: install the OAuth client, then import the token.
+#: Where the shim is installed. Prepended to PATH by each runtime's start.sh, so every
+#: command the agent runs resolves `gog` here before /usr/local/bin.
+SHIM_BIN_SUBDIR = ".local/bin"
+#: The real binary, installed by the base images.
+_REAL_GOG = "/usr/local/bin/gog"
 
-    Entirely env-driven — no secret material is interpolated here — so it is safe to ship
-    in the ConfigMap alongside the other start-up scripts.
 
-    GOG_HOME is wiped first so a boot can never inherit half-written state from a
-    previous one (the credential may have changed, or been removed and re-added).
+def shim_bin_dir(home_dir: str) -> str:
+    return f"{home_dir}/{SHIM_BIN_SUBDIR}"
 
-    No default account is set: gog infers the account when exactly one token exists for
-    the client (``inferredStoredAccount``), which is always the case here. ``gog auth
-    alias set default`` would in fact fail — "default" is a reserved alias name.
+
+def build_gog_shim_sh() -> str:
+    """Render the ``gog`` wrapper that fetches a short-lived token before each call.
+
+    Installed ahead of the real binary on PATH and exec's it by absolute path, so there
+    is no recursion. Env-driven and secret-free, so it ships in the ConfigMap like the
+    other start-up scripts.
+
+    Fetching per invocation rather than once at boot is deliberate: a Google access token
+    lasts about an hour and agents run for days, so a boot-time fetch would work until it
+    silently stopped. It also means revoking the Agent Secret takes effect on the next
+    command rather than the next restart.
+
+    Failures name the real problem instead of letting gog report a confusing Google
+    error, and are distinguished so a missing credential does not look like an outage.
     """
-    return """#!/bin/sh
+    token_env = gateway_token_env_var(SecretProvider.GOOGLE_WORKSPACE)
+    return f"""#!/bin/sh
+set -eu
+umask 077
+
+if [ -z "${{{token_env}:-}}" ] || [ -z "${{AF_GATEWAY_TOKEN_URL:-}}" ]; then
+  echo "gog: no Google Workspace credential is configured for this agent" >&2
+  exit 78
+fi
+
+if ! response=$(curl -fsS -H "Authorization: Bearer ${token_env}" "$AF_GATEWAY_TOKEN_URL"); then
+  echo "gog: the credential gateway refused or could not supply Google authorization" >&2
+  exit 77
+fi
+
+{GOG_ACCESS_TOKEN_ENV}=$(printf '%s' "$response" | sed -n 's/.*"access_token"[[:space:]]*:[[:space:]]*"\\([^"]*\\)".*/\\1/p')
+if [ -z "${GOG_ACCESS_TOKEN_ENV}" ]; then
+  echo "gog: the credential gateway returned no access token" >&2
+  exit 77
+fi
+export {GOG_ACCESS_TOKEN_ENV}
+
+exec {_REAL_GOG} "$@"
+"""
+
+
+def build_gog_shim_install_sh(home_dir: str) -> str:
+    """Render the boot script that puts the shim on PATH.
+
+    Replaces the credential-importing setup script under the gateway: there is no
+    keyring, no stored OAuth client and no token to import, so installing the wrapper is
+    the whole job.
+    """
+    bin_dir = shim_bin_dir(home_dir)
+    return f"""#!/bin/sh
 set -e
 umask 077
-rm -rf "$GOG_HOME"
-mkdir -p "$GOG_HOME"
-
-client_file="$(mktemp)"
-printf '%s' "$GOG_CLIENT_JSON" > "$client_file"
-gog auth credentials "$client_file"
-rm -f "$client_file"
-
-printf '%s' "$GOG_TOKEN_JSON" | gog auth tokens import -
+mkdir -p {bin_dir}
+cp /app/config/gog-shim.sh {bin_dir}/gog
+chmod 755 {bin_dir}/gog
 """
 
 
@@ -154,8 +178,9 @@ def build_gog_policy_md(content: GoogleWorkspaceContent | None) -> str:
     if content.read_only:
         lines.append(
             "**This credential is read-only.** Attempts to send, create, modify, or "
-            "delete anything will be refused by Google. Do not promise the user a write "
-            "action — tell them the connection is read-only.\n"
+            "delete anything are rejected by `gog` before the request reaches Google. "
+            "Do not promise the user a write action — tell them the connection is "
+            "read-only.\n"
         )
     lines.append("Available now:\n")
     lines.extend(f"- **{_SERVICE_GUIDE[s][0]}**: `{_SERVICE_GUIDE[s][1]}`" for s in services)

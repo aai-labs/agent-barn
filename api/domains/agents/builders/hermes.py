@@ -115,6 +115,7 @@ def build_hermes_config_map(
     aai_cli_config_toml: str | None = None,
     aai_cli_setup_sh: str | None = None,
     gog_setup_sh: str | None = None,
+    gog_shim_sh: str | None = None,
     skills_json: str | None = None,
 ) -> client.V1ConfigMap:
     data: dict[str, str] = {
@@ -138,6 +139,10 @@ def build_hermes_config_map(
         data["aai-cli-setup.sh"] = aai_cli_setup_sh
     if gog_setup_sh is not None:
         data["gog-setup.sh"] = gog_setup_sh
+    if gog_shim_sh is not None:
+        # Installed onto PATH by gog-setup.sh; start.sh puts that directory ahead of
+        # /usr/local/bin so every agent command resolves the wrapper first.
+        data["gog-shim.sh"] = gog_shim_sh
     if skills_json is not None:
         data["skills.json"] = skills_json
     return client.V1ConfigMap(

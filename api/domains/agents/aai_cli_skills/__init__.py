@@ -15,6 +15,7 @@ import json
 from pathlib import Path
 
 from api.domains.agents.models import SecretProvider
+from api.domains.integrations.plugins.registry import INTEGRATION_PLUGINS
 
 AAI_CLI_ROOT_DIR = "aai-cli"  # legacy archive root, used only by migration helpers
 _BUNDLED_ROOT = Path(__file__).parent / "bundled" / "skills"
@@ -32,7 +33,6 @@ _DISPLAY_NAMES = {
     "aai-openpanel": "OpenPanel",
     "aai-pipedrive": "Pipedrive",
     "aai-posthog": "PostHog",
-    "aai-zoho-mail": "Zoho Mail",
 }
 
 _COMMANDS = {
@@ -46,25 +46,17 @@ _COMMANDS = {
     "aai-openpanel": "openpanel",
     "aai-pipedrive": "pipedrive",
     "aai-posthog": "posthog",
-    "aai-zoho-mail": "email",
 }
 
-# These are the integrations whose secret lifecycle is currently implemented by
-# Agent Farm. The remaining bundled docs are still available as explicit Platform
-# Skills, but are not auto-attached until their credentials are modeled here.
-_REQUIRED_PROVIDERS = {
-    "aai-bitbucket": [SecretProvider.BITBUCKET],
-    "aai-confluence": [SecretProvider.CONFLUENCE],
-    "aai-excel": [],
-    "aai-github": [SecretProvider.GITHUB],
-    "aai-google-drive": [],
-    "aai-hubspot": [],
-    "aai-jira": [SecretProvider.JIRA],
-    "aai-openpanel": [],
-    "aai-pipedrive": [SecretProvider.PIPEDRIVE],
-    "aai-posthog": [],
-    "aai-zoho-mail": [SecretProvider.ZOHO_MAIL],
-}
+# Which providers a bundled skill needs before it is auto-attached. Derived from each
+# Integration Plugin's ``bundled_skill_slugs`` so a new provider cannot be modelled
+# without its skill binding being declared in the same place. A skill absent from the
+# mapping needs no credential (Excel, and the docs whose credentials are not modelled
+# yet) and is only ever mounted when explicitly assigned.
+_REQUIRED_PROVIDERS: dict[str, list[SecretProvider]] = {directory: [] for directory in _DISPLAY_NAMES}
+for _plugin in INTEGRATION_PLUGINS.all():
+    for _slug in _plugin.bundled_skill_slugs:
+        _REQUIRED_PROVIDERS[_slug].append(_plugin.provider)
 
 
 def _frontmatter_value(content: str, key: str) -> str | None:

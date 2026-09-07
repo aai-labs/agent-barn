@@ -20,7 +20,7 @@ from api.domains.agents.aai_cli_artifacts import (
     build_local_tools_policy_md,
     build_setup_sh,
     build_tool_context_md,
-    provider_secrets_map,
+    store_providers_for,
 )
 from api.domains.agents.aai_cli_skills import build_skills_manifest
 from api.domains.agents.authorization import AgentAuthorization
@@ -37,7 +37,12 @@ from api.domains.agents.builders import (
     build_service,
 )
 from api.domains.agents.error_messages import friendly_k8s_error, friendly_pod_reason
-from api.domains.agents.gog_artifacts import build_gog_env, build_gog_policy_md, build_gog_setup_sh
+from api.domains.agents.gog_artifacts import (
+    build_gog_env,
+    build_gog_policy_md,
+    build_gog_shim_install_sh,
+    build_gog_shim_sh,
+)
 from api.domains.agents.models import (
     PROVIDER_DISPLAY_NAMES,
     Agent,
@@ -72,7 +77,6 @@ from api.domains.agents.models import (
     AgentUpdate,
     CommandApprovalMode,
     ConfluenceContent,
-    FirecrawlContent,
     GoogleWorkspaceContent,
     JiraContent,
     SecretProvider,
@@ -89,6 +93,8 @@ from api.domains.agents.override_repository import (
 from api.domains.agents.repository import AgentRepository
 from api.domains.agents.runtime_policy import build_chat_commands_policy_md, build_role_scope_policy_md
 from api.domains.auth.models import CurrentUserContext
+from api.domains.credential_gateway.models import gateway_token_env_var
+from api.domains.credential_gateway.service import CredentialGatewayService
 from api.domains.events import ActorIdentity, ActorIdentityType, EventDeliveryDispatcher, resolve_actor_identity
 from api.domains.events.catalog import (
     AGENT_SECRET_ADDED,
@@ -200,6 +206,7 @@ class AgentService:
     event_delivery_dispatcher: EventDeliveryDispatcher
     organization_lookup: OrganizationLookupService
     agent_settings_lookup: AgentSettingsLookupService
+    credential_gateway: CredentialGatewayService
 
     def _org_id(self, context: CurrentUserContext) -> UUID:
         return context.require_current_user_organization().organization_id
@@ -1975,37 +1982,63 @@ class AgentService:
                     "Authenticate with Google, or configure google_cloud_client_id/secret."
                 ),
             )
-        store = {p: c for p, c in decrypted.items() if p.value in provider_secrets_map}
+        # Rotates the Agent's gateway tokens and revokes any left from a previous start.
+        # Computed here (rather than where it's written into the Secret, below) because
+        # the Firecrawl block also needs to know its own token, if one was issued.
+        gateway_tokens = self.credential_gateway.issue_for_agent(agent.id, agent.organization_id, set(decrypted.keys()))
+        gateway_tokens_by_provider = {issued.provider: issued.value for issued in gateway_tokens}
+
+        # A gateway-routed provider is excluded from the store, which is what actually
+        # keeps its real credential out of the pod Secret and aai-secrets.enc.json.
+        store = store_providers_for(decrypted)
         aai_home = "/opt/data" if agent.agent_type == AgentType.HERMES else "/home/node"
         # Gated on providers that actually get an aai-cli profile: an agent whose only
         # integrations are profile-less (google_workspace, firecrawl) would otherwise get
         # a config.toml holding nothing but the store header.
         has_aai_profiles = bool(decrypted.keys() & set(PROFILE_SLUGS))
-        aai_config_toml = build_config_toml(decrypted, home_dir=aai_home) if has_aai_profiles else None
+        aai_config_toml = (
+            build_config_toml(
+                decrypted,
+                home_dir=aai_home,
+                gateway_base_url=self.config.credential_gateway_base_url,
+            )
+            if has_aai_profiles
+            else None
+        )
         aai_setup_sh = build_setup_sh(list(store), home_dir=aai_home) if has_aai_profiles else None
         if store:
             secret.string_data.update(build_env(store))
 
-        # gog (Google Workspace) — its own CLI with its own on-disk state, rebuilt from
-        # this secret on every boot. GOG_HOME is deliberately the container filesystem,
-        # not the PVC that aai_home points at for Hermes.
+        # gog (Google Workspace) — always brokered through the gateway: no keyring, no
+        # stored OAuth client and no token to import, so installing the shim on PATH is
+        # the whole of boot-time setup. GOG_HOME is deliberately the container
+        # filesystem, not the PVC that aai_home points at for Hermes.
         gog_setup_sh = None
+        gog_shim_sh = None
         if isinstance(gws_content, GoogleWorkspaceContent):
             gog_home_dir = "/home/hermes" if agent.agent_type == AgentType.HERMES else "/home/node"
             secret.string_data.update(
-                build_gog_env(gws_content, gog_home_dir, secrets.token_urlsafe(32)),
+                build_gog_env(
+                    gws_content,
+                    gog_home_dir,
+                    gateway_base_url=self.config.credential_gateway_base_url,
+                ),
             )
-            gog_setup_sh = build_gog_setup_sh()
+            gog_setup_sh = build_gog_shim_install_sh(gog_home_dir)
+            gog_shim_sh = build_gog_shim_sh()
 
-        fc_content = decrypted.get(SecretProvider.FIRECRAWL)
-        fc_api_key = (
-            fc_content.api_key if isinstance(fc_content, FirecrawlContent) else self.config.agent_firecrawl_api_key
-        )
-        fc_base_url = (
-            fc_content.base_url
-            if isinstance(fc_content, FirecrawlContent) and fc_content.base_url
-            else self.config.agent_firecrawl_base_url
-        )
+        fc_gateway_token = gateway_tokens_by_provider.get(SecretProvider.FIRECRAWL)
+        if fc_gateway_token is not None:
+            # A stored credential is always gateway-routed: the real key never enters
+            # the pod. The pod's Firecrawl clients already read whatever value is here.
+            fc_api_key = fc_gateway_token
+            fc_base_url = f"{self.config.credential_gateway_base_url.rstrip('/')}/p/firecrawl"
+        else:
+            # No stored credential for this agent: the server-operator-configured
+            # platform default, injected directly as it always has been. Outside the
+            # Agent Secret model entirely, so the gateway has nothing to decrypt here.
+            fc_api_key = self.config.agent_firecrawl_api_key
+            fc_base_url = self.config.agent_firecrawl_base_url
         if fc_api_key and fc_base_url:
             secret.string_data["FIRECRAWL_API_KEY"] = fc_api_key
             if hermes_cfg is not None:
@@ -2038,6 +2071,10 @@ class AgentService:
 
         ingest_key = secrets.token_urlsafe(32)
         communication_key = secrets.token_urlsafe(32)
+        for issued in gateway_tokens:
+            secret.string_data[gateway_token_env_var(issued.provider)] = issued.value
+        if gateway_tokens:
+            secret.string_data["AF_GATEWAY_URL"] = self.config.credential_gateway_base_url
         secret.string_data.update(
             {
                 "AGENT_ID": str(agent.id),
@@ -2121,6 +2158,7 @@ class AgentService:
                 aai_cli_config_toml=aai_config_toml,
                 aai_cli_setup_sh=aai_setup_sh,
                 gog_setup_sh=gog_setup_sh,
+                gog_shim_sh=gog_shim_sh,
                 skills_json=skills_json,
             )
         else:
@@ -2140,6 +2178,7 @@ class AgentService:
                 aai_cli_config_toml=aai_config_toml,
                 aai_cli_setup_sh=aai_setup_sh,
                 gog_setup_sh=gog_setup_sh,
+                gog_shim_sh=gog_shim_sh,
                 skills_json=skills_json,
             )
 
@@ -2315,6 +2354,9 @@ class AgentService:
         self.k8s.delete_deployment(name, ns)
         self.k8s.delete_config_map(name, ns)
         self.k8s.delete_secret(name, ns)
+        # The pod is gone, so its gateway tokens must stop resolving even if a copy of
+        # the Secret was taken while it ran.
+        self.credential_gateway.revoke_for_agent(agent.id, agent.organization_id)
 
         agent.status = AgentStatus.STOPPED
         agent.running_model = ""

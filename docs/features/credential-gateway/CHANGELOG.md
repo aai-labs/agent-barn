@@ -1,0 +1,110 @@
+# Credential Gateway — change log
+
+Status: Active
+Epic: credential gateway (ticket pending)
+Related context: [`../../adr/2026-09-02-credential-gateway-egress-modes.md`](../../adr/2026-09-02-credential-gateway-egress-modes.md), [`../../adr/2026-09-02-integration-plugin-and-runtime-tool-adapter-seams.md`](../../adr/2026-09-02-integration-plugin-and-runtime-tool-adapter-seams.md), [`../integrations.md`](../integrations.md)
+
+## Current state
+
+- **Delivered:** the Integration Plugin seam; the credential gateway as a separate deployment; token issue/revoke/resolve; the `GATEWAY_PROXY` forward path for every shipped aai-cli provider without changing aai-cli; `TOKEN_BROKER` for Google Workspace; `GATEWAY_PROXY` for Firecrawl; and a durable audit trail for every resolution and lifecycle event. **No shipped plugin is `EgressMode.DIRECT` any more — no provider materializes a real credential into an agent pod.** The gateway is unconditional — `CREDENTIAL_GATEWAY_ENABLED` is gone, and each plugin's `egress_mode` is the sole, permanent routing decision.
+- **In transition:** `PROVIDER_DISPLAY_NAMES`, `PROVIDER_CONTENT_MODELS`, and `PROVIDER_VALIDATORS` still live outside the plugins (import cycle) and are pinned by contract test rather than derived.
+- **Next:** none open.
+- **Blockers:** none.
+
+## Changes
+
+### 2026-09-05 — Durable audit trail for gateway resolution and lifecycle events
+
+- **Why:** resolution and lifecycle events previously produced only a structured log line and a Prometheus counter — enough for live dashboards, but not something a compliance review could query after the fact, and not guaranteed to survive whatever collects container logs having a bad day. Slice 8 called for "buffering and disk spool so audit events survive an ingest outage."
+- **Decision:** skip the spool. Both `resolve()` (token lookup, `touch_last_used`) and `issue_for_agent`/`revoke_for_agent` already depend on Postgres being up to do their real work, so writing the audit row to that same Postgres, in the same request, removes the premise of a separate "ingest" that can be down while the operation it is auditing succeeds — if Postgres is unreachable, resolution already fails before there is anything to audit. No queue, no background worker, no new dependency.
+- **Delivered:** a `gateway_audit_event` table (`kind`, `detail`, `provider`, `agent_id`, `organization_id`, no foreign keys — matching `SecurityAuditRecord`, audit evidence must survive later deletion of the Agent or org it names). `GatewayAuditSink` now writes a row alongside the existing log line and counter, on every resolution and lifecycle event. The write is best-effort like `touch_last_used`: a failed insert is logged and swallowed, never turned into a 403 for a validly resolved token.
+- **Not delivered:** retention or partitioning for the table. It grows one row per tool call; that is a real future concern but not a now one — add pruning when row count is actually a problem.
+- **Tests:** `test_credential_gateway.py` asserts a durable row is written for a successful resolution, an unknown-token resolution (no identity to attach), and both issuance and revocation.
+
+### 2026-09-03 — Firecrawl routed through the gateway (last DIRECT provider)
+
+- **Why:** `FirecrawlContent.base_url` is a completely unvalidated self-hosted override — unlike Jira/Confluence (`*.atlassian.net`) or Pipedrive (`*.pipedrive.com`), it has no fixed suffix to constrain it to. In `DIRECT` mode this was low-risk: the same agent owner who can set `base_url` could already read the real Firecrawl API key directly out of the pod's own env, so redirecting their own traffic handed them nothing new. Once the real key stops entering the pod, that stops being true — a malicious `base_url` would make the *gateway* attach the real, shared platform key and forward it to a host the credential's owner controls. That is a new credential-exfiltration path, not a preserved one.
+- **Decision:** rather than add SSRF hardening (DNS resolution, private-IP blocking, redirect handling) to support an arbitrary self-hosted target, self-hosted Firecrawl is dropped. `FirecrawlPlugin.upstream_base_url` ignores `content.base_url` and is pinned to `https://api.firecrawl.dev`, matching GitHub/Bitbucket's fully-fixed-host shape. `FirecrawlContent.base_url` stays in the model — `SecretContent` forbids extra fields on decrypt, so removing it would need a re-encryption migration for stored content — but nothing reads it any more.
+- **Delivered:** `FirecrawlPlugin` is `EgressMode.GATEWAY_PROXY` with `apply_upstream_auth` sending `Authorization: Bearer <api_key>`. `start_agent`'s Firecrawl block now checks whether a Gateway Token was issued for the agent's stored credential (it is, whenever one exists) and, if so, writes the Gateway Token and the gateway's `/p/firecrawl` forward path into the same `FIRECRAWL_API_KEY`/`FIRECRAWL_API_URL` slots the pod's Firecrawl clients (Hermes's web/browser backend, openclaw's firecrawl plugin) already read — no change needed on either client.
+- **Unchanged:** the server-operator-configured platform default (`AGENT_FIRECRAWL_API_KEY`/`AGENT_FIRECRAWL_BASE_URL`), used when an agent has no stored Firecrawl credential at all. That key is not an Agent Secret — there is no per-agent row for the gateway to decrypt — so it is injected directly exactly as before. Only a *stored* credential is gateway-routed.
+- **Consequence:** gateway token issuance had to move earlier in `start_agent`, before the Firecrawl block, so the block can see whether a token was minted for it. `issue_for_agent` revokes and reissues on every call, so it is now called exactly once per start — calling it a second time later would have silently invalidated the token already baked into `FIRECRAWL_API_KEY`.
+- **Milestone:** every shipped Integration Plugin now has a gateway-served `egress_mode`. `EgressMode.DIRECT` support in the plugin/aai-cli seam is unused by any live provider today — it remains as the seam for whatever provider ships next without gateway support, not dead code.
+
+### 2026-09-03 — CREDENTIAL_GATEWAY_ENABLED removed
+
+- **Why:** the flag existed only as a rollout/rollback lever while providers were migrated one slice at a time. Every aai-cli and TOKEN_BROKER provider already had a gateway-served `egress_mode` (`GATEWAY_PROXY` or `TOKEN_BROKER`) by this point — Firecrawl was the only plugin still `DIRECT`, and it isn't reached through the flag's rollback path at all (see below) — so there was nothing left for the flag to roll back and it was pure risk: a stray unset env var would have silently reinstated real credentials in every agent pod.
+- **Removed:** `Config.credential_gateway_enabled` and `effective_egress_mode` (the function that combined it with a plugin's `egress_mode`); call sites now read `plugin.egress_mode` directly. The `CREDENTIAL_GATEWAY_ENABLED` env var in both Helm Deployments.
+- **Also removed as a consequence — the DIRECT gog materialization path:** it was reachable only when the flag was off, and Google Workspace's plugin is permanently `TOKEN_BROKER`, so it was dead code once the flag left. `build_gog_setup_sh`, the file keyring, `GOG_CLIENT_JSON`/`GOG_TOKEN_JSON` construction, and the keyring password are gone from `gog_artifacts.py`; `build_gog_env` now only builds the brokered shape.
+- **Not removed:** the `DIRECT`/`aai_cli_profile_block` path in `aai_cli_artifacts.py` and the provider plugins. Unlike gog's, that branch was never flag-gated — it is keyed on each plugin's own `egress_mode` and remains the seam a future not-yet-gateway-integrated aai-cli provider would use.
+- **Tests:** the rollback scenario (`test_rolling_a_provider_back_refuses_its_live_tokens`) is gone — there is no rollback to test. Tests that exercised the direct-profile branch for now-permanently-`GATEWAY_PROXY` providers (Jira/Confluence scoped-token URLs, Pipedrive domain handling) now call the plugin's `aai_cli_profile_block` directly instead of going through `build_config_toml`, since that dispatch path is unreachable for them.
+
+### 2026-09-03 — Google Workspace brokers a short-lived token
+
+- **Delivered:** `GoogleWorkspacePlugin` is `EgressMode.TOKEN_BROKER` and implements `mint_upstream_token`; `GET /gateway/v1/token` mints one for the presenting agent. Brokered rather than proxied because gog exposes no base-URL override but does accept a pre-minted token (`GOG_ACCESS_TOKEN`), so no gog change is needed.
+- **Removed from the pod:** the OAuth refresh token, the client secret, the file keyring and its password, and the token-import setup script. This was the last and worst credential in any agent pod — a refresh token is a renewable grant, not a single secret.
+- **Pod side:** a ConfigMap-mounted `gog-shim.sh` installs onto `PATH` ahead of `/usr/local/bin` and exchanges the Gateway Token for an access token on every invocation, then execs the real binary by absolute path. Per-invocation rather than per-boot because a Google access token lasts about an hour while agents run for days, and because it makes revocation effective on the next command. `start.sh` prepends the install directory for both runtimes.
+- **Not cached:** each mint is one request per gog invocation, and a cache keyed on the credential would hold live Google tokens in gateway memory for an hour with no way to drop them on revocation.
+- **Residual exposure, stated plainly:** this is the one provider where the pod still holds an upstream credential — expiring and non-renewable rather than none. That is the trade `TOKEN_BROKER` makes for a CLI that cannot be redirected.
+- **Also fixed:** the gateway's async routes were calling blocking database and HTTP work directly on the event loop, which would serialise every request through one worker. Resolution, forwarding and minting now run via `run_in_threadpool`.
+
+### 2026-09-03 — Zoho removed as a tool Integration
+
+- **Why:** Zoho Calendar never worked. Its CalDAV verbs — `PROPFIND`, `REPORT`, `MKCALENDAR`, `MOVE` — were rejected by the gateway's method list, and a probe confirmed all four returned 405 while only `GET` passed; the parametrized test passed solely because it used `GET`. It had already been disabled in the UI as "not currently offered". Zoho Mail is withdrawn alongside it.
+- **Removed:** `SecretProvider.ZOHO_MAIL` / `ZOHO_CALENDAR`, both content models, both plugins, the Zoho OAuth token exchange and cache, the CalDAV host allowlist, the `aai-zoho-mail` bundled skill, and the UI credential forms. The `email-reminder` predefined template is now Google Workspace only.
+- **Migration `a85f48650d6a`:** deletes `agent_secret` and `shared_credential` rows for both providers. This destroys credential material deliberately — no runtime can use those credentials, and leaving them would raise `ValueError` when agent start coerces the stored provider string back to the enum.
+- **Kept:** `UpstreamAuthenticationError` and its handler in the forward path. No shipped plugin raises it now, but it is the contract the Google Workspace token broker needs next.
+- **Tests:** Zoho-specific tests removed. Three general tests that merely used Zoho as their example were preserved rather than deleted — `build_env` ignoring non-store providers is now proved against Firecrawl, and the "provider without a capability clause" case became a registry contract test asserting every shipped aai-cli provider supplies one.
+
+### 2026-09-03 — Preserve unrestricted agent internet access
+
+- **Scope:** credential isolation removes real provider credentials from agent pods; it does not restrict the destinations agents may reach.
+- **Decision:** agent internet access remains unrestricted. A default-deny egress `NetworkPolicy` is not part of this feature because it would remove a critical runtime capability without being necessary to keep provider credentials out of pods.
+- **Redirects:** the gateway continues to follow provider redirects itself so credential headers remain under gateway control. It strips those headers on cross-host redirects; this behavior does not depend on pod network confinement.
+
+### 2026-09-03 — All aai-cli providers use the credential gateway
+
+- **Delivered:** Jira, Confluence, Bitbucket, and Pipedrive now implement the same provider-plugin proxy contract as GitHub. (Zoho Mail and Zoho Calendar were also delivered here and removed the same day — see below.) Their gateway profiles use only existing aai-cli endpoint and environment-authentication fields.
+- **Provider authentication:** the gateway applies Atlassian and Bitbucket Basic auth and Pipedrive's `x-api-token`. Long-lived provider credentials never enter the agent pod.
+- **Transport compatibility:** ordinary HTTP integrations present their Gateway Token as Bearer auth. CalDAV presents it as the password in its existing Basic-auth shape; Gateway Token resolution accepts that carrier and replaces the whole header before forwarding.
+- **Upstream safety:** stored Atlassian URLs are constrained to trusted HTTPS provider hosts before the gateway connects. Invalid stored upstream configuration is refused without forwarding.
+- **Rollout:** the Helm chart and new local configuration enable the gateway globally. Provider routing comes only from each plugin's `egress_mode`; `CREDENTIAL_GATEWAY_ENABLED=false` is the emergency rollback switch. There is no provider allowlist to synchronize when a plugin is added.
+
+### 2026-09-02 — Slice 3 — GATEWAY_PROXY forward path for GitHub
+
+- **Delivered:** `ANY /gateway/v1/p/{provider}/{path}` resolves the Gateway Token, decrypts the Agent Secret (following a Shared Credential when set), strips the agent's `Authorization` and hop-by-hop headers, applies the real provider credential through `apply_upstream_auth`, forwards, and returns the upstream status and body unchanged. `GithubPlugin` gained `upstream_base_url` and `apply_upstream_auth`.
+- **Rollout model:** `egress_mode` on a plugin is the provider-level source of truth; `Config.credential_gateway_enabled` is only a global operational switch. `effective_egress_mode` is the single place the two combine, so Gateway Token issuance and runtime artifact builders cannot disagree. A new provider requires no duplicate deployment registration, while global rollback remains a config change.
+- **What actually removes the credential:** `store_providers_for` excludes gateway-routed providers from the aai-cli secret store, so the real token is in neither the pod Secret nor `aai-secrets.enc.json`. The profile block alone would not have done it.
+- **CLI contract:** the generated profile uses aai-cli's existing endpoint override and environment-backed Bearer authentication. The Gateway Token authenticates only the pod-to-gateway hop; `apply_upstream_auth` replaces it with GitHub's real credential for the upstream hop. No gateway-specific aai-cli authentication mode is introduced.
+- **Refusals:** wrong-provider path, rolled-back provider, missing credential, unknown and revoked tokens all return the same opaque 403 as `/identity`, so an agent cannot probe which applies. An unreachable upstream is a 502 and is distinguished from an upstream error status, which passes through untouched.
+- **Redirects:** followed gateway-side so provider credential headers remain under gateway control. Those headers are retained only while the redirect stays on the origin host — carrying one to a redirect target would hand it to whoever controls that host. Bounded at 5 hops.
+
+### 2026-09-02 — Slack retired as a tool Integration
+
+Not a gateway slice; recorded here because it landed mid-epic and changed the plugin catalogue from ten providers to nine.
+
+- **Why:** the shipped Slack Platform Plugin replaces the Slack tool Integration outright, and it owns that credential. Keeping a second Slack credential class meant two places to configure, validate, and revoke the same access.
+- **Delivered:** `SecretProvider.SLACK`, `SlackContent`, `SlackPlugin`, `validate_slack`, and the UI credential form are removed. A Slack credential is now only ever a Communication Connection credential and never an Agent Secret.
+- **Migration `59bd5956b22a`:** deletes `agent_secret` and `shared_credential` rows with `provider = 'slack'`. This destroys credential material deliberately — no runtime could use those tokens any more, and leaving them would raise `ValueError` when agent start coerces the stored string back to the enum.
+- **Tests:** 15 Slack-specific tests removed. Four general tests that merely used Slack as their example (`test_env_var_for`, `test_config_toml_emits_only_present_store_profiles`, `test_tool_context_md_lists_providers_without_metadata`, `test_integrations_policy_md_never_leaks_tokens`) were kept and re-pointed at Pipedrive.
+
+### 2026-09-02 — Slice 2 — Credential gateway, identity only
+
+- **Decided:** the gateway is a **separate Deployment** (own Service, port 8003, independent replicas and resources), because it lands on the request path of every agent tool call and its availability and scaling should not be coupled to the product API's. It ships in the **same image**, so the Integration Plugins it imports need no separate packaging — the concern that made this decision blocking does not arise.
+- **Delivered:** `gateway_token` table; `CredentialGatewayService` issue/revoke/resolve; `GET /gateway/v1/identity` returning `(agent_id, organization_id, provider)` and one structured 403 for every rejection; `gateway_app.py` + `gateway_main.py`; Helm `gateway-deployment.yaml` and values block; chart `0.7.9` → `0.8.0`.
+- **Changed:** agent start issues and rotates Gateway Tokens for gateway-served providers and writes `AF_GATEWAY_TOKEN_<PROVIDER>` plus `AF_GATEWAY_URL` into the pod Secret; agent stop revokes them. Issuance is gated on `EgressMode`, so today it is a no-op and the pod Secret is unchanged.
+- **Security shape:** tokens are stored as SHA-256 hashes, not encrypted — the gateway resolves by the token alone, and Fernet ciphertext is non-deterministic and so not indexable. Nothing needs the plaintext back. A slow password hash would be wrong for 32 bytes of CSPRNG entropy on a per-tool-call path. One token per `(Agent, provider)`, so revoking one Integration cannot take the others down. Revocation is a stamp, not a delete, so the audit trail outlives the credential.
+- **Deferred:** resolution audit currently emits a structured log line and a Prometheus counter through `GatewayAuditSink`. The durable buffering/disk-spool implementation that survives a 60s ingest outage is Slice 8 and replaces the sink without touching call sites.
+- **Follow-up:** Slice 3 flips GitHub to `GATEWAY_PROXY`, which is what first makes issuance non-empty.
+
+### 2026-09-02 — Slice 1 — Integration Plugin and Runtime Tool Adapter seams
+
+- **Delivered:** `IntegrationPlugin` (generic over its credential model), the `AaiCliIntegration`/`AaiCliPlugin` aai-cli surface, `EgressMode`, and `IntegrationPluginRegistry` with import-time coherence validation. All ten providers ported as `EgressMode.DIRECT`.
+- **Changed:** `aai_cli_artifacts.py` keeps its public surface but derives `PROFILE_SLUGS` and `provider_secrets_map` from the registry and delegates every per-provider branch to a plugin; the `_PROFILE_BUILDERS` dict, the eight `_x_block` builders, `_INTEGRATION_LABELS`, `_INTEGRATION_CAPABILITIES`, `_repo_scoped_profile_line`, and the two `isinstance` chains are gone. `SHARED_CREDENTIAL_ALLOWED_PROVIDERS` and `aai_cli_skills._REQUIRED_PROVIDERS` are now derived from the plugins. `service.py` is untouched.
+- **Verified:** every artifact (config.toml, setup.sh, env, tools_md, agents_md, gog env/policy/setup) is byte-identical across a full and a variant provider map, both runtime home dirs, and the empty case. 915 unit and 825 integration tests pass with no existing test modified.
+- **Follow-up:** Slice 2 (gateway identity) is unblocked once the deployment shape is decided.
+
+### 2026-09-02 — Slice 0 — `GOG_READONLY` backstop
+
+- **Delivered:** a read-only Google Workspace credential now sets `GOG_READONLY=1`, so gog rejects mutating API requests locally before dispatch instead of relying solely on Google refusing the write.
+- **Changed:** `build_gog_env` emits the variable only when `content.read_only`; `build_gog_policy_md` now tells the agent writes are rejected by `gog`, not by Google. `docs/features/integrations.md` records the backstop and its limit.
+- **Follow-up:** an environment variable is unsettable by an agent with a shell. The compiled safety-profile binary in Slice 7 is the version that cannot be bypassed.

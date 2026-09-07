@@ -310,7 +310,14 @@ def _run_and_drain(delivery: dict, session_key: str) -> None:
     except Exception as exc:
         with _PENDING_APPROVALS_LOCK:
             _PENDING_APPROVALS.pop(session_key, None)
-        complete_delivery(delivery_id, succeeded=False, error=exc)
+        try:
+            complete_delivery(delivery_id, succeeded=False, error=exc)
+        except Exception as report_exc:
+            # The delivery's lease expired and it was reclaimed (then completed by a
+            # later attempt) while this run was still genuinely in progress -- the
+            # same race resolve_pending_approval already handles for approvals.
+            # Nothing left to report.
+            print(f"[communications-adapter] delivery {delivery_id} already resolved: {report_exc}", flush=True)
     finally:
         heartbeat_stopped.set()
         with _ACTIVE_RUNS_LOCK:

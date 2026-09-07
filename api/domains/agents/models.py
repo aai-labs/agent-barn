@@ -53,10 +53,7 @@ class SecretProvider(str, enum.Enum):
     JIRA = "jira"
     CONFLUENCE = "confluence"
     BITBUCKET = "bitbucket"
-    ZOHO_MAIL = "zoho_mail"
-    ZOHO_CALENDAR = "zoho_calendar"
     FIRECRAWL = "firecrawl"
-    SLACK = "slack"
     PIPEDRIVE = "pipedrive"
     GOOGLE_WORKSPACE = "google_workspace"
 
@@ -72,10 +69,7 @@ PROVIDER_DISPLAY_NAMES: dict[SecretProvider, str] = {
     SecretProvider.JIRA: "Jira credential",
     SecretProvider.CONFLUENCE: "Confluence credential",
     SecretProvider.BITBUCKET: "Bitbucket credential",
-    SecretProvider.ZOHO_MAIL: "Zoho Mail credential",
-    SecretProvider.ZOHO_CALENDAR: "Zoho Calendar credential",
     SecretProvider.FIRECRAWL: "Firecrawl credential",
-    SecretProvider.SLACK: "Slack credential",
     SecretProvider.PIPEDRIVE: "Pipedrive credential",
     SecretProvider.GOOGLE_WORKSPACE: "Google Workspace credential",
 }
@@ -181,28 +175,12 @@ class GoogleWorkspaceContent(SecretContent):
         return self
 
 
-class ZohoMailContent(SecretContent):
-    email: str
-    account_id: str
-    client_id: str
-    client_secret: str
-    refresh_token: str
-
-
-class ZohoCalendarContent(SecretContent):
-    username: str
-    email: str
-    app_password: str
-    caldav_url: str
-
-
 class FirecrawlContent(SecretContent):
     api_key: str
+    # Self-hosted override. Kept for backward-compatible decryption of already-stored
+    # content (SecretContent forbids extra fields) but no longer read by anything —
+    # FirecrawlPlugin.upstream_base_url ignores it. See that plugin for why.
     base_url: str = ""
-
-
-class SlackContent(SecretContent):
-    token: str
 
 
 class PipedriveContent(SecretContent):
@@ -218,10 +196,7 @@ PROVIDER_CONTENT_MODELS: dict[SecretProvider, type[SecretContent]] = {
     SecretProvider.JIRA: JiraContent,
     SecretProvider.CONFLUENCE: ConfluenceContent,
     SecretProvider.BITBUCKET: BitbucketContent,
-    SecretProvider.ZOHO_MAIL: ZohoMailContent,
-    SecretProvider.ZOHO_CALENDAR: ZohoCalendarContent,
     SecretProvider.FIRECRAWL: FirecrawlContent,
-    SecretProvider.SLACK: SlackContent,
     SecretProvider.PIPEDRIVE: PipedriveContent,
     SecretProvider.GOOGLE_WORKSPACE: GoogleWorkspaceContent,
 }

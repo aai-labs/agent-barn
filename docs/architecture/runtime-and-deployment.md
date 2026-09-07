@@ -41,6 +41,14 @@ The shared runtime adapter uses bounded exponential idle backoff with jitter for
 
 Runtime is persisted as `agent_type`. Platform is not an Agent field: an Agent may be headless or own any number of Communication Connections independently of whether Hermes or OpenClaw executes it.
 
+## Credential gateway
+
+The credential gateway is a separate Deployment on `:8003` serving `/gateway/v1`, ships in the same image as the API, and holds the Gateway Token catalogue. It is deliberately not a route family on the product API: it sits on the request path of every agent tool call, so its availability, scaling, and blast radius are independent.
+
+A Gateway Token is a credential to Agent Barn, not to a provider. Agent start issues one per gateway-served `(Agent, provider)` pair and writes it to the pod Secret as `AF_GATEWAY_TOKEN_<PROVIDER>`; agent stop revokes them. Each Integration Plugin's `EgressMode` is the sole, permanent provider-level source of truth — there is no global switch and no duplicate provider list. All aai-cli providers use gateway proxying.
+
+Tokens are stored as SHA-256 hashes rather than encrypted, because the gateway resolves a presented token by lookup and never needs the plaintext. Shared-HTTP aai-cli profiles carry it as Bearer auth; the CalDAV transport carries it as its Basic-auth password. Every rejection — missing header, wrong credential class, unknown token, revoked token — returns one structured 403, so an agent cannot probe which of its tokens were withdrawn; the distinction is kept in the audit trail. See [`../adr/2026-09-02-credential-gateway-egress-modes.md`](../adr/2026-09-02-credential-gateway-egress-modes.md).
+
 ## Platform Plugin boundary
 
 Agent Barn ships a code-owned Platform Plugin registry. Each plugin owns typed settings and credential schemas, external validation, credential uniqueness/fingerprinting, inbound normalization/admission, optional best-effort inbound name enrichment, provider-session behavior, outbound sending, and optional processing-feedback hooks. Slack uses supervised Socket Mode, Telegram uses supervised polling, and Discord uses a supervised Gateway session.
@@ -85,7 +93,7 @@ Every release's namespace and `needs:` entries are templated on a `NAMESPACE` en
 
 ## Observability
 
-`../../helm/monitoring/` deploys namespace-scoped Prometheus, Grafana, and Alertmanager charts. The product API exposes platform probes on `:8000`, Ingest exposes telemetry metrics on `:8001`, and Communications exposes HTTP metrics on `:8002`; LiteLLM and Agent health services retain their existing scrape targets. Alert rules route through Alertmanager, and Grafana dashboards are provisioned from chart ConfigMaps.
+`../../helm/monitoring/` deploys namespace-scoped Prometheus, Grafana, and Alertmanager charts. The product API exposes platform probes on `:8000`, Ingest exposes telemetry metrics on `:8001`, Communications exposes HTTP metrics on `:8002`, and the credential gateway exposes HTTP and token metrics on `:8003`; LiteLLM and Agent health services retain their existing scrape targets. Alert rules route through Alertmanager, and Grafana dashboards are provisioned from chart ConfigMaps.
 
 ## Kubernetes client constraint
 
@@ -96,6 +104,7 @@ Kubernetes `stream()` and `portforward()` temporarily monkey-patch `ApiClient.re
 | Concern                         | Source                                                                          |
 | ------------------------------- | ------------------------------------------------------------------------------- |
 | Runtime orchestration           | `../../api/domains/agents/service.py`                                                 |
+| Credential gateway process      | `../../api/gateway_app.py`, `../../api/gateway_main.py`, `../../api/domains/credential_gateway/`, `../../helm/agentbarn-api/templates/gateway-deployment.yaml` |
 | Ingest process and routing      | `../../api/ingest_app.py`, `../../api/ingest_main.py`, `../../api/start.sh`                       |
 | Communications process and routing | `../../api/communications_app.py`, `../../api/communications_main.py`, `../../api/domains/communications/` |
 | Domain Event delivery workers   | `../../api/worker_app.py`, `../../api/domains/events/worker.py`, `../../api/domains/events/reconciliation.py`, `../../helm/agentbarn-api/templates/event-delivery-worker-deployment.yaml`, `../../helm/agentbarn-api/templates/event-delivery-reconciliation-cronjob.yaml` |
@@ -112,4 +121,4 @@ Kubernetes `stream()` and `portforward()` temporarily monkey-patch `ApiClient.re
 
 ## Change impact
 
-Runtime changes must be checked against both runtime builders, images/base configuration, Agent lifecycle tests, telemetry, and the versioned Communications protocol. Platform changes belong at the Platform Plugin seam and require plugin, gateway, Connection CRUD/schema, and delivery tests rather than runtime branches. Chart template/value changes require the chart `version` bump according to `../../AGENTS.md`.
+A change to Gateway Token issuance, revocation, or resolution affects agent start and stop, the gateway process, and the Helm gateway Deployment. Runtime changes must be checked against both runtime builders, images/base configuration, Agent lifecycle tests, telemetry, and the versioned Communications protocol. Platform changes belong at the Platform Plugin seam and require plugin, gateway, Connection CRUD/schema, and delivery tests rather than runtime branches. Chart template/value changes require the chart `version` bump according to `../../AGENTS.md`.

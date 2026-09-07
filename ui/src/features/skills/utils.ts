@@ -24,9 +24,6 @@ export const SKILL_PROVIDER_LABELS: Record<string, string> = {
   confluence: "Confluence",
   bitbucket: "Bitbucket",
   google_workspace: "Google Workspace",
-  zoho_mail: "Zoho Mail",
-  zoho_calendar: "Zoho Calendar",
-  slack: "Slack",
   pipedrive: "Pipedrive",
 };
 

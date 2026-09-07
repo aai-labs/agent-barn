@@ -67,6 +67,7 @@ services:
       # Agent pods run in k3d, outside this Compose network, so they reach the
       # Communications gateway through the same host hop as Ingest and LiteLLM.
       COMMUNICATIONS_BASE_URL: ${COMMUNICATIONS_BASE_URL:-http://host.docker.internal:${COMMUNICATIONS_PORT:-8002}/communications/v1}
+      CREDENTIAL_GATEWAY_BASE_URL: ${CREDENTIAL_GATEWAY_BASE_URL:-http://host.docker.internal:${GATEWAY_PORT:-8003}/gateway/v1}
       # The rest of the agent config (AGENT_*, LITELLM_SECRET_NAME, OPENCLAW_IMAGE,
       # ...) arrives via env_file above. Only the values that must differ inside
       # the container are overridden here.
@@ -146,6 +147,25 @@ services:
       - ./api:/app/api
     ports:
       - "${COMMUNICATIONS_PORT:-8002}:8002"
+
+  credential-gateway:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    container_name: aai_credential_gateway
+    restart: unless-stopped
+    command: ["uvicorn", "api.gateway_main:app", "--host", "0.0.0.0", "--port", "8003", "--reload"]
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      <<: *api-env
+    volumes:
+      - ./api:/app/api
+    ports:
+      - "${GATEWAY_PORT:-8003}:8003"
 
   ui:
     build:

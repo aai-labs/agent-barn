@@ -48,14 +48,6 @@ export function isAutoConfiguredProvider(providerId: string): boolean {
 
 export const INTEGRATION_PROVIDERS: IntegrationProvider[] = [
   {
-    id: "slack",
-    label: "Slack tool access",
-    scopeNote: "A tool credential is separate from Communication Connection credentials and is exposed only to the Agent's Slack skill.",
-    fields: [
-      { key: "token", label: "Bot or user token", type: "secret", required: true, placeholder: "xoxb-… or xoxp-…" },
-    ],
-  },
-  {
     id: "github",
     label: "GitHub",
     scopeNote: "Classic PAT: repo, read:user, read:org — Fine-grained PAT: Contents (read), Pull requests (read + write), Metadata (read, mandatory)",
@@ -155,18 +147,6 @@ export const INTEGRATION_PROVIDERS: IntegrationProvider[] = [
     ],
   },
   {
-    id: "zoho_mail",
-    label: "Zoho Mail",
-    scopeNote: "OAuth 2.0 client credentials with ZohoMail.messages.READ scope",
-    fields: [
-      { key: "email", label: "Email", type: "text", required: true, placeholder: "you@yourdomain.com", hint: "Zoho Mail account email address" },
-      { key: "accountId", label: "Account ID", type: "text", required: true, placeholder: "56218000000008002", hint: "Zoho Mail account ID (from API console)" },
-      { key: "clientId", label: "Client ID", type: "text", required: true, placeholder: "1000.…", hint: "Zoho OAuth 2.0 client ID" },
-      { key: "clientSecret", label: "Client secret", type: "secret", required: true, hint: "Zoho OAuth 2.0 client secret" },
-      { key: "refreshToken", label: "Refresh token", type: "secret", required: true, hint: "OAuth 2.0 refresh token for the Zoho Mail account" },
-    ],
-  },
-  {
     id: "firecrawl",
     label: "Firecrawl",
     scopeNote: "Optional — agents use the platform Firecrawl by default. Provide your own API key and URL to use Firecrawl Cloud or another instance.",
@@ -184,19 +164,6 @@ export const INTEGRATION_PROVIDERS: IntegrationProvider[] = [
       { key: "domain", label: "Company domain", type: "text", required: false, placeholder: "aai-labs", hint: "Leave empty to use the default api.pipedrive.com endpoint." },
     ],
   },
-  // zoho_calendar disabled: not currently offered as an integration. Re-enable by
-  // uncommenting if needed again.
-  // {
-  //   id: "zoho_calendar",
-  //   label: "Zoho Calendar",
-  //   scopeNote: "App password from Zoho account security settings (two-factor must be enabled)",
-  //   fields: [
-  //     { key: "username", label: "Username", type: "text", required: true, placeholder: "you@zoho.com" },
-  //     { key: "email", label: "Email", type: "text", required: true, placeholder: "you@zoho.com" },
-  //     { key: "appPassword", label: "App password", type: "secret", required: true },
-  //     { key: "caldavUrl", label: "CalDAV URL", type: "text", required: true, placeholder: "https://calendar.zoho.com/caldav/..." },
-  //   ],
-  // },
 ];
 
 export function getIntegrationProvider(id: string): IntegrationProvider | undefined {

@@ -8,9 +8,17 @@ Read before changing tool-provider credential schemas, encryption, Google OAuth,
 
 Integrations make external services available to an Agent. Agent Secrets hold encrypted provider-specific credentials; agent start converts them into runtime environment, aai-cli secret-store setup, configuration, skill availability, and policy context.
 
+## Provider extension seam
+
+Per-provider behavior lives on an Integration Plugin in `../../api/domains/integrations/plugins/`: one class per provider carrying its credential model, live validator, Shared Credential eligibility, bundled skill binding, egress mode, and — for aai-cli providers — its `--profile` slug, config.toml block, secret-store entries, and agents_md lines. A provider is reached by exactly one runtime tool (`aai-cli`, `gog`, or none), and that tool's adapter owns file layout, ordering, and shared prose rather than branching per provider.
+
+The registry validates plugin coherence at import, so a malformed or half-added provider fails process startup rather than one Agent's start. `SHARED_CREDENTIAL_ALLOWED_PROVIDERS`, the aai-cli profile slugs, the secret-store map, and each bundled skill's required providers are all derived from the plugins. `PROVIDER_DISPLAY_NAMES`, `PROVIDER_CONTENT_MODELS`, and `PROVIDER_VALIDATORS` remain where they are to avoid an import cycle, and `../../api/tests/unit/test_integration_plugins.py` pins them against the plugins so they cannot drift.
+
+Plugins are trusted release artifacts, not dynamically installed packages: adding a provider is a merged PR, never runtime registration.
+
 ## Supported providers
 
-Provider credential contracts are defined by `SecretProvider` and its content models in `../../api/domains/agents/models.py`. Current providers cover GitHub, Jira, Confluence, Bitbucket, Google Workspace, Zoho Mail, Zoho Calendar, Firecrawl, Slack, and Pipedrive. The per-service Google providers (Gmail, Google Calendar, Google Sheets) are retired; affected agents must reconnect through Google Workspace.
+Provider credential contracts are defined by `SecretProvider` and its content models in `../../api/domains/agents/models.py`. Current providers cover GitHub, Jira, Confluence, Bitbucket, Google Workspace, Firecrawl, and Pipedrive. The per-service Google providers (Gmail, Google Calendar, Google Sheets) are retired; affected agents must reconnect through Google Workspace. Zoho Mail and Zoho Calendar are retired: Zoho Calendar's CalDAV verbs were never carried by any transport we shipped, so it never worked, and Zoho Mail is withdrawn with it. Slack is retired as a tool Integration: the shipped Slack Platform Plugin replaces it and owns that credential, so a Slack credential is always a Communication Connection credential and never an Agent Secret.
 
 Providers reach their service through one of two CLIs: aai-cli (all of the above except Google Workspace) or gog (Google Workspace only). The two have separate runtime artifacts, secret stores, and agent policy blocks.
 
@@ -18,7 +26,7 @@ Providers reach their service through one of two CLIs: aai-cli (all of the above
 
 Shared Credentials are org-scoped, admin-managed credential payloads that any member can attach to an agent. They use the same encryption and provider content models as Agent Secrets.
 
-- Only manual-entry providers are supported for shared credentials (v1): GitHub, Jira, Confluence, Bitbucket, Zoho Mail. OAuth-based providers (Google Workspace) are excluded.
+- Only manual-entry providers are supported for shared credentials (v1): GitHub, Jira, Confluence, Bitbucket. OAuth-based providers (Google Workspace) are excluded.
 - An agent gets either a shared credential or a per-agent secret for a given provider, not both.
 - Any org member can list and attach shared credentials; only admins (owner/admin roles) can create, update, or delete them.
 - Multiple shared credentials per provider per org are allowed (e.g. "Production GitHub" and "Staging GitHub").
@@ -36,7 +44,7 @@ Shared Credentials are org-scoped, admin-managed credential payloads that any me
 - Eligible built-in aai-cli skills are mounted at start when their provider credential is configured.
 - A built-in skill may declare no required providers when it needs no credential (Excel operates on local `.xlsx` files). Such a skill is never auto-mounted — an empty requirement list is trivially satisfied, so it would otherwise attach to every agent — and is mounted only when explicitly assigned.
 - Application deployment secrets, Agent Secrets, Shared Credentials, and Communication Connection credentials are distinct credential classes with different ownership and lifecycles. Connection credentials are owned and validated by shipped Platform Plugins and never become runtime Integration secrets.
-- Firecrawl is an infrastructure-level capability: when `AGENT_FIRECRAWL_BASE_URL` and `AGENT_FIRECRAWL_API_KEY` are configured, all agents receive web-fetch/search by default (analogous to LiteLLM). Agents with a per-agent Firecrawl Agent Secret override the platform key.
+- Firecrawl is an infrastructure-level capability: when `AGENT_FIRECRAWL_BASE_URL` and `AGENT_FIRECRAWL_API_KEY` are configured, all agents receive web-fetch/search by default (analogous to LiteLLM), injected directly since there is no per-agent Agent Secret row for the gateway to route. An agent with its own Firecrawl Agent Secret is `EgressMode.GATEWAY_PROXY` instead: the pod gets a Gateway Token and the gateway's forward path, never the real key, and `FirecrawlPlugin.upstream_base_url` is pinned to `https://api.firecrawl.dev` — a stored `base_url` (self-hosted override) is accepted for schema compatibility but is not honored, since it has no fixed suffix to constrain it to the way Jira/Confluence/Pipedrive's tenant hosts do.
 
 ## Google OAuth
 
@@ -50,13 +58,24 @@ At start, Agent Service decrypts provider payloads, backfills configured Google 
 
 The aai-cli integrations policy is gated on providers that actually have an aai-cli profile. An agent whose only integration is profile-less Google Workspace must not receive instructions claiming that aai-cli profiles are required.
 
-Google Workspace materializes through `gog_artifacts.py`: the pod Secret carries the OAuth client and refresh token as `GOG_*` environment, while a ConfigMap-mounted `gog-setup.sh` rebuilds gog state at boot. `GOG_HOME` is on the container filesystem and is wiped and rebuilt on every start; the encrypted Agent Secret remains the source of truth.
+A provider whose Integration Plugin declares `EgressMode.GATEWAY_PROXY` is always routed through the credential gateway — there is no config flag to opt out. Ordinary HTTP profiles keep aai-cli's existing `auth_type = "bearer_token"`, point their existing `base_url` or `site_url` override at `/p/<provider>`, and use the existing `token_env` field to load `AF_GATEWAY_TOKEN_<PROVIDER>`. The gateway also accepts the Gateway Token as a Basic-auth password, so a transport that cannot send a bearer header is still able to authenticate the pod-to-gateway hop. The token authenticates only the pod-to-gateway hop; the gateway replaces it with the provider's real authorization before forwarding. No aai-cli gateway-specific behavior is required.
+
+All shipped aai-cli providers use this mode: GitHub, Jira, Confluence, Bitbucket, and Pipedrive. Credential-owned Jira and Confluence upstream URLs are restricted to their provider hosts before forwarding, because `site_url` is user-supplied and becomes the forward target. Gateway-routed providers are excluded from the aai-cli secret store, so their real credentials are in neither the pod Secret nor `aai-secrets.enc.json`. The plugin's `egress_mode` is the single, permanent provider-level decision, so adding a provider does not require a deployment allowlist change.
+
+Credential isolation does not impose an agent egress policy. Hermes and OpenClaw retain unrestricted internet access; the gateway changes where provider credentials live and where authenticated provider requests are executed, not which unrelated destinations an agent may reach.
+
+Google Workspace materializes through `gog_artifacts.py`, always as `EgressMode.TOKEN_BROKER` rather than `GATEWAY_PROXY`, because gog exposes no base-URL override but does accept a pre-minted token. The refresh token and OAuth client secret stay in the gateway; the pod receives only its Gateway Token and the mint URL, and there is no keyring, no stored OAuth client and nothing to import. A ConfigMap-mounted `gog-shim.sh` is installed onto `PATH` ahead of `/usr/local/bin` and, on every invocation, exchanges the Gateway Token for a short-lived Google access token which it exports as `GOG_ACCESS_TOKEN` before exec'ing the real binary. Fetching per invocation rather than once at boot matters: a Google access token lasts about an hour and agents run for days, and it makes revocation take effect on the next command rather than the next restart.
+
+This is the one provider where the pod still holds an upstream credential. That is the trade `TOKEN_BROKER` makes — an expiring, non-renewable access token instead of a renewable grant plus a client secret — and it is what allows a CLI that cannot be redirected to be covered at all.
+
+A read-only Google Workspace credential also sets `GOG_READONLY=1`, which makes gog reject mutating API requests locally before dispatch. This is a defence-in-depth backstop layered on the read-only OAuth scopes, not a replacement for them: it is an environment variable, so an agent with a shell can unset it.
 
 ## Source map
 
 | Concern                                            | Authoritative source                                                                                                                                |
 | -------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Provider enum, content schemas, encryption helpers | `../../api/domains/agents/models.py`                                                                                                                |
+| Per-provider behavior (Integration Plugins)        | `../../api/domains/integrations/plugins/`                                                                                                           |
 | Shared Credential CRUD and lifecycle               | `../../api/domains/shared_credentials/`                                                                                                             |
 | Agent Secret persistence and lifecycle             | `../../api/domains/agents/service.py`, `../../api/domains/agents/repository.py`                                                                     |
 | aai-cli runtime materialization                    | `../../api/domains/agents/aai_cli_artifacts.py`, `../../api/domains/agents/aai_cli_skills/bundled/skills/`                                         |
@@ -66,8 +85,8 @@ Google Workspace materializes through `gog_artifacts.py`: the pod Secret carries
 | Google OAuth (Google Workspace)                    | `../../api/domains/integrations/google_oauth/routes.py`                                                                                             |
 | Firecrawl runtime wiring                           | `../../api/domains/agents/service.py` (platform-default + per-agent override)                                                                       |
 | UI credential forms                                | `../../ui/src/features/agents/`, `../../ui/src/features/account/`                                                                                   |
-| Tests                                              | `../../api/tests/integration/test_agents.py`, `../../api/tests/integration/test_shared_credentials.py`, `../../api/tests/integration/test_communication_connections.py`, `../../api/tests/unit/test_google_oauth.py` |
+| Tests                                              | `../../api/tests/unit/test_integration_plugins.py`, `../../api/tests/integration/test_agents.py`, `../../api/tests/integration/test_shared_credentials.py`, `../../api/tests/integration/test_communication_connections.py`, `../../api/tests/unit/test_google_oauth.py` |
 
 ## Change impact
 
-A tool Integration provider addition or schema change affects request validation, encrypted compatibility, runtime environment/config generation, built-in Skill seeding, UI forms/Zod schemas, and Agent start tests. Platform additions instead use the shipped Platform Plugin seam. Encryption-key changes require an explicit migration/rotation plan because Agent Secrets, Shared Credentials, and Communication Connection credentials depend on the existing key.
+A tool Integration provider addition is one Integration Plugin plus its bundled Skill, its content model, and the UI form. A schema change still affects request validation, encrypted compatibility, runtime environment/config generation, built-in Skill seeding, UI forms/Zod schemas, and Agent start tests. A provider reached by a new CLI also needs that CLI's adapter and plugin surface; it does not touch existing providers. Platform additions instead use the shipped Platform Plugin seam. Encryption-key changes require an explicit migration/rotation plan because Agent Secrets, Shared Credentials, and Communication Connection credentials depend on the existing key.

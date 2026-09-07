@@ -162,6 +162,21 @@ communications:
       memory: 512Mi
       cpu: 500m
 
+# The credential gateway sits on the request path of every agent tool call, so it is a
+# separate Deployment from the API: its availability and scaling are independent.
+gateway:
+  enabled: true
+  replicaCount: 1
+  service:
+    port: 8003
+  resources:
+    requests:
+      memory: 256Mi
+      cpu: 100m
+    limits:
+      memory: 512Mi
+      cpu: 500m
+
 resources:
   requests:
     memory: 256Mi
