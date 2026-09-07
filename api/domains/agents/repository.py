@@ -1,3 +1,5 @@
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, ClassVar
@@ -5,7 +7,7 @@ from uuid import UUID, uuid4
 
 import sqlalchemy as sa
 from injector import inject, singleton
-from sqlalchemy import exists, func, or_
+from sqlalchemy import exists, func, or_, text
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, col, select
 
@@ -752,6 +754,31 @@ class AgentRepository:
             session.refresh(agent)
             session.commit()
             return AgentLifecycleEventResult(agent=agent, delivery_ids=delivery_ids)
+
+    @contextmanager
+    def lifecycle_lock(self, agent_id: UUID) -> Iterator[bool]:
+        """Serialize lifecycle-mutating operations (start/stop) for one Agent across
+        API processes, so a competing request fails fast with 409 instead of racing
+        this one through runtime provisioning.
+
+        Uses a session-scoped Postgres advisory lock (non-blocking): it is not tied
+        to any single transaction, so the caller may commit intermediate work while
+        still holding it. It is released when this context manager exits, or, as a
+        crash safety net, automatically by Postgres when the underlying connection
+        closes. Callers must not release it (let the `with` block exit) until after
+        their own writes have committed, or a losing request could still observe
+        stale state once it acquires the lock.
+        """
+        lock_key = f"agent-lifecycle:{agent_id}"
+        with Session(self.delegate.engine) as session:
+            acquired = bool(
+                session.scalar(text("SELECT pg_try_advisory_lock(hashtext(:lock_key))"), {"lock_key": lock_key})
+            )
+            try:
+                yield acquired
+            finally:
+                if acquired:
+                    session.scalar(text("SELECT pg_advisory_unlock(hashtext(:lock_key))"), {"lock_key": lock_key})
 
     def save_with_lifecycle_event(
         self,

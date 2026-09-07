@@ -1843,7 +1843,17 @@ class AgentService:
 
     def start_agent(self, agent_id: UUID, context: CurrentUserContext) -> AgentRead:
         agent = self.authorization.require_action(context, agent_id, PermissionKey.AGENT_LIFECYCLE_MANAGE)
-        started = self._start_agent_unchecked(agent, resolve_actor_identity(context, agent.organization_id))
+        actor = resolve_actor_identity(context, agent.organization_id)
+        with self.repository.lifecycle_lock(agent.id) as acquired:
+            if not acquired:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"Agent {agent_id} has a lifecycle operation already in progress",
+                )
+            # Re-read status now that we hold the lock: it may have changed since
+            # the caller's copy was loaded above.
+            current = self.repository.get_by_id(agent.id) or agent
+            started = self._start_agent_unchecked(current, actor)
         return self._get_agent_read(started, context)
 
     def _start_agent_unchecked(self, agent: Agent, actor: ActorIdentity) -> Agent:
@@ -2296,7 +2306,15 @@ class AgentService:
 
     def stop_agent(self, agent_id: UUID, context: CurrentUserContext) -> AgentRead:
         agent = self.authorization.require_action(context, agent_id, PermissionKey.AGENT_LIFECYCLE_MANAGE)
-        stopped = self._stop_agent_unchecked(agent, resolve_actor_identity(context, agent.organization_id))
+        actor = resolve_actor_identity(context, agent.organization_id)
+        with self.repository.lifecycle_lock(agent.id) as acquired:
+            if not acquired:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"Agent {agent_id} has a lifecycle operation already in progress",
+                )
+            current = self.repository.get_by_id(agent.id) or agent
+            stopped = self._stop_agent_unchecked(current, actor)
         return self._get_agent_read(stopped, context)
 
     def _stop_agent_unchecked(self, agent: Agent, actor: ActorIdentity) -> Agent:

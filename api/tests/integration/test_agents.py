@@ -1,4 +1,5 @@
 import json
+import threading
 from typing import cast
 from unittest.mock import MagicMock, patch
 from uuid import uuid7
@@ -47,6 +48,7 @@ from api.domains.events.security_audit import SecurityAuditRepository
 from api.domains.organizations.repository import OrganizationRepository
 from api.domains.templates.models import AgentTemplate, PlatformTemplate
 from api.domains.templates.repository import TemplateRepository
+from api.infrastructure.crypto import decrypt_token
 from api.infrastructure.integration_validators.result import IntegrationValidationResult
 from api.infrastructure.kubernetes.client import KubernetesClient
 from api.infrastructure.litellm.client import LiteLLMClient, LiteLLMError
@@ -1187,6 +1189,53 @@ def test_start_already_running_returns_409():
 
         with then("it returns 409"):
             assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
+
+
+def test_concurrent_start_requests_reject_the_loser_and_keep_credentials_consistent():
+    """Regression test for AF-287 / agent-barn#160: a second start request that
+    arrives while the first is still mid-provisioning must be rejected, not race
+    it to persist its own (different) credentials."""
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        k8s: MagicMock = context.injector.get(KubernetesClient)
+
+        entered_provisioning = threading.Event()
+        release_first_request = threading.Event()
+
+        def block_mid_provisioning(*args, **kwargs):
+            entered_provisioning.set()
+            release_first_request.wait(timeout=5)
+
+        k8s.create_deployment.side_effect = block_mid_provisioning
+
+        responses: dict[str, httpx.Response] = {}
+
+        def start_first():
+            responses["first"] = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with when("a second start request arrives while the first is still provisioning the runtime"):
+            first_thread = threading.Thread(target=start_first)
+            first_thread.start()
+            assert_that(entered_provisioning.wait(timeout=5), equal_to(True))
+
+            responses["second"] = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+            release_first_request.set()
+            first_thread.join(timeout=5)
+
+        with then("the second, competing request is rejected as a lifecycle conflict, not raced through"):
+            assert_that(responses["second"].status_code, equal_to(status.HTTP_409_CONFLICT))
+            assert_that(responses["second"].json()["detail"], contains_string("already in progress"))
+
+        with then("the first request completes and starts the agent"):
+            assert_that(responses["first"].status_code, equal_to(status.HTTP_200_OK))
+
+        with then("the persisted credentials match what was written into the runtime secret"):
+            persisted = context.injector.get(AgentRepository).get_by_id(context.agent.id)
+            assert persisted is not None
+            _, secret = k8s.create_secret.call_args.args
+            decrypted_ingest_key = decrypt_token(persisted.ingest_key_encrypted, TEST_ENCRYPTION_KEY)
+            assert_that(decrypted_ingest_key, equal_to(secret.string_data["INGEST_API_KEY"]))
 
 
 def test_start_agent_rejects_model_removed_from_allowlist():
