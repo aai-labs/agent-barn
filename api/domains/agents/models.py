@@ -694,6 +694,31 @@ class PlatformTemplateDraftSkill(BaseModel, table=True):
     group_key: str | None = SqlField(default=None, nullable=True, max_length=100)
 
 
+class AgentTemplateDraftSkill(BaseModel, table=True):
+    __tablename__: str = "agent_template_draft_skill"
+
+    # Mirrors AgentTemplateSkill: the required-skill selection currently staged
+    # on an organization's Draft Template Version, carried over to
+    # agent_template_skill on publish.
+    __table_args__ = (
+        sa.UniqueConstraint("draft_id", "skill_id", name="uq_agent_template_draft_skill"),
+        sa.Index("ix_agent_template_draft_skill_draft", "draft_id"),
+        sa.ForeignKeyConstraint(
+            ["skill_id", "skill_version"],
+            ["skill_version.skill_id", "skill_version.version"],
+            ondelete="RESTRICT",
+            name="fk_agent_template_draft_skill_version",
+        ),
+    )
+
+    draft_id: UUID = SqlField(foreign_key="agent_template_draft.id", nullable=False, ondelete="CASCADE")
+    skill_id: UUID = SqlField(foreign_key="skill.id", nullable=False, ondelete="RESTRICT")
+    skill_version: int = SqlField(nullable=False)
+    # None for a standalone (AND-required) skill; otherwise the key of the
+    # "at least one of" group this skill belongs to on this draft.
+    group_key: str | None = SqlField(default=None, nullable=True, max_length=100)
+
+
 class AgentSecretCreate(PydanticBaseModel):  # no secret_name — backend stamps it
     provider: SecretProvider
     content: dict

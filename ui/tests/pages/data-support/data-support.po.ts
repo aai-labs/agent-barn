@@ -5,6 +5,7 @@ import { AuthSupport } from "./auth-support.po";
 import { CommunicationConnectionDataSupport } from "./communication-connection-data-support.po";
 import { EventDeliveryDataSupport } from "./event-delivery-data-support.po";
 import { OrganizationDataSupport } from "./organization-data-support.po";
+import { OrgTemplateDataSupport } from "./org-template-data-support.po";
 import { PlatformStatsDataSupport } from "./platform-stats-data-support.po";
 import { PlatformTemplateDataSupport } from "./platform-template-data-support.po";
 import { SkillDataSupport } from "./skill-data-support.po";
@@ -18,6 +19,7 @@ export class DataSupport {
   public skills: SkillDataSupport;
   public organizations: OrganizationDataSupport;
   public eventDeliveries: EventDeliveryDataSupport;
+  public orgTemplates: OrgTemplateDataSupport;
   public platformTemplates: PlatformTemplateDataSupport;
   public platformStats: PlatformStatsDataSupport;
 
@@ -29,6 +31,7 @@ export class DataSupport {
     this.skills = new SkillDataSupport(page);
     this.organizations = new OrganizationDataSupport(page);
     this.eventDeliveries = new EventDeliveryDataSupport(page);
+    this.orgTemplates = new OrgTemplateDataSupport(page);
     this.platformTemplates = new PlatformTemplateDataSupport(page);
     this.platformStats = new PlatformStatsDataSupport(page);
   }

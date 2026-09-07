@@ -1,5 +1,8 @@
 from uuid import UUID
 
+from sqlmodel import Session
+
+from api.domains.agents.models import AgentTemplateDraftSkill
 from api.domains.templates.defaults import (
     DEFAULT_AGENTS_MD,
     DEFAULT_BOOT_MD,
@@ -10,8 +13,9 @@ from api.domains.templates.defaults import (
     DEFAULT_TOOLS_MD,
     DEFAULT_USER_MD,
 )
-from api.domains.templates.models import AgentTemplate, TemplateSource
+from api.domains.templates.models import AgentTemplate, AgentTemplateDraft, TemplateSource
 from api.domains.templates.repository import TemplateRepository
+from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 
 
 def there_is_a_template(
@@ -49,6 +53,75 @@ def there_is_a_template(
         )
         repository.save_template(template)
         context.template = template
+
+    return step
+
+
+def there_is_an_org_template_draft(
+    template_key: str = "test-template",
+    name: str = "Test Template",
+    source: TemplateSource = TemplateSource.CUSTOM,
+    organization_id: UUID | None = None,
+    description: str | None = None,
+    forked_from_platform_template_id: UUID | None = None,
+    fork_baseline_platform_template_id: UUID | None = None,
+    fork_baseline_platform_version: int | None = None,
+    soul_md: str = DEFAULT_SOUL_MD,
+    identity_md: str = DEFAULT_IDENTITY_MD,
+    user_md: str = DEFAULT_USER_MD,
+    tools_md: str = DEFAULT_TOOLS_MD,
+    agents_md: str = DEFAULT_AGENTS_MD,
+    boot_md: str = DEFAULT_BOOT_MD,
+    bootstrap_md: str = DEFAULT_BOOTSTRAP_MD,
+    heartbeat_md: str = DEFAULT_HEARTBEAT_MD,
+):
+    """Put an unpublished Organization Draft Template Version on the lineage."""
+
+    def step(context):
+        org_id = organization_id or context.organization.id
+        delegate: PostgresRepositoryDelegate = context.injector.get(PostgresRepositoryDelegate)
+        draft = AgentTemplateDraft(
+            organization_id=org_id,
+            template_key=template_key,
+            template_name=name,
+            template_source=source,
+            description=description,
+            forked_from_platform_template_id=forked_from_platform_template_id,
+            fork_baseline_platform_template_id=fork_baseline_platform_template_id,
+            fork_baseline_platform_version=fork_baseline_platform_version,
+            soul_md=soul_md,
+            identity_md=identity_md,
+            user_md=user_md,
+            tools_md=tools_md,
+            agents_md=agents_md,
+            boot_md=boot_md,
+            bootstrap_md=bootstrap_md,
+            heartbeat_md=heartbeat_md,
+        )
+        delegate.save(draft)
+        context.org_template_draft = draft
+
+    return step
+
+
+def there_is_an_org_template_draft_skill(group_key: str | None = None, skill_version: int = 1):
+    """Require context.skill on context.org_template_draft.
+
+    A None group_key (the default) makes it a standalone AND-required skill."""
+
+    def step(context):
+        delegate: PostgresRepositoryDelegate = context.injector.get(PostgresRepositoryDelegate)
+        with Session(delegate.engine) as session:
+            session.add(
+                AgentTemplateDraftSkill(
+                    draft_id=context.org_template_draft.id,
+                    skill_id=context.skill.id,
+                    skill_version=skill_version,
+                    group_key=group_key,
+                )
+            )
+            session.commit()
+        context.org_template_draft_skill = (context.org_template_draft.id, context.skill.id)
 
     return step
 

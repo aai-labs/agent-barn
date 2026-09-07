@@ -16,25 +16,26 @@ import { toast } from "sonner";
 import { ConfirmationDialog } from "@/components/confirmation-dialog";
 
 import {
-  useCreatePlatformTemplateDraft,
-  useDiscardPlatformTemplateDraft,
-  usePublishPlatformTemplateDraft,
-  useStartPlatformTemplateDraft,
-  useUpdatePlatformTemplateDraft,
-} from "../hooks/use-platform-template-actions";
-import { usePlatformSkills } from "../hooks/use-platform-skills";
-import { usePlatformTemplateDraft } from "../hooks/use-platform-template-draft";
-import { usePlatformTemplateVersions } from "../hooks/use-platform-template-versions";
-import type { PlatformTemplateAdminSummary } from "../schemas";
+  useCreateTemplateDraft,
+  useDiscardTemplateDraft,
+  usePublishTemplateDraft,
+  useStartTemplateDraft,
+  useUpdateTemplateDraft,
+} from "../hooks/use-template-actions";
+import { useTemplateSkills } from "../hooks/use-template-skills";
+import { useTemplateDraft } from "../hooks/use-template-draft";
+import { useTemplateVersions } from "../hooks/use-template-versions";
+import type { TemplateLineageSummary } from "../schemas";
+import { type TemplateScopeRef, templateSkillScope } from "../scope";
 import {
-  blankPlatformTemplateFiles,
+  blankTemplateFiles,
   formFromDraft,
   requiredSkillPayload,
-  type PlatformTemplateFileKey,
-  type PlatformTemplateForm,
+  type TemplateFileKey,
+  type TemplateForm,
 } from "../utils";
 import { PlatformTemplateArtifactTabs } from "./platform-template-artifact-tabs";
-import { PlatformTemplatePublishedView } from "./platform-template-published-view";
+import { TemplatePublishedView } from "./template-published-view";
 import { PlatformTemplateSkillCheckbox } from "./platform-template-skill-checkbox";
 import { PlatformTemplateSkillGroup } from "./platform-template-skill-group";
 
@@ -52,18 +53,20 @@ type ConfirmationConfig = {
   children?: ReactNode;
 };
 
-function emptyForm(): PlatformTemplateForm {
+function emptyForm(): TemplateForm {
   return {
     templateName: "",
     description: "",
-    files: blankPlatformTemplateFiles(),
+    files: blankTemplateFiles(),
     standaloneSkillIds: [],
     skillGroups: [],
     skillVersions: {},
   };
 }
 
-export function PlatformTemplateEditor({
+export function TemplateEditor({
+  scope,
+  canManage = true,
   isNew,
   templateKey,
   lineage,
@@ -71,16 +74,20 @@ export function PlatformTemplateEditor({
   onCreated,
   onChanged,
 }: {
+  scope: TemplateScopeRef;
+  canManage?: boolean;
   isNew: boolean;
   templateKey: string | null;
-  lineage: PlatformTemplateAdminSummary | null;
+  lineage: TemplateLineageSummary | null;
   onClose: () => void;
   onCreated: (templateKey: string) => void;
   onChanged: () => void;
 }) {
+  const isPlatform = scope.kind === "platform";
+  const skillScope = templateSkillScope(scope);
   const hasPublishedVersion =
     !isNew && Boolean(lineage && lineage.latestPublishedVersion !== null);
-  const [isEditing, setIsEditing] = useState(isNew || !hasPublishedVersion);
+  const [isEditing, setIsEditing] = useState(canManage && (isNew || !hasPublishedVersion));
   const [started, setStarted] = useState(false);
   const [selectedVersion, setSelectedVersion] = useState<number | null>(null);
   const shouldLoadDraft =
@@ -93,25 +100,25 @@ export function PlatformTemplateEditor({
     isLoading: isPublishedLoading,
     error: publishedError,
     refetch: refetchPublishedVersions,
-  } = usePlatformTemplateVersions(templateKey, hasPublishedVersion);
+  } = useTemplateVersions(scope, templateKey, hasPublishedVersion);
   const {
     draft,
     isLoading: isDraftLoading,
     error: draftError,
-  } = usePlatformTemplateDraft(templateKey, shouldLoadDraft);
+  } = useTemplateDraft(scope, templateKey, shouldLoadDraft);
   const {
     skills,
     isLoading: isSkillsLoading,
     error: skillsError,
-  } = usePlatformSkills(true);
-  const startDraft = useStartPlatformTemplateDraft();
-  const createDraft = useCreatePlatformTemplateDraft();
-  const updateDraft = useUpdatePlatformTemplateDraft();
-  const discardDraft = useDiscardPlatformTemplateDraft();
-  const publishDraft = usePublishPlatformTemplateDraft();
-  const [form, setForm] = useState<PlatformTemplateForm>(emptyForm);
+  } = useTemplateSkills(scope, true);
+  const startDraft = useStartTemplateDraft(scope);
+  const createDraft = useCreateTemplateDraft(scope);
+  const updateDraft = useUpdateTemplateDraft(scope);
+  const discardDraft = useDiscardTemplateDraft(scope);
+  const publishDraft = usePublishTemplateDraft(scope);
+  const [form, setForm] = useState<TemplateForm>(emptyForm);
   const [selectedFile, setSelectedFile] =
-    useState<PlatformTemplateFileKey>("soulMd");
+    useState<TemplateFileKey>("soulMd");
   const [skillSearch, setSkillSearch] = useState("");
   const [dirty, setDirty] = useState(false);
   const [confirmation, setConfirmation] = useState<ConfirmationKind | null>(
@@ -163,7 +170,7 @@ export function PlatformTemplateEditor({
   }, [skillSearch, skills]);
 
   function patchForm(
-    updater: (previous: PlatformTemplateForm) => PlatformTemplateForm,
+    updater: (previous: TemplateForm) => TemplateForm,
   ) {
     setForm((previous) => updater(previous));
     setDirty(true);
@@ -352,10 +359,10 @@ export function PlatformTemplateEditor({
   const errorMessage =
     editorError instanceof Error ? editorError.message : null;
   const templateName = isNew
-    ? form.templateName || "New platform template"
+    ? form.templateName || (isPlatform ? "New platform template" : "New template")
     : (currentDraft?.templateName ??
       lineage?.templateName ??
-      "Platform template");
+      (isPlatform ? "Platform template" : "Template"));
   const templateMeta = isNew
     ? "Create an unpublished template draft. It becomes visible to organizations only after publishing."
     : lineage?.latestPublishedVersion
@@ -365,7 +372,7 @@ export function PlatformTemplateEditor({
   const confirmationConfig: ConfirmationConfig | null =
     confirmation === "publish"
       ? {
-          title: "Publish platform template?",
+          title: isPlatform ? "Publish platform template?" : "Publish template?",
           description: (
             <>
               Publish {currentDraft?.templateName ?? "this template"} as a new
@@ -486,7 +493,9 @@ export function PlatformTemplateEditor({
 
   if (!isEditing) {
     return (
-      <PlatformTemplatePublishedView
+      <TemplatePublishedView
+        scope={scope}
+        canManage={canManage}
         lineage={lineage}
         template={publishedTemplate}
         isLoading={isPublishedLoading}
@@ -507,13 +516,14 @@ export function PlatformTemplateEditor({
 
   return (
     <div className="max-w-[1100px] mx-auto px-4 sm:px-8 lg:px-10 pt-8 pb-24">
-      <div className="flex flex-wrap gap-2 mb-6">
+      <div className="flex flex-wrap items-center gap-2 mb-6">
         <button
-          className="af-btn af-btn-sm"
+          className="inline-flex items-center gap-1.5 text-[0.8125rem] px-2 py-1 -ml-2 rounded-lg hover:bg-[var(--bg-soft)] transition-colors disabled:opacity-60"
+          style={{ color: "var(--ink-3)" }}
           onClick={requestClose}
           disabled={pending}
         >
-          <ArrowLeft size={14} /> Platform templates
+          <ArrowLeft size={14} /> {isPlatform ? "Platform templates" : "Templates"}
         </button>
         {!isNew && hasPublishedVersion && (
           <button
@@ -558,7 +568,7 @@ export function PlatformTemplateEditor({
             style={{ color: "var(--ink-3)" }}
           >
             {isNew
-              ? "Define the prompt artifacts and required skills for this platform template. Save it as a draft before publishing."
+              ? "Define the prompt artifacts and required skills for this template. Save it as a draft before publishing."
               : "Edit the draft Markdown artifacts and required skills. Published versions remain immutable."}
           </p>
         </div>
@@ -701,7 +711,7 @@ export function PlatformTemplateEditor({
                     style={{ color: "var(--ink-3)" }}
                   >
                     Edit the raw Markdown files that are rendered into agents
-                    using this platform template.
+                    using this template.
                   </p>
                 </div>
                 <PlatformTemplateArtifactTabs
@@ -731,14 +741,14 @@ export function PlatformTemplateEditor({
                     className="text-[12.5px] mt-1"
                     style={{ color: "var(--ink-3)" }}
                   >
-                    Only global platform skills can be required here. Standalone
+                    {isPlatform ? "Only global platform skills" : "Platform and organization skills"} can be required here. Standalone
                     skills are always required; grouped skills mean “at least
                     one of”.
                   </p>
                 </div>
                 <input
                   className="af-input"
-                  aria-label="Search platform skills"
+                  aria-label={isPlatform ? "Search platform skills" : "Search skills"}
                   placeholder="Search global skills…"
                   value={skillSearch}
                   onChange={(event) => setSkillSearch(event.target.value)}
@@ -756,7 +766,7 @@ export function PlatformTemplateEditor({
                     className="text-[12.5px]"
                     style={{ color: "var(--err)" }}
                   >
-                    Global skills could not be loaded.
+                    {isPlatform ? "Global skills" : "Skills"} could not be loaded.
                   </div>
                 )}
                 {!isSkillsLoading && !skillsError && (
@@ -777,6 +787,7 @@ export function PlatformTemplateEditor({
                           onVersionChange={(version) => updateSkillVersion(skill.id, version)}
                           showVersionPicker
                           onChange={() => toggleStandaloneSkill(skill.id, skill.version)}
+                          scope={skillScope}
                         />
                       ))}
                     {form.skillGroups.map((group) => (
@@ -792,6 +803,7 @@ export function PlatformTemplateEditor({
                         skillVersions={form.skillVersions}
                         onVersionChange={updateSkillVersion}
                         showVersionPicker
+                        scope={skillScope}
                       />
                     ))}
                     {visibleSkills.length === 0 &&

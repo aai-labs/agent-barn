@@ -157,11 +157,11 @@ A user-initiated action that selects a newer direct Platform or Organization Ove
 _Avoid_: merge, automatic sync, rollback
 
 **Draft Template Version**:
-An unpublished, in-progress next version of a Platform Template lineage, editable only by a Platform Administrator and invisible to every Organization. A lineage has at most one Draft Template Version at a time; publishing it produces the next immutable Platform Template Version.
+An unpublished, in-progress next version of a template lineage. Platform lineages have one per lineage, editable only by a Platform Administrator and invisible to every Organization; Organization lineages have one per `(organization_id, template_key)`, editable by an Organization manager. A lineage has at most one Draft Template Version at a time; publishing it produces the next immutable Template Version in that lineage's scope.
 _Avoid_: unpublished template, WIP template
 
 **Template Restore**:
-A Platform Administrator action that seeds the Draft Template Version from any selected immutable Platform Template Version. Publishing the restored draft creates the next version in the lineage; it never mutates or removes the selected historical version.
+An action that seeds the Draft Template Version from any selected immutable published version of the same lineage, in either scope. Publishing the restored draft creates the next version in the lineage; it never mutates or removes the selected historical version.
 _Avoid_: version pointer switch, destructive rollback
 
 **Fork Baseline Version**:

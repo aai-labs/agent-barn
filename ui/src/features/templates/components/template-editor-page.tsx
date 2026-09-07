@@ -1,23 +1,30 @@
 "use client";
 
 import { ArrowLeft } from "lucide-react";
-import { useRouter } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 
 import { AppErrorState } from "@/components/app-error-state";
 
-import { usePlatformTemplateLineages } from "../hooks/use-platform-template-lineages";
-import { PlatformTemplateEditor } from "./platform-template-editor";
+import { useTemplateLineages } from "../hooks/use-template-lineages";
+import { templateDetailHref, templatesListHref, type TemplateScopeRef } from "../scope";
+import { TemplateEditor } from "./template-editor";
 
-export function PlatformTemplateEditorPage({
+export function TemplateEditorPage({
+  scope,
   templateKey,
   isNew = false,
+  canManage = true,
 }: {
+  scope: TemplateScopeRef;
   templateKey?: string;
   isNew?: boolean;
+  canManage?: boolean;
 }) {
   const router = useRouter();
-  const { lineages, isLoading, error, refetch } =
-    usePlatformTemplateLineages(!isNew);
+  const params = useParams();
+  const orgId = typeof params?.orgId === "string" ? params.orgId : null;
+  const listHref = templatesListHref(scope, orgId);
+  const { lineages, isLoading, error, refetch } = useTemplateLineages(scope, !isNew);
   const lineage = isNew
     ? null
     : (lineages.find((candidate) => candidate.templateKey === templateKey) ?? null);
@@ -43,8 +50,8 @@ export function PlatformTemplateEditorPage({
     return (
       <AppErrorState
         error={error}
-        title="We couldn't load this platform template"
-        description="The platform template editor is unavailable right now."
+        title="We couldn&apos;t load this template"
+        description="The template editor is unavailable right now."
         onRetry={() => void refetch()}
         retryLabel="Retry template"
       />
@@ -59,15 +66,16 @@ export function PlatformTemplateEditorPage({
             className="font-semibold text-[16px] mb-1"
             style={{ color: "var(--ink)" }}
           >
-            Platform template not found
+            Template not found
           </div>
           <p className="text-[13.5px] mb-5" style={{ color: "var(--ink-3)" }}>
             This template lineage may have been removed or is not available to
             your account.
           </p>
           <button
-            className="af-btn"
-            onClick={() => router.push("/dashboard/platform/templates")}
+            className="inline-flex items-center gap-1.5 text-[0.8125rem] px-2 py-1 -ml-2 rounded-lg hover:bg-[var(--bg-soft)] transition-colors"
+            style={{ color: "var(--ink-3)" }}
+            onClick={() => router.push(listHref)}
           >
             <ArrowLeft size={14} /> Back to templates
           </button>
@@ -77,13 +85,15 @@ export function PlatformTemplateEditorPage({
   }
 
   return (
-    <PlatformTemplateEditor
+    <TemplateEditor
+      scope={scope}
+      canManage={canManage}
       isNew={isNew}
       templateKey={isNew ? null : (templateKey ?? null)}
       lineage={lineage}
-      onClose={() => router.push("/dashboard/platform/templates")}
+      onClose={() => router.push(listHref)}
       onCreated={(createdTemplateKey) =>
-        router.replace(`/dashboard/platform/templates/${createdTemplateKey}`)
+        router.replace(templateDetailHref(scope, orgId, createdTemplateKey))
       }
       onChanged={() => void refetch()}
     />

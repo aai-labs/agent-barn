@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-const PlatformSkillSchema = z.object({
+const TemplateSkillSchema = z.object({
   id: z.string().uuid(),
   organizationId: z.string().uuid().nullable(),
   name: z.string(),
@@ -12,24 +12,28 @@ const PlatformSkillSchema = z.object({
   updatedAt: z.string(),
 });
 
-const PlatformTemplateSkillSchema = PlatformSkillSchema.extend({
+const TemplateRequiredSkillSchema = TemplateSkillSchema.extend({
   // A required Skill must always point at an exact published version.
   version: z.number().int().min(1),
   groupKey: z.string().nullable().optional().default(null),
 });
 
-export const PlatformTemplateAdminSummarySchema = z.object({
+export const TemplateLineageSummarySchema = z.object({
   templateKey: z.string(),
   templateName: z.string(),
   latestPublishedVersion: z.number().int().nullable(),
   hasDraft: z.boolean(),
+  templateSource: z.enum(["pre-defined", "custom"]).optional(),
+  isFork: z.boolean().optional(),
+  platformUpdateAvailable: z.boolean().optional(),
+  inUse: z.boolean().optional(),
 });
 
-export const PlatformTemplateAdminSummariesSchema = z.array(
-  PlatformTemplateAdminSummarySchema,
+export const TemplateLineageSummariesSchema = z.array(
+  TemplateLineageSummarySchema,
 );
 
-export const PlatformTemplateDraftReadSchema = z.object({
+export const TemplateDraftReadSchema = z.object({
   id: z.string().uuid(),
   templateKey: z.string(),
   templateName: z.string(),
@@ -44,15 +48,15 @@ export const PlatformTemplateDraftReadSchema = z.object({
   heartbeatMd: z.string(),
   createdAt: z.string(),
   updatedAt: z.string(),
-  requiredSkills: z.array(PlatformTemplateSkillSchema).default([]),
+  requiredSkills: z.array(TemplateRequiredSkillSchema).default([]),
 });
 
-export const PlatformTemplateReadSchema = z.object({
+export const TemplateReadSchema = z.object({
   id: z.string().uuid(),
   organizationId: z.string().uuid().nullable(),
   templateKey: z.string(),
   templateName: z.string(),
-  templateSource: z.literal("pre-defined"),
+  templateSource: z.enum(["pre-defined", "custom"]),
   forkedFromPlatformTemplateId: z.string().uuid().nullable().optional(),
   forkBaselinePlatformTemplateId: z.string().uuid().nullable().optional(),
   forkBaselinePlatformVersion: z.number().int().nullable().optional(),
@@ -68,26 +72,33 @@ export const PlatformTemplateReadSchema = z.object({
   heartbeatMd: z.string(),
   createdAt: z.string(),
   updatedAt: z.string(),
-  requiredSkills: z.array(PlatformTemplateSkillSchema).default([]),
+  requiredSkills: z.array(TemplateRequiredSkillSchema).default([]),
   inUse: z.boolean().default(false),
 });
 
-export const PlatformTemplatePublishedReadSchema = z.object({
+export const TemplatePublishedReadSchema = z.object({
   id: z.string().uuid(),
   templateKey: z.string(),
   version: z.number().int(),
 });
 
-export const PlatformSkillListSchema = z.array(PlatformSkillSchema);
+export const TemplateSkillListSchema = z.array(TemplateSkillSchema);
 
-export type PlatformTemplateAdminSummary = z.infer<
-  typeof PlatformTemplateAdminSummarySchema
+export const PaginatedTemplateSkillsSchema = z.object({
+  page: z.number().int(),
+  pageSize: z.number().int(),
+  total: z.number().int(),
+  items: z.array(TemplateSkillSchema),
+});
+
+export type TemplateLineageSummary = z.infer<
+  typeof TemplateLineageSummarySchema
 >;
-export type PlatformTemplateDraft = z.infer<typeof PlatformTemplateDraftReadSchema>;
-export type PlatformTemplate = z.infer<typeof PlatformTemplateReadSchema>;
-export type PlatformSkill = z.infer<typeof PlatformSkillListSchema>[number];
+export type TemplateDraft = z.infer<typeof TemplateDraftReadSchema>;
+export type TemplateRead = z.infer<typeof TemplateReadSchema>;
+export type TemplateSkill = z.infer<typeof TemplateSkillListSchema>[number];
 
-export type PlatformTemplateDraftFields = {
+export type TemplateDraftFields = {
   description?: string | null;
   soulMd?: string;
   identityMd?: string;
@@ -102,6 +113,6 @@ export type PlatformTemplateDraftFields = {
   requiredSkillVersions?: Record<string, number>;
 };
 
-export type CreatePlatformTemplateDraft = PlatformTemplateDraftFields & {
+export type CreateTemplateDraft = TemplateDraftFields & {
   templateName: string;
 };

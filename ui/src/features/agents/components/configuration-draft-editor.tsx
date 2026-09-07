@@ -5,9 +5,9 @@ import { Loader2, Pencil } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useSkills } from "@/features/skills/hooks/use-skills";
-import { PlatformTemplateSkillCheckbox } from "@/features/platform-templates/components/platform-template-skill-checkbox";
-import { PlatformTemplateSkillGroup } from "@/features/platform-templates/components/platform-template-skill-group";
-import { PLATFORM_TEMPLATE_FILES } from "@/features/platform-templates/utils";
+import { PlatformTemplateSkillCheckbox } from "@/features/templates/components/platform-template-skill-checkbox";
+import { PlatformTemplateSkillGroup } from "@/features/templates/components/platform-template-skill-group";
+import { TEMPLATE_FILES } from "@/features/templates/utils";
 
 import type { AgentOverrideDraft } from "../schemas";
 import {
@@ -43,7 +43,7 @@ export function AgentOverrideDraftEditor({
   const { skills, isLoading: skillsLoading } = useSkills({ scope: { kind: "organization" }, pageSize: 100 });
   const original = draftToForm(draft);
   const isDirty =
-    PLATFORM_TEMPLATE_FILES.some(({ key }) => form[key] !== original[key]) ||
+    TEMPLATE_FILES.some(({ key }) => form[key] !== original[key]) ||
     form.templateName !== original.templateName ||
     form.description !== original.description ||
     JSON.stringify(form.requiredSkillIds) !==
@@ -183,6 +183,7 @@ export function AgentOverrideDraftEditor({
                   skillMap={skillMap}
                   selectedSkillIds={selectedSkillIds}
                   onToggle={toggleSkill}
+                  scope={{ kind: "organization" }}
                 />
               ))}
               <div className="grid gap-2 sm:grid-cols-2">
@@ -192,6 +193,7 @@ export function AgentOverrideDraftEditor({
                     skill={skill}
                     checked={selectedSkillIds.has(skill.id)}
                     onChange={() => toggleSkill(skill.id)}
+                    scope={{ kind: "organization" }}
                   />
                 ))}
               </div>

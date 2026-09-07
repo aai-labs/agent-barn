@@ -11,6 +11,7 @@ from hamcrest import (
     matches_regexp,
     none,
 )
+from sqlmodel import Session, col, select
 from starlette.testclient import TestClient
 
 from api.domains.agents.repository import AgentRepository
@@ -25,7 +26,12 @@ from api.domains.rbac.catalog import PermissionKey
 from api.domains.rbac.policy import AuthorizationScope
 from api.domains.skills.repository import SkillRepository
 from api.domains.templates.defaults import DEFAULT_SOUL_MD
-from api.domains.templates.models import AgentTemplate, PlatformTemplate, TemplateSource
+from api.domains.templates.models import (
+    AgentTemplate,
+    AgentTemplateDraft,
+    PlatformTemplate,
+    TemplateSource,
+)
 from api.domains.templates.predefined import PREDEFINED_TEMPLATES
 from api.domains.templates.repository import TemplateRepository
 from api.domains.templates.service import TemplateService
@@ -43,6 +49,7 @@ from api.tests.steps.agent import (
     MockK8sModule,
     MockLiteLLMModule,
     there_is_a_skill,
+    there_is_a_skill_for_another_org,
     there_is_an_agent,
     use_org_for_auth,
 )
@@ -55,6 +62,7 @@ from api.tests.steps.template import (
     there_is_a_template,
     there_is_a_template_skill,
     there_is_a_template_skill_group,
+    there_is_an_org_template_draft,
 )
 from api.tests.steps.user import there_is_a_user, there_is_an_access_token_for_user
 
@@ -837,18 +845,27 @@ def test_create_template_returns_201_v1_custom():
                 headers=_auth(context),
             )
 
-        with then("it returns 201 with a generated template_key, v1, custom source"):
+        with then("it returns 201 with a generated template_key and an unpublished draft"):
             assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
             body = response.json()
             assert_that(body["template_key"], matches_regexp(r"^tpl-[0-9a-f]{12}$"))
             assert_that(body["template_name"], equal_to("My Helper!"))
-            assert_that(body["version"], equal_to(1))
             assert_that(body["template_source"], equal_to("custom"))
             assert_that(body["soul_md"], equal_to("# Soul"))
+            assert_that("version" in body, equal_to(False))
 
         with then("missing md fields fall back to defaults"):
             assert_that(body["user_md"], is_not(equal_to("")))
             assert_that(body["tools_md"], is_not(equal_to("")))
+
+        with then("nothing is published until the draft is published"):
+            assert_that(
+                client.get(f"{_BASE}/{body['template_key']}", headers=_auth(context)).status_code,
+                equal_to(status.HTTP_404_NOT_FOUND),
+            )
+            published = client.post(f"{_BASE}/{body['template_key']}/draft/publish", headers=_auth(context))
+            assert_that(published.json()["version"], equal_to(1))
+            assert_that(published.json()["template_source"], equal_to("custom"))
 
 
 def test_create_template_duplicate_name_gets_a_distinct_generated_key():
@@ -926,14 +943,15 @@ def test_create_template_with_required_skills_stores_them():
                 headers=_auth(context),
             )
 
-        with then("it returns 201 with required_skills populated"):
+        with then("it returns 201 with required_skills populated on the draft"):
             assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
             body = response.json()
             assert_that(len(body["required_skills"]), equal_to(1))
             assert_that(body["required_skills"][0]["id"], equal_to(str(context.skill.id)))
             assert_that(body["required_skills"][0]["name"], equal_to("Jira"))
 
-        with then("GET also returns the required skill"):
+        with then("publishing carries the requirement onto the published version"):
+            client.post(f"{_BASE}/{body['template_key']}/draft/publish", headers=_auth(context))
             get_resp = client.get(f"{_BASE}/{body['template_key']}", headers=_auth(context))
             assert_that(len(get_resp.json()["required_skills"]), equal_to(1))
 
@@ -1097,23 +1115,6 @@ def test_create_template_rejects_duplicate_group_keys():
 # --- update ---
 
 
-def test_member_cannot_update_template():
-    with given(
-        [
-            *_GIVEN,
-            there_is_a_template(template_key="alpha", name="Alpha"),
-            _there_is_a_member_actor(),
-        ]
-    ) as context:
-        response = context.client.patch(
-            f"{_BASE}/alpha",
-            json={"description": "Changed"},
-            headers=_auth(context),
-        )
-
-        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
-
-
 def test_update_template_creates_new_version_with_merge():
     with given(
         [
@@ -1124,14 +1125,16 @@ def test_update_template_creates_new_version_with_merge():
         client: TestClient = context.client
 
         with when("I update only the soul"):
-            response = client.patch(
-                f"{_BASE}/alpha",
+            _start_org_draft(client, context, "alpha")
+            client.patch(
+                f"{_BASE}/alpha/draft",
                 json={"soul_md": "# New Soul"},
                 headers=_auth(context),
             )
+            response = client.post(f"{_BASE}/alpha/draft/publish", headers=_auth(context))
 
         with then("a new version is created, untouched fields carried over"):
-            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
             body = response.json()
             assert_that(body["version"], equal_to(2))
             assert_that(body["soul_md"], equal_to("# New Soul"))
@@ -1144,11 +1147,13 @@ def test_update_template_name_is_inherited_not_editable():
         client: TestClient = context.client
 
         with when("I edit content and attempt to rename in the same request"):
-            response = client.patch(
-                f"{_BASE}/alpha",
+            _start_org_draft(client, context, "alpha")
+            client.patch(
+                f"{_BASE}/alpha/draft",
                 json={"soul_md": "# New", "template_name": "Alpha Renamed"},
                 headers=_auth(context),
             )
+            response = client.post(f"{_BASE}/alpha/draft/publish", headers=_auth(context))
 
         with then("the new version inherits the v1 name; the rename is ignored"):
             body = response.json()
@@ -1168,11 +1173,13 @@ def test_update_predefined_template_keeps_source():
         client: TestClient = context.client
 
         with when("I update a pre-defined template"):
-            response = client.patch(
-                f"{_BASE}/seeded",
+            _start_org_draft(client, context, "seeded")
+            client.patch(
+                f"{_BASE}/seeded/draft",
                 json={"soul_md": "# Edited"},
                 headers=_auth(context),
             )
+            response = client.post(f"{_BASE}/seeded/draft/publish", headers=_auth(context))
 
         with then("the new version stays pre-defined"):
             body = response.json()
@@ -1196,28 +1203,19 @@ def test_update_template_does_not_touch_agent_pins():
             assert_that(agent["template_version"], equal_to(1))
 
         with when("the templates page publishes a new version of that lineage"):
-            response = client.patch(
-                f"{_BASE}/test-template",
+            _start_org_draft(client, context, "test-template")
+            client.patch(
+                f"{_BASE}/test-template/draft",
                 json={"soul_md": "# v2"},
                 headers=_auth(context),
             )
+            response = client.post(f"{_BASE}/test-template/draft/publish", headers=_auth(context))
 
         with then("the agent stays pinned to its original version"):
-            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
             assert_that(response.json()["version"], equal_to(2))
             agent_response = client.get(f"{_AGENTS_BASE}/{agent['id']}", headers=_auth(context))
             assert_that(agent_response.json()["template_version"], equal_to(1))
-
-
-def test_update_template_unknown_key_returns_404():
-    with given(_GIVEN) as context:
-        client: TestClient = context.client
-
-        with when("I update a non-existent template"):
-            response = client.patch(f"{_BASE}/nope", json={"soul_md": "# X"}, headers=_auth(context))
-
-        with then("it returns 404"):
-            assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
 
 
 def test_update_template_empty_body_returns_422():
@@ -1225,7 +1223,8 @@ def test_update_template_empty_body_returns_422():
         client: TestClient = context.client
 
         with when("I send an empty update"):
-            response = client.patch(f"{_BASE}/alpha", json={}, headers=_auth(context))
+            _start_org_draft(client, context, "alpha")
+            response = client.patch(f"{_BASE}/alpha/draft", json={}, headers=_auth(context))
 
         with then("it returns 422"):
             assert_that(response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_ENTITY))
@@ -1243,14 +1242,16 @@ def test_update_template_inherits_skills_by_default():
         client: TestClient = context.client
 
         with when("I update the template without specifying required_skill_ids"):
-            response = client.patch(
-                f"{_BASE}/alpha",
+            _start_org_draft(client, context, "alpha")
+            client.patch(
+                f"{_BASE}/alpha/draft",
                 json={"soul_md": "# Updated"},
                 headers=_auth(context),
             )
+            response = client.post(f"{_BASE}/alpha/draft/publish", headers=_auth(context))
 
         with then("the new version carries over the required skills from v1"):
-            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
             body = response.json()
             assert_that(body["version"], equal_to(2))
             assert_that(len(body["required_skills"]), equal_to(1))
@@ -1271,14 +1272,16 @@ def test_update_template_replaces_skills():
         confluence_id = str(context.skill.id)
 
         with when("I update the template replacing required skills"):
-            response = client.patch(
-                f"{_BASE}/alpha",
+            _start_org_draft(client, context, "alpha")
+            client.patch(
+                f"{_BASE}/alpha/draft",
                 json={"soul_md": "# Updated", "required_skill_ids": [confluence_id]},
                 headers=_auth(context),
             )
+            response = client.post(f"{_BASE}/alpha/draft/publish", headers=_auth(context))
 
         with then("the new version has only the replacement skill"):
-            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
             body = response.json()
             assert_that(body["version"], equal_to(2))
             assert_that(len(body["required_skills"]), equal_to(1))
@@ -1320,13 +1323,15 @@ def test_update_template_resolves_standalone_and_group_versions_together():
         assert_that(create.status_code, equal_to(status.HTTP_201_CREATED))
         template_key = create.json()["template_key"]
 
-        response = client.patch(
-            f"{_BASE}/{template_key}",
+        _start_org_draft(client, context, f"{template_key}")
+        client.patch(
+            f"{_BASE}/{template_key}/draft",
             json={"soul_md": "# Updated", **payload},
             headers=_auth(context),
         )
+        response = client.post(f"{_BASE}/{template_key}/draft/publish", headers=_auth(context))
 
-        assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+        assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
         required = {item["id"]: item for item in response.json()["required_skills"]}
         assert_that(required[str(standalone.id)]["version"], equal_to(1))
         assert_that(required[str(group_a.id)]["version"], equal_to(1))
@@ -1345,14 +1350,16 @@ def test_update_template_clears_skills():
         client: TestClient = context.client
 
         with when("I update the template clearing required skills"):
-            response = client.patch(
-                f"{_BASE}/alpha",
+            _start_org_draft(client, context, "alpha")
+            client.patch(
+                f"{_BASE}/alpha/draft",
                 json={"soul_md": "# Updated", "required_skill_ids": []},
                 headers=_auth(context),
             )
+            response = client.post(f"{_BASE}/alpha/draft/publish", headers=_auth(context))
 
         with then("the new version has no required skills"):
-            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
             body = response.json()
             assert_that(body["version"], equal_to(2))
             assert_that(body["required_skills"], equal_to([]))
@@ -1369,14 +1376,16 @@ def test_update_template_inherits_groups_when_field_unset():
         client: TestClient = context.client
 
         with when("I update other fields without touching required_skill_groups"):
-            response = client.patch(
-                f"{_BASE}/alpha",
+            _start_org_draft(client, context, "alpha")
+            client.patch(
+                f"{_BASE}/alpha/draft",
                 json={"soul_md": "# Updated"},
                 headers=_auth(context),
             )
+            response = client.post(f"{_BASE}/alpha/draft/publish", headers=_auth(context))
 
         with then("the new version keeps the inherited group"):
-            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
             body = response.json()
             assert_that(body["version"], equal_to(2))
             assert_that(len(body["required_skills"]), equal_to(2))
@@ -1397,17 +1406,19 @@ def test_update_template_replaces_groups():
         jira_id = str(context.skill.id)
 
         with when("I replace the required_skill_groups with a different group"):
-            response = client.patch(
-                f"{_BASE}/alpha",
+            _start_org_draft(client, context, "alpha")
+            client.patch(
+                f"{_BASE}/alpha/draft",
                 json={
                     "soul_md": "# Updated",
                     "required_skill_groups": [{"group_key": "solo-jira", "skill_ids": [jira_id]}],
                 },
                 headers=_auth(context),
             )
+            response = client.post(f"{_BASE}/alpha/draft/publish", headers=_auth(context))
 
         with then("the new version only has the replacement group"):
-            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
             body = response.json()
             assert_that(len(body["required_skills"]), equal_to(1))
             assert_that(body["required_skills"][0]["name"], equal_to("Jira"))
@@ -1425,14 +1436,16 @@ def test_update_template_clears_groups():
         client: TestClient = context.client
 
         with when("I clear required_skill_groups explicitly"):
-            response = client.patch(
-                f"{_BASE}/alpha",
+            _start_org_draft(client, context, "alpha")
+            client.patch(
+                f"{_BASE}/alpha/draft",
                 json={"soul_md": "# Updated", "required_skill_groups": []},
                 headers=_auth(context),
             )
+            response = client.post(f"{_BASE}/alpha/draft/publish", headers=_auth(context))
 
         with then("the new version has no required skills"):
-            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
             assert_that(response.json()["required_skills"], equal_to([]))
 
 
@@ -1448,13 +1461,14 @@ def test_update_template_rejects_overlap_with_inherited_group():
         github_skill = context.template_skill_group["skills"][0]
 
         with when("required_skill_ids is set to a skill already inherited as a group member"):
+            _start_org_draft(client, context, "alpha")
             response = client.patch(
-                f"{_BASE}/alpha",
+                f"{_BASE}/alpha/draft",
                 json={"soul_md": "# Updated", "required_skill_ids": [str(github_skill.id)]},
                 headers=_auth(context),
             )
 
-        with then("it returns 422"):
+        with then("the draft edit is rejected before anything can be published"):
             assert_that(response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_ENTITY))
 
 
@@ -1695,11 +1709,13 @@ def test_seed_does_not_clobber_edited_predefined_template():
         service.seed_predefined_templates()
 
         with when("I edit scrum-master and reseed"):
+            _start_org_draft(client, context, "scrum-master")
             client.patch(
-                f"{_BASE}/scrum-master",
+                f"{_BASE}/scrum-master/draft",
                 json={"soul_md": "# Edited Soul"},
                 headers=_auth(context),
             )
+            client.post(f"{_BASE}/scrum-master/draft/publish", headers=_auth(context))
             service.seed_predefined_templates()
 
         with then("the edited org fork stays the latest"):
@@ -1713,14 +1729,16 @@ def test_seed_does_not_clobber_edited_predefined_template():
             assert_that(latest.fork_baseline_platform_version, equal_to(1))
 
         with when("the organization edits the fork again"):
-            response = client.patch(
-                f"{_BASE}/scrum-master",
+            _start_org_draft(client, context, "scrum-master")
+            client.patch(
+                f"{_BASE}/scrum-master/draft",
                 json={"tools_md": "# Edited Tools"},
                 headers=_auth(context),
             )
+            response = client.post(f"{_BASE}/scrum-master/draft/publish", headers=_auth(context))
 
         with then("the new org version preserves the original fork and its baseline"):
-            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
             latest_again = repository.get_latest_org_template(org_id, "scrum-master")
             assert latest_again is not None
             assert_that(latest_again.version, equal_to(2))
@@ -1804,17 +1822,19 @@ def test_platform_template_update_clones_the_new_platform_snapshot_and_preserves
             assert_that(agent_response.json()["template_version"], equal_to(1))
 
         with when("the organization creates a fork with a soul and skill override"):
-            fork_response = client.patch(
-                f"{_BASE}/manual",
+            _start_org_draft(client, context, "manual")
+            client.patch(
+                f"{_BASE}/manual/draft",
                 json={
                     "soul_md": "organization soul",
                     "required_skill_ids": [str(override_skill.id)],
                 },
                 headers=_auth(context),
             )
+            fork_response = client.post(f"{_BASE}/manual/draft/publish", headers=_auth(context))
 
         with then("the fork is created at org version 1"):
-            assert_that(fork_response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(fork_response.status_code, equal_to(status.HTTP_201_CREATED))
             assert_that(fork_response.json()["version"], equal_to(1))
             assert_that(fork_response.json()["fork_baseline_platform_version"], equal_to(1))
 
@@ -1862,12 +1882,14 @@ def test_platform_update_availability_uses_latest_org_version_not_history():
         repository: TemplateRepository = context.injector.get(TemplateRepository)
         repository.save_platform_template(_platform_version("manual", 1))
 
-        fork_response = client.patch(
-            f"{_BASE}/manual",
+        _start_org_draft(client, context, "manual")
+        client.patch(
+            f"{_BASE}/manual/draft",
             json={"soul_md": "organization soul"},
             headers=_auth(context),
         )
-        assert_that(fork_response.status_code, equal_to(status.HTTP_200_OK))
+        fork_response = client.post(f"{_BASE}/manual/draft/publish", headers=_auth(context))
+        assert_that(fork_response.status_code, equal_to(status.HTTP_201_CREATED))
 
         repository.save_platform_template(_platform_version("manual", 2, soul_md="platform soul 2"))
         update_v2 = client.post(f"{_BASE}/manual/platform-update", headers=_auth(context))
@@ -1896,12 +1918,14 @@ def test_newer_platform_version_does_not_replace_an_org_fork_in_the_catalog():
         repository: TemplateRepository = context.injector.get(TemplateRepository)
         repository.save_platform_template(_platform_version("manual", 1))
 
-        fork_response = client.patch(
-            f"{_BASE}/manual",
+        _start_org_draft(client, context, "manual")
+        client.patch(
+            f"{_BASE}/manual/draft",
             json={"soul_md": "organization soul"},
             headers=_auth(context),
         )
-        assert_that(fork_response.status_code, equal_to(status.HTTP_200_OK))
+        fork_response = client.post(f"{_BASE}/manual/draft/publish", headers=_auth(context))
+        assert_that(fork_response.status_code, equal_to(status.HTTP_201_CREATED))
         repository.save_platform_template(_platform_version("manual", 3, soul_md="platform soul 3"))
 
         with when("the organization lists its templates after a newer platform publish"):
@@ -1917,10 +1941,10 @@ def test_newer_platform_version_does_not_replace_an_org_fork_in_the_catalog():
             assert_that(get_response.status_code, equal_to(status.HTTP_200_OK))
             assert_that(get_response.json()["soul_md"], equal_to("organization soul"))
 
-        with then("version history keeps the organization version for the shared number"):
+        with then("version history lists only the organization's own versions"):
             versions_response = client.get(f"{_BASE}/manual/versions", headers=_auth(context))
-            assert_that([version["version"] for version in versions_response.json()], equal_to([3, 1]))
-            assert_that(versions_response.json()[1]["soul_md"], equal_to("organization soul"))
+            assert_that([version["version"] for version in versions_response.json()], equal_to([1]))
+            assert_that(versions_response.json()[0]["soul_md"], equal_to("organization soul"))
 
 
 def test_platform_template_update_requires_a_newer_platform_version():
@@ -1929,12 +1953,14 @@ def test_platform_template_update_requires_a_newer_platform_version():
         repository: TemplateRepository = context.injector.get(TemplateRepository)
         repository.save_platform_template(_platform_version("manual", 1))
 
-        fork_response = client.patch(
-            f"{_BASE}/manual",
+        _start_org_draft(client, context, "manual")
+        client.patch(
+            f"{_BASE}/manual/draft",
             json={"soul_md": "organization soul"},
             headers=_auth(context),
         )
-        assert_that(fork_response.status_code, equal_to(status.HTTP_200_OK))
+        fork_response = client.post(f"{_BASE}/manual/draft/publish", headers=_auth(context))
+        assert_that(fork_response.status_code, equal_to(status.HTTP_201_CREATED))
 
         with when("the organization applies an update while the platform is still at the baseline"):
             response = client.post(f"{_BASE}/manual/platform-update", headers=_auth(context))
@@ -2180,8 +2206,9 @@ def test_create_template_emits_created_domain_event():
     with given(_GIVEN) as context:
         client: TestClient = context.client
 
-        with when("I create a template"):
+        with when("I create a template and publish its draft"):
             response = client.post(_BASE, json={"template_name": "My Template"}, headers=_auth(context))
+            client.post(f"{_BASE}/{response.json()['template_key']}/draft/publish", headers=_auth(context))
 
         with then("a template.created Domain Event is persisted"):
             assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
@@ -2198,47 +2225,6 @@ def test_create_template_emits_created_domain_event():
             # Regression: actor_display must be the acting user's name, not the
             # ActorIdentity type string ("MEMBERSHIP"/"USER").
             assert_that(created_events[0].payload["actor_display"], equal_to("Test User"))
-
-
-def test_update_template_description_emits_updated_domain_event_with_field_changes():
-    with given([*_GIVEN, there_is_a_template(template_key="alpha", name="Alpha")]) as context:
-        client: TestClient = context.client
-        client.patch(f"{_BASE}/alpha", json={"description": "Old description"}, headers=_auth(context))
-
-        with when("I update only the description again"):
-            response = client.patch(
-                f"{_BASE}/alpha",
-                json={"description": "New description"},
-                headers=_auth(context),
-            )
-
-        with then("a template.updated Domain Event carries the before/after description"):
-            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
-            messages = _outbox_messages(context)
-            # Two template.updated events exist: setting the description the first
-            # time (v1->v2, from the setup PATCH above) and this test's own change
-            # (v2->v3) — select the latter by its new_version.
-            updated_events = [m for m in messages if m.event_name == TEMPLATE_UPDATED]
-            assert_that(len(updated_events), equal_to(2))
-            event = next(m for m in updated_events if m.payload["new_version"] == 3)
-            field_changes = event.payload["field_changes"]
-            assert_that(field_changes["description"]["previous"], equal_to("Old description"))
-            assert_that(field_changes["description"]["new"], equal_to("New description"))
-            assert_that(event.payload["previous_version"], equal_to(2))
-
-
-def test_update_template_body_only_emits_no_updated_event():
-    with given([*_GIVEN, there_is_a_template(template_key="alpha", name="Alpha", soul_md="# Old")]) as context:
-        client: TestClient = context.client
-
-        with when("I update only a markdown body, not name/description"):
-            response = client.patch(f"{_BASE}/alpha", json={"soul_md": "# New"}, headers=_auth(context))
-
-        with then("no template.updated Domain Event is staged"):
-            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
-            messages = _outbox_messages(context)
-            updated_events = [m for m in messages if m.event_name == TEMPLATE_UPDATED]
-            assert_that(len(updated_events), equal_to(0))
 
 
 def test_delete_template_emits_deleted_domain_event():
@@ -2261,9 +2247,10 @@ def test_template_created_event_projects_to_durable_security_audit_record():
     with given(_GIVEN) as context:
         client: TestClient = context.client
 
-        with when("I create a template and the delivery is processed"):
+        with when("I create a template, publish it, and the delivery is processed"):
             response = client.post(_BASE, json={"template_name": "My Template"}, headers=_auth(context))
             assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+            client.post(f"{_BASE}/{response.json()['template_key']}/draft/publish", headers=_auth(context))
             outbox_repository = context.injector.get(OutboxMessageRepository)
             messages = _outbox_messages(context)
             created_event = next(m for m in messages if m.event_name == TEMPLATE_CREATED)
@@ -2277,3 +2264,642 @@ def test_template_created_event_projects_to_durable_security_audit_record():
             assert_that(audit_record, is_not(none()))
             assert audit_record is not None
             assert_that(audit_record.action, equal_to(TEMPLATE_CREATED))
+
+
+def _org_drafts(context, template_key: str) -> list[AgentTemplateDraft]:
+    delegate: PostgresRepositoryDelegate = context.injector.get(PostgresRepositoryDelegate)
+    with Session(delegate.engine) as session:
+        return list(
+            session.exec(select(AgentTemplateDraft).where(col(AgentTemplateDraft.template_key) == template_key)).all()
+        )
+
+
+def test_delete_template_also_purges_the_org_draft():
+    """A deleted lineage must not reappear as a draft-only row in the catalogue."""
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_template(template_key="doomed", name="Doomed", version=1),
+            there_is_an_org_template_draft(template_key="doomed", name="Doomed"),
+        ]
+    ) as context:
+        client: TestClient = context.client
+
+        with when("I delete the template lineage"):
+            response = client.delete(f"{_BASE}/doomed", headers=_auth(context))
+
+        with then("the published versions and the draft are both gone"):
+            assert_that(response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
+            assert_that(_org_drafts(context, "doomed"), equal_to([]))
+
+
+def test_generated_template_key_allocation_sees_a_key_held_only_by_an_org_draft():
+    """_template_key_exists guards generated-key allocation across every table
+    holding a template_key, so an unpublished draft in any organization still
+    reserves its key."""
+    with given(_GIVEN) as context:
+        org_repository: OrganizationRepository = context.injector.get(OrganizationRepository)
+        other_org = Organization(name="Other Org")
+        org_repository.save(other_org)
+        there_is_an_org_template_draft(template_key="tpl-aaaaaaaaaaaa", name="Theirs", organization_id=other_org.id)(
+            context
+        )
+        delegate: PostgresRepositoryDelegate = context.injector.get(PostgresRepositoryDelegate)
+
+        with when("allocation checks a key only another organization's draft holds"):
+            with Session(delegate.engine) as session:
+                taken = TemplateRepository._template_key_exists(session, "tpl-aaaaaaaaaaaa")
+                free = TemplateRepository._template_key_exists(session, "tpl-bbbbbbbbbbbb")
+
+        with then("the draft's key counts as taken"):
+            assert_that(taken, equal_to(True))
+            assert_that(free, equal_to(False))
+
+
+def test_two_organizations_can_hold_drafts_for_the_same_template_key():
+    """Draft uniqueness is (organization_id, template_key): two organizations can
+    each fork the same platform lineage and draft against it independently."""
+    with given([*_GIVEN, there_is_an_org_template_draft(template_key="shared-key", name="Shared")]) as context:
+        org_repository: OrganizationRepository = context.injector.get(OrganizationRepository)
+        other_org = Organization(name="Other Org")
+        org_repository.save(other_org)
+
+        with when("the other organization drafts against the same lineage key"):
+            there_is_an_org_template_draft(template_key="shared-key", name="Shared", organization_id=other_org.id)(
+                context
+            )
+
+        with then("both drafts exist, one per organization"):
+            drafts = _org_drafts(context, "shared-key")
+            assert_that(len(drafts), equal_to(2))
+            assert_that(
+                sorted(str(d.organization_id) for d in drafts),
+                equal_to(sorted([str(context.organization.id), str(other_org.id)])),
+            )
+
+
+# --- Organization Draft Template Versions (mirrors the platform draft block) ---
+
+
+def _start_org_draft(client: TestClient, context, template_key: str, source_version: int | None = None):
+    url = f"{_BASE}/{template_key}/draft"
+    if source_version is not None:
+        url = f"{url}?source_version={source_version}"
+    return client.post(url, headers=_auth(context))
+
+
+def test_org_draft_start_edit_and_publish_creates_the_next_version():
+    with given([*_GIVEN, there_is_a_template(template_key="alpha", name="Alpha", version=1)]) as context:
+        client: TestClient = context.client
+
+        with when("I start a draft, edit it, and publish"):
+            started = _start_org_draft(client, context, "alpha")
+            patched = client.patch(
+                f"{_BASE}/alpha/draft",
+                json={"soul_md": "# Drafted", "description": "drafted description"},
+                headers=_auth(context),
+            )
+            published = client.post(f"{_BASE}/alpha/draft/publish", headers=_auth(context))
+
+        with then("the lineage gains v2 and the draft slot is free again"):
+            assert_that(started.status_code, equal_to(status.HTTP_201_CREATED))
+            assert_that(patched.json()["soul_md"], equal_to("# Drafted"))
+            assert_that(published.status_code, equal_to(status.HTTP_201_CREATED))
+            body = published.json()
+            assert_that(body["version"], equal_to(2))
+            assert_that(body["soul_md"], equal_to("# Drafted"))
+            assert_that(body["description"], equal_to("drafted description"))
+            assert_that(
+                client.get(f"{_BASE}/alpha/draft", headers=_auth(context)).status_code,
+                equal_to(status.HTTP_404_NOT_FOUND),
+            )
+            versions = client.get(f"{_BASE}/alpha/versions", headers=_auth(context)).json()
+            assert_that([v["version"] for v in versions], equal_to([2, 1]))
+
+
+def test_org_draft_publish_carries_required_skills_forward():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_skill(name="Carried Skill"),
+            there_is_a_template(template_key="alpha", name="Alpha", version=1),
+            there_is_a_template_skill(),
+        ]
+    ) as context:
+        client: TestClient = context.client
+
+        with when("I start a draft and publish it without touching skills"):
+            _start_org_draft(client, context, "alpha")
+            published = client.post(f"{_BASE}/alpha/draft/publish", headers=_auth(context))
+
+        with then("the published version keeps the requirement"):
+            required = published.json()["required_skills"]
+            assert_that([s["id"] for s in required], equal_to([str(context.skill.id)]))
+
+
+def test_org_draft_publish_does_not_touch_agent_pins():
+    with given([*_GIVEN, there_is_a_template(template_key="alpha", name="Alpha", version=1)]) as context:
+        client: TestClient = context.client
+        agent = client.post(
+            _AGENTS_BASE,
+            json={"name": "Pinned Agent", "template_key": "alpha"},
+            headers=_auth(context),
+        ).json()
+
+        with when("a draft is published on the lineage the agent is pinned to"):
+            _start_org_draft(client, context, "alpha")
+            client.patch(f"{_BASE}/alpha/draft", json={"soul_md": "# v2"}, headers=_auth(context))
+            published = client.post(f"{_BASE}/alpha/draft/publish", headers=_auth(context))
+
+        with then("the agent stays on its original version"):
+            assert_that(published.json()["version"], equal_to(2))
+            after = client.get(f"{_AGENTS_BASE}/{agent['id']}", headers=_auth(context)).json()
+            assert_that(after["template_version"], equal_to(1))
+
+
+def test_org_draft_on_a_never_edited_builtin_publishes_org_v1_and_records_the_fork():
+    """The fork bookkeeping relocated from update_template must produce the same
+    row it always did: Org v1, pre-defined source, origin and baseline pointing
+    at the platform version the draft copied."""
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+        repository: TemplateRepository = context.injector.get(TemplateRepository)
+        platform = _platform_version("builtin", 3)
+        repository.save_platform_template(platform)
+
+        with when("the organization drafts from the built-in and publishes"):
+            _start_org_draft(client, context, "builtin")
+            client.patch(f"{_BASE}/builtin/draft", json={"soul_md": "# Org edit"}, headers=_auth(context))
+            published = client.post(f"{_BASE}/builtin/draft/publish", headers=_auth(context))
+
+        with then("it becomes Org v1 carrying the fork pointers"):
+            body = published.json()
+            assert_that(body["version"], equal_to(1))
+            assert_that(body["template_source"], equal_to("pre-defined"))
+            assert_that(body["soul_md"], equal_to("# Org edit"))
+            assert_that(body["organization_id"], equal_to(str(context.organization.id)))
+            assert_that(body["forked_from_platform_template_id"], equal_to(str(platform.id)))
+            assert_that(body["fork_baseline_platform_template_id"], equal_to(str(platform.id)))
+            assert_that(body["fork_baseline_platform_version"], equal_to(3))
+
+
+def test_org_draft_start_with_source_version_on_an_existing_draft_returns_409():
+    with given([*_GIVEN, there_is_a_template(template_key="alpha", name="Alpha", version=1)]) as context:
+        client: TestClient = context.client
+        _start_org_draft(client, context, "alpha")
+
+        with when("I try to restore a published version while a draft is open"):
+            response = _start_org_draft(client, context, "alpha", source_version=1)
+
+        with then("it is refused"):
+            assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
+
+
+def test_org_draft_start_without_source_version_returns_the_existing_draft():
+    with given([*_GIVEN, there_is_a_template(template_key="alpha", name="Alpha", version=1)]) as context:
+        client: TestClient = context.client
+        first = _start_org_draft(client, context, "alpha")
+        client.patch(f"{_BASE}/alpha/draft", json={"soul_md": "# In progress"}, headers=_auth(context))
+
+        with when("I start a draft again"):
+            second = _start_org_draft(client, context, "alpha")
+
+        with then("I get the same draft back, edits intact"):
+            assert_that(second.json()["id"], equal_to(first.json()["id"]))
+            assert_that(second.json()["soul_md"], equal_to("# In progress"))
+
+
+def test_org_draft_restores_an_older_version_as_a_new_highest_version():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_template(template_key="alpha", name="Alpha", version=1, soul_md="# v1 content"),
+            there_is_a_template(template_key="alpha", name="Alpha", version=2, soul_md="# v2 content"),
+        ]
+    ) as context:
+        client: TestClient = context.client
+
+        with when("I restore v1 as a draft and publish it"):
+            started = _start_org_draft(client, context, "alpha", source_version=1)
+            published = client.post(f"{_BASE}/alpha/draft/publish", headers=_auth(context))
+
+        with then("history is preserved and v3 carries the restored content"):
+            assert_that(started.json()["soul_md"], equal_to("# v1 content"))
+            assert_that(published.json()["version"], equal_to(3))
+            assert_that(published.json()["soul_md"], equal_to("# v1 content"))
+            versions = client.get(f"{_BASE}/alpha/versions", headers=_auth(context)).json()
+            assert_that([v["version"] for v in versions], equal_to([3, 2, 1]))
+
+
+def test_org_draft_discard_leaves_published_versions_intact():
+    with given([*_GIVEN, there_is_a_template(template_key="alpha", name="Alpha", version=1)]) as context:
+        client: TestClient = context.client
+        _start_org_draft(client, context, "alpha")
+        client.patch(f"{_BASE}/alpha/draft", json={"soul_md": "# Abandoned"}, headers=_auth(context))
+
+        with when("I discard the draft"):
+            response = client.delete(f"{_BASE}/alpha/draft", headers=_auth(context))
+
+        with then("the draft is gone and v1 is untouched"):
+            assert_that(response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
+            assert_that(
+                client.get(f"{_BASE}/alpha/draft", headers=_auth(context)).status_code,
+                equal_to(status.HTTP_404_NOT_FOUND),
+            )
+            versions = client.get(f"{_BASE}/alpha/versions", headers=_auth(context)).json()
+            assert_that([v["version"] for v in versions], equal_to([1]))
+
+
+def test_org_draft_is_invisible_to_the_published_read_endpoints():
+    with given([*_GIVEN, there_is_a_template(template_key="alpha", name="Alpha", version=1)]) as context:
+        client: TestClient = context.client
+        _start_org_draft(client, context, "alpha")
+        client.patch(f"{_BASE}/alpha/draft", json={"soul_md": "# Unpublished"}, headers=_auth(context))
+
+        with then("list, detail and version history all still show only v1"):
+            listed = client.get(_BASE, headers=_auth(context)).json()["items"]
+            assert_that([(t["template_key"], t["version"]) for t in listed], equal_to([("alpha", 1)]))
+            detail = client.get(f"{_BASE}/alpha", headers=_auth(context)).json()
+            assert_that(detail["version"], equal_to(1))
+            assert_that(detail["soul_md"], is_not(equal_to("# Unpublished")))
+            versions = client.get(f"{_BASE}/alpha/versions", headers=_auth(context)).json()
+            assert_that([v["version"] for v in versions], equal_to([1]))
+
+
+def test_org_draft_rejects_an_unpublished_required_skill():
+    with given([*_GIVEN, there_is_a_template(template_key="alpha", name="Alpha", version=1)]) as context:
+        client: TestClient = context.client
+        draft_only = _save_draft_only_skill(context, name="Draft Only Skill")
+        _start_org_draft(client, context, "alpha")
+
+        with when("I require a skill that has no published version"):
+            response = client.patch(
+                f"{_BASE}/alpha/draft",
+                json={"required_skill_ids": [str(draft_only.id)]},
+                headers=_auth(context),
+            )
+
+        with then("it is refused"):
+            assert_that(response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_ENTITY))
+
+
+def test_org_draft_accepts_a_platform_skill_but_not_another_orgs_skill():
+    """Organization drafts resolve against org-visible skills (global_only=False),
+    unlike platform drafts, which are restricted to global skills."""
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_skill_for_another_org(),
+            there_is_a_skill(name="Global Skill", global_skill=True),
+            there_is_a_template(template_key="alpha", name="Alpha", version=1),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        global_skill_id = context.skill.id
+        foreign_skill_id = context.other_org_skill.id
+        _start_org_draft(client, context, "alpha")
+
+        with when("I require the platform skill"):
+            allowed = client.patch(
+                f"{_BASE}/alpha/draft",
+                json={"required_skill_ids": [str(global_skill_id)]},
+                headers=_auth(context),
+            )
+
+        with when("I require another organization's skill"):
+            refused = client.patch(
+                f"{_BASE}/alpha/draft",
+                json={"required_skill_ids": [str(foreign_skill_id)]},
+                headers=_auth(context),
+            )
+
+        with then("only the platform skill is accepted"):
+            assert_that(allowed.status_code, equal_to(status.HTTP_200_OK))
+            assert_that([s["id"] for s in allowed.json()["required_skills"]], equal_to([str(global_skill_id)]))
+            assert_that(refused.status_code, equal_to(status.HTTP_404_NOT_FOUND))
+
+
+def test_member_cannot_start_edit_publish_or_discard_an_org_draft():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_template(template_key="alpha", name="Alpha", version=1),
+            there_is_an_org_template_draft(template_key="alpha", name="Alpha"),
+            _there_is_a_member_actor(),
+        ]
+    ) as context:
+        client: TestClient = context.client
+
+        with then("every draft write is forbidden for a Member"):
+            assert_that(_start_org_draft(client, context, "alpha").status_code, equal_to(status.HTTP_403_FORBIDDEN))
+            assert_that(
+                client.patch(f"{_BASE}/alpha/draft", json={"soul_md": "x"}, headers=_auth(context)).status_code,
+                equal_to(status.HTTP_403_FORBIDDEN),
+            )
+            assert_that(
+                client.post(f"{_BASE}/alpha/draft/publish", headers=_auth(context)).status_code,
+                equal_to(status.HTTP_403_FORBIDDEN),
+            )
+            assert_that(
+                client.delete(f"{_BASE}/alpha/draft", headers=_auth(context)).status_code,
+                equal_to(status.HTTP_403_FORBIDDEN),
+            )
+
+
+def test_reading_an_org_draft_requires_only_template_read():
+    with given([*_GIVEN, there_is_a_template(template_key="alpha", name="Alpha", version=1)]) as context:
+        client: TestClient = context.client
+        _start_org_draft(client, context, "alpha")
+        _there_is_a_member_actor()(context)
+
+        with when("a Member reads the draft"):
+            response = client.get(f"{_BASE}/alpha/draft", headers=_auth(context))
+
+        with then("it is allowed"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(response.json()["template_key"], equal_to("alpha"))
+
+
+def test_reading_an_org_draft_requires_template_read_permission():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_template(template_key="alpha", name="Alpha", version=1),
+            there_is_an_org_template_draft(template_key="alpha", name="Alpha"),
+            role_lacks_permission(OrganizationRole.MEMBER, PermissionKey.TEMPLATE_READ),
+            _there_is_a_member_actor(),
+        ]
+    ) as context:
+        client: TestClient = context.client
+
+        with when("a role without template.read reads the draft"):
+            response = client.get(f"{_BASE}/alpha/draft", headers=_auth(context))
+
+        with then("it is forbidden"):
+            assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+
+
+def test_org_draft_publish_over_a_platform_version_emits_template_updated():
+    """A lineage the organization has never published still has an `old` — the
+    platform version being superseded — so publish reports it as an update."""
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+        repository: TemplateRepository = context.injector.get(TemplateRepository)
+        repository.save_platform_template(_platform_version("builtin", 1))
+
+        with when("the organization forks and publishes for the first time"):
+            _start_org_draft(client, context, "builtin")
+            client.patch(f"{_BASE}/builtin/draft", json={"description": "org description"}, headers=_auth(context))
+            published = client.post(f"{_BASE}/builtin/draft/publish", headers=_auth(context))
+
+        with then("template.updated is staged against the platform version"):
+            assert_that(published.status_code, equal_to(status.HTTP_201_CREATED))
+            updated = [m for m in _outbox_messages(context) if m.event_name == TEMPLATE_UPDATED]
+            assert_that(len(updated), equal_to(1))
+            assert_that(updated[0].payload["previous_version"], equal_to(1))
+            assert_that(updated[0].payload["new_version"], equal_to(1))
+
+
+def test_org_draft_publish_with_a_description_change_emits_template_updated():
+    with given([*_GIVEN, there_is_a_template(template_key="alpha", name="Alpha", version=1)]) as context:
+        client: TestClient = context.client
+
+        with when("I publish a draft that changes the description"):
+            _start_org_draft(client, context, "alpha")
+            client.patch(f"{_BASE}/alpha/draft", json={"description": "changed"}, headers=_auth(context))
+            client.post(f"{_BASE}/alpha/draft/publish", headers=_auth(context))
+
+        with then("template.updated carries the field change"):
+            updated = [m for m in _outbox_messages(context) if m.event_name == TEMPLATE_UPDATED]
+            assert_that(len(updated), equal_to(1))
+            assert_that(updated[0].payload["field_changes"]["description"]["new"], equal_to("changed"))
+            assert_that(updated[0].payload["previous_version"], equal_to(1))
+            assert_that(updated[0].payload["new_version"], equal_to(2))
+
+
+def test_org_draft_publish_with_only_markdown_changes_emits_no_event():
+    with given([*_GIVEN, there_is_a_template(template_key="alpha", name="Alpha", version=1)]) as context:
+        client: TestClient = context.client
+
+        with when("I publish a draft that only changes markdown"):
+            _start_org_draft(client, context, "alpha")
+            client.patch(f"{_BASE}/alpha/draft", json={"soul_md": "# Only markdown"}, headers=_auth(context))
+            published = client.post(f"{_BASE}/alpha/draft/publish", headers=_auth(context))
+
+        with then("no template.updated event is staged"):
+            assert_that(published.json()["version"], equal_to(2))
+            updated = [m for m in _outbox_messages(context) if m.event_name == TEMPLATE_UPDATED]
+            assert_that(updated, equal_to([]))
+
+
+def test_org_draft_for_an_unknown_lineage_returns_404():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+
+        with then("both starting and reading a draft 404"):
+            assert_that(_start_org_draft(client, context, "nope").status_code, equal_to(status.HTTP_404_NOT_FOUND))
+            assert_that(
+                client.get(f"{_BASE}/nope/draft", headers=_auth(context)).status_code,
+                equal_to(status.HTTP_404_NOT_FOUND),
+            )
+
+
+def test_publishing_or_discarding_without_a_draft_returns_404():
+    with given([*_GIVEN, there_is_a_template(template_key="alpha", name="Alpha", version=1)]) as context:
+        client: TestClient = context.client
+
+        with then("publish and discard both 404 when no draft is open"):
+            assert_that(
+                client.post(f"{_BASE}/alpha/draft/publish", headers=_auth(context)).status_code,
+                equal_to(status.HTTP_404_NOT_FOUND),
+            )
+            assert_that(
+                client.delete(f"{_BASE}/alpha/draft", headers=_auth(context)).status_code,
+                equal_to(status.HTTP_404_NOT_FOUND),
+            )
+
+
+def test_version_history_falls_back_to_platform_for_a_never_edited_builtin():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+        repository: TemplateRepository = context.injector.get(TemplateRepository)
+        repository.save_platform_template(_platform_version("untouched", 1))
+        repository.save_platform_template(_platform_version("untouched", 2))
+
+        with when("the organization lists versions for a lineage it has never edited"):
+            response = client.get(f"{_BASE}/untouched/versions", headers=_auth(context))
+
+        with then("the platform lineage's own history is returned"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            body = response.json()
+            assert_that([version["version"] for version in body], equal_to([2, 1]))
+            assert_that([version["organization_id"] for version in body], equal_to([None, None]))
+
+
+def test_version_history_switches_to_organization_only_on_first_publish():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+        repository: TemplateRepository = context.injector.get(TemplateRepository)
+        repository.save_platform_template(_platform_version("switching", 1))
+        repository.save_platform_template(_platform_version("switching", 2))
+
+        with when("the organization has not edited the lineage"):
+            before = client.get(f"{_BASE}/switching/versions", headers=_auth(context)).json()
+
+        with when("the organization publishes its first version"):
+            _start_org_draft(client, context, "switching")
+            client.patch(f"{_BASE}/switching/draft", json={"soul_md": "# Ours"}, headers=_auth(context))
+            client.post(f"{_BASE}/switching/draft/publish", headers=_auth(context))
+            after = client.get(f"{_BASE}/switching/versions", headers=_auth(context)).json()
+
+        with then("history stops showing the platform lineage and shows Org v1 alone"):
+            assert_that([version["version"] for version in before], equal_to([2, 1]))
+            assert_that([version["version"] for version in after], equal_to([1]))
+            assert_that(after[0]["organization_id"], equal_to(str(context.organization.id)))
+            assert_that(after[0]["soul_md"], equal_to("# Ours"))
+
+
+def test_agent_configuration_still_offers_both_lineages_for_the_active_pin():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+        repository: TemplateRepository = context.injector.get(TemplateRepository)
+        repository.save_platform_template(_platform_version("shared", 1))
+        agent = client.post(
+            _AGENTS_BASE,
+            json={"name": "Shared Agent", "template_key": "shared"},
+            headers=_auth(context),
+        ).json()
+        _start_org_draft(client, context, "shared")
+        client.patch(f"{_BASE}/shared/draft", json={"soul_md": "# Org copy"}, headers=_auth(context))
+        client.post(f"{_BASE}/shared/draft/publish", headers=_auth(context))
+
+        with when("the agent configuration is read after the organization forked the lineage"):
+            configuration = client.get(f"{_AGENTS_BASE}/{agent['id']}/configuration", headers=_auth(context)).json()
+
+        with then("shared_versions still exposes both the platform and organization rows"):
+            source_types = {version["source_type"] for version in configuration["shared_versions"]}
+            assert_that(source_types, equal_to({"platform", "organization"}))
+
+
+def test_org_lineages_lists_published_and_draft_only_lineages():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_template(template_key="published", name="Published One", version=1),
+            there_is_an_org_template_draft(template_key="draft-only", name="Draft Only"),
+        ]
+    ) as context:
+        client: TestClient = context.client
+
+        with when("I list template lineages"):
+            response = client.get(f"{_BASE}/lineages", headers=_auth(context))
+
+        with then("both the published lineage and the draft-only lineage appear"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            by_key = {row["template_key"]: row for row in response.json()}
+            assert_that(by_key["published"]["latest_published_version"], equal_to(1))
+            assert_that(by_key["published"]["has_draft"], equal_to(False))
+            assert_that(by_key["draft-only"]["latest_published_version"], none())
+            assert_that(by_key["draft-only"]["has_draft"], equal_to(True))
+
+
+def test_org_lineages_reports_has_draft_for_a_published_lineage():
+    with given([*_GIVEN, there_is_a_template(template_key="alpha", name="Alpha", version=1)]) as context:
+        client: TestClient = context.client
+        _start_org_draft(client, context, "alpha")
+
+        with when("I list lineages while a draft is open"):
+            rows = client.get(f"{_BASE}/lineages", headers=_auth(context)).json()
+
+        with then("the lineage reports both its published version and its draft"):
+            row = next(row for row in rows if row["template_key"] == "alpha")
+            assert_that(row["latest_published_version"], equal_to(1))
+            assert_that(row["has_draft"], equal_to(True))
+
+
+def test_org_lineages_reports_fork_source_and_platform_update():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+        repository: TemplateRepository = context.injector.get(TemplateRepository)
+        repository.save_platform_template(_platform_version("shared", 1))
+        _start_org_draft(client, context, "shared")
+        client.patch(f"{_BASE}/shared/draft", json={"soul_md": "# Org"}, headers=_auth(context))
+        client.post(f"{_BASE}/shared/draft/publish", headers=_auth(context))
+        repository.save_platform_template(_platform_version("shared", 2))
+
+        with when("I list lineages after the platform publishes a newer version"):
+            rows = client.get(f"{_BASE}/lineages", headers=_auth(context)).json()
+
+        with then("the lineage is flagged as a fork with an available platform update"):
+            row = next(row for row in rows if row["template_key"] == "shared")
+            assert_that(row["template_source"], equal_to("pre-defined"))
+            assert_that(row["is_fork"], equal_to(True))
+            assert_that(row["platform_update_available"], equal_to(True))
+
+
+def test_org_lineages_reports_in_use_for_a_hired_lineage():
+    with given([*_GIVEN, there_is_a_template(template_key="alpha", name="Alpha", version=1)]) as context:
+        client: TestClient = context.client
+        client.post(
+            _AGENTS_BASE,
+            json={"name": "Lineage Agent", "template_key": "alpha"},
+            headers=_auth(context),
+        )
+
+        with when("I list lineages while an agent is pinned to one"):
+            rows = client.get(f"{_BASE}/lineages", headers=_auth(context)).json()
+
+        with then("that lineage reports in_use"):
+            row = next(row for row in rows if row["template_key"] == "alpha")
+            assert_that(row["in_use"], equal_to(True))
+
+
+def test_org_lineages_is_scoped_to_the_calling_organization():
+    with given([*_GIVEN, there_is_a_template(template_key="mine", name="Mine", version=1)]) as context:
+        client: TestClient = context.client
+        org_repository: OrganizationRepository = context.injector.get(OrganizationRepository)
+        other_org = Organization(name="Other Org")
+        org_repository.save(other_org)
+        there_is_a_template(template_key="theirs", name="Theirs", organization_id=other_org.id)(context)
+        there_is_an_org_template_draft(template_key="their-draft", name="Their Draft", organization_id=other_org.id)(
+            context
+        )
+
+        with when("I list lineages"):
+            rows = client.get(f"{_BASE}/lineages", headers=_auth(context)).json()
+
+        with then("only my organization's lineages are returned"):
+            keys = {row["template_key"] for row in rows}
+            assert_that("mine" in keys, equal_to(True))
+            assert_that("theirs" in keys, equal_to(False))
+            assert_that("their-draft" in keys, equal_to(False))
+
+
+def test_org_lineages_requires_template_read_permission():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_template(template_key="alpha", name="Alpha", version=1),
+            role_lacks_permission(OrganizationRole.MEMBER, PermissionKey.TEMPLATE_READ),
+            _there_is_a_member_actor(),
+        ]
+    ) as context:
+        client: TestClient = context.client
+
+        with when("a role without template.read lists lineages"):
+            response = client.get(f"{_BASE}/lineages", headers=_auth(context))
+
+        with then("it is forbidden"):
+            assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+
+
+def test_patch_template_endpoint_is_gone():
+    """Content edits are draft-gated; the direct publish-on-save endpoint is removed."""
+    with given([*_GIVEN, there_is_a_template(template_key="alpha", name="Alpha", version=1)]) as context:
+        client: TestClient = context.client
+
+        with when("I call the removed direct update endpoint"):
+            response = client.patch(f"{_BASE}/alpha", json={"soul_md": "# X"}, headers=_auth(context))
+
+        with then("the method is no longer allowed"):
+            assert_that(response.status_code, equal_to(status.HTTP_405_METHOD_NOT_ALLOWED))

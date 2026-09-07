@@ -1,4 +1,6 @@
-import type { PlatformSkill } from "../schemas";
+import type { SkillScopeRef } from "@/features/skills/scope";
+
+import type { TemplateSkill } from "../schemas";
 import type { SkillGroupDraft } from "../utils";
 import { PlatformTemplateSkillCheckbox } from "./platform-template-skill-checkbox";
 
@@ -12,20 +14,22 @@ export function PlatformTemplateSkillGroup({
   onVersionChange,
   showVersionPicker = false,
   disabled = false,
+  scope = { kind: "platform" },
 }: {
   group: SkillGroupDraft;
-  skills: PlatformSkill[];
-  skillMap: Map<string, PlatformSkill>;
+  skills: TemplateSkill[];
+  skillMap: Map<string, TemplateSkill>;
   selectedSkillIds: Set<string>;
   onToggle: (skillId: string) => void;
   skillVersions?: Record<string, number>;
   onVersionChange?: (skillId: string, version: number) => void;
   showVersionPicker?: boolean;
   disabled?: boolean;
+  scope?: SkillScopeRef;
 }) {
   const groupSkills = group.skillIds
     .map((id) => skillMap.get(id))
-    .filter((skill): skill is PlatformSkill => Boolean(skill));
+    .filter((skill): skill is TemplateSkill => Boolean(skill));
   const visibleGroupSkills = skills.filter((skill) =>
     group.skillIds.includes(skill.id),
   );
@@ -68,12 +72,13 @@ export function PlatformTemplateSkillGroup({
           onVersionChange={(version) => onVersionChange?.(skill.id, version)}
           showVersionPicker={showVersionPicker}
           disabled={disabled || (showVersionPicker && skill.version === null)}
+          scope={scope}
         />
       ))}
       {missingSkillCount > 0 && (
         <div className="text-[11.5px]" style={{ color: "var(--warn)" }}>
           {missingSkillCount} required skill
-          {missingSkillCount === 1 ? " is" : "s are"} not in the current global
+          {missingSkillCount === 1 ? " is" : "s are"} not in the current
           catalog.
         </div>
       )}

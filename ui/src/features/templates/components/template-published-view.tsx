@@ -1,9 +1,18 @@
 "use client";
 
 import { useState } from "react";
-import { ArrowLeft, Loader2, Pencil } from "lucide-react";
+import { ArrowLeft, Loader2, Pencil, RefreshCw, Trash2 } from "lucide-react";
+import { toast } from "sonner";
 
 import { AppErrorState } from "@/components/app-error-state";
+import { ConfirmationDialog } from "@/components/confirmation-dialog";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import { toastError } from "@/shared/toast";
 import {
   Select,
   SelectContent,
@@ -14,16 +23,20 @@ import {
 } from "@/components/ui/select";
 
 import type {
-  PlatformTemplateAdminSummary,
-  PlatformTemplate as PublishedPlatformTemplate,
+  TemplateLineageSummary,
+  TemplateRead as PublishedPlatformTemplate,
 } from "../schemas";
+import { type TemplateScopeRef } from "../scope";
 import {
   formFromDraft,
-  type PlatformTemplateFileKey,
+  type TemplateFileKey,
 } from "../utils";
+import { useUpdateTemplateFromPlatform } from "../hooks/use-update-template-from-platform";
+import { DeleteTemplateDialog } from "./delete-template-dialog";
 import { PlatformTemplateArtifactTabs } from "./platform-template-artifact-tabs";
 
-export function PlatformTemplatePublishedView({
+export function TemplatePublishedView({
+  scope,
   lineage,
   template,
   versions,
@@ -31,25 +44,41 @@ export function PlatformTemplatePublishedView({
   isLoading,
   error,
   isStartingDraft,
+  canManage = true,
   onRetry,
   onVersionChange,
   onStartEditing,
   onClose,
 }: {
-  lineage: PlatformTemplateAdminSummary | null;
+  scope: TemplateScopeRef;
+  lineage: TemplateLineageSummary | null;
   template: PublishedPlatformTemplate | undefined;
   versions: PublishedPlatformTemplate[];
   selectedVersion: number | null;
   isLoading: boolean;
   error: unknown;
   isStartingDraft: boolean;
+  canManage?: boolean;
   onRetry: () => void;
   onVersionChange: (version: number) => void;
   onStartEditing: () => void;
   onClose: () => void;
 }) {
   const [selectedFile, setSelectedFile] =
-    useState<PlatformTemplateFileKey>("soulMd");
+    useState<TemplateFileKey>("soulMd");
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [updateOpen, setUpdateOpen] = useState(false);
+  const applyPlatformUpdate = useUpdateTemplateFromPlatform();
+  const isOrg = scope.kind === "organization";
+  const isFork = Boolean(template?.forkedFromPlatformTemplateId);
+  const isBuiltIn = template?.templateSource === "pre-defined";
+  const deleteBlockedReason = !template
+    ? null
+    : isBuiltIn && !isFork
+      ? "Built-in templates cannot be deleted"
+      : template.inUse
+        ? "This template is being used by an agent"
+        : null;
   const templateForm = template ? formFromDraft(template) : null;
   const latestPublishedVersion = Math.max(
     0,
@@ -59,8 +88,12 @@ export function PlatformTemplatePublishedView({
 
   return (
     <div className="max-w-[1100px] mx-auto px-4 sm:px-8 lg:px-10 pt-8 pb-24">
-      <button className="af-btn af-btn-sm mb-6" onClick={onClose}>
-        <ArrowLeft size={14} /> Platform templates
+      <button
+        className="inline-flex items-center gap-1.5 text-[0.8125rem] mb-6 px-2 py-1 -ml-2 rounded-lg hover:bg-[var(--bg-soft)] transition-colors"
+        style={{ color: "var(--ink-3)" }}
+        onClick={onClose}
+      >
+        <ArrowLeft size={14} /> {scope.kind === "platform" ? "Platform templates" : "Templates"}
       </button>
 
       {isLoading && (
@@ -79,7 +112,7 @@ export function PlatformTemplatePublishedView({
       {!isLoading && Boolean(error) && (
         <AppErrorState
           error={error}
-          title="We couldn't load this platform template"
+          title="We couldn&apos;t load this template"
           description="The published template content is unavailable right now."
           onRetry={onRetry}
           retryLabel="Retry template"
@@ -99,6 +132,13 @@ export function PlatformTemplatePublishedView({
               </h1>
               <p className="text-[14px] m-0" style={{ color: "var(--ink-3)" }}>
                 Version v{template.version}
+                {isOrg && isFork && (
+                  <>
+                    {" · Organization fork"}
+                    {template.forkBaselinePlatformVersion != null &&
+                      ` · Platform baseline v${template.forkBaselinePlatformVersion}`}
+                  </>
+                )}
               </p>
             </div>
             <div className="flex items-center gap-2">
@@ -250,30 +290,88 @@ export function PlatformTemplatePublishedView({
               style={{ borderColor: "var(--line)" }}
             >
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <button className="af-btn" onClick={onClose}>
-                  Close
-                </button>
-                <button
-                  className="af-btn af-btn-primary"
-                  onClick={onStartEditing}
-                  disabled={isStartingDraft}
-                >
-                  {isStartingDraft ? (
-                    <Loader2 size={14} className="animate-spin" />
-                  ) : (
-                    <Pencil size={14} />
+                <div className="flex items-center gap-2">
+                  <button className="af-btn" onClick={onClose}>
+                    Close
+                  </button>
+                  {isOrg && canManage && (
+                    <TooltipProvider>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <span>
+                            <button
+                              className="af-btn af-btn-danger"
+                              onClick={() => setDeleteOpen(true)}
+                              disabled={deleteBlockedReason !== null}
+                            >
+                              <Trash2 size={14} /> Delete
+                            </button>
+                          </span>
+                        </TooltipTrigger>
+                        {deleteBlockedReason && (
+                          <TooltipContent>{deleteBlockedReason}</TooltipContent>
+                        )}
+                      </Tooltip>
+                    </TooltipProvider>
                   )}
-                  {lineage?.hasDraft
-                    ? "Continue editing draft"
-                    : template.version === versions[0]?.version
-                      ? "Start draft"
-                      : `Restore v${template.version} as draft`}
-                </button>
+                  {isOrg && canManage && lineage?.platformUpdateAvailable && (
+                    <button className="af-btn" onClick={() => setUpdateOpen(true)}>
+                      <RefreshCw size={14} /> Apply platform update
+                    </button>
+                  )}
+                </div>
+                {canManage && (
+                  <button
+                    className="af-btn af-btn-primary"
+                    onClick={onStartEditing}
+                    disabled={isStartingDraft}
+                  >
+                    {isStartingDraft ? (
+                      <Loader2 size={14} className="animate-spin" />
+                    ) : (
+                      <Pencil size={14} />
+                    )}
+                    {lineage?.hasDraft
+                      ? "Continue editing draft"
+                      : template.version === versions[0]?.version
+                        ? "Start draft"
+                        : `Restore v${template.version} as draft`}
+                  </button>
+                )}
               </div>
             </div>
           </div>
         </>
       )}
+
+      <DeleteTemplateDialog
+        template={template ?? null}
+        open={deleteOpen}
+        onOpenChange={setDeleteOpen}
+        onDeleted={onClose}
+      />
+
+      <ConfirmationDialog
+        open={updateOpen}
+        onOpenChange={setUpdateOpen}
+        title="Apply platform template update?"
+        description="This clones the latest Platform Template content and required skills into a new organization version. Existing Agents remain pinned to their current versions."
+        confirmLabel="Apply update"
+        pendingLabel="Applying…"
+        isPending={applyPlatformUpdate.isPending}
+        icon={<RefreshCw size={18} />}
+        onConfirm={async () => {
+          if (!template) return;
+          try {
+            await applyPlatformUpdate.mutateAsync(template.templateKey);
+            toast.success("Platform update applied.");
+            setUpdateOpen(false);
+            onRetry();
+          } catch (error) {
+            toastError(error, "Could not apply the platform update.");
+          }
+        }}
+      />
     </div>
   );
 }

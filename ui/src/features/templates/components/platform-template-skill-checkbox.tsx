@@ -3,8 +3,9 @@ import { Check } from "lucide-react";
 
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useSkillVersions } from "@/features/skills/hooks/use-skill-versions";
+import type { SkillScopeRef } from "@/features/skills/scope";
 
-import type { PlatformSkill } from "../schemas";
+import type { TemplateSkill } from "../schemas";
 
 export function PlatformTemplateSkillCheckbox({
   skill,
@@ -14,19 +15,21 @@ export function PlatformTemplateSkillCheckbox({
   onVersionChange,
   showVersionPicker = false,
   disabled = false,
+  scope = { kind: "platform" },
 }: {
-  skill: PlatformSkill;
+  skill: TemplateSkill;
   checked: boolean;
   onChange: () => void;
   version?: number | null;
   onVersionChange?: (version: number) => void;
   showVersionPicker?: boolean;
   disabled?: boolean;
+  scope?: SkillScopeRef;
 }) {
   const [pickerOpen, setPickerOpen] = useState(false);
   const { versions, isLoading } = useSkillVersions(
     skill.id,
-    { kind: "platform" },
+    scope,
     showVersionPicker && pickerOpen && checked,
   );
   const selectedVersion = version ?? skill.version;
@@ -59,7 +62,11 @@ export function PlatformTemplateSkillCheckbox({
             {skill.name}
           </span>
           <span className="block text-[11.5px]" style={{ color: "var(--ink-4)" }}>
-            {unavailable ? "No published version" : "Global platform skill"}
+            {unavailable
+              ? "No published version"
+              : skill.organizationId === null
+                ? "Global platform skill"
+                : "Organization skill"}
           </span>
         </span>
       </label>
