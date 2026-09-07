@@ -65,6 +65,11 @@ def test_organization_role_permission_matrix_is_exact():
         PermissionKey.SKILL_MANAGE,
         PermissionKey.ACTIVITY_READ,
         PermissionKey.COST_READ,
+        # Organization-wide read of every Agent's memory, including deleted
+        # Agents — the memory directory. Deliberately alongside COST_READ and
+        # deliberately not granted to MEMBER: both keys expose every Agent at
+        # once, which no per-Agent grant does.
+        PermissionKey.AGENT_MEMORY_READ,
     }
     expected = {
         OrganizationRole.OWNER: owner_permissions,

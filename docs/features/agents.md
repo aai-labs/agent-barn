@@ -76,6 +76,18 @@ Stop snapshots logs before removing active runtime resources and marking the Age
 
 Share-management endpoints expose locked Agent Access Roles and one canonical Agent share snapshot. `GET /agents/{agent_id}/share` returns Agent General Access plus explicit Agent Access assignments, and `PUT /agents/{agent_id}/share` replaces both in one transaction. Implicit Organization Owner/Admin authority is not a revocable assignment. Share changes take effect on the next request; missing, cross-Organization, or inaccessible resources retain the documented 404 concealment behavior. Custom Agent Access Roles are added by AF-216, and access-management UI is added by AF-217.
 
+### View and curate memory
+
+Memory is a tab on the Agent detail page, alongside conversations, tool calls, logs, and work. `GET /agents/{agent_id}/memory` lists what an Agent has concluded, paginated, each item carrying the (observer, observed) peer pair it belongs to — memory is stored per pair, so the same Agent holds a separate view of every person it talks to plus a model of itself. `GET /agents/{agent_id}/memory/search?q=` searches it semantically; Honcho stores those vectors per pair and rejects a query that does not name both peers, so an Agent-wide search fans out across its peers and merges, capped because the fan-out is quadratic in peer count. Both need `agent.read`.
+
+`DELETE /agents/{agent_id}/memory/{memory_id}` forgets one item and `PUT` replaces its content; both need `agent.update`, because changing what an Agent knows changes how it behaves. Honcho has no update endpoint, so a correction is a delete followed by a create: the item gets a new id, and the replacement is always `explicit` since a level cannot be set on create — a corrected inference stops being labelled an inference. `owner` is not a user but the peer for messages that arrived with no sender identity.
+
+Deleting an Agent retains its Honcho workspace, so these endpoints also resolve a soft-deleted Agent. A deleted Agent has no live access assignments, so per-agent grants cannot be evaluated against it; reaching one requires organization-wide visibility, which only Organization Owners and Admins have — a higher bar than the per-agent permission, not a lower one. Without this, retention would leave personal data nobody could view, search, or erase through the product.
+
+### Share memory
+
+`POST /agents/{agent_id}/memory/shared-facts` promotes explicit, operator-supplied content into one or more destination Agents' Honcho memory, written as a conclusion on each destination's own self-model because that is where its recall looks. Because Honcho stores no metadata on a conclusion, the origin is tracked in `shared_memory_fact` and joined back on read, so a shared memory reads as "Shared by <agent>" rather than as something the Agent concluded about itself. Honcho has no cross-workspace sharing and cannot grow one — `workspace_name` participates in nearly every composite foreign key, so isolation is a schema property — which makes copying into the destination the only available mechanism. The path Agent is audit context only — its content is never read out of Honcho — so it needs `agent.read`; each destination needs `agent.update`, since the write changes what that Agent knows. A destination must currently be an active (non-deleted) Agent. See [`../adr/2026-09-03-honcho-backed-agent-memory.md`](../adr/2026-09-03-honcho-backed-agent-memory.md) for why sharing is explicit rather than a shared workspace.
+
 ## Source map
 
 | Concern                                    | Authoritative source                                                                                         |
@@ -88,6 +100,7 @@ Share-management endpoints expose locked Agent Access Roles and one canonical Ag
 | HTTP routes                                | `../../api/domains/agents/routes.py` |
 | Communication Connections and Plugins     | `../../api/domains/communications/` |
 | Runtime resources                          | `../../api/domains/agents/builders/`                                                                               |
+| Memory viewing, curation, and sharing      | `../../api/domains/agents/memory_sharing.py`                                                                       |
 | Integration and skill artifacts            | `../../api/domains/agents/aai_cli_artifacts.py`, `../../api/domains/agents/aai_cli_skills/bundled/skills/`, `../../api/domains/agents/gog_artifacts.py`                                  |
 | UI contracts and hooks                     | `../../ui/src/features/agents/schemas.ts`, `../../ui/src/features/agents/hooks/`                                         |
 | UI components                              | `../../ui/src/features/agents/components/`                                                                         |
@@ -101,6 +114,7 @@ Share-management endpoints expose locked Agent Access Roles and one canonical Ag
 - [`2026-08-09-agent-scoped-template-overrides.md`](../adr/2026-08-09-agent-scoped-template-overrides.md)
 - [`2026-08-19-organization-scoped-agent-settings.md`](../adr/2026-08-19-organization-scoped-agent-settings.md)
 - [`2026-08-22-agent-barn-owned-communications-gateway.md`](../adr/2026-08-22-agent-barn-owned-communications-gateway.md)
+- [`2026-09-03-honcho-backed-agent-memory.md`](../adr/2026-09-03-honcho-backed-agent-memory.md)
 
 ## Change impact
 

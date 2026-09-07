@@ -72,6 +72,18 @@ agentModelAllowlist: ""
 # no model set. Format: litellm/openrouter/<slug>. Empty uses the code default.
 agentDefaultModel: ""
 
+# Honcho-backed Agent memory. Off by default; a running Agent picks the change
+# up only when it is stopped and started again.
+honchoEnabled: false
+honchoBaseUrl: "http://honcho:8000"
+# What Agent pods call. In-cluster this is the same Service; it exists because
+# locally the API and Agents reach Honcho by different names.
+agentHonchoBaseUrl: ""
+# Shared secret the Ingest service checks on Honcho usage posts.
+honchoTelemetryKey: ""
+# Honcho's LiteLLM key, read-only here: it is what memory spend is looked up on.
+honchoLitellmKey: ""
+
 kubeconfigB64: ""
 # Name of the registry pull Secret this chart creates (registry-secret.yaml) and
 # that agent pods reference to pull their own images. Must match imagePullSecrets
@@ -93,6 +105,9 @@ litellmApiKeySecretName: litellm-api-key
 
 # Pre-existing litellm Secret (used by hook Job to call /key/generate)
 litellmSecretName: litellm
+# Secret published by the honcho release's key Job. Read only when
+# honchoLitellmKey is left empty, which is the default.
+honchoLitellmKeySecretName: honcho-litellm-key
 
 # ServiceAccount the litellm-key hook Job runs as (needs create/update on secrets).
 # Defaults to the out-of-band `agent-farm-user` (see k8s/agent-farm-user.yaml). Set

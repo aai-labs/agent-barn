@@ -152,6 +152,19 @@ export function CostsDashboard() {
 
           <div className="af-card px-5.5 py-5 flex flex-col gap-1">
             <div className="text-[0.813rem] font-medium uppercase tracking-wide" style={{ color: "var(--ink-4)" }}>
+              Memory
+            </div>
+            <div className="text-[2rem] font-semibold tracking-tight" style={{ color: "var(--ink)" }}>
+              <span className="text-[1.25rem]" style={{ color: "var(--ink-4)" }}>$</span>
+              {summary.totalMemoryCost.toFixed(4)}
+            </div>
+            <div className="text-[0.75rem]" style={{ color: "var(--ink-4)" }}>
+              What your agents spent remembering things
+            </div>
+          </div>
+
+          <div className="af-card px-5.5 py-5 flex flex-col gap-1">
+            <div className="text-[0.813rem] font-medium uppercase tracking-wide" style={{ color: "var(--ink-4)" }}>
               Active Agents
             </div>
             <div className="text-[2rem] font-semibold tracking-tight" style={{ color: "var(--ink)" }}>
@@ -351,7 +364,7 @@ export function CostsDashboard() {
             <table className="w-full text-left border-collapse">
               <thead>
                 <tr style={{ borderBottom: "1px solid var(--line)" }}>
-                  {["Agent", "Status", "Model", "Input Tokens", "Output Tokens", "Cost"].map((h, i) => (
+                  {["Agent", "Status", "Model", "Input Tokens", "Output Tokens", "Memory", "Cost"].map((h, i) => (
                     <th
                       key={h}
                       className={`px-6 py-3 text-[0.75rem] font-medium uppercase tracking-wider${i >= 3 ? " text-right" : ""}`}
@@ -442,6 +455,9 @@ export function CostsDashboard() {
                         </td>
                         <td className="px-6 py-4 text-right text-[0.8125rem] font-mono" style={{ color: "var(--ink-2)" }}>
                           {displayCompletionTokens.toLocaleString()}
+                        </td>
+                        <td className="px-6 py-4 text-right text-[0.8125rem] font-mono" style={{ color: "var(--ink-3)" }}>
+                          {agent.memoryCost > 0 ? `$${agent.memoryCost.toFixed(5)}` : "—"}
                         </td>
                         <td className="px-6 py-4 text-right font-semibold text-[0.875rem]" style={{ color: "var(--ink)" }}>
                           ${agent.totalCost.toFixed(5)}

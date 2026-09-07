@@ -56,6 +56,16 @@ spec:
                 name: {{ .Values.secretName }}
             - secretRef:
                 name: {{ .Values.litellmApiKeySecretName }}
+{{- if not .Values.honchoLitellmKey }}
+            # HONCHO_LITELLM_KEY, minted by the honcho release rather than
+            # configured — the API hashes it to find Honcho's spend in LiteLLM's
+            # activity report, so it has to be the same value Honcho itself uses.
+            # Optional: with Honcho disabled the Secret does not exist, and
+            # memory cost simply reports zero rather than blocking startup.
+            - secretRef:
+                name: {{ .Values.honchoLitellmKeySecretName }}
+                optional: true
+{{- end }}
           env:
             # The namespace this release runs in — the API creates agent
             # workloads (Deployments/Services/PVCs/Secrets) here. Without it the
@@ -86,6 +96,14 @@ spec:
             {{- if .Values.agentDefaultModel }}
             - name: AGENT_DEFAULT_MODEL
               value: "{{ .Values.agentDefaultModel }}"
+            {{- end }}
+            {{- if .Values.honchoEnabled }}
+            - name: HONCHO_ENABLED
+              value: "true"
+            - name: HONCHO_BASE_URL
+              value: "{{ .Values.honchoBaseUrl }}"
+            - name: AGENT_HONCHO_BASE_URL
+              value: "{{ .Values.agentHonchoBaseUrl | default .Values.honchoBaseUrl }}"
             {{- end }}
             {{- if .Values.storageClass }}
             - name: STORAGE_CLASS

@@ -19,6 +19,7 @@ from api.domains.costs.models import (
     CostTimeSeriesPoint,
     OrgCostSummaryRead,
 )
+from api.domains.costs.usage_service import HonchoUsageService
 from api.domains.rbac.catalog import PermissionKey
 from api.domains.rbac.policy import PermissionPolicy
 from api.infrastructure.crypto import decrypt_token
@@ -39,6 +40,7 @@ class CostService:
     permission_policy: PermissionPolicy
     litellm: LiteLLMClient
     config: Config
+    honcho_usage: HonchoUsageService
 
     def _org_id(self, context: CurrentUserContext) -> UUID:
         return context.require_current_user_organization().organization_id
@@ -154,8 +156,19 @@ class CostService:
         time_series = [CostTimeSeriesPoint(date=d, cost=c) for d, c in sorted(daily_costs.items())]
         by_model_list = [CostByModelRead(model=m, total_cost=c) for m, c in by_model.items()]
 
+        # Memory spend is attributed separately: it is not on any Agent's own key,
+        # so it never appears in the per-key report above.
+        memory_costs = self.honcho_usage.memory_cost_by_agent(start_str, end_str)
+        total_memory_cost = 0.0
+        for cost_read in agent_costs:
+            agent_memory_cost = memory_costs.get(cost_read.agent_id, 0.0)
+            if agent_memory_cost:
+                cost_read.memory_cost = agent_memory_cost
+                total_memory_cost += agent_memory_cost
+
         return OrgCostSummaryRead(
             totalCost=total_cost,
+            totalMemoryCost=total_memory_cost,
             agents=agent_costs,
             byModel=by_model_list,
             timeSeries=time_series,

@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 from uuid import UUID
 
@@ -35,11 +36,38 @@ COMMUNICATIONS_RUNTIME_ADAPTER_PY: str = (_COMMON_SCRIPTS / "communications-runt
 _HERMES_APPROVAL_MODE = {"manual": "manual", "auto": "smart", "off": "off"}
 
 
+# Hermes resolves this from $HERMES_HOME first, then ~/.hermes, then ~/.honcho.
+HERMES_STATE_DIR = "/opt/data"
+
+
+def build_honcho_config(*, base_url: str, workspace_id: str, agent_name: str) -> dict:
+    """Honcho as a Hermes memory provider.
+
+    Unlike OpenClaw, where Honcho takes the runtime's single memory slot, Hermes
+    runs it alongside MEMORY.md and USER.md: the files stay the operator-editable
+    baseline and Honcho holds what is learned in conversation.
+    """
+    return {
+        "baseUrl": base_url,
+        "hosts": {
+            "hermes": {
+                "enabled": True,
+                "workspace": workspace_id,
+                # Both sides are modelled: the AI peer is what Honcho learns about
+                # the Agent, separate from what it learns about each participant.
+                "aiPeer": f"agent-{agent_name}",
+                "peerName": "operator",
+            }
+        },
+    }
+
+
 def _hermes_config_core(
     model: str,
     litellm_base_url: str,
     enabled_plugins: list[str],
     approval_mode: str = "auto",
+    honcho_enabled: bool = False,
 ) -> dict:
     _, sep, model_name = model.partition("/")
     if not sep:
@@ -61,6 +89,10 @@ def _hermes_config_core(
         "memory": {
             "memory_enabled": True,
             "user_profile_enabled": True,
+            # Writing honcho.json alone does not activate the provider: Hermes
+            # selects it with this key and otherwise runs built-in memory only,
+            # reporting "Provider: (none — built-in only)" while looking healthy.
+            **({"provider": "honcho"} if honcho_enabled else {}),
         },
         "compression": {
             "enabled": False,
@@ -86,12 +118,15 @@ def build_hermes_gateway_config(
     model: str,
     litellm_base_url: str,
     approval_mode: str = "auto",
+    *,
+    honcho_enabled: bool = False,
 ) -> dict:
     return _hermes_config_core(
         model,
         litellm_base_url,
         enabled_plugins=["telemetry-push"],
         approval_mode=approval_mode,
+        honcho_enabled=honcho_enabled,
     )
 
 
@@ -107,6 +142,7 @@ def build_hermes_config_map(
     boot_md: str,
     heartbeat_md: str,
     hermes_config: dict,
+    honcho_config: dict | None = None,
     aai_cli_config_toml: str | None = None,
     aai_cli_setup_sh: str | None = None,
     gog_setup_sh: str | None = None,
@@ -127,6 +163,8 @@ def build_hermes_config_map(
         "start.sh": HERMES_START_SH,
         "communications-runtime-adapter.py": COMMUNICATIONS_RUNTIME_ADAPTER_PY,
     }
+    if honcho_config is not None:
+        data["honcho.json"] = json.dumps(honcho_config)
     if aai_cli_config_toml is not None:
         data["aai-cli-config.toml"] = aai_cli_config_toml
     if aai_cli_setup_sh is not None:
@@ -237,6 +275,7 @@ def build_hermes_deployment(
                                 # agent's shell is anchored in the wrong place and
                                 # relative writes miss the persistent /workspace.
                                 # ocbw sets both alongside terminal.cwd — mirror it.
+                                client.V1EnvVar(name="HERMES_HOME", value=HERMES_STATE_DIR),
                                 client.V1EnvVar(name="TERMINAL_CWD", value="/workspace"),
                                 client.V1EnvVar(name="MESSAGING_CWD", value="/workspace"),
                             ],

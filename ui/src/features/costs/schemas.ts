@@ -16,6 +16,10 @@ export const agentCostSchema = z.object({
   totalTokens: z.number().int(),
   promptTokens: z.number().int(),
   completionTokens: z.number().int(),
+  // This Agent's share of Honcho's spend. It is not on the Agent's own LiteLLM
+  // key — Honcho bills one fleet-wide credential — so it is reported separately
+  // rather than folded into totalCost, and is 0 when memory is off.
+  memoryCost: z.number().default(0),
   modelsBreakdown: z.array(agentModelBreakdownSchema).default([]),
 });
 
@@ -31,6 +35,8 @@ export const costSeriesPointSchema = z.object({
 
 export const costSummarySchema = z.object({
   totalCost: z.number(),
+  // Memory spend for this Organization's Agents only, not the fleet total.
+  totalMemoryCost: z.number().default(0),
   agents: z.array(agentCostSchema),
   byModel: z.array(modelCostSchema),
   timeSeries: z.array(costSeriesPointSchema),

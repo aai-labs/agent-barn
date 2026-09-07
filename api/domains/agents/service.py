@@ -30,6 +30,7 @@ from api.domains.agents.builders import (
     build_hermes_config_map,
     build_hermes_deployment,
     build_hermes_gateway_config,
+    build_honcho_config,
     build_openclaw_gateway_config,
     build_pvc,
     build_secret_hermes_runtime,
@@ -107,6 +108,7 @@ from api.domains.templates.repository import TemplateRepository
 from api.domains.templates.requirements import effective_required_ids, split_requirements
 from api.domains.users.models import User
 from api.infrastructure.crypto import decrypt_token, encrypt_token
+from api.infrastructure.honcho.client import workspace_id_for_agent
 from api.infrastructure.integration_validators import (
     PROVIDER_VALIDATORS,
     format_validation_result,
@@ -1882,6 +1884,7 @@ class AgentService:
                 effective_model,
                 llm_proxy_url,
                 approval_mode=str(agent.approval_mode),
+                honcho_enabled=self.config.honcho_enabled,
             )
             secret = build_secret_hermes_runtime(
                 agent.id,
@@ -1900,7 +1903,14 @@ class AgentService:
                 self.config.agent_image_pull_secret,
             )
         else:
-            overlay = build_openclaw_gateway_config(effective_model, llm_proxy_url)
+            overlay = build_openclaw_gateway_config(
+                effective_model,
+                llm_proxy_url,
+                honcho_base_url=self.config.agent_honcho_base_url if self.config.honcho_enabled else None,
+                # Derivable from the Agent id so a workspace never needs its own
+                # mapping row, and deletion can find it without one.
+                honcho_workspace_id=workspace_id_for_agent(agent.id) if self.config.honcho_enabled else None,
+            )
             hermes_cfg = None
             secret = build_secret_runtime(
                 agent.id,
@@ -2094,6 +2104,15 @@ class AgentService:
                 boot_md=rendered.boot_md,
                 heartbeat_md=rendered.heartbeat_md,
                 hermes_config=hermes_cfg,
+                honcho_config=(
+                    build_honcho_config(
+                        base_url=self.config.agent_honcho_base_url,
+                        workspace_id=workspace_id_for_agent(agent.id),
+                        agent_name=agent.name,
+                    )
+                    if self.config.honcho_enabled
+                    else None
+                ),
                 aai_cli_config_toml=aai_config_toml,
                 aai_cli_setup_sh=aai_setup_sh,
                 gog_setup_sh=gog_setup_sh,

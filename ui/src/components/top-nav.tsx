@@ -43,6 +43,9 @@ export function TopNav({ onHire }: TopNavProps) {
         { href: orgBase, label: "Home" },
         // Costs is owner/admin-only (the endpoint is gated too); hide it from members.
         ...(canManageMembers ? [{ href: `${orgBase}/costs`, label: "Costs" }] : []),
+        // Same gate, same reason: this lists every agent's memory across the org,
+        // including agents a member holds no individual grant on.
+        ...(canManageMembers ? [{ href: `${orgBase}/memory`, label: "Memory" }] : []),
         { href: `${orgBase}/settings`, label: "Settings" },
       ];
   const [menuOpen, setMenuOpen] = useState(false);

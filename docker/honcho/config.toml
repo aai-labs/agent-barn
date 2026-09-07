@@ -1,0 +1,100 @@
+# Local Honcho model configuration. Mirrors helm/honcho/templates/configmap.yaml:
+# every model-calling module is pinned to LiteLLM, because Honcho's built-in
+# defaults target each provider's own endpoint and would send the LiteLLM key
+# to the wrong host.
+
+[deriver]
+# Honcho derives conclusions from a *batch* of pending messages, not from each
+# one. The default gate is 512 tokens — a few short turns — which on a real
+# conversation means the deriver runs constantly and records trivia like
+# "operator asked where the runbooks live" alongside anything worth keeping.
+# A larger window gives the model enough conversation to tell those apart, and
+# costs one call where the default spends several.
+#
+# Latency is not the trade-off it looks like: recent turns are already in the
+# runtime's own context window, so memory is what an Agent recalls in a *later*
+# session. Lagging the current conversation by a few turns costs nothing there.
+representation_batch_work_unit_target_tokens = 4096
+representation_batch_target_input_tokens = 4096
+# Unchanged, and deliberately: a quiet conversation that never reaches the token
+# gate still gets derived within half an hour rather than sitting forever.
+representation_batch_max_age_seconds = 1800
+
+[deriver.model_config]
+transport = "openai"
+model = "openrouter/z-ai/glm-5.2"
+
+[deriver.model_config.overrides]
+base_url = "http://litellm:4000/v1"
+
+[summary.model_config]
+transport = "openai"
+model = "openrouter/z-ai/glm-5.2"
+
+[summary.model_config.overrides]
+base_url = "http://litellm:4000/v1"
+
+[embedding.model_config]
+transport = "openai"
+model = "openai/text-embedding-3-small"
+
+[embedding.model_config.overrides]
+base_url = "http://litellm:4000/v1"
+
+[dialectic.levels.minimal.model_config]
+transport = "openai"
+model = "openrouter/z-ai/glm-5.2"
+
+[dialectic.levels.minimal.model_config.overrides]
+base_url = "http://litellm:4000/v1"
+
+[dialectic.levels.low]
+# `low` is what a caller gets when it does not ask for a level, and its stock
+# budget is 5 tool iterations — more than `medium` (2) or `high` (4), which
+# makes the name actively misleading. Measured on a live Agent, dropping it to
+# a single iteration answered 6/6 recall questions identically while using 36%
+# fewer input and 60% fewer output tokens, and returned tighter answers: the
+# extra iterations were spent on hedging preamble, not on finding anything.
+max_tool_iterations = 1
+
+[dialectic.levels.low.model_config]
+transport = "openai"
+model = "openrouter/z-ai/glm-5.2"
+
+[dialectic.levels.low.model_config.overrides]
+base_url = "http://litellm:4000/v1"
+
+[dialectic.levels.medium.model_config]
+transport = "openai"
+model = "openrouter/z-ai/glm-5.2"
+
+[dialectic.levels.medium.model_config.overrides]
+base_url = "http://litellm:4000/v1"
+
+[dialectic.levels.high.model_config]
+transport = "openai"
+model = "openrouter/z-ai/glm-5.2"
+
+[dialectic.levels.high.model_config.overrides]
+base_url = "http://litellm:4000/v1"
+
+[dialectic.levels.max.model_config]
+transport = "openai"
+model = "openrouter/z-ai/glm-5.2"
+
+[dialectic.levels.max.model_config.overrides]
+base_url = "http://litellm:4000/v1"
+
+[dream.deduction_model_config]
+transport = "openai"
+model = "openrouter/z-ai/glm-5.2"
+
+[dream.deduction_model_config.overrides]
+base_url = "http://litellm:4000/v1"
+
+[dream.induction_model_config]
+transport = "openai"
+model = "openrouter/z-ai/glm-5.2"
+
+[dream.induction_model_config.overrides]
+base_url = "http://litellm:4000/v1"

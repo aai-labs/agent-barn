@@ -1,0 +1,4 @@
+apiVersion: v2
+name: honcho
+description: Honcho memory service for Agent Barn Agents
+version: 0.3.0

@@ -467,6 +467,43 @@ class AgentLifecycleEmailReceipt(BaseModel, table=True):
     recipient_email: str = SqlField(nullable=False, max_length=320)
 
 
+class SharedMemoryFact(BaseModel, table=True):
+    """Provenance for a memory one Agent was handed by another.
+
+    Honcho's conclusions carry no metadata — `ConclusionCreate` accepts content and
+    a peer pair, nothing more — and a shared fact is written onto the destination's
+    own self-model, which is exactly where its self-derived conclusions live. So
+    once written there is nothing in Honcho that distinguishes the two. This table
+    is that distinction, kept on our side and joined back on read.
+
+    Rows outlive the deletion of either Agent: Agents are soft-deleted and their
+    memory is deliberately retained, so the fact stays explainable afterwards.
+    """
+
+    __tablename__: str = "shared_memory_fact"
+
+    __table_args__ = (
+        # Honcho ids are unique per conclusion; a second row for one would mean two
+        # different origins claimed for the same memory.
+        sa.UniqueConstraint("conclusion_id", name="uq_shared_memory_fact_conclusion_id"),
+        sa.Index("ix_shared_memory_fact_target_agent", "target_agent_id"),
+    )
+
+    # The Honcho conclusion this describes. A correction replaces the conclusion and
+    # its id, so this is updated rather than re-created (`carry_forward`).
+    conclusion_id: str = SqlField(nullable=False, max_length=255)
+    # CASCADE: if the destination is hard-deleted its memory is gone with it, so a
+    # row describing that memory has nothing left to explain.
+    target_agent_id: UUID = SqlField(foreign_key="agent.id", nullable=False, ondelete="CASCADE")
+    # SET NULL, not CASCADE: hard-deleting the source must not erase the badge on a
+    # memory the destination still holds. "Shared from an Agent that no longer
+    # exists" is worth more than silently reverting to "figured this out itself".
+    source_agent_id: UUID | None = SqlField(default=None, foreign_key="agent.id", nullable=True, ondelete="SET NULL")
+    # Who performed the share. Nullable because the row must survive the user being
+    # removed — losing the actor is better than losing the origin.
+    shared_by_user_id: UUID | None = SqlField(default=None, foreign_key="user.id", nullable=True)
+
+
 class AgentTemplateSkill(BaseModel, table=True):
     __tablename__: str = "agent_template_skill"
 

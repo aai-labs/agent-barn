@@ -8,6 +8,7 @@ from .hermes import (
     build_hermes_config_map,
     build_hermes_deployment,
     build_hermes_gateway_config,
+    build_honcho_config,
     build_secret_hermes_runtime,
 )
 from .openclaw import (
@@ -46,6 +47,7 @@ __all__ = [  # noqa: RUF022 - grouped by runtime (common/openclaw/hermes), not a
     "TELEMETRY_PUSH_PLUGIN_INIT",
     "build_hermes_gateway_config",
     "build_hermes_config_map",
+    "build_honcho_config",
     "build_secret_hermes_runtime",
     "build_hermes_deployment",
 ]

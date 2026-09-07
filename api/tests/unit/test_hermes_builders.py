@@ -4,6 +4,7 @@ from api.domains.agents.builders import (
     build_hermes_config_map,
     build_hermes_deployment,
     build_hermes_gateway_config,
+    build_honcho_config,
     build_secret_hermes_runtime,
 )
 
@@ -107,3 +108,79 @@ def test_deployment_recreates_rather_than_rolling_update() -> None:
 def test_deployment_carries_the_hermes_runtime_label() -> None:
     deployment = build_hermes_deployment(_AGENT_ID, _ORG_ID, _NS, "hermes:test")
     assert deployment.metadata.labels["agentbarn.io/runtime"] == "hermes"
+
+
+def _config_map(honcho_config: dict | None = None):
+    return build_hermes_config_map(
+        _AGENT_ID,
+        _ORG_ID,
+        _NS,
+        "soul",
+        "identity",
+        "user",
+        "tools",
+        "agents",
+        "boot",
+        "heartbeat",
+        build_hermes_gateway_config("litellm/gpt-5", "http://litellm:4000"),
+        honcho_config=honcho_config,
+    )
+
+
+def test_config_map_has_no_honcho_config_when_memory_is_not_backed_by_honcho() -> None:
+    assert "honcho.json" not in _config_map().data
+
+
+def test_config_map_carries_the_honcho_provider_config_when_configured() -> None:
+    """Hermes resolves honcho.json from $HERMES_HOME first, and takes Honcho as a
+    provider alongside MEMORY.md and USER.md rather than replacing them, which is
+    the opposite of how OpenClaw's single memory slot works."""
+    import json
+
+    config = build_honcho_config(
+        base_url="http://honcho:8000",
+        workspace_id="af-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        agent_name="watcher",
+    )
+    honcho_json = json.loads(_config_map(config).data["honcho.json"])
+
+    assert honcho_json["baseUrl"] == "http://honcho:8000"
+    host = honcho_json["hosts"]["hermes"]
+    assert host["enabled"] is True
+    assert host["workspace"] == "af-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+    assert host["aiPeer"]
+
+
+def test_deployment_points_hermes_at_the_state_dir_it_actually_uses() -> None:
+    """honcho.json is resolved from $HERMES_HOME before any other location. Without
+    it Hermes looks in ~/.hermes, which is not the mounted state directory, and the
+    provider config is silently never found."""
+    deployment = build_hermes_deployment(_AGENT_ID, _ORG_ID, _NS, "hermes:test")
+    container = deployment.spec.template.spec.containers[0]
+
+    hermes_home = next(var for var in container.env if var.name == "HERMES_HOME")
+    state_mount = next(m for m in container.volume_mounts if m.mount_path == "/opt/data")
+
+    assert hermes_home.value == state_mount.mount_path
+
+
+def test_start_sh_installs_the_honcho_provider_config_when_present() -> None:
+    from api.domains.agents.builders.hermes import HERMES_START_SH
+
+    assert "honcho.json" in HERMES_START_SH
+
+
+def test_memory_provider_is_selected_when_honcho_is_enabled() -> None:
+    """Writing honcho.json is not enough — Hermes activates an external provider
+    through `memory.provider`, and without it runs built-in memory only while
+    reporting "Provider: (none — built-in only)"."""
+    config = build_hermes_gateway_config("litellm/gpt-5", "http://litellm:4000", honcho_enabled=True)
+
+    assert config["memory"]["provider"] == "honcho"
+    assert config["memory"]["memory_enabled"] is True
+
+
+def test_no_memory_provider_key_when_honcho_is_disabled() -> None:
+    config = build_hermes_gateway_config("litellm/gpt-5", "http://litellm:4000")
+
+    assert "provider" not in config["memory"]

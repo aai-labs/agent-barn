@@ -6,6 +6,16 @@ from fastapi.responses import StreamingResponse
 from fastapi_injector import Injected
 
 from api.domains.agents.access_service import AgentAccessService
+from api.domains.agents.memory_sharing import (
+    AgentMemoryService,
+    MemoryItemRead,
+    MemoryItemUpdate,
+    MemoryPage,
+    MemorySharingService,
+    OrganizationMemoryRead,
+    SharedFactCreate,
+    SharedFactResult,
+)
 from api.domains.agents.models import (
     AgentAccessRoleRead,
     AgentAccessSettingsRead,
@@ -33,6 +43,10 @@ from api.domains.templates.models import TemplateRead
 from api.infrastructure.shared.models import PaginatedItems, Pagination
 
 agents_router = APIRouter(prefix="/organizations/{organization_id}/agents", tags=["agents"])
+# Organization-scoped rather than Agent-scoped, so it cannot live under the router
+# above: `/agents/memory` would be matched by `/agents/{agent_id}/...` and the
+# literal would be parsed as an Agent id.
+organization_memory_router = APIRouter(prefix="/organizations/{organization_id}/memory", tags=["agents"])
 
 
 @agents_router.post("", response_model=AgentRead, status_code=status.HTTP_201_CREATED)
@@ -93,6 +107,60 @@ def replace_agent_share_settings(
     service: Annotated[AgentAccessService, Injected(AgentAccessService)],
 ):
     return service.replace_access_settings(agent_id, data, context)
+
+
+@agents_router.get("/{agent_id}/memory", response_model=MemoryPage, response_model_by_alias=True)
+def list_agent_memory(
+    agent_id: UUID,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[AgentMemoryService, Injected(AgentMemoryService)],
+    page: int = Query(default=1, ge=1),
+    size: int = Query(default=50, ge=1, le=100),
+):
+    return service.list_memory(agent_id, context, page=page, size=size)
+
+
+@agents_router.get("/{agent_id}/memory/search", response_model=list[MemoryItemRead], response_model_by_alias=True)
+def search_agent_memory(
+    agent_id: UUID,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[AgentMemoryService, Injected(AgentMemoryService)],
+    q: str = Query(min_length=1, max_length=500),
+    limit: int = Query(default=20, ge=1, le=100),
+):
+    return service.search_memory(agent_id, q, context, limit=limit)
+
+
+@agents_router.delete("/{agent_id}/memory/{memory_id}", status_code=status.HTTP_204_NO_CONTENT)
+def forget_agent_memory(
+    agent_id: UUID,
+    memory_id: str,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[AgentMemoryService, Injected(AgentMemoryService)],
+):
+    service.forget(agent_id, memory_id, context)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@agents_router.put("/{agent_id}/memory/{memory_id}", response_model=MemoryItemRead, response_model_by_alias=True)
+def correct_agent_memory(
+    agent_id: UUID,
+    memory_id: str,
+    data: MemoryItemUpdate,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[AgentMemoryService, Injected(AgentMemoryService)],
+):
+    return service.correct(agent_id, memory_id, data, context)
+
+
+@agents_router.post("/{agent_id}/memory/shared-facts", response_model=SharedFactResult, response_model_by_alias=True)
+def share_agent_memory_fact(
+    agent_id: UUID,
+    data: SharedFactCreate,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[MemorySharingService, Injected(MemorySharingService)],
+):
+    return service.share_fact(agent_id, data, context)
 
 
 @agents_router.get("/{agent_id}/logs/stream")
@@ -272,3 +340,11 @@ def validate_integration(
     service: Annotated[AgentService, Injected(AgentService)],
 ):
     return service.validate_integration(agent_id, provider, context)
+
+
+@organization_memory_router.get("", response_model=OrganizationMemoryRead, response_model_by_alias=True)
+def list_organization_memory(
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[AgentMemoryService, Injected(AgentMemoryService)],
+):
+    return service.list_organization_memory(context)

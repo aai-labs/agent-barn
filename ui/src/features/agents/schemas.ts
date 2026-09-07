@@ -55,6 +55,8 @@ export const AgentPermissionKeySchema = z.enum([
   "agent.lifecycle.manage",
   "agent.access.manage",
   "agent.secret.manage",
+  "agent.memory.read",
+  "agent.memory.manage",
   "activity.read",
   "cost.read",
 ]);
@@ -365,3 +367,66 @@ export type AgentAccessSettingsAssignmentUpdate = z.infer<
   typeof AgentAccessSettingsAssignmentUpdateSchema
 >;
 export type AgentAccessSettingsUpdate = z.infer<typeof AgentAccessSettingsUpdateSchema>;
+
+// Memory is stored per (observer, observed) peer pair: the same Agent holds a
+// separate view of each person it talks to, plus a model of itself. The pair is
+// surfaced rather than flattened, because collapsing it would misrepresent whose
+// memory an item actually is.
+export const AgentMemoryItemSchema = z.object({
+  id: z.string(),
+  content: z.string(),
+  observer: z.string(),
+  observed: z.string(),
+  level: z.string(),
+  createdAt: z.string().nullable().optional(),
+  // Set only for a memory another agent shared in. It is stored on this agent's
+  // own self-model, identically to something it concluded itself, so this is the
+  // only thing that tells them apart. A null name with a set date means the
+  // source agent has been deleted.
+  sharedFrom: z.string().nullable().optional(),
+  sharedAt: z.string().nullable().optional(),
+});
+
+export const AgentMemoryPageSchema = z.object({
+  items: z.array(AgentMemoryItemSchema),
+  total: z.number().int(),
+  page: z.number().int(),
+  size: z.number().int(),
+});
+
+export type AgentMemoryItem = z.infer<typeof AgentMemoryItemSchema>;
+export type AgentMemoryPage = z.infer<typeof AgentMemoryPageSchema>;
+
+// One result per destination: a share can succeed for some agents and fail for
+// others, and the API reports each rather than failing the whole call.
+export const SharedFactTargetResultSchema = z.object({
+  agentId: z.string().uuid(),
+  shared: z.boolean(),
+  error: z.string().nullable().optional(),
+});
+
+export const SharedFactResultSchema = z.object({
+  results: z.array(SharedFactTargetResultSchema),
+});
+
+export type SharedFactResult = z.infer<typeof SharedFactResultSchema>;
+
+export const OrganizationAgentMemorySchema = z.object({
+  agentId: z.string().uuid(),
+  agentName: z.string(),
+  agentType: z.string(),
+  deleted: z.boolean(),
+  // null means the memory store could not be reached for this agent. Distinct
+  // from 0, which means it holds nothing — the two must not render alike.
+  memoryCount: z.number().int().nullable(),
+});
+
+export const OrganizationMemorySchema = z.object({
+  agents: z.array(OrganizationAgentMemorySchema),
+  totalMemories: z.number().int(),
+  // True when some count is missing, making the total a floor rather than exact.
+  partial: z.boolean(),
+});
+
+export type OrganizationAgentMemory = z.infer<typeof OrganizationAgentMemorySchema>;
+export type OrganizationMemory = z.infer<typeof OrganizationMemorySchema>;

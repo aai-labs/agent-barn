@@ -19,6 +19,7 @@ from api.domains.agents.models import (
     AgentSkill,
     AgentStatus,
     SecretProvider,
+    SharedMemoryFact,
 )
 from api.domains.communications.models import (
     CommunicationConnection,
@@ -1343,3 +1344,90 @@ class AgentRepository:
 
     def hard_delete(self, agent_id: UUID) -> None:
         self.delegate.delete_one(Agent, agent_id)
+
+
+@dataclass(frozen=True)
+class SharedMemoryProvenance:
+    """Where a memory came from, for one conclusion."""
+
+    source_agent_id: UUID | None
+    source_agent_name: str | None
+    shared_at: datetime | None
+
+
+@inject
+@singleton
+@dataclass
+class SharedMemoryFactRepository:
+    """Tracks which memories an Agent was handed rather than concluded itself.
+
+    Separate from `AgentRepository` because it answers one narrow question about a
+    subordinate resource, and the memory read path is the only caller.
+    """
+
+    delegate: PostgresRepositoryDelegate
+
+    def record(
+        self,
+        *,
+        conclusion_id: str,
+        target_agent_id: UUID,
+        source_agent_id: UUID,
+        shared_by_user_id: UUID | None,
+    ) -> None:
+        self.delegate.save(
+            SharedMemoryFact(
+                conclusion_id=conclusion_id,
+                target_agent_id=target_agent_id,
+                source_agent_id=source_agent_id,
+                shared_by_user_id=shared_by_user_id,
+            )
+        )
+
+    def find_for_conclusions(self, conclusion_ids: list[str]) -> dict[str, SharedMemoryProvenance]:
+        """Provenance for the conclusions on one page, keyed by conclusion id.
+
+        Scoped to the ids actually being displayed rather than the whole Agent: a
+        long-lived Agent's memory is unbounded, a page of it is not.
+        """
+        if not conclusion_ids:
+            return {}
+        with Session(self.delegate.engine) as session:
+            query = (
+                select(SharedMemoryFact, Agent.name)
+                # Outer: the source Agent may have been hard-deleted, which nulls the
+                # column. The memory is still shared — it just cannot name its origin.
+                .join(Agent, col(SharedMemoryFact.source_agent_id) == col(Agent.id), isouter=True)
+                .where(col(SharedMemoryFact.conclusion_id).in_(conclusion_ids))
+            )
+            return {
+                fact.conclusion_id: SharedMemoryProvenance(
+                    source_agent_id=fact.source_agent_id,
+                    source_agent_name=source_name,
+                    shared_at=fact.created_at,
+                )
+                for fact, source_name in session.exec(query).all()
+            }
+
+    def forget(self, conclusion_id: str) -> None:
+        with Session(self.delegate.engine) as session:
+            for fact in session.exec(
+                select(SharedMemoryFact).where(col(SharedMemoryFact.conclusion_id) == conclusion_id)
+            ).all():
+                session.delete(fact)
+            session.commit()
+
+    def carry_forward(self, old_conclusion_id: str, new_conclusion_id: str) -> None:
+        """Follow a corrected memory to its replacement.
+
+        Honcho has no update, so correcting a memory deletes it and creates a new
+        one with a new id. Rewording a shared fact does not make it self-derived,
+        so the row moves rather than being dropped.
+        """
+        with Session(self.delegate.engine) as session:
+            for fact in session.exec(
+                select(SharedMemoryFact).where(col(SharedMemoryFact.conclusion_id) == old_conclusion_id)
+            ).all():
+                fact.conclusion_id = new_conclusion_id
+                session.add(fact)
+            session.commit()
