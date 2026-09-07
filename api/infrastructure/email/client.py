@@ -210,11 +210,19 @@ class EmailClient:
 
     def _build_payload(self, email: Email, sender_email: str) -> dict:
         payload: dict = {
-            "from": formataddr((email.from_name, sender_email)),
+            "from": formataddr((email.from_name, email.from_email or sender_email)),
             "to": email.to_email,
             "subject": email.subject,
-            "html": email.html_part,
         }
+
+        if email.html_part:
+            payload["html"] = email.html_part
+        if email.text_part:
+            payload["text"] = email.text_part
+        if email.reply_to:
+            payload["reply_to"] = email.reply_to
+        if email.headers:
+            payload["headers"] = dict(email.headers)
 
         # The JSON API has no multipart/related equivalent, so the logo travels as an
         # inline attachment whose content_id resolves the `cid:` reference in the html.
