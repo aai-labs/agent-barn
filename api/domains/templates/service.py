@@ -355,8 +355,9 @@ class TemplateService:
 
     def get_org_draft(self, template_key: str, context: CurrentUserContext) -> AgentTemplateDraftRead:
         org_id = self._org_id(context)
+        draft = self._get_org_draft_or_404(org_id, template_key)
         self.permission_policy.require_organization(context, org_id, PermissionKey.TEMPLATE_READ)
-        return self._org_draft_read_or_404(org_id, template_key)
+        return self._org_draft_read(draft)
 
     def start_org_draft(
         self, template_key: str, source_version: int | None, context: CurrentUserContext
@@ -368,8 +369,16 @@ class TemplateService:
         publishing the draft then creates Org v1 and records the fork origin,
         exactly as a PATCH used to."""
         org_id = self._org_id(context)
-        self.permission_policy.require_organization(context, org_id, PermissionKey.TEMPLATE_MANAGE)
         existing_draft = self.repository.get_org_draft(org_id, template_key)
+        source = (
+            self.repository.resolve_template(org_id, template_key, source_version)
+            if source_version is not None
+            else self.repository.resolve_latest_template(org_id, template_key)
+        )
+        if existing_draft is None and source is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Template {template_key} not found")
+        self.permission_policy.require_organization(context, org_id, PermissionKey.TEMPLATE_MANAGE)
+
         if existing_draft is not None:
             if source_version is not None:
                 raise HTTPException(
@@ -377,12 +386,6 @@ class TemplateService:
                     detail="A draft already exists; discard it before restoring another published version",
                 )
             return self._org_draft_read(existing_draft)
-
-        source = (
-            self.repository.resolve_template(org_id, template_key, source_version)
-            if source_version is not None
-            else self.repository.resolve_latest_template(org_id, template_key)
-        )
         if source is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Template {template_key} not found")
 
@@ -421,8 +424,8 @@ class TemplateService:
         self, template_key: str, data: TemplateUpdate, context: CurrentUserContext
     ) -> AgentTemplateDraftRead:
         org_id = self._org_id(context)
-        self.permission_policy.require_organization(context, org_id, PermissionKey.TEMPLATE_MANAGE)
         draft = self._get_org_draft_or_404(org_id, template_key)
+        self.permission_policy.require_organization(context, org_id, PermissionKey.TEMPLATE_MANAGE)
         updated = data.model_dump(exclude_unset=True)
         for field in (
             "description",
@@ -452,8 +455,8 @@ class TemplateService:
 
     def discard_org_draft(self, template_key: str, context: CurrentUserContext) -> None:
         org_id = self._org_id(context)
-        self.permission_policy.require_organization(context, org_id, PermissionKey.TEMPLATE_MANAGE)
         draft = self._get_org_draft_or_404(org_id, template_key)
+        self.permission_policy.require_organization(context, org_id, PermissionKey.TEMPLATE_MANAGE)
         self.repository.delete_org_draft(draft.id)
 
     def publish_org_draft(self, template_key: str, context: CurrentUserContext) -> TemplateRead:
@@ -465,8 +468,8 @@ class TemplateService:
         published), which is what selects between template.created and
         template.updated. Agent pins are untouched."""
         org_id = self._org_id(context)
-        self.permission_policy.require_organization(context, org_id, PermissionKey.TEMPLATE_MANAGE)
         draft = self._get_org_draft_or_404(org_id, template_key)
+        self.permission_policy.require_organization(context, org_id, PermissionKey.TEMPLATE_MANAGE)
         old = self.repository.resolve_latest_template(org_id, template_key)
         published = AgentTemplate(
             organization_id=org_id,
@@ -515,9 +518,6 @@ class TemplateService:
 
     def _org_draft_read(self, draft: AgentTemplateDraft) -> AgentTemplateDraftRead:
         return self.repository.to_org_draft_read(draft, self.repository.get_org_draft_required_skills(draft.id))
-
-    def _org_draft_read_or_404(self, org_id: UUID, template_key: str) -> AgentTemplateDraftRead:
-        return self._org_draft_read(self._get_org_draft_or_404(org_id, template_key))
 
     @staticmethod
     def _reject_standalone_group_overlap(resolved_map: dict[UUID, tuple[int, str | None]]) -> None:
