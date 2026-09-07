@@ -258,6 +258,24 @@ def test_runtime_claim_dead_letters_an_inbound_delivery_after_repeated_lease_exp
             assert_that(final.last_error_code, equal_to("LEASE_EXPIRED"))
 
 
+def test_runtime_can_renew_its_live_inbound_delivery_lease() -> None:
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        connection_id = _create_connection(context)
+        repository = context.injector.get(CommunicationDeliveryRepository)
+        accepted = repository.accept_inbound(connection_id=connection_id, envelope=_envelope("provider-1"))
+        claimed = repository.claim_next_inbound(agent_id=context.agent.id)
+        assert_that(claimed, is_(not_(none())))
+
+        with when("the runtime renews its active delivery claim"):
+            renewed = repository.renew_runtime_delivery_lease(accepted.delivery_id, agent_id=context.agent.id)
+
+        with then("the lease remains active and is extended"):
+            assert_that(renewed, is_(True))
+            delivery = _delivery(context, accepted.delivery_id)
+            assert_that(delivery.status, equal_to(CommunicationDeliveryStatus.PROCESSING))
+            assert_that(delivery.lease_expires_at, greater_than(datetime.now(UTC) + timedelta(seconds=100)))
+
+
 def test_thread_state_is_durable_and_connection_scoped() -> None:
     with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
         connection_id = _create_connection(context, bot_token="gateway-token-one")

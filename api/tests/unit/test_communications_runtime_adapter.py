@@ -291,6 +291,75 @@ def test_hermes_reclaim_does_not_start_a_second_concurrent_run_for_the_same_sess
     assert session_key not in adapter._ACTIVE_RUNS
 
 
+def test_hermes_second_delivery_for_an_active_session_is_acknowledged(monkeypatch: pytest.MonkeyPatch) -> None:
+    adapter = _load_adapter(monkeypatch, runtime_kind="hermes")
+    calls: list[tuple[str, dict | None]] = []
+    release = threading.Event()
+
+    def fake_http_request(method, url, *, headers, payload=None):
+        calls.append((url, payload))
+        if url.endswith("/v1/runs"):
+            release.wait(timeout=5)
+            return {"run_id": "run-1"}
+        return None
+
+    monkeypatch.setattr(adapter, "http_request", fake_http_request)
+    monkeypatch.setattr(adapter.urllib.request, "urlopen", _fake_urlopen([("run.completed", {"output": "done"})]))
+
+    session_key = adapter.session_key_for(_DELIVERY)
+    adapter.run_delivery_hermes(_DELIVERY)
+    try:
+        second_delivery = {**_DELIVERY, "delivery_id": "delivery-2"}
+        adapter.run_delivery_hermes(second_delivery)
+    finally:
+        release.set()
+        adapter._ACTIVE_RUNS[session_key].join(timeout=5)
+
+    reply_calls = [payload for url, payload in calls if url.endswith("/replies") and payload is not None]
+    assert reply_calls == [
+        {
+            "idempotency_key": "delivery-2",
+            "text": "I'm still working on your previous message. Please try again shortly.",
+        },
+        {"idempotency_key": "delivery-1:1", "text": "done"},
+    ]
+    completion_calls = [payload for url, payload in calls if url.endswith("/complete")]
+    assert completion_calls == [{"succeeded": True}, {"succeeded": True}]
+
+
+def test_hermes_progress_relay_is_best_effort_and_rate_limited(monkeypatch: pytest.MonkeyPatch) -> None:
+    adapter = _load_adapter(monkeypatch, runtime_kind="hermes", verbose_mode=True)
+    calls: list[tuple[str, dict | None]] = []
+
+    def fake_http_request(method, url, *, headers, payload=None):
+        calls.append((url, payload))
+        if url.endswith("/replies") and payload and payload["idempotency_key"] == "delivery-1:1":
+            raise RuntimeError("provider unavailable")
+
+    monkeypatch.setattr(adapter, "http_request", fake_http_request)
+    monkeypatch.setattr(adapter.time, "monotonic", lambda: 10.0)
+    monkeypatch.setattr(
+        adapter.urllib.request,
+        "urlopen",
+        _fake_urlopen(
+            [
+                ("tool.started", {"tool": "search_files", "preview": "first"}),
+                ("tool.started", {"tool": "search_files", "preview": "second"}),
+                ("run.completed", {"text": "final answer"}),
+            ]
+        ),
+    )
+
+    adapter._drain_run("run-1", _DELIVERY["delivery_id"], adapter.session_key_for(_DELIVERY))
+
+    reply_calls = [payload for url, payload in calls if url.endswith("/replies") and payload is not None]
+    assert reply_calls == [
+        {"idempotency_key": "delivery-1:1", "text": 'Searching the codebase for files matching "first"'},
+        {"idempotency_key": "delivery-1:3", "text": "final answer"},
+    ]
+    assert [payload for url, payload in calls if url.endswith("/complete")] == [{"succeeded": True}]
+
+
 def test_hermes_approval_request_relays_regardless_of_verbose_mode(monkeypatch: pytest.MonkeyPatch) -> None:
     adapter = _load_adapter(monkeypatch, runtime_kind="hermes", verbose_mode=False)
     calls: list[tuple[str, dict | None]] = []

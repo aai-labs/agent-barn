@@ -86,7 +86,24 @@ def test_chunk_text_leaves_short_text_untouched():
 def test_chunk_text_splits_long_text_on_the_nearest_newline():
     text = ("a" * 10) + "\n" + ("b" * 10)
     chunks = _chunk_text(text, limit=15)
-    assert_that(chunks, equal_to(["a" * 10, "b" * 10]))
+    assert_that(chunks, equal_to([("a" * 10) + "\n", "b" * 10]))
+
+
+def test_chunk_text_preserves_deliberate_blank_lines_at_split_boundaries():
+    text = ("a" * 10) + "\n\n" + ("b" * 10)
+
+    chunks = _chunk_text(text, limit=11)
+
+    assert_that(chunks, equal_to([("a" * 10) + "\n", "\n" + ("b" * 10)]))
+    assert_that("".join(chunks), equal_to(text))
+
+
+def test_chunk_text_uses_telegram_utf16_code_unit_limit():
+    text = ("a" * 4095) + "😀"
+
+    chunks = _chunk_text(text)
+
+    assert_that(chunks, equal_to(["a" * 4095, "😀"]))
 
 
 def test_chunk_text_hard_splits_when_no_newline_is_available():
