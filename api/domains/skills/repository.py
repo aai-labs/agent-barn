@@ -11,6 +11,7 @@ from sqlmodel import Session, col, delete, or_, select
 from api.domains.agents.models import (
     Agent,
     AgentSkill,
+    AgentTemplateDraftSkill,
     AgentTemplateOverrideDraftSkill,
     AgentTemplateOverrideVersionSkill,
     AgentTemplateSkill,
@@ -339,6 +340,10 @@ class SkillRepository:
                     col(PlatformTemplateDraftSkill.skill_id) == skill_id,
                     col(PlatformTemplateDraftSkill.skill_version) == version,
                 ),
+                select(AgentTemplateDraftSkill.id).where(
+                    col(AgentTemplateDraftSkill.skill_id) == skill_id,
+                    col(AgentTemplateDraftSkill.skill_version) == version,
+                ),
                 select(AgentTemplateOverrideDraftSkill.id).where(
                     col(AgentTemplateOverrideDraftSkill.skill_id) == skill_id,
                     col(AgentTemplateOverrideDraftSkill.skill_version) == version,
@@ -377,6 +382,7 @@ class SkillRepository:
                 select(AgentTemplateSkill.id).where(col(AgentTemplateSkill.skill_id) == skill_id),
                 select(PlatformTemplateSkill.id).where(col(PlatformTemplateSkill.skill_id) == skill_id),
                 select(PlatformTemplateDraftSkill.id).where(col(PlatformTemplateDraftSkill.skill_id) == skill_id),
+                select(AgentTemplateDraftSkill.id).where(col(AgentTemplateDraftSkill.skill_id) == skill_id),
                 select(AgentTemplateOverrideDraftSkill.id).where(
                     col(AgentTemplateOverrideDraftSkill.skill_id) == skill_id
                 ),
