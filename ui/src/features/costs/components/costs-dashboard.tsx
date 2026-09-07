@@ -162,7 +162,7 @@ export function CostsDashboard() {
               {summary.totalCost.toFixed(4)}
             </div>
             <div className="text-[0.75rem]" style={{ color: "var(--ink-4)" }}>
-              What your agents spent on model usage
+              What your agents spent operating — conversations and actions
             </div>
           </div>
 

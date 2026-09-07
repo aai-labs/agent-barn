@@ -81,6 +81,10 @@ releases:
       - name: db.name
         value: {{ env "POSTGRES_FIRECRAWL_DB" | required "POSTGRES_FIRECRAWL_DB is required" | quote }}
 
+  # Honcho and its database deploy only when memory is enabled. The releases
+  # carry required secrets, so gating keeps a memory-off deploy from needing
+  # any Honcho GitHub secrets at all — the whole block is skipped.
+{{ if eq (env "HONCHO_ENABLED" | default "false") "true" }}
   - name: postgres-honcho
     namespace: {{ env "NAMESPACE" | default "agent-farm" }}
     chart: ./helm/postgres
@@ -106,6 +110,7 @@ releases:
       - name: db.name
         value: {{ env "POSTGRES_HONCHO_DB" | required "POSTGRES_HONCHO_DB is required" | quote }}
 
+{{ end }}
   - name: redis
     namespace: {{ env "NAMESPACE" | default "agent-farm" }}
     chart: ./helm/redis
@@ -148,6 +153,7 @@ releases:
       - {{ env "NAMESPACE" | default "agent-farm" }}/postgres-firecrawl
       - {{ env "NAMESPACE" | default "agent-farm" }}/redis
 
+{{ if eq (env "HONCHO_ENABLED" | default "false") "true" }}
   - name: honcho
     namespace: {{ env "NAMESPACE" | default "agent-farm" }}
     chart: ./helm/honcho
@@ -172,6 +178,7 @@ releases:
       - {{ env "NAMESPACE" | default "agent-farm" }}/redis
       - {{ env "NAMESPACE" | default "agent-farm" }}/litellm
 
+{{ end }}
   - name: agentbarn-api
     namespace: {{ env "NAMESPACE" | default "agent-farm" }}
     chart: ./helm/agentbarn-api
@@ -263,11 +270,13 @@ releases:
       - {{ env "NAMESPACE" | default "agent-farm" }}/litellm
       - {{ env "NAMESPACE" | default "agent-farm" }}/firecrawl
       - {{ env "NAMESPACE" | default "agent-farm" }}/redis
-      # Not a runtime dependency — the API runs fine without Honcho. This is so
-      # the minted HONCHO_LITELLM_KEY Secret exists before the API pod reads it;
-      # without the ordering the API would come up keyless and report no memory
-      # cost until its next restart.
+      # Not a runtime dependency — the API runs fine without Honcho. Ordered only
+      # when Honcho is deployed, so the minted HONCHO_LITELLM_KEY Secret exists
+      # before the API pod reads it; otherwise the API would come up keyless and
+      # report no memory cost until its next restart.
+{{ if eq (env "HONCHO_ENABLED" | default "false") "true" }}
       - {{ env "NAMESPACE" | default "agent-farm" }}/honcho
+{{ end }}
 
   - name: agentbarn-ui
     namespace: {{ env "NAMESPACE" | default "agent-farm" }}
