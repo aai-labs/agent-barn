@@ -146,10 +146,23 @@ export function CostsDashboard() {
             </div>
             <div className="text-[2rem] font-semibold tracking-tight" style={{ color: "var(--ink)" }}>
               <span className="text-[1.25rem]" style={{ color: "var(--ink-4)" }}>$</span>
+              {(summary.totalCost + summary.totalMemoryCost).toFixed(4)}
+            </div>
+            <div className="text-[0.75rem]" style={{ color: "var(--ink-4)" }}>
+              Everything — model usage plus memory
+            </div>
+          </div>
+
+          <div className="af-card px-5.5 py-5 flex flex-col gap-1">
+            <div className="text-[0.813rem] font-medium uppercase tracking-wide" style={{ color: "var(--ink-4)" }}>
+              Model Spend
+            </div>
+            <div className="text-[2rem] font-semibold tracking-tight" style={{ color: "var(--ink)" }}>
+              <span className="text-[1.25rem]" style={{ color: "var(--ink-4)" }}>$</span>
               {summary.totalCost.toFixed(4)}
             </div>
             <div className="text-[0.75rem]" style={{ color: "var(--ink-4)" }}>
-              Model usage only. Memory cost is billed separately — see below.
+              What your agents spent on model usage
             </div>
           </div>
 
@@ -162,7 +175,7 @@ export function CostsDashboard() {
               {summary.totalMemoryCost.toFixed(4)}
             </div>
             <div className="text-[0.75rem]" style={{ color: "var(--ink-4)" }}>
-              What your agents spent remembering things, on top of Total Spend
+              What your agents spent remembering things
             </div>
           </div>
 

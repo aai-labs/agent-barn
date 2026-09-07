@@ -13,6 +13,12 @@ Related context: [`../agents.md`](../agents.md), [`../costs.md`](../costs.md), [
 
 ## Changes
 
+### 2026-09-07 — AF-280 — Costs page shows a true total
+
+- Added the all-in figure the page was missing: "Total Spend" is now model plus memory, the headline card. The old model-only card is renamed "Model Spend", and "Memory Cost" is unchanged, so the three read Total = Model + Memory and the numbers visibly add up.
+- This removes the disclaimer under the old card rather than needing it: "Total Spend" now means everything, which is what the label always implied. The table note that memory is separate from the per-row Cost column stays, since that table has no total column.
+- No data change; the total is summed in the view from the two figures the API already returns.
+
 ### 2026-09-07 — AF-280 — Costs page names memory cost and states it is separate
 
 - Renamed the "Memory" label to "Memory cost" on both the summary card and the agent-breakdown column, so it reads as spend rather than a memory count.
