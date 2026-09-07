@@ -357,8 +357,7 @@ export function CostsDashboard() {
             Agent breakdown
           </h2>
           <p className="mt-1 text-[0.8125rem]" style={{ color: "var(--ink-3)" }}>
-            Memory cost is billed on a separate credential and is not part of the Cost column — an agent&apos;s
-            total is Cost plus Memory cost.
+            Memory cost is separate from the Cost column — an agent&apos;s total is Cost plus Memory cost.
           </p>
         </div>
 
