@@ -1,7 +1,7 @@
 from injector import Module, provider, singleton
 
 from api.core.config import Config, get_config
-from api.domains.agents.event_handlers import AgentLifecycleEmailHandler
+from api.domains.agents.event_handlers import AgentLifecycleEmailHandler, AgentMemoryPurgeHandler
 from api.domains.communications.plugins.discord import DiscordPlatformPlugin
 from api.domains.communications.plugins.registry import PlatformPluginRegistry
 from api.domains.communications.plugins.slack import SlackPlatformPlugin
@@ -52,9 +52,12 @@ class AppModule(Module):
     def provide_event_handler_registry(
         self,
         agent_lifecycle_email_handler: AgentLifecycleEmailHandler,
+        agent_memory_purge_handler: AgentMemoryPurgeHandler,
         security_audit_projection: SecurityAuditProjection,
     ) -> EventHandlerRegistry:
-        return EventHandlerRegistry([agent_lifecycle_email_handler, security_audit_projection])
+        return EventHandlerRegistry(
+            [agent_lifecycle_email_handler, agent_memory_purge_handler, security_audit_projection]
+        )
 
     @provider
     @singleton

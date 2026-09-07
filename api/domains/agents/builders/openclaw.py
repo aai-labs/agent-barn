@@ -117,7 +117,14 @@ def _openclaw_config_core(
             "profile": "full",
             "exec": {"mode": "full"},
         },
-        "memory": {"backend": "builtin"},
+        # "builtin" is the file-backed store; "qmd" is the plugin-backed one, and the
+        # runtime accepts nothing else (it reports `Invalid input (allowed: "builtin",
+        # "qmd")` on anything third). The plugin slot decides which is actually used
+        # either way — an Agent with Honcho in the slot runs on Honcho even with
+        # "builtin" written here, verified against a live pod — but leaving it saying
+        # "builtin" makes the config claim file memory while Honcho holds the data,
+        # which is the first place anyone looks when memory seems wrong.
+        "memory": {"backend": "qmd" if honcho_workspace_id else "builtin"},
         "plugins": {
             # memory-core stays in `allow` even when Honcho holds the slot: it is
             # not active without an entry, but start.sh needs it permitted to fall

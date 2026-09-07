@@ -21,13 +21,16 @@ data:
     # window gives the model enough conversation to tell those apart, and costs
     # one call where the default spends several.
     #
-    # Latency is not the trade-off it appears to be: recent turns are already in
-    # the runtime's own context window, so memory is what an Agent recalls in a
-    # *later* session. Lagging the current conversation costs nothing there.
+    # Latency is not free, and an earlier note here claimed it was. Recall is
+    # unaffected — recent turns are already in the runtime's own context window,
+    # so memory is what an Agent recalls in a *later* session. The Memory tab is
+    # a different matter: it shows derived memory, so batching is exactly what
+    # someone watching it waits on. That is what the age backstop below bounds.
     representation_batch_work_unit_target_tokens = {{ .Values.deriver.batchWorkUnitTargetTokens }}
     representation_batch_target_input_tokens = {{ .Values.deriver.batchTargetInputTokens }}
-    # A quiet conversation that never reaches the token gate is still derived
-    # within this window rather than sitting unprocessed indefinitely.
+    # Backstop for conversation that never reaches the token gate, which is most
+    # ordinary chat. Per session, timed from its oldest unprocessed message, so it
+    # bounds how long a new memory can take to appear rather than fixing it.
     representation_batch_max_age_seconds = {{ .Values.deriver.batchMaxAgeSeconds }}
 
     [deriver.model_config]

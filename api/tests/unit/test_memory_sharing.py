@@ -8,7 +8,7 @@ matches what the runtime builders actually configured — a mismatch there would
 mean the fact lands somewhere the Agent's own reasoning never looks.
 """
 
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 from uuid import uuid7
 
 import pytest
@@ -18,6 +18,7 @@ from hamcrest import assert_that, equal_to, has_length
 from api.core.config import Config
 from api.domains.agents.authorization import AgentAuthorization
 from api.domains.agents.memory_sharing import (
+    MemoryCarryOverCreate,
     MemorySharingService,
     SharedFactCreate,
     ai_peer_name_for_agent,
@@ -63,7 +64,7 @@ def test_openclaw_ai_peer_is_fixed_regardless_of_agent_name():
 def _service(*, honcho_enabled: bool = True):
     authorization = Mock(spec=AgentAuthorization)
     honcho = Mock(spec=HonchoClient)
-    honcho.share_fact.return_value = {"id": "conclusion-1"}
+    honcho.share_fact.return_value = [{"id": "conclusion-1"}]
     provenance = Mock(spec=SharedMemoryFactRepository)
     config = Config(honcho_enabled=honcho_enabled)
     service = MemorySharingService(
@@ -117,7 +118,7 @@ def test_one_targets_honcho_failure_does_not_swallow_another_targets_success():
     target_a = _agent(AgentType.HERMES, name="agent-a")
     target_b = _agent(AgentType.HERMES, name="agent-b")
     authorization.require_action.side_effect = [source, target_a, target_b]
-    honcho.share_fact.side_effect = [HonchoError("unreachable"), {"id": "conclusion-2"}]
+    honcho.share_fact.side_effect = [HonchoError("unreachable"), [{"id": "conclusion-2"}]]
 
     result = service.share_fact(
         source.id,
@@ -186,7 +187,7 @@ def test_sharing_records_which_agent_a_fact_came_from():
     source = _agent(AgentType.HERMES, name="scout")
     target = _agent(AgentType.HERMES, name="receiver")
     authorization.require_action.side_effect = [source, target]
-    honcho.share_fact.return_value = {"id": "conclusion-xyz"}
+    honcho.share_fact.return_value = [{"id": "conclusion-xyz"}]
 
     service.share_fact(source.id, SharedFactCreate(content="fact", targetAgentIds=[target.id]), _context())
 
@@ -209,3 +210,122 @@ def test_a_share_that_honcho_rejected_records_no_provenance():
     service.share_fact(source.id, SharedFactCreate(content="fact", targetAgentIds=[target.id]), _context())
 
     provenance.record.assert_not_called()
+
+
+def test_carry_over_copies_every_memory_into_each_destination():
+    """Deleting an Agent erases what it learned, so this is the rescue path — it has
+    to move the whole workspace, not a fact at a time like ordinary sharing."""
+    service, authorization, honcho, provenance = _service()
+    source = _agent(AgentType.HERMES, name="leaving")
+    target = _agent(AgentType.HERMES, name="staying")
+    authorization.require_action.side_effect = [source, target]
+    honcho.list_all_conclusions.return_value = [
+        {"id": "a", "content": "first fact"},
+        {"id": "b", "content": "second fact"},
+    ]
+
+    result = service.carry_over(source.id, MemoryCarryOverCreate(targetAgentIds=[target.id]), _context())
+
+    assert_that(result.copied, equal_to(2))
+    assert_that(result.truncated, equal_to(False))
+    assert_that([c.args[2] for c in honcho.share_fact.call_args_list], equal_to(["first fact", "second fact"]))
+    assert_that(provenance.record.call_count, equal_to(2))
+
+
+def test_carry_over_reports_truncation_rather_than_silently_dropping():
+    """The caller is about to delete the source. Learning afterwards that only part
+    of its memory was copied is too late, so the partial result is on the response."""
+    service, authorization, honcho, _prov = _service()
+    source = _agent(AgentType.HERMES)
+    target = _agent(AgentType.HERMES, name="staying")
+    authorization.require_action.side_effect = [source, target]
+    honcho.list_all_conclusions.return_value = [
+        {"id": str(i), "content": f"fact {i}"} for i in range(service.MAX_CARRY_OVER + 1)
+    ]
+
+    result = service.carry_over(source.id, MemoryCarryOverCreate(targetAgentIds=[target.id]), _context())
+
+    assert_that(result.truncated, equal_to(True))
+    assert_that(result.copied, equal_to(service.MAX_CARRY_OVER))
+
+
+def test_carry_over_reads_the_source_so_it_needs_the_memory_read_grant():
+    """Ordinary sharing takes agent.read on the source because the operator supplies
+    the content. This reads the Agent's memory out, which is a different power."""
+    from api.domains.rbac.catalog import PermissionKey
+
+    service, authorization, honcho, _prov = _service()
+    source = _agent(AgentType.HERMES)
+    target = _agent(AgentType.HERMES, name="staying")
+    authorization.require_action.side_effect = [source, target]
+    honcho.list_all_conclusions.return_value = []
+
+    service.carry_over(source.id, MemoryCarryOverCreate(targetAgentIds=[target.id]), _context())
+
+    assert_that(authorization.require_action.call_args_list[0].args[2], equal_to(PermissionKey.AGENT_MEMORY_READ))
+
+
+def test_a_shared_fact_is_written_where_every_runtime_recall_looks():
+    """The two runtimes recall differently. Hermes reads the Agent's whole
+    representation, so a fact on the self-model is found. OpenClaw's plugin scopes
+    every recall to the person it is talking to — `target: participantPeer` — so
+    the same fact, filed as "about the Agent itself", is invisible there: verified
+    live, the Agent answered "no recorded fruit you like" with the fact sitting in
+    its workspace. Writing it under each person the Agent knows as well is what
+    makes it recallable on both."""
+    from api.infrastructure.honcho.client import HonchoClient
+
+    client = HonchoClient(config=Config(honcho_base_url="http://honcho"))
+    written: list[tuple[str, str]] = []
+    with (
+        patch.object(HonchoClient, "list_peers", return_value=["agent-main", "owner", "U123SLACK"]),
+        patch.object(
+            HonchoClient,
+            "create_conclusion",
+            side_effect=lambda ws, *, content, observer, observed: (
+                written.append((observer, observed)) or {"id": f"{observer}->{observed}"}
+            ),
+        ),
+    ):
+        created = client.share_fact("af-x", "agent-main", "user likes oranges")
+
+    assert_that(
+        sorted(written), equal_to([("agent-main", "U123SLACK"), ("agent-main", "agent-main"), ("agent-main", "owner")])
+    )
+    assert_that(len(created), equal_to(3))
+
+
+def test_a_shared_fact_never_writes_a_person_observing_themselves():
+    """Only the Agent's view of each person gets the fact. Writing it as the
+    person's own self-model would claim they said it about themselves."""
+    from api.infrastructure.honcho.client import HonchoClient
+
+    client = HonchoClient(config=Config(honcho_base_url="http://honcho"))
+    written: list[tuple[str, str]] = []
+    with (
+        patch.object(HonchoClient, "list_peers", return_value=["agent-main", "owner"]),
+        patch.object(
+            HonchoClient,
+            "create_conclusion",
+            side_effect=lambda ws, *, content, observer, observed: written.append((observer, observed)) or {"id": "c"},
+        ),
+    ):
+        client.share_fact("af-x", "agent-main", "fact")
+
+    assert_that(all(observer == "agent-main" for observer, _ in written), equal_to(True))
+
+
+def test_a_provenance_write_failure_does_not_fail_a_share_already_stored():
+    """By the time provenance is recorded the fact is in the destination's memory.
+    A failed row must degrade to an unbadged memory, not a 500 reporting failure for
+    a share that actually happened."""
+    service, authorization, honcho, provenance = _service()
+    source = _agent(AgentType.HERMES)
+    target = _agent(AgentType.HERMES, name="receiver")
+    authorization.require_action.side_effect = [source, target]
+    honcho.share_fact.return_value = [{"id": "c1"}]
+    provenance.record.side_effect = RuntimeError("db down")
+
+    result = service.share_fact(source.id, SharedFactCreate(content="fact", targetAgentIds=[target.id]), _context())
+
+    assert_that(result.results[0].shared, equal_to(True))

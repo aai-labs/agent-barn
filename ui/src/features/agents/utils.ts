@@ -25,7 +25,8 @@ export const agentsKey = {
   health: (id: string) => [..._agentsKeyBase.detail(id), "health"] as const,
   configuration: (id: string) => [..._agentsKeyBase.detail(id), "configuration"] as const,
   shareSettings: (id: string) => [..._agentsKeyBase.detail(id), "share"] as const,
-  memory: (id: string, page: number) => [..._agentsKeyBase.detail(id), "memory", page] as const,
+  memory: (id: string, page: number, observed: string | null) =>
+    [..._agentsKeyBase.detail(id), "memory", observed ?? "everyone", page] as const,
   shareRoles: () => [..._agentsKeyBase.all, "share-roles"] as const,
   conversationChannels: (agentId: string) =>
     [..._agentsKeyBase.detail(agentId), "conversation-channels"] as const,

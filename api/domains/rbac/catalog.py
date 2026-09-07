@@ -115,11 +115,6 @@ _OWNER_ORGANIZATION_KEYS = frozenset(
         PermissionKey.SKILL_MANAGE,
         PermissionKey.ACTIVITY_READ,
         PermissionKey.COST_READ,
-        # Organization-wide, in addition to the per-Agent grant of the same key:
-        # the Organization memory directory lists every Agent including deleted
-        # ones, which no per-Agent grant can authorize. Held by Owner and Admin
-        # only, matching COST_READ — both expose every Agent at once.
-        PermissionKey.AGENT_MEMORY_READ,
     }
 )
 _ADMIN_ORGANIZATION_KEYS = _OWNER_ORGANIZATION_KEYS - {

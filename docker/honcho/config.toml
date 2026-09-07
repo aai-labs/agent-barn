@@ -11,14 +11,22 @@
 # A larger window gives the model enough conversation to tell those apart, and
 # costs one call where the default spends several.
 #
-# Latency is not the trade-off it looks like: recent turns are already in the
-# runtime's own context window, so memory is what an Agent recalls in a *later*
-# session. Lagging the current conversation by a few turns costs nothing there.
+# Latency is not free, and an earlier note here claimed it was. Recall is
+# unaffected — recent turns are already in the runtime's own context window, so
+# memory is what an Agent recalls in a *later* session. The Memory tab is a
+# different matter: it shows derived memory, so batching is exactly what someone
+# watching it waits on. That is what the age backstop below bounds.
 representation_batch_work_unit_target_tokens = 4096
 representation_batch_target_input_tokens = 4096
-# Unchanged, and deliberately: a quiet conversation that never reaches the token
-# gate still gets derived within half an hour rather than sitting forever.
-representation_batch_max_age_seconds = 1800
+# The backstop for conversation that never reaches the token gate — which is most
+# ordinary chat: a short exchange is a few dozen tokens, nowhere near 4096. This
+# timer runs per session from its oldest unprocessed message, so the wait before a
+# memory appears is not a fixed delay but anywhere between zero and this value,
+# depending on where that session's timer already was. At the stock 1800 that made
+# a new memory take up to half an hour to show in the Memory tab, unpredictably.
+# Five minutes bounds it without touching the token gate, which is where the actual
+# cost saving comes from.
+representation_batch_max_age_seconds = 300
 
 [deriver.model_config]
 transport = "openai"

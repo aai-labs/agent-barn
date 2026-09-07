@@ -100,8 +100,11 @@ deriver:
   # give the model enough context to skip recording trivia.
   batchWorkUnitTargetTokens: 4096
   batchTargetInputTokens: 4096
-  # Safety net for conversations that never reach the token gate. 0 disables it.
-  batchMaxAgeSeconds: 1800
+  # Backstop for conversation that never reaches the token gate, which is most
+  # ordinary chat. The timer is per session and runs from its oldest unprocessed
+  # message, so this is the upper bound on how long a new memory takes to appear,
+  # not a fixed delay. 0 disables it entirely.
+  batchMaxAgeSeconds: 300
   resources:
     requests:
       memory: 512Mi

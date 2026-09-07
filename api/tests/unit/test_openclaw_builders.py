@@ -127,6 +127,7 @@ def test_gateway_config_keeps_file_backed_memory_when_honcho_is_not_configured()
     plugins = config["plugins"]
     assert plugins["slots"]["memory"] == "memory-core"
     assert "openclaw-honcho" not in plugins["allow"]
+    assert config["memory"]["backend"] == "builtin"
 
 
 def test_gateway_config_moves_the_memory_slot_to_honcho_when_configured() -> None:
@@ -147,6 +148,11 @@ def test_gateway_config_moves_the_memory_slot_to_honcho_when_configured() -> Non
     # start.sh can fall back to it when the plugin turns out to be missing.
     assert "memory-core" not in plugins["entries"]
     assert "memory-core" in plugins["allow"]
+    # The runtime accepts only "builtin" (file-backed) or "qmd" (plugin-backed) here.
+    # The slot is what actually decides, so an Agent runs on Honcho either way — but
+    # a config that says "builtin" while Honcho holds the data sends anyone
+    # debugging memory to the wrong place first.
+    assert config["memory"]["backend"] == "qmd"
 
     entry = plugins["entries"]["openclaw-honcho"]
     assert entry["enabled"] is True

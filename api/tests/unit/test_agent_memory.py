@@ -6,7 +6,6 @@ Correction is delete-then-create because Honcho has no update endpoint, and the
 consequences of that are pinned here rather than left as a surprise.
 """
 
-from datetime import UTC, datetime
 from unittest.mock import Mock
 from uuid import uuid7
 
@@ -18,9 +17,8 @@ from api.core.config import Config
 from api.domains.agents.authorization import AgentAuthorization
 from api.domains.agents.memory_sharing import AgentMemoryService, MemoryItemUpdate
 from api.domains.agents.models import Agent, AgentType
-from api.domains.agents.repository import AgentRepository, SharedMemoryFactRepository, SharedMemoryProvenance
+from api.domains.agents.repository import SharedMemoryFactRepository, SharedMemoryProvenance
 from api.domains.auth.models import CurrentUserContext
-from api.domains.rbac.policy import PermissionPolicy
 from api.infrastructure.honcho.client import HonchoClient, HonchoError
 
 AGENT_ID = uuid7()
@@ -30,6 +28,7 @@ def _agent() -> Agent:
     agent = Mock(spec=Agent)
     agent.id = AGENT_ID
     agent.name = "watcher"
+    agent.agent_type = AgentType.HERMES
     return agent
 
 
@@ -38,6 +37,8 @@ def _service(*, honcho_enabled: bool = True):
     authorization.require_action.return_value = _agent()
     authorization.require_action_allowing_deleted.return_value = _agent()
     honcho = Mock(spec=HonchoClient)
+    # No peers by default, so the facet pass is a no-op unless a test sets it.
+    honcho.list_peers.return_value = []
     provenance = Mock(spec=SharedMemoryFactRepository)
     provenance.find_for_conclusions.return_value = {}
     service = AgentMemoryService(
@@ -45,8 +46,6 @@ def _service(*, honcho_enabled: bool = True):
         honcho=honcho,
         config=Config(honcho_enabled=honcho_enabled),
         provenance=provenance,
-        permission_policy=Mock(spec=PermissionPolicy),
-        agent_repository=Mock(spec=AgentRepository),
     )
     return service, authorization, honcho, provenance
 
@@ -263,77 +262,52 @@ def test_correcting_a_shared_memory_keeps_it_marked_as_shared():
     provenance.carry_forward.assert_called_once_with("old", "new")
 
 
-def _org_agent(name: str, *, deleted: bool = False):
-    agent = Mock(spec=Agent)
-    agent.id = uuid7()
-    agent.name = name
-    # A plain string, which is what SQLModel returns for this column — the enum
-    # member a Mock would otherwise carry hides that the read model has to
-    # normalise it.
-    agent.agent_type = AgentType.HERMES.value
-    agent.deleted_at = datetime.now(UTC) if deleted else None
-    return agent
-
-
-def _org_context():
-    context = Mock(spec=CurrentUserContext)
-    context.require_current_user_organization.return_value = Mock(organization_id=uuid7())
-    return context
-
-
-def test_organization_directory_includes_deleted_agents():
-    """The reason this view exists: a deleted Agent keeps its memory, so without
-    listing it here that memory is personal data with no route to it."""
-    service, _auth, honcho, _prov = _service()
-    service.agent_repository.find_all_for_org.return_value = [
-        _org_agent("live-one"),
-        _org_agent("gone-one", deleted=True),
+def test_facets_count_each_peer_and_put_the_self_model_first():
+    """The tab filters by peer, so each facet needs its real count — Honcho counts
+    server-side per peer. The Agent's model of itself sorts first, then people by
+    how much the Agent knows about them, so the default order leads with the
+    fullest buckets."""
+    service, _, honcho, _provenance = _service()
+    honcho.list_peers.return_value = ["agent-watcher", "owner", "U123"]
+    # page fetch, then one count call per peer
+    honcho.list_conclusions.side_effect = [
+        ([], 0),  # the page itself (unfiltered)
+        ([], 65),  # observed=agent-watcher (self)
+        ([], 120),  # observed=owner
+        ([], 3),  # observed=U123
     ]
-    honcho.list_conclusions.return_value = ([], 7)
 
-    result = service.list_organization_memory(_org_context())
+    page = service.list_memory(AGENT_ID, _context(), page=1, size=50)
 
-    by_name = {a.agent_name: a for a in result.agents}
-    assert_that(by_name["gone-one"].deleted, equal_to(True))
-    assert_that(by_name["live-one"].deleted, equal_to(False))
-    assert_that(result.total_memories, equal_to(14))
-
-
-def test_an_unreachable_workspace_is_not_reported_as_empty():
-    """Zero means "this Agent learned nothing", which is a different claim from
-    "we could not ask". Collapsing them would quietly invite someone to conclude
-    an Agent has no memory when its store is simply down."""
-    service, _auth, honcho, _prov = _service()
-    service.agent_repository.find_all_for_org.return_value = [_org_agent("unreachable")]
-    honcho.list_conclusions.side_effect = HonchoError("down")
-
-    result = service.list_organization_memory(_org_context())
-
-    assert_that(result.agents[0].memory_count, equal_to(None))
-    assert_that(result.partial, equal_to(True))
-    assert_that(result.total_memories, equal_to(0))
+    labels = [(f.label, f.count, f.is_self) for f in page.facets]
+    assert_that(labels[0], equal_to(("What watcher knows", 65, True)))
+    assert_that(labels[1], equal_to(("About you", 120, False)))
+    assert_that(labels[2], equal_to(("About U123", 3, False)))
 
 
-def test_one_unreachable_agent_does_not_blank_the_others():
-    service, _auth, honcho, _prov = _service()
-    service.agent_repository.find_all_for_org.return_value = [_org_agent("a"), _org_agent("b")]
-    honcho.list_conclusions.side_effect = [HonchoError("down"), ([], 5)]
+def test_a_peer_the_agent_never_concluded_about_gets_no_facet():
+    """A peer can exist from a single inbound message that produced nothing. A zero
+    facet would be a filter that leads to an empty list."""
+    service, _, honcho, _provenance = _service()
+    honcho.list_peers.return_value = ["agent-watcher", "ghost"]
+    honcho.list_conclusions.side_effect = [([], 0), ([], 10), ([], 0)]
 
-    result = service.list_organization_memory(_org_context())
+    page = service.list_memory(AGENT_ID, _context(), page=1, size=50)
 
-    counts = {a.agent_name: a.memory_count for a in result.agents}
-    assert_that(counts, equal_to({"a": None, "b": 5}))
-    assert_that(result.total_memories, equal_to(5))
+    assert_that([f.peer for f in page.facets], equal_to(["agent-watcher"]))
 
 
-def test_organization_directory_requires_organization_wide_permission():
-    """Per-Agent grants are not enough: this lists Agents the caller may hold no
-    individual grant on, deleted ones included."""
-    service, _auth, honcho, _prov = _service()
-    service.agent_repository.find_all_for_org.return_value = []
-    service.permission_policy.require_organization.side_effect = HTTPException(status_code=403)
+def test_filtering_to_a_peer_scopes_the_query_and_skips_facets():
+    """Under a filter the facets are redundant — they describe the whole workspace,
+    which the unfiltered view already provided — so they are not recomputed, and
+    the query is scoped to that peer as observed."""
+    service, _, honcho, _provenance = _service()
+    honcho.list_conclusions.return_value = ([], 0)
 
-    with pytest.raises(HTTPException):
-        service.list_organization_memory(_org_context())
+    page = service.list_memory(AGENT_ID, _context(), page=1, size=50, observed="owner")
 
-    honcho.list_conclusions.assert_not_called()
+    assert_that(page.facets, equal_to([]))
+    honcho.list_peers.assert_not_called()
+    assert_that(honcho.list_conclusions.call_args.kwargs["observed"], equal_to("owner"))
+    # Always scoped to the Agent as observer, filtered or not.
+    assert_that(honcho.list_conclusions.call_args.kwargs["observer"], equal_to("agent-watcher"))

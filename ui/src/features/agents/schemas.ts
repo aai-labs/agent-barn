@@ -387,14 +387,27 @@ export const AgentMemoryItemSchema = z.object({
   sharedAt: z.string().nullable().optional(),
 });
 
+// One peer the memory can be filtered to, with its real count. `peer` is the id
+// sent back to filter; `label` is what the chip shows.
+export const AgentMemoryFacetSchema = z.object({
+  peer: z.string(),
+  label: z.string(),
+  count: z.number().int(),
+  isSelf: z.boolean(),
+});
+
 export const AgentMemoryPageSchema = z.object({
   items: z.array(AgentMemoryItemSchema),
   total: z.number().int(),
   page: z.number().int(),
   size: z.number().int(),
+  // Present only on the unfiltered view; the chips it drives describe the whole
+  // workspace. Undeclared fields are stripped by zod, so this must be listed.
+  facets: z.array(AgentMemoryFacetSchema).default([]),
 });
 
 export type AgentMemoryItem = z.infer<typeof AgentMemoryItemSchema>;
+export type AgentMemoryFacet = z.infer<typeof AgentMemoryFacetSchema>;
 export type AgentMemoryPage = z.infer<typeof AgentMemoryPageSchema>;
 
 // One result per destination: a share can succeed for some agents and fail for
@@ -411,22 +424,12 @@ export const SharedFactResultSchema = z.object({
 
 export type SharedFactResult = z.infer<typeof SharedFactResultSchema>;
 
-export const OrganizationAgentMemorySchema = z.object({
-  agentId: z.string().uuid(),
-  agentName: z.string(),
-  agentType: z.string(),
-  deleted: z.boolean(),
-  // null means the memory store could not be reached for this agent. Distinct
-  // from 0, which means it holds nothing — the two must not render alike.
-  memoryCount: z.number().int().nullable(),
+export const MemoryCarryOverResultSchema = z.object({
+  copied: z.number().int(),
+  // True when the agent held more than the copy limit, so the caller learns the
+  // carry-over was partial before deleting rather than afterwards.
+  truncated: z.boolean(),
+  results: z.array(SharedFactTargetResultSchema),
 });
 
-export const OrganizationMemorySchema = z.object({
-  agents: z.array(OrganizationAgentMemorySchema),
-  totalMemories: z.number().int(),
-  // True when some count is missing, making the total a floor rather than exact.
-  partial: z.boolean(),
-});
-
-export type OrganizationAgentMemory = z.infer<typeof OrganizationAgentMemorySchema>;
-export type OrganizationMemory = z.infer<typeof OrganizationMemorySchema>;
+export type MemoryCarryOverResult = z.infer<typeof MemoryCarryOverResultSchema>;

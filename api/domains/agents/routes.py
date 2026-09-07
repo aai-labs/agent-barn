@@ -8,11 +8,12 @@ from fastapi_injector import Injected
 from api.domains.agents.access_service import AgentAccessService
 from api.domains.agents.memory_sharing import (
     AgentMemoryService,
+    MemoryCarryOverCreate,
+    MemoryCarryOverResult,
     MemoryItemRead,
     MemoryItemUpdate,
     MemoryPage,
     MemorySharingService,
-    OrganizationMemoryRead,
     SharedFactCreate,
     SharedFactResult,
 )
@@ -43,10 +44,6 @@ from api.domains.templates.models import TemplateRead
 from api.infrastructure.shared.models import PaginatedItems, Pagination
 
 agents_router = APIRouter(prefix="/organizations/{organization_id}/agents", tags=["agents"])
-# Organization-scoped rather than Agent-scoped, so it cannot live under the router
-# above: `/agents/memory` would be matched by `/agents/{agent_id}/...` and the
-# literal would be parsed as an Agent id.
-organization_memory_router = APIRouter(prefix="/organizations/{organization_id}/memory", tags=["agents"])
 
 
 @agents_router.post("", response_model=AgentRead, status_code=status.HTTP_201_CREATED)
@@ -116,8 +113,9 @@ def list_agent_memory(
     service: Annotated[AgentMemoryService, Injected(AgentMemoryService)],
     page: int = Query(default=1, ge=1),
     size: int = Query(default=50, ge=1, le=100),
+    observed: str | None = Query(default=None),
 ):
-    return service.list_memory(agent_id, context, page=page, size=size)
+    return service.list_memory(agent_id, context, page=page, size=size, observed=observed)
 
 
 @agents_router.get("/{agent_id}/memory/search", response_model=list[MemoryItemRead], response_model_by_alias=True)
@@ -342,9 +340,12 @@ def validate_integration(
     return service.validate_integration(agent_id, provider, context)
 
 
-@organization_memory_router.get("", response_model=OrganizationMemoryRead, response_model_by_alias=True)
-def list_organization_memory(
+@agents_router.post("/{agent_id}/memory/carry-over", response_model=MemoryCarryOverResult, response_model_by_alias=True)
+def carry_over_agent_memory(
+    agent_id: UUID,
+    data: MemoryCarryOverCreate,
     context: Annotated[CurrentUserContext, Depends(get_current_user())],
-    service: Annotated[AgentMemoryService, Injected(AgentMemoryService)],
+    service: Annotated[MemorySharingService, Injected(MemorySharingService)],
 ):
-    return service.list_organization_memory(context)
+    """Copy an Agent's memory into other Agents before it is deleted."""
+    return service.carry_over(agent_id, data, context)

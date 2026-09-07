@@ -6,12 +6,51 @@ Related context: [`../agents.md`](../agents.md), [`../costs.md`](../costs.md), [
 
 ## Current state
 
-- Delivered: the Honcho service charts, their Helmfile releases, an embedding route on LiteLLM, runtime wiring for both OpenClaw and Hermes behind a fleet-wide toggle that defaults to off, per-Agent memory cost attribution, and explicit cross-Agent memory sharing. A prior slice added workspace purging on Agent deletion; that has been reversed in favor of retention.
+- Delivered: the Honcho service charts, their Helmfile releases, an embedding route on LiteLLM, runtime wiring for both OpenClaw and Hermes behind a fleet-wide toggle that defaults to off, per-Agent memory cost attribution, explicit cross-Agent memory sharing, and erasure of an Agent's memory when it is deleted with carry-over offered first.
 - In transition: with `HONCHO_ENABLED` unset nothing changes, and Agents already running keep file-backed memory until they are stopped and started once. The toggle is fleet-wide, so enabling it moves every OpenClaw Agent on its next restart rather than a chosen subset.
-- Next: commit. Everything designed for this feature is now built.
+- Next: commit. Everything designed for this feature is built. The Organization-wide memory directory was built and then removed with the move back to erasing memory on deletion; it is preserved on `AF-280-org-memory-view-backup`.
 - Blockers: none. Kubernetes mints Honcho's LiteLLM key itself; a local compose run still needs `HONCHO_LITELLM_KEY` and `HONCHO_ENABLED=true` in `.env`, since compose has no install hook.
 
 ## Changes
+
+### 2026-09-07 — AF-280 — memory tab: peer filters instead of in-page groups
+
+- Replaced the in-page grouping with filter chips. The tab was grouping each page's rows by peer and labelling the header with the per-page count, so the number changed as you paged and a group spanned pages. Chips now carry each peer's real total — Honcho filters and counts server-side — and selecting one scopes the query to that peer, so "Page 1 of 2" means page 1 of that peer alone.
+- Scoped the whole view to the Agent as observer. Honcho stores each fact under the Agent's view of a person *and* that person's own derived self-model, which restated everything twice; showing only what the Agent concluded removes that duplication at the source rather than papering over it in the client.
+- Facets live in their own cached query, not the paged response, so the chips stay put when a filter is active — an earlier cut dropped them on filter, stranding you with no way back to Everyone.
+- Kept a per-page content collapse: sharing deliberately writes a fact under the self-model and each person so both runtimes' recall find it, so one fact can still appear more than once on the Everyone view. Collapsed rows act on every copy — forgetting or correcting hits all of them.
+- Relabelled `owner` as "About you" (chip) / "about you" (row). It is you talking to the Agent through the app, not headless traffic; the old "From messages with no sender" was wrong.
+- Fixed the bare 500 on sharing. Provenance recording ran outside the guard around the Honcho write, so a DB hiccup failed a share whose conclusion had already landed. It is now best-effort: the fact stays, the memory simply shows unbadged, and the failure is logged rather than raised. This is the class of the earlier `memtest-openclaw` 500s.
+- Server: `list_conclusions` gained `observer`/`observed` filters and `GET …/memory` an `observed` query param; `MemoryPage` gained `facets`. Coverage: facet counting and ordering, the zero-count peer being dropped, filtered requests skipping the facet pass, and the provenance-failure degradation. 1707 tests pass; `check-api`, `check-ui`, `lint-ui` clean; verified live — chips 110/45/65, filtering to a peer narrows and paginates honestly, chips persist across filters.
+- Not addressed, and now the most visible thing in the tab: the OpenClaw memory plugin records its own system prompt as facts ("owner instructs the agent to…"), which dominates a real Agent's list. The Facts-only heuristic catches some by wording, not by design. Still the largest open memory-quality issue.
+
+### 2026-09-07 — AF-280 — bound how long a new memory takes to appear
+
+- Cut the deriver's age backstop from Honcho's stock 1800s to 300s. The token gate stays at 4096, which is where the cost saving actually comes from.
+- The problem this fixes was mine. Widening the batch gate assumed latency was free, on the reasoning that recent turns are already in the runtime's context window so memory only matters for a *later* session. That holds for recall and not for the Memory tab, which shows derived memory — so batching is precisely what someone watching that tab waits on. Told an Agent something and it took roughly 25 minutes to appear.
+- Worse than slow, it was unpredictable. The timer is per session and runs from that session's oldest unprocessed message, so the wait is anywhere from zero to the full window depending on where a session's timer already sat. Measured on two Agents created minutes apart: 12 minutes on one, 25 on the other.
+- A hypothesis worth recording as wrong: the difference looked like a runtime difference, with Hermes appearing to reach the token gate on its own because it sends large `<prior_memory_file>` payloads. Measuring it killed that — Hermes had ~716 tokens across 18 messages, OpenClaw ~3,744 across 24, and neither approaches 4096. Both were waiting on the age backstop; only the timers' phase differed.
+- Ordinary chat never reaches a 4096-token gate — a short exchange is a few dozen tokens — so the backstop, not the gate, is what governs when memory appears in practice.
+- Verified against the running stack: the deriver reports 300s in effect with the gate and dialectic settings unchanged. `helm template` renders it, and `check-api`, `check-ui`, `lint-ui` are clean.
+
+### 2026-09-07 — AF-280 — the OpenClaw config now says which memory backend is in use
+
+- `memory.backend` is emitted as `qmd` when Honcho holds the memory slot, and stays `builtin` otherwise. It was hardcoded to `builtin` regardless, so the config claimed file-backed memory while Honcho held the data.
+- This is a clarity fix, not a behaviour fix: the plugin slot decides which backend runs, and an Agent with Honcho in the slot already ran on Honcho with `builtin` written here — confirmed by `openclaw status --json --all` on a live pod reporting `backend: qmd, provider: honcho-selfhosted` against the correct workspace. But the config is the first place anyone looks when memory seems wrong, and it was pointing at the wrong one.
+- The value came from the runtime rather than a guess: `memory.backend` accepts exactly `"builtin"` and `"qmd"`, which the runtime states in its own validation error. `"plugin"` and `"none"` are rejected outright, so a plausible-looking edit here would have failed the config rather than degrading quietly.
+- Existing Agents keep whatever is on their volume until they are recreated; the config persists on the PVC, so this reaches an Agent on its next rebuild rather than its next restart.
+- Also seen while validating, and not addressed here: the runtime reports `plugins.allow` as a legacy key ("now gates bundled provider discovery by default"), suggesting `plugins.bundledDiscovery` should be set explicitly. That is a plausible contributor to the `firecrawl plugin install failed` line in Agent boot logs, which predates this work.
+
+### 2026-09-07 — AF-280 — memory is erased with the Agent, and carried over first
+
+- Reversed the retention decision: deleting an Agent now erases its Honcho workspace. Deletion already destroys the volume, the Secret and every other resource, and nothing in the product restores an Agent — the soft-deleted row is audit and cost history. Memory was the lone survivor of an otherwise total teardown, which is an inconsistency rather than a safeguard, and it was conversational content about real people held under no retention policy.
+- Removed the Organization-wide memory directory, whose main justification was reaching a deleted Agent's memory. It is preserved on the `AF-280-org-memory-view-backup` branch rather than deleted outright.
+- Reverted the Organization-role grant of `agent.memory.read` that the directory required. An org-wide grant with no caller is a silent widening of trust, and the exact-matrix RBAC test exists to stop exactly that.
+- The purge runs as a retried delivery on `agent.deleted`, not inline. This matters: Honcho returns 409 on a workspace delete while any session remains — the normal state for an Agent that did any work, confirmed against a live workspace — and deleting sessions first does not settle it, because both deletes are accepted asynchronously (202) and the workspace delete can still race ahead. Inline, a lost race would have left memory in place behind a log line, with no view left in the product able to reach it. The first implementation here was inline and would have shipped exactly that failure.
+- Added carry-over in the delete flow: the retire dialog offers to copy the Agent's memory into other Agents, does it before deleting, and aborts the deletion if the copy fails. Leaving this to ordinary sharing would not have been enough — sharing is one fact at a time and needs foresight at the moment people have least of it, since deletion is usually "this Agent is redundant" and the loss is noticed later. Bounded at 500 memories, with truncation reported before anything is destroyed.
+- Verified live: carry-over of all 49 memories from one Agent to another over the authenticated route, each arriving badged with its origin, then removed again through the API — which also confirmed that forgetting a memory clears its provenance row. Separately, a workspace holding a session, a message and a conclusion was fully erased through the real client.
+- Coverage: 1701 tests pass; `check-api`, `check-migrations`, `check-monitoring`, `check-ui`, `lint-ui` clean. Seven new tests cover the purge, its retry-on-failure, the disabled-backend case, session-before-workspace ordering, and carry-over's copy, truncation and permission behaviour.
+- The handler-registry wiring test caught the new handler being named in the catalog with nothing registered behind it, exactly as intended.
 
 ### 2026-09-06 — AF-280 — Organization-wide memory directory
 

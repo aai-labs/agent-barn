@@ -31,10 +31,9 @@ from pydantic import BaseModel, ConfigDict, Field
 from api.core.config import Config
 from api.domains.agents.authorization import AgentAuthorization
 from api.domains.agents.models import Agent, AgentType
-from api.domains.agents.repository import AgentRepository, SharedMemoryFactRepository, SharedMemoryProvenance
+from api.domains.agents.repository import SharedMemoryFactRepository, SharedMemoryProvenance
 from api.domains.auth.models import CurrentUserContext
 from api.domains.rbac.catalog import PermissionKey
-from api.domains.rbac.policy import PermissionPolicy
 from api.infrastructure.honcho.client import HonchoClient, HonchoError, workspace_id_for_agent
 
 logger = logging.getLogger(__name__)
@@ -58,6 +57,22 @@ class SharedFactTargetResult(BaseModel):
 class SharedFactResult(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
+    results: list[SharedFactTargetResult]
+
+
+class MemoryCarryOverCreate(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    target_agent_ids: list[UUID] = Field(min_length=1, max_length=20, alias="targetAgentIds")
+
+
+class MemoryCarryOverResult(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    copied: int
+    # Set when the source held more than the copy limit, so the caller learns the
+    # carry-over was partial *before* deleting the Agent rather than afterwards.
+    truncated: bool = False
     results: list[SharedFactTargetResult]
 
 
@@ -86,6 +101,23 @@ class MemoryItemRead(BaseModel):
     shared_at: str | None = Field(default=None, alias="sharedAt")
 
 
+class MemoryFacet(BaseModel):
+    """One peer the memory can be filtered to, with its own count.
+
+    `peer` is the raw Honcho id the client sends back to filter; `label` is what
+    the tab shows. Counts are the peer's real totals, so a facet chip means the
+    same number whichever page is open."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    peer: str
+    label: str
+    count: int
+    # The Agent's model of itself, versus a person it has talked to. The tab uses
+    # it to order facets and to drop the redundant per-row "about whom" label.
+    is_self: bool = Field(alias="isSelf")
+
+
 class MemoryPage(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -93,33 +125,10 @@ class MemoryPage(BaseModel):
     total: int
     page: int
     size: int
-
-
-class OrganizationAgentMemoryRead(BaseModel):
-    """One Agent's line in the Organization-wide memory directory."""
-
-    model_config = ConfigDict(populate_by_name=True)
-
-    agent_id: UUID = Field(alias="agentId")
-    agent_name: str = Field(alias="agentName")
-    agent_type: str = Field(alias="agentType")
-    # Deleted Agents keep their memory (see the ADR), which is the reason this
-    # view exists: without it that memory is personal data nobody can reach.
-    deleted: bool
-    # None means Honcho could not be reached for this Agent. Distinct from 0,
-    # which means the workspace exists and holds nothing — reporting an
-    # unreachable workspace as empty would read as "this Agent learned nothing".
-    memory_count: int | None = Field(default=None, alias="memoryCount")
-
-
-class OrganizationMemoryRead(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    agents: list[OrganizationAgentMemoryRead]
-    total_memories: int = Field(alias="totalMemories")
-    # True when at least one Agent's count is None, so the total is a floor
-    # rather than a figure — the UI says so rather than presenting it as exact.
-    partial: bool = False
+    # Every peer the memory can be filtered to, each with its real count. Absent
+    # (empty) when a specific peer is being viewed — the facets describe the whole
+    # workspace, so they are computed only for the unfiltered "Everyone" view.
+    facets: list[MemoryFacet] = Field(default_factory=list)
 
 
 class MemoryItemUpdate(BaseModel):
@@ -142,6 +151,21 @@ def _to_memory_item(raw: dict, shared: SharedMemoryProvenance | None = None) -> 
         sharedFrom=shared.source_agent_name if shared else None,
         sharedAt=shared.shared_at.isoformat() if shared and shared.shared_at else None,
     )
+
+
+def _facet_for_peer(peer: str, count: int, agent_name: str, ai_peer_name: str) -> MemoryFacet:
+    """Turn a raw Honcho peer id into a facet the tab can show.
+
+    The three cases mirror how memory is actually keyed. The AI peer is the
+    Agent's model of itself. `owner` is OpenClaw's id for whoever is talking to
+    the Agent through the app when no sender identity is attached — a person, not
+    headless traffic, so it reads as "you". Everything else is a named
+    correspondent (a Slack user id, say), shown as-is."""
+    if peer == ai_peer_name:
+        return MemoryFacet(peer=peer, label=f"What {agent_name} knows", count=count, isSelf=True)
+    if peer == "owner":
+        return MemoryFacet(peer=peer, label="About you", count=count, isSelf=False)
+    return MemoryFacet(peer=peer, label=f"About {peer}", count=count, isSelf=False)
 
 
 def ai_peer_name_for_agent(agent: Agent) -> str:
@@ -168,6 +192,30 @@ class MemorySharingService:
     honcho: HonchoClient
     config: Config
     provenance: SharedMemoryFactRepository
+
+    def _record_provenance(
+        self, created: list[dict], *, target_agent_id: UUID, source_agent_id: UUID, context: CurrentUserContext
+    ) -> None:
+        """Record where each shared conclusion came from, without letting that fail
+        the share. By the time this runs the fact is already in the destination's
+        memory, so a provenance-write hiccup must not turn a successful share into a
+        500 — the memory simply shows unbadged, and that is recoverable, whereas a
+        raised error here reports failure for a change that happened."""
+        for conclusion in created:
+            try:
+                self.provenance.record(
+                    conclusion_id=str(conclusion.get("id")),
+                    target_agent_id=target_agent_id,
+                    source_agent_id=source_agent_id,
+                    shared_by_user_id=getattr(context.user, "id", None),
+                )
+            except Exception:
+                logger.warning(
+                    "Shared fact %s into agent %s but could not record its provenance",
+                    conclusion.get("id"),
+                    target_agent_id,
+                    exc_info=True,
+                )
 
     def share_fact(
         self, source_agent_id: UUID, payload: SharedFactCreate, context: CurrentUserContext
@@ -196,18 +244,66 @@ class MemorySharingService:
                     ai_peer_name_for_agent(target_agent),
                     payload.content,
                 )
-                # Only after Honcho confirms: a row for a conclusion that was never
-                # created would badge whichever unrelated memory later takes that id.
-                self.provenance.record(
-                    conclusion_id=str(created.get("id")),
-                    target_agent_id=target_agent.id,
-                    source_agent_id=source_agent_id,
-                    shared_by_user_id=getattr(context.user, "id", None),
+                # After Honcho confirms each conclusion. Provenance is best-effort:
+                # the fact is already stored, so a failed row must not fail the share.
+                self._record_provenance(
+                    created, target_agent_id=target_agent.id, source_agent_id=source_agent_id, context=context
                 )
                 results.append(SharedFactTargetResult(agentId=target_agent_id, shared=True))
             except HonchoError as exc:
                 results.append(SharedFactTargetResult(agentId=target_agent_id, shared=False, error=str(exc)))
         return SharedFactResult(results=results)
+
+    # An Agent's memory is erased when it is deleted, so this is the escape hatch:
+    # copy what it learned into another Agent first. Deliberately bounded — it is a
+    # rescue path at deletion time, not a migration tool.
+    MAX_CARRY_OVER = 500
+
+    def carry_over(
+        self, source_agent_id: UUID, payload: MemoryCarryOverCreate, context: CurrentUserContext
+    ) -> MemoryCarryOverResult:
+        if not self.config.honcho_enabled:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Memory sharing requires Honcho-backed memory to be enabled.",
+            )
+        # Reading the source's memory, not just naming it, so this needs the memory
+        # read grant rather than the plain agent read that sharing a typed-in fact takes.
+        source = self.agent_authorization.require_action(context, source_agent_id, PermissionKey.AGENT_MEMORY_READ)
+        targets = [
+            self.agent_authorization.require_action(context, target_id, PermissionKey.AGENT_MEMORY_MANAGE)
+            for target_id in payload.target_agent_ids
+        ]
+
+        try:
+            items = self.honcho.list_all_conclusions(workspace_id_for_agent(source.id), limit=self.MAX_CARRY_OVER + 1)
+        except HonchoError as exc:
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+        truncated = len(items) > self.MAX_CARRY_OVER
+        contents = [str(i.get("content") or "") for i in items[: self.MAX_CARRY_OVER]]
+        contents = [c for c in contents if c]
+
+        results: list[SharedFactTargetResult] = []
+        copied = 0
+        for target in targets:
+            workspace = workspace_id_for_agent(target.id)
+            peer = ai_peer_name_for_agent(target)
+            failure: str | None = None
+            for content in contents:
+                try:
+                    created = self.honcho.share_fact(workspace, peer, content)
+                except HonchoError as exc:
+                    # Stop at the first failure for this destination: the rest would
+                    # almost certainly fail the same way, and reporting a partial
+                    # count is more useful than a long stall.
+                    failure = str(exc)
+                    break
+                self._record_provenance(
+                    created, target_agent_id=target.id, source_agent_id=source_agent_id, context=context
+                )
+                copied += 1
+            results.append(SharedFactTargetResult(agentId=target.id, shared=failure is None, error=failure))
+        return MemoryCarryOverResult(copied=copied, truncated=truncated, results=results)
 
 
 @inject
@@ -225,8 +321,6 @@ class AgentMemoryService:
     honcho: HonchoClient
     config: Config
     provenance: SharedMemoryFactRepository
-    permission_policy: PermissionPolicy
-    agent_repository: AgentRepository
 
     def _require(self, agent_id: UUID, permission: PermissionKey, context: CurrentUserContext) -> Agent:
         if not self.config.honcho_enabled:
@@ -239,67 +333,26 @@ class AgentMemoryService:
         # erase. Reaching a deleted Agent needs organization-wide visibility.
         return self.agent_authorization.require_action_allowing_deleted(context, agent_id, permission)
 
-    def list_organization_memory(self, context: CurrentUserContext) -> OrganizationMemoryRead:
-        """Every Agent in the Organization that could hold memory, with its size.
+    def list_memory(
+        self, agent_id: UUID, context: CurrentUserContext, *, page: int, size: int, observed: str | None = None
+    ) -> MemoryPage:
+        """One page of what the Agent has learned, optionally filtered to one peer.
 
-        A directory rather than a merged stream of memories: Honcho keyed every
-        workspace by Agent, and nothing reads across workspaces, so a combined
-        list would query every Agent on every page and paginate across sources
-        that do not share an order. Counting is one cheap call per Agent, and the
-        per-Agent view already handles reading.
-
-        Deleted Agents are included deliberately — their memory is retained (see
-        the ADR), so this is the only place it can be found.
+        Everything is scoped to the Agent as observer: the view is what the Agent
+        concluded, not the Honcho-derived self-models of the people it talked to,
+        which restate the same facts under a second peer pair. That scoping is
+        also why nothing here has to de-duplicate — each fact appears once.
         """
-        if not self.config.honcho_enabled:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Agent memory requires Honcho-backed memory to be enabled.",
-            )
-        org_id = context.require_current_user_organization().organization_id
-        # Organization-wide rather than per-Agent: this lists Agents the caller
-        # may hold no individual grant on, including deleted ones.
-        self.permission_policy.require_organization(
-            context,
-            org_id,
-            PermissionKey.AGENT_MEMORY_READ,
-            detail="You don't have permission to view this organization's agent memory.",
-        )
-
-        entries: list[OrganizationAgentMemoryRead] = []
-        total = 0
-        partial = False
-        for agent in self.agent_repository.find_all_for_org(org_id):
-            try:
-                _, count = self.honcho.list_conclusions(workspace_id_for_agent(agent.id), page=1, size=1)
-            except HonchoError:
-                # One unreachable workspace must not blank the whole directory:
-                # the other Agents' counts are still true.
-                logger.warning("Could not read memory size for agent %s", agent.id, exc_info=True)
-                count = None
-                partial = True
-            else:
-                total += count
-            entries.append(
-                OrganizationAgentMemoryRead(
-                    agentId=agent.id,
-                    agentName=agent.name,
-                    # The column is a plain string, so SQLModel hands back a str
-                    # rather than the enum. Normalising accepts either.
-                    agentType=AgentType(agent.agent_type).value,
-                    deleted=agent.deleted_at is not None,
-                    memoryCount=count,
-                )
-            )
-        # Largest first: the reason to open this page is usually to find where
-        # memory has accumulated. Unreachable Agents sort last rather than as 0.
-        entries.sort(key=lambda e: (e.memory_count is None, -(e.memory_count or 0), e.agent_name))
-        return OrganizationMemoryRead(agents=entries, totalMemories=total, partial=partial)
-
-    def list_memory(self, agent_id: UUID, context: CurrentUserContext, *, page: int, size: int) -> MemoryPage:
         agent = self._require(agent_id, PermissionKey.AGENT_MEMORY_READ, context)
+        workspace = workspace_id_for_agent(agent.id)
+        ai_peer = ai_peer_name_for_agent(agent)
         try:
-            items, total = self.honcho.list_conclusions(workspace_id_for_agent(agent.id), page=page, size=size)
+            items, total = self.honcho.list_conclusions(
+                workspace, page=page, size=size, observer=ai_peer, observed=observed
+            )
+            # Facets describe the whole workspace, so they are computed only for the
+            # unfiltered view — asking for them under a filter would be redundant work.
+            facets = self._memory_facets(workspace, ai_peer, agent.name) if observed is None else []
         except HonchoError as exc:
             raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
         shared = self.provenance.find_for_conclusions([str(i.get("id")) for i in items])
@@ -308,7 +361,27 @@ class AgentMemoryService:
             total=total,
             page=page,
             size=size,
+            facets=facets,
         )
+
+    def _memory_facets(self, workspace: str, ai_peer: str, agent_name: str) -> list[MemoryFacet]:
+        """The peers the Agent has memory about, each with its real count.
+
+        One count call per observed peer. Peers are few in practice — an Agent has
+        a handful of correspondents — and each call is `size=1` for the total only.
+        The Agent's own self-model sorts first, then the rest by size, so the tab's
+        default facet order puts "what it knows about itself" and the busiest
+        person up front.
+        """
+        # Every peer in the workspace is a candidate; the count guard below drops
+        # any the Agent never actually formed a conclusion about.
+        facets: list[MemoryFacet] = []
+        for peer in self.honcho.list_peers(workspace):
+            _, count = self.honcho.list_conclusions(workspace, page=1, size=1, observer=ai_peer, observed=peer)
+            if count:
+                facets.append(_facet_for_peer(peer, count, agent_name, ai_peer))
+        facets.sort(key=lambda f: (not f.is_self, -f.count, f.label))
+        return facets
 
     def forget(self, agent_id: UUID, memory_id: str, context: CurrentUserContext) -> None:
         # Not agent.update: removing what an Agent knows changes what it believes,
