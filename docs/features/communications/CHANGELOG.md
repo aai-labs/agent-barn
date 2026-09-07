@@ -13,6 +13,14 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
 
 ## Changes
 
+### 2026-09-06 — Hermes DM history continuity — PR pending
+
+- Fixed: Consecutive Hermes deliveries now explicitly resume the persisted Connection/location/thread session through `/v1/runs`. Previously the shared session ID selected persistence identity but supplied no prior messages to inference, so the Agent treated each DM as its first turn despite history remaining in SQLite.
+- Changed: The Hermes base image adds an opt-in session-history patch preserving native tool messages and compaction lineage. Storage failures fail the turn rather than erasing its context. The adapter and patched image must roll out together; OpenClaw delivery is unchanged.
+- Fixed: Hermes renews its active inbound-delivery lease throughout long async runs and approvals. A later message in the same session receives a completed “still working” acknowledgement rather than being silently reclaimed; reclaimed terminal failures now record metrics and provider failure feedback. Verbose progress and approval notices are rate-limited and best-effort, so their transient delivery failures do not fail a live run.
+- Fixed: Telegram long-message chunking now measures Telegram's UTF-16 code-unit limit and preserves newline/blank-line content exactly at chunk boundaries.
+- Verified: Existing PVC history is reused without a migration.
+
 ### 2026-09-04 — Provider gateway close diagnostics — PR pending
 
 - Changed: WebSocket provider close codes are now retained as bounded

@@ -159,6 +159,7 @@ def build_secret_hermes_runtime(
     runtime_api_key: str,
     litellm_api_key: str,
     litellm_base_url: str,
+    verbose_mode: bool = False,
 ) -> client.V1Secret:
     return client.V1Secret(
         metadata=client.V1ObjectMeta(
@@ -178,6 +179,8 @@ def build_secret_hermes_runtime(
             "RUNTIME_API_KEY": runtime_api_key,
             "RUNTIME_API_URL": "http://127.0.0.1:8642",
             "RUNTIME_MODEL": agent_name,
+            "RUNTIME_KIND": "hermes",
+            "VERBOSE_MODE": "true" if verbose_mode else "false",
         },
     )
 
