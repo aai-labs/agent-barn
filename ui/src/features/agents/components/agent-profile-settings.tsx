@@ -2,6 +2,8 @@
 
 import { useState } from "react";
 
+import { Checkbox } from "@/components/ui/checkbox";
+import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
@@ -38,12 +40,14 @@ export function AgentProfileSettings({
   const [name, setName] = useState(agent.name);
   const [model, setModel] = useState<string | null>(agent.model || null);
   const [approvalMode, setApprovalMode] = useState<CommandApprovalMode>(agent.approvalMode);
+  const [verboseMode, setVerboseMode] = useState(agent.verboseMode);
   const { applyAndRestart } = useAgentApplyAndRestart(agent);
-  const approvalLabel = agent.agentType === "hermes" ? agent.approvalMode : "Managed by OpenClaw";
+  const approvalLabel = agent.agentType === "hermes" ? agent.approvalMode : "Full access — no approval prompts";
   const isDirty =
     name.trim() !== agent.name ||
     (model ?? "") !== agent.model ||
-    (agent.agentType === "hermes" && approvalMode !== agent.approvalMode);
+    (agent.agentType === "hermes" && approvalMode !== agent.approvalMode) ||
+    (agent.agentType === "hermes" && verboseMode !== agent.verboseMode);
 
   async function applyChanges() {
     await applyAndRestart(() =>
@@ -51,7 +55,7 @@ export function AgentProfileSettings({
         agentId: agent.id,
         name: name.trim(),
         model,
-        ...(agent.agentType === "hermes" ? { approvalMode } : {}),
+        ...(agent.agentType === "hermes" ? { approvalMode, verboseMode } : {}),
       }).then(() => undefined),
     );
   }
@@ -60,6 +64,7 @@ export function AgentProfileSettings({
     setName(agent.name);
     setModel(agent.model || null);
     setApprovalMode(agent.approvalMode);
+    setVerboseMode(agent.verboseMode);
     updateAgent.reset();
     onEdit();
   }
@@ -108,6 +113,15 @@ export function AgentProfileSettings({
               </Select>
             </label>
           )}
+          {agent.agentType === "hermes" && (
+            <Label className="flex items-center gap-2 text-[0.84rem] font-medium" style={{ color: "var(--ink)" }}>
+              <Checkbox
+                checked={verboseMode}
+                onCheckedChange={(checked) => setVerboseMode(checked === true)}
+              />
+              Verbose mode — show progress while the Agent is working
+            </Label>
+          )}
           {updateAgent.error && (
             <span className="text-xs" style={{ color: "var(--err)" }}>
               {updateAgent.error instanceof Error ? updateAgent.error.message : "Save failed"}
@@ -136,6 +150,14 @@ export function AgentProfileSettings({
             <dt className="text-[0.72rem] font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--ink-4)" }}>Command approval</dt>
             <dd className="mb-0 mt-1 text-[0.9rem]" style={{ color: "var(--ink-2)" }}>{approvalLabel}</dd>
           </div>
+          {agent.agentType === "hermes" && (
+            <div>
+              <dt className="text-[0.72rem] font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--ink-4)" }}>Verbose mode</dt>
+              <dd className="mb-0 mt-1 text-[0.9rem]" style={{ color: "var(--ink-2)" }}>
+                {agent.verboseMode ? "Shown while the Agent is working" : "Hidden — only the final reply is sent"}
+              </dd>
+            </div>
+          )}
         </dl>
       )}
 

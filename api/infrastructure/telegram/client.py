@@ -11,6 +11,46 @@ logger = logging.getLogger(__name__)
 _BASE = "https://api.telegram.org"
 _TIMEOUT_SECONDS = 15
 _CHAT_CACHE_TTL_SECONDS = 600
+# Telegram's hard sendMessage text limit, measured in UTF-16 code units.
+# Longer text is rejected outright with HTTP 400 ("message is too long")
+# rather than truncated by the API.
+_MAX_MESSAGE_LENGTH = 4096
+
+
+def _utf16_length(text: str) -> int:
+    return len(text.encode("utf-16-le")) // 2
+
+
+def _prefix_within_utf16_limit(text: str, limit: int) -> int:
+    """Return the largest prefix whose UTF-16 length does not exceed limit."""
+    units = 0
+    for index, character in enumerate(text):
+        character_units = 2 if ord(character) > 0xFFFF else 1
+        if units + character_units > limit:
+            return index
+        units += character_units
+    return len(text)
+
+
+def _chunk_text(text: str, limit: int = _MAX_MESSAGE_LENGTH) -> list[str]:
+    if _utf16_length(text) <= limit:
+        return [text]
+    chunks = []
+    remaining = text
+    while _utf16_length(remaining) > limit:
+        split_at = _prefix_within_utf16_limit(remaining, limit)
+        newline_at = remaining.rfind("\n", 0, split_at)
+        if newline_at >= 0:
+            split_at = newline_at + 1
+        if split_at == 0:
+            # A single Unicode scalar cannot exceed Telegram's real 4096-unit
+            # limit, but retain progress for callers using a smaller test limit.
+            split_at = 1
+        chunks.append(remaining[:split_at])
+        remaining = remaining[split_at:]
+    if remaining:
+        chunks.append(remaining)
+    return chunks
 
 
 def _request_json(url: str, *, label: str = "Telegram") -> dict:
@@ -89,28 +129,34 @@ def send_message(
     thread_id: str | None = None,
     idempotency_key: str | None = None,
 ) -> str:
-    payload: dict[str, str | int] = {"chat_id": chat_id, "text": text}
-    if thread_id:
-        payload["message_thread_id"] = int(thread_id)
-    headers = {"Content-Type": "application/json"}
-    if idempotency_key:
-        # Keep the stable key on the transport boundary for deployments that
-        # front Telegram with an idempotency-aware egress proxy.
-        headers["Idempotency-Key"] = idempotency_key
-    response = resilient_request(
-        "POST",
-        f"{_BASE}/bot{bot_token}/sendMessage",
-        content=json.dumps(payload).encode(),
-        headers=headers,
-        timeout=_TIMEOUT_SECONDS,
-        label="Telegram sendMessage",
-        retry_server_errors=True,
-    )
-    response.raise_for_status()
-    body = response.json()
-    if not body.get("ok"):
-        raise RuntimeError(f"Telegram sendMessage error: {body.get('description', 'unknown error')}")
-    message_id = body.get("result", {}).get("message_id")
-    if message_id is None:
-        raise RuntimeError("Telegram sendMessage returned no message id")
+    chunks = _chunk_text(text)
+    message_id: str | None = None
+    for index, chunk in enumerate(chunks):
+        payload: dict[str, str | int] = {"chat_id": chat_id, "text": chunk}
+        if thread_id:
+            payload["message_thread_id"] = int(thread_id)
+        headers = {"Content-Type": "application/json"}
+        if idempotency_key:
+            # Keep the stable key on the transport boundary for deployments that
+            # front Telegram with an idempotency-aware egress proxy. Each chunk
+            # of a split message needs its own key so a proxy doesn't dedupe
+            # the second half against the first.
+            headers["Idempotency-Key"] = f"{idempotency_key}:{index}" if len(chunks) > 1 else idempotency_key
+        response = resilient_request(
+            "POST",
+            f"{_BASE}/bot{bot_token}/sendMessage",
+            content=json.dumps(payload).encode(),
+            headers=headers,
+            timeout=_TIMEOUT_SECONDS,
+            label="Telegram sendMessage",
+            retry_server_errors=True,
+        )
+        response.raise_for_status()
+        body = response.json()
+        if not body.get("ok"):
+            raise RuntimeError(f"Telegram sendMessage error: {body.get('description', 'unknown error')}")
+        message_id = body.get("result", {}).get("message_id")
+        if message_id is None:
+            raise RuntimeError("Telegram sendMessage returned no message id")
+    assert message_id is not None
     return str(message_id)
