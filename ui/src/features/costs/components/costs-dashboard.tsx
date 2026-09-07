@@ -148,18 +148,21 @@ export function CostsDashboard() {
               <span className="text-[1.25rem]" style={{ color: "var(--ink-4)" }}>$</span>
               {summary.totalCost.toFixed(4)}
             </div>
+            <div className="text-[0.75rem]" style={{ color: "var(--ink-4)" }}>
+              Model usage only. Memory cost is billed separately — see below.
+            </div>
           </div>
 
           <div className="af-card px-5.5 py-5 flex flex-col gap-1">
             <div className="text-[0.813rem] font-medium uppercase tracking-wide" style={{ color: "var(--ink-4)" }}>
-              Memory
+              Memory Cost
             </div>
             <div className="text-[2rem] font-semibold tracking-tight" style={{ color: "var(--ink)" }}>
               <span className="text-[1.25rem]" style={{ color: "var(--ink-4)" }}>$</span>
               {summary.totalMemoryCost.toFixed(4)}
             </div>
             <div className="text-[0.75rem]" style={{ color: "var(--ink-4)" }}>
-              What your agents spent remembering things
+              What your agents spent remembering things, on top of Total Spend
             </div>
           </div>
 
@@ -353,6 +356,10 @@ export function CostsDashboard() {
           <h2 className="text-lg font-semibold tracking-tight m-0" style={{ color: "var(--ink)" }}>
             Agent breakdown
           </h2>
+          <p className="mt-1 text-[0.8125rem]" style={{ color: "var(--ink-3)" }}>
+            Memory cost is billed on a separate credential and is not part of the Cost column — an agent&apos;s
+            total is Cost plus Memory cost.
+          </p>
         </div>
 
         <div className="af-card overflow-hidden">
@@ -364,7 +371,7 @@ export function CostsDashboard() {
             <table className="w-full text-left border-collapse">
               <thead>
                 <tr style={{ borderBottom: "1px solid var(--line)" }}>
-                  {["Agent", "Status", "Model", "Input Tokens", "Output Tokens", "Memory", "Cost"].map((h, i) => (
+                  {["Agent", "Status", "Model", "Input Tokens", "Output Tokens", "Memory Cost", "Cost"].map((h, i) => (
                     <th
                       key={h}
                       className={`px-6 py-3 text-[0.75rem] font-medium uppercase tracking-wider${i >= 3 ? " text-right" : ""}`}

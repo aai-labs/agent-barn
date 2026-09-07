@@ -13,6 +13,12 @@ Related context: [`../agents.md`](../agents.md), [`../costs.md`](../costs.md), [
 
 ## Changes
 
+### 2026-09-07 — AF-280 — Costs page names memory cost and states it is separate
+
+- Renamed the "Memory" label to "Memory cost" on both the summary card and the agent-breakdown column, so it reads as spend rather than a memory count.
+- Added the disclaimer that memory cost is not part of the Cost figure. Cost is the agent's own model spend (its LiteLLM key); memory cost is its share of Honcho's separate fleet credential, and the two are never summed in the data. On the current stack memory ($0.39) exceeds model spend ($0.29), so a reader who took "Total Spend" as everything would be low by more than half. The note is in two places — under Total Spend and above the table — since each shows the numbers side by side with nothing otherwise saying they are different pockets.
+- No data change: `total_cost` and `memory_cost` were already computed and stored separately; this only makes the separation legible.
+
 ### 2026-09-07 — AF-280 — memory tab: peer filters instead of in-page groups
 
 - Replaced the in-page grouping with filter chips. The tab was grouping each page's rows by peer and labelling the header with the per-page count, so the number changed as you paged and a group spanned pages. Chips now carry each peer's real total — Honcho filters and counts server-side — and selecting one scopes the query to that peer, so "Page 1 of 2" means page 1 of that peer alone.
