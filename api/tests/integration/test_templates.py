@@ -2584,6 +2584,7 @@ def test_member_cannot_start_edit_publish_or_discard_an_org_draft():
         [
             *_GIVEN,
             there_is_a_template(template_key="alpha", name="Alpha", version=1),
+            there_is_an_org_template_draft(template_key="alpha", name="Alpha"),
             _there_is_a_member_actor(),
         ]
     ) as context:
