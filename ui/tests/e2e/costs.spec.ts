@@ -56,6 +56,35 @@ test.describe("Organization costs", () => {
     await expect(page).toHaveURL(new RegExp(`agentId=${AGENT_A_ID}`));
   });
 
+  test("a chosen date range lands in the URL and bounds the request", async ({
+    page,
+  }) => {
+    await data.costs.interceptOrgSummary();
+    await data.costs.interceptOrgList({ items: [costRecord()], total: 1 });
+
+    await page.goto(COSTS_URL);
+    await expect(page.getByTestId("cost-list")).toBeVisible();
+
+    // Both bounds have to reach the server together. They are written in one
+    // update, so a half-applied range would show up here as a missing param.
+    const boundedRequest = page.waitForRequest(
+      (request) =>
+        request.url().includes("/costs?") &&
+        request.url().includes("from_date=") &&
+        request.url().includes("to_date="),
+    );
+
+    await page.getByLabel("Date range").click();
+    // Two days in the same month, so the range closes without paging.
+    const days = page.getByRole("gridcell").filter({ hasText: /^\d+$/ });
+    await days.nth(4).click();
+    await days.nth(9).click();
+
+    await boundedRequest;
+    await expect(page).toHaveURL(/from=/);
+    await expect(page).toHaveURL(/to=/);
+  });
+
   test("a filter survives a reload, because it lives in the URL", async ({ page }) => {
     await data.costs.interceptOrgSummary();
     await data.costs.interceptOrgList({ items: [costRecord()], total: 1 });

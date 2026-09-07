@@ -6,12 +6,6 @@ export const COST_SORT_LABELS: Record<CostSortDirection, string> = {
   most_expensive: "Most expensive",
 };
 
-/** Reporting presets the server accepts. Kept in this order because the picker
- *  renders them in it. */
-export const COST_PERIODS = [
-  { value: "SEVEN_DAYS", label: "Last 7 days" },
-  { value: "THIRTY_DAYS", label: "Last 30 days" },
-  { value: "NINETY_DAYS", label: "Last 90 days" },
-] as const;
-
-export const DEFAULT_COST_PERIOD = "THIRTY_DAYS";
+// The period presets are gone: the cost surfaces pick an explicit start and end
+// instead. With neither bound set the server still applies its own default
+// window, so an unfiltered page keeps working with a clean URL.

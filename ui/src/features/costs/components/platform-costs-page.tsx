@@ -5,7 +5,6 @@ import { RefreshCw } from "lucide-react";
 
 import { OrganizationCombobox } from "@/components/organization-combobox";
 
-import { DEFAULT_COST_PERIOD } from "../constants";
 import { formatSpend } from "../format";
 import {
   usePlatformCostFilterOptions,
@@ -27,7 +26,8 @@ const FILTER_DEFAULTS = {
   orgName: "",
   agentId: "",
   model: "",
-  period: DEFAULT_COST_PERIOD,
+  from: "",
+  to: "",
   sort: "newest_first",
 };
 
@@ -40,7 +40,8 @@ export function PlatformCostsPage() {
       organizationId: urlFilters.orgId || undefined,
       agentId: urlFilters.agentId || undefined,
       model: urlFilters.model || undefined,
-      period: urlFilters.period,
+      fromDate: urlFilters.from || undefined,
+      toDate: urlFilters.to || undefined,
       sort: urlFilters.sort as CostFilters["sort"],
     }),
     [urlFilters],
@@ -50,7 +51,9 @@ export function PlatformCostsPage() {
     filters.search ||
     filters.organizationId ||
     filters.agentId ||
-    filters.model
+    filters.model ||
+    filters.fromDate ||
+    filters.toDate
   );
 
   const { summary, isLoading: isLoadingSummary, refetch: refetchSummary } =
@@ -91,6 +94,13 @@ export function PlatformCostsPage() {
     [setUrlFilters],
   );
 
+  const handleDateRangeChange = useCallback(
+    (from: string, to: string) => {
+      setUrlFilters({ from: from || null, to: to || null });
+    },
+    [setUrlFilters],
+  );
+
   const handleClear = useCallback(() => {
     setUrlFilters({
       q: null,
@@ -98,6 +108,8 @@ export function PlatformCostsPage() {
       orgName: null,
       agentId: null,
       model: null,
+      from: null,
+      to: null,
     });
   }, [setUrlFilters]);
 
@@ -185,6 +197,7 @@ export function PlatformCostsPage() {
         agentOptions={agentOptions}
         modelOptions={modelOptions}
         onChange={handleChange}
+        onDateRangeChange={handleDateRangeChange}
         hasActiveFilters={hasActiveFilters}
         onClear={handleClear}
         organizationFilter={organizationFilter}

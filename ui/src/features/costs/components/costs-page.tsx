@@ -5,7 +5,6 @@ import { RefreshCw } from "lucide-react";
 
 import { useRequireOrgManager } from "@/features/organizations/hooks/use-require-org-manager";
 
-import { DEFAULT_COST_PERIOD } from "../constants";
 import { useCostFilterOptions } from "../hooks/use-cost-filter-options";
 import { useCostSummary } from "../hooks/use-cost-summary";
 import { useCosts } from "../hooks/use-costs";
@@ -20,7 +19,8 @@ const FILTER_DEFAULTS = {
   q: "",
   agentId: "",
   model: "",
-  period: DEFAULT_COST_PERIOD,
+  from: "",
+  to: "",
   sort: "newest_first",
 };
 
@@ -38,7 +38,8 @@ export function CostsPage() {
       search: urlFilters.q || undefined,
       agentId: urlFilters.agentId || undefined,
       model: urlFilters.model || undefined,
-      period: urlFilters.period,
+      fromDate: urlFilters.from || undefined,
+      toDate: urlFilters.to || undefined,
       sort: urlFilters.sort as CostFilters["sort"],
     }),
     [urlFilters],
@@ -47,7 +48,9 @@ export function CostsPage() {
   const hasActiveFilters = !!(
     filters.search ||
     filters.agentId ||
-    filters.model
+    filters.model ||
+    filters.fromDate ||
+    filters.toDate
   );
 
   const { summary, isLoading: isLoadingSummary, refetch: refetchSummary } =
@@ -72,8 +75,15 @@ export function CostsPage() {
     [setUrlFilters],
   );
 
+  const handleDateRangeChange = useCallback(
+    (from: string, to: string) => {
+      setUrlFilters({ from: from || null, to: to || null });
+    },
+    [setUrlFilters],
+  );
+
   const handleClear = useCallback(() => {
-    setUrlFilters({ q: null, agentId: null, model: null });
+    setUrlFilters({ q: null, agentId: null, model: null, from: null, to: null });
   }, [setUrlFilters]);
 
   const handleRefresh = useCallback(() => {
@@ -110,6 +120,7 @@ export function CostsPage() {
         agentOptions={agentOptions}
         modelOptions={modelOptions}
         onChange={handleChange}
+        onDateRangeChange={handleDateRangeChange}
         hasActiveFilters={hasActiveFilters}
         onClear={handleClear}
       />

@@ -2,9 +2,18 @@
 
 import { memo, type ReactNode } from "react";
 
+import { DateRangePicker } from "@/components/date-range-picker";
 import { SearchInput } from "@/components/search-input";
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 
-import { COST_PERIODS, COST_SORT_LABELS } from "../constants";
+import { COST_SORT_LABELS } from "../constants";
 import { CostSortDirectionSchema, type CostFilterOption } from "../schemas";
 import { CostOptionCombobox } from "./cost-option-combobox";
 
@@ -12,7 +21,9 @@ export interface CostFilterBarValues {
   q: string;
   agentId: string;
   model: string;
-  period: string;
+  /** ISO datetime bounds, or "" for "let the server pick the window". */
+  from: string;
+  to: string;
   sort: string;
 }
 
@@ -21,6 +32,9 @@ interface CostFilterBarProps {
   agentOptions: CostFilterOption[];
   modelOptions: CostFilterOption[];
   onChange: (key: keyof CostFilterBarValues, value: string | null) => void;
+  /** Both bounds move together: two single-key updates would race, because each
+   *  reads the same query string and the second would drop the first. */
+  onDateRangeChange: (from: string, to: string) => void;
   hasActiveFilters: boolean;
   onClear: () => void;
   /** Slot for the organization picker, which only the platform surface has. */
@@ -35,6 +49,7 @@ export const CostFilterBar = memo(function CostFilterBar({
   agentOptions,
   modelOptions,
   onChange,
+  onDateRangeChange,
   hasActiveFilters,
   onClear,
   organizationFilter,
@@ -69,35 +84,37 @@ export const CostFilterBar = memo(function CostFilterBar({
         testId="cost-model-filter"
       />
 
-      <select
-        className="af-input"
-        style={{ width: "9.5rem" }}
-        aria-label="Period"
-        data-testid="cost-period-filter"
-        value={values.period}
-        onChange={(e) => onChange("period", e.target.value)}
-      >
-        {COST_PERIODS.map((period) => (
-          <option key={period.value} value={period.value}>
-            {period.label}
-          </option>
-        ))}
-      </select>
+      <DateRangePicker
+        from={values.from}
+        to={values.to}
+        onChange={onDateRangeChange}
+        placeholder="All dates"
+        width="16rem"
+        ariaLabel="Date range"
+      />
 
-      <select
-        className="af-input"
-        style={{ width: "10rem" }}
-        aria-label="Sort"
-        data-testid="cost-sort-filter"
+      <Select
         value={values.sort}
-        onChange={(e) => onChange("sort", e.target.value)}
+        onValueChange={(value) => onChange("sort", value)}
       >
-        {CostSortDirectionSchema.options.map((sort) => (
-          <option key={sort} value={sort}>
-            {COST_SORT_LABELS[sort]}
-          </option>
-        ))}
-      </select>
+        <SelectTrigger
+          className="af-input"
+          style={{ width: "10rem" }}
+          aria-label="Sort"
+          data-testid="cost-sort-filter"
+        >
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectGroup>
+            {CostSortDirectionSchema.options.map((sort) => (
+              <SelectItem key={sort} value={sort}>
+                {COST_SORT_LABELS[sort]}
+              </SelectItem>
+            ))}
+          </SelectGroup>
+        </SelectContent>
+      </Select>
 
       {hasActiveFilters && (
         <button type="button" className="af-btn" onClick={onClear}>
