@@ -19,6 +19,8 @@ COST_SYNC_MAX_RUNTIME_SECONDS = 600
 # OpenRouter's /generation endpoint held 18 req/s across 260 requests with zero 429s
 # during the AF-281 benchmark. Eight keeps a comfortable margin under that.
 COST_HEAL_CONCURRENCY = 8
+# How many candidates one query pulls at a time. Not a cap on the run: healing
+# loops until the backlog is drained or the max-runtime guard trips.
 COST_HEAL_BATCH_SIZE = 500
 
 # Fixed dollar bands for the cost-per-call histogram. Fixed rather than derived from

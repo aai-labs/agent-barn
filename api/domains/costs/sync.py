@@ -302,33 +302,56 @@ class CostSynchronizer:
     # --- Phase 2: heal -----------------------------------------------------
 
     def _heal(self, result: CostSyncResult, started: float) -> CostSyncResult:
-        if self._out_of_time(started):
-            return replace(result, truncated=True)
+        """Heal until the backlog is gone or the run is out of time.
 
-        candidates = self.repository.find_heal_candidates(COST_HEAL_BATCH_SIZE)
-        if not candidates:
-            return result
+        Batched for memory, not as a cap: a healed row stops matching the
+        predicate, so each query returns the next slice and the work is
+        self-resuming. Capping a run at one batch would leave an unattended
+        backfill needing dozens of scheduled runs to finish.
 
+        The one thing that would not terminate is a row OpenRouter cannot
+        resolve. It stays a candidate for ever and the same query keeps handing
+        it back, so a run that only re-reads rows it has already tried would spin
+        until the clock stopped it. Tracking what this run has attempted turns
+        that into the exit condition: a batch with nothing new in it means the
+        remainder is unresolvable, and there is nothing left to do until new
+        rows arrive.
+        """
         healed = 0
         not_found = 0
         failed = 0
         attempted = 0
+        truncated = False
+        seen: set[str] = set()
 
-        with ThreadPoolExecutor(max_workers=COST_HEAL_CONCURRENCY) as executor:
-            futures = {
-                executor.submit(self._heal_one, candidate.request_id, started): candidate
-                for candidate in candidates
-                if not self._out_of_time(started)
-            }
-            attempted = len(futures)
-            for future in as_completed(futures):
-                outcome = future.result()
-                if outcome == "healed":
-                    healed += 1
-                elif outcome == "not_found":
-                    not_found += 1
-                else:
-                    failed += 1
+        while True:
+            if self._out_of_time(started):
+                truncated = True
+                break
+
+            candidates = self.repository.find_heal_candidates(COST_HEAL_BATCH_SIZE)
+            batch = [c for c in candidates if c.request_id not in seen]
+            if not batch:
+                break
+            seen.update(c.request_id for c in batch)
+
+            with ThreadPoolExecutor(max_workers=COST_HEAL_CONCURRENCY) as executor:
+                futures = [
+                    executor.submit(self._heal_one, candidate.request_id, started)
+                    for candidate in batch
+                    if not self._out_of_time(started)
+                ]
+                if len(futures) < len(batch):
+                    truncated = True
+                attempted += len(futures)
+                for future in as_completed(futures):
+                    outcome = future.result()
+                    if outcome == "healed":
+                        healed += 1
+                    elif outcome == "not_found":
+                        not_found += 1
+                    else:
+                        failed += 1
 
         return replace(
             result,
@@ -336,7 +359,7 @@ class CostSynchronizer:
             heal_succeeded=healed,
             heal_not_found=not_found,
             heal_failed=failed,
-            truncated=result.truncated or attempted < len(candidates),
+            truncated=result.truncated or truncated,
         )
 
     def _heal_one(self, request_id: str, started: float) -> str:

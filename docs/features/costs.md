@@ -35,7 +35,8 @@ Reading the proxy at request time — the earlier arrangement — meant a failed
 - The generation-id test is what separates "we lost the cost" from "there was no cost". Failed calls record a UUID request id; treating one as healable would give a failed request fabricated spend.
 - Any successful OpenRouter lookup marks the row healed, **including one reporting zero**. A genuinely free generation is still an answer; leaving it untagged would have every future run fetch it again.
 - A 404 leaves the row alone. It means "we could not find out", not "this call was free", and writing a zero would assert the latter.
-- Healing is unbounded and self-resuming: healed rows stop matching the predicate, so there is no cursor. Only the max-runtime guard bounds a run.
+- Healing is unbounded and self-resuming: healed rows stop matching the predicate, so there is no cursor. Only the max-runtime guard bounds a run. Rows are read in batches for memory, and the run loops until the backlog is drained.
+- A row a 404 left alone stays a candidate for ever, so the same query keeps returning it. A run therefore remembers what it has already attempted and stops once a batch holds nothing new — otherwise an unresolvable remainder would spend the whole runtime budget re-reading itself every fifteen minutes.
 
 ### Reads
 

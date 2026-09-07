@@ -4,6 +4,7 @@ from uuid import UUID, uuid4
 
 from api.domains.agents.models import Agent
 from api.domains.costs.constants import (
+    COST_HEAL_BATCH_SIZE,
     COST_SYNC_MAX_RUNTIME_SECONDS,
     COST_SYNC_PAGE_SIZE,
     COST_SYNC_WATERMARK_OVERLAP_SECONDS,
@@ -18,8 +19,10 @@ ORG_NAME = "Acme Inc"
 
 
 class FakeCostRepository:
-    def __init__(self, *, watermark=None, candidates=None, organization_names=None):
+    def __init__(self, *, watermark=None, candidates=None, organization_names=None, drop_healed=False):
         self.watermark = watermark
+        # Mirror the real predicate: a healed row stops being a candidate.
+        self.drop_healed = drop_healed
         self.candidates = candidates or []
         self.organization_names = organization_names or {ORG_ID: ORG_NAME}
         self.upserted: list[list[CostRecord]] = []
@@ -33,6 +36,9 @@ class FakeCostRepository:
         return self.watermark
 
     def find_heal_candidates(self, limit):
+        if self.drop_healed:
+            done = {request_id for request_id, _ in self.healed}
+            return [c for c in self.candidates if c.request_id not in done][:limit]
         return self.candidates[:limit]
 
     def mark_healed(self, request_id, *, spend, prompt_tokens=None, completion_tokens=None):
@@ -412,3 +418,41 @@ def test_healing_is_skipped_when_the_deadline_has_already_passed(monkeypatch):
 
     assert generations.looked_up == []
     assert result.truncated is True
+
+
+def test_healing_drains_a_backlog_larger_than_one_batch_in_a_single_run():
+    """The backfill is unattended: a run heals until the backlog is gone.
+
+    Capping a run at one batch would leave the documented behaviour ("only the
+    max-runtime guard bounds a run") false, and a real backlog needing dozens of
+    scheduled runs to clear.
+    """
+    backlog = [_candidate(f"gen-{i}") for i in range(COST_HEAL_BATCH_SIZE + 120)]
+    # A healed row stops matching the predicate, which is what makes the next
+    # query return the next slice rather than the same one.
+    repository = FakeCostRepository(candidates=backlog, drop_healed=True)
+    generations = FakeGenerations()
+
+    result = _synchronizer(repository, generations=generations).run_once()
+
+    assert result.heal_succeeded == len(backlog)
+    assert result.truncated is False
+
+
+def test_healing_stops_when_only_unresolvable_rows_are_left():
+    """A row OpenRouter cannot resolve stays a candidate for ever.
+
+    The query keeps handing it back, so a run that did not track what it had
+    already tried would re-read the same rows until the clock stopped it,
+    burning the whole runtime budget every fifteen minutes.
+    """
+    stuck = [_candidate("gen-x"), _candidate("gen-y")]
+    repository = FakeCostRepository(candidates=stuck, drop_healed=True)
+    generations = FakeGenerations(missing=["gen-x", "gen-y"])
+
+    result = _synchronizer(repository, generations=generations).run_once()
+
+    assert result.heal_not_found == 2
+    # Each row tried once, not once per loop pass.
+    assert sorted(generations.looked_up) == ["gen-x", "gen-y"]
+    assert result.truncated is False
