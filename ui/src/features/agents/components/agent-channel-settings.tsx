@@ -169,21 +169,17 @@ function PlatformOption({
   platform,
   selected,
   onSelect,
-  centeredOnOwnRow = false,
 }: {
   platform: { key: string; displayName: string };
   selected: boolean;
   onSelect: () => void;
-  centeredOnOwnRow?: boolean;
 }) {
   return (
     <button
       type="button"
       aria-pressed={selected}
       aria-label={`Select ${platform.displayName}`}
-      className={`group flex min-h-[4.75rem] cursor-pointer items-center gap-3 rounded-xl p-3 text-left transition-colors hover:shadow-sm${
-        centeredOnOwnRow ? " sm:col-span-2 sm:mx-auto sm:w-[calc(50%-0.3125rem)]" : ""
-      }`}
+      className="group flex min-h-[4.75rem] cursor-pointer items-center gap-3 rounded-xl p-3 text-left transition-colors hover:shadow-sm"
       style={{
         border: selected
           ? "1.5px solid var(--accent)"
@@ -1280,15 +1276,12 @@ export function AgentChannelSettings({
                 )}
                 {addablePlatforms && addablePlatforms.length > 0 && (
                   <div className="mt-3 grid gap-2.5 sm:grid-cols-2">
-                    {addablePlatforms.map((platform, index) => (
+                    {addablePlatforms.map((platform) => (
                       <PlatformOption
                         key={platform.key}
                         platform={platform}
                         selected={platformKey === platform.key}
                         onSelect={() => choosePlatform(platform.key)}
-                        centeredOnOwnRow={
-                          addablePlatforms.length % 2 === 1 && index === addablePlatforms.length - 1
-                        }
                       />
                     ))}
                   </div>
