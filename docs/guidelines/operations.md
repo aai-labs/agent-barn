@@ -172,10 +172,7 @@ kubeconfig portably with
 | `PUBLIC_SLACK_ALERTS_WEBHOOK_URL` | `#alerts` or a public-specific channel |
 
 Shared with k3s (already present): `CLOUDFLARE_ACCOUNT_ID`,
-`CLOUDFLARE_API_TOKEN`, `GOOGLE_CLOUD_CLIENT_SECRET`, and
-`AAI_CLI_REPO_ACCESS_TOKEN`. The last token only authenticates a clone of the
-public `aai-labs/aai-cli` repository; it does not need private-repository
-access.
+`CLOUDFLARE_API_TOKEN`, and `GOOGLE_CLOUD_CLIENT_SECRET`.
 
 ## Versioning and releases
 
