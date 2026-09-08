@@ -5,7 +5,7 @@ Helmfile releases install only when `HONCHO_ENABLED` is `true`, so a deploy with
 memory off needs none of the config below — nothing new is required to keep
 deploying unrelated changes.
 
-To turn memory **on** for an environment, set `HONCHO_ENABLED=true` for it and
+To turn memory **on** for an environment, set that environment's enable flag and
 create the config it then requires. A deploy with `HONCHO_ENABLED=true` and any
 of these missing fails at render (loudly, naming the missing key), not silently.
 
@@ -13,9 +13,13 @@ of these missing fails at render (loudly, naming the missing key), not silently.
 
 Shared across environments unless a per-environment value is needed:
 
+> The enable flag is **not** shared: `HONCHO_ENABLED` (production), `STAGING_HONCHO_ENABLED` (staging), and `PUBLIC_HONCHO_ENABLED` (public) are separate, so a normal rollout enables staging first and production later. The DB user/name and model vars below are shared across environments; only the enable flag and the DB password differ per environment.
+
 | Variable | Example | Notes |
 |---|---|---|
-| `HONCHO_ENABLED` | `true` | The switch. Unset/`false` skips all Honcho releases. |
+| `HONCHO_ENABLED` | `true` | The switch (production / k3s main). Unset/`false` skips all Honcho releases. |
+| `STAGING_HONCHO_ENABLED` | `true` | The switch for **staging** — independent of production, so memory can be turned on for staging first. |
+| `PUBLIC_HONCHO_ENABLED` | `true` | The switch for the **public** cluster (`deploy-public.yml`). |
 | `POSTGRES_HONCHO_USER` | `honcho` | Honcho's database user. |
 | `POSTGRES_HONCHO_DB` | `honcho` | Honcho's database name. |
 | `HONCHO_TEXT_MODEL` | `openrouter/z-ai/glm-5.2` | Model for deriver/dialectic/summary/dream. Must be an allowlisted LiteLLM model. |
