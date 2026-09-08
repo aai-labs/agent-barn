@@ -21,6 +21,7 @@ from api.domains.communications.models import (
 )
 from api.domains.communications.plugins.base import (
     InboundAdmissionContext,
+    PlatformPlugin,
     ProcessingFeedbackContext,
     provider_idempotency_key,
 )
@@ -1261,3 +1262,19 @@ def test_teams_offers_guidance_for_after_the_connection_is_saved() -> None:
     assert "Messaging endpoint" in (descriptor.post_setup_hint or "")
     assert "app package" in (descriptor.post_setup_hint or "")
     assert "client secret" in (descriptor.setup_hint or "")
+
+
+@pytest.mark.parametrize(
+    "plugin_class",
+    [SlackPlatformPlugin, DiscordPlatformPlugin, TelegramPlatformPlugin, TeamsPlatformPlugin],
+)
+def test_chat_platforms_hand_the_runtime_the_message_exactly_as_stored(plugin_class) -> None:
+    envelope = NormalizedCommunicationEnvelope(
+        provider_message_id="1724264405.531769",
+        occurred_at=datetime(2026, 8, 24, 10, 0, tzinfo=UTC),
+        location=ConversationLocation(id="C123", type="CHANNEL"),
+        text="the original message text",
+    )
+
+    assert plugin_class.runtime_prompt is PlatformPlugin.runtime_prompt
+    assert PlatformPlugin.runtime_prompt(plugin_class.__new__(plugin_class), envelope) == envelope.text

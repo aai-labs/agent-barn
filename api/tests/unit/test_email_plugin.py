@@ -13,6 +13,7 @@ from api.domains.communications.models import (
 )
 from api.domains.communications.plugins.email import (
     DISPLAY_NAME_LIMIT,
+    INBOUND_FRAMING,
     MAX_REFERENCES,
     REFERENCES_HEADER_BYTE_LIMIT,
     SUBJECT_LIMIT,
@@ -218,6 +219,26 @@ def test_hashing_an_overlong_message_id_is_stable_so_retries_stay_idempotent() -
     second = plugin.normalize_inbound(_settings(plugin), payload)[0]
 
     assert first.provider_message_id == second.provider_message_id
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "What does the team plan cost?",
+        "Thanks, that works.\n\nOn Mon, Jan 1 2026, Tommy wrote:\n> earlier",
+        "Hello\n\n-- \nGDPR disclaimer text",
+        "",
+        "line one\nline two\n\nline three",
+    ],
+)
+def test_the_runtime_sees_the_framing_the_sender_and_the_untouched_body(body) -> None:
+    plugin = _plugin()
+
+    [envelope] = plugin.normalize_inbound(_settings(plugin), _inbound(text=body))
+
+    assert plugin.runtime_prompt(envelope) == (
+        f"{INBOUND_FRAMING}\n\nFrom: Jane Customer <jane@acme.com>\nSubject: Question about pricing\n\n{envelope.text}"
+    )
 
 
 def test_the_persisted_message_is_only_what_the_sender_wrote() -> None:
