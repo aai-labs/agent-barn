@@ -46,14 +46,12 @@ jobs:
             file: hermes-base/Dockerfile
             version_file: hermes-base/VERSION
             version_kind: file
-            needs_token: true
             smoke: hermes-base/smoke-test.sh
           - name: openclaw-base
             context: openclaw-base
             file: openclaw-base/Dockerfile
             version_file: openclaw-base/VERSION
             version_kind: file
-            needs_token: true
             smoke: openclaw-base/smoke-test.sh
     steps:
       - uses: actions/checkout@v5
@@ -97,7 +95,6 @@ jobs:
           push: false
           tags: ${{ steps.meta.outputs.tags }}
           build-args: ${{ matrix.name == 'ui' && format('NEXT_PUBLIC_BACKEND_URL={0}', env.UI_BACKEND_URL) || '' }}
-          secrets: ${{ matrix.needs_token && format('gh_token={0}', secrets.AAI_CLI_REPO_ACCESS_TOKEN) || '' }}
           cache-from: type=gha,scope=${{ matrix.name }}
           cache-to: type=gha,mode=max,scope=${{ matrix.name }}
 
@@ -117,5 +114,4 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           build-args: ${{ matrix.name == 'ui' && format('NEXT_PUBLIC_BACKEND_URL={0}', env.UI_BACKEND_URL) || '' }}
-          secrets: ${{ matrix.needs_token && format('gh_token={0}', secrets.AAI_CLI_REPO_ACCESS_TOKEN) || '' }}
           cache-from: type=gha,scope=${{ matrix.name }}

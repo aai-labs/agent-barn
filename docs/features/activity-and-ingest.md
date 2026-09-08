@@ -13,7 +13,7 @@ Conversation Messages and Tool Calls share the Agent Activity UI but have differ
 - Ingest authenticates with agent ID plus the stored per-agent ingest key generated at start. Authentication checks identity and key, not AgentStatus; stop does not currently clear the key.
 - Message identity is unique per `(connection_id, provider_message_id)`; the legacy `openclaw_msg_id` column stores that provider identity for all Platforms.
 - Conversation location identity is `(connection_id, channel_id)`. Read DTOs, repository filters, API paths, UI query keys, and URL selection preserve both values so same-platform Connections may safely reuse provider channel identifiers.
-- Conversation Messages record their source Connection, direction, channel/direct-message type, session, location, optional thread, names, content, and occurrence time.
+- Conversation Messages record their source Connection, direction, channel/direct-message type, session, location, optional thread, names, content, and occurrence time. The Agent Conversations read API excludes the dashboard's built-in Web Chat Connection; its history is available through the dedicated Chat tab.
 - Runtime replies are bound to their source Communication Delivery, which supplies the originating Connection and location; the runtime cannot redirect a reply to another Connection.
 - Tool results are paired to their call by the runtime's per-invocation call id, so concurrent calls to one tool within a task stay distinct.
 - Tool calls are unique per `(agent_id, external_id)` and use `PENDING`, `SUCCESS`, or `ERROR` status.
