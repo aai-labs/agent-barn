@@ -94,6 +94,9 @@ class CommunicationsGatewayService:
             )
         delivery = self.delivery_repository.claim_next_inbound(agent_id=agent.id, reclaim_expired=False)
         if delivery is not None:
+            delivery = delivery.model_copy(
+                update={"progress_updates": self._accepts_progress_updates(delivery.connection_id)}
+            )
             self.notify_processing_feedback(
                 ProcessingFeedbackContext(
                     connection_id=delivery.connection_id,
@@ -103,6 +106,20 @@ class CommunicationsGatewayService:
                 )
             )
         return delivery
+
+    def _accepts_progress_updates(self, connection_id: UUID) -> bool:
+        try:
+            connection = self.connection_repository.get_active(connection_id)
+            if connection is None:
+                return True
+            return self.plugins.require(connection.platform_key).supports_progress_updates
+        except Exception as exc:
+            logger.warning(
+                "Communication progress-update policy lookup failed for Connection %s (%s)",
+                connection_id,
+                type(exc).__name__,
+            )
+            return True
 
     def complete_runtime_delivery(
         self,

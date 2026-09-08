@@ -75,6 +75,7 @@ def _feedback_plugin() -> Mock:
     plugin.capabilities = frozenset({PlatformCapability.PROCESSING_FEEDBACK})
     plugin.settings_model = SlackSettings
     plugin.credentials_model = SlackCredentials
+    plugin.supports_progress_updates = True
     plugin.admit_inbound.return_value = InboundAdmissionResult(
         CommunicationPolicyDisposition.ACCEPTED,
         (_envelope(),),
@@ -253,6 +254,55 @@ def test_gateway_marks_claim_and_terminal_runtime_failure_at_lifecycle_seam() ->
     assert completed is True
     stages = [call.args[2].stage for call in plugin.processing_feedback.call_args_list]
     assert stages == [ProcessingFeedbackStage.CLAIMED, ProcessingFeedbackStage.FAILED]
+
+
+def test_a_claimed_delivery_carries_whether_its_platform_accepts_progress_updates() -> None:
+    for accepts_progress in (True, False):
+        connection = cast(CommunicationConnection, _connection())
+        plugin = _feedback_plugin()
+        plugin.supports_progress_updates = accepts_progress
+        service, deliveries = _service(connection, plugin)
+        delivery = RuntimeDeliveryRead(
+            delivery_id=uuid4(),
+            message_id=uuid4(),
+            connection_id=connection.id,
+            attempt_count=1,
+            envelope=_envelope(),
+        )
+        deliveries.claim_next_inbound.return_value = delivery
+        deliveries.reclaim_expired_inbound.return_value = []
+        agent = cast(Agent, SimpleNamespace(id=uuid4(), status=AgentStatus.RUNNING))
+
+        with patch(
+            "api.domains.communications.gateway_service.decrypt_token",
+            return_value=json.dumps({"bot_token": "xoxb-token", "app_token": "xapp-token"}),
+        ):
+            claimed = service.claim_runtime_delivery(agent)
+
+        assert claimed is not None
+        assert claimed.progress_updates is accepts_progress
+
+
+def test_a_claim_still_succeeds_when_the_platform_plugin_is_gone() -> None:
+    retired_platform = _connection()
+    retired_platform.platform_key = "platform-that-no-longer-ships"
+    connection = cast(CommunicationConnection, retired_platform)
+    service, deliveries = _service(connection, _feedback_plugin())
+    delivery = RuntimeDeliveryRead(
+        delivery_id=uuid4(),
+        message_id=uuid4(),
+        connection_id=connection.id,
+        attempt_count=1,
+        envelope=_envelope(),
+    )
+    deliveries.claim_next_inbound.return_value = delivery
+    deliveries.reclaim_expired_inbound.return_value = []
+    agent = cast(Agent, SimpleNamespace(id=uuid4(), status=AgentStatus.RUNNING))
+
+    claimed = service.claim_runtime_delivery(agent)
+
+    assert claimed is not None
+    assert claimed.progress_updates is True
 
 
 def test_gateway_reports_a_dead_letter_created_by_lease_reclaim() -> None:

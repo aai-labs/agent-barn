@@ -191,6 +191,67 @@ def test_hermes_verbose_mode_relays_progress_events_when_enabled(monkeypatch: py
     assert reply_texts == ['Searching the codebase for files matching "rbac"', "final answer"]
 
 
+def test_progress_events_are_withheld_from_a_platform_that_refuses_them(monkeypatch: pytest.MonkeyPatch) -> None:
+    adapter = _load_adapter(monkeypatch, runtime_kind="hermes", verbose_mode=True)
+    calls: list[tuple[str, dict | None]] = []
+
+    def fake_http_request(method, url, *, headers, payload=None):
+        calls.append((url, payload))
+        if url.endswith("/v1/runs"):
+            return {"run_id": "run-1"}
+        return None
+
+    monkeypatch.setattr(adapter, "http_request", fake_http_request)
+    monkeypatch.setattr(
+        adapter.urllib.request,
+        "urlopen",
+        _fake_urlopen(
+            [
+                ("tool.started", {"tool": "search_files", "preview": "rbac"}),
+                ("subagent.start", {"goal": "check the mailbox"}),
+                ("run.completed", {"text": "final answer"}),
+            ]
+        ),
+    )
+    delivery = {**_DELIVERY, "progress_updates": False}
+
+    adapter._run_and_drain(delivery, adapter.session_key_for(delivery))
+
+    reply_texts = [payload["text"] for url, payload in calls if url.endswith("/replies") and payload is not None]
+    assert reply_texts == ["final answer"]
+
+
+def test_approval_requests_reach_a_platform_that_refuses_progress_events(monkeypatch: pytest.MonkeyPatch) -> None:
+    adapter = _load_adapter(monkeypatch, runtime_kind="hermes", verbose_mode=True)
+    calls: list[tuple[str, dict | None]] = []
+
+    def fake_http_request(method, url, *, headers, payload=None):
+        calls.append((url, payload))
+        if url.endswith("/v1/runs"):
+            return {"run_id": "run-1"}
+        return None
+
+    monkeypatch.setattr(adapter, "http_request", fake_http_request)
+    monkeypatch.setattr(
+        adapter.urllib.request,
+        "urlopen",
+        _fake_urlopen(
+            [
+                ("tool.started", {"tool": "search_files", "preview": "rbac"}),
+                ("approval.request", {"command": "rm -rf build", "choices": ["once", "deny"]}),
+            ],
+            then_block=True,
+        ),
+    )
+    delivery = {**_DELIVERY, "progress_updates": False}
+
+    with pytest.raises(_StreamStillOpen):
+        adapter._run_and_drain(delivery, adapter.session_key_for(delivery))
+
+    reply_texts = [payload["text"] for url, payload in calls if url.endswith("/replies") and payload is not None]
+    assert reply_texts == ["rm -rf build\nReply with one of: once, deny"]
+
+
 def test_progress_line_renders_full_sentences_for_known_tools(monkeypatch: pytest.MonkeyPatch) -> None:
     adapter = _load_adapter(monkeypatch, runtime_kind="hermes", verbose_mode=True)
 

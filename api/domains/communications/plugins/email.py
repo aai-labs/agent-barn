@@ -104,6 +104,7 @@ class EmailPlatformPlugin(PlatformPlugin):
     settings_model = EmailSettings
     credentials_model = EmailCredentials
     credential_uniqueness_scope = CredentialUniquenessScope.NONE
+    supports_progress_updates = False
 
     def __init__(self, config: EmailValidationConfig, client: EmailClient) -> None:
         self._config = config

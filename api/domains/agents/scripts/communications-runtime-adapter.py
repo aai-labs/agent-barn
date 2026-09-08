@@ -306,7 +306,12 @@ def _run_and_drain(delivery: dict, session_key: str) -> None:
             headers=runtime_headers(session_key, delivery_id),
             payload={"input": text, "session_id": session_key, "resume_session": True},
         )
-        _drain_run(started["run_id"], delivery_id, session_key)
+        _drain_run(
+            started["run_id"],
+            delivery_id,
+            session_key,
+            progress_updates=delivery.get("progress_updates", True),
+        )
     except Exception as exc:
         with _PENDING_APPROVALS_LOCK:
             _PENDING_APPROVALS.pop(session_key, None)
@@ -353,7 +358,7 @@ def _progress_line(event: str, payload: dict) -> str:
     return preview or tool or event
 
 
-def _drain_run(run_id: str, delivery_id: str, session_key: str) -> None:
+def _drain_run(run_id: str, delivery_id: str, session_key: str, *, progress_updates: bool = True) -> None:
     req = urllib.request.Request(
         f"{RUNTIME_API_URL}/v1/runs/{run_id}/events",
         method="GET",
@@ -396,7 +401,11 @@ def _drain_run(run_id: str, delivery_id: str, session_key: str) -> None:
             # a distinct "thinking" step), so it always either duplicates or
             # cuts off the real final reply below.
             if event in ("tool.started", "subagent.start", "subagent.complete"):
-                if VERBOSE_MODE and time.monotonic() - last_progress_at >= _PROGRESS_RELAY_MIN_SECONDS:
+                if (
+                    VERBOSE_MODE
+                    and progress_updates
+                    and time.monotonic() - last_progress_at >= _PROGRESS_RELAY_MIN_SECONDS
+                ):
                     post_reply_best_effort(delivery_id, _progress_line(event, payload), suffix=str(sequence))
                     last_progress_at = time.monotonic()
                 continue
