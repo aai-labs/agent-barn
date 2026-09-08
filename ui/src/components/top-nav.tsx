@@ -6,8 +6,15 @@ import { usePathname, useRouter } from "next/navigation";
 import { useCurrentUser } from "@/auth/providers/user-context-provider";
 import { useLogout } from "@/auth/hooks/use-logout";
 import { PlusIcon, UserIcon, UsersIcon, BuildingIcon, LogOutIcon, ShieldIcon, ServerIcon } from "@/components/icons";
-import { FileText, Receipt, Sparkles } from "lucide-react";
+import { FileText, Menu, Receipt, Sparkles } from "lucide-react";
 import { LogoMark } from "@/components/logo-mark";
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+  SheetTrigger,
+} from "@/components/ui/sheet";
 import { OrgSwitcher } from "@/features/organizations/components/org-switcher";
 import { useActiveOrgRole } from "@/features/organizations/hooks/use-active-org-role";
 import { useOrganizationContext } from "@/features/organizations/providers/organization-provider";
@@ -47,6 +54,7 @@ export function TopNav({ onHire }: TopNavProps) {
         { href: `${orgBase}/settings`, label: "Settings" },
       ];
   const [menuOpen, setMenuOpen] = useState(false);
+  const [navOpen, setNavOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -76,22 +84,65 @@ export function TopNav({ onHire }: TopNavProps) {
 
   return (
     <header
-      className="flex items-center gap-9 px-10 sticky top-0 z-10 h-[61px] flex-shrink-0"
+      className="flex items-center gap-4 px-4 lg:gap-6 lg:px-6 xl:gap-9 xl:px-10 sticky top-0 z-10 h-[61px] flex-shrink-0"
       style={{ borderBottom: "1px solid var(--line)", background: "var(--bg)" }}
     >
-      <div className="flex items-center gap-2.5 font-semibold text-[15.5px] tracking-tight" style={{ color: "var(--ink)" }}>
+      <Sheet open={navOpen} onOpenChange={setNavOpen}>
+        <SheetTrigger
+          className="af-hover-bg -ml-1.5 grid h-9 w-9 flex-shrink-0 place-items-center rounded-lg lg:hidden"
+          style={{ color: "var(--ink-2)" }}
+          aria-label="Open navigation"
+        >
+          <Menu size={18} />
+        </SheetTrigger>
+
+        <SheetContent side="left" className="w-[17rem] p-0">
+          <SheetHeader className="px-4 pb-1 pt-4">
+            <SheetTitle
+              className="text-[11px] font-semibold uppercase tracking-[0.08em]"
+              style={{ color: "var(--ink-5)" }}
+            >
+              {isPlatformView ? "Platform" : "Navigation"}
+            </SheetTitle>
+          </SheetHeader>
+
+          <nav className="flex flex-col gap-0.5 px-2 pb-4">
+            {navTabs.map(({ href, label }) => (
+              <Link
+                key={href}
+                href={href}
+                className="af-hover-bg rounded-lg px-3.5 py-2.5 text-[14px] transition-colors"
+                style={{
+                  color: isActive(href) ? "var(--ink)" : "var(--ink-2)",
+                  fontWeight: isActive(href) ? 600 : 500,
+                  background: isActive(href) ? "var(--bg-soft)" : "transparent",
+                }}
+                aria-current={isActive(href) ? "page" : undefined}
+                onClick={() => setNavOpen(false)}
+              >
+                {label}
+              </Link>
+            ))}
+          </nav>
+        </SheetContent>
+      </Sheet>
+
+      <div
+        className="flex flex-shrink-0 items-center gap-2.5 font-semibold text-[15.5px] tracking-tight"
+        style={{ color: "var(--ink)" }}
+      >
         <LogoMark size={26} />
-        Agent Barn
+        <span className="hidden sm:inline">Agent Barn</span>
       </div>
 
       <OrgSwitcher />
 
-      <nav className="flex gap-0.5 flex-1">
+      <nav className="no-scrollbar hidden min-w-0 flex-1 gap-0.5 overflow-x-auto lg:flex">
         {navTabs.map(({ href, label }) => (
           <Link
             key={href}
             href={href}
-            className="px-3.5 py-[7px] rounded-lg text-[14px] font-medium transition-colors"
+            className="flex-shrink-0 whitespace-nowrap px-2.5 xl:px-3.5 py-[7px] rounded-lg text-[14px] font-medium transition-colors"
             style={{
               color: isActive(href) ? "var(--ink)" : "var(--ink-3)",
               fontWeight: isActive(href) ? 600 : 500,
@@ -110,10 +161,13 @@ export function TopNav({ onHire }: TopNavProps) {
         ))}
       </nav>
 
-      <div className="flex items-center gap-2.5">
+      {/* The drawer carries the tabs below lg, so keep the actions right-aligned. */}
+      <div className="flex-1 lg:hidden" />
+
+      <div className="flex flex-shrink-0 items-center gap-2.5">
         {!isPlatformView && (
-          <button className="af-btn af-btn-primary" onClick={onHire}>
-          <PlusIcon /> Hire agent
+          <button className="af-btn af-btn-primary" onClick={onHire} aria-label="Hire agent">
+            <PlusIcon /> <span className="hidden sm:inline">Hire agent</span>
           </button>
         )}
         <div ref={menuRef} className="relative">
