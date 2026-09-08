@@ -4,6 +4,7 @@ from typing import cast
 from unittest.mock import Mock, patch
 from uuid import uuid4
 
+import pytest
 from hamcrest import assert_that, empty, is_
 
 from api.core.config import Config
@@ -311,7 +312,7 @@ def test_a_claimed_delivery_carries_the_prompt_its_platform_builds_for_the_runti
     assert delivery.envelope.text == "hello"
 
 
-def test_a_claim_still_succeeds_when_the_platform_plugin_is_gone() -> None:
+def test_a_claim_retries_when_its_platform_plugin_is_gone() -> None:
     retired_platform = _connection()
     retired_platform.platform_key = "platform-that-no-longer-ships"
     connection = cast(CommunicationConnection, retired_platform)
@@ -327,10 +328,27 @@ def test_a_claim_still_succeeds_when_the_platform_plugin_is_gone() -> None:
     deliveries.reclaim_expired_inbound.return_value = []
     agent = cast(Agent, SimpleNamespace(id=uuid4(), status=AgentStatus.RUNNING))
 
-    claimed = service.claim_runtime_delivery(agent)
+    with pytest.raises(RuntimeError, match="Could not prepare runtime delivery"):
+        service.claim_runtime_delivery(agent)
 
-    assert claimed is not None
-    assert claimed.progress_updates is True
+
+def test_a_claim_retries_when_its_connection_is_no_longer_active() -> None:
+    connection = cast(CommunicationConnection, _connection())
+    service, deliveries = _service(connection, _feedback_plugin())
+    service.connection_repository.get_active.return_value = None
+    delivery = RuntimeDeliveryRead(
+        delivery_id=uuid4(),
+        message_id=uuid4(),
+        connection_id=connection.id,
+        attempt_count=1,
+        envelope=_envelope(),
+    )
+    deliveries.claim_next_inbound.return_value = delivery
+    deliveries.reclaim_expired_inbound.return_value = []
+    agent = cast(Agent, SimpleNamespace(id=uuid4(), status=AgentStatus.RUNNING))
+
+    with pytest.raises(RuntimeError, match="is no longer active"):
+        service.claim_runtime_delivery(agent)
 
 
 def test_gateway_reports_a_dead_letter_created_by_lease_reclaim() -> None:

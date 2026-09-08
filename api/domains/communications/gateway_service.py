@@ -106,24 +106,20 @@ class CommunicationsGatewayService:
         return delivery
 
     def _for_runtime(self, delivery: RuntimeDeliveryRead) -> RuntimeDeliveryRead:
+        connection = self.connection_repository.get_active(delivery.connection_id)
+        if connection is None:
+            raise RuntimeError(f"Connection {delivery.connection_id} is no longer active")
         try:
-            connection = self.connection_repository.get_active(delivery.connection_id)
-            if connection is None:
-                return delivery
             plugin = self.plugins.require(connection.platform_key)
-            return delivery.model_copy(
-                update={
-                    "progress_updates": plugin.supports_progress_updates,
-                    "envelope": delivery.envelope.model_copy(update={"text": plugin.runtime_prompt(delivery.envelope)}),
-                }
-            )
+            prompt = plugin.runtime_prompt(delivery.envelope)
         except Exception as exc:
-            logger.warning(
-                "Communication runtime delivery preparation failed for Connection %s (%s)",
-                delivery.connection_id,
-                type(exc).__name__,
-            )
-            return delivery
+            raise RuntimeError(f"Could not prepare runtime delivery for Connection {delivery.connection_id}") from exc
+        return delivery.model_copy(
+            update={
+                "progress_updates": plugin.supports_progress_updates,
+                "envelope": delivery.envelope.model_copy(update={"text": prompt}),
+            }
+        )
 
     def complete_runtime_delivery(
         self,
