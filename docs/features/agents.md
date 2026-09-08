@@ -19,6 +19,7 @@ An Agent is the central execution aggregate. It connects organization tenancy, a
 - Agent General Access is an Agent-level setting: Restricted or All Organization Members with one Agent Access Role. It applies only to accepted Memberships and is additive with explicit Agent Access; removing one source leaves the other source intact.
 - Agent read DTOs expose current effective Agent-related Permission keys. The UI uses those keys for lifecycle, configuration, secret, activity, cost, and deletion controls rather than deriving Agent authority from either role family; mutations independently reauthorize and validate current state. AF-150 does not expose access-management UI.
 - Runtime and Platform are independent. Hermes and OpenClaw both consume the same runtime-neutral Communications protocol. An Agent may own zero or many Communication Connections, including multiple Connections to the same Platform.
+- The Dashboard Web Chat composer accepts new messages only while the Agent is `RUNNING` and its health status is `ok` (shown as Working). A thread remains visibly awaiting a reply while its latest durable inbound Communication Delivery is `PENDING` or `PROCESSING`, so the working indicator survives tab navigation and page remounts until an outbound reply arrives or the user stops generation. Stop is durable and suppresses late replies for both runtimes; neither pinned runtime currently exposes a proven abort handle for this chat-completions path, so the product does not promise compute interruption.
 - Command approval is currently Hermes-only: the persisted `approval_mode` field maps onto the Hermes runtime's approval policy. OpenClaw has no user-configurable command-approval control, so create/update reject an explicit non-default `approval_mode` for an OpenClaw Agent (HTTP 400) rather than silently ignoring it, and reads report the effective `AUTO` default for OpenClaw regardless of the stored value. OpenClaw command approval is deferred to a future task.
 - Persisted lifecycle states are `STOPPED`, `RUNNING`, and `ERROR`.
 - An Agent's model is either inherited or overridden. An empty `model` means the Agent follows its Organization's default runtime model, resolved at every start; a non-empty `model` is an explicit override that no default change touches. Agent read DTOs expose `model_source` and the resolved `effective_model` so no client re-derives this. Sending `model: null` on update clears an override and returns the Agent to the default. See [`agent-settings.md`](agent-settings.md).
@@ -78,21 +79,21 @@ Share-management endpoints expose locked Agent Access Roles and one canonical Ag
 
 ## Source map
 
-| Concern                                    | Authoritative source                                                                                         |
-| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------ |
-| Persistence, enums, request/read contracts | `../../api/domains/agents/models.py`                                                                               |
-| Lifecycle and cross-domain orchestration   | `../../api/domains/agents/service.py`                                                                              |
-| Tenant/access-scoped persistence           | `../../api/domains/agents/repository.py`                                                                           |
-| Agent visibility and effective actions     | `../../api/domains/agents/authorization.py`                                                                        |
-| Agent Access workflows                     | `../../api/domains/agents/access_service.py`                                                                        |
-| HTTP routes                                | `../../api/domains/agents/routes.py` |
-| Communication Connections and Plugins     | `../../api/domains/communications/` |
-| Runtime resources                          | `../../api/domains/agents/builders/`                                                                               |
-| Integration and skill artifacts            | `../../api/domains/agents/aai_cli_artifacts.py`, `../../api/domains/agents/aai_cli_skills/bundled/skills/`, `../../api/domains/agents/gog_artifacts.py`                                  |
-| UI contracts and hooks                     | `../../ui/src/features/agents/schemas.ts`, `../../ui/src/features/agents/hooks/`                                         |
-| UI components                              | `../../ui/src/features/agents/components/`                                                                         |
-| Model inheritance and Organization defaults | `../../api/domains/agent_settings/`, [`agent-settings.md`](agent-settings.md) |
-| Integration coverage                       | `../../api/tests/integration/test_agents.py`, `../../api/tests/integration/test_agent_rbac.py`, `../../api/tests/integration/test_agent_general_access.py`, `../../api/tests/integration/test_agent_logs.py` |
+| Concern                                     | Authoritative source                                                                                                                                                                                         |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Persistence, enums, request/read contracts  | `../../api/domains/agents/models.py`                                                                                                                                                                         |
+| Lifecycle and cross-domain orchestration    | `../../api/domains/agents/service.py`                                                                                                                                                                        |
+| Tenant/access-scoped persistence            | `../../api/domains/agents/repository.py`                                                                                                                                                                     |
+| Agent visibility and effective actions      | `../../api/domains/agents/authorization.py`                                                                                                                                                                  |
+| Agent Access workflows                      | `../../api/domains/agents/access_service.py`                                                                                                                                                                 |
+| HTTP routes                                 | `../../api/domains/agents/routes.py`                                                                                                                                                                         |
+| Communication Connections and Plugins       | `../../api/domains/communications/`                                                                                                                                                                          |
+| Runtime resources                           | `../../api/domains/agents/builders/`                                                                                                                                                                         |
+| Integration and skill artifacts             | `../../api/domains/agents/aai_cli_artifacts.py`, `../../api/domains/agents/aai_cli_skills/bundled/skills/`, `../../api/domains/agents/gog_artifacts.py`                                                      |
+| UI contracts and hooks                      | `../../ui/src/features/agents/schemas.ts`, `../../ui/src/features/agents/hooks/`                                                                                                                             |
+| UI components                               | `../../ui/src/features/agents/components/`                                                                                                                                                                   |
+| Model inheritance and Organization defaults | `../../api/domains/agent_settings/`, [`agent-settings.md`](agent-settings.md)                                                                                                                                |
+| Integration coverage                        | `../../api/tests/integration/test_agents.py`, `../../api/tests/integration/test_agent_rbac.py`, `../../api/tests/integration/test_agent_general_access.py`, `../../api/tests/integration/test_agent_logs.py` |
 
 ## Related decisions
 
