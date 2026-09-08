@@ -757,9 +757,10 @@ class AgentRepository:
 
     @contextmanager
     def lifecycle_lock(self, agent_id: UUID) -> Iterator[bool]:
-        """Serialize lifecycle-mutating operations (start/stop) for one Agent across
-        API processes, so a competing request fails fast with 409 instead of racing
-        this one through runtime provisioning.
+        """Serialize lifecycle-mutating operations (start/stop/delete, and the
+        maintenance rebuild path) for one Agent across API processes, so a competing
+        request fails fast with 409 instead of racing this one through runtime
+        provisioning or teardown.
 
         Uses a session-scoped Postgres advisory lock (non-blocking): it is not tied
         to any single transaction, so the caller may commit intermediate work while
