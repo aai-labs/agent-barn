@@ -38,6 +38,15 @@ CLOUDFLARE_ACCOUNT_ID=
 CLOUDFLARE_API_TOKEN=
 SENDER_EMAIL=
 
+# Optional: per-Agent email addresses. Unset leaves the Email platform refusing new
+# Communication Connections; nothing else changes. Both are required on top of the three
+# values above. AGENT_EMAIL_DOMAIN must be onboarded for BOTH Email Routing and Email
+# Sending in the same Cloudflare account (e.g. agents.agentbarn.dev).
+# EMAIL_INBOUND_SECRET is the bearer token the inbound Email Worker presents; generate
+# with `openssl rand -hex 32` and set the same value as a Wrangler secret on the Worker.
+AGENT_EMAIL_DOMAIN=
+EMAIL_INBOUND_SECRET=
+
 # Optional: shared Google OAuth 2.0 "Web application" client for the Gmail
 # "Authenticate with Google" flow. If unset, the flow is disabled. Register
 # "<WEB_APP_URL>/api/v1/integrations/google/callback" as an authorized redirect URI.
@@ -94,10 +103,6 @@ LITELLM_MASTER_KEY=
 # These supersede AGENT_IMAGE above, which the API no longer reads.
 OPENCLAW_IMAGE=
 HERMES_IMAGE=
-
-# GitHub PAT with read access to aai-labs/aai-cli — the base-image
-# build clones that repo.
-GH_TOKEN=
 
 # In-container path to the kubeconfig, for the API started by `./run.sh`.
 # ./run.sh sets this automatically. Leave empty if you're not using k3d.

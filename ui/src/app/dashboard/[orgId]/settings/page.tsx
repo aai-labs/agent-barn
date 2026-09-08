@@ -6,7 +6,7 @@ import { parseAsStringEnum, useQueryState } from "nuqs";
 import { SettingsPageLayout } from "@/components/settings/settings-page-layout";
 import { SettingsSidebar } from "@/components/settings/settings-sidebar";
 import { AgentDefaultsPanel } from "@/features/agent-settings/components/agent-defaults-panel";
-import { TemplatesPanel } from "@/features/agents/components/templates-panel";
+import { TemplatesPanel } from "@/features/templates/components/templates-panel";
 import { useActiveOrgRole } from "@/features/organizations/hooks/use-active-org-role";
 import {
   ORGANIZATION_SETTINGS_SECTION_KEYS,
@@ -83,7 +83,9 @@ export default function SettingsPage() {
           description={section.description}
         >
           {section.key === "agents" && <AgentDefaultsPanel canEdit={canManage} />}
-          {section.key === "templates" && <TemplatesPanel />}
+          {section.key === "templates" && (
+            <TemplatesPanel scope={{ kind: "organization" }} canManage={canManage} />
+          )}
           {section.key === "skills" && <SkillsPanel scope={{ kind: "organization" }} canManage={canManage} />}
           {section.key === "shared-credentials" && <SharedCredentialsPanel />}
         </SettingsPageLayout>

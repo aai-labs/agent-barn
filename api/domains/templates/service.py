@@ -10,6 +10,7 @@ from sqlalchemy.exc import IntegrityError
 
 from api.domains.auth.models import CurrentUserContext
 from api.domains.events import EventDeliveryDispatcher, resolve_actor_identity
+from api.domains.events.catalog import TEMPLATE_CREATED, TEMPLATE_UPDATED
 from api.domains.rbac.catalog import PermissionKey
 from api.domains.rbac.policy import PermissionPolicy
 from api.domains.skills.repository import SkillRepository
@@ -25,6 +26,9 @@ from api.domains.templates.defaults import (
 )
 from api.domains.templates.models import (
     AgentTemplate,
+    AgentTemplateDraft,
+    AgentTemplateDraftRead,
+    OrganizationTemplateLineageSummary,
     PlatformTemplate,
     PlatformTemplateAdminSummary,
     PlatformTemplateDraft,
@@ -58,6 +62,7 @@ _TEMPLATE_CONTENT_FIELDS = (
     "heartbeat_md",
 )
 _MAX_KEY_GENERATION_ATTEMPTS = 5
+_LINEAGE_PAGE_SIZE = 500
 _KEY_COLLISION_ERRORS = (TemplateKeyCollisionError, IntegrityError)
 
 _T = TypeVar("_T")
@@ -242,6 +247,48 @@ class TemplateService:
             items=self._mark_platform_updates(reads),
         )
 
+    def list_org_template_lineages(self, context: CurrentUserContext) -> list[OrganizationTemplateLineageSummary]:
+        org_id = self._org_id(context)
+        self.permission_policy.require_organization(context, org_id, PermissionKey.TEMPLATE_READ)
+        reads = self.list_templates(
+            template_filter=TemplateFilter(),
+            pagination=Pagination(page=1, size=_LINEAGE_PAGE_SIZE),
+            context=context,
+        ).items
+        draft_names = self.repository.get_org_draft_names_by_key(org_id)
+        summaries = [
+            OrganizationTemplateLineageSummary(
+                template_key=read.template_key,
+                template_name=read.template_name,
+                latest_published_version=read.version,
+                has_draft=read.template_key in draft_names,
+                template_source=read.template_source,
+                is_fork=read.forked_from_platform_template_id is not None,
+                platform_update_available=read.platform_update_available,
+                in_use=read.in_use,
+            )
+            for read in reads
+        ]
+        published_keys = {summary.template_key for summary in summaries}
+        summaries.extend(
+            OrganizationTemplateLineageSummary(
+                template_key=template_key,
+                template_name=name,
+                latest_published_version=None,
+                has_draft=True,
+                template_source=TemplateSource.CUSTOM,
+            )
+            for template_key, name in draft_names.items()
+            if template_key not in published_keys
+        )
+        summaries.sort(
+            key=lambda summary: (
+                0 if summary.template_source == TemplateSource.PRE_DEFINED else 1,
+                summary.template_name,
+            )
+        )
+        return summaries
+
     def get_template(self, template_key: str, context: CurrentUserContext) -> TemplateRead:
         org_id = self._org_id(context)
         template = self._get_latest_or_404(org_id, template_key)
@@ -263,7 +310,9 @@ class TemplateService:
         reads = [self._to_read_with_skills(v).model_copy(update={"in_use": in_use}) for v in versions]
         return self._mark_platform_updates(reads)
 
-    def create_template(self, data: TemplateCreate, context: CurrentUserContext) -> TemplateRead:
+    def create_new_org_template_draft(
+        self, data: TemplateCreate, context: CurrentUserContext
+    ) -> AgentTemplateDraftRead:
         org_id = self._org_id(context)
         self.permission_policy.require_organization(context, org_id, PermissionKey.TEMPLATE_MANAGE)
         skills_map = self._resolve_skill_map(
@@ -273,13 +322,12 @@ class TemplateService:
             requested_versions=data.required_skill_versions,
         )
 
-        def build(template_key: str) -> AgentTemplate:
-            return AgentTemplate(
+        def build(template_key: str) -> AgentTemplateDraft:
+            return AgentTemplateDraft(
                 organization_id=org_id,
                 template_key=template_key,
                 template_name=data.template_name,
                 template_source=TemplateSource.CUSTOM,
-                version=1,
                 description=data.description,
                 soul_md=data.soul_md or DEFAULT_SOUL_MD,
                 identity_md=data.identity_md or DEFAULT_IDENTITY_MD,
@@ -291,55 +339,109 @@ class TemplateService:
                 heartbeat_md=data.heartbeat_md or DEFAULT_HEARTBEAT_MD,
             )
 
-        result = self._allocate_unique_key(
+        draft = self._allocate_unique_key(
             build,
-            lambda t: self.repository.save_new_org_template_with_skills_and_event(
-                t,
-                skills_map,
-                actor=resolve_actor_identity(context, org_id),
-                actor_display=context.user.full_name or context.user.email,
-            ),
+            lambda d: self.repository.save_new_org_draft_with_skills(d, skills_map),
         )
-        self.event_delivery_dispatcher.enqueue_immediate(result.delivery_ids)
-        return self._to_read_with_skills(result.template)
+        return self._org_draft_read(draft)
 
-    def update_template(self, template_key: str, data: TemplateUpdate, context: CurrentUserContext) -> TemplateRead:
+    # --- organization drafts -------------------------------------------------
+    #
+    # The organization mirror of the platform draft lifecycle below. The fork
+    # bookkeeping and the audit-field diff that used to live in update_template
+    # move here: the former into start_org_draft (it describes the source the
+    # draft copied), the latter into publish_org_draft (it describes the version
+    # being written).
+
+    def get_org_draft(self, template_key: str, context: CurrentUserContext) -> AgentTemplateDraftRead:
         org_id = self._org_id(context)
-        old = self._get_latest_or_404(org_id, template_key)
+        draft = self._get_org_draft_or_404(org_id, template_key)
+        self.permission_policy.require_organization(context, org_id, PermissionKey.TEMPLATE_READ)
+        return self._org_draft_read(draft)
+
+    def start_org_draft(
+        self, template_key: str, source_version: int | None, context: CurrentUserContext
+    ) -> AgentTemplateDraftRead:
+        """Get-or-create the single in-flight draft for an organization's view of
+        a lineage, seeded from a selected version or, by default, the latest.
+
+        The source may be a PlatformTemplate the organization has never forked;
+        publishing the draft then creates Org v1 and records the fork origin,
+        exactly as a PATCH used to."""
+        org_id = self._org_id(context)
+        existing_draft = self.repository.get_org_draft(org_id, template_key)
+        source = (
+            self.repository.resolve_template(org_id, template_key, source_version)
+            if source_version is not None
+            else self.repository.resolve_latest_template(org_id, template_key)
+        )
+        if existing_draft is None and source is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Template {template_key} not found")
+        self.permission_policy.require_organization(context, org_id, PermissionKey.TEMPLATE_MANAGE)
+
+        if existing_draft is not None:
+            if source_version is not None:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="A draft already exists; discard it before restoring another published version",
+                )
+            return self._org_draft_read(existing_draft)
+        if source is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Template {template_key} not found")
+
+        is_platform_source = isinstance(source, PlatformTemplate)
+        draft = AgentTemplateDraft(
+            organization_id=org_id,
+            forked_from_platform_template_id=(
+                source.id if is_platform_source else source.forked_from_platform_template_id
+            ),
+            fork_baseline_platform_template_id=(
+                source.id
+                if is_platform_source
+                else (source.fork_baseline_platform_template_id or source.forked_from_platform_template_id)
+            ),
+            fork_baseline_platform_version=(
+                source.version if is_platform_source else source.fork_baseline_platform_version
+            ),
+            template_key=source.template_key,
+            template_name=source.template_name,
+            template_source=TemplateSource.PRE_DEFINED if is_platform_source else source.template_source,
+            description=source.description,
+            soul_md=source.soul_md,
+            identity_md=source.identity_md,
+            user_md=source.user_md,
+            tools_md=source.tools_md,
+            agents_md=source.agents_md,
+            boot_md=source.boot_md,
+            bootstrap_md=source.bootstrap_md,
+            heartbeat_md=source.heartbeat_md,
+        )
+        skill_map = self.repository.get_required_skill_map_for(source)
+        self.repository.save_org_draft_with_skills(draft, skill_map)
+        return self._org_draft_read(draft)
+
+    def update_org_draft(
+        self, template_key: str, data: TemplateUpdate, context: CurrentUserContext
+    ) -> AgentTemplateDraftRead:
+        org_id = self._org_id(context)
+        draft = self._get_org_draft_or_404(org_id, template_key)
         self.permission_policy.require_organization(context, org_id, PermissionKey.TEMPLATE_MANAGE)
         updated = data.model_dump(exclude_unset=True)
-        # Every update publishes a new immutable organization version of the
-        # lineage; the template_key never changes and agent pins are left
-        # untouched. Organization-owned version numbers start at 1, separately
-        # from the platform version sequence.
-        forked_from = old.id if isinstance(old, PlatformTemplate) else old.forked_from_platform_template_id
-        fork_baseline = (
-            old.id
-            if isinstance(old, PlatformTemplate)
-            else (old.fork_baseline_platform_template_id or old.forked_from_platform_template_id)
-        )
-        fork_baseline_version = old.version if isinstance(old, PlatformTemplate) else old.fork_baseline_platform_version
-        source = TemplateSource.PRE_DEFINED if isinstance(old, PlatformTemplate) else old.template_source
-        new_template = AgentTemplate(
-            organization_id=org_id,
-            forked_from_platform_template_id=forked_from,
-            fork_baseline_platform_template_id=fork_baseline,
-            fork_baseline_platform_version=fork_baseline_version,
-            template_key=old.template_key,
-            template_name=updated.get("template_name", old.template_name),
-            template_source=source,
-            version=self.repository.get_next_org_template_version(org_id, old.template_key),
-            description=updated.get("description", old.description),
-            soul_md=updated.get("soul_md", old.soul_md),
-            identity_md=updated.get("identity_md", old.identity_md),
-            user_md=updated.get("user_md", old.user_md),
-            tools_md=updated.get("tools_md", old.tools_md),
-            agents_md=updated.get("agents_md", old.agents_md),
-            boot_md=updated.get("boot_md", old.boot_md),
-            bootstrap_md=updated.get("bootstrap_md", old.bootstrap_md),
-            heartbeat_md=updated.get("heartbeat_md", old.heartbeat_md),
-        )
-        old_map = self.repository.get_required_skill_map_for(old)
+        for field in (
+            "description",
+            "soul_md",
+            "identity_md",
+            "user_md",
+            "tools_md",
+            "agents_md",
+            "boot_md",
+            "bootstrap_md",
+            "heartbeat_md",
+        ):
+            if field in updated:
+                setattr(draft, field, updated[field])
+
+        old_map = self.repository.get_org_draft_required_skill_map(draft.id)
         resolved_map = self._resolve_updated_skill_map(
             old_map,
             data.required_skill_ids,
@@ -347,9 +449,81 @@ class TemplateService:
             org_id,
             requested_versions=data.required_skill_versions,
         )
-        standalone_map = {sid: value for sid, value in resolved_map.items() if value[1] is None}
-        groups_map = {sid: value for sid, value in resolved_map.items() if value[1] is not None}
-        overlap = set(standalone_map) & groups_map.keys()
+        self._reject_standalone_group_overlap(resolved_map)
+        self.repository.update_org_draft_with_skills(draft, resolved_map)
+        return self._org_draft_read(draft)
+
+    def discard_org_draft(self, template_key: str, context: CurrentUserContext) -> None:
+        org_id = self._org_id(context)
+        draft = self._get_org_draft_or_404(org_id, template_key)
+        self.permission_policy.require_organization(context, org_id, PermissionKey.TEMPLATE_MANAGE)
+        self.repository.delete_org_draft(draft.id)
+
+    def publish_org_draft(self, template_key: str, context: CurrentUserContext) -> TemplateRead:
+        """Convert the draft into the next immutable agent_template version,
+        carry over its required skills, and clear the draft slot.
+
+        `old` is the version this publish supersedes and may be a PlatformTemplate
+        (the organization's first fork) or None (a lineage that has never been
+        published), which is what selects between template.created and
+        template.updated. Agent pins are untouched."""
+        org_id = self._org_id(context)
+        draft = self._get_org_draft_or_404(org_id, template_key)
+        self.permission_policy.require_organization(context, org_id, PermissionKey.TEMPLATE_MANAGE)
+        old = self.repository.resolve_latest_template(org_id, template_key)
+        published = AgentTemplate(
+            organization_id=org_id,
+            forked_from_platform_template_id=draft.forked_from_platform_template_id,
+            fork_baseline_platform_template_id=draft.fork_baseline_platform_template_id,
+            fork_baseline_platform_version=draft.fork_baseline_platform_version,
+            template_key=draft.template_key,
+            template_name=draft.template_name,
+            template_source=draft.template_source,
+            version=self.repository.get_next_org_template_version(org_id, draft.template_key),
+            description=draft.description,
+            soul_md=draft.soul_md,
+            identity_md=draft.identity_md,
+            user_md=draft.user_md,
+            tools_md=draft.tools_md,
+            agents_md=draft.agents_md,
+            boot_md=draft.boot_md,
+            bootstrap_md=draft.bootstrap_md,
+            heartbeat_md=draft.heartbeat_md,
+        )
+        field_changes: dict[str, dict[str, Any]] = {}
+        if old is not None:
+            for field in ("template_name", "description"):
+                previous_value = getattr(old, field)
+                new_value = getattr(published, field)
+                if previous_value != new_value:
+                    field_changes[field] = {"previous": previous_value, "new": new_value}
+        result = self.repository.publish_org_draft_with_skills(
+            published,
+            draft.id,
+            self.repository.get_org_draft_required_skill_map(draft.id),
+            event_name=TEMPLATE_CREATED if old is None else TEMPLATE_UPDATED,
+            previous_version=old.version if old is not None else None,
+            field_changes=field_changes,
+            actor=resolve_actor_identity(context, org_id),
+            actor_display=context.user.full_name or context.user.email,
+        )
+        self.event_delivery_dispatcher.enqueue_immediate(result.delivery_ids)
+        return self._to_read_with_skills(result.template)
+
+    def _get_org_draft_or_404(self, org_id: UUID, template_key: str) -> AgentTemplateDraft:
+        draft = self.repository.get_org_draft(org_id, template_key)
+        if draft is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"No draft for {template_key}")
+        return draft
+
+    def _org_draft_read(self, draft: AgentTemplateDraft) -> AgentTemplateDraftRead:
+        return self.repository.to_org_draft_read(draft, self.repository.get_org_draft_required_skills(draft.id))
+
+    @staticmethod
+    def _reject_standalone_group_overlap(resolved_map: dict[UUID, tuple[int, str | None]]) -> None:
+        standalone = {sid for sid, value in resolved_map.items() if value[1] is None}
+        grouped = {sid for sid, value in resolved_map.items() if value[1] is not None}
+        overlap = standalone & grouped
         if overlap:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -357,22 +531,6 @@ class TemplateService:
                     f"Skills cannot be both standalone required and part of a group: {sorted(str(s) for s in overlap)}"
                 ),
             )
-        field_changes: dict[str, dict[str, Any]] = {}
-        for field in ("template_name", "description"):
-            previous_value = getattr(old, field)
-            new_value = getattr(new_template, field)
-            if previous_value != new_value:
-                field_changes[field] = {"previous": previous_value, "new": new_value}
-        result = self.repository.save_template_with_updated_event(
-            new_template,
-            standalone_map | groups_map,
-            previous_version=old.version,
-            field_changes=field_changes,
-            actor=resolve_actor_identity(context, org_id),
-            actor_display=context.user.full_name or context.user.email,
-        )
-        self.event_delivery_dispatcher.enqueue_immediate(result.delivery_ids)
-        return self._to_read_with_skills(result.template)
 
     def update_from_platform(self, template_key: str, context: CurrentUserContext) -> TemplateRead:
         """Clone the newest platform snapshot into the next org version.

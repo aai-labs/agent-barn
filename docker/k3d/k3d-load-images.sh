@@ -8,10 +8,6 @@
 # Required env vars:
 #   OPENCLAW_IMAGE    — fully-qualified image name+tag (from .env)
 #   HERMES_IMAGE      — fully-qualified image name+tag (from .env)
-#   GH_TOKEN          — GitHub PAT with read access to aai-labs/aai-cli
-#                       (https://github.com/aai-labs/aai-cli); only
-#                       needed when a build actually has to run.
-#
 # Optional:
 #   APT_MIRROR        — Debian archive host for the base-image builds. The
 #                       default CDN occasionally serves a badly degraded edge
@@ -59,10 +55,6 @@ fi
 if [[ "${TARGET}" == "all" || "${TARGET}" == "hermes" ]]; then
   [[ -n "${HERMES_IMAGE:-}" ]] || red "HERMES_IMAGE is not set — source your .env first"
 fi
-# GH_TOKEN is only needed to build; checked lazily in build_image so a run
-# that only needs to import an image already sitting in the local Docker
-# image store (see image_available_locally below) doesn't require it.
-
 # The API launches pods from these env-var refs with imagePullPolicy=IfNotPresent,
 # while CI publishes each base image under exactly its VERSION tag. A tag that
 # doesn't match its VERSION file means building/importing one image and running a
@@ -112,14 +104,11 @@ build_image() {
   local context="$3"
   local tag="$4"
 
-  [[ -n "${GH_TOKEN:-}" ]] || red "GH_TOKEN is not set — needed to clone aai-cli for the ${name} build"
-
   step "Building ${name} → ${tag}"
   if [[ "${APT_MIRROR}" != "deb.debian.org" ]]; then
     green "  using Debian mirror: ${APT_MIRROR}"
   fi
   docker build \
-    --secret "id=gh_token,env=GH_TOKEN" \
     --build-arg "APT_MIRROR=${APT_MIRROR}" \
     --file "${REPO_ROOT}/${dockerfile}" \
     --tag  "${tag}" \
@@ -141,7 +130,7 @@ image_loaded_in_cluster() {
 
 # A tag already in the local Docker image store — built by hand, by a prior
 # run, or by CI's publish step — is exactly what build_image would produce,
-# so import it directly instead of demanding GH_TOKEN to rebuild it.
+# so import it directly instead of rebuilding it.
 image_available_locally() {
   local tag="$1"
   docker image inspect "${tag}" >/dev/null 2>&1

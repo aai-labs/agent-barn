@@ -65,10 +65,6 @@ native `dev-*` targets, tests, and lint (see [Development](#development)).
 **Required credentials**
 
 1. An **[OpenRouter](https://openrouter.ai) API key** — every agent's model calls route through it.
-2. A **GitHub token** — the current agent base-image Dockerfiles use it for an
-   authenticated clone of the public
-   [`aai-labs/aai-cli`](https://github.com/aai-labs/aai-cli) repository. It does
-   not need private-repository access.
 
 **Local ports** — these must be free:
 
@@ -113,7 +109,6 @@ anything not listed here has a working local default:
 | `LITELLM_MASTER_KEY`                                                 | a **stable** admin key — generate it below                                                                              |
 | `AGENT_LITELLM_BASE_URL`                                             | `http://host.docker.internal:7070` so agent pods can reach LiteLLM through the host                                    |
 | `OPENCLAW_IMAGE`, `HERMES_IMAGE`                                     | full `name:tag`; each tag must equal the matching `openclaw-base/VERSION` / `hermes-base/VERSION`                       |
-| `GH_TOKEN`                                                           | the GitHub token from above; no private-repository access is required                                                   |
 
 Generate the two keys:
 

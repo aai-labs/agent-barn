@@ -64,6 +64,7 @@ def _service(
         agent_repository=Mock(),
         delivery_repository=deliveries,
         connection_repository=connections,
+        email_addresses=Mock(),
         plugins=plugins,
         signals=Mock(),
         operations=operations,
