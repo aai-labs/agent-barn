@@ -557,6 +557,7 @@ class RuntimeDeliveryRead(PydanticBaseModel):
     connection_id: UUID
     attempt_count: int
     envelope: NormalizedCommunicationEnvelope
+    progress_updates: bool = True
 
 
 class RuntimeDeliveryResult(PydanticBaseModel):

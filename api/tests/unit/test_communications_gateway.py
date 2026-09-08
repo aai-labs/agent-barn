@@ -5,6 +5,7 @@ from typing import cast
 from unittest.mock import AsyncMock, Mock, patch
 from uuid import uuid4
 
+import pytest
 from hamcrest import assert_that, empty, is_
 
 from api.core.config import Config
@@ -80,6 +81,8 @@ def _feedback_plugin() -> Mock:
     plugin.capabilities = frozenset({PlatformCapability.PROCESSING_FEEDBACK})
     plugin.settings_model = SlackSettings
     plugin.credentials_model = SlackCredentials
+    plugin.supports_progress_updates = True
+    plugin.runtime_prompt.side_effect = lambda envelope: envelope.text
     plugin.admit_inbound.return_value = InboundAdmissionResult(
         CommunicationPolicyDisposition.ACCEPTED,
         (_envelope(),),
@@ -332,6 +335,99 @@ def test_runtime_control_stream_replays_then_heartbeats_without_claim_polling() 
     signals.wait_async.assert_awaited_once_with(agent.id, "10-0")
     signals.latest_cursor.assert_not_called()
     signals.wait.assert_not_called()
+
+
+def test_a_claimed_delivery_carries_whether_its_platform_accepts_progress_updates() -> None:
+    for accepts_progress in (True, False):
+        connection = cast(CommunicationConnection, _connection())
+        plugin = _feedback_plugin()
+        plugin.supports_progress_updates = accepts_progress
+        service, deliveries = _service(connection, plugin)
+        delivery = RuntimeDeliveryRead(
+            delivery_id=uuid4(),
+            message_id=uuid4(),
+            connection_id=connection.id,
+            attempt_count=1,
+            envelope=_envelope(),
+        )
+        deliveries.claim_next_inbound.return_value = delivery
+        deliveries.reclaim_expired_inbound.return_value = []
+        agent = cast(Agent, SimpleNamespace(id=uuid4(), status=AgentStatus.RUNNING))
+
+        with patch(
+            "api.domains.communications.gateway_service.decrypt_token",
+            return_value=json.dumps({"bot_token": "xoxb-token", "app_token": "xapp-token"}),
+        ):
+            claimed = service.claim_runtime_delivery(agent)
+
+        assert claimed is not None
+        assert claimed.progress_updates is accepts_progress
+
+
+def test_a_claimed_delivery_carries_the_prompt_its_platform_builds_for_the_runtime() -> None:
+    connection = cast(CommunicationConnection, _connection())
+    plugin = _feedback_plugin()
+    plugin.runtime_prompt.side_effect = lambda envelope: f"FRAMING\n\n{envelope.text}"
+    service, deliveries = _service(connection, plugin)
+    delivery = RuntimeDeliveryRead(
+        delivery_id=uuid4(),
+        message_id=uuid4(),
+        connection_id=connection.id,
+        attempt_count=1,
+        envelope=_envelope(),
+    )
+    deliveries.claim_next_inbound.return_value = delivery
+    deliveries.reclaim_expired_inbound.return_value = []
+    agent = cast(Agent, SimpleNamespace(id=uuid4(), status=AgentStatus.RUNNING))
+
+    with patch(
+        "api.domains.communications.gateway_service.decrypt_token",
+        return_value=json.dumps({"bot_token": "xoxb-token", "app_token": "xapp-token"}),
+    ):
+        claimed = service.claim_runtime_delivery(agent)
+
+    assert claimed is not None
+    assert claimed.envelope.text == "FRAMING\n\nhello"
+    assert delivery.envelope.text == "hello"
+
+
+def test_a_claim_retries_when_its_platform_plugin_is_gone() -> None:
+    retired_platform = _connection()
+    retired_platform.platform_key = "platform-that-no-longer-ships"
+    connection = cast(CommunicationConnection, retired_platform)
+    service, deliveries = _service(connection, _feedback_plugin())
+    delivery = RuntimeDeliveryRead(
+        delivery_id=uuid4(),
+        message_id=uuid4(),
+        connection_id=connection.id,
+        attempt_count=1,
+        envelope=_envelope(),
+    )
+    deliveries.claim_next_inbound.return_value = delivery
+    deliveries.reclaim_expired_inbound.return_value = []
+    agent = cast(Agent, SimpleNamespace(id=uuid4(), status=AgentStatus.RUNNING))
+
+    with pytest.raises(RuntimeError, match="Could not prepare runtime delivery"):
+        service.claim_runtime_delivery(agent)
+
+
+def test_a_claim_retries_when_its_connection_is_no_longer_active() -> None:
+    connection = cast(CommunicationConnection, _connection())
+    service, deliveries = _service(connection, _feedback_plugin())
+    cast(Mock, service.connection_repository).get_active.return_value = None
+    delivery = RuntimeDeliveryRead(
+        delivery_id=uuid4(),
+        message_id=uuid4(),
+        connection_id=connection.id,
+        attempt_count=1,
+        envelope=_envelope(),
+    )
+    deliveries.claim_next_inbound.return_value = delivery
+    deliveries.reclaim_expired_inbound.return_value = []
+    agent = cast(Agent, SimpleNamespace(id=uuid4(), status=AgentStatus.RUNNING))
+
+    with pytest.raises(RuntimeError, match="is no longer active"):
+        service.claim_runtime_delivery(agent)
 
 
 def test_gateway_reports_a_dead_letter_created_by_lease_reclaim() -> None:

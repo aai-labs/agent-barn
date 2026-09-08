@@ -125,6 +125,7 @@ class CommunicationsGatewayService:
             )
         delivery = self.delivery_repository.claim_next_inbound(agent_id=agent.id, reclaim_expired=False)
         if delivery is not None:
+            delivery = self._for_runtime(delivery)
             self.notify_processing_feedback(
                 ProcessingFeedbackContext(
                     connection_id=delivery.connection_id,
@@ -134,6 +135,22 @@ class CommunicationsGatewayService:
                 )
             )
         return delivery
+
+    def _for_runtime(self, delivery: RuntimeDeliveryRead) -> RuntimeDeliveryRead:
+        connection = self.connection_repository.get_active(delivery.connection_id)
+        if connection is None:
+            raise RuntimeError(f"Connection {delivery.connection_id} is no longer active")
+        try:
+            plugin = self.plugins.require(connection.platform_key)
+            prompt = plugin.runtime_prompt(delivery.envelope)
+        except Exception as exc:
+            raise RuntimeError(f"Could not prepare runtime delivery for Connection {delivery.connection_id}") from exc
+        return delivery.model_copy(
+            update={
+                "progress_updates": plugin.supports_progress_updates,
+                "envelope": delivery.envelope.model_copy(update={"text": prompt}),
+            }
+        )
 
     def find_active_inbound_delivery(
         self,
