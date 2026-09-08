@@ -60,3 +60,48 @@ def test_handle_retry_exhausted_without_delivery_id_is_a_noop(monkeypatch):
     worker.handle_retry_exhausted({"args": []}, retries=None)
 
     assert repository.dead_lettered == []
+
+
+class FakeInjector:
+    def __init__(self, repository):
+        self.repository = repository
+
+    def get(self, interface):
+        from api.domains.events.handlers import EventHandlerRegistry
+        from api.domains.events.repository import OutboxMessageRepository
+
+        if interface is OutboxMessageRepository:
+            return self.repository
+        if interface is EventHandlerRegistry:
+            return EventHandlerRegistry()
+        raise AssertionError(f"unexpected dependency {interface!r}")
+
+
+def test_worker_builds_one_injector_per_process_and_none_at_import(monkeypatch):
+    import importlib
+
+    from api.core import utils
+    from api.domains.events import worker
+
+    created: list[FakeInjector] = []
+    repository = FakeRepository()
+
+    def counting_create_injector():
+        created.append(FakeInjector(repository))
+        return created[-1]
+
+    monkeypatch.setattr(utils, "create_injector", counting_create_injector)
+    importlib.reload(worker)
+    try:
+        assert created == [], "importing the worker module must not build an injector"
+
+        processors = [worker._processor() for _ in range(3)]
+        repositories = [worker._repository() for _ in range(2)]
+
+        assert len(created) == 1
+        assert all(processor.repository is repository for processor in processors)
+        assert all(candidate is repository for candidate in repositories)
+    finally:
+        worker.reset_injector()
+        monkeypatch.undo()
+        importlib.reload(worker)
