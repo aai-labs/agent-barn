@@ -80,6 +80,25 @@ test.describe("Top nav responsiveness", () => {
 
       await expect(drawer).toBeHidden();
     });
+
+    test("closes the drawer on navigation it did not initiate", async ({
+      page,
+    }) => {
+      await dashboardPage.gotoUsers();
+      await page.getByRole("button", { name: "Open navigation" }).click();
+
+      const drawer = page.getByRole("dialog");
+      await drawer.getByRole("link", { name: "Overview" }).click();
+      await expect(drawer).toBeHidden();
+
+      // Re-open, then leave by a route change the drawer knows nothing about.
+      await page.getByRole("button", { name: "Open navigation" }).click();
+      await expect(drawer).toBeVisible();
+
+      await page.goBack();
+
+      await expect(drawer).toBeHidden();
+    });
   });
 
   test.describe("on a tablet viewport", () => {

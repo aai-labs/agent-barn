@@ -54,7 +54,10 @@ export function TopNav({ onHire }: TopNavProps) {
         { href: `${orgBase}/settings`, label: "Settings" },
       ];
   const [menuOpen, setMenuOpen] = useState(false);
-  const [navOpen, setNavOpen] = useState(false);
+  const routeKey = pathname ?? "";
+  const [navOpenedOn, setNavOpenedOn] = useState<string | null>(null);
+  const navOpen = navOpenedOn !== null && navOpenedOn === routeKey;
+  const setNavOpen = (open: boolean) => setNavOpenedOn(open ? routeKey : null);
   const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
