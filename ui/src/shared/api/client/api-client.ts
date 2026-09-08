@@ -47,6 +47,15 @@ export class ApiClient {
     this.authInterceptor?.clearAuth();
   }
 
+  async getAuthHeaders(forceRefresh = false): Promise<Record<string, string>> {
+    const tokens = forceRefresh
+      ? await this.authInterceptor?.refresh()
+      : await this.authInterceptor?.getTokens();
+    return tokens?.accessToken
+      ? { Authorization: `Bearer ${tokens.accessToken}` }
+      : {};
+  }
+
   private setupInterceptors(): void {
     const requestInterceptor = createRequestInterceptor(
       this.config.transformKeys,

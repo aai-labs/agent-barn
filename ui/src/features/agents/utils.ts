@@ -41,6 +41,10 @@ export const agentsKey = {
       channelId,
       filters,
     ] as const,
+  webChatMessages: (agentId: string, threadId: string) =>
+    [..._agentsKeyBase.detail(agentId), "web-chat-messages", threadId] as const,
+  webChatThreads: (agentId: string) =>
+    [..._agentsKeyBase.detail(agentId), "web-chat-threads"] as const,
   logs: (id: string) => [..._agentsKeyBase.detail(id), "logs"] as const,
   slackChannels: (id: string) => [..._agentsKeyBase.detail(id), "slack-channels"] as const,
   slackUsers: (id: string) => [..._agentsKeyBase.detail(id), "slack-users"] as const,

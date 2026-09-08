@@ -1,5 +1,6 @@
 import json
 import secrets
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import NoReturn
@@ -11,13 +12,17 @@ from pydantic import ValidationError
 
 from api.core.config import Config
 from api.domains.agents.authorization import AgentAuthorization
+from api.domains.agents.models import Agent
 from api.domains.auth.models import CurrentUserContext
+from api.domains.communications.addressing import build_local_part, compose_address
 from api.domains.communications.delivery_repository import (
     CommunicationDeliveryRepository,
     CommunicationDeliveryRetryError,
 )
+from api.domains.communications.email_address_repository import AgentEmailAddressRepository
 from api.domains.communications.error_details import normalize_communication_error
 from api.domains.communications.models import (
+    AgentEmailAddress,
     CommunicationConnection,
     CommunicationConnectionCreate,
     CommunicationConnectionRead,
@@ -74,6 +79,7 @@ class CommunicationsService:
     config: Config
     authorization: AgentAuthorization
     repository: CommunicationConnectionRepository
+    addresses: AgentEmailAddressRepository
     plugins: PlatformPluginRegistry
     delivery_repository: CommunicationDeliveryRepository | None = None
     operations: CommunicationOperationalRepository | None = None
@@ -89,7 +95,9 @@ class CommunicationsService:
     ) -> list[CommunicationConnectionRead]:
         self.authorization.require_visible(context, agent_id)
         scope = self.authorization.authorization_scope(context, PermissionKey.AGENT_READ)
-        return [self._read(connection) for connection in self.repository.list_active_for_agent(agent_id, scope)]
+        connections = self.repository.list_active_for_agent(agent_id, scope)
+        addresses = self.addresses.addresses_for([connection.id for connection in connections])
+        return [self._read(connection, addresses) for connection in connections]
 
     def _raise_directory_error(self, exc: Exception, operation: str) -> NoReturn:
         """Translate a provider-side directory failure into a bounded HTTP error.
@@ -183,6 +191,7 @@ class CommunicationsService:
         agent = self.authorization.require_action(context, agent_id, PermissionKey.AGENT_UPDATE)
         self.authorization.require_action_for_visible(context, agent, PermissionKey.AGENT_SECRET_MANAGE)
         plugin = self._require_plugin(data.platform_key)
+        self._reject_web_chat_mutation(plugin.key)
         validated = self._validate(
             plugin,
             data.settings,
@@ -209,9 +218,33 @@ class CommunicationsService:
             observed_status=ConnectionObservedStatus.PENDING if data.enabled else None,
         )
         try:
-            return self._read(self.repository.create(connection))
+            created = self.repository.create(
+                connection,
+                allocate_address=self._address_allocator(plugin, agent) if self._allocates_address(plugin) else None,
+            )
+            return self._read(created)
         except CommunicationConnectionConflictError as exc:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+    def _allocates_address(self, plugin) -> bool:
+        return PlatformCapability.MANAGED_ADDRESS in plugin.capabilities
+
+    def _address_allocator(self, plugin, agent: Agent) -> Callable[[UUID], AgentEmailAddress]:
+        del plugin
+        mailbox = self.config.agent_email_mailbox.strip()
+        domain = self.config.agent_email_domain.strip()
+
+        def allocate(connection_id: UUID) -> AgentEmailAddress:
+            local_part = build_local_part(agent.name)
+            return AgentEmailAddress(
+                organization_id=agent.organization_id,
+                agent_id=agent.id,
+                connection_id=connection_id,
+                local_part=local_part,
+                address=compose_address(mailbox, local_part, domain),
+            )
+
+        return allocate
 
     def update_connection(
         self,
@@ -225,6 +258,7 @@ class CommunicationsService:
         connection = self.repository.get_active_in_scope(connection_id, agent_id, action_scope)
         if connection is None:
             self._raise_not_found(connection_id)
+        self._reject_web_chat_mutation(connection.platform_key)
 
         if data.credentials is not None:
             self.authorization.require_action_for_visible(context, agent, PermissionKey.AGENT_SECRET_MANAGE)
@@ -268,8 +302,10 @@ class CommunicationsService:
         agent = self.authorization.require_action(context, agent_id, PermissionKey.AGENT_UPDATE)
         self.authorization.require_action_for_visible(context, agent, PermissionKey.AGENT_SECRET_MANAGE)
         action_scope = self.authorization.authorization_scope(context, PermissionKey.AGENT_UPDATE)
-        if self.repository.get_active_in_scope(connection_id, agent_id, action_scope) is None:
+        connection = self.repository.get_active_in_scope(connection_id, agent_id, action_scope)
+        if connection is None:
             self._raise_not_found(connection_id)
+        self._reject_web_chat_mutation(connection.platform_key)
         try:
             if not self.repository.retire(connection_id, expected_revision=revision):
                 self._raise_not_found(connection_id)
@@ -511,6 +547,14 @@ class CommunicationsService:
         except (ValidationError, ValueError) as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
+    @staticmethod
+    def _reject_web_chat_mutation(platform_key: str) -> None:
+        if platform_key == "web":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="The built-in Web Chat connection is managed by Agent Barn",
+            )
+
     def _require_plugin(self, key: str):
         try:
             return self.plugins.require(key)
@@ -545,11 +589,25 @@ class CommunicationsService:
                 detail="Stored Communication Connection credentials are invalid",
             ) from exc
 
-    def _read(self, connection: CommunicationConnection) -> CommunicationConnectionRead:
+    def _read(
+        self,
+        connection: CommunicationConnection,
+        addresses: dict[UUID, str] | None = None,
+    ) -> CommunicationConnectionRead:
         plugin = self.plugins.require(connection.platform_key)
+        addressed_by_mailbox = PlatformCapability.MANAGED_ADDRESS in plugin.capabilities
         webhook_url = None
-        if PlatformCapability.WEBHOOK_INGRESS in plugin.capabilities and self.config.api_external_url:
+        if (
+            PlatformCapability.WEBHOOK_INGRESS in plugin.capabilities
+            and not addressed_by_mailbox
+            and self.config.api_external_url
+        ):
             webhook_url = f"{self.config.api_external_url.rstrip('/')}/communications/v1/webhooks/{connection.id}"
+        managed_address = None
+        if addressed_by_mailbox:
+            if addresses is None:
+                addresses = self.addresses.addresses_for([connection.id])
+            managed_address = addresses.get(connection.id)
         read = CommunicationConnectionRead.model_validate(connection)
         safe_details = CommunicationOperationalRepository.safe_error_details(connection.last_error_details)
         return read.model_copy(
@@ -561,6 +619,7 @@ class CommunicationsService:
                 ),
                 "last_error_details": safe_details,
                 "webhook_url": webhook_url,
+                "managed_address": managed_address,
             }
         )
 

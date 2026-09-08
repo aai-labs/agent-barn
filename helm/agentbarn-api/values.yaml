@@ -42,6 +42,15 @@ cloudflareAccountId: ""
 cloudflareApiToken: ""
 senderEmail: ""
 
+# Per-Agent email addresses. Blank leaves the Email platform disabled — Agent Barn
+# refuses new Email Communication Connections and nothing else changes. Both are needed
+# on top of the three values above. agentEmailDomain must be onboarded for BOTH Email
+# Routing and Email Sending in the same Cloudflare account; emailInboundSecret is the
+# bearer token the inbound Email Worker presents, and reaches the Communications
+# deployment through the same Secret as the API.
+agentEmailDomain: ""
+emailInboundSecret: ""
+
 # Shared Google OAuth 2.0 "Web application" client for the Gmail "Authenticate with
 # Google" flow. Leave blank to disable the flow. Registered redirect URI must be
 # "<webAppUrl>/api/v1/integrations/google/callback".
@@ -128,6 +137,16 @@ eventDelivery:
   reconciliation:
     enabled: true
     schedule: "*/5 * * * *"
+
+costs:
+  sync:
+    enabled: true
+    # Every 15 minutes. Two phases per run: pull LiteLLM's spend log into
+    # cost_record, then recover costs LiteLLM dropped by asking OpenRouter what it
+    # actually charged. The interval must stay above
+    # COST_SYNC_MAX_RUNTIME_SECONDS (api/domains/costs/constants.py) — the job runs
+    # under concurrencyPolicy: Forbid, so an overrunning pass costs the next tick.
+    schedule: "*/15 * * * *"
 
 worker:
   enabled: true

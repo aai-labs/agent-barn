@@ -29,6 +29,8 @@ class CommunicationPlatform(str, enum.Enum):
     SLACK = "slack"
     TELEGRAM = "telegram"
     DISCORD = "discord"
+    WEB = "web"
+    EMAIL = "email"
 
 
 class PlatformCapability(str, enum.Enum):
@@ -36,10 +38,12 @@ class PlatformCapability(str, enum.Enum):
     APPLICATION_PROVISIONING = "application_provisioning"
     INSTALL_LINK = "install_link"
     WEBHOOK_INGRESS = "webhook_ingress"
+    MANAGED_ADDRESS = "managed_address"
     ATTACHMENTS = "attachments"
     THREADS = "threads"
     MENTIONS = "mentions"
     PROCESSING_FEEDBACK = "processing_feedback"
+    SUPERVISED_INGRESS = "supervised_ingress"
 
 
 class ProcessingFeedbackStage(str, enum.Enum):
@@ -225,6 +229,36 @@ class CommunicationConnection(BaseModel, table=True):
     )
 
 
+class AgentEmailAddress(BaseModel, table=True):
+    __tablename__: str = "agent_email_address"
+    __table_args__ = (
+        sa.ForeignKeyConstraint(
+            ["connection_id", "organization_id"],
+            ["communication_connection.id", "communication_connection.organization_id"],
+            name="fk_agent_email_address_connection_organization",
+            ondelete="CASCADE",
+        ),
+        sa.UniqueConstraint("connection_id", name="uq_agent_email_address_connection"),
+        sa.Index(
+            "uq_agent_email_address_local_part",
+            sa.func.lower(sa.column("local_part")),
+            unique=True,
+        ),
+        sa.Index("ix_agent_email_address_agent", "agent_id"),
+    )
+
+    organization_id: UUID = SqlField(nullable=False)
+    agent_id: UUID = SqlField(foreign_key="agent.id", nullable=False, ondelete="CASCADE")
+    connection_id: UUID = SqlField(nullable=False)
+    local_part: str = SqlField(nullable=False, max_length=128)
+    address: str = SqlField(nullable=False, max_length=254)
+    released_at: datetime | None = SqlField(
+        default=None,
+        nullable=True,
+        sa_type=sa.DateTime(timezone=True),  # type: ignore
+    )
+
+
 class CommunicationDelivery(BaseModel, table=True):
     __tablename__: str = "communication_delivery"
     __table_args__ = (
@@ -277,6 +311,7 @@ class CommunicationDelivery(BaseModel, table=True):
     provider_message_id: str | None = SqlField(default=None, nullable=True, max_length=512)
     last_error_code: str | None = SqlField(default=None, nullable=True, max_length=100)
     last_error_message: str | None = SqlField(default=None, nullable=True, max_length=500)
+    cancel_requested_at: datetime | None = SqlField(default=None, nullable=True, sa_type=sa.DateTime(timezone=True))  # type: ignore
     envelope: dict[str, Any] = SqlField(sa_column=Column(JSONB, nullable=False))
 
 
@@ -623,6 +658,7 @@ class CommunicationConnectionRead(PydanticBaseModel):
     last_error_message: str | None
     last_error_details: CommunicationErrorDetails | None = None
     webhook_url: str | None = None
+    managed_address: str | None = None
     revision: int
     created_at: datetime
     updated_at: datetime

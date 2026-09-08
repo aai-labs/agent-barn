@@ -44,6 +44,10 @@ class CommunicationDeliveryRetryError(RuntimeError):
     pass
 
 
+class CommunicationDeliveryCancelledError(RuntimeError):
+    pass
+
+
 _BLOCKING_OUTBOUND_STATUSES = (
     CommunicationDeliveryStatus.PENDING,
     CommunicationDeliveryStatus.PROCESSING,
@@ -165,7 +169,11 @@ class CommunicationDeliveryRepository:
         *,
         agent_id: UUID,
         lease_seconds: int = 120,
+        max_attempts: int = 5,
+        reclaim_expired: bool = True,
     ) -> RuntimeDeliveryRead | None:
+        if reclaim_expired:
+            self.reclaim_expired_inbound(agent_id=agent_id, max_attempts=max_attempts)
         now = datetime.now(UTC)
         active_ordering = aliased(CommunicationDelivery)
         with Session(self.delegate.engine) as session:
@@ -191,6 +199,7 @@ class CommunicationDeliveryRepository:
             )
             delivery = session.exec(query).one_or_none()
             if delivery is None:
+                session.commit()
                 return None
             delivery.status = CommunicationDeliveryStatus.PROCESSING
             delivery.claimed_at = now
@@ -216,6 +225,155 @@ class CommunicationDeliveryRepository:
                 attempt_count=delivery.attempt_count,
                 envelope=NormalizedCommunicationEnvelope.model_validate(delivery.envelope),
             )
+
+    def find_active_inbound_delivery(
+        self,
+        *,
+        connection_id: UUID,
+        ordering_key: str,
+    ) -> UUID | None:
+        """Return the most recent still-in-flight inbound delivery for a thread.
+
+        Used to resolve "the turn currently generating a reply" for a stop
+        request, which only ever has the thread identity to go on.
+        """
+        with Session(self.delegate.engine) as session:
+            return session.exec(
+                select(CommunicationDelivery.id)
+                .where(
+                    col(CommunicationDelivery.connection_id) == connection_id,
+                    col(CommunicationDelivery.direction) == CommunicationDirection.INBOUND,
+                    col(CommunicationDelivery.ordering_key) == ordering_key,
+                    col(CommunicationDelivery.status).in_(
+                        (CommunicationDeliveryStatus.PENDING, CommunicationDeliveryStatus.PROCESSING)
+                    ),
+                )
+                .order_by(
+                    sa.case(
+                        (col(CommunicationDelivery.status) == CommunicationDeliveryStatus.PROCESSING, 0),
+                        else_=1,
+                    ),
+                    col(CommunicationDelivery.created_at).desc(),
+                )
+                .limit(1)
+            ).one_or_none()
+
+    def request_cancel(self, delivery_id: UUID, *, agent_id: UUID) -> CommunicationDeliveryStatus | None:
+        """Mark an inbound delivery for cancellation.
+
+        A delivery still PENDING (not yet claimed by the Runtime) is
+        cancelled immediately — there is nothing in flight to interrupt. A
+        PROCESSING delivery is only flagged; the caller pushes the actual
+        interrupt to the Runtime pod (see
+        CommunicationsGatewayService.request_cancel_delivery), and this flag
+        makes that delivery's eventual completion terminal instead of
+        retried (see `_apply_completion`) even if the push never lands.
+
+        Returns the delivery's resulting status, or None if there was
+        nothing left to cancel.
+        """
+        now = datetime.now(UTC)
+        with Session(self.delegate.engine) as session:
+            delivery = session.exec(
+                select(CommunicationDelivery)
+                .where(
+                    col(CommunicationDelivery.id) == delivery_id,
+                    col(CommunicationDelivery.agent_id) == agent_id,
+                    col(CommunicationDelivery.direction) == CommunicationDirection.INBOUND,
+                    col(CommunicationDelivery.status).in_(
+                        (CommunicationDeliveryStatus.PENDING, CommunicationDeliveryStatus.PROCESSING)
+                    ),
+                )
+                .with_for_update()
+            ).one_or_none()
+            if delivery is None:
+                return None
+            delivery.cancel_requested_at = now
+            if delivery.status == CommunicationDeliveryStatus.PENDING:
+                delivery.status = CommunicationDeliveryStatus.CANCELLED
+                delivery.completed_at = now
+                delivery.last_error_code = "CANCELLED"
+                delivery.last_error_message = "Cancelled by user"
+            session.add(delivery)
+            session.commit()
+            return delivery.status
+
+    def reclaim_expired_inbound(
+        self,
+        *,
+        agent_id: UUID,
+        max_attempts: int = 5,
+    ) -> list[RuntimeDeliveryRead]:
+        """Reclaim stale runtime leases and return newly terminal deliveries."""
+        now = datetime.now(UTC)
+        dead_lettered: list[RuntimeDeliveryRead] = []
+        reclaimed: list[CommunicationDelivery] = []
+        with Session(self.delegate.engine, expire_on_commit=False) as session:
+            expired = session.exec(
+                select(CommunicationDelivery)
+                .where(
+                    col(CommunicationDelivery.agent_id) == agent_id,
+                    col(CommunicationDelivery.direction) == CommunicationDirection.INBOUND,
+                    col(CommunicationDelivery.status) == CommunicationDeliveryStatus.PROCESSING,
+                    col(CommunicationDelivery.lease_expires_at) < now,
+                )
+                .with_for_update(skip_locked=True)
+            ).all()
+            for stale in expired:
+                self._apply_completion(
+                    stale,
+                    succeeded=False,
+                    now=now,
+                    max_attempts=max_attempts,
+                    error_code="LEASE_EXPIRED",
+                    error_message="Runtime did not complete this delivery before its claim lease expired",
+                    error_details=None,
+                )
+                session.add(stale)
+                self._stage_completion_journal(session, stale, now=now)
+                reclaimed.append(stale)
+                if stale.status == CommunicationDeliveryStatus.DEAD_LETTERED:
+                    dead_lettered.append(
+                        RuntimeDeliveryRead(
+                            delivery_id=stale.id,
+                            message_id=stale.message_id,
+                            connection_id=stale.connection_id,
+                            attempt_count=stale.attempt_count,
+                            envelope=NormalizedCommunicationEnvelope.model_validate(stale.envelope),
+                        )
+                    )
+            session.commit()
+        for stale in reclaimed:
+            self._record_completion_metric(stale)
+        return dead_lettered
+
+    def renew_runtime_delivery_lease(
+        self,
+        delivery_id: UUID,
+        *,
+        agent_id: UUID,
+        lease_seconds: int = 120,
+    ) -> bool:
+        """Extend a live runtime claim without allowing an expired claim to revive."""
+        now = datetime.now(UTC)
+        with Session(self.delegate.engine) as session:
+            delivery = session.exec(
+                select(CommunicationDelivery)
+                .where(
+                    col(CommunicationDelivery.id) == delivery_id,
+                    col(CommunicationDelivery.agent_id) == agent_id,
+                    col(CommunicationDelivery.direction) == CommunicationDirection.INBOUND,
+                    col(CommunicationDelivery.status) == CommunicationDeliveryStatus.PROCESSING,
+                    col(CommunicationDelivery.lease_expires_at) > now,
+                )
+                .with_for_update()
+            ).one_or_none()
+            if delivery is None:
+                return False
+            delivery.lease_expires_at = now + timedelta(seconds=lease_seconds)
+            session.add(delivery)
+            session.commit()
+            return True
 
     def thread_has_agent_state(
         self,
@@ -264,6 +422,8 @@ class CommunicationDeliveryRepository:
             ).one_or_none()
             if source is None:
                 raise LookupError("Source Communication Delivery not found")
+            if source.cancel_requested_at is not None or source.status == CommunicationDeliveryStatus.CANCELLED:
+                raise CommunicationDeliveryCancelledError("Source Communication Delivery was cancelled")
             existing = session.exec(
                 select(CommunicationDelivery).where(
                     col(CommunicationDelivery.connection_id) == source.connection_id,
@@ -751,7 +911,15 @@ class CommunicationDeliveryRepository:
             error_message,
             details=safe_details,
         )
-        if succeeded:
+        if delivery.cancel_requested_at is not None:
+            # Cancellation wins even when a runtime that cannot hard-abort
+            # reports success after the request. Retrying or publishing that
+            # result would re-run work the user explicitly abandoned.
+            delivery.status = CommunicationDeliveryStatus.CANCELLED
+            delivery.completed_at = now
+            delivery.last_error_code = delivery.last_error_code or "CANCELLED"
+            delivery.last_error_message = delivery.last_error_message or "Cancelled by user"
+        elif succeeded:
             delivery.status = CommunicationDeliveryStatus.SUCCEEDED
             delivery.completed_at = now
         elif delivery.attempt_count >= max_attempts:
@@ -763,9 +931,13 @@ class CommunicationDeliveryRepository:
             delivery.claimed_at = None
 
     @staticmethod
+    def ordering_key_for_location(connection_id: UUID, location: ConversationLocation) -> str:
+        thread = location.thread_id or "root"
+        return f"{connection_id}:{location.id}:{thread}"
+
+    @staticmethod
     def ordering_key(connection_id: UUID, envelope: NormalizedCommunicationEnvelope) -> str:
-        thread = envelope.location.thread_id or "root"
-        return f"{connection_id}:{envelope.location.id}:{thread}"
+        return CommunicationDeliveryRepository.ordering_key_for_location(connection_id, envelope.location)
 
     @staticmethod
     def _message_values(

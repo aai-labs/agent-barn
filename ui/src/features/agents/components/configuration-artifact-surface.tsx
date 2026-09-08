@@ -3,8 +3,8 @@
 import { useState } from "react";
 
 import { Textarea } from "@/components/ui/textarea";
-import type { PlatformTemplateFileKey } from "@/features/platform-templates/utils";
-import { PlatformTemplateArtifactTabs } from "@/features/platform-templates/components/platform-template-artifact-tabs";
+import type { TemplateFileKey } from "@/features/templates/utils";
+import { PlatformTemplateArtifactTabs } from "@/features/templates/components/platform-template-artifact-tabs";
 
 import type { Snapshot } from "./agent-configuration-utils";
 
@@ -16,11 +16,11 @@ export function ConfigurationArtifactSurface({
 }: {
   snapshot: Snapshot;
   editable?: boolean;
-  values?: Partial<Record<PlatformTemplateFileKey, string>>;
-  onChange?: (artifact: PlatformTemplateFileKey, value: string) => void;
+  values?: Partial<Record<TemplateFileKey, string>>;
+  onChange?: (artifact: TemplateFileKey, value: string) => void;
 }) {
   const [selectedArtifact, setSelectedArtifact] =
-    useState<PlatformTemplateFileKey>("soulMd");
+    useState<TemplateFileKey>("soulMd");
 
   return (
     <PlatformTemplateArtifactTabs
