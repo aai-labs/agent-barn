@@ -94,9 +94,7 @@ class CommunicationsGatewayService:
             )
         delivery = self.delivery_repository.claim_next_inbound(agent_id=agent.id, reclaim_expired=False)
         if delivery is not None:
-            delivery = delivery.model_copy(
-                update={"progress_updates": self._accepts_progress_updates(delivery.connection_id)}
-            )
+            delivery = self._for_runtime(delivery)
             self.notify_processing_feedback(
                 ProcessingFeedbackContext(
                     connection_id=delivery.connection_id,
@@ -107,19 +105,25 @@ class CommunicationsGatewayService:
             )
         return delivery
 
-    def _accepts_progress_updates(self, connection_id: UUID) -> bool:
+    def _for_runtime(self, delivery: RuntimeDeliveryRead) -> RuntimeDeliveryRead:
         try:
-            connection = self.connection_repository.get_active(connection_id)
+            connection = self.connection_repository.get_active(delivery.connection_id)
             if connection is None:
-                return True
-            return self.plugins.require(connection.platform_key).supports_progress_updates
+                return delivery
+            plugin = self.plugins.require(connection.platform_key)
+            return delivery.model_copy(
+                update={
+                    "progress_updates": plugin.supports_progress_updates,
+                    "envelope": delivery.envelope.model_copy(update={"text": plugin.runtime_prompt(delivery.envelope)}),
+                }
+            )
         except Exception as exc:
             logger.warning(
-                "Communication progress-update policy lookup failed for Connection %s (%s)",
-                connection_id,
+                "Communication runtime delivery preparation failed for Connection %s (%s)",
+                delivery.connection_id,
                 type(exc).__name__,
             )
-            return True
+            return delivery
 
     def complete_runtime_delivery(
         self,

@@ -114,6 +114,9 @@ class PlatformPlugin(ABC):
     credential_uniqueness_scope: CredentialUniquenessScope = CredentialUniquenessScope.NONE
     supports_progress_updates: bool = True
 
+    def runtime_prompt(self, envelope: NormalizedCommunicationEnvelope) -> str:
+        return envelope.text
+
     @property
     def descriptor(self) -> PlatformDescriptorRead:
         return PlatformDescriptorRead(

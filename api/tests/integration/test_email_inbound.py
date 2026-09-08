@@ -142,14 +142,19 @@ def test_the_stored_message_is_located_on_the_sender_and_carries_the_subject() -
         with when("the inbound worker posts a parsed message"):
             _post(context, _payload(address))
 
-        with then("the conversation is the correspondent, and the agent can see who wrote and why"):
+        with then("the conversation is the correspondent, and the stored message is only what they wrote"):
             delegate = context.injector.get(PostgresRepositoryDelegate)
             with Session(delegate.engine) as session:
                 [message] = session.exec(select(AgentChatMessage)).all()
+                [delivery] = _deliveries(context)
             assert_that(message.channel_id, equal_to(CUSTOMER))
             assert_that(message.sender_id, equal_to(CUSTOMER))
-            assert_that("Question about pricing" in message.content, is_(True))
-            assert_that("Jane Customer" in message.content, is_(True))
+            assert_that(message.sender_name, equal_to("Jane Customer"))
+            assert_that(message.content, equal_to("What does the team plan cost?"))
+            assert_that(
+                delivery.envelope["provider_metadata"]["subject"],
+                equal_to("Question about pricing"),
+            )
 
 
 def test_a_wrong_shared_secret_is_rejected() -> None:

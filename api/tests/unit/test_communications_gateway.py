@@ -76,6 +76,7 @@ def _feedback_plugin() -> Mock:
     plugin.settings_model = SlackSettings
     plugin.credentials_model = SlackCredentials
     plugin.supports_progress_updates = True
+    plugin.runtime_prompt.side_effect = lambda envelope: envelope.text
     plugin.admit_inbound.return_value = InboundAdmissionResult(
         CommunicationPolicyDisposition.ACCEPTED,
         (_envelope(),),
@@ -281,6 +282,33 @@ def test_a_claimed_delivery_carries_whether_its_platform_accepts_progress_update
 
         assert claimed is not None
         assert claimed.progress_updates is accepts_progress
+
+
+def test_a_claimed_delivery_carries_the_prompt_its_platform_builds_for_the_runtime() -> None:
+    connection = cast(CommunicationConnection, _connection())
+    plugin = _feedback_plugin()
+    plugin.runtime_prompt.side_effect = lambda envelope: f"FRAMING\n\n{envelope.text}"
+    service, deliveries = _service(connection, plugin)
+    delivery = RuntimeDeliveryRead(
+        delivery_id=uuid4(),
+        message_id=uuid4(),
+        connection_id=connection.id,
+        attempt_count=1,
+        envelope=_envelope(),
+    )
+    deliveries.claim_next_inbound.return_value = delivery
+    deliveries.reclaim_expired_inbound.return_value = []
+    agent = cast(Agent, SimpleNamespace(id=uuid4(), status=AgentStatus.RUNNING))
+
+    with patch(
+        "api.domains.communications.gateway_service.decrypt_token",
+        return_value=json.dumps({"bot_token": "xoxb-token", "app_token": "xapp-token"}),
+    ):
+        claimed = service.claim_runtime_delivery(agent)
+
+    assert claimed is not None
+    assert claimed.envelope.text == "FRAMING\n\nhello"
+    assert delivery.envelope.text == "hello"
 
 
 def test_a_claim_still_succeeds_when_the_platform_plugin_is_gone() -> None:

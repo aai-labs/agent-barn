@@ -220,14 +220,24 @@ def test_hashing_an_overlong_message_id_is_stable_so_retries_stay_idempotent() -
     assert first.provider_message_id == second.provider_message_id
 
 
+def test_the_persisted_message_is_only_what_the_sender_wrote() -> None:
+    plugin = _plugin()
+
+    [envelope] = plugin.normalize_inbound(_settings(plugin), _inbound())
+
+    assert envelope.text == "What does the team plan cost?"
+
+
 def test_the_agent_is_given_the_sender_and_subject_the_adapter_does_not_pass_through() -> None:
     plugin = _plugin()
 
     [envelope] = plugin.normalize_inbound(_settings(plugin), _inbound())
 
-    assert "Jane Customer <jane@acme.com>" in envelope.text
-    assert "Question about pricing" in envelope.text
-    assert "What does the team plan cost?" in envelope.text
+    prompt = plugin.runtime_prompt(envelope)
+
+    assert "Jane Customer <jane@acme.com>" in prompt
+    assert "Question about pricing" in prompt
+    assert "What does the team plan cost?" in prompt
 
 
 def test_the_agent_is_told_the_message_is_addressed_to_it_and_that_its_reply_is_sent() -> None:
@@ -235,10 +245,12 @@ def test_the_agent_is_told_the_message_is_addressed_to_it_and_that_its_reply_is_
 
     [envelope] = plugin.normalize_inbound(_settings(plugin), _inbound())
 
-    opening = envelope.text.splitlines()[0].lower()
+    prompt = plugin.runtime_prompt(envelope)
+
+    opening = prompt.splitlines()[0].lower()
     assert "you" in opening
-    assert "reply" in envelope.text.lower()
-    assert envelope.text.lower().index("reply") < envelope.text.index("What does the team plan cost?")
+    assert "reply" in prompt.lower()
+    assert prompt.lower().index("reply") < prompt.index("What does the team plan cost?")
 
 
 @pytest.mark.parametrize(

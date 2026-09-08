@@ -161,7 +161,7 @@ class EmailPlatformPlugin(PlatformPlugin):
                         thread_id=_bounded_identity(thread_id),
                     ),
                     sender=CommunicationSender(id=sender, display_name=sender_name),
-                    text=_readable_message(sender, sender_name, subject, str(payload.get("text") or "")),
+                    text=_without_quoted_history(str(payload.get("text") or "")),
                     provider_metadata={
                         "message_id": message_id,
                         "subject": subject,
@@ -170,6 +170,14 @@ class EmailPlatformPlugin(PlatformPlugin):
                     },
                 ),
             ),
+        )
+
+    def runtime_prompt(self, envelope: NormalizedCommunicationEnvelope) -> str:
+        return _readable_message(
+            envelope.sender.id or "",
+            envelope.sender.display_name,
+            str(envelope.provider_metadata.get("subject") or ""),
+            envelope.text,
         )
 
     def send(
@@ -276,7 +284,7 @@ def _readable_message(sender: str, sender_name: str | None, subject: str, body: 
     Agent also cannot otherwise know its whole response is delivered verbatim.
     """
     origin = f"{sender_name} <{sender}>" if sender_name else sender
-    return f"{INBOUND_FRAMING}\n\nFrom: {origin}\nSubject: {subject}\n\n{_without_quoted_history(body)}"
+    return f"{INBOUND_FRAMING}\n\nFrom: {origin}\nSubject: {subject}\n\n{body}"
 
 
 def _without_quoted_history(body: str) -> str:
