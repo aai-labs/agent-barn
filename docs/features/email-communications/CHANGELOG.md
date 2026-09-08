@@ -13,6 +13,8 @@ Related context: [Communications](../communications/CHANGELOG.md), [Agents](../a
 - Delivered: **Verified end to end on 2026-08-31** against a local k3d cluster — a real Gmail message reached the Agent through Cloudflare, the Worker and a `cloudflared` tunnel, and the Agent's reply arrived back in the sender's inbox. Slice 1 is code-complete.
 - In transition: every environment still leaves `AGENT_EMAIL_DOMAIN` unset, which makes `validate_external` refuse Email Connections outright, so the feature stays inert until an operator configures the domain and deploys the Worker.
 - Delivered: The Worker deploys through `ci.yml`/`deploy.yml` like every other component, and `EMAIL_INBOUND_SECRET` reaches the Worker and the cluster from one GitHub secret in the same run.
+- Delivered: An Agent's verbose progress relay is withheld from email, so one inbound message produces one reply rather than one per tool call. Approval prompts are unaffected.
+- Delivered: Email conversations appear in the Conversations tab, each References chain rendering as a thread with its first message as the root.
 - Next: separating the persisted Conversation Message from the runtime prompt text (see the framing follow-up below), and deleting the leftover `agentbarn-email-inbound-local` Worker with its routing rule.
 - Blockers: rollout needs the agent subdomain onboarded for **both** Email Routing and Email Sending, **and subaddressing switched on** — it is off by default, and with it off every agent address bounces with `550 5.1.1` and no activity-log entry at all.
 - Blockers: five GitHub Actions entries must exist before the first deploy — `CLOUDFLARE_WORKERS_TOKEN`, plus `AGENT_EMAIL_DOMAIN`/`STAGING_AGENT_EMAIL_DOMAIN` (variables) and `EMAIL_INBOUND_SECRET`/`STAGING_EMAIL_INBOUND_SECRET` (secrets, which must differ from one another).
@@ -35,6 +37,16 @@ Confirmed against Cloudflare's documentation while planning; recorded here becau
 - The Cloudflare daily send quota is **per account and shared with invites, password resets, staging and production** (`../../guidelines/operations.md`). Agent mail draws from the same pool.
 
 ## Changes
+
+### 2026-09-08 — AF-288 — Email hardening after first staging use — PR pending
+
+- Delivered: Verbose mode no longer reaches email. `PlatformPlugin` gained a `supports_progress_updates` class attribute defaulting to `True`; Email is the only platform that overrides it. `claim_runtime_delivery` resolves it per delivery onto `RuntimeDeliveryRead.progress_updates`, and the runtime adapter gates its progress relay on that alongside `VERBOSE_MODE`. Slack, Discord, Telegram and Teams inherit the default and their plugin files are untouched.
+- Delivered: The Conversations tab renders email. `_group_into_threads` discarded any thread whose `thread_id` would not parse as a float, and since every email message carries a Message-ID thread id, every email thread was dropped before reaching the UI — the tab showed "No messages in this range" for a conversation that had persisted correctly all along. A non-numeric id now falls through to the existing "earliest message is the root" branch instead of being discarded.
+- Changed: `README.md` documents the Cloudflare routing-rule cutover under Deploying to Kubernetes, because CI publishes the Worker but cannot connect it — Email Routing rules are dashboard state — and a reader following README alone would deploy a Worker that never receives mail. Full reference stays in `operations.md`.
+- Notes: The progress relay is the only thing suppressed. Approval prompts still reach email, because `resolve_pending_approval` treats the next inbound message as the approval answer — suppressing the prompt would leave a run waiting on a reply the correspondent was never asked for. The "still working on your previous message" notice also still sends.
+- Notes: The threading defect was Slack-shaped, not accidental. `thread_ts` *is* the root message's timestamp, so the float parse fed a ±5s match against a `thread_id`-less root. Every other shipped platform stores digits — Teams `messageid`/`replyToId`, Discord snowflakes, Telegram `message_thread_id` — so all four parsed and took the fallback branch already. Email was the only platform affected, verified by running the real function over each platform's id shape before and after.
+- Notes: `supports_progress_updates` is deliberately absent from `PlatformDescriptorRead`, so neither the platform catalogue nor the UI contract changes. A capability enum value was rejected for the same reason: capabilities are opt-in and would have meant editing four plugins that had no reason to change.
+- Follow-up: `progress_updates` defaults to `True` on both sides of the protocol, so an Agent pod running the previous adapter keeps relaying progress until it is recreated — the adapter ships as a ConfigMap rendered at API import. A stale pod is not a failed fix.
 
 ### 2026-09-03 — AF-276 — Worker deploys through CI; email brand mark — PR pending
 
