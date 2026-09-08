@@ -76,10 +76,19 @@ export function AddMemberDialog({
     >
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>{result ? "Member invited" : "Add member"}</DialogTitle>
+          <DialogTitle>
+            {result
+              ? result.inviteLink
+                ? "Member invited"
+                : "Member added"
+              : "Add member"}
+          </DialogTitle>
           <DialogDescription>
             {result
-              ? `${result.member.email} has been added as ${result.member.role.toLowerCase()}.`
+              ? `${result.member.email} has been added as ${result.member.role.toLowerCase()}.` +
+                (result.inviteLink
+                  ? ""
+                  : " They already have an account, so no new invite was sent.")
               : "Invite someone to this organization by email."}
           </DialogDescription>
         </DialogHeader>

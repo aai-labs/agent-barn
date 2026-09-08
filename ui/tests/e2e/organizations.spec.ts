@@ -283,6 +283,41 @@ test.describe("Organization detail — members", () => {
     ).toHaveValue(/set-password\?token=/);
   });
 
+  test("adding an existing user reports no invite was sent", async ({ page }) => {
+    // AF-244: an existing account keeps the one link it already has, so the add returns
+    // no invite_link and the dialog must not claim one went out.
+    await data.organizations.interceptAddMember({
+      result: {
+        member: {
+          user_id: "66666666-6666-4666-8666-666666666666",
+          email: "teammate@example.com",
+          full_name: null,
+          role: "MEMBER",
+          is_pending: false,
+        },
+        invite_link: null,
+      },
+    });
+    await page.goto(DETAIL_URL);
+
+    await page.getByRole("button", { name: /add member/i }).click();
+    await page.getByLabel(/email/i).fill("teammate@example.com");
+    await page
+      .getByRole("dialog")
+      .getByRole("button", { name: /add member/i })
+      .click();
+
+    await expect(
+      page.getByRole("heading", { name: /member added/i }),
+    ).toBeVisible();
+    await expect(
+      page.getByText(/no new invite was sent/i),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("dialog").locator("input[readonly]"),
+    ).toHaveCount(0);
+  });
+
   test("promotes a member to admin via the actions menu", async ({ page }) => {
     await page.goto(DETAIL_URL);
 

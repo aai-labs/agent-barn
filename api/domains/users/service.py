@@ -128,17 +128,7 @@ class UserService:
                 status_code=status.HTTP_409_CONFLICT,
                 detail="An active user does not need an invitation",
             )
-        invited_user, invite_link = self.auth_service.invite_user(
-            email=user.email,
-            full_name=user.full_name,
-        )
-        del invited_user
-        if invite_link is None:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="An active user does not need an invitation",
-            )
-        return PlatformUserInviteResult(invite_link=invite_link)
+        return PlatformUserInviteResult(invite_link=self.auth_service.resend_invite(user))
 
     def get_user_by_id_and_organization_id(self, user_id: UUID, organization_id: UUID) -> User:
         user = self.user_repository.get_by_id_and_organization_id(user_id, organization_id)
