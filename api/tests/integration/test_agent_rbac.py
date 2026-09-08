@@ -162,6 +162,8 @@ def test_member_creation_persists_creator_access_and_effective_permission_keys()
                 PermissionKey.AGENT_LIFECYCLE_MANAGE.value,
                 PermissionKey.AGENT_ACCESS_MANAGE.value,
                 PermissionKey.AGENT_SECRET_MANAGE.value,
+                PermissionKey.AGENT_MEMORY_READ.value,
+                PermissionKey.AGENT_MEMORY_MANAGE.value,
                 PermissionKey.ACTIVITY_READ.value,
                 PermissionKey.COST_READ.value,
             ),
@@ -447,6 +449,7 @@ def test_locked_agent_access_roles_are_listed_with_exact_permissions():
                 {
                     PermissionKey.AGENT_READ.value,
                     PermissionKey.ACTIVITY_READ.value,
+                    PermissionKey.AGENT_MEMORY_READ.value,
                     PermissionKey.COST_READ.value,
                 }
             ),

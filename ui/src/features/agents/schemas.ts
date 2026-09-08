@@ -55,6 +55,8 @@ export const AgentPermissionKeySchema = z.enum([
   "agent.lifecycle.manage",
   "agent.access.manage",
   "agent.secret.manage",
+  "agent.memory.read",
+  "agent.memory.manage",
   "activity.read",
   "cost.read",
 ]);
@@ -366,3 +368,69 @@ export type AgentAccessSettingsAssignmentUpdate = z.infer<
   typeof AgentAccessSettingsAssignmentUpdateSchema
 >;
 export type AgentAccessSettingsUpdate = z.infer<typeof AgentAccessSettingsUpdateSchema>;
+
+// Memory is stored per (observer, observed) peer pair: the same Agent holds a
+// separate view of each person it talks to, plus a model of itself. The pair is
+// surfaced rather than flattened, because collapsing it would misrepresent whose
+// memory an item actually is.
+export const AgentMemoryItemSchema = z.object({
+  id: z.string(),
+  content: z.string(),
+  observer: z.string(),
+  observed: z.string(),
+  level: z.string(),
+  createdAt: z.string().nullable().optional(),
+  // Set only for a memory another agent shared in. It is stored on this agent's
+  // own self-model, identically to something it concluded itself, so this is the
+  // only thing that tells them apart. A null name with a set date means the
+  // source agent has been deleted.
+  sharedFrom: z.string().nullable().optional(),
+  sharedAt: z.string().nullable().optional(),
+});
+
+// One peer the memory can be filtered to, with its real count. `peer` is the id
+// sent back to filter; `label` is what the chip shows.
+export const AgentMemoryFacetSchema = z.object({
+  peer: z.string(),
+  label: z.string(),
+  count: z.number().int(),
+  isSelf: z.boolean(),
+});
+
+export const AgentMemoryPageSchema = z.object({
+  items: z.array(AgentMemoryItemSchema),
+  total: z.number().int(),
+  page: z.number().int(),
+  size: z.number().int(),
+  // Present only on the unfiltered view; the chips it drives describe the whole
+  // workspace. Undeclared fields are stripped by zod, so this must be listed.
+  facets: z.array(AgentMemoryFacetSchema).default([]),
+});
+
+export type AgentMemoryItem = z.infer<typeof AgentMemoryItemSchema>;
+export type AgentMemoryFacet = z.infer<typeof AgentMemoryFacetSchema>;
+export type AgentMemoryPage = z.infer<typeof AgentMemoryPageSchema>;
+
+// One result per destination: a share can succeed for some agents and fail for
+// others, and the API reports each rather than failing the whole call.
+export const SharedFactTargetResultSchema = z.object({
+  agentId: z.string().uuid(),
+  shared: z.boolean(),
+  error: z.string().nullable().optional(),
+});
+
+export const SharedFactResultSchema = z.object({
+  results: z.array(SharedFactTargetResultSchema),
+});
+
+export type SharedFactResult = z.infer<typeof SharedFactResultSchema>;
+
+export const MemoryCarryOverResultSchema = z.object({
+  copied: z.number().int(),
+  // True when the agent held more than the copy limit, so the caller learns the
+  // carry-over was partial before deleting rather than afterwards.
+  truncated: z.boolean(),
+  results: z.array(SharedFactTargetResultSchema),
+});
+
+export type MemoryCarryOverResult = z.infer<typeof MemoryCarryOverResultSchema>;

@@ -30,6 +30,7 @@ from api.domains.agents.builders import (
     build_hermes_config_map,
     build_hermes_deployment,
     build_hermes_gateway_config,
+    build_honcho_config,
     build_openclaw_gateway_config,
     build_pvc,
     build_secret_hermes_runtime,
@@ -107,6 +108,7 @@ from api.domains.templates.repository import TemplateRepository
 from api.domains.templates.requirements import effective_required_ids, split_requirements
 from api.domains.users.models import User
 from api.infrastructure.crypto import decrypt_token, encrypt_token
+from api.infrastructure.honcho.client import HonchoClient, HonchoError, workspace_id_for_agent
 from api.infrastructure.integration_validators import (
     PROVIDER_VALIDATORS,
     format_validation_result,
@@ -200,6 +202,7 @@ class AgentService:
     event_delivery_dispatcher: EventDeliveryDispatcher
     organization_lookup: OrganizationLookupService
     agent_settings_lookup: AgentSettingsLookupService
+    honcho: HonchoClient
 
     def _org_id(self, context: CurrentUserContext) -> UUID:
         return context.require_current_user_organization().organization_id
@@ -1905,6 +1908,7 @@ class AgentService:
                 effective_model,
                 llm_proxy_url,
                 approval_mode=str(agent.approval_mode),
+                honcho_enabled=self.config.honcho_enabled,
             )
             secret = build_secret_hermes_runtime(
                 agent.id,
@@ -1924,7 +1928,14 @@ class AgentService:
                 self.config.agent_image_pull_secret,
             )
         else:
-            overlay = build_openclaw_gateway_config(effective_model, llm_proxy_url)
+            overlay = build_openclaw_gateway_config(
+                effective_model,
+                llm_proxy_url,
+                honcho_base_url=self.config.agent_honcho_base_url if self.config.honcho_enabled else None,
+                # Derivable from the Agent id so a workspace never needs its own
+                # mapping row, and deletion can find it without one.
+                honcho_workspace_id=workspace_id_for_agent(agent.id) if self.config.honcho_enabled else None,
+            )
             hermes_cfg = None
             secret = build_secret_runtime(
                 agent.id,
@@ -2118,6 +2129,15 @@ class AgentService:
                 boot_md=rendered.boot_md,
                 heartbeat_md=rendered.heartbeat_md,
                 hermes_config=hermes_cfg,
+                honcho_config=(
+                    build_honcho_config(
+                        base_url=self.config.agent_honcho_base_url,
+                        workspace_id=workspace_id_for_agent(agent.id),
+                        agent_name=agent.name,
+                    )
+                    if self.config.honcho_enabled
+                    else None
+                ),
                 aai_cli_config_toml=aai_config_toml,
                 aai_cli_setup_sh=aai_setup_sh,
                 gog_setup_sh=gog_setup_sh,
@@ -2166,6 +2186,17 @@ class AgentService:
 
         agent.status = AgentStatus.RUNNING
         agent.last_error = None
+        # Tell this Agent's memory deriver to keep transient conversational actions
+        # ("the peer asked X") out of stored memory. Done on every start so it also
+        # backfills Agents that predate it, and best-effort: memory is opt-in and
+        # its store may be unreachable, neither of which should fail an Agent start.
+        if self.config.honcho_enabled:
+            try:
+                self.honcho.ensure_deriver_instructions(
+                    workspace_id_for_agent(agent.id), self.honcho.DERIVER_INSTRUCTIONS
+                )
+            except HonchoError:
+                logger.warning("Could not set memory deriver instructions for agent %s", agent_id, exc_info=True)
         # Pin what this pod was started on. The runtime reads its config once, so this
         # is the model it serves until someone restarts it — however the Organization
         # default moves in the meantime.

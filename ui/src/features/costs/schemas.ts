@@ -81,6 +81,9 @@ export const CostSummarySchema = z.object({
   toDate: z.string(),
   granularity: GranularitySchema,
   totalSpend: z.number(),
+  // Memory spend for this org's agents, billed on Honcho's separate credential
+  // and not part of totalSpend. Undeclared fields are stripped by zod.
+  totalMemoryCost: z.number().default(0),
   totalCalls: z.number().int(),
   activeAgents: z.number().int(),
   topModel: z.string().nullable().default(null),
@@ -127,6 +130,7 @@ export const AgentCostSchema = z.object({
   totalTokens: z.number().int(),
   promptTokens: z.number().int(),
   completionTokens: z.number().int(),
+  memoryCost: z.number().default(0),
   modelsBreakdown: z.array(AgentModelBreakdownSchema).default([]),
 });
 

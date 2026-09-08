@@ -1,0 +1,90 @@
+{{- $base := .Values.litellmBaseUrl -}}
+{{- $text := .Values.models.text | required "models.text is required" -}}
+{{- $embedding := .Values.models.embedding | required "models.embedding is required" -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "honcho.labels" . | nindent 4 }}
+data:
+  config.toml: |
+    # Every model-calling module is pinned to LiteLLM. Honcho's built-in
+    # defaults target the provider's own endpoint, so a module left unset here
+    # would send this deployment's LiteLLM key to the wrong host.
+    [deriver]
+    # Honcho derives conclusions from a *batch* of pending messages, not from
+    # each one. The stock gate is 512 tokens — a few short turns — so on a real
+    # conversation the deriver runs constantly and records trivia like "operator
+    # asked where the runbooks live" alongside anything worth keeping. A larger
+    # window gives the model enough conversation to tell those apart, and costs
+    # one call where the default spends several.
+    #
+    # Latency is not free, and an earlier note here claimed it was. Recall is
+    # unaffected — recent turns are already in the runtime's own context window,
+    # so memory is what an Agent recalls in a *later* session. The Memory tab is
+    # a different matter: it shows derived memory, so batching is exactly what
+    # someone watching it waits on. That is what the age backstop below bounds.
+    representation_batch_work_unit_target_tokens = {{ .Values.deriver.batchWorkUnitTargetTokens }}
+    representation_batch_target_input_tokens = {{ .Values.deriver.batchTargetInputTokens }}
+    # Backstop for conversation that never reaches the token gate, which is most
+    # ordinary chat. Per session, timed from its oldest unprocessed message, so it
+    # bounds how long a new memory can take to appear rather than fixing it.
+    representation_batch_max_age_seconds = {{ .Values.deriver.batchMaxAgeSeconds }}
+
+    [deriver.model_config]
+    transport = "openai"
+    model = "{{ $text }}"
+
+    [deriver.model_config.overrides]
+    base_url = "{{ $base }}"
+
+    [summary.model_config]
+    transport = "openai"
+    model = "{{ $text }}"
+
+    [summary.model_config.overrides]
+    base_url = "{{ $base }}"
+
+    [embedding.model_config]
+    transport = "openai"
+    model = "{{ $embedding }}"
+
+    [embedding.model_config.overrides]
+    base_url = "{{ $base }}"
+
+    # All five reasoning levels are set explicitly: unset levels are backfilled
+    # from defaults that carry the provider's own base URL.
+    {{- range $level := list "minimal" "low" "medium" "high" "max" }}
+
+    [dialectic.levels.{{ $level }}.model_config]
+    transport = "openai"
+    model = "{{ $text }}"
+
+    [dialectic.levels.{{ $level }}.model_config.overrides]
+    base_url = "{{ $base }}"
+    {{- end }}
+
+    # `low` is what a caller gets when it does not ask for a level, and its stock
+    # budget is 5 tool iterations — more than `medium` (2) or `high` (4), which
+    # makes the name actively misleading. Measured against a live Agent, a single
+    # iteration answered 6/6 recall questions identically while using 36% fewer
+    # input and 60% fewer output tokens, and returned tighter answers: the extra
+    # iterations bought hedging preamble, not accuracy.
+    [dialectic.levels.low]
+    max_tool_iterations = {{ .Values.dialectic.lowMaxToolIterations }}
+
+    [dream.deduction_model_config]
+    transport = "openai"
+    model = "{{ $text }}"
+
+    [dream.deduction_model_config.overrides]
+    base_url = "{{ $base }}"
+
+    [dream.induction_model_config]
+    transport = "openai"
+    model = "{{ $text }}"
+
+    [dream.induction_model_config.overrides]
+    base_url = "{{ $base }}"

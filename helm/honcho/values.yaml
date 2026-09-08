@@ -1,0 +1,114 @@
+image:
+  repository: ghcr.io/plastic-labs/honcho
+  tag: v3.1.0
+  pullPolicy: IfNotPresent
+
+# Name of the k8s Secret containing:
+#   DB_CONNECTION_URI, LLM_OPENAI_API_KEY
+secretName: honcho
+
+# postgresql+psycopg://<user>:<password>@postgres-honcho:5432/<db>
+databaseUrl: ""
+
+# LiteLLM virtual key. Honcho resolves model credentials per module rather than
+# per workspace, so every Agent's memory work shares this one key and memory
+# spend is an aggregate figure, not a per-Agent one. See
+# docs/adr/2026-09-03-honcho-backed-agent-memory.md.
+litellmKey: ""
+
+# OpenAI-compatible endpoint every Honcho module is pointed at, so Honcho never
+# holds a provider credential of its own.
+litellmBaseUrl: http://litellm:4000/v1
+
+models:
+  # Used by the deriver, summary, dialectic, and dream modules.
+  text: ""
+  # OpenRouter serves no embedding models, so this must name a model LiteLLM
+  # routes to an embedding-capable provider.
+  embedding: ""
+
+cache:
+  # Firecrawl already uses database 0 on the shared Redis release.
+  url: redis://redis:6379/1?suppress=true
+
+# Honcho's background dreaming performs model work on an idle timer, spending
+# tokens with no user action. Off by default so memory cost tracks conversation.
+dream:
+  enabled: false
+
+# Honcho posts per-call usage telemetry here. It is the only way to attribute
+# memory spend: Honcho sends every model call on one credential with no workspace
+# identity, so LiteLLM cannot split it, but this telemetry names the workspace and
+# counts tokens.
+telemetry:
+  enabled: true
+  endpoint: "http://agentbarn-api:8001/ingest/v1/honcho/usage"
+  # Shared secret the Ingest service checks. Empty disables emission rather than
+  # posting unauthenticated.
+  key: ""
+
+service:
+  port: 8000
+
+api:
+  # Only the API entrypoint provisions the database, and it does so on every
+  # start, so a second replica would race the first. Raise only once
+  # provisioning is known to be safe under concurrency.
+  replicaCount: 1
+  resources:
+    requests:
+      memory: 512Mi
+      cpu: 100m
+    limits:
+      memory: 1Gi
+      cpu: 500m
+
+# Honcho's LiteLLM credential. Leave empty and the chart mints one at install
+# time and publishes it to `keyJob.secretName`; set it to pin a specific key and
+# the Job is not rendered at all.
+litellmKey: ""
+
+keyJob:
+  # Where the minted key is published. Read by Honcho's own pods as
+  # LLM_OPENAI_API_KEY, and by the API as HONCHO_LITELLM_KEY for cost
+  # attribution — one value, one Secret, so the two cannot drift apart.
+  secretName: honcho-litellm-key
+  # LiteLLM requires aliases to be unique across all keys; this one identifies
+  # Honcho's spend in LiteLLM's activity report.
+  keyAlias: honcho
+  litellmUrl: http://litellm:4000
+  # The Secret holding LiteLLM's master key, which is what authorizes minting.
+  litellmSecretName: litellm
+  litellmMasterKeyRef: LITELLM_MASTER_KEY
+  # Needs create/update on Secrets in this namespace only — the cluster is
+  # shared and we own no cluster-scoped resources.
+  serviceAccountName: agent-farm-user
+  image: python:3.12-alpine
+
+dialectic:
+  # Tool iterations allowed at the `low` reasoning level, which is what a caller
+  # gets when it does not ask for one. Honcho ships 5 here — more than `medium`
+  # or `high`. Raise only if Agents start being asked questions that need several
+  # rounds of lookup; simple recall measured identical at 1.
+  lowMaxToolIterations: 1
+
+deriver:
+  replicaCount: 1
+  workers: 1
+  # How much conversation accumulates before one derivation pass. Honcho ships
+  # 512/1024, which is a few short turns; larger batches mean fewer LLM calls and
+  # give the model enough context to skip recording trivia.
+  batchWorkUnitTargetTokens: 4096
+  batchTargetInputTokens: 4096
+  # Backstop for conversation that never reaches the token gate, which is most
+  # ordinary chat. The timer is per session and runs from its oldest unprocessed
+  # message, so this is the upper bound on how long a new memory takes to appear,
+  # not a fixed delay. 0 disables it entirely.
+  batchMaxAgeSeconds: 300
+  resources:
+    requests:
+      memory: 512Mi
+      cpu: 100m
+    limits:
+      memory: 1Gi
+      cpu: 500m

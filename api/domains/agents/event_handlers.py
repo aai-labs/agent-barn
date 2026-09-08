@@ -6,8 +6,15 @@ from uuid import UUID
 
 from injector import inject
 
+from api.core.config import Config
 from api.domains.agents.repository import AgentRepository
-from api.domains.events.catalog import AGENT_LIFECYCLE_EMAIL_HANDLER, AGENT_STARTED, AGENT_STOPPED
+from api.domains.events.catalog import (
+    AGENT_DELETED,
+    AGENT_LIFECYCLE_EMAIL_HANDLER,
+    AGENT_MEMORY_PURGE_HANDLER,
+    AGENT_STARTED,
+    AGENT_STOPPED,
+)
 from api.domains.events.handlers import (
     EventDeliveryContext,
     RetryableEventHandlerError,
@@ -20,6 +27,7 @@ from api.infrastructure.email.exceptions import (
     TerminalEmailSendingException,
 )
 from api.infrastructure.email.service import EmailService
+from api.infrastructure.honcho.client import HonchoClient, HonchoError, workspace_id_for_agent
 
 logger = logging.getLogger(__name__)
 
@@ -80,3 +88,42 @@ class AgentLifecycleEmailHandler:
             raise TerminalEventHandlerError(
                 f"Agent lifecycle email permanently failed for {len(terminal_recipients)} recipient(s)"
             )
+
+
+@inject
+@dataclass
+class AgentMemoryPurgeHandler:
+    """Erase a deleted Agent's memory.
+
+    Deleting an Agent already destroys its volume, secret, and every other trace,
+    and there is no restore path — retaining derived conclusions about real people,
+    owned by an Agent nobody owns and under no retention policy, would be the odd
+    exception rather than a safeguard. Anything worth keeping is copied out first
+    through the carry-over the delete flow offers.
+
+    This runs as a retried delivery rather than inline in `delete_agent` because
+    Honcho refuses a workspace delete while any session remains (409), and both the
+    session and workspace deletes are accepted asynchronously — so the purge can
+    lose that race. Inline, a lost race would leave the memory behind with only a
+    log line; here it is retried until it takes.
+    """
+
+    honcho: HonchoClient
+    config: Config
+
+    name: ClassVar[str] = AGENT_MEMORY_PURGE_HANDLER
+    supported_events: ClassVar[Sequence[SupportedEvent]] = (SupportedEvent(AGENT_DELETED, 1),)
+
+    def handle(self, event: DomainEventEnvelope, context: EventDeliveryContext) -> None:
+        if not self.config.honcho_enabled:
+            # No workspace was ever created, so there is nothing to erase. Not an
+            # error: the same deployment may enable memory later.
+            return
+        agent_id = UUID(str(event.payload["agent_id"]))
+        try:
+            self.honcho.delete_workspace(workspace_id_for_agent(agent_id))
+        except HonchoError as exc:
+            # Retryable, deliberately: the common cause is Honcho still clearing
+            # sessions. Giving up would leave a deleted Agent's memory in place with
+            # nothing left in the product able to reach it.
+            raise RetryableEventHandlerError(f"Could not erase memory for agent {agent_id}: {exc}") from exc

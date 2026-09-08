@@ -1,0 +1,25 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-env
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "honcho.labels" . | nindent 4 }}
+data:
+  # Flat settings, using each section's env prefix (src/config.py). Nested model
+  # configuration lives in config.toml instead, because the dialectic levels are
+  # a dict field that does not express reliably as environment variables.
+  CACHE_URL: {{ .Values.cache.url | quote }}
+  CACHE_ENABLED: "true"
+  # ClusterIP only; the service is never exposed through ingress.
+  AUTH_USE_AUTH: "false"
+  VECTOR_STORE_TYPE: pgvector
+  DREAM_ENABLED: {{ .Values.dream.enabled | quote }}
+  DERIVER_WORKERS: {{ .Values.deriver.workers | quote }}
+  {{- if and .Values.telemetry.enabled .Values.telemetry.key }}
+  TELEMETRY_ENABLED: "true"
+  TELEMETRY_ENDPOINT: {{ .Values.telemetry.endpoint | quote }}
+  # Pinned rather than left to the default: below 1.0 these events are sampled,
+  # and a sampled stream undercounts every workspace's share of the bill.
+  TELEMETRY_HIGH_VOLUME_SAMPLE_RATE: "1.0"
+  {{- end }}

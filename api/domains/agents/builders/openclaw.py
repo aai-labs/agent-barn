@@ -33,12 +33,80 @@ TELEMETRY_PUSH_PACKAGE_JSON: str = (_TELEMETRY_PUSH / "package.json").read_text(
 TELEMETRY_PUSH_PLUGIN_JSON: str = (_TELEMETRY_PUSH / "openclaw.plugin.json").read_text()
 COMMUNICATIONS_RUNTIME_ADAPTER_PY: str = (_COMMON_SCRIPTS / "communications-runtime-adapter.py").read_text()
 
+# The Honcho plugin defaults its sender-to-peer map to ~/.honcho, which is not
+# the mounted volume. Held there it is lost on every pod recreation and each
+# participant silently becomes a new peer with an empty representation.
+OPENCLAW_HONCHO_PEERS_FILE: str = "/home/node/.openclaw/honcho/openclaw-peers.json"
+
+# Generous relative to the ~25s a dialectic recall was measured at, because the
+# cost of being too low is silent — recall just never arrives — while the cost of
+# being high is only a slower turn when Honcho is genuinely struggling.
+HONCHO_RECALL_TIMEOUT_MS: int = 60000
+
+
+_MEMORY_CORE = "memory-core"
+_MEMORY_HONCHO = "openclaw-honcho"
+
+# The Honcho plugin runs an internal memory-search sub-agent, and its turns — the
+# sub-agent's own instruction prompt and its bounded "NONE" replies — are captured
+# and derived into conclusions as if the user had said them ("owner instructs the
+# agent to return NONE…"). On a fresh Agent that scaffolding outnumbers real memory
+# before a single genuine message. These patterns drop those turns at capture: the
+# plugin merges them with its defaults and `shouldSkipMessage` treats a `/…/`
+# entry as a regex tested anywhere in the message. Every phrase is one no human
+# types into a chat, so they target the sub-agent without touching real content.
+_MEMORY_NOISE_PATTERNS = [
+    "/memory search agent/i",
+    "/return exactly one of two forms/i",
+    "/compact plain-text summary/i",
+    "/reply with (?:the word )?NONE/i",
+    "/^NONE\\.?$/i",
+]
+
+
+def _memory_plugin(honcho_workspace_id: str | None) -> str:
+    """Honcho occupies the single memory slot rather than running beside
+    memory-core; two writers over the same semantic state is what the memory
+    backend decision exists to remove."""
+    return _MEMORY_HONCHO if honcho_workspace_id else _MEMORY_CORE
+
+
+def _memory_entry(honcho_base_url: str | None, honcho_workspace_id: str | None) -> dict:
+    if not honcho_workspace_id:
+        return {_MEMORY_CORE: {"enabled": True}}
+    return {
+        _MEMORY_HONCHO: {
+            "enabled": True,
+            "config": {
+                "baseUrl": honcho_base_url,
+                "workspaceId": honcho_workspace_id,
+                # Merged with the plugin's own defaults; drops the memory-search
+                # sub-agent's turns before they are ever stored (see above).
+                "noisePatterns": _MEMORY_NOISE_PATTERNS,
+            },
+            "hooks": {
+                # Without this the runtime blocks the plugin's `agent_end` hook, so
+                # no conversation is ever captured and memory stays silently empty.
+                # The plugin writes the flag itself and asks for a restart, which
+                # means a first run captures nothing unless it is set here up front.
+                "allowConversationAccess": True,
+                # Recall runs a dialectic query on `before_prompt_build`, which is
+                # an LLM call with its own tool loop — measured at ~25s against a
+                # real workspace. The runtime's 15s default kills it every turn, so
+                # capture works while recall silently never lands.
+                "timeoutMs": HONCHO_RECALL_TIMEOUT_MS,
+            },
+        }
+    }
+
 
 def _openclaw_config_core(
     model: str,
     litellm_base_url: str,
     binding_channel: str | None,
     channels: dict,
+    honcho_base_url: str | None = None,
+    honcho_workspace_id: str | None = None,
 ) -> dict:
     provider, _, model_name = model.partition("/")
     return {
@@ -68,13 +136,26 @@ def _openclaw_config_core(
             "profile": "full",
             "exec": {"mode": "full"},
         },
-        "memory": {"backend": "builtin"},
+        # "builtin" is the file-backed store; "qmd" is the plugin-backed one, and the
+        # runtime accepts nothing else (it reports `Invalid input (allowed: "builtin",
+        # "qmd")` on anything third). The plugin slot decides which is actually used
+        # either way — an Agent with Honcho in the slot runs on Honcho even with
+        # "builtin" written here, verified against a live pod — but leaving it saying
+        # "builtin" makes the config claim file memory while Honcho holds the data,
+        # which is the first place anyone looks when memory seems wrong.
+        "memory": {"backend": "qmd" if honcho_workspace_id else "builtin"},
         "plugins": {
-            "allow": ["memory-core", "active-memory", "telemetry-push"],
+            # memory-core stays in `allow` even when Honcho holds the slot: it is
+            # not active without an entry, but start.sh needs it permitted to fall
+            # back to when the plugin is missing, rather than leaving the Agent
+            # with no memory backend at all.
+            "allow": [_memory_plugin(honcho_workspace_id), _MEMORY_CORE, "active-memory", "telemetry-push"]
+            if honcho_workspace_id
+            else [_MEMORY_CORE, "active-memory", "telemetry-push"],
             "load": {"paths": ["/home/node/.openclaw/local-plugins/telemetry-push"]},
-            "slots": {"memory": "memory-core"},
+            "slots": {"memory": _memory_plugin(honcho_workspace_id)},
             "entries": {
-                "memory-core": {"enabled": True},
+                **_memory_entry(honcho_base_url, honcho_workspace_id),
                 "active-memory": {
                     "enabled": True,
                     "config": {
@@ -102,8 +183,21 @@ def _openclaw_config_core(
     }
 
 
-def build_openclaw_gateway_config(model: str, litellm_base_url: str) -> dict:
-    return _openclaw_config_core(model, litellm_base_url, binding_channel=None, channels={})
+def build_openclaw_gateway_config(
+    model: str,
+    litellm_base_url: str,
+    *,
+    honcho_base_url: str | None = None,
+    honcho_workspace_id: str | None = None,
+) -> dict:
+    return _openclaw_config_core(
+        model,
+        litellm_base_url,
+        binding_channel=None,
+        channels={},
+        honcho_base_url=honcho_base_url,
+        honcho_workspace_id=honcho_workspace_id,
+    )
 
 
 def build_config_map(
@@ -248,6 +342,12 @@ def build_deployment(
                                 period_seconds=15,
                                 failure_threshold=6,
                             ),
+                            env=[
+                                client.V1EnvVar(
+                                    name="OPENCLAW_HONCHO_PEERS_FILE",
+                                    value=OPENCLAW_HONCHO_PEERS_FILE,
+                                ),
+                            ],
                             env_from=[client.V1EnvFromSource(secret_ref=client.V1SecretEnvSource(name=name))],
                             volume_mounts=[
                                 client.V1VolumeMount(

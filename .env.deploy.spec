@@ -120,6 +120,38 @@ POSTGRES_FIRECRAWL_USER=firecrawl
 POSTGRES_FIRECRAWL_PASSWORD=
 POSTGRES_FIRECRAWL_DB=firecrawl
 
+# ── Postgres (Honcho DB) ─────────────────────────────────────────────────────
+POSTGRES_HONCHO_USER=honcho
+POSTGRES_HONCHO_PASSWORD=
+POSTGRES_HONCHO_DB=honcho
+
+# ── Honcho memory service (AF-280) ───────────────────────────────────────────
+# Honcho-backed Agent memory. Off by default. Enabling it moves an Agent's memory
+# backend on its next start; already-running Agents are unaffected until then.
+HONCHO_ENABLED=false
+# LiteLLM virtual key Honcho uses for every model call. Honcho resolves model
+# credentials per module rather than per workspace, so all Agents' memory work
+# shares this key and memory spend is an aggregate figure, not a per-Agent one.
+#
+# Optional on Kubernetes: left empty, the honcho chart mints a key against
+# LiteLLM in a pre-install hook and publishes it as the `honcho-litellm-key`
+# Secret, which both Honcho and the API read. Set it only to pin a specific key,
+# which also skips the minting Job. Compose has no such hook, so a local run
+# with HONCHO_ENABLED=true still needs a value here.
+HONCHO_LITELLM_KEY=
+# Model LiteLLM routes for the deriver, summary, dialectic, and dream modules.
+HONCHO_TEXT_MODEL=openrouter/z-ai/glm-5.2
+# Must match the embedding model the LiteLLM chart exposes. Honcho fixes the
+# vector dimension for the life of a deployment, so changing this later means a
+# new deployment and a data replay, not a config edit.
+HONCHO_EMBEDDING_MODEL=openai/text-embedding-3-small
+# Shared secret Honcho presents when posting per-call usage telemetry to the
+# Ingest service. That telemetry is the only way memory spend can be attributed
+# per Agent: Honcho sends every model call on one credential with no workspace
+# identity, so LiteLLM cannot split it. Empty disables emission.
+#   Generate with: echo "sk-$(openssl rand -hex 24)"
+HONCHO_TELEMETRY_KEY=
+
 # ── Model picker (AF-128) ────────────────────────────────────────────────────
 # Comma-separated fnmatch globs limiting OpenRouter models, e.g. z-ai/glm-5.2,openai/gpt-5*
 # Empty offers the full catalogue.

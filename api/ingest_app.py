@@ -8,7 +8,7 @@ import api.domains.conversations.models
 import api.domains.organizations.models  # noqa: F401
 from api.core.metrics import CONTENT_TYPE_LATEST, render_metrics, setup_http_metrics
 from api.core.utils import create_injector
-from api.domains.ingest.routes import ingest_router
+from api.domains.ingest.routes import honcho_router, ingest_router
 
 
 def create_ingest_app(injector: Injector | None = None):
@@ -19,6 +19,7 @@ def create_ingest_app(injector: Injector | None = None):
     subapi = FastAPI()
 
     subapi.include_router(ingest_router)
+    subapi.include_router(honcho_router)
 
     app.mount("/ingest/v1", subapi)
 

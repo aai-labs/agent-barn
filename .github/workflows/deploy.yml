@@ -276,6 +276,13 @@ jobs:
           POSTGRES_FIRECRAWL_USER: ${{ vars.POSTGRES_FIRECRAWL_USER }}
           POSTGRES_FIRECRAWL_PASSWORD: ${{ secrets.POSTGRES_FIRECRAWL_PASSWORD }}
           POSTGRES_FIRECRAWL_DB: ${{ vars.POSTGRES_FIRECRAWL_DB }}
+          POSTGRES_HONCHO_USER: ${{ vars.POSTGRES_HONCHO_USER }}
+          POSTGRES_HONCHO_PASSWORD: ${{ github.ref_name == 'staging' && secrets.STAGING_POSTGRES_HONCHO_PASSWORD || secrets.POSTGRES_HONCHO_PASSWORD }}
+          POSTGRES_HONCHO_DB: ${{ vars.POSTGRES_HONCHO_DB }}
+          HONCHO_ENABLED: ${{ github.ref_name == 'staging' && vars.STAGING_HONCHO_ENABLED || vars.HONCHO_ENABLED }}
+          HONCHO_TEXT_MODEL: ${{ vars.HONCHO_TEXT_MODEL }}
+          HONCHO_EMBEDDING_MODEL: ${{ vars.HONCHO_EMBEDDING_MODEL }}
+          HONCHO_TELEMETRY_KEY: ${{ github.ref_name == 'staging' && secrets.STAGING_HONCHO_TELEMETRY_KEY || secrets.HONCHO_TELEMETRY_KEY }}
           FIRECRAWL_API_KEY: ${{ secrets.FIRECRAWL_API_KEY }}
           LITELLM_MASTER_KEY: ${{ github.ref_name == 'staging' && secrets.STAGING_LITELLM_MASTER_KEY || secrets.LITELLM_MASTER_KEY }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}

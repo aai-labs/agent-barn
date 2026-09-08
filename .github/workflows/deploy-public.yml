@@ -72,6 +72,12 @@ jobs:
           PUBLIC_FIRECRAWL_API_KEY: ${{ secrets.PUBLIC_FIRECRAWL_API_KEY }}
           PUBLIC_OPENROUTER_API_KEY: ${{ secrets.PUBLIC_OPENROUTER_API_KEY }}
           PUBLIC_SLACK_ALERTS_WEBHOOK_URL: ${{ secrets.PUBLIC_SLACK_ALERTS_WEBHOOK_URL }}
+          HONCHO_ENABLED: ${{ vars.PUBLIC_HONCHO_ENABLED }}
+          POSTGRES_HONCHO_USER: ${{ vars.POSTGRES_HONCHO_USER }}
+          POSTGRES_HONCHO_DB: ${{ vars.POSTGRES_HONCHO_DB }}
+          HONCHO_TEXT_MODEL: ${{ vars.HONCHO_TEXT_MODEL }}
+          HONCHO_EMBEDDING_MODEL: ${{ vars.HONCHO_EMBEDDING_MODEL }}
+          PUBLIC_POSTGRES_HONCHO_PASSWORD: ${{ secrets.PUBLIC_POSTGRES_HONCHO_PASSWORD }}
         run: |
           set -euo pipefail
           tag="${{ env.RELEASE_TAG }}"
@@ -101,6 +107,19 @@ jobs:
               missing+=("secret $name")
             fi
           done
+          # Honcho only deploys when memory is enabled, so its config is required
+          # only then — a memory-off deploy needs none of it.
+          if [ "${HONCHO_ENABLED:-false}" = "true" ]; then
+            for name in POSTGRES_HONCHO_USER POSTGRES_HONCHO_DB HONCHO_TEXT_MODEL HONCHO_EMBEDDING_MODEL; do
+              if [ -z "${!name:-}" ]; then
+                missing+=("var $name")
+              fi
+            done
+            if [ -z "${PUBLIC_POSTGRES_HONCHO_PASSWORD:-}" ]; then
+              missing+=("secret PUBLIC_POSTGRES_HONCHO_PASSWORD")
+            fi
+          fi
+
           if [ "${#missing[@]}" -ne 0 ]; then
             echo "::error::Public deploy is missing GitHub config: ${missing[*]}"
             exit 1
@@ -310,6 +329,13 @@ jobs:
           POSTGRES_LITELLM_PASSWORD: ${{ secrets.PUBLIC_POSTGRES_LITELLM_PASSWORD }}
           POSTGRES_FIRECRAWL_USER: ${{ vars.POSTGRES_FIRECRAWL_USER }}
           POSTGRES_FIRECRAWL_DB: ${{ vars.POSTGRES_FIRECRAWL_DB }}
+          POSTGRES_HONCHO_USER: ${{ vars.POSTGRES_HONCHO_USER }}
+          POSTGRES_HONCHO_PASSWORD: ${{ secrets.PUBLIC_POSTGRES_HONCHO_PASSWORD }}
+          POSTGRES_HONCHO_DB: ${{ vars.POSTGRES_HONCHO_DB }}
+          HONCHO_ENABLED: ${{ vars.PUBLIC_HONCHO_ENABLED }}
+          HONCHO_TEXT_MODEL: ${{ vars.HONCHO_TEXT_MODEL }}
+          HONCHO_EMBEDDING_MODEL: ${{ vars.HONCHO_EMBEDDING_MODEL }}
+          HONCHO_TELEMETRY_KEY: ${{ secrets.PUBLIC_HONCHO_TELEMETRY_KEY }}
           POSTGRES_FIRECRAWL_PASSWORD: ${{ secrets.PUBLIC_POSTGRES_FIRECRAWL_PASSWORD }}
           LITELLM_MASTER_KEY: ${{ secrets.PUBLIC_LITELLM_MASTER_KEY }}
           SECRET_SIGNING_KEY: ${{ secrets.PUBLIC_SECRET_SIGNING_KEY }}

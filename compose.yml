@@ -91,6 +91,15 @@ services:
       # LITELLM_BASE_URL is host-facing (127.0.0.1) and env_file would pull it in
       # verbatim, where it resolves to this container instead of the proxy.
       LITELLM_BASE_URL: ${API_LITELLM_BASE_URL:-http://litellm:4000}
+      # Honcho-backed Agent memory. Listed explicitly rather than left to env_file
+      # so it can be flipped for a single run without editing .env.
+      HONCHO_ENABLED: ${HONCHO_ENABLED:-false}
+      # Same split as LITELLM: the API reaches Honcho on the Compose network,
+      # while Agent pods in k3d reach it through the host.
+      HONCHO_BASE_URL: ${API_HONCHO_BASE_URL:-http://honcho:8000}
+      AGENT_HONCHO_BASE_URL: ${AGENT_HONCHO_BASE_URL:-http://host.docker.internal:${HONCHO_PORT:-7071}}
+      HONCHO_TELEMETRY_KEY: ${HONCHO_TELEMETRY_KEY:-}
+      HONCHO_LITELLM_KEY: ${HONCHO_LITELLM_KEY:-}
     extra_hosts:
       # Reach the host-published k8s API from inside the container. No-op on
       # Docker Desktop; required on Linux/CI where host.docker.internal is unset.
@@ -227,8 +236,111 @@ services:
     volumes:
       - ./docker/litellm/config.yaml:/app/config.yaml:ro
 
+  honcho-db:
+    image: pgvector/pgvector:pg18
+    container_name: ${HONCHO_DB_CONTAINER_NAME:-aai_honcho_db}
+    profiles: ["k3d"]
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: honcho
+      POSTGRES_PASSWORD: honcho
+      POSTGRES_DB: honcho
+    volumes:
+      # Postgres 18 images want the mount at /var/lib/postgresql, not the data
+      # subdirectory — mounting the subdirectory makes initdb refuse to start.
+      # Matches helm/postgres, which already mounts it this way.
+      - aai_honcho_db_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U honcho -d honcho"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  honcho:
+    image: ghcr.io/plastic-labs/honcho:v3.1.0
+    container_name: ${HONCHO_CONTAINER_NAME:-aai_honcho}
+    profiles: ["k3d"]
+    restart: unless-stopped
+    depends_on:
+      honcho-db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    # The image's default command serves without provisioning the database; this
+    # entrypoint provisions first, which is why the deriver waits on it.
+    entrypoint: ["sh", "docker/entrypoint.sh"]
+    environment:
+      DB_CONNECTION_URI: postgresql+psycopg://honcho:honcho@honcho-db:5432/honcho
+      CACHE_URL: redis://redis:6379/1?suppress=true
+      CACHE_ENABLED: "true"
+      AUTH_USE_AUTH: "false"
+      VECTOR_STORE_TYPE: pgvector
+      DREAM_ENABLED: "false"
+      # Honcho's own LiteLLM virtual key, never the master key: the master key can
+      # mint and revoke every other key, and its spend is not a per-key line any
+      # cost report reads, so falling back to it loses attribution entirely.
+      # Mint one with:
+      #   curl -s localhost:${LITELLM_PORT:-7070}/key/generate \
+      #     -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
+      #     -H 'Content-Type: application/json' -d '{"key_alias":"honcho"}'
+      LLM_OPENAI_API_KEY: ${HONCHO_LITELLM_KEY:-}
+      # Per-call usage telemetry. This is the only path that can attribute memory
+      # spend: Honcho sends every model call on one credential with no workspace
+      # identity, so LiteLLM cannot split it, but this names the workspace.
+      TELEMETRY_ENABLED: ${HONCHO_TELEMETRY_ENABLED:-true}
+      TELEMETRY_ENDPOINT: ${HONCHO_TELEMETRY_ENDPOINT:-http://api:8001/ingest/v1/honcho/usage}
+      TELEMETRY_HEADERS: '{"Authorization":"Bearer ${HONCHO_TELEMETRY_KEY:-}"}'
+      # Pinned: below 1.0 these events are sampled and every share undercounts.
+      TELEMETRY_HIGH_VOLUME_SAMPLE_RATE: "1.0"
+    ports:
+      # All interfaces, for the same reason LiteLLM binds this way: agent pods
+      # inside k3d reach the host through the bridge gateway, not 127.0.0.1.
+      - "${HONCHO_PORT:-7071}:8000"
+    volumes:
+      - ./docker/honcho/config.toml:/app/config.toml:ro
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2)\""]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  honcho-deriver:
+    image: ghcr.io/plastic-labs/honcho:v3.1.0
+    container_name: ${HONCHO_DERIVER_CONTAINER_NAME:-aai_honcho_deriver}
+    profiles: ["k3d"]
+    restart: unless-stopped
+    depends_on:
+      honcho:
+        condition: service_healthy
+    entrypoint: ["/app/.venv/bin/python", "-m", "src.deriver"]
+    environment:
+      DB_CONNECTION_URI: postgresql+psycopg://honcho:honcho@honcho-db:5432/honcho
+      CACHE_URL: redis://redis:6379/1?suppress=true
+      CACHE_ENABLED: "true"
+      VECTOR_STORE_TYPE: pgvector
+      DREAM_ENABLED: "false"
+      # Honcho's own LiteLLM virtual key, never the master key: the master key can
+      # mint and revoke every other key, and its spend is not a per-key line any
+      # cost report reads, so falling back to it loses attribution entirely.
+      # Mint one with:
+      #   curl -s localhost:${LITELLM_PORT:-7070}/key/generate \
+      #     -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
+      #     -H 'Content-Type: application/json' -d '{"key_alias":"honcho"}'
+      LLM_OPENAI_API_KEY: ${HONCHO_LITELLM_KEY:-}
+      # Per-call usage telemetry. This is the only path that can attribute memory
+      # spend: Honcho sends every model call on one credential with no workspace
+      # identity, so LiteLLM cannot split it, but this names the workspace.
+      TELEMETRY_ENABLED: ${HONCHO_TELEMETRY_ENABLED:-true}
+      TELEMETRY_ENDPOINT: ${HONCHO_TELEMETRY_ENDPOINT:-http://api:8001/ingest/v1/honcho/usage}
+      TELEMETRY_HEADERS: '{"Authorization":"Bearer ${HONCHO_TELEMETRY_KEY:-}"}'
+      # Pinned: below 1.0 these events are sampled and every share undercounts.
+      TELEMETRY_HIGH_VOLUME_SAMPLE_RATE: "1.0"
+    volumes:
+      - ./docker/honcho/config.toml:/app/config.toml:ro
+
 volumes:
   aai_db_postgres_data:
   aai_litellm_db_data:
+  aai_honcho_db_data:
   aai_redis_data:
   aai_ui_node_modules:

@@ -23,6 +23,8 @@ _AGENT_ACTION_PERMISSIONS: tuple[PermissionKey, ...] = (
     PermissionKey.AGENT_LIFECYCLE_MANAGE,
     PermissionKey.AGENT_ACCESS_MANAGE,
     PermissionKey.AGENT_SECRET_MANAGE,
+    PermissionKey.AGENT_MEMORY_READ,
+    PermissionKey.AGENT_MEMORY_MANAGE,
     PermissionKey.ACTIVITY_READ,
     PermissionKey.COST_READ,
 )
@@ -95,6 +97,34 @@ class AgentAuthorization:
         agent = self.require_visible(context, agent_id)
         self.require_action_for_visible(context, agent, permission, detail=detail)
         return agent
+
+    def require_action_allowing_deleted(
+        self,
+        context: CurrentUserContext,
+        agent_id: UUID,
+        permission: PermissionKey,
+        *,
+        detail: str = "You don't have permission to perform this action.",
+    ) -> Agent:
+        """Resolve an Agent for an action, falling back to a soft-deleted one.
+
+        Deleting an Agent retains its memory, so that memory has to stay reachable
+        or it becomes personal data nobody can view, search, or erase. A deleted
+        Agent has no live access assignments, so per-agent grants cannot be
+        evaluated against it; `get_deleted_in_scope` instead requires
+        organization-wide visibility, which only Organization Owners and Admins
+        have. That is a higher bar than the per-agent permission, not a lower one.
+        """
+        scope = self._scope(context, PermissionKey.AGENT_READ)
+        agent = self.repository.get_active_in_scope(agent_id, scope)
+        if agent is not None:
+            self.require_action_for_visible(context, agent, permission, detail=detail)
+            return agent
+
+        deleted = self.repository.get_deleted_in_scope(agent_id, scope)
+        if deleted is None:
+            self._raise_not_found(agent_id)
+        return deleted
 
     def require_action_for_visible(
         self,

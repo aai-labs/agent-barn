@@ -109,6 +109,38 @@ class CostRecord(BaseModel, table=True):
     )
 
 
+class HonchoUsageEvent(BaseModel, table=True):
+    """One model or embedding call Honcho made, attributed to a workspace.
+
+    Honcho sends every model call to LiteLLM on a single service credential and
+    carries no workspace identity on the request, so LiteLLM cannot split that
+    spend. It does, however, emit per-call telemetry that names the workspace and
+    counts tokens. These rows are that telemetry: they carry no money, only the
+    token shares used to divide LiteLLM's authoritative total for Honcho's key.
+    """
+
+    __tablename__: str = "honcho_usage_event"
+
+    __table_args__ = (
+        # Honcho retries a failed batch, so the same CloudEvent can arrive twice.
+        sa.UniqueConstraint("event_id", name="uq_honcho_usage_event_event_id"),
+        sa.Index("ix_honcho_usage_event_workspace_occurred", "workspace_name", "occurred_at"),
+    )
+
+    # CloudEvent id, used only to discard retried duplicates.
+    event_id: str = SqlField(nullable=False, max_length=255)
+    # `af-<agent id>`; resolved to an Agent when the usage is read, not on write,
+    # so ingest never blocks on a lookup and usage for a deleted Agent still lands.
+    workspace_name: str = SqlField(nullable=False, max_length=255)
+    event_type: str = SqlField(nullable=False, max_length=100)
+    model: str = SqlField(nullable=False, max_length=255)
+    # Which Honcho subsystem made the call (deriver, dialectic, summary, dream).
+    call_purpose: str | None = SqlField(default=None, nullable=True, max_length=100)
+    input_tokens: int = SqlField(default=0, nullable=False)
+    output_tokens: int = SqlField(default=0, nullable=False)
+    occurred_at: datetime = SqlField(sa_type=sa.DateTime(timezone=True), nullable=False)  # type: ignore
+
+
 # ---------------------------------------------------------------------------
 # Response models
 # ---------------------------------------------------------------------------
@@ -134,6 +166,10 @@ class AgentCostRead(PydanticBaseModel):
     total_tokens: int
     prompt_tokens: int
     completion_tokens: int
+    # This Agent's share of Honcho's spend. Not on the Agent's own LiteLLM key —
+    # Honcho bills one fleet-wide credential — so it is reported separately rather
+    # than folded into total_cost, and is 0 when memory is off.
+    memory_cost: float = 0.0
     models_breakdown: list[AgentModelBreakdown] = Field(default_factory=list)
 
 
@@ -283,6 +319,9 @@ class CostSummaryRead(PydanticBaseModel):
     granularity: StatsGranularity
 
     total_spend: float
+    # Memory spend for this Organization's Agents only, billed on Honcho's separate
+    # credential and therefore not part of total_spend. 0 when memory is off.
+    total_memory_cost: float = 0.0
     total_calls: int
     active_agents: int
     top_model: str | None = None

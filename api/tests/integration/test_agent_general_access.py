@@ -301,6 +301,7 @@ def test_general_access_makes_agent_visible_with_role_permissions():
             contains_inanyorder(
                 PermissionKey.AGENT_READ.value,
                 PermissionKey.ACTIVITY_READ.value,
+                PermissionKey.AGENT_MEMORY_READ.value,
                 PermissionKey.COST_READ.value,
             ),
         )
@@ -458,6 +459,7 @@ def test_direct_and_general_access_permissions_are_additive():
             contains_inanyorder(
                 PermissionKey.AGENT_READ.value,
                 PermissionKey.ACTIVITY_READ.value,
+                PermissionKey.AGENT_MEMORY_READ.value,
                 PermissionKey.COST_READ.value,
             ),
         )

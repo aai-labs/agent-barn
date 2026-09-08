@@ -24,6 +24,7 @@ from api.domains.costs.models import (
     TokenSeriesPoint,
 )
 from api.domains.costs.repository import CostRepository
+from api.domains.costs.usage_service import HonchoUsageService
 from api.domains.platform_admin.models import StatsWindow
 from api.domains.rbac.catalog import PermissionKey
 from api.domains.rbac.policy import PermissionPolicy
@@ -40,6 +41,7 @@ class CostService:
     agent_authorization: AgentAuthorization
     permission_policy: PermissionPolicy
     repository: CostRepository
+    honcho_usage: HonchoUsageService
 
     def _org_id(self, context: CurrentUserContext) -> UUID:
         return context.require_current_user_organization().organization_id
@@ -76,7 +78,14 @@ class CostService:
         filters: CostFilter,
     ) -> CostSummaryRead:
         scoped = self._scoped(self._authorized_org(context), filters)
-        return build_cost_summary(self.repository, window, scoped)
+        summary = build_cost_summary(self.repository, window, scoped)
+        # Memory spend is billed on Honcho's separate credential, so it is added
+        # here rather than coming from the cost_record table the summary reads.
+        memory_by_agent = self.honcho_usage.memory_cost_by_agent(
+            window.start.date().isoformat(), window.end.date().isoformat()
+        )
+        summary.total_memory_cost = round(sum(memory_by_agent.values()), 12)
+        return summary
 
     def list_org_costs(
         self,
@@ -151,6 +160,9 @@ class CostService:
         filters = CostFilter(organization_id=agent.organization_id, agent_id=agent.id)
         totals = self.repository.totals(window, filters)
         breakdown = self.repository.model_breakdown(window, filters)
+        memory_by_agent = self.honcho_usage.memory_cost_by_agent(
+            window.start.date().isoformat(), window.end.date().isoformat()
+        )
 
         return AgentCostRead(
             agent_id=agent.id,
@@ -161,6 +173,7 @@ class CostService:
             total_tokens=totals.prompt_tokens + totals.completion_tokens,
             prompt_tokens=totals.prompt_tokens,
             completion_tokens=totals.completion_tokens,
+            memory_cost=memory_by_agent.get(agent.id, 0.0),
             models_breakdown=[
                 AgentModelBreakdown(
                     model=model,

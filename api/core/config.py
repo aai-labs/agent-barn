@@ -48,6 +48,23 @@ class Config(BaseSettings):
     agent_litellm_base_url: str = ""
     agent_image_pull_secret: str = ""
     agent_default_model: str = "litellm/openrouter/z-ai/glm-5.2"
+    # Honcho-backed Agent memory. Off by default: enabling it moves the runtime's
+    # single memory slot off the file-backed default, and a running Agent only
+    # picks the change up when it is stopped and started again.
+    honcho_enabled: bool = False
+    # What the API itself calls to purge a deleted Agent's workspace.
+    honcho_base_url: str = "http://honcho:8000"
+    # What an Agent pod calls. Same value in-cluster, but locally the API runs in
+    # Compose while Agents run in k3d, so they reach Honcho by different names —
+    # the same split `agent_litellm_base_url` exists for.
+    agent_honcho_base_url: str = "http://honcho:8000"
+    # Shared secret Honcho presents when posting its usage telemetry. Empty
+    # rejects every post, so usage is simply not recorded rather than accepted
+    # from anyone who can reach the Ingest service.
+    honcho_telemetry_key: str = ""
+    # Honcho's own LiteLLM virtual key. The API needs it to read the spend that
+    # Honcho's token telemetry is divided against; it is never used to call a model.
+    honcho_litellm_key: str = ""
     organization_creation_limit: int = 5
     api_external_url: str = ""
     # Agent workloads and the API run in the same namespace, so the short Service

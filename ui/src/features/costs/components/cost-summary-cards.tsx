@@ -49,6 +49,14 @@ export function CostSummaryCards({
         hint={`${summary.totalCalls.toLocaleString()} ${summary.totalCalls === 1 ? "call" : "calls"}`}
         testId="cost-total-spend"
       />
+      {summary.totalMemoryCost > 0 && (
+        <StatCard
+          label="Memory cost"
+          value={formatSpend(summary.totalMemoryCost)}
+          hint="separate from spend"
+          testId="cost-memory"
+        />
+      )}
       <StatCard
         label="Active agents"
         value={summary.activeAgents.toLocaleString()}

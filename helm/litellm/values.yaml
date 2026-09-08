@@ -13,6 +13,12 @@ masterKey: ""
 openrouterApiKey: ""
 databaseUrl: ""
 
+# Embedding model exposed for Honcho. OpenRouter's embeddings endpoint is not in
+# its /models catalogue, so this is named explicitly rather than reached through
+# the wildcard passthrough. 1536 dimensions matches what Honcho's vector store is
+# fixed at, and that dimension cannot be changed once memory exists.
+embeddingModel: "openai/text-embedding-3-small"
+
 service:
   port: 4000
 

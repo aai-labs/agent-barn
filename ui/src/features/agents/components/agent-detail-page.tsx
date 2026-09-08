@@ -27,6 +27,7 @@ import { AgentMetaBadges } from "./agent-meta-badges";
 import { StatusLine } from "./status-line";
 import { ConversationsTab } from "./conversations-tab";
 import { ToolCallsTab } from "./tool-calls-tab";
+import { AgentMemoryPage } from "./agent-memory-page";
 import { LogsTab } from "./logs-tab";
 import { WorkTab } from "./work-tab";
 import { AboutTab } from "./about-tab";
@@ -37,18 +38,20 @@ interface AgentDetailPageProps {
   agentId: string;
 }
 
-type Tab = "conversations" | "tool-calls" | "logs" | "work" | "about";
+type Tab = "conversations" | "tool-calls" | "logs" | "work" | "memory" | "about";
 const VALID_TABS: Tab[] = [
   "conversations",
   "tool-calls",
   "logs",
   "work",
+  "memory",
   "about",
 ];
 
 export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
   const { agent, isLoading, error, refetch } = useAgent(agentId);
   const canReadActivity = canAgent(agent, "activity.read");
+  const canReadMemory = canAgent(agent, "agent.memory.read");
   const { health } = useAgentHealth(
     agentId,
     canReadActivity &&
@@ -82,6 +85,7 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
           ["work", "Work"],
         ] as [Tab, string][])
       : []),
+    ...(canReadMemory ? ([["memory", "Memory"]] as [Tab, string][]) : []),
     ["about", "About"],
   ];
   const resolvedTab = tabs.some(([key]) => key === tab) ? tab : tabs[0][0];
@@ -302,6 +306,9 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
             {resolvedTab === "tool-calls" && <ToolCallsTab agent={agent} />}
             {resolvedTab === "logs" && <LogsTab agent={agent} />}
             {resolvedTab === "work" && <WorkTab agent={agent} />}
+            {resolvedTab === "memory" && (
+              <AgentMemoryPage agentId={agent.id} agentName={agent.name} />
+            )}
             {resolvedTab === "about" && <AboutTab />}
           </>
         )}

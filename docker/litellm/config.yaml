@@ -9,6 +9,18 @@ model_list:
       api_key: os.environ/OPENROUTER_API_KEY
       api_base: https://openrouter.ai/api/v1
 
+  # Embeddings for Honcho. OpenRouter serves these but does not list them in
+  # /models, so the wildcard above cannot reach them. Keep in step with
+  # helm/litellm/templates/configmap.yaml.
+  - model_name: "openai/text-embedding-3-small"
+    litellm_params:
+      model: "openai/openai/text-embedding-3-small"
+      api_key: os.environ/OPENROUTER_API_KEY
+      api_base: https://openrouter.ai/api/v1
+      # OpenRouter rejects LiteLLM's default encoding_format; pin the one it accepts
+      # so callers that omit it (Honcho does) don't get a 400.
+      encoding_format: float
+
 general_settings:
   master_key: os.environ/LITELLM_MASTER_KEY
   store_model_in_db: false
