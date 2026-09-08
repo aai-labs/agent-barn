@@ -26,7 +26,7 @@ from api.domains.communications.plugins.base import (
 )
 from api.domains.communications.plugins.discord import DiscordPlatformPlugin
 from api.domains.communications.plugins.registry import PlatformPluginRegistry
-from api.domains.communications.plugins.slack import SlackPlatformPlugin
+from api.domains.communications.plugins.slack import SlackPlatformPlugin, SlackSettings
 from api.domains.communications.plugins.teams import TeamsPlatformPlugin
 from api.domains.communications.plugins.telegram import TelegramPlatformPlugin
 from api.domains.communications.plugins.web import WebPlatformPlugin
@@ -365,6 +365,98 @@ def test_slack_dm_and_bot_message_policies_remain_before_mention_admission() -> 
     assert len(dm) == 1
     assert bot_message == []
     assert subtype_message == []
+
+
+def _slack_bot_event(text: str, *, thread_ts: str | None = None, user: str = "bot-2") -> dict:
+    """A message posted by another Slack app's bot user, as Slack delivers it over Socket Mode."""
+    payload = _slack_event(text, thread_ts=thread_ts, user=user)
+    payload["event"]["bot_id"] = "B0OTHERAPP"
+    return payload
+
+
+def test_slack_ignores_other_bots_by_default() -> None:
+    plugin = SlackPlatformPlugin(ValidationConfig())
+    settings = plugin.settings_model.model_validate({"group_policy": "open"})
+
+    result = plugin.admit_inbound(
+        settings,
+        _slack_bot_event("<@bot-1> please take this lead"),
+        context=_slack_admission_context(owned=False),
+    )
+
+    assert_that(SlackSettings().accept_agent_mentions, equal_to(False))
+    assert_that(result.disposition, equal_to(CommunicationPolicyDisposition.BOT_IGNORED))
+
+
+def test_slack_accepts_another_bot_only_when_it_mentions_this_agent() -> None:
+    plugin = SlackPlatformPlugin(ValidationConfig())
+    settings = plugin.settings_model.model_validate({"group_policy": "open", "accept_agent_mentions": True})
+    context = _slack_admission_context(owned=False)
+
+    mentioned = plugin.admit_inbound(settings, _slack_bot_event("<@bot-1> please take this lead"), context=context)
+    unmentioned = plugin.admit_inbound(settings, _slack_bot_event("posting for everyone"), context=context)
+    other_agent_mentioned = plugin.admit_inbound(settings, _slack_bot_event("<@bot-3> over to you"), context=context)
+
+    assert_that(mentioned.disposition, equal_to(CommunicationPolicyDisposition.ACCEPTED))
+    assert_that(mentioned, has_length(1))
+    assert_that(mentioned[0].sender.id, equal_to("bot-2"))
+    assert_that(mentioned[0].mentions, equal_to(["bot-1"]))
+    assert_that(unmentioned.disposition, equal_to(CommunicationPolicyDisposition.MENTION_REQUIRED))
+    assert_that(other_agent_mentioned.disposition, equal_to(CommunicationPolicyDisposition.MENTION_REQUIRED))
+
+
+def test_slack_accepted_bot_mentions_still_ignore_the_agents_own_messages() -> None:
+    plugin = SlackPlatformPlugin(ValidationConfig())
+    settings = plugin.settings_model.model_validate({"group_policy": "open", "accept_agent_mentions": True})
+
+    own_echo = plugin.admit_inbound(
+        settings,
+        _slack_bot_event("<@bot-1> talking to myself", user="bot-1"),
+        context=_slack_admission_context(owned=False),
+    )
+
+    assert_that(own_echo.disposition, equal_to(CommunicationPolicyDisposition.BOT_IGNORED))
+
+
+def test_slack_bot_messages_need_a_mention_even_in_owned_start_only_threads() -> None:
+    plugin = SlackPlatformPlugin(ValidationConfig())
+    settings = plugin.settings_model.model_validate(
+        {"group_policy": "open", "accept_agent_mentions": True, "thread_mention_policy": "start_only"}
+    )
+    context = _slack_admission_context(owned=True)
+
+    human_reply = plugin.admit_inbound(settings, _slack_event("follow-up", thread_ts="root-1"), context=context)
+    bot_reply = plugin.admit_inbound(settings, _slack_bot_event("follow-up", thread_ts="root-1"), context=context)
+    bot_mention = plugin.admit_inbound(
+        settings, _slack_bot_event("<@bot-1> draft is ready", thread_ts="root-1"), context=context
+    )
+
+    assert_that(human_reply.disposition, equal_to(CommunicationPolicyDisposition.ACCEPTED))
+    assert_that(bot_reply.disposition, equal_to(CommunicationPolicyDisposition.MENTION_REQUIRED))
+    assert_that(bot_mention.disposition, equal_to(CommunicationPolicyDisposition.ACCEPTED))
+
+
+def test_slack_bot_mentions_fail_closed_without_a_captured_bot_identity() -> None:
+    plugin = SlackPlatformPlugin(ValidationConfig())
+    settings = plugin.settings_model.model_validate({"group_policy": "open", "accept_agent_mentions": True})
+    payload = _slack_bot_event("<@bot-1> please take this lead")
+    del payload["agentbarn_bot_user_id"]
+
+    result = plugin.admit_inbound(settings, payload, context=_slack_admission_context(owned=False))
+
+    assert_that(result.disposition, equal_to(CommunicationPolicyDisposition.BOT_IGNORED))
+
+
+def test_slack_legacy_bot_messages_without_a_user_use_the_bot_id_as_sender() -> None:
+    plugin = SlackPlatformPlugin(ValidationConfig())
+    settings = plugin.settings_model.model_validate({"group_policy": "open", "accept_agent_mentions": True})
+    payload = _slack_bot_event("<@bot-1> heads up")
+    del payload["event"]["user"]
+
+    result = plugin.admit_inbound(settings, payload, context=_slack_admission_context(owned=False))
+
+    assert_that(result.disposition, equal_to(CommunicationPolicyDisposition.ACCEPTED))
+    assert_that(result[0].sender.id, equal_to("B0OTHERAPP"))
 
 
 def test_slack_ignores_app_mention_events_to_avoid_duplicate_message_delivery() -> None:
