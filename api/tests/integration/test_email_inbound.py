@@ -6,12 +6,15 @@ from hamcrest import assert_that, empty, equal_to, has_length, is_, not_
 from sqlmodel import Session, col, select
 
 from api.domains.agents.models import AgentStatus
+from api.domains.agents.repository import AgentRepository
 from api.domains.communications.models import (
     CommunicationDelivery,
     CommunicationDeliveryStatus,
     CommunicationDirection,
 )
+from api.domains.communications.plugins.email import INBOUND_FRAMING
 from api.domains.conversations.models import AgentChatMessage
+from api.infrastructure.crypto import encrypt_token
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.tests.core.givenpy import given, then, when
 from api.tests.core.modules import (
@@ -121,6 +124,17 @@ def _deliveries(context) -> list[CommunicationDelivery]:
         )
 
 
+def _runtime_auth(context) -> dict[str, str]:
+    runtime_key = "runtime-communications-key"
+    agent_repository: AgentRepository = context.injector.get(AgentRepository)
+    context.agent.communication_key_encrypted = encrypt_token(runtime_key, TEST_ENCRYPTION_KEY)
+    agent_repository.save(context.agent)
+    return {
+        "Authorization": f"Bearer {runtime_key}",
+        "X-AgentBarn-Communications-Version": "1",
+    }
+
+
 def test_mail_to_an_agent_address_becomes_a_pending_delivery() -> None:
     with given(_GIVEN) as context:
         address = _create_email_connection(context)
@@ -142,14 +156,43 @@ def test_the_stored_message_is_located_on_the_sender_and_carries_the_subject() -
         with when("the inbound worker posts a parsed message"):
             _post(context, _payload(address))
 
-        with then("the conversation is the correspondent, and the agent can see who wrote and why"):
+        with then("the conversation is the correspondent, and the stored message is only what they wrote"):
             delegate = context.injector.get(PostgresRepositoryDelegate)
             with Session(delegate.engine) as session:
                 [message] = session.exec(select(AgentChatMessage)).all()
+                [delivery] = _deliveries(context)
             assert_that(message.channel_id, equal_to(CUSTOMER))
             assert_that(message.sender_id, equal_to(CUSTOMER))
-            assert_that("Question about pricing" in message.content, is_(True))
-            assert_that("Jane Customer" in message.content, is_(True))
+            assert_that(message.sender_name, equal_to("Jane Customer"))
+            assert_that(message.content, equal_to("What does the team plan cost?"))
+            assert_that(
+                delivery.envelope["provider_metadata"]["subject"],
+                equal_to("Question about pricing"),
+            )
+
+
+def test_an_email_claim_disables_progress_updates_and_frames_the_runtime_prompt() -> None:
+    with given(_GIVEN) as context:
+        address = _create_email_connection(context)
+        _post(context, _payload(address))
+
+        with when("the email agent claims its pending delivery"):
+            response = context.communications_client.post(
+                f"/communications/v1/agents/{context.agent.id}/deliveries/claim",
+                headers=_runtime_auth(context),
+            )
+
+        with then("the runtime receives the email-safe delivery contract"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            delivery = response.json()
+            assert_that(delivery["progress_updates"], is_(False))
+            assert_that(
+                delivery["envelope"]["text"],
+                equal_to(
+                    f"{INBOUND_FRAMING}\n\nFrom: Jane Customer <{CUSTOMER}>\n"
+                    "Subject: Question about pricing\n\nWhat does the team plan cost?"
+                ),
+            )
 
 
 def test_a_wrong_shared_secret_is_rejected() -> None:
