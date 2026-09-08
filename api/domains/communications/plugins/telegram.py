@@ -88,6 +88,7 @@ class TelegramPlatformPlugin(PlatformPlugin):
     capabilities = frozenset(
         {
             PlatformCapability.ATTACHMENTS,
+            PlatformCapability.SUPERVISED_INGRESS,
             PlatformCapability.MENTIONS,
             PlatformCapability.THREADS,
         }

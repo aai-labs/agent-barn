@@ -201,6 +201,47 @@ def test_list_channels_returns_db_channels():
             assert_that(ids, equal_to({"CDB1"}))
 
 
+def test_list_channels_excludes_the_built_in_web_chat_connection():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        client: TestClient = context.client
+        delegate: PostgresRepositoryDelegate = context.injector.get(PostgresRepositoryDelegate)
+        web_connection = CommunicationConnection(
+            organization_id=context.agent.organization_id,
+            agent_id=context.agent.id,
+            platform_key="web",
+            display_name="Web Chat",
+            credentials_encrypted="unused",
+            driver_key_encrypted="unused",
+        )
+        delegate.save(web_connection)
+
+        _seed_message(
+            context,
+            direction=MessageDirection.INBOUND,
+            channel_id="CDB1",
+            content="slack-channel",
+            channel_name="slack-known",
+        )
+        _seed_message(
+            context,
+            direction=MessageDirection.INBOUND,
+            channel_id="web-channel",
+            content="web-chat-message",
+            connection=web_connection,
+        )
+
+        with when("I list channels"):
+            response = client.get(
+                f"{_BASE}/{context.agent.id}/conversations/channels",
+                headers=_auth(context),
+            )
+
+        with then("only the non-Web Chat channel is returned"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            ids = {c["channel_id"] for c in response.json()}
+            assert_that(ids, equal_to({"CDB1"}))
+
+
 # --- /conversations/connections/{connection_id}/channels/{channel_id}/messages ---
 
 

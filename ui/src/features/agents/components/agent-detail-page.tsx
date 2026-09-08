@@ -25,6 +25,7 @@ import { toastError } from "@/shared/toast";
 import { AgentAvatar } from "./agent-avatar";
 import { AgentMetaBadges } from "./agent-meta-badges";
 import { StatusLine } from "./status-line";
+import { ChatTab } from "./chat-tab";
 import { ConversationsTab } from "./conversations-tab";
 import { ToolCallsTab } from "./tool-calls-tab";
 import { LogsTab } from "./logs-tab";
@@ -37,8 +38,9 @@ interface AgentDetailPageProps {
   agentId: string;
 }
 
-type Tab = "conversations" | "tool-calls" | "logs" | "work" | "about";
+type Tab = "chat" | "conversations" | "tool-calls" | "logs" | "work" | "about";
 const VALID_TABS: Tab[] = [
+  "chat",
   "conversations",
   "tool-calls",
   "logs",
@@ -59,7 +61,7 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
   const [tab, setTab] = useQueryState(
     "tab",
     parseAsStringEnum<Tab>(VALID_TABS)
-      .withDefault("conversations")
+      .withDefault("chat")
       .withOptions({ scroll: false, history: "replace" }),
   );
   const [, setChannel] = useQueryState(
@@ -76,6 +78,7 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
   const tabs: [Tab, string][] = [
     ...(canReadActivity
       ? ([
+          ["chat", "Chat"],
           ["conversations", "Conversations"],
           ["tool-calls", "Tool calls"],
           ["logs", "Logs"],
@@ -87,12 +90,19 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
   const resolvedTab = tabs.some(([key]) => key === tab) ? tab : tabs[0][0];
 
   const isRunning = agent?.status === "RUNNING";
+  const isAgentWorking = isRunning && health?.status === "ok";
   const canManageLifecycle = canAgent(agent, "agent.lifecycle.manage");
   const canManageAccess = canAgent(agent, "agent.access.manage");
   const canManageConnections = canAgent(agent, "agent.update");
   const connections = useCommunicationConnections(agent?.id ?? "");
-  const isUnreachable =
-    !connections.isPending && connections.data?.length === 0;
+  // The built-in Chat tab lazily provisions a "web" Connection on first send
+  // so people can try the Agent without setting anything up; it shouldn't
+  // count as a real messaging platform for this nudge.
+  const externalConnections = connections.data?.filter(
+    (connection) => connection.platformKey !== "web",
+  );
+  const needsMessagingSetup =
+    !connections.isPending && externalConnections?.length === 0;
   const [shareOpen, setShareOpen] = useState(false);
 
   const params = useParams();
@@ -211,7 +221,7 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
                 </div>
               )}
 
-            {isUnreachable && (
+            {needsMessagingSetup && (
               <div
                 className="mb-6 overflow-hidden rounded-2xl"
                 style={{
@@ -248,21 +258,22 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
                             color: "var(--warn)",
                           }}
                         >
-                          Not connected
+                          Web chat only
                         </span>
                       </div>
                       <div
                         className="text-[0.95rem] font-semibold"
                         style={{ color: "var(--ink)" }}
                       >
-                        Make {agent.name} reachable
+                        Bring {agent.name} to your messaging tools
                       </div>
                       <p
                         className="mb-0 mt-1 text-[0.844rem] leading-relaxed"
                         style={{ color: "var(--ink-3)" }}
                       >
-                        Connect a messaging platform so people can message this
-                        Agent.
+                        {agent.name} is available in Web Chat. Add a connection
+                        so your team can also message {agent.name} from Slack,
+                        Teams, Telegram, or Discord.
                       </p>
                     </div>
                   </div>
@@ -271,7 +282,7 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
                       href={`${homeHref}/agents/${agent.id}/configuration?section=channels&connect=true`}
                       className="af-btn af-btn-primary af-btn-sm flex-shrink-0 self-start sm:self-auto"
                     >
-                      <Plus size={14} /> Add connection
+                      <Plus size={14} /> Add messaging connection
                     </Link>
                   )}
                 </div>
@@ -296,6 +307,9 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
               ))}
             </div>
 
+            {resolvedTab === "chat" && (
+              <ChatTab agent={agent} isAgentWorking={isAgentWorking} />
+            )}
             {resolvedTab === "conversations" && (
               <ConversationsTab agent={agent} />
             )}

@@ -12,14 +12,16 @@ interface BadgeProps {
   children: React.ReactNode;
   variant?: BadgeVariant;
   className?: string;
+  title?: string;
 }
 
 /** Small pill label. Use for source/status/count indicators — not for buttons. */
-export function Badge({ children, variant = "neutral", className = "" }: BadgeProps) {
+export function Badge({ children, variant = "neutral", className = "", title }: BadgeProps) {
   return (
     <span
       className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium whitespace-nowrap ${className}`}
       style={VARIANT_STYLES[variant]}
+      title={title}
     >
       {children}
     </span>

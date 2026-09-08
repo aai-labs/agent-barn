@@ -104,10 +104,6 @@ LITELLM_MASTER_KEY=
 OPENCLAW_IMAGE=
 HERMES_IMAGE=
 
-# GitHub PAT with read access to aai-labs/aai-cli — the base-image
-# build clones that repo.
-GH_TOKEN=
-
 # In-container path to the kubeconfig, for the API started by `./run.sh`.
 # ./run.sh sets this automatically. Leave empty if you're not using k3d.
 API_K8S_KUBECONFIG_PATH=

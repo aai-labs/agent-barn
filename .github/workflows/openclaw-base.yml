@@ -41,8 +41,6 @@ jobs:
           no-cache-filters: rust-build
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          secrets: |
-            gh_token=${{ secrets.AAI_CLI_REPO_ACCESS_TOKEN }}
       - name: Smoke test
         run: |
           docker run --rm \
@@ -96,8 +94,6 @@ jobs:
           # the same one the smoke test ran against, at one compile rather than three.
           no-cache-filters: rust-build
           cache-from: type=gha
-          secrets: |
-            gh_token=${{ secrets.AAI_CLI_REPO_ACCESS_TOKEN }}
       - name: Smoke test
         run: |
           docker run --rm \
@@ -112,8 +108,6 @@ jobs:
           push: true
           tags: ${{ vars.REGISTRY_URL }}/agentbarn-openclaw-base:${{ steps.tag.outputs.value }}
           cache-from: type=gha
-          secrets: |
-            gh_token=${{ secrets.AAI_CLI_REPO_ACCESS_TOKEN }}
       - name: Push latest tag
         if: steps.tag.outputs.push_latest == 'true'
         uses: docker/build-push-action@v7
@@ -123,6 +117,3 @@ jobs:
           push: true
           tags: ${{ vars.REGISTRY_URL }}/agentbarn-openclaw-base:latest
           cache-from: type=gha
-          secrets: |
-            gh_token=${{ secrets.AAI_CLI_REPO_ACCESS_TOKEN }}
-
