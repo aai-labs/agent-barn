@@ -51,6 +51,12 @@ class DiscordClient:
             raise ValueError("Discord bot token is invalid")
         return body
 
+    def get_current_application(self) -> dict[str, Any]:
+        body = self._get("/oauth2/applications/@me", label="Discord get current application")
+        if not body or not body.get("id"):
+            raise ValueError("Discord application lookup failed")
+        return body
+
     def get_gateway_url(self) -> str:
         body = self._get("/gateway/bot", label="Discord get gateway")
         if not body or not body.get("url"):

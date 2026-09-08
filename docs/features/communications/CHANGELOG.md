@@ -8,10 +8,34 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
 
 - Delivered: Agent-subordinate Communication Connection persistence and scoped CRUD; explicit shipped Platform Plugin registry; Slack, Telegram, Discord, and Microsoft Teams plugins; the first webhook-ingress platform, authenticated by Bot Framework JWT verification at the `verify_webhook` seam; strict plugin-owned settings/credential schemas; encrypted credential envelopes; generic credential uniqueness; optimistic concurrency; platform catalogue; connection-scoped canonical Conversation Messages; durable inbound/outbound Communication Deliveries; gateway-supervised Slack Socket Mode, Telegram polling, and Discord Gateway ingress; database ingress leases; a separately served gateway; one versioned runtime-neutral protocol used by both runtimes; Slack channel/thread mention admission with durable Connection-scoped thread ownership; provider-neutral processing feedback with Slack reactions and assistant thread status; bounded adaptive idle claim backoff shared by both runtime adapters; optional, best-effort Platform Plugin name enrichment; and AF-273's content-free operational journal, typed admission dispositions, Agent-scoped diagnostics with richer aggregate health signals, filtered/chronological Journal reads including a per-Delivery lifecycle drill-down, reconnect/retry recovery controls, bounded retention, stable ordered outbound delivery, safe error projections, audit events, and low-cardinality Communications metrics.
 - Changed: Agents are headless and no longer own a single Platform. Legacy provider configuration tables, DTO fields, routes, and provider-specific UI have been removed after their data is migrated into Communication Connections.
-- Next: add Agent Barn Chat as another adapter at the Platform Plugin seam, then evaluate iMessage transport constraints independently of Agent runtimes.
+- Next: add Agent Barn Chat as another adapter at the Platform Plugin seam, then evaluate iMessage transport constraints independently of Agent runtimes. Email is delivered for inbound and reply; agent-initiated outbound remains unbuilt.
 - Blockers: none.
 
 ## Changes
+
+### 2026-09-06 — Hermes DM history continuity — PR pending
+
+- Fixed: Consecutive Hermes deliveries now explicitly resume the persisted Connection/location/thread session through `/v1/runs`. Previously the shared session ID selected persistence identity but supplied no prior messages to inference, so the Agent treated each DM as its first turn despite history remaining in SQLite.
+- Changed: The Hermes base image adds an opt-in session-history patch preserving native tool messages and compaction lineage. Storage failures fail the turn rather than erasing its context. The adapter and patched image must roll out together; OpenClaw delivery is unchanged.
+- Fixed: Hermes renews its active inbound-delivery lease throughout long async runs and approvals. A later message in the same session receives a completed “still working” acknowledgement rather than being silently reclaimed; reclaimed terminal failures now record metrics and provider failure feedback. Verbose progress and approval notices are rate-limited and best-effort, so their transient delivery failures do not fail a live run.
+- Fixed: Telegram long-message chunking now measures Telegram's UTF-16 code-unit limit and preserves newline/blank-line content exactly at chunk boundaries.
+- Verified: Existing PVC history is reused without a migration.
+
+### 2026-09-04 — Provider gateway close diagnostics — PR pending
+
+- Changed: WebSocket provider close codes are now retained as bounded
+  `provider_code` diagnostics while free-form close reasons remain excluded.
+  Discord close codes for disallowed or invalid intents (`4014`/`4013`) are
+  classified as configuration failures, and authentication close code `4004`
+  is classified as an authentication failure, so gateway setup problems no
+  longer surface only as opaque `PROVIDER_ERROR` incidents. Their summaries
+  include a concrete recovery action—enable Message Content Intent, review the
+  intent selection, or replace the bot token—and tell the operator to reconnect.
+
+### 2026-09-03 — Discord bot install link — PR pending
+
+- Delivered: A saved Discord Connection can regenerate its bot install URL on demand. The Connection card's **Get install link** action calls a new `install-link` endpoint, which resolves the bot's application through Discord's `GET /oauth2/applications/@me` using the stored bot token and returns the recommended least-privilege authorize URL — View Channels, Send Messages, Read Message History, and Send Messages in Threads, plus reactions, embeds, attachments, and external emoji. The URL is never persisted, so permission recommendations in code apply to every existing Connection immediately, and the action follows the app-package contract: authorized with `AGENT_UPDATE`, concealed cross-Organization, and rejected with 400 for platforms without the capability.
+- Changed: The install link follows the Teams app-package pattern — a new optional `build_install_link` Platform Plugin seam gated by the `INSTALL_LINK` capability, declared and implemented only by Discord. No Connection persistence, validation flow, or read-model shape changed, restoring the simple install workflow the pre-AF-271 wizard offered without its separate Application ID entry. The Discord setup hint now leads with the card action, keeping the OAuth2 URL Generator as the manual alternative.
 
 ### 2026-09-01 — Directory failures are reported instead of crashing — PR pending
 
@@ -88,6 +112,14 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
 - Changed: Connection health changes, dead-lettered Deliveries, requested retries, and successful recovery are registered as typed Organization-scoped Domain Events and projected through the existing Security Audit handler. Communications metrics expose status, outcomes, queue age/depth, latency, reconnects, and policy dispositions with no Organization, Agent, Connection, Conversation, or User labels.
 - Changed: Delivery transition detail derives queue wait, processing time, and any scheduled retry from the live Delivery; raw payloads, provider identifiers, and identities remain excluded. Ordinary successful Connection events are compact rows, while failures, degraded state, and reconnect requests retain a focused drill-down.
 - Follow-up: No bulk replay, org-wide dashboard, alert routing, or provider-specific recovery buttons were added.
+
+### 2026-08-31 — AF-276 — Email as a communication platform — PR pending
+
+- Delivered: A shipped Email Platform Plugin, the first platform reached at an address rather than through a per-Connection endpoint. Each Email Connection is allocated `agent+<slug>-<token>@<AGENT_EMAIL_DOMAIN>`, claimed on create and released on retirement or Agent deletion, with the local part never reissued. A Cloudflare Email Worker parses inbound MIME and posts to `POST /communications/v1/webhooks/email/inbound`, authenticated by a gateway-level shared secret because the Worker knows only the recipient address, never a Connection id. Replies are plain text, sent from the Agent's own address, threaded on the References root.
+- Changed: `PlatformCapability` gained `MANAGED_ADDRESS`, which now also suppresses the per-Connection `webhook_url` — Email declares `WEBHOOK_INGRESS` only so `PlatformIngressSupervisor` parks it instead of polling, and the URL it implied was meaningless for a mailbox-addressed platform. `CommunicationPlatform` gained `EMAIL` so the platform-admin stats filter can see these Connections. `CommunicationConnectionRepository.create` takes an optional address allocator and claims inside the Connection's transaction, retrying local-part collisions in a savepoint. `Email`/`EmailClient` gained a per-message sender address, plain-text part, `Reply-To` and custom headers.
+- Notes: Scope is **inbound and reply only**. `RuntimeReplyCreate` has no recipient field and `enqueue_runtime_reply` copies the location from the source inbound delivery, so an Agent structurally cannot address anyone who did not write to it first; a test pins this. Inbound email is untrusted text reaching the LLM, and unlike every other platform it needs no channel membership — mitigated by an allowlist that defaults to empty, an address Agent Barn never publishes, and the sender-only reply property.
+- Notes: Cloudflare's send API returns no message id, so threads anchor on the References root rather than on our own `Message-ID`, which we can never learn. Email Workers cannot read SPF/DKIM/DMARC verdicts (cloudflare/workerd#6740); Cloudflare's MX rejects DMARC failures upstream, and sender trust beyond that is the Connection allowlist.
+- Follow-up: agent-initiated ("cold") outbound needs a gateway path for an outbound delivery with no source delivery, plus a way for a runtime to invoke it — no tool or MCP surface exists today. Attachments, HTML replies, CC/BCC, processing feedback, and bounce handling are all unimplemented. The Worker deploys manually with `wrangler` and has no CI coverage. `prepare_communications_server` now exists, so the Teams provider webhook route can finally get the integration coverage this log recorded as missing.
 
 ### 2026-08-28 — AF-118 — Harden the Teams authentication path — PR pending
 

@@ -272,6 +272,18 @@ class AgentService:
             )
 
     @staticmethod
+    def _ensure_verbose_mode_supported(agent_type: AgentType, verbose_mode: bool | None) -> None:
+        """OpenClaw has no progress-message channel wired up yet; only Hermes
+        reads verbose_mode (see builders/hermes.py). An explicit True would
+        silently have no effect, so it is rejected rather than accepted and ignored.
+        """
+        if agent_type == AgentType.OPENCLAW and verbose_mode:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="OpenClaw does not support verbose progress messages; verbose_mode is Hermes-only.",
+            )
+
+    @staticmethod
     def _build_skill_pointers(skills: list[Skill]) -> str:
         return "".join(derive_tools_pointer(s) for s in skills)
 
@@ -574,6 +586,9 @@ class AgentService:
             # instead of a stored value from before this became enforced, so
             # reads stay truthful even for agents persisted prior to this check.
             approval_mode=(agent.approval_mode if agent.agent_type == AgentType.HERMES else CommandApprovalMode.AUTO),
+            # OpenClaw ignores verbose_mode for the same reason; report the
+            # effective no-op default rather than a stored value.
+            verbose_mode=agent.verbose_mode if agent.agent_type == AgentType.HERMES else False,
             secrets=secrets_read,
             skills=skills_read,
             configured_platform_keys=configured_platform_keys or [],
@@ -692,6 +707,7 @@ class AgentService:
         self.authorization.require_collection_scope(context, PermissionKey.AGENT_CREATE)
         self._ensure_model_allowed(data.model, org_id)
         self._ensure_approval_mode_supported(data.agent_type, data.approval_mode)
+        self._ensure_verbose_mode_supported(data.agent_type, data.verbose_mode)
 
         # Pin to the requested version, or the lineage's latest if unspecified.
         if data.template_version is not None:
@@ -710,6 +726,7 @@ class AgentService:
             model=data.model or "",
             agent_type=data.agent_type,
             approval_mode=data.approval_mode,
+            verbose_mode=data.verbose_mode,
         )
         self._set_pin(agent, template)
 
@@ -1591,6 +1608,9 @@ class AgentService:
         if "approval_mode" in updated:
             self._ensure_approval_mode_supported(agent.agent_type, updated["approval_mode"])
 
+        if "verbose_mode" in updated:
+            self._ensure_verbose_mode_supported(agent.agent_type, updated["verbose_mode"])
+
         # Validate every requested skill pin before mutating the Agent, its
         # template pin, or any attached credential.
         current_skill_rows = self.repository.get_skills_for_agent(agent.id)
@@ -1630,6 +1650,9 @@ class AgentService:
 
         if "approval_mode" in updated:
             agent.approval_mode = updated["approval_mode"]
+
+        if "verbose_mode" in updated:
+            agent.verbose_mode = updated["verbose_mode"]
 
         # Validate skill changes against the effective template's required skills
         if effective_template is None:
@@ -1895,6 +1918,7 @@ class AgentService:
                 runtime_api_key=runtime_api_key,
                 litellm_api_key=litellm_key,
                 litellm_base_url=llm_proxy_url,
+                verbose_mode=agent.verbose_mode,
             )
             deployment = build_hermes_deployment(
                 agent.id,

@@ -333,11 +333,19 @@ def test_cannot_read_template_from_another_org():
         assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
 
 
-def test_cannot_update_template_from_another_org():
+def test_cannot_start_a_template_draft_from_another_org():
     with given(_member_a_with_org_b_template()) as context:
-        response = context.client.patch(
-            f"{_templates(ORG_A)}/{_ORG_B_TEMPLATE_KEY}",
-            json={"soul_md": "# Hijacked"},
+        response = context.client.post(
+            f"{_templates(ORG_A)}/{_ORG_B_TEMPLATE_KEY}/draft",
+            headers=_headers(context),
+        )
+        assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
+
+
+def test_cannot_read_a_template_draft_from_another_org():
+    with given(_member_a_with_org_b_template()) as context:
+        response = context.client.get(
+            f"{_templates(ORG_A)}/{_ORG_B_TEMPLATE_KEY}/draft",
             headers=_headers(context),
         )
         assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))

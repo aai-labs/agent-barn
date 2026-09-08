@@ -6,6 +6,7 @@ from starlette.testclient import TestClient
 
 from api.domains.agents.models import SecretProvider
 from api.domains.rbac.catalog import PermissionKey
+from api.domains.skills.repository import SkillRepository
 from api.domains.users.organization_users.models import OrganizationRole
 from api.tests.core.givenpy import given, then, when
 from api.tests.core.modules import (
@@ -30,7 +31,12 @@ from api.tests.steps.organization import (
     there_is_an_organization_with_user_and_access_token,
 )
 from api.tests.steps.rbac import role_lacks_permission
-from api.tests.steps.template import there_is_a_template, there_is_a_template_skill
+from api.tests.steps.template import (
+    there_is_a_template,
+    there_is_a_template_skill,
+    there_is_an_org_template_draft,
+    there_is_an_org_template_draft_skill,
+)
 from api.tests.steps.user import there_is_a_user, there_is_an_access_token_for_user
 
 _BASE = "/api/v1/organizations/{organization_id}/skills"
@@ -1886,3 +1892,76 @@ def test_composite_fk_blocks_db_level_delete_of_pinned_version():
                         raise AssertionError("Expected IntegrityError")
                     except IntegrityError:
                         session.rollback()
+
+
+def test_delete_organization_skill_is_blocked_when_required_by_an_org_template_draft():
+    """An unpublished Organization Draft Template Version holds a real reference:
+    deleting its required Skill would silently invalidate the draft.
+
+    The RESTRICT foreign key is the database-level net here, so this asserts the
+    contract rather than which layer enforces it; the application-level check in
+    `delete_skill_if_unused` keeps the blocker deterministic and consistent with
+    the five sibling association tables."""
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_skill(name="Draft Required Skill"),
+            there_is_an_org_template_draft(),
+            there_is_an_org_template_draft_skill(),
+        ]
+    ) as context:
+        with when("I try to delete a skill an org template draft requires"):
+            response = context.client.delete(f"{_BASE}/{context.skill.id}", headers=_auth(context))
+
+        with then("deletion is refused and the skill survives"):
+            assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
+            assert_that(
+                context.client.get(f"{_BASE}/{context.skill.id}", headers=_auth(context)).status_code,
+                equal_to(status.HTTP_200_OK),
+            )
+
+
+def test_org_template_draft_counts_as_a_skill_version_reference():
+    """`is_skill_version_referenced_anywhere` is a pure query with no database
+    fallback behind it, so this covers the org-draft clause directly rather than
+    through an endpoint the RESTRICT foreign key would protect anyway."""
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_skill(name="Draft Referenced Skill"),
+            there_is_an_org_template_draft(),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        _publish_new_version(client, context, "# v2")
+        there_is_an_org_template_draft_skill(skill_version=2)(context)
+        repository: SkillRepository = context.injector.get(SkillRepository)
+
+        with when("I ask whether each version is referenced"):
+            pinned = repository.is_skill_version_referenced_anywhere(context.skill.id, 2)
+            unpinned = repository.is_skill_version_referenced_anywhere(context.skill.id, 1)
+
+        with then("only the version the draft pins counts as referenced"):
+            assert_that(pinned, equal_to(True))
+            assert_that(unpinned, equal_to(False))
+
+
+def test_delete_skill_version_required_by_an_org_template_draft_returns_409():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_skill(name="Draft Versioned Skill"),
+            there_is_an_org_template_draft(),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        _publish_new_version(client, context, "# v2")
+        there_is_an_org_template_draft_skill(skill_version=2)(context)
+
+        with when("I try to delete the exact version the draft pins"):
+            response = client.delete(f"{_BASE}/{context.skill.id}/versions/2", headers=_auth(context))
+
+        with then("it returns 409 and the version stays"):
+            assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
+            versions = client.get(f"{_BASE}/{context.skill.id}/versions", headers=_auth(context)).json()
+            assert_that([v["version"] for v in versions], equal_to([2, 1]))

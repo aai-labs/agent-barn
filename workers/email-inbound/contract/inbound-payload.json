@@ -1,0 +1,17 @@
+{
+  "to": "agent+tommy-4f2a@agents.agentbarn.test",
+  "from": "jane@acme.test",
+  "from_name": "Jane Customer",
+  "subject": "Question about pricing",
+  "text": "What does the team plan cost?\n",
+  "message_id": "<abc123@acme.test>",
+  "in_reply_to": "<root-9f2@agents.agentbarn.test>",
+  "references": [
+    "<root-9f2@agents.agentbarn.test>",
+    "<cf-assigned@mail.test>"
+  ],
+  "auto_submitted": "",
+  "precedence": "",
+  "list_id": "",
+  "received_at": "2026-08-31T10:00:00.000Z"
+}

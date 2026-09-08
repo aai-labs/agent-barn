@@ -111,6 +111,7 @@ export const AgentSchema = z.object({
   /** Set only when a restart would move a running Agent onto a different model. */
   pendingModel: z.string().default(""),
   approvalMode: z.enum(["manual", "auto", "off"]).default("auto"),
+  verboseMode: z.boolean().default(false),
   secrets: z.array(AgentSecretReadSchema).optional(),
   skills: z.array(AgentAssignedSkillSchema).default([]),
   configuredPlatformKeys: z.array(z.string()).default([]),

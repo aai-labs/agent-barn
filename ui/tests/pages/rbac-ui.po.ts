@@ -46,11 +46,11 @@ export class RbacUiPage {
   }
 
   async openTemplate(name: string) {
-    await this.page.getByText(name, { exact: true }).click();
+    await this.page.getByRole("button", { name: new RegExp(name) }).click();
   }
 
   async closeTemplate() {
-    await this.page.getByRole("button", { name: "Close", exact: true }).last().click();
+    await this.page.getByRole("button", { name: "Templates", exact: true }).first().click();
   }
 
   async openSkill(name: string) {

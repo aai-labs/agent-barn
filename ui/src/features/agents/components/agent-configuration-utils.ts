@@ -1,4 +1,4 @@
-import type { PlatformTemplateFileKey } from "@/features/platform-templates/utils";
+import type { TemplateFileKey } from "@/features/templates/utils";
 
 import type {
   AgentConfigurationVersion,
@@ -7,7 +7,7 @@ import type {
   AgentTemplateRead,
 } from "../schemas";
 
-export type ArtifactKey = PlatformTemplateFileKey;
+export type ArtifactKey = TemplateFileKey;
 export type ConfigurationSnapshot =
   | AgentConfigurationVersion
   | AgentOverrideDraft

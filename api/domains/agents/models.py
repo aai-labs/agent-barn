@@ -333,6 +333,10 @@ class Agent(BaseModel, table=True):
         default=CommandApprovalMode.AUTO,
         sa_column=Column(sa.String(10), nullable=False, server_default="auto"),
     )
+    verbose_mode: bool = SqlField(
+        default=False,
+        sa_column=Column(sa.Boolean(), nullable=False, server_default=sa.false()),
+    )
 
 
 class AgentAccess(BaseModel, table=True):
@@ -727,6 +731,31 @@ class PlatformTemplateDraftSkill(BaseModel, table=True):
     group_key: str | None = SqlField(default=None, nullable=True, max_length=100)
 
 
+class AgentTemplateDraftSkill(BaseModel, table=True):
+    __tablename__: str = "agent_template_draft_skill"
+
+    # Mirrors AgentTemplateSkill: the required-skill selection currently staged
+    # on an organization's Draft Template Version, carried over to
+    # agent_template_skill on publish.
+    __table_args__ = (
+        sa.UniqueConstraint("draft_id", "skill_id", name="uq_agent_template_draft_skill"),
+        sa.Index("ix_agent_template_draft_skill_draft", "draft_id"),
+        sa.ForeignKeyConstraint(
+            ["skill_id", "skill_version"],
+            ["skill_version.skill_id", "skill_version.version"],
+            ondelete="RESTRICT",
+            name="fk_agent_template_draft_skill_version",
+        ),
+    )
+
+    draft_id: UUID = SqlField(foreign_key="agent_template_draft.id", nullable=False, ondelete="CASCADE")
+    skill_id: UUID = SqlField(foreign_key="skill.id", nullable=False, ondelete="RESTRICT")
+    skill_version: int = SqlField(nullable=False)
+    # None for a standalone (AND-required) skill; otherwise the key of the
+    # "at least one of" group this skill belongs to on this draft.
+    group_key: str | None = SqlField(default=None, nullable=True, max_length=100)
+
+
 class AgentSecretCreate(PydanticBaseModel):  # no secret_name — backend stamps it
     provider: SecretProvider
     content: dict
@@ -767,6 +796,7 @@ class AgentCreate(PydanticBaseModel):
     # pin here are pinned to their latest version at creation time.
     skill_versions: list[SkillVersionPin] = Field(default_factory=list)
     approval_mode: CommandApprovalMode = CommandApprovalMode.AUTO
+    verbose_mode: bool = False
 
     @model_validator(mode="after")
     def validate_unique_secret_providers(self) -> AgentCreate:
@@ -798,6 +828,7 @@ class AgentUpdate(PydanticBaseModel):
     shared_credentials: list[AgentSharedCredentialAttach] | None = None
     removed_secret_providers: list[SecretProvider] | None = None
     approval_mode: CommandApprovalMode | None = None
+    verbose_mode: bool | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -811,6 +842,13 @@ class AgentUpdate(PydanticBaseModel):
     def reject_null_approval_mode(cls, values: object) -> object:
         if isinstance(values, dict) and values.get("approval_mode", ...) is None:
             raise ValueError("approval_mode must be omitted rather than null")
+        return values
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_null_verbose_mode(cls, values: object) -> object:
+        if isinstance(values, dict) and values.get("verbose_mode", ...) is None:
+            raise ValueError("verbose_mode must be omitted rather than null")
         return values
 
     @model_validator(mode="after")
@@ -1106,6 +1144,7 @@ class AgentRead(PydanticBaseModel):
     skills: list[AgentAssignedSkillRead] = Field(default_factory=list)
     configured_platform_keys: list[str] = Field(default_factory=list)
     approval_mode: CommandApprovalMode
+    verbose_mode: bool
     allowed_actions: list[PermissionKey] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime

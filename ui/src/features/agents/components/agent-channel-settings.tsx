@@ -17,7 +17,6 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-
 import { toast } from "sonner";
 
 import { ConfirmationDialog } from "@/components/confirmation-dialog";
@@ -32,6 +31,7 @@ import {
   useCommunicationConnectionDirectory,
   useCommunicationPlatforms,
   useDownloadAppPackage,
+  useInstallLink,
 } from "@/features/communication-connections/hooks/use-communication-connections";
 import { DirectoryPickerDialog } from "@/features/communication-connections/components/directory-picker-dialog";
 import { SLACK_APP_MANIFEST } from "@/features/communication-connections/slack-manifest";
@@ -137,17 +137,21 @@ function PlatformOption({
   platform,
   selected,
   onSelect,
+  centeredOnOwnRow = false,
 }: {
   platform: { key: string; displayName: string };
   selected: boolean;
   onSelect: () => void;
+  centeredOnOwnRow?: boolean;
 }) {
   return (
     <button
       type="button"
       aria-pressed={selected}
       aria-label={`Select ${platform.displayName}`}
-      className="group flex min-h-[4.75rem] cursor-pointer items-center gap-3 rounded-xl p-3 text-left transition-colors hover:shadow-sm"
+      className={`group flex min-h-[4.75rem] cursor-pointer items-center gap-3 rounded-xl p-3 text-left transition-colors hover:shadow-sm${
+        centeredOnOwnRow ? " sm:col-span-2 sm:mx-auto sm:w-[calc(50%-0.3125rem)]" : ""
+      }`}
       style={{
         border: selected ? "1.5px solid var(--accent)" : "1px solid var(--line)",
         background: selected ? "var(--accent-soft)" : "var(--bg-elev)",
@@ -453,8 +457,12 @@ export function AgentChannelSettings({
   const [formError, setFormError] = useState<string | null>(null);
   const [retiring, setRetiring] = useState<CommunicationConnection | null>(null);
   const downloadAppPackage = useDownloadAppPackage();
+  const fetchInstallLink = useInstallLink();
   const [packageBusyId, setPackageBusyId] = useState<string | null>(null);
   const [packageError, setPackageError] = useState<string | null>(null);
+  const [installLinks, setInstallLinks] = useState<Record<string, string>>({});
+  const [installBusyId, setInstallBusyId] = useState<string | null>(null);
+  const [installError, setInstallError] = useState<string | null>(null);
   const [editingConnection, setEditingConnection] = useState<CommunicationConnection | null>(null);
   const [editDisplayName, setEditDisplayName] = useState("");
   const [editSettings, setEditSettings] = useState<Record<string, unknown>>({});
@@ -693,6 +701,25 @@ export function AgentChannelSettings({
                       Paste this URL into {platforms.data?.find((p) => p.key === connection.platformKey)?.displayName ?? "the platform"}&apos;s webhook settings: <code className="break-all">{connection.webhookUrl}</code>
                     </div>
                   )}
+                  {connection.managedAddress && (
+                    <div className="mt-2 flex flex-wrap items-center gap-2 text-xs" style={{ color: "var(--ink-3)" }}>
+                      <span>Give people this address to reach the Agent:</span>
+                      <code className="break-all" data-testid="managed-address">{connection.managedAddress}</code>
+                      <button
+                        type="button"
+                        className="af-btn af-btn-sm flex-shrink-0"
+                        title="Copy address"
+                        aria-label="Copy address"
+                        onClick={() => {
+                          void navigator.clipboard
+                            .writeText(connection.managedAddress ?? "")
+                            .then(() => toast.success("Address copied to clipboard"));
+                        }}
+                      >
+                        <Copy width={13} height={13} />
+                      </button>
+                    </div>
+                  )}
                   {platforms.data
                     ?.find((p) => p.key === connection.platformKey)
                     ?.capabilities.includes("application_provisioning") && (
@@ -720,6 +747,46 @@ export function AgentChannelSettings({
                   )}
                   {packageError && packageBusyId === null && (
                     <div className="mt-2 text-xs" style={{ color: "var(--err)" }}>{packageError}</div>
+                  )}
+                  {platforms.data
+                    ?.find((p) => p.key === connection.platformKey)
+                    ?.capabilities.includes("install_link") && (
+                    <div className="mt-2 flex items-center gap-2 text-xs" style={{ color: "var(--ink-3)" }}>
+                      <span>Add the bot to a server with the recommended permissions.</span>
+                      {installLinks[connection.id] ? (
+                        <a
+                          href={installLinks[connection.id]}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="af-btn af-btn-sm flex-shrink-0"
+                        >
+                          Install bot to server ↗
+                        </a>
+                      ) : (
+                        <button
+                          type="button"
+                          className="af-btn af-btn-sm flex-shrink-0"
+                          disabled={installBusyId === connection.id}
+                          onClick={() => {
+                            setInstallBusyId(connection.id);
+                            setInstallError(null);
+                            void fetchInstallLink(agent.id, connection.id)
+                              .then((url) => setInstallLinks((previous) => ({ ...previous, [connection.id]: url })))
+                              .catch((cause: unknown) =>
+                                setInstallError(
+                                  cause instanceof Error ? cause.message : "Could not build the install link.",
+                                ),
+                              )
+                              .finally(() => setInstallBusyId(null));
+                          }}
+                        >
+                          {installBusyId === connection.id ? "Preparing…" : "Get install link"}
+                        </button>
+                      )}
+                    </div>
+                  )}
+                  {installError && installBusyId === null && (
+                    <div className="mt-2 text-xs" style={{ color: "var(--err)" }}>{installError}</div>
                   )}
                   <div className="mt-3">
                     <PlatformSetupHint
@@ -799,13 +866,15 @@ export function AgentChannelSettings({
                         arrayBrowse={editBrowseSources(connection.platformKey)}
                       />
                       </div>
-                      <div className="rounded-lg p-3" style={{ border: "1px solid var(--line)" }}>
-                        <div className="mb-1 text-xs font-semibold uppercase tracking-wide" style={{ color: "var(--ink-4)" }}>Replace credentials</div>
-                        <p className="mb-3 mt-0 text-xs" style={{ color: "var(--ink-3)" }}>Leave every credential blank to keep the encrypted credentials already stored.</p>
-                        <div className="flex w-full flex-col gap-3">
-                          <SchemaFields schema={platform.credentialsSchema} values={editCredentials} onChange={setEditCredentials} secret />
+                      {schemaProperties(platform.credentialsSchema).length > 0 && (
+                        <div className="rounded-lg p-3" style={{ border: "1px solid var(--line)" }}>
+                          <div className="mb-1 text-xs font-semibold uppercase tracking-wide" style={{ color: "var(--ink-4)" }}>Replace credentials</div>
+                          <p className="mb-3 mt-0 text-xs" style={{ color: "var(--ink-3)" }}>Leave every credential blank to keep the encrypted credentials already stored.</p>
+                          <div className="flex w-full flex-col gap-3">
+                            <SchemaFields schema={platform.credentialsSchema} values={editCredentials} onChange={setEditCredentials} secret />
+                          </div>
                         </div>
-                      </div>
+                      )}
                     </>
                   )}
                   {formError && <p className="m-0 text-xs" style={{ color: "var(--err)" }}>{formError}</p>}
@@ -847,12 +916,15 @@ export function AgentChannelSettings({
                 )}
                 {platforms.data && platforms.data.length > 0 && (
                   <div className="mt-3 grid gap-2.5 sm:grid-cols-2">
-                    {platforms.data.map((platform) => (
+                    {platforms.data.map((platform, index) => (
                       <PlatformOption
                         key={platform.key}
                         platform={platform}
                         selected={platformKey === platform.key}
                         onSelect={() => choosePlatform(platform.key)}
+                        centeredOnOwnRow={
+                          platforms.data.length % 2 === 1 && index === platforms.data.length - 1
+                        }
                       />
                     ))}
                   </div>
@@ -886,25 +958,27 @@ export function AgentChannelSettings({
 
                   <div className="mt-5 flex flex-col gap-4">
                     <PlatformSetupHint hint={selectedPlatform.setupHint} platformKey={selectedPlatform.key} />
-                    <div className="rounded-xl p-4" style={{ border: "1px solid var(--line)", background: "var(--bg-soft)" }}>
-                      <div className="flex items-start gap-2.5">
-                        <LockKeyhole size={16} className="mt-0.5 flex-shrink-0" style={{ color: "var(--accent-ink)" }} />
-                        <div>
-                          <div className="text-xs font-semibold uppercase tracking-[0.1em]" style={{ color: "var(--ink-2)" }}>Credentials</div>
-                          <p className="mb-0 mt-1 text-xs leading-relaxed" style={{ color: "var(--ink-3)" }}>
-                            Encrypted at rest and never shown again after you save this connection.
-                          </p>
+                    {schemaProperties(selectedPlatform.credentialsSchema).length > 0 && (
+                      <div className="rounded-xl p-4" style={{ border: "1px solid var(--line)", background: "var(--bg-soft)" }}>
+                        <div className="flex items-start gap-2.5">
+                          <LockKeyhole size={16} className="mt-0.5 flex-shrink-0" style={{ color: "var(--accent-ink)" }} />
+                          <div>
+                            <div className="text-xs font-semibold uppercase tracking-[0.1em]" style={{ color: "var(--ink-2)" }}>Credentials</div>
+                            <p className="mb-0 mt-1 text-xs leading-relaxed" style={{ color: "var(--ink-3)" }}>
+                              Encrypted at rest and never shown again after you save this connection.
+                            </p>
+                          </div>
+                        </div>
+                        <div className="mt-4 flex w-full flex-col gap-3">
+                          <SchemaFields
+                            schema={selectedPlatform.credentialsSchema}
+                            values={credentials}
+                            onChange={(next) => { setCredentials(next); setSlackPreview(null); setSlackPreviewError(null); }}
+                            secret
+                          />
                         </div>
                       </div>
-                      <div className="mt-4 flex w-full flex-col gap-3">
-                        <SchemaFields
-                          schema={selectedPlatform.credentialsSchema}
-                          values={credentials}
-                          onChange={(next) => { setCredentials(next); setSlackPreview(null); setSlackPreviewError(null); }}
-                          secret
-                        />
-                      </div>
-                    </div>
+                    )}
                     <label className="flex flex-col gap-1.5 text-sm font-medium">
                       Connection name
                       <input
