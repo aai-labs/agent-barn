@@ -414,7 +414,7 @@ def test_a_claim_retries_when_its_platform_plugin_is_gone() -> None:
 def test_a_claim_retries_when_its_connection_is_no_longer_active() -> None:
     connection = cast(CommunicationConnection, _connection())
     service, deliveries = _service(connection, _feedback_plugin())
-    service.connection_repository.get_active.return_value = None
+    cast(Mock, service.connection_repository).get_active.return_value = None
     delivery = RuntimeDeliveryRead(
         delivery_id=uuid4(),
         message_id=uuid4(),
