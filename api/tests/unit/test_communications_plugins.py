@@ -374,6 +374,37 @@ def _slack_bot_event(text: str, *, thread_ts: str | None = None, user: str = "bo
     return payload
 
 
+def test_slack_admits_a_modern_app_bot_message_in_slacks_documented_shape() -> None:
+    """Current (granular-permission) Slack apps post plain `message` events that carry
+    `bot_id` and `bot_profile` with no `bot_message` subtype — the shape another Agent
+    Barn Agent's reply arrives in. See docs.slack.dev/reference/events/message/bot_message."""
+    plugin = SlackPlatformPlugin(ValidationConfig())
+    settings = plugin.settings_model.model_validate({"group_policy": "open", "accept_agent_mentions": True})
+    payload = {
+        "team_id": "T0TEAM",
+        "event_id": "Ev0EVENT",
+        "agentbarn_bot_user_id": "bot-1",
+        "event": {
+            "type": "message",
+            "channel": "channel-1",
+            "channel_type": "channel",
+            "user": "bot-2",
+            "bot_id": "B0OTHERAPP",
+            "bot_profile": {"id": "B0OTHERAPP", "name": "Writer", "app_id": "A0WRITER"},
+            "ts": "1724320800.000200",
+            "thread_ts": "1724320800.000100",
+            "text": "[DRAFT-READY] <@bot-1> the draft is above",
+        },
+    }
+
+    result = plugin.admit_inbound(settings, payload, context=_slack_admission_context(owned=False))
+
+    assert_that(result.disposition, equal_to(CommunicationPolicyDisposition.ACCEPTED))
+    assert_that(result[0].sender.id, equal_to("bot-2"))
+    assert_that(result[0].location.thread_id, equal_to("1724320800.000100"))
+    assert_that(result[0].mentions, equal_to(["bot-1"]))
+
+
 def test_slack_ignores_other_bots_by_default() -> None:
     plugin = SlackPlatformPlugin(ValidationConfig())
     settings = plugin.settings_model.model_validate({"group_policy": "open"})
