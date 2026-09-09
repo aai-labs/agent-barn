@@ -808,20 +808,22 @@ test.describe("Agent Detail Page — Channels tab", () => {
     await agentDetailPage.channelsTab().click();
   }
 
-  test("configures and clears a scheduled default through the Connection editor", async ({ page }) => {
+  test("configures a scheduled default through the Connection editor", async ({ page }) => {
     await serveSavedSlackConnection(page);
     await agentDetailPage.editConnectionButton("Team Slack").click();
+    await expect(page.getByLabel("Default thread or topic (optional)", { exact: true })).toHaveCount(0);
     await agentDetailPage.defaultDeliveryToggle().check();
     await agentDetailPage.defaultDestinationBrowse().click();
     await agentDetailPage.directoryPickerOption(/#general/).click();
     await agentDetailPage.directoryPickerConfirmButton().click();
-    await expect(agentDetailPage.defaultDestinationInput()).toHaveValue("channel-one");
-    await agentDetailPage.defaultThreadInput().fill("123.456789");
+    await expect(agentDetailPage.defaultDestinationChip("#general")).toBeVisible();
     const update = agentDetailPage.waitForConnectionMutation("PATCH");
     await agentDetailPage.saveConnectionButton().click();
-    expect((await update).postDataJSON()).toMatchObject({ settings: {
-      default_delivery_target: { kind: "channel", recipient: "channel-one", thread_id: "123.456789" },
+    const payload = (await update).postDataJSON();
+    expect(payload).toMatchObject({ settings: {
+      default_delivery_target: { kind: "channel", recipient: "channel-one" },
     }});
+    expect(payload.settings.default_delivery_target).not.toHaveProperty("thread_id");
   });
 
   test("browses a saved Connection's own directory when editing it", async ({ page }) => {

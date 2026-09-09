@@ -138,10 +138,6 @@ export class AgentDetailPage {
     return this.page.getByRole("option");
   }
 
-  defaultThreadInput(): Locator {
-    return this.page.getByLabel("Default thread or topic (optional)", { exact: true });
-  }
-
   directoryPicker(): Locator {
     return this.page.getByRole("dialog");
   }

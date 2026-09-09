@@ -188,9 +188,7 @@ export function DefaultDeliveryTargetInput({
             <FieldLabel htmlFor={`${id}-kind`}>Destination type</FieldLabel>
             <Select
               value={kind}
-              onValueChange={(next) =>
-                update({ kind: next, recipient: "", threadId: null })
-              }
+              onValueChange={(next) => update({ kind: next, recipient: "" })}
             >
               <SelectTrigger id={`${id}-kind`}>
                 <SelectValue />
@@ -210,19 +208,6 @@ export function DefaultDeliveryTargetInput({
               value={String(target.recipient ?? "")}
               onChange={(next) => update({ recipient: next })}
               browse={browse}
-            />
-          </Field>
-          <Field>
-            <FieldLabel htmlFor={`${id}-thread`}>
-              Default thread or topic (optional)
-            </FieldLabel>
-            <input
-              id={`${id}-thread`}
-              className="af-input w-full"
-              value={String(target.threadId ?? "")}
-              onChange={(event) =>
-                update({ threadId: event.target.value || null })
-              }
             />
           </Field>
         </FieldGroup>
