@@ -507,7 +507,7 @@ class CommunicationsService:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"{plugin.display_name} does not provide a bot install link",
             ) from exc
-        except (ValidationError, ValueError) as exc:
+        except (ValidationError, ValueError, PermissionError) as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
     def build_app_package(
@@ -544,7 +544,7 @@ class CommunicationsService:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"{plugin.display_name} does not provide an installable app package",
             ) from exc
-        except (ValidationError, ValueError) as exc:
+        except (ValidationError, ValueError, PermissionError) as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
     @staticmethod
@@ -570,7 +570,7 @@ class CommunicationsService:
                 organization_id=organization_id,
                 agent_id=agent_id,
             )
-        except (ValidationError, ValueError) as exc:
+        except (ValidationError, ValueError, PermissionError) as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
     def _encrypt_credentials(self, credentials: dict) -> str:

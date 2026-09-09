@@ -16,6 +16,7 @@ from api.domains.communications.addressing import extract_local_part
 from api.domains.communications.delivery_repository import CommunicationDeliveryRepository
 from api.domains.communications.email_address_repository import AgentEmailAddressRepository
 from api.domains.communications.error_details import normalize_communication_error
+from api.domains.communications.execution_context import issue_execution_token
 from api.domains.communications.models import (
     AcceptedCommunicationRead,
     CommunicationConnection,
@@ -126,6 +127,12 @@ class CommunicationsGatewayService:
         delivery = self.delivery_repository.claim_next_inbound(agent_id=agent.id, reclaim_expired=False)
         if delivery is not None:
             delivery = self._for_runtime(delivery)
+            delivery.execution_token = issue_execution_token(
+                self.config.agent_token_encryption_key,
+                agent.id,
+                delivery.delivery_id,
+                delivery.attempt_count,
+            )
             self.notify_processing_feedback(
                 ProcessingFeedbackContext(
                     connection_id=delivery.connection_id,

@@ -582,6 +582,24 @@ class CommunicationDeliveryRepository:
                 envelope=NormalizedCommunicationEnvelope.model_validate(delivery.envelope),
             )
 
+    @staticmethod
+    def select_inbound(source_id: UUID, agent_id: UUID) -> Any:
+        """The one way to address an Agent's inbound delivery by id."""
+        return select(CommunicationDelivery).where(
+            col(CommunicationDelivery.id) == source_id,
+            col(CommunicationDelivery.agent_id) == agent_id,
+            col(CommunicationDelivery.direction) == CommunicationDirection.INBOUND,
+        )
+
+    def source_is_cancelled(self, source_id: UUID, *, agent_id: UUID) -> bool:
+        with Session(self.delegate.engine) as session:
+            source = session.exec(self.select_inbound(source_id, agent_id)).one_or_none()
+            return (
+                source is None
+                or source.cancel_requested_at is not None
+                or source.status == CommunicationDeliveryStatus.CANCELLED
+            )
+
     def delivery_status(
         self,
         delivery_id: UUID,

@@ -460,6 +460,7 @@ def test_diagnostics_reports_pipeline_transitions_without_message_content() -> N
                         "agent_claimed": 1,
                         "model_completed": 1,
                         "reply_queued": 1,
+                        "initiated_queued": 0,
                         "provider_delivered": 1,
                         "dead_lettered": 0,
                     }
