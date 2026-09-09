@@ -11,6 +11,11 @@ on:
         description: Release tag for API and UI images (e.g. v0.15.0)
         required: true
         type: string
+      image_prefix:
+        description: Path prefix under the client registry (tenant ACL scope)
+        required: false
+        default: agent-barn
+        type: string
 
 concurrency:
   group: client-release
@@ -79,7 +84,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v6
         with:
-          images: ${{ vars.CLIENT_REGISTRY_URL }}/agent-barn/${{ matrix.name }}
+          images: ${{ vars.CLIENT_REGISTRY_URL }}/${{ inputs.image_prefix }}/${{ matrix.name }}
           tags: |
             type=raw,value=${{ steps.ver.outputs.version }}
             type=raw,value=latest
@@ -103,7 +108,7 @@ jobs:
         run: |
           docker run --rm \
             -v "${{ github.workspace }}/${{ matrix.smoke }}:/smoke-test.sh:ro" \
-            "${{ vars.CLIENT_REGISTRY_URL }}/agent-barn/${{ matrix.name }}:${{ steps.ver.outputs.version }}" \
+            "${{ vars.CLIENT_REGISTRY_URL }}/${{ inputs.image_prefix }}/${{ matrix.name }}:${{ steps.ver.outputs.version }}" \
             /bin/sh /smoke-test.sh
 
       - name: Push
