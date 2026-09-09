@@ -2316,7 +2316,7 @@ def test_start_hermes_agent_configmap_has_hermes_config():
             cfg = _yaml.safe_load(config_map.data["hermes-config.yaml"])
             assert_that(cfg["model"]["base_url"], equal_to("http://localhost:8090"))
             assert_that(cfg["display"]["platforms"], equal_to({}))
-            assert_that(cfg["plugins"]["enabled"], equal_to(["telemetry-push"]))
+            assert_that(cfg["plugins"]["enabled"], equal_to(["telemetry-push", "agentbarn-messaging"]))
             assert_that(cfg, is_not(has_key("slack")))
 
         with then("the ConfigMap has the headless runtime adapter"):

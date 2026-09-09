@@ -16,7 +16,7 @@ def test_gateway_config_is_headless_and_keeps_telemetry() -> None:
     config = build_hermes_gateway_config("litellm/gpt-5", "http://litellm:4000")
 
     assert config["display"]["platforms"] == {}
-    assert config["plugins"]["enabled"] == ["telemetry-push"]
+    assert config["plugins"]["enabled"] == ["telemetry-push", "agentbarn-messaging"]
     assert "slack" not in config
     assert "telegram" not in config
     assert "discord" not in config
@@ -60,6 +60,9 @@ def test_config_map_contains_runtime_adapter_and_no_provider_policy_plugins() ->
     )
 
     assert "communications-runtime-adapter.py" in config_map.data
+    assert "agentbarn_message.py" in config_map.data
+    # OpenClaw's plugin has no business in a Hermes ConfigMap.
+    assert "openclaw-messaging.js" not in config_map.data
     assert not any("allowlist" in name or "deny-dms" in name for name in config_map.data)
 
 

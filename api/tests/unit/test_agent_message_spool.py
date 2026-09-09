@@ -1,0 +1,164 @@
+import importlib.util
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+from hamcrest import assert_that, equal_to, has_length
+
+ROOT = Path(__file__).parents[2] / "domains/agents/scripts/messaging"
+
+
+def _client(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENTBARN_MESSAGE_SPOOL", str(tmp_path / "messages.sqlite3"))
+    monkeypatch.setenv("AGENTBARN_EXECUTIONS_DIR", str(tmp_path / "executions"))
+    spec = importlib.util.spec_from_file_location("agentbarn_message_test", ROOT / "agentbarn_message.py")
+    client = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(client)
+    return client
+
+
+def test_completion_survives_process_restart_and_lost_acknowledgement(monkeypatch, tmp_path):
+    client = _client(monkeypatch, tmp_path)
+    subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "from agentbarn_message import capture_completion; capture_completion('hermes:one','result')",
+        ],
+        cwd=ROOT,
+        check=True,
+    )
+    submissions = []
+
+    def lost_ack(method, path, payload):
+        submissions.append(payload)
+        raise TimeoutError
+
+    monkeypatch.setattr(client, "request", lost_ack)
+    client.drain_once()
+    with client._spool() as db:
+        assert_that(db.execute("SELECT receipt FROM completions").fetchone()[0], equal_to(None))
+        db.execute("UPDATE completions SET available_at=0")
+    receipt = {"delivery_id": "durable-one", "status": "PENDING"}
+    monkeypatch.setattr(client, "request", lambda method, path, payload: submissions.append(payload) or receipt)
+    client.drain_once()
+    client.drain_once()
+    assert_that(submissions, has_length(2))
+    assert_that(submissions[0], equal_to(submissions[1]))
+    with client._spool() as db:
+        assert_that(json.loads(db.execute("SELECT receipt FROM completions").fetchone()[0]), equal_to(receipt))
+
+
+def test_either_silence_marker_suppresses_submission_but_prose_does_not(monkeypatch, tmp_path):
+    """Templates say HEARTBEAT_OK, the delivery policy says [SILENT]; both must stay quiet.
+
+    Surrounding whitespace is ignored because a trailing newline is the normal shape of
+    a model's final response, and posting a bare "[SILENT]" to Slack is the worse failure.
+    """
+    client = _client(monkeypatch, tmp_path)
+    quiet = [
+        "[SILENT]",
+        "HEARTBEAT_OK",
+        " [SILENT] ",
+        "HEARTBEAT_OK\n",
+        "   ",
+        # The runtime's own tokens: BOOT.md and the seeds hand these to agents, and
+        # models drop the brackets often enough that Hermes matches them natively.
+        "SILENT",
+        "no_reply",
+        "NO REPLY",
+        "Here is the summary.\n\n[silent]",
+    ]
+    delivered = ["Report [SILENT]", "HEARTBEAT_OK: 3 blockers", "Nothing to flag today.", "no reply was received"]
+    for key, text in enumerate(quiet + delivered):
+        client.capture_completion(str(key), text)
+    with client._spool() as db:
+        assert_that(db.execute("SELECT COUNT(*) FROM completions").fetchone()[0], equal_to(len(delivered)))
+
+
+def test_changed_completion_cannot_replace_persisted_run(monkeypatch, tmp_path):
+    client = _client(monkeypatch, tmp_path)
+    client.capture_completion("one", "first")
+    with pytest.raises(ValueError):
+        client.capture_completion("one", "second")
+
+
+def test_runtime_binding_is_session_scoped_and_removed_at_completion(monkeypatch, tmp_path):
+    client = _client(monkeypatch, tmp_path)
+    client.bind_execution("inbound", {"execution_token": "server-token", "delivery_id": "delivery"})
+    assert_that(client.execution_environment("inbound", "call")["AGENTBARN_INVOCATION_ID"], equal_to("delivery:call"))
+    with pytest.raises(FileNotFoundError):
+        client.execution_environment("cron", "call")
+    client.unbind_execution("inbound")
+    with pytest.raises(FileNotFoundError):
+        client.execution_environment("inbound", "call")
+
+
+@pytest.mark.parametrize(
+    "origin,expected",
+    [
+        (None, {"kind": "default"}),
+        ({}, {"kind": "default"}),
+        (
+            {"platform": "api_server", "chat_id": "connection:0191-uuid:C123:root"},
+            {"kind": "origin", "connection_id": "0191-uuid", "channel_id": "C123", "thread_id": None},
+        ),
+        (
+            {"platform": "api_server", "chat_id": "connection:0191-uuid:C123:1788328904.404579"},
+            {"kind": "origin", "connection_id": "0191-uuid", "channel_id": "C123", "thread_id": "1788328904.404579"},
+        ),
+        # Created somewhere we cannot map: refuse rather than divert to the default.
+        ({"platform": "telegram", "chat_id": "-1001"}, None),
+        ({"platform": "api_server", "chat_id": "api_9f2c1b"}, None),
+        ({"platform": "api_server", "chat_id": "connection::C123:root"}, None),
+        ({"platform": "api_server", "chat_id": "connection:0191-uuid"}, None),
+    ],
+)
+def test_origin_maps_only_to_conversations_the_adapter_minted(monkeypatch, tmp_path, origin, expected):
+    client = _client(monkeypatch, tmp_path)
+    assert_that(client.destination_for_origin(origin), equal_to(expected))
+
+
+_THREADED = {"platform": "api_server", "chat_id": "connection:0191-uuid:C123:1788991850.702569"}
+
+
+@pytest.mark.parametrize(
+    "deliver,expected_thread",
+    [
+        # Says nothing about routing: keep the thread the conversation happened in.
+        (None, "1788991850.702569"),
+        ("origin", "1788991850.702569"),
+        ("local", "1788991850.702569"),
+        ("all", "1788991850.702569"),
+        ("origin,all", "1788991850.702569"),
+        # Same channel, empty thread segment: post at channel level.
+        ("slack:C123:", None),
+        ("slack:C123", None),
+        # Same channel, explicit thread.
+        ("slack:C123:1788000000.000001", "1788000000.000001"),
+    ],
+)
+def test_deliver_moves_a_job_within_its_own_channel(monkeypatch, tmp_path, deliver, expected_thread):
+    client = _client(monkeypatch, tmp_path)
+    destination = client.destination_for_origin(_THREADED, deliver)
+    assert_that(destination["channel_id"], equal_to("C123"))
+    assert_that(destination["thread_id"], equal_to(expected_thread))
+
+
+@pytest.mark.parametrize("deliver", ["slack:C999:", "slack:C999:178.000001", "telegram:-1001:17"])
+def test_deliver_naming_another_channel_is_refused_not_silently_rerouted(monkeypatch, tmp_path, deliver):
+    client = _client(monkeypatch, tmp_path)
+    assert_that(client.destination_for_origin(_THREADED, deliver), equal_to(None))
+
+
+def test_unmappable_origin_is_never_delivered_to_the_default(monkeypatch, tmp_path):
+    client = _client(monkeypatch, tmp_path)
+    client.capture_completion("one", "Scheduled result", {"platform": "telegram", "chat_id": "-1001"})
+    client.capture_completion("two", "Scheduled result", None)
+    with client._spool() as db:
+        rows = db.execute("SELECT run_id, request FROM completions").fetchall()
+    assert_that(rows, has_length(1))
+    assert_that(rows[0][0], equal_to("two"))
+    assert_that(json.loads(rows[0][1])["destination"], equal_to({"kind": "default"}))
