@@ -117,6 +117,22 @@ export class AgentDetailPage {
     return this.page.getByRole("button", { name: `Browse ${fieldLabel}`, exact: true });
   }
 
+  defaultDeliveryToggle(): Locator {
+    return this.page.getByRole("checkbox", { name: "Send scheduled results through this Connection" });
+  }
+
+  defaultDestinationBrowse(): Locator {
+    return this.page.getByRole("button", { name: "Browse default destination" });
+  }
+
+  defaultDestinationInput(): Locator {
+    return this.page.getByLabel("Default channel or recipient", { exact: true });
+  }
+
+  defaultThreadInput(): Locator {
+    return this.page.getByLabel("Default thread or topic (optional)", { exact: true });
+  }
+
   directoryPicker(): Locator {
     return this.page.getByRole("dialog");
   }

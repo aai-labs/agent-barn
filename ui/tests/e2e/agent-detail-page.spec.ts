@@ -808,6 +808,22 @@ test.describe("Agent Detail Page — Channels tab", () => {
     await agentDetailPage.channelsTab().click();
   }
 
+  test("configures and clears a scheduled default through the Connection editor", async ({ page }) => {
+    await serveSavedSlackConnection(page);
+    await agentDetailPage.editConnectionButton("Team Slack").click();
+    await agentDetailPage.defaultDeliveryToggle().check();
+    await agentDetailPage.defaultDestinationBrowse().click();
+    await agentDetailPage.directoryPickerOption(/#general/).click();
+    await agentDetailPage.directoryPickerConfirmButton().click();
+    await expect(agentDetailPage.defaultDestinationInput()).toHaveValue("channel-one");
+    await agentDetailPage.defaultThreadInput().fill("123.456789");
+    const update = agentDetailPage.waitForConnectionMutation("PATCH");
+    await agentDetailPage.saveConnectionButton().click();
+    expect((await update).postDataJSON()).toMatchObject({ settings: {
+      default_delivery_target: { kind: "channel", recipient: "channel-one", thread_id: "123.456789" },
+    }});
+  });
+
   test("browses a saved Connection's own directory when editing it", async ({ page }) => {
     await serveSavedSlackConnection(page);
     await agentDetailPage.editConnectionButton("Team Slack").click();

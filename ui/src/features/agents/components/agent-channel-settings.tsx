@@ -38,6 +38,7 @@ import {
   useDownloadAppPackage,
   useInstallLink,
 } from "@/features/communication-connections/hooks/use-communication-connections";
+import { DefaultDeliveryTargetInput } from "@/features/communication-connections/components/default-delivery-target-input";
 import { DirectoryPickerDialog } from "@/features/communication-connections/components/directory-picker-dialog";
 import { SLACK_APP_MANIFEST } from "@/features/communication-connections/slack-manifest";
 import type { CommunicationConnection, CommunicationDirectoryEntry, CommunicationPlatform } from "@/features/communication-connections/schemas";
@@ -482,6 +483,11 @@ function SchemaFields({
       </span>
     );
 
+    if (key === "defaultDeliveryTarget") {
+      return <DefaultDeliveryTargetInput key={key} value={values[key]} onChange={update}
+        channels={arrayBrowse.channelIds ?? arrayBrowse.allowedChannelIds}
+        users={arrayBrowse.dmUserIds ?? arrayBrowse.allowedUserIds} />;
+    }
     if (property.type === "boolean") {
       return (
         <label key={key} className="flex flex-col gap-1">
