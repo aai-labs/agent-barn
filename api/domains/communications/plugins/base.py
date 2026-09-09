@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from api.domains.communications.models import (
     CommunicationPolicyDisposition,
@@ -14,9 +14,11 @@ from api.domains.communications.models import (
     CredentialUniquenessScope,
     NormalizedCommunicationEnvelope,
     OutboundCommunicationEnvelope,
+    OutboundTargetRequest,
     PlatformCapability,
     PlatformDescriptorRead,
     ProcessingFeedbackStage,
+    ResolvedOutboundTarget,
 )
 
 
@@ -38,6 +40,21 @@ class PlatformSettings(BaseModel):
 
 class PlatformCredentials(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+
+class AgentInitiatedDeliverySettings(BaseModel):
+    """Mix into a platform's settings to opt it into agent-initiated delivery.
+
+    Additive: a platform that mixes this in still has all of its ordinary inbound
+    settings. Only platforms carrying AGENT_INITIATED_DELIVERY should mix it in,
+    since the field is rendered into the Connection editor from the settings schema.
+    """
+
+    default_delivery_target: OutboundTargetRequest | None = Field(
+        default=None,
+        title="Default delivery target",
+        description="Optional destination for scheduled results. Only one Connection per Agent may set a default.",
+    )
 
 
 @dataclass(frozen=True)
@@ -114,6 +131,17 @@ class PlatformPlugin(ABC):
     credential_uniqueness_scope: CredentialUniquenessScope = CredentialUniquenessScope.NONE
     supports_progress_updates: bool = True
 
+    def resolve_outbound_target(
+        self,
+        settings: PlatformSettings,
+        credentials: PlatformCredentials,
+        request: OutboundTargetRequest,
+    ) -> ResolvedOutboundTarget:
+        raise NotImplementedError("This platform does not support agent-initiated delivery")
+
+    def validate_outbound_target(self, settings: PlatformSettings, target: ResolvedOutboundTarget) -> None:
+        raise NotImplementedError("This platform does not support agent-initiated delivery")
+
     def runtime_prompt(self, envelope: NormalizedCommunicationEnvelope) -> str:
         return envelope.text
 
@@ -141,6 +169,8 @@ class PlatformPlugin(ABC):
         settings = self.settings_model.model_validate(raw_settings)
         credentials = self.credentials_model.model_validate(raw_credentials)
         external_identity = self.validate_external(settings, credentials)
+        if isinstance(settings, AgentInitiatedDeliverySettings) and settings.default_delivery_target is not None:
+            self.resolve_outbound_target(settings, credentials, settings.default_delivery_target)
         fingerprint = self.credential_fingerprint(credentials)
         return ValidatedConnectionConfiguration(
             settings=settings.model_dump(mode="json"),
