@@ -8,10 +8,6 @@
 # Required env vars:
 #   OPENCLAW_IMAGE    — fully-qualified image name+tag (from .env)
 #   HERMES_IMAGE      — fully-qualified image name+tag (from .env)
-#   GH_TOKEN          — GitHub PAT with read access to aai-labs/aai-cli
-#                       (https://github.com/aai-labs/aai-cli); only
-#                       needed when a build actually has to run.
-#
 # Optional:
 #   APT_MIRROR        — Debian archive host for the base-image builds. The
 #                       default CDN occasionally serves a badly degraded edge
@@ -59,10 +55,6 @@ fi
 if [[ "${TARGET}" == "all" || "${TARGET}" == "hermes" ]]; then
   [[ -n "${HERMES_IMAGE:-}" ]] || red "HERMES_IMAGE is not set — source your .env first"
 fi
-# GH_TOKEN is only needed to build; checked lazily in build_image so a run
-# that only needs to import an image already sitting in the local Docker
-# image store (see image_available_locally below) doesn't require it.
-
 # The API launches pods from these env-var refs with imagePullPolicy=IfNotPresent,
 # while CI publishes each base image under exactly its VERSION tag. A tag that
 # doesn't match its VERSION file means building/importing one image and running a
@@ -112,14 +104,11 @@ build_image() {
   local context="$3"
   local tag="$4"
 
-  [[ -n "${GH_TOKEN:-}" ]] || red "GH_TOKEN is not set — needed to clone aai-cli for the ${name} build"
-
   step "Building ${name} → ${tag}"
   if [[ "${APT_MIRROR}" != "deb.debian.org" ]]; then
     green "  using Debian mirror: ${APT_MIRROR}"
   fi
   docker build \
-    --secret "id=gh_token,env=GH_TOKEN" \
     --build-arg "APT_MIRROR=${APT_MIRROR}" \
     --file "${REPO_ROOT}/${dockerfile}" \
     --tag  "${tag}" \
@@ -141,7 +130,7 @@ image_loaded_in_cluster() {
 
 # A tag already in the local Docker image store — built by hand, by a prior
 # run, or by CI's publish step — is exactly what build_image would produce,
-# so import it directly instead of demanding GH_TOKEN to rebuild it.
+# so import it directly instead of rebuilding it.
 image_available_locally() {
   local tag="$1"
   docker image inspect "${tag}" >/dev/null 2>&1
@@ -154,8 +143,34 @@ import_image() {
   step "Importing ${tag} → k3d cluster '${CLUSTER}'"
   # k3d-runner sees the host Docker daemon via the mounted socket, so it can
   # find the locally built image and stream it into the cluster's containerd.
-  ${COMPOSE} run --rm k3d-runner k3d image import "${tag}" --cluster "${CLUSTER}"
-  green "  imported"
+  #
+  # --mode direct streams the image from the runtime straight into each node.
+  # k3d's default ("tools-node") instead spawns a k3d-tools container that saves
+  # the image to a tarball on a shared volume for the node to read back, and that
+  # save has been seen exiting 0 without writing the tarball — the node then finds
+  # no such file and the image silently never lands. Direct mode drops the tools
+  # node, the shared volume and the tarball, and is roughly twice as fast for
+  # these multi-GB base images.
+  #
+  # It is not immune, though: direct mode has its own observed flake, the image
+  # stream over the Docker socket dying mid-copy ("use of closed network
+  # connection"). Both modes then do the same damaging thing — k3d logs the
+  # error and still exits 0 with "Successfully imported image(s)". So the real
+  # protection is below: confirm the tag actually reached the node, and retry.
+  # Unverified, a failed import is a green run whose only symptom is the next
+  # agent pod failing with an opaque "Failed to pull the agent image".
+  local attempt
+  for attempt in 1 2 3; do
+    ${COMPOSE} run --rm k3d-runner k3d image import "${tag}" --cluster "${CLUSTER}" --mode direct
+    if image_loaded_in_cluster "${tag}"; then
+      green "  imported"
+      return 0
+    fi
+    if [[ "${attempt}" != 3 ]]; then
+      printf '\033[33m  %s\033[0m\n' "import reported success but ${tag} is not in the cluster — retrying (${attempt}/2)"
+    fi
+  done
+  red "Failed to import ${tag} into cluster '${CLUSTER}': k3d reported success but the image is not in the node's containerd store. Check the k3d output above for a per-node import error."
 }
 
 # ── main ──────────────────────────────────────────────────────────────────────

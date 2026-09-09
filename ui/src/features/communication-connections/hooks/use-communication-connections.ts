@@ -18,10 +18,12 @@ import {
   CommunicationReconnectSchema,
   CommunicationRetrySchema,
   CommunicationPlatformSchema,
+  CommunicationInstallLinkSchema,
   type CommunicationConnection,
   type CommunicationDirectoryEntry,
   type CommunicationDirectoryPreview,
   type CommunicationPlatform,
+  type CommunicationInstallLink,
   type CommunicationDiagnostics,
   type CommunicationJournalFilters,
   type CommunicationJournalKind,
@@ -228,6 +230,18 @@ export function useCommunicationDeliveryLifecycle(
     new Map((query.data?.pages.flatMap((page) => page.items) ?? []).map((entry) => [entry.id, entry])).values(),
   );
   return { ...query, entries };
+}
+
+export function useInstallLink() {
+  const orgApiBase = useOrganizationApiBase();
+
+  return async function fetchInstallLink(agentId: string, connectionId: string) {
+    const response = await api.get<CommunicationInstallLink>(
+      `${orgApiBase}/agents/${agentId}/connections/${connectionId}/install-link`,
+      { schema: CommunicationInstallLinkSchema },
+    );
+    return response.data.url;
+  };
 }
 
 export function useDownloadAppPackage() {

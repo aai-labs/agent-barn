@@ -18,7 +18,7 @@ export const mockCommunicationPlatforms = [
     setup_hint:
       "## Create a bot\n\n1. Open the **Bot** page and copy the Token.\n2. Enable **Message Content Intent**.\n\n## Invite the bot\n\n1. Grant **View Channels**, **Send Messages**, and **Read Message History**.",
     schema_version: 1,
-    capabilities: ["MENTIONS", "DIRECTORY_DISCOVERY"],
+    capabilities: ["MENTIONS", "DIRECTORY_DISCOVERY", "install_link"],
     settings_schema: {
       type: "object",
       properties: {
@@ -87,6 +87,7 @@ export const mockCommunicationConnection = {
   last_error_code: "HTTPStatusError",
   last_error_message: SAFE_PROVIDER_ERROR,
   webhook_url: null,
+  managed_address: null,
   revision: 3,
   created_at: "2026-01-01T00:00:00Z",
   updated_at: "2026-01-01T00:00:00Z",
@@ -117,6 +118,7 @@ export const mockCreatedCommunicationConnection = {
   last_error_code: null,
   last_error_message: null,
   webhook_url: "https://api.example.test/communications/v1/webhooks/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+  managed_address: null,
   revision: 1,
   created_at: "2026-01-01T00:00:00Z",
   updated_at: "2026-01-01T00:00:00Z",

@@ -20,7 +20,9 @@ from api.domains.agents.models import (
     AgentStatus,
     SecretProvider,
 )
+from api.domains.communications.email_address_repository import release_agent_email_addresses
 from api.domains.communications.models import (
+    AgentEmailAddress,
     CommunicationConnection,
     CommunicationDelivery,
     CommunicationDeliveryStatus,
@@ -843,6 +845,7 @@ class AgentRepository:
         "name",
         "model",
         "approval_mode",
+        "verbose_mode",
         "agent_template_id",
         "platform_template_id",
     )
@@ -967,6 +970,7 @@ class AgentRepository:
                     last_error_message="Communication Connection was retired",
                 )
             )
+            session.exec(release_agent_email_addresses(now).where(col(AgentEmailAddress.agent_id) == persisted.id))
             event = EVENT_REGISTRY.build_event(
                 event_name=AGENT_DELETED,
                 schema_version=1,
@@ -1213,6 +1217,18 @@ class AgentRepository:
         """Return all agents for an org — both live and deleted."""
         with Session(self.delegate.engine) as session:
             query = select(Agent).where(col(Agent.organization_id) == org_id).order_by(col(Agent.created_at).asc())
+            return list(session.exec(query).all())
+
+    def find_all_with_litellm_keys(self) -> list[Agent]:
+        """Every agent that has ever held a LiteLLM key, across all organizations.
+
+        Deleted agents are included on purpose: their keys still appear in historical
+        spend logs, and dropping them would push real cost into the unattributed
+        bucket. Platform-wide by design — the cost sync builds one key-hash map per
+        run rather than querying per organization.
+        """
+        with Session(self.delegate.engine) as session:
+            query = select(Agent).where(col(Agent.litellm_key_encrypted) != "").order_by(col(Agent.created_at).asc())
             return list(session.exec(query).all())
 
     # --- Integration secrets ---

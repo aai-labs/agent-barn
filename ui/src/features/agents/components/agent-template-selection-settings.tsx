@@ -64,6 +64,7 @@ export function AgentTemplateSelectionSettings({
       active: configuration.active,
       overrideVersions: configuration.overrideVersions,
       sourceUpdate: configuration.sourceUpdate,
+      sharedVersions: configuration.sharedVersions,
     });
   const active = configuration.active;
   const activeValue =

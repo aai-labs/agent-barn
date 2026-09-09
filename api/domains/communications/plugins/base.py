@@ -112,6 +112,10 @@ class PlatformPlugin(ABC):
     settings_model: type[PlatformSettings]
     credentials_model: type[PlatformCredentials]
     credential_uniqueness_scope: CredentialUniquenessScope = CredentialUniquenessScope.NONE
+    supports_progress_updates: bool = True
+
+    def runtime_prompt(self, envelope: NormalizedCommunicationEnvelope) -> str:
+        return envelope.text
 
     @property
     def descriptor(self) -> PlatformDescriptorRead:
@@ -309,3 +313,16 @@ class PlatformPlugin(ABC):
         credential material.
         """
         raise NotImplementedError(f"{self.key} does not implement application provisioning")
+
+    def build_install_link(
+        self,
+        settings: PlatformSettings,
+        credentials: PlatformCredentials,
+    ) -> str:
+        """Build the provider install URL that adds this Connection's bot to a server.
+
+        Platforms whose bot is installed through a generated provider URL
+        implement this seam and declare INSTALL_LINK. The returned URL must
+        carry only non-secret material (client id, scopes, permissions).
+        """
+        raise NotImplementedError(f"{self.key} does not implement bot install links")

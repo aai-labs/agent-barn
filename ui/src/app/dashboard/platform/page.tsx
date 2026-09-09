@@ -3,7 +3,7 @@ import { Suspense } from "react";
 import { BuildingIcon, ServerIcon, UsersIcon } from "@/components/icons";
 import { PlatformAdminOnly } from "@/auth/components/platform-admin-only";
 import { PlatformStatsPanel } from "@/features/platform-stats/components/platform-stats-panel";
-import { FileText, Sparkles } from "lucide-react";
+import { FileText, Receipt, Sparkles } from "lucide-react";
 
 const platformLinks = [
   {
@@ -25,6 +25,12 @@ const platformLinks = [
     title: "Event Deliveries",
     description: "Inspect delivery pipeline health and diagnose handler failures.",
     Icon: ServerIcon,
+  },
+  {
+    href: "/dashboard/platform/costs",
+    title: "Platform Costs",
+    description: "Model spend across every organization, with burn rate and runway.",
+    Icon: Receipt,
   },
   {
     href: "/dashboard/platform/templates",

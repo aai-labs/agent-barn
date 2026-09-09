@@ -166,7 +166,7 @@ jobs:
             context: hermes-base
             file: hermes-base/Dockerfile
             tag: ${{ needs.resolve.outputs.hermes_image_tag }}
-            needs_token: true
+            rust_build: true
             smoke: hermes-base/smoke-test.sh
             free_disk: true
           - image: agentbarn-openclaw-base
@@ -174,7 +174,7 @@ jobs:
             context: openclaw-base
             file: openclaw-base/Dockerfile
             tag: ${{ needs.resolve.outputs.openclaw_image_tag }}
-            needs_token: true
+            rust_build: true
             smoke: openclaw-base/smoke-test.sh
             free_disk: true
     steps:
@@ -215,10 +215,9 @@ jobs:
           push: false
           tags: ${{ steps.meta.outputs.tags }}
           build-args: ${{ matrix.name == 'ui' && format('NEXT_PUBLIC_BACKEND_URL=https://{0}', needs.resolve.outputs.api_host) || '' }}
-          secrets: ${{ matrix.needs_token && format('gh_token={0}', secrets.AAI_CLI_REPO_ACCESS_TOKEN) || '' }}
           cache-from: type=gha,scope=public-${{ matrix.name }}
           cache-to: type=gha,mode=max,scope=public-${{ matrix.name }}
-          no-cache-filters: ${{ matrix.needs_token && 'rust-build' || '' }}
+          no-cache-filters: ${{ matrix.rust_build && 'rust-build' || '' }}
 
       - name: Smoke test
         if: matrix.smoke
@@ -236,9 +235,8 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           build-args: ${{ matrix.name == 'ui' && format('NEXT_PUBLIC_BACKEND_URL=https://{0}', needs.resolve.outputs.api_host) || '' }}
-          secrets: ${{ matrix.needs_token && format('gh_token={0}', secrets.AAI_CLI_REPO_ACCESS_TOKEN) || '' }}
           cache-from: type=gha,scope=public-${{ matrix.name }}
-          no-cache-filters: ${{ matrix.needs_token && 'rust-build' || '' }}
+          no-cache-filters: ${{ matrix.rust_build && 'rust-build' || '' }}
 
   deploy:
     name: Helmfile sync

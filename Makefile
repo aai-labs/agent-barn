@@ -3,7 +3,7 @@ COMPOSE := docker compose -f compose.yml
 .PHONY: \
 	setup run stop stop-clean \
 	restart-ui \
-	dev-api dev-ingest dev-communications dev-ui dev-worker reconcile seed-event-deliveries seed-agent-overrides migrate merge-heads rollback makemigrations test-api test-ui lint-ui check-ui coverage check-api check-migrations check-monitoring fix-api test check fix \
+	dev-api dev-ingest dev-communications dev-ui dev-worker reconcile seed-event-deliveries seed-costs seed-agent-overrides migrate merge-heads rollback makemigrations test-api test-ui lint-ui check-ui coverage check-api check-migrations check-monitoring fix-api test check fix \
 	db-up db-down db-logs db-restart redis-up redis-down redis-logs
 
 # One-command local dev: validates .env, brings up k3d + LiteLLM, loads agent
@@ -82,6 +82,11 @@ reconcile:
 seed-event-deliveries:
 	api/.venv/bin/python -m api.scripts.seed_event_delivery_monitor_fixtures --count 200
 
+# Local-only: populate the dev database with realistic cost records for manually
+# exercising the org and platform Cost pages. Safe to re-run.
+seed-costs:
+	api/.venv/bin/python -m api.scripts.seed_cost_fixtures --count "$${SEED_COST_COUNT:-4000}"
+
 # Local-only: create stopped Telegram Agents for manually exercising Agent-owned
 # template override authoring. Set SEED_AGENT_ORGANIZATION_ID before invoking.
 seed-agent-overrides:
@@ -119,6 +124,9 @@ test-api:
 
 test-api-k8s:
 	cd api && uv run python -m pytest tests/integration/test_kubernetes_client.py -v
+
+test-api-runtime:
+	cd api && uv run python -m pytest runtime_tests -v
 
 test-ui:
 	cd ui && pnpm test

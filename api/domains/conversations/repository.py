@@ -235,6 +235,8 @@ class ConversationRepository:
 
         Provider channel identifiers are unique only within one Connection. Picks
         the latest non-null channel name for each (Connection, channel) pair.
+        Excludes the built-in Web Chat Connection: it already has its own live
+        Chat tab, so surfacing it again here would just duplicate that view.
         """
         with Session(self.delegate.engine) as session:
             query = (
@@ -246,6 +248,7 @@ class ConversationRepository:
                 )
                 .where(
                     col(AgentChatMessage.agent_id) == agent_id,
+                    col(CommunicationConnection.platform_key) != CommunicationPlatform.WEB.value,
                     *agent_scope_predicates(authorization_scope),
                 )
                 .order_by(

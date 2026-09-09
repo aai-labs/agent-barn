@@ -3,6 +3,7 @@ from unittest.mock import MagicMock, patch
 
 from hamcrest import assert_that, equal_to, none
 
+from api.domains.communications.plugins.base import provider_idempotency_key
 from api.infrastructure.discord.client import DiscordClient
 from api.infrastructure.shared.cache import clear_cache
 
@@ -80,13 +81,17 @@ def test_discord_client_carries_the_provider_idempotency_key(mock_request):
     response.json.return_value = {"id": "message-1"}
     mock_request.return_value = response
 
+    provider_key = provider_idempotency_key("delivery-1")
+
     message_id = DiscordClient("bot-value").send_message(
         "channel-1",
         "reply",
-        idempotency_key="provider-key",
+        idempotency_key=provider_key,
     )
 
     assert_that(message_id, equal_to("message-1"))
     payload = json.loads(mock_request.call_args.kwargs["content"])
-    assert_that(payload["nonce"], equal_to("provider-key"))
+    # Discord caps the nonce at 25 characters and answers 400/50035 above that.
+    assert_that(payload["nonce"], equal_to(provider_key[:25]))
+    assert_that(len(payload["nonce"]), equal_to(25))
     assert_that(payload["enforce_nonce"], equal_to(True))

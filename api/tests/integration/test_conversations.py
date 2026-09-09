@@ -201,6 +201,47 @@ def test_list_channels_returns_db_channels():
             assert_that(ids, equal_to({"CDB1"}))
 
 
+def test_list_channels_excludes_the_built_in_web_chat_connection():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        client: TestClient = context.client
+        delegate: PostgresRepositoryDelegate = context.injector.get(PostgresRepositoryDelegate)
+        web_connection = CommunicationConnection(
+            organization_id=context.agent.organization_id,
+            agent_id=context.agent.id,
+            platform_key="web",
+            display_name="Web Chat",
+            credentials_encrypted="unused",
+            driver_key_encrypted="unused",
+        )
+        delegate.save(web_connection)
+
+        _seed_message(
+            context,
+            direction=MessageDirection.INBOUND,
+            channel_id="CDB1",
+            content="slack-channel",
+            channel_name="slack-known",
+        )
+        _seed_message(
+            context,
+            direction=MessageDirection.INBOUND,
+            channel_id="web-channel",
+            content="web-chat-message",
+            connection=web_connection,
+        )
+
+        with when("I list channels"):
+            response = client.get(
+                f"{_BASE}/{context.agent.id}/conversations/channels",
+                headers=_auth(context),
+            )
+
+        with then("only the non-Web Chat channel is returned"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            ids = {c["channel_id"] for c in response.json()}
+            assert_that(ids, equal_to({"CDB1"}))
+
+
 # --- /conversations/connections/{connection_id}/channels/{channel_id}/messages ---
 
 
@@ -363,6 +404,84 @@ def test_list_messages_bundles_thread_messages_within_page_window():
             assert_that(thread["root"]["content"], equal_to("parent"))
             assert_that(thread["replies"], has_length(1))
             assert_that(thread["replies"][0]["content"], equal_to("thread-reply"))
+
+
+def test_an_email_exchange_is_returned_as_one_thread():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        client: TestClient = context.client
+        connection = _seed_connection(context, "Email")
+        opened_at = datetime(2026, 9, 8, 9, 0, tzinfo=UTC)
+        references_root = "<CABc123def@mail.gmail.com>"
+        for offset, (direction, content) in enumerate(
+            [
+                (MessageDirection.INBOUND, "can you look into the invoice?"),
+                (MessageDirection.OUTBOUND, "checking now"),
+                (MessageDirection.INBOUND, "thanks"),
+            ]
+        ):
+            _seed_message(
+                context,
+                direction=direction,
+                channel_id="customer@acme.test",
+                thread_id=references_root,
+                content=content,
+                occurred_at=opened_at + timedelta(minutes=offset),
+                connection=connection,
+            )
+
+        with when("I list the messages for that correspondent"):
+            response = client.get(
+                _messages_url(context, "customer@acme.test", connection_id=connection.id),
+                headers=_auth(context),
+            )
+
+        with then("the first email is the root and the rest are its replies"):
+            body = response.json()
+            assert_that(body["threads"], has_length(1))
+            thread = body["threads"][0]
+            assert_that(thread["root"]["content"], equal_to("can you look into the invoice?"))
+            assert_that(
+                [reply["content"] for reply in thread["replies"]],
+                equal_to(["checking now", "thanks"]),
+            )
+
+
+def test_separate_email_chains_from_one_correspondent_stay_separate_threads():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        client: TestClient = context.client
+        connection = _seed_connection(context, "Email")
+        opened_at = datetime(2026, 9, 8, 9, 0, tzinfo=UTC)
+        for offset, (root, content) in enumerate(
+            [
+                ("<first-chain@mail.test>", "about the invoice"),
+                ("<first-chain@mail.test>", "invoice reply"),
+                ("<second-chain@mail.test>", "about the contract"),
+                ("<second-chain@mail.test>", "contract reply"),
+            ]
+        ):
+            _seed_message(
+                context,
+                direction=MessageDirection.INBOUND,
+                channel_id="customer@acme.test",
+                thread_id=root,
+                content=content,
+                occurred_at=opened_at + timedelta(minutes=offset),
+                connection=connection,
+            )
+
+        with when("I list the messages for that correspondent"):
+            response = client.get(
+                _messages_url(context, "customer@acme.test", connection_id=connection.id),
+                headers=_auth(context),
+            )
+
+        with then("each References chain is its own thread"):
+            body = response.json()
+            assert_that(body["threads"], has_length(2))
+            assert_that(
+                [thread["root"]["content"] for thread in body["threads"]],
+                equal_to(["about the invoice", "about the contract"]),
+            )
 
 
 def test_list_messages_running_agent_submits_sync_does_not_block():

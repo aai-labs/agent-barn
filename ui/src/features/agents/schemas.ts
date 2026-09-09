@@ -109,6 +109,7 @@ export const AgentSchema = z.object({
   /** Set only when a restart would move a running Agent onto a different model. */
   pendingModel: z.string().default(""),
   approvalMode: z.enum(["manual", "auto", "off"]).default("auto"),
+  verboseMode: z.boolean().default(false),
   secrets: z.array(AgentSecretReadSchema).optional(),
   skills: z.array(AgentAssignedSkillSchema).default([]),
   configuredPlatformKeys: z.array(z.string()).default([]),
@@ -204,6 +205,29 @@ export const ConversationChannelSchema = z.object({
   channelId: z.string(),
   channelName: z.string().nullable(),
   conversationType: z.enum(["CHANNEL", "DM"]),
+});
+
+export const WebChatMessageSchema = z.object({
+  id: z.string().uuid(),
+  direction: z.enum(["INBOUND", "OUTBOUND"]),
+  content: z.string(),
+  occurredAt: z.string(),
+  deliveryStatus: z.enum([
+    "PENDING",
+    "PROCESSING",
+    "SUCCEEDED",
+    "DEAD_LETTERED",
+    "CANCELLED",
+    "UNAVAILABLE",
+  ]),
+  cancelRequestedAt: z.string().nullable(),
+});
+
+export const WebChatThreadSchema = z.object({
+  threadId: z.string(),
+  title: z.string(),
+  lastOccurredAt: z.string().nullable(),
+  lastContent: z.string().nullable(),
 });
 
 export const ConversationsCursorSchema = z.object({
@@ -335,6 +359,8 @@ export type AgentConfigurationVersion = z.infer<typeof AgentConfigurationVersion
 export type AgentOverrideDraft = z.infer<typeof AgentOverrideDraftSchema>;
 export type AgentOverrideVersion = z.infer<typeof AgentOverrideVersionSchema>;
 export type AgentConfiguration = z.infer<typeof AgentConfigurationSchema>;
+export type WebChatMessage = z.infer<typeof WebChatMessageSchema>;
+export type WebChatThread = z.infer<typeof WebChatThreadSchema>;
 export type ConversationMessage = z.infer<typeof ConversationMessageSchema>;
 export type ConversationChannel = z.infer<typeof ConversationChannelSchema>;
 export type ConversationsCursor = z.infer<typeof ConversationsCursorSchema>;

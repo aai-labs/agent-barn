@@ -2,11 +2,16 @@ from injector import Module, provider, singleton
 
 from api.core.config import Config, get_config
 from api.domains.agents.event_handlers import AgentLifecycleEmailHandler
+from api.domains.agents.repository import AgentRepository
 from api.domains.communications.plugins.discord import DiscordPlatformPlugin
+from api.domains.communications.plugins.email import EmailPlatformPlugin
 from api.domains.communications.plugins.registry import PlatformPluginRegistry
 from api.domains.communications.plugins.slack import SlackPlatformPlugin
 from api.domains.communications.plugins.teams import TeamsPlatformPlugin
 from api.domains.communications.plugins.telegram import TelegramPlatformPlugin
+from api.domains.communications.plugins.web import WebPlatformPlugin
+from api.domains.costs.repository import CostRepository
+from api.domains.costs.sync import CostSynchronizer
 from api.domains.events.constants import EVENT_DELIVERY_PROCESSING_STALE_SECONDS
 from api.domains.events.handlers import EventHandlerRegistry
 from api.domains.events.processor import EventDeliveryProcessor
@@ -15,7 +20,11 @@ from api.domains.events.repository import OutboxMessageRepository
 from api.domains.events.security_audit import SecurityAuditProjection
 from api.domains.events.transport import EventDeliveryTransport
 from api.infrastructure.clock import Clock
+from api.infrastructure.communication_signals import CommunicationSignalBus
+from api.infrastructure.email.client import EmailClient
 from api.infrastructure.kubernetes.client import KubernetesClient
+from api.infrastructure.litellm.client import LiteLLMClient
+from api.infrastructure.openrouter.client import OpenRouterClient
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 
 
@@ -37,13 +46,24 @@ class AppModule(Module):
 
     @provider
     @singleton
-    def provide_platform_plugin_registry(self, config: Config) -> PlatformPluginRegistry:
+    def provide_communication_signal_bus(self, config: Config) -> CommunicationSignalBus:
+        return CommunicationSignalBus(config)
+
+    @provider
+    @singleton
+    def provide_platform_plugin_registry(
+        self,
+        config: Config,
+        email_client: EmailClient,
+    ) -> PlatformPluginRegistry:
         return PlatformPluginRegistry(
             [
                 DiscordPlatformPlugin(config),
+                EmailPlatformPlugin(config, email_client),
                 SlackPlatformPlugin(config),
                 TeamsPlatformPlugin(config),
                 TelegramPlatformPlugin(config),
+                WebPlatformPlugin(),
             ]
         )
 
@@ -68,6 +88,23 @@ class AppModule(Module):
         transport: EventDeliveryTransport,
     ) -> EventDeliveryReconciler:
         return EventDeliveryReconciler(repository=repository, transport=transport)
+
+    @provider
+    def provide_cost_synchronizer(
+        self,
+        config: Config,
+        repository: CostRepository,
+        agent_repository: AgentRepository,
+        litellm: LiteLLMClient,
+        openrouter: OpenRouterClient,
+    ) -> CostSynchronizer:
+        return CostSynchronizer(
+            repository=repository,
+            agent_repository=agent_repository,
+            spend_logs=litellm,
+            generations=openrouter,
+            encryption_key=config.agent_token_encryption_key,
+        )
 
     @provider
     def provide_event_delivery_processor(

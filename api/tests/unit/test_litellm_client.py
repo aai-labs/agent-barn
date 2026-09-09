@@ -44,3 +44,45 @@ def test_delete_key_returns_false_and_does_not_log_plaintext_key_on_failure(capl
 
     assert result is False
     assert key not in caplog.text
+
+
+def test_spend_logs_are_requested_in_ascending_time_order():
+    """Ascending order is a correctness requirement, not a preference.
+
+    The cost sync derives its watermark from max(occurred_at) of what it has stored.
+    LiteLLM defaults to sort_order=desc, under which a run truncated partway would
+    store only the newest rows, push the watermark to ~now, and skip every older row
+    permanently. Asserted here rather than left to a comment.
+    """
+    client = _client()
+    response = MagicMock()
+    response.raise_for_status.return_value = None
+    response.json.return_value = {"data": [], "total": 0, "total_pages": 0}
+
+    with patch.object(client, "_master_key", return_value="master-key"):
+        with patch("api.infrastructure.litellm.client.httpx.get", return_value=response) as get:
+            client.get_spend_logs_v2("2026-09-01 00:00:00", "2026-09-02 00:00:00", page=2, page_size=1000)
+
+    params = get.call_args.kwargs["params"]
+    assert params["sort_order"] == "asc"
+    assert params["sort_by"] == "startTime"
+    assert params["page"] == 2
+    assert params["page_size"] == 1000
+    # A bare date returns HTTP 400 — the full timestamp form is required.
+    assert params["start_date"] == "2026-09-01 00:00:00"
+
+
+def test_spend_logs_rejects_a_non_object_response():
+    client = _client()
+    response = MagicMock()
+    response.raise_for_status.return_value = None
+    response.json.return_value = [{"request_id": "gen-1"}]
+
+    with patch.object(client, "_master_key", return_value="master-key"):
+        with patch("api.infrastructure.litellm.client.httpx.get", return_value=response):
+            try:
+                client.get_spend_logs_v2("2026-09-01 00:00:00", "2026-09-02 00:00:00")
+            except Exception as exc:
+                assert "Unexpected" in str(exc)
+            else:
+                raise AssertionError("expected a LiteLLMError for a list response")

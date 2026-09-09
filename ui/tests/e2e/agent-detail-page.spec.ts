@@ -2,6 +2,7 @@ import { expect, test, type Locator, type Page } from "@playwright/test";
 
 import { TEST_ORG_ID } from "../constants";
 import {
+  COMMUNICATION_CONNECTION_ID,
   COMMUNICATION_DELIVERY_ID,
   mockCommunicationConnection,
   SAFE_ERROR_DETAILS,
@@ -49,8 +50,9 @@ test.describe("Agent Detail Page", () => {
     await agentDetailPage.goto(MOCK_AGENT_ID);
   });
 
-  test("should load agent detail page", async () => {
+  test("should load agent detail page", async ({ page }) => {
     await expect(agentDetailPage.agentName("Maya")).toBeVisible();
+    await expect(page.getByLabel("Message input")).toBeEnabled();
   });
 
   test("shows configured messaging platform icons", async ({ page }) => {
@@ -60,6 +62,101 @@ test.describe("Agent Detail Page", () => {
 
   test("shows model name in header", async ({ page }) => {
     await expect(page.getByText("litellm/gpt-5-mini")).toBeVisible();
+  });
+
+  test("disables web chat until the Agent is working", async ({ page }) => {
+    await dataSupportPage.agents.interceptGetAgentHealthRequest({
+      body: { status: "initializing" },
+    });
+    await page.route("**/api/v1/organizations/*/agents/*/web-chat/**", async (route) => {
+      const path = new URL(route.request().url()).pathname;
+      const body = path.endsWith("/threads") || path.endsWith("/messages") ? [] : ": keep-alive\n\n";
+      await route.fulfill({
+        status: 200,
+        contentType: path.endsWith("/stream") ? "text/event-stream" : "application/json",
+        body: typeof body === "string" ? body : JSON.stringify(body),
+      });
+    });
+
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+
+    await expect(page.getByLabel("Message input")).toBeDisabled();
+  });
+
+  test("restores the Agent working indicator from message history", async ({ page }) => {
+    await page.route("**/api/v1/organizations/*/agents/*/web-chat/**", async (route) => {
+      const path = new URL(route.request().url()).pathname;
+      if (path.endsWith("/messages")) {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify([
+            {
+              id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+              direction: "INBOUND",
+              content: "Still working on this",
+              occurred_at: "2026-09-01T08:00:00Z",
+              delivery_status: "PROCESSING",
+              cancel_requested_at: null,
+            },
+          ]),
+        });
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: path.endsWith("/stream") ? "text/event-stream" : "application/json",
+        body: path.endsWith("/stream") ? ": keep-alive\n\n" : "[]",
+      });
+    });
+
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await page.getByRole("button", { name: "About", exact: true }).click();
+    await page.getByRole("button", { name: "Chat", exact: true }).click();
+
+    await expect(page.getByRole("status").filter({ hasText: "Maya is working" })).toBeVisible();
+  });
+
+  test("stops the active web chat generation", async ({ page }) => {
+    let deliveryStatus = "PROCESSING";
+    let stopRequests = 0;
+    await page.route("**/api/v1/organizations/*/agents/*/web-chat/**", async (route) => {
+      const path = new URL(route.request().url()).pathname;
+      if (path.endsWith("/stop") && route.request().method() === "POST") {
+        stopRequests += 1;
+        deliveryStatus = "CANCELLED";
+        await route.fulfill({ status: 204, body: "" });
+        return;
+      }
+      if (path.endsWith("/messages")) {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify([
+            {
+              id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+              direction: "INBOUND",
+              content: "Stop this work",
+              occurred_at: "2026-09-01T08:00:00Z",
+              delivery_status: deliveryStatus,
+              cancel_requested_at: null,
+            },
+          ]),
+        });
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: path.endsWith("/stream") ? "text/event-stream" : "application/json",
+        body: path.endsWith("/stream") ? ": keep-alive\n\n" : "[]",
+      });
+    });
+
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await page.getByRole("button", { name: "Stop generating" }).click();
+
+    await expect.poll(() => stopRequests).toBe(1);
+    await expect(page.getByRole("button", { name: "Stop generating" })).not.toBeVisible();
   });
 
   test("guides an unreachable Agent to messaging setup", async ({ page }) => {
@@ -73,9 +170,9 @@ test.describe("Agent Detail Page", () => {
     await agentDetailPage.goto(MOCK_AGENT_ID);
 
     await expect(page.getByText("Messaging setup", { exact: true })).toBeVisible();
-    await expect(page.getByText("Make Maya reachable", { exact: true })).toBeVisible();
-    await expect(page.getByText("Not connected", { exact: true })).toBeVisible();
-    await expect(page.getByRole("link", { name: "Add connection" })).toHaveAttribute(
+    await expect(page.getByText("Bring Maya to your messaging tools", { exact: true })).toBeVisible();
+    await expect(page.getByText("Web chat only", { exact: true })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Add messaging connection" })).toHaveAttribute(
       "href",
       /configuration\?section=channels&connect=true/,
     );
@@ -517,6 +614,30 @@ test.describe("Agent Detail Page — Channels tab", () => {
     await expect(agentDetailPage.connectionProviderStatus("Connected")).toBeVisible();
   });
 
+  test("builds the recommended install link on demand for a Discord Connection", async ({ page }) => {
+    const installUrl =
+      "https://discord.com/oauth2/authorize?client_id=123456789012345678&scope=bot%20applications.commands&permissions=274878286912";
+    await page.route(
+      `**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}/connections/${COMMUNICATION_CONNECTION_ID}/install-link`,
+      async (route) => {
+        await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ url: installUrl }) });
+      },
+    );
+
+    await expect(agentDetailPage.getInstallLinkButton()).toBeVisible();
+    await agentDetailPage.getInstallLinkButton().click();
+
+    const installLink = agentDetailPage.installBotServerLink();
+    await expect(installLink).toBeVisible();
+    await expect(installLink).toHaveAttribute("href", installUrl);
+  });
+
+  test("hides the install link action when the platform provides none", async ({ page }) => {
+    await serveSavedSlackConnection(page);
+
+    await expect(agentDetailPage.getInstallLinkButton()).toHaveCount(0);
+  });
+
   test("shows a redacted provider error at full width", async () => {
     const providerError = agentDetailPage.providerErrorAlert();
     const errorMessage = agentDetailPage.providerErrorMessage();
@@ -788,6 +909,99 @@ test.describe("Agent Detail Page — Channels tab", () => {
       settings: { guild_ids: ["guild-two", "guild-three"] },
       credentials: { bot_token: "token-two" },
     });
+  });
+});
+
+test.describe("Agent Detail Page — Channels tab, Email connection", () => {
+  test.describe.configure({ mode: "serial" });
+  let agentDetailPage: AgentDetailPage;
+  let dataSupportPage: DataSupport;
+
+  const EMAIL_ADDRESS = "agent+tommy-4f2a@agents.agentbarn.test";
+
+  test.use({ storageState: { cookies: [], origins: [] } });
+
+  test.beforeEach(async ({ page }) => {
+    agentDetailPage = new AgentDetailPage(page);
+    dataSupportPage = new DataSupport(page);
+
+    await dataSupportPage.auth.interceptRefreshRequest();
+    await dataSupportPage.users.interceptGetUserContextRequest();
+    await dataSupportPage.users.interceptGetOrganizationsRequest();
+    await dataSupportPage.agents.interceptGetAgentRequest({
+      body: { ...mockAgent, status: "STOPPED" },
+    });
+    await dataSupportPage.agents.interceptGetAgentTemplateRequest();
+    await dataSupportPage.agents.interceptGetConversationChannelsRequest();
+    await dataSupportPage.agents.interceptGetTemplatesRequest();
+    await dataSupportPage.agents.interceptGetAgentConfigurationRequest();
+    await dataSupportPage.agents.interceptGetModelsRequest();
+    await page.route("**/api/v1/organizations/*/communication-platforms", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify([{
+          key: "email",
+          display_name: "Email",
+          setup_hint: "Agent Barn allocates this agent its own address when the connection is created.",
+          schema_version: 1,
+          capabilities: ["managed_address", "threads", "webhook_ingress"],
+          settings_schema: {
+            type: "object",
+            properties: {
+              sender_policy: { title: "Who may email this agent", type: "string" },
+              allowed_senders: { title: "Allowed senders", type: "array", items: { type: "string" } },
+            },
+          },
+          credentials_schema: { type: "object", properties: {} },
+        }]),
+      });
+    });
+    await page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}/connections`, async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify([{
+          id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+          agent_id: MOCK_AGENT_ID,
+          platform_key: "email",
+          display_name: "Email",
+          enabled: true,
+          schema_version: 1,
+          settings: { sender_policy: "allowlist", allowed_senders: ["@acme.test"] },
+          external_identity: null,
+          observed_status: "CONNECTED",
+          last_health_at: "2026-01-01T00:00:00Z",
+          last_error_code: null,
+          last_error_message: null,
+          webhook_url: null,
+          managed_address: EMAIL_ADDRESS,
+          revision: 1,
+          created_at: "2026-01-01T00:00:00Z",
+          updated_at: "2026-01-01T00:00:00Z",
+        }]),
+      });
+    });
+
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await agentDetailPage.configureButton().click();
+    await agentDetailPage.channelsTab().click();
+  });
+
+  test("shows the address people should write to", async ({ page }) => {
+    await expect(page.getByTestId("managed-address")).toHaveText(EMAIL_ADDRESS);
+  });
+
+  test("offers no webhook URL to paste, because email is reached at its address", async ({ page }) => {
+    await expect(page.getByText("Paste this URL into")).toHaveCount(0);
+  });
+
+  test("asks for no credentials on a platform that has none", async ({ page }) => {
+    await page.getByRole("button", { name: "Add connection" }).click();
+    await page.getByRole("button", { name: "Select Email" }).click();
+
+    await expect(page.getByText("Encrypted at rest and never shown again")).toHaveCount(0);
+    await expect(page.getByLabel("Connection name")).toBeVisible();
   });
 });
 
@@ -1282,8 +1496,8 @@ test.describe("Agent Detail Page — Personality tab (approval mode, OpenClaw)",
     await page.getByRole("button", { name: "Profile", exact: true }).click();
   });
 
-  test("shows Managed by OpenClaw instead of a command approval value", async ({ page }) => {
-    await expect(page.getByText("Managed by OpenClaw")).toBeVisible();
+  test("shows full access instead of a command approval value", async ({ page }) => {
+    await expect(page.getByText("Full access — no approval prompts")).toBeVisible();
     await expect(page.getByRole("combobox", { name: "Command approval" })).toHaveCount(0);
   });
 

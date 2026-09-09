@@ -168,6 +168,10 @@ releases:
         value: {{ env "CLOUDFLARE_API_TOKEN" | default "" | quote }}
       - name: senderEmail
         value: {{ env "SENDER_EMAIL" | default "" | quote }}
+      - name: agentEmailDomain
+        value: {{ env "AGENT_EMAIL_DOMAIN" | default "" | quote }}
+      - name: emailInboundSecret
+        value: {{ env "EMAIL_INBOUND_SECRET" | default "" | quote }}
       - name: googleCloudClientId
         value: {{ env "GOOGLE_CLOUD_CLIENT_ID" | default "" | quote }}
       - name: googleCloudClientSecret
