@@ -151,12 +151,19 @@ class CostService:
         filters = CostFilter(organization_id=agent.organization_id, agent_id=agent.id)
         totals = self.repository.totals(window, filters)
         breakdown = self.repository.model_breakdown(window, filters)
+        # Same series builder the organization summary uses; the filter above pins it
+        # to this agent, so the trend and the totals beside it describe one set of calls.
+        series = self.repository.spend_series(window, filters)
 
         return AgentCostRead(
             agent_id=agent.id,
             agent_name=agent.name,
             model=agent.model,
             status=_display_status(agent),
+            period=window.period,
+            from_date=window.start,
+            to_date=window.end,
+            granularity=window.granularity,
             total_cost=float(totals.spend),
             total_tokens=totals.prompt_tokens + totals.completion_tokens,
             prompt_tokens=totals.prompt_tokens,
@@ -169,6 +176,9 @@ class CostService:
                     completion_tokens=completion_tokens,
                 )
                 for model, spend, prompt_tokens, completion_tokens in breakdown
+            ],
+            spend_over_time=[
+                CostSeriesPoint(bucket=bucket, spend=float(spend), calls=calls) for bucket, spend, calls in series
             ],
         )
 

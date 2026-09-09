@@ -114,6 +114,12 @@ class CostRecord(BaseModel, table=True):
 # ---------------------------------------------------------------------------
 
 
+class CostSeriesPoint(PydanticBaseModel):
+    bucket: datetime
+    spend: float
+    calls: int
+
+
 class AgentModelBreakdown(PydanticBaseModel):
     model: str
     total_cost: float
@@ -122,7 +128,7 @@ class AgentModelBreakdown(PydanticBaseModel):
 
 
 class AgentCostRead(PydanticBaseModel):
-    """Cost totals for a single agent."""
+    """Cost totals and spend trend for a single agent."""
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -130,11 +136,18 @@ class AgentCostRead(PydanticBaseModel):
     agent_name: str
     model: str
     status: str
+
+    period: StatsPeriod | None = None
+    from_date: datetime
+    to_date: datetime
+    granularity: StatsGranularity
+
     total_cost: float
     total_tokens: int
     prompt_tokens: int
     completion_tokens: int
     models_breakdown: list[AgentModelBreakdown] = Field(default_factory=list)
+    spend_over_time: list[CostSeriesPoint] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -232,12 +245,6 @@ class PlatformCostRecordRead(CostRecordRead):
 
     organization_id: UUID | None = None
     organization_name: str | None = None
-
-
-class CostSeriesPoint(PydanticBaseModel):
-    bucket: datetime
-    spend: float
-    calls: int
 
 
 class AgentSpendSeriesPoint(PydanticBaseModel):
