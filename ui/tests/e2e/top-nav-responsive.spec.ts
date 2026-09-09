@@ -101,6 +101,38 @@ test.describe("Top nav responsiveness", () => {
     });
   });
 
+  test.describe("active tab", () => {
+    test.use({ viewport: { width: 1440, height: 900 } });
+
+    test("marks only the page you are on, not its section root", async ({
+      page,
+    }) => {
+      // Overview's href is a prefix of every other Platform tab, so a prefix test
+      // reports it active everywhere in the section. The drawer fills the active
+      // row's background, which makes two selected rows plainly visible.
+      await dashboardPage.gotoUsers();
+
+      const nav = page.locator("header nav");
+      await expect(nav.getByRole("link", { name: "Users" })).toHaveAttribute(
+        "aria-current",
+        "page",
+      );
+      await expect(
+        nav.getByRole("link", { name: "Overview" }),
+      ).not.toHaveAttribute("aria-current", "page");
+    });
+
+    test("marks Overview on the platform root itself", async ({ page }) => {
+      await page.goto("/dashboard/platform");
+
+      const nav = page.locator("header nav");
+      await expect(nav.getByRole("link", { name: "Overview" })).toHaveAttribute(
+        "aria-current",
+        "page",
+      );
+    });
+  });
+
   test.describe("on a tablet viewport", () => {
     test.use({ viewport: { width: 900, height: 900 } });
 

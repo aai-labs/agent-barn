@@ -19,6 +19,8 @@ import { OrgSwitcher } from "@/features/organizations/components/org-switcher";
 import { useActiveOrgRole } from "@/features/organizations/hooks/use-active-org-role";
 import { useOrganizationContext } from "@/features/organizations/providers/organization-provider";
 
+const PLATFORM_BASE = "/dashboard/platform";
+
 interface TopNavProps {
   onHire: () => void;
 }
@@ -32,14 +34,14 @@ export function TopNav({ onHire }: TopNavProps) {
 
   const orgId = selectedOrganization?.id;
   const orgBase = orgId ? `/dashboard/${orgId}` : "/dashboard";
-  const isPlatformView = pathname?.startsWith("/dashboard/platform") ?? false;
+  const isPlatformView = pathname?.startsWith(PLATFORM_BASE) ?? false;
 
   // Owners/admins (and platform admins) manage members and see org spend; plain members can't.
   const { canManage: canManageMembers } = useActiveOrgRole();
 
   const navTabs = isPlatformView
     ? [
-        { href: "/dashboard/platform", label: "Overview" },
+        { href: PLATFORM_BASE, label: "Overview" },
         { href: "/dashboard/platform/users", label: "Users" },
         { href: "/dashboard/platform/organizations", label: "Organizations" },
         { href: "/dashboard/platform/event-deliveries", label: "Event Deliveries" },
@@ -78,9 +80,14 @@ export function TopNav({ onHire }: TopNavProps) {
     .toUpperCase();
 
   const isActive = (href: string) => {
-    // Home matches the org root and its agent pages; other tabs match their subtree.
+    // Home and Overview are prefixes of every tab beside them, so a prefix test would
+    // report them active on every page in their section. Both match exactly instead —
+    // Home additionally claims the agent pages, which have no tab of their own.
     if (href === orgBase) {
       return pathname === orgBase || pathname.startsWith(`${orgBase}/agents`);
+    }
+    if (href === PLATFORM_BASE) {
+      return pathname === PLATFORM_BASE;
     }
     return pathname.startsWith(href);
   };
@@ -151,6 +158,7 @@ export function TopNav({ onHire }: TopNavProps) {
               fontWeight: isActive(href) ? 600 : 500,
               background: "transparent",
             }}
+            aria-current={isActive(href) ? "page" : undefined}
             onMouseEnter={(e) => {
               if (!isActive(href))
                 (e.currentTarget as HTMLElement).style.background = "var(--bg-soft)";
