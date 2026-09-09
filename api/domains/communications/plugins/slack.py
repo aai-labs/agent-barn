@@ -71,13 +71,14 @@ class SlackSettings(PlatformSettings):
             "threads already owned by this Agent."
         ),
     )
-    accept_agent_mentions: bool = Field(
+    accept_bot_mentions: bool = Field(
         default=False,
-        title="Mentions from other agents",
+        title="Mentions from other bots",
         description=(
-            "Off ignores every message written by a bot, including other Agent Barn agents. "
-            "On accepts a bot's message only when it @mentions this agent, so agents can hand work to each other "
-            "in a shared channel or thread. The agent's own messages are always ignored."
+            "Off ignores every message written by a bot. On admits a message from any Slack bot, including other "
+            "Agent Barn agents, but only when it explicitly @mentions this agent. Turn it on only for agents that "
+            "work in controlled channels: a bot you did not write can then send this agent instructions. "
+            "The agent's own messages are always ignored."
         ),
     )
     verbose_mode: bool = Field(
@@ -309,10 +310,13 @@ class SlackPlatformPlugin(PlatformPlugin):
         if not isinstance(event, dict):
             return InboundAdmissionResult(CommunicationPolicyDisposition.MALFORMED_PAYLOAD)
         # Bot-authored messages (other apps, including other Agent Barn agents)
-        # are refused by default. A Connection can opt in to hearing them, but
-        # only when the message @mentions this agent — see the check below.
+        # are refused by default. A Connection can opt in to admitting them,
+        # but only when the message explicitly @mentions this agent — see the
+        # check below. This is opt-in admission of explicitly addressed bot
+        # messages, not a peer-trust model: any Slack bot qualifies, which is
+        # why the setting defaults to off and its description says so.
         sender_is_bot = bool(event.get("bot_id") or event.get("is_bot"))
-        if sender_is_bot and not settings.accept_agent_mentions:
+        if sender_is_bot and not settings.accept_bot_mentions:
             return InboundAdmissionResult(CommunicationPolicyDisposition.BOT_IGNORED)
         # Slack emits both app_mention and message events for a mentioned
         # channel message. We consume the message event only; accepting
@@ -324,23 +328,24 @@ class SlackPlatformPlugin(PlatformPlugin):
         if event.get("type") != "message" or event.get("subtype"):
             return InboundAdmissionResult(CommunicationPolicyDisposition.EVENT_IGNORED)
         channel_id = str(event.get("channel") or "")
-        # Messages posted by an app with a bot user carry that user's id; older
-        # integrations may only carry bot_id, which is still a stable sender.
-        sender_id = str(event.get("user") or (event.get("bot_id") if sender_is_bot else "") or "")
+        sender_id = str(event.get("user") or "")
         bot_user_id = self._bot_user_id(payload)
+        # The self-message check below compares Slack *user* ids. A legacy bot
+        # event that carries only bot_id cannot be matched against this agent's
+        # own identity (bot_id and bot user id are different id spaces), and
+        # neither can any bot event when ingress did not capture that identity,
+        # so both fail closed instead of risking a self-echo.
+        if sender_is_bot and (not sender_id or not bot_user_id):
+            return InboundAdmissionResult(CommunicationPolicyDisposition.BOT_IGNORED)
         if not sender_id:
             return InboundAdmissionResult(CommunicationPolicyDisposition.MALFORMED_PAYLOAD)
         if bot_user_id and sender_id == bot_user_id:
             return InboundAdmissionResult(CommunicationPolicyDisposition.BOT_IGNORED)
-        if sender_is_bot:
+        if sender_is_bot and bot_user_id not in self._mentioned_user_ids(str(event.get("text") or "")):
             # Another bot is admitted only on an explicit mention, whatever the
             # thread policy says, so two agents cannot keep each other awake on
-            # unmentioned thread replies. Fail closed when ingress did not
-            # capture this agent's bot identity.
-            if not bot_user_id:
-                return InboundAdmissionResult(CommunicationPolicyDisposition.BOT_IGNORED)
-            if bot_user_id not in self._mentioned_user_ids(str(event.get("text") or "")):
-                return InboundAdmissionResult(CommunicationPolicyDisposition.MENTION_REQUIRED)
+            # unmentioned thread replies.
+            return InboundAdmissionResult(CommunicationPolicyDisposition.MENTION_REQUIRED)
         is_dm = event.get("channel_type") == "im"
         if is_dm:
             if settings.dm_policy == "off":
