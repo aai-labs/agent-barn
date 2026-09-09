@@ -123,11 +123,16 @@ export const AgentCostSchema = z.object({
   agentName: z.string(),
   model: z.string(),
   status: z.string(),
+  period: z.string().nullable().default(null),
+  fromDate: z.string(),
+  toDate: z.string(),
+  granularity: GranularitySchema,
   totalCost: z.number(),
   totalTokens: z.number().int(),
   promptTokens: z.number().int(),
   completionTokens: z.number().int(),
   modelsBreakdown: z.array(AgentModelBreakdownSchema).default([]),
+  spendOverTime: z.array(CostSeriesPointSchema).default([]),
 });
 
 export type CostSortDirection = z.infer<typeof CostSortDirectionSchema>;

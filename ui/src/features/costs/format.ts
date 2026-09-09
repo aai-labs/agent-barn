@@ -72,3 +72,10 @@ export function formatDuration(ms: number | null): string {
   if (ms < 1000) return `${ms}ms`;
   return `${(ms / 1000).toFixed(1)}s`;
 }
+
+/** The model as the cost surfaces show it: the slug alone, without its routing path.
+ *  `cost_record.model` stores the full route (e.g. "openrouter/anthropic/claude-opus-5"),
+ *  which is too long to read in a table and identical across rows in its leading parts. */
+export function formatModelLabel(model: string): string {
+  return model.split("/").at(-1) ?? model;
+}
