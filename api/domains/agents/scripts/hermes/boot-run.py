@@ -22,7 +22,7 @@ from pathlib import Path
 
 sys.path.insert(0, "/app/config")
 
-from agentbarn_message import BOOT_SESSION_ID  # type: ignore[unresolved-import]
+from agentbarn_message import BOOT_SESSION_ID  # ty: ignore[unresolved-import]
 
 BOOT_FILE = Path("/workspace/BOOT.md")
 READY_TIMEOUT_SECONDS = 300

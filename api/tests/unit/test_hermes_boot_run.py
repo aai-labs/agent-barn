@@ -22,9 +22,12 @@ def _load(monkeypatch, tmp_path):
     monkeypatch.setenv("RUNTIME_API_KEY", "runtime-key")
     monkeypatch.syspath_prepend(str(_MESSAGING))
     spec = importlib.util.spec_from_file_location("hermes_boot_run_test", _BOOT_RUN)
+    if spec is None or spec.loader is None:
+        raise AssertionError("Could not load the Hermes boot runner")
+    loader = spec.loader
     module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    module.BOOT_FILE = tmp_path / "BOOT.md"
+    loader.exec_module(module)
+    module.__dict__["BOOT_FILE"] = tmp_path / "BOOT.md"
     sys.modules.pop("hermes_boot_run_test", None)
     return module
 
@@ -97,7 +100,7 @@ def test_the_checklist_waits_for_a_gateway_that_is_not_listening_yet(monkeypatch
 def test_the_boot_session_is_the_one_communications_routes_to_the_default(monkeypatch, tmp_path):
     """Both halves must agree, or boot-created jobs are refused as unmappable origins."""
     module = _load(monkeypatch, tmp_path)
-    import agentbarn_message
+    import agentbarn_message  # ty: ignore[unresolved-import]
 
     assert_that(
         agentbarn_message.destination_for_origin({"platform": "api_server", "chat_id": module.BOOT_SESSION_ID}),

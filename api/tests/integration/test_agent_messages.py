@@ -182,7 +182,14 @@ def test_runtime_identity_requires_matching_credential():
 def test_database_enforces_one_default_including_disabled_connections():
     with given([*STEPS, messaging_ready]) as context:
         other = CommunicationConnection(
-            **{**context.connection.model_dump(), "id": uuid4(), "display_name": "Another", "enabled": False}
+            organization_id=context.connection.organization_id,
+            agent_id=context.connection.agent_id,
+            platform_key=context.connection.platform_key,
+            display_name="Another",
+            enabled=False,
+            settings=dict(context.connection.settings),
+            credentials_encrypted=context.connection.credentials_encrypted,
+            driver_key_encrypted=context.connection.driver_key_encrypted,
         )
         with pytest.raises(IntegrityError):
             context.injector.get(PostgresRepositoryDelegate).save(other)

@@ -79,7 +79,7 @@ class AgentMessageRepository:
         and tells the plugin whether to resolve a channel or a DM.
         """
         with Session(self.delegate.engine) as session:
-            return session.exec(
+            conversation_type = session.exec(
                 select(AgentChatMessage.conversation_type)
                 .where(
                     col(AgentChatMessage.agent_id) == agent_id,
@@ -88,6 +88,7 @@ class AgentMessageRepository:
                 )
                 .limit(1)
             ).first()
+            return ConversationType(conversation_type) if conversation_type is not None else None
 
     def execution_connection_id(self, agent_id: UUID, source_id: UUID, attempt: int) -> UUID:
         """The Connection an active inbound execution arrived on, for routing its sends."""

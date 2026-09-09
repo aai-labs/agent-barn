@@ -12,8 +12,8 @@ os.environ["HERMES_HOME"] = tempfile.mkdtemp(prefix="agentbarn-cron-")
 os.environ["AGENTBARN_SCHEDULED_DELIVERY"] = "1"
 os.environ["AGENTBARN_MESSAGE_SPOOL"] = str(Path(os.environ["HERMES_HOME"]) / "messages.sqlite3")
 
-from cron import scheduler  # type: ignore[unresolved-import]
-from cron.jobs import create_job  # type: ignore[unresolved-import]
+from cron import scheduler  # ty: ignore[unresolved-import]
+from cron.jobs import create_job  # ty: ignore[unresolved-import]
 
 
 def run(text):

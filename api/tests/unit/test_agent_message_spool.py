@@ -14,8 +14,11 @@ def _client(monkeypatch, tmp_path):
     monkeypatch.setenv("AGENTBARN_MESSAGE_SPOOL", str(tmp_path / "messages.sqlite3"))
     monkeypatch.setenv("AGENTBARN_EXECUTIONS_DIR", str(tmp_path / "executions"))
     spec = importlib.util.spec_from_file_location("agentbarn_message_test", ROOT / "agentbarn_message.py")
+    if spec is None or spec.loader is None:
+        raise AssertionError("Could not load the agent message client")
+    loader = spec.loader
     client = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(client)
+    loader.exec_module(client)
     return client
 
 

@@ -136,6 +136,8 @@ def rows(context):
 def change_connection(context, **changes):
     with Session(context.injector.get(PostgresRepositoryDelegate).engine) as session:
         connection = session.get(CommunicationConnection, context.connection.id)
+        if connection is None:
+            raise AssertionError("The test connection was not persisted")
         for key, value in changes.items():
             setattr(connection, key, value)
         connection.revision += 1

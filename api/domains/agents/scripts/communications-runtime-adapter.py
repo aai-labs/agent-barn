@@ -14,7 +14,7 @@ import time
 import urllib.error
 import urllib.request
 
-from agentbarn_message import bind_execution, unbind_execution  # type: ignore[unresolved-import]
+from agentbarn_message import bind_execution, unbind_execution  # ty: ignore[unresolved-import]
 
 COMMUNICATIONS_URL = os.environ["COMMUNICATIONS_URL"].rstrip("/")
 COMMUNICATIONS_API_KEY = os.environ["COMMUNICATIONS_API_KEY"]
