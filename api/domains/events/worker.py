@@ -37,20 +37,13 @@ def _get_injector() -> Injector:
     return _injector
 
 
-def reset_injector() -> None:
-    """Drop the cached injector so the next call rebuilds it. Intended for tests."""
-    global _injector
-    with _injector_lock:
-        _injector = None
-
-
 def _processor() -> EventDeliveryProcessor:
     injector = _get_injector()
     repository = injector.get(OutboxMessageRepository)
-    try:
-        handlers = injector.get(EventHandlerRegistry)
-    except Exception:
-        handlers = EventHandlerRegistry()
+    # A registry that fails to resolve must propagate so dramatiq retries the
+    # message. Substituting an empty registry would dead-letter the delivery as
+    # an unknown handler, turning a transient wiring failure into a terminal one.
+    handlers = injector.get(EventHandlerRegistry)
     return EventDeliveryProcessor(
         repository=repository,
         handlers=handlers,

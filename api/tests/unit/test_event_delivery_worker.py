@@ -1,5 +1,7 @@
 from uuid import UUID, uuid4
 
+import pytest
+
 from api.domains.events.models import EventDeliveryDeadLetterReason
 
 
@@ -63,8 +65,9 @@ def test_handle_retry_exhausted_without_delivery_id_is_a_noop(monkeypatch):
 
 
 class FakeInjector:
-    def __init__(self, repository):
+    def __init__(self, repository, *, registry_error: Exception | None = None):
         self.repository = repository
+        self.registry_error = registry_error
 
     def get(self, interface):
         from api.domains.events.handlers import EventHandlerRegistry
@@ -73,16 +76,33 @@ class FakeInjector:
         if interface is OutboxMessageRepository:
             return self.repository
         if interface is EventHandlerRegistry:
+            if self.registry_error is not None:
+                raise self.registry_error
             return EventHandlerRegistry()
         raise AssertionError(f"unexpected dependency {interface!r}")
 
 
-def test_worker_builds_one_injector_per_process_and_none_at_import(monkeypatch):
+@pytest.fixture
+def worker_with_injector_factory(monkeypatch):
+    """Reload the worker module with a patched injector factory, and reload it clean afterwards."""
     import importlib
 
     from api.core import utils
     from api.domains.events import worker
 
+    def install(factory):
+        monkeypatch.setattr(utils, "create_injector", factory)
+        importlib.reload(worker)
+        return worker
+
+    try:
+        yield install
+    finally:
+        monkeypatch.undo()
+        importlib.reload(worker)
+
+
+def test_worker_builds_one_injector_per_process_and_none_at_import(worker_with_injector_factory):
     created: list[FakeInjector] = []
     repository = FakeRepository()
 
@@ -90,18 +110,22 @@ def test_worker_builds_one_injector_per_process_and_none_at_import(monkeypatch):
         created.append(FakeInjector(repository))
         return created[-1]
 
-    monkeypatch.setattr(utils, "create_injector", counting_create_injector)
-    importlib.reload(worker)
-    try:
-        assert created == [], "importing the worker module must not build an injector"
+    worker = worker_with_injector_factory(counting_create_injector)
+    assert created == [], "importing the worker module must not build an injector"
 
-        processors = [worker._processor() for _ in range(3)]
-        repositories = [worker._repository() for _ in range(2)]
+    processors = [worker._processor() for _ in range(3)]
+    repositories = [worker._repository() for _ in range(2)]
 
-        assert len(created) == 1
-        assert all(processor.repository is repository for processor in processors)
-        assert all(candidate is repository for candidate in repositories)
-    finally:
-        worker.reset_injector()
-        monkeypatch.undo()
-        importlib.reload(worker)
+    assert len(created) == 1
+    assert all(processor.repository is repository for processor in processors)
+    assert all(candidate is repository for candidate in repositories)
+
+
+def test_processor_propagates_handler_registry_resolution_failure(worker_with_injector_factory):
+    registry_error = RuntimeError("registry wiring failed")
+    worker = worker_with_injector_factory(lambda: FakeInjector(FakeRepository(), registry_error=registry_error))
+
+    with pytest.raises(RuntimeError) as raised:
+        worker._processor()
+
+    assert raised.value is registry_error
