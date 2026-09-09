@@ -120,6 +120,11 @@ def is_silent(text):
     return any(candidate.casefold() in SILENCE_MARKERS for candidate in (text.strip(), lines[0], lines[-1]))
 
 
+# The session the boot checklist runs under. Hermes always records an origin for an
+# api_server run, so a job created by BOOT.md would otherwise look like an unmappable
+# conversation and be refused. It has no conversation at all, which is the default's case.
+BOOT_SESSION_ID = "agentbarn-boot"
+
 _KEEP_ORIGIN_THREAD = object()
 
 
@@ -153,6 +158,8 @@ def destination_for_origin(origin, deliver=None):
     if not origin:
         return {"kind": "default"}
     chat_id = str(origin.get("chat_id") or "")
+    if chat_id == BOOT_SESSION_ID:
+        return {"kind": "default"}
     if origin.get("platform") != "api_server" or not chat_id.startswith("connection:"):
         return None
     parts = chat_id.split(":", 3)

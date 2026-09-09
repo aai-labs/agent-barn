@@ -60,6 +60,8 @@ def test_config_map_contains_runtime_adapter_and_no_provider_policy_plugins() ->
     )
 
     assert "communications-runtime-adapter.py" in config_map.data
+    # Pinned Hermes ships no gateway:startup hook, so BOOT.md only runs if we drive it.
+    assert "boot-run.py" in config_map.data
     assert "agentbarn_message.py" in config_map.data
     # OpenClaw's plugin has no business in a Hermes ConfigMap.
     assert "openclaw-messaging.js" not in config_map.data

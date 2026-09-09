@@ -112,6 +112,8 @@ def test_runtime_binding_is_session_scoped_and_removed_at_completion(monkeypatch
         # Created somewhere we cannot map: refuse rather than divert to the default.
         ({"platform": "telegram", "chat_id": "-1001"}, None),
         ({"platform": "api_server", "chat_id": "api_9f2c1b"}, None),
+        # The boot checklist runs under a session but not a conversation.
+        ({"platform": "api_server", "chat_id": "agentbarn-boot"}, {"kind": "default"}),
         ({"platform": "api_server", "chat_id": "connection::C123:root"}, None),
         ({"platform": "api_server", "chat_id": "connection:0191-uuid"}, None),
     ],

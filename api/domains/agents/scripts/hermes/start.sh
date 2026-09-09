@@ -66,4 +66,6 @@ cp /app/config/hermes-messaging.py /opt/data/plugins/agentbarn-messaging/__init_
 printf 'name: agentbarn-messaging\nversion: "1.0"\ndescription: Bind explicit message requests to inbound executions\n' > /opt/data/plugins/agentbarn-messaging/plugin.yaml
 export AGENTBARN_SCHEDULED_DELIVERY=1
 python3 /app/config/agentbarn_message.py drain &
+# Pinned Hermes never runs BOOT.md; OpenClaw bundles a gateway:startup hook for it.
+python3 /app/config/boot-run.py &
 exec hermes gateway run
