@@ -8,7 +8,7 @@ Related context: [Identity and Organizations](../identity-and-organizations.md),
 
 - Delivered: AF-237 self-service Organization creation, invitation-based Platform user onboarding, per-creator limits, membership-only Organization selection, bounded Platform Privilege administration, explicit Platform/Organization event scopes, and durable Security Audit Record projection.
 - Delivered: Platform View now includes allowlisted Organization and user identity detail, Organization membership drill-downs, and dedicated read contracts that exclude tenant configuration.
-- Delivered: Platform View reports cross-Organization chat volume and Agent activity as bounded statistics, over preset periods or a custom range, narrowed by Organization, Agent, creator, or chat platform. Every number is defined under Metric definitions below and asserted by the contract suite.
+- Delivered: Platform View reports cross-Organization chat volume and Agent activity as bounded statistics over an explicit date range, narrowed by Organization, chat platform, and message direction. The panel's state lives in the query string, so a link reproduces a view. Every number is defined under Metric definitions below and asserted by the contract suite.
 - In transition: the remaining Platform Oversight detail/statistics surfaces—per-Organization and per-Agent breakdowns, Tool Call statistics, model usage, costs, suspension, and unified audit exploration—remain deferred under the AF-235 backlog.
 - Next: Organization suspension/reactivation, unified audit exploration, and the remaining platform oversight details/statistics are captured in `../../plans/AF-235-remaining-platform-management-tasks.md`.
 - Blockers: none for the delivered AF-237 slice.
@@ -41,6 +41,12 @@ Two rules resolve every filter question:
   counted under the app it actually arrived on, never all of them under both.
   Tool Calls carry no Connection, so they fall back to the Agent's Connections.
 
+The direction filter narrows what is drawn rather than what is fetched, so it
+applies unevenly and deliberately: Messages, Received, Sent and the messages
+series all reflect the selected direction, while **Active agents does not**. That
+number comes from the agents endpoint, which unions message and Tool Call
+activity and has no direction to filter on.
+
 Two definitions changed with the AF-271 communications rewrite and are recorded
 here rather than restored:
 
@@ -54,6 +60,31 @@ here rather than restored:
   activity.
 
 ## Changes
+
+### 2026-09-03 — AF-265 follow-up — same PR
+
+Requested after AF-265's acceptance criteria were written, and delivered alongside
+them rather than as separate tickets.
+
+- Changed: the reporting-period selector is removed outright, superseding the
+  preset trim recorded below. The panel now narrows by an explicit date range
+  only, defaulting to the past 30 days on first load and capped at 366 days.
+  `presets.ts` is deleted; no preset control remains in the UI. The API is
+  unchanged and still accepts either a `StatsPeriod` preset or an explicit range.
+- Added: panel state — date range, Organization, messaging app and direction —
+  is mirrored to the query string, so a link reproduces a view and a reload
+  restores one. A shared link is a fixed window and does not advance with time.
+- Note: that mirroring uses the History API, not `router.replace`. On a
+  prerendered route `useSearchParams` does not observe a router write, so an
+  effect that waits to read its own write back never settles and re-fires
+  indefinitely. This reproduces only in a production build, which is why the
+  e2e guard asserts that changing a filter issues no RSC navigation carrying
+  panel state.
+- Added: a message-direction filter — All messages, Received only, Sent only.
+  The messages payload already carries both directions per bucket, so this
+  narrows what is drawn, not what is fetched: no query parameter, no repository
+  predicate, no contract change. Its uneven reach is recorded under Metric
+  definitions above.
 
 ### 2026-09-02 — AF-265 — one implementation PR
 
