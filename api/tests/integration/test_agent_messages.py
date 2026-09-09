@@ -5,11 +5,13 @@ from uuid import uuid4
 
 import pytest
 from hamcrest import assert_that, contains_string, empty, equal_to, has_length, is_, not_
+from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError
 
 from api.domains.communications.delivery_repository import CommunicationDeliveryRepository
 from api.domains.communications.gateway_service import CommunicationsGatewayService
 from api.domains.communications.models import (
+    AgentMessageCreate,
     CommunicationConnection,
     CommunicationDirection,
     CommunicationJournalStage,
@@ -299,3 +301,65 @@ def test_unverifiable_origin_is_rejected_and_never_diverted_to_the_default(mutat
         assert_that(submit(context, payload).status_code, equal_to(expected))
         deliveries, _, _ = rows(context)
         assert_that(deliveries, empty())
+
+
+@pytest.mark.parametrize(
+    "context_kind,destination_kind,allowed",
+    [
+        # A scheduled run may reach its configured default or the conversation that
+        # created it. It may never name a destination itself -- that is the whole
+        # authorization boundary for work with no user in the loop.
+        ("scheduled", "default", True),
+        ("scheduled", "origin", True),
+        ("scheduled", "explicit", False),
+        # An interactive run has a live execution to authorize an explicit send, but
+        # no job origin to inherit.
+        ("interactive", "default", True),
+        ("interactive", "explicit", True),
+        ("interactive", "origin", False),
+    ],
+)
+def test_only_the_allowed_destination_kinds_are_accepted_per_context(context_kind, destination_kind, allowed):
+    destinations = {
+        "default": {"kind": "default"},
+        "explicit": {"kind": "explicit", "target": {"recipient": "C456"}},
+        "origin": {
+            "kind": "origin",
+            "connection_id": str(uuid4()),
+            "channel_id": "C456",
+            "thread_id": None,
+        },
+    }
+    contexts = {
+        "scheduled": {"kind": "scheduled", "run_id": "hermes:run"},
+        "interactive": {"kind": "interactive", "execution_token": "token"},
+    }
+    payload = {
+        "text": "Scheduled result",
+        "idempotency_key": "matrix",
+        "destination": destinations[destination_kind],
+        "context": contexts[context_kind],
+    }
+    if allowed:
+        AgentMessageCreate.model_validate(payload)
+    else:
+        with pytest.raises(ValidationError):
+            AgentMessageCreate.model_validate(payload)
+
+
+def test_a_connection_id_is_not_part_of_the_explicit_contract():
+    """Connection identity changes when an operator recreates a Connection, so it
+    must never be something a prompt carries or a model can name."""
+    with pytest.raises(ValidationError):
+        AgentMessageCreate.model_validate(
+            {
+                "text": "hello",
+                "idempotency_key": "k",
+                "destination": {
+                    "kind": "explicit",
+                    "connection_id": str(uuid4()),
+                    "target": {"recipient": "C456"},
+                },
+                "context": {"kind": "interactive", "execution_token": "token"},
+            }
+        )
