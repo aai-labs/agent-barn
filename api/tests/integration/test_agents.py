@@ -1,7 +1,8 @@
 import json
+import threading
 from typing import cast
 from unittest.mock import MagicMock, patch
-from uuid import uuid7
+from uuid import UUID, uuid7
 
 import httpx
 from fastapi import HTTPException, status
@@ -47,6 +48,7 @@ from api.domains.events.security_audit import SecurityAuditRepository
 from api.domains.organizations.repository import OrganizationRepository
 from api.domains.templates.models import AgentTemplate, PlatformTemplate
 from api.domains.templates.repository import TemplateRepository
+from api.infrastructure.crypto import decrypt_token
 from api.infrastructure.integration_validators.result import IntegrationValidationResult
 from api.infrastructure.kubernetes.client import KubernetesClient
 from api.infrastructure.litellm.client import LiteLLMClient, LiteLLMError
@@ -1187,6 +1189,137 @@ def test_start_already_running_returns_409():
 
         with then("it returns 409"):
             assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
+
+
+def test_concurrent_start_requests_reject_the_loser_and_keep_credentials_consistent():
+    """Regression test for AF-287 / agent-barn#160: a second start request that
+    arrives while the first is still mid-provisioning must be rejected, not race
+    it to persist its own (different) credentials."""
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        k8s: MagicMock = context.injector.get(KubernetesClient)
+
+        entered_provisioning = threading.Event()
+        release_first_request = threading.Event()
+
+        def block_mid_provisioning(*args, **kwargs):
+            entered_provisioning.set()
+            release_first_request.wait(timeout=5)
+
+        k8s.create_deployment.side_effect = block_mid_provisioning
+
+        responses: dict[str, httpx.Response] = {}
+
+        def start_first():
+            responses["first"] = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with when("a second start request arrives while the first is still provisioning the runtime"):
+            first_thread = threading.Thread(target=start_first)
+            first_thread.start()
+            assert_that(entered_provisioning.wait(timeout=5), equal_to(True))
+
+            responses["second"] = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+            release_first_request.set()
+            first_thread.join(timeout=5)
+
+        with then("the second, competing request is rejected as a lifecycle conflict, not raced through"):
+            assert_that(responses["second"].status_code, equal_to(status.HTTP_409_CONFLICT))
+            assert_that(responses["second"].json()["detail"], contains_string("already in progress"))
+
+        with then("the first request completes and starts the agent"):
+            assert_that(responses["first"].status_code, equal_to(status.HTTP_200_OK))
+
+        with then("the persisted credentials match what was written into the runtime secret"):
+            persisted = context.injector.get(AgentRepository).get_by_id(context.agent.id)
+            assert persisted is not None
+            _, secret = k8s.create_secret.call_args.args
+            decrypted_ingest_key = decrypt_token(persisted.ingest_key_encrypted, TEST_ENCRYPTION_KEY)
+            assert_that(decrypted_ingest_key, equal_to(secret.string_data["INGEST_API_KEY"]))
+
+
+def test_start_agent_returns_404_if_deleted_while_racing_the_lock():
+    """Regression test for review feedback on AF-287: if the agent is soft-deleted
+    between the caller's authorization check and this request acquiring the
+    lifecycle lock, start must 404 rather than silently starting a stale copy."""
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        client: TestClient = context.client
+        repository: AgentRepository = context.injector.get(AgentRepository)
+
+        entered_before_lock = threading.Event()
+        release_start = threading.Event()
+        original_lifecycle_lock = repository.lifecycle_lock
+
+        def blocked_lifecycle_lock(agent_id: UUID):
+            # Only the start request (the first caller) should stall here; the
+            # delete that races it must go straight through to the real lock.
+            if not entered_before_lock.is_set():
+                entered_before_lock.set()
+                release_start.wait(timeout=5)
+            return original_lifecycle_lock(agent_id)
+
+        responses: dict[str, httpx.Response] = {}
+
+        def start_agent():
+            responses["start"] = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with when(
+            "the agent is deleted after the start request passes authorization "
+            "but before it acquires the lifecycle lock"
+        ):
+            with patch.object(repository, "lifecycle_lock", side_effect=blocked_lifecycle_lock):
+                start_thread = threading.Thread(target=start_agent)
+                start_thread.start()
+                assert_that(entered_before_lock.wait(timeout=5), equal_to(True))
+
+                delete_response = client.delete(f"{_BASE}/{context.agent.id}", headers=_auth(context))
+                assert_that(delete_response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
+
+                release_start.set()
+                start_thread.join(timeout=5)
+
+        with then("start 404s instead of provisioning a runtime for the deleted agent"):
+            assert_that(responses["start"].status_code, equal_to(status.HTTP_404_NOT_FOUND))
+
+
+def test_concurrent_delete_while_starting_is_rejected_as_conflict():
+    """Regression test for review feedback on AF-287: delete_agent now shares the
+    lifecycle lock with start/stop, so a delete racing an in-flight start is
+    rejected instead of tearing down k8s resources the start is still creating."""
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        client: TestClient = context.client
+        k8s: MagicMock = context.injector.get(KubernetesClient)
+
+        entered_provisioning = threading.Event()
+        release_start = threading.Event()
+
+        def block_mid_provisioning(*args, **kwargs):
+            entered_provisioning.set()
+            release_start.wait(timeout=5)
+
+        k8s.create_deployment.side_effect = block_mid_provisioning
+
+        responses: dict[str, httpx.Response] = {}
+
+        def start_agent():
+            responses["start"] = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with when("a delete request arrives while start is still provisioning the runtime"):
+            start_thread = threading.Thread(target=start_agent)
+            start_thread.start()
+            assert_that(entered_provisioning.wait(timeout=5), equal_to(True))
+
+            responses["delete"] = client.delete(f"{_BASE}/{context.agent.id}", headers=_auth(context))
+
+            release_start.set()
+            start_thread.join(timeout=5)
+
+        with then("the delete is rejected as a lifecycle conflict rather than tearing down the runtime mid-start"):
+            assert_that(responses["delete"].status_code, equal_to(status.HTTP_409_CONFLICT))
+            k8s.delete_deployment.assert_not_called()
+
+        with then("the start request completes normally"):
+            assert_that(responses["start"].status_code, equal_to(status.HTTP_200_OK))
 
 
 def test_start_agent_rejects_model_removed_from_allowlist():
