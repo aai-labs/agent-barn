@@ -122,11 +122,20 @@ export class AgentDetailPage {
   }
 
   defaultDestinationBrowse(): Locator {
-    return this.page.getByRole("button", { name: "Browse default destination" });
+    return this.page.getByRole("button", { name: "Browse Default channel or recipient" });
   }
 
   defaultDestinationInput(): Locator {
     return this.page.getByLabel("Default channel or recipient", { exact: true });
+  }
+
+  /** The chosen destination renders as a removable chip, replacing the input. */
+  defaultDestinationChip(name: string | RegExp): Locator {
+    return this.page.getByRole("button", { name: new RegExp(`^Remove ${name}$`) });
+  }
+
+  defaultDestinationTypeOptions(): Locator {
+    return this.page.getByRole("option");
   }
 
   defaultThreadInput(): Locator {
