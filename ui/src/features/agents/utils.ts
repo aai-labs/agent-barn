@@ -22,6 +22,8 @@ export type ConversationsFiltersKey = {
 
 export const agentsKey = {
   ..._agentsKeyBase,
+  nameSuggestion: (orgApiBase: string, openingId: string) =>
+    [..._agentsKeyBase.all, "name-suggestion", orgApiBase, openingId] as const,
   health: (id: string) => [..._agentsKeyBase.detail(id), "health"] as const,
   configuration: (id: string) => [..._agentsKeyBase.detail(id), "configuration"] as const,
   shareSettings: (id: string) => [..._agentsKeyBase.detail(id), "share"] as const,

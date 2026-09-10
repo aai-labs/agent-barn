@@ -740,6 +740,10 @@ class SkillVersionPin(PydanticBaseModel):
     version: int = Field(ge=1)
 
 
+class AgentNameSuggestionRead(PydanticBaseModel):
+    first_name: str
+
+
 class AgentCreate(PydanticBaseModel):
     model_config = ConfigDict(extra="forbid")
 

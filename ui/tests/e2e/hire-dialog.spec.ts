@@ -27,6 +27,7 @@ test.describe("Hire Dialog", () => {
     await dataSupport.agents.interceptGetAgentHealthRequest();
     await dataSupport.agents.interceptGetTemplatesRequest();
     await dataSupport.agents.interceptGetModelsRequest();
+    await dataSupport.agents.interceptNameSuggestionRequest();
 
     await dashboardPage.goto();
     await page.getByRole("button", { name: /hire agent/i }).click();
@@ -34,7 +35,7 @@ test.describe("Hire Dialog", () => {
 
   test("hires a headless Agent without communication credentials", async ({ page }) => {
     await dataSupport.agents.interceptCreateAgentRequest({
-      body: { ...mockAgent, name: "Aria", status: "STOPPED", agent_type: "hermes" },
+      body: { ...mockAgent, name: "Brandon the Assistant", status: "STOPPED", agent_type: "hermes" },
     });
     await dataSupport.agents.interceptStartAgentRequest();
 
@@ -45,7 +46,9 @@ test.describe("Hire Dialog", () => {
     await expect(page.getByPlaceholder(/xapp-/i)).toHaveCount(0);
     await expect(page.getByPlaceholder(/discord bot token/i)).toHaveCount(0);
 
+    await expect(dashboardPage.agentNameInput()).toHaveValue("Brandon the Assistant");
     await chooseTemplate(page);
+    await expect(dashboardPage.agentNameInput()).toHaveValue("Brandon the Assistant");
     await expect(page.getByRole("radio", { name: /use organization default/i })).toBeChecked();
     const createRequest = page.waitForRequest(
       (request) => request.url().endsWith("/agents") && request.method() === "POST",
@@ -57,14 +60,61 @@ test.describe("Hire Dialog", () => {
 
     const payload = (await createRequest).postDataJSON();
     expect(payload).toEqual({
-      name: "Aria",
+      name: "Brandon the Assistant",
       agent_type: "hermes",
       template_key: "general-purpose",
       template_version: 1,
       approval_mode: "auto",
     });
     await startRequest;
-    await expect(page.getByText("Aria was hired successfully.")).toBeVisible();
+    await expect(page.getByText("Brandon the Assistant was hired successfully.")).toBeVisible();
+  });
+
+  test("preserves manual edits when selecting a template", async ({ page }) => {
+    await expect(dashboardPage.agentNameInput()).toHaveValue("Brandon the Assistant");
+    await dashboardPage.agentNameInput().fill("My teammate");
+    await dashboardPage.chooseHireTemplate("General Purpose · v1");
+    await expect(dashboardPage.agentNameInput()).toHaveValue("My teammate");
+    await dashboardPage.agentNameInput().fill("");
+    await expect(page.getByRole("button", { name: "Hire Agent", exact: true })).toBeDisabled();
+  });
+
+  test("updates the generated suffix for a different template", async ({ page }) => {
+    await dataSupport.agents.interceptGetTemplatesRequest({ body: {
+      page: 1, page_size: 50, total: 2,
+      items: [mockTemplates[0], { ...mockTemplates[0], template_key: "reviewer", template_name: "PR Reviewer" }],
+    } });
+    await dashboardPage.goto();
+    await page.getByRole("button", { name: /hire agent/i }).click();
+    await expect(dashboardPage.agentNameInput()).toHaveValue("Brandon the Assistant");
+    await dashboardPage.chooseHireTemplate("PR Reviewer · v1");
+    await expect(dashboardPage.agentNameInput()).toHaveValue("Brandon the PR Reviewer");
+    await dashboardPage.chooseHireTemplate("General Purpose · v1");
+    await expect(dashboardPage.agentNameInput()).toHaveValue("Brandon the Assistant");
+  });
+
+  test("allows manual naming when suggestion retrieval fails", async ({ page }) => {
+    await dataSupport.agents.interceptNameSuggestionRequest({ status: 503 });
+    await dashboardPage.goto();
+    await page.getByRole("button", { name: /hire agent/i }).click();
+    await expect(dashboardPage.nameSuggestionError()).toBeVisible();
+    await dashboardPage.agentNameInput().fill("My assistant");
+    await dashboardPage.chooseHireTemplate("General Purpose · v1");
+    await expect(page.getByRole("button", { name: "Hire Agent", exact: true })).toBeEnabled();
+    await dataSupport.agents.interceptNameSuggestionRequest({ firstName: "Andy" });
+    await dashboardPage.retryNameSuggestion();
+    await expect(dashboardPage.nameSuggestionError()).toHaveCount(0);
+    await expect(dashboardPage.agentNameInput()).toHaveValue("My assistant");
+  });
+
+  test("keeps an open suggestion stable and fetches a fresh one after cancellation", async ({ page }) => {
+    await expect(dashboardPage.agentNameInput()).toHaveValue("Brandon the Assistant");
+    await dataSupport.agents.interceptNameSuggestionRequest({ firstName: "Benny" });
+    await dashboardPage.chooseHireTemplate("General Purpose · v1");
+    await expect(dashboardPage.agentNameInput()).toHaveValue("Brandon the Assistant");
+    await dashboardPage.closeHireDialog();
+    await page.getByRole("button", { name: /hire agent/i }).click();
+    await expect(dashboardPage.agentNameInput()).toHaveValue("Benny the Assistant");
   });
 
   test("configures template-required skill credentials before creating the Agent", async ({ page }) => {
@@ -89,7 +139,7 @@ test.describe("Hire Dialog", () => {
     });
     await dataSupport.skills.interceptGetSkillsRequest({ body: [mockJiraSkill] });
     await dataSupport.agents.interceptCreateAgentRequest({
-      body: { ...mockAgent, name: "Aria", status: "STOPPED", agent_type: "hermes" },
+      body: { ...mockAgent, name: "Brandon the Assistant", status: "STOPPED", agent_type: "hermes" },
     });
     await dataSupport.agents.interceptStartAgentRequest();
 
@@ -206,7 +256,7 @@ test.describe("Hire Dialog", () => {
 
   test("allows choosing a runtime independently of communication platforms", async ({ page }) => {
     await dataSupport.agents.interceptCreateAgentRequest({
-      body: { ...mockAgent, name: "Aria", status: "STOPPED", agent_type: "openclaw" },
+      body: { ...mockAgent, name: "Brandon the Assistant", status: "STOPPED", agent_type: "openclaw" },
     });
     await dataSupport.agents.interceptStartAgentRequest();
 

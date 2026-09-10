@@ -55,6 +55,26 @@ Starting an already running agent and stopping an agent that is not running are 
 
 Creation requires `agent.create`, resolves the requested Template Version or latest version, validates required Skills and tool-provider credentials, live-validates supported provider credentials from the exact request, and atomically persists the Agent with creator provenance and explicit Agent Owner access. It persists Agent Secrets, assigns Skills, and creates a per-Agent LiteLLM key when configured only after deterministic and live preflight validation. New Agents are headless and `STOPPED`; Communication Connections are added independently after creation. Agent General Access defaults to Restricted, so no other Member receives access automatically.
 
+### Suggested names
+
+The hiring dialog suggests `<first name> the <template name>`. It cycles initials A–Z using the
+Organization's total persisted Agent count modulo 26, including soft-deleted Agents and manually
+named Agents. Each suggestion randomly chooses a distinct spelling from the supplied names for
+that initial. Existing Agents contribute to the count and retain their names. Deleting an Agent
+does not rewind the sequence. No separate counter or name uniqueness constraint is maintained.
+
+`GET /organizations/{organization_id}/agents/name-suggestion` requires `agent.create` and returns
+only `first_name`; it does not reserve or persist a name. Concurrent dialogs may repeat names,
+and creation preserves the submitted name even when another creation has changed the count.
+The create API still requires `name`. Failed creation does not advance the count; failure to
+start an already-created Agent does.
+
+Before Template selection, and for the `General Purpose` display name, the suffix is `Assistant`.
+Other Template display names are used verbatim, truncated only when needed to fit the 255-character
+Agent name limit. Template changes update the suggestion until the user edits the name manually.
+The dialog retains its first name throughout the opening, offers manual entry and retrieval retry
+on failure, and has no shuffle control. Reopening fetches a fresh suggestion.
+
 ### Update
 
 Update is allowed only while not running. It can change runtime-relevant configuration, repin to an existing template version, add/remove allowed skills, and upsert/remove Agent Secrets. The configuration UI stops a running Agent before submitting these updates and starts it again after a successful or failed update so the lifecycle remains explicit. Repinning requires both template_key and version and revalidates required skills.

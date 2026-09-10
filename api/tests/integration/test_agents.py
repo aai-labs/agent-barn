@@ -45,6 +45,7 @@ from api.domains.events.models import EventDeliveryStatus, OutboxMessage
 from api.domains.events.processor import EventDeliveryProcessor
 from api.domains.events.repository import OutboxMessageRepository
 from api.domains.events.security_audit import SecurityAuditRepository
+from api.domains.organizations.models import Organization
 from api.domains.organizations.repository import OrganizationRepository
 from api.domains.templates.models import AgentTemplate, PlatformTemplate
 from api.domains.templates.repository import TemplateRepository
@@ -73,6 +74,7 @@ from api.tests.steps.agent import (
 )
 from api.tests.steps.database import database_is_clean, database_repo_is_ready
 from api.tests.steps.organization import (
+    there_is_an_organization,
     there_is_an_organization_with_user_and_access_token,
 )
 from api.tests.steps.template import (
@@ -4749,3 +4751,94 @@ def test_start_agent_rejects_google_workspace_without_a_client():
         with then("the start is rejected with a reconnect hint"):
             assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
             assert_that(response.json()["detail"], contains_string("Google Workspace credential"))
+
+
+def test_name_suggestion_advances_after_creation_and_does_not_rewind_after_deletion():
+    with given(_GIVEN) as context:
+        client = context.client
+        base = _BASE.format(organization_id=context.organization.id)
+        headers = _auth(context)
+        with when("I request a suggestion before creating an Agent"):
+            suggestion = client.get(f"{base}/name-suggestion", headers=headers)
+        with then("the suggestion is an A name"):
+            assert_that(suggestion.status_code, equal_to(200))
+            first_name = suggestion.json()["first_name"]
+            assert_that(
+                first_name, is_in(("Alfie", "Andy", "Archie", "Arlo", "Amos", "Abe", "Adrian", "Alex", "Aaron", "Arie"))
+            )
+        with when("I create and read an Agent using the suggestion"):
+            name = f"{first_name} the Assistant"
+            created = client.post(base, json={**_VALID_CREATE, "name": name}, headers=headers)
+        with then("the submitted name is persisted"):
+            assert_that(created.status_code, equal_to(201))
+            agent_url = f"{base}/{created.json()['id']}"
+            saved = client.get(agent_url, headers=headers)
+            assert_that(saved.status_code, equal_to(200))
+            assert_that(saved.json()["name"], equal_to(name))
+        with when("I request another suggestion"):
+            next_name = client.get(f"{base}/name-suggestion", headers=headers)
+        with then("the next initial is B"):
+            assert_that(next_name.status_code, equal_to(200))
+            assert_that(next_name.json()["first_name"][0], equal_to("B"))
+        with when("I delete the Agent and request another suggestion"):
+            deleted = client.delete(agent_url, headers=headers)
+        with then("soft deletion does not rewind the initial"):
+            assert_that(deleted.status_code, equal_to(204))
+            suggestion = client.get(f"{base}/name-suggestion", headers=headers)
+            assert_that(suggestion.status_code, equal_to(200))
+            assert_that(suggestion.json()["first_name"][0], equal_to("B"))
+
+
+def test_name_suggestion_requires_authentication():
+    with given(_GIVEN) as context:
+        base = _BASE.format(organization_id=context.organization.id)
+        with when("I request a suggestion without authentication"):
+            response = context.client.get(f"{base}/name-suggestion")
+        with then("authentication is required"):
+            assert_that(response.status_code, equal_to(401))
+
+
+def test_name_suggestion_counts_only_the_active_organization():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        first_org_id = context.organization.id
+        with when("I join a second Organization without Agents"):
+            there_is_an_organization(name="Second Organization")(context)
+            response = context.client.get(
+                f"/api/v1/organizations/{context.organization.id}/agents/name-suggestion", headers=_auth(context)
+            )
+        with then("the second Organization starts at A"):
+            assert_that(response.status_code, equal_to(200))
+            assert_that(response.json()["first_name"][0], equal_to("A"))
+        with when("I request another suggestion in the first Organization"):
+            response = context.client.get(
+                f"/api/v1/organizations/{first_org_id}/agents/name-suggestion", headers=_auth(context)
+            )
+        with then("its existing Agent advances its initial to B"):
+            assert_that(response.status_code, equal_to(200))
+            assert_that(response.json()["first_name"][0], equal_to("B"))
+
+
+def test_name_suggestion_rejects_non_member():
+    with given(_GIVEN) as context:
+        other = context.injector.get(OrganizationRepository).save(Organization(name="Other Organization"))
+        with when("I request a suggestion from an Organization I have not joined"):
+            response = context.client.get(
+                f"/api/v1/organizations/{other.id}/agents/name-suggestion", headers=_auth(context)
+            )
+        with then("access is forbidden"):
+            assert_that(response.status_code, equal_to(403))
+
+
+def test_failed_creation_and_repeated_suggestions_do_not_advance_initial():
+    with given(_GIVEN) as context:
+        base = _BASE.format(organization_id=context.organization.id)
+        with when("I submit an invalid Template"):
+            response = context.client.post(
+                base, json={**_VALID_CREATE, "template_key": "missing"}, headers=_auth(context)
+            )
+        with then("creation fails and repeated reads still suggest A"):
+            assert_that(response.status_code, equal_to(404))
+            for _ in range(2):
+                response = context.client.get(f"{base}/name-suggestion", headers=_auth(context))
+                assert_that(response.status_code, equal_to(200))
+                assert_that(response.json()["first_name"][0], equal_to("A"))
