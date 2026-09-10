@@ -75,31 +75,6 @@ class LiteLLMClient:
         except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
             raise LiteLLMError("Failed to reconcile Organization LiteLLM team") from exc
 
-    def attach_key_to_team(self, key: str, org_id: str) -> None:
-        """Preserve key identity, spend and blocked state during backfill."""
-        headers = self._headers(self._master_key())
-        try:
-            response = httpx.get(
-                f"{self.config.litellm_base_url}/key/info", params={"key": key}, headers=headers, timeout=10
-            )
-            response.raise_for_status()
-            current_team = response.json()["info"].get("team_id")
-            if current_team == org_id:
-                return
-            if current_team:
-                raise LiteLLMError("Agent key already belongs to a different LiteLLM team")
-            response = httpx.post(
-                f"{self.config.litellm_base_url}/key/update",
-                json={"key": key, "team_id": org_id},
-                headers=headers,
-                timeout=10,
-            )
-            response.raise_for_status()
-        except httpx.HTTPError, ValueError, KeyError, TypeError:
-            # /key/info carries a credential in its URL; suppress the HTTP
-            # exception chain so manual reconciliation tracebacks cannot leak it.
-            raise LiteLLMError("Failed to attach Agent key to Organization team") from None
-
     def generate_key(self, agent_id: str, agent_name: str, org_id: str) -> str:
         """Returns a new plaintext LiteLLM key for the agent."""
         self.ensure_organization_team(org_id)

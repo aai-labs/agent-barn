@@ -166,52 +166,21 @@ def test_generated_key_has_team_and_existing_attribution_metadata():
     )
 
 
-@pytest.mark.parametrize("team", [None, "org", "other"])
-def test_backfill_keeps_key_identity_and_refuses_cross_team_move(team):
-    client = LiteLLMClient(MagicMock(), config())
-    with (
-        patch.object(client, "_master_key", return_value="master"),
-        patch(
-            "api.infrastructure.litellm.client.httpx.get",
-            return_value=response({"info": {"team_id": team, "blocked": True, "spend": 9}}),
-        ),
-        patch("api.infrastructure.litellm.client.httpx.post", return_value=response({})) as post,
-    ):
-        if team == "other":
-            with pytest.raises(LiteLLMError):
-                client.attach_key_to_team("sk-test", "org")
-        else:
-            client.attach_key_to_team("sk-test", "org")
-    if team is None:
-        assert_that(post.call_args.kwargs["json"], equal_to({"key": "sk-test", "team_id": "org"}))
-    else:
-        post.assert_not_called()
-
-
-def test_reconciliation_scopes_keys_to_each_org():
+def test_reconciliation_applies_policy_to_each_organization():
     orgs = [uuid4(), uuid4()]
     repository = MagicMock()
     repository.list_ids_for_llm_reconciliation.return_value = orgs
-    agents = MagicMock()
-    agents.list_llm_keys_for_reconciliation.side_effect = [["encrypted"], []]
     client = MagicMock()
-    service = OrganizationLLMService(config(), client, repository, agents)
-    with patch("api.domains.organizations.llm.decrypt_token", return_value="sk-test"):
-        service.reconcile()
+    OrganizationLLMService(config(), client, repository).reconcile()
     assert_that(
         [call.args for call in client.ensure_organization_team.call_args_list], equal_to([(str(org),) for org in orgs])
-    )
-    client.attach_key_to_team.assert_called_once_with("sk-test", str(orgs[0]))
-    assert_that(
-        [call.args for call in agents.list_llm_keys_for_reconciliation.call_args_list],
-        equal_to([(org,) for org in orgs]),
     )
 
 
 def test_no_litellm_skips_all_provisioning():
     client = MagicMock()
     repo = MagicMock()
-    service = OrganizationLLMService(config(litellm_base_url=""), client, repo, MagicMock())
+    service = OrganizationLLMService(config(litellm_base_url=""), client, repo)
     service.provision_after_commit(uuid4())
     service.reconcile()
     client.ensure_organization_team.assert_not_called()
@@ -221,28 +190,13 @@ def test_no_litellm_skips_all_provisioning():
 def test_committed_creation_survives_remote_failure_without_logging_secrets():
     client = MagicMock()
     client.ensure_organization_team.side_effect = LiteLLMError("sk-secret")
-    service = OrganizationLLMService(config(), client, MagicMock(), MagicMock())
+    service = OrganizationLLMService(config(), client, MagicMock())
     org_id = uuid4()
     with patch("api.domains.organizations.llm.logger") as logger:
         service.provision_after_commit(org_id)
     logger.error.assert_called_once_with(
         "LiteLLM team provisioning deferred for Organization %s (%s)", org_id, "LiteLLMError"
     )
-
-
-def test_backfill_failure_traceback_does_not_expose_key():
-    import traceback
-
-    client = LiteLLMClient(MagicMock(), config())
-    failure = httpx.Response(503, request=httpx.Request("GET", "http://litellm/key/info?key=sk-secret"))
-    with (
-        patch.object(client, "_master_key", return_value="master"),
-        patch("api.infrastructure.litellm.client.httpx.get", return_value=failure),
-    ):
-        with pytest.raises(LiteLLMError) as caught:
-            client.attach_key_to_team("sk-secret", "org")
-    rendered = "".join(traceback.format_exception(caught.value))
-    assert_that("key=sk-secret" in rendered, equal_to(False))
 
 
 @pytest.mark.parametrize("fails", [False, True])

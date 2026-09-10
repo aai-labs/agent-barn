@@ -42,7 +42,7 @@ Database records generally inherit UUID and timestamp fields from `../../api/inf
 
 The application lifespan ensures a bootstrap Platform Administrator, seeds built-in aai-cli skills, and seeds the global predefined template catalogue into the `platform_template` table. The system has no default Organization. Platform-owned resources are global resources, not Organization-owned rows: built-in skills use `organization_id = NULL` in the `skill` table, and predefined templates live in a dedicated `platform_template` table with no `organization_id` column. Agents pin a template via one of two mutually-exclusive FKs (`platform_template_id` or `agent_template_id`), enforced by a CHECK constraint. Platform-admin behavior must use the platform-admin seam rather than adding dependencies on an Organization. Changes to bootstrap entities can affect startup, tests, and predefined catalog behavior simultaneously.
 
-Product API startup also runs the system-owned [Organization LiteLLM reconciliation](../features/costs.md#organization-llm-budgets) before serving requests. A proxy or key-attachment failure aborts startup; restarting retries the pass. Existing Agent pods continue running independently of API readiness.
+Product API startup also runs the system-owned [Organization LiteLLM reconciliation](../features/costs.md#organization-llm-budgets) before serving requests. A proxy failure aborts startup; restarting retries the pass. Existing Agent pods continue running independently of API readiness.
 
 ## Testing
 

@@ -78,7 +78,7 @@ async def lifespan(_: FastAPI):
             detail="Error while initializing startup data",
         )
 
-    # Reconcile existing keys before serving requests. Fail startup visibly on
+    # Apply deployment budget policy before serving requests. Fail startup visibly on
     # partial reconciliation; a restart safely retries without resetting spend.
     try:
         injector.get(OrganizationLLMService).reconcile()

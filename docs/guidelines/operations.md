@@ -68,31 +68,20 @@ $50 per 30 days. Saving a GitHub variable alone does not update running pods:
 redeploy the appropriate workflow. Clearing it and redeploying removes the cap
 from existing teams as well as new ones. No hostname-based logic is involved.
 
-On rollout, the API reconciles every existing Organization and Agent key before
-becoming ready. The API startup probe allows up to ten minutes for bootstrap and
-reconciliation before liveness takes over. Look for
-`Organization LiteLLM teams and budgets reconciled` in
-the API log. Failure aborts startup and a pod restart retries idempotently;
-inspect proxy availability, the Kubernetes master-key Secret, and conflicting
-team assignments. Existing Agent pods remain active during this pass, so API
-readiness failure is not a spend stop for previously running Agents. For a
-controlled cutoff during initial enrollment, stop those Agents before rollout.
-Historical pre-enrollment spend remains in reports but is not added to the new
-team counter. Verify `/team/info` for a selected Organization UUID and confirm its
-keys' `team_id` through the LiteLLM admin interface before relying on enforcement.
+On rollout, the API reconciles Organization teams and budget settings before
+becoming ready. Look for `Organization LiteLLM teams and budgets reconciled` in
+the API log. A failure aborts startup; restarting retries without resetting spend.
+Check proxy availability and the Kubernetes master-key Secret when it fails.
+Existing Agent pods continue running independently of API readiness.
 
-For a manual retry with the same environment as the API, run inside its container:
+Existing Agent keys are not automatically enrolled. Handle their initial team
+assignment with a separate one-off script before relying on the limits for those
+Agents. Historical pre-enrollment
+spend remains in reports but is not added to the new team counter. Verify each
+legacy key's `team_id` through the LiteLLM admin interface after enrollment.
 
-```bash
-python -c "from api.domains.organizations.llm import main; main()"
-```
-
-The command requires the API database, encryption key, LiteLLM URL, Kubernetes
-namespace and master-key Secret access. It exits nonzero on failure. Do not run it
-with an empty budget environment against a deployment intended to have a cap:
-empty is an explicit instruction to remove the cap. Use the API container's
-existing environment. Changing only the amount preserves spend and renewal;
-changing duration moves the next renewal, without resetting spend immediately.
+Changing only the amount preserves spend and renewal; changing duration moves
+the next renewal without resetting spend immediately.
 
 ## Transactional email
 

@@ -69,12 +69,11 @@ logged without undoing the committed Organization; first Agent key creation
 retries team provisioning and fails rather than issuing an unassigned key.
 
 Agents retain individual virtual keys and attribution metadata. New keys include
-`team_id`. Product API startup reconciles all existing Organizations and their
-active and soft-deleted Agent keys before serving traffic. This is a system-only
-credential operation: inventory queries are Organization-scoped and expose no
-new user or platform endpoint. Existing keys are attached without rotation,
-unblocking, or resetting their spend. A key already assigned to another team
-causes reconciliation to fail rather than silently transferring it.
+`team_id`. Product API startup reconciles Organization teams and their budget
+settings before serving traffic. It does not inspect or modify existing Agent
+keys. Initial enrollment of legacy keys is a separate one-off operational script,
+outside the application. Those keys are not covered by a team budget until they
+have been assigned to the corresponding Organization team.
 
 Budget enforcement is opt-in through the deployment environment; see
 [configuration and rollout](../guidelines/operations.md#organization-llm-budgets).
