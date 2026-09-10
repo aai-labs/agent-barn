@@ -592,6 +592,40 @@ def test_hermes_approval_request_relays_regardless_of_verbose_mode(monkeypatch: 
     assert adapter._PENDING_APPROVALS[session_key]["run_id"] == "run-1"
 
 
+def test_an_approval_answer_is_matched_past_the_provider_mention(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A Slack reply carries the bot mention like any other message, so the raw
+    envelope text is never exactly a choice and the run re-prompts forever."""
+    adapter = _load_adapter(monkeypatch, runtime_kind="hermes")
+    session_key = adapter.session_key_for(_DELIVERY)
+    adapter._PENDING_APPROVALS[session_key] = {
+        "run_id": "run-1",
+        "delivery_id": "delivery-1",
+        "choices": ["once", "session", "always", "deny"],
+    }
+    calls: list[tuple[str, dict | None]] = []
+
+    def fake_http_request(method, url, *, headers, payload=None):
+        calls.append((url, payload))
+
+    monkeypatch.setattr(adapter, "http_request", fake_http_request)
+    monkeypatch.setattr(
+        adapter,
+        "_run_and_drain",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("should not start a new run")),
+    )
+
+    reply_delivery = {
+        **_DELIVERY,
+        "delivery_id": "delivery-2",
+        "envelope": {**_DELIVERY["envelope"], "text": "<@U0BTHDYS4TY> always"},
+    }
+    adapter.run_delivery_hermes(reply_delivery)
+
+    approval_calls = [(url, payload) for url, payload in calls if url.endswith("/v1/runs/run-1/approval")]
+    assert approval_calls == [("http://runtime.test/v1/runs/run-1/approval", {"choice": "always"})]
+    assert session_key not in adapter._PENDING_APPROVALS
+
+
 def test_hermes_second_delivery_for_pending_session_resolves_approval(monkeypatch: pytest.MonkeyPatch) -> None:
     adapter = _load_adapter(monkeypatch, runtime_kind="hermes")
     session_key = adapter.session_key_for(_DELIVERY)

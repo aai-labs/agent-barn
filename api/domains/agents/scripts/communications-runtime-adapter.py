@@ -318,6 +318,14 @@ def iter_sse_events(response):
         yield event, "\n".join(data_lines)
 
 
+# Providers wrap mentions and links in their own angle-bracket markup, and a
+# reply that answers an approval carries it like any other message
+# ("<@U0BTHDYS4TY> always"). A model reading a turn can ignore that; an exact
+# choice match cannot, so it is stripped here rather than in any one plugin --
+# Slack, Discord, and Teams all reach this same comparison.
+_PROVIDER_MARKUP = re.compile(r"<[^>]*>")
+
+
 def resolve_pending_approval(session_key: str, delivery: dict) -> bool:
     """If session_key has a run waiting on approval, submit this delivery's text
     as the answer. Returns True once this delivery has been fully handled."""
@@ -327,7 +335,7 @@ def resolve_pending_approval(session_key: str, delivery: dict) -> bool:
         return False
 
     delivery_id = delivery["delivery_id"]
-    choice = delivery["envelope"].get("text", "").strip().lower()
+    choice = _PROVIDER_MARKUP.sub(" ", delivery["envelope"].get("text", "")).strip().lower()
     try:
         http_request(
             "POST",
