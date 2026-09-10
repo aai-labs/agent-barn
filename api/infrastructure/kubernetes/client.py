@@ -35,6 +35,7 @@ class KubernetesClient:
     config: Config
     _apps_v1_client: client.AppsV1Api | None = field(init=False, default=None)
     _core_v1_client: client.CoreV1Api | None = field(init=False, default=None)
+    _batch_v1_client: client.BatchV1Api | None = field(init=False, default=None)
     _stream_core_v1_client: client.CoreV1Api | None = field(init=False, default=None)
     _kubeconfig_path: str | None = field(init=False, default=None)
 
@@ -58,6 +59,7 @@ class KubernetesClient:
                     ) from e
         self._apps_v1_client = client.AppsV1Api()
         self._core_v1_client = client.CoreV1Api()
+        self._batch_v1_client = client.BatchV1Api()
         if self.config.k8s_kubeconfig_path:
             stream_api_client = k8s_config.new_client_from_config(config_file=self._kubeconfig_path)
         else:
@@ -83,6 +85,16 @@ class KubernetesClient:
     @_core_v1.setter
     def _core_v1(self, value: client.CoreV1Api) -> None:
         self._core_v1_client = value
+
+    @property
+    def _batch_v1(self) -> client.BatchV1Api:
+        self._ensure_configured()
+        assert self._batch_v1_client is not None
+        return self._batch_v1_client
+
+    @_batch_v1.setter
+    def _batch_v1(self, value: client.BatchV1Api) -> None:
+        self._batch_v1_client = value
 
     @property
     def _stream_core_v1(self) -> client.CoreV1Api:
@@ -250,6 +262,22 @@ class KubernetesClient:
 
     def get_config_map(self, name: str, namespace: str) -> client.V1ConfigMap | None:
         return self._get_or_none(self._core_v1.read_namespaced_config_map, name, namespace)
+
+    def create_job(self, namespace: str, manifest: client.V1Job) -> client.V1Job:
+        return self._batch_v1.create_namespaced_job(namespace, manifest)
+
+    def delete_job(self, name: str, namespace: str) -> None:
+        try:
+            self._batch_v1.delete_namespaced_job(name, namespace, propagation_policy="Background")
+        except ApiException as e:
+            if e.status != 404:
+                raise
+
+    def get_job(self, name: str, namespace: str) -> client.V1Job | None:
+        return self._get_or_none(self._batch_v1.read_namespaced_job, name, namespace)
+
+    def list_jobs(self, namespace: str, label_selector: str = "") -> list[client.V1Job]:
+        return self._batch_v1.list_namespaced_job(namespace, label_selector=label_selector).items
 
     def list_config_maps(self, namespace: str, label_selector: str = "") -> list[client.V1ConfigMap]:
         return self._core_v1.list_namespaced_config_map(namespace, label_selector=label_selector).items
