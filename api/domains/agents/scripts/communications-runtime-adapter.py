@@ -183,18 +183,39 @@ def complete_delivery(delivery_id: str, *, succeeded: bool, error: Exception | N
     )
 
 
-def renew_delivery_lease(delivery_id: str) -> None:
+def renew_delivery_lease(delivery_id: str, *, awaiting_input: bool = False) -> None:
     http_request(
         "POST",
-        f"{COMMUNICATIONS_URL}/agents/{AGENT_ID}/deliveries/{delivery_id}/renew",
+        f"{COMMUNICATIONS_URL}/agents/{AGENT_ID}/deliveries/{delivery_id}/renew"
+        f"?awaiting_input={'true' if awaiting_input else 'false'}",
         headers=communications_headers(),
     )
 
 
-def _heartbeat_delivery_lease(delivery_id: str, stopped: threading.Event) -> None:
+def _is_awaiting_input(session_key: str) -> bool:
+    with _PENDING_APPROVALS_LOCK:
+        return session_key in _PENDING_APPROVALS
+
+
+def _publish_awaiting_input(delivery_id: str, session_key: str) -> None:
+    """Push the session's current parked state without waiting for the next
+    heartbeat, which would otherwise hold an answer for up to a full interval.
+
+    The value is read here rather than passed in: a run that parks again right
+    after an approval resolves must not be un-parked by the resolving call.
+    """
+    try:
+        renew_delivery_lease(delivery_id, awaiting_input=_is_awaiting_input(session_key))
+    except Exception as exc:
+        # The heartbeat re-sends this state every interval, so a lost
+        # transition costs latency, not correctness.
+        print(f"[communications-adapter] awaiting-input publish failed: {exc}", flush=True)
+
+
+def _heartbeat_delivery_lease(delivery_id: str, stopped: threading.Event, session_key: str) -> None:
     while not stopped.wait(_LEASE_HEARTBEAT_SECONDS):
         try:
-            renew_delivery_lease(delivery_id)
+            renew_delivery_lease(delivery_id, awaiting_input=_is_awaiting_input(session_key))
         except Exception as exc:
             # A transient renewal failure must not interrupt a healthy Hermes
             # run; the next heartbeat can still extend its original lease.
@@ -316,6 +337,7 @@ def resolve_pending_approval(session_key: str, delivery: dict) -> bool:
 
     with _PENDING_APPROVALS_LOCK:
         _PENDING_APPROVALS.pop(session_key, None)
+    _publish_awaiting_input(pending["delivery_id"], session_key)
     complete_delivery(delivery_id, succeeded=True)
     return True
 
@@ -352,7 +374,7 @@ def _run_and_drain(delivery: dict, session_key: str) -> None:
     heartbeat_stopped = threading.Event()
     heartbeat = threading.Thread(
         target=_heartbeat_delivery_lease,
-        args=(delivery_id, heartbeat_stopped),
+        args=(delivery_id, heartbeat_stopped, session_key),
         daemon=True,
     )
     heartbeat.start()
@@ -447,6 +469,10 @@ def _drain_run(run_id: str, delivery_id: str, session_key: str, *, progress_upda
                         "delivery_id": delivery_id,
                         "choices": choices,
                     }
+                # Release this delivery's hold on the thread: the answer can
+                # only arrive as the next message here, and it cannot be
+                # claimed while this run counts as blocking.
+                _publish_awaiting_input(delivery_id, session_key)
                 description = payload.get("command") or payload.get("description") or "A command needs approval"
                 post_reply_best_effort(
                     delivery_id,

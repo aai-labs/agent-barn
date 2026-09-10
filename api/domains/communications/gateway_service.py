@@ -232,10 +232,20 @@ class CommunicationsGatewayService:
                 self._notify_runtime_failure_feedback(agent.id, delivery_id)
         return completed
 
-    def renew_runtime_delivery_lease(self, agent: Agent, delivery_id: UUID) -> bool:
+    def renew_runtime_delivery_lease(
+        self,
+        agent: Agent,
+        delivery_id: UUID,
+        *,
+        awaiting_input: bool = False,
+    ) -> bool:
         if agent.status != AgentStatus.RUNNING:
             raise RuntimeError("Agent is not running")
-        return self.delivery_repository.renew_runtime_delivery_lease(delivery_id, agent_id=agent.id)
+        return self.delivery_repository.renew_runtime_delivery_lease(
+            delivery_id,
+            agent_id=agent.id,
+            awaiting_input=awaiting_input,
+        )
 
     def _notify_runtime_failure_feedback(self, agent_id: UUID, delivery_id: UUID) -> None:
         """Notify terminal runtime failure without coupling it to completion."""

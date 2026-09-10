@@ -184,9 +184,15 @@ class CommunicationDeliveryRepository:
                     col(CommunicationDelivery.direction) == CommunicationDirection.INBOUND,
                     col(CommunicationDelivery.status) == CommunicationDeliveryStatus.PENDING,
                     col(CommunicationDelivery.available_at) <= now,
+                    # An in-flight delivery holds its ordering key so a thread
+                    # never runs two turns at once -- unless its run is parked
+                    # awaiting a human answer, which can only arrive as the
+                    # next message on this very thread. Claiming that answer is
+                    # what unblocks the run, so it must not be blocked by it.
                     ~sa.exists().where(
                         col(active_ordering.ordering_key) == col(CommunicationDelivery.ordering_key),
                         col(active_ordering.status) == CommunicationDeliveryStatus.PROCESSING,
+                        col(active_ordering.awaiting_input).is_(False),
                     ),
                 )
                 .order_by(
@@ -204,6 +210,9 @@ class CommunicationDeliveryRepository:
             delivery.status = CommunicationDeliveryStatus.PROCESSING
             delivery.claimed_at = now
             delivery.lease_expires_at = now + timedelta(seconds=lease_seconds)
+            # A freshly claimed delivery is running, not parked: it re-blocks
+            # its ordering key until it completes or reports otherwise.
+            delivery.awaiting_input = False
             delivery.attempt_count += 1
             session.add(delivery)
             if self.operations is not None:
@@ -353,8 +362,14 @@ class CommunicationDeliveryRepository:
         *,
         agent_id: UUID,
         lease_seconds: int = 120,
+        awaiting_input: bool = False,
     ) -> bool:
-        """Extend a live runtime claim without allowing an expired claim to revive."""
+        """Extend a live runtime claim without allowing an expired claim to revive.
+
+        The runtime reports whether this claim's run is parked awaiting a human
+        answer on every heartbeat, so the flag re-converges even if a single
+        transition call is lost.
+        """
         now = datetime.now(UTC)
         with Session(self.delegate.engine) as session:
             delivery = session.exec(
@@ -371,6 +386,7 @@ class CommunicationDeliveryRepository:
             if delivery is None:
                 return False
             delivery.lease_expires_at = now + timedelta(seconds=lease_seconds)
+            delivery.awaiting_input = awaiting_input
             session.add(delivery)
             session.commit()
             return True

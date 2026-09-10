@@ -115,10 +115,11 @@ def renew_runtime_delivery_lease(
     service: Annotated[CommunicationsGatewayService, Injected(CommunicationsGatewayService)],
     authorization: Annotated[str, Header()],
     protocol_version: Annotated[str, Header(alias="X-AgentBarn-Communications-Version")],
+    awaiting_input: bool = False,
 ) -> Response:
     agent = _authenticate(service, agent_id, authorization, protocol_version)
     try:
-        renewed = service.renew_runtime_delivery_lease(agent, delivery_id)
+        renewed = service.renew_runtime_delivery_lease(agent, delivery_id, awaiting_input=awaiting_input)
     except RuntimeError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     if not renewed:

@@ -324,6 +324,14 @@ class CommunicationDelivery(BaseModel, table=True):
     last_error_code: str | None = SqlField(default=None, nullable=True, max_length=100)
     last_error_message: str | None = SqlField(default=None, nullable=True, max_length=500)
     cancel_requested_at: datetime | None = SqlField(default=None, nullable=True, sa_type=sa.DateTime(timezone=True))  # type: ignore
+    # A claimed delivery whose run is parked waiting on a human answer. The
+    # answer can only arrive as another message on this same thread, so such a
+    # delivery must not block its own ordering key or the reply deadlocks
+    # behind the run that is waiting for it.
+    awaiting_input: bool = SqlField(
+        default=False,
+        sa_column=Column(sa.Boolean(), nullable=False, server_default=sa.false()),
+    )
     envelope: dict[str, Any] = SqlField(sa_column=Column(JSONB, nullable=False))
 
 
@@ -671,8 +679,8 @@ class AgentMessageCreate(PydanticBaseModel):
 
     # A scheduled run may reach its configured default or the conversation that created
     # it, never a destination the model named. An interactive run has a live execution
-    # to authorize an explicit send, but no job origin to inherit.
-    _ALLOWED_DESTINATIONS = {"scheduled": {"default", "origin"}, "interactive": {"default", "explicit"}}
+    # that authorizes an explicit send on the inbound Connection only.
+    _ALLOWED_DESTINATIONS = {"scheduled": {"default", "origin"}, "interactive": {"explicit"}}
 
     @model_validator(mode="after")
     def validate_context(self) -> AgentMessageCreate:
