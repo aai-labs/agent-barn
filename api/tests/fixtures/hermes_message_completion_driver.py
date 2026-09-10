@@ -12,6 +12,7 @@ os.environ["HERMES_HOME"] = tempfile.mkdtemp(prefix="agentbarn-cron-")
 os.environ["AGENTBARN_SCHEDULED_DELIVERY"] = "1"
 os.environ["AGENTBARN_MESSAGE_SPOOL"] = str(Path(os.environ["HERMES_HOME"]) / "messages.sqlite3")
 
+import agentbarn_message  # ty: ignore[unresolved-import]
 from cron import scheduler  # ty: ignore[unresolved-import]
 from cron.jobs import create_job  # ty: ignore[unresolved-import]
 
@@ -34,6 +35,23 @@ run("[SILENT]")
 run("HEARTBEAT_OK")
 run("SILENT")
 run("Report mentioning [SILENT]")
+saved_outputs = []
+native_save_job_output = scheduler.save_job_output
+
+
+def record_saved_output(job_id, output):
+    saved = native_save_job_output(job_id, output)
+    saved_outputs.append(saved)
+    return saved
+
+
+with (
+    patch.object(agentbarn_message, "capture_completion", side_effect=OSError("spool full")),
+    patch.object(scheduler, "save_job_output", side_effect=record_saved_output),
+):
+    persisted = run("Completion whose delivery capture fails")
+if not persisted or len(saved_outputs) != 1 or saved_outputs[0].read_text() != "full output":
+    raise AssertionError("A spool failure prevented Hermes from saving its native job output")
 deliverable = 2
 with sqlite3.connect(path) as db:
     rows = db.execute("SELECT run_id, request, receipt FROM completions").fetchall()

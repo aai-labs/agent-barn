@@ -49,7 +49,7 @@ def _capture(module, monkeypatch, failures=0):
     return posted
 
 
-def test_boot_checklist_runs_under_a_session_with_no_conversation(monkeypatch, tmp_path):
+def test_boot_checklist_runs_under_a_session_with_no_conversation(monkeypatch, tmp_path, capsys):
     module = _load(monkeypatch, tmp_path)
     module.BOOT_FILE.write_text("## Cron Maintenance\n\nEnsure the time-teller job exists.")
     posted = _capture(module, monkeypatch)
@@ -63,7 +63,9 @@ def test_boot_checklist_runs_under_a_session_with_no_conversation(monkeypatch, t
     # is what routes jobs it creates to the Agent's configured default.
     assert_that(payload["session_id"], equal_to(module.BOOT_SESSION_ID))
     assert_that(payload["resume_session"], equal_to(False))
+    assert_that(payload["input"], contains_string("never create a duplicate"))
     assert_that(payload["input"], contains_string("Ensure the time-teller job exists."))
+    assert_that(capsys.readouterr().out, contains_string("BOOT.md run run-1 started"))
 
 
 def test_a_missing_boot_file_submits_nothing(monkeypatch, tmp_path):

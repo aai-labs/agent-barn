@@ -57,12 +57,14 @@ def main() -> None:
     deadline = time.monotonic() + READY_TIMEOUT_SECONDS
     while time.monotonic() < deadline:
         try:
-            _post(
+            started = _post(
                 "/v1/runs",
                 {
                     "input": (
-                        "Startup checklist. Follow the BOOT.md instructions below exactly, then reply "
-                        f"with the silent token NO_REPLY.\n\n{instructions}"
+                        "Startup checklist. This runs on every gateway start, so repair or update what "
+                        "already exists -- scheduled jobs in particular -- and never create a duplicate. "
+                        "Follow the BOOT.md instructions below exactly, then reply with the silent token "
+                        f"NO_REPLY.\n\n{instructions}"
                     ),
                     "session_id": BOOT_SESSION_ID,
                     "resume_session": False,
@@ -72,7 +74,9 @@ def main() -> None:
             time.sleep(3)
             last = exc
         else:
-            print("[boot-run] BOOT.md checklist submitted", flush=True)
+            # Fire-and-forget: this only proves the run started, not that the checklist succeeded.
+            run_id = (started or {}).get("run_id") or (started or {}).get("id") or "unknown"
+            print(f"[boot-run] BOOT.md run {run_id} started; its outcome is in the gateway log", flush=True)
             return
     print(f"[boot-run] gateway never became ready ({type(last).__name__}); BOOT.md not run", flush=True)
 

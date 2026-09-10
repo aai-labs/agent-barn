@@ -1,15 +1,20 @@
 """Hermes tool middleware binds message CLI calls to the actual inbound session."""
 
+import re
 import shlex
 
 from agentbarn_message import execution_environment
+
+# The command name as its own word: a bare substring also matches the spool file
+# (agentbarn-messages.sqlite3), blocking or rebinding ordinary commands that name it.
+_COMMAND = re.compile(r"(?<![\w.-])agentbarn-message(?![\w.-])")
 
 
 def before_tool(tool_name=None, args=None, session_id=None, tool_call_id=None, **kwargs):
     if tool_name != "terminal" or not isinstance(args, dict):
         return None
     command = args.get("command", "")
-    if "agentbarn-message" not in command:
+    if not isinstance(command, str) or not _COMMAND.search(command):
         return None
     try:
         # Validate the binding now; only non-secret correlation IDs enter tool audit.

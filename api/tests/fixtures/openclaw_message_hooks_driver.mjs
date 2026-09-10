@@ -13,12 +13,11 @@ const end = (text, runId, trigger = "cron", context = {}) => hooks.runAgentEnd(
   { success: true, messages: [{ role: "assistant", content: [{ type: "text", text }] }] },
   { runId, trigger, ...context },
 );
-await end("Conversation result", "one", "cron", {
-  channelId: "connection:0191-uuid:C123:1788328904.404579",
-});
-await end("Conversation result", "one", "cron", {
-  channelId: "connection:0191-uuid:C123:1788328904.404579",
-});
+// The context a real cron run carries: channelId is the delivery channel, and the session key is
+// lowercased. Neither identifies the creating conversation, so OpenClaw refuses to misroute it.
+const conversation = { channelId: "slack", sessionKey: "agent:main:connection:0191-uuid:c123:1788328904.404579" };
+await end("Conversation result", "one", "cron", conversation);
+await end("Conversation result", "one", "cron", conversation);
 await end("Default result", "default");
 await end("[SILENT]", "two");
 await end("HEARTBEAT_OK\n", "two-b");
@@ -31,7 +30,6 @@ const requests = JSON.parse(execFileSync("python3", ["-c", [
 ].join(";")], { encoding: "utf8" }));
 assert.deepEqual(requests, [
   ["openclaw:default", { kind: "default" }],
-  ["openclaw:one", { kind: "origin", connection_id: "0191-uuid", channel_id: "C123", thread_id: "1788328904.404579" }],
 ]);
 const session = "agent:main:connection:test";
 fs.mkdirSync("/tmp/agentbarn-executions", { recursive: true });
@@ -41,4 +39,8 @@ const bound = await hooks.runBeforeToolCall(event, { sessionKey: session, toolNa
 assert.match(bound.params.command, /AGENTBARN_TOOL_SESSION=/);
 const denied = await hooks.runBeforeToolCall(event, { sessionKey: "cron:other", toolName: "exec", toolCallId: "call-1" });
 assert.equal(denied.block, true);
+// A command that merely names the spool file is neither blocked nor rebound.
+const spoolListing = { toolName: "exec", params: { command: "ls /home/node/.openclaw/agentbarn-messages.sqlite3" }, toolCallId: "call-2" };
+const untouched = await hooks.runBeforeToolCall(spoolListing, { sessionKey: "cron:other", toolName: "exec", toolCallId: "call-2" });
+assert.ok(!untouched?.block && !untouched?.params);
 console.log("OpenClaw native completion and tool-binding hooks passed");

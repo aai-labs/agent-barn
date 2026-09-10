@@ -15,9 +15,13 @@ def patch(source: str) -> str:
         capture,
         """                # Agent Barn durable completion bridge
                 if os.environ.get("AGENTBARN_SCHEDULED_DELIVERY") == "1":
-                    from agentbarn_message import capture_completion
-                    if success and not _is_interrupted(job["id"], execution_token):
-                        capture_completion("hermes:" + str(execution_id), final_response, job.get("origin"), job.get("deliver"))
+                    # Delivery is the newer side effect; it must never cost the job its saved output.
+                    try:
+                        from agentbarn_message import capture_completion
+                        if success and not _is_interrupted(job["id"], execution_token):
+                            capture_completion("hermes:" + str(execution_id), final_response, job.get("origin"), job.get("deliver"))
+                    except Exception as exc:
+                        print(f"[agentbarn-message] scheduled completion not captured ({type(exc).__name__})", flush=True)
 """
         + capture,
     )

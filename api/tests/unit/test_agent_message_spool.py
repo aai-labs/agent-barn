@@ -1,11 +1,13 @@
 import importlib.util
+import io
 import json
 import subprocess
 import sys
+import urllib.error
 from pathlib import Path
 
 import pytest
-from hamcrest import assert_that, equal_to, has_length
+from hamcrest import assert_that, contains_string, equal_to, has_length
 
 ROOT = Path(__file__).parents[2] / "domains/agents/scripts/messaging"
 
@@ -52,6 +54,113 @@ def test_completion_survives_process_restart_and_lost_acknowledgement(monkeypatc
     assert_that(submissions[0], equal_to(submissions[1]))
     with client._spool() as db:
         assert_that(json.loads(db.execute("SELECT receipt FROM completions").fetchone()[0]), equal_to(receipt))
+
+
+def _refusal(code, detail="Agent has no configured default delivery target"):
+    body = io.BytesIO(json.dumps({"detail": detail}).encode())
+    return urllib.error.HTTPError("http://communications/messages", code, "refused", {}, body)  # ty: ignore[invalid-argument-type]
+
+
+@pytest.mark.parametrize(
+    "code,retried", [(400, False), (403, False), (409, False), (408, True), (429, True), (503, True)]
+)
+def test_only_a_failure_that_could_succeed_later_is_retried(monkeypatch, tmp_path, code, retried):
+    """A permanent refusal retried forever never shrinks the spool and can land hours late."""
+    client = _client(monkeypatch, tmp_path)
+    client.capture_completion("one", "Scheduled result")
+    submissions = []
+
+    def refuse(method, path, payload):
+        submissions.append(payload)
+        raise _refusal(code)
+
+    monkeypatch.setattr(client, "request", refuse)
+    client.drain_once()
+    with client._spool() as db:
+        db.execute("UPDATE completions SET available_at=0")
+    client.drain_once()
+    assert_that(submissions, has_length(2 if retried else 1))
+
+
+def test_retries_stop_at_the_attempt_ceiling(monkeypatch, tmp_path):
+    client = _client(monkeypatch, tmp_path)
+    client.capture_completion("one", "Scheduled result")
+    with client._spool() as db:
+        db.execute("UPDATE completions SET attempts=?", (client.MAX_ATTEMPTS - 1,))
+    monkeypatch.setattr(client, "request", lambda method, path, payload: (_ for _ in ()).throw(TimeoutError()))
+    client.drain_once()
+    with client._spool() as db:
+        assert_that(db.execute("SELECT settled_at IS NOT NULL FROM completions").fetchone()[0], equal_to(1))
+
+
+def test_settled_rows_are_pruned_only_after_the_retention_window(monkeypatch, tmp_path):
+    client = _client(monkeypatch, tmp_path)
+    for run_id in ("old", "recent", "pending"):
+        client.capture_completion(run_id, f"Scheduled result {run_id}")
+    now = client.time.time()
+    with client._spool() as db:
+        db.execute("UPDATE completions SET settled_at=? WHERE run_id='old'", (now - client.RETENTION_SECONDS - 1,))
+        db.execute("UPDATE completions SET settled_at=? WHERE run_id='recent'", (now,))
+        db.execute("UPDATE completions SET available_at=? WHERE run_id='pending'", (now + 3600,))
+    client.drain_once()
+    with client._spool() as db:
+        remaining = [row[0] for row in db.execute("SELECT run_id FROM completions ORDER BY run_id")]
+    assert_that(remaining, equal_to(["pending", "recent"]))
+
+
+def test_existing_spool_is_upgraded_with_terminal_state(monkeypatch, tmp_path):
+    client = _client(monkeypatch, tmp_path)
+    path = tmp_path / "messages.sqlite3"
+    with client.sqlite3.connect(path) as db:
+        db.execute(
+            """CREATE TABLE completions (
+                run_id TEXT PRIMARY KEY, request TEXT NOT NULL, receipt TEXT,
+                attempts INTEGER NOT NULL DEFAULT 0, available_at REAL NOT NULL DEFAULT 0, error TEXT
+            )"""
+        )
+
+    with client._spool() as db:
+        columns = [row[1] for row in db.execute("PRAGMA table_info(completions)")]
+
+    assert_that("settled_at" in columns, equal_to(True))
+
+
+@pytest.mark.parametrize(
+    "error,expected",
+    [
+        (_refusal(403, "Outbound recipient is not allowed by this Connection"), "Do not retry"),
+        (TimeoutError(), "retry the same tool invocation"),
+    ],
+)
+def test_cli_tells_the_model_to_retry_only_what_could_succeed(monkeypatch, tmp_path, capsys, error, expected):
+    client = _client(monkeypatch, tmp_path)
+    monkeypatch.setattr(sys, "argv", ["agentbarn-message", "send", "--to", "C123", "--text", "hi"])
+    monkeypatch.setattr(client, "send_explicit", lambda *args: (_ for _ in ()).throw(error))
+    with pytest.raises(SystemExit):
+        client.main()
+    assert_that(capsys.readouterr().err, contains_string(expected))
+
+
+@pytest.mark.parametrize(
+    "command,matched",
+    [
+        ("agentbarn-message send --to C123 --text hi", True),
+        ("cd /workspace && /tmp/agentbarn-bin/agentbarn-message send --to C123 --text hi", True),
+        ("ls -la /opt/data/agentbarn-messages.sqlite3", False),
+        ("cat agentbarn-message.log", False),
+    ],
+)
+def test_hermes_hook_matches_the_command_not_a_path_that_contains_it(monkeypatch, tmp_path, command, matched):
+    monkeypatch.syspath_prepend(str(ROOT))
+    spec = importlib.util.spec_from_file_location("hermes_messaging_test", ROOT / "hermes-messaging.py")
+    if spec is None or spec.loader is None:
+        raise AssertionError("Could not load the Hermes messaging hook")
+    loader = spec.loader
+    hook = importlib.util.module_from_spec(spec)
+    loader.exec_module(hook)
+    # No inbound binding exists, so a matched command is blocked and anything else passes through untouched.
+    result = hook.before_tool("terminal", {"command": command}, session_id="cron", tool_call_id="call")
+    assert_that(result is not None, equal_to(matched))
 
 
 def test_either_silence_marker_suppresses_submission_but_prose_does_not(monkeypatch, tmp_path):

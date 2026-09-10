@@ -10,6 +10,7 @@ import json
 import os
 import sqlite3
 import time
+import urllib.error
 import urllib.request
 from contextlib import contextmanager
 from pathlib import Path
@@ -88,16 +89,23 @@ def send_explicit(recipient, text, kind="channel", thread=None):
 
 @contextmanager
 def _spool():
-    default = str(Path(os.environ.get("HERMES_HOME", "/opt/data")) / "agentbarn-messages.sqlite3")
-    path = Path(os.environ.get("AGENTBARN_MESSAGE_SPOOL", default))
+    # Required, never inferred: each start.sh exports it so the capturing runtime and
+    # the drain loop cannot silently disagree about which file they share.
+    path = Path(os.environ["AGENTBARN_MESSAGE_SPOOL"])
     path.parent.mkdir(parents=True, exist_ok=True)
     db = sqlite3.connect(path, timeout=30)
     db.execute("PRAGMA journal_mode=WAL")
     db.execute("PRAGMA synchronous=FULL")
     db.execute("""CREATE TABLE IF NOT EXISTS completions (
         run_id TEXT PRIMARY KEY, request TEXT NOT NULL, receipt TEXT,
-        attempts INTEGER NOT NULL DEFAULT 0, available_at REAL NOT NULL DEFAULT 0, error TEXT
+        attempts INTEGER NOT NULL DEFAULT 0, available_at REAL NOT NULL DEFAULT 0, error TEXT,
+        settled_at REAL
     )""")
+    # Runtime-local schema migration for spools created before terminal states were
+    # introduced. SQLite has no CREATE TABLE IF NOT EXISTS upgrade semantics.
+    columns = {row[1] for row in db.execute("PRAGMA table_info(completions)")}
+    if "settled_at" not in columns:
+        db.execute("ALTER TABLE completions ADD COLUMN settled_at REAL")
     try:
         with db:
             yield db
@@ -204,12 +212,26 @@ def capture_completion(run_id, text, origin=None, deliver=None):
         db.execute("INSERT OR IGNORE INTO completions(run_id, request) VALUES (?, ?)", (str(run_id), payload))
 
 
+# A transient failure retries for about a day (backoff caps at 300s); past that the
+# message is stale. Settled rows -- acknowledged or abandoned -- are kept long enough
+# that a re-captured run still dedupes, then pruned so the spool cannot grow forever.
+MAX_ATTEMPTS = 300
+RETENTION_SECONDS = 7 * 24 * 3600
+
+
+def is_permanent(exc):
+    """A 4xx other than timeout or rate limit: resubmitting the same request only repeats the refusal."""
+    return isinstance(exc, urllib.error.HTTPError) and 400 <= exc.code < 500 and exc.code not in (408, 429)
+
+
 def drain_once():
+    now = time.time()
     with _spool() as db:
+        db.execute("DELETE FROM completions WHERE settled_at < ?", (now - RETENTION_SECONDS,))
         rows = db.execute(
-            "SELECT run_id, request, attempts FROM completions WHERE receipt IS NULL AND available_at<=? "
+            "SELECT run_id, request, attempts FROM completions WHERE settled_at IS NULL AND available_at<=? "
             "ORDER BY rowid LIMIT 20",
-            (time.time(),),
+            (now,),
         ).fetchall()
     for run_id, payload, attempts in rows:
         try:
@@ -218,15 +240,28 @@ def drain_once():
                 raise ValueError("Communications did not acknowledge durable acceptance")
         except Exception as exc:
             # Retain the body locally, but never print content, credentials, or provider errors.
+            error = f"HTTP {exc.code}" if isinstance(exc, urllib.error.HTTPError) else type(exc).__name__
+            if is_permanent(exc) or attempts + 1 >= MAX_ATTEMPTS:
+                # Never accepted, so the Communications journal will not show it; this line is the signal.
+                with _spool() as db:
+                    db.execute(
+                        "UPDATE completions SET attempts=attempts+1, error=?, settled_at=? WHERE run_id=?",
+                        (error, time.time(), run_id),
+                    )
+                print(f"[agentbarn-message] scheduled completion {run_id} abandoned ({error})", flush=True)
+                continue
             with _spool() as db:
                 db.execute(
                     "UPDATE completions SET attempts=attempts+1, available_at=?, error=? WHERE run_id=?",
-                    (time.time() + min(300, 2 ** min(attempts + 1, 8)), type(exc).__name__, run_id),
+                    (time.time() + min(300, 2 ** min(attempts + 1, 8)), error, run_id),
                 )
-            print(f"[agentbarn-message] scheduled submission pending ({type(exc).__name__})", flush=True)
+            print(f"[agentbarn-message] scheduled submission pending ({error})", flush=True)
         else:
             with _spool() as db:
-                db.execute("UPDATE completions SET receipt=?, error=NULL WHERE run_id=?", (json.dumps(receipt), run_id))
+                db.execute(
+                    "UPDATE completions SET receipt=?, error=NULL, settled_at=? WHERE run_id=?",
+                    (json.dumps(receipt), time.time(), run_id),
+                )
 
 
 def drain_forever():
@@ -254,7 +289,15 @@ def main():
         try:
             print(json.dumps(send_explicit(args.to, args.text, args.kind, args.thread)))
         except Exception as exc:
-            parser.exit(1, f"Message was not acknowledged ({type(exc).__name__}); retry the same tool invocation.\n")
+            if not is_permanent(exc):
+                parser.exit(
+                    1, f"Message was not acknowledged ({type(exc).__name__}); retry the same tool invocation.\n"
+                )
+            try:
+                reason = json.loads(exc.read())["detail"]  # ty: ignore[unresolved-attribute]
+            except Exception:
+                reason = str(exc)
+            parser.exit(1, f"Message was refused: {reason}. Do not retry; report that it could not be sent.\n")
 
 
 if __name__ == "__main__":

@@ -65,6 +65,8 @@ mkdir -p /opt/data/plugins/agentbarn-messaging
 cp /app/config/hermes-messaging.py /opt/data/plugins/agentbarn-messaging/__init__.py
 printf 'name: agentbarn-messaging\nversion: "1.0"\ndescription: Bind explicit message requests to inbound executions\n' > /opt/data/plugins/agentbarn-messaging/plugin.yaml
 export AGENTBARN_SCHEDULED_DELIVERY=1
+# The scheduler (inside the gateway) and the drain loop must name the same file.
+export AGENTBARN_MESSAGE_SPOOL=/opt/data/agentbarn-messages.sqlite3
 python3 /app/config/agentbarn_message.py drain &
 # Pinned Hermes never runs BOOT.md; OpenClaw bundles a gateway:startup hook for it.
 python3 /app/config/boot-run.py &
