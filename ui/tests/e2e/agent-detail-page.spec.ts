@@ -839,7 +839,7 @@ test.describe("Agent Detail Page — Channels tab", () => {
     await expect(page.getByRole("button", { name: "Remove #general", exact: true })).toBeVisible();
   });
 
-  test("shows why a directory read failed instead of an empty picker", async ({ page }) => {
+  test("shows an actionable directory error without exposing server details", async ({ page }) => {
     await serveSavedSlackConnection(page);
     await page.route("**/directory/channels*", async (route) => {
       await route.fulfill({
@@ -852,7 +852,10 @@ test.describe("Agent Detail Page — Channels tab", () => {
     await agentDetailPage.editConnectionButton("Team Slack").click();
     await agentDetailPage.browseDirectoryButton("Allowed channels").click();
 
-    await expect(agentDetailPage.directoryPicker()).toContainText("missing_scope");
+    await expect(agentDetailPage.directoryPicker()).toContainText(
+      "Could not load channels. Check the Connection's permissions and try again.",
+    );
+    await expect(agentDetailPage.directoryPicker()).not.toContainText("missing_scope");
   });
 
   test("browses the Slack workspace to fill channel IDs from names", async ({ page }) => {

@@ -167,7 +167,9 @@ class CommunicationsService:
                 detail="Workspace preview is available for Slack only",
             )
         try:
-            settings = plugin.settings_model.model_validate(data.settings)
+            preview_settings = dict(data.settings)
+            preview_settings.pop("default_delivery_target", None)
+            settings = plugin.settings_model.model_validate(preview_settings)
             credentials = plugin.credentials_model.model_validate(data.credentials)
             channels = plugin.list_directory_entries(settings, credentials, kind="channels")
             users = plugin.list_directory_entries(settings, credentials, kind="users")

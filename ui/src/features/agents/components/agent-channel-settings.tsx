@@ -53,6 +53,10 @@ function titleCase(text: string): string {
   return text.replace(/[_-]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
+function directoryLoadError(noun: string): string {
+  return `Could not load ${noun}. Check the Connection's permissions and try again.`;
+}
+
 /** Small colored dot + text, matching the status language used across the agent list/detail views. */
 function StatusDot({ color, label }: { color: string; label: string }) {
   return (
@@ -622,12 +626,8 @@ export function AgentChannelSettings({
       noun,
       entries: query.data ?? [],
       isLoading: query.isPending,
-      // Surface what the provider actually said (a revoked token, a missing scope) rather
-      // than a generic failure — the whole point of the API's bounded error detail.
       error: query.error
-        ? query.error instanceof Error
-          ? query.error.message
-          : `Could not load ${noun}.`
+        ? directoryLoadError(noun)
         : null,
       disabledReason: disabledReason ?? null,
       // A directory read that already failed is cached as an error, so re-opening the
@@ -655,9 +655,7 @@ export function AgentChannelSettings({
         void previewConnectionDirectory
           .mutateAsync({ agentId: agent.id, platformKey: "slack", settings, credentials })
           .then(setSlackPreview)
-          .catch((error: unknown) =>
-            setSlackPreviewError(error instanceof Error ? error.message : "Could not load the Slack workspace."),
-          );
+          .catch(() => setSlackPreviewError(directoryLoadError(noun)));
       },
     });
     return {
