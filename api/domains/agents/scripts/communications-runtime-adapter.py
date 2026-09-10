@@ -43,6 +43,17 @@ _PENDING_APPROVALS: dict[str, dict] = {}
 _ACTIVE_RUNS_LOCK = threading.Lock()
 _ACTIVE_RUNS: dict[str, ActiveRun] = {}
 
+# Communications control-plane calls (claim, reply, complete, renew) and the
+# runtime's own run/approval endpoints all answer immediately, so a peer that
+# stops responding must surface as an error the surrounding retry loop can act
+# on. It cannot be left to block: the delivery worker claims inside this call,
+# so a long stall there stops claiming entirely and logs nothing at all --
+# indistinguishable from an idle queue.
+_REQUEST_TIMEOUT_SECONDS = 30
+# The one exception: OpenClaw's blocking turn holds the connection open for the
+# whole model response.
+_RUNTIME_TURN_TIMEOUT_SECONDS = 900
+
 _LEASE_HEARTBEAT_SECONDS = 60
 _PROGRESS_RELAY_MIN_SECONDS = 3
 
@@ -111,11 +122,18 @@ class InFlightDelivery:
 IN_FLIGHT = InFlightDelivery()
 
 
-def http_request(method: str, url: str, *, headers: dict[str, str], payload: dict | None = None):
+def http_request(
+    method: str,
+    url: str,
+    *,
+    headers: dict[str, str],
+    payload: dict | None = None,
+    timeout: float = _REQUEST_TIMEOUT_SECONDS,
+):
     body = json.dumps(payload).encode() if payload is not None else None
     req = urllib.request.Request(url, method=method, headers=headers, data=body)
     try:
-        with urllib.request.urlopen(req, timeout=900) as response:
+        with urllib.request.urlopen(req, timeout=timeout) as response:
             if response.status == 204:
                 return None
             return json.loads(response.read())
@@ -243,6 +261,7 @@ def run_delivery_chat_completions(delivery: dict) -> None:
             "POST",
             f"{RUNTIME_API_URL}/v1/chat/completions",
             headers=runtime_headers(session_key, delivery_id),
+            timeout=_RUNTIME_TURN_TIMEOUT_SECONDS,
             payload={
                 "model": RUNTIME_MODEL,
                 "stream": False,

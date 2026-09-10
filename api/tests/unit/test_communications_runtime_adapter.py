@@ -5,7 +5,7 @@ import json
 import threading
 from pathlib import Path
 from types import ModuleType
-from typing import Any
+from typing import Any, Self
 from unittest.mock import Mock, call
 
 import pytest
@@ -109,7 +109,7 @@ def test_run_delivery_posts_reply_then_completion(monkeypatch: pytest.MonkeyPatc
     adapter = _load_adapter(monkeypatch)
     calls: list[tuple[str, dict | None]] = []
 
-    def fake_request(_method: str, url: str, *, headers: dict[str, str], payload: dict | None = None):
+    def fake_request(_method: str, url: str, *, headers: dict[str, str], payload: dict | None = None, **_):
         del headers
         calls.append((url, payload))
         if url.endswith("/v1/chat/completions"):
@@ -129,11 +129,40 @@ def test_run_delivery_posts_reply_then_completion(monkeypatch: pytest.MonkeyPatc
     assert calls[2][1] == {"succeeded": True}
 
 
+def test_communications_calls_are_bounded_so_a_stall_cannot_park_the_worker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The delivery worker claims inside http_request, so an unbounded wait there
+    stops claiming entirely and logs nothing -- indistinguishable from idle."""
+    adapter = _load_adapter(monkeypatch)
+    timeouts: list[float | None] = []
+
+    class Response:
+        status = 204
+
+        def __enter__(self) -> Self:
+            return self
+
+        def __exit__(self, *_: object) -> bool:
+            return False
+
+    def fake_urlopen(_req: Any, timeout: float | None = None) -> Response:
+        timeouts.append(timeout)
+        return Response()
+
+    monkeypatch.setattr(adapter.urllib.request, "urlopen", fake_urlopen)
+
+    adapter.renew_delivery_lease("delivery-1")
+
+    assert timeouts == [adapter._REQUEST_TIMEOUT_SECONDS]
+    assert adapter._REQUEST_TIMEOUT_SECONDS < adapter._RUNTIME_TURN_TIMEOUT_SECONDS
+
+
 def test_cancel_during_runtime_work_suppresses_reply(monkeypatch: pytest.MonkeyPatch) -> None:
     adapter = _load_adapter(monkeypatch)
     calls: list[tuple[str, dict | None]] = []
 
-    def fake_request(_method: str, url: str, *, headers: dict[str, str], payload: dict | None = None):
+    def fake_request(_method: str, url: str, *, headers: dict[str, str], payload: dict | None = None, **_):
         del headers
         calls.append((url, payload))
         if url.endswith("/v1/chat/completions"):
