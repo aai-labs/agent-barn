@@ -12,6 +12,7 @@ from api.domains.auth.models import CurrentUserContext
 from api.domains.costs.models import (
     AgentCostRead,
     AgentModelBreakdown,
+    AgentSpendRead,
     AgentSpendSeriesPoint,
     CostFilter,
     CostFilterOption,
@@ -118,6 +119,33 @@ class CostService:
         return [
             CostFilterOption(value=model, label=model.split("/")[-1])
             for model in self.repository.distinct_models(window, scoped)
+        ]
+
+    def list_org_agent_spend(
+        self,
+        context: CurrentUserContext,
+        window: StatsWindow,
+        filters: CostFilter,
+    ) -> list[AgentSpendRead]:
+        """Every Agent that spent anything in the window, ranked.
+
+        Organization-wide, so it takes the Organization `cost.read` the summary takes
+        rather than a per-Agent check: the caller is asking about the whole
+        organization's spend, not about one Agent they have been assigned.
+        """
+        scoped = self._scoped(self._authorized_org(context), filters)
+        return [
+            AgentSpendRead(
+                agent_id=agent_id,
+                agent_name=agent_name,
+                spend=float(spend),
+                calls=calls,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+            )
+            for agent_id, agent_name, spend, calls, prompt_tokens, completion_tokens in (
+                self.repository.spend_by_agent(window, scoped)
+            )
         ]
 
     def get_agent_cost(

@@ -8,6 +8,7 @@ from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.utils import get_current_user
 from api.domains.costs.models import (
     AgentCostRead,
+    AgentSpendRead,
     CostFilter,
     CostFilterOption,
     CostRecordRead,
@@ -67,6 +68,22 @@ def list_model_filter_options(
     filters: Annotated[CostFilter, Depends(get_cost_filter)],
 ):
     return service.list_org_model_options(context, window, filters)
+
+
+@costs_router.get("/agents", response_model=list[AgentSpendRead])
+def list_agent_spend(
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[CostService, Injected(CostService)],
+    window: Annotated[StatsWindow, Depends(get_stats_window)],
+    filters: Annotated[CostFilter, Depends(get_cost_filter)],
+):
+    """Agents ranked by spend, biggest first.
+
+    The shared filter carries a sort direction, which this route ignores: the ranking
+    is always by spend, and the table re-sorts the whole list client-side rather than
+    refetching, so there is no server ordering for a caller to choose.
+    """
+    return service.list_org_agent_spend(context, window, filters)
 
 
 @costs_router.get("/agents/{agent_id}", response_model=AgentCostRead)

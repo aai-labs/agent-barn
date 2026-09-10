@@ -317,6 +317,22 @@ class OrganizationSpendRead(PydanticBaseModel):
     agents: int
 
 
+class AgentSpendRead(PydanticBaseModel):
+    """One Agent's slice of organization spend, for the ranked table.
+
+    `agent_id` is None for the unattributed bucket, kept in the ranking rather than
+    filtered out: hiding it would let the organization total silently exceed the sum
+    of the rows shown beneath it.
+    """
+
+    agent_id: UUID | None = None
+    agent_name: str | None = None
+    spend: float
+    calls: int
+    prompt_tokens: int
+    completion_tokens: int
+
+
 class PlatformCostSummaryRead(CostSummaryRead):
     """The org summary plus the figures only a platform admin sees."""
 

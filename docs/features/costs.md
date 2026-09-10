@@ -41,6 +41,7 @@ Reading the proxy at request time — the earlier arrangement — meant a failed
 ### Reads
 
 - Every aggregate and the row list run through the same predicate, so a stat card and the table beneath it cannot describe different sets of calls.
+- The ranked Agent table is not capped, unlike the per-Agent series behind the chart: a line per Agent stops being readable after a handful, but a table has to account for every Agent that spent anything. It keeps the unattributed bucket for the same reason the Organization ranking does.
 - On the org surface `organization_id` is pinned by the route and never read from the query string.
 - The platform surface has its own routes, service and read model. The org surface must have no code path that can return another organization's name or spend.
 - The unattributed bucket stays inside platform totals and is also reported separately. Excluding it would make the platform total exceed the sum of the organizations listed beneath it.

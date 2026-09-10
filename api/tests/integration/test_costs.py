@@ -303,6 +303,32 @@ def test_get_agent_cost_returns_200_and_data():
             assert_that(data["models_breakdown"], has_length(1))
 
 
+def test_agent_spend_list_ranks_agents_by_spend():
+    with given([*_GIVEN, there_are_cost_records(count=2, spend="1.25")]) as context:
+        client: TestClient = context.client
+
+        with when("I list agent spend for the organization"):
+            response = client.get(f"{_BASE}/agents", headers=_auth(context))
+
+        with then("it returns one row per agent with its totals"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            rows = response.json()
+            assert_that(rows, has_length(1))
+            assert_that(rows[0]["agent_id"], equal_to(str(context.agent.id)))
+            assert_that(rows[0]["spend"], close_to(2.5, 0.0001))
+            assert_that(rows[0]["calls"], equal_to(2))
+            assert_that(rows[0]["prompt_tokens"], greater_than(0))
+
+
+def test_member_cannot_list_agent_spend():
+    """The ranked table is Organization-wide, so it takes the Organization `cost.read`
+    the summary takes rather than a per-Agent check."""
+    member_id = uuid7()
+    with given([*_GIVEN, _there_is_a_member_actor(member_id)]) as context:
+        response = context.client.get(f"{_BASE}/agents", headers=_auth(context))
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+
+
 def test_agent_cost_includes_a_spend_trend_for_the_agent():
     """The per-Agent surface carries its own trend.
 
