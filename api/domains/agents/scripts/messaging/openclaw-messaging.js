@@ -16,14 +16,14 @@ export default {
       const content = assistant?.content;
       const text = typeof content === "string" ? content : (content || [])
         .filter((part) => part.type === "text").map((part) => part.text).join("\n");
-      // Keep in step with SILENCE_MARKERS in agentbarn_message.py.
-      const silent = new Set(["[silent]", "silent", "no_reply", "no reply", "heartbeat_ok"]);
-      const lines = text.trim().split("\n").map((l) => l.trim()).filter(Boolean);
-      if (!lines.length) return;
-      if ([text.trim(), lines[0], lines[lines.length - 1]].some((c) => silent.has(c.toLowerCase()))) return;
+      const channelId = typeof ctx.channelId === "string" ? ctx.channelId.trim() : "";
+      const origin = channelId.startsWith("connection:")
+        ? { platform: "api_server", chat_id: channelId }
+        : null;
       // Synchronous capture finishes before the hook yields; network retry is a separate process.
-      execFileSync("python3", ["-c", "import json,sys; from agentbarn_message import capture_completion; p=json.load(sys.stdin); capture_completion(p['run_id'],p['text'])"], {
-        input: JSON.stringify({ run_id: `openclaw:${runId}`, text }),
+      // The shared client owns silence filtering and destination parsing for both runtimes.
+      execFileSync("python3", ["-c", "import json,sys; from agentbarn_message import capture_completion; p=json.load(sys.stdin); capture_completion(p['run_id'],p['text'],p.get('origin'))"], {
+        input: JSON.stringify({ run_id: `openclaw:${runId}`, text, origin }),
         env: process.env, timeout: 30000, stdio: ["pipe", "pipe", "pipe"],
       });
     });
@@ -33,7 +33,7 @@ export default {
       const invocation = event.toolCallId || ctx.toolCallId;
       const path = `${process.env.AGENTBARN_EXECUTIONS_DIR || "/tmp/agentbarn-executions"}/${crypto.createHash("sha256").update(session || "").digest("hex")}`;
       if (!session || !invocation || !fs.existsSync(path)) {
-        return { block: true, blockReason: "Explicit messaging requires an active inbound execution. Scheduled delivery uses the configured default." };
+        return { block: true, blockReason: "Explicit messaging requires an active inbound execution. Scheduled results are delivered automatically." };
       }
       return { params: { ...event.params,
         command: `AGENTBARN_TOOL_SESSION=${quote(session)} AGENTBARN_TOOL_INVOCATION=${quote(invocation)} sh -c ${quote(event.params.command)}`,

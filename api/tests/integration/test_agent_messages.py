@@ -173,6 +173,17 @@ def test_explicit_send_stays_on_the_conversation_connection():
         assert_that(outbound[0].connection_id, not_(equal_to(other.id)))
 
 
+def test_interactive_send_cannot_select_the_configured_default():
+    """A live execution authorizes only an explicit send on its inbound Connection."""
+    with given([*STEPS, messaging_ready]) as context:
+        _, payload = _interactive(context)
+        payload["destination"] = {"kind": "default"}
+
+        response = submit(context, payload)
+
+        assert_that(response.status_code, equal_to(422))
+
+
 def test_runtime_identity_requires_matching_credential():
     with given([*STEPS, messaging_ready]) as context:
         context.runtime_headers["Authorization"] = "Bearer wrong-key"
@@ -321,7 +332,7 @@ def test_unverifiable_origin_is_rejected_and_never_diverted_to_the_default(mutat
         ("scheduled", "explicit", False),
         # An interactive run has a live execution to authorize an explicit send, but
         # no job origin to inherit.
-        ("interactive", "default", True),
+        ("interactive", "default", False),
         ("interactive", "explicit", True),
         ("interactive", "origin", False),
     ],

@@ -9,15 +9,30 @@ const registry = { plugins: [{ id: plugin.id, status: "loaded" }], hooks: [], ty
 plugin.register({ on(hookName, handler) { registry.typedHooks.push({ pluginId: plugin.id, hookName, handler }); } });
 initialize(registry);
 const hooks = runner();
-const end = (text, runId, trigger = "cron") => hooks.runAgentEnd({ success: true, messages: [{ role: "assistant", content: [{ type: "text", text }] }] }, { runId, trigger });
-await end("Scheduled result", "one");
-await end("Scheduled result", "one");
+const end = (text, runId, trigger = "cron", context = {}) => hooks.runAgentEnd(
+  { success: true, messages: [{ role: "assistant", content: [{ type: "text", text }] }] },
+  { runId, trigger, ...context },
+);
+await end("Conversation result", "one", "cron", {
+  channelId: "connection:0191-uuid:C123:1788328904.404579",
+});
+await end("Conversation result", "one", "cron", {
+  channelId: "connection:0191-uuid:C123:1788328904.404579",
+});
+await end("Default result", "default");
 await end("[SILENT]", "two");
 await end("HEARTBEAT_OK\n", "two-b");
 await end("SILENT", "three");
 await end("Ordinary reply", "four", "user");
-const count = execFileSync("python3", ["-c", "import os,sqlite3; print(sqlite3.connect(os.environ['AGENTBARN_MESSAGE_SPOOL']).execute('select count(*) from completions').fetchone()[0])"], { encoding: "utf8" });
-assert.equal(count.trim(), "2");
+const requests = JSON.parse(execFileSync("python3", ["-c", [
+  "import json,os,sqlite3",
+  "rows=sqlite3.connect(os.environ['AGENTBARN_MESSAGE_SPOOL']).execute('select run_id,request from completions order by run_id').fetchall()",
+  "print(json.dumps([(run_id,json.loads(request)['destination']) for run_id,request in rows]))",
+].join(";")], { encoding: "utf8" }));
+assert.deepEqual(requests, [
+  ["openclaw:default", { kind: "default" }],
+  ["openclaw:one", { kind: "origin", connection_id: "0191-uuid", channel_id: "C123", thread_id: "1788328904.404579" }],
+]);
 const session = "agent:main:connection:test";
 fs.mkdirSync("/tmp/agentbarn-executions", { recursive: true });
 fs.writeFileSync(`/tmp/agentbarn-executions/${crypto.createHash("sha256").update(session).digest("hex")}`, "{}");

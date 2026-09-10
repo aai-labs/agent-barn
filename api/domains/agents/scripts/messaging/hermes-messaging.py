@@ -18,7 +18,7 @@ def before_tool(tool_name=None, args=None, session_id=None, tool_call_id=None, *
         return {
             "action": "block",
             "message": "Explicit messaging requires an active inbound execution. "
-            "Scheduled results are delivered automatically to the configured default.",
+            "Scheduled results are delivered automatically.",
         }
     assert isinstance(session_id, str) and isinstance(tool_call_id, str)
     prefix = f"AGENTBARN_TOOL_SESSION={shlex.quote(session_id)} AGENTBARN_TOOL_INVOCATION={shlex.quote(tool_call_id)} "
