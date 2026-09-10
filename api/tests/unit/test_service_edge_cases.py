@@ -43,7 +43,7 @@ def build_user_service() -> tuple[
         user_repository=cast(UserRepository, user_repository),
         organization_user_service=cast(OrganizationUserService, organization_user_service),
         organization_user_repository=cast(OrganizationUserRepository, organization_user_repository),
-        organization_llm=Mock(),
+        litellm=Mock(),
         organization_repository=cast(OrganizationRepository, organization_repository),
         refresh_token_repository=cast(RefreshTokenRepository, refresh_token_repository),
         config=config,
@@ -106,7 +106,7 @@ def test_organization_service_update_not_found_raises_404():
     repo = Mock()
     repo.get.return_value = None
     org_service = OrganizationService(
-        organization_llm=Mock(),
+        litellm=Mock(),
         organization_repository=repo,
         agent_service=Mock(),
         permission_policy=Mock(),

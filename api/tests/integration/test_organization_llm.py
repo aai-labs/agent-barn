@@ -6,8 +6,8 @@ from fastapi import status
 from hamcrest import assert_that, equal_to
 
 from api.core.config import Config
-from api.domains.organizations.llm import OrganizationLLMService
 from api.domains.organizations.repository import OrganizationRepository
+from api.domains.organizations.service import OrganizationService
 from api.infrastructure.litellm.client import LiteLLMClient
 from api.tests.core.givenpy import given, then, when
 from api.tests.core.modules import create_test_client, prepare_api_server, prepare_injector
@@ -26,7 +26,8 @@ _GIVEN = [
 
 
 @pytest.mark.parametrize("platform", [False, True])
-def test_both_creation_paths_provision_team(platform):
+@pytest.mark.parametrize("remote_fails", [False, True])
+def test_both_creation_paths_provision_team(platform, remote_fails):
     with given(
         [
             *_GIVEN,
@@ -36,6 +37,8 @@ def test_both_creation_paths_provision_team(platform):
     ) as context:
         config = context.injector.get(Config)
         client = context.injector.get(LiteLLMClient)
+        if remote_fails:
+            client.ensure_organization_team.side_effect = RuntimeError("unavailable")
         path = "/api/v1/platform/users" if platform else "/api/v1/organizations"
         body = (
             {"email": "new@example.com", "full_name": "New User", "organization_name": "New Org"}
@@ -61,14 +64,14 @@ def test_reconciliation_failure_is_visible_and_retryable():
     with given([*_GIVEN, there_is_an_organization()]) as context:
         config = context.injector.get(Config)
         client = context.injector.get(LiteLLMClient)
-        service = context.injector.get(OrganizationLLMService)
+        service = context.injector.get(OrganizationService)
         client.ensure_organization_team.side_effect = RuntimeError("unavailable")
         with (
             patch.object(config, "litellm_base_url", "http://litellm"),
             patch.object(config, "litellm_secret_name", "litellm"),
         ):
             with pytest.raises(RuntimeError):
-                service.reconcile()
+                service.sync_llm_budgets()
             client.ensure_organization_team.side_effect = None
-            service.reconcile()
+            service.sync_llm_budgets()
         assert_that(client.ensure_organization_team.call_count, equal_to(2))

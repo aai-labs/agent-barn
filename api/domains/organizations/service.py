@@ -22,7 +22,6 @@ from api.domains.events import (
 )
 from api.domains.events.catalog import EVENT_REGISTRY, ORGANIZATION_MODEL_ALLOWLIST_CHANGED
 from api.domains.organizations.exceptions import OrganizationCreationLimitReached
-from api.domains.organizations.llm import OrganizationLLMService
 from api.domains.organizations.models import (
     Organization,
     OrganizationCreate,
@@ -34,6 +33,7 @@ from api.domains.organizations.models import (
 from api.domains.organizations.repository import OrganizationRepository
 from api.domains.rbac.catalog import ORG_OWNER_ONLY_ROLES, PermissionKey
 from api.domains.rbac.policy import PermissionPolicy
+from api.infrastructure.litellm.client import LiteLLMClient
 from api.infrastructure.shared.models import PaginatedItems, Pagination
 
 logger = logging.getLogger(__name__)
@@ -51,12 +51,20 @@ def _and_list(items: list[str]) -> str:
 @dataclass
 class OrganizationService:
     organization_repository: OrganizationRepository
-    organization_llm: OrganizationLLMService
+    litellm: LiteLLMClient
     agent_service: AgentService
     permission_policy: PermissionPolicy
     event_delivery_dispatcher: EventDeliveryDispatcher
     agent_settings_lookup: AgentSettingsLookupService
     agent_repository: AgentRepository
+
+    def sync_llm_budgets(self) -> None:
+        config = get_config()
+        if not config.litellm_base_url or not config.litellm_secret_name:
+            return
+        for organization_id in self.organization_repository.list_ids():
+            self.litellm.ensure_organization_team(str(organization_id))
+        logger.info("Organization LiteLLM teams and budgets synchronized")
 
     def get_organization(self, organization_id: UUID, context: CurrentUserContext) -> OrganizationRead:
         # Any member (or a platform administrator in explicit Organization context) may
@@ -200,7 +208,15 @@ class OrganizationService:
                 detail=f"You can create up to {error.limit} organizations",
             ) from error
 
-        self.organization_llm.provision_after_commit(organization.id)
+        if config.litellm_base_url and config.litellm_secret_name:
+            try:
+                self.litellm.ensure_organization_team(str(organization.id))
+            except Exception as exc:
+                # Creation already committed; key generation retries provisioning
+                # and refuses to issue a key without its team.
+                logger.error(
+                    "LiteLLM team provisioning deferred for Organization %s (%s)", organization.id, type(exc).__name__
+                )
         organization_read = self.organization_repository.get_read(organization.id)
         if not organization_read:
             raise HTTPException(

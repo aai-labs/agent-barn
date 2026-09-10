@@ -124,7 +124,7 @@ class OrganizationRepository:
 
         return query
 
-    def list_ids_for_llm_reconciliation(self) -> list[UUID]:
+    def list_ids(self) -> list[UUID]:
         """System-only inventory; never exposed through a user-facing route."""
         with Session(self.delegate.engine) as session:
             return list(session.exec(select(Organization.id)).all())

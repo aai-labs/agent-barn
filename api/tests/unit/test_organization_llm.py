@@ -1,5 +1,4 @@
 from unittest.mock import MagicMock, patch
-from uuid import uuid4
 
 import httpx
 import pytest
@@ -7,7 +6,7 @@ from hamcrest import assert_that, equal_to
 from pydantic import ValidationError
 
 from api.core.config import Config
-from api.domains.organizations.llm import OrganizationLLMService
+from api.domains.organizations.service import OrganizationService
 from api.infrastructure.litellm.client import LiteLLMClient, LiteLLMError
 
 
@@ -166,39 +165,6 @@ def test_generated_key_has_team_and_existing_attribution_metadata():
     )
 
 
-def test_reconciliation_applies_policy_to_each_organization():
-    orgs = [uuid4(), uuid4()]
-    repository = MagicMock()
-    repository.list_ids_for_llm_reconciliation.return_value = orgs
-    client = MagicMock()
-    OrganizationLLMService(config(), client, repository).reconcile()
-    assert_that(
-        [call.args for call in client.ensure_organization_team.call_args_list], equal_to([(str(org),) for org in orgs])
-    )
-
-
-def test_no_litellm_skips_all_provisioning():
-    client = MagicMock()
-    repo = MagicMock()
-    service = OrganizationLLMService(config(litellm_base_url=""), client, repo)
-    service.provision_after_commit(uuid4())
-    service.reconcile()
-    client.ensure_organization_team.assert_not_called()
-    repo.list_ids_for_llm_reconciliation.assert_not_called()
-
-
-def test_committed_creation_survives_remote_failure_without_logging_secrets():
-    client = MagicMock()
-    client.ensure_organization_team.side_effect = LiteLLMError("sk-secret")
-    service = OrganizationLLMService(config(), client, MagicMock())
-    org_id = uuid4()
-    with patch("api.domains.organizations.llm.logger") as logger:
-        service.provision_after_commit(org_id)
-    logger.error.assert_called_once_with(
-        "LiteLLM team provisioning deferred for Organization %s (%s)", org_id, "LiteLLMError"
-    )
-
-
 @pytest.mark.parametrize("fails", [False, True])
 def test_startup_reconciles_before_serving_and_aborts_on_failure(fails):
     import asyncio
@@ -207,9 +173,9 @@ def test_startup_reconciles_before_serving_and_aborts_on_failure(fails):
 
     injector = MagicMock()
     llm = MagicMock()
-    injector.get.side_effect = lambda cls: llm if cls is OrganizationLLMService else MagicMock()
+    injector.get.side_effect = lambda cls: llm if cls is OrganizationService else MagicMock()
     if fails:
-        llm.reconcile.side_effect = LiteLLMError("unavailable")
+        llm.sync_llm_budgets.side_effect = LiteLLMError("unavailable")
 
     async def run():
         with (
@@ -223,6 +189,6 @@ def test_startup_reconciles_before_serving_and_aborts_on_failure(fails):
                         pytest.fail("Must not serve after incomplete reconciliation")
             else:
                 async with lifespan(MagicMock()):
-                    llm.reconcile.assert_called_once_with()
+                    llm.sync_llm_budgets.assert_called_once_with()
 
     asyncio.run(run())

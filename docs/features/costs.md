@@ -58,7 +58,7 @@ Reading the proxy at request time — the earlier arrangement — meant a failed
 
 ## Organization LLM budgets
 
-`../../api/domains/organizations/llm.py` owns provisioning and reconciliation;
+`../../api/domains/organizations/service.py` owns provisioning and reconciliation;
 `../../api/infrastructure/litellm/client.py` owns the remote team/key API calls.
 
 When LiteLLM is configured, every Organization receives a LiteLLM team whose
