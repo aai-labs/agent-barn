@@ -44,6 +44,7 @@ export const mockCommunicationPlatforms = [
     settings_schema: {
       type: "object",
       properties: {
+        default_delivery_target: { title: "Default delivery target", type: "object" },
         channel_ids: { title: "Allowed channels", type: "array", items: { type: "string" } },
         dm_user_ids: { title: "Allowed DM senders", type: "array", items: { type: "string" } },
       },
@@ -141,6 +142,7 @@ export const mockCommunicationConnectionSummary = {
     agent_claimed: 2,
     model_completed: 2,
     reply_queued: 2,
+    initiated_queued: 1,
     provider_delivered: 2,
     dead_lettered: 0,
   },

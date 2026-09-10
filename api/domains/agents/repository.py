@@ -1,3 +1,5 @@
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, ClassVar
@@ -5,7 +7,7 @@ from uuid import UUID, uuid4
 
 import sqlalchemy as sa
 from injector import inject, singleton
-from sqlalchemy import exists, func, or_
+from sqlalchemy import exists, func, or_, text
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, col, select
 
@@ -199,6 +201,7 @@ class AgentRepository:
         agent_id: UUID | None,
         created_by_user_id: UUID | None,
         platform: CommunicationPlatform | None,
+        include_retired_connections: bool = False,
     ) -> list[Any]:
         """Shared narrowing for the stats aggregates (AF-256). Deliberately does
         not include a deleted_at predicate — callers decide that, since inventory
@@ -211,13 +214,13 @@ class AgentRepository:
         if created_by_user_id is not None:
             predicates.append(col(Agent.created_by_user_id) == created_by_user_id)
         if platform is not None:
-            predicates.append(
-                exists().where(
-                    col(CommunicationConnection.agent_id) == col(Agent.id),
-                    col(CommunicationConnection.platform_key) == platform.value,
-                    col(CommunicationConnection.retired_at).is_(None),
-                )
-            )
+            connection_predicates = [
+                col(CommunicationConnection.agent_id) == col(Agent.id),
+                col(CommunicationConnection.platform_key) == platform.value,
+            ]
+            if not include_retired_connections:
+                connection_predicates.append(col(CommunicationConnection.retired_at).is_(None))
+            predicates.append(exists().where(*connection_predicates))
         return predicates
 
     def count_agents_for_stats(
@@ -280,7 +283,13 @@ class AgentRepository:
         two-year one is not seven hundred. It also drives the generate_series
         step, so the empty buckets are filled in at the same resolution.
         """
-        predicates = self._stats_predicates(organization_id, agent_id, created_by_user_id, platform)
+        predicates = self._stats_predicates(
+            organization_id,
+            agent_id,
+            created_by_user_id,
+            platform,
+            include_retired_connections=True,
+        )
         step = sa.text(f"interval '1 {unit.value}'")
         created_utc = sa.func.timezone("UTC", col(Agent.created_at))
         deleted_utc = sa.func.timezone("UTC", col(Agent.deleted_at))
@@ -752,6 +761,32 @@ class AgentRepository:
             session.refresh(agent)
             session.commit()
             return AgentLifecycleEventResult(agent=agent, delivery_ids=delivery_ids)
+
+    @contextmanager
+    def lifecycle_lock(self, agent_id: UUID) -> Iterator[bool]:
+        """Serialize lifecycle-mutating operations (start/stop/delete, and the
+        maintenance rebuild path) for one Agent across API processes, so a competing
+        request fails fast with 409 instead of racing this one through runtime
+        provisioning or teardown.
+
+        Uses a session-scoped Postgres advisory lock (non-blocking): it is not tied
+        to any single transaction, so the caller may commit intermediate work while
+        still holding it. It is released when this context manager exits, or, as a
+        crash safety net, automatically by Postgres when the underlying connection
+        closes. Callers must not release it (let the `with` block exit) until after
+        their own writes have committed, or a losing request could still observe
+        stale state once it acquires the lock.
+        """
+        lock_key = f"agent-lifecycle:{agent_id}"
+        with Session(self.delegate.engine) as session:
+            acquired = bool(
+                session.scalar(text("SELECT pg_try_advisory_lock(hashtext(:lock_key))"), {"lock_key": lock_key})
+            )
+            try:
+                yield acquired
+            finally:
+                if acquired:
+                    session.scalar(text("SELECT pg_advisory_unlock(hashtext(:lock_key))"), {"lock_key": lock_key})
 
     def save_with_lifecycle_event(
         self,

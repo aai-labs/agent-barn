@@ -38,6 +38,7 @@ import {
   useDownloadAppPackage,
   useInstallLink,
 } from "@/features/communication-connections/hooks/use-communication-connections";
+import { DefaultDeliveryTargetInput } from "@/features/communication-connections/components/default-delivery-target-input";
 import { DirectoryPickerDialog } from "@/features/communication-connections/components/directory-picker-dialog";
 import { SLACK_APP_MANIFEST } from "@/features/communication-connections/slack-manifest";
 import type { CommunicationConnection, CommunicationDirectoryEntry, CommunicationPlatform } from "@/features/communication-connections/schemas";
@@ -50,6 +51,10 @@ const WEB_PLATFORM_KEY = "web";
 
 function titleCase(text: string): string {
   return text.replace(/[_-]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function directoryLoadError(noun: string): string {
+  return `Could not load ${noun}. Check the Connection's permissions and try again.`;
 }
 
 /** Small colored dot + text, matching the status language used across the agent list/detail views. */
@@ -482,6 +487,11 @@ function SchemaFields({
       </span>
     );
 
+    if (key === "defaultDeliveryTarget") {
+      return <DefaultDeliveryTargetInput key={key} value={values[key]} onChange={update}
+        channels={arrayBrowse.channelIds ?? arrayBrowse.allowedChannelIds}
+        users={arrayBrowse.dmUserIds ?? arrayBrowse.allowedUserIds} />;
+    }
     if (property.type === "boolean") {
       return (
         <label key={key} className="flex flex-col gap-1">
@@ -616,12 +626,8 @@ export function AgentChannelSettings({
       noun,
       entries: query.data ?? [],
       isLoading: query.isPending,
-      // Surface what the provider actually said (a revoked token, a missing scope) rather
-      // than a generic failure — the whole point of the API's bounded error detail.
       error: query.error
-        ? query.error instanceof Error
-          ? query.error.message
-          : `Could not load ${noun}.`
+        ? directoryLoadError(noun)
         : null,
       disabledReason: disabledReason ?? null,
       // A directory read that already failed is cached as an error, so re-opening the
@@ -649,9 +655,7 @@ export function AgentChannelSettings({
         void previewConnectionDirectory
           .mutateAsync({ agentId: agent.id, platformKey: "slack", settings, credentials })
           .then(setSlackPreview)
-          .catch((error: unknown) =>
-            setSlackPreviewError(error instanceof Error ? error.message : "Could not load the Slack workspace."),
-          );
+          .catch(() => setSlackPreviewError(directoryLoadError(noun)));
       },
     });
     return {

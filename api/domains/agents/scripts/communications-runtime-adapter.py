@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent / "messaging"))
 import json
 import os
 import re
@@ -9,6 +13,8 @@ import threading
 import time
 import urllib.error
 import urllib.request
+
+from agentbarn_message import bind_execution, unbind_execution  # ty: ignore[unresolved-import]
 
 COMMUNICATIONS_URL = os.environ["COMMUNICATIONS_URL"].rstrip("/")
 COMMUNICATIONS_API_KEY = os.environ["COMMUNICATIONS_API_KEY"]
@@ -36,6 +42,17 @@ _PENDING_APPROVALS: dict[str, dict] = {}
 # progress) from starting a second concurrent run against the same session.
 _ACTIVE_RUNS_LOCK = threading.Lock()
 _ACTIVE_RUNS: dict[str, ActiveRun] = {}
+
+# Communications control-plane calls (claim, reply, complete, renew) and the
+# runtime's own run/approval endpoints all answer immediately, so a peer that
+# stops responding must surface as an error the surrounding retry loop can act
+# on. It cannot be left to block: the delivery worker claims inside this call,
+# so a long stall there stops claiming entirely and logs nothing at all --
+# indistinguishable from an idle queue.
+_REQUEST_TIMEOUT_SECONDS = 30
+# The one exception: OpenClaw's blocking turn holds the connection open for the
+# whole model response.
+_RUNTIME_TURN_TIMEOUT_SECONDS = 900
 
 _LEASE_HEARTBEAT_SECONDS = 60
 _PROGRESS_RELAY_MIN_SECONDS = 3
@@ -105,11 +122,18 @@ class InFlightDelivery:
 IN_FLIGHT = InFlightDelivery()
 
 
-def http_request(method: str, url: str, *, headers: dict[str, str], payload: dict | None = None):
+def http_request(
+    method: str,
+    url: str,
+    *,
+    headers: dict[str, str],
+    payload: dict | None = None,
+    timeout: float = _REQUEST_TIMEOUT_SECONDS,
+):
     body = json.dumps(payload).encode() if payload is not None else None
     req = urllib.request.Request(url, method=method, headers=headers, data=body)
     try:
-        with urllib.request.urlopen(req, timeout=900) as response:
+        with urllib.request.urlopen(req, timeout=timeout) as response:
             if response.status == 204:
                 return None
             return json.loads(response.read())
@@ -177,18 +201,39 @@ def complete_delivery(delivery_id: str, *, succeeded: bool, error: Exception | N
     )
 
 
-def renew_delivery_lease(delivery_id: str) -> None:
+def renew_delivery_lease(delivery_id: str, *, awaiting_input: bool = False) -> None:
     http_request(
         "POST",
-        f"{COMMUNICATIONS_URL}/agents/{AGENT_ID}/deliveries/{delivery_id}/renew",
+        f"{COMMUNICATIONS_URL}/agents/{AGENT_ID}/deliveries/{delivery_id}/renew"
+        f"?awaiting_input={'true' if awaiting_input else 'false'}",
         headers=communications_headers(),
     )
 
 
-def _heartbeat_delivery_lease(delivery_id: str, stopped: threading.Event) -> None:
+def _is_awaiting_input(session_key: str) -> bool:
+    with _PENDING_APPROVALS_LOCK:
+        return session_key in _PENDING_APPROVALS
+
+
+def _publish_awaiting_input(delivery_id: str, session_key: str) -> None:
+    """Push the session's current parked state without waiting for the next
+    heartbeat, which would otherwise hold an answer for up to a full interval.
+
+    The value is read here rather than passed in: a run that parks again right
+    after an approval resolves must not be un-parked by the resolving call.
+    """
+    try:
+        renew_delivery_lease(delivery_id, awaiting_input=_is_awaiting_input(session_key))
+    except Exception as exc:
+        # The heartbeat re-sends this state every interval, so a lost
+        # transition costs latency, not correctness.
+        print(f"[communications-adapter] awaiting-input publish failed: {exc}", flush=True)
+
+
+def _heartbeat_delivery_lease(delivery_id: str, stopped: threading.Event, session_key: str) -> None:
     while not stopped.wait(_LEASE_HEARTBEAT_SECONDS):
         try:
-            renew_delivery_lease(delivery_id)
+            renew_delivery_lease(delivery_id, awaiting_input=_is_awaiting_input(session_key))
         except Exception as exc:
             # A transient renewal failure must not interrupt a healthy Hermes
             # run; the next heartbeat can still extend its original lease.
@@ -210,11 +255,13 @@ def run_delivery_chat_completions(delivery: dict) -> None:
     envelope = delivery["envelope"]
     session_key = session_key_for(delivery)
     IN_FLIGHT.begin(delivery_id, session_key)
+    bind_execution(session_key, delivery)
     try:
         result = http_request(
             "POST",
             f"{RUNTIME_API_URL}/v1/chat/completions",
             headers=runtime_headers(session_key, delivery_id),
+            timeout=_RUNTIME_TURN_TIMEOUT_SECONDS,
             payload={
                 "model": RUNTIME_MODEL,
                 "stream": False,
@@ -247,6 +294,7 @@ def run_delivery_chat_completions(delivery: dict) -> None:
         )
     finally:
         IN_FLIGHT.clear(delivery_id)
+        unbind_execution(session_key)
 
 
 def iter_sse_events(response):
@@ -270,6 +318,14 @@ def iter_sse_events(response):
         yield event, "\n".join(data_lines)
 
 
+# Providers wrap mentions and links in their own angle-bracket markup, and a
+# reply that answers an approval carries it like any other message
+# ("<@U0BTHDYS4TY> always"). A model reading a turn can ignore that; an exact
+# choice match cannot, so it is stripped here rather than in any one plugin --
+# Slack, Discord, and Teams all reach this same comparison.
+_PROVIDER_MARKUP = re.compile(r"<[^>]*>")
+
+
 def resolve_pending_approval(session_key: str, delivery: dict) -> bool:
     """If session_key has a run waiting on approval, submit this delivery's text
     as the answer. Returns True once this delivery has been fully handled."""
@@ -279,7 +335,7 @@ def resolve_pending_approval(session_key: str, delivery: dict) -> bool:
         return False
 
     delivery_id = delivery["delivery_id"]
-    choice = delivery["envelope"].get("text", "").strip().lower()
+    choice = _PROVIDER_MARKUP.sub(" ", delivery["envelope"].get("text", "")).strip().lower()
     try:
         http_request(
             "POST",
@@ -308,6 +364,7 @@ def resolve_pending_approval(session_key: str, delivery: dict) -> bool:
 
     with _PENDING_APPROVALS_LOCK:
         _PENDING_APPROVALS.pop(session_key, None)
+    _publish_awaiting_input(pending["delivery_id"], session_key)
     complete_delivery(delivery_id, succeeded=True)
     return True
 
@@ -344,10 +401,11 @@ def _run_and_drain(delivery: dict, session_key: str) -> None:
     heartbeat_stopped = threading.Event()
     heartbeat = threading.Thread(
         target=_heartbeat_delivery_lease,
-        args=(delivery_id, heartbeat_stopped),
+        args=(delivery_id, heartbeat_stopped, session_key),
         daemon=True,
     )
     heartbeat.start()
+    bind_execution(session_key, delivery)
     try:
         started = http_request(
             "POST",
@@ -366,6 +424,7 @@ def _run_and_drain(delivery: dict, session_key: str) -> None:
             _PENDING_APPROVALS.pop(session_key, None)
         complete_delivery(delivery_id, succeeded=False, error=exc)
     finally:
+        unbind_execution(session_key)
         heartbeat_stopped.set()
         with _ACTIVE_RUNS_LOCK:
             active = _ACTIVE_RUNS.get(session_key)
@@ -437,6 +496,10 @@ def _drain_run(run_id: str, delivery_id: str, session_key: str, *, progress_upda
                         "delivery_id": delivery_id,
                         "choices": choices,
                     }
+                # Release this delivery's hold on the thread: the answer can
+                # only arrive as the next message here, and it cannot be
+                # claimed while this run counts as blocking.
+                _publish_awaiting_input(delivery_id, session_key)
                 description = payload.get("command") or payload.get("description") or "A command needs approval"
                 post_reply_best_effort(
                     delivery_id,

@@ -47,6 +47,7 @@ jobs:
             -v "${{ github.workspace }}/openclaw-base/smoke-test.sh:/smoke-test.sh:ro" \
             openclaw-base:ci \
             /bin/sh /smoke-test.sh
+          sh openclaw-base/test-message-hooks.sh openclaw-base:ci
 
   push:
     name: Push
@@ -100,6 +101,7 @@ jobs:
             -v "${{ github.workspace }}/openclaw-base/smoke-test.sh:/smoke-test.sh:ro" \
             ${{ vars.REGISTRY_URL }}/agentbarn-openclaw-base:${{ steps.tag.outputs.value }} \
             /bin/sh /smoke-test.sh
+          sh openclaw-base/test-message-hooks.sh "${{ vars.REGISTRY_URL }}/agentbarn-openclaw-base:${{ steps.tag.outputs.value }}"
       - name: Push
         uses: docker/build-push-action@v7
         with:

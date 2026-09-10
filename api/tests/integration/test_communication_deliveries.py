@@ -175,6 +175,62 @@ def test_runtime_claim_serializes_one_conversation() -> None:
             )
 
 
+def test_runtime_claim_releases_one_answer_to_a_run_awaiting_input() -> None:
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        connection_id = _create_connection(context)
+        repository = context.injector.get(CommunicationDeliveryRepository)
+        repository.accept_inbound(connection_id=connection_id, envelope=_envelope("provider-1"))
+        repository.accept_inbound(connection_id=connection_id, envelope=_envelope("provider-2"))
+        repository.accept_inbound(connection_id=connection_id, envelope=_envelope("provider-3"))
+
+        with when("the claimed run parks awaiting a human answer it can only receive on this thread"):
+            parked = repository.claim_next_inbound(agent_id=context.agent.id)
+            assert parked is not None
+            blocked_while_running = repository.claim_next_inbound(agent_id=context.agent.id)
+            repository.renew_runtime_delivery_lease(
+                parked.delivery_id,
+                agent_id=context.agent.id,
+                awaiting_input=True,
+            )
+            answer = repository.claim_next_inbound(agent_id=context.agent.id)
+            blocked_behind_answer = repository.claim_next_inbound(agent_id=context.agent.id)
+
+        with then("only the next message is released, and claiming it re-blocks the queue"):
+            assert_that(blocked_while_running, none())
+            assert_that(answer, is_(not_(none())))
+            assert_that(
+                answer.envelope.provider_message_id if answer is not None else None,
+                equal_to("provider-2"),
+            )
+            assert_that(blocked_behind_answer, none())
+
+
+def test_runtime_claim_reblocks_a_conversation_once_its_run_resumes() -> None:
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        connection_id = _create_connection(context)
+        repository = context.injector.get(CommunicationDeliveryRepository)
+        repository.accept_inbound(connection_id=connection_id, envelope=_envelope("provider-1"))
+        repository.accept_inbound(connection_id=connection_id, envelope=_envelope("provider-2"))
+
+        with when("the run parks, then reports itself running again"):
+            parked = repository.claim_next_inbound(agent_id=context.agent.id)
+            assert parked is not None
+            repository.renew_runtime_delivery_lease(
+                parked.delivery_id,
+                agent_id=context.agent.id,
+                awaiting_input=True,
+            )
+            repository.renew_runtime_delivery_lease(
+                parked.delivery_id,
+                agent_id=context.agent.id,
+                awaiting_input=False,
+            )
+            blocked = repository.claim_next_inbound(agent_id=context.agent.id)
+
+        with then("the conversation serializes again"):
+            assert_that(blocked, none())
+
+
 def test_runtime_claim_reclaims_an_inbound_delivery_whose_lease_expired() -> None:
     with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
         connection_id = _create_connection(context)
@@ -460,6 +516,7 @@ def test_diagnostics_reports_pipeline_transitions_without_message_content() -> N
                         "agent_claimed": 1,
                         "model_completed": 1,
                         "reply_queued": 1,
+                        "initiated_queued": 0,
                         "provider_delivered": 1,
                         "dead_lettered": 0,
                     }

@@ -5,10 +5,13 @@ from fastapi import APIRouter, Header, HTTPException, Response, status
 from fastapi.responses import StreamingResponse
 from fastapi_injector import Injected
 
+from api.domains.communications.agent_message_service import AgentMessageService
 from api.domains.communications.delivery_repository import CommunicationDeliveryCancelledError
 from api.domains.communications.gateway_service import CommunicationsGatewayService
 from api.domains.communications.models import (
     AcceptedCommunicationRead,
+    AgentMessageCreate,
+    AgentMessageRead,
     RuntimeDeliveryRead,
     RuntimeDeliveryResult,
     RuntimeReplyCreate,
@@ -112,10 +115,11 @@ def renew_runtime_delivery_lease(
     service: Annotated[CommunicationsGatewayService, Injected(CommunicationsGatewayService)],
     authorization: Annotated[str, Header()],
     protocol_version: Annotated[str, Header(alias="X-AgentBarn-Communications-Version")],
+    awaiting_input: bool = False,
 ) -> Response:
     agent = _authenticate(service, agent_id, authorization, protocol_version)
     try:
-        renewed = service.renew_runtime_delivery_lease(agent, delivery_id)
+        renewed = service.renew_runtime_delivery_lease(agent, delivery_id, awaiting_input=awaiting_input)
     except RuntimeError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     if not renewed:
@@ -191,3 +195,16 @@ def accept_provider_webhook(
     except (PermissionError, NotImplementedError) as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Webhook authentication failed") from exc
     return {"accepted": accepted}
+
+
+@runtime_communications_router.post("/{agent_id}/messages", status_code=status.HTTP_202_ACCEPTED)
+def submit_agent_message(
+    agent_id: UUID,
+    request: AgentMessageCreate,
+    service: Annotated[CommunicationsGatewayService, Injected(CommunicationsGatewayService)],
+    messages: Annotated[AgentMessageService, Injected(AgentMessageService)],
+    authorization: Annotated[str, Header()],
+    protocol_version: Annotated[str, Header(alias="X-AgentBarn-Communications-Version")],
+) -> AgentMessageRead:
+    agent = _authenticate(service, agent_id, authorization, protocol_version)
+    return messages.submit_agent_message(agent, request)

@@ -34,6 +34,9 @@ COMMUNICATIONS_RUNTIME_ADAPTER_PY: str = (_COMMON_SCRIPTS / "communications-runt
 
 _HERMES_APPROVAL_MODE = {"manual": "manual", "auto": "smart", "off": "off"}
 
+_MESSAGE_SCRIPTS = _COMMON_SCRIPTS / "messaging"
+HERMES_BOOT_RUN_PY: str = (_SCRIPTS / "boot-run.py").read_text()
+
 
 def _hermes_config_core(
     model: str,
@@ -95,7 +98,7 @@ def build_hermes_gateway_config(
     return _hermes_config_core(
         model,
         litellm_base_url,
-        enabled_plugins=["telemetry-push"],
+        enabled_plugins=["telemetry-push", "agentbarn-messaging"],
         approval_mode=approval_mode,
     )
 
@@ -131,6 +134,9 @@ def build_hermes_config_map(
         "healthz-server.py": HERMES_HEALTHZ_PY,
         "start.sh": HERMES_START_SH,
         "communications-runtime-adapter.py": COMMUNICATIONS_RUNTIME_ADAPTER_PY,
+        "agentbarn_message.py": (_MESSAGE_SCRIPTS / "agentbarn_message.py").read_text(),
+        "hermes-messaging.py": (_MESSAGE_SCRIPTS / "hermes-messaging.py").read_text(),
+        "boot-run.py": HERMES_BOOT_RUN_PY,
     }
     if aai_cli_config_toml is not None:
         data["aai-cli-config.toml"] = aai_cli_config_toml
