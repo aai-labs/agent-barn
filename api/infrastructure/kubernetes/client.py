@@ -6,6 +6,7 @@ import os
 import tempfile
 from collections.abc import Generator
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import ClassVar
 
 import yaml
@@ -281,6 +282,46 @@ class KubernetesClient:
 
     def list_config_maps(self, namespace: str, label_selector: str = "") -> list[client.V1ConfigMap]:
         return self._core_v1.list_namespaced_config_map(namespace, label_selector=label_selector).items
+
+    def get_pod_name_for_job(self, job_name: str, namespace: str) -> str | None:
+        pods = self._core_v1.list_namespaced_pod(namespace, label_selector=f"job-name={job_name}")
+        candidates = [p for p in pods.items if p.metadata.deletion_timestamp is None]
+        if not candidates:
+            return None
+        candidates.sort(key=lambda p: p.metadata.creation_timestamp or datetime.min.replace(tzinfo=UTC), reverse=True)
+        return candidates[0].metadata.name
+
+    def get_job_exit_code(self, job_name: str, namespace: str) -> int | None:
+        pods = self._core_v1.list_namespaced_pod(namespace, label_selector=f"job-name={job_name}")
+        for pod in pods.items:
+            for container_status in pod.status.container_statuses or []:
+                terminated = container_status.state.terminated if container_status.state else None
+                if terminated is not None and terminated.exit_code is not None:
+                    return terminated.exit_code
+        return None
+
+    def read_job_logs(
+        self,
+        job_name: str,
+        namespace: str,
+        tail_lines: int = 50,
+        container: str = "archive",
+    ) -> str | None:
+        pod_name = self.get_pod_name_for_job(job_name, namespace)
+        if pod_name is None:
+            return None
+        try:
+            return self._core_v1.read_namespaced_pod_log(
+                pod_name,
+                namespace,
+                container=container,
+                tail_lines=tail_lines,
+                timestamps=False,
+            )
+        except ApiException as e:
+            if e.status in (400, 404):
+                return None
+            raise
 
     def get_pod_name_for_deployment(self, deployment_name: str, namespace: str) -> str | None:
         pods = self._core_v1.list_namespaced_pod(namespace, label_selector=f"app={deployment_name}")

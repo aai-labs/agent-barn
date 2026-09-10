@@ -102,6 +102,7 @@ from api.domains.events.catalog import (
 )
 from api.domains.organizations.lookup import OrganizationLookupService
 from api.domains.rbac.catalog import PermissionKey
+from api.domains.restore_points.service import RestorePointService
 from api.domains.shared_credentials.repository import SharedCredentialRepository
 from api.domains.skills.models import PinnedSkill, Skill, SkillVersion, derive_tools_pointer
 from api.domains.skills.repository import SkillRepository
@@ -135,6 +136,10 @@ _CREDENTIAL_FIELDS = frozenset(
 
 
 _MAX_LOG_SNAPSHOT_BYTES = 1_048_576  # 1 MB
+
+RESTORE_POINT_IN_FLIGHT_DETAIL = (
+    "A restore point capture or restore is still running for this Agent. Wait for it to finish."
+)
 
 _OPENROUTER_MODEL_PREFIX = "litellm/openrouter/"
 
@@ -203,6 +208,7 @@ class AgentService:
     shared_credential_repository: SharedCredentialRepository
     event_delivery_dispatcher: EventDeliveryDispatcher
     organization_lookup: OrganizationLookupService
+    restore_points: RestorePointService
     agent_settings_lookup: AgentSettingsLookupService
 
     def _org_id(self, context: CurrentUserContext) -> UUID:
@@ -1859,6 +1865,11 @@ class AgentService:
             current = self.repository.get_by_id(agent.id)
             if current is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent {agent_id} not found")
+            if self.restore_points.has_blocking_operation(current.id):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=RESTORE_POINT_IN_FLIGHT_DETAIL,
+                )
             started = self._start_agent_unchecked(current, actor)
         return self._get_agent_read(started, context)
 
@@ -2407,12 +2418,18 @@ class AgentService:
             current = self.repository.get_by_id(agent.id)
             if current is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent {agent_id} not found")
+            if self.restore_points.has_blocking_operation(current.id):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=RESTORE_POINT_IN_FLIGHT_DETAIL,
+                )
 
             self.k8s.delete_deployment(name, ns)
             self.k8s.delete_service(name, ns)
             self.k8s.delete_pvc(name, ns)
             self.k8s.delete_secret(name, ns)
             self.k8s.delete_config_map(name, ns)
+            self.restore_points.purge_agent(current.id)
 
             delete_result = self.repository.soft_delete_with_event(
                 current,

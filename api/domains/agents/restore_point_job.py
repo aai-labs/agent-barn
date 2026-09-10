@@ -177,6 +177,18 @@ def restore(target: Path, backup: Path, archive_dir: Path, runtime: str) -> None
     apply_archive(target, archive_dir)
 
 
+def emit_result(manifest: dict) -> None:
+    """Return the manifest to the API, which cannot read the destination volume."""
+    sys.stdout.write(json.dumps(manifest) + "\n")
+    sys.stdout.flush()
+
+
+def emit_failure(message: str) -> None:
+    """Report a reason the API surfaces verbatim on the restore point row."""
+    sys.stderr.write(message + "\n")
+    sys.stderr.flush()
+
+
 def _required_env(name: str) -> Path:
     value = os.environ.get(name)
     if not value:
@@ -189,8 +201,7 @@ def main() -> None:
     runtime = os.environ.get(ENV_RUNTIME, RUNTIME_HERMES)
 
     if mode == MODE_CAPTURE:
-        manifest = capture(_required_env(ENV_SOURCE), _required_env(ENV_DEST), runtime)
-        print(json.dumps(manifest))
+        emit_result(capture(_required_env(ENV_SOURCE), _required_env(ENV_DEST), runtime))
         return
 
     if mode != MODE_RESTORE:
@@ -201,13 +212,13 @@ def main() -> None:
     archive_dir = _required_env(ENV_ARCHIVE)
 
     try:
-        capture(target, backup, runtime)
+        emit_result(capture(target, backup, runtime))
     except Exception as exc:
-        print(f"pre-restore capture failed: {exc}", file=sys.stderr)
+        emit_failure(f"pre-restore capture failed: {exc}")
         raise SystemExit(EXIT_BACKUP_FAILED) from exc
 
     try:
         apply_archive(target, archive_dir)
     except Exception as exc:
-        print(f"restore failed: {exc}", file=sys.stderr)
+        emit_failure(f"restore failed: {exc}")
         raise SystemExit(EXIT_RESTORE_FAILED) from exc
