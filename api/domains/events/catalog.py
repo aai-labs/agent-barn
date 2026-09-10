@@ -19,6 +19,9 @@ AGENT_TEMPLATE_OVERRIDE_PUBLISHED = "agent.template_override.published"
 AGENT_TEMPLATE_OVERRIDE_SELECTED = "agent.template_override.selected"
 AGENT_UPDATED = "agent.updated"
 AGENT_DELETED = "agent.deleted"
+AGENT_RESTORE_POINT_CREATED = "agent.restore_point.created"
+AGENT_RESTORE_POINT_RESTORED = "agent.restore_point.restored"
+AGENT_RESTORE_POINT_DELETED = "agent.restore_point.deleted"
 AGENT_SECRET_ADDED = "agent.secret.added"
 AGENT_SECRET_UPDATED = "agent.secret.updated"
 AGENT_SECRET_REMOVED = "agent.secret.removed"
@@ -166,6 +169,26 @@ class AgentDeletedPayload(BaseModel):
     runtime: str
     actor_display: str
     subject_display: str
+
+
+class AgentRestorePointChangedPayload(BaseModel):
+    """Identifiers only: the captured configuration manifest stays on the row.
+
+    Putting it here would risk the registry's 16KB payload cap and its
+    sensitive-key filter, and the manifest is display data rather than an
+    audit fact.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    organization_id: UUID
+    agent_id: UUID
+    agent_name: str
+    restore_point_id: UUID
+    origin: str
+    label: str | None = None
+    actor_display: str | None = None
+    subject_display: str | None = None
 
 
 class AgentSecretChangedPayload(BaseModel):
@@ -419,6 +442,24 @@ def build_default_event_registry() -> DomainEventRegistry:
             event_name=AGENT_CREATED,
             schema_version=1,
             payload_model=AgentCreatedPayload,
+            event_scope=EventScope.ORGANIZATION,
+        )
+    )
+    for event_name in (AGENT_RESTORE_POINT_CREATED, AGENT_RESTORE_POINT_DELETED):
+        registry.register(
+            DomainEventDefinition(
+                event_name=event_name,
+                schema_version=1,
+                payload_model=AgentRestorePointChangedPayload,
+                event_scope=EventScope.ORGANIZATION,
+            )
+        )
+    registry.register(
+        DomainEventDefinition(
+            event_name=AGENT_RESTORE_POINT_RESTORED,
+            schema_version=1,
+            payload_model=AgentRestorePointChangedPayload,
+            handler_names=(SECURITY_AUDIT_HANDLER,),
             event_scope=EventScope.ORGANIZATION,
         )
     )

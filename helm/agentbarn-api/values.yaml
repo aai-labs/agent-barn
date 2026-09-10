@@ -92,6 +92,15 @@ agentImagePullSecret: "registry-pull-secret"
 # StorageClass for agent pod PVCs. Empty falls through to the cluster default.
 storageClass: ""
 
+# Agent Restore Points. The capture/restore Job runs the API's own image, wired
+# from registryPrefix/image above so it can never be a different build than the
+# API that created it. Size must be at least the agent PVC size (1Gi).
+restorePoints:
+  size: "1Gi"
+  maxPerAgent: 5
+  captureTimeoutSeconds: 900
+  restoreTimeoutSeconds: 1800
+
 registry:
   server: ""
   username: ""

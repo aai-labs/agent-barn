@@ -36,6 +36,7 @@ from api.domains.integrations.google_oauth.routes import integrations_router
 from api.domains.organizations.routes import org_router, platform_org_router
 from api.domains.platform_admin.routes import platform_stats_router
 from api.domains.rbac.seeder import RbacSeeder
+from api.domains.restore_points.routes import restore_points_router
 from api.domains.shared_credentials.routes import shared_credentials_router
 from api.domains.skills.repository import SkillRepository
 from api.domains.skills.routes import agent_skills_router, platform_skills_router, skills_router
@@ -125,6 +126,7 @@ def create_app(injector: Injector | None = None):
     subapi.include_router(templates_router)
     subapi.include_router(platform_templates_router)
     subapi.include_router(tool_calls_router)
+    subapi.include_router(restore_points_router)
     subapi.include_router(users_router)
 
     http_registry = setup_http_metrics(subapi)

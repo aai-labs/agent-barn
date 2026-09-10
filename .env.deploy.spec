@@ -107,6 +107,15 @@ INGRESS_CLUSTER_ISSUER=letsencrypt-http01
 # local-path. Set to a network-replicated class for node-loss durability.
 STORAGE_CLASS=local-path
 
+# ── Restore points ───────────────────────────────────────────────────────────
+# Each restore point gets its own PVC of this size. Must be at least the agent
+# PVC size (1Gi). On local-path these volumes are node-local and unreplicated:
+# a restore point does not survive loss of the node holding the agent's volume.
+RESTORE_POINT_SIZE=1Gi
+# Manual restore points retained per Agent. The Job image is not configured here
+# — the chart derives it from the API image so both are always the same build.
+RESTORE_POINT_MAX_PER_AGENT=5
+
 # ── Firecrawl ────────────────────────────────────────────────────────────────
 # API key used by the Firecrawl server (TEST_API_KEY) and agents (FIRECRAWL_API_KEY).
 # Same value serves both sides. Generate with: openssl rand -hex 24

@@ -11,6 +11,8 @@ from kubernetes.client import (
     V1Container,
     V1Deployment,
     V1DeploymentSpec,
+    V1Job,
+    V1JobSpec,
     V1LabelSelector,
     V1ObjectMeta,
     V1PersistentVolumeClaim,
@@ -23,6 +25,7 @@ from kubernetes.client import (
     V1ServicePort,
     V1ServiceSpec,
 )
+from kubernetes.client.exceptions import ApiException
 
 from api.core.config import Config
 from api.infrastructure.kubernetes.client import KubernetesClient
@@ -58,6 +61,8 @@ def cleanup(k8s, run_id):
         k8s.delete_secret(sec.metadata.name, NS)
     for cm in k8s.list_config_maps(NS, sel):
         k8s.delete_config_map(cm.metadata.name, NS)
+    for j in k8s.list_jobs(NS, sel):
+        k8s.delete_job(j.metadata.name, NS)
 
 
 def _wait_for_deletion(get_fn, timeout=10):
@@ -118,6 +123,23 @@ def _config_map(name, run_id):
     )
 
 
+def _job(name, run_id):
+    return V1Job(
+        metadata=V1ObjectMeta(name=name, labels=_labels(run_id)),
+        spec=V1JobSpec(
+            backoff_limit=0,
+            ttl_seconds_after_finished=60,
+            template=V1PodTemplateSpec(
+                metadata=V1ObjectMeta(labels=_labels(run_id)),
+                spec=V1PodSpec(
+                    restart_policy="Never",
+                    containers=[V1Container(name="work", image="busybox", command=["sh", "-c", "true"])],
+                ),
+            ),
+        ),
+    )
+
+
 def test_deployment_crud(k8s, run_id):
     name = f"test-dep-{run_id}"
     created = k8s.create_deployment(NS, _deployment(name, run_id))
@@ -166,6 +188,33 @@ def test_config_map_crud(k8s, run_id):
     assert_that(k8s.get_config_map(name, NS), not_none())
     k8s.delete_config_map(name, NS)
     assert_that(k8s.get_config_map(name, NS), none())
+
+
+def test_job_crud(k8s, run_id):
+    name = f"test-job-{run_id}"
+    created = k8s.create_job(NS, _job(name, run_id))
+    assert_that(created.metadata.name, equal_to(name))
+    assert_that(k8s.get_job(name, NS), not_none())
+    assert_that(
+        [j.metadata.name for j in k8s.list_jobs(NS, f"test-run-id={run_id}")],
+        has_item(name),
+    )
+    k8s.delete_job(name, NS)
+    _wait_for_deletion(lambda: k8s.get_job(name, NS))
+    assert_that(k8s.get_job(name, NS), none())
+
+
+def test_create_job_twice_raises_conflict(k8s, run_id):
+    name = f"test-job-conflict-{run_id}"
+    manifest = _job(name, run_id)
+    k8s.create_job(NS, manifest)
+    with pytest.raises(ApiException) as exc_info:
+        k8s.create_job(NS, manifest)
+    assert_that(exc_info.value.status, equal_to(409))
+
+
+def test_delete_nonexistent_job_is_safe(k8s):
+    k8s.delete_job(f"does-not-exist-{uuid.uuid4().hex}", NS)
 
 
 def test_create_twice_is_safe(k8s, run_id):

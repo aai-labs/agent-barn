@@ -6,6 +6,7 @@ import os
 import tempfile
 from collections.abc import Generator
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import ClassVar
 
 import yaml
@@ -35,6 +36,7 @@ class KubernetesClient:
     config: Config
     _apps_v1_client: client.AppsV1Api | None = field(init=False, default=None)
     _core_v1_client: client.CoreV1Api | None = field(init=False, default=None)
+    _batch_v1_client: client.BatchV1Api | None = field(init=False, default=None)
     _stream_core_v1_client: client.CoreV1Api | None = field(init=False, default=None)
     _kubeconfig_path: str | None = field(init=False, default=None)
 
@@ -58,6 +60,7 @@ class KubernetesClient:
                     ) from e
         self._apps_v1_client = client.AppsV1Api()
         self._core_v1_client = client.CoreV1Api()
+        self._batch_v1_client = client.BatchV1Api()
         if self.config.k8s_kubeconfig_path:
             stream_api_client = k8s_config.new_client_from_config(config_file=self._kubeconfig_path)
         else:
@@ -83,6 +86,16 @@ class KubernetesClient:
     @_core_v1.setter
     def _core_v1(self, value: client.CoreV1Api) -> None:
         self._core_v1_client = value
+
+    @property
+    def _batch_v1(self) -> client.BatchV1Api:
+        self._ensure_configured()
+        assert self._batch_v1_client is not None
+        return self._batch_v1_client
+
+    @_batch_v1.setter
+    def _batch_v1(self, value: client.BatchV1Api) -> None:
+        self._batch_v1_client = value
 
     @property
     def _stream_core_v1(self) -> client.CoreV1Api:
@@ -251,8 +264,64 @@ class KubernetesClient:
     def get_config_map(self, name: str, namespace: str) -> client.V1ConfigMap | None:
         return self._get_or_none(self._core_v1.read_namespaced_config_map, name, namespace)
 
+    def create_job(self, namespace: str, manifest: client.V1Job) -> client.V1Job:
+        return self._batch_v1.create_namespaced_job(namespace, manifest)
+
+    def delete_job(self, name: str, namespace: str) -> None:
+        try:
+            self._batch_v1.delete_namespaced_job(name, namespace, propagation_policy="Background")
+        except ApiException as e:
+            if e.status != 404:
+                raise
+
+    def get_job(self, name: str, namespace: str) -> client.V1Job | None:
+        return self._get_or_none(self._batch_v1.read_namespaced_job, name, namespace)
+
+    def list_jobs(self, namespace: str, label_selector: str = "") -> list[client.V1Job]:
+        return self._batch_v1.list_namespaced_job(namespace, label_selector=label_selector).items
+
     def list_config_maps(self, namespace: str, label_selector: str = "") -> list[client.V1ConfigMap]:
         return self._core_v1.list_namespaced_config_map(namespace, label_selector=label_selector).items
+
+    def get_pod_name_for_job(self, job_name: str, namespace: str) -> str | None:
+        pods = self._core_v1.list_namespaced_pod(namespace, label_selector=f"job-name={job_name}")
+        candidates = [p for p in pods.items if p.metadata.deletion_timestamp is None]
+        if not candidates:
+            return None
+        candidates.sort(key=lambda p: p.metadata.creation_timestamp or datetime.min.replace(tzinfo=UTC), reverse=True)
+        return candidates[0].metadata.name
+
+    def get_job_exit_code(self, job_name: str, namespace: str) -> int | None:
+        pods = self._core_v1.list_namespaced_pod(namespace, label_selector=f"job-name={job_name}")
+        for pod in pods.items:
+            for container_status in pod.status.container_statuses or []:
+                terminated = container_status.state.terminated if container_status.state else None
+                if terminated is not None and terminated.exit_code is not None:
+                    return terminated.exit_code
+        return None
+
+    def read_job_logs(
+        self,
+        job_name: str,
+        namespace: str,
+        tail_lines: int = 50,
+        container: str = "archive",
+    ) -> str | None:
+        pod_name = self.get_pod_name_for_job(job_name, namespace)
+        if pod_name is None:
+            return None
+        try:
+            return self._core_v1.read_namespaced_pod_log(
+                pod_name,
+                namespace,
+                container=container,
+                tail_lines=tail_lines,
+                timestamps=False,
+            )
+        except ApiException as e:
+            if e.status in (400, 403, 404):
+                return None
+            raise
 
     def get_pod_name_for_deployment(self, deployment_name: str, namespace: str) -> str | None:
         pods = self._core_v1.list_namespaced_pod(namespace, label_selector=f"app={deployment_name}")
