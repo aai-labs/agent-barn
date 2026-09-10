@@ -179,3 +179,7 @@ resources:
   limits:
     memory: 512Mi
     cpu: 500m
+
+# Empty disables budget enforcement; each Organization still gets a LiteLLM team.
+organizationLlmBudgetUsd: ""
+organizationLlmBudgetDuration: "30d"

@@ -79,6 +79,10 @@ spec:
               value: "http://{{ .Release.Name }}-communications:{{ .Values.communications.service.port }}/communications/v1"
             - name: AGENT_IMAGE_PULL_SECRET
               value: "{{ .Values.agentImagePullSecret }}"
+            - name: ORGANIZATION_LLM_BUDGET_USD
+              value: {{ .Values.organizationLlmBudgetUsd | toString | quote }}
+            - name: ORGANIZATION_LLM_BUDGET_DURATION
+              value: {{ .Values.organizationLlmBudgetDuration | quote }}
             - name: AGENT_MODEL_ALLOWLIST
               value: "{{ .Values.agentModelAllowlist }}"
             - name: AGENT_FIRECRAWL_BASE_URL

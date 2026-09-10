@@ -33,6 +33,7 @@ from api.domains.costs.platform_routes import platform_costs_router
 from api.domains.costs.routes import costs_router
 from api.domains.events.routes import event_delivery_monitor_router
 from api.domains.integrations.google_oauth.routes import integrations_router
+from api.domains.organizations.llm import OrganizationLLMService
 from api.domains.organizations.routes import org_router, platform_org_router
 from api.domains.platform_admin.routes import platform_stats_router
 from api.domains.rbac.seeder import RbacSeeder
@@ -76,6 +77,14 @@ async def lifespan(_: FastAPI):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Error while initializing startup data",
         )
+
+    # Reconcile existing keys before serving requests. Fail startup visibly on
+    # partial reconciliation; a restart safely retries without resetting spend.
+    try:
+        injector.get(OrganizationLLMService).reconcile()
+    except Exception as exc:
+        logger.error("Organization LiteLLM reconciliation failed (%s)", type(exc).__name__)
+        raise RuntimeError("Organization LiteLLM reconciliation failed") from None
 
     yield
 

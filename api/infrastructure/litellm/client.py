@@ -39,8 +39,70 @@ class LiteLLMClient:
             "Content-Type": "application/json",
         }
 
+    def ensure_organization_team(self, org_id: str) -> None:
+        """Reconcile changed policy fields without overwriting spend or reset dates."""
+        headers = self._headers(self._master_key())
+        base = self.config.litellm_base_url
+        budget = self.config.organization_llm_budget_usd
+        desired = {
+            "max_budget": budget,
+            "budget_duration": self.config.organization_llm_budget_duration if budget is not None else None,
+        }
+        try:
+            response = httpx.get(f"{base}/team/info", params={"team_id": org_id}, headers=headers, timeout=10)
+            if response.status_code == 404:
+                created = httpx.post(
+                    f"{base}/team/new",
+                    json={"team_id": org_id, "team_alias": f"agentbarn-{org_id}", **desired},
+                    headers=headers,
+                    timeout=10,
+                )
+                # A concurrent process may create the team. Verify by re-reading;
+                # an arbitrary 400 response is not evidence of success.
+                if created.status_code not in (400, 409):
+                    created.raise_for_status()
+                response = httpx.get(f"{base}/team/info", params={"team_id": org_id}, headers=headers, timeout=10)
+            response.raise_for_status()
+            current = response.json()["team_info"]
+            if current["team_id"] != org_id:
+                raise ValueError("Unexpected team identity")
+            changed = {name: value for name, value in desired.items() if current.get(name) != value}
+            if changed:
+                response = httpx.post(
+                    f"{base}/team/update", json={"team_id": org_id, **changed}, headers=headers, timeout=10
+                )
+                response.raise_for_status()
+        except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
+            raise LiteLLMError("Failed to reconcile Organization LiteLLM team") from exc
+
+    def attach_key_to_team(self, key: str, org_id: str) -> None:
+        """Preserve key identity, spend and blocked state during backfill."""
+        headers = self._headers(self._master_key())
+        try:
+            response = httpx.get(
+                f"{self.config.litellm_base_url}/key/info", params={"key": key}, headers=headers, timeout=10
+            )
+            response.raise_for_status()
+            current_team = response.json()["info"].get("team_id")
+            if current_team == org_id:
+                return
+            if current_team:
+                raise LiteLLMError("Agent key already belongs to a different LiteLLM team")
+            response = httpx.post(
+                f"{self.config.litellm_base_url}/key/update",
+                json={"key": key, "team_id": org_id},
+                headers=headers,
+                timeout=10,
+            )
+            response.raise_for_status()
+        except httpx.HTTPError, ValueError, KeyError, TypeError:
+            # /key/info carries a credential in its URL; suppress the HTTP
+            # exception chain so manual reconciliation tracebacks cannot leak it.
+            raise LiteLLMError("Failed to attach Agent key to Organization team") from None
+
     def generate_key(self, agent_id: str, agent_name: str, org_id: str) -> str:
         """Returns a new plaintext LiteLLM key for the agent."""
+        self.ensure_organization_team(org_id)
         master_key = self._master_key()
         url = f"{self.config.litellm_base_url}/key/generate"
         try:
@@ -48,6 +110,7 @@ class LiteLLMClient:
                 url,
                 json={
                     "key_alias": f"{agent_name}-{agent_id}",
+                    "team_id": org_id,
                     "metadata": {
                         "agent_id": agent_id,
                         "organization_id": org_id,

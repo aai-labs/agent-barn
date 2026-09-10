@@ -12,6 +12,7 @@ from api.domains.auth.password_validation import validate_strong_password
 from api.domains.auth.repository import RefreshTokenRepository
 from api.domains.auth.service import AuthService
 from api.domains.events import EventDeliveryDispatcher
+from api.domains.organizations.llm import OrganizationLLMService
 from api.domains.organizations.models import Organization
 from api.domains.organizations.repository import OrganizationRepository
 from api.domains.users.exceptions import (
@@ -47,6 +48,7 @@ class UserService:
     organization_user_service: OrganizationUserService
     organization_user_repository: OrganizationUserRepository
     organization_repository: OrganizationRepository
+    organization_llm: OrganizationLLMService
     refresh_token_repository: RefreshTokenRepository
     config: Config
     event_delivery_dispatcher: EventDeliveryDispatcher
@@ -108,6 +110,7 @@ class UserService:
             )
             session.commit()
 
+        self.organization_llm.provision_after_commit(organization.id)
         self.auth_service.send_prepared_invite(prepared)
         organization_read = self.organization_repository.get_platform_read(organization.id)
         if organization_read is None or prepared.invite_link is None:

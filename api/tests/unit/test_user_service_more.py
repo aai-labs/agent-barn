@@ -48,6 +48,7 @@ def build_user_service() -> tuple[
         user_repository=cast(UserRepository, user_repository),
         organization_user_service=cast(OrganizationUserService, organization_user_service),
         organization_user_repository=cast(OrganizationUserRepository, organization_user_repository),
+        organization_llm=Mock(),
         organization_repository=cast(OrganizationRepository, organization_repository),
         refresh_token_repository=cast(RefreshTokenRepository, refresh_token_repository),
         config=config,

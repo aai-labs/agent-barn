@@ -22,6 +22,7 @@ from api.domains.events import (
 )
 from api.domains.events.catalog import EVENT_REGISTRY, ORGANIZATION_MODEL_ALLOWLIST_CHANGED
 from api.domains.organizations.exceptions import OrganizationCreationLimitReached
+from api.domains.organizations.llm import OrganizationLLMService
 from api.domains.organizations.models import (
     Organization,
     OrganizationCreate,
@@ -50,6 +51,7 @@ def _and_list(items: list[str]) -> str:
 @dataclass
 class OrganizationService:
     organization_repository: OrganizationRepository
+    organization_llm: OrganizationLLMService
     agent_service: AgentService
     permission_policy: PermissionPolicy
     event_delivery_dispatcher: EventDeliveryDispatcher
@@ -198,6 +200,7 @@ class OrganizationService:
                 detail=f"You can create up to {error.limit} organizations",
             ) from error
 
+        self.organization_llm.provision_after_commit(organization.id)
         organization_read = self.organization_repository.get_read(organization.id)
         if not organization_read:
             raise HTTPException(

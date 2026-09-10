@@ -108,6 +108,18 @@ class AgentRepository:
     delegate: PostgresRepositoryDelegate
     outbox_repository: OutboxMessageRepository
 
+    def list_llm_keys_for_reconciliation(self, organization_id: UUID) -> list[str]:
+        """System-only credential projection scoped to one Organization, including deleted Agents."""
+        with Session(self.delegate.engine) as session:
+            return list(
+                session.exec(
+                    select(Agent.litellm_key_encrypted).where(
+                        col(Agent.organization_id) == organization_id,
+                        col(Agent.litellm_key_encrypted) != "",
+                    )
+                ).all()
+            )
+
     def get_by_id(self, agent_id: UUID) -> Agent | None:
         with Session(self.delegate.engine) as session:
             query = select(Agent).where(col(Agent.id) == agent_id).where(col(Agent.deleted_at).is_(None))
