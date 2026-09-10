@@ -99,6 +99,14 @@ spec:
             - name: kubeconfig
               mountPath: /etc/kubeconfig
               readOnly: true
+          # Initial Organization/key reconciliation can outlast the ordinary
+          # liveness grace period on deployments with many existing Agents.
+          startupProbe:
+            httpGet:
+              path: /api/v1/health
+              port: 8000
+            periodSeconds: 10
+            failureThreshold: 60
           readinessProbe:
             httpGet:
               path: /api/v1/health

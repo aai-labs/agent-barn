@@ -69,7 +69,9 @@ redeploy the appropriate workflow. Clearing it and redeploying removes the cap
 from existing teams as well as new ones. No hostname-based logic is involved.
 
 On rollout, the API reconciles every existing Organization and Agent key before
-becoming ready. Look for `Organization LiteLLM teams and budgets reconciled` in
+becoming ready. The API startup probe allows up to ten minutes for bootstrap and
+reconciliation before liveness takes over. Look for
+`Organization LiteLLM teams and budgets reconciled` in
 the API log. Failure aborts startup and a pod restart retries idempotently;
 inspect proxy availability, the Kubernetes master-key Secret, and conflicting
 team assignments. Existing Agent pods remain active during this pass, so API
