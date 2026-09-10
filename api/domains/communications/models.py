@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import enum
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 import sqlalchemy as sa
@@ -35,6 +35,7 @@ class CommunicationPlatform(str, enum.Enum):
 
 
 class PlatformCapability(str, enum.Enum):
+    AGENT_INITIATED_DELIVERY = "agent_initiated_delivery"
     DIRECTORY_DISCOVERY = "directory_discovery"
     APPLICATION_PROVISIONING = "application_provisioning"
     INSTALL_LINK = "install_link"
@@ -135,6 +136,7 @@ class CommunicationJournalStage(str, enum.Enum):
     AGENT_CLAIMED = "agent_claimed"
     MODEL_COMPLETED = "model_completed"
     REPLY_QUEUED = "reply_queued"
+    INITIATED_QUEUED = "initiated_queued"
     PROVIDER_DELIVERY_ATTEMPTED = "provider_delivery_attempted"
     PROVIDER_DELIVERED = "provider_delivered"
     CONNECTION_CONNECTING = "connection_connecting"
@@ -162,6 +164,12 @@ class CommunicationConnection(BaseModel, table=True):
         sa.Index("ix_communication_connection_agent", "agent_id"),
         sa.Index("ix_communication_connection_organization", "organization_id"),
         sa.Index("ix_communication_connection_platform", "platform_key"),
+        sa.Index(
+            "uq_communication_connection_default_target",
+            "agent_id",
+            unique=True,
+            postgresql_where=sa.text("retired_at IS NULL AND settings->>'default_delivery_target' IS NOT NULL"),
+        ),
         sa.Index(
             "uq_communication_connection_active_name",
             "agent_id",
@@ -276,6 +284,7 @@ class CommunicationDelivery(BaseModel, table=True):
             name="uq_communication_delivery_idempotency",
         ),
         sa.CheckConstraint("attempt_count >= 0", name="ck_communication_delivery_attempt_count"),
+        sa.UniqueConstraint("agent_id", "submission_key", name="uq_communication_delivery_submission"),
         sa.Index("ix_communication_delivery_connection_status", "connection_id", "status"),
         sa.Index("ix_communication_delivery_status_available", "status", "available_at"),
         sa.Index("ix_communication_delivery_ordering", "ordering_key", "created_at"),
@@ -296,6 +305,8 @@ class CommunicationDelivery(BaseModel, table=True):
         sa_column=Column(sa.String(32), nullable=False, server_default="PENDING"),
     )
     idempotency_key: str = SqlField(nullable=False, max_length=512)
+    submission_key: str | None = SqlField(default=None, nullable=True, max_length=64)
+    request_digest: str | None = SqlField(default=None, nullable=True, max_length=64)
     ordering_key: str = SqlField(nullable=False, max_length=1024)
     attempt_count: int = SqlField(
         default=0,
@@ -313,6 +324,14 @@ class CommunicationDelivery(BaseModel, table=True):
     last_error_code: str | None = SqlField(default=None, nullable=True, max_length=100)
     last_error_message: str | None = SqlField(default=None, nullable=True, max_length=500)
     cancel_requested_at: datetime | None = SqlField(default=None, nullable=True, sa_type=sa.DateTime(timezone=True))  # type: ignore
+    # A claimed delivery whose run is parked waiting on a human answer. The
+    # answer can only arrive as another message on this same thread, so such a
+    # delivery must not block its own ordering key or the reply deadlocks
+    # behind the run that is waiting for it.
+    awaiting_input: bool = SqlField(
+        default=False,
+        sa_column=Column(sa.Boolean(), nullable=False, server_default=sa.false()),
+    )
     envelope: dict[str, Any] = SqlField(sa_column=Column(JSONB, nullable=False))
 
 
@@ -445,6 +464,7 @@ class CommunicationPipelineCounts(PydanticBaseModel):
     agent_claimed: int = 0
     model_completed: int = 0
     reply_queued: int = 0
+    initiated_queued: int = 0
     provider_delivered: int = 0
     dead_lettered: int = 0
 
@@ -559,6 +579,7 @@ class RuntimeDeliveryRead(PydanticBaseModel):
     attempt_count: int
     envelope: NormalizedCommunicationEnvelope
     progress_updates: bool = True
+    execution_token: str | None = None
 
 
 class RuntimeDeliveryResult(PydanticBaseModel):
@@ -577,11 +598,104 @@ class OutboundCommunicationEnvelope(PydanticBaseModel):
     model_config = ConfigDict(extra="forbid")
 
     schema_version: int = Field(default=1, ge=1)
-    source_delivery_id: UUID
+    origin: Literal["reply", "cron", "user_directed"] = "reply"
+    execution_id: str | None = None
+    source_delivery_id: UUID | None = None
     location: ConversationLocation
     text: str = Field(min_length=1, max_length=100_000)
     attachments: list[CommunicationAttachment] = Field(default_factory=list)
     reply_to_provider_message_id: str | None = Field(default=None, max_length=512)
+    provider_metadata: dict[str, str | int | float | bool | None] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def require_reply_source(self) -> OutboundCommunicationEnvelope:
+        if self.origin in {"reply", "user_directed"} and self.source_delivery_id is None:
+            raise ValueError("Replies and user-directed messages require a source delivery")
+        if self.origin == "cron" and (self.source_delivery_id is not None or not self.execution_id):
+            raise ValueError("Scheduled messages require a run identity and no reply source")
+        return self
+
+
+class OutboundTargetRequest(PydanticBaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["channel", "user", "dm"] = "channel"
+    recipient: str = Field(min_length=1, max_length=512, title="Channel or recipient")
+    thread_id: str | None = Field(default=None, min_length=1, max_length=512, title="Thread (optional)")
+
+
+class DefaultMessageDestination(PydanticBaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["default"] = "default"
+
+
+class ExplicitMessageDestination(PydanticBaseModel):
+    """An Agent names where to send, never which Connection carries it.
+
+    Connection identity is infrastructure: it changes when an operator recreates a
+    Connection, so it must not live in a prompt. Communications resolves the route.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["explicit"] = "explicit"
+    target: OutboundTargetRequest
+
+
+class OriginMessageDestination(PydanticBaseModel):
+    """The conversation a scheduled job was created from, recorded by the trusted adapter.
+
+    Not model-chosen: the runtime derives this from the session key Communications
+    minted for an inbound delivery that already passed inbound admission. Every field
+    is still verified against the Agent's own Connections and history on arrival.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["origin"] = "origin"
+    connection_id: UUID
+    channel_id: str = Field(min_length=1, max_length=512)
+    thread_id: str | None = Field(default=None, min_length=1, max_length=512)
+
+
+class ScheduledMessageContext(PydanticBaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["scheduled"] = "scheduled"
+    run_id: str = Field(min_length=1, max_length=256)
+
+
+class InteractiveMessageContext(PydanticBaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["interactive"] = "interactive"
+    execution_token: str = Field(min_length=1, max_length=256)
+
+
+class AgentMessageCreate(PydanticBaseModel):
+    model_config = ConfigDict(extra="forbid")
+    text: str = Field(min_length=1, max_length=100_000)
+    idempotency_key: str = Field(min_length=1, max_length=512)
+    destination: DefaultMessageDestination | ExplicitMessageDestination | OriginMessageDestination = Field(
+        discriminator="kind"
+    )
+    context: ScheduledMessageContext | InteractiveMessageContext = Field(discriminator="kind")
+
+    # A scheduled run may reach its configured default or the conversation that created
+    # it, never a destination the model named. An interactive run has a live execution
+    # that authorizes an explicit send on the inbound Connection only.
+    _ALLOWED_DESTINATIONS = {"scheduled": {"default", "origin"}, "interactive": {"explicit"}}
+
+    @model_validator(mode="after")
+    def validate_context(self) -> AgentMessageCreate:
+        if self.destination.kind not in self._ALLOWED_DESTINATIONS[self.context.kind]:
+            raise ValueError(f"A {self.context.kind} execution may not use a {self.destination.kind} destination")
+        return self
+
+
+class AgentMessageRead(PydanticBaseModel):
+    delivery_id: UUID
+    status: CommunicationDeliveryStatus
+
+
+class ResolvedOutboundTarget(PydanticBaseModel):
+    location: ConversationLocation
     provider_metadata: dict[str, str | int | float | bool | None] = Field(default_factory=dict)
 
 

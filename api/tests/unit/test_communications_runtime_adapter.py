@@ -5,7 +5,7 @@ import json
 import threading
 from pathlib import Path
 from types import ModuleType
-from typing import Any
+from typing import Any, Self
 from unittest.mock import Mock, call
 
 import pytest
@@ -109,7 +109,7 @@ def test_run_delivery_posts_reply_then_completion(monkeypatch: pytest.MonkeyPatc
     adapter = _load_adapter(monkeypatch)
     calls: list[tuple[str, dict | None]] = []
 
-    def fake_request(_method: str, url: str, *, headers: dict[str, str], payload: dict | None = None):
+    def fake_request(_method: str, url: str, *, headers: dict[str, str], payload: dict | None = None, **_):
         del headers
         calls.append((url, payload))
         if url.endswith("/v1/chat/completions"):
@@ -129,11 +129,40 @@ def test_run_delivery_posts_reply_then_completion(monkeypatch: pytest.MonkeyPatc
     assert calls[2][1] == {"succeeded": True}
 
 
+def test_communications_calls_are_bounded_so_a_stall_cannot_park_the_worker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The delivery worker claims inside http_request, so an unbounded wait there
+    stops claiming entirely and logs nothing -- indistinguishable from idle."""
+    adapter = _load_adapter(monkeypatch)
+    timeouts: list[float | None] = []
+
+    class Response:
+        status = 204
+
+        def __enter__(self) -> Self:
+            return self
+
+        def __exit__(self, *_: object) -> bool:
+            return False
+
+    def fake_urlopen(_req: Any, timeout: float | None = None) -> Response:
+        timeouts.append(timeout)
+        return Response()
+
+    monkeypatch.setattr(adapter.urllib.request, "urlopen", fake_urlopen)
+
+    adapter.renew_delivery_lease("delivery-1")
+
+    assert timeouts == [adapter._REQUEST_TIMEOUT_SECONDS]
+    assert adapter._REQUEST_TIMEOUT_SECONDS < adapter._RUNTIME_TURN_TIMEOUT_SECONDS
+
+
 def test_cancel_during_runtime_work_suppresses_reply(monkeypatch: pytest.MonkeyPatch) -> None:
     adapter = _load_adapter(monkeypatch)
     calls: list[tuple[str, dict | None]] = []
 
-    def fake_request(_method: str, url: str, *, headers: dict[str, str], payload: dict | None = None):
+    def fake_request(_method: str, url: str, *, headers: dict[str, str], payload: dict | None = None, **_):
         del headers
         calls.append((url, payload))
         if url.endswith("/v1/chat/completions"):
@@ -561,6 +590,40 @@ def test_hermes_approval_request_relays_regardless_of_verbose_mode(monkeypatch: 
     assert "rm -rf /tmp/x" in reply_calls[0]["text"]
     assert not any(url.endswith("/complete") for url, _ in calls)
     assert adapter._PENDING_APPROVALS[session_key]["run_id"] == "run-1"
+
+
+def test_an_approval_answer_is_matched_past_the_provider_mention(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A Slack reply carries the bot mention like any other message, so the raw
+    envelope text is never exactly a choice and the run re-prompts forever."""
+    adapter = _load_adapter(monkeypatch, runtime_kind="hermes")
+    session_key = adapter.session_key_for(_DELIVERY)
+    adapter._PENDING_APPROVALS[session_key] = {
+        "run_id": "run-1",
+        "delivery_id": "delivery-1",
+        "choices": ["once", "session", "always", "deny"],
+    }
+    calls: list[tuple[str, dict | None]] = []
+
+    def fake_http_request(method, url, *, headers, payload=None):
+        calls.append((url, payload))
+
+    monkeypatch.setattr(adapter, "http_request", fake_http_request)
+    monkeypatch.setattr(
+        adapter,
+        "_run_and_drain",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("should not start a new run")),
+    )
+
+    reply_delivery = {
+        **_DELIVERY,
+        "delivery_id": "delivery-2",
+        "envelope": {**_DELIVERY["envelope"], "text": "<@U0BTHDYS4TY> always"},
+    }
+    adapter.run_delivery_hermes(reply_delivery)
+
+    approval_calls = [(url, payload) for url, payload in calls if url.endswith("/v1/runs/run-1/approval")]
+    assert approval_calls == [("http://runtime.test/v1/runs/run-1/approval", {"choice": "always"})]
+    assert session_key not in adapter._PENDING_APPROVALS
 
 
 def test_hermes_second_delivery_for_pending_session_resolves_approval(monkeypatch: pytest.MonkeyPatch) -> None:

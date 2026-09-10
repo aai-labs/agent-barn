@@ -33,6 +33,10 @@ TELEMETRY_PUSH_PACKAGE_JSON: str = (_TELEMETRY_PUSH / "package.json").read_text(
 TELEMETRY_PUSH_PLUGIN_JSON: str = (_TELEMETRY_PUSH / "openclaw.plugin.json").read_text()
 COMMUNICATIONS_RUNTIME_ADAPTER_PY: str = (_COMMON_SCRIPTS / "communications-runtime-adapter.py").read_text()
 
+_MESSAGE_SCRIPTS = _COMMON_SCRIPTS / "messaging"
+AGENTBARN_MESSAGE_PY: str = (_MESSAGE_SCRIPTS / "agentbarn_message.py").read_text()
+OPENCLAW_MESSAGING_JS: str = (_MESSAGE_SCRIPTS / "openclaw-messaging.js").read_text()
+
 
 def _openclaw_config_core(
     model: str,
@@ -70,11 +74,17 @@ def _openclaw_config_core(
         },
         "memory": {"backend": "builtin"},
         "plugins": {
-            "allow": ["memory-core", "active-memory", "telemetry-push"],
-            "load": {"paths": ["/home/node/.openclaw/local-plugins/telemetry-push"]},
+            "allow": ["memory-core", "active-memory", "telemetry-push", "agentbarn-messaging"],
+            "load": {
+                "paths": [
+                    "/home/node/.openclaw/local-plugins/telemetry-push",
+                    "/home/node/.openclaw/local-plugins/agentbarn-messaging",
+                ]
+            },
             "slots": {"memory": "memory-core"},
             "entries": {
                 "memory-core": {"enabled": True},
+                "agentbarn-messaging": {"enabled": True},
                 "active-memory": {
                     "enabled": True,
                     "config": {
@@ -143,6 +153,8 @@ def build_config_map(
         data["telemetry-push-package.json"] = TELEMETRY_PUSH_PACKAGE_JSON
         data["telemetry-push-plugin.json"] = TELEMETRY_PUSH_PLUGIN_JSON
         data["communications-runtime-adapter.py"] = COMMUNICATIONS_RUNTIME_ADAPTER_PY
+        data["agentbarn_message.py"] = AGENTBARN_MESSAGE_PY
+        data["openclaw-messaging.js"] = OPENCLAW_MESSAGING_JS
     if aai_cli_config_toml is not None:
         data["aai-cli-config.toml"] = aai_cli_config_toml
     if aai_cli_setup_sh is not None:

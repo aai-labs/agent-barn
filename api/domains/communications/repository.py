@@ -114,6 +114,36 @@ class CommunicationConnectionRepository:
                 )
             ).one_or_none()
 
+    def runtime_default(self, agent_id: UUID, organization_id: UUID) -> CommunicationConnection | None:
+        """The Agent's one designated default, disabled ones included.
+
+        A disabled Connection is returned so callers report an unavailable default
+        rather than an absent one. Matches uq_communication_connection_default_target,
+        which keeps this to at most one row.
+        """
+        with Session(self.delegate.engine) as session:
+            return session.exec(
+                self._runtime_query(agent_id, organization_id).where(
+                    sa.text("settings->>'default_delivery_target' IS NOT NULL")
+                )
+            ).one_or_none()
+
+    def runtime_connection(
+        self, agent_id: UUID, organization_id: UUID, connection_id: UUID
+    ) -> CommunicationConnection | None:
+        with Session(self.delegate.engine) as session:
+            return session.exec(
+                self._runtime_query(agent_id, organization_id).where(col(CommunicationConnection.id) == connection_id)
+            ).one_or_none()
+
+    @staticmethod
+    def _runtime_query(agent_id: UUID, organization_id: UUID) -> Any:
+        return select(CommunicationConnection).where(
+            col(CommunicationConnection.agent_id) == agent_id,
+            col(CommunicationConnection.organization_id) == organization_id,
+            col(CommunicationConnection.retired_at).is_(None),
+        )
+
     def get_active_by_platform_key(self, agent_id: UUID, platform_key: str) -> CommunicationConnection | None:
         with Session(self.delegate.engine) as session:
             return session.exec(
@@ -470,6 +500,8 @@ class CommunicationConnectionRepository:
     @staticmethod
     def _conflict_detail(exc: IntegrityError) -> str:
         message = str(exc).lower()
+        if "uq_communication_connection_default_target" in message:
+            return "This Agent already has a default delivery target; clear it before selecting another"
         if "uq_communication_connection_active_name" in message:
             return "An active Communication Connection already uses this display name"
         if "uq_communication_connection_credential" in message:

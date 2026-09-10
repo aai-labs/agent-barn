@@ -171,6 +171,19 @@ class SlackClient:
             raise SlackFetchError("chat.postMessage returned no message id")
         return message_id
 
+    def get_conversation(self, channel_id: str) -> dict:
+        body = self._get("conversations.info", {"channel": channel_id})
+        if not body.get("ok") or not body.get("channel"):
+            raise SlackFetchError(f"conversations.info error: {body.get('error', 'unknown_error')}")
+        return body["channel"]
+
+    def open_dm(self, user_id: str) -> str:
+        body = self._post("conversations.open", {"users": user_id})
+        channel_id = (body.get("channel") or {}).get("id")
+        if not body.get("ok") or not channel_id:
+            raise SlackFetchError(f"conversations.open error: {body.get('error', 'unknown_error')}")
+        return str(channel_id)
+
     def add_reaction(self, channel_id: str, timestamp: str, name: str) -> None:
         """Add a reaction, treating Slack's duplicate response as success."""
         body = self._post(

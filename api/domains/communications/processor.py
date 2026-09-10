@@ -14,7 +14,9 @@ from api.domains.communications.models import (
     CommunicationDeliveryStatus,
     CommunicationDirection,
     OutboundCommunicationEnvelope,
+    PlatformCapability,
     ProcessingFeedbackStage,
+    ResolvedOutboundTarget,
 )
 from api.domains.communications.plugins.base import ProcessingFeedbackContext
 from api.domains.communications.plugins.registry import PlatformPluginRegistry
@@ -58,6 +60,21 @@ class OutboundCommunicationProcessor:
             agent = self.agents.get_by_id(connection.agent_id)
             if agent is None:
                 raise RuntimeError("Agent is unavailable")
+            if outbound.origin != "reply":
+                if outbound.source_delivery_id is not None and self.deliveries.source_is_cancelled(
+                    outbound.source_delivery_id,
+                    agent_id=delivery.agent_id,
+                ):
+                    raise PermissionError("Originating inbound execution was cancelled")
+                if PlatformCapability.AGENT_INITIATED_DELIVERY not in plugin.capabilities:
+                    raise PermissionError("Platform does not support initiated delivery")
+                plugin.validate_outbound_target(
+                    settings,
+                    ResolvedOutboundTarget(
+                        location=outbound.location,
+                        provider_metadata=outbound.provider_metadata,
+                    ),
+                )
             provider_message_id = plugin.send(
                 settings,
                 credentials,
@@ -129,6 +146,8 @@ class OutboundCommunicationProcessor:
         outbound: OutboundCommunicationEnvelope,
         stage: ProcessingFeedbackStage,
     ) -> None:
+        if outbound.origin != "reply":
+            return
         self.gateway.notify_processing_feedback(
             ProcessingFeedbackContext(
                 connection_id=connection_id,

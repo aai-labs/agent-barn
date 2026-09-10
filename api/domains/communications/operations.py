@@ -393,6 +393,7 @@ class CommunicationOperationalRepository:
             agent_claimed=pipeline_values.get(CommunicationJournalStage.AGENT_CLAIMED.value, 0),
             model_completed=pipeline_values.get(CommunicationJournalStage.MODEL_COMPLETED.value, 0),
             reply_queued=pipeline_values.get(CommunicationJournalStage.REPLY_QUEUED.value, 0),
+            initiated_queued=pipeline_values.get(CommunicationJournalStage.INITIATED_QUEUED.value, 0),
             provider_delivered=pipeline_values.get(CommunicationJournalStage.PROVIDER_DELIVERED.value, 0),
             dead_lettered=pipeline_values.get(CommunicationJournalStage.DEAD_LETTERED.value, 0),
         )

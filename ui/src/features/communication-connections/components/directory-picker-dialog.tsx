@@ -35,6 +35,7 @@ export function DirectoryPickerDialog({
   selected,
   isLoading = false,
   error = null,
+  multiple = true,
   onConfirm,
 }: {
   open: boolean;
@@ -46,6 +47,8 @@ export function DirectoryPickerDialog({
   selected: string[];
   isLoading?: boolean;
   error?: string | null;
+  /** Single-select replaces the choice instead of accumulating one. */
+  multiple?: boolean;
   onConfirm: (ids: string[]) => void;
 }) {
   return (
@@ -62,6 +65,7 @@ export function DirectoryPickerDialog({
           selected={selected}
           isLoading={isLoading}
           error={error}
+          multiple={multiple}
           onCancel={() => onOpenChange(false)}
           onConfirm={(ids) => {
             onConfirm(ids);
@@ -81,6 +85,7 @@ function DirectoryPickerBody({
   selected,
   isLoading,
   error,
+  multiple,
   onCancel,
   onConfirm,
 }: {
@@ -91,12 +96,16 @@ function DirectoryPickerBody({
   selected: string[];
   isLoading: boolean;
   error: string | null;
+  multiple: boolean;
   onCancel: () => void;
   onConfirm: (ids: string[]) => void;
 }) {
   const [draft, setDraft] = useState<string[]>(selected);
   const toggle = (id: string) =>
-    setDraft((current) => (current.includes(id) ? current.filter((item) => item !== id) : [...current, id]));
+    setDraft((current) => {
+      if (current.includes(id)) return current.filter((item) => item !== id);
+      return multiple ? [...current, id] : [id];
+    });
 
   return (
     <>
@@ -165,7 +174,7 @@ function DirectoryPickerBody({
         style={{ borderColor: "var(--line)" }}
       >
         <span className="text-xs" style={{ color: "var(--ink-4)" }}>
-          {draft.length} selected
+          {multiple ? `${draft.length} selected` : draft[0] ? `Selected ${draft[0]}` : "None selected"}
         </span>
         <div className="flex justify-end gap-2">
           <button type="button" className="af-btn" onClick={onCancel}>

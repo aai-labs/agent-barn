@@ -87,7 +87,11 @@ from api.domains.agents.override_repository import (
     AgentOverrideSnapshot,
 )
 from api.domains.agents.repository import AgentRepository
-from api.domains.agents.runtime_policy import build_chat_commands_policy_md, build_role_scope_policy_md
+from api.domains.agents.runtime_policy import (
+    build_chat_commands_policy_md,
+    build_messaging_policy_md,
+    build_role_scope_policy_md,
+)
 from api.domains.auth.models import CurrentUserContext
 from api.domains.events import ActorIdentity, ActorIdentityType, EventDeliveryDispatcher, resolve_actor_identity
 from api.domains.events.catalog import (
@@ -2114,6 +2118,7 @@ class AgentService:
             + build_local_tools_policy_md(s.name for s in mounted_skills)
             + build_chat_commands_policy_md()
             + build_role_scope_policy_md()
+            + build_messaging_policy_md()
         )
 
         if agent.agent_type == AgentType.HERMES:
