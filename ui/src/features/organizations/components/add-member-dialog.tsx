@@ -28,6 +28,29 @@ interface AddMemberDialogProps {
   onOpenChange: (open: boolean) => void;
 }
 
+function resultCopy(result: MemberInviteResult): { title: string; description: string } {
+  const { member, inviteLink } = result;
+  const added = `${member.email} has been added as ${member.role.toLowerCase()}.`;
+
+  if (inviteLink) {
+    return { title: "Member invited", description: added };
+  }
+  // No link was issued because this person already has an account — an invite
+  // link belongs to the account, not the membership, so an org add never mints
+  // or replaces one. What we tell the admin differs by whether that account can
+  // already sign in.
+  if (member.isPending) {
+    return {
+      title: "Member added",
+      description: `${added} They already have an outstanding invite from before, so no new one was sent — that link still works. Use "Resend invite" from the members list if they need a fresh one.`,
+    };
+  }
+  return {
+    title: "Member added",
+    description: `${added} They already have an account and can sign in right away.`,
+  };
+}
+
 export function AddMemberDialog({
   organizationId,
   open,
@@ -77,18 +100,11 @@ export function AddMemberDialog({
       <DialogContent>
         <DialogHeader>
           <DialogTitle>
-            {result
-              ? result.inviteLink
-                ? "Member invited"
-                : "Member added"
-              : "Add member"}
+            {result ? resultCopy(result).title : "Add member"}
           </DialogTitle>
           <DialogDescription>
             {result
-              ? `${result.member.email} has been added as ${result.member.role.toLowerCase()}.` +
-                (result.inviteLink
-                  ? ""
-                  : " They already have an account, so no new invite was sent.")
+              ? resultCopy(result).description
               : "Invite someone to this organization by email."}
           </DialogDescription>
         </DialogHeader>

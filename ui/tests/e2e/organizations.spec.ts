@@ -283,7 +283,7 @@ test.describe("Organization detail — members", () => {
     ).toHaveValue(/set-password\?token=/);
   });
 
-  test("adding an existing user reports no invite was sent", async ({ page }) => {
+  test("adding an existing active user reports no invite was sent", async ({ page }) => {
     // AF-244: an existing account keeps the one link it already has, so the add returns
     // no invite_link and the dialog must not claim one went out.
     await data.organizations.interceptAddMember({
@@ -311,8 +311,47 @@ test.describe("Organization detail — members", () => {
       page.getByRole("heading", { name: /member added/i }),
     ).toBeVisible();
     await expect(
-      page.getByText(/no new invite was sent/i),
+      page.getByText(/can sign in right away/i),
     ).toBeVisible();
+    await expect(
+      page.getByRole("dialog").locator("input[readonly]"),
+    ).toHaveCount(0);
+  });
+
+  test("adding an existing pending user points the admin to Resend invite", async ({
+    page,
+  }) => {
+    // AF-244 review: a pending user (never set a password) also gets no link, but the
+    // copy must say so distinctly from an active user — they can't sign in yet, and the
+    // admin needs the hint that Resend invite exists for them.
+    await data.organizations.interceptAddMember({
+      result: {
+        member: {
+          user_id: "77777777-7777-4777-8777-777777777777",
+          email: "still-pending@example.com",
+          full_name: null,
+          role: "MEMBER",
+          is_pending: true,
+        },
+        invite_link: null,
+      },
+    });
+    await page.goto(DETAIL_URL);
+
+    await page.getByRole("button", { name: /add member/i }).click();
+    await page.getByLabel(/email/i).fill("still-pending@example.com");
+    await page
+      .getByRole("dialog")
+      .getByRole("button", { name: /add member/i })
+      .click();
+
+    await expect(
+      page.getByRole("heading", { name: /member added/i }),
+    ).toBeVisible();
+    await expect(
+      page.getByText(/outstanding invite from before/i),
+    ).toBeVisible();
+    await expect(page.getByText(/resend invite/i)).toBeVisible();
     await expect(
       page.getByRole("dialog").locator("input[readonly]"),
     ).toHaveCount(0);
