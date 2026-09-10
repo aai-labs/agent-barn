@@ -48,7 +48,7 @@ Every Organization can use these locked defaults:
 
 AF-216 adds Organization-defined custom Agent Access Roles using the same Agent Permission catalogue. AF-150 seeds only the locked defaults and implements role-bearing assignments.
 
-An Agent operation is allowed when the actor has the corresponding Permission through implicit Agent Owner authority, explicit Agent Access, or Agent General Access, and the Agent lifecycle permits the operation. Start and stop use one `agent.lifecycle.manage` Permission; current Agent state selects the valid transition. Agent role names are not authorization checks.
+An Agent operation is allowed when the actor has the corresponding Permission through implicit Agent Owner authority, explicit Agent Access, or Agent General Access, and the Agent lifecycle permits the operation. Start and stop use one `agent.lifecycle.manage` Permission; current Agent state selects the valid transition. Capturing, restoring, and deleting an Agent Restore Point reuse that same Permission, because each is a lifecycle operation on a stopped Agent; reading restore points uses `activity.read`, alongside conversations, tool calls, logs, and health. No restore-point-specific Permission exists — an Agent Editor who may stop an Agent and repin its template may also roll its volume back, and gating restore behind Agent Owner would let an Editor break an Agent without being able to fix it. Agent role names are not authorization checks.
 
 ## Agent Access
 

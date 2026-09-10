@@ -92,6 +92,14 @@ _Avoid_: configured model, current model
 The implementation that executes an agent. Agent Barn currently supports Hermes and OpenClaw.
 _Avoid_: platform
 
+**Agent Restore Point**:
+A captured, restorable copy of one Agent's persistent volume contents, together with a record of the Agent's configuration pins at capture time. Capture and restore both require a stopped Agent, and restore replaces the volume contents in place. The archive deliberately excludes credential material and any state the Agent's start script regenerates, so it holds the Agent's own work rather than a byte-exact image of the volume.
+_Avoid_: snapshot, backup, volume image, checkpoint
+
+**Pre-Restore Restore Point**:
+An Agent Restore Point the system captures automatically at the start of a restore, before the target volume is modified. It is the rollback path when a restore is unwanted or fails partway, and it does not count against the per-Agent retention cap.
+_Avoid_: automatic backup, undo point
+
 **Platform**:
 The chat system through which an Agent interacts with people. Agent Barn support for a Platform is supplied by a shipped Platform Plugin.
 _Avoid_: runtime
@@ -286,6 +294,7 @@ _Avoid_: webhook
 - An **Agent** has one current **Configured Model** and may have **Observed Model Usage** for multiple models over time.
 - A **Membership** may have **Agent Access** to many Agents, and each relationship carries one **Agent Access Role**; creating an Agent grants its creator explicit Agent Owner access without transferring Organization ownership.
 - An **Agent** has one **Agent General Access** setting whose Permissions combine with (never subtract from) explicit Agent Access grants.
+- An **Agent** has zero or more **Agent Restore Points**, each capturing its persistent volume at one instant. They exist only after the Agent has run at least once, and they are destroyed when the Agent is deleted.
 - A **Template Version** may require multiple immutable **Skill Versions**.
 - A **Platform Skill** has no owner; an **Organization Skill** belongs to one Organization; an **Agent Skill** belongs to one Agent and retains its Organization for tenant isolation.
 - An **Agent** can see Platform Skills, its Organization's Skills, and its own Agent Skills, but never another Agent's private Skills. Agent assignments and Template requirements pin exact Skill Versions.
@@ -308,3 +317,4 @@ _Avoid_: webhook
 - The persisted field `openclaw_msg_id` stores the runtime-external message identifier for both OpenClaw and Hermes messages. Its name is narrower than its current meaning.
 - “Integration” is sometimes used for both the external service and its credential. Use **Integration** for the service and **Agent Secret** for the stored credential payload.
 - “Owner” names both an Organization Role and a default Agent Access Role. Use **Organization Owner** for tenant governance and **Agent Owner** for full authority over one Agent.
+- “Restore” names two unrelated actions. **Template Restore** seeds a Draft Template Version from an earlier published version and is additive — it never destroys anything. Restoring an **Agent Restore Point** replaces an Agent's volume contents in place and is destructive. Always qualify which one is meant; never write “restore” unqualified.

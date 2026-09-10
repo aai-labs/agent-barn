@@ -2,7 +2,7 @@
 
 ## Read when
 
-Read before changing Hermes/OpenClaw behavior, agent Kubernetes resources, runtime images, telemetry configuration, Helm charts, deployment workflows, or service versions.
+Read before changing Agent Restore Point Jobs, Hermes/OpenClaw behavior, agent Kubernetes resources, runtime images, telemetry configuration, Helm charts, deployment workflows, or service versions.
 
 ## Agent runtime assembly
 
@@ -92,6 +92,33 @@ Every release's namespace and `needs:` entries are templated on a `NAMESPACE` en
 ## Observability
 
 `../../helm/monitoring/` deploys namespace-scoped Prometheus, Grafana, and Alertmanager charts. The product API exposes platform probes on `:8000`, Ingest exposes telemetry metrics on `:8001`, and Communications exposes HTTP metrics on `:8002`; LiteLLM and Agent health services retain their existing scrape targets. Alert rules route through Alertmanager, and Grafana dashboards are provisioned from chart ConfigMaps.
+
+## Restore point Jobs
+
+Capture and restore run as `batch/v1` Jobs rather than pods managed by the API, and reuse the
+API's own image so the archive logic and its exclusion sets are always the same build as the
+API that scheduled them — `API_IMAGE` is rendered from the same chart expression as the API
+container's `image`. Nothing new is built or published.
+
+Both mount the Agent's `agent-<uuid>` PVC, which is why they require a stopped Agent: the
+volume is ReadWriteOnce and cannot be held by the Agent pod and a Job pod at once. Capture
+mounts the Agent volume read-only alongside a fresh per-restore-point PVC. Restore mounts
+three — the Agent volume writable, the new Pre-Restore destination, and the chosen archive
+read-only — and performs the safety-net capture and the extraction in one process, so the
+backup is on disk before anything is wiped.
+
+The Job runs as root. Extraction then applies the ownership the target volume already had,
+read before the wipe, because the two runtimes differ: Hermes' init container chowns `/opt/data`
+recursively, while OpenClaw's chowns only the mount point, so a restore cannot rely on the next
+start to repair ownership.
+
+The API learns each Job's outcome by reading its status, and its archive manifest by reading
+the Job pod's logs — the manifest is written onto the restore point's PVC, which the API cannot
+mount. Distinct exit codes separate a failed safety-net capture, where the Agent volume was
+never touched, from a failed extraction, where it was.
+
+CSI `VolumeSnapshot` is deliberately unused; see
+[`../adr/2026-09-10-restore-points-use-tar-jobs-not-csi-snapshots.md`](../adr/2026-09-10-restore-points-use-tar-jobs-not-csi-snapshots.md).
 
 ## Kubernetes client constraint
 

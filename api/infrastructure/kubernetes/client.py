@@ -319,7 +319,7 @@ class KubernetesClient:
                 timestamps=False,
             )
         except ApiException as e:
-            if e.status in (400, 404):
+            if e.status in (400, 403, 404):
                 return None
             raise
 
