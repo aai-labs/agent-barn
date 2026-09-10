@@ -20,6 +20,12 @@ from api.domains.agents.models import Agent, AgentRestorePoint, AgentStatus, Res
 from api.domains.agents.repository import AgentRepository
 from api.domains.agents.restore_point_job import EXIT_BACKUP_FAILED, EXIT_RESTORE_FAILED
 from api.domains.auth.models import CurrentUserContext
+from api.domains.events.catalog import (
+    AGENT_RESTORE_POINT_CREATED,
+    AGENT_RESTORE_POINT_DELETED,
+    AGENT_RESTORE_POINT_RESTORED,
+)
+from api.domains.events.dispatch import EventDeliveryDispatcher, resolve_actor_identity
 from api.domains.rbac.catalog import PermissionKey
 from api.domains.restore_points.models import (
     NON_TERMINAL_STATUSES,
@@ -61,6 +67,24 @@ class RestorePointService:
     agent_repository: AgentRepository
     agent_authorization: AgentAuthorization
     k8s: KubernetesClient
+    event_delivery_dispatcher: EventDeliveryDispatcher
+
+    def _event_payload(
+        self,
+        agent: Agent,
+        restore_point: AgentRestorePoint,
+        context: CurrentUserContext,
+    ) -> dict:
+        return {
+            "organization_id": agent.organization_id,
+            "agent_id": agent.id,
+            "agent_name": agent.name,
+            "restore_point_id": restore_point.id,
+            "origin": restore_point.origin,
+            "label": restore_point.label,
+            "actor_display": context.user.full_name or context.user.email,
+            "subject_display": agent.name,
+        }
 
     def list_restore_points(
         self,
@@ -244,10 +268,16 @@ class RestorePointService:
             )
             restore_point.pvc_name = restore_point_resource_name(restore_point.id)
             restore_point.job_name = _capture_job_name(restore_point.id)
-            self.repository.save(restore_point)
+            result = self.repository.save_with_event(
+                restore_point,
+                event_name=AGENT_RESTORE_POINT_CREATED,
+                actor=resolve_actor_identity(context, current.organization_id),
+                payload=self._event_payload(current, restore_point, context),
+            )
 
             self._provision_capture(current, restore_point)
 
+        self._dispatch(result.delivery_ids)
         return AgentRestorePointRead.model_validate(restore_point)
 
     def restore_restore_point(
@@ -282,14 +312,21 @@ class RestorePointService:
 
             job_name = _restore_job_name(target.id)
             backup = self._create_pre_restore_row(current, job_name)
-            self.repository.update_status(
+            result = self.repository.update_status_with_event(
                 target.id,
                 RestorePointStatus.RESTORING,
                 from_statuses=(RestorePointStatus.READY,),
+                event_name=AGENT_RESTORE_POINT_RESTORED,
+                actor=resolve_actor_identity(context, current.organization_id),
+                payload=self._event_payload(current, target, context),
             )
+            if result is None:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=NOT_READY_DETAIL)
             self.repository.set_job_name(target.id, job_name)
 
             self._provision_restore(current, target, backup, job_name)
+
+        self._dispatch(result.delivery_ids)
 
         refreshed = self.repository.get_in_scope(restore_point_id, agent_id, scope)
         return AgentRestorePointRead.model_validate(refreshed or target)
@@ -369,12 +406,31 @@ class RestorePointService:
         if restore_point.status in NON_TERMINAL_STATUSES:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=DELETE_IN_FLIGHT_DETAIL)
 
+        agent = self.agent_repository.get_by_id(agent_id)
+        if agent is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent {agent_id} not found")
+
         namespace = self.config.k8s_namespace
         if restore_point.job_name:
             self.k8s.delete_job(restore_point.job_name, namespace)
         if restore_point.pvc_name:
             self.k8s.delete_pvc(restore_point.pvc_name, namespace)
-        self.repository.delete(restore_point.id)
+
+        delivery_ids = self.repository.delete_with_event(
+            restore_point,
+            event_name=AGENT_RESTORE_POINT_DELETED,
+            actor=resolve_actor_identity(context, agent.organization_id),
+            payload=self._event_payload(agent, restore_point, context),
+        )
+        self._dispatch(delivery_ids)
+
+    def _dispatch(self, delivery_ids: list[UUID]) -> None:
+        if not delivery_ids:
+            return
+        try:
+            self.event_delivery_dispatcher.enqueue_immediate(delivery_ids)
+        except Exception:
+            logger.warning("Could not enqueue restore point event deliveries", exc_info=True)
 
     def has_blocking_operation(self, agent_id: UUID) -> bool:
         """True when a capture or restore is genuinely still running.

@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from injector import inject, singleton
 from sqlalchemy import func, update
@@ -8,6 +8,9 @@ from sqlmodel import Session, col, select
 
 from api.domains.agents.models import Agent, AgentRestorePoint, RestorePointOrigin, RestorePointStatus
 from api.domains.agents.repository import agent_scope_predicates
+from api.domains.events.catalog import EVENT_REGISTRY
+from api.domains.events.models import ActorIdentity, EventDelivery, SubjectIdentity, SubjectIdentityType
+from api.domains.events.repository import OutboxMessageRepository
 from api.domains.rbac.policy import AuthorizationScope
 from api.domains.restore_points.models import (
     ACTIVE_CAPTURE_STATUSES,
@@ -18,11 +21,18 @@ from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.infrastructure.shared.models import PaginatedItems, Pagination
 
 
+@dataclass
+class RestorePointEventResult:
+    restore_point: AgentRestorePoint
+    delivery_ids: list[UUID]
+
+
 @inject
 @singleton
 @dataclass
 class RestorePointRepository:
     delegate: PostgresRepositoryDelegate
+    outbox_repository: OutboxMessageRepository
 
     def find_by_agent(
         self,
@@ -194,6 +204,92 @@ class RestorePointRepository:
     def save(self, restore_point: AgentRestorePoint) -> AgentRestorePoint:
         self.delegate.save(restore_point)
         return restore_point
+
+    def save_with_event(
+        self,
+        restore_point: AgentRestorePoint,
+        *,
+        event_name: str,
+        actor: ActorIdentity,
+        payload: dict,
+    ) -> RestorePointEventResult:
+        with Session(self.delegate.engine, expire_on_commit=False) as session:
+            session.add(restore_point)
+            session.flush()
+            delivery_ids = self._stage(session, restore_point, event_name, actor, payload)
+            session.commit()
+            return RestorePointEventResult(restore_point=restore_point, delivery_ids=delivery_ids)
+
+    def update_status_with_event(
+        self,
+        restore_point_id: UUID,
+        new_status: RestorePointStatus,
+        *,
+        from_statuses: tuple[RestorePointStatus, ...],
+        event_name: str,
+        actor: ActorIdentity,
+        payload: dict,
+    ) -> RestorePointEventResult | None:
+        with Session(self.delegate.engine, expire_on_commit=False) as session:
+            row = session.exec(
+                select(AgentRestorePoint)
+                .where(
+                    col(AgentRestorePoint.id) == restore_point_id,
+                    col(AgentRestorePoint.status).in_(from_statuses),
+                )
+                .with_for_update()
+            ).first()
+            if row is None:
+                return None
+            row.status = new_status
+            row.updated_at = datetime.now(UTC)
+            session.add(row)
+            session.flush()
+            delivery_ids = self._stage(session, row, event_name, actor, payload)
+            session.commit()
+            return RestorePointEventResult(restore_point=row, delivery_ids=delivery_ids)
+
+    def delete_with_event(
+        self,
+        restore_point: AgentRestorePoint,
+        *,
+        event_name: str,
+        actor: ActorIdentity,
+        payload: dict,
+    ) -> list[UUID]:
+        with Session(self.delegate.engine, expire_on_commit=False) as session:
+            delivery_ids = self._stage(session, restore_point, event_name, actor, payload)
+            row = session.get(AgentRestorePoint, restore_point.id)
+            if row is not None:
+                session.delete(row)
+            session.commit()
+            return delivery_ids
+
+    def _stage(
+        self,
+        session: Session,
+        restore_point: AgentRestorePoint,
+        event_name: str,
+        actor: ActorIdentity,
+        payload: dict,
+    ) -> list[UUID]:
+        organization_id = payload["organization_id"]
+        event = EVENT_REGISTRY.build_event(
+            event_name=event_name,
+            schema_version=1,
+            occurred_at=datetime.now(UTC),
+            organization_id=organization_id,
+            actor=actor,
+            subject=SubjectIdentity(
+                type=SubjectIdentityType.AGENT,
+                id=restore_point.agent_id,
+                organization_id=organization_id,
+            ),
+            correlation_id=uuid4(),
+            payload=payload,
+        )
+        self.outbox_repository.stage(session=session, registry=EVENT_REGISTRY, event=event)
+        return list(session.exec(select(EventDelivery.id).where(EventDelivery.event_id == event.event_id)))
 
     def _exists_with_status(self, agent_id: UUID, statuses: tuple[RestorePointStatus, ...]) -> bool:
         with Session(self.delegate.engine) as session:

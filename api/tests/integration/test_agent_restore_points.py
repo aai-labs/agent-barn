@@ -1,4 +1,5 @@
 import uuid
+from unittest.mock import patch
 
 from fastapi import status
 from hamcrest import (
@@ -18,8 +19,18 @@ from sqlalchemy.exc import IntegrityError
 
 from api.domains.agents.models import AgentRestorePoint, AgentStatus, RestorePointOrigin, RestorePointStatus
 from api.domains.agents.restore_point_job import EXIT_BACKUP_FAILED, EXIT_RESTORE_FAILED
+from api.domains.events.catalog import (
+    AGENT_RESTORE_POINT_CREATED,
+    AGENT_RESTORE_POINT_DELETED,
+    AGENT_RESTORE_POINT_RESTORED,
+    EVENT_REGISTRY,
+    SECURITY_AUDIT_HANDLER,
+)
+from api.domains.events.dispatch import EventDeliveryDispatcher
+from api.domains.events.models import EventScope, OutboxMessage
 from api.domains.restore_points.repository import RestorePointRepository
 from api.infrastructure.kubernetes import KubernetesClient
+from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.tests.core.givenpy import given, then, when
 from api.tests.core.modules import (
     create_test_client,
@@ -591,6 +602,103 @@ def test_delete_agent_purges_restore_point_rows_and_resources_by_label():
             assert_that(repository.find_non_terminal_for_agent(context.agent.id), equal_to([]))
             selectors = [call.args[1] for call in k8s.list_pvcs.call_args_list if len(call.args) > 1]
             assert_that(selectors, has_item(f"agentbarn.io/agent-id={context.agent.id}"))
+
+
+def _outbox(context, event_name: str) -> list[OutboxMessage]:
+    messages = context.injector.get(PostgresRepositoryDelegate).find_all(OutboxMessage)
+    return [m for m in messages if m.event_name == event_name]
+
+
+def test_capturing_a_restore_point_stages_an_organization_scoped_event():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        with when("I capture a restore point"):
+            body = context.client.post(_url(context), json={"label": "before"}, headers=_auth(context)).json()
+
+        with then("one organization-scoped event is staged with identifiers only"):
+            messages = _outbox(context, AGENT_RESTORE_POINT_CREATED)
+            assert_that(messages, has_length(1))
+            message = messages[0]
+            assert_that(message.event_scope, equal_to(EventScope.ORGANIZATION))
+            assert_that(message.organization_id, equal_to(context.organization.id))
+            assert_that(message.payload["restore_point_id"], equal_to(body["id"]))
+            assert_that(message.payload["agent_id"], equal_to(str(context.agent.id)))
+            assert_that(message.payload["label"], equal_to("before"))
+            assert_that(message.payload["origin"], equal_to("MANUAL"))
+            assert_that("config_manifest" not in message.payload, equal_to(True))
+
+
+def test_a_capture_that_cannot_be_provisioned_fails_the_row_and_releases_the_volume():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        k8s = context.injector.get(KubernetesClient)
+        k8s.create_job.side_effect = RuntimeError("cluster rejected the job")
+
+        with when("the job cannot be created"):
+            response = context.client.post(_url(context), json={}, headers=_auth(context))
+
+        with then("the row is failed and its volume is reclaimed"):
+            assert_that(response.status_code, equal_to(status.HTTP_500_INTERNAL_SERVER_ERROR))
+            repository: RestorePointRepository = context.injector.get(RestorePointRepository)
+            rows = repository.find_non_terminal_for_agent(context.agent.id)
+            assert_that(rows, equal_to([]))
+            assert_that(k8s.delete_pvc.called, equal_to(True))
+
+
+def test_restoring_stages_an_event_and_produces_a_security_audit_record():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        target = _seed(context, status_value=RestorePointStatus.READY)
+
+        with when("I restore it"):
+            context.client.post(_restore_url(context, target.id), headers=_auth(context))
+
+        with then("the restore is staged and projected into the audit trail"):
+            messages = _outbox(context, AGENT_RESTORE_POINT_RESTORED)
+            assert_that(messages, has_length(1))
+            assert_that(messages[0].payload["restore_point_id"], equal_to(str(target.id)))
+            definition = EVENT_REGISTRY.get(AGENT_RESTORE_POINT_RESTORED, 1)
+            assert_that(definition.handler_names, has_item(SECURITY_AUDIT_HANDLER))
+
+
+def test_a_dispatch_failure_does_not_fail_the_request():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        dispatcher = context.injector.get(EventDeliveryDispatcher)
+        with patch.object(dispatcher, "enqueue_immediate", side_effect=RuntimeError("broker down")):
+            with when("the broker is unreachable"):
+                response = context.client.post(_url(context), json={}, headers=_auth(context))
+
+        with then("the capture is still accepted and the delivery stays staged"):
+            assert_that(response.status_code, equal_to(status.HTTP_202_ACCEPTED))
+            assert_that(_outbox(context, AGENT_RESTORE_POINT_CREATED), has_length(1))
+
+
+def test_the_automatic_pre_restore_backup_does_not_emit_its_own_created_event():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        target = _seed(context, status_value=RestorePointStatus.READY)
+
+        with when("I restore, which creates a safety net row"):
+            context.client.post(_restore_url(context, target.id), headers=_auth(context))
+
+        with then("only the restore itself is reported, not the system-created backup"):
+            assert_that(_outbox(context, AGENT_RESTORE_POINT_CREATED), equal_to([]))
+            assert_that(_outbox(context, AGENT_RESTORE_POINT_RESTORED), has_length(1))
+
+
+def test_only_restoring_is_projected_into_the_security_audit_trail():
+    for event_name in (AGENT_RESTORE_POINT_CREATED, AGENT_RESTORE_POINT_DELETED):
+        definition = EVENT_REGISTRY.get(event_name, 1)
+        assert_that(definition.handler_names, is_not(has_item(SECURITY_AUDIT_HANDLER)))
+
+
+def test_deleting_a_restore_point_stages_an_event():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        seeded = _seed(context, status_value=RestorePointStatus.READY)
+
+        with when("I delete it"):
+            context.client.delete(f"{_url(context)}/{seeded.id}", headers=_auth(context))
+
+        with then("the deletion is recorded even though the row is gone"):
+            messages = _outbox(context, AGENT_RESTORE_POINT_DELETED)
+            assert_that(messages, has_length(1))
+            assert_that(messages[0].payload["restore_point_id"], equal_to(str(seeded.id)))
 
 
 def test_the_read_dto_never_exposes_internal_resource_names():
