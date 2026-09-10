@@ -9,8 +9,16 @@ def patch(source: str) -> str:
         return source
     capture = '                output_file = save_job_output(job["id"], output)'
     suppress = "            should_deliver = bool(deliver_content.strip())"
-    if source.count(capture) != 1 or source.count(suppress) != 1:
+    preflight = '        ("delivery", lambda: _preflight_check_delivery(job)),'
+    if any(source.count(anchor) != 1 for anchor in (capture, suppress, preflight)):
         raise RuntimeError("Pinned Hermes scheduler changed: completion bridge anchors are not unique")
+    # Native platforms never get credentials here, so the delivery preflight would block
+    # every `deliver: slack:...` job before it runs; destination_for_origin polices targets.
+    source = source.replace(
+        preflight,
+        '        ("delivery", lambda: None if os.environ.get("AGENTBARN_SCHEDULED_DELIVERY") == "1"'
+        " else _preflight_check_delivery(job)),",
+    )
     source = source.replace(
         capture,
         """                # Agent Barn durable completion bridge
