@@ -176,18 +176,17 @@ class ToolCallRepository:
                 query = query.where(col(ToolCall.organization_id) == organization_id)
             if agent_id is not None:
                 query = query.where(col(ToolCall.agent_id) == agent_id)
-            if created_by_user_id is not None or platform is not None:
-                query = query.join(Agent, col(Agent.id) == col(ToolCall.agent_id))
-                if created_by_user_id is not None:
-                    query = query.where(col(Agent.created_by_user_id) == created_by_user_id)
-                if platform is not None:
-                    query = query.where(
-                        sa.exists().where(
-                            col(CommunicationConnection.agent_id) == col(Agent.id),
-                            col(CommunicationConnection.platform_key) == platform.value,
-                            col(CommunicationConnection.retired_at).is_(None),
-                        )
+            if platform is not None:
+                query = query.where(
+                    sa.exists().where(
+                        col(CommunicationConnection.agent_id) == col(ToolCall.agent_id),
+                        col(CommunicationConnection.platform_key) == platform.value,
                     )
+                )
+            if created_by_user_id is not None:
+                query = query.join(Agent, col(Agent.id) == col(ToolCall.agent_id)).where(
+                    col(Agent.created_by_user_id) == created_by_user_id
+                )
 
             query = query.distinct()
             rows = session.exec(query).all()  # type: ignore[call-overload]

@@ -222,7 +222,14 @@ def test_platform_catalog_lists_the_shipped_plugins() -> None:
 
 def test_slack_workspace_preview_loads_directory_without_creating_a_connection() -> None:
     with given(_GIVEN) as context:
-        preview = {"platform_key": "slack", "credentials": _slack_payload()["credentials"]}
+        # The Connection editor creates this transient target while an operator
+        # is choosing a person. Directory discovery needs only Slack credentials,
+        # not a complete scheduled-delivery destination.
+        preview = {
+            "platform_key": "slack",
+            "settings": {"default_delivery_target": {"kind": "user", "recipient": ""}},
+            "credentials": _slack_payload()["credentials"],
+        }
         with patch(
             "api.infrastructure.slack.client.SlackClient.list_channels",
             return_value=[{"id": "C1", "name": "ops", "is_private": False}],

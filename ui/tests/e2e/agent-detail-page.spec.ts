@@ -808,6 +808,24 @@ test.describe("Agent Detail Page — Channels tab", () => {
     await agentDetailPage.channelsTab().click();
   }
 
+  test("configures a scheduled default through the Connection editor", async ({ page }) => {
+    await serveSavedSlackConnection(page);
+    await agentDetailPage.editConnectionButton("Team Slack").click();
+    await expect(page.getByLabel("Default thread or topic (optional)", { exact: true })).toHaveCount(0);
+    await agentDetailPage.defaultDeliveryToggle().check();
+    await agentDetailPage.defaultDestinationBrowse().click();
+    await agentDetailPage.directoryPickerOption(/#general/).click();
+    await agentDetailPage.directoryPickerConfirmButton().click();
+    await expect(agentDetailPage.defaultDestinationChip("#general")).toBeVisible();
+    const update = agentDetailPage.waitForConnectionMutation("PATCH");
+    await agentDetailPage.saveConnectionButton().click();
+    const payload = (await update).postDataJSON();
+    expect(payload).toMatchObject({ settings: {
+      default_delivery_target: { kind: "channel", recipient: "channel-one" },
+    }});
+    expect(payload.settings.default_delivery_target).not.toHaveProperty("thread_id");
+  });
+
   test("browses a saved Connection's own directory when editing it", async ({ page }) => {
     await serveSavedSlackConnection(page);
     await agentDetailPage.editConnectionButton("Team Slack").click();
@@ -821,7 +839,7 @@ test.describe("Agent Detail Page — Channels tab", () => {
     await expect(page.getByRole("button", { name: "Remove #general", exact: true })).toBeVisible();
   });
 
-  test("shows why a directory read failed instead of an empty picker", async ({ page }) => {
+  test("shows an actionable directory error without exposing server details", async ({ page }) => {
     await serveSavedSlackConnection(page);
     await page.route("**/directory/channels*", async (route) => {
       await route.fulfill({
@@ -834,7 +852,10 @@ test.describe("Agent Detail Page — Channels tab", () => {
     await agentDetailPage.editConnectionButton("Team Slack").click();
     await agentDetailPage.browseDirectoryButton("Allowed channels").click();
 
-    await expect(agentDetailPage.directoryPicker()).toContainText("missing_scope");
+    await expect(agentDetailPage.directoryPicker()).toContainText(
+      "Could not load channels. Check the Connection's permissions and try again.",
+    );
+    await expect(agentDetailPage.directoryPicker()).not.toContainText("missing_scope");
   });
 
   test("browses the Slack workspace to fill channel IDs from names", async ({ page }) => {

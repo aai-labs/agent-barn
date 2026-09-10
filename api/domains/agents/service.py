@@ -87,7 +87,11 @@ from api.domains.agents.override_repository import (
     AgentOverrideSnapshot,
 )
 from api.domains.agents.repository import AgentRepository
-from api.domains.agents.runtime_policy import build_chat_commands_policy_md, build_role_scope_policy_md
+from api.domains.agents.runtime_policy import (
+    build_chat_commands_policy_md,
+    build_messaging_policy_md,
+    build_role_scope_policy_md,
+)
 from api.domains.auth.models import CurrentUserContext
 from api.domains.events import ActorIdentity, ActorIdentityType, EventDeliveryDispatcher, resolve_actor_identity
 from api.domains.events.catalog import (
@@ -1843,7 +1847,19 @@ class AgentService:
 
     def start_agent(self, agent_id: UUID, context: CurrentUserContext) -> AgentRead:
         agent = self.authorization.require_action(context, agent_id, PermissionKey.AGENT_LIFECYCLE_MANAGE)
-        started = self._start_agent_unchecked(agent, resolve_actor_identity(context, agent.organization_id))
+        actor = resolve_actor_identity(context, agent.organization_id)
+        with self.repository.lifecycle_lock(agent.id) as acquired:
+            if not acquired:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"Agent {agent_id} has a lifecycle operation already in progress",
+                )
+            # Re-read status now that we hold the lock: it may have changed since
+            # the caller's copy was loaded above.
+            current = self.repository.get_by_id(agent.id)
+            if current is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent {agent_id} not found")
+            started = self._start_agent_unchecked(current, actor)
         return self._get_agent_read(started, context)
 
     def _start_agent_unchecked(self, agent: Agent, actor: ActorIdentity) -> Agent:
@@ -2102,6 +2118,7 @@ class AgentService:
             + build_local_tools_policy_md(s.name for s in mounted_skills)
             + build_chat_commands_policy_md()
             + build_role_scope_policy_md()
+            + build_messaging_policy_md()
         )
 
         if agent.agent_type == AgentType.HERMES:
@@ -2296,7 +2313,17 @@ class AgentService:
 
     def stop_agent(self, agent_id: UUID, context: CurrentUserContext) -> AgentRead:
         agent = self.authorization.require_action(context, agent_id, PermissionKey.AGENT_LIFECYCLE_MANAGE)
-        stopped = self._stop_agent_unchecked(agent, resolve_actor_identity(context, agent.organization_id))
+        actor = resolve_actor_identity(context, agent.organization_id)
+        with self.repository.lifecycle_lock(agent.id) as acquired:
+            if not acquired:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"Agent {agent_id} has a lifecycle operation already in progress",
+                )
+            current = self.repository.get_by_id(agent.id)
+            if current is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent {agent_id} not found")
+            stopped = self._stop_agent_unchecked(current, actor)
         return self._get_agent_read(stopped, context)
 
     def _stop_agent_unchecked(self, agent: Agent, actor: ActorIdentity) -> Agent:
@@ -2344,8 +2371,14 @@ class AgentService:
         failures: list[tuple[Agent, Exception]] = []
         for agent in agents:
             try:
-                stopped = self._stop_agent_unchecked(agent, actor)
-                started = self._start_agent_unchecked(stopped, actor)
+                with self.repository.lifecycle_lock(agent.id) as acquired:
+                    if not acquired:
+                        raise RuntimeError(f"Agent {agent.id} has a lifecycle operation already in progress")
+                    current = self.repository.get_by_id(agent.id)
+                    if current is None:
+                        raise RuntimeError(f"Agent {agent.id} not found")
+                    stopped = self._stop_agent_unchecked(current, actor)
+                    started = self._start_agent_unchecked(stopped, actor)
                 if started.status != AgentStatus.RUNNING:
                     failures.append((agent, RuntimeError(f"restart completed with status {started.status.value}")))
                     continue
@@ -2365,17 +2398,27 @@ class AgentService:
         ns = self.config.k8s_namespace
         name = f"agent-{agent.id}"
 
-        self.k8s.delete_deployment(name, ns)
-        self.k8s.delete_service(name, ns)
-        self.k8s.delete_pvc(name, ns)
-        self.k8s.delete_secret(name, ns)
-        self.k8s.delete_config_map(name, ns)
+        with self.repository.lifecycle_lock(agent.id) as acquired:
+            if not acquired:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"Agent {agent_id} has a lifecycle operation already in progress",
+                )
+            current = self.repository.get_by_id(agent.id)
+            if current is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent {agent_id} not found")
 
-        delete_result = self.repository.soft_delete_with_event(
-            agent,
-            actor=resolve_actor_identity(context, agent.organization_id),
-            actor_display=context.user.full_name or context.user.email,
-        )
+            self.k8s.delete_deployment(name, ns)
+            self.k8s.delete_service(name, ns)
+            self.k8s.delete_pvc(name, ns)
+            self.k8s.delete_secret(name, ns)
+            self.k8s.delete_config_map(name, ns)
+
+            delete_result = self.repository.soft_delete_with_event(
+                current,
+                actor=resolve_actor_identity(context, agent.organization_id),
+                actor_display=context.user.full_name or context.user.email,
+            )
         self.event_delivery_dispatcher.enqueue_immediate(delete_result.delivery_ids)
 
         if agent.litellm_key_encrypted:

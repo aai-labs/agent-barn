@@ -128,8 +128,9 @@ changes.
 
 CI is path-aware. It runs API linting, migration checks, tests, and image builds
 for API changes; ESLint, TypeScript, Playwright, and an image build for UI changes;
-the matching Hermes or OpenClaw base-image workflow for base-image or
-telemetry-plugin changes; and alert-rule tests for monitoring changes. Both
+the matching Hermes or OpenClaw base-image workflow for base-image, runtime
+builder/startup, telemetry-plugin, shared messaging, or runtime-fixture changes;
+and alert-rule tests for monitoring changes. Both
 runtime workflows smoke-test their image, and Hermes also runs its pinned-image
 plugin contract.
 

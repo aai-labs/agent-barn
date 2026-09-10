@@ -261,7 +261,9 @@ def test_gateway_marks_claim_and_terminal_runtime_failure_at_lifecycle_seam() ->
             RuntimeDeliveryResult(succeeded=False, error_code="RuntimeError", error_message="failed"),
         )
 
-    assert claimed == delivery
+    # The claim now carries a server-issued execution token; the rest must be unchanged.
+    assert claimed is not None and claimed.execution_token
+    assert claimed.model_copy(update={"execution_token": None}) == delivery
     assert completed is True
     stages = [call.args[2].stage for call in plugin.processing_feedback.call_args_list]
     assert stages == [ProcessingFeedbackStage.CLAIMED, ProcessingFeedbackStage.FAILED]

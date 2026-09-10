@@ -17,10 +17,13 @@ from api.domains.communications.models import (
     CredentialUniquenessScope,
     NormalizedCommunicationEnvelope,
     OutboundCommunicationEnvelope,
+    OutboundTargetRequest,
     PlatformCapability,
     ProcessingFeedbackStage,
+    ResolvedOutboundTarget,
 )
 from api.domains.communications.plugins.base import (
+    AgentInitiatedDeliverySettings,
     InboundAdmissionContext,
     InboundAdmissionResult,
     PlatformCredentials,
@@ -38,7 +41,7 @@ class SlackValidationConfig(Protocol):
     skip_slack_token_validation: bool
 
 
-class SlackSettings(PlatformSettings):
+class SlackSettings(AgentInitiatedDeliverySettings, PlatformSettings):
     channel_ids: list[str] = Field(
         default_factory=list,
         title="Allowed channels",
@@ -46,8 +49,8 @@ class SlackSettings(PlatformSettings):
     )
     dm_user_ids: list[str] = Field(
         default_factory=list,
-        title="Allowed DM senders",
-        description="User IDs allowed to direct-message this agent. Used when Direct messages is Allowlist.",
+        title="Allowed DM users",
+        description="User IDs allowed to exchange direct messages with this Agent, including initiated sends. Used when Direct messages is Allowlist.",
     )
     group_policy: str = Field(
         default="allowlist",
@@ -59,7 +62,7 @@ class SlackSettings(PlatformSettings):
         default="off",
         pattern="^(off|open|allowlist)$",
         title="Direct messages",
-        description="Off ignores DMs, Open accepts DMs from anyone, Allowlist restricts to Allowed DM senders.",
+        description="Off ignores DMs, Open accepts DMs from anyone, Allowlist restricts to Allowed DM users.",
     )
     thread_mention_policy: str = Field(
         default="every_message",
@@ -97,6 +100,19 @@ class SlackCredentials(PlatformCredentials):
     )
 
 
+def _resolve_unique_name(entries: list[dict], recipient: str, *, fields: tuple[str, ...]) -> str:
+    """Reject ambiguous names instead of guessing which match the Agent meant."""
+    name = recipient.lstrip("#@").casefold()
+    matches = {
+        str(entry["id"])
+        for entry in entries
+        if any(str(entry.get(field) or "").lstrip("#@").casefold() == name for field in fields)
+    }
+    if len(matches) != 1:
+        raise ValueError("Unknown or ambiguous target; use its provider ID")
+    return matches.pop()
+
+
 class SlackPlatformPlugin(PlatformPlugin):
     key = "slack"
     display_name = "Slack"
@@ -120,6 +136,7 @@ class SlackPlatformPlugin(PlatformPlugin):
     )
     capabilities = frozenset(
         {
+            PlatformCapability.AGENT_INITIATED_DELIVERY,
             PlatformCapability.ATTACHMENTS,
             PlatformCapability.SUPERVISED_INGRESS,
             PlatformCapability.DIRECTORY_DISCOVERY,
@@ -136,6 +153,69 @@ class SlackPlatformPlugin(PlatformPlugin):
 
     def __init__(self, config: SlackValidationConfig) -> None:
         self._skip_validation = config.skip_slack_token_validation
+
+    def resolve_outbound_target(
+        self,
+        settings: PlatformSettings,
+        credentials: PlatformCredentials,
+        request: OutboundTargetRequest,
+    ) -> ResolvedOutboundTarget:
+        assert isinstance(credentials, SlackCredentials)
+        client = SlackClient(credentials.bot_token)
+        recipient = request.recipient
+        if request.thread_id and not re.fullmatch(r"[0-9]+\.[0-9]{6}", request.thread_id):
+            raise ValueError("Slack thread must be a message timestamp")
+        user_id = None
+        if request.kind == "user":
+            user_id = (
+                recipient
+                if re.fullmatch(r"[UW][A-Z0-9]+", recipient)
+                else _resolve_unique_name(
+                    client.list_users(),
+                    recipient,
+                    fields=("name", "real_name", "display_name"),
+                )
+            )
+            provisional = ResolvedOutboundTarget(
+                location=ConversationLocation(id=user_id, type="DM"),
+                provider_metadata={"outbound_user_id": user_id},
+            )
+            self.validate_outbound_target(settings, provisional)
+            recipient = client.open_dm(user_id)
+        elif not re.fullmatch(r"[CDG][A-Z0-9]+", recipient):
+            recipient = _resolve_unique_name(client.list_channels(), recipient, fields=("name",))
+        conversation = client.get_conversation(recipient)
+        if conversation.get("is_mpim"):
+            raise ValueError("Group DMs are not supported for initiated delivery")
+        is_dm = bool(conversation.get("is_im"))
+        if (request.kind in {"user", "dm"}) != is_dm:
+            raise ValueError("Target kind does not match the Slack conversation")
+        target = ResolvedOutboundTarget(
+            location=ConversationLocation(
+                id=recipient,
+                type="DM" if is_dm else "CHANNEL",
+                display_name=conversation.get("name"),
+                thread_id=request.thread_id,
+            ),
+            provider_metadata={"outbound_user_id": user_id or conversation.get("user")},
+        )
+        self.validate_outbound_target(settings, target)
+        return target
+
+    def validate_outbound_target(self, settings: PlatformSettings, target: ResolvedOutboundTarget) -> None:
+        """Reuse the inbound allowlists as outbound restrictions; DMs stay off unless DM policy allows them."""
+        assert isinstance(settings, SlackSettings)
+        location = target.location
+        if location.type == "DM":
+            user_id = str(target.provider_metadata.get("outbound_user_id") or "")
+            if (
+                not user_id
+                or settings.dm_policy == "off"
+                or (settings.dm_policy == "allowlist" and user_id not in settings.dm_user_ids)
+            ):
+                raise PermissionError("Outbound recipient is not allowed by this Connection")
+        elif settings.group_policy == "allowlist" and location.id not in settings.channel_ids:
+            raise PermissionError("Outbound channel is not allowed by this Connection")
 
     def validate_external(self, settings: PlatformSettings, credentials: PlatformCredentials) -> str | None:
         assert isinstance(credentials, SlackCredentials)
