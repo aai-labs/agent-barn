@@ -28,14 +28,17 @@ run("Fresh completion without inbound history")
 path = Path(os.environ["AGENTBARN_MESSAGE_SPOOL"])
 if not path.exists():
     raise AssertionError("Pinned Hermes did not durably capture the scheduled completion")
+# Every marker runtime_policy promises an agent will suppress delivery, and one
+# report that merely quotes a marker mid-sentence, which must still deliver.
 run("[SILENT]")
 run("HEARTBEAT_OK")
 run("SILENT")
 run("Report mentioning [SILENT]")
+deliverable = 2
 with sqlite3.connect(path) as db:
     rows = db.execute("SELECT run_id, request, receipt FROM completions").fetchall()
-if len(rows) != 3 or len({row[0] for row in rows}) != 3:
-    raise AssertionError(f"Expected three distinct deliverable executions, got {len(rows)}")
+if len(rows) != deliverable or len({row[0] for row in rows}) != deliverable:
+    raise AssertionError(f"Expected {deliverable} distinct deliverable executions, got {len(rows)}")
 if any(not row[0].startswith("hermes:") or row[2] is not None for row in rows):
     raise AssertionError("Completions must retain durable run identities until acknowledgement")
 print("Hermes native completion capture and exact silence contract passed")
