@@ -1,3 +1,4 @@
+from typing import Any
 from uuid import UUID
 
 from hamcrest import assert_that, empty, equal_to, has_entries, is_not, none
@@ -36,7 +37,7 @@ def _mounts(job) -> dict[str, tuple[str, bool]]:
 
 
 def _capture_job(**overrides):
-    kwargs = {
+    kwargs: dict[str, Any] = {
         "job_name": _JOB,
         "agent_id": _AGENT_ID,
         "org_id": _ORG_ID,
@@ -52,7 +53,7 @@ def _capture_job(**overrides):
 
 
 def _restore_job(**overrides):
-    kwargs = {
+    kwargs: dict[str, Any] = {
         "job_name": "rp-res-11111111-1111-1111-1111-111111111111-abc123",
         "agent_id": _AGENT_ID,
         "org_id": _ORG_ID,

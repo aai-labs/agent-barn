@@ -2,7 +2,7 @@ import json
 import logging
 import secrets
 from dataclasses import dataclass
-from uuid import UUID
+from uuid import UUID, uuid7
 
 from fastapi import HTTPException, status
 from injector import inject, singleton
@@ -257,17 +257,19 @@ class RestorePointService:
                 )
             self._assert_capturable(current)
 
+            restore_point_id = uuid7()
             restore_point = AgentRestorePoint(
+                id=restore_point_id,
                 agent_id=current.id,
                 created_by_user_id=context.user.id,
                 label=payload.label,
                 status=RestorePointStatus.PENDING,
                 origin=RestorePointOrigin.MANUAL,
                 agent_type=current.agent_type,
+                pvc_name=restore_point_resource_name(restore_point_id),
+                job_name=_capture_job_name(restore_point_id),
                 config_manifest=self._build_config_manifest(current).model_dump(mode="json"),
             )
-            restore_point.pvc_name = restore_point_resource_name(restore_point.id)
-            restore_point.job_name = _capture_job_name(restore_point.id)
             result = self.repository.save_with_event(
                 restore_point,
                 event_name=AGENT_RESTORE_POINT_CREATED,
@@ -332,16 +334,18 @@ class RestorePointService:
         return AgentRestorePointRead.model_validate(refreshed or target)
 
     def _create_pre_restore_row(self, agent: Agent, job_name: str) -> AgentRestorePoint:
+        backup_id = uuid7()
         backup = AgentRestorePoint(
+            id=backup_id,
             agent_id=agent.id,
             label=PRE_RESTORE_LABEL,
             status=RestorePointStatus.PENDING,
             origin=RestorePointOrigin.PRE_RESTORE,
             agent_type=agent.agent_type,
+            pvc_name=restore_point_resource_name(backup_id),
+            job_name=job_name,
             config_manifest=self._build_config_manifest(agent).model_dump(mode="json"),
         )
-        backup.pvc_name = restore_point_resource_name(backup.id)
-        backup.job_name = job_name
         return self.repository.save(backup)
 
     def _provision_restore(
