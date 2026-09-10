@@ -1644,14 +1644,13 @@ test.describe("Agent Detail Page — About tab", () => {
     await expect(page.getByTestId("agent-cost-by-model")).toBeHidden();
   });
 
-  test("asks the per-agent endpoint again when the period changes", async ({
-    page,
-  }) => {
+  test("reads its window from the date range in the URL", async ({ page }) => {
     // The chart must not be sourced from the organization summary: that endpoint
-    // needs an Organization-wide permission an Agent Access Role never grants.
-    const requested: string[] = [];
+    // needs an Organization-wide permission an Agent Access Role never grants. It
+    // sends only the window, because this route takes no filter.
+    const requested: URLSearchParams[] = [];
     await page.route(`**/costs/agents/${MOCK_AGENT_ID}*`, async (route) => {
-      requested.push(new URL(route.request().url()).searchParams.get("period") ?? "");
+      requested.push(new URL(route.request().url()).searchParams);
       await route.fulfill({
         status: 200,
         contentType: "application/json",
@@ -1665,10 +1664,38 @@ test.describe("Agent Detail Page — About tab", () => {
       page.getByRole("heading", { name: "Spend over time" }),
     ).toBeVisible();
 
-    await page.getByRole("button", { name: "7 days" }).click();
+    // No range picked: the server chooses the window, as "All dates" does on the
+    // costs page.
+    expect(requested[0].get("from_date")).toBeNull();
+    expect(requested[0].get("to_date")).toBeNull();
+    expect(requested[0].get("sort")).toBeNull();
 
-    await expect.poll(() => requested).toContain("SEVEN_DAYS");
-    expect(requested[0]).toBe("THIRTY_DAYS");
+    await page.goto(
+      `/dashboard/${TEST_ORG_ID}/agents/${MOCK_AGENT_ID}?tab=about&from=2026-08-01T00:00:00.000Z&to=2026-08-31T00:00:00.000Z`,
+    );
+    await expect(
+      page.getByRole("heading", { name: "Spend over time" }),
+    ).toBeVisible();
+
+    await expect
+      .poll(() => requested.at(-1)?.get("from_date"))
+      .toBe("2026-08-01T00:00:00.000Z");
+    expect(requested.at(-1)?.get("to_date")).toBe("2026-08-31T00:00:00.000Z");
+  });
+
+  test("offers the same date range picker as the costs page", async ({ page }) => {
+    await page.route(`**/costs/agents/${MOCK_AGENT_ID}*`, async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(agentCost()),
+      });
+    });
+
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await page.getByRole("button", { name: "About", exact: true }).click();
+
+    await expect(page.getByRole("button", { name: "Date range" })).toBeVisible();
   });
 
   test("says so plainly when the reader has no cost access to this agent", async ({

@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
 
+import { DateRangePicker } from "@/components/date-range-picker";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ApiError } from "@/shared/api/error/errors";
 import { SpendOverTimeChart } from "@/features/costs/components/spend-over-time-chart";
@@ -11,18 +11,16 @@ import {
   formatTokens,
 } from "@/features/costs/format";
 import { useAgentCost } from "@/features/costs/hooks/use-agent-cost";
+import { useCostUrlFilters } from "@/features/costs/hooks/use-cost-url-filters";
 import type { Agent } from "../schemas";
 
-const PERIODS = [
-  { value: "SEVEN_DAYS", label: "7 days" },
-  { value: "THIRTY_DAYS", label: "30 days" },
-  { value: "NINETY_DAYS", label: "90 days" },
-] as const;
+const DATE_FILTER_DEFAULTS = { from: "", to: "" };
 
 export function AboutTab({ agent }: { agent: Agent }) {
-  const [period, setPeriod] = useState<string>("THIRTY_DAYS");
+  const [dateFilters, setDateFilters] = useCostUrlFilters(DATE_FILTER_DEFAULTS);
   const { agentCost, isLoadingAgentCost, error } = useAgentCost(agent.id, {
-    period,
+    fromDate: dateFilters.from || undefined,
+    toDate: dateFilters.to || undefined,
   });
 
   return (
@@ -41,29 +39,16 @@ export function AboutTab({ agent }: { agent: Agent }) {
             </p>
           </div>
 
-          <div
-            className="flex gap-0.5 rounded-lg p-0.5"
-            style={{ background: "var(--bg-soft)" }}
-            role="group"
-            aria-label="Period"
-          >
-            {PERIODS.map(({ value, label }) => (
-              <button
-                key={value}
-                type="button"
-                className="rounded-md px-2.5 py-1 text-[12.5px] transition-colors"
-                style={{
-                  background: period === value ? "var(--bg-elev)" : "transparent",
-                  color: period === value ? "var(--ink)" : "var(--ink-3)",
-                  fontWeight: period === value ? 600 : 500,
-                }}
-                aria-pressed={period === value}
-                onClick={() => setPeriod(value)}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
+          <DateRangePicker
+            from={dateFilters.from}
+            to={dateFilters.to}
+            onChange={(from, to) =>
+              setDateFilters({ from: from || null, to: to || null })
+            }
+            placeholder="All dates"
+            width="16rem"
+            ariaLabel="Date range"
+          />
         </div>
 
         {error ? (
