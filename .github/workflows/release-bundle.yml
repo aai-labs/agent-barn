@@ -11,6 +11,11 @@ on:
       tag:
         description: Release tag (e.g. v0.15.0)
         required: true
+      image_prefix:
+        description: Path prefix under the client registry; must match the Client Release run
+        required: false
+        default: agent-barn
+        type: string
 
 permissions:
   contents: write
@@ -43,7 +48,7 @@ jobs:
           # and pin image tags. Credentials are intentionally left blank for the
           # client to fill in.
           sed \
-            -e 's|^REGISTRY_PREFIX=.*|REGISTRY_PREFIX=clients.registry.k8s.aai-labs.com/agent-barn|' \
+            -e 's|^REGISTRY_PREFIX=.*|REGISTRY_PREFIX=clients.registry.k8s.aai-labs.com/${{ inputs.image_prefix }}|' \
             -e 's|^REGISTRY_SERVER=.*|REGISTRY_SERVER=clients.registry.k8s.aai-labs.com|' \
             -e 's|^API_IMAGE_REPOSITORY=.*|API_IMAGE_REPOSITORY=api|' \
             -e 's|^UI_IMAGE_REPOSITORY=.*|UI_IMAGE_REPOSITORY=ui|' \

@@ -128,6 +128,17 @@ AGENT_MODEL_ALLOWLIST=
 # e.g. litellm/openrouter/z-ai/glm-5.2. Empty uses the API's built-in default.
 AGENT_DEFAULT_MODEL=
 
+# ── Monitoring (Prometheus + Grafana + Alertmanager) ─────────────────────────
+# Set to false to skip the monitoring release. The values below are still read
+# when the helmfile renders, so leave the placeholders in place when disabled.
+MONITORING_ENABLED=true
+# Hostname the Grafana ingress serves (needs DNS + cert-manager like API_HOST).
+GRAFANA_HOST=grafana.agentbarn.local
+GRAFANA_ADMIN_PASSWORD=change-me
+# Slack incoming webhook (https://hooks.slack.com/services/...) Alertmanager posts to. Any URL keeps the config
+# valid but undeliverable.
+SLACK_ALERTS_WEBHOOK_URL=https://example.invalid/slack-webhook-placeholder
+
 # ── Optional ─────────────────────────────────────────────────────────────────
 # Kubeconfig the API pod uses to manage agent workloads. Defaults to base64 of
 # $KUBECONFIG (deploy.sh derives it). Set only if the API pod must use a

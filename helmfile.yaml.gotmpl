@@ -246,6 +246,9 @@ releases:
   - name: monitoring
     namespace: {{ env "NAMESPACE" | default "agent-farm" }}
     chart: ./helm/monitoring
+    # Self-host clients can opt out (MONITORING_ENABLED=false). The block below
+    # is still rendered, so its required inputs need placeholder values.
+    installed: {{ env "MONITORING_ENABLED" | default "true" | eq "true" }}
     labels:
       name: monitoring
     set:
