@@ -114,6 +114,12 @@ class CostRecord(BaseModel, table=True):
 # ---------------------------------------------------------------------------
 
 
+class CostSeriesPoint(PydanticBaseModel):
+    bucket: datetime
+    spend: float
+    calls: int
+
+
 class AgentModelBreakdown(PydanticBaseModel):
     model: str
     total_cost: float
@@ -122,7 +128,7 @@ class AgentModelBreakdown(PydanticBaseModel):
 
 
 class AgentCostRead(PydanticBaseModel):
-    """Cost totals for a single agent."""
+    """Cost totals and spend trend for a single agent."""
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -130,11 +136,18 @@ class AgentCostRead(PydanticBaseModel):
     agent_name: str
     model: str
     status: str
+
+    period: StatsPeriod | None = None
+    from_date: datetime
+    to_date: datetime
+    granularity: StatsGranularity
+
     total_cost: float
     total_tokens: int
     prompt_tokens: int
     completion_tokens: int
     models_breakdown: list[AgentModelBreakdown] = Field(default_factory=list)
+    spend_over_time: list[CostSeriesPoint] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -234,12 +247,6 @@ class PlatformCostRecordRead(CostRecordRead):
     organization_name: str | None = None
 
 
-class CostSeriesPoint(PydanticBaseModel):
-    bucket: datetime
-    spend: float
-    calls: int
-
-
 class AgentSpendSeriesPoint(PydanticBaseModel):
     bucket: datetime
     agent_id: UUID | None = None
@@ -308,6 +315,22 @@ class OrganizationSpendRead(PydanticBaseModel):
     spend: float
     calls: int
     agents: int
+
+
+class AgentSpendRead(PydanticBaseModel):
+    """One Agent's slice of organization spend, for the ranked table.
+
+    `agent_id` is None for the unattributed bucket, kept in the ranking rather than
+    filtered out: hiding it would let the organization total silently exceed the sum
+    of the rows shown beneath it.
+    """
+
+    agent_id: UUID | None = None
+    agent_name: str | None = None
+    spend: float
+    calls: int
+    prompt_tokens: int
+    completion_tokens: int
 
 
 class PlatformCostSummaryRead(CostSummaryRead):
