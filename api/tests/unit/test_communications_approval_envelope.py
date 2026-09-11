@@ -20,7 +20,7 @@ from api.domains.communications.models import (
     RuntimeReplyCreate,
 )
 
-_APPROVAL = {"run_id": "run-1", "command": "rm -rf build", "choices": ["once", "deny"]}
+_APPROVAL = ApprovalRequest(run_id="run-1", command="rm -rf build", choices=["once", "deny"])
 
 
 def _envelope(**overrides) -> OutboundCommunicationEnvelope:
@@ -40,7 +40,7 @@ def test_an_envelope_stored_before_this_release_still_validates() -> None:
 
 
 def test_the_approval_field_survives_the_jsonb_round_trip() -> None:
-    stored = _envelope(approval=ApprovalRequest(**_APPROVAL)).model_dump(mode="json")
+    stored = _envelope(approval=_APPROVAL).model_dump(mode="json")
 
     restored = OutboundCommunicationEnvelope.model_validate(stored)
 
@@ -88,7 +88,7 @@ def test_a_replica_without_this_release_cannot_read_an_approval_envelope() -> No
     del previous_release.model_fields["approval"]
     previous_release.model_rebuild(force=True)
 
-    written_by_a_newer_replica = _envelope(approval=ApprovalRequest(**_APPROVAL)).model_dump(mode="json")
+    written_by_a_newer_replica = _envelope(approval=_APPROVAL).model_dump(mode="json")
 
     with pytest.raises(ValidationError):
         previous_release.model_validate(written_by_a_newer_replica)

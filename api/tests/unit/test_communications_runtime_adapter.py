@@ -417,7 +417,7 @@ def test_a_late_approval_answer_is_not_handed_to_the_model(monkeypatch: pytest.M
 
     assert handled is True
     assert not any(url.endswith("/approval") for url, _ in calls)
-    assert [payload["text"] for url, payload in calls if url.endswith("/replies")] == [
+    assert [payload["text"] for url, payload in calls if url.endswith("/replies") and payload is not None] == [
         "No command is waiting for approval."
     ]
 
@@ -537,7 +537,7 @@ def test_an_answer_that_was_not_offered_is_refused(monkeypatch: pytest.MonkeyPat
 
     assert adapter.resolve_pending_approval(session_key, delivery) is True
     assert not any(url.endswith("/approval") for url, _ in calls)
-    assert [payload["text"] for url, payload in calls if url.endswith("/replies")] == [
+    assert [payload["text"] for url, payload in calls if url.endswith("/replies") and payload is not None] == [
         "Please reply with one of: once, deny"
     ]
     assert session_key in adapter._PENDING_APPROVALS

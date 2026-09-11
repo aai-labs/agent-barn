@@ -27,6 +27,8 @@ _MANAGED = {
 @pytest.fixture
 def merge():
     spec = importlib.util.spec_from_file_location("hermes_config_merge", _MERGE_SCRIPT)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("Could not load Hermes config merge script")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
