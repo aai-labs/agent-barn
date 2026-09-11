@@ -1,6 +1,8 @@
 "use client";
 
 
+import { format } from "date-fns";
+
 import { DateRangePicker } from "@/components/date-range-picker";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ApiError } from "@/shared/api/error/errors";
@@ -23,6 +25,13 @@ export function AboutTab({ agent }: { agent: Agent }) {
     toDate: dateFilters.to || undefined,
   });
 
+  const resolvedWindowLabel = agentCost
+    ? `${format(new Date(agentCost.fromDate), "MMM d, yyyy")} – ${format(
+        new Date(agentCost.toDate),
+        "MMM d, yyyy",
+      )}`
+    : "Loading…";
+
   return (
     <div className="flex flex-col gap-4">
       <div className="af-card p-4">
@@ -35,7 +44,7 @@ export function AboutTab({ agent }: { agent: Agent }) {
               Spend over time
             </h2>
             <p className="m-0 mt-1 text-[12px]" style={{ color: "var(--ink-4)" }}>
-              What this agent has cost, by day.
+              What this agent has cost.
             </p>
           </div>
 
@@ -45,7 +54,7 @@ export function AboutTab({ agent }: { agent: Agent }) {
             onChange={(from, to) =>
               setDateFilters({ from: from || null, to: to || null })
             }
-            placeholder="All dates"
+            placeholder={resolvedWindowLabel}
             width="16rem"
             ariaLabel="Date range"
           />

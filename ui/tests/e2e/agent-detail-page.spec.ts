@@ -1683,7 +1683,11 @@ test.describe("Agent Detail Page — About tab", () => {
     expect(requested.at(-1)?.get("to_date")).toBe("2026-08-31T00:00:00.000Z");
   });
 
-  test("offers the same date range picker as the costs page", async ({ page }) => {
+  test("labels the picker with the window the server actually used", async ({
+    page,
+  }) => {
+    // With no range picked the server applies its own default window, so a static
+    // "All dates" would describe the totals beside it as lifetime when they are not.
     await page.route(`**/costs/agents/${MOCK_AGENT_ID}*`, async (route) => {
       await route.fulfill({
         status: 200,
@@ -1695,7 +1699,12 @@ test.describe("Agent Detail Page — About tab", () => {
     await agentDetailPage.goto(MOCK_AGENT_ID);
     await page.getByRole("button", { name: "About", exact: true }).click();
 
-    await expect(page.getByRole("button", { name: "Date range" })).toBeVisible();
+    const picker = page.getByRole("button", { name: "Date range" });
+    await expect(picker).toBeVisible();
+    // from_date / to_date in the fixture are 2026-08-01 and 2026-08-31.
+    await expect(picker).toContainText("Aug 1, 2026");
+    await expect(picker).toContainText("Aug 31, 2026");
+    await expect(picker).not.toContainText("All dates");
   });
 
   test("says so plainly when the reader has no cost access to this agent", async ({
