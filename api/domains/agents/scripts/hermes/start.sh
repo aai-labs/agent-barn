@@ -17,7 +17,8 @@ if [ ! -f /opt/data/memories/USER.md ]; then
 fi
 
 cp /app/config/SOUL.md /opt/data/SOUL.md
-cp /app/config/hermes-config.yaml /opt/data/config.yaml
+python3 /app/config/config-merge.py /app/config/hermes-config.yaml /opt/data/config.yaml \
+    || cp /app/config/hermes-config.yaml /opt/data/config.yaml
 
 # Remove any stale .env from the PVC — all vars are injected via k8s Secret.
 # A persisted .env takes precedence over system env and would cause stale

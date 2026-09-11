@@ -51,6 +51,9 @@ export const SLACK_APP_MANIFEST = {
     pkce_enabled: false,
   },
   settings: {
+    interactivity: {
+      is_enabled: true,
+    },
     event_subscriptions: {
       bot_events: [
         "app_mention",

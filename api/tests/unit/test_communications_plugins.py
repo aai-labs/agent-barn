@@ -225,11 +225,151 @@ def _slack_event(
     return {"event": event, "agentbarn_bot_user_id": "bot-1"}
 
 
+def _slack_block_action(
+    *,
+    choice: str = "once",
+    run_id: str = "run-1",
+    user: str = "user-1",
+    channel: str = "channel-1",
+    posted_by: str | None = "bot-1",
+    action_id: str | None = None,
+    bot_user_id: str | None = "bot-1",
+) -> dict:
+    message: dict = {"type": "message", "bot_id": "B123", "text": "approval"}
+    if posted_by is not None:
+        message["user"] = posted_by
+    payload = {
+        "type": "block_actions",
+        "user": {"id": user},
+        "channel": {"id": channel, "name": "general" if not channel.startswith("D") else "directmessage"},
+        "container": {
+            "type": "message",
+            "message_ts": "1724320800.000100",
+            "thread_ts": "1724320800.000100",
+            "channel_id": channel,
+        },
+        "message": message,
+        "actions": [
+            {
+                "type": "button",
+                "action_id": action_id if action_id is not None else f"agentbarn_approval:{choice}",
+                "block_id": "approval",
+                "value": f"{run_id}:{choice}",
+                "action_ts": "1724320900.000200",
+            }
+        ],
+    }
+    if bot_user_id is not None:
+        payload["agentbarn_bot_user_id"] = bot_user_id
+    return payload
+
+
 def _slack_admission_context(*, owned: bool) -> InboundAdmissionContext:
     return InboundAdmissionContext(
         connection_id=uuid4(),
         thread_is_agent_owned=lambda _location: owned,
     )
+
+
+def test_an_approval_click_becomes_an_ordinary_inbound_answer() -> None:
+    plugin = SlackPlatformPlugin(ValidationConfig())
+    settings = plugin.settings_model.model_validate({"group_policy": "open"})
+
+    admitted = plugin.admit_inbound(
+        settings,
+        _slack_block_action(choice="once"),
+        context=_slack_admission_context(owned=False),
+    )
+
+    assert len(admitted) == 1
+    envelope = admitted[0]
+    assert envelope.text == "once"
+    assert envelope.sender.id == "user-1"
+    assert envelope.location.thread_id == "1724320800.000100"
+    assert envelope.provider_metadata["approval_run_id"] == "run-1"
+
+
+def test_repeat_clicks_are_not_deduped_into_nothing() -> None:
+    plugin = SlackPlatformPlugin(ValidationConfig())
+    settings = plugin.settings_model.model_validate({"group_policy": "open"})
+
+    envelope = plugin.normalize_inbound(settings, _slack_block_action()).envelopes[0]
+
+    assert envelope.provider_message_id == "action:1724320900.000200"
+    assert envelope.provider_message_id != "1724320800.000100"
+
+
+def test_a_click_still_obeys_the_channel_allowlist() -> None:
+    plugin = SlackPlatformPlugin(ValidationConfig())
+    settings = plugin.settings_model.model_validate({"group_policy": "allowlist", "channel_ids": ["channel-9"]})
+
+    result = plugin.normalize_inbound(settings, _slack_block_action(channel="channel-1"))
+
+    assert result.disposition == CommunicationPolicyDisposition.CHANNEL_DENIED
+
+
+def test_a_click_still_obeys_the_dm_policy() -> None:
+    plugin = SlackPlatformPlugin(ValidationConfig())
+    off = plugin.settings_model.model_validate({"dm_policy": "off"})
+    allowlisted = plugin.settings_model.model_validate({"dm_policy": "allowlist", "dm_user_ids": ["user-9"]})
+
+    assert (
+        plugin.normalize_inbound(off, _slack_block_action(channel="D123")).disposition
+        == CommunicationPolicyDisposition.USER_DENIED
+    )
+    assert (
+        plugin.normalize_inbound(allowlisted, _slack_block_action(channel="D123", user="user-1")).disposition
+        == CommunicationPolicyDisposition.USER_DENIED
+    )
+
+
+def test_a_click_on_a_message_this_agent_did_not_post_is_refused() -> None:
+    plugin = SlackPlatformPlugin(ValidationConfig())
+    settings = plugin.settings_model.model_validate({"group_policy": "open"})
+    context = _slack_admission_context(owned=True)
+
+    foreign = plugin.admit_inbound(settings, _slack_block_action(posted_by="someone-else"), context=context)
+    unattributed = plugin.admit_inbound(settings, _slack_block_action(posted_by=None), context=context)
+    unknown_bot = plugin.admit_inbound(settings, _slack_block_action(bot_user_id=None), context=context)
+
+    assert foreign == []
+    assert unattributed == []
+    assert unknown_bot == []
+
+
+def test_the_clicking_bot_cannot_answer_its_own_approval() -> None:
+    plugin = SlackPlatformPlugin(ValidationConfig())
+    settings = plugin.settings_model.model_validate({"group_policy": "open"})
+
+    result = plugin.normalize_inbound(settings, _slack_block_action(user="bot-1"))
+
+    assert result.disposition == CommunicationPolicyDisposition.BOT_IGNORED
+
+
+def test_an_unrelated_interaction_is_ignored_rather_than_malformed() -> None:
+    plugin = SlackPlatformPlugin(ValidationConfig())
+    settings = plugin.settings_model.model_validate({"group_policy": "open"})
+
+    result = plugin.normalize_inbound(settings, _slack_block_action(action_id="some_other_app:button"))
+
+    assert result.disposition == CommunicationPolicyDisposition.EVENT_IGNORED
+
+
+def test_a_click_never_receives_slack_reactions() -> None:
+    plugin = SlackPlatformPlugin(ValidationConfig())
+    settings = plugin.settings_model.model_validate({})
+    credentials = plugin.credentials_model.model_validate({"bot_token": "xoxb-token", "app_token": "xapp-token"})
+    context = ProcessingFeedbackContext(
+        connection_id=uuid4(),
+        stage=ProcessingFeedbackStage.ACCEPTED,
+        location=ConversationLocation(id="channel-1", type="CHANNEL", thread_id="1724320800.000100"),
+        provider_message_id="action:1724320900.000200",
+    )
+
+    with patch("api.domains.communications.plugins.slack.SlackClient") as client_type:
+        plugin.processing_feedback(settings, credentials, context)
+
+    client_type.return_value.add_reaction.assert_not_called()
 
 
 def test_slack_plugin_requires_a_direct_bot_mention_for_channel_messages() -> None:

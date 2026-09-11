@@ -25,6 +25,7 @@ _COMMON_SCRIPTS = _SCRIPTS.parent
 _TELEMETRY_PUSH = _SCRIPTS / "plugins" / "telemetry-push"
 
 HERMES_BOOTLOADER_FOOTER: str = (_SCRIPTS / "bootloader-footer.md").read_text()
+HERMES_CONFIG_MERGE_PY: str = (_SCRIPTS / "config-merge.py").read_text()
 HERMES_HEALTHZ_PY: str = (_SCRIPTS / "healthz-server.py").read_text()
 HERMES_START_SH: str = (_SCRIPTS / "start.sh").read_text()
 TELEMETRY_PUSH_PLUGIN_YAML: str = (_TELEMETRY_PUSH / "plugin.yaml").read_text()
@@ -33,6 +34,8 @@ COMMUNICATIONS_RUNTIME_ADAPTER_PY: str = (_COMMON_SCRIPTS / "communications-runt
 
 
 _HERMES_APPROVAL_MODE = {"manual": "manual", "auto": "smart", "off": "off"}
+_HERMES_APPROVAL_TIMEOUT_SECONDS = 300
+_HERMES_HEADLESS_APPROVAL_MODE = "deny"
 
 _MESSAGE_SCRIPTS = _COMMON_SCRIPTS / "messaging"
 HERMES_BOOT_RUN_PY: str = (_SCRIPTS / "boot-run.py").read_text()
@@ -86,6 +89,9 @@ def _hermes_config_core(
         },
         "approvals": {
             "mode": _HERMES_APPROVAL_MODE.get(approval_mode, "smart"),
+            "timeout": _HERMES_APPROVAL_TIMEOUT_SECONDS,
+            "cron_mode": _HERMES_HEADLESS_APPROVAL_MODE,
+            "single_query_mode": _HERMES_HEADLESS_APPROVAL_MODE,
         },
     }
 
@@ -132,6 +138,7 @@ def build_hermes_config_map(
         "telemetry-push-plugin.yaml": TELEMETRY_PUSH_PLUGIN_YAML,
         "telemetry-push-init.py": TELEMETRY_PUSH_PLUGIN_INIT,
         "healthz-server.py": HERMES_HEALTHZ_PY,
+        "config-merge.py": HERMES_CONFIG_MERGE_PY,
         "start.sh": HERMES_START_SH,
         "communications-runtime-adapter.py": COMMUNICATIONS_RUNTIME_ADAPTER_PY,
         "agentbarn_message.py": (_MESSAGE_SCRIPTS / "agentbarn_message.py").read_text(),

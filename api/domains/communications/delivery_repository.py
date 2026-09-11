@@ -458,6 +458,7 @@ class CommunicationDeliveryRepository:
                 attachments=reply.attachments,
                 reply_to_provider_message_id=inbound.provider_message_id,
                 provider_metadata=inbound.provider_metadata,
+                approval=reply.approval,
             )
             message = AgentChatMessage(
                 agent_id=agent_id,
