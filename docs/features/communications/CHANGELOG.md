@@ -13,6 +13,11 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
 
 ## Changes
 
+### 2026-09-11 — Manual approval mode always asks — PR pending
+
+- Fixed: A Hermes Agent in manual mode could stop prompting entirely. An `always` answer on a dangerous-pattern finding is stored as the pattern, approving the whole category, and the pinned runtime consults that allowlist before it branches on the approval mode. Once `always` began surviving restarts, a grant made while the Agent ran in auto mode silenced manual mode after the switch.
+- Changed: Permanent grants are kept in an Agent Barn-owned file beside the runtime config and handed to Hermes only outside manual mode, so they return when the Agent leaves manual mode rather than being discarded. In manual mode the approval prompt offers only `once` and `deny`, and in every mode the adapter accepts only an answer that was offered, so a typed `always` cannot create the grant the buttons withheld.
+
 ### 2026-09-11 — Readable command approvals and the approval envelope field — PR pending
 
 - Changed: A Hermes approval prompt now renders the command as a fenced block bounded at 2,500 characters, counting any dropped remainder explicitly rather than truncating silently, and neutralises a fence inside the command so it cannot terminate the block early. The idempotency suffix is keyed on the run and command rather than the SSE frame counter, which restarted on a re-drain and could either duplicate a prompt or drop it against an existing delivery's envelope.

@@ -173,6 +173,7 @@ def build_secret_hermes_runtime(
     litellm_api_key: str,
     litellm_base_url: str,
     verbose_mode: bool = False,
+    approval_mode: str = "auto",
 ) -> client.V1Secret:
     return client.V1Secret(
         metadata=client.V1ObjectMeta(
@@ -194,6 +195,7 @@ def build_secret_hermes_runtime(
             "RUNTIME_MODEL": agent_name,
             "RUNTIME_KIND": "hermes",
             "VERBOSE_MODE": "true" if verbose_mode else "false",
+            "APPROVAL_MODE": approval_mode,
         },
     )
 

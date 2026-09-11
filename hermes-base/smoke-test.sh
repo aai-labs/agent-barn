@@ -204,6 +204,23 @@ for code in ('invalid_approval_choice', 'run_not_found', 'approval_not_active'):
         fail('approval endpoint no longer returns ' + code)
 "
 
+check approvals-allowlist-loads-at-import python3 -c "
+import os
+import sys
+import tempfile
+
+home = tempfile.mkdtemp()
+os.environ['HERMES_HOME'] = home
+with open(os.path.join(home, 'config.yaml'), 'w') as handle:
+    handle.write('command_allowlist:\n- recursive delete\n')
+sys.path.insert(0, '/opt/hermes')
+
+from tools import approval
+
+if 'recursive delete' not in approval._permanent_approved:
+    raise SystemExit('approvals contract broken: command_allowlist is no longer loaded when tools.approval is imported')
+"
+
 if [ "$CLOUD_CLIS" = "true" ]; then
     check aws    aws --version
     check gcloud gcloud --version

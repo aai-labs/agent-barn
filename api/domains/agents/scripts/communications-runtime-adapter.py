@@ -29,6 +29,7 @@ RUNTIME_MODEL = os.environ["RUNTIME_MODEL"]
 # /v1/chat/completions call, since only Hermes exposes the run/event/approval API.
 RUNTIME_KIND = os.environ.get("RUNTIME_KIND", "openclaw")
 VERBOSE_MODE = os.environ.get("VERBOSE_MODE", "false").lower() == "true"
+MANUAL_APPROVAL = os.environ.get("APPROVAL_MODE", "").lower() == "manual"
 CLAIM_SAFETY_POLL_INTERVAL_SECONDS = 5
 PENDING_CANCEL_TTL_SECONDS = 900
 MAX_PENDING_CANCEL_REQUESTS = 1_024
@@ -60,6 +61,8 @@ _PROGRESS_RELAY_MIN_SECONDS = 3
 
 _APPROVAL_COMMAND_MAX_CHARS = 2_500
 _APPROVAL_CHOICES = frozenset({"once", "session", "always", "deny"})
+_APPROVAL_CHOICE_ALIASES = {"approve": "once", "approved": "once", "allow": "once"}
+_MANUAL_APPROVAL_CHOICES = ("once", "deny")
 _APPROVAL_RUN_METADATA_KEY = "approval_run_id"
 
 
@@ -357,6 +360,12 @@ def resolve_pending_approval(session_key: str, delivery: dict) -> bool:
         complete_delivery(delivery_id, succeeded=True)
         return True
 
+    choice = _APPROVAL_CHOICE_ALIASES.get(choice, choice)
+    if choice not in pending["choices"]:
+        post_reply(delivery_id, f"Please reply with one of: {', '.join(pending['choices'])}")
+        complete_delivery(delivery_id, succeeded=True)
+        return True
+
     try:
         http_request(
             "POST",
@@ -524,6 +533,8 @@ def _drain_run(run_id: str, delivery_id: str, session_key: str, *, progress_upda
 
             if event == "approval.request":
                 choices = payload.get("choices") or ["once", "session", "always", "deny"]
+                if MANUAL_APPROVAL:
+                    choices = [choice for choice in choices if choice in _MANUAL_APPROVAL_CHOICES] or choices
                 with _PENDING_APPROVALS_LOCK:
                     _PENDING_APPROVALS[session_key] = {
                         "run_id": run_id,

@@ -115,6 +115,21 @@ def test_runtime_secret_verbose_mode_toggle() -> None:
     assert secret.string_data["VERBOSE_MODE"] == "true"
 
 
+def test_runtime_secret_tells_the_adapter_the_approval_mode() -> None:
+    secret = build_secret_hermes_runtime(
+        _AGENT_ID,
+        _ORG_ID,
+        _NS,
+        "Test Agent",
+        runtime_api_key="runtime-key",
+        litellm_api_key="llm-key",
+        litellm_base_url="http://litellm:4000",
+        approval_mode="manual",
+    )
+
+    assert secret.string_data["APPROVAL_MODE"] == "manual"
+
+
 def test_deployment_runs_one_headless_runtime_container() -> None:
     deployment = build_hermes_deployment(_AGENT_ID, _ORG_ID, _NS, "hermes:test")
 

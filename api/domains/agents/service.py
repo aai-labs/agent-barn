@@ -1931,6 +1931,7 @@ class AgentService:
                 litellm_api_key=litellm_key,
                 litellm_base_url=llm_proxy_url,
                 verbose_mode=agent.verbose_mode,
+                approval_mode=str(agent.approval_mode),
             )
             deployment = build_hermes_deployment(
                 agent.id,
