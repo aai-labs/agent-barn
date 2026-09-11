@@ -43,6 +43,10 @@ export function useDeleteOrganization() {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: organizationsKey.lists() });
       void queryClient.invalidateQueries({ queryKey: platformOrganizationsKey.lists() });
+      // The org switcher reads its list from the user's memberships in
+      // current-user-context, not from the queries above, so without this the
+      // deleted organization stays selectable until a full page reload.
+      void queryClient.invalidateQueries({ queryKey: currentUserContextKey.all });
     },
   });
 }

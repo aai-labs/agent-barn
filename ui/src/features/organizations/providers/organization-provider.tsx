@@ -130,8 +130,19 @@ export function OrganizationProvider({ children }: { children: ReactNode }) {
   const canAccessUrlOrg =
     !urlOrganizationId ||
     organizations.some((org) => org.id === urlOrganizationId);
+
+  const deletingOrganizationId = useOrgStore(
+    (state) => state.deletingOrganizationId,
+  );
+  const setDeletingOrganizationId = useOrgStore(
+    (state) => state.setDeletingOrganizationId,
+  );
+  const isLeavingDeletedOrg =
+    !!urlOrganizationId && urlOrganizationId === deletingOrganizationId;
+
   useEffect(() => {
     if (!hasHydrated) return;
+    if (isLeavingDeletedOrg) return;
     if (!canAccessUrlOrg && fallbackOrganization) {
       router.replace(`/dashboard/${fallbackOrganization.id}`);
     }
@@ -139,8 +150,15 @@ export function OrganizationProvider({ children }: { children: ReactNode }) {
     canAccessUrlOrg,
     fallbackOrganization,
     hasHydrated,
+    isLeavingDeletedOrg,
     router,
   ]);
+
+  useEffect(() => {
+    if (deletingOrganizationId && urlOrganizationId !== deletingOrganizationId) {
+      setDeletingOrganizationId(null);
+    }
+  }, [deletingOrganizationId, urlOrganizationId, setDeletingOrganizationId]);
 
   if (!userContext) {
     return <AuthLoadingFallback message="Unable to load organizations." />;
