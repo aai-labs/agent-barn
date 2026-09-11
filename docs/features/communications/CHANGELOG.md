@@ -13,6 +13,18 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
 
 ## Changes
 
+### 2026-09-11 — Manual approval mode always asks — PR pending
+
+- Fixed: A Hermes Agent in manual mode could stop prompting entirely. An `always` answer on a dangerous-pattern finding is stored as the pattern, approving the whole category, and the pinned runtime consults that allowlist before it branches on the approval mode. Once `always` began surviving restarts, a grant made while the Agent ran in auto mode silenced manual mode after the switch.
+- Changed: Permanent grants are kept in an Agent Barn-owned file beside the runtime config and handed to Hermes only outside manual mode, so they return when the Agent leaves manual mode rather than being discarded. In manual mode the approval prompt offers only `once` and `deny`, and in every mode the adapter accepts only an answer that was offered, so a typed `always` cannot create the grant the buttons withheld.
+
+### 2026-09-11 — Readable command approvals and the approval envelope field — PR pending
+
+- Changed: A Hermes approval prompt now renders the command as a fenced block bounded at 2,500 characters, counting any dropped remainder explicitly rather than truncating silently, and neutralises a fence inside the command so it cannot terminate the block early. The idempotency suffix is keyed on the run and command rather than the SSE frame counter, which restarted on a re-drain and could either duplicate a prompt or drop it against an existing delivery's envelope.
+- Changed: Answering `always` is now permanent. Hermes persists that grant as root-level `command_allowlist` in `/opt/data/config.yaml`, which the Hermes start script previously overwrote from the ConfigMap on every boot; it now merges, reasserting every settings-derived key while carrying only the allowlist forward. The generated config also pins `approvals.timeout`, `approvals.cron_mode`, and `approvals.single_query_mode` to the pinned image's own defaults so a runtime upgrade cannot move the policy silently, and the image smoke test asserts those keys, the allowlist key, and the `approval.request` event shape still exist.
+- Delivered: `RuntimeReplyCreate` and `OutboundCommunicationEnvelope` accept an optional `approval` payload carrying the run, command, and the runtime's own offered choices, plus an `interactive_components` Platform Capability. Nothing writes the field yet. Outbound envelopes are persisted and re-validated on every retry under `extra="forbid"`, so the release that can read the field must be fully rolled out before any release writes it; otherwise an older replica rejects the envelope, exhausts its retries, and dead-letters a row that blocks its whole ordering key.
+- Changed: The sample Slack manifest enables interactivity. Apps created from an earlier manifest need **Interactivity & Shortcuts** switched on before approval buttons become clickable; Socket Mode requires no request URL and no reinstall, and the typed reply keeps working either way.
+
 ### 2026-09-10 — Agent-initiated message delivery — [PR #188](https://github.com/aai-labs/agent-barn/pull/188)
 
 - Delivered: Hermes and OpenClaw can durably submit scheduled final responses to Communications. On Hermes, jobs created in a conversation return to that Connection, channel, and thread, and jobs created at startup use the Agent's single configured default. OpenClaw uses the default only when the completion has no recorded origin; its pinned cron hook exposes a delivery-channel label rather than the creating conversation, so those unmappable completions are refused until origin can be captured at job creation. Shared silence markers suppress empty scheduled updates.

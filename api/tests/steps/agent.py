@@ -12,6 +12,7 @@ from api.domains.agents.models import (
     AgentAccess,
     AgentStatus,
     AgentType,
+    CommandApprovalMode,
 )
 from api.domains.agents.repository import AgentRepository
 from api.domains.events import ActorIdentity, ActorIdentityType
@@ -70,6 +71,7 @@ def there_is_an_agent(
     bot_token: str | None = None,
     created_by_user_id: UUID | None = None,
     creator_membership_id: UUID | None = None,
+    approval_mode: CommandApprovalMode = CommandApprovalMode.AUTO,
 ):
     def step(context):
         org_id = organization_id or context.organization.id
@@ -102,6 +104,7 @@ def there_is_an_agent(
             status=status,
             agent_type=agent_type,
             agent_template_id=template.id,
+            approval_mode=approval_mode,
         )
 
         if deleted:

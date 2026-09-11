@@ -156,6 +156,71 @@ if not {'chat_id', 'thread_id'} <= set(SessionSource.__dataclass_fields__):
     fail('SessionSource no longer exposes chat_id/thread_id')
 "
 
+check approvals-contract python3 -c "
+import inspect
+import sys
+
+sys.path.insert(0, '/opt/hermes')
+
+
+def fail(message):
+    raise SystemExit('approvals contract broken: ' + message)
+
+
+from hermes_cli.config_defaults import DEFAULT_CONFIG
+
+approvals = DEFAULT_CONFIG.get('approvals') or {}
+for key in ('mode', 'timeout', 'cron_mode', 'single_query_mode'):
+    if key not in approvals:
+        fail('approvals.' + key + ' is no longer a recognised config key')
+
+if 'command_allowlist' not in DEFAULT_CONFIG:
+    fail('command_allowlist is no longer a root-level config key')
+
+from tools import approval
+
+for name in ('load_permanent_allowlist', 'save_permanent_allowlist'):
+    if not hasattr(approval, name):
+        fail(name + ' is gone')
+    if 'command_allowlist' not in inspect.getsource(getattr(approval, name)):
+        fail(name + ' no longer reads/writes command_allowlist')
+
+from gateway.platforms.api_server import _approval_event_choices
+
+if _approval_event_choices(smart_denied=True, allow_permanent=True) != ['once', 'deny']:
+    fail('smart-denied choice set changed')
+if _approval_event_choices(smart_denied=False, allow_permanent=False) != ['once', 'session', 'deny']:
+    fail('non-permanent choice set changed')
+if _approval_event_choices(smart_denied=False, allow_permanent=True) != ['once', 'session', 'always', 'deny']:
+    fail('default choice set changed')
+
+source = open('/opt/hermes/gateway/platforms/api_server.py').read()
+for marker in ('\"event\": \"approval.request\"', '\"run_id\": run_id', '\"choices\": _approval_event_choices('):
+    if marker not in source:
+        fail('approval.request no longer carries ' + marker)
+
+for code in ('invalid_approval_choice', 'run_not_found', 'approval_not_active'):
+    if code not in source:
+        fail('approval endpoint no longer returns ' + code)
+"
+
+check approvals-allowlist-loads-at-import python3 -c "
+import os
+import sys
+import tempfile
+
+home = tempfile.mkdtemp()
+os.environ['HERMES_HOME'] = home
+with open(os.path.join(home, 'config.yaml'), 'w') as handle:
+    handle.write('command_allowlist:\n- recursive delete\n')
+sys.path.insert(0, '/opt/hermes')
+
+from tools import approval
+
+if 'recursive delete' not in approval._permanent_approved:
+    raise SystemExit('approvals contract broken: command_allowlist is no longer loaded when tools.approval is imported')
+"
+
 if [ "$CLOUD_CLIS" = "true" ]; then
     check aws    aws --version
     check gcloud gcloud --version
