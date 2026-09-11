@@ -2,7 +2,7 @@ from functools import lru_cache
 from pathlib import Path
 
 from dotenv import load_dotenv
-from pydantic import Field, PostgresDsn
+from pydantic import Field, PostgresDsn, field_validator
 from pydantic_settings import BaseSettings
 
 ROOT_ENV_PATH = Path(__file__).resolve().parents[2] / ".env"
@@ -49,6 +49,9 @@ class Config(BaseSettings):
     agent_image_pull_secret: str = ""
     agent_default_model: str = "litellm/openrouter/z-ai/glm-5.2"
     organization_creation_limit: int = 5
+    organization_llm_budget_usd: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    organization_llm_budget_duration: str = Field(default="30d", pattern=r"^[1-9][0-9]*[smhd]$")
+
     api_external_url: str = ""
     # Agent workloads and the API run in the same namespace, so the short Service
     # name is portable between staging and production.
@@ -98,6 +101,11 @@ class Config(BaseSettings):
 
     agent_firecrawl_base_url: str = ""
     agent_firecrawl_api_key: str = ""
+
+    @field_validator("organization_llm_budget_usd", mode="before")
+    @classmethod
+    def empty_budget_is_unlimited(cls, value: object) -> object:
+        return None if isinstance(value, str) and not value.strip() else value
 
     @property
     def is_email_delivery_enabled(self) -> bool:
