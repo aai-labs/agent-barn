@@ -11,6 +11,7 @@ from pydantic import Field
 from websockets.asyncio.client import connect
 
 from api.domains.communications.models import (
+    ApprovalRequest,
     CommunicationPolicyDisposition,
     CommunicationSender,
     ConversationLocation,
@@ -103,6 +104,14 @@ class SlackCredentials(PlatformCredentials):
 APPROVAL_ACTION_PREFIX = "agentbarn_approval:"
 _APPROVAL_RUN_METADATA_KEY = "approval_run_id"
 _SYNTHESIZED_MESSAGE_PREFIX = "action:"
+_APPROVAL_BLOCK_ID = "agentbarn_approval"
+_SECTION_TEXT_LIMIT = 3000
+_APPROVAL_CHOICE_LABELS = {
+    "once": "Allow once",
+    "session": "Allow for session",
+    "always": "Always allow",
+    "deny": "Deny",
+}
 
 
 def approval_action_id(choice: str) -> str:
@@ -111,6 +120,36 @@ def approval_action_id(choice: str) -> str:
 
 def approval_action_value(run_id: str, choice: str) -> str:
     return f"{run_id}:{choice}"
+
+
+def _approval_blocks(approval: ApprovalRequest) -> list[dict]:
+    fenced = approval.command.replace("```", "`\u200b``")
+    budget = _SECTION_TEXT_LIMIT - len("```\n\n```") - 40
+    if len(fenced) > budget:
+        hidden = len(fenced) - budget
+        fenced = f"{fenced[:budget]}\n[{hidden} more characters not shown]"
+    return [
+        {"type": "section", "text": {"type": "mrkdwn", "text": f"```\n{fenced}\n```"}},
+        {
+            "type": "actions",
+            "block_id": _APPROVAL_BLOCK_ID,
+            "elements": [
+                {
+                    "type": "button",
+                    "action_id": approval_action_id(choice),
+                    "text": {"type": "plain_text", "text": _APPROVAL_CHOICE_LABELS.get(choice, choice)},
+                    "value": approval_action_value(approval.run_id, choice),
+                }
+                for choice in approval.choices
+            ],
+        },
+        {
+            "type": "context",
+            "elements": [
+                {"type": "mrkdwn", "text": f"Or reply with one of: {', '.join(approval.choices)}"},
+            ],
+        },
+    ]
 
 
 def _resolve_unique_name(entries: list[dict], recipient: str, *, fields: tuple[str, ...]) -> str:
@@ -292,11 +331,13 @@ class SlackPlatformPlugin(PlatformPlugin):
         idempotency_key: str,
     ) -> str:
         assert isinstance(credentials, SlackCredentials)
+        interactive = {"blocks": _approval_blocks(envelope.approval)} if envelope.approval else {}
         return SlackClient(credentials.bot_token).send_message(
             envelope.location.id,
             envelope.text,
             thread_id=envelope.location.thread_id,
             idempotency_key=provider_idempotency_key(idempotency_key),
+            **interactive,
         )
 
     def processing_feedback(

@@ -11,6 +11,7 @@ import pytest
 from hamcrest import assert_that, empty, equal_to, has_length
 
 from api.domains.communications.models import (
+    ApprovalRequest,
     CommunicationPolicyDisposition,
     CommunicationSender,
     ConversationLocation,
@@ -353,6 +354,86 @@ def test_an_unrelated_interaction_is_ignored_rather_than_malformed() -> None:
     result = plugin.normalize_inbound(settings, _slack_block_action(action_id="some_other_app:button"))
 
     assert result.disposition == CommunicationPolicyDisposition.EVENT_IGNORED
+
+
+def test_an_approval_renders_buttons_for_exactly_the_offered_choices() -> None:
+    plugin = SlackPlatformPlugin(ValidationConfig())
+    credentials = plugin.credentials_model.model_validate({"bot_token": "bot-value", "app_token": "app-value"})
+    envelope = OutboundCommunicationEnvelope(
+        source_delivery_id=uuid4(),
+        location=ConversationLocation(id="channel-1", type="CHANNEL"),
+        text="```\nrm -rf build\n```\nReply with one of: once, deny",
+        approval=ApprovalRequest(run_id="run-1", command="rm -rf build", choices=["once", "deny"]),
+    )
+
+    with patch("api.domains.communications.plugins.slack.SlackClient") as client_type:
+        client_type.return_value.send_message.return_value = "sent-1"
+        plugin.send(plugin.settings_model.model_validate({}), credentials, envelope, idempotency_key="reply-1")
+
+    blocks = client_type.return_value.send_message.call_args.kwargs["blocks"]
+    actions = next(block for block in blocks if block["type"] == "actions")
+    assert [element["action_id"] for element in actions["elements"]] == [
+        "agentbarn_approval:once",
+        "agentbarn_approval:deny",
+    ]
+    assert [element["value"] for element in actions["elements"]] == ["run-1:once", "run-1:deny"]
+    assert "```\nrm -rf build\n```" in blocks[0]["text"]["text"]
+
+
+def test_the_typed_answer_stays_available_alongside_the_buttons() -> None:
+    plugin = SlackPlatformPlugin(ValidationConfig())
+    credentials = plugin.credentials_model.model_validate({"bot_token": "bot-value", "app_token": "app-value"})
+    envelope = OutboundCommunicationEnvelope(
+        source_delivery_id=uuid4(),
+        location=ConversationLocation(id="channel-1", type="CHANNEL"),
+        text="prompt text",
+        approval=ApprovalRequest(run_id="run-1", command="x", choices=["once", "session", "always", "deny"]),
+    )
+
+    with patch("api.domains.communications.plugins.slack.SlackClient") as client_type:
+        client_type.return_value.send_message.return_value = "sent-1"
+        plugin.send(plugin.settings_model.model_validate({}), credentials, envelope, idempotency_key="reply-1")
+
+    call = client_type.return_value.send_message.call_args
+    blocks = call.kwargs["blocks"]
+    context = next(block for block in blocks if block["type"] == "context")
+    assert call.args[1] == "prompt text"
+    assert "once, session, always, deny" in context["elements"][0]["text"]
+
+
+def test_a_command_too_long_for_a_section_block_is_bounded() -> None:
+    plugin = SlackPlatformPlugin(ValidationConfig())
+    credentials = plugin.credentials_model.model_validate({"bot_token": "bot-value", "app_token": "app-value"})
+    envelope = OutboundCommunicationEnvelope(
+        source_delivery_id=uuid4(),
+        location=ConversationLocation(id="channel-1", type="CHANNEL"),
+        text="prompt",
+        approval=ApprovalRequest(run_id="run-1", command="x" * 9000, choices=["once"]),
+    )
+
+    with patch("api.domains.communications.plugins.slack.SlackClient") as client_type:
+        client_type.return_value.send_message.return_value = "sent-1"
+        plugin.send(plugin.settings_model.model_validate({}), credentials, envelope, idempotency_key="reply-1")
+
+    blocks = client_type.return_value.send_message.call_args.kwargs["blocks"]
+    assert len(blocks[0]["text"]["text"]) <= 3000
+    assert "more characters not shown" in blocks[0]["text"]["text"]
+
+
+def test_an_ordinary_reply_is_sent_without_blocks() -> None:
+    plugin = SlackPlatformPlugin(ValidationConfig())
+    credentials = plugin.credentials_model.model_validate({"bot_token": "bot-value", "app_token": "app-value"})
+    envelope = OutboundCommunicationEnvelope(
+        source_delivery_id=uuid4(),
+        location=ConversationLocation(id="channel-1", type="CHANNEL"),
+        text="reply",
+    )
+
+    with patch("api.domains.communications.plugins.slack.SlackClient") as client_type:
+        client_type.return_value.send_message.return_value = "sent-1"
+        plugin.send(plugin.settings_model.model_validate({}), credentials, envelope, idempotency_key="reply-1")
+
+    assert "blocks" not in client_type.return_value.send_message.call_args.kwargs
 
 
 def test_a_click_never_receives_slack_reactions() -> None:

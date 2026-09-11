@@ -688,6 +688,11 @@ def test_hermes_approval_request_relays_regardless_of_verbose_mode(monkeypatch: 
     reply_calls = [payload for url, payload in calls if url.endswith("/replies") and payload is not None]
     assert len(reply_calls) == 1
     assert "rm -rf /tmp/x" in reply_calls[0]["text"]
+    assert reply_calls[0]["approval"] == {
+        "run_id": "run-1",
+        "command": "rm -rf /tmp/x",
+        "choices": ["once", "deny"],
+    }
     assert not any(url.endswith("/complete") for url, _ in calls)
     assert adapter._PENDING_APPROVALS[session_key]["run_id"] == "run-1"
 

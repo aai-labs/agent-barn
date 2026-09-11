@@ -155,8 +155,11 @@ class SlackClient:
         *,
         thread_id: str | None = None,
         idempotency_key: str | None = None,
+        blocks: list[dict] | None = None,
     ) -> str:
-        payload = {"channel": channel_id, "text": text}
+        payload: dict = {"channel": channel_id, "text": text}
+        if blocks:
+            payload["blocks"] = blocks
         if thread_id:
             payload["thread_ts"] = thread_id
         if idempotency_key:

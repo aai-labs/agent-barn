@@ -183,13 +183,16 @@ def request_local_cancel(delivery_id: str) -> None:
     IN_FLIGHT.request_cancel(delivery_id)
 
 
-def post_reply(delivery_id: str, text: str, *, suffix: str = "") -> None:
+def post_reply(delivery_id: str, text: str, *, suffix: str = "", approval: dict | None = None) -> None:
     idempotency_key = f"{delivery_id}:{suffix}" if suffix else delivery_id
+    payload = {"idempotency_key": idempotency_key, "text": text}
+    if approval is not None:
+        payload["approval"] = approval
     http_request(
         "POST",
         f"{COMMUNICATIONS_URL}/agents/{AGENT_ID}/deliveries/{delivery_id}/replies",
         headers=communications_headers(),
-        payload={"idempotency_key": idempotency_key, "text": text},
+        payload=payload,
     )
 
 
@@ -245,9 +248,9 @@ def _heartbeat_delivery_lease(delivery_id: str, stopped: threading.Event, sessio
             print(f"[communications-adapter] lease renewal failed: {exc}", flush=True)
 
 
-def post_reply_best_effort(delivery_id: str, text: str, *, suffix: str = "") -> None:
+def post_reply_best_effort(delivery_id: str, text: str, *, suffix: str = "", approval: dict | None = None) -> None:
     try:
-        post_reply(delivery_id, text, suffix=suffix)
+        post_reply(delivery_id, text, suffix=suffix, approval=approval)
     except Exception as exc:
         # Progress and approval notices improve visibility, but neither is the
         # turn result. Keep draining so the final response can still arrive.
@@ -536,6 +539,7 @@ def _drain_run(run_id: str, delivery_id: str, session_key: str, *, progress_upda
                     delivery_id,
                     _approval_prompt(description, choices),
                     suffix=_approval_reply_suffix(run_id, description),
+                    approval={"run_id": run_id, "command": description, "choices": choices},
                 )
                 continue
 
