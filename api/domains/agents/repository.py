@@ -132,6 +132,13 @@ class AgentRepository:
             )
             return session.exec(query).first()
 
+    def count_all_by_org(self, org_id: UUID) -> int:
+        """Include soft-deleted Agents so deletion does not rewind naming."""
+        with Session(self.delegate.engine) as session:
+            return (
+                session.scalar(select(func.count()).select_from(Agent).where(col(Agent.organization_id) == org_id)) or 0
+            )
+
     def count_active_by_org(self, org_id: UUID) -> int:
         with Session(self.delegate.engine) as session:
             count_query = (

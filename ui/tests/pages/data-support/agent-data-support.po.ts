@@ -660,6 +660,14 @@ export class AgentDataSupport {
     });
   }
 
+  async interceptNameSuggestionRequest({ firstName = "Brandon", status = 200 }: { firstName?: string; status?: number } = {}) {
+    await this.page.route("**/api/v1/organizations/*/agents/name-suggestion", async (route) => {
+      await route.fulfill({ status, contentType: "application/json", body: JSON.stringify(
+        status === 200 ? { first_name: firstName } : { detail: "Suggestion unavailable" },
+      ) });
+    });
+  }
+
   async interceptCreateAgentRequest({
     status = 201,
     detail = "Unable to create agent",

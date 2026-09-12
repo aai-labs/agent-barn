@@ -50,6 +50,7 @@ from api.domains.agents.models import (
     AgentLogHistoryRead,
     AgentLogSnapshot,
     AgentLogsRead,
+    AgentNameSuggestionRead,
     AgentOverrideAuthorRead,
     AgentRead,
     AgentSecret,
@@ -81,6 +82,7 @@ from api.domains.agents.models import (
     encrypt_content,
     validate_content,
 )
+from api.domains.agents.naming import choose_first_name
 from api.domains.agents.override_repository import (
     AgentOverrideConcurrencyError,
     AgentOverrideRepository,
@@ -702,6 +704,11 @@ class AgentService:
             type(delete_error).__name__,
             safe_message(delete_error),
         )
+
+    def suggest_agent_name(self, context: CurrentUserContext) -> AgentNameSuggestionRead:
+        org_id = self._org_id(context)
+        self.authorization.require_collection_scope(context, PermissionKey.AGENT_CREATE)
+        return AgentNameSuggestionRead(first_name=choose_first_name(self.repository.count_all_by_org(org_id)))
 
     def create_agent(self, data: AgentCreate, context: CurrentUserContext) -> AgentRead:
         org_id = self._org_id(context)
