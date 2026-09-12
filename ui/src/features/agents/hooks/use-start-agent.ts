@@ -26,5 +26,10 @@ export function useStartAgent() {
       void queryClient.invalidateQueries({ queryKey: agentsKey.lists() });
       void queryClient.invalidateQueries({ queryKey: agentsKey.health(data.id) });
     },
+    onError: (_error, agentId) => {
+      void queryClient.invalidateQueries({ queryKey: agentsKey.detail(agentId) });
+      void queryClient.invalidateQueries({ queryKey: agentsKey.lists() });
+      void queryClient.invalidateQueries({ queryKey: agentsKey.health(agentId) });
+    },
   });
 }

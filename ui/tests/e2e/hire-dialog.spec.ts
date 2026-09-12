@@ -1,6 +1,10 @@
 import { expect, test, type Page } from "@playwright/test";
 
-import { mockAgent, mockTemplates } from "../pages/data-support/agent-data-support.po";
+import {
+  mockAgent,
+  mockProvisioningError,
+  mockTemplates,
+} from "../pages/data-support/agent-data-support.po";
 import { mockCustomSkill, mockJiraSkill } from "../pages/data-support/skill-data-support.po";
 import { DataSupport } from "../pages/data-support/data-support.po";
 import { DashboardPage } from "../pages/dashboard-page.po";
@@ -265,5 +269,88 @@ test.describe("Hire Dialog", () => {
 
     await expect(page.getByText("An Agent named Aria already exists")).toBeVisible();
     expect(startRequests).toBe(0);
+  });
+
+  test("a start refused by the cluster explains itself and says the Agent exists", async ({
+    page,
+  }) => {
+    await dataSupport.agents.interceptCreateAgentRequest({
+      body: { ...mockAgent, name: "Aria", status: "STOPPED" },
+    });
+    await dataSupport.agents.interceptStartAgentRequest({
+      status: 503,
+      detail: mockProvisioningError,
+    });
+
+    await chooseTemplate(page);
+    await page.getByRole("button", { name: "Hire Agent", exact: true }).click();
+
+    const alert = page.getByTestId("hire-provisioning-error");
+    await expect(alert).toBeVisible();
+    await expect(alert).toContainText("Namespace quota exhausted");
+    await expect(alert).toContainText("run out of resource quota");
+    await expect(alert).toContainText("requests.storage: requested 1Gi");
+    // Creation succeeded before the start failed, so the Agent is on the team page.
+    await expect(alert).toContainText("was created and is waiting on your team page");
+    await expect(page.getByText("Request failed with status code")).toHaveCount(0);
+  });
+
+  test("retrying a failed hire starts the created Agent instead of creating a second", async ({
+    page,
+  }) => {
+    let createRequests = 0;
+    await page.route("**/api/v1/organizations/*/agents", async (route) => {
+      if (route.request().method() !== "POST") {
+        await route.fallback();
+        return;
+      }
+      createRequests += 1;
+      await route.fulfill({
+        status: 201,
+        contentType: "application/json",
+        body: JSON.stringify({ ...mockAgent, name: "Aria", status: "STOPPED" }),
+      });
+    });
+    await dataSupport.agents.interceptStartAgentRequest({
+      status: 503,
+      detail: mockProvisioningError,
+    });
+
+    await chooseTemplate(page);
+    await page.getByRole("button", { name: "Hire Agent", exact: true }).click();
+    await expect(page.getByTestId("hire-provisioning-error")).toBeVisible();
+    expect(createRequests).toBe(1);
+
+    const retry = page.getByRole("button", { name: "Start again", exact: true });
+    await expect(retry).toBeVisible();
+
+    const startRetry = page.waitForRequest(
+      (request) => request.url().includes("/start") && request.method() === "POST",
+    );
+    await retry.click();
+    await startRetry;
+
+    expect(createRequests).toBe(1);
+  });
+
+  test("hides the creation form once the Agent exists", async ({ page }) => {
+    await dataSupport.agents.interceptCreateAgentRequest({
+      body: { ...mockAgent, name: "Aria", status: "STOPPED" },
+    });
+    await dataSupport.agents.interceptStartAgentRequest({
+      status: 503,
+      detail: mockProvisioningError,
+    });
+
+    await chooseTemplate(page);
+    await page.getByRole("button", { name: "Hire Agent", exact: true }).click();
+    await expect(page.getByTestId("hire-provisioning-error")).toBeVisible();
+
+    // The Agent is persisted with the submitted configuration, so an edit here would
+    // promise a change the retry cannot apply.
+    await expect(page.getByRole("combobox")).toHaveCount(0);
+    await expect(page.getByRole("textbox")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Start again", exact: true })).toBeEnabled();
+    await expect(page.getByRole("button", { name: "Cancel", exact: true })).toBeEnabled();
   });
 });

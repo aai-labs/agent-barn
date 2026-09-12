@@ -2,17 +2,42 @@ import axios from "axios";
 import { ZodError } from "zod";
 import { ApiError } from "./errors";
 
+// FastAPI sends `detail` as a string, a list of validation errors, or an object
+// such as a classified provisioning failure or an agent health report.
+const isDetailObject = (detail: unknown): detail is Record<string, any> =>
+  typeof detail === "object" && detail !== null && !Array.isArray(detail);
+
+const messageFrom = (data: any, fallback: string): string => {
+  const detail = data?.detail;
+
+  if (Array.isArray(detail)) {
+    return detail.map((item: any) => item?.msg ?? JSON.stringify(item)).join("; ");
+  }
+  if (isDetailObject(detail)) {
+    return detail.summary || detail.message || detail.reason || fallback;
+  }
+  return detail || data?.message || data?.error || fallback;
+};
+
+const codeFrom = (data: any, status: number): string => {
+  const detail = data?.detail;
+  const detailCode = isDetailObject(detail) ? detail.code : undefined;
+
+  return detailCode || data?.code || `HTTP_${status}`;
+};
+
 export const handleError = (error: any): ApiError => {
   if (axios.isAxiosError(error)) {
     if (error.response) {
       const { status, data } = error.response;
-      const detail = data?.detail;
-      const message = Array.isArray(detail)
-        ? detail.map((e: any) => e?.msg ?? JSON.stringify(e)).join("; ")
-        : detail || data?.message || data?.error || error.message;
-      const code = data?.code || `HTTP_${status}`;
 
-      return new ApiError(message, status, code, data, error);
+      return new ApiError(
+        messageFrom(data, error.message),
+        status,
+        codeFrom(data, status),
+        data,
+        error,
+      );
     } else if (error.request) {
       return ApiError.networkError(error.message);
     }
