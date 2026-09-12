@@ -53,6 +53,14 @@ export class AgentDetailPage {
     return this.page.getByText(status, { exact: true });
   }
 
+  provisioningErrorBanner(): Locator {
+    return this.page.getByTestId("agent-error-banner");
+  }
+
+  provisioningErrorDetail(): Locator {
+    return this.page.getByTestId("agent-error-detail");
+  }
+
   providerErrorAlert(): Locator {
     return this.page.getByRole("alert").filter({ hasText: "Latest provider error" });
   }

@@ -12,6 +12,7 @@ from sqlmodel import Column, Enum, Index
 from sqlmodel import Field as SqlField
 
 from api.domains.agents.google_workspace_scopes import required_service_scopes
+from api.domains.agents.provisioning_errors import AgentProvisioningErrorCategory
 from api.domains.rbac.catalog import PermissionKey
 from api.domains.users.organization_users.models import OrganizationRole
 from api.infrastructure.crypto import decrypt_token, encrypt_token
@@ -321,11 +322,17 @@ class Agent(BaseModel, table=True):
         default=AgentType.OPENCLAW,
         sa_column=Column(sa.String(20), nullable=False, server_default="openclaw"),
     )
+    # Provisioning failure, as normalized by provisioning_errors.py. `last_error` is
+    # the one-line display rendering (summary + detail); `last_error_code` names the
+    # category the read boundary rebuilds the rest from, and its absence on a row
+    # that has `last_error` marks pre-normalization text that was never sanitized.
     last_error: str | None = SqlField(
         default=None,
         nullable=True,
         sa_type=sa.Text,
     )
+    last_error_code: str | None = SqlField(default=None, nullable=True, max_length=100)
+    last_error_detail: str | None = SqlField(default=None, nullable=True, max_length=500)
 
     ingest_key_encrypted: str | None = SqlField(default=None, nullable=True)
     communication_key_encrypted: str | None = SqlField(default=None, nullable=True)
@@ -1079,6 +1086,21 @@ class AgentAssignedSkillRead(PydanticBaseModel):
 AgentModelSource = Literal["default", "override"]
 
 
+class AgentProvisioningErrorRead(PydanticBaseModel):
+    """A failed start, as shown to anyone who can read the Agent.
+
+    Every field is derived from the stored category or rebuilt from validated
+    fragments; no cluster text reaches this DTO. See `provisioning_errors.py`.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    code: str
+    category: AgentProvisioningErrorCategory
+    summary: str
+    detail: str | None = None
+
+
 class AgentRead(PydanticBaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -1108,6 +1130,7 @@ class AgentRead(PydanticBaseModel):
     configured_platform_keys: list[str] = Field(default_factory=list)
     approval_mode: CommandApprovalMode
     verbose_mode: bool
+    last_error: AgentProvisioningErrorRead | None = None
     allowed_actions: list[PermissionKey] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime

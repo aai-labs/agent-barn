@@ -24,6 +24,11 @@ import { useModels } from "../hooks/use-models";
 import { useTemplates } from "../hooks/use-templates";
 import { splitRequiredSkills } from "../utils";
 import { CredentialErrorAlert } from "./credential-error-alert";
+import {
+  describeProvisioningFailure,
+  provisioningFailureOf,
+  type ProvisioningFailureDisplay,
+} from "../provisioning-failure";
 import { DialogShell, FormField } from "./hire-dialog-primitives";
 import { SkillsStep } from "./hire-dialog-steps";
 import { ModelChoice } from "./model-choice";
@@ -63,6 +68,11 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
   const [skillCredentials, setSkillCredentials] = useState<IntegrationDraft[]>([]);
   const [groupChoices, setGroupChoices] = useState<Record<string, string[]>>({});
   const [error, setError] = useState<string | null>(null);
+  const [provisioningFailure, setProvisioningFailure] =
+    useState<ProvisioningFailureDisplay | null>(null);
+  // Creation can succeed and the start still fail. Holding the Agent lets the retry
+  // start that Agent instead of creating a second one.
+  const [createdAgent, setCreatedAgent] = useState<{ id: string; name: string } | null>(null);
 
   const template = templates.find((candidate) => candidate.templateKey === templateKey);
   const { standalone, groups } = splitRequiredSkills(template?.requiredSkills ?? []);
@@ -72,6 +82,14 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
     Boolean(template) &&
     !missingGroupChoice &&
     !hasIncompleteIntegration(skillCredentials);
+
+  const hireButtonLabel = createdAgent
+    ? pending
+      ? "Starting…"
+      : "Start again"
+    : pending
+      ? "Hiring…"
+      : "Hire Agent";
 
   function handleTemplateChange(nextKey: string) {
     const nextTemplate = templates.find((candidate) => candidate.templateKey === nextKey);
@@ -107,6 +125,12 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
   async function hire() {
     if (!template || !name.trim() || !canHire) return;
     setError(null);
+    setProvisioningFailure(null);
+
+    if (createdAgent) {
+      await startCreatedAgent(createdAgent);
+      return;
+    }
 
     const skillIds = [
       ...new Set([
@@ -150,11 +174,30 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
         ...(sharedCredentials.length > 0 ? { sharedCredentials } : {}),
         ...approval,
       });
+      setCreatedAgent({ id: agent.id, name: agent.name });
+      await startCreatedAgent({ id: agent.id, name: agent.name });
+    } catch (cause) {
+      reportHireFailure(cause);
+    }
+  }
+
+  async function startCreatedAgent(agent: { id: string; name: string }) {
+    if (!template) return;
+    try {
       await startAgent.mutateAsync(agent.id);
       onHired({ name: agent.name, role: template.templateName });
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Could not hire the Agent.");
+      reportHireFailure(cause);
     }
+  }
+
+  function reportHireFailure(cause: unknown) {
+    const failure = provisioningFailureOf(cause);
+    if (failure) {
+      setProvisioningFailure(describeProvisioningFailure(failure));
+      return;
+    }
+    setError(cause instanceof Error ? cause.message : "Could not hire the Agent.");
   }
 
   return (
@@ -169,6 +212,8 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
       </header>
 
       <div className="grid flex-1 gap-5 overflow-y-auto p-6 sm:grid-cols-2">
+        {!createdAgent && (
+          <>
         <FormField label="Agent name">
           <input className="af-input" value={name} onChange={(event) => setName(event.target.value)} autoFocus />
         </FormField>
@@ -228,6 +273,35 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
             />
           </section>
         )}
+          </>
+        )}
+
+        {provisioningFailure && (
+          <div
+            role="alert"
+            data-testid="hire-provisioning-error"
+            className="rounded-xl px-4 py-3.5 text-[0.8125rem] sm:col-span-2"
+            style={{
+              background: "color-mix(in srgb, var(--err) 10%, transparent)",
+              border: "1px solid color-mix(in srgb, var(--err) 25%, transparent)",
+              color: "var(--err)",
+            }}
+          >
+            <p className="m-0 font-medium">{provisioningFailure.title}</p>
+            <p className="m-0 mt-1">{provisioningFailure.summary}</p>
+            {provisioningFailure.detail && (
+              <p className="m-0 mt-2 overflow-x-auto font-mono text-[0.75rem] leading-[1.5] opacity-80">
+                {provisioningFailure.detail}
+              </p>
+            )}
+            {/* The Agent was created before the start failed, so it is on the
+                team page in ERROR rather than lost. Saying so stops the reader
+                hiring a second one to replace it. */}
+            <p className="m-0 mt-2 opacity-90">
+              {name.trim()} was created and is waiting on your team page.
+            </p>
+          </div>
+        )}
 
         {error && (!template?.requiredSkills.length || skillCredentials.length === 0) && (
           <CredentialErrorAlert
@@ -240,7 +314,7 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
       <footer className="flex justify-end gap-2 border-t px-6 py-4" style={{ borderColor: "var(--line)" }}>
         <button type="button" className="af-btn" disabled={pending} onClick={onClose}>Cancel</button>
         <button type="button" className="af-btn af-btn-primary" disabled={pending || !template || !name.trim() || !canHire} onClick={() => void hire()}>
-          {pending ? "Hiring…" : "Hire Agent"}
+          {hireButtonLabel}
         </button>
       </footer>
     </DialogShell>

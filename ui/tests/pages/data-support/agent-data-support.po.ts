@@ -114,6 +114,44 @@ export const mockAgent = {
   updated_at: "2026-05-14T09:14:00Z",
 };
 
+// The classified failure the API returns for the quota exhaustion reported in
+// AF staging: the same shape on the Agent read and as a failed start's error body.
+export const mockProvisioningError = {
+  code: "QUOTA_EXHAUSTED",
+  category: "quota_exhausted",
+  summary:
+    "The agent could not start — its namespace has run out of resource quota. " +
+    "Ask an administrator to free up or raise it, then start the agent again.",
+  detail:
+    "requests.storage: requested 1Gi, used 30Gi, limit 30Gi (quota example-quota, creating persistentvolumeclaims)",
+};
+
+// A failure whose code this build does not know, for the fallback copy path.
+export const mockUnknownProvisioningError = {
+  code: "PROVISIONING_FAILED",
+  category: "unknown",
+  summary:
+    "The agent could not start — creating its runtime resources failed unexpectedly. " +
+    "Try again; if it keeps failing, ask an administrator to check the cluster.",
+  detail: null,
+};
+
+export const mockRbacProvisioningError = {
+  code: "CLUSTER_PERMISSION_DENIED",
+  category: "cluster_permission_denied",
+  summary:
+    "The agent could not start — Agent Barn's service account is missing RBAC permission to " +
+    "create the agent's resources. Ask an administrator to review them.",
+  detail: "cannot create deployments",
+};
+
+export const mockAgentInError = {
+  ...mockAgent,
+  status: "ERROR",
+  running_model: "",
+  last_error: mockProvisioningError,
+};
+
 export const mockSecret = {
   provider: "github",
   secret_name: "github-secret",
@@ -704,6 +742,10 @@ export class AgentDataSupport {
     });
   }
 
+  /**
+   * `detail` is fulfilled verbatim, so a test can send either a plain string or
+   * the structured provisioning failure a failed start really returns.
+   */
   async interceptStartAgentRequest({
     agentId = MOCK_AGENT_ID,
     status = 200,
@@ -712,7 +754,7 @@ export class AgentDataSupport {
   }: {
     agentId?: string;
     status?: number;
-    detail?: string;
+    detail?: unknown;
     body?: unknown;
   } = {}) {
     await this.page.route(

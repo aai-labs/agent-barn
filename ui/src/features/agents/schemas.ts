@@ -88,6 +88,13 @@ export const AgentAccessSettingsReadSchema = z.object({
   assignments: z.array(AgentAccessMemberReadSchema),
 });
 
+export const AgentProvisioningErrorSchema = z.object({
+  code: z.string(),
+  category: z.string(),
+  summary: z.string(),
+  detail: z.string().nullish(),
+});
+
 export const AgentSchema = z.object({
   id: z.string().uuid(),
   name: z.string(),
@@ -110,6 +117,7 @@ export const AgentSchema = z.object({
   pendingModel: z.string().default(""),
   approvalMode: z.enum(["manual", "auto", "off"]).default("auto"),
   verboseMode: z.boolean().default(false),
+  lastError: AgentProvisioningErrorSchema.nullish(),
   secrets: z.array(AgentSecretReadSchema).optional(),
   skills: z.array(AgentAssignedSkillSchema).default([]),
   configuredPlatformKeys: z.array(z.string()).default([]),
@@ -346,6 +354,7 @@ export const AgentConfigurationSchema = z.object({
 export type CommandApprovalMode = "manual" | "auto" | "off";
 export type AgentPermissionKey = z.infer<typeof AgentPermissionKeySchema>;
 export type Agent = z.infer<typeof AgentSchema>;
+export type AgentProvisioningError = z.infer<typeof AgentProvisioningErrorSchema>;
 export type AgentAssignedSkill = z.infer<typeof AgentAssignedSkillSchema>;
 export type TemplateRequiredSkill = z.infer<typeof TemplateRequiredSkillSchema>;
 export type AgentHealth = z.infer<typeof AgentHealthSchema>;

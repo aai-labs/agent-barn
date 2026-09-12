@@ -1,5 +1,9 @@
 "use client";
 
+import {
+  provisioningFailureLine,
+  provisioningFailureOf,
+} from "../provisioning-failure";
 import { useStartAgent } from "./use-start-agent";
 import { useStopAgent } from "./use-stop-agent";
 import type { Agent } from "../schemas";
@@ -24,7 +28,19 @@ export function useAgentApplyAndRestart(
     } finally {
       // Complete the restart transition even when the update fails, so an
       // Agent that was stopped for the update does not remain stopped.
-      await startAgent.mutateAsync(agent.id);
+      await restart();
+    }
+  }
+
+  async function restart() {
+    try {
+      return await startAgent.mutateAsync(agent.id);
+    } catch (cause) {
+      const failure = provisioningFailureOf(cause);
+      if (failure) {
+        throw new Error(provisioningFailureLine(failure), { cause });
+      }
+      throw cause;
     }
   }
 
