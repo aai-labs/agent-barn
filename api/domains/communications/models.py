@@ -592,7 +592,7 @@ class RuntimeDeliveryResult(PydanticBaseModel):
 class ApprovalRequest(PydanticBaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    run_id: str = Field(min_length=1, max_length=512)
+    approval_id: str = Field(min_length=1, max_length=512)
     command: str = Field(min_length=1, max_length=100_000)
     choices: list[str] = Field(min_length=1, max_length=16)
 
@@ -616,7 +616,7 @@ class OutboundCommunicationEnvelope(PydanticBaseModel):
     attachments: list[CommunicationAttachment] = Field(default_factory=list)
     reply_to_provider_message_id: str | None = Field(default=None, max_length=512)
     provider_metadata: dict[str, str | int | float | bool | None] = Field(default_factory=dict)
-    approval: ApprovalRequest | None = None
+    approval: ApprovalRequest | None = Field(default=None, exclude_if=lambda value: value is None)
 
     @model_validator(mode="after")
     def require_reply_source(self) -> OutboundCommunicationEnvelope:

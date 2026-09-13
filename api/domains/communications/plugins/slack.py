@@ -102,7 +102,7 @@ class SlackCredentials(PlatformCredentials):
 
 
 APPROVAL_ACTION_PREFIX = "agentbarn_approval:"
-_APPROVAL_RUN_METADATA_KEY = "approval_run_id"
+_APPROVAL_METADATA_KEY = "approval_id"
 _SYNTHESIZED_MESSAGE_PREFIX = "action:"
 _APPROVAL_BLOCK_ID = "agentbarn_approval"
 _SECTION_TEXT_LIMIT = 3000
@@ -118,8 +118,8 @@ def approval_action_id(choice: str) -> str:
     return f"{APPROVAL_ACTION_PREFIX}{choice}"
 
 
-def approval_action_value(run_id: str, choice: str) -> str:
-    return f"{run_id}:{choice}"
+def approval_action_value(approval_id: str, choice: str) -> str:
+    return f"{approval_id}:{choice}"
 
 
 def _approval_blocks(approval: ApprovalRequest) -> list[dict]:
@@ -138,7 +138,7 @@ def _approval_blocks(approval: ApprovalRequest) -> list[dict]:
                     "type": "button",
                     "action_id": approval_action_id(choice),
                     "text": {"type": "plain_text", "text": _APPROVAL_CHOICE_LABELS.get(choice, choice)},
-                    "value": approval_action_value(approval.run_id, choice),
+                    "value": approval_action_value(approval.approval_id, choice),
                 }
                 for choice in approval.choices
             ],
@@ -474,11 +474,13 @@ class SlackPlatformPlugin(PlatformPlugin):
         except TypeError, ValueError, OSError:
             return InboundAdmissionResult(CommunicationPolicyDisposition.MALFORMED_PAYLOAD)
 
-        run_id, _, choice = str(action.get("value") or "").rpartition(":")
+        approval_id, _, choice = str(action.get("value") or "").rpartition(":")
         if not choice:
             return InboundAdmissionResult(CommunicationPolicyDisposition.MALFORMED_PAYLOAD)
 
-        thread_id = str(container.get("thread_ts") or container.get("message_ts") or "")
+        clicked = payload.get("message")
+        clicked_thread = clicked.get("thread_ts") if isinstance(clicked, dict) else None
+        thread_id = str(container.get("thread_ts") or clicked_thread or container.get("message_ts") or "")
         if not thread_id:
             return InboundAdmissionResult(CommunicationPolicyDisposition.MALFORMED_PAYLOAD)
 
@@ -495,7 +497,7 @@ class SlackPlatformPlugin(PlatformPlugin):
                     ),
                     sender=CommunicationSender(id=sender_id),
                     text=choice,
-                    provider_metadata={_APPROVAL_RUN_METADATA_KEY: run_id},
+                    provider_metadata={_APPROVAL_METADATA_KEY: approval_id},
                 ),
             ),
         )

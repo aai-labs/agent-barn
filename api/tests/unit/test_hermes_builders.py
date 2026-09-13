@@ -37,9 +37,10 @@ def test_gateway_config_maps_approval_mode_onto_approvals_policy() -> None:
     def approvals(mode: str) -> dict:
         return build_hermes_gateway_config("litellm/gpt-5", "http://litellm:4000", approval_mode=mode)["approvals"]
 
-    assert approvals("manual")["mode"] == "manual"
-    assert approvals("auto")["mode"] == "smart"
-    assert approvals("off")["mode"] == "off"
+    policy = {"timeout": 300, "cron_mode": "deny", "single_query_mode": "deny"}
+    assert approvals("manual") == {"mode": "manual", **policy}
+    assert approvals("auto") == {"mode": "smart", **policy}
+    assert approvals("off") == {"mode": "off", **policy}
 
 
 def test_gateway_config_pins_approval_policy_rather_than_inheriting_upstream_defaults() -> None:

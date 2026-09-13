@@ -43,8 +43,12 @@ def main() -> int:
 
     sidecar = os.path.join(os.path.dirname(target), SIDECAR_NAME)
     current = _load_yaml(target).get(ALLOWLIST_KEY)
-    written = [entry for entry in current if isinstance(entry, str)] if isinstance(current, list) else []
-    saved = list(dict.fromkeys([*_load_sidecar(sidecar), *written]))
+    # Whatever Hermes last had is the truth, including a revoke. The sidecar only
+    # stands in while manual mode keeps the key out of its reach.
+    if isinstance(current, list):
+        saved = [entry for entry in current if isinstance(entry, str)]
+    else:
+        saved = _load_sidecar(sidecar)
     _write_atomically(sidecar, lambda handle: json.dump(saved, handle))
 
     approvals = managed.get("approvals")

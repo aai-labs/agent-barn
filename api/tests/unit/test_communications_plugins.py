@@ -229,7 +229,7 @@ def _slack_event(
 def _slack_block_action(
     *,
     choice: str = "once",
-    run_id: str = "run-1",
+    approval_id: str = "run-1:1.0",
     user: str = "user-1",
     channel: str = "channel-1",
     posted_by: str | None = "bot-1",
@@ -255,7 +255,7 @@ def _slack_block_action(
                 "type": "button",
                 "action_id": action_id if action_id is not None else f"agentbarn_approval:{choice}",
                 "block_id": "approval",
-                "value": f"{run_id}:{choice}",
+                "value": f"{approval_id}:{choice}",
                 "action_ts": "1724320900.000200",
             }
         ],
@@ -287,7 +287,7 @@ def test_an_approval_click_becomes_an_ordinary_inbound_answer() -> None:
     assert envelope.text == "once"
     assert envelope.sender.id == "user-1"
     assert envelope.location.thread_id == "1724320800.000100"
-    assert envelope.provider_metadata["approval_run_id"] == "run-1"
+    assert envelope.provider_metadata["approval_id"] == "run-1:1.0"
 
 
 def test_repeat_clicks_are_not_deduped_into_nothing() -> None:
@@ -363,7 +363,7 @@ def test_an_approval_renders_buttons_for_exactly_the_offered_choices() -> None:
         source_delivery_id=uuid4(),
         location=ConversationLocation(id="channel-1", type="CHANNEL"),
         text="```\nrm -rf build\n```\nReply with one of: once, deny",
-        approval=ApprovalRequest(run_id="run-1", command="rm -rf build", choices=["once", "deny"]),
+        approval=ApprovalRequest(approval_id="run-1:1.0", command="rm -rf build", choices=["once", "deny"]),
     )
 
     with patch("api.domains.communications.plugins.slack.SlackClient") as client_type:
@@ -376,7 +376,7 @@ def test_an_approval_renders_buttons_for_exactly_the_offered_choices() -> None:
         "agentbarn_approval:once",
         "agentbarn_approval:deny",
     ]
-    assert [element["value"] for element in actions["elements"]] == ["run-1:once", "run-1:deny"]
+    assert [element["value"] for element in actions["elements"]] == ["run-1:1.0:once", "run-1:1.0:deny"]
     assert "```\nrm -rf build\n```" in blocks[0]["text"]["text"]
 
 
@@ -387,7 +387,7 @@ def test_the_typed_answer_stays_available_alongside_the_buttons() -> None:
         source_delivery_id=uuid4(),
         location=ConversationLocation(id="channel-1", type="CHANNEL"),
         text="prompt text",
-        approval=ApprovalRequest(run_id="run-1", command="x", choices=["once", "session", "always", "deny"]),
+        approval=ApprovalRequest(approval_id="run-1:1.0", command="x", choices=["once", "session", "always", "deny"]),
     )
 
     with patch("api.domains.communications.plugins.slack.SlackClient") as client_type:
@@ -408,7 +408,7 @@ def test_a_command_too_long_for_a_section_block_is_bounded() -> None:
         source_delivery_id=uuid4(),
         location=ConversationLocation(id="channel-1", type="CHANNEL"),
         text="prompt",
-        approval=ApprovalRequest(run_id="run-1", command="x" * 9000, choices=["once"]),
+        approval=ApprovalRequest(approval_id="run-1:1.0", command="x" * 9000, choices=["once"]),
     )
 
     with patch("api.domains.communications.plugins.slack.SlackClient") as client_type:

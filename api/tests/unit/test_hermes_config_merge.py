@@ -77,6 +77,27 @@ def test_a_grant_made_since_the_last_boot_joins_the_saved_ones(merge, tmp_path: 
     assert _saved(tmp_path) == ["recursive delete", "cargo *"]
 
 
+def test_a_revoked_grant_stays_revoked(merge, tmp_path: Path) -> None:
+    (tmp_path / "agentbarn-command-allowlist.json").write_text(
+        json.dumps(["recursive delete", "cargo *"]), encoding="utf-8"
+    )
+    revoked = yaml.safe_dump({"command_allowlist": ["cargo *"]})
+
+    merged = _run(merge, tmp_path, revoked, mode="smart")
+
+    assert merged["command_allowlist"] == ["cargo *"]
+    assert _saved(tmp_path) == ["cargo *"]
+
+
+def test_revoking_every_grant_sticks(merge, tmp_path: Path) -> None:
+    (tmp_path / "agentbarn-command-allowlist.json").write_text(json.dumps(["recursive delete"]), encoding="utf-8")
+
+    merged = _run(merge, tmp_path, yaml.safe_dump({"command_allowlist": []}), mode="smart")
+
+    assert "command_allowlist" not in merged
+    assert _saved(tmp_path) == []
+
+
 def test_a_corrupt_saved_grant_file_still_yields_a_bootable_runtime(merge, tmp_path: Path) -> None:
     (tmp_path / "agentbarn-command-allowlist.json").write_text("{not json", encoding="utf-8")
 

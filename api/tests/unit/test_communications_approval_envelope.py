@@ -20,7 +20,7 @@ from api.domains.communications.models import (
     RuntimeReplyCreate,
 )
 
-_APPROVAL = ApprovalRequest(run_id="run-1", command="rm -rf build", choices=["once", "deny"])
+_APPROVAL = ApprovalRequest(approval_id="run-1:1.0", command="rm -rf build", choices=["once", "deny"])
 
 
 def _envelope(**overrides) -> OutboundCommunicationEnvelope:
@@ -45,7 +45,7 @@ def test_the_approval_field_survives_the_jsonb_round_trip() -> None:
     restored = OutboundCommunicationEnvelope.model_validate(stored)
 
     assert restored.approval is not None
-    assert restored.approval.run_id == "run-1"
+    assert restored.approval.approval_id == "run-1:1.0"
     assert restored.approval.choices == ["once", "deny"]
 
 
@@ -59,12 +59,12 @@ def test_choices_are_carried_verbatim_rather_than_assumed() -> None:
     """Hermes narrows the offered set: a smart-denied command gets once/deny only,
     and a non-permanent one gets once/session/deny. Rendering a fixed four would
     offer an option the runtime will reject."""
-    narrowed = ApprovalRequest(run_id="run-1", command="x", choices=["once", "deny"])
+    narrowed = ApprovalRequest(approval_id="run-1:1.0", command="x", choices=["once", "deny"])
 
     assert narrowed.choices == ["once", "deny"]
 
     with pytest.raises(ValidationError):
-        ApprovalRequest(run_id="run-1", command="x", choices=[])
+        ApprovalRequest(approval_id="run-1:1.0", command="x", choices=[])
 
 
 def test_interactive_components_is_a_declared_capability() -> None:

@@ -6,7 +6,6 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent / "messaging"))
-import hashlib
 import json
 import os
 import re
@@ -63,7 +62,7 @@ _APPROVAL_COMMAND_MAX_CHARS = 2_500
 _APPROVAL_CHOICES = frozenset({"once", "session", "always", "deny"})
 _APPROVAL_CHOICE_ALIASES = {"approve": "once", "approved": "once", "allow": "once"}
 _MANUAL_APPROVAL_CHOICES = ("once", "deny")
-_APPROVAL_RUN_METADATA_KEY = "approval_run_id"
+_APPROVAL_METADATA_KEY = "approval_id"
 
 
 class ActiveRun:
@@ -346,22 +345,25 @@ def resolve_pending_approval(session_key: str, delivery: dict) -> bool:
     delivery_id = delivery["delivery_id"]
     envelope = delivery["envelope"]
     choice = _PROVIDER_MARKUP.sub(" ", envelope.get("text", "")).strip().lower()
-    clicked_run_id = str((envelope.get("provider_metadata") or {}).get(_APPROVAL_RUN_METADATA_KEY) or "")
+    clicked_approval_id = str((envelope.get("provider_metadata") or {}).get(_APPROVAL_METADATA_KEY) or "")
 
     if pending is None:
-        if clicked_run_id or choice in _APPROVAL_CHOICES:
+        # Only a click is unambiguously an approval answer. A typed word reaches
+        # the model as it always did -- "deny" is a normal reply to a normal
+        # question.
+        if clicked_approval_id:
             post_reply_best_effort(delivery_id, "No command is waiting for approval.")
             complete_delivery(delivery_id, succeeded=True)
             return True
         return False
 
-    if clicked_run_id and clicked_run_id != pending["run_id"]:
+    if clicked_approval_id and clicked_approval_id != pending["approval_id"]:
         post_reply_best_effort(delivery_id, "That approval is no longer active.")
         complete_delivery(delivery_id, succeeded=True)
         return True
 
     choice = _APPROVAL_CHOICE_ALIASES.get(choice, choice)
-    if choice not in pending["choices"]:
+    if choice in _APPROVAL_CHOICES and choice not in pending["choices"]:
         post_reply(delivery_id, f"Please reply with one of: {', '.join(pending['choices'])}")
         complete_delivery(delivery_id, succeeded=True)
         return True
@@ -496,17 +498,20 @@ def _progress_line(event: str, payload: dict) -> str:
     return preview or tool or event
 
 
-def _approval_prompt(command: str, choices: list) -> str:
-    fenced = command.replace("```", "`\u200b``")
+def _bounded_command(command) -> str:
+    fenced = str(command).replace("```", "`\u200b``")
     if len(fenced) > _APPROVAL_COMMAND_MAX_CHARS:
         hidden = len(fenced) - _APPROVAL_COMMAND_MAX_CHARS
         fenced = f"{fenced[:_APPROVAL_COMMAND_MAX_CHARS]}\n[{hidden} more characters not shown]"
-    return f"```\n{fenced}\n```\nReply with one of: {', '.join(choices)}"
+    return fenced
 
 
-def _approval_reply_suffix(run_id: str, command: str) -> str:
-    digest = hashlib.sha256(command.encode("utf-8", "replace")).hexdigest()[:16]
-    return f"approval:{run_id}:{digest}"
+def _approval_prompt(command: str, choices: list) -> str:
+    return f"```\n{command}\n```\nReply with one of: {', '.join(choices)}"
+
+
+def _approval_id(run_id: str, payload: dict, sequence: int) -> str:
+    return f"{run_id}:{payload.get('timestamp') or sequence}"
 
 
 def _drain_run(run_id: str, delivery_id: str, session_key: str, *, progress_updates: bool = True) -> None:
@@ -535,9 +540,11 @@ def _drain_run(run_id: str, delivery_id: str, session_key: str, *, progress_upda
                 choices = payload.get("choices") or ["once", "session", "always", "deny"]
                 if MANUAL_APPROVAL:
                     choices = [choice for choice in choices if choice in _MANUAL_APPROVAL_CHOICES] or choices
+                approval_id = _approval_id(run_id, payload, sequence)
                 with _PENDING_APPROVALS_LOCK:
                     _PENDING_APPROVALS[session_key] = {
                         "run_id": run_id,
+                        "approval_id": approval_id,
                         "delivery_id": delivery_id,
                         "choices": choices,
                     }
@@ -546,11 +553,12 @@ def _drain_run(run_id: str, delivery_id: str, session_key: str, *, progress_upda
                 # claimed while this run counts as blocking.
                 _publish_awaiting_input(delivery_id, session_key)
                 description = payload.get("command") or payload.get("description") or "A command needs approval"
+                command = _bounded_command(description)
                 post_reply_best_effort(
                     delivery_id,
-                    _approval_prompt(description, choices),
-                    suffix=_approval_reply_suffix(run_id, description),
-                    approval={"run_id": run_id, "command": description, "choices": choices},
+                    _approval_prompt(command, choices),
+                    suffix=f"approval:{approval_id}",
+                    approval={"approval_id": approval_id, "command": command, "choices": choices},
                 )
                 continue
 
