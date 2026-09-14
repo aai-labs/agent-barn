@@ -769,6 +769,7 @@ test.describe("Agent Detail Page — Channels tab", () => {
     await expect(page.getByText("xapp-", { exact: true })).toBeVisible();
     await expect(page.getByRole("link", { name: "Slack app management" })).toHaveAttribute("href", "https://api.slack.com/apps");
     await expect(page.getByRole("button", { name: "Copy Slack manifest" })).toBeVisible();
+    await expect(page.getByText("Announce steps", { exact: true })).toHaveCount(0);
 
     await agentDetailPage.selectPlatformButton("Discord").click();
     const discordHint = agentDetailPage.setupHint(/Invite the bot/);
@@ -789,7 +790,7 @@ test.describe("Agent Detail Page — Channels tab", () => {
     ...mockCommunicationConnection,
     platform_key: "slack",
     display_name: "Team Slack",
-    settings: { channel_ids: ["C1"], dm_user_ids: [] },
+    settings: { channel_ids: ["C1"], dm_user_ids: [], verbose_mode: true },
   };
 
   async function serveSavedSlackConnection(page: Page) {
@@ -807,6 +808,16 @@ test.describe("Agent Detail Page — Channels tab", () => {
     await agentDetailPage.configureButton().click();
     await agentDetailPage.channelsTab().click();
   }
+
+  test("does not resubmit the retired Slack announce-steps setting", async ({ page }) => {
+    await serveSavedSlackConnection(page);
+    await agentDetailPage.editConnectionButton("Team Slack").click();
+
+    await expect(page.getByText("Announce steps", { exact: true })).toHaveCount(0);
+    const update = agentDetailPage.waitForConnectionMutation("PATCH");
+    await agentDetailPage.saveConnectionButton().click();
+    expect((await update).postDataJSON().settings).not.toHaveProperty("verbose_mode");
+  });
 
   test("configures a scheduled default through the Connection editor", async ({ page }) => {
     await serveSavedSlackConnection(page);

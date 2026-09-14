@@ -47,6 +47,9 @@ export const mockCommunicationPlatforms = [
         default_delivery_target: { title: "Default delivery target", type: "object" },
         channel_ids: { title: "Allowed channels", type: "array", items: { type: "string" } },
         dm_user_ids: { title: "Allowed DM senders", type: "array", items: { type: "string" } },
+        // Simulate a stale backend replica during rollout. The client must not
+        // render or resubmit this retired setting.
+        verbose_mode: { title: "Announce steps", type: "boolean", default: true },
       },
     },
     credentials_schema: {
