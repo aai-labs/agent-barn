@@ -1,11 +1,14 @@
+import enum
 import json
 import logging
 import secrets
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid7
 
 from fastapi import HTTPException, status
 from injector import inject, singleton
+from kubernetes.client import V1Job
 
 from api.core.config import Config
 from api.domains.agents.authorization import AgentAuthorization
@@ -41,6 +44,11 @@ logger = logging.getLogger(__name__)
 
 _MAX_FAILURE_REASON = 500
 
+RESTORE_POINT_RECONCILIATION_PENDING_GRACE_SECONDS = 60
+
+CAPTURE_TIMEOUT_SETTING = "RESTORE_POINT_CAPTURE_TIMEOUT_SECONDS"
+RESTORE_TIMEOUT_SETTING = "RESTORE_POINT_RESTORE_TIMEOUT_SECONDS"
+
 NOTHING_TO_CAPTURE_DETAIL = "This Agent has never run, so there is nothing to capture."
 AGENT_RUNNING_DETAIL = "Stop the Agent before capturing a restore point."
 AGENT_RUNNING_RESTORE_DETAIL = "Stop the Agent before restoring a restore point."
@@ -56,6 +64,31 @@ def _capture_job_name(restore_point_id: UUID) -> str:
 
 def _restore_job_name(restore_point_id: UUID) -> str:
     return f"rp-res-{restore_point_id}-{secrets.token_hex(3)}"
+
+
+class _RestoreOutcome(str, enum.Enum):
+    BACKUP_FAILED = "BACKUP_FAILED"
+    EXTRACTION_FAILED = "EXTRACTION_FAILED"
+    UNKNOWN = "UNKNOWN"
+
+
+def _parse_manifest(logs: str) -> dict:
+    for line in reversed(logs.splitlines()):
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            parsed = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(parsed, dict):
+            return parsed
+    return {}
+
+
+def _deadline_exceeded(job: V1Job) -> bool:
+    conditions = job.status.conditions if job.status is not None else None
+    return any(c.type == "Failed" and c.status == "True" and c.reason == "DeadlineExceeded" for c in conditions or [])
 
 
 @inject
@@ -117,16 +150,12 @@ class RestorePointService:
     def _reconcile_row(self, row: AgentRestorePoint) -> None:
         namespace = self.config.k8s_namespace
         if not row.job_name:
-            self._fail_capture(row, "The restore point has no job to track.")
+            self._resolve_untracked(row, "The restore point has no job to track.")
             return
 
         job = self.k8s.get_job(row.job_name, namespace)
         if job is None:
-            reason = "The job that was running this operation is no longer available."
-            if row.status == RestorePointStatus.RESTORING:
-                self._fail(row, reason)
-            else:
-                self._fail_capture(row, reason)
+            self._resolve_untracked(row, "The job that was running this operation is no longer available.")
             return
 
         status_block = job.status
@@ -141,7 +170,7 @@ class RestorePointService:
             return
 
         if status_block.failed:
-            self._resolve_failure(row, namespace)
+            self._resolve_failure(row, job, namespace)
             return
 
         if row.status == RestorePointStatus.PENDING and status_block.active:
@@ -149,29 +178,72 @@ class RestorePointService:
                 row.id, RestorePointStatus.CAPTURING, from_statuses=(RestorePointStatus.PENDING,)
             )
 
-    def _resolve_failure(self, row: AgentRestorePoint, namespace: str) -> None:
-        """Split a restore Job's failure across the two rows it serves.
+    def _resolve_untracked(self, row: AgentRestorePoint, reason: str) -> None:
+        """Resolve a row with no Job to read — but only once it has had time to get one.
 
-        Exit 2 means the safety-net capture failed and the Agent volume was never
-        touched, so the restore point being restored from is still intact. Exit 3
-        means the wipe-and-extract failed, leaving the volume mid-restore: the
-        safety net exists and is the recovery path.
+        A row is committed before its Job is created, so a read landing in that
+        window would otherwise fail a healthy operation. Past the grace window a
+        missing Job is genuine. A restore target keeps its volume; a capture
+        releases the one it never finished writing.
         """
-        exit_code = self.k8s.get_job_exit_code(row.job_name or "", namespace)
-        reason = self._job_failure_reason(row.job_name or "", namespace)
-
+        grace = timedelta(seconds=RESTORE_POINT_RECONCILIATION_PENDING_GRACE_SECONDS)
+        if row.updated_at > datetime.now(UTC) - grace:
+            return
         if row.status == RestorePointStatus.RESTORING:
-            if exit_code == EXIT_BACKUP_FAILED:
+            self._fail(row, reason)
+        else:
+            self._fail_capture(row, reason)
+
+    def _resolve_failure(self, row: AgentRestorePoint, job: V1Job, namespace: str) -> None:
+        """Split a failed Job across the rows it serves, destroying nothing on doubt.
+
+        A capture's volume holds no usable archive and is always released. A
+        restore is judged by which phase failed: if the safety net never finished,
+        the Agent volume was never touched; if it did, the backup is the recovery
+        path. When the phase cannot be established the backup volume is kept.
+        """
+        reason = self._failure_reason(row, job, namespace)
+        is_restore = row.status == RestorePointStatus.RESTORING or row.origin == RestorePointOrigin.PRE_RESTORE
+        if not is_restore:
+            self._fail_capture(row, reason)
+            return
+
+        outcome = self._restore_outcome(row.job_name or "", namespace)
+        if row.status == RestorePointStatus.RESTORING:
+            if outcome == _RestoreOutcome.BACKUP_FAILED:
                 self.repository.mark_restored(row.id)
             else:
                 self._fail(row, reason)
             return
 
-        if row.origin == RestorePointOrigin.PRE_RESTORE and exit_code == EXIT_RESTORE_FAILED:
+        if outcome == _RestoreOutcome.EXTRACTION_FAILED:
             self._succeed(row)
-            return
+        elif outcome == _RestoreOutcome.BACKUP_FAILED:
+            self._fail_capture(row, reason)
+        else:
+            self._fail(row, reason)
 
-        self._fail_capture(row, reason)
+    def _restore_outcome(self, job_name: str, namespace: str) -> _RestoreOutcome:
+        if self.k8s.get_pod_name_for_job(job_name, namespace) is None:
+            return _RestoreOutcome.UNKNOWN
+        exit_code = self.k8s.get_job_exit_code(job_name, namespace)
+        if exit_code == EXIT_BACKUP_FAILED:
+            return _RestoreOutcome.BACKUP_FAILED
+        if exit_code == EXIT_RESTORE_FAILED:
+            return _RestoreOutcome.EXTRACTION_FAILED
+        logs = self.k8s.read_job_logs(job_name, namespace)
+        if logs is None:
+            return _RestoreOutcome.UNKNOWN
+        if _parse_manifest(logs):
+            return _RestoreOutcome.EXTRACTION_FAILED
+        return _RestoreOutcome.BACKUP_FAILED
+
+    def _failure_reason(self, row: AgentRestorePoint, job: V1Job, namespace: str) -> str:
+        if _deadline_exceeded(job):
+            is_restore = row.status == RestorePointStatus.RESTORING or row.origin == RestorePointOrigin.PRE_RESTORE
+            setting = RESTORE_TIMEOUT_SETTING if is_restore else CAPTURE_TIMEOUT_SETTING
+            return f"The operation did not finish within its time limit. Raise {setting} for large Agent volumes."
+        return self._job_failure_reason(row.job_name or "", namespace)
 
     def _succeed(self, row: AgentRestorePoint) -> None:
         manifest = self._read_manifest(row)
@@ -199,19 +271,7 @@ class RestorePointService:
         if not row.job_name:
             return {}
         logs = self.k8s.read_job_logs(row.job_name, self.config.k8s_namespace)
-        if not logs:
-            return {}
-        for line in reversed(logs.splitlines()):
-            line = line.strip()
-            if not line.startswith("{"):
-                continue
-            try:
-                parsed = json.loads(line)
-            except ValueError:
-                continue
-            if isinstance(parsed, dict):
-                return parsed
-        return {}
+        return _parse_manifest(logs) if logs else {}
 
     def _job_failure_reason(self, job_name: str, namespace: str) -> str:
         logs = self.k8s.read_job_logs(job_name, namespace)
@@ -318,13 +378,13 @@ class RestorePointService:
                 target.id,
                 RestorePointStatus.RESTORING,
                 from_statuses=(RestorePointStatus.READY,),
+                job_name=job_name,
                 event_name=AGENT_RESTORE_POINT_RESTORED,
                 actor=resolve_actor_identity(context, current.organization_id),
                 payload=self._event_payload(current, target, context),
             )
             if result is None:
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=NOT_READY_DETAIL)
-            self.repository.set_job_name(target.id, job_name)
 
             self._provision_restore(current, target, backup, job_name)
 

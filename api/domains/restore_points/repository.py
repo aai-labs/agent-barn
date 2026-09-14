@@ -148,9 +148,6 @@ class RestorePointRepository:
             },
         )
 
-    def set_job_name(self, restore_point_id: UUID, job_name: str) -> bool:
-        return self._conditional_update(restore_point_id, NON_TERMINAL_STATUSES, {"job_name": job_name})
-
     def mark_restored(self, restore_point_id: UUID) -> bool:
         return self._conditional_update(
             restore_point_id,
@@ -226,6 +223,7 @@ class RestorePointRepository:
         new_status: RestorePointStatus,
         *,
         from_statuses: tuple[RestorePointStatus, ...],
+        job_name: str | None,
         event_name: str,
         actor: ActorIdentity,
         payload: dict,
@@ -242,6 +240,7 @@ class RestorePointRepository:
             if row is None:
                 return None
             row.status = new_status
+            row.job_name = job_name
             row.updated_at = datetime.now(UTC)
             session.add(row)
             session.flush()

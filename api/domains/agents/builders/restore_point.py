@@ -25,7 +25,8 @@ ARCHIVE_MOUNT_PATH = "/archive"
 _ENTRYPOINT = ["python", "-c", "from api.domains.agents.restore_point_job import main; main()"]
 
 _TTL_SECONDS_AFTER_FINISHED = 3600
-_BACKOFF_LIMIT = 1
+_CAPTURE_BACKOFF_LIMIT = 1
+_RESTORE_BACKOFF_LIMIT = 0
 
 _JOB_RESOURCES = client.V1ResourceRequirements(
     requests={"memory": "128Mi", "cpu": "50m"},
@@ -84,13 +85,14 @@ def _build_job(
     env: dict[str, str],
     volumes: list[tuple[str, str, str, bool]],
     timeout_seconds: int,
+    backoff_limit: int,
     image_pull_secret: str | None,
 ) -> client.V1Job:
     labels = _labels(agent_id, org_id)
     return client.V1Job(
         metadata=client.V1ObjectMeta(name=job_name, namespace=namespace, labels=labels),
         spec=client.V1JobSpec(
-            backoff_limit=_BACKOFF_LIMIT,
+            backoff_limit=backoff_limit,
             active_deadline_seconds=timeout_seconds,
             ttl_seconds_after_finished=_TTL_SECONDS_AFTER_FINISHED,
             template=client.V1PodTemplateSpec(
@@ -151,6 +153,7 @@ def build_capture_job(
             ("dest", dest_pvc, DEST_MOUNT_PATH, False),
         ],
         timeout_seconds=timeout_seconds,
+        backoff_limit=_CAPTURE_BACKOFF_LIMIT,
         image_pull_secret=image_pull_secret,
     )
 
@@ -188,5 +191,6 @@ def build_restore_job(
             ("archive", archive_pvc, ARCHIVE_MOUNT_PATH, True),
         ],
         timeout_seconds=timeout_seconds,
+        backoff_limit=_RESTORE_BACKOFF_LIMIT,
         image_pull_secret=image_pull_secret,
     )

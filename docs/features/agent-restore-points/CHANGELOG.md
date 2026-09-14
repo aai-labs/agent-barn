@@ -20,6 +20,33 @@ Related context: [`../agents.md`](../agents.md), [`../../architecture/runtime-an
 
 ## Changes
 
+### 2026-09-14 — AF-292 — Ticket 1 review fixes
+
+- Changed: OpenClaw's archive excluded every `workspace/*.md` except `USER.md`, so an Agent's own
+  markdown was never captured and a restore destroyed it. It now excludes exactly the seven files
+  its ConfigMap regenerates, as Hermes already did.
+- Changed: a restore Job is no longer retried (`backoff_limit` 0; capture keeps 1). A retry
+  re-ran the safety-net capture against the already-wiped volume, overwriting the good backup.
+- Changed: reconcile no longer fails a row whose Job does not exist yet. Rows are committed
+  before their Job is created and reads take no lock, so a read in that window could fail a
+  healthy capture and — on restore — delete the archive being restored from. Missing Jobs are
+  now acted on only after a 60s grace window, mirroring the event reconciler; the restore's
+  `job_name` is written in the same update as `RESTORING`.
+- Changed: a failed restore is classified by which phase failed, and releases nothing when that
+  cannot be established. Previously a restore killed by its time limit deleted a complete backup.
+- Observed: on local k3d, a Job killed by `activeDeadlineSeconds` has its pod deleted outright,
+  taking the exit code and logs with it; the Job's `DeadlineExceeded` condition survives and now
+  drives a failure reason naming the timeout setting instead of pointing at logs that no longer
+  exist.
+- Observed: the Kubernetes Python client's `read_namespaced_pod_log` returns the Python repr
+  rather than the text when a log body is valid JSON, and a bytes repr for multi-line bodies.
+  Every successful capture prints exactly one JSON line, so `archive_bytes` and `file_count`
+  would have been `null` in production. `read_job_logs` now reads the raw response body. Mock
+  tests could not catch this; the new k3d cases do.
+- Coverage: the acceptance criterion tying each exclusion to the line that regenerates it was
+  never implemented and is now a test, evidenced from the start scripts, `init-openclaw.js`,
+  `aai_cli_artifacts.py`, and the OpenClaw ConfigMap builder itself.
+
 ### 2026-09-10 — AF-292 — Ticket 1
 
 - Delivered: `POST/GET …/agents/{id}/restore-points`, `GET/DELETE …/restore-points/{id}`, and

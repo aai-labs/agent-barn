@@ -32,7 +32,7 @@ EXIT_RESTORE_FAILED = 3
 
 _READ_CHUNK_BYTES = 1024 * 1024
 
-_HERMES_EXCLUDED = (
+HERMES_EXCLUDED = (
     ".config/aai-cli",
     ".env",
     "SOUL.md",
@@ -47,14 +47,19 @@ _HERMES_EXCLUDED = (
     "workspace/HEARTBEAT.md",
 )
 
-_OPENCLAW_EXCLUDED = (
+OPENCLAW_EXCLUDED = (
     "local-plugins",
     "openclaw.json",
     "agentbarn-messages.sqlite3",
     "workspace/skills",
+    "workspace/AGENTS.md",
+    "workspace/BOOT.md",
+    "workspace/BOOTSTRAP.md",
+    "workspace/HEARTBEAT.md",
+    "workspace/IDENTITY.md",
+    "workspace/SOUL.md",
+    "workspace/TOOLS.md",
 )
-
-_OPENCLAW_AGENT_OWNED = ("workspace/USER.md",)
 
 
 class ArchiveValidationError(Exception):
@@ -69,19 +74,9 @@ def _matches_prefix(rel_path: str, prefixes: tuple[str, ...]) -> bool:
     return any(rel_path == prefix or rel_path.startswith(prefix + "/") for prefix in prefixes)
 
 
-def _is_regenerated_openclaw_markdown(rel_path: str) -> bool:
-    parent, _, name = rel_path.rpartition("/")
-    if parent != "workspace" or not name.endswith(".md"):
-        return False
-    return rel_path not in _OPENCLAW_AGENT_OWNED
-
-
 def is_excluded(rel_path: str, runtime: str) -> bool:
-    if runtime == RUNTIME_HERMES:
-        return _matches_prefix(rel_path, _HERMES_EXCLUDED)
-    if _matches_prefix(rel_path, _OPENCLAW_EXCLUDED):
-        return True
-    return _is_regenerated_openclaw_markdown(rel_path)
+    excluded = HERMES_EXCLUDED if runtime == RUNTIME_HERMES else OPENCLAW_EXCLUDED
+    return _matches_prefix(rel_path, excluded)
 
 
 def _walk_included_files(root: Path, runtime: str):

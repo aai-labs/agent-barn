@@ -1,11 +1,14 @@
 import gzip
 import io
+import re
 import tarfile
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 from hamcrest import assert_that, calling, empty, equal_to, greater_than, has_item, is_not, raises
 
+from api.domains.agents.builders.openclaw import build_config_map
 from api.domains.agents.restore_point_job import (
     ARCHIVE_NAME,
     ENV_ARCHIVE,
@@ -15,16 +18,45 @@ from api.domains.agents.restore_point_job import (
     ENV_TARGET,
     EXIT_BACKUP_FAILED,
     EXIT_RESTORE_FAILED,
+    HERMES_EXCLUDED,
     MANIFEST_NAME,
     MODE_RESTORE,
+    OPENCLAW_EXCLUDED,
     ArchiveValidationError,
     capture,
+    is_excluded,
     main,
     restore,
 )
 
 _HERMES = "hermes"
 _OPENCLAW = "openclaw"
+
+_AGENTS_DIR = Path(__file__).resolve().parents[2] / "domains" / "agents"
+_HERMES_START = _AGENTS_DIR / "scripts" / "hermes" / "start.sh"
+_OPENCLAW_START = _AGENTS_DIR / "scripts" / "openclaw" / "start.sh"
+_OPENCLAW_INIT = _AGENTS_DIR / "scripts" / "openclaw" / "init-openclaw.js"
+_AAI_CLI_ARTIFACTS = _AGENTS_DIR / "aai_cli_artifacts.py"
+
+_HERMES_WORKSPACE_COPY_LOOP = re.compile(r"^for f in (?P<files>[^;]+); do$", re.MULTILINE)
+
+_EXCLUSION_EVIDENCE = {
+    _HERMES: {
+        ".config/aai-cli": (_AAI_CLI_ARTIFACTS, "/.config/aai-cli"),
+        ".env": (_HERMES_START, "rm -f /opt/data/.env"),
+        "SOUL.md": (_HERMES_START, "cp /app/config/SOUL.md /opt/data/SOUL.md"),
+        "config.yaml": (_HERMES_START, "/opt/data/config.yaml"),
+        "plugins": (_HERMES_START, "/opt/data/plugins/"),
+        "agentbarn-messages.sqlite3": (_HERMES_START, "/opt/data/agentbarn-messages.sqlite3"),
+        "workspace/skills": (_HERMES_START, "rm -rf /workspace/skills"),
+    },
+    _OPENCLAW: {
+        "local-plugins": (_OPENCLAW_START, "/home/node/.openclaw/local-plugins/"),
+        "agentbarn-messages.sqlite3": (_OPENCLAW_START, "/home/node/.openclaw/agentbarn-messages.sqlite3"),
+        "openclaw.json": (_OPENCLAW_INIT, "'openclaw.json'"),
+        "workspace/skills": (_OPENCLAW_INIT, "path.join(WORKSPACE_DIR, 'skills')"),
+    },
+}
 
 
 def _write(root: Path, rel: str, content: str = "x") -> None:
@@ -111,7 +143,7 @@ def test_hermes_capture_retains_agent_owned_memories_and_work(tmp_path):
     assert_that(names, has_item("workspace/notes.md"))
 
 
-def test_openclaw_capture_retains_workspace_user_md_but_drops_other_markdown(tmp_path):
+def test_openclaw_capture_retains_workspace_user_md_but_drops_regenerated_markdown(tmp_path):
     source, dest = tmp_path / "src", tmp_path / "dst"
     source.mkdir()
     dest.mkdir()
@@ -122,6 +154,84 @@ def test_openclaw_capture_retains_workspace_user_md_but_drops_other_markdown(tmp
     names = _members(dest)
     assert_that(names, has_item("workspace/USER.md"))
     assert_that(names, is_not(has_item("workspace/AGENTS.md")))
+
+
+def test_openclaw_capture_retains_agent_authored_workspace_markdown(tmp_path):
+    source, dest = tmp_path / "src", tmp_path / "dst"
+    source.mkdir()
+    dest.mkdir()
+    _openclaw_volume(source)
+
+    capture(source, dest, _OPENCLAW)
+
+    assert_that(_members(dest), has_item("workspace/notes.md"))
+
+
+def _workspace_markdown(excluded: tuple[str, ...]) -> set[str]:
+    return {path for path in excluded if path.startswith("workspace/") and path.endswith(".md")}
+
+
+def _openclaw_config_map_markdown() -> set[str]:
+    config_map = build_config_map(
+        agent_id=uuid4(),
+        org_id=uuid4(),
+        namespace="agent-farm",
+        soul_md="x",
+        identity_md="x",
+        user_md="x",
+        tools_md="x",
+        agents_md="x",
+        boot_md="x",
+        bootstrap_md="x",
+        heartbeat_md="x",
+        openclaw_config_overlay={"agents": {}},
+        aai_cli_config_toml="x",
+        aai_cli_setup_sh="x",
+        gog_setup_sh="x",
+        skills_json="[]",
+    )
+    return {key for key in config_map.data if key.endswith(".md")}
+
+
+@pytest.mark.parametrize(
+    ("runtime", "excluded"),
+    [(_HERMES, HERMES_EXCLUDED), (_OPENCLAW, OPENCLAW_EXCLUDED)],
+)
+def test_every_non_markdown_exclusion_has_evidence_and_no_evidence_is_stale(runtime, excluded):
+    non_markdown = set(excluded) - _workspace_markdown(excluded)
+
+    assert_that(set(_EXCLUSION_EVIDENCE[runtime]), equal_to(non_markdown))
+
+
+@pytest.mark.parametrize(
+    ("runtime", "path", "source", "evidence"),
+    [
+        (runtime, path, source, evidence)
+        for runtime, rows in _EXCLUSION_EVIDENCE.items()
+        for path, (source, evidence) in rows.items()
+    ],
+)
+def test_each_exclusion_is_still_written_by_its_runtime(runtime, path, source, evidence):
+    assert_that(evidence in source.read_text(encoding="utf-8"), equal_to(True))
+
+
+def test_hermes_markdown_exclusions_match_the_start_script_copy_loop():
+    match = _HERMES_WORKSPACE_COPY_LOOP.search(_HERMES_START.read_text(encoding="utf-8"))
+    assert match is not None
+    copied = {f"workspace/{name}" for name in match.group("files").split()}
+
+    assert_that(_workspace_markdown(HERMES_EXCLUDED), equal_to(copied))
+
+
+def test_openclaw_markdown_exclusions_match_what_the_config_map_regenerates():
+    regenerated = {f"workspace/{name}" for name in _openclaw_config_map_markdown() - {"USER.md"}}
+
+    assert_that(_workspace_markdown(OPENCLAW_EXCLUDED), equal_to(regenerated))
+
+
+@pytest.mark.parametrize(("runtime", "path"), [(_HERMES, "memories/USER.md"), (_OPENCLAW, "workspace/USER.md")])
+def test_neither_runtime_excludes_its_agent_owned_user_profile(runtime, path):
+    assert_that(is_excluded(path, runtime), equal_to(False))
 
 
 def test_openclaw_capture_excludes_regenerated_state_and_the_message_spool(tmp_path):

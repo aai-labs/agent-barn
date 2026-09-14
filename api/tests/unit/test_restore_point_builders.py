@@ -120,13 +120,21 @@ def test_capture_job_runs_the_api_image_entrypoint_as_root():
     )
 
 
-def test_capture_job_does_not_restart_or_retry_indefinitely():
+def test_capture_job_retries_once_because_capturing_is_idempotent():
     job = _capture_job()
 
     assert_that(job.spec.template.spec.restart_policy, equal_to("Never"))
     assert_that(job.spec.backoff_limit, equal_to(1))
     assert_that(job.spec.active_deadline_seconds, equal_to(900))
     assert_that(job.spec.ttl_seconds_after_finished, is_not(none()))
+
+
+def test_restore_job_is_never_retried_so_a_second_attempt_cannot_overwrite_the_backup():
+    job = _restore_job()
+
+    assert_that(job.spec.template.spec.restart_policy, equal_to("Never"))
+    assert_that(job.spec.backoff_limit, equal_to(0))
+    assert_that(job.spec.active_deadline_seconds, equal_to(1800))
 
 
 def test_capture_job_mounts_the_agent_volume_read_only():
