@@ -1,6 +1,11 @@
 "use client";
 
-import { formatCallSpend, formatDuration, formatTokens } from "../format";
+import {
+  formatCallSpend,
+  formatDuration,
+  formatModelLabel,
+  formatTokens,
+} from "../format";
 import type { CostRecord, PlatformCostRecord } from "../schemas";
 
 interface CostRowProps {
@@ -30,7 +35,7 @@ export function CostRow({ record, grid, showOrganization }: CostRowProps) {
       </span>
 
       <span className="truncate" style={{ color: "var(--ink)" }} title={record.model}>
-        {record.model.split("/").at(-1)}
+        {formatModelLabel(record.model)}
       </span>
 
       <span

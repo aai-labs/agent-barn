@@ -8,8 +8,10 @@ import { useRequireOrgManager } from "@/features/organizations/hooks/use-require
 import { useCostFilterOptions } from "../hooks/use-cost-filter-options";
 import { useCostSummary } from "../hooks/use-cost-summary";
 import { useCosts } from "../hooks/use-costs";
+import { useAgentSpend } from "../hooks/use-agent-spend";
 import { useCostUrlFilters } from "../hooks/use-cost-url-filters";
 import type { CostFilters } from "../utils";
+import { AgentsBySpend } from "./agents-by-spend";
 import { CostChartsPanel } from "./cost-charts-panel";
 import { CostFilterBar } from "./cost-filter-bar";
 import { CostList } from "./cost-list";
@@ -52,6 +54,14 @@ export function CostsPage() {
     filters.fromDate ||
     filters.toDate
   );
+
+  // The table lists every agent, so it deliberately drops the agent dimension:
+  // filtering it by the selected agent would collapse it to the row just clicked.
+  const agentTableFilters: CostFilters = useMemo(
+    () => ({ ...filters, agentId: undefined }),
+    [filters],
+  );
+  const { agents, isLoadingAgents } = useAgentSpend(agentTableFilters);
 
   const { summary, isLoading: isLoadingSummary, refetch: refetchSummary } =
     useCostSummary(filters);
@@ -126,6 +136,13 @@ export function CostsPage() {
       />
 
       <CostChartsPanel summary={summary} isLoading={isLoadingSummary} />
+
+      <AgentsBySpend
+        agents={agents}
+        isLoading={isLoadingAgents}
+        selectedAgentId={filters.agentId}
+        onSelectAgent={(agentId) => setUrlFilters({ agentId })}
+      />
 
       <p className="text-[13px] mb-3" style={{ color: "var(--ink-4)" }}>
         {total.toLocaleString()} {total === 1 ? "call" : "calls"}
