@@ -1920,7 +1920,7 @@ class AgentService:
             hermes_cfg = build_hermes_gateway_config(
                 effective_model,
                 llm_proxy_url,
-                approval_mode=str(agent.approval_mode),
+                approval_mode=CommandApprovalMode(agent.approval_mode).value,
             )
             secret = build_secret_hermes_runtime(
                 agent.id,
@@ -1931,7 +1931,7 @@ class AgentService:
                 litellm_api_key=litellm_key,
                 litellm_base_url=llm_proxy_url,
                 verbose_mode=agent.verbose_mode,
-                approval_mode=str(agent.approval_mode),
+                approval_mode=CommandApprovalMode(agent.approval_mode).value,
             )
             deployment = build_hermes_deployment(
                 agent.id,

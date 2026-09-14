@@ -43,6 +43,19 @@ def test_gateway_config_maps_approval_mode_onto_approvals_policy() -> None:
     assert approvals("off") == {"mode": "off", **policy}
 
 
+def test_gateway_config_routes_smart_approval_llm_through_the_litellm_proxy() -> None:
+    """Smart approval escalates to the user whenever its auxiliary LLM call fails,
+    so it must use the proxy with the agent's key rather than the openrouter lane.
+    """
+    config = build_hermes_gateway_config("litellm/gpt-5", "http://localhost:8090")
+
+    assert config["auxiliary"]["approval"] == {
+        "provider": "custom",
+        "base_url": "http://localhost:8090",
+        "model": "gpt-5",
+    }
+
+
 def test_gateway_config_pins_approval_policy_rather_than_inheriting_upstream_defaults() -> None:
     """Every key here matches the pinned image's own default, so this changes no
     behaviour today -- it stops a Hermes upgrade from moving the policy silently.

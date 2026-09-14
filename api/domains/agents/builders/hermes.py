@@ -93,6 +93,18 @@ def _hermes_config_core(
             "cron_mode": _HERMES_HEADLESS_APPROVAL_MODE,
             "single_query_mode": _HERMES_HEADLESS_APPROVAL_MODE,
         },
+        # Smart approvals ask an auxiliary LLM first and escalate to the user on
+        # any failure. Left on "auto" it resolves via provider=openrouter, finds no
+        # OPENROUTER_API_KEY, and falls back to a keyless client the LiteLLM proxy
+        # rejects -- so every flagged command prompted. "custom" reuses
+        # OPENAI_API_KEY from the runtime secret against the same proxy.
+        "auxiliary": {
+            "approval": {
+                "provider": "custom",
+                "base_url": litellm_base_url,
+                "model": model_name,
+            },
+        },
     }
 
 
