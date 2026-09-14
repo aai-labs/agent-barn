@@ -72,17 +72,22 @@ class _RestoreOutcome(str, enum.Enum):
     UNKNOWN = "UNKNOWN"
 
 
+def _manifest_from_line(line: str) -> dict | None:
+    line = line.strip()
+    if not line.startswith("{"):
+        return None
+    try:
+        parsed = json.loads(line)
+    except ValueError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
 def _parse_manifest(logs: str) -> dict:
     for line in reversed(logs.splitlines()):
-        line = line.strip()
-        if not line.startswith("{"):
-            continue
-        try:
-            parsed = json.loads(line)
-        except ValueError:
-            continue
-        if isinstance(parsed, dict):
-            return parsed
+        manifest = _manifest_from_line(line)
+        if manifest is not None:
+            return manifest
     return {}
 
 
@@ -276,7 +281,7 @@ class RestorePointService:
     def _job_failure_reason(self, job_name: str, namespace: str) -> str:
         logs = self.k8s.read_job_logs(job_name, namespace)
         if logs:
-            lines = [line.strip() for line in logs.splitlines() if line.strip()]
+            lines = [line.strip() for line in logs.splitlines() if line.strip() and _manifest_from_line(line) is None]
             if lines:
                 return lines[-1]
         return "The operation failed. Check the cluster logs for details."

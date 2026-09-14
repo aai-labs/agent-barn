@@ -673,6 +673,22 @@ def test_an_unexpected_exit_before_the_safety_net_leaves_the_target_usable():
             assert_that(k8s.delete_pvc.called, equal_to(True))
 
 
+def test_the_failure_reason_is_the_error_even_when_stderr_is_logged_before_the_manifest():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        _restore_failed(
+            context,
+            exit_code=3,
+            logs='restore failed: corrupt archive\n{"bytes": 800, "file_count": 5}\n',
+        )
+
+        with when("the pod log recorded the stderr line ahead of the stdout manifest"):
+            rows = _rows_by_origin(context)
+
+        with then("the reported reason is the error, not the manifest"):
+            target = rows[RestorePointOrigin.MANUAL.value]
+            assert_that(target["failure_reason"], equal_to("restore failed: corrupt archive"))
+
+
 def test_delete_restore_point_removes_the_row_its_volume_and_its_job():
     with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
         seeded = _seed(context, status_value=RestorePointStatus.READY)

@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from typing import cast
 
 import pytest
-from hamcrest import assert_that, equal_to, has_item, has_key, none, not_none
+from hamcrest import assert_that, contains_inanyorder, equal_to, has_item, has_key, none, not_none
 from kubernetes.client import (
     V1ConfigMap,
     V1Container,
@@ -297,7 +297,7 @@ def test_a_log_body_with_several_lines_is_returned_as_text_not_a_bytes_repr(k8s,
 
     logs = k8s.read_job_logs(name, NS)
 
-    assert_that(logs.splitlines(), equal_to(['{"bytes": 1, "file_count": 2}', "restore failed: boom"]))
+    assert_that(logs.splitlines(), contains_inanyorder('{"bytes": 1, "file_count": 2}', "restore failed: boom"))
 
 
 def test_create_twice_is_safe(k8s, run_id):
