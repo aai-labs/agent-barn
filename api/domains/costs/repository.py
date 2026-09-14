@@ -520,6 +520,32 @@ class CostRepository:
             rows = connection.execute(query).all()
         return [(row[0], row[1], Decimal(str(row[2])), int(row[3]), int(row[4])) for row in rows]
 
+    def spend_by_agent(
+        self,
+        window: StatsWindow,
+        filters: CostFilter,
+    ) -> list[tuple[UUID | None, str | None, Decimal, int, int, int]]:
+        """Agents ranked by spend, biggest first.
+        Unlike `spend_by_agent_series` this is not capped.
+        """
+        # sa.select: sqlmodel's typed overloads stop short of five columns.
+        query = (
+            sa.select(
+                col(CostRecord.agent_id),
+                sa.func.max(col(CostRecord.agent_name)),
+                sa.func.coalesce(sa.func.sum(col(CostRecord.spend)), 0).label("spend"),
+                sa.func.count(),
+                sa.func.coalesce(sa.func.sum(col(CostRecord.prompt_tokens)), 0),
+                sa.func.coalesce(sa.func.sum(col(CostRecord.completion_tokens)), 0),
+            )
+            .where(*self._predicates(window, filters))
+            .group_by(col(CostRecord.agent_id))
+            .order_by(sa.desc("spend"))
+        )
+        with self.delegate.engine.connect() as connection:
+            rows = connection.execute(query).all()
+        return [(row[0], row[1], Decimal(str(row[2])), int(row[3]), int(row[4]), int(row[5])) for row in rows]
+
     def unattributed_totals(self, window: StatsWindow, filters: CostFilter) -> tuple[Decimal, int]:
         """Spend that resolved to no agent — the honest gap in attribution.
 

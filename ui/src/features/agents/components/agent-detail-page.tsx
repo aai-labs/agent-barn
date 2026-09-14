@@ -316,7 +316,7 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
             {resolvedTab === "tool-calls" && <ToolCallsTab agent={agent} />}
             {resolvedTab === "logs" && <LogsTab agent={agent} />}
             {resolvedTab === "work" && <WorkTab agent={agent} />}
-            {resolvedTab === "about" && <AboutTab />}
+            {resolvedTab === "about" && <AboutTab agent={agent} />}
           </>
         )}
       </div>
