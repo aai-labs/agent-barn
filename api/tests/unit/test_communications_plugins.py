@@ -420,20 +420,34 @@ def test_a_command_too_long_for_a_section_block_is_bounded() -> None:
     assert "more characters not shown" in blocks[0]["text"]["text"]
 
 
-def test_an_ordinary_reply_is_sent_without_blocks() -> None:
+def _slack_sent_kwargs(text: str) -> dict:
     plugin = SlackPlatformPlugin(ValidationConfig())
     credentials = plugin.credentials_model.model_validate({"bot_token": "bot-value", "app_token": "app-value"})
     envelope = OutboundCommunicationEnvelope(
         source_delivery_id=uuid4(),
         location=ConversationLocation(id="channel-1", type="CHANNEL"),
-        text="reply",
+        text=text,
     )
 
     with patch("api.domains.communications.plugins.slack.SlackClient") as client_type:
         client_type.return_value.send_message.return_value = "sent-1"
         plugin.send(plugin.settings_model.model_validate({}), credentials, envelope, idempotency_key="reply-1")
 
-    assert "blocks" not in client_type.return_value.send_message.call_args.kwargs
+    return client_type.return_value.send_message.call_args.kwargs
+
+
+def test_an_ordinary_reply_renders_as_a_markdown_block() -> None:
+    text = "## Summary\n\n**Done** — see [the run](https://example.test/run)"
+
+    assert _slack_sent_kwargs(text)["blocks"] == [{"type": "markdown", "text": text}]
+
+
+def test_a_reply_with_slack_mention_markup_stays_mrkdwn_text() -> None:
+    assert "blocks" not in _slack_sent_kwargs("Done, <@U123> please review")
+
+
+def test_a_reply_over_the_markdown_block_cap_stays_mrkdwn_text() -> None:
+    assert "blocks" not in _slack_sent_kwargs("x" * 12_001)
 
 
 def test_a_click_never_receives_slack_reactions() -> None:
@@ -655,6 +669,7 @@ def test_slack_send_passes_a_stable_provider_idempotency_key() -> None:
         "reply",
         thread_id=None,
         idempotency_key=provider_idempotency_key("reply-1"),
+        blocks=[{"type": "markdown", "text": "reply"}],
     )
 
 

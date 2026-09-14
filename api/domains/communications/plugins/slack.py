@@ -106,6 +106,8 @@ _APPROVAL_METADATA_KEY = "approval_id"
 _SYNTHESIZED_MESSAGE_PREFIX = "action:"
 _APPROVAL_BLOCK_ID = "agentbarn_approval"
 _SECTION_TEXT_LIMIT = 3000
+_MARKDOWN_BLOCK_LIMIT = 12_000
+_SLACK_MARKUP = re.compile(r"<[@#!]")
 _APPROVAL_CHOICE_LABELS = {
     "once": "Allow once",
     "session": "Allow for session",
@@ -150,6 +152,19 @@ def _approval_blocks(approval: ApprovalRequest) -> list[dict]:
             ],
         },
     ]
+
+
+def _message_blocks(envelope: OutboundCommunicationEnvelope) -> list[dict] | None:
+    if envelope.approval:
+        return _approval_blocks(envelope.approval)
+    # The markdown block renders the standard Markdown Agents write, which mrkdwn
+    # text shows as raw `**` and `[label](url)`. Slack documents no mention markup
+    # inside it, so text carrying <@user>, <#channel>, or <!here> stays mrkdwn.
+    # ponytail: replies over the 12,000-character markdown block cap fall back to
+    # raw mrkdwn; split them across messages if long replies become common.
+    if len(envelope.text) <= _MARKDOWN_BLOCK_LIMIT and not _SLACK_MARKUP.search(envelope.text):
+        return [{"type": "markdown", "text": envelope.text}]
+    return None
 
 
 def _resolve_unique_name(entries: list[dict], recipient: str, *, fields: tuple[str, ...]) -> str:
@@ -331,13 +346,13 @@ class SlackPlatformPlugin(PlatformPlugin):
         idempotency_key: str,
     ) -> str:
         assert isinstance(credentials, SlackCredentials)
-        interactive = {"blocks": _approval_blocks(envelope.approval)} if envelope.approval else {}
+        blocks = _message_blocks(envelope)
         return SlackClient(credentials.bot_token).send_message(
             envelope.location.id,
             envelope.text,
             thread_id=envelope.location.thread_id,
             idempotency_key=provider_idempotency_key(idempotency_key),
-            **interactive,
+            **({"blocks": blocks} if blocks else {}),
         )
 
     def processing_feedback(
