@@ -43,17 +43,15 @@ def test_gateway_config_maps_approval_mode_onto_approvals_policy() -> None:
     assert approvals("off") == {"mode": "off", **policy}
 
 
-def test_gateway_config_routes_smart_approval_llm_through_the_litellm_proxy() -> None:
-    """Smart approval escalates to the user whenever its auxiliary LLM call fails,
-    so it must use the proxy with the agent's key rather than the openrouter lane.
+def test_gateway_config_routes_auxiliary_llm_tasks_through_the_litellm_proxy() -> None:
+    """Auxiliary tasks left on the openrouter lane reach the proxy without the
+    agent's key; smart approval then escalates every flagged command to the user.
     """
-    config = build_hermes_gateway_config("litellm/gpt-5", "http://localhost:8090")
+    auxiliary = build_hermes_gateway_config("litellm/gpt-5", "http://localhost:8090")["auxiliary"]
 
-    assert config["auxiliary"]["approval"] == {
-        "provider": "custom",
-        "base_url": "http://localhost:8090",
-        "model": "gpt-5",
-    }
+    expected = {"provider": "custom", "base_url": "http://localhost:8090", "model": "gpt-5"}
+    assert {"approval", "title_generation", "vision"} <= auxiliary.keys()
+    assert all(task == expected for task in auxiliary.values())
 
 
 def test_gateway_config_pins_approval_policy_rather_than_inheriting_upstream_defaults() -> None:

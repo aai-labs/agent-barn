@@ -36,6 +36,25 @@ COMMUNICATIONS_RUNTIME_ADAPTER_PY: str = (_COMMON_SCRIPTS / "communications-runt
 _HERMES_APPROVAL_MODE = {"manual": "manual", "auto": "smart", "off": "off"}
 _HERMES_APPROVAL_TIMEOUT_SECONDS = 300
 _HERMES_HEADLESS_APPROVAL_MODE = "deny"
+# Every auxiliary.<task> block v2026.8.19 reads, minus the moa_* slots (MoA only).
+_HERMES_AUXILIARY_TASKS = (
+    "vision",
+    "web_extract",
+    "compression",
+    "skills_hub",
+    "approval",
+    "mcp",
+    "title_generation",
+    "memory_query_rewrite",
+    "tts_audio_tags",
+    "triage_specifier",
+    "kanban_decomposer",
+    "profile_describer",
+    "goal_judge",
+    "curator",
+    "monitor",
+    "background_review",
+)
 
 _MESSAGE_SCRIPTS = _COMMON_SCRIPTS / "messaging"
 HERMES_BOOT_RUN_PY: str = (_SCRIPTS / "boot-run.py").read_text()
@@ -93,17 +112,15 @@ def _hermes_config_core(
             "cron_mode": _HERMES_HEADLESS_APPROVAL_MODE,
             "single_query_mode": _HERMES_HEADLESS_APPROVAL_MODE,
         },
-        # Smart approvals ask an auxiliary LLM first and escalate to the user on
-        # any failure. Left on "auto" it resolves via provider=openrouter, finds no
-        # OPENROUTER_API_KEY, and falls back to a keyless client the LiteLLM proxy
-        # rejects -- so every flagged command prompted. "custom" reuses
-        # OPENAI_API_KEY from the runtime secret against the same proxy.
+        # Left on "auto", auxiliary tasks resolve via provider=openrouter, find no
+        # OPENROUTER_API_KEY, and fall back to a keyless client the LiteLLM proxy
+        # rejects: smart approval escalated every flagged command, and title
+        # generation and vision failed. "custom" reuses OPENAI_API_KEY from the
+        # runtime secret against the same proxy. The main model stays on
+        # "openrouter" because "custom" there drops that key.
         "auxiliary": {
-            "approval": {
-                "provider": "custom",
-                "base_url": litellm_base_url,
-                "model": model_name,
-            },
+            task: {"provider": "custom", "base_url": litellm_base_url, "model": model_name}
+            for task in _HERMES_AUXILIARY_TASKS
         },
     }
 
@@ -198,7 +215,10 @@ def build_secret_hermes_runtime(
             "OPENAI_BASE_URL": litellm_base_url,
             "OPENROUTER_BASE_URL": litellm_base_url,
             "API_SERVER_ENABLED": "true",
-            "API_SERVER_HOST": "0.0.0.0",
+            # Only in-pod callers (adapter, boot-run, healthz) reach the API server,
+            # and the Service does not expose it; loopback keeps the unsandboxed
+            # terminal off the pod network.
+            "API_SERVER_HOST": "127.0.0.1",
             "API_SERVER_PORT": "8642",
             "API_SERVER_KEY": runtime_api_key,
             "API_SERVER_MODEL_NAME": agent_name,
