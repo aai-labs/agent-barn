@@ -16,7 +16,7 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
 ### 2026-09-14 — Remove the obsolete Slack announce-steps setting — PR pending
 
 - Removed: Slack Connections no longer expose the unused **Announce steps** setting. The schema-driven Connection form drops the checkbox with the backend schema; the Agent-level **Verbose mode** setting remains the single control for runtime progress messages.
-- Changed: Slack's Connection schema advances to version 2. Existing `verbose_mode` values are removed from persisted Slack Connection settings. During rolling deployment, backend validation discards that one legacy key, while the UI filters it from stale platform schemas and saved settings so it is neither rendered nor resubmitted. Other unknown settings remain rejected.
+- Changed: Slack's Connection schema advances to version 2. Existing `verbose_mode` values are removed from persisted Slack Connection settings, and validation temporarily discards that one legacy key so Connections written by an older replica remain usable during a rolling deployment. Other unknown settings remain rejected.
 
 ### 2026-09-11 — Manual approval mode always asks — PR pending
 

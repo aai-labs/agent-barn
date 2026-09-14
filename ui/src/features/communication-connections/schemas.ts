@@ -2,29 +2,6 @@ import { z } from "zod";
 
 const JsonSchemaSchema = z.record(z.string(), z.unknown());
 
-const RETIRED_SLACK_SETTING_KEYS = new Set(["verboseMode", "verbose_mode"]);
-
-function withoutRetiredSlackSettings(settings: Record<string, unknown>): Record<string, unknown> {
-  return Object.fromEntries(
-    Object.entries(settings).filter(([key]) => !RETIRED_SLACK_SETTING_KEYS.has(key)),
-  );
-}
-
-function withoutRetiredSlackSchemaProperties(
-  platform: z.infer<typeof CommunicationPlatformBaseSchema>,
-): z.infer<typeof CommunicationPlatformBaseSchema> {
-  if (platform.key !== "slack") return platform;
-  const properties = platform.settingsSchema.properties;
-  if (!properties || typeof properties !== "object" || Array.isArray(properties)) return platform;
-  return {
-    ...platform,
-    settingsSchema: {
-      ...platform.settingsSchema,
-      properties: withoutRetiredSlackSettings(properties as Record<string, unknown>),
-    },
-  };
-}
-
 const CommunicationErrorDetailsSchema = z.object({
   category: z.enum([
     "authentication",
@@ -56,7 +33,7 @@ export const CommunicationDirectoryPreviewSchema = z.object({
   users: z.array(CommunicationDirectoryEntrySchema),
 });
 
-const CommunicationPlatformBaseSchema = z.object({
+export const CommunicationPlatformSchema = z.object({
   key: z.string(),
   displayName: z.string(),
   schemaVersion: z.number().int().positive(),
@@ -67,11 +44,7 @@ const CommunicationPlatformBaseSchema = z.object({
   postSetupHint: z.string().nullable().optional(),
 });
 
-export const CommunicationPlatformSchema = CommunicationPlatformBaseSchema.transform(
-  withoutRetiredSlackSchemaProperties,
-);
-
-const CommunicationConnectionBaseSchema = z.object({
+export const CommunicationConnectionSchema = z.object({
   id: z.string().uuid(),
   agentId: z.string().uuid(),
   platformKey: z.string(),
@@ -91,12 +64,6 @@ const CommunicationConnectionBaseSchema = z.object({
   createdAt: z.string(),
   updatedAt: z.string(),
 });
-
-export const CommunicationConnectionSchema = CommunicationConnectionBaseSchema.transform((connection) =>
-  connection.platformKey === "slack"
-    ? { ...connection, settings: withoutRetiredSlackSettings(connection.settings) }
-    : connection,
-);
 
 export const CommunicationJournalEntrySchema = z.object({
   id: z.string().uuid(),
