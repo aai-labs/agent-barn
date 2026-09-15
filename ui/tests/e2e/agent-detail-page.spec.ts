@@ -25,6 +25,41 @@ import { DataSupport } from "../pages/data-support/data-support.po";
 import { AgentDetailPage } from "../pages/agent-detail-page.po";
 import { CommunicationConnectionDetailPage } from "../pages/communication-connection-detail-page.po";
 
+type RouteHandler = Parameters<Page["route"]>[1];
+
+async function routeApprovalPrompt(page: Page, answer: RouteHandler) {
+  await page.route("**/api/v1/organizations/*/agents/*/web-chat/**", async (route, request) => {
+    const path = new URL(request.url()).pathname;
+    if (path.endsWith("/messages") && request.method() === "POST") {
+      await answer(route, request);
+      return;
+    }
+    if (path.endsWith("/messages")) {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify([
+          {
+            id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+            direction: "OUTBOUND",
+            content: "```\nrm -rf build\n```\nReply with one of: once, deny",
+            occurred_at: "2026-09-01T08:00:00Z",
+            delivery_status: "SUCCEEDED",
+            cancel_requested_at: null,
+            approval: { approval_id: "run_1:1726051234.5", command: "rm -rf build", choices: ["once", "deny"] },
+          },
+        ]),
+      });
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: path.endsWith("/stream") ? "text/event-stream" : "application/json",
+      body: path.endsWith("/stream") ? ": keep-alive\n\n" : "[]",
+    });
+  });
+}
+
 test.describe("Agent Detail Page", () => {
   test.describe.configure({ mode: "serial" });
   let agentDetailPage: AgentDetailPage;
@@ -212,6 +247,46 @@ test.describe("Agent Detail Page", () => {
     await expect.poll(() => sentBodies).toEqual([
       { text: "once", thread_id: "main", approval_id: "run_1:1726051234.5" },
     ]);
+  });
+
+  test("disables approval buttons once one is clicked", async ({ page }) => {
+    let answers = 0;
+    await routeApprovalPrompt(page, async (route) => {
+      answers += 1;
+      await route.fulfill({
+        status: 202,
+        contentType: "application/json",
+        body: JSON.stringify({
+          id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+          direction: "INBOUND",
+          content: "once",
+          occurred_at: "2026-09-01T08:01:00Z",
+          delivery_status: "PENDING",
+          cancel_requested_at: null,
+          approval: null,
+        }),
+      });
+    });
+
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await page.getByRole("button", { name: "Allow once" }).click();
+
+    await expect(page.getByRole("button", { name: "Allow once" })).toBeDisabled();
+    await expect(page.getByRole("button", { name: "Deny" })).toBeDisabled();
+    await expect.poll(() => answers).toBe(1);
+  });
+
+  test("re-enables approval buttons when the answer fails to send", async ({ page }) => {
+    await routeApprovalPrompt(page, async (route) => {
+      await route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ detail: "boom" }) });
+    });
+
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    const failed = page.waitForResponse((response) => response.request().method() === "POST" && response.status() === 500);
+    await page.getByRole("button", { name: "Allow once" }).click();
+    await failed;
+
+    await expect(page.getByRole("button", { name: "Allow once" })).toBeEnabled();
   });
 
   test("hides approval buttons from someone who cannot update the Agent", async ({ page }) => {

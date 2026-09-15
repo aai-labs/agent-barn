@@ -7,7 +7,7 @@ Related context: [`../communications/CHANGELOG.md`](../communications/CHANGELOG.
 ## Current state
 
 - Delivered: Slack renders clickable command-approval buttons and ingests clicks (AF-299, PR #198). The platform-neutral pieces every approval-capable plugin shares — the `approval_id` metadata key, the synthesized `action:` message-id prefix, choice labels, and the button-value codec — live in `api/domains/communications/plugins/approvals.py`. The runtime adapter keeps its own copy of the metadata key because it runs inside the Agent pod and cannot import the API; a unit test pins the two together.
-- Delivered: Web Chat renders approval buttons — one per offered choice — and sends the choice with its `approval_id`. Buttons are hidden from users without `agent.update` and disabled while the Agent is not working.
+- Delivered: Web Chat renders approval buttons — one per offered choice — and sends the choice with its `approval_id`. Buttons are hidden from users without `agent.update`, disabled while the Agent is not working, and disabled once the approval is answered in that browser session (re-enabled if the answer fails to send).
 - In transition: nothing.
 - Next: Discord — bound the approval message under the 2000-character content limit (a live defect), then buttons and clicks.
 - Blockers: Teams implementation waits on a live-tenant spike to confirm the `Action.Execute` invoke payload in personal chat, group chat and channel before any card code is written.
@@ -15,6 +15,13 @@ Related context: [`../communications/CHANGELOG.md`](../communications/CHANGELOG.
 Every slice must hold the shared contract: one button per offered choice; the typed reply stays usable; a click arrives as an ordinary inbound message whose conversation and thread match the pending approval; the click re-passes every policy gate a typed message passes; a synthesized `action:` id is never sent to a provider as a reply reference; and ordinary sends are unchanged. None of the planned slices changes the runtime adapter, so each ships with an API deploy alone.
 
 ## Changes
+
+### 2026-09-15 — AF-325 — Web Chat buttons disable once answered
+
+- Observed: in a live test the buttons stayed clickable after answering, so each extra click posted another choice and got "No command is waiting for approval."
+- Changed: `WebChatApprovalRenderer` tracks answered approval ids. A click disables every button for that approval before sending; a failed send re-enables them. The state is client-side only, so a page reload re-enables old prompts, and the runtime adapter still refuses those clicks.
+- Verified: Playwright covers one POST per clicked approval with all its buttons disabled, and re-enabling after a failed send; removing the re-enable makes that test fail. The full agent-detail spec passes.
+- Follow-up: Discord.
 
 ### 2026-09-15 — AF-325 — Web Chat UI
 
