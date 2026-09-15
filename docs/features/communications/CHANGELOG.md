@@ -18,6 +18,10 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
 - Removed: Slack Connections no longer expose the unused **Announce steps** setting. The schema-driven Connection form drops the checkbox with the backend schema; the Agent-level **Verbose mode** setting remains the single control for runtime progress messages.
 - Changed: Slack's Connection schema advances to version 2. Existing `verbose_mode` values are removed from persisted Slack Connection settings, and validation temporarily discards that one legacy key so Connections written by an older replica remain usable during a rolling deployment. Other unknown settings remain rejected.
 
+### 2026-09-14 — Markdown replies on Slack — PR pending
+
+- Changed: Slack replies are sent as a `markdown` block, so the standard Markdown Agents write (bold, links, headings, lists, code blocks, tables) renders instead of showing raw `**` and `[label](url)`. The plain `text` is still sent as the notification fallback. A reply carrying Slack mention markup (`<@…>`, `<#…>`, `<!…>`), which the markdown block does not document, or longer than the block's 12,000-character cap keeps the previous mrkdwn text path. Approval prompts keep their existing section and button blocks.
+
 ### 2026-09-11 — Manual approval mode always asks — PR pending
 
 - Fixed: A Hermes Agent in manual mode could stop prompting entirely. An `always` answer on a dangerous-pattern finding is stored as the pattern, approving the whole category, and the pinned runtime consults that allowlist before it branches on the approval mode. Once `always` began surviving restarts, a grant made while the Agent ran in auto mode silenced manual mode after the switch.

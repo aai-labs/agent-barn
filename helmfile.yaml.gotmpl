@@ -191,6 +191,10 @@ releases:
         value: "agentbarn-api-registry-pull-secret"
       - name: storageClass
         value: {{ env "STORAGE_CLASS" | default "" | quote }}
+      - name: restorePoints.size
+        value: {{ env "RESTORE_POINT_SIZE" | default "1Gi" | quote }}
+      - name: restorePoints.maxPerAgent
+        value: {{ env "RESTORE_POINT_MAX_PER_AGENT" | default "5" | quote }}
       - name: agentDefaultModel
         value: {{ env "AGENT_DEFAULT_MODEL" | default "" | quote }}
       - name: agentModelAllowlist
