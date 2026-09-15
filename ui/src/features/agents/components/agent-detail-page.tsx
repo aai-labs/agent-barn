@@ -23,6 +23,7 @@ import {
 import { AppErrorState } from "@/components/app-error-state";
 import { toastError } from "@/shared/toast";
 import { AgentAvatar } from "./agent-avatar";
+import { AgentErrorBanner, AgentHealthErrorBanner } from "./agent-error-banner";
 import { AgentMetaBadges } from "./agent-meta-badges";
 import { StatusLine } from "./status-line";
 import { ChatTab } from "./chat-tab";
@@ -58,6 +59,7 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
   );
   const stopAgent = useStopAgent();
   const startAgent = useStartAgent();
+
   const [tab, setTab] = useQueryState(
     "tab",
     parseAsStringEnum<Tab>(VALID_TABS)
@@ -202,24 +204,18 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
               </div>
             </div>
 
-            {(agent.status === "ERROR" ||
-              health?.status === "crashed" ||
-              health?.status === "error") &&
-              health?.reason && (
-                <div
-                  className="mb-6 rounded-xl px-4 py-3 text-[0.844rem]"
-                  style={{
-                    background:
-                      "color-mix(in srgb, var(--err) 10%, transparent)",
-                    border:
-                      "1px solid color-mix(in srgb, var(--err) 25%, transparent)",
-                    color: "var(--err)",
-                  }}
-                >
-                  <span className="font-medium">Error: </span>
-                  {health.reason}
-                </div>
-              )}
+            {/* The classified provisioning failure comes off the Agent itself, so
+                it renders on first paint and does not depend on health polling —
+                which is also gated on activity.read. Health only explains a
+                runtime fault on an Agent that did start. */}
+            {agent.status === "ERROR" && agent.lastError ? (
+              <AgentErrorBanner failure={agent.lastError} />
+            ) : (
+              (agent.status === "ERROR" ||
+                health?.status === "crashed" ||
+                health?.status === "error") &&
+              health?.reason && <AgentHealthErrorBanner reason={health.reason} />
+            )}
 
             {needsMessagingSetup && (
               <div

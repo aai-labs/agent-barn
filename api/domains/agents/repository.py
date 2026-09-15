@@ -834,6 +834,8 @@ class AgentRepository:
             # Anything start/stop writes has to be listed here or it is silently dropped.
             persisted.status = agent.status
             persisted.last_error = agent.last_error
+            persisted.last_error_code = agent.last_error_code
+            persisted.last_error_detail = agent.last_error_detail
             persisted.ingest_key_encrypted = agent.ingest_key_encrypted
             persisted.running_model = agent.running_model
             persisted.communication_key_encrypted = agent.communication_key_encrypted
