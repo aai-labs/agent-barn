@@ -40,8 +40,5 @@ export function useCreateAgent() {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: agentsKey.all });
     },
-    onError: () => {
-      void queryClient.invalidateQueries({ queryKey: agentsKey.all });
-    },
   });
 }

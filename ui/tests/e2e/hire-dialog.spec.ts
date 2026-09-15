@@ -291,7 +291,7 @@ test.describe("Hire Dialog", () => {
     await expect(alert).toContainText("run out of resource quota");
     await expect(alert).toContainText("requests.storage: requested 1Gi");
     // Creation succeeded before the start failed, so the Agent is on the team page.
-    await expect(alert).toContainText("was created and is waiting on your team page");
+    await expect(page.getByText("Aria was created and is waiting on your team page.")).toBeVisible();
     await expect(page.getByText("Request failed with status code")).toHaveCount(0);
   });
 
@@ -353,4 +353,60 @@ test.describe("Hire Dialog", () => {
     await expect(page.getByRole("button", { name: "Start again", exact: true })).toBeEnabled();
     await expect(page.getByRole("button", { name: "Cancel", exact: true })).toBeEnabled();
   });
+  for (const scenario of [
+    { label: "a precondition error", response: { status: 400, detail: "Google Workspace is missing a client id/secret" }, message: "Google Workspace is missing a client id/secret" },
+    { label: "a lifecycle conflict", response: { status: 409, detail: "Lifecycle operation already in progress" }, message: "Lifecycle operation already in progress" },
+    { label: "a network error", response: { networkError: true }, message: "Network Error" },
+  ]) {
+    test(`shows ${scenario.label} after creating an Agent with credentials`, async ({ page }) => {
+      const jiraRequiredSkill = {
+        id: mockJiraSkill.id,
+        name: mockJiraSkill.name,
+        source: mockJiraSkill.source,
+        required_providers: mockJiraSkill.requiredProviders,
+        tools_pointer: mockJiraSkill.toolsPointer,
+        required: true,
+        created_at: mockJiraSkill.createdAt,
+        updated_at: mockJiraSkill.updatedAt,
+        group_key: null,
+      };
+      await dataSupport.agents.interceptGetTemplatesRequest({
+        body: {
+          page: 1,
+          page_size: 50,
+          total: 1,
+          items: [{ ...mockTemplates[0], required_skills: [jiraRequiredSkill] }],
+        },
+      });
+      await dataSupport.skills.interceptGetSkillsRequest({ body: [mockJiraSkill] });
+      await dataSupport.agents.interceptCreateAgentRequest({
+        body: { ...mockAgent, name: "Aria", status: "STOPPED", agent_type: "hermes" },
+      });
+      await dataSupport.agents.interceptStartAgentRequest(scenario.response);
+
+      // The dialog's initial template query is already cached by the dashboard;
+      // reload so this test-specific template response is consumed.
+      await dashboardPage.goto();
+      await page.getByRole("button", { name: /hire agent/i }).click();
+      await chooseTemplate(page);
+      await expect(page.getByText("Template skills and credentials")).toBeVisible();
+      await expect(page.getByText("jira", { exact: true })).toBeVisible();
+
+      await page.getByPlaceholder("https://your-domain.atlassian.net").fill("https://acme.atlassian.net");
+      await page.getByText("Non-scoped token", { exact: true }).click();
+      await page.getByPlaceholder("you@example.com").fill("user@example.com");
+      await page.locator('input[type="password"]').fill("jira-token");
+
+      const createRequest = page.waitForRequest(
+        (request) => request.url().endsWith("/agents") && request.method() === "POST",
+      );
+      await page.getByRole("button", { name: "Hire Agent", exact: true }).click();
+      const payload = (await createRequest).postDataJSON();
+
+      expect(payload.secrets).toHaveLength(1);
+      await expect(page.getByRole("button", { name: "Start again", exact: true })).toBeVisible();
+      await expect(page.getByRole("alert").filter({ hasText: "Could not start Agent" })).toContainText(scenario.message);
+      await expect(page.getByText("Aria was created and is waiting on your team page.")).toBeVisible();
+    });
+  }
 });

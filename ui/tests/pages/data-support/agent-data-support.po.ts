@@ -751,17 +751,23 @@ export class AgentDataSupport {
     status = 200,
     detail = "Unable to start agent",
     body,
+    networkError = false,
   }: {
     agentId?: string;
     status?: number;
     detail?: unknown;
     body?: unknown;
+    networkError?: boolean;
   } = {}) {
     await this.page.route(
       `**/api/v1/organizations/*/agents/${agentId}/start`,
       async (route) => {
         if (route.request().method() !== "POST") {
           await route.fallback();
+          return;
+        }
+        if (networkError) {
+          await route.abort("failed");
           return;
         }
         await route.fulfill({

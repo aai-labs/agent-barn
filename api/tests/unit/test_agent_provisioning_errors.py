@@ -46,10 +46,7 @@ def test_exhausted_quota_names_the_exhausted_axis() -> None:
     assert_that(normalized.code, equal_to("QUOTA_EXHAUSTED"))
     assert_that(
         normalized.detail,
-        equal_to(
-            "requests.storage: requested 1Gi, used 30Gi, limit 30Gi "
-            "(quota example-quota, creating persistentvolumeclaims)"
-        ),
+        equal_to("requests.storage: requested 1Gi, used 30Gi, limit 30Gi"),
     )
 
 
@@ -127,6 +124,37 @@ def test_a_summary_says_whether_retrying_helps_or_an_administrator_is_needed() -
     assert_that(quota.summary, contains_string("Ask an administrator"))
     assert_that(unreachable.summary, contains_string("try again"))
     assert_that(unreachable.summary, is_not(contains_string("administrator")))
+
+
+def test_an_application_exception_is_not_read_as_a_cluster_message() -> None:
+    """The whole provisioning step is wrapped, so exceptions that never touched
+    Kubernetes reach the classifier. Matching their text against cluster wording
+    invents a cause: a missing skill version is not an unreachable namespace."""
+    for exc in (
+        RuntimeError("skill version not found"),
+        RuntimeError("template forbidden for this organization"),
+        ValueError("pinned version is invalid"),
+        RuntimeError("timed out waiting for the skill bundle"),
+    ):
+        normalized = normalize_agent_provisioning_error(exc)
+
+        assert_that(normalized.category, is_(AgentProvisioningErrorCategory.UNKNOWN), str(exc))
+
+
+def test_an_rbac_denial_on_resourcequotas_is_not_read_as_an_exhausted_quota() -> None:
+    exc = _ApiException(
+        403,
+        _status_body(
+            'resourcequotas is forbidden: User "system:serviceaccount:agent-farm:api" '
+            'cannot create resource "resourcequotas" in API group "" in the namespace "agent-farm"',
+            reason="Forbidden",
+            code=403,
+        ),
+    )
+
+    normalized = normalize_agent_provisioning_error(exc)
+
+    assert_that(normalized.category, is_(AgentProvisioningErrorCategory.CLUSTER_PERMISSION_DENIED))
 
 
 def test_a_server_error_is_not_reported_as_an_unreachable_namespace() -> None:
@@ -270,3 +298,59 @@ def test_a_stored_detail_is_re_screened_rather_than_trusted() -> None:
 
     assert stored is not None
     assert_that(stored.detail, is_(none()))
+
+
+def test_quota_extraction_does_not_scan_echoed_request_values() -> None:
+    exc = _pvc_quota_rejection()
+    body = json.loads(exc.body)
+    body["message"] += "; rejected request data: pin=938174"
+    exc.body = json.dumps(body)
+    failure = normalize_agent_provisioning_error(exc)
+    assert_that(failure.code, equal_to("QUOTA_EXHAUSTED"))
+    assert_that(failure.detail, is_(none()))
+
+
+def test_stored_details_must_match_their_category_structure() -> None:
+    for code, detail in (
+        ("QUOTA_EXHAUSTED", "sk_live_abc123456789"),
+        ("QUOTA_EXHAUSTED", "pin: limit 938174"),
+        ("CLUSTER_PERMISSION_DENIED", "cannot create sk_live_abc123456789"),
+        ("PROVISIONING_FAILED", "sk_live_abc123456789"),
+        ("RESOURCE_REJECTED", "ValueError"),
+    ):
+        failure = persisted_provisioning_error(code=code, detail=detail, legacy_message=None)
+        assert failure is not None
+        assert_that(failure.detail, is_(none()), code)
+
+
+def test_quota_names_are_not_republished() -> None:
+    exc = _pvc_quota_rejection()
+    exc.body = exc.body.replace("example-quota", "938174")
+    failure = normalize_agent_provisioning_error(exc)
+    assert_that(failure.detail, is_not(contains_string("938174")))
+
+
+def test_safe_details_survive_persistence() -> None:
+    for exc in (_pvc_quota_rejection(), RuntimeError("private message")):
+        failure = normalize_agent_provisioning_error(exc)
+        stored = persisted_provisioning_error(code=failure.code, detail=failure.detail, legacy_message=None)
+        assert stored is not None
+        assert_that(stored, equal_to(failure))
+
+
+def test_unfamiliar_quota_axes_or_malformed_quantities_drop_the_detail() -> None:
+    for fragment in ("pin=938174", "requests.storage=938174abc", "count/custom.example=938174"):
+        exc = _pvc_quota_rejection()
+        exc.body = exc.body.replace("requests.storage=1Gi", fragment)
+        failure = normalize_agent_provisioning_error(exc)
+        assert_that(failure.code, equal_to("QUOTA_EXHAUSTED"))
+        assert_that(failure.detail, is_(none()))
+
+
+def test_unknown_rbac_resources_keep_only_the_summary() -> None:
+    exc = _ApiException(
+        403, _status_body('cannot create resource "sk_live_abc123456789"', reason="Forbidden", code=403)
+    )
+    failure = normalize_agent_provisioning_error(exc)
+    assert_that(failure.code, equal_to("CLUSTER_PERMISSION_DENIED"))
+    assert_that(failure.detail, is_(none()))

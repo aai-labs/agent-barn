@@ -82,17 +82,24 @@ _SUMMARY_BY_CATEGORY: dict[AgentProvisioningErrorCategory, str] = {
     ),
 }
 
-# A ResourceQuota axis ("requests.storage", "limits.memory", "count/pods")
-# paired with a Kubernetes quantity ("1Gi", "30", "1500m").
-_QUOTA_PAIR = re.compile(
-    r"(?:(requested|used|limited):\s*)?([a-z][a-z0-9./-]{0,63})=([0-9]+(?:\.[0-9]+)?[A-Za-z]{0,2})(?![A-Za-z0-9.])"
+# Only fixed resource names are safe to expose. Custom resource/quota names and
+# unfamiliar formats keep the category summary without a detail.
+_RESOURCE = r"(?:pods|persistentvolumeclaims|services|configmaps|deployments|replicasets|statefulsets|daemonsets|jobs|cronjobs|replicationcontrollers|resourcequotas)"
+_AXIS = rf"(?:requests\.(?:storage|cpu|memory|ephemeral-storage)|limits\.(?:cpu|memory|ephemeral-storage)|cpu|memory|services\.(?:nodeports|loadbalancers)|{_RESOURCE}|count/{_RESOURCE})"
+_QUANTITY = r"[0-9]{1,18}(?:\.[0-9]{1,9})?(?:[EPTGMK]i|[numkKMGTPE]|[eE][+-]?[0-9]{1,3})?"
+_PAIR = rf"{_AXIS}={_QUANTITY}"
+_QUOTA_SECTION = re.compile(
+    rf"exceeded quota: [^,\r\n]{{1,253}}, requested: (?P<requested>{_PAIR}(?:,\s*{_PAIR})*), "
+    rf"used: (?P<used>{_PAIR}(?:,\s*{_PAIR})*), limited: (?P<limited>{_PAIR}(?:,\s*{_PAIR})*)\Z"
 )
-_QUOTA_NAME = re.compile(r"exceeded quota:\s*([a-z0-9][a-z0-9.-]{0,62})\s*,")
-_RESOURCE_KIND = re.compile(r'^([a-z][a-z0-9.]{0,62})\s+"')
-_RBAC_RESOURCE = re.compile(
-    r'cannot\s+(create|get|update|delete|list|watch|patch)\s+resource\s+"([a-z][a-z0-9.-]{0,62})"'
-)
-_EXCEPTION_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
+_QUOTA_PAIR = re.compile(rf"({_AXIS})=({_QUANTITY})")
+_QUOTA_ROW = rf"{_AXIS}: requested {_QUANTITY}, used {_QUANTITY}, limit {_QUANTITY}"
+_STORED_QUOTA = re.compile(rf"{_QUOTA_ROW}(?:; {_QUOTA_ROW}){{0,2}}")
+_RESOURCE_KIND = re.compile(rf'^({_RESOURCE})\s+"')
+_VERB = r"(?:create|get|update|delete|list|watch|patch)"
+_RBAC_RESOURCE = re.compile(rf'cannot\s+({_VERB})\s+resource\s+"({_RESOURCE})"')
+_STORED_RBAC = re.compile(rf"(?:cannot {_VERB} {_RESOURCE}|creating {_RESOURCE})")
+_EXCEPTION_NAMES = frozenset({"ValueError", "RuntimeError", "TypeError", "KeyError", "ApiException"})
 _QUOTA_KEYWORD_LABELS = (("requested", "requested"), ("used", "used"), ("limited", "limit"))
 _MAX_REPORTED_QUOTA_AXES = 3
 
@@ -117,7 +124,7 @@ def normalize_agent_provisioning_error(exc: Exception) -> NormalizedAgentProvisi
     status_code = _status_code_of(exc)
     message = _cluster_message(exc)
     category = _classify(exc, status_code=status_code, message=message)
-    return _for_category(category, detail=_detail_for(category, message=message, exc=exc))
+    return _for_category(category, detail=_detail_for(category, message=message or "", exc=exc))
 
 
 def persisted_provisioning_error(
@@ -128,7 +135,7 @@ def persisted_provisioning_error(
 ) -> NormalizedAgentProvisioningError | None:
     """Rebuild a stored failure at the read boundary.
 
-    Only the code and detail are trusted from storage. The summary is derived here,
+    The code selects fixed copy and the detail must match its category grammar,
     so improved copy reaches Agents already sitting in ERROR without a data migration.
 
     A row with no code but a message was written before normalization existed. Its
@@ -138,7 +145,7 @@ def persisted_provisioning_error(
     if code is None:
         return _for_category(AgentProvisioningErrorCategory.UNKNOWN, detail=None) if legacy_message else None
     category = _CATEGORY_BY_CODE.get(code, AgentProvisioningErrorCategory.UNKNOWN)
-    return _for_category(category, detail=_bounded_safe_detail(detail))
+    return _for_category(category, detail=_bounded_safe_detail(detail, category))
 
 
 def _for_category(
@@ -159,47 +166,52 @@ def _status_code_of(exc: Exception) -> int | None:
     return status_code if isinstance(status_code, int) else None
 
 
-def _cluster_message(exc: Exception) -> str:
-    """The cluster's own message, used only for classification and pattern extraction.
+def _cluster_message(exc: Exception) -> str | None:
+    """The cluster's own message, or None when the Kubernetes API did not answer.
 
-    Never returned to a caller. ``ApiException.body`` is a JSON Status object; the
-    exception's own text is the fallback when it is absent or unparseable.
+    Used only for classification and pattern extraction, never returned to a
+    caller. ``ApiException.body`` is a JSON Status object.
     """
     body: Any = getattr(exc, "body", None)
-    if body:
-        try:
-            parsed = json.loads(body) if isinstance(body, (str, bytes)) else body
-        except TypeError, ValueError:
-            parsed = None
-        if isinstance(parsed, dict):
-            message = parsed.get("message") or parsed.get("reason")
-            if isinstance(message, str) and message:
-                return message
-        if isinstance(body, str):
-            return body
-    return str(exc)
+    if not body:
+        return None
+    try:
+        parsed = json.loads(body) if isinstance(body, (str, bytes)) else body
+    except TypeError, ValueError:
+        parsed = None
+    if isinstance(parsed, dict):
+        message = parsed.get("message") or parsed.get("reason")
+        if isinstance(message, str) and message:
+            return message
+    return body if isinstance(body, str) else None
 
 
 def _classify(
     exc: Exception,
     *,
     status_code: int | None,
-    message: str,
+    message: str | None,
 ) -> AgentProvisioningErrorCategory:
-    lowered = message.casefold()
+    # Everything below matches wording the Kubernetes API uses. An exception from
+    # anywhere else in provisioning carries unrelated text, and a RuntimeError
+    # saying "skill version not found" is not the namespace being unreachable.
+    if message is None and status_code is None:
+        if _looks_unreachable(exc):
+            return AgentProvisioningErrorCategory.CLUSTER_UNAVAILABLE
+        return AgentProvisioningErrorCategory.UNKNOWN
+
+    lowered = (message or "").casefold()
 
     # A full ResourceQuota and a missing RoleBinding both come back as 403 Forbidden.
     # Reporting quota exhaustion as an RBAC fault sends operators to the service
     # account when the namespace has simply run out of a resource, so quota wins.
-    if "exceeded quota" in lowered or "resourcequota" in lowered:
+    if "exceeded quota" in lowered:
         return AgentProvisioningErrorCategory.QUOTA_EXHAUSTED
     if status_code == 403 or "forbidden" in lowered or "cannot create resource" in lowered:
         return AgentProvisioningErrorCategory.CLUSTER_PERMISSION_DENIED
     if status_code == 422 or "is invalid" in lowered or "unprocessable" in lowered:
         return AgentProvisioningErrorCategory.RESOURCE_REJECTED
     if status_code == 404 or "not found" in lowered:
-        return AgentProvisioningErrorCategory.CLUSTER_UNAVAILABLE
-    if status_code is None and _looks_unreachable(exc, lowered):
         return AgentProvisioningErrorCategory.CLUSTER_UNAVAILABLE
     # A 5xx means the API server answered, so the namespace is reachable.
     return AgentProvisioningErrorCategory.UNKNOWN
@@ -212,11 +224,18 @@ _UNREACHABLE_NEEDLES = (
     "temporary failure in name resolution",
 )
 
+# Transport failures reach us from the HTTP stack the Kubernetes client uses, so
+# their text is safe to match. Application code raising the same words is not.
+_TRANSPORT_MODULES = ("urllib3", "kubernetes", "http", "socket", "ssl", "httpx", "httpcore")
 
-def _looks_unreachable(exc: Exception, lowered_message: str) -> bool:
+
+def _looks_unreachable(exc: Exception) -> bool:
     if isinstance(exc, (ConnectionError, TimeoutError)):
         return True
-    return any(needle in lowered_message for needle in _UNREACHABLE_NEEDLES)
+    if type(exc).__module__.split(".")[0] not in _TRANSPORT_MODULES:
+        return False
+    lowered = str(exc).casefold()
+    return any(needle in lowered for needle in _UNREACHABLE_NEEDLES)
 
 
 def _detail_for(
@@ -231,12 +250,12 @@ def _detail_for(
         detail = _rbac_detail(message)
     elif category is AgentProvisioningErrorCategory.UNKNOWN:
         # Only the unclassified case falls back to the exception's class name. It
-        # cannot carry a credential, and it is the one clue left once raw text is
+        # comes from a fixed allowlist, and it is the one clue left once raw text is
         # dropped; on a classified failure the summary already says more than it would.
         detail = _exception_name(exc)
     else:
         detail = None
-    return _bounded_safe_detail(detail)
+    return _bounded_safe_detail(detail, category)
 
 
 def _quota_detail(message: str) -> str | None:
@@ -245,48 +264,17 @@ def _quota_detail(message: str) -> str | None:
     The axis is the diagnosis. requests.storage and limits.memory need different
     fixes, so it is extracted instead of dropped with the rest of the message.
     """
-    axes: dict[str, dict[str, str]] = {}
-    order: list[str] = []
-    keyword: str | None = None
-    for match in _QUOTA_PAIR.finditer(message):
-        keyword = match.group(1) or keyword
-        if keyword is None:
-            continue
-        axis, quantity = match.group(2), match.group(3)
-        if axis not in axes:
-            if len(order) >= _MAX_REPORTED_QUOTA_AXES:
-                continue
-            axes[axis] = {}
-            order.append(axis)
-        axes[axis][keyword] = quantity
-
-    parts: list[str] = []
-    for axis in order:
-        measured = [f"{label} {axes[axis][key]}" for key, label in _QUOTA_KEYWORD_LABELS if key in axes[axis]]
-        if measured:
-            parts.append(f"{axis}: {', '.join(measured)}")
-    if not parts:
+    section = _QUOTA_SECTION.search(message)
+    if section is None:
         return None
-
-    detail = "; ".join(parts)
-    quota_name = _quota_name(message)
-    resource_kind = _resource_kind(message)
-    scope: list[str] = []
-    if quota_name:
-        scope.append(f"quota {quota_name}")
-    if resource_kind:
-        scope.append(f"creating {resource_kind}")
-    return f"{detail} ({', '.join(scope)})" if scope else detail
-
-
-def _quota_name(message: str) -> str | None:
-    match = _QUOTA_NAME.search(message)
-    return match.group(1) if match else None
-
-
-def _resource_kind(message: str) -> str | None:
-    match = _RESOURCE_KIND.match(message)
-    return match.group(1) if match else None
+    measurements = {key: dict(_QUOTA_PAIR.findall(section.group(key))) for key, _ in _QUOTA_KEYWORD_LABELS}
+    axes = list(measurements["requested"])
+    if any(set(values) != set(axes) for values in measurements.values()):
+        return None
+    return "; ".join(
+        f"{axis}: " + ", ".join(f"{label} {measurements[key][axis]}" for key, label in _QUOTA_KEYWORD_LABELS)
+        for axis in axes[:_MAX_REPORTED_QUOTA_AXES]
+    )
 
 
 def _rbac_detail(message: str) -> str | None:
@@ -297,30 +285,27 @@ def _rbac_detail(message: str) -> str | None:
     match = _RBAC_RESOURCE.search(message)
     if match:
         return f"cannot {match.group(1)} {match.group(2)}"
-    kind = _resource_kind(message)
+    match = _RESOURCE_KIND.match(message)
+    kind = match.group(1) if match else None
     return f"creating {kind}" if kind else None
 
 
 def _exception_name(exc: Exception) -> str | None:
     name = type(exc).__name__
-    return name if _EXCEPTION_NAME.fullmatch(name) else None
+    return name if name in _EXCEPTION_NAMES else None
 
 
-def _bounded_safe_detail(detail: str | None) -> str | None:
-    """Last check before a detail leaves this module.
-
-    The extraction above is an allowlist, so this rarely fires. It guards against a
-    future pattern that widens far enough to capture a credential.
-
-    It also drops details that are safe. `count/secrets` is a real ResourceQuota
-    axis, so exhausting it reports only that quota ran out. The full cluster text is
-    in the logs.
-    """
-    if not detail:
+def _bounded_safe_detail(detail: str | None, category: AgentProvisioningErrorCategory) -> str | None:
+    """Reject details outside the category's complete grammar, including on reads."""
+    if not detail or len(detail) > MAX_PROVISIONING_DETAIL_CHARS or _contains_sensitive(detail):
         return None
-    if _contains_sensitive(detail):
-        return None
-    return detail[:MAX_PROVISIONING_DETAIL_CHARS]
+    if category is AgentProvisioningErrorCategory.QUOTA_EXHAUSTED:
+        return detail if _STORED_QUOTA.fullmatch(detail) else None
+    if category is AgentProvisioningErrorCategory.CLUSTER_PERMISSION_DENIED:
+        return detail if _STORED_RBAC.fullmatch(detail) else None
+    if category is AgentProvisioningErrorCategory.UNKNOWN:
+        return detail if detail in _EXCEPTION_NAMES else None
+    return None
 
 
 def _contains_sensitive(value: str) -> bool:

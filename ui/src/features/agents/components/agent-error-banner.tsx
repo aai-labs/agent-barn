@@ -1,3 +1,5 @@
+import type { ReactNode } from "react";
+
 import { describeProvisioningFailure } from "../provisioning-failure";
 import type { AgentProvisioningError } from "../schemas";
 
@@ -7,16 +9,22 @@ import type { AgentProvisioningError } from "../schemas";
  */
 export function AgentErrorBanner({
   failure,
+  className = "mb-6",
+  testId = "agent-error-banner",
+  children,
 }: {
   failure: AgentProvisioningError;
+  className?: string;
+  testId?: string;
+  children?: ReactNode;
 }) {
   const { title, summary, detail } = describeProvisioningFailure(failure);
 
   return (
     <div
       role="alert"
-      data-testid="agent-error-banner"
-      className="mb-6 rounded-xl px-4 py-3.5 text-[0.844rem]"
+      data-testid={testId}
+      className={`${className} rounded-xl px-4 py-3.5 text-[0.844rem]`}
       style={{
         background: "color-mix(in srgb, var(--err) 10%, transparent)",
         border: "1px solid color-mix(in srgb, var(--err) 25%, transparent)",
@@ -33,6 +41,7 @@ export function AgentErrorBanner({
           {detail}
         </p>
       )}
+      {children}
     </div>
   );
 }

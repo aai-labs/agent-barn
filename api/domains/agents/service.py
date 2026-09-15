@@ -1904,12 +1904,13 @@ class AgentService:
     def _start_agent_unchecked(self, agent: Agent, actor: ActorIdentity) -> Agent:
         """Start a known Agent after its caller has established authority."""
         try:
-            return self._provision_and_start(agent, actor)
+            previous_status = self._provision_and_start(agent)
         except AgentProvisioningPrecondition:
             raise
         except Exception as exc:
             logger.exception("Failed to start agent %s", agent.id)
             raise self._record_provisioning_failure(agent, exc) from exc
+        return self._persist_started(agent, actor, previous_status)
 
     def _record_provisioning_failure(self, agent: Agent, exc: Exception) -> HTTPException:
         """Persist a sanitized failure on the Agent and build the error to raise.
@@ -1922,7 +1923,12 @@ class AgentService:
         agent.last_error = normalized.display_message
         agent.last_error_code = normalized.code
         agent.last_error_detail = normalized.detail
-        self.repository.save(agent)
+        try:
+            self.repository.save(agent)
+        except Exception:
+            # A database fault is one of the things that lands here, and it would
+            # raise again on this write. The caller still gets the classified cause.
+            logger.exception("Could not record the provisioning failure for agent %s", agent.id)
         return HTTPException(
             status_code=_PROVISIONING_FAILURE_STATUS.get(
                 normalized.category,
@@ -1931,7 +1937,8 @@ class AgentService:
             detail=_provisioning_error_dto(normalized).model_dump(mode="json"),
         )
 
-    def _provision_and_start(self, agent: Agent, actor: ActorIdentity) -> Agent:
+    def _provision_and_start(self, agent: Agent) -> str:
+        """Build and create the Agent's Kubernetes resources. Returns its previous status."""
         agent_id = agent.id
         org_id = agent.organization_id
         # Stamped as Service labels for monitoring; resolved here (not in the
@@ -2254,6 +2261,15 @@ class AgentService:
             communication_key,
             self.config.agent_token_encryption_key,
         )
+        return previous_status
+
+    def _persist_started(self, agent: Agent, actor: ActorIdentity, previous_status: str) -> Agent:
+        """Record a start whose Kubernetes resources already exist.
+
+        Deliberately outside the failure handler. The workload is running by now, so
+        marking the Agent ERROR because this write failed would describe a state the
+        cluster is not in.
+        """
         result = self.repository.save_with_lifecycle_event(
             agent,
             event_name=AGENT_STARTED,

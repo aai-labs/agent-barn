@@ -24,11 +24,9 @@ import { useModels } from "../hooks/use-models";
 import { useTemplates } from "../hooks/use-templates";
 import { splitRequiredSkills } from "../utils";
 import { CredentialErrorAlert } from "./credential-error-alert";
-import {
-  describeProvisioningFailure,
-  provisioningFailureOf,
-  type ProvisioningFailureDisplay,
-} from "../provisioning-failure";
+import { AgentErrorBanner } from "./agent-error-banner";
+import { provisioningFailureOf } from "../provisioning-failure";
+import type { AgentProvisioningError } from "../schemas";
 import { DialogShell, FormField } from "./hire-dialog-primitives";
 import { SkillsStep } from "./hire-dialog-steps";
 import { ModelChoice } from "./model-choice";
@@ -69,7 +67,7 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
   const [groupChoices, setGroupChoices] = useState<Record<string, string[]>>({});
   const [error, setError] = useState<string | null>(null);
   const [provisioningFailure, setProvisioningFailure] =
-    useState<ProvisioningFailureDisplay | null>(null);
+    useState<AgentProvisioningError | null>(null);
   // Creation can succeed and the start still fail. Holding the Agent lets the retry
   // start that Agent instead of creating a second one.
   const [createdAgent, setCreatedAgent] = useState<{ id: string; name: string } | null>(null);
@@ -194,7 +192,7 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
   function reportHireFailure(cause: unknown) {
     const failure = provisioningFailureOf(cause);
     if (failure) {
-      setProvisioningFailure(describeProvisioningFailure(failure));
+      setProvisioningFailure(failure);
       return;
     }
     setError(cause instanceof Error ? cause.message : "Could not hire the Agent.");
@@ -277,38 +275,26 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
         )}
 
         {provisioningFailure && (
-          <div
-            role="alert"
-            data-testid="hire-provisioning-error"
-            className="rounded-xl px-4 py-3.5 text-[0.8125rem] sm:col-span-2"
-            style={{
-              background: "color-mix(in srgb, var(--err) 10%, transparent)",
-              border: "1px solid color-mix(in srgb, var(--err) 25%, transparent)",
-              color: "var(--err)",
-            }}
+          <AgentErrorBanner
+            failure={provisioningFailure}
+            className="sm:col-span-2"
+            testId="hire-provisioning-error"
           >
-            <p className="m-0 font-medium">{provisioningFailure.title}</p>
-            <p className="m-0 mt-1">{provisioningFailure.summary}</p>
-            {provisioningFailure.detail && (
-              <p className="m-0 mt-2 overflow-x-auto font-mono text-[0.75rem] leading-[1.5] opacity-80">
-                {provisioningFailure.detail}
-              </p>
-            )}
-            {/* The Agent was created before the start failed, so it is on the
-                team page in ERROR rather than lost. Saying so stops the reader
-                hiring a second one to replace it. */}
-            <p className="m-0 mt-2 opacity-90">
-              {name.trim()} was created and is waiting on your team page.
-            </p>
-          </div>
+          </AgentErrorBanner>
         )}
 
-        {error && (!template?.requiredSkills.length || skillCredentials.length === 0) && (
+        {error && (createdAgent || !template?.requiredSkills.length || skillCredentials.length === 0) && (
           <CredentialErrorAlert
-            title="Could not hire Agent"
+            title={createdAgent ? "Could not start Agent" : "Could not hire Agent"}
             message={error}
           />
         )}
+        {createdAgent && (provisioningFailure || error) && (
+          <p className="m-0 text-sm sm:col-span-2">
+            {createdAgent.name} was created and is waiting on your team page.
+          </p>
+        )}
+
       </div>
 
       <footer className="flex justify-end gap-2 border-t px-6 py-4" style={{ borderColor: "var(--line)" }}>

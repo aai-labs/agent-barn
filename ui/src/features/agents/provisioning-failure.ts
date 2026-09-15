@@ -44,9 +44,3 @@ export function provisioningFailureOf(
   const parsed = AgentProvisioningErrorSchema.safeParse(error.details?.detail);
   return parsed.success ? parsed.data : null;
 }
-
-export function provisioningFailureLine(
-  failure: AgentProvisioningError,
-): string {
-  return failure.summary;
-}

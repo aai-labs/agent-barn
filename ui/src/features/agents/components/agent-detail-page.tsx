@@ -21,12 +21,7 @@ import {
   ShareIcon,
 } from "@/components/icons";
 import { AppErrorState } from "@/components/app-error-state";
-import { toast } from "sonner";
 import { toastError } from "@/shared/toast";
-import {
-  provisioningFailureLine,
-  provisioningFailureOf,
-} from "../provisioning-failure";
 import { AgentAvatar } from "./agent-avatar";
 import { AgentErrorBanner, AgentHealthErrorBanner } from "./agent-error-banner";
 import { AgentMetaBadges } from "./agent-meta-badges";
@@ -64,15 +59,6 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
   );
   const stopAgent = useStopAgent();
   const startAgent = useStartAgent();
-
-  function reportLifecycleFailure(cause: unknown) {
-    const failure = provisioningFailureOf(cause);
-    if (failure) {
-      toast.error(provisioningFailureLine(failure));
-      return;
-    }
-    toastError(cause);
-  }
 
   const [tab, setTab] = useQueryState(
     "tab",
@@ -187,7 +173,7 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
                     className="af-btn"
                     disabled={stopAgent.isPending}
                     onClick={() => {
-                      void stopAgent.mutateAsync(agent.id).catch(reportLifecycleFailure);
+                      void stopAgent.mutateAsync(agent.id).catch(toastError);
                     }}
                   >
                     <PauseIcon /> {stopAgent.isPending ? "Pausing…" : "Pause"}
@@ -198,7 +184,7 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
                     className="af-btn"
                     disabled={startAgent.isPending}
                     onClick={() => {
-                      void startAgent.mutateAsync(agent.id).catch(reportLifecycleFailure);
+                      void startAgent.mutateAsync(agent.id).catch(toastError);
                     }}
                   >
                     <PlayIcon /> {startAgent.isPending ? "Starting…" : "Start"}

@@ -12,10 +12,11 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 from fastapi import HTTPException, status
-from hamcrest import assert_that, contains_string, equal_to, is_, is_not, none
+from hamcrest import assert_that, calling, contains_string, equal_to, is_, is_not, none, raises
 from starlette.testclient import TestClient
 
 from api.domains.agents.models import AgentStatus
+from api.domains.agents.service import AgentService
 from api.infrastructure.kubernetes.client import KubernetesClient
 from api.tests.core.givenpy import given, then, when
 from api.tests.core.modules import (
@@ -177,6 +178,57 @@ def test_a_failure_before_the_cluster_calls_is_recorded_the_same_way() -> None:
             body = client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context)).json()
             assert_that(body["status"], equal_to(AgentStatus.ERROR.value))
             assert_that(body["last_error"]["code"], equal_to("PROVISIONING_FAILED"))
+
+
+def test_a_failed_record_of_the_failure_still_returns_the_classified_cause() -> None:
+    """A database fault is one of the things that reaches the handler, and the write
+    recording it would fail the same way. The caller still has to learn the cause."""
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        _quota_exhausted_namespace(context)
+        service = context.injector.get(AgentService)
+
+        with when("recording the failure on the Agent also fails"):
+            with patch.object(type(service.repository), "save", side_effect=RuntimeError("database is down")):
+                response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("the response still names the quota rather than a bare 500"):
+            assert_that(response.status_code, equal_to(status.HTTP_503_SERVICE_UNAVAILABLE))
+            assert_that(response.json()["detail"]["code"], equal_to("QUOTA_EXHAUSTED"))
+
+
+def test_a_start_that_reaches_the_cluster_is_not_marked_failed_by_a_later_write() -> None:
+    """Every Kubernetes resource exists by the time the start is recorded. Marking the
+    Agent ERROR because that write failed would describe a state the cluster is not in.
+
+    The Agent is left as it was, which still disagrees with the running workload, but
+    it does not claim a provisioning failure that never happened.
+    """
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        k8s: Any = context.injector.get(KubernetesClient)
+        service = context.injector.get(AgentService)
+
+        with when("the workload is created but recording the start fails"):
+            with patch.object(
+                type(service.repository),
+                "save_with_lifecycle_event",
+                side_effect=RuntimeError("database is down"),
+            ):
+                # The TestClient re-raises what the app does not handle; a deployed
+                # API answers 500.
+                assert_that(
+                    calling(client.post).with_args(f"{_BASE}/{context.agent.id}/start", headers=_auth(context)),
+                    raises(RuntimeError),
+                )
+
+        with then("the deployment was created"):
+            k8s.create_deployment.assert_called_once()
+
+        with then("the agent carries no provisioning failure"):
+            body = client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context)).json()
+            assert_that(body["last_error"], is_(none()))
+            assert_that(body["status"], is_not(equal_to(AgentStatus.ERROR.value)))
 
 
 def test_an_http_error_that_is_not_a_declared_precondition_is_still_recorded() -> None:
