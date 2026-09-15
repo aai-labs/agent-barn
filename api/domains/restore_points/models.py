@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 from uuid import UUID
@@ -6,8 +7,9 @@ from pydantic import BaseModel as PydanticBaseModel
 from pydantic import ConfigDict, Field
 
 from api.domains.agents.models import RestorePointOrigin, RestorePointStatus
+from api.infrastructure.shared.models import PaginatedItems
 
-CONFIG_MANIFEST_VERSION = 1
+CONFIG_MANIFEST_VERSION = 2
 
 TERMINAL_STATUSES = (RestorePointStatus.READY, RestorePointStatus.FAILED)
 NON_TERMINAL_STATUSES = (
@@ -38,6 +40,13 @@ class RestorePointConfigManifest(PydanticBaseModel):
 
     version: int = CONFIG_MANIFEST_VERSION
     agent_type: str
+    template_key: str = ""
+    template_version: int = 0
+    # How the pin was made, in the vocabulary select_agent_template accepts, so a
+    # replay can hand it straight back rather than guessing which of the two
+    # shared sources — platform or organization — this version came from.
+    template_selection_type: str = ""
+    override_version: int | None = None
     model: str = ""
     effective_model: str = ""
     approval_mode: str = ""
@@ -66,3 +75,16 @@ class AgentRestorePointRead(PydanticBaseModel):
     config_manifest: dict[str, Any]
     created_at: datetime
     captured_at: datetime | None
+
+
+@dataclass
+class AgentRestorePointList(PaginatedItems[AgentRestorePointRead]):
+    """The page, plus what the caller needs to decide whether capture is offered.
+
+    ``total`` counts every row an Agent has, including PRE_RESTORE backups and
+    failed captures. The cap counts neither, so a client cannot derive its
+    remaining headroom from the page alone.
+    """
+
+    cap: int
+    manual_count: int
