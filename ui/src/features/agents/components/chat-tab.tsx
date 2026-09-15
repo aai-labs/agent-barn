@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Archive, Maximize2, MoreHorizontal, Minimize2, Pencil, Plus } from "lucide-react";
 import { useQueryState, parseAsString } from "nuqs";
 import {
@@ -33,6 +33,7 @@ import type { Agent, WebChatMessage } from "../schemas";
 import { MAIN_THREAD_ID, useWebChat } from "../hooks/use-web-chat";
 import { useWebChatThreads } from "../hooks/use-web-chat-threads";
 import { AgentAvatar } from "./agent-avatar";
+import { APPROVAL_DATA_PART, WebChatApprovalRenderer } from "./web-chat-approval";
 
 interface ChatTabProps {
   agent: Agent;
@@ -43,7 +44,12 @@ function convertMessage(message: WebChatMessage): ThreadMessageLike {
   return {
     id: message.id,
     role: message.direction === "OUTBOUND" ? "assistant" : "user",
-    content: [{ type: "text", text: message.content }],
+    content: message.approval
+      ? [
+          { type: "text", text: message.content },
+          { type: "data", name: APPROVAL_DATA_PART, data: message.approval },
+        ]
+      : [{ type: "text", text: message.content }],
     createdAt: new Date(message.occurredAt),
   };
 }
@@ -53,7 +59,8 @@ interface ChatThreadProps {
   messages: WebChatMessage[];
   isAgentWorking: boolean;
   isAwaitingReply: boolean;
-  sendMessage: (text: string) => Promise<void>;
+  canAnswerApprovals: boolean;
+  sendMessage: (text: string, approvalId?: string) => Promise<void>;
   stopGeneration: () => Promise<void>;
   onSent: () => void;
 }
@@ -63,10 +70,18 @@ function ChatThread({
   messages,
   isAgentWorking,
   isAwaitingReply,
+  canAnswerApprovals,
   sendMessage,
   stopGeneration,
   onSent,
 }: ChatThreadProps) {
+  const answerApproval = useCallback(
+    async (choice: string, approvalId: string) => {
+      await sendMessage(choice, approvalId);
+      onSent();
+    },
+    [sendMessage, onSent],
+  );
   const runtime = useExternalStoreRuntime<WebChatMessage>({
     messages,
     isDisabled: !isAgentWorking,
@@ -85,6 +100,11 @@ function ChatThread({
 
   return (
     <AssistantRuntimeProvider runtime={runtime}>
+      <WebChatApprovalRenderer
+        canAnswer={canAnswerApprovals}
+        disabled={!isAgentWorking}
+        onAnswer={answerApproval}
+      />
       <Thread workingMessage={`${agentName} is working`} />
     </AssistantRuntimeProvider>
   );
@@ -222,6 +242,7 @@ export function ChatTab({ agent, isAgentWorking }: ChatTabProps) {
     renameThread,
     deleteThread,
   } = useWebChatThreads(agent.id, true);
+  const handleSent = useCallback(() => void refetchThreads(), [refetchThreads]);
 
   const [isMaximized, setIsMaximized] = useState(false);
 
@@ -370,9 +391,10 @@ export function ChatTab({ agent, isAgentWorking }: ChatTabProps) {
               messages={messages}
               isAgentWorking={isAgentWorking}
               isAwaitingReply={isAwaitingReply}
+              canAnswerApprovals={agent.allowedActions.includes("agent.update")}
               sendMessage={sendMessage}
               stopGeneration={stopGeneration}
-              onSent={() => void refetchThreads()}
+              onSent={handleSent}
             />
           </div>
         </div>
