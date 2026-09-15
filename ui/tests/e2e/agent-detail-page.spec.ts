@@ -159,6 +159,98 @@ test.describe("Agent Detail Page", () => {
     await expect(page.getByRole("button", { name: "Stop generating" })).not.toBeVisible();
   });
 
+  test("answers a command approval with a button", async ({ page }) => {
+    const sentBodies: unknown[] = [];
+    await page.route("**/api/v1/organizations/*/agents/*/web-chat/**", async (route) => {
+      const path = new URL(route.request().url()).pathname;
+      if (path.endsWith("/messages") && route.request().method() === "POST") {
+        sentBodies.push(route.request().postDataJSON());
+        await route.fulfill({
+          status: 202,
+          contentType: "application/json",
+          body: JSON.stringify({
+            id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+            direction: "INBOUND",
+            content: "once",
+            occurred_at: "2026-09-01T08:01:00Z",
+            delivery_status: "PENDING",
+            cancel_requested_at: null,
+            approval: null,
+          }),
+        });
+        return;
+      }
+      if (path.endsWith("/messages")) {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify([
+            {
+              id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+              direction: "OUTBOUND",
+              content: "```\nrm -rf build\n```\nReply with one of: once, deny",
+              occurred_at: "2026-09-01T08:00:00Z",
+              delivery_status: "SUCCEEDED",
+              cancel_requested_at: null,
+              approval: { approval_id: "run_1:1726051234.5", command: "rm -rf build", choices: ["once", "deny"] },
+            },
+          ]),
+        });
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: path.endsWith("/stream") ? "text/event-stream" : "application/json",
+        body: path.endsWith("/stream") ? ": keep-alive\n\n" : "[]",
+      });
+    });
+
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await expect(page.getByRole("button", { name: "Allow for session" })).toHaveCount(0);
+    await page.getByRole("button", { name: "Allow once" }).click();
+
+    await expect.poll(() => sentBodies).toEqual([
+      { text: "once", thread_id: "main", approval_id: "run_1:1726051234.5" },
+    ]);
+  });
+
+  test("hides approval buttons from someone who cannot update the Agent", async ({ page }) => {
+    await dataSupportPage.agents.interceptGetAgentRequest({
+      body: { ...mockAgent, allowed_actions: ["agent.read", "activity.read"] },
+    });
+    await page.route("**/api/v1/organizations/*/agents/*/web-chat/**", async (route) => {
+      const path = new URL(route.request().url()).pathname;
+      if (path.endsWith("/messages")) {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify([
+            {
+              id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+              direction: "OUTBOUND",
+              content: "Reply with one of: once, deny",
+              occurred_at: "2026-09-01T08:00:00Z",
+              delivery_status: "SUCCEEDED",
+              cancel_requested_at: null,
+              approval: { approval_id: "run_1:1726051234.5", command: "rm -rf build", choices: ["once", "deny"] },
+            },
+          ]),
+        });
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: path.endsWith("/stream") ? "text/event-stream" : "application/json",
+        body: path.endsWith("/stream") ? ": keep-alive\n\n" : "[]",
+      });
+    });
+
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+
+    await expect(page.getByText("Reply with one of: once, deny")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Allow once" })).toHaveCount(0);
+  });
+
   test("guides an unreachable Agent to messaging setup", async ({ page }) => {
     await page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}/connections`, async (route) => {
       if (route.request().method() !== "GET") {
