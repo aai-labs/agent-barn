@@ -58,6 +58,45 @@ Reading the proxy at request time — the earlier arrangement — meant a failed
 - Cost-facing status is mapped to `active`, `stopped`, `error` or `deleted`; it is not the persisted AgentStatus enum.
 - Every platform route requires `require_platform_admin`. Nothing re-scopes by membership, because a platform admin deliberately has none.
 
+## Organization LLM budgets
+
+`../../api/domains/organizations/service.py` owns provisioning and reconciliation;
+`../../api/infrastructure/litellm/client.py` owns the remote team/key API calls.
+
+When LiteLLM is configured, every Organization receives a LiteLLM team whose
+`team_id` is the Organization UUID. Team identity does not depend on its mutable
+name. Both self-service Organization creation and platform user provisioning
+attempt team creation after the local transaction commits. A remote failure is
+logged without undoing the committed Organization; first Agent key creation
+retries team provisioning and fails rather than issuing an unassigned key.
+
+Agents retain individual virtual keys and attribution metadata. New keys include
+`team_id`. Product API startup reconciles Organization teams and their budget
+settings before serving traffic. It does not inspect or modify existing Agent
+keys. Initial enrollment of legacy keys is a separate one-off operational script,
+outside the application. Those keys are not covered by a team budget until they
+have been assigned to the corresponding Organization team.
+
+Budget enforcement is opt-in through the deployment environment; see
+[configuration and rollout](../guidelines/operations.md#organization-llm-budgets).
+Each Organization gets its own allowance. The deployment owns these team budget
+fields, so changes apply to existing teams on API restart. An unchanged policy
+performs no update; changing only the amount preserves the renewal date. Changing
+the duration schedules the next renewal from the update time. No reconciliation
+writes `spend` or resets accumulated usage. Removing the amount clears the limit
+and renewal schedule. Teams are retained on Organization deletion for historical
+attribution; their Agent keys have already been blocked by Agent deletion.
+
+LiteLLM enforces its own recorded spend, independently of `cost_record` and
+OpenRouter cost healing. Historical requests made before team attachment are not
+retroactively assigned to the team's allowance. In-flight requests and delayed
+or missing LiteLLM cost accounting can exceed or undercount a cap; healing the
+Agent Barn cost table does not repair LiteLLM's budget counters. This is a proxy
+spend cutoff, not an exact provider-invoice ceiling. Only calls using these
+LiteLLM Agent keys count. A budget rejection does not stop the Agent container
+or suspend the Organization; model calls fail until the allowance renews or is
+raised/removed.
+
 ## Operational
 
 - The CronJob runs every 15 minutes under `concurrencyPolicy: Forbid`. `COST_SYNC_MAX_RUNTIME_SECONDS` must stay below the schedule interval: an overrunning pass does not overlap, it silently costs the next tick.

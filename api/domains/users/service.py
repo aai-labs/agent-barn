@@ -1,3 +1,4 @@
+import logging
 from dataclasses import dataclass
 from uuid import UUID, uuid7
 
@@ -37,7 +38,10 @@ from api.domains.users.organization_users.models import (
 from api.domains.users.organization_users.repository import OrganizationUserRepository
 from api.domains.users.organization_users.service import OrganizationUserService
 from api.domains.users.repository import UserRepository
+from api.infrastructure.litellm.client import LiteLLMClient
 from api.infrastructure.shared.models import PaginatedItems, Pagination
+
+logger = logging.getLogger(__name__)
 
 
 @inject
@@ -47,6 +51,7 @@ class UserService:
     organization_user_service: OrganizationUserService
     organization_user_repository: OrganizationUserRepository
     organization_repository: OrganizationRepository
+    litellm: LiteLLMClient
     refresh_token_repository: RefreshTokenRepository
     config: Config
     event_delivery_dispatcher: EventDeliveryDispatcher
@@ -108,6 +113,15 @@ class UserService:
             )
             session.commit()
 
+        if self.config.litellm_base_url and self.config.litellm_secret_name:
+            try:
+                self.litellm.ensure_organization_team(str(organization.id))
+            except Exception as exc:
+                # Creation already committed; key generation retries provisioning
+                # and refuses to issue a key without its team.
+                logger.error(
+                    "LiteLLM team provisioning deferred for Organization %s (%s)", organization.id, type(exc).__name__
+                )
         self.auth_service.send_prepared_invite(prepared)
         organization_read = self.organization_repository.get_platform_read(organization.id)
         if organization_read is None or prepared.invite_link is None:

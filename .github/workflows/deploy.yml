@@ -261,6 +261,8 @@ jobs:
         env:
           KUBECONFIG: /home/runner/.kube/config
           NAMESPACE: ${{ needs.resolve-env.outputs.namespace }}
+          ORGANIZATION_LLM_BUDGET_USD: ${{ vars[github.ref_name == 'staging' && 'STAGING_ORGANIZATION_LLM_BUDGET_USD' || 'ORGANIZATION_LLM_BUDGET_USD'] }}
+          ORGANIZATION_LLM_BUDGET_DURATION: ${{ vars[github.ref_name == 'staging' && 'STAGING_ORGANIZATION_LLM_BUDGET_DURATION' || 'ORGANIZATION_LLM_BUDGET_DURATION'] || '30d' }}
           LITELLM_KEY_SERVICE_ACCOUNT: ${{ needs.resolve-env.outputs.litellm_key_service_account }}
           API_IMAGE_TAG: ${{ needs.resolve-env.outputs.api_image_tag }}
           UI_IMAGE_TAG: ${{ needs.resolve-env.outputs.ui_image_tag }}

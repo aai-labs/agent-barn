@@ -140,6 +140,10 @@ releases:
         value: {{ env "API_IMAGE_TAG" | default "" | quote }}
       - name: buildSha
         value: {{ env "GIT_SHA" | default "" | quote }}
+      - name: organizationLlmBudgetUsd
+        value: {{ env "ORGANIZATION_LLM_BUDGET_USD" | default "" | quote }}
+      - name: organizationLlmBudgetDuration
+        value: {{ env "ORGANIZATION_LLM_BUDGET_DURATION" | default "30d" | quote }}
       - name: litellmKeyServiceAccountName
         value: {{ env "LITELLM_KEY_SERVICE_ACCOUNT" | default "agent-farm-user" | quote }}
       - name: openclawImage.repository

@@ -284,6 +284,8 @@ jobs:
           KUBECONFIG: /home/runner/.kube/config
           NAMESPACE: agent-farm
           ENVIRONMENT: public
+          ORGANIZATION_LLM_BUDGET_USD: ${{ vars.PUBLIC_ORGANIZATION_LLM_BUDGET_USD }}
+          ORGANIZATION_LLM_BUDGET_DURATION: ${{ vars.PUBLIC_ORGANIZATION_LLM_BUDGET_DURATION || '30d' }}
           LITELLM_KEY_SERVICE_ACCOUNT: agent-farm-user
           API_IMAGE_TAG: ${{ needs.resolve.outputs.api_image_tag }}
           UI_IMAGE_TAG: ${{ needs.resolve.outputs.ui_image_tag }}
