@@ -387,7 +387,274 @@ def test_approval_requests_reach_a_platform_that_refuses_progress_events(monkeyp
         adapter._run_and_drain(delivery, adapter.session_key_for(delivery))
 
     reply_texts = [payload["text"] for url, payload in calls if url.endswith("/replies") and payload is not None]
-    assert reply_texts == ["rm -rf build\nReply with one of: once, deny"]
+    assert reply_texts == ["```\nrm -rf build\n```\nReply with one of: once, deny"]
+
+
+def test_approval_prompt_keeps_a_long_command_reviewable(monkeypatch: pytest.MonkeyPatch) -> None:
+    adapter = _load_adapter(monkeypatch, runtime_kind="hermes")
+    limit = adapter._APPROVAL_COMMAND_MAX_CHARS
+
+    short = adapter._approval_prompt(adapter._bounded_command("echo hi"), ["once", "deny"])
+    assert short == "```\necho hi\n```\nReply with one of: once, deny"
+
+    overlong = adapter._approval_prompt(adapter._bounded_command("x" * (limit + 40)), ["once"])
+    assert "[40 more characters not shown]" in overlong
+    assert overlong.startswith("```\n") and overlong.endswith("Reply with one of: once")
+
+    escaped = adapter._approval_prompt(adapter._bounded_command("cat <<'EOF'\n```\nEOF"), ["once"])
+    assert escaped.count("```") == 2
+
+
+def test_a_late_approval_answer_is_not_handed_to_the_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    adapter = _load_adapter(monkeypatch, runtime_kind="hermes")
+    calls: list[tuple[str, dict | None]] = []
+    monkeypatch.setattr(
+        adapter, "http_request", lambda method, url, *, headers, payload=None: calls.append((url, payload))
+    )
+
+    delivery = {
+        **_DELIVERY,
+        "envelope": {
+            **_DELIVERY["envelope"],
+            "text": "once",
+            "provider_metadata": {"approval_id": "run-1:1.0"},
+        },
+    }
+    handled = adapter.resolve_pending_approval(adapter.session_key_for(delivery), delivery)
+
+    assert handled is True
+    assert not any(url.endswith("/approval") for url, _ in calls)
+    assert [payload["text"] for url, payload in calls if url.endswith("/replies") and payload is not None] == [
+        "No command is waiting for approval."
+    ]
+
+
+def test_an_ordinary_message_is_untouched_when_no_approval_is_pending(monkeypatch: pytest.MonkeyPatch) -> None:
+    adapter = _load_adapter(monkeypatch, runtime_kind="hermes")
+
+    handled = adapter.resolve_pending_approval(adapter.session_key_for(_DELIVERY), _DELIVERY)
+
+    assert handled is False
+
+
+def test_a_typed_choice_word_still_reaches_the_model_when_nothing_is_pending(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = _load_adapter(monkeypatch, runtime_kind="hermes")
+
+    for word in ("deny", "once", "always", "session"):
+        delivery = {**_DELIVERY, "envelope": {**_DELIVERY["envelope"], "text": word}}
+        assert adapter.resolve_pending_approval(adapter.session_key_for(delivery), delivery) is False
+
+
+def test_a_click_from_an_already_resolved_run_cannot_answer_the_current_one(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = _load_adapter(monkeypatch, runtime_kind="hermes")
+    calls: list[tuple[str, dict | None]] = []
+    monkeypatch.setattr(
+        adapter, "http_request", lambda method, url, *, headers, payload=None: calls.append((url, payload))
+    )
+
+    session_key = adapter.session_key_for(_DELIVERY)
+    adapter._PENDING_APPROVALS[session_key] = {
+        "run_id": "run-2",
+        "approval_id": "run-2:2.0",
+        "delivery_id": "delivery-1",
+        "choices": ["once", "deny"],
+    }
+    delivery = {
+        **_DELIVERY,
+        "envelope": {**_DELIVERY["envelope"], "text": "once", "provider_metadata": {"approval_id": "run-1:1.0"}},
+    }
+
+    handled = adapter.resolve_pending_approval(session_key, delivery)
+
+    assert handled is True
+    assert not any(url.endswith("/approval") for url, _ in calls)
+    assert adapter._PENDING_APPROVALS[session_key]["run_id"] == "run-2"
+
+
+def test_a_click_from_the_pending_run_resolves_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    adapter = _load_adapter(monkeypatch, runtime_kind="hermes")
+    calls: list[tuple[str, dict | None]] = []
+    monkeypatch.setattr(
+        adapter, "http_request", lambda method, url, *, headers, payload=None: calls.append((url, payload))
+    )
+
+    session_key = adapter.session_key_for(_DELIVERY)
+    adapter._PENDING_APPROVALS[session_key] = {
+        "run_id": "run-1",
+        "approval_id": "run-1:1.0",
+        "delivery_id": "delivery-1",
+        "choices": ["once", "deny"],
+    }
+    delivery = {
+        **_DELIVERY,
+        "envelope": {**_DELIVERY["envelope"], "text": "once", "provider_metadata": {"approval_id": "run-1:1.0"}},
+    }
+
+    assert adapter.resolve_pending_approval(session_key, delivery) is True
+    assert [payload for url, payload in calls if url.endswith("/approval")] == [{"choice": "once"}]
+    assert session_key not in adapter._PENDING_APPROVALS
+
+
+def _drain_one_approval(adapter, monkeypatch: pytest.MonkeyPatch, choices: list[str]) -> tuple[dict, str]:
+    calls: list[tuple[str, dict | None]] = []
+
+    def fake_http_request(method, url, *, headers, payload=None):
+        calls.append((url, payload))
+        if url.endswith("/v1/runs"):
+            return {"run_id": "run-1"}
+        return None
+
+    monkeypatch.setattr(adapter, "http_request", fake_http_request)
+    monkeypatch.setattr(
+        adapter.urllib.request,
+        "urlopen",
+        _fake_urlopen([("approval.request", {"command": "rm -rf build", "choices": choices})], then_block=True),
+    )
+    session_key = adapter.session_key_for(_DELIVERY)
+    with pytest.raises(_StreamStillOpen):
+        adapter._run_and_drain(_DELIVERY, session_key)
+    return next(payload for url, payload in calls if url.endswith("/replies") and payload), session_key
+
+
+def test_manual_mode_offers_only_per_command_answers(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("APPROVAL_MODE", "manual")
+    adapter = _load_adapter(monkeypatch, runtime_kind="hermes")
+
+    reply, session_key = _drain_one_approval(adapter, monkeypatch, ["once", "session", "always", "deny"])
+
+    assert reply["approval"]["choices"] == ["once", "deny"]
+    assert reply["text"].endswith("Reply with one of: once, deny")
+    assert adapter._PENDING_APPROVALS[session_key]["choices"] == ["once", "deny"]
+
+
+def test_auto_mode_still_offers_every_answer(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("APPROVAL_MODE", raising=False)
+    adapter = _load_adapter(monkeypatch, runtime_kind="hermes")
+
+    reply, _ = _drain_one_approval(adapter, monkeypatch, ["once", "session", "always", "deny"])
+
+    assert reply["approval"]["choices"] == ["once", "session", "always", "deny"]
+
+
+def test_an_answer_that_was_not_offered_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    adapter = _load_adapter(monkeypatch, runtime_kind="hermes")
+    calls: list[tuple[str, dict | None]] = []
+    monkeypatch.setattr(
+        adapter, "http_request", lambda method, url, *, headers, payload=None: calls.append((url, payload))
+    )
+    session_key = adapter.session_key_for(_DELIVERY)
+    adapter._PENDING_APPROVALS[session_key] = {
+        "run_id": "run-1",
+        "approval_id": "run-1:1.0",
+        "delivery_id": "delivery-1",
+        "choices": ["once", "deny"],
+    }
+    delivery = {**_DELIVERY, "envelope": {**_DELIVERY["envelope"], "text": "always"}}
+
+    assert adapter.resolve_pending_approval(session_key, delivery) is True
+    assert not any(url.endswith("/approval") for url, _ in calls)
+    assert [payload["text"] for url, payload in calls if url.endswith("/replies") and payload is not None] == [
+        "Please reply with one of: once, deny"
+    ]
+    assert session_key in adapter._PENDING_APPROVALS
+
+
+def test_text_that_is_not_a_choice_still_reaches_the_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
+    adapter = _load_adapter(monkeypatch, runtime_kind="hermes")
+    calls: list[tuple[str, dict | None]] = []
+    monkeypatch.setattr(
+        adapter, "http_request", lambda method, url, *, headers, payload=None: calls.append((url, payload))
+    )
+    session_key = adapter.session_key_for(_DELIVERY)
+    adapter._PENDING_APPROVALS[session_key] = {
+        "run_id": "run-1",
+        "approval_id": "run-1:1.0",
+        "delivery_id": "delivery-1",
+        "choices": ["once", "deny"],
+    }
+    delivery = {**_DELIVERY, "envelope": {**_DELIVERY["envelope"], "text": "what does that command do?"}}
+
+    adapter.resolve_pending_approval(session_key, delivery)
+
+    assert [payload for url, payload in calls if url.endswith("/approval")] == [
+        {"choice": "what does that command do?"}
+    ]
+
+
+def test_approve_still_means_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    adapter = _load_adapter(monkeypatch, runtime_kind="hermes")
+    calls: list[tuple[str, dict | None]] = []
+    monkeypatch.setattr(
+        adapter, "http_request", lambda method, url, *, headers, payload=None: calls.append((url, payload))
+    )
+    session_key = adapter.session_key_for(_DELIVERY)
+    adapter._PENDING_APPROVALS[session_key] = {
+        "run_id": "run-1",
+        "approval_id": "run-1:1.0",
+        "delivery_id": "delivery-1",
+        "choices": ["once", "deny"],
+    }
+    delivery = {**_DELIVERY, "envelope": {**_DELIVERY["envelope"], "text": "approve"}}
+
+    assert adapter.resolve_pending_approval(session_key, delivery) is True
+    assert [payload for url, payload in calls if url.endswith("/approval")] == [{"choice": "once"}]
+
+
+def test_the_same_command_asked_twice_in_one_run_is_posted_twice(monkeypatch: pytest.MonkeyPatch) -> None:
+    adapter = _load_adapter(monkeypatch, runtime_kind="hermes")
+    calls: list[tuple[str, dict | None]] = []
+
+    def fake_http_request(method, url, *, headers, payload=None):
+        calls.append((url, payload))
+        if url.endswith("/v1/runs"):
+            return {"run_id": "run-1"}
+        return None
+
+    monkeypatch.setattr(adapter, "http_request", fake_http_request)
+    monkeypatch.setattr(
+        adapter.urllib.request,
+        "urlopen",
+        _fake_urlopen(
+            [
+                ("approval.request", {"command": "rm -rf build", "choices": ["once", "deny"], "timestamp": 1.0}),
+                ("approval.request", {"command": "rm -rf build", "choices": ["once", "deny"], "timestamp": 2.0}),
+            ],
+            then_block=True,
+        ),
+    )
+
+    with pytest.raises(_StreamStillOpen):
+        adapter._run_and_drain(_DELIVERY, adapter.session_key_for(_DELIVERY))
+
+    keys = [payload["idempotency_key"] for url, payload in calls if url.endswith("/replies") and payload is not None]
+    assert len(keys) == 2
+    assert keys[0] != keys[1]
+
+
+def test_an_overlong_command_still_yields_a_valid_reply(monkeypatch: pytest.MonkeyPatch) -> None:
+    adapter = _load_adapter(monkeypatch, runtime_kind="hermes")
+    limit = adapter._APPROVAL_COMMAND_MAX_CHARS
+
+    bounded = adapter._bounded_command("x" * 100_001)
+
+    assert len(bounded) < 100_000
+    assert bounded.startswith("x" * limit)
+    assert "more characters not shown" in bounded
+    assert adapter._bounded_command(12345) == "12345"
+
+
+def test_each_approval_in_a_run_gets_its_own_identity(monkeypatch: pytest.MonkeyPatch) -> None:
+    adapter = _load_adapter(monkeypatch, runtime_kind="hermes")
+
+    first = adapter._approval_id("run-1", {"timestamp": 1.5}, 1)
+    assert first == adapter._approval_id("run-1", {"timestamp": 1.5}, 9)
+    assert first != adapter._approval_id("run-1", {"timestamp": 2.5}, 1)
+    assert first != adapter._approval_id("run-2", {"timestamp": 1.5}, 1)
+    assert adapter._approval_id("run-1", {}, 4) == "run-1:4"
 
 
 def test_progress_line_renders_full_sentences_for_known_tools(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -588,6 +855,11 @@ def test_hermes_approval_request_relays_regardless_of_verbose_mode(monkeypatch: 
     reply_calls = [payload for url, payload in calls if url.endswith("/replies") and payload is not None]
     assert len(reply_calls) == 1
     assert "rm -rf /tmp/x" in reply_calls[0]["text"]
+    assert reply_calls[0]["approval"] == {
+        "approval_id": adapter._PENDING_APPROVALS[session_key]["approval_id"],
+        "command": "rm -rf /tmp/x",
+        "choices": ["once", "deny"],
+    }
     assert not any(url.endswith("/complete") for url, _ in calls)
     assert adapter._PENDING_APPROVALS[session_key]["run_id"] == "run-1"
 
@@ -599,6 +871,7 @@ def test_an_approval_answer_is_matched_past_the_provider_mention(monkeypatch: py
     session_key = adapter.session_key_for(_DELIVERY)
     adapter._PENDING_APPROVALS[session_key] = {
         "run_id": "run-1",
+        "approval_id": "run-1:1.0",
         "delivery_id": "delivery-1",
         "choices": ["once", "session", "always", "deny"],
     }
@@ -631,6 +904,7 @@ def test_hermes_second_delivery_for_pending_session_resolves_approval(monkeypatc
     session_key = adapter.session_key_for(_DELIVERY)
     adapter._PENDING_APPROVALS[session_key] = {
         "run_id": "run-1",
+        "approval_id": "run-1:1.0",
         "delivery_id": "delivery-1",
         "choices": ["once", "deny"],
     }

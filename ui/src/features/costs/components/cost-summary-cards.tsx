@@ -4,7 +4,12 @@ import type { ReactNode } from "react";
 
 import { Skeleton } from "@/components/ui/skeleton";
 
-import { formatCallSpend, formatSpend, formatTokens } from "../format";
+import {
+  formatCallSpend,
+  formatModelLabel,
+  formatSpend,
+  formatTokens,
+} from "../format";
 import type { CostSummary } from "../schemas";
 
 interface CostSummaryCardsProps {
@@ -57,7 +62,7 @@ export function CostSummaryCards({
       />
       <StatCard
         label="Top model"
-        value={summary.topModel ? shortModel(summary.topModel) : "—"}
+        value={summary.topModel ? formatModelLabel(summary.topModel) : "—"}
         hint={summary.topModel ? formatSpend(summary.topModelSpend) : "no spend yet"}
         testId="cost-top-model"
       />
@@ -76,12 +81,6 @@ export function CostSummaryCards({
       {children}
     </div>
   );
-}
-
-/** Provider-qualified ids are too long for a card. The last segment is the name
- *  people actually say. */
-export function shortModel(model: string): string {
-  return model.split("/").at(-1) ?? model;
 }
 
 export function StatCard({

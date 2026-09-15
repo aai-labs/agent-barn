@@ -10,7 +10,7 @@ from urllib.request import Request, urlopen
 
 PROXY_PORT = 8090
 PORT = int(os.environ.get("HEALTHZ_PORT", "8081"))
-HERMES_URL = "http://localhost:8642/v1/models"
+HERMES_URL = "http://127.0.0.1:8642/v1/models"
 POLL_INTERVAL = 10
 
 LITELLM_PROXY_TARGET = os.environ.get("LITELLM_PROXY_TARGET", "")

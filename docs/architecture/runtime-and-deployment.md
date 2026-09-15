@@ -2,7 +2,7 @@
 
 ## Read when
 
-Read before changing Hermes/OpenClaw behavior, agent Kubernetes resources, runtime images, telemetry configuration, Helm charts, deployment workflows, or service versions.
+Read before changing Agent Restore Point Jobs, Hermes/OpenClaw behavior, agent Kubernetes resources, runtime images, telemetry configuration, Helm charts, deployment workflows, or service versions.
 
 ## Agent runtime assembly
 
@@ -24,6 +24,12 @@ Runtime behaviour policies are appended to `AGENTS.md` rather than stored in a t
 A Kubernetes/runtime start failure can place the Agent in `ERROR`; successful start clears the prior lifecycle error. Hermes and OpenClaw Deployments repair ownership of their root-mounted persistent state in a root init container before starting their non-root runtime, and pre-create Hermes' `workspace` subPath. Hermes base-image CI starts the real image against a fresh root-owned Docker volume, executes the generated init-container command as root, then proves the default `hermes` user can create the startup directories and write through the persistent workspace. Google Workspace runtime state is rebuilt by a ConfigMap-mounted `gog-setup.sh` from `GOG_*` Secret environment and is kept outside the persistent workspace. Connection validation and provider-session failures instead update that Communication Connection's observed health and do not change Agent lifecycle.
 
 Command approval (the persisted `approval_mode` field) is mapped onto a runtime policy only for Hermes: `builders/hermes.py` maps `manual`→`manual`, `auto`→`smart`, and `off`→`off` into the Hermes `approvals.mode` config. OpenClaw has no user-configurable command-approval control — `build_openclaw_gateway_config` never receives or emits an approvals block — so the API rejects an explicit non-default `approval_mode` for an OpenClaw Agent instead of accepting and silently ignoring it. OpenClaw-specific command approval is tracked as a separate follow-up.
+
+Alongside the mode, the generated config pins `approvals.timeout`, `approvals.cron_mode`, and `approvals.single_query_mode` to the pinned image's own defaults. This changes no behaviour today; it stops a runtime upgrade from moving the approval policy silently. `unattended_mode` is deliberately not emitted — v2026.8.19 does not read it, so writing it would be a no-op rather than an error. Headless approval policy therefore remains `deny`: a cron or heartbeat run that trips a dangerous-command gate is refused immediately rather than waiting out the timeout, because no human is present on those paths to answer. `BOOT.md` is the exception — it is driven through `/v1/runs` by `boot-run.py`, which the runtime treats as an interactive gateway session, so a flagged startup command parks awaiting an approval no one is watching for until the timeout denies it. Keeping startup work clear of flagged commands is the practical remedy. The image smoke test asserts each of these keys is still recognised, so an upgrade that renames one fails on the version bump rather than on a live Agent.
+
+Hermes answers an approval with `always` by appending the pattern to root-level `command_allowlist` in its own `config.yaml`, which lives on the Agent PVC at `/opt/data/config.yaml`. `start.sh` therefore merges that file rather than copying over it: every settings-derived key is reasserted from the ConfigMap, and only `command_allowlist` is carried forward from the previous boot. The direction matters in both senses — copying over it revoked every permanent approval on each pod restart, while preserving the whole file would freeze an Agent on the model, approval mode, and plugin set it first started with, so a user could change a setting, receive a 200, restart, and observe nothing. The merge writes through a temporary file and renames, and any failure falls back to the original copy so a malformed persisted config cannot stop the runtime from booting.
+
+An `always` grant is broader than it reads. For a dangerous-pattern finding Hermes stores the pattern rather than the command, so one grant approves the whole category — every `python3 -c`, `node -e` and `bash -c` after a single click on one of them — and the pinned image consults the allowlist before it branches on `approvals.mode`, so a grant made in `smart` would silence `manual` too. Manual mode therefore always asks. Grants live in an Agent Barn-owned file beside the config, `agentbarn-command-allowlist.json`, which each boot unions with anything Hermes wrote since; they are handed to Hermes only when the Agent is not in manual mode, and return when it leaves manual mode. The runtime adapter receives the mode as `APPROVAL_MODE` in the runtime Secret: in manual mode it offers only `once` and `deny`, and in every mode it accepts only an answer that was actually offered, so a typed `always` cannot create the grant the buttons withheld. The pinned endpoint itself accepts any of the four answers regardless of what it offered.
 
 Progress visibility (the persisted `verbose_mode` field) is Hermes-only for a different reason: it isn't a missing config mapping, it's a missing transport. Hermes's `/v1/runs` API exposes mid-turn `tool.started`/`subagent.*` events over HTTP, which `communications-runtime-adapter.py` relays to chat only when `verbose_mode` is set. OpenClaw has the same kind of signal internally (`onAgentEvent` emits `"tool"`/`"thinking"`/`"item"` streams), but neither of its external HTTP surfaces (`/v1/chat/completions`, `/v1/responses`) forwards anything but the final assistant content and a terminal lifecycle event — there is no HTTP channel for the adapter to read progress from. Reaching parity needs an in-process OpenClaw plugin (same plugin SDK the shipped `telemetry-push` plugin uses) that bridges `onAgentEvent` progress out to Communications; until that exists, the API rejects `verbose_mode=true` for an OpenClaw Agent rather than accepting a setting with no effect. Tracked as the same follow-up as OpenClaw approval parity.
 
@@ -92,6 +98,33 @@ Every release's namespace and `needs:` entries are templated on a `NAMESPACE` en
 ## Observability
 
 `../../helm/monitoring/` deploys namespace-scoped Prometheus, Grafana, and Alertmanager charts. The product API exposes platform probes on `:8000`, Ingest exposes telemetry metrics on `:8001`, and Communications exposes HTTP metrics on `:8002`; LiteLLM and Agent health services retain their existing scrape targets. Alert rules route through Alertmanager, and Grafana dashboards are provisioned from chart ConfigMaps.
+
+## Restore point Jobs
+
+Capture and restore run as `batch/v1` Jobs rather than pods managed by the API, and reuse the
+API's own image so the archive logic and its exclusion sets are always the same build as the
+API that scheduled them — `API_IMAGE` is rendered from the same chart expression as the API
+container's `image`. Nothing new is built or published.
+
+Both mount the Agent's `agent-<uuid>` PVC, which is why they require a stopped Agent: the
+volume is ReadWriteOnce and cannot be held by the Agent pod and a Job pod at once. Capture
+mounts the Agent volume read-only alongside a fresh per-restore-point PVC. Restore mounts
+three — the Agent volume writable, the new Pre-Restore destination, and the chosen archive
+read-only — and performs the safety-net capture and the extraction in one process, so the
+backup is on disk before anything is wiped.
+
+The Job runs as root. Extraction then applies the ownership the target volume already had,
+read before the wipe, because the two runtimes differ: Hermes' init container chowns `/opt/data`
+recursively, while OpenClaw's chowns only the mount point, so a restore cannot rely on the next
+start to repair ownership.
+
+The API learns each Job's outcome by reading its status, and its archive manifest by reading
+the Job pod's logs — the manifest is written onto the restore point's PVC, which the API cannot
+mount. Distinct exit codes separate a failed safety-net capture, where the Agent volume was
+never touched, from a failed extraction, where it was.
+
+CSI `VolumeSnapshot` is deliberately unused; see
+[`../adr/2026-09-10-restore-points-use-tar-jobs-not-csi-snapshots.md`](../adr/2026-09-10-restore-points-use-tar-jobs-not-csi-snapshots.md).
 
 ## Kubernetes client constraint
 

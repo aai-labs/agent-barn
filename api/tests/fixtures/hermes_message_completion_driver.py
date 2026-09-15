@@ -59,4 +59,14 @@ if len(rows) != deliverable or len({row[0] for row in rows}) != deliverable:
     raise AssertionError(f"Expected {deliverable} distinct deliverable executions, got {len(rows)}")
 if any(not row[0].startswith("hermes:") or row[2] is not None for row in rows):
     raise AssertionError("Completions must retain durable run identities until acknowledgement")
+# A channel-root target has no native Slack credentials by design; preflight must not
+# refuse it before the bridge ever sees the completion.
+channel_job = {"deliver": "slack:C123:"}
+with (
+    patch.object(scheduler, "_preflight_check_provider_key", return_value=None),
+    patch.object(scheduler, "_preflight_check_skills", return_value=None),
+):
+    reason = scheduler._preflight_job_config(channel_job, {})
+if reason:
+    raise AssertionError(f"Delivery preflight blocked a bridge-delivered job: {reason}")
 print("Hermes native completion capture and exact silence contract passed")

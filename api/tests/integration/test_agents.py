@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 from uuid import UUID, uuid7
 
 import httpx
+import pytest
 from fastapi import HTTPException, status
 from hamcrest import (
     assert_that,
@@ -24,6 +25,7 @@ from api.domains.agents.models import (
     AgentTemplateOverrideSourceType,
     AgentTemplateOverrideVersion,
     AgentType,
+    CommandApprovalMode,
     SecretProvider,
 )
 from api.domains.agents.override_repository import AgentOverrideRepository
@@ -2335,6 +2337,35 @@ def test_start_hermes_agent_configmap_has_hermes_config():
 
         with then("BOOTSTRAP.md is absent from the ConfigMap"):
             assert_that(config_map.data, is_not(has_key("BOOTSTRAP.md")))
+
+
+@pytest.mark.parametrize(
+    "approval_mode,runtime_mode",
+    [
+        (CommandApprovalMode.MANUAL, "manual"),
+        (CommandApprovalMode.AUTO, "smart"),
+        (CommandApprovalMode.OFF, "off"),
+    ],
+)
+def test_start_hermes_agent_carries_the_chosen_approval_mode_to_the_runtime(approval_mode, runtime_mode):
+    import yaml as _yaml
+
+    with given(
+        [*_GIVEN_WITH_HERMES_IMAGE, there_is_an_agent(agent_type=AgentType.HERMES, approval_mode=approval_mode)]
+    ) as context:
+        client: TestClient = context.client
+        k8s: MagicMock = context.injector.get(KubernetesClient)
+
+        with when("I start the Hermes agent"):
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("the runtime config and the adapter both receive the chosen mode"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            config_map = k8s.create_config_map.call_args.args[1]
+            cfg = _yaml.safe_load(config_map.data["hermes-config.yaml"])
+            assert_that(cfg["approvals"]["mode"], equal_to(runtime_mode))
+            _, secret = k8s.create_secret.call_args.args
+            assert_that(secret.string_data["APPROVAL_MODE"], equal_to(approval_mode.value))
 
 
 def test_start_hermes_agent_deployment_has_workspace_volume():

@@ -247,6 +247,65 @@ test.describe("Organization detail — delete", () => {
     await expect(page.getByText(/organization deleted/i)).toBeVisible();
     await expect(page).toHaveURL(new RegExp(`${ORGS_URL}$`));
   });
+
+  test("drops the deleted organization from the switcher without a reload", async ({
+    page,
+  }) => {
+    // The switcher lists the user's memberships from current-user-context, not from
+    // the organizations queries, so it only refreshes if the delete invalidates that
+    // too. Serve both orgs until the delete lands, then only Globex.
+    let deleted = false;
+    await page.route("**/api/v1/auth/me", async (route) => {
+      if (route.request().method() !== "GET") {
+        await route.fallback();
+        return;
+      }
+      const context = userWithOrgMemberships();
+      if (deleted) {
+        context.organization_users = context.organization_users.filter(
+          (membership) => membership.organization_id !== ORG_A_ID,
+        );
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(context),
+      });
+    });
+    await page.route(`**/api/v1/organizations/${ORG_A_ID}`, async (route) => {
+      if (route.request().method() !== "DELETE") {
+        await route.fallback();
+        return;
+      }
+      deleted = true;
+      await route.fulfill({ status: 204, body: "" });
+    });
+
+    await page.goto(DETAIL_URL);
+
+    const switcher = page.locator('button[aria-haspopup="listbox"]');
+    await switcher.click();
+    await expect(
+      page.getByRole("listbox").getByRole("option", { name: /aai labs/i }),
+    ).toBeVisible();
+    await page.keyboard.press("Escape");
+
+    await page.getByRole("button", { name: /delete organization/i }).click();
+    const dialog = page.getByRole("dialog");
+    await dialog.getByLabel(/confirm organization name/i).fill("AAI Labs");
+    await dialog.getByRole("button", { name: /delete organization/i }).click();
+
+    await expect(page.getByText(/organization deleted/i)).toBeVisible();
+
+    await switcher.click();
+    const listbox = page.getByRole("listbox");
+    await expect(
+      listbox.getByRole("option", { name: /globex/i }),
+    ).toBeVisible();
+    await expect(
+      listbox.getByRole("option", { name: /aai labs/i }),
+    ).toHaveCount(0);
+  });
 });
 
 test.describe("Organization detail — members", () => {
@@ -281,6 +340,80 @@ test.describe("Organization detail — members", () => {
     await expect(
       page.getByRole("dialog").locator("input[readonly]"),
     ).toHaveValue(/set-password\?token=/);
+  });
+
+  test("adding an existing active user reports no invite was sent", async ({ page }) => {
+    // AF-244: an existing account keeps the one link it already has, so the add returns
+    // no invite_link and the dialog must not claim one went out.
+    await data.organizations.interceptAddMember({
+      result: {
+        member: {
+          user_id: "66666666-6666-4666-8666-666666666666",
+          email: "teammate@example.com",
+          full_name: null,
+          role: "MEMBER",
+          is_pending: false,
+        },
+        invite_link: null,
+      },
+    });
+    await page.goto(DETAIL_URL);
+
+    await page.getByRole("button", { name: /add member/i }).click();
+    await page.getByLabel(/email/i).fill("teammate@example.com");
+    await page
+      .getByRole("dialog")
+      .getByRole("button", { name: /add member/i })
+      .click();
+
+    await expect(
+      page.getByRole("heading", { name: /member added/i }),
+    ).toBeVisible();
+    await expect(
+      page.getByText(/can sign in right away/i),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("dialog").locator("input[readonly]"),
+    ).toHaveCount(0);
+  });
+
+  test("adding an existing pending user points the admin to Resend invite", async ({
+    page,
+  }) => {
+    // AF-244 review: a pending user (never set a password) also gets no link, but the
+    // copy must say so distinctly from an active user — they can't sign in yet, and the
+    // admin needs the hint that Resend invite exists for them.
+    await data.organizations.interceptAddMember({
+      result: {
+        member: {
+          user_id: "77777777-7777-4777-8777-777777777777",
+          email: "still-pending@example.com",
+          full_name: null,
+          role: "MEMBER",
+          is_pending: true,
+        },
+        invite_link: null,
+      },
+    });
+    await page.goto(DETAIL_URL);
+
+    await page.getByRole("button", { name: /add member/i }).click();
+    await page.getByLabel(/email/i).fill("still-pending@example.com");
+    await page
+      .getByRole("dialog")
+      .getByRole("button", { name: /add member/i })
+      .click();
+
+    await expect(
+      page.getByRole("heading", { name: /member added/i }),
+    ).toBeVisible();
+    await expect(
+      page.getByText(/outstanding invite from before/i),
+    ).toBeVisible();
+    await expect(page.getByText(/resend invite/i)).toBeVisible();
+    await expect(
+      page.getByRole("dialog").locator("input[readonly]"),
+    ).toHaveCount(0);
   });
 
   test("promotes a member to admin via the actions menu", async ({ page }) => {
