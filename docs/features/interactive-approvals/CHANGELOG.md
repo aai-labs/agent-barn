@@ -7,13 +7,20 @@ Related context: [`../communications/CHANGELOG.md`](../communications/CHANGELOG.
 ## Current state
 
 - Delivered: Slack renders clickable command-approval buttons and ingests clicks (AF-299, PR #198). The platform-neutral pieces every approval-capable plugin shares — the `approval_id` metadata key, the synthesized `action:` message-id prefix, choice labels, and the button-value codec — live in `api/domains/communications/plugins/approvals.py`. The runtime adapter keeps its own copy of the metadata key because it runs inside the Agent pod and cannot import the API; a unit test pins the two together.
+- Delivered: the Web Chat API exposes an approval prompt's `approval` on history and live-stream messages and accepts an `approval_id` with a sent message. No buttons render yet.
 - In transition: nothing.
-- Next: Web Chat API — surface the approval on Web Chat messages and accept an approval answer.
+- Next: Web Chat UI — render the approval as buttons and send the answer with its `approval_id`.
 - Blockers: Teams implementation waits on a live-tenant spike to confirm the `Action.Execute` invoke payload in personal chat, group chat and channel before any card code is written.
 
 Every slice must hold the shared contract: one button per offered choice; the typed reply stays usable; a click arrives as an ordinary inbound message whose conversation and thread match the pending approval; the click re-passes every policy gate a typed message passes; a synthesized `action:` id is never sent to a provider as a reply reference; and ordinary sends are unchanged. None of the planned slices changes the runtime adapter, so each ships with an API deploy alone.
 
 ## Changes
+
+### 2026-09-15 — AF-325 — Web Chat API
+
+- Delivered: `WebChatMessageRead.approval` on history and live-stream refreshes, read from the outbound delivery envelope — no migration. `WebChatMessageCreate.approval_id`, stored as the inbound delivery's `provider_metadata["approval_id"]` so the runtime adapter matches the answer to its pending approval.
+- Changed: answering an approval uses the existing send endpoint and its Agent update permission; a viewer is refused. A stored approval that fails validation — for example one written before the identity field was renamed during AF-299 — is omitted instead of failing the thread.
+- Follow-up: Web Chat UI.
 
 ### 2026-09-15 — AF-325 — Shared approval module
 

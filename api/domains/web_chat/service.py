@@ -19,6 +19,7 @@ from api.domains.communications.models import (
     ConversationLocation,
     NormalizedCommunicationEnvelope,
 )
+from api.domains.communications.plugins.approvals import APPROVAL_METADATA_KEY
 from api.domains.communications.plugins.web import WebPlatformPlugin
 from api.domains.communications.repository import (
     CommunicationConnectionConflictError,
@@ -55,6 +56,7 @@ class WebChatService:
         text: str,
         thread_id: str,
         context: CurrentUserContext,
+        approval_id: str | None = None,
     ) -> WebChatMessageRead:
         agent = self.authorization.require_action(context, agent_id, PermissionKey.AGENT_UPDATE)
         connection = self._get_or_create_connection(agent.id, agent.organization_id)
@@ -73,6 +75,7 @@ class WebChatService:
                 display_name=context.user.full_name or context.user.email,
             ),
             text=text,
+            provider_metadata={APPROVAL_METADATA_KEY: approval_id} if approval_id else {},
         )
         accepted = self.gateway.accept_inbound(connection.id, envelope)
         return WebChatMessageRead(
@@ -318,6 +321,7 @@ class WebChatService:
                 delivery_state.status if delivery_state is not None else CommunicationDeliveryStatus.SUCCEEDED
             ),
             cancel_requested_at=delivery_state.cancel_requested_at if delivery_state is not None else None,
+            approval=delivery_state.approval if delivery_state is not None else None,
         )
 
     @staticmethod
