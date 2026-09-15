@@ -1,7 +1,7 @@
 """remove Slack Connection verbose mode
 
 Revision ID: c4e8a2f19d73
-Revises: b3d1f47c9a20
+Revises: a7c3e91d5b48
 Create Date: 2026-09-14 00:00:00.000000
 
 """
@@ -10,7 +10,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "c4e8a2f19d73"
-down_revision: str | None = "b3d1f47c9a20"
+down_revision: str | None = "a7c3e91d5b48"
 branch_labels: str | None = None
 depends_on: str | None = None
 
