@@ -25,6 +25,7 @@ _COMMON_SCRIPTS = _SCRIPTS.parent
 _TELEMETRY_PUSH = _SCRIPTS / "plugins" / "telemetry-push"
 
 HERMES_BOOTLOADER_FOOTER: str = (_SCRIPTS / "bootloader-footer.md").read_text()
+HERMES_CONFIG_MERGE_PY: str = (_SCRIPTS / "config-merge.py").read_text()
 HERMES_HEALTHZ_PY: str = (_SCRIPTS / "healthz-server.py").read_text()
 HERMES_START_SH: str = (_SCRIPTS / "start.sh").read_text()
 TELEMETRY_PUSH_PLUGIN_YAML: str = (_TELEMETRY_PUSH / "plugin.yaml").read_text()
@@ -33,6 +34,27 @@ COMMUNICATIONS_RUNTIME_ADAPTER_PY: str = (_COMMON_SCRIPTS / "communications-runt
 
 
 _HERMES_APPROVAL_MODE = {"manual": "manual", "auto": "smart", "off": "off"}
+_HERMES_APPROVAL_TIMEOUT_SECONDS = 300
+_HERMES_HEADLESS_APPROVAL_MODE = "deny"
+# Every auxiliary.<task> block v2026.8.19 reads, minus the moa_* slots (MoA only).
+_HERMES_AUXILIARY_TASKS = (
+    "vision",
+    "web_extract",
+    "compression",
+    "skills_hub",
+    "approval",
+    "mcp",
+    "title_generation",
+    "memory_query_rewrite",
+    "tts_audio_tags",
+    "triage_specifier",
+    "kanban_decomposer",
+    "profile_describer",
+    "goal_judge",
+    "curator",
+    "monitor",
+    "background_review",
+)
 
 _MESSAGE_SCRIPTS = _COMMON_SCRIPTS / "messaging"
 HERMES_BOOT_RUN_PY: str = (_SCRIPTS / "boot-run.py").read_text()
@@ -86,6 +108,19 @@ def _hermes_config_core(
         },
         "approvals": {
             "mode": _HERMES_APPROVAL_MODE.get(approval_mode, "smart"),
+            "timeout": _HERMES_APPROVAL_TIMEOUT_SECONDS,
+            "cron_mode": _HERMES_HEADLESS_APPROVAL_MODE,
+            "single_query_mode": _HERMES_HEADLESS_APPROVAL_MODE,
+        },
+        # Left on "auto", auxiliary tasks resolve via provider=openrouter, find no
+        # OPENROUTER_API_KEY, and fall back to a keyless client the LiteLLM proxy
+        # rejects: smart approval escalated every flagged command, and title
+        # generation and vision failed. "custom" reuses OPENAI_API_KEY from the
+        # runtime secret against the same proxy. The main model stays on
+        # "openrouter" because "custom" there drops that key.
+        "auxiliary": {
+            task: {"provider": "custom", "base_url": litellm_base_url, "model": model_name}
+            for task in _HERMES_AUXILIARY_TASKS
         },
     }
 
@@ -132,6 +167,7 @@ def build_hermes_config_map(
         "telemetry-push-plugin.yaml": TELEMETRY_PUSH_PLUGIN_YAML,
         "telemetry-push-init.py": TELEMETRY_PUSH_PLUGIN_INIT,
         "healthz-server.py": HERMES_HEALTHZ_PY,
+        "config-merge.py": HERMES_CONFIG_MERGE_PY,
         "start.sh": HERMES_START_SH,
         "communications-runtime-adapter.py": COMMUNICATIONS_RUNTIME_ADAPTER_PY,
         "agentbarn_message.py": (_MESSAGE_SCRIPTS / "agentbarn_message.py").read_text(),
@@ -166,6 +202,7 @@ def build_secret_hermes_runtime(
     litellm_api_key: str,
     litellm_base_url: str,
     verbose_mode: bool = False,
+    approval_mode: str = "auto",
 ) -> client.V1Secret:
     return client.V1Secret(
         metadata=client.V1ObjectMeta(
@@ -178,7 +215,10 @@ def build_secret_hermes_runtime(
             "OPENAI_BASE_URL": litellm_base_url,
             "OPENROUTER_BASE_URL": litellm_base_url,
             "API_SERVER_ENABLED": "true",
-            "API_SERVER_HOST": "0.0.0.0",
+            # Only in-pod callers (adapter, boot-run, healthz) reach the API server,
+            # and the Service does not expose it; loopback keeps the unsandboxed
+            # terminal off the pod network.
+            "API_SERVER_HOST": "127.0.0.1",
             "API_SERVER_PORT": "8642",
             "API_SERVER_KEY": runtime_api_key,
             "API_SERVER_MODEL_NAME": agent_name,
@@ -187,6 +227,7 @@ def build_secret_hermes_runtime(
             "RUNTIME_MODEL": agent_name,
             "RUNTIME_KIND": "hermes",
             "VERBOSE_MODE": "true" if verbose_mode else "false",
+            "APPROVAL_MODE": approval_mode,
         },
     )
 

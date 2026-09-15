@@ -2,7 +2,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
-from hamcrest import assert_that, equal_to
+from hamcrest import assert_that, equal_to, has_key, not_
 
 from api.domains.communications.models import OutboundTargetRequest, PlatformCapability
 from api.domains.communications.plugins.discord import DiscordPlatformPlugin
@@ -13,6 +13,15 @@ from api.domains.communications.plugins.telegram import TelegramPlatformPlugin
 CONFIG = SimpleNamespace(
     skip_slack_token_validation=True, skip_discord_token_validation=True, skip_telegram_token_validation=True
 )
+
+
+def test_slack_settings_retire_announce_steps_and_discard_legacy_values():
+    schema = SlackSettings.model_json_schema()
+
+    assert_that(schema["properties"], not_(has_key("verbose_mode")))
+    legacy_settings = SlackSettings.model_validate({"verbose_mode": True})
+    assert_that(legacy_settings.model_dump(), not_(has_key("verbose_mode")))
+    assert_that(SlackPlatformPlugin(CONFIG).descriptor.schema_version, equal_to(2))
 
 
 def test_slack_resolves_channel_thread_and_rejects_ambiguous_names():

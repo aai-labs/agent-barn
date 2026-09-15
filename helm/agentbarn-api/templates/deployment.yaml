@@ -91,6 +91,24 @@ spec:
             - name: STORAGE_CLASS
               value: "{{ .Values.storageClass }}"
             {{- end }}
+            - name: API_IMAGE
+              value: "{{ .Values.registryPrefix }}/{{ .Values.image.repository }}:{{ required "image.tag is required" .Values.image.tag }}"
+            {{- if .Values.restorePoints.size }}
+            - name: RESTORE_POINT_SIZE
+              value: "{{ .Values.restorePoints.size }}"
+            {{- end }}
+            {{- if .Values.restorePoints.maxPerAgent }}
+            - name: RESTORE_POINT_MAX_PER_AGENT
+              value: "{{ .Values.restorePoints.maxPerAgent }}"
+            {{- end }}
+            {{- if .Values.restorePoints.captureTimeoutSeconds }}
+            - name: RESTORE_POINT_CAPTURE_TIMEOUT_SECONDS
+              value: "{{ .Values.restorePoints.captureTimeoutSeconds }}"
+            {{- end }}
+            {{- if .Values.restorePoints.restoreTimeoutSeconds }}
+            - name: RESTORE_POINT_RESTORE_TIMEOUT_SECONDS
+              value: "{{ .Values.restorePoints.restoreTimeoutSeconds }}"
+            {{- end }}
           volumeMounts:
             - name: kubeconfig
               mountPath: /etc/kubeconfig
