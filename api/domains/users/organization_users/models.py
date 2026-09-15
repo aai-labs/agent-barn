@@ -95,8 +95,9 @@ class TransferOwnershipRequest(PydanticBaseModel):
 
 
 class MemberInviteResult(PydanticBaseModel):
-    """Result of adding/resending an invite. ``invite_link`` is present only when an
-    invite was actually (re)sent to a pending user."""
+    """Result of adding/resending an invite. ``invite_link`` is present only when a link
+    was actually issued — on an add that means a brand-new user, since anyone who already
+    exists keeps the one link their account already has."""
 
     member: OrganizationMemberRead
     invite_link: str | None = None

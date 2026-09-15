@@ -41,6 +41,7 @@ Reading the proxy at request time — the earlier arrangement — meant a failed
 ### Reads
 
 - Every aggregate and the row list run through the same predicate, so a stat card and the table beneath it cannot describe different sets of calls.
+- The ranked Agent table is not capped, unlike the per-Agent series behind the chart: a line per Agent stops being readable after a handful, but a table has to account for every Agent that spent anything. It keeps the unattributed bucket for the same reason the Organization ranking does.
 - On the org surface `organization_id` is pinned by the route and never read from the query string.
 - The platform surface has its own routes, service and read model. The org surface must have no code path that can return another organization's name or spend.
 - The unattributed bucket stays inside platform totals and is also reported separately. Excluding it would make the platform total exceed the sum of the organizations listed beneath it.
@@ -53,6 +54,7 @@ Reading the proxy at request time — the earlier arrangement — meant a failed
 - Organization cost summaries require the Organization Permission `cost.read`; fixed Organization Owner/Admin roles receive it. An Agent Access Role never authorizes an Organization-wide summary.
 - Per-Agent detail requires `cost.read` through the effective Agent Access Role. Agent Viewer, Editor and Owner can read accessible active-Agent costs; Organization Owner/Admin may also read deleted-Agent history.
 - Per-Agent detail respects the requested window. It previously read `/key/info`, which is lifetime spend and ignores the date range.
+- Per-Agent detail carries its own spend trend, built from the same series query the Organization summary uses under an Agent-pinned filter. It is not read from the summary: that surface requires the Organization-wide `cost.read` an Agent Access Role never grants, so an Agent Viewer or Editor could not load it. The response echoes the resolved window and granularity, because a chart cannot label a bucket without knowing the resolution it was grouped at.
 - Cost-facing status is mapped to `active`, `stopped`, `error` or `deleted`; it is not the persisted AgentStatus enum.
 - Every platform route requires `require_platform_admin`. Nothing re-scopes by membership, because a platform admin deliberately has none.
 

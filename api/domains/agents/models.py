@@ -1,13 +1,14 @@
 import enum
 import json
 from datetime import datetime
-from typing import Literal, Self
+from typing import Any, Literal, Self
 from uuid import UUID
 
 import sqlalchemy as sa
 from fastapi import Query
 from pydantic import BaseModel as PydanticBaseModel
 from pydantic import ConfigDict, Field, field_validator, model_validator
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Column, Enum, Index
 from sqlmodel import Field as SqlField
 
@@ -17,11 +18,29 @@ from api.domains.users.organization_users.models import OrganizationRole
 from api.infrastructure.crypto import decrypt_token, encrypt_token
 from api.infrastructure.postgres.models import BaseModel
 
+ACTIVE_CAPTURE_PREDICATE = "status IN ('PENDING', 'CAPTURING')"
+
 
 class AgentStatus(str, enum.Enum):
     STOPPED = "STOPPED"
     RUNNING = "RUNNING"
     ERROR = "ERROR"
+
+
+class RestorePointStatus(str, enum.Enum):
+    PENDING = "PENDING"
+    CAPTURING = "CAPTURING"
+    RESTORING = "RESTORING"
+    READY = "READY"
+    FAILED = "FAILED"
+    DELETING = "DELETING"
+
+
+class RestorePointOrigin(str, enum.Enum):
+    MANUAL = "MANUAL"
+    PRE_RESTORE = "PRE_RESTORE"
+    PRE_RESET = "PRE_RESET"
+    PRE_UPGRADE = "PRE_UPGRADE"
 
 
 class CommandApprovalMode(str, enum.Enum):
@@ -449,6 +468,56 @@ class AgentLogSnapshot(BaseModel, table=True):
     )
     log_text: str = SqlField(sa_column=Column(sa.Text(), nullable=False))
     byte_size: int = SqlField(nullable=False)
+
+
+class AgentRestorePoint(BaseModel, table=True):
+    __tablename__: str = "agent_restore_point"
+
+    __table_args__ = (
+        Index(
+            "ix_agent_restore_point_agent_created",
+            "agent_id",
+            sa.text("created_at DESC"),
+        ),
+        Index(
+            "uq_agent_restore_point_active_capture",
+            "agent_id",
+            unique=True,
+            postgresql_where=sa.text(ACTIVE_CAPTURE_PREDICATE),
+        ),
+    )
+
+    agent_id: UUID = SqlField(foreign_key="agent.id", nullable=False, ondelete="CASCADE")
+    created_by_user_id: UUID | None = SqlField(
+        default=None,
+        foreign_key="user.id",
+        nullable=True,
+        ondelete="SET NULL",
+    )
+    label: str | None = SqlField(default=None, nullable=True, max_length=120)
+    status: RestorePointStatus = SqlField(
+        default=RestorePointStatus.PENDING,
+        sa_column=Column(Enum(RestorePointStatus), nullable=False, server_default="PENDING"),
+    )
+    origin: RestorePointOrigin = SqlField(
+        default=RestorePointOrigin.MANUAL,
+        sa_column=Column(Enum(RestorePointOrigin), nullable=False, server_default="MANUAL"),
+    )
+    agent_type: AgentType = SqlField(sa_column=Column(sa.String(20), nullable=False))
+    pvc_name: str = SqlField(nullable=False, max_length=253)
+    job_name: str | None = SqlField(default=None, nullable=True, max_length=253)
+    archive_bytes: int | None = SqlField(default=None, sa_column=Column(sa.BigInteger(), nullable=True))
+    file_count: int | None = SqlField(default=None, nullable=True)
+    config_manifest: dict[str, Any] = SqlField(
+        default_factory=dict,
+        sa_column=Column(JSONB, nullable=False),
+    )
+    failure_reason: str | None = SqlField(default=None, nullable=True, max_length=500)
+    captured_at: datetime | None = SqlField(
+        default=None,
+        nullable=True,
+        sa_type=sa.DateTime(timezone=True),  # type: ignore
+    )
 
 
 class AgentLifecycleEmailReceipt(BaseModel, table=True):

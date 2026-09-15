@@ -23,6 +23,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 
+import { useOrgStore } from "../stores/org-store";
 import { useDeleteOrganization } from "../hooks/use-organization-actions";
 import { useOrganization } from "../hooks/use-organization";
 import { useOrganizationMembers } from "../hooks/use-organization-members";
@@ -41,6 +42,9 @@ export function OrganizationDetail({ organizationId }: { organizationId: string 
   const { members, isLoading: membersLoading } =
     useOrganizationMembers(organizationId);
   const deleteOrganization = useDeleteOrganization();
+  const setDeletingOrganizationId = useOrgStore(
+    (state) => state.setDeletingOrganizationId,
+  );
 
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [confirmName, setConfirmName] = useState("");
@@ -51,13 +55,17 @@ export function OrganizationDetail({ organizationId }: { organizationId: string 
   const canDelete = !!organization && (user.isPlatformAdmin || currentRole === "OWNER");
 
   const onDelete = () => {
+    setDeletingOrganizationId(organizationId);
     deleteOrganization.mutate(organizationId, {
       onSuccess: () => {
         toast.success("Organization deleted.");
         setDeleteOpen(false);
         router.push(user.isPlatformAdmin ? "/dashboard/platform/organizations" : "/");
       },
-      onError: (e) => toast.error(e.message || "Failed to delete organization"),
+      onError: (e) => {
+        setDeletingOrganizationId(null);
+        toast.error(e.message || "Failed to delete organization");
+      },
     });
   };
 
