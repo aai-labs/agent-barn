@@ -1,3 +1,4 @@
+import json
 import uuid
 from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
@@ -32,6 +33,7 @@ from api.domains.events.catalog import (
 from api.domains.events.dispatch import EventDeliveryDispatcher
 from api.domains.events.models import ActorIdentity, ActorIdentityType, EventScope, OutboxMessage
 from api.domains.restore_points.repository import RestorePointRepository
+from api.domains.templates.repository import TemplateRepository
 from api.infrastructure.kubernetes import KubernetesClient
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.tests.core.givenpy import given, then, when
@@ -42,9 +44,12 @@ from api.tests.core.modules import (
     set_env_variable,
 )
 from api.tests.steps.agent import (
+    FAKE_LITELLM_KEY,
     TEST_ENCRYPTION_KEY,
     MockK8sModule,
     MockLiteLLMModule,
+    skill_is_assigned_to_agent,
+    there_is_a_skill,
     there_is_an_agent,
     use_org_for_auth,
 )
@@ -204,6 +209,69 @@ def test_list_restore_points_returns_newest_first():
             body = response.json()
             assert_that(body["items"], has_length(2))
             assert_that(body["items"][0]["id"], equal_to(str(newer.id)))
+
+
+def test_list_restore_points_reports_the_cap_and_the_manual_count():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        _seed(context)
+        _seed(context, origin=RestorePointOrigin.PRE_RESTORE)
+        _seed(context, status_value=RestorePointStatus.FAILED)
+
+        with when("I list restore points"):
+            response = context.client.get(_url(context), headers=_auth(context))
+
+        with then("the count excludes what the cap excludes, unlike the page total"):
+            body = response.json()
+            assert_that(body["total"], equal_to(3))
+            assert_that(body["cap"], equal_to(2))
+            assert_that(body["manual_count"], equal_to(1))
+
+
+def test_capture_records_the_template_pin_in_the_config_manifest():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        pinned = context.injector.get(TemplateRepository).get_pinned_template(context.agent)
+
+        with when("I capture a restore point"):
+            response = context.client.post(_url(context), json={}, headers=_auth(context))
+
+        with then("the manifest names the version the Agent was pinned to"):
+            manifest = response.json()["config_manifest"]
+            assert_that(manifest["template_key"], equal_to(pinned.template_key))
+            assert_that(manifest["template_version"], equal_to(1))
+            assert_that(manifest["template_selection_type"], equal_to("organization"))
+            assert_that(manifest["override_version"], none())
+
+
+def test_capture_records_skill_pins_in_the_config_manifest():
+    with given(
+        [
+            *_GIVEN,
+            there_is_an_agent(status=AgentStatus.STOPPED),
+            there_is_a_skill(name="Calendar"),
+            skill_is_assigned_to_agent(),
+        ]
+    ) as context:
+        with when("I capture a restore point"):
+            response = context.client.post(_url(context), json={}, headers=_auth(context))
+
+        with then("each assigned skill is recorded with the version it was pinned to"):
+            skills = response.json()["config_manifest"]["skills"]
+            assert_that(skills, has_length(1))
+            assert_that(skills[0]["skill_id"], equal_to(str(context.skill.id)))
+            assert_that(skills[0]["name"], equal_to("Calendar"))
+            assert_that(skills[0]["pinned_version"], equal_to(1))
+
+
+def test_config_manifest_holds_no_credentials():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        with when("I capture a restore point"):
+            response = context.client.post(_url(context), json={}, headers=_auth(context))
+
+        with then("nothing secret rides along in the display record"):
+            manifest = response.json()["config_manifest"]
+            serialized = json.dumps(manifest)
+            assert_that(serialized, is_not(contains_string(FAKE_LITELLM_KEY)))
+            assert_that(serialized, is_not(contains_string(TEST_ENCRYPTION_KEY)))
 
 
 def test_list_restore_points_for_an_unknown_agent_returns_404():

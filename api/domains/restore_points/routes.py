@@ -6,9 +6,13 @@ from fastapi_injector import Injected
 
 from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.utils import get_current_user
-from api.domains.restore_points.models import AgentRestorePointCreate, AgentRestorePointRead
+from api.domains.restore_points.models import (
+    AgentRestorePointCreate,
+    AgentRestorePointList,
+    AgentRestorePointRead,
+)
 from api.domains.restore_points.service import RestorePointService
-from api.infrastructure.shared.models import PaginatedItems, Pagination
+from api.infrastructure.shared.models import Pagination
 
 restore_points_router = APIRouter(prefix="/organizations/{organization_id}/agents", tags=["restore-points"])
 
@@ -27,7 +31,7 @@ def create_restore_point(
     return service.create_restore_point(agent_id, payload, context)
 
 
-@restore_points_router.get("/{agent_id}/restore-points", response_model=PaginatedItems[AgentRestorePointRead])
+@restore_points_router.get("/{agent_id}/restore-points", response_model=AgentRestorePointList)
 def list_restore_points(
     agent_id: UUID,
     context: Annotated[CurrentUserContext, Depends(get_current_user())],

@@ -1249,7 +1249,37 @@ class AgentService:
             selected_template_key = None
             selected_version = selected_override.version
             required_map = self.override_repository.get_version_skill_map(selected_override.id)
-        self._validate_override_requirements(agent, required_map, org_id)
+        # Everything is validated before anything is written, then written together.
+        updated = data.model_dump(exclude_unset=True)
+        if "approval_mode" in updated:
+            self._ensure_approval_mode_supported(agent.agent_type, data.approval_mode)
+        if "verbose_mode" in updated:
+            self._ensure_verbose_mode_supported(agent.agent_type, data.verbose_mode)
+        if "model" in updated:
+            self._ensure_model_allowed(data.model, org_id)
+
+        current_pins = {row.skill_id: row.pinned_version for row in self.repository.get_skills_for_agent(agent.id)}
+        resolved_skill_pins = self._resolve_skill_pins(
+            data.skill_ids,
+            data.skill_versions,
+            set(current_pins),
+            data.removed_skill_ids,
+            org_id,
+            agent.id,
+        )
+        prospective_pins = dict(current_pins)
+        prospective_pins.update({pin.skill_id: pin.version for pin in resolved_skill_pins})
+        for skill_id in data.removed_skill_ids:
+            prospective_pins.pop(skill_id, None)
+
+        self._validate_override_requirements(agent, required_map, org_id, prospective_pins)
+        self._validate_prospective_skill_providers(agent, prospective_pins)
+
+        scalar_updates = {field: updated[field] for field in ("approval_mode", "verbose_mode") if field in updated}
+        if "model" in updated:
+            # Non-nullable column; "" is the sentinel for the Organization default.
+            scalar_updates["model"] = updated["model"] or ""
+
         try:
             selected_agent = self.override_repository.select_pin(
                 agent.id,
@@ -1261,6 +1291,9 @@ class AgentService:
                 actor_display=context.user.full_name or context.user.email,
                 template_key=selected_template_key,
                 selected_version=selected_version,
+                skill_pins=[(pin.skill_id, pin.version) for pin in resolved_skill_pins],
+                removed_skill_ids=data.removed_skill_ids,
+                scalar_updates=scalar_updates,
             )
         except AgentOverrideConcurrencyError as exc:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
@@ -1268,12 +1301,42 @@ class AgentService:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
         return self._get_agent_read(selected_agent, context)
 
+    def _validate_prospective_skill_providers(
+        self,
+        agent: Agent,
+        prospective_pins: Mapping[UUID, int],
+    ) -> None:
+        """Every Skill the Agent will hold must have its providers configured.
+
+        The required-skill check covers only what the template demands, and an
+        optional Skill carries the same invariant.
+        """
+        if not prospective_pins:
+            return
+        skills = self.skill_repository.get_many_by_ids(list(prospective_pins))
+        providers = {secret.provider for secret in self.repository.get_secrets_for_agent(agent.id)}
+        for skill in sorted(skills, key=lambda candidate: candidate.name):
+            missing = [provider for provider in skill.required_providers if provider not in providers]
+            if missing:
+                names = ", ".join(sorted(str(provider) for provider in missing))
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Skill '{skill.name}' requires providers that are not configured: {names}",
+                )
+
     def _validate_override_requirements(
         self,
         agent: Agent,
         required_map: Mapping[UUID, tuple[int, str | None]],
         org_id: UUID,
+        prospective_pins: Mapping[UUID, int] | None = None,
     ) -> None:
+        """Check a template's required Skills against the assignments that will hold.
+
+        ``prospective_pins`` is the pins *after* the caller's changes; without it the
+        present assignments are used, which rejects a template and its own skills
+        arriving together.
+        """
         if not required_map:
             return
         accessible = {skill.id: skill for skill in self.skill_repository.find_visible_for_agent(agent.id, org_id)}
@@ -1283,21 +1346,15 @@ class AgentService:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Override requires a Skill that is no longer available to this Organization",
             )
-        assigned_rows = self.skill_repository.get_agent_skills_with_details(agent.id)
-        assigned_versions = {skill.id: row.pinned_version for row, skill in assigned_rows}
+        if prospective_pins is None:
+            assigned_rows = self.skill_repository.get_agent_skills_with_details(agent.id)
+            assigned_versions = {skill.id: row.pinned_version for row, skill in assigned_rows}
+        else:
+            assigned_versions = dict(prospective_pins)
         assigned_ids = set(assigned_versions)
-        wrong_versions = {
-            skill_id
-            for skill_id, (required_version, _) in required_map.items()
-            if assigned_versions.get(skill_id) != required_version
-        }
-        if wrong_versions:
-            names = ", ".join(sorted(accessible[skill_id].name for skill_id in wrong_versions))
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Required template skills must use the pinned versions: {names}",
-            )
         standalone_ids, groups = split_requirements(required_map)
+
+        # Per the group contract: a group needs one member, not all of them.
         if standalone_ids - assigned_ids:
             missing = ", ".join(sorted(accessible[skill_id].name for skill_id in standalone_ids - assigned_ids))
             raise HTTPException(
@@ -1311,8 +1368,17 @@ class AgentService:
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail=f"At least one of these template skills must be assigned to the Agent: {names}",
                 )
+
+        # The same group-aware validator `update_agent` uses, so both write paths
+        # accept the same configurations.
+        self._validate_required_skill_versions(required_map, assigned_versions)
+
+        # Only for what the Agent actually has: an unchosen alternative needs none.
+        satisfying_ids = (standalone_ids | {skill_id for members in groups.values() for skill_id in members}) & (
+            assigned_ids
+        )
         providers = {secret.provider for secret in self.repository.get_secrets_for_agent(agent.id)}
-        for skill_id in required_map:
+        for skill_id in sorted(satisfying_ids, key=lambda candidate: accessible[candidate].name):
             missing_providers = set(accessible[skill_id].required_providers) - providers
             if missing_providers:
                 names = ", ".join(sorted(provider.value for provider in missing_providers))

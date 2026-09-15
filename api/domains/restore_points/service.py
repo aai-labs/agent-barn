@@ -33,12 +33,16 @@ from api.domains.rbac.catalog import PermissionKey
 from api.domains.restore_points.models import (
     NON_TERMINAL_STATUSES,
     AgentRestorePointCreate,
+    AgentRestorePointList,
     AgentRestorePointRead,
     RestorePointConfigManifest,
+    RestorePointSkill,
 )
 from api.domains.restore_points.repository import RestorePointRepository
+from api.domains.skills.repository import SkillRepository
+from api.domains.templates.repository import TemplateRepository
 from api.infrastructure.kubernetes import KubernetesClient
-from api.infrastructure.shared.models import PaginatedItems, Pagination
+from api.infrastructure.shared.models import Pagination
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +60,21 @@ CAPTURE_IN_FLIGHT_DETAIL = "A restore point operation is already in progress for
 NOT_READY_DETAIL = "Only a ready restore point can be restored."
 DELETE_IN_FLIGHT_DETAIL = "This restore point is still being worked on. Wait for it to finish, then delete it."
 PRE_RESTORE_LABEL = "Automatic backup before restore"
+
+
+def _selection_type(agent: Agent) -> str:
+    """The pin's origin as ``select_agent_template`` names it.
+
+    The display pin type collapses platform and organization templates into
+    "shared", which is enough to render but not enough to re-apply.
+    """
+    if agent.platform_template_id is not None:
+        return "platform"
+    if agent.agent_template_id is not None:
+        return "organization"
+    if agent.agent_template_override_version_id is not None:
+        return "override"
+    return ""
 
 
 def _capture_job_name(restore_point_id: UUID) -> str:
@@ -104,6 +123,8 @@ class RestorePointService:
     repository: RestorePointRepository
     agent_repository: AgentRepository
     agent_authorization: AgentAuthorization
+    template_repository: TemplateRepository
+    skill_repository: SkillRepository
     k8s: KubernetesClient
     event_delivery_dispatcher: EventDeliveryDispatcher
 
@@ -129,10 +150,18 @@ class RestorePointService:
         agent_id: UUID,
         context: CurrentUserContext,
         pagination: Pagination,
-    ) -> PaginatedItems[AgentRestorePointRead]:
+    ) -> AgentRestorePointList:
         scope = self._read_scope(agent_id, context)
         self.reconcile_agent(agent_id)
-        return self.repository.find_by_agent(agent_id, pagination, scope)
+        page = self.repository.find_by_agent(agent_id, pagination, scope)
+        return AgentRestorePointList(
+            page=page.page,
+            page_size=page.page_size,
+            total=page.total,
+            items=page.items,
+            cap=self.config.restore_point_max_per_agent,
+            manual_count=self.repository.count_manual_for_agent(agent_id),
+        )
 
     def reconcile_agent(self, agent_id: UUID) -> None:
         """Resolve non-terminal rows from live Job status.
@@ -583,12 +612,27 @@ class RestorePointService:
             ) from exc
 
     def _build_config_manifest(self, agent: Agent) -> RestorePointConfigManifest:
+        """The Agent's pins at capture time, shaped for display and replay.
+
+        Resolved the same way the Agent read DTO resolves them, so a client can
+        diff the two without mapping between vocabularies.
+        """
+        pin = self.template_repository.get_pinned_template_info_for_agents([agent]).get(agent.id)
+        template_key, template_version, _, override_version = pin or ("", 0, "", None)
         return RestorePointConfigManifest(
             agent_type=agent.agent_type,
+            template_key=template_key,
+            template_version=template_version,
+            template_selection_type=_selection_type(agent),
+            override_version=override_version,
             model=agent.model or "",
             effective_model=agent.running_model or agent.model or "",
             approval_mode=agent.approval_mode,
             verbose_mode=agent.verbose_mode,
+            skills=[
+                RestorePointSkill(skill_id=skill.id, name=skill.name, pinned_version=row.pinned_version)
+                for row, skill in self.skill_repository.get_agent_skills_with_details(agent.id)
+            ],
         )
 
     def _read_scope(self, agent_id: UUID, context: CurrentUserContext):
