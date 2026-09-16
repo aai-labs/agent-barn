@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 import httpx
 from hamcrest import assert_that, equal_to
 
-from api.infrastructure.telegram.client import _chunk_text, get_chat_display_name, send_message
+from api.infrastructure.telegram.client import _chunk_text, get_chat_display_name, send_files, send_message
 
 _REQUEST = httpx.Request("GET", "https://api.telegram.org/bot123:ABC/getChat")
 
@@ -135,3 +135,23 @@ def test_send_message_over_the_telegram_limit_is_split_across_multiple_calls(moc
     second_text = json.loads(second_call.kwargs["content"])["text"]
     assert_that(len(first_text) <= 4096, equal_to(True))
     assert_that(first_text + second_text, equal_to(long_text))
+
+
+@patch("api.infrastructure.telegram.client.resilient_request")
+def test_send_files_uses_telegram_document_multipart(mock_request):
+    response = MagicMock(status_code=200)
+    response.json.return_value = {"ok": True, "result": {"message_id": 19}}
+    mock_request.return_value = response
+
+    result = send_files(
+        "bot-value",
+        "chat-1",
+        [("report.csv", "text/csv", b"a,b")],
+        idempotency_key="provider-key",
+    )
+
+    assert result == ["19"]
+    assert mock_request.call_args.kwargs["headers"]["Idempotency-Key"] == "provider-key:file:0"
+    content = mock_request.call_args.kwargs["content"]
+    assert b'name="document"; filename="report.csv"' in content
+    assert b"Content-Type: text/csv" in content

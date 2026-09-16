@@ -6,9 +6,11 @@ from uuid import uuid4
 
 from api.core.config import Config
 from api.domains.communications.models import (
+    CommunicationAttachment,
     CommunicationDeliveryStatus,
     ConversationLocation,
     OutboundCommunicationEnvelope,
+    PlatformCapability,
     ProcessingFeedbackStage,
 )
 from api.domains.communications.plugins.slack import SlackCredentials, SlackSettings
@@ -27,6 +29,7 @@ def _delivery() -> tuple[SimpleNamespace, OutboundCommunicationEnvelope]:
     return (
         SimpleNamespace(
             id=uuid4(),
+            agent_id=uuid4(),
             connection_id=connection_id,
             idempotency_key="reply-1",
             envelope=outbound.model_dump(mode="json"),
@@ -100,6 +103,36 @@ def test_outbound_success_feedback_runs_after_durable_provider_success() -> None
     assert context.location == outbound.location
     assert context.provider_message_id == outbound.reply_to_provider_message_id
     assert context.source_delivery_id == outbound.source_delivery_id
+
+
+def test_outbound_processor_resolves_attachment_bytes_for_capable_plugin() -> None:
+    delivery, outbound = _delivery()
+    attachment = CommunicationAttachment(
+        id=str(uuid4()),
+        media_type="text/csv",
+        filename="report.csv",
+        size_bytes=3,
+    )
+    outbound = outbound.model_copy(update={"attachments": [attachment]})
+    delivery.envelope = outbound.model_dump(mode="json")
+    plugin = _plugin()
+    plugin.capabilities = frozenset({PlatformCapability.ATTACHMENTS})
+    processor, _, deliveries = _processor(
+        delivery,
+        plugin,
+        status=CommunicationDeliveryStatus.SUCCEEDED,
+    )
+    deliveries.attachment_contents.return_value = [SimpleNamespace(content=b"a,b")]
+
+    with patch(
+        "api.domains.communications.processor.decrypt_token",
+        return_value=json.dumps({"bot_token": "xoxb-token", "app_token": "xapp-token"}),
+    ):
+        assert processor.process_one() is True
+
+    sent_attachment = plugin.send.call_args.kwargs["attachments"][0]
+    assert sent_attachment.attachment == attachment
+    assert sent_attachment.content == b"a,b"
 
 
 def test_outbound_terminal_failure_feedback_marks_failed_after_dead_letter() -> None:

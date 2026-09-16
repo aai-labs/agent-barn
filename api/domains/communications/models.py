@@ -397,10 +397,52 @@ class CommunicationJournalEntry(BaseModel, table=True):
 
 
 class CommunicationAttachment(PydanticBaseModel):
-    id: str = Field(min_length=1, max_length=512)
+    """A file on a message.
+
+    On an inbound envelope ``id`` is the provider's own file reference; bytes are
+    fetched from the provider only when the runtime asks for them. On a reply it
+    is the id of a ``CommunicationAttachmentContent`` row the runtime uploaded.
+    """
+
+    id: str = Field(min_length=1, max_length=4096)
     media_type: str = Field(min_length=1, max_length=255)
     filename: str | None = Field(default=None, max_length=255)
     size_bytes: int | None = Field(default=None, ge=0)
+
+
+# Telegram's Bot API cannot download anything larger, and it keeps one row well
+# inside what PostgreSQL and a request body comfortably hold.
+MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
+MAX_ATTACHMENT_TOTAL_BYTES = 20 * 1024 * 1024
+MAX_ATTACHMENTS_PER_MESSAGE = 10
+
+
+class CommunicationAttachmentContent(BaseModel, table=True):
+    """File bytes a runtime uploaded for a reply, held until outbound delivery.
+
+    Successful delivery deletes the bytes atomically with its terminal state;
+    dead-lettered replies retain them so an operator retry remains possible.
+    """
+
+    __tablename__: str = "communication_attachment_content"
+    __table_args__ = (
+        sa.Index("ix_communication_attachment_content_created", "created_at"),
+        sa.UniqueConstraint("agent_id", "idempotency_key", name="uq_attachment_content_agent_idempotency"),
+    )
+
+    agent_id: UUID = SqlField(foreign_key="agent.id", nullable=False, ondelete="CASCADE", index=True)
+    outbound_delivery_id: UUID | None = SqlField(
+        default=None,
+        foreign_key="communication_delivery.id",
+        nullable=True,
+        ondelete="CASCADE",
+        index=True,
+    )
+    idempotency_key: str = SqlField(nullable=False, max_length=512)
+    media_type: str = SqlField(nullable=False, max_length=255)
+    filename: str = SqlField(nullable=False, max_length=255)
+    size_bytes: int = SqlField(nullable=False)
+    content: bytes = SqlField(sa_column=Column(sa.LargeBinary, nullable=False))
 
 
 class ConversationLocation(PydanticBaseModel):
@@ -600,7 +642,7 @@ class ApprovalRequest(PydanticBaseModel):
 class RuntimeReplyCreate(PydanticBaseModel):
     idempotency_key: str = Field(min_length=1, max_length=512)
     text: str = Field(min_length=1, max_length=100_000)
-    attachments: list[CommunicationAttachment] = Field(default_factory=list)
+    attachments: list[CommunicationAttachment] = Field(default_factory=list, max_length=MAX_ATTACHMENTS_PER_MESSAGE)
     approval: ApprovalRequest | None = None
 
 

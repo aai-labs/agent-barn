@@ -26,6 +26,7 @@ from api.domains.communications.delivery_repository import (
 )
 from api.domains.communications.gateway_service import CommunicationsGatewayService
 from api.domains.communications.models import (
+    CommunicationAttachment,
     CommunicationDelivery,
     CommunicationDeliveryStatus,
     CommunicationJournalEntry,
@@ -463,6 +464,90 @@ def test_outbound_reply_inherits_channel_name_from_source_inbound_location() -> 
         with then("the outbound message carries the source channel's name"):
             outbound_message_id = _delivery(context, outbound_delivery_id).message_id
             assert_that(_message(context, outbound_message_id).channel_name, equal_to("general"))
+
+
+def test_runtime_attachment_upload_is_idempotent_and_reply_metadata_is_canonical() -> None:
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        connection_id = _create_connection(context)
+        repository = context.injector.get(CommunicationDeliveryRepository)
+        accepted = repository.accept_inbound(connection_id=connection_id, envelope=_envelope("provider-1"))
+
+        with when("the runtime retries an upload and queues it using untrusted metadata"):
+            first = repository.store_attachment_content(
+                agent_id=context.agent.id,
+                idempotency_key="delivery-1:attachment:0",
+                filename="report.csv",
+                media_type="text/csv",
+                content=b"a,b",
+            )
+            duplicate = repository.store_attachment_content(
+                agent_id=context.agent.id,
+                idempotency_key="delivery-1:attachment:0",
+                filename="changed.exe",
+                media_type="application/x-msdownload",
+                content=b"different",
+            )
+            outbound_id = repository.enqueue_runtime_reply(
+                agent_id=context.agent.id,
+                source_delivery_id=accepted.delivery_id,
+                reply=RuntimeReplyCreate(
+                    idempotency_key="reply-1",
+                    text="attached",
+                    attachments=[
+                        CommunicationAttachment(
+                            id=first.id,
+                            filename="spoofed.exe",
+                            media_type="application/x-msdownload",
+                            size_bytes=999,
+                        )
+                    ],
+                ),
+            )
+
+        with then("one Agent-owned blob and its stored metadata back the delivery"):
+            assert_that(duplicate.id, equal_to(first.id))
+            outbound = _delivery(context, outbound_id)
+            attachment = outbound.envelope["attachments"][0]
+            assert_that(attachment["filename"], equal_to("report.csv"))
+            assert_that(attachment["media_type"], equal_to("text/csv"))
+            assert_that(attachment["size_bytes"], equal_to(3))
+
+        with when("the provider delivery succeeds"):
+            claimed = repository.claim_next_outbound()
+            assert claimed is not None
+            repository.complete_outbound(claimed.id, provider_message_id="provider-reply")
+
+        with then("the no-longer-retryable bytes are removed"):
+            with pytest.raises(LookupError, match="Attachment content not found"):
+                repository.attachment_contents(agent_id=context.agent.id, attachments=[first])
+
+
+def test_runtime_cannot_attach_content_owned_by_another_agent() -> None:
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        repository = context.injector.get(CommunicationDeliveryRepository)
+        first_agent = context.agent
+        attachment = repository.store_attachment_content(
+            agent_id=first_agent.id,
+            idempotency_key="first-agent-file",
+            filename="private.txt",
+            media_type="text/plain",
+            content=b"private",
+        )
+        there_is_an_agent(name="Second Agent", status=AgentStatus.RUNNING)(context)
+        connection_id = _create_connection(context, bot_token="second-agent-token")
+        accepted = repository.accept_inbound(connection_id=connection_id, envelope=_envelope("provider-2"))
+
+        with when("the second runtime references the first Agent's attachment id"):
+            with pytest.raises(LookupError, match="Attachment content not found"):
+                repository.enqueue_runtime_reply(
+                    agent_id=context.agent.id,
+                    source_delivery_id=accepted.delivery_id,
+                    reply=RuntimeReplyCreate(
+                        idempotency_key="reply-2",
+                        text="steal",
+                        attachments=[attachment],
+                    ),
+                )
 
 
 def test_diagnostics_reports_pipeline_transitions_without_message_content() -> None:

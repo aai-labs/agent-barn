@@ -4,7 +4,7 @@ import logging
 import threading
 import time
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 import jwt
 from jwt import PyJWKClient
@@ -102,6 +102,23 @@ def send_activity(
     if not activity_id:
         raise TeamsDeliveryError("Teams send returned no activity id")
     return activity_id
+
+
+def download_attachment(url: str, *, token: str | None = None) -> bytes:
+    parsed = urlsplit(url)
+    if parsed.scheme != "https" or not parsed.hostname:
+        raise ValueError("Teams attachment URL must be an absolute HTTPS URL")
+    headers = {"Authorization": f"Bearer {token}"} if token else None
+    response = resilient_request(
+        "GET",
+        url,
+        headers=headers,
+        timeout=_TIMEOUT_SECONDS,
+        label="Teams attachment download",
+        retry_server_errors=True,
+    )
+    response.raise_for_status()
+    return response.content
 
 
 def list_team_channels(service_url: str, team_id: str, token: str) -> dict[str, str | None]:

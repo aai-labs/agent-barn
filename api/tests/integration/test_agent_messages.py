@@ -12,6 +12,7 @@ from api.domains.communications.delivery_repository import CommunicationDelivery
 from api.domains.communications.gateway_service import CommunicationsGatewayService
 from api.domains.communications.models import (
     AgentMessageCreate,
+    CommunicationAttachment,
     CommunicationConnection,
     CommunicationDirection,
     CommunicationJournalStage,
@@ -37,6 +38,79 @@ from api.tests.helpers.agent_messages import (
 
 def _conversation(channel):
     return {"id": channel, "name": "updates", "is_im": False}
+
+
+def test_runtime_uploads_attachment_content_over_its_authenticated_protocol() -> None:
+    with given([*STEPS, messaging_ready]) as context:
+        with when("the runtime uploads a generated report"):
+            response = context.communications_client.post(
+                f"/communications/v1/agents/{context.agent.id}/attachments",
+                content=b"quarter,total\nQ1,42\n",
+                headers={
+                    **context.runtime_headers,
+                    "Content-Type": "text/csv",
+                    "Idempotency-Key": "delivery-1:attachment:0",
+                    "X-Attachment-Filename": "report.csv",
+                },
+            )
+
+        with then("Communications returns a durable Agent-scoped reference"):
+            assert_that(response.status_code, equal_to(201))
+            assert_that(response.json()["filename"], equal_to("report.csv"))
+            assert_that(response.json()["media_type"], equal_to("text/csv"))
+            assert_that(response.json()["size_bytes"], equal_to(20))
+
+
+def test_runtime_attachment_upload_rejects_an_invalid_runtime_key() -> None:
+    with given([*STEPS, messaging_ready]) as context:
+        response = context.communications_client.post(
+            f"/communications/v1/agents/{context.agent.id}/attachments",
+            content=b"secret",
+            headers={
+                "Authorization": "Bearer wrong",
+                "X-AgentBarn-Communications-Version": "2",
+                "Content-Type": "text/plain",
+                "Idempotency-Key": "delivery-1:attachment:0",
+                "X-Attachment-Filename": "secret.txt",
+            },
+        )
+
+        assert_that(response.status_code, equal_to(401))
+
+
+def test_runtime_downloads_an_inbound_provider_attachment() -> None:
+    with given([*STEPS, messaging_ready]) as context:
+        repository = context.injector.get(CommunicationDeliveryRepository)
+        envelope = NormalizedCommunicationEnvelope(
+            provider_message_id="provider-file-message",
+            occurred_at=datetime.now(UTC),
+            location=ConversationLocation(id="C123", type="CHANNEL"),
+            sender=CommunicationSender(id="U123"),
+            text="",
+            attachments=[
+                CommunicationAttachment(
+                    id="F123",
+                    filename="report.csv",
+                    media_type="text/csv",
+                    size_bytes=3,
+                )
+            ],
+        )
+        accepted = repository.accept_inbound(connection_id=context.connection.id, envelope=envelope)
+
+        with patch(
+            "api.domains.communications.plugins.slack.SlackPlatformPlugin.download_attachment",
+            return_value=b"a,b",
+        ):
+            response = context.communications_client.get(
+                f"/communications/v1/agents/{context.agent.id}/deliveries/{accepted.delivery_id}/attachments/0",
+                headers=context.runtime_headers,
+            )
+
+        assert_that(response.status_code, equal_to(200))
+        assert_that(response.content, equal_to(b"a,b"))
+        assert_that(response.headers["content-type"], equal_to("text/csv; charset=utf-8"))
+        assert_that(response.headers["content-disposition"], contains_string("report.csv"))
 
 
 @pytest.fixture(autouse=True)

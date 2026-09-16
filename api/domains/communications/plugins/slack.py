@@ -2,7 +2,7 @@ import asyncio
 import json
 import logging
 import re
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from datetime import UTC, datetime
 from typing import Any, Protocol
 
@@ -11,7 +11,9 @@ from pydantic import Field, model_validator
 from websockets.asyncio.client import connect
 
 from api.domains.communications.models import (
+    MAX_ATTACHMENTS_PER_MESSAGE,
     ApprovalRequest,
+    CommunicationAttachment,
     CommunicationPolicyDisposition,
     CommunicationSender,
     ConversationLocation,
@@ -25,12 +27,14 @@ from api.domains.communications.models import (
 )
 from api.domains.communications.plugins.base import (
     AgentInitiatedDeliverySettings,
+    AttachmentContent,
     InboundAdmissionContext,
     InboundAdmissionResult,
     PlatformCredentials,
     PlatformPlugin,
     PlatformSettings,
     ProcessingFeedbackContext,
+    provider_attachment,
     provider_idempotency_key,
 )
 from api.infrastructure.slack.client import SlackClient
@@ -168,6 +172,17 @@ def _message_blocks(envelope: OutboundCommunicationEnvelope) -> list[dict] | Non
     if len(envelope.text) <= _MARKDOWN_BLOCK_LIMIT and not _SLACK_MARKUP.search(envelope.text):
         return [{"type": "markdown", "text": envelope.text}]
     return None
+
+
+def _attachments(files: object) -> list[CommunicationAttachment]:
+    if not isinstance(files, list):
+        return []
+    attachments = (
+        provider_attachment(item.get("id"), item.get("mimetype"), item.get("name"), item.get("size"))
+        for item in files
+        if isinstance(item, dict)
+    )
+    return [attachment for attachment in attachments if attachment is not None][:MAX_ATTACHMENTS_PER_MESSAGE]
 
 
 def _resolve_unique_name(entries: list[dict], recipient: str, *, fields: tuple[str, ...]) -> str:
@@ -348,16 +363,39 @@ class SlackPlatformPlugin(PlatformPlugin):
         envelope: OutboundCommunicationEnvelope,
         *,
         idempotency_key: str,
+        attachments: Sequence[AttachmentContent] = (),
     ) -> str:
         assert isinstance(credentials, SlackCredentials)
+        client = SlackClient(credentials.bot_token)
         blocks = _message_blocks(envelope)
-        return SlackClient(credentials.bot_token).send_message(
+        message_id = client.send_message(
             envelope.location.id,
             envelope.text,
             thread_id=envelope.location.thread_id,
             idempotency_key=provider_idempotency_key(idempotency_key),
             **({"blocks": blocks} if blocks else {}),
         )
+        if attachments:
+            # Slack's external upload flow has no idempotency field. The durable
+            # delivery retry keeps the same text client_msg_id, while Slack owns
+            # duplicate suppression for that message.
+            client.upload_files(
+                envelope.location.id,
+                [(item.attachment.filename or "attachment", item.content) for item in attachments],
+                thread_id=envelope.location.thread_id,
+            )
+        return message_id
+
+    def download_attachment(
+        self,
+        settings: PlatformSettings,
+        credentials: PlatformCredentials,
+        envelope: NormalizedCommunicationEnvelope,
+        attachment: CommunicationAttachment,
+    ) -> bytes:
+        del settings, envelope
+        assert isinstance(credentials, SlackCredentials)
+        return SlackClient(credentials.bot_token).download_file(attachment.id)
 
     def processing_feedback(
         self,
@@ -545,7 +583,9 @@ class SlackPlatformPlugin(PlatformPlugin):
         # neither bot output nor malformed — they are events the policy simply
         # does not handle, so they get their own disposition instead of
         # polluting the bot_ignored signal.
-        if event.get("type") != "message" or event.get("subtype"):
+        # A message with uploaded files arrives as the file_share subtype; it is
+        # still an ordinary user message.
+        if event.get("type") != "message" or event.get("subtype") not in (None, "file_share"):
             return InboundAdmissionResult(CommunicationPolicyDisposition.EVENT_IGNORED)
         channel_id = str(event.get("channel") or "")
         sender_id = str(event.get("user") or "")
@@ -589,6 +629,7 @@ class SlackPlatformPlugin(PlatformPlugin):
                     sender=CommunicationSender(id=sender_id or None),
                     text=text,
                     mentions=self._mentioned_user_ids(text),
+                    attachments=_attachments(event.get("files")),
                     provider_metadata={
                         "team_id": str(payload.get("team_id") or ""),
                         "event_id": str(payload.get("event_id") or ""),

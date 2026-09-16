@@ -18,7 +18,7 @@ from api.domains.communications.models import (
     ProcessingFeedbackStage,
     ResolvedOutboundTarget,
 )
-from api.domains.communications.plugins.base import ProcessingFeedbackContext
+from api.domains.communications.plugins.base import AttachmentContent, ProcessingFeedbackContext
 from api.domains.communications.plugins.registry import PlatformPluginRegistry
 from api.domains.communications.repository import CommunicationConnectionRepository
 from api.infrastructure.crypto import decrypt_token
@@ -75,11 +75,31 @@ class OutboundCommunicationProcessor:
                         provider_metadata=outbound.provider_metadata,
                     ),
                 )
+            attachment_contents: list[AttachmentContent] = []
+            if outbound.attachments:
+                if PlatformCapability.ATTACHMENTS in plugin.capabilities:
+                    stored = self.deliveries.attachment_contents(
+                        agent_id=delivery.agent_id,
+                        attachments=outbound.attachments,
+                    )
+                    attachment_contents = [
+                        AttachmentContent(attachment=metadata, content=content.content)
+                        for metadata, content in zip(outbound.attachments, stored, strict=True)
+                    ]
+                else:
+                    names = ", ".join(item.filename or "attachment" for item in outbound.attachments)
+                    outbound = outbound.model_copy(
+                        update={
+                            "text": f"{outbound.text}\n\n[Files could not be attached on {plugin.display_name}: {names}]",
+                            "attachments": [],
+                        }
+                    )
             provider_message_id = plugin.send(
                 settings,
                 credentials,
                 self._with_agent_identity(outbound, agent.name),
                 idempotency_key=delivery.idempotency_key,
+                **({"attachments": attachment_contents} if attachment_contents else {}),
             )
         except Exception as exc:
             logger.warning("Outbound Communication Delivery %s failed (%s)", delivery.id, type(exc).__name__)

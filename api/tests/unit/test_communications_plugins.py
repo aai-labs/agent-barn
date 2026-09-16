@@ -12,6 +12,7 @@ from hamcrest import assert_that, empty, equal_to, has_length
 
 from api.domains.communications.models import (
     ApprovalRequest,
+    CommunicationAttachment,
     CommunicationPolicyDisposition,
     CommunicationSender,
     ConversationLocation,
@@ -21,6 +22,7 @@ from api.domains.communications.models import (
     ProcessingFeedbackStage,
 )
 from api.domains.communications.plugins.base import (
+    AttachmentContent,
     InboundAdmissionContext,
     PlatformPlugin,
     ProcessingFeedbackContext,
@@ -178,6 +180,30 @@ def test_discord_plugin_normalizes_an_allowed_message_create_event() -> None:
     assert envelopes[0].provider_message_id == "message-1"
     assert envelopes[0].location.id == "channel-1"
     assert envelopes[0].sender.display_name == "Ada"
+
+
+def test_discord_normalizes_file_metadata_instead_of_forwarding_a_blank_prompt() -> None:
+    plugin = DiscordPlatformPlugin(ValidationConfig())
+    settings = plugin.settings_model.model_validate({"dm_policy": "open"})
+
+    envelope = plugin.normalize_inbound(
+        settings,
+        {
+            "t": "MESSAGE_CREATE",
+            "d": {
+                "id": "message-1",
+                "channel_id": "channel-1",
+                "timestamp": "2026-08-22T10:00:00+00:00",
+                "content": "",
+                "author": {"id": "user-1", "bot": False},
+                "attachments": [{"id": "file-1", "filename": "report.csv", "content_type": "text/csv", "size": 12}],
+            },
+        },
+    )[0]
+
+    assert envelope.attachments == [
+        CommunicationAttachment(id="file-1", filename="report.csv", media_type="text/csv", size_bytes=12)
+    ]
 
 
 def test_discord_plugin_ignores_unmentioned_group_messages() -> None:
@@ -603,6 +629,19 @@ def test_slack_dm_and_bot_message_policies_remain_before_mention_admission() -> 
     assert subtype_message == []
 
 
+def test_slack_admits_file_share_messages_and_keeps_the_file_reference() -> None:
+    plugin = SlackPlatformPlugin(ValidationConfig())
+    settings = plugin.settings_model.model_validate({"dm_policy": "open"})
+    payload = _slack_event("the requested report", subtype="file_share", channel_type="im")
+    payload["event"]["files"] = [{"id": "F123", "name": "report.pdf", "mimetype": "application/pdf", "size": 101}]
+
+    envelope = plugin.normalize_inbound(settings, payload)[0]
+
+    assert envelope.text == "the requested report"
+    assert envelope.attachments[0].id == "F123"
+    assert envelope.attachments[0].filename == "report.pdf"
+
+
 def test_slack_ignores_app_mention_events_to_avoid_duplicate_message_delivery() -> None:
     plugin = SlackPlatformPlugin(ValidationConfig())
     settings = plugin.settings_model.model_validate({"group_policy": "open"})
@@ -725,6 +764,64 @@ def test_telegram_send_passes_a_stable_provider_idempotency_key() -> None:
         thread_id=None,
         idempotency_key=provider_idempotency_key("reply-1"),
     )
+
+
+def test_telegram_sends_runtime_attachment_bytes_as_documents() -> None:
+    plugin = TelegramPlatformPlugin(ValidationConfig())
+    credentials = plugin.credentials_model.model_validate({"bot_token": "bot-value"})
+    envelope = OutboundCommunicationEnvelope(
+        source_delivery_id=uuid4(),
+        location=ConversationLocation(id="chat-1", type="DM"),
+        text="report attached",
+    )
+    attachment = CommunicationAttachment(id="content-1", media_type="text/csv", filename="report.csv", size_bytes=3)
+
+    with (
+        patch("api.domains.communications.plugins.telegram.send_message", return_value="sent-1"),
+        patch("api.domains.communications.plugins.telegram.send_files", return_value=["sent-2"]) as send_files,
+    ):
+        plugin.send(
+            plugin.settings_model.model_validate({}),
+            credentials,
+            envelope,
+            idempotency_key="reply-1",
+            attachments=[AttachmentContent(attachment=attachment, content=b"a,b")],
+        )
+
+    send_files.assert_called_once_with(
+        "bot-value",
+        "chat-1",
+        [("report.csv", "text/csv", b"a,b")],
+        thread_id=None,
+        idempotency_key=provider_idempotency_key("reply-1"),
+    )
+
+
+def test_telegram_normalizes_document_metadata_without_a_caption() -> None:
+    plugin = TelegramPlatformPlugin(ValidationConfig())
+    settings = plugin.settings_model.model_validate({"dm_policy": "open"})
+    envelope = plugin.normalize_inbound(
+        settings,
+        {
+            "update_id": 1,
+            "message": {
+                "message_id": 2,
+                "date": 1_700_000_000,
+                "chat": {"id": 42, "type": "private"},
+                "from": {"id": 42, "first_name": "Ada"},
+                "document": {
+                    "file_id": "telegram-file",
+                    "file_name": "report.pdf",
+                    "mime_type": "application/pdf",
+                    "file_size": 99,
+                },
+            },
+        },
+    )[0]
+
+    assert envelope.text == ""
+    assert envelope.attachments[0].id == "telegram-file"
+    assert envelope.attachments[0].filename == "report.pdf"
 
 
 # --- inbound name enrichment ------------------------------------------------
@@ -986,6 +1083,27 @@ def test_teams_normalizes_a_personal_message_as_a_dm() -> None:
     assert envelope.sender.id == "7faf8ab2-3d56-4244-b585-20c8a42ed2b8"
     assert envelope.sender.display_name == "Megan Bowen"
     assert envelope.text == "Hello"
+
+
+def test_teams_normalizes_personal_file_download_metadata() -> None:
+    plugin = _teams_plugin()
+    settings = plugin.settings_model.model_validate({"dm_policy": "open"})
+    payload = _teams_activity(
+        text="",
+        attachments=[
+            {
+                "contentType": "application/vnd.microsoft.teams.file.download.info",
+                "contentUrl": "https://unused.example/file",
+                "name": "budget.xlsx",
+                "content": {"downloadUrl": "https://download.example/signed"},
+            }
+        ],
+    )
+
+    envelope = plugin.normalize_inbound(settings, payload)[0]
+
+    assert envelope.attachments[0].id == "direct:https://download.example/signed"
+    assert envelope.attachments[0].filename == "budget.xlsx"
 
 
 def test_teams_carries_service_url_so_replies_can_be_addressed() -> None:
@@ -1392,6 +1510,7 @@ def test_teams_app_package_contains_a_valid_manifest_and_icons() -> None:
     assert manifest["manifestVersion"] == "1.17"
     assert manifest["bots"][0]["botId"] == "app-1"
     assert manifest["bots"][0]["scopes"] == ["personal", "team", "groupChat"]
+    assert manifest["bots"][0]["supportsFiles"] is True
     assert manifest["developer"]["websiteUrl"] == "https://example.test"
 
 

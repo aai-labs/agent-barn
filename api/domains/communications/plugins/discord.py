@@ -1,7 +1,7 @@
 import asyncio
 import json
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from datetime import UTC, datetime
 from typing import Any, Protocol
 
@@ -9,6 +9,8 @@ from pydantic import Field
 from websockets.asyncio.client import connect
 
 from api.domains.communications.models import (
+    MAX_ATTACHMENTS_PER_MESSAGE,
+    CommunicationAttachment,
     CommunicationPolicyDisposition,
     CommunicationSender,
     ConversationLocation,
@@ -18,10 +20,12 @@ from api.domains.communications.models import (
     PlatformCapability,
 )
 from api.domains.communications.plugins.base import (
+    AttachmentContent,
     InboundAdmissionResult,
     PlatformCredentials,
     PlatformPlugin,
     PlatformSettings,
+    provider_attachment,
     provider_idempotency_key,
 )
 from api.infrastructure.discord.client import DiscordClient
@@ -30,6 +34,17 @@ logger = logging.getLogger(__name__)
 
 _INSTALL_OAUTH_SCOPES = "bot%20applications.commands"
 _INSTALL_PERMISSIONS = 274878286912
+
+
+def _attachments(raw: object) -> list[CommunicationAttachment]:
+    if not isinstance(raw, list):
+        return []
+    attachments = (
+        provider_attachment(item.get("id"), item.get("content_type"), item.get("filename"), item.get("size"))
+        for item in raw[:MAX_ATTACHMENTS_PER_MESSAGE]
+        if isinstance(item, dict)
+    )
+    return [attachment for attachment in attachments if attachment is not None]
 
 
 class DiscordValidationConfig(Protocol):
@@ -190,6 +205,7 @@ class DiscordPlatformPlugin(PlatformPlugin):
         envelope: OutboundCommunicationEnvelope,
         *,
         idempotency_key: str,
+        attachments: Sequence[AttachmentContent] = (),
     ) -> str:
         assert isinstance(credentials, DiscordCredentials)
         return DiscordClient(credentials.bot_token).send_message(
@@ -197,6 +213,31 @@ class DiscordPlatformPlugin(PlatformPlugin):
             envelope.text,
             reply_to_id=envelope.reply_to_provider_message_id,
             idempotency_key=provider_idempotency_key(idempotency_key),
+            **(
+                {
+                    "files": [
+                        (item.attachment.filename or "attachment", item.attachment.media_type, item.content)
+                        for item in attachments
+                    ]
+                }
+                if attachments
+                else {}
+            ),
+        )
+
+    def download_attachment(
+        self,
+        settings: PlatformSettings,
+        credentials: PlatformCredentials,
+        envelope: NormalizedCommunicationEnvelope,
+        attachment: CommunicationAttachment,
+    ) -> bytes:
+        del settings
+        assert isinstance(credentials, DiscordCredentials)
+        return DiscordClient(credentials.bot_token).download_attachment(
+            envelope.location.id,
+            envelope.provider_message_id,
+            attachment.id,
         )
 
     def normalize_inbound(
@@ -284,6 +325,7 @@ class DiscordPlatformPlugin(PlatformPlugin):
                         or None,
                     ),
                     text=str(event.get("content") or ""),
+                    attachments=_attachments(event.get("attachments")),
                     reply_to_provider_message_id=str(reference.get("message_id") or "") or None,
                     provider_metadata={"guild_id": guild_id},
                 ),

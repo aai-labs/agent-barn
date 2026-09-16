@@ -1,4 +1,6 @@
 import logging
+import mimetypes
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Any, Protocol
 from uuid import UUID
@@ -6,6 +8,8 @@ from uuid import UUID
 from pydantic import Field
 
 from api.domains.communications.models import (
+    MAX_ATTACHMENTS_PER_MESSAGE,
+    CommunicationAttachment,
     CommunicationPolicyDisposition,
     CommunicationSender,
     ConversationLocation,
@@ -15,10 +19,12 @@ from api.domains.communications.models import (
     PlatformCapability,
 )
 from api.domains.communications.plugins.base import (
+    AttachmentContent,
     InboundAdmissionResult,
     PlatformCredentials,
     PlatformPlugin,
     PlatformSettings,
+    provider_attachment,
     provider_idempotency_key,
 )
 from api.infrastructure.msteams.client import (
@@ -27,6 +33,9 @@ from api.infrastructure.msteams.client import (
     list_team_channels,
     send_activity,
     verify_inbound_jwt,
+)
+from api.infrastructure.msteams.client import (
+    download_attachment as download_teams_attachment,
 )
 from api.infrastructure.msteams.manifest import build_app_package as build_teams_app_package
 
@@ -108,7 +117,9 @@ class TeamsPlatformPlugin(PlatformPlugin):
         "1. Direct messages default to Off; set Direct messages to Open or Allowlist when DMs are needed.\n"
         "2. Teams delivers channel and group-chat messages only when the bot is @mentioned.\n"
         "3. Allowed DM senders use the sender's Microsoft Entra object ID; Allowed channels use the Teams channel "
-        "conversation ID, which looks like `19:....@thread.tacv2`."
+        "conversation ID, which looks like `19:....@thread.tacv2`.\n"
+        "4. Files sent to the bot are available in personal chats. Files produced by the Agent are reported by name, "
+        "but Teams cannot receive them until a consent-card or Microsoft Graph upload flow is configured."
     )
     post_setup_hint = (
         "## Finish setup\n\n"
@@ -192,7 +203,9 @@ class TeamsPlatformPlugin(PlatformPlugin):
         envelope: OutboundCommunicationEnvelope,
         *,
         idempotency_key: str,
+        attachments: Sequence[AttachmentContent] = (),
     ) -> str:
+        del attachments
         assert isinstance(credentials, TeamsCredentials)
         metadata = envelope.provider_metadata
         service_url = str(metadata.get("service_url") or "")
@@ -232,6 +245,25 @@ class TeamsPlatformPlugin(PlatformPlugin):
         del settings
         assert isinstance(credentials, TeamsCredentials)
         return [self._enrich_envelope(credentials, envelope) for envelope in envelopes]
+
+    def download_attachment(
+        self,
+        settings: PlatformSettings,
+        credentials: PlatformCredentials,
+        envelope: NormalizedCommunicationEnvelope,
+        attachment: CommunicationAttachment,
+    ) -> bytes:
+        del settings
+        assert isinstance(credentials, TeamsCredentials)
+        authenticated, _, url = attachment.id.partition(":")
+        if authenticated not in {"bot", "direct"} or not url:
+            raise ValueError("Teams attachment reference is malformed")
+        token = (
+            acquire_token(credentials.tenant_id, credentials.app_id, credentials.app_password)
+            if authenticated == "bot"
+            else None
+        )
+        return download_teams_attachment(url, token=token)
 
     def _enrich_envelope(
         self,
@@ -325,6 +357,7 @@ class TeamsPlatformPlugin(PlatformPlugin):
             sender=CommunicationSender(id=sender_id, display_name=sender_name),
             text=_without_own_mention(str(payload.get("text") or ""), payload.get("entities"), bot_id),
             mentions=_mentioned_ids(payload.get("entities")),
+            attachments=_teams_attachments(payload.get("attachments")),
             provider_metadata={
                 "service_url": str(payload.get("serviceUrl") or ""),
                 "conversation_id": raw_conversation_id,
@@ -377,3 +410,28 @@ def _mentioned_ids(entities: Any) -> list[str]:
         if isinstance(target, dict) and target.get("id"):
             mentioned.append(str(target["id"]))
     return list(dict.fromkeys(mentioned))
+
+
+def _teams_attachments(raw: Any) -> list[CommunicationAttachment]:
+    if not isinstance(raw, list):
+        return []
+    attachments = []
+    for item in raw[:MAX_ATTACHMENTS_PER_MESSAGE]:
+        if not isinstance(item, dict):
+            continue
+        content_type = str(item.get("contentType") or "application/octet-stream")
+        content = item.get("content") if isinstance(item.get("content"), dict) else {}
+        if content_type == "application/vnd.microsoft.teams.file.download.info":
+            url = str(content.get("downloadUrl") or item.get("contentUrl") or "")
+            reference = f"direct:{url}" if url else ""
+            media_type = mimetypes.guess_type(str(item.get("name") or ""))[0] or "application/octet-stream"
+        elif content_type.startswith(("image/", "audio/", "video/")):
+            url = str(item.get("contentUrl") or "")
+            reference = f"bot:{url}" if url else ""
+            media_type = content_type
+        else:
+            continue
+        attachment = provider_attachment(reference, media_type, item.get("name"), None)
+        if attachment is not None:
+            attachments.append(attachment)
+    return attachments

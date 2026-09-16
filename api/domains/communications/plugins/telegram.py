@@ -1,5 +1,5 @@
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from datetime import UTC, datetime
 from typing import Any, Protocol
 
@@ -7,6 +7,7 @@ import httpx
 from pydantic import Field
 
 from api.domains.communications.models import (
+    CommunicationAttachment,
     CommunicationPolicyDisposition,
     CommunicationSender,
     ConversationLocation,
@@ -16,13 +17,21 @@ from api.domains.communications.models import (
     PlatformCapability,
 )
 from api.domains.communications.plugins.base import (
+    AttachmentContent,
     InboundAdmissionResult,
     PlatformCredentials,
     PlatformPlugin,
     PlatformSettings,
+    provider_attachment,
     provider_idempotency_key,
 )
-from api.infrastructure.telegram.client import get_chat_display_name, send_message, validate_bot_token
+from api.infrastructure.telegram.client import (
+    download_file,
+    get_chat_display_name,
+    send_files,
+    send_message,
+    validate_bot_token,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -121,15 +130,40 @@ class TelegramPlatformPlugin(PlatformPlugin):
         envelope: OutboundCommunicationEnvelope,
         *,
         idempotency_key: str,
+        attachments: Sequence[AttachmentContent] = (),
     ) -> str:
         assert isinstance(credentials, TelegramCredentials)
-        return send_message(
+        provider_key = provider_idempotency_key(idempotency_key)
+        message_id = send_message(
             credentials.bot_token,
             envelope.location.id,
             envelope.text,
             thread_id=envelope.location.thread_id,
-            idempotency_key=provider_idempotency_key(idempotency_key),
+            idempotency_key=provider_key,
         )
+        if attachments:
+            send_files(
+                credentials.bot_token,
+                envelope.location.id,
+                [
+                    (item.attachment.filename or "attachment", item.attachment.media_type, item.content)
+                    for item in attachments
+                ],
+                thread_id=envelope.location.thread_id,
+                idempotency_key=provider_key,
+            )
+        return message_id
+
+    def download_attachment(
+        self,
+        settings: PlatformSettings,
+        credentials: PlatformCredentials,
+        envelope: NormalizedCommunicationEnvelope,
+        attachment: CommunicationAttachment,
+    ) -> bytes:
+        del settings, envelope
+        assert isinstance(credentials, TelegramCredentials)
+        return download_file(credentials.bot_token, attachment.id)
 
     def normalize_inbound(
         self,
@@ -184,6 +218,7 @@ class TelegramPlatformPlugin(PlatformPlugin):
                     ),
                     sender=CommunicationSender(id=sender_id or None, display_name=display_name or None),
                     text=str(message.get("text") or message.get("caption") or ""),
+                    attachments=_message_attachments(message),
                     reply_to_provider_message_id=(
                         str(message.get("reply_to_message", {}).get("message_id"))
                         if isinstance(message.get("reply_to_message"), dict)
@@ -280,3 +315,37 @@ class TelegramPlatformPlugin(PlatformPlugin):
                     update_id = update.get("update_id")
                     if isinstance(update_id, int):
                         offset = update_id + 1
+
+
+def _message_attachments(message: dict[str, Any]) -> list[CommunicationAttachment]:
+    item: dict[str, Any] | None = None
+    filename: str | None = None
+    media_type: str | None = None
+    if isinstance(message.get("document"), dict):
+        item = message["document"]
+        filename = str(item.get("file_name") or "document")
+        media_type = str(item.get("mime_type") or "application/octet-stream")
+    elif isinstance(message.get("photo"), list):
+        photos = [photo for photo in message["photo"] if isinstance(photo, dict)]
+        if photos:
+            item = photos[-1]
+            filename = "photo.jpg"
+            media_type = "image/jpeg"
+    else:
+        for field, default_name, default_type in (
+            ("video", "video.mp4", "video/mp4"),
+            ("animation", "animation.mp4", "video/mp4"),
+            ("audio", "audio", "audio/mpeg"),
+            ("voice", "voice.ogg", "audio/ogg"),
+            ("video_note", "video-note.mp4", "video/mp4"),
+        ):
+            candidate = message.get(field)
+            if isinstance(candidate, dict):
+                item = candidate
+                filename = str(candidate.get("file_name") or default_name)
+                media_type = str(candidate.get("mime_type") or default_type)
+                break
+    if item is None:
+        return []
+    attachment = provider_attachment(item.get("file_id"), media_type, filename, item.get("file_size"))
+    return [attachment] if attachment is not None else []

@@ -1,5 +1,8 @@
+from collections.abc import Sequence
+
 from api.domains.communications.models import OutboundCommunicationEnvelope, PlatformCapability
 from api.domains.communications.plugins.base import (
+    AttachmentContent,
     PlatformCredentials,
     PlatformPlugin,
     PlatformSettings,
@@ -43,6 +46,7 @@ class WebPlatformPlugin(PlatformPlugin):
         envelope: OutboundCommunicationEnvelope,
         *,
         idempotency_key: str,
+        attachments: Sequence[AttachmentContent] = (),
     ) -> str:
-        del settings, credentials, idempotency_key
+        del settings, credentials, idempotency_key, attachments
         return f"web:{envelope.source_delivery_id}"

@@ -1,6 +1,9 @@
 import hashlib
 import json
 import logging
+from collections.abc import Sequence
+
+import httpx
 
 from api.core.config import get_config
 from api.infrastructure.http import resilient_request
@@ -160,3 +163,62 @@ def send_message(
             raise RuntimeError("Telegram sendMessage returned no message id")
     assert message_id is not None
     return str(message_id)
+
+
+def send_files(
+    bot_token: str,
+    chat_id: str,
+    files: Sequence[tuple[str, str, bytes]],
+    *,
+    thread_id: str | None = None,
+    idempotency_key: str | None = None,
+) -> list[str]:
+    """Send files as documents after the reply text."""
+    message_ids = []
+    for index, (filename, media_type, content) in enumerate(files):
+        data: dict[str, str | int] = {"chat_id": chat_id}
+        if thread_id:
+            data["message_thread_id"] = int(thread_id)
+        request = httpx.Request(
+            "POST",
+            f"{_BASE}/bot{bot_token}/sendDocument",
+            data=data,
+            files={"document": (filename, content, media_type)},
+        )
+        headers = {"Content-Type": request.headers["Content-Type"]}
+        if idempotency_key:
+            headers["Idempotency-Key"] = f"{idempotency_key}:file:{index}"
+        response = resilient_request(
+            "POST",
+            f"{_BASE}/bot{bot_token}/sendDocument",
+            headers=headers,
+            content=request.read(),
+            timeout=_TIMEOUT_SECONDS,
+            label="Telegram sendDocument",
+            retry_server_errors=True,
+        )
+        response.raise_for_status()
+        body = response.json()
+        if not body.get("ok"):
+            raise RuntimeError(f"Telegram sendDocument error: {body.get('description', 'unknown error')}")
+        message_id = body.get("result", {}).get("message_id")
+        if message_id is None:
+            raise RuntimeError("Telegram sendDocument returned no message id")
+        message_ids.append(str(message_id))
+    return message_ids
+
+
+def download_file(bot_token: str, file_id: str) -> bytes:
+    metadata = _request_json(f"{_BASE}/bot{bot_token}/getFile?file_id={file_id}", label="Telegram getFile")
+    file_path = (metadata.get("result") or {}).get("file_path") if metadata.get("ok") else None
+    if not file_path:
+        raise RuntimeError(f"Telegram getFile error: {metadata.get('description', 'no file path')}")
+    response = resilient_request(
+        "GET",
+        f"{_BASE}/file/bot{bot_token}/{file_path}",
+        timeout=_TIMEOUT_SECONDS,
+        label="Telegram file download",
+        retry_server_errors=True,
+    )
+    response.raise_for_status()
+    return response.content

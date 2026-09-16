@@ -129,6 +129,80 @@ def test_run_delivery_posts_reply_then_completion(monkeypatch: pytest.MonkeyPatc
     assert calls[2][1] == {"succeeded": True}
 
 
+def test_run_delivery_uploads_media_paths_and_removes_control_lines(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    adapter = _load_adapter(monkeypatch)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    report = workspace / "report.csv"
+    report.write_bytes(b"quarter,total\nQ1,42\n")
+    monkeypatch.setattr(adapter, "_WORKSPACE", workspace)
+    calls: list[tuple[str, dict | None, bytes | None]] = []
+
+    def fake_request(
+        method: str,
+        url: str,
+        *,
+        headers: dict[str, str],
+        payload: dict | None = None,
+        content: bytes | None = None,
+        **_,
+    ):
+        del method, headers
+        calls.append((url, payload, content))
+        if url.endswith("/v1/chat/completions"):
+            return {"choices": [{"message": {"content": f"Here is the report.\nMEDIA:{report}"}}]}
+        if url.endswith("/attachments"):
+            return {
+                "id": "attachment-1",
+                "media_type": "text/csv",
+                "filename": "report.csv",
+                "size_bytes": len(content or b""),
+            }
+        return None
+
+    monkeypatch.setattr(adapter, "http_request", fake_request)
+
+    adapter.run_delivery(_delivery())
+
+    upload = next(call for call in calls if call[0].endswith("/attachments"))
+    assert upload[2] == report.read_bytes()
+    reply = next(call for call in calls if call[0].endswith("/replies"))
+    assert reply[1] == {
+        "idempotency_key": "delivery-1",
+        "text": "Here is the report.",
+        "attachments": [
+            {
+                "id": "attachment-1",
+                "media_type": "text/csv",
+                "filename": "report.csv",
+                "size_bytes": report.stat().st_size,
+            }
+        ],
+    }
+
+
+def test_inbound_attachment_is_downloaded_into_workspace_and_added_to_the_prompt(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    adapter = _load_adapter(monkeypatch)
+    monkeypatch.setattr(adapter, "_WORKSPACE", tmp_path)
+    monkeypatch.setattr(adapter, "_download_attachment", lambda delivery_id, index: b"file bytes")
+    delivery = _delivery()
+    delivery["envelope"]["attachments"] = [
+        {"id": "provider-file", "filename": "../report.csv", "media_type": "text/csv", "size_bytes": 10}
+    ]
+
+    adapter.materialize_inbound_attachments(delivery)
+
+    target = tmp_path / ".agentbarn" / "inbox" / "delivery-1" / "1-report.csv"
+    assert target.read_bytes() == b"file bytes"
+    assert delivery["envelope"]["text"] == f"hello\n\n[User attached a file: {target}]"
+
+
 def test_communications_calls_are_bounded_so_a_stall_cannot_park_the_worker(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

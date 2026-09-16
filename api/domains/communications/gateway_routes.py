@@ -1,7 +1,8 @@
 from typing import Annotated, Any
+from urllib.parse import quote, unquote
 from uuid import UUID
 
-from fastapi import APIRouter, Header, HTTPException, Response, status
+from fastapi import APIRouter, Header, HTTPException, Request, Response, status
 from fastapi.responses import StreamingResponse
 from fastapi_injector import Injected
 
@@ -9,9 +10,11 @@ from api.domains.communications.agent_message_service import AgentMessageService
 from api.domains.communications.delivery_repository import CommunicationDeliveryCancelledError
 from api.domains.communications.gateway_service import CommunicationsGatewayService
 from api.domains.communications.models import (
+    MAX_ATTACHMENT_BYTES,
     AcceptedCommunicationRead,
     AgentMessageCreate,
     AgentMessageRead,
+    CommunicationAttachment,
     RuntimeDeliveryRead,
     RuntimeDeliveryResult,
     RuntimeReplyCreate,
@@ -146,7 +149,67 @@ def enqueue_runtime_reply(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except LookupError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     return {"delivery_id": outbound_delivery_id}
+
+
+@runtime_communications_router.post(
+    "/{agent_id}/attachments",
+    response_model=CommunicationAttachment,
+    status_code=status.HTTP_201_CREATED,
+)
+async def upload_runtime_attachment(
+    agent_id: UUID,
+    request: Request,
+    service: Annotated[CommunicationsGatewayService, Injected(CommunicationsGatewayService)],
+    authorization: Annotated[str, Header()],
+    protocol_version: Annotated[str, Header(alias="X-AgentBarn-Communications-Version")],
+    idempotency_key: Annotated[str, Header(alias="Idempotency-Key")],
+    filename: Annotated[str, Header(alias="X-Attachment-Filename")],
+) -> CommunicationAttachment:
+    agent = _authenticate(service, agent_id, authorization, protocol_version)
+    content = bytearray()
+    async for chunk in request.stream():
+        content.extend(chunk)
+        if len(content) > MAX_ATTACHMENT_BYTES:
+            raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="Attachment is too large")
+    try:
+        return service.store_runtime_attachment(
+            agent,
+            idempotency_key=idempotency_key,
+            filename=unquote(filename),
+            media_type=request.headers.get("content-type", "application/octet-stream").split(";", 1)[0],
+            content=bytes(content),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@runtime_communications_router.get(
+    "/{agent_id}/deliveries/{delivery_id}/attachments/{attachment_index}",
+)
+def download_runtime_attachment(
+    agent_id: UUID,
+    delivery_id: UUID,
+    attachment_index: int,
+    service: Annotated[CommunicationsGatewayService, Injected(CommunicationsGatewayService)],
+    authorization: Annotated[str, Header()],
+    protocol_version: Annotated[str, Header(alias="X-AgentBarn-Communications-Version")],
+) -> Response:
+    agent = _authenticate(service, agent_id, authorization, protocol_version)
+    try:
+        attachment = service.download_runtime_attachment(agent, delivery_id, attachment_index)
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail=str(exc)) from exc
+    filename = attachment.attachment.filename or "attachment"
+    return Response(
+        content=attachment.content,
+        media_type=attachment.attachment.media_type,
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"},
+    )
 
 
 @driver_communications_router.post("/{connection_id}/events", status_code=status.HTTP_202_ACCEPTED)

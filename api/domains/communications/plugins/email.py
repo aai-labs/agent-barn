@@ -1,5 +1,6 @@
 import hashlib
 import re
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from email.utils import parseaddr
 from typing import Any, Protocol
@@ -16,6 +17,7 @@ from api.domains.communications.models import (
     PlatformCapability,
 )
 from api.domains.communications.plugins.base import (
+    AttachmentContent,
     InboundAdmissionResult,
     PlatformCredentials,
     PlatformPlugin,
@@ -187,8 +189,9 @@ class EmailPlatformPlugin(PlatformPlugin):
         envelope: OutboundCommunicationEnvelope,
         *,
         idempotency_key: str,
+        attachments: Sequence[AttachmentContent] = (),
     ) -> str:
-        del settings, credentials
+        del settings, credentials, attachments
         metadata = envelope.provider_metadata
         agent_address = str(metadata.get("recipient") or "")
         if not agent_address:

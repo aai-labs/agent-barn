@@ -18,7 +18,9 @@ from api.domains.communications.email_address_repository import AgentEmailAddres
 from api.domains.communications.error_details import normalize_communication_error
 from api.domains.communications.execution_context import issue_execution_token
 from api.domains.communications.models import (
+    MAX_ATTACHMENT_BYTES,
     AcceptedCommunicationRead,
+    CommunicationAttachment,
     CommunicationConnection,
     CommunicationDeliveryStatus,
     CommunicationDirection,
@@ -34,6 +36,7 @@ from api.domains.communications.models import (
 )
 from api.domains.communications.operations import CommunicationOperationalRepository
 from api.domains.communications.plugins.base import (
+    AttachmentContent,
     InboundAdmissionContext,
     InboundAdmissionResult,
     PlatformPlugin,
@@ -292,6 +295,54 @@ class CommunicationsGatewayService:
             ),
         )
         return delivery_id
+
+    def store_runtime_attachment(
+        self,
+        agent: Agent,
+        *,
+        idempotency_key: str,
+        filename: str,
+        media_type: str,
+        content: bytes,
+    ) -> CommunicationAttachment:
+        return self.delivery_repository.store_attachment_content(
+            agent_id=agent.id,
+            idempotency_key=idempotency_key,
+            filename=filename,
+            media_type=media_type,
+            content=content,
+        )
+
+    def download_runtime_attachment(
+        self,
+        agent: Agent,
+        delivery_id: UUID,
+        attachment_index: int,
+    ) -> AttachmentContent:
+        delivery = self.delivery_repository.get_inbound_runtime_delivery(delivery_id, agent_id=agent.id)
+        if delivery is None:
+            raise LookupError("Communication Delivery not found")
+        if attachment_index < 0:
+            raise LookupError("Communication attachment not found")
+        try:
+            attachment = delivery.envelope.attachments[attachment_index]
+        except IndexError as exc:
+            raise LookupError("Communication attachment not found") from exc
+        if attachment.size_bytes is not None and attachment.size_bytes > MAX_ATTACHMENT_BYTES:
+            raise ValueError(f"Attachment exceeds the {MAX_ATTACHMENT_BYTES}-byte limit")
+
+        connection = self.connection_repository.get_active(delivery.connection_id)
+        if connection is None or not connection.enabled:
+            raise LookupError("Communication Connection not found")
+        plugin = self.plugins.require(connection.platform_key)
+        settings = plugin.settings_model.model_validate(connection.settings)
+        credentials = plugin.credentials_model.model_validate(
+            json.loads(decrypt_token(connection.credentials_encrypted, self.config.agent_token_encryption_key))
+        )
+        content = plugin.download_attachment(settings, credentials, delivery.envelope, attachment)
+        if len(content) > MAX_ATTACHMENT_BYTES:
+            raise ValueError(f"Attachment exceeds the {MAX_ATTACHMENT_BYTES}-byte limit")
+        return AttachmentContent(attachment=attachment, content=content)
 
     def accept_driver_event(
         self,

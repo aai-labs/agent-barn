@@ -67,7 +67,7 @@ def build_app_package(
             {
                 "botId": app_id,
                 "scopes": ["personal", "team", "groupChat"],
-                "supportsFiles": False,
+                "supportsFiles": True,
                 "isNotificationOnly": False,
             }
         ],

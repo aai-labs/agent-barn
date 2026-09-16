@@ -7,11 +7,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent / "messaging"))
 import json
+import mimetypes
 import os
 import re
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 from agentbarn_message import bind_execution, unbind_execution  # ty: ignore[unresolved-import]
@@ -32,6 +34,11 @@ MANUAL_APPROVAL = os.environ.get("APPROVAL_MODE", "").lower() == "manual"
 CLAIM_SAFETY_POLL_INTERVAL_SECONDS = 5
 PENDING_CANCEL_TTL_SECONDS = 900
 MAX_PENDING_CANCEL_REQUESTS = 1_024
+MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
+MAX_ATTACHMENT_TOTAL_BYTES = 20 * 1024 * 1024
+MAX_ATTACHMENTS_PER_MESSAGE = 10
+_WORKSPACE = Path("/workspace")
+_MEDIA_LINE = re.compile(r"^MEDIA:(.+)$")
 
 # Runs currently waiting on a human approval, keyed by session. Process-local:
 # lost on a pod restart, same as an in-flight blocking call is today.
@@ -135,9 +142,12 @@ def http_request(
     *,
     headers: dict[str, str],
     payload: dict | None = None,
+    content: bytes | None = None,
     timeout: float = _REQUEST_TIMEOUT_SECONDS,
 ):
-    body = json.dumps(payload).encode() if payload is not None else None
+    if payload is not None and content is not None:
+        raise ValueError("HTTP request cannot carry both JSON and raw content")
+    body = json.dumps(payload).encode() if payload is not None else content
     req = urllib.request.Request(url, method=method, headers=headers, data=body)
     try:
         with urllib.request.urlopen(req, timeout=timeout) as response:
@@ -157,6 +167,48 @@ def communications_headers() -> dict[str, str]:
         "X-AgentBarn-Communications-Version": COMMUNICATIONS_PROTOCOL_VERSION,
         "Content-Type": "application/json",
     }
+
+
+def _download_attachment(delivery_id: str, index: int) -> bytes:
+    headers = communications_headers()
+    headers.pop("Content-Type", None)
+    req = urllib.request.Request(
+        f"{COMMUNICATIONS_URL}/agents/{AGENT_ID}/deliveries/{delivery_id}/attachments/{index}",
+        method="GET",
+        headers=headers,
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=_REQUEST_TIMEOUT_SECONDS) as response:
+            content = response.read(MAX_ATTACHMENT_BYTES + 1)
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode(errors="replace")[:500]
+        raise RuntimeError(f"HTTP {exc.code}: {detail}") from exc
+    if len(content) > MAX_ATTACHMENT_BYTES:
+        raise RuntimeError("Inbound attachment exceeds the supported size limit")
+    return content
+
+
+def _safe_filename(value: object, index: int) -> str:
+    filename = Path(str(value or "")).name.strip()
+    filename = re.sub(r"[^A-Za-z0-9._ -]", "_", filename)[:255]
+    return filename if filename not in {"", ".", ".."} else f"attachment-{index + 1}"
+
+
+def materialize_inbound_attachments(delivery: dict) -> None:
+    attachments = delivery.get("envelope", {}).get("attachments") or []
+    if not attachments:
+        return
+    delivery_id = str(delivery["delivery_id"])
+    target_dir = _WORKSPACE / ".agentbarn" / "inbox" / delivery_id
+    target_dir.mkdir(parents=True, exist_ok=True)
+    notices = []
+    for index, attachment in enumerate(attachments):
+        filename = _safe_filename(attachment.get("filename"), index)
+        target = target_dir / f"{index + 1}-{filename}"
+        target.write_bytes(_download_attachment(delivery_id, index))
+        notices.append(f"[User attached a file: {target}]")
+    text = str(delivery["envelope"].get("text") or "").rstrip()
+    delivery["envelope"]["text"] = "\n\n".join(part for part in (text, "\n".join(notices)) if part)
 
 
 def runtime_headers(session_key: str, idempotency_key: str) -> dict[str, str]:
@@ -185,9 +237,73 @@ def request_local_cancel(delivery_id: str) -> None:
     IN_FLIGHT.request_cancel(delivery_id)
 
 
-def post_reply(delivery_id: str, text: str, *, suffix: str = "", approval: dict | None = None) -> None:
+def _extract_media_paths(text: str) -> tuple[str, list[Path]]:
+    clean_lines: list[str] = []
+    media: list[Path] = []
+    workspace = _WORKSPACE.resolve()
+    for line in str(text).splitlines():
+        match = _MEDIA_LINE.fullmatch(line.strip())
+        if not match:
+            clean_lines.append(line)
+            continue
+        path = Path(match.group(1).strip()).resolve()
+        if not path.is_relative_to(workspace):
+            raise ValueError("MEDIA paths must be inside /workspace")
+        if not path.is_file():
+            raise ValueError(f"MEDIA file does not exist: {path.name}")
+        if path.stat().st_size > MAX_ATTACHMENT_BYTES:
+            raise ValueError(f"MEDIA file exceeds the {MAX_ATTACHMENT_BYTES}-byte limit: {path.name}")
+        media.append(path)
+    if len(media) > MAX_ATTACHMENTS_PER_MESSAGE:
+        raise ValueError(f"A reply can contain at most {MAX_ATTACHMENTS_PER_MESSAGE} MEDIA files")
+    if sum(path.stat().st_size for path in media) > MAX_ATTACHMENT_TOTAL_BYTES:
+        raise ValueError(f"MEDIA files exceed the {MAX_ATTACHMENT_TOTAL_BYTES}-byte total limit")
+    clean_text = "\n".join(clean_lines).strip()
+    if media and not clean_text:
+        clean_text = "Attached file." if len(media) == 1 else "Attached files."
+    return clean_text, media
+
+
+def _upload_media(delivery_id: str, idempotency_key: str, paths: list[Path]) -> list[dict]:
+    attachments = []
+    for index, path in enumerate(paths):
+        content = path.read_bytes()
+        media_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+        headers = communications_headers()
+        headers.update(
+            {
+                "Content-Type": media_type,
+                "Idempotency-Key": f"{idempotency_key}:attachment:{index}",
+                "X-Attachment-Filename": urllib.parse.quote(path.name),
+            }
+        )
+        attachments.append(
+            http_request(
+                "POST",
+                f"{COMMUNICATIONS_URL}/agents/{AGENT_ID}/attachments",
+                headers=headers,
+                content=content,
+            )
+        )
+    return attachments
+
+
+def post_reply(
+    delivery_id: str,
+    text: str,
+    *,
+    suffix: str = "",
+    approval: dict | None = None,
+    extract_media: bool = False,
+) -> None:
     idempotency_key = f"{delivery_id}:{suffix}" if suffix else delivery_id
+    attachments = []
+    if extract_media:
+        text, paths = _extract_media_paths(text)
+        attachments = _upload_media(delivery_id, idempotency_key, paths)
     payload = {"idempotency_key": idempotency_key, "text": text}
+    if attachments:
+        payload["attachments"] = attachments
     if approval is not None:
         payload["approval"] = approval
     http_request(
@@ -267,6 +383,7 @@ def run_delivery_chat_completions(delivery: dict) -> None:
     IN_FLIGHT.begin(delivery_id, session_key)
     bind_execution(session_key, delivery)
     try:
+        materialize_inbound_attachments(delivery)
         result = http_request(
             "POST",
             f"{RUNTIME_API_URL}/v1/chat/completions",
@@ -287,7 +404,7 @@ def run_delivery_chat_completions(delivery: dict) -> None:
             }
         else:
             reply = result["choices"][0]["message"]["content"]
-            post_reply(delivery_id, reply)
+            post_reply(delivery_id, reply, extract_media=True)
             completion = {"succeeded": True}
     except Exception as exc:
         completion = {
@@ -429,6 +546,7 @@ def run_delivery_hermes(delivery: dict) -> None:
 
 def _run_and_drain(delivery: dict, session_key: str) -> None:
     delivery_id = delivery["delivery_id"]
+    materialize_inbound_attachments(delivery)
     text = delivery["envelope"].get("text", "")
     heartbeat_stopped = threading.Event()
     heartbeat = threading.Thread(
@@ -577,7 +695,12 @@ def _drain_run(run_id: str, delivery_id: str, session_key: str, *, progress_upda
                 continue
 
             if event == "run.completed":
-                post_reply(delivery_id, payload.get("text") or payload.get("output") or "", suffix=str(sequence))
+                post_reply(
+                    delivery_id,
+                    payload.get("text") or payload.get("output") or "",
+                    suffix=str(sequence),
+                    extract_media=True,
+                )
                 with _PENDING_APPROVALS_LOCK:
                     _PENDING_APPROVALS.pop(session_key, None)
                 complete_delivery(delivery_id, succeeded=True)

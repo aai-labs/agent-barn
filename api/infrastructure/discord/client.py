@@ -1,6 +1,9 @@
 import hashlib
 import json
+from collections.abc import Sequence
 from typing import Any
+
+import httpx
 
 from api.infrastructure.http import resilient_request
 from api.infrastructure.shared.cache import cached
@@ -10,6 +13,25 @@ _TIMEOUT_SECONDS = 15
 _DIRECTORY_CACHE_TTL_SECONDS = 600
 _MESSAGE_CHANNEL_TYPES = {0, 5, 10, 11, 12, 15}
 _MAX_NONCE_LENGTH = 25
+_MAX_FILES_PER_MESSAGE = 10
+_MAX_MESSAGE_LENGTH = 2000
+
+
+def _chunk_text(text: str, limit: int = _MAX_MESSAGE_LENGTH) -> list[str]:
+    if len(text) <= limit:
+        return [text]
+    chunks = []
+    remaining = text
+    while len(remaining) > limit:
+        split_at = limit
+        newline_at = remaining.rfind("\n", 0, limit)
+        if newline_at >= 0:
+            split_at = newline_at + 1
+        chunks.append(remaining[:split_at])
+        remaining = remaining[split_at:]
+    if remaining:
+        chunks.append(remaining)
+    return chunks
 
 
 class DiscordClient:
@@ -64,14 +86,57 @@ class DiscordClient:
         return str(body["url"])
 
     def send_message(
-        self, channel_id: str, text: str, *, reply_to_id: str | None = None, idempotency_key: str | None = None
+        self,
+        channel_id: str,
+        text: str,
+        *,
+        reply_to_id: str | None = None,
+        idempotency_key: str | None = None,
+        files: Sequence[tuple[str, str, bytes]] = (),
+    ) -> str:
+        """Post text plus (filename, media type, content) files; returns the first message id.
+
+        Discord caps one message at 2,000 characters and ten files, so the
+        remainder follows in deterministic continuation messages.
+        """
+        text_chunks = _chunk_text(text)
+        file_batches = [
+            files[start : start + _MAX_FILES_PER_MESSAGE] for start in range(0, len(files), _MAX_FILES_PER_MESSAGE)
+        ]
+        message_count = max(len(text_chunks), len(file_batches), 1)
+        message_ids = [
+            self._create_message(
+                channel_id,
+                text_chunks[index] if index < len(text_chunks) else "",
+                reply_to_id=reply_to_id if index == 0 else None,
+                # Discord rejects a nonce longer than 25 characters with 400/50035, and the
+                # provider key is a 64-character digest. The prefix stays deterministic per
+                # Delivery, so retries still de-duplicate.
+                nonce=(
+                    idempotency_key[:_MAX_NONCE_LENGTH]
+                    if index == 0
+                    else f"{idempotency_key[: _MAX_NONCE_LENGTH - len(str(index)) - 1]}:{index}"
+                )
+                if idempotency_key
+                else None,
+                files=file_batches[index] if index < len(file_batches) else (),
+            )
+            for index in range(message_count)
+        ]
+        return message_ids[0]
+
+    def _create_message(
+        self,
+        channel_id: str,
+        text: str,
+        *,
+        reply_to_id: str | None,
+        nonce: str | None,
+        files: Sequence[tuple[str, str, bytes]],
     ) -> str:
         payload: dict[str, Any] = {"content": text, "allowed_mentions": {"parse": []}}
-        if idempotency_key:
-            # Discord rejects a nonce longer than 25 characters with 400/50035, and the
-            # provider key is a 64-character digest. The prefix stays deterministic per
-            # Delivery, so retries still de-duplicate.
-            payload["nonce"] = idempotency_key[:_MAX_NONCE_LENGTH]
+        if nonce:
+            payload["nonce"] = nonce
             payload["enforce_nonce"] = True
         if reply_to_id:
             payload["message_reference"] = {
@@ -79,11 +144,26 @@ class DiscordClient:
                 "channel_id": channel_id,
                 "fail_if_not_exists": False,
             }
+        if files:
+            request = httpx.Request(
+                "POST",
+                _BASE,
+                data={"payload_json": json.dumps(payload)},
+                files=[
+                    (f"files[{index}]", (filename, content, media_type))
+                    for index, (filename, media_type, content) in enumerate(files)
+                ],
+            )
+            headers = {"Authorization": f"Bot {self._bot_token}", "Content-Type": request.headers["Content-Type"]}
+            content = request.read()
+        else:
+            headers = {"Authorization": f"Bot {self._bot_token}", "Content-Type": "application/json"}
+            content = json.dumps(payload).encode("utf-8")
         response = resilient_request(
             "POST",
             f"{_BASE}/channels/{channel_id}/messages",
-            headers={"Authorization": f"Bot {self._bot_token}", "Content-Type": "application/json"},
-            content=json.dumps(payload).encode("utf-8"),
+            headers=headers,
+            content=content,
             timeout=_TIMEOUT_SECONDS,
             label="Discord create message",
             retry_server_errors=True,
@@ -93,6 +173,35 @@ class DiscordClient:
         if not message_id:
             raise RuntimeError("Discord create message returned no message id")
         return str(message_id)
+
+    def download_attachment(self, channel_id: str, message_id: str, attachment_id: str) -> bytes:
+        """Download a message attachment through a freshly signed CDN URL.
+
+        Attachment URLs captured at ingress expire, so the message is re-read.
+        """
+        headers = {"Authorization": f"Bot {self._bot_token}"}
+        response = resilient_request(
+            "GET",
+            f"{_BASE}/channels/{channel_id}/messages/{message_id}",
+            headers=headers,
+            timeout=_TIMEOUT_SECONDS,
+            label="Discord get message",
+            retry_server_errors=True,
+        )
+        response.raise_for_status()
+        url = next(
+            (
+                item.get("url")
+                for item in response.json().get("attachments", [])
+                if str(item.get("id")) == attachment_id
+            ),
+            None,
+        )
+        if not url:
+            raise LookupError("Discord attachment is no longer on its message")
+        download = resilient_request("GET", str(url), timeout=_TIMEOUT_SECONDS, label="Discord attachment download")
+        download.raise_for_status()
+        return download.content
 
     def list_guilds(self) -> list[dict[str, str]]:
         def fetch() -> list[dict[str, str]]:

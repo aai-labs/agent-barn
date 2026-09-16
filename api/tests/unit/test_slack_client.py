@@ -400,3 +400,24 @@ def test_send_message_carries_the_provider_idempotency_key():
 
     assert_that(message_id, equal_to("1724264405.531769"))
     assert_that(json.loads(mock.call_args.kwargs["content"])["client_msg_id"], equal_to("provider-key"))
+
+
+def test_upload_files_uses_slacks_external_upload_flow():
+    responses = [
+        _resp({"ok": True, "upload_url": "https://upload.slack.test/one", "file_id": "F123"}),
+        _resp({}),
+        _resp({"ok": True}),
+    ]
+    with patch("httpx.request", _mock_httpx(responses)) as mock:
+        SlackClient("bot-value").upload_files("C123", [("report.csv", b"a,b")], thread_id="111.222")
+
+    assert mock.call_count == 3
+    ticket = json.loads(mock.call_args_list[0].kwargs["content"])
+    assert ticket == {"filename": "report.csv", "length": 3}
+    assert mock.call_args_list[1].kwargs["content"] == b"a,b"
+    completion = json.loads(mock.call_args_list[2].kwargs["content"])
+    assert completion == {
+        "files": [{"id": "F123", "title": "report.csv"}],
+        "channel_id": "C123",
+        "thread_ts": "111.222",
+    }

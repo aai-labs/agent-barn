@@ -6,9 +6,10 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from api.domains.communications.models import (
+    CommunicationAttachment,
     CommunicationPolicyDisposition,
     ConversationLocation,
     CredentialUniquenessScope,
@@ -32,6 +33,34 @@ def provider_idempotency_key(delivery_key: str) -> str:
     """
 
     return hashlib.sha256(f"agentbarn:communication:{delivery_key}".encode()).hexdigest()
+
+
+def provider_attachment(
+    file_id: object,
+    media_type: object,
+    filename: object,
+    size_bytes: object,
+) -> CommunicationAttachment | None:
+    """Map one provider file reference to an attachment, or None when it is unusable.
+
+    Provider payloads are untrusted shapes: a malformed file entry must drop that
+    file, not reject the whole message it arrived on.
+    """
+    try:
+        return CommunicationAttachment(
+            id=str(file_id or ""),
+            media_type=str(media_type or "application/octet-stream"),
+            filename=str(filename)[:255] if filename else None,
+            size_bytes=size_bytes if isinstance(size_bytes, int) and size_bytes >= 0 else None,
+        )
+    except ValidationError:
+        return None
+
+
+@dataclass(frozen=True)
+class AttachmentContent:
+    attachment: CommunicationAttachment
+    content: bytes
 
 
 class PlatformSettings(BaseModel):
@@ -219,12 +248,16 @@ class PlatformPlugin(ABC):
         envelope: OutboundCommunicationEnvelope,
         *,
         idempotency_key: str,
+        attachments: Sequence[AttachmentContent] = (),
     ) -> str:
         """Deliver one normalized reply and return the provider message id.
 
         ``idempotency_key`` is stable for the durable Delivery across leases
         and manual retries. Provider adapters must pass it to the provider's
         native deduplication field or idempotency transport header.
+
+        ``attachments`` is only ever non-empty for plugins declaring ATTACHMENTS;
+        Communications tells the recipient about undeliverable files elsewhere.
 
         A shipped plugin that cannot provide outbound delivery is not eligible for
         an enabled Communication Connection.
@@ -271,6 +304,22 @@ class PlatformPlugin(ABC):
         """
         del settings, credentials
         return envelopes
+
+    def download_attachment(
+        self,
+        settings: PlatformSettings,
+        credentials: PlatformCredentials,
+        envelope: NormalizedCommunicationEnvelope,
+        attachment: CommunicationAttachment,
+    ) -> bytes:
+        """Fetch the bytes of one file received on an inbound envelope.
+
+        A platform advertising ATTACHMENTS implements this seam and accepts
+        ``attachments`` in ``send``. A provider may implement this seam for an
+        inbound-only file flow without advertising full attachment support.
+        """
+        del settings, credentials, envelope, attachment
+        raise NotImplementedError(f"{self.key} does not implement attachments")
 
     def list_directory_entries(
         self,

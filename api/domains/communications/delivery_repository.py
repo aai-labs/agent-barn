@@ -12,7 +12,12 @@ from sqlmodel import Session, col, select
 from api.domains.agents.models import Agent, AgentStatus
 from api.domains.communications.error_details import error_code_from_details
 from api.domains.communications.models import (
+    MAX_ATTACHMENT_BYTES,
+    MAX_ATTACHMENT_TOTAL_BYTES,
+    MAX_ATTACHMENTS_PER_MESSAGE,
     AcceptedCommunicationRead,
+    CommunicationAttachment,
+    CommunicationAttachmentContent,
     CommunicationConnection,
     CommunicationDelivery,
     CommunicationDeliveryStatus,
@@ -61,6 +66,83 @@ _BLOCKING_OUTBOUND_STATUSES = (
 class CommunicationDeliveryRepository:
     delegate: PostgresRepositoryDelegate
     operations: CommunicationOperationalRepository | None = None
+
+    def store_attachment_content(
+        self,
+        *,
+        agent_id: UUID,
+        idempotency_key: str,
+        filename: str,
+        media_type: str,
+        content: bytes,
+    ) -> CommunicationAttachment:
+        """Store one runtime-produced file idempotently within its Agent boundary."""
+        if not idempotency_key or len(idempotency_key) > 512:
+            raise ValueError("Attachment idempotency key must be between 1 and 512 characters")
+        filename = filename.strip()
+        if not filename or len(filename) > 255:
+            raise ValueError("Attachment filename must be between 1 and 255 characters")
+        media_type = media_type.strip()
+        if not media_type or len(media_type) > 255:
+            raise ValueError("Attachment media type must be between 1 and 255 characters")
+        if len(content) > MAX_ATTACHMENT_BYTES:
+            raise ValueError(f"Attachment exceeds the {MAX_ATTACHMENT_BYTES}-byte limit")
+
+        with Session(self.delegate.engine) as session:
+            session.exec(
+                sa.delete(CommunicationAttachmentContent).where(
+                    col(CommunicationAttachmentContent.agent_id) == agent_id,
+                    col(CommunicationAttachmentContent.outbound_delivery_id).is_(None),
+                    col(CommunicationAttachmentContent.created_at) < datetime.now(UTC) - timedelta(days=1),
+                )
+            )
+            statement = (
+                insert(CommunicationAttachmentContent)
+                .values(
+                    agent_id=agent_id,
+                    idempotency_key=idempotency_key,
+                    filename=filename,
+                    media_type=media_type,
+                    size_bytes=len(content),
+                    content=content,
+                )
+                .on_conflict_do_nothing(index_elements=["agent_id", "idempotency_key"])
+            )
+            session.exec(statement)
+            stored = session.exec(
+                select(CommunicationAttachmentContent).where(
+                    col(CommunicationAttachmentContent.agent_id) == agent_id,
+                    col(CommunicationAttachmentContent.idempotency_key) == idempotency_key,
+                )
+            ).one()
+            session.commit()
+            return self._attachment_metadata(stored)
+
+    def attachment_contents(
+        self,
+        *,
+        agent_id: UUID,
+        attachments: list[CommunicationAttachment],
+    ) -> list[CommunicationAttachmentContent]:
+        """Resolve outbound attachment references in request order and tenant scope."""
+        if not attachments:
+            return []
+        try:
+            attachment_ids = [UUID(item.id) for item in attachments]
+        except ValueError as exc:
+            raise LookupError("Attachment content not found") from exc
+        with Session(self.delegate.engine, expire_on_commit=False) as session:
+            stored = session.exec(
+                select(CommunicationAttachmentContent).where(
+                    col(CommunicationAttachmentContent.agent_id) == agent_id,
+                    col(CommunicationAttachmentContent.id).in_(attachment_ids),
+                )
+            ).all()
+            by_id = {item.id: item for item in stored}
+            try:
+                return [by_id[attachment_id] for attachment_id in attachment_ids]
+            except KeyError as exc:
+                raise LookupError("Attachment content not found") from exc
 
     def accept_inbound(
         self,
@@ -450,12 +532,22 @@ class CommunicationDeliveryRepository:
             if existing is not None:
                 return existing.id
 
+            if len(reply.attachments) > MAX_ATTACHMENTS_PER_MESSAGE:
+                raise ValueError(f"A reply can contain at most {MAX_ATTACHMENTS_PER_MESSAGE} attachments")
+            stored_attachments = self._attachment_contents_in_session(
+                session,
+                agent_id=agent_id,
+                attachments=reply.attachments,
+            )
+            if sum(item.size_bytes for item in stored_attachments) > MAX_ATTACHMENT_TOTAL_BYTES:
+                raise ValueError(f"Reply attachments exceed the {MAX_ATTACHMENT_TOTAL_BYTES}-byte total limit")
+            canonical_attachments = [self._attachment_metadata(item) for item in stored_attachments]
             inbound = NormalizedCommunicationEnvelope.model_validate(source.envelope)
             outbound = OutboundCommunicationEnvelope(
                 source_delivery_id=source.id,
                 location=inbound.location,
                 text=reply.text,
-                attachments=reply.attachments,
+                attachments=canonical_attachments,
                 reply_to_provider_message_id=inbound.provider_message_id,
                 provider_metadata=inbound.provider_metadata,
                 approval=reply.approval,
@@ -488,6 +580,12 @@ class CommunicationDeliveryRepository:
                 envelope=outbound.model_dump(mode="json"),
             )
             session.add(delivery)
+            session.flush()
+            for item in stored_attachments:
+                if item.outbound_delivery_id is not None:
+                    raise LookupError("Attachment content is already assigned to another reply")
+                item.outbound_delivery_id = delivery.id
+                session.add(item)
             if self.operations is not None:
                 self.operations.stage_journal(
                     session=session,
@@ -501,6 +599,42 @@ class CommunicationDeliveryRepository:
             session.commit()
             session.refresh(delivery)
             return delivery.id
+
+    @staticmethod
+    def _attachment_contents_in_session(
+        session: Session,
+        *,
+        agent_id: UUID,
+        attachments: list[CommunicationAttachment],
+    ) -> list[CommunicationAttachmentContent]:
+        if not attachments:
+            return []
+        try:
+            attachment_ids = [UUID(item.id) for item in attachments]
+        except ValueError as exc:
+            raise LookupError("Attachment content not found") from exc
+        stored = session.exec(
+            select(CommunicationAttachmentContent)
+            .where(
+                col(CommunicationAttachmentContent.agent_id) == agent_id,
+                col(CommunicationAttachmentContent.id).in_(attachment_ids),
+            )
+            .with_for_update()
+        ).all()
+        by_id = {item.id: item for item in stored}
+        try:
+            return [by_id[attachment_id] for attachment_id in attachment_ids]
+        except KeyError as exc:
+            raise LookupError("Attachment content not found") from exc
+
+    @staticmethod
+    def _attachment_metadata(stored: CommunicationAttachmentContent) -> CommunicationAttachment:
+        return CommunicationAttachment(
+            id=str(stored.id),
+            media_type=stored.media_type,
+            filename=stored.filename,
+            size_bytes=stored.size_bytes,
+        )
 
     def claim_next_outbound(self, *, lease_seconds: int = 120) -> CommunicationDelivery | None:
         now = datetime.now(UTC)
@@ -666,10 +800,27 @@ class CommunicationDeliveryRepository:
             )
             delivery.provider_message_id = provider_message_id
             session.add(delivery)
+            if delivery.status == CommunicationDeliveryStatus.SUCCEEDED:
+                self._delete_delivered_attachment_contents(session, delivery)
             self._stage_completion_journal(session, delivery, now=now, error_details=error_details)
             session.commit()
             self._record_completion_metric(delivery)
             return True
+
+    @staticmethod
+    def _delete_delivered_attachment_contents(session: Session, delivery: CommunicationDelivery) -> None:
+        outbound = OutboundCommunicationEnvelope.model_validate(delivery.envelope)
+        try:
+            attachment_ids = [UUID(item.id) for item in outbound.attachments]
+        except ValueError:
+            return
+        if attachment_ids:
+            session.exec(
+                sa.delete(CommunicationAttachmentContent).where(
+                    col(CommunicationAttachmentContent.agent_id) == delivery.agent_id,
+                    col(CommunicationAttachmentContent.id).in_(attachment_ids),
+                )
+            )
 
     def complete_runtime_delivery(
         self,

@@ -95,3 +95,50 @@ def test_discord_client_carries_the_provider_idempotency_key(mock_request):
     assert_that(payload["nonce"], equal_to(provider_key[:25]))
     assert_that(len(payload["nonce"]), equal_to(25))
     assert_that(payload["enforce_nonce"], equal_to(True))
+
+
+@patch("api.infrastructure.discord.client.resilient_request")
+def test_discord_client_sends_files_as_multipart_form_data(mock_request):
+    response = MagicMock(status_code=200)
+    response.json.return_value = {"id": "message-1"}
+    mock_request.return_value = response
+
+    DiscordClient("bot-value").send_message(
+        "channel-1",
+        "attached",
+        files=[("report.csv", "text/csv", b"a,b")],
+    )
+
+    headers = mock_request.call_args.kwargs["headers"]
+    content = mock_request.call_args.kwargs["content"]
+    assert headers["Content-Type"].startswith("multipart/form-data; boundary=")
+    assert b'name="files[0]"; filename="report.csv"' in content
+    assert b"Content-Type: text/csv" in content
+    assert b"a,b" in content
+
+
+@patch("api.infrastructure.discord.client.resilient_request")
+def test_discord_client_splits_long_replies_into_provider_sized_messages(mock_request):
+    first_response = MagicMock(status_code=200)
+    first_response.json.return_value = {"id": "message-1"}
+    second_response = MagicMock(status_code=200)
+    second_response.json.return_value = {"id": "message-2"}
+    mock_request.side_effect = [first_response, second_response]
+    provider_key = provider_idempotency_key("delivery-1")
+    text = "x" * 2868
+
+    message_id = DiscordClient("bot-value").send_message(
+        "channel-1",
+        text,
+        reply_to_id="source-message",
+        idempotency_key=provider_key,
+    )
+
+    assert_that(message_id, equal_to("message-1"))
+    payloads = [json.loads(call.kwargs["content"]) for call in mock_request.call_args_list]
+    assert_that("".join(payload["content"] for payload in payloads), equal_to(text))
+    assert_that([len(payload["content"]) for payload in payloads], equal_to([2000, 868]))
+    assert_that(payloads[0]["message_reference"]["message_id"], equal_to("source-message"))
+    assert_that("message_reference" in payloads[1], equal_to(False))
+    assert_that(payloads[0]["nonce"], equal_to(provider_key[:25]))
+    assert_that(payloads[1]["nonce"], equal_to(f"{provider_key[:23]}:1"))

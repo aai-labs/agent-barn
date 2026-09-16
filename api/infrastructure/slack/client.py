@@ -3,6 +3,8 @@ import json
 import logging
 from collections.abc import Iterator
 
+from api.core.config import get_config
+from api.infrastructure.http import resilient_request
 from api.infrastructure.slack.cache import cached, clear_directory_cache
 from api.infrastructure.slack.errors import (
     APP_TOKEN_ERRORS,
@@ -173,6 +175,50 @@ class SlackClient:
         if not message_id:
             raise SlackFetchError("chat.postMessage returned no message id")
         return message_id
+
+    def download_file(self, file_id: str) -> bytes:
+        body = self._get("files.info", {"file": file_id})
+        url = (body.get("file") or {}).get("url_private_download")
+        if not body.get("ok") or not url:
+            raise SlackFetchError(f"files.info error: {body.get('error', 'no download url')}")
+        response = resilient_request(
+            "GET",
+            str(url),
+            headers={"Authorization": f"Bearer {self._bot_token}"},
+            timeout=get_config().slack_request_timeout_seconds,
+            label="Slack file download",
+        )
+        response.raise_for_status()
+        return response.content
+
+    def upload_files(
+        self,
+        channel_id: str,
+        files: list[tuple[str, bytes]],
+        *,
+        thread_id: str | None = None,
+    ) -> None:
+        """Share (filename, content) pairs in one message via Slack's external upload flow."""
+        uploaded = []
+        for filename, content in files:
+            ticket = self._post("files.getUploadURLExternal", {"filename": filename, "length": len(content)})
+            if not ticket.get("ok") or not ticket.get("upload_url"):
+                raise SlackFetchError(f"files.getUploadURLExternal error: {ticket.get('error', 'unknown_error')}")
+            response = resilient_request(
+                "POST",
+                str(ticket["upload_url"]),
+                content=content,
+                timeout=get_config().slack_request_timeout_seconds,
+                label="Slack file upload",
+            )
+            response.raise_for_status()
+            uploaded.append({"id": ticket["file_id"], "title": filename})
+        payload: dict = {"files": uploaded, "channel_id": channel_id}
+        if thread_id:
+            payload["thread_ts"] = thread_id
+        body = self._post("files.completeUploadExternal", payload)
+        if not body.get("ok"):
+            raise SlackFetchError(f"files.completeUploadExternal error: {body.get('error', 'unknown_error')}")
 
     def get_conversation(self, channel_id: str) -> dict:
         body = self._get("conversations.info", {"channel": channel_id})
