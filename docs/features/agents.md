@@ -19,7 +19,7 @@ An Agent is the central execution aggregate. It connects organization tenancy, a
 - Agent General Access is an Agent-level setting: Restricted or All Organization Members with one Agent Access Role. It applies only to accepted Memberships and is additive with explicit Agent Access; removing one source leaves the other source intact.
 - Agent read DTOs expose current effective Agent-related Permission keys. The UI uses those keys for lifecycle, configuration, secret, activity, cost, and deletion controls rather than deriving Agent authority from either role family; mutations independently reauthorize and validate current state. AF-150 does not expose access-management UI.
 - Runtime and Platform are independent. Hermes and OpenClaw both consume the same runtime-neutral Communications protocol. An Agent may own zero or many Communication Connections, including multiple Connections to the same Platform.
-- The Dashboard Web Chat composer accepts new messages only while the Agent is `RUNNING` and its health status is `ok` (shown as Working). A thread remains visibly awaiting a reply while its latest durable inbound Communication Delivery is `PENDING` or `PROCESSING`, so the working indicator survives tab navigation and page remounts until an outbound reply arrives or the user stops generation. Stop is durable and suppresses late replies for both runtimes; neither pinned runtime currently exposes a proven abort handle for this chat-completions path, so the product does not promise compute interruption.
+- The Dashboard Web Chat composer accepts new messages only while the Agent is `RUNNING` and its health status is `ok` (shown as Working). A thread remains visibly awaiting a reply while its latest durable inbound Communication Delivery is `PENDING` or `PROCESSING`, so the working indicator survives tab navigation and page remounts until an outbound reply arrives or the user stops generation. Stop is durable and suppresses late replies for both runtimes; neither pinned runtime currently exposes a proven abort handle for this chat-completions path, so the product does not promise compute interruption. A Web Chat message that is a command-approval prompt exposes its `approval` (identity, command and offered choices), read from its outbound delivery, and renders one button per offered choice; clicking one sends that choice with the `approval_id` it answers. Answering requires the same Agent update permission as any send, and the buttons are not shown without it. A stored approval that no longer validates is omitted rather than failing the thread.
 - Command approval is currently Hermes-only: the persisted `approval_mode` field maps onto the Hermes runtime's approval policy. OpenClaw has no user-configurable command-approval control, so create/update reject an explicit non-default `approval_mode` for an OpenClaw Agent (HTTP 400) rather than silently ignoring it, and reads report the effective `AUTO` default for OpenClaw regardless of the stored value. OpenClaw command approval is deferred to a future task.
 - Answering a Hermes approval prompt with `always` is permanent: the pattern is retained across Agent restarts and is not re-prompted. It covers the whole category of command, not the one command shown. Manual mode ignores these grants and asks for every flagged command, offering only `once` and `deny`; the grants return when the Agent leaves manual mode, and removing one is permanent. Scheduled and heartbeat runs have no one to prompt, so a dangerous command reached from cron or the heartbeat is denied rather than parked; a `BOOT.md` command is parked until it times out, so startup work should avoid flagged commands. See [`../architecture/runtime-and-deployment.md`](../architecture/runtime-and-deployment.md).
 - Persisted lifecycle states are `STOPPED`, `RUNNING`, and `ERROR`.
@@ -63,6 +63,26 @@ Any failure during provisioning — not only Kubernetes resource creation — mo
 ### Create
 
 Creation requires `agent.create`, resolves the requested Template Version or latest version, validates required Skills and tool-provider credentials, live-validates supported provider credentials from the exact request, and atomically persists the Agent with creator provenance and explicit Agent Owner access. It persists Agent Secrets, assigns Skills, and creates a per-Agent LiteLLM key when configured only after deterministic and live preflight validation. New Agents are headless and `STOPPED`; Communication Connections are added independently after creation. Agent General Access defaults to Restricted, so no other Member receives access automatically.
+
+### Suggested names
+
+The hiring dialog suggests `<first name> the <template name>`. It cycles initials A–Z using the
+Organization's total persisted Agent count modulo 26, including soft-deleted Agents and manually
+named Agents. Each suggestion randomly chooses a distinct spelling from the supplied names for
+that initial. Existing Agents contribute to the count and retain their names. Deleting an Agent
+does not rewind the sequence. No separate counter or name uniqueness constraint is maintained.
+
+`GET /organizations/{organization_id}/agents/name-suggestion` requires `agent.create` and returns
+only `first_name`; it does not reserve or persist a name. Concurrent dialogs may repeat names,
+and creation preserves the submitted name even when another creation has changed the count.
+The create API still requires `name`. Failed creation does not advance the count; failure to
+start an already-created Agent does.
+
+Before Template selection, and for the `General Purpose` display name, the suffix is `Assistant`.
+Other Template display names are used verbatim, truncated only when needed to fit the 255-character
+Agent name limit. Template changes update the suggestion until the user edits the name manually.
+The dialog retains its first name throughout the opening, offers manual entry and retrieval retry
+on failure, and has no shuffle control. Reopening fetches a fresh suggestion.
 
 ### Update
 

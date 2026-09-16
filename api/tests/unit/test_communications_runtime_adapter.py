@@ -10,6 +10,8 @@ from unittest.mock import Mock, call
 
 import pytest
 
+from api.domains.communications.plugins.approvals import APPROVAL_METADATA_KEY
+
 _ADAPTER_PATH = Path(__file__).parents[2] / "domains" / "agents" / "scripts" / "communications-runtime-adapter.py"
 
 
@@ -99,6 +101,12 @@ def _fake_urlopen(events: list[tuple[str, dict]], *, then_block: bool = False):
         return _FakeSSEResponse(_sse_bytes(events), then_block=then_block)
 
     return _urlopen
+
+
+def test_adapter_reads_approval_clicks_under_the_key_every_plugin_writes(monkeypatch: pytest.MonkeyPatch) -> None:
+    adapter = _load_adapter(monkeypatch, runtime_kind="hermes")
+
+    assert adapter._APPROVAL_METADATA_KEY == APPROVAL_METADATA_KEY
 
 
 def test_adapter_source_parses_for_the_oldest_runtime_image() -> None:

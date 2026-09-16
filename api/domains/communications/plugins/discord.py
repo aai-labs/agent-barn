@@ -5,10 +5,12 @@ from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any, Protocol
 
+import httpx
 from pydantic import Field
 from websockets.asyncio.client import connect
 
 from api.domains.communications.models import (
+    ApprovalRequest,
     CommunicationPolicyDisposition,
     CommunicationSender,
     ConversationLocation,
@@ -17,11 +19,22 @@ from api.domains.communications.models import (
     OutboundCommunicationEnvelope,
     PlatformCapability,
 )
+from api.domains.communications.plugins.approvals import (
+    APPROVAL_COMPONENT_MAX_CHARS,
+    APPROVAL_METADATA_KEY,
+    SYNTHESIZED_MESSAGE_PREFIX,
+    decode_approval_component,
+    encode_approval_component,
+    is_approval_component,
+    is_synthesized_message_id,
+)
 from api.domains.communications.plugins.base import (
     InboundAdmissionResult,
     PlatformCredentials,
     PlatformPlugin,
     PlatformSettings,
+    ProcessingFeedbackContext,
+    best_effort_failure_notice,
     provider_idempotency_key,
 )
 from api.infrastructure.discord.client import DiscordClient
@@ -30,6 +43,59 @@ logger = logging.getLogger(__name__)
 
 _INSTALL_OAUTH_SCOPES = "bot%20applications.commands"
 _INSTALL_PERMISSIONS = 274878286912
+_CONTENT_LIMIT = 2_000
+_BUTTONS_PER_ROW = 5
+_BUTTON_LABEL_LIMIT = 80
+_ACTION_ROW_TYPE = 1
+_BUTTON_TYPE = 2
+_SECONDARY_BUTTON_STYLE = 2
+_DANGER_BUTTON_STYLE = 4
+_MESSAGE_COMPONENT_INTERACTION = 3
+_INTERACTION_CALLBACK_URL = "https://discord.com/api/v10/interactions/{interaction_id}/{token}/callback"
+_INTERACTION_ACK_TIMEOUT_SECONDS = 5
+_DEFERRED_UPDATE_CALLBACK = {"type": 6}
+_CLEAR_COMPONENTS_CALLBACK = {"type": 7, "data": {"components": []}}
+
+
+def _approval_content(approval: ApprovalRequest) -> str:
+    fallback = f"\nOr reply to your original request with one of: {', '.join(approval.choices)}"
+    fenced = approval.command.replace("```", "`\u200b``")
+    budget = _CONTENT_LIMIT - len("```\n\n```") - len(fallback) - 40
+    if len(fenced) > budget:
+        hidden = len(fenced) - budget
+        fenced = f"{fenced[:budget]}\n[{hidden} more characters not shown]"
+    return f"```\n{fenced}\n```{fallback}"
+
+
+def _approval_buttons(approval: ApprovalRequest, thread_id: str) -> list[dict[str, Any]] | None:
+    buttons: list[dict[str, Any]] = []
+    for choice in approval.choices:
+        custom_id = encode_approval_component(thread_id, approval.approval_id, choice)
+        if len(custom_id) > APPROVAL_COMPONENT_MAX_CHARS:
+            return None
+        buttons.append(
+            {
+                "type": _BUTTON_TYPE,
+                "style": _DANGER_BUTTON_STYLE if choice == "deny" else _SECONDARY_BUTTON_STYLE,
+                "label": approval.choice_labels.get(choice, choice)[:_BUTTON_LABEL_LIMIT],
+                "custom_id": custom_id,
+            }
+        )
+    return [
+        {"type": _ACTION_ROW_TYPE, "components": buttons[start : start + _BUTTONS_PER_ROW]}
+        for start in range(0, len(buttons), _BUTTONS_PER_ROW)
+    ]
+
+
+def _approval_components(approval: ApprovalRequest, thread_id: str) -> list[dict[str, Any]] | None:
+    rows = _approval_buttons(approval, thread_id) or _approval_buttons(approval, "")
+    if rows is None:
+        logger.warning(
+            "Discord approval %s offers no buttons: its identifier exceeds %s characters",
+            approval.approval_id,
+            APPROVAL_COMPONENT_MAX_CHARS,
+        )
+    return rows
 
 
 class DiscordValidationConfig(Protocol):
@@ -118,6 +184,7 @@ class DiscordPlatformPlugin(PlatformPlugin):
             PlatformCapability.ATTACHMENTS,
             PlatformCapability.SUPERVISED_INGRESS,
             PlatformCapability.MENTIONS,
+            PlatformCapability.PROCESSING_FEEDBACK,
             PlatformCapability.THREADS,
         }
     )
@@ -192,11 +259,158 @@ class DiscordPlatformPlugin(PlatformPlugin):
         idempotency_key: str,
     ) -> str:
         assert isinstance(credentials, DiscordCredentials)
+        content = _approval_content(envelope.approval) if envelope.approval else envelope.text
+        components = (
+            _approval_components(envelope.approval, envelope.location.thread_id or "") if envelope.approval else None
+        )
+        reply_to_id = envelope.reply_to_provider_message_id
         return DiscordClient(credentials.bot_token).send_message(
             envelope.location.id,
-            envelope.text,
-            reply_to_id=envelope.reply_to_provider_message_id,
+            content,
+            reply_to_id=None if is_synthesized_message_id(reply_to_id) else reply_to_id,
             idempotency_key=provider_idempotency_key(idempotency_key),
+            **({"components": components} if components else {}),
+        )
+
+    def _location_disposition(
+        self,
+        settings: DiscordSettings,
+        *,
+        guild_id: str,
+        channel_id: str,
+    ) -> CommunicationPolicyDisposition | None:
+        if settings.group_policy == "allowlist" and guild_id not in settings.guild_ids:
+            return CommunicationPolicyDisposition.CHANNEL_DENIED
+        if settings.allowed_channel_ids and channel_id not in settings.allowed_channel_ids:
+            return CommunicationPolicyDisposition.CHANNEL_DENIED
+        return None
+
+    def _member_disposition(
+        self,
+        settings: DiscordSettings,
+        *,
+        sender_id: str,
+        roles: list[str],
+    ) -> CommunicationPolicyDisposition | None:
+        if (
+            (settings.allowed_user_ids or settings.allowed_role_ids)
+            and sender_id not in settings.allowed_user_ids
+            and not set(roles) & set(settings.allowed_role_ids)
+        ):
+            return CommunicationPolicyDisposition.USER_DENIED
+        return None
+
+    def _dm_disposition(self, settings: DiscordSettings, sender_id: str) -> CommunicationPolicyDisposition | None:
+        if settings.dm_policy == "off":
+            return CommunicationPolicyDisposition.USER_DENIED
+        if settings.dm_policy == "allowlist" and sender_id not in settings.allowed_user_ids:
+            return CommunicationPolicyDisposition.USER_DENIED
+        return None
+
+    def _normalize_interaction(
+        self,
+        settings: DiscordSettings,
+        payload: dict[str, Any],
+    ) -> InboundAdmissionResult:
+        raw_event = payload.get("d")
+        if not isinstance(raw_event, dict):
+            return InboundAdmissionResult(CommunicationPolicyDisposition.MALFORMED_PAYLOAD)
+        event: dict[str, Any] = raw_event
+        if event.get("type") != _MESSAGE_COMPONENT_INTERACTION:
+            return InboundAdmissionResult(CommunicationPolicyDisposition.EVENT_IGNORED)
+        data = event.get("data")
+        custom_id = str(data.get("custom_id") or "") if isinstance(data, dict) else ""
+        if not is_approval_component(custom_id):
+            return InboundAdmissionResult(CommunicationPolicyDisposition.EVENT_IGNORED)
+        thread_id, approval_id, choice = decode_approval_component(custom_id)
+        if not approval_id or not choice:
+            return InboundAdmissionResult(CommunicationPolicyDisposition.MALFORMED_PAYLOAD)
+
+        interaction_id = str(event.get("id") or "")
+        channel_id = str(event.get("channel_id") or "")
+        guild_id = str(event.get("guild_id") or "")
+        is_dm = not guild_id
+        raw_member = event.get("member")
+        member: dict[str, Any] = raw_member if isinstance(raw_member, dict) else {}
+        raw_clicker = event.get("user") if is_dm else member.get("user")
+        if not isinstance(raw_clicker, dict):
+            return InboundAdmissionResult(CommunicationPolicyDisposition.MALFORMED_PAYLOAD)
+        clicker: dict[str, Any] = raw_clicker
+        sender_id = str(clicker.get("id") or "")
+        if not interaction_id or not channel_id or not sender_id:
+            return InboundAdmissionResult(CommunicationPolicyDisposition.MALFORMED_PAYLOAD)
+
+        bot_user_id = str(payload.get("agentbarn_bot_user_id") or "")
+        if clicker.get("bot") or (bot_user_id and sender_id == bot_user_id):
+            return InboundAdmissionResult(CommunicationPolicyDisposition.BOT_IGNORED)
+
+        if is_dm:
+            denied = self._dm_disposition(settings, sender_id)
+        else:
+            roles = member.get("roles", [])
+            if not isinstance(roles, list):
+                return InboundAdmissionResult(CommunicationPolicyDisposition.MALFORMED_PAYLOAD)
+            denied = self._location_disposition(settings, guild_id=guild_id, channel_id=channel_id) or (
+                self._member_disposition(settings, sender_id=sender_id, roles=[str(role) for role in roles])
+            )
+        if denied is not None:
+            return InboundAdmissionResult(denied)
+
+        raw_clicked = event.get("message")
+        clicked: dict[str, Any] = raw_clicked if isinstance(raw_clicked, dict) else {}
+        author = clicked.get("author")
+        posted_by = str(author.get("id") or "") if isinstance(author, dict) else ""
+        if not bot_user_id or posted_by != bot_user_id:
+            return InboundAdmissionResult(CommunicationPolicyDisposition.MENTION_REQUIRED)
+
+        if not thread_id:
+            reference = clicked.get("message_reference")
+            thread_id = str(reference.get("message_id") or "") if isinstance(reference, dict) else ""
+            if not thread_id:
+                return InboundAdmissionResult(CommunicationPolicyDisposition.MALFORMED_PAYLOAD)
+
+        return InboundAdmissionResult(
+            CommunicationPolicyDisposition.ACCEPTED,
+            (
+                NormalizedCommunicationEnvelope(
+                    provider_message_id=f"{SYNTHESIZED_MESSAGE_PREFIX}{interaction_id}",
+                    occurred_at=datetime.now(UTC),
+                    location=ConversationLocation(
+                        id=channel_id,
+                        type="DM" if is_dm else "CHANNEL",
+                        thread_id=thread_id or None,
+                    ),
+                    sender=CommunicationSender(
+                        id=sender_id,
+                        display_name=str(
+                            member.get("nick") or clicker.get("global_name") or clicker.get("username") or ""
+                        )
+                        or None,
+                    ),
+                    text=choice,
+                    provider_metadata={APPROVAL_METADATA_KEY: approval_id, "guild_id": guild_id},
+                ),
+            ),
+        )
+
+    def processing_feedback(
+        self,
+        settings: PlatformSettings,
+        credentials: PlatformCredentials,
+        context: ProcessingFeedbackContext,
+    ) -> None:
+        del settings
+        assert isinstance(credentials, DiscordCredentials)
+        best_effort_failure_notice(
+            context,
+            lambda text, idempotency_key: DiscordClient(credentials.bot_token).send_message(
+                context.location.id,
+                text,
+                reply_to_id=context.provider_message_id,
+                idempotency_key=idempotency_key,
+            ),
+            target=f"Discord channel {context.location.id}",
+            logger=logger,
         )
 
     def normalize_inbound(
@@ -205,6 +419,8 @@ class DiscordPlatformPlugin(PlatformPlugin):
         payload: dict[str, Any],
     ) -> InboundAdmissionResult:
         assert isinstance(settings, DiscordSettings)
+        if payload.get("t") == "INTERACTION_CREATE":
+            return self._normalize_interaction(settings, payload)
         event = payload.get("d") if payload.get("t") == "MESSAGE_CREATE" else payload
         if not isinstance(event, dict):
             return InboundAdmissionResult(CommunicationPolicyDisposition.MALFORMED_PAYLOAD)
@@ -222,15 +438,13 @@ class DiscordPlatformPlugin(PlatformPlugin):
         if not message_id or not channel_id:
             return InboundAdmissionResult(CommunicationPolicyDisposition.MALFORMED_PAYLOAD)
         if is_dm:
-            if settings.dm_policy == "off":
-                return InboundAdmissionResult(CommunicationPolicyDisposition.USER_DENIED)
-            if settings.dm_policy == "allowlist" and sender_id not in settings.allowed_user_ids:
-                return InboundAdmissionResult(CommunicationPolicyDisposition.USER_DENIED)
+            dm_denied = self._dm_disposition(settings, sender_id)
+            if dm_denied is not None:
+                return InboundAdmissionResult(dm_denied)
         else:
-            if settings.group_policy == "allowlist" and guild_id not in settings.guild_ids:
-                return InboundAdmissionResult(CommunicationPolicyDisposition.CHANNEL_DENIED)
-            if settings.allowed_channel_ids and channel_id not in settings.allowed_channel_ids:
-                return InboundAdmissionResult(CommunicationPolicyDisposition.CHANNEL_DENIED)
+            location_denied = self._location_disposition(settings, guild_id=guild_id, channel_id=channel_id)
+            if location_denied is not None:
+                return InboundAdmissionResult(location_denied)
             raw_member = event.get("member")
             if raw_member is not None and not isinstance(raw_member, dict):
                 return InboundAdmissionResult(CommunicationPolicyDisposition.MALFORMED_PAYLOAD)
@@ -238,12 +452,13 @@ class DiscordPlatformPlugin(PlatformPlugin):
             roles = member_for_policy.get("roles", [])
             if not isinstance(roles, list):
                 return InboundAdmissionResult(CommunicationPolicyDisposition.MALFORMED_PAYLOAD)
-            if (
-                (settings.allowed_user_ids or settings.allowed_role_ids)
-                and sender_id not in settings.allowed_user_ids
-                and not set(map(str, roles)) & set(settings.allowed_role_ids)
-            ):
-                return InboundAdmissionResult(CommunicationPolicyDisposition.USER_DENIED)
+            member_denied = self._member_disposition(
+                settings,
+                sender_id=sender_id,
+                roles=[str(role) for role in roles],
+            )
+            if member_denied is not None:
+                return InboundAdmissionResult(member_denied)
             if settings.require_mention:
                 bot_user_id = str(payload.get("agentbarn_bot_user_id") or "")
                 raw_mentions = event.get("mentions", [])
@@ -347,6 +562,25 @@ class DiscordPlatformPlugin(PlatformPlugin):
             )
             return None
 
+    async def _acknowledge_interaction(self, settings: PlatformSettings, message: dict[str, Any]) -> None:
+        event = message.get("d")
+        if not isinstance(event, dict):
+            return
+        interaction_id = str(event.get("id") or "")
+        token = str(event.get("token") or "")
+        if not interaction_id or not token:
+            return
+        try:
+            admitted = self.normalize_inbound(settings, message).disposition == CommunicationPolicyDisposition.ACCEPTED
+            async with httpx.AsyncClient(timeout=_INTERACTION_ACK_TIMEOUT_SECONDS) as client:
+                response = await client.post(
+                    _INTERACTION_CALLBACK_URL.format(interaction_id=interaction_id, token=token),
+                    json=_CLEAR_COMPONENTS_CALLBACK if admitted else _DEFERRED_UPDATE_CALLBACK,
+                )
+                response.raise_for_status()
+        except Exception as exc:
+            logger.warning("Discord interaction acknowledgement failed (%s)", type(exc).__name__)
+
     async def run_ingress(
         self,
         settings: PlatformSettings,
@@ -397,6 +631,11 @@ class DiscordPlatformPlugin(PlatformPlugin):
                 if message.get("t") == "READY":
                     bot_user_id = str(message.get("d", {}).get("user", {}).get("id") or "")
                     await connected()
+                    continue
+                if message.get("t") == "INTERACTION_CREATE" and bot_user_id:
+                    message["agentbarn_bot_user_id"] = bot_user_id
+                    await self._acknowledge_interaction(settings, message)
+                    await emit(message)
                     continue
                 if message.get("t") == "MESSAGE_CREATE" and bot_user_id:
                     message["agentbarn_bot_user_id"] = bot_user_id
