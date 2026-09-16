@@ -38,6 +38,7 @@ from api.domains.communications.plugins.base import (
     PlatformPlugin,
     PlatformSettings,
     ProcessingFeedbackContext,
+    best_effort_failure_notice,
     provider_idempotency_key,
 )
 from api.infrastructure.slack.client import SlackClient
@@ -410,6 +411,19 @@ class SlackPlatformPlugin(PlatformPlugin):
                 context.provider_message_id or "",
                 "white_check_mark" if context.stage == ProcessingFeedbackStage.SUCCEEDED else "x",
             ),
+        )
+        # An "x" reaction says a message was dropped but never why, so the
+        # normalized reason goes in the thread beside it.
+        best_effort_failure_notice(
+            context,
+            lambda text, idempotency_key: client.send_message(
+                context.location.id,
+                text,
+                thread_id=context.location.thread_id or context.provider_message_id,
+                idempotency_key=idempotency_key,
+            ),
+            target=f"Slack channel {context.location.id} thread {context.location.thread_id or 'root'}",
+            logger=logger,
         )
 
     @staticmethod
