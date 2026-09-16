@@ -32,6 +32,7 @@ class CommunicationPlatform(str, enum.Enum):
     DISCORD = "discord"
     WEB = "web"
     EMAIL = "email"
+    WEBHOOK = "webhook"
 
 
 class PlatformCapability(str, enum.Enum):
@@ -61,6 +62,22 @@ class CredentialUniquenessScope(str, enum.Enum):
     AGENT = "agent"
     ORGANIZATION = "organization"
     GLOBAL = "global"
+
+
+class DeliveryKind(str, enum.Enum):
+    """What the sender expects back, which is not the same as where it came from.
+
+    A CONVERSATION has a human on the other end who will wait, retry and answer a
+    question. An EVENT is a job fired by a machine that does none of those. Origin
+    (Teams vs Jira) and contract (chat vs job) are independent axes, so this rides
+    on the delivery rather than on the plugin.
+
+    Nothing outside `execution_policy` compares one of these. Read a field off a
+    policy instead; see that module for why.
+    """
+
+    CONVERSATION = "CONVERSATION"
+    EVENT = "EVENT"
 
 
 class CommunicationDirection(str, enum.Enum):
@@ -305,6 +322,15 @@ class CommunicationDelivery(BaseModel, table=True):
         default=CommunicationDeliveryStatus.PENDING,
         sa_column=Column(sa.String(32), nullable=False, server_default="PENDING"),
     )
+    # Set once at admission and never changed: a delivery's contract with its sender is
+    # fixed the moment it arrives. See `execution_policy` for what each kind means.
+    kind: DeliveryKind = SqlField(
+        default=DeliveryKind.CONVERSATION,
+        sa_column=Column(sa.String(16), nullable=False, server_default="CONVERSATION"),
+    )
+    # The runtime session this delivery runs in. Carried rather than recomputed by the
+    # pod, so one policy has one owner. Null on rows written before this existed.
+    session_key: str | None = SqlField(default=None, nullable=True, max_length=1024)
     idempotency_key: str = SqlField(nullable=False, max_length=512)
     submission_key: str | None = SqlField(default=None, nullable=True, max_length=64)
     request_digest: str | None = SqlField(default=None, nullable=True, max_length=64)
@@ -405,7 +431,7 @@ class CommunicationAttachment(PydanticBaseModel):
 
 class ConversationLocation(PydanticBaseModel):
     id: str = Field(min_length=1, max_length=512)
-    type: str = Field(pattern="^(CHANNEL|DM)$")
+    type: str = Field(pattern="^(CHANNEL|DM|EVENT)$")
     display_name: str | None = Field(default=None, max_length=255)
     thread_id: str | None = Field(default=None, max_length=512)
 
@@ -428,6 +454,11 @@ class NormalizedCommunicationEnvelope(PydanticBaseModel):
     attachments: list[CommunicationAttachment] = Field(default_factory=list)
     reply_to_provider_message_id: str | None = Field(default=None, max_length=512)
     provider_metadata: dict[str, str | int | float | bool | None] = Field(default_factory=dict)
+    # provider_metadata is flat scalars, so it cannot carry a webhook body. A machine
+    # event hands the agent structured JSON; flattening it into prose here would throw
+    # away the shape the caller deliberately sent. Declared, so extra="forbid" allows it,
+    # and defaulted, so envelopes stored before this field existed still validate.
+    payload: dict[str, Any] | None = Field(default=None)
 
 
 class AcceptedCommunicationRead(PydanticBaseModel):
@@ -573,6 +604,24 @@ class CommunicationRetryRead(PydanticBaseModel):
     requested_at: datetime
 
 
+class RuntimeExecutionRead(PydanticBaseModel):
+    """The execution contract handed to the pod, resolved server-side from the kind.
+
+    The pod is told rather than asked to work it out. Today the API and the adapter
+    derive the session key independently from the same inputs, which is exactly how two
+    copies of one policy drift apart once they stop agreeing.
+
+    Every field has a default matching today's behaviour, so an adapter that has never
+    heard of this block keeps running conversations byte-for-byte as it does now.
+    """
+
+    session_key: str
+    resume_session: bool = True
+    approvals_enabled: bool = True
+    busy_notice: str | None = None
+    busy_releases: bool = False
+
+
 class RuntimeDeliveryRead(PydanticBaseModel):
     delivery_id: UUID
     message_id: UUID
@@ -581,6 +630,8 @@ class RuntimeDeliveryRead(PydanticBaseModel):
     envelope: NormalizedCommunicationEnvelope
     progress_updates: bool = True
     execution_token: str | None = None
+    kind: DeliveryKind = DeliveryKind.CONVERSATION
+    execution: RuntimeExecutionRead | None = None
 
 
 class RuntimeDeliveryResult(PydanticBaseModel):

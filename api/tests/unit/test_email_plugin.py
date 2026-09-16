@@ -236,7 +236,7 @@ def test_the_runtime_sees_the_framing_the_sender_and_the_untouched_body(body) ->
 
     [envelope] = plugin.normalize_inbound(_settings(plugin), _inbound(text=body))
 
-    assert plugin.runtime_prompt(envelope) == (
+    assert plugin.runtime_prompt(_settings(plugin), envelope) == (
         f"{INBOUND_FRAMING}\n\nFrom: Jane Customer <jane@acme.com>\nSubject: Question about pricing\n\n{envelope.text}"
     )
 
@@ -254,7 +254,7 @@ def test_the_agent_is_given_the_sender_and_subject_the_adapter_does_not_pass_thr
 
     [envelope] = plugin.normalize_inbound(_settings(plugin), _inbound())
 
-    prompt = plugin.runtime_prompt(envelope)
+    prompt = plugin.runtime_prompt(_settings(plugin), envelope)
 
     assert "Jane Customer <jane@acme.com>" in prompt
     assert "Question about pricing" in prompt
@@ -266,7 +266,7 @@ def test_the_agent_is_told_the_message_is_addressed_to_it_and_that_its_reply_is_
 
     [envelope] = plugin.normalize_inbound(_settings(plugin), _inbound())
 
-    prompt = plugin.runtime_prompt(envelope)
+    prompt = plugin.runtime_prompt(_settings(plugin), envelope)
 
     opening = prompt.splitlines()[0].lower()
     assert "you" in opening

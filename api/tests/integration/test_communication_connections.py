@@ -184,7 +184,7 @@ def test_platform_catalog_lists_the_shipped_plugins() -> None:
             catalogue = response.json()
             assert_that(
                 [item["key"] for item in catalogue],
-                contains_inanyorder("discord", "email", "slack", "teams", "telegram", "web"),
+                contains_inanyorder("discord", "email", "slack", "teams", "telegram", "web", "webhook"),
             )
             slack = next(item for item in catalogue if item["key"] == "slack")
             assert_that(slack["schema_version"], equal_to(2))

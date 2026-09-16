@@ -1,7 +1,7 @@
 import hashlib
 import json
 from abc import ABC, abstractmethod
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
@@ -80,6 +80,26 @@ class InboundAdmissionContext:
 
 
 @dataclass(frozen=True)
+class WebhookRequest:
+    """One inbound provider webhook, before anything trusts it.
+
+    Carries the raw bytes as well as the parsed body: a signature is over what was
+    actually sent, and re-serializing a parsed dict does not reproduce it. Headers come
+    along because a versioned contract puts its version there.
+    """
+
+    raw_body: bytes
+    payload: dict[str, Any]
+    authorization: str
+    headers: Mapping[str, str]
+
+    def header(self, name: str) -> str | None:
+        """Case-insensitive lookup, since HTTP header names are not case-sensitive."""
+        lowered = name.lower()
+        return next((value for key, value in self.headers.items() if key.lower() == lowered), None)
+
+
+@dataclass(frozen=True)
 class ProcessingFeedbackContext:
     """Provider-neutral lifecycle facts for best-effort user feedback."""
 
@@ -142,7 +162,15 @@ class PlatformPlugin(ABC):
     def validate_outbound_target(self, settings: PlatformSettings, target: ResolvedOutboundTarget) -> None:
         raise NotImplementedError("This platform does not support agent-initiated delivery")
 
-    def runtime_prompt(self, envelope: NormalizedCommunicationEnvelope) -> str:
+    def runtime_prompt(self, settings: PlatformSettings, envelope: NormalizedCommunicationEnvelope) -> str:
+        """What the Agent is actually asked, rendered at claim time.
+
+        Takes settings because what a platform wants said can be configured per
+        Connection -- a webhook's prompt template is the whole point of the trigger.
+        Rendering here rather than at admission keeps the stored envelope the raw
+        provider fact, so fixing a bad template fixes the next attempt too.
+        """
+        del settings
         return envelope.text
 
     @property
@@ -320,11 +348,16 @@ class PlatformPlugin(ABC):
 
     def verify_webhook(
         self,
+        settings: PlatformSettings,
         credentials: PlatformCredentials,
-        payload: dict[str, Any],
-        authorization: str,
+        request: WebhookRequest,
     ) -> None:
-        """Authenticate a provider webhook before normalization."""
+        """Authenticate a provider webhook before normalization.
+
+        Raise PermissionError to reject the caller, ValueError to reject the request
+        itself (an unsupported contract version, say). Takes settings because how a
+        Connection authenticates can be configured per Connection.
+        """
         raise NotImplementedError(f"{self.key} does not implement webhook ingress")
 
     def build_app_package(

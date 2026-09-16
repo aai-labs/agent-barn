@@ -24,6 +24,7 @@ from api.domains.communications.plugins.base import (
     InboundAdmissionContext,
     PlatformPlugin,
     ProcessingFeedbackContext,
+    WebhookRequest,
     provider_idempotency_key,
 )
 from api.domains.communications.plugins.discord import DiscordPlatformPlugin
@@ -1476,6 +1477,16 @@ def test_teams_manifest_uses_only_fields_its_declared_schema_allows() -> None:
     assert set(manifest["bots"][0]["scopes"]) <= {"team", "personal", "groupChat"}
 
 
+def _webhook_request(payload: dict, *, authorization: str = "", headers: dict | None = None) -> WebhookRequest:
+    """Build the request a plugin sees, with raw bytes that really are this payload."""
+    return WebhookRequest(
+        raw_body=json.dumps(payload).encode(),
+        payload=payload,
+        authorization=authorization,
+        headers=headers or {},
+    )
+
+
 def test_teams_rejected_webhook_token_raises_the_gateways_permission_error() -> None:
     plugin = _teams_plugin()
 
@@ -1484,7 +1495,11 @@ def test_teams_rejected_webhook_token_raises_the_gateways_permission_error() -> 
         side_effect=TeamsAuthError("Bot Framework token verification failed"),
     ):
         with pytest.raises(PermissionError):
-            plugin.verify_webhook(_teams_credentials(plugin), {"type": "message"}, "Bearer nope")
+            plugin.verify_webhook(
+                plugin.settings_model.model_construct(),
+                _teams_credentials(plugin),
+                _webhook_request({"type": "message"}, authorization="Bearer nope"),
+            )
 
 
 def test_teams_rejected_credentials_raise_value_error_like_every_other_plugin() -> None:
@@ -1521,4 +1536,5 @@ def test_chat_platforms_hand_the_runtime_the_message_exactly_as_stored(plugin_cl
     )
 
     assert plugin_class.runtime_prompt is PlatformPlugin.runtime_prompt
-    assert PlatformPlugin.runtime_prompt(plugin_class.__new__(plugin_class), envelope) == envelope.text
+    settings = plugin_class.settings_model.model_construct()
+    assert PlatformPlugin.runtime_prompt(plugin_class.__new__(plugin_class), settings, envelope) == envelope.text
