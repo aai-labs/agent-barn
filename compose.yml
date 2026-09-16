@@ -134,21 +134,7 @@ services:
       dockerfile: api/Dockerfile
     container_name: aai_communications
     restart: unless-stopped
-    # The supervisor holds provider websockets and the runtime holds a control
-    # stream, so a plain --reload waits forever on "connections to close": HTTP
-    # dies while ingress keeps queueing Deliveries nothing can claim.
-    command:
-      [
-        "uvicorn",
-        "api.communications_main:app",
-        "--host",
-        "0.0.0.0",
-        "--port",
-        "8002",
-        "--reload",
-        "--timeout-graceful-shutdown",
-        "5",
-      ]
+    command: ["uvicorn", "api.communications_main:app", "--host", "0.0.0.0", "--port", "8002", "--reload"]
     depends_on:
       db:
         condition: service_healthy

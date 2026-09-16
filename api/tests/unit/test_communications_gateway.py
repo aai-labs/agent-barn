@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, Mock, patch
 from uuid import uuid4
 
 import pytest
-from hamcrest import assert_that, empty, is_
+from hamcrest import assert_that, empty, equal_to, is_
 
 from api.core.config import Config
 from api.domains.agents.models import Agent, AgentStatus
@@ -268,7 +268,10 @@ def test_gateway_marks_claim_and_terminal_runtime_failure_at_lifecycle_seam() ->
     assert completed is True
     stages = [call.args[2].stage for call in plugin.processing_feedback.call_args_list]
     assert stages == [ProcessingFeedbackStage.CLAIMED, ProcessingFeedbackStage.FAILED]
-    assert plugin.processing_feedback.call_args_list[1].args[2].provider_metadata == envelope.provider_metadata
+    assert_that(
+        plugin.processing_feedback.call_args_list[1].args[2].provider_metadata,
+        equal_to(envelope.provider_metadata),
+    )
     published_agent_id, published_signal = cast(Mock, service.signals).publish.call_args.args
     assert published_agent_id == agent.id
     assert published_signal.type == CommunicationSignalType.MESSAGE_CHANGED

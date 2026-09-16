@@ -14,7 +14,6 @@ from api.domains.communications.models import (
     NormalizedCommunicationEnvelope,
     OutboundCommunicationEnvelope,
     PlatformCapability,
-    ProcessingFeedbackStage,
 )
 from api.domains.communications.plugins.base import (
     InboundAdmissionResult,
@@ -22,7 +21,7 @@ from api.domains.communications.plugins.base import (
     PlatformPlugin,
     PlatformSettings,
     ProcessingFeedbackContext,
-    failure_notice,
+    best_effort_failure_notice,
     provider_idempotency_key,
 )
 from api.infrastructure.telegram.client import get_chat_display_name, send_message, validate_bot_token
@@ -143,27 +142,19 @@ class TelegramPlatformPlugin(PlatformPlugin):
     ) -> None:
         del settings
         assert isinstance(credentials, TelegramCredentials)
-        if context.stage != ProcessingFeedbackStage.FAILED:
-            return
-        try:
-            send_message(
+        best_effort_failure_notice(
+            context,
+            lambda text, idempotency_key: send_message(
                 credentials.bot_token,
                 context.location.id,
-                failure_notice(context.error_summary),
+                text,
                 thread_id=context.location.thread_id,
                 reply_to_id=context.provider_message_id,
-                idempotency_key=(
-                    provider_idempotency_key(str(context.source_delivery_id))
-                    if context.source_delivery_id is not None
-                    else None
-                ),
-            )
-        except Exception as exc:
-            logger.warning(
-                "Telegram failure notice failed for chat %s (%s)",
-                context.location.id,
-                type(exc).__name__,
-            )
+                idempotency_key=idempotency_key,
+            ),
+            target=f"Telegram chat {context.location.id}",
+            logger=logger,
+        )
 
     def normalize_inbound(
         self,

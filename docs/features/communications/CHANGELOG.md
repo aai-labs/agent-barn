@@ -15,7 +15,7 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
 
 ### 2026-09-16 — Provider-credit failure feedback across messaging channels — PR pending
 
-- Delivered: A terminal runtime failure now uses the same safe, normalized reason in Discord, Slack, Telegram, Teams, and Web Chat. Telegram replies to the originating message, Teams reuses the inbound activity's stored conversation routing, and Web Chat exposes the existing delivery error summary to the dashboard.
+- Delivered: A terminal runtime failure now uses the same safe, normalized reason in Discord, Slack, Telegram, Teams, and Web Chat. Telegram replies to the originating message, Teams reuses the inbound activity's stored conversation routing, and Web Chat exposes the existing delivery error summary to the dashboard. Non-retryable provider failures, including HTTP 402 credit or billing failures, become terminal immediately instead of consuming the remaining runtime attempts.
 - Changed: Processing feedback carries provider-owned routing metadata only inside the Platform Plugin boundary. No migration is required; Web Chat reads the existing `CommunicationDelivery.last_error_message` field.
 
 ### 2026-09-14 — Remove the obsolete Slack announce-steps setting — PR pending

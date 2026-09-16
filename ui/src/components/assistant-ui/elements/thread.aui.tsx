@@ -51,9 +51,14 @@ import {
   type ComponentType,
   type FC,
   type PropsWithChildren,
+  type ReactNode,
 } from "react";
 
 export type ThreadGroupPart = MessagePrimitive.GroupedParts.GroupPart;
+
+export type UserMessageProps = {
+  afterParts?: ReactNode;
+};
 
 /**
  * Optional component overrides for the thread. `AssistantMessage`,
@@ -64,7 +69,7 @@ export type ThreadGroupPart = MessagePrimitive.GroupedParts.GroupPart;
  */
 export type ThreadComponents = {
   AssistantMessage?: ComponentType | undefined;
-  UserMessage?: ComponentType | undefined;
+  UserMessage?: ComponentType<UserMessageProps> | undefined;
   Welcome?: ComponentType | undefined;
   ToolFallback?: ToolCallMessagePartComponent | undefined;
   ToolGroup?:
@@ -525,7 +530,7 @@ const AssistantActionBar: FC = () => {
   );
 };
 
-const UserMessage: FC = () => {
+export const UserMessage: FC<UserMessageProps> = ({ afterParts }) => {
   return (
     <MessagePrimitive.Root
       data-slot="aui_user-message-root"
@@ -535,6 +540,7 @@ const UserMessage: FC = () => {
       <div className="aui-user-message-content-wrapper relative col-start-2 min-w-0">
         <div className="aui-user-message-content peer bg-muted text-foreground rounded-xl px-4 py-2 wrap-break-word empty:hidden">
           <MessagePrimitive.Parts />
+          {afterParts}
         </div>
       </div>
     </MessagePrimitive.Root>
