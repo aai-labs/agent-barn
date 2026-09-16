@@ -229,7 +229,11 @@ class CommunicationsGatewayService:
                 CommunicationSignal(type=CommunicationSignalType.MESSAGE_CHANGED, delivery_id=delivery_id),
             )
             if not result.succeeded:
-                self._notify_runtime_failure_feedback(agent.id, delivery_id)
+                self._notify_runtime_failure_feedback(
+                    agent.id,
+                    delivery_id,
+                    normalized_error.summary if normalized_error is not None else None,
+                )
         return completed
 
     def renew_runtime_delivery_lease(
@@ -247,7 +251,12 @@ class CommunicationsGatewayService:
             awaiting_input=awaiting_input,
         )
 
-    def _notify_runtime_failure_feedback(self, agent_id: UUID, delivery_id: UUID) -> None:
+    def _notify_runtime_failure_feedback(
+        self,
+        agent_id: UUID,
+        delivery_id: UUID,
+        error_summary: str | None = None,
+    ) -> None:
         """Notify terminal runtime failure without coupling it to completion."""
         try:
             status = self.delivery_repository.delivery_status(
@@ -264,6 +273,8 @@ class CommunicationsGatewayService:
                         stage=ProcessingFeedbackStage.FAILED,
                         location=delivery.envelope.location,
                         provider_message_id=delivery.envelope.provider_message_id,
+                        source_delivery_id=delivery_id,
+                        error_summary=error_summary,
                     )
                 )
         except Exception as exc:
@@ -400,6 +411,25 @@ class CommunicationsGatewayService:
             logger.warning(
                 "Communication processing feedback lookup failed for Connection %s (%s)",
                 context.connection_id,
+                type(exc).__name__,
+            )
+
+    def notify_connection_alert(self, connection_id: UUID, text: str) -> None:
+        """Best-effort operator notice for a failure with no Delivery."""
+        try:
+            connection = self.connection_repository.get_active(connection_id)
+            if connection is None:
+                return
+            plugin = self.plugins.require(connection.platform_key)
+            settings = plugin.settings_model.model_validate(connection.settings)
+            credentials = plugin.credentials_model.model_validate(
+                json.loads(decrypt_token(connection.credentials_encrypted, self.config.agent_token_encryption_key))
+            )
+            plugin.alert(settings, credentials, text)
+        except Exception as exc:
+            logger.warning(
+                "Communication connection alert failed for Connection %s (%s)",
+                connection_id,
                 type(exc).__name__,
             )
 
