@@ -595,6 +595,14 @@ class ApprovalRequest(PydanticBaseModel):
     approval_id: str = Field(min_length=1, max_length=512)
     command: str = Field(min_length=1, max_length=100_000)
     choices: list[str] = Field(min_length=1, max_length=16)
+    choice_labels: dict[str, str] = Field(
+        default_factory=lambda: {
+            "once": "Allow once",
+            "session": "Allow for session",
+            "always": "Always allow",
+            "deny": "Deny",
+        }
+    )
 
 
 class RuntimeReplyCreate(PydanticBaseModel):

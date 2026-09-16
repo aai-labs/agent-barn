@@ -11,11 +11,17 @@ from starlette.testclient import TestClient
 from api.domains.agents.models import AgentStatus
 from api.domains.communications.delivery_repository import CommunicationDeliveryRepository
 from api.domains.communications.models import (
+    ApprovalRequest,
     CommunicationConnection,
     CommunicationDelivery,
     CommunicationDeliveryStatus,
+    RuntimeReplyCreate,
 )
 from api.domains.conversations.models import AgentChatMessage, ConversationType, MessageDirection
+from api.domains.rbac.catalog import AGENT_VIEWER_ROLE_ID
+from api.domains.users.organization_users.models import OrganizationRole
+from api.domains.web_chat.models import MAIN_THREAD_ID
+from api.domains.web_chat.repository import WebChatRepository
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.tests.core.givenpy import given, then, when
 from api.tests.core.modules import (
@@ -28,6 +34,7 @@ from api.tests.steps.agent import (
     TEST_ENCRYPTION_KEY,
     MockK8sModule,
     MockLiteLLMModule,
+    there_is_agent_access,
     there_is_an_agent,
     use_org_for_auth,
 )
@@ -35,6 +42,7 @@ from api.tests.steps.database import database_is_clean, database_repo_is_ready
 from api.tests.steps.organization import (
     there_is_an_organization_with_user_and_access_token,
 )
+from api.tests.steps.user import there_is_a_user, there_is_an_access_token_for_user
 
 _BASE = "/api/v1/organizations/{organization_id}/agents"
 
@@ -222,6 +230,162 @@ def test_processing_stop_exposes_cancel_request_before_runtime_completion():
         assert_that(stop_response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
         assert_that(messages_response.json()[0]["delivery_status"], equal_to("PROCESSING"))
         assert_that(messages_response.json()[0]["cancel_requested_at"], is_(not_(none())))
+
+
+def _switch_to_viewer():
+    def step(context):
+        member_id = uuid7()
+        there_is_a_user(
+            id=member_id,
+            email=f"viewer-{member_id}@example.com",
+            role=OrganizationRole.MEMBER,
+            organization_id=context.organization.id,
+        )(context)
+        there_is_an_access_token_for_user(member_id)(context)
+        there_is_agent_access(access_role_id=AGENT_VIEWER_ROLE_ID)(context)
+
+    return step
+
+
+def _agent_replies(context, text: str, approval: ApprovalRequest | None = None) -> None:
+    deliveries = context.injector.get(CommunicationDeliveryRepository)
+    claimed = deliveries.claim_next_inbound(agent_id=context.agent.id)
+    assert_that(claimed, is_(not_(none())))
+    deliveries.enqueue_runtime_reply(
+        agent_id=context.agent.id,
+        source_delivery_id=claimed.delivery_id,
+        reply=RuntimeReplyCreate(idempotency_key=f"{claimed.delivery_id}:reply", text=text, approval=approval),
+    )
+
+
+def _list(context) -> list[dict]:
+    response = context.client.get(f"{_BASE}/{context.agent.id}/web-chat/messages", headers=_auth(context))
+    assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+    return response.json()
+
+
+_APPROVAL = ApprovalRequest(approval_id="run_1:1726051234.5", command="rm -rf build", choices=["once", "deny"])
+
+
+def test_an_approval_prompt_carries_its_approval_to_the_browser():
+    with given([*_GIVEN[:-1], there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        _send(context, "clean the build")
+
+        with when("the agent asks to approve a command"):
+            _agent_replies(context, "```\nrm -rf build\n```\nReply with one of: once, deny", approval=_APPROVAL)
+
+        with then("the prompt exposes the approval and the question does not"):
+            messages = _list(context)
+            assert_that(messages[0]["approval"], none())
+            assert_that(
+                messages[1]["approval"],
+                equal_to(
+                    {
+                        "approval_id": "run_1:1726051234.5",
+                        "command": "rm -rf build",
+                        "choices": ["once", "deny"],
+                        "choice_labels": {
+                            "once": "Allow once",
+                            "session": "Allow for session",
+                            "always": "Always allow",
+                            "deny": "Deny",
+                        },
+                    }
+                ),
+            )
+
+
+def test_a_live_stream_refresh_keeps_the_approval():
+    with given([*_GIVEN[:-1], there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        _send(context, "clean the build")
+        _agent_replies(context, "Reply with one of: once, deny", approval=_APPROVAL)
+        delegate = context.injector.get(PostgresRepositoryDelegate)
+        with Session(delegate.engine) as session:
+            prompt = session.exec(
+                select(CommunicationDelivery).where(CommunicationDelivery.direction == "OUTBOUND")
+            ).one()
+
+        with when("the stream refreshes the prompt's delivery"):
+            refreshed = context.injector.get(WebChatRepository).get_message_for_delivery(
+                delivery_id=prompt.id,
+                connection_id=prompt.connection_id,
+                channel_id=str(context.user.id),
+                thread_id=MAIN_THREAD_ID,
+            )
+
+        with then("the approval survives the refresh"):
+            assert_that(refreshed, is_(not_(none())))
+            assert_that(refreshed[1].approval, equal_to(_APPROVAL))
+
+
+def test_an_ordinary_reply_carries_no_approval():
+    with given([*_GIVEN[:-1], there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        _send(context, "hello")
+
+        with when("the agent replies normally"):
+            _agent_replies(context, "hi there")
+
+        with then("no approval is exposed"):
+            assert_that([message["approval"] for message in _list(context)], equal_to([None, None]))
+
+
+def test_an_approval_answer_is_recorded_against_the_approval_it_answers():
+    with given([*_GIVEN[:-1], there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        with when("I answer an approval from the browser"):
+            response = context.client.post(
+                f"{_BASE}/{context.agent.id}/web-chat/messages",
+                headers=_auth(context),
+                json={"text": "once", "approval_id": "run_1:1726051234.5"},
+            )
+
+        with then("the inbound delivery carries the approval id the runtime matches on"):
+            assert_that(response.status_code, equal_to(status.HTTP_202_ACCEPTED))
+            delegate = context.injector.get(PostgresRepositoryDelegate)
+            with Session(delegate.engine) as session:
+                delivery = session.exec(
+                    select(CommunicationDelivery).where(
+                        CommunicationDelivery.message_id == UUID(str(response.json()["id"]))
+                    )
+                ).one()
+            assert_that(delivery.envelope["provider_metadata"], equal_to({"approval_id": "run_1:1726051234.5"}))
+
+
+def test_an_unreadable_stored_approval_does_not_break_the_thread():
+    with given([*_GIVEN[:-1], there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        _send(context, "clean the build")
+        _agent_replies(context, "Reply with one of: once, deny", approval=_APPROVAL)
+        delegate = context.injector.get(PostgresRepositoryDelegate)
+        with Session(delegate.engine) as session:
+            prompt = session.exec(
+                select(CommunicationDelivery).where(CommunicationDelivery.direction == "OUTBOUND")
+            ).one()
+            prompt.envelope = {
+                **prompt.envelope,
+                "approval": {"run_id": "run_1", "command": "rm -rf build", "choices": ["once", "deny"]},
+            }
+            session.add(prompt)
+            session.commit()
+
+        with when("I list the thread"):
+            messages = _list(context)
+
+        with then("the prompt still loads, without buttons"):
+            assert_that(messages, has_length(2))
+            assert_that(messages[1]["content"], equal_to("Reply with one of: once, deny"))
+            assert_that(messages[1]["approval"], none())
+
+
+def test_a_viewer_cannot_answer_an_approval():
+    with given([*_GIVEN[:-1], there_is_an_agent(status=AgentStatus.RUNNING), _switch_to_viewer()]) as context:
+        with when("a viewer tries to answer an approval"):
+            response = context.client.post(
+                f"{_BASE}/{context.agent.id}/web-chat/messages",
+                headers=_auth(context),
+                json={"text": "once", "approval_id": "run_1:1726051234.5"},
+            )
+
+        with then("it is forbidden"):
+            assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
 
 
 def test_messages_sent_to_different_threads_stay_isolated():

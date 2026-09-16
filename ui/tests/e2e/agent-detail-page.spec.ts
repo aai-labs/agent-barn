@@ -18,6 +18,7 @@ import {
   mockSecret,
   mockTemplates,
   mockToolCall,
+  mockWebChatApprovalPrompt,
   mockVersionsForKey,
 } from "../pages/data-support/agent-data-support.po";
 import { mockCustomSkill, mockPlatformSkill, MOCK_PLATFORM_SKILL_ID } from "../pages/data-support/skill-data-support.po";
@@ -197,6 +198,95 @@ test.describe("Agent Detail Page", () => {
 
     await expect.poll(() => stopRequests).toBe(1);
     await expect(page.getByRole("button", { name: "Stop generating" })).not.toBeVisible();
+  });
+
+  test("answers a command approval with a button", async ({ page }) => {
+    const sentBodies: unknown[] = [];
+    await dataSupportPage.agents.interceptWebChatApprovalPrompt({
+      answer: async (route, request) => {
+        sentBodies.push(request.postDataJSON());
+        await route.fulfill({
+          status: 202,
+          contentType: "application/json",
+          body: JSON.stringify({
+            id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+            direction: "INBOUND",
+            content: "once",
+            occurred_at: "2026-09-01T08:01:00Z",
+            delivery_status: "PENDING",
+            cancel_requested_at: null,
+            approval: null,
+          }),
+        });
+      },
+    });
+
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await expect(page.getByRole("button", { name: "Allow for session" })).toHaveCount(0);
+    await page.getByRole("button", { name: "Allow once" }).click();
+
+    await expect.poll(() => sentBodies).toEqual([
+      { text: "once", thread_id: "main", approval_id: "run_1:1726051234.5" },
+    ]);
+  });
+
+  test("disables approval buttons once one is clicked", async ({ page }) => {
+    let answers = 0;
+    await dataSupportPage.agents.interceptWebChatApprovalPrompt({
+      answer: async (route) => {
+        answers += 1;
+        await route.fulfill({
+        status: 202,
+        contentType: "application/json",
+        body: JSON.stringify({
+          id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+          direction: "INBOUND",
+          content: "once",
+          occurred_at: "2026-09-01T08:01:00Z",
+          delivery_status: "PENDING",
+          cancel_requested_at: null,
+          approval: null,
+        }),
+        });
+      },
+    });
+
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await page.getByRole("button", { name: "Allow once" }).click();
+
+    await expect(page.getByRole("button", { name: "Allow once" })).toBeDisabled();
+    await expect(page.getByRole("button", { name: "Deny" })).toBeDisabled();
+    await expect.poll(() => answers).toBe(1);
+  });
+
+  test("re-enables approval buttons when the answer fails to send", async ({ page }) => {
+    await dataSupportPage.agents.interceptWebChatApprovalPrompt({
+      answer: async (route) => {
+        await route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ detail: "boom" }) });
+      },
+    });
+
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    const failed = page.waitForResponse((response) => response.request().method() === "POST" && response.status() === 500);
+    await page.getByRole("button", { name: "Allow once" }).click();
+    await failed;
+
+    await expect(page.getByRole("button", { name: "Allow once" })).toBeEnabled();
+  });
+
+  test("hides approval buttons from someone who cannot update the Agent", async ({ page }) => {
+    await dataSupportPage.agents.interceptGetAgentRequest({
+      body: { ...mockAgent, allowed_actions: ["agent.read", "activity.read"] },
+    });
+    await dataSupportPage.agents.interceptWebChatApprovalPrompt({
+      answer: async (route) => route.fallback(),
+      prompt: { ...mockWebChatApprovalPrompt, content: "Reply with one of: once, deny" },
+    });
+
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+
+    await expect(page.getByText("Reply with one of: once, deny")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Allow once" })).toHaveCount(0);
   });
 
   test("guides an unreachable Agent to messaging setup", async ({ page }) => {

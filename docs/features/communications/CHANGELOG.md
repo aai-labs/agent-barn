@@ -18,6 +18,11 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
 - Delivered: A terminal runtime failure now uses the same safe, normalized reason in Discord, Slack, Telegram, Teams, and Web Chat. Telegram replies to the originating message, Teams reuses the inbound activity's stored conversation routing, and Web Chat exposes the existing delivery error summary to the dashboard. Non-retryable provider failures, including HTTP 402 credit or billing failures, become terminal immediately instead of consuming the remaining runtime attempts.
 - Changed: Processing feedback carries provider-owned routing metadata only inside the Platform Plugin boundary. No migration is required; Web Chat reads the existing `CommunicationDelivery.last_error_message` field.
 
+### 2026-09-16 — Discord approval prompts fit the message limit — PR pending
+
+- Changed: a Discord command-approval prompt is rendered by the plugin instead of being sent as the runtime's text, so the command is bounded and the message stays inside Discord's 2,000-character `content` limit; a long command previously failed the send with 400 and dead-lettered the reply.
+- Changed: Discord ingress now forwards component interactions as well as messages, acknowledging each over HTTP before the gateway persists it, since the interaction token expires after three seconds. Message handling, intents, and every other platform's ingress are untouched.
+
 ### 2026-09-14 — Remove the obsolete Slack announce-steps setting — PR pending
 
 - Removed: Slack Connections no longer expose the unused **Announce steps** setting. The schema-driven Connection form drops the checkbox with the backend schema; the Agent-level **Verbose mode** setting remains the single control for runtime progress messages.

@@ -3,9 +3,10 @@ from datetime import UTC, datetime
 from uuid import UUID
 
 from injector import inject, singleton
+from pydantic import ValidationError
 from sqlmodel import Session, col, select
 
-from api.domains.communications.models import CommunicationDelivery, CommunicationDeliveryStatus
+from api.domains.communications.models import ApprovalRequest, CommunicationDelivery, CommunicationDeliveryStatus
 from api.domains.conversations.models import AgentChatMessage, MessageDirection
 from api.domains.web_chat.models import WebChatThread
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
@@ -23,7 +24,17 @@ class ThreadSummary:
 class WebChatDeliveryState:
     status: CommunicationDeliveryStatus
     cancel_requested_at: datetime | None
-    error_message: str | None
+    approval: ApprovalRequest | None = None
+    error_message: str | None = None
+
+
+def _approval(raw: object) -> ApprovalRequest | None:
+    if not isinstance(raw, dict):
+        return None
+    try:
+        return ApprovalRequest.model_validate(raw)
+    except ValidationError:
+        return None
 
 
 @inject
@@ -69,20 +80,16 @@ class WebChatRepository:
             return {}
         with Session(self.delegate.engine) as session:
             rows = session.exec(
-                select(
-                    CommunicationDelivery.message_id,
-                    CommunicationDelivery.status,
-                    CommunicationDelivery.cancel_requested_at,
-                    CommunicationDelivery.last_error_message,
-                ).where(col(CommunicationDelivery.message_id).in_(message_ids))
+                select(CommunicationDelivery).where(col(CommunicationDelivery.message_id).in_(message_ids))
             ).all()
             return {
-                message_id: WebChatDeliveryState(
-                    status=CommunicationDeliveryStatus(status),
-                    cancel_requested_at=cancel_requested_at,
-                    error_message=error_message,
+                row.message_id: WebChatDeliveryState(
+                    status=row.status,
+                    cancel_requested_at=row.cancel_requested_at,
+                    approval=_approval(row.envelope.get("approval")),
+                    error_message=row.last_error_message,
                 )
-                for message_id, status, cancel_requested_at, error_message in rows
+                for row in rows
             }
 
     def get_message_for_delivery(
@@ -95,24 +102,18 @@ class WebChatRepository:
     ) -> tuple[AgentChatMessage, WebChatDeliveryState] | None:
         """Return one message and its current delivery state, scoped to Web Chat."""
         with Session(self.delegate.engine) as session:
-            delivery_row = session.exec(
-                select(
-                    CommunicationDelivery.message_id,
-                    CommunicationDelivery.status,
-                    CommunicationDelivery.cancel_requested_at,
-                    CommunicationDelivery.last_error_message,
-                ).where(
+            delivery = session.exec(
+                select(CommunicationDelivery).where(
                     col(CommunicationDelivery.id) == delivery_id,
                     col(CommunicationDelivery.connection_id) == connection_id,
                 )
             ).one_or_none()
-            if delivery_row is None:
+            if delivery is None:
                 return None
 
-            message_id, status, cancel_requested_at, error_message = delivery_row
             message = session.exec(
                 select(AgentChatMessage).where(
-                    col(AgentChatMessage.id) == message_id,
+                    col(AgentChatMessage.id) == delivery.message_id,
                     col(AgentChatMessage.connection_id) == connection_id,
                     col(AgentChatMessage.channel_id) == channel_id,
                     col(AgentChatMessage.thread_id) == thread_id,
@@ -121,9 +122,10 @@ class WebChatRepository:
             if message is None:
                 return None
             return message, WebChatDeliveryState(
-                status=CommunicationDeliveryStatus(status),
-                cancel_requested_at=cancel_requested_at,
-                error_message=error_message,
+                status=delivery.status,
+                cancel_requested_at=delivery.cancel_requested_at,
+                approval=_approval(delivery.envelope.get("approval")),
+                error_message=delivery.last_error_message,
             )
 
     def list_threads(
