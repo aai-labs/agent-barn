@@ -79,6 +79,12 @@ reconcile:
 
 # Local-only: populate the dev database with realistic Event Deliveries for
 # manually exercising the Platform Event Delivery Monitor UI. Safe to re-run.
+check-llm-budgets:
+	cd api && uv run python -c "from api.domains.organizations.llm_budget_alerts import main; main()"
+
+reconcile-llm-budgets:
+	cd api && uv run python -c "from api.domains.organizations.llm_budget_reconciliation import main; main()"
+
 seed-event-deliveries:
 	api/.venv/bin/python -m api.scripts.seed_event_delivery_monitor_fixtures --count 200
 

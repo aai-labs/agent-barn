@@ -115,7 +115,7 @@ class UserService:
 
         if self.config.litellm_base_url and self.config.litellm_secret_name:
             try:
-                self.litellm.ensure_organization_team(str(organization.id))
+                self.litellm.ensure_team_exists(str(organization.id))
             except Exception as exc:
                 # Creation already committed; key generation retries provisioning
                 # and refuses to issue a key without its team.

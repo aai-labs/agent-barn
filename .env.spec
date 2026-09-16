@@ -79,10 +79,9 @@ LITELLM_BASE_URL=
 AGENT_LITELLM_BASE_URL=
 # Name of the k8s Secret containing LITELLM_MASTER_KEY. Defaults to "litellm".
 LITELLM_SECRET_NAME=litellm
-# Optional per-Organization USD cap. Empty means unlimited; 0 sets a zero allowance.
-ORGANIZATION_LLM_BUDGET_USD=
-# Positive integer duration in seconds/minutes/hours/days; not a calendar month.
-ORGANIZATION_LLM_BUDGET_DURATION=30d
+# Percentages of an Organization's LLM limit at which its Owners and Admins are
+# notified. Comma separated, 1-100. Empty uses the default.
+ORGANIZATION_LLM_BUDGET_ALERT_THRESHOLDS=80,100
 # Default model for openclaw agents when agent.model is not set. Format: litellm/openrouter/<slug>
 AGENT_DEFAULT_MODEL=litellm/openrouter/z-ai/glm-5.2
 # OpenRouter API key used to fetch the model catalogue for the picker. Optional —

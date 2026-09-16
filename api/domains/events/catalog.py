@@ -37,9 +37,12 @@ COMMUNICATION_CONNECTION_RECONNECT_REQUESTED = "communication.connection.reconne
 COMMUNICATION_DELIVERY_DEAD_LETTERED = "communication.delivery.dead_lettered"
 COMMUNICATION_DELIVERY_RETRY_REQUESTED = "communication.delivery.retry.requested"
 COMMUNICATION_DELIVERY_RECOVERED = "communication.delivery.recovered"
+ORGANIZATION_LLM_BUDGET_THRESHOLD_REACHED = "organization.llm_budget.threshold_reached"
+ORGANIZATION_LLM_BUDGET_EXHAUSTED = "organization.llm_budget.exhausted"
 
 SECURITY_AUDIT_HANDLER = "security_audit.projection"
 AGENT_LIFECYCLE_EMAIL_HANDLER = "agent.lifecycle_email.notification"
+ORGANIZATION_LLM_BUDGET_EMAIL_HANDLER = "organization.llm_budget_email.notification"
 
 
 class OrganizationRoleChangedPayload(BaseModel):
@@ -219,6 +222,21 @@ class TemplateDeletedPayload(BaseModel):
     template_key: str
     versions_deleted: list[int]
     actor_display: str
+    subject_display: str
+
+
+class OrganizationLlmBudgetPayload(BaseModel):
+    """Spend against an Organization's model budget at the moment a threshold was
+    first crossed. The figures are a snapshot, not a live reading — a notification
+    built from them is informational and never gates anything."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    organization_id: UUID
+    threshold_percent: int
+    spend_usd: float
+    limit_usd: float
+    renews_at: str | None = None
     subject_display: str
 
 
@@ -422,6 +440,16 @@ def build_default_event_registry() -> DomainEventRegistry:
             event_scope=EventScope.ORGANIZATION,
         )
     )
+    for event_name in (ORGANIZATION_LLM_BUDGET_THRESHOLD_REACHED, ORGANIZATION_LLM_BUDGET_EXHAUSTED):
+        registry.register(
+            DomainEventDefinition(
+                event_name=event_name,
+                schema_version=1,
+                payload_model=OrganizationLlmBudgetPayload,
+                handler_names=(ORGANIZATION_LLM_BUDGET_EMAIL_HANDLER,),
+                event_scope=EventScope.ORGANIZATION,
+            )
+        )
     for event_name in (AGENT_STARTED, AGENT_STOPPED):
         registry.register(
             DomainEventDefinition(

@@ -3,11 +3,12 @@ from unittest.mock import MagicMock, patch
 import httpx
 import pytest
 from hamcrest import assert_that, equal_to
-from pydantic import ValidationError
 
 from api.core.config import Config
-from api.domains.organizations.service import OrganizationService
 from api.infrastructure.litellm.client import LiteLLMClient, LiteLLMError
+
+TEAM_NEW = "http://litellm/team/new"
+TEAM_UPDATE = "http://litellm/team/update"
 
 
 def config(**values):
@@ -18,8 +19,6 @@ def config(**values):
             "platform_admin_credentials": "test:test",
             "litellm_base_url": "http://litellm",
             "litellm_secret_name": "litellm",
-            "organization_llm_budget_usd": None,
-            "organization_llm_budget_duration": "30d",
             **values,
         }
     )
@@ -29,71 +28,103 @@ def response(data, code=200):
     return httpx.Response(code, json=data, request=httpx.Request("GET", "http://litellm"))
 
 
-@pytest.mark.parametrize("value", [None, "", "  "])
-def test_unset_budget_is_unlimited(value):
-    assert_that(config(organization_llm_budget_usd=value).organization_llm_budget_usd, equal_to(None))
+def client():
+    return LiteLLMClient(MagicMock(), config())
 
 
-@pytest.mark.parametrize("value", [-1, "nan", "inf", "bad"])
-def test_invalid_budget_rejected(value):
-    with pytest.raises(ValidationError):
-        config(organization_llm_budget_usd=value)
+def team(**fields):
+    return response({"team_info": {"team_id": "org", **fields}})
 
 
-@pytest.mark.parametrize("value", ["0d", "-1d", "monthly", "1.5d"])
-def test_invalid_duration_rejected(value):
-    with pytest.raises(ValidationError):
-        config(organization_llm_budget_duration=value)
+# --- ensure_team_exists: identity only, never policy -------------------------
 
 
-def test_zero_budget_is_not_unlimited():
-    assert_that(config(organization_llm_budget_usd="0").organization_llm_budget_usd, equal_to(0))
-
-
-@pytest.mark.parametrize("budget", [None, 0, 50])
-def test_new_team_has_org_identity_and_optional_budget(budget):
-    client = LiteLLMClient(MagicMock(), config(organization_llm_budget_usd=budget))
-    duration = "30d" if budget is not None else None
+def test_missing_team_is_created_without_budget_fields():
     with (
-        patch.object(client, "_master_key", return_value="master"),
+        patch.object(LiteLLMClient, "_master_key", return_value="master"),
         patch(
             "api.infrastructure.litellm.client.httpx.get",
-            side_effect=[
-                response({}, 404),
-                response({"team_info": {"team_id": "org", "max_budget": budget, "budget_duration": duration}}),
-            ],
+            side_effect=[response({}, 404), team()],
         ),
         patch("api.infrastructure.litellm.client.httpx.post", return_value=response({})) as post,
     ):
-        client.ensure_organization_team("org")
-    assert_that(post.call_count, equal_to(1))
+        client().ensure_team_exists("org")
+    assert_that(post.call_args.args[0], equal_to(TEAM_NEW))
+    assert_that(post.call_args.kwargs["json"], equal_to({"team_id": "org", "team_alias": "agentbarn-org"}))
+
+
+def test_existing_team_is_left_untouched():
+    """Key generation must never re-assert policy over a platform admin's setting."""
+    with (
+        patch.object(LiteLLMClient, "_master_key", return_value="master"),
+        patch("api.infrastructure.litellm.client.httpx.get", return_value=team(max_budget=50, spend=42)),
+        patch("api.infrastructure.litellm.client.httpx.post") as post,
+    ):
+        client().ensure_team_exists("org")
+    post.assert_not_called()
+
+
+def test_concurrent_creation_is_verified_by_reread():
+    with (
+        patch.object(LiteLLMClient, "_master_key", return_value="master"),
+        patch("api.infrastructure.litellm.client.httpx.get", side_effect=[response({}, 404), team()]),
+        patch("api.infrastructure.litellm.client.httpx.post", return_value=response({}, 400)),
+    ):
+        client().ensure_team_exists("org")
+
+
+def test_failed_creation_raises():
+    with (
+        patch.object(LiteLLMClient, "_master_key", return_value="master"),
+        patch("api.infrastructure.litellm.client.httpx.get", return_value=response({}, 404)),
+        patch("api.infrastructure.litellm.client.httpx.post", return_value=response({}, 403)),
+    ):
+        with pytest.raises(LiteLLMError):
+            client().ensure_team_exists("org")
+
+
+def test_mismatched_team_identity_is_refused():
+    with (
+        patch.object(LiteLLMClient, "_master_key", return_value="master"),
+        patch(
+            "api.infrastructure.litellm.client.httpx.get", return_value=response({"team_info": {"team_id": "other"}})
+        ),
+    ):
+        with pytest.raises(LiteLLMError):
+            client().ensure_team_exists("org")
+
+
+# --- apply_team_budget: policy, passed in by the caller ----------------------
+
+
+@pytest.mark.parametrize("budget,duration", [(None, None), (0, "30d"), (50, "30d")])
+def test_missing_team_is_created_with_the_requested_policy(budget, duration):
+    with (
+        patch.object(LiteLLMClient, "_master_key", return_value="master"),
+        patch(
+            "api.infrastructure.litellm.client.httpx.get",
+            side_effect=[response({}, 404), team(max_budget=budget, budget_duration=duration)],
+        ),
+        patch("api.infrastructure.litellm.client.httpx.post", return_value=response({})) as post,
+    ):
+        client().apply_team_budget("org", budget, duration)
     assert_that(
         post.call_args.kwargs["json"],
         equal_to({"team_id": "org", "team_alias": "agentbarn-org", "max_budget": budget, "budget_duration": duration}),
     )
 
 
-def test_unchanged_policy_does_not_reset_budget_window_or_spend():
-    client = LiteLLMClient(MagicMock(), config(organization_llm_budget_usd=50))
+def test_unchanged_policy_writes_nothing():
+    """An update would reschedule the renewal date and is not free."""
     with (
-        patch.object(client, "_master_key", return_value="master"),
+        patch.object(LiteLLMClient, "_master_key", return_value="master"),
         patch(
             "api.infrastructure.litellm.client.httpx.get",
-            return_value=response(
-                {
-                    "team_info": {
-                        "team_id": "org",
-                        "max_budget": 50,
-                        "budget_duration": "30d",
-                        "spend": 42,
-                        "budget_reset_at": "later",
-                    }
-                }
-            ),
+            return_value=team(max_budget=50, budget_duration="30d", spend=42, budget_reset_at="later"),
         ),
         patch("api.infrastructure.litellm.client.httpx.post") as post,
     ):
-        client.ensure_organization_team("org")
+        client().apply_team_budget("org", 50, "30d")
     post.assert_not_called()
 
 
@@ -101,62 +132,38 @@ def test_unchanged_policy_does_not_reset_budget_window_or_spend():
     "budget,duration,expected",
     [
         (75, "30d", {"max_budget": 75}),
-        (None, "30d", {"max_budget": None, "budget_duration": None}),
         (50, "7d", {"budget_duration": "7d"}),
+        (None, None, {"max_budget": None, "budget_duration": None}),
     ],
 )
-def test_policy_changes_patch_only_changed_fields(budget, duration, expected):
-    client = LiteLLMClient(
-        MagicMock(), config(organization_llm_budget_usd=budget, organization_llm_budget_duration=duration)
-    )
+def test_only_changed_policy_fields_are_patched(budget, duration, expected):
     with (
-        patch.object(client, "_master_key", return_value="master"),
+        patch.object(LiteLLMClient, "_master_key", return_value="master"),
         patch(
             "api.infrastructure.litellm.client.httpx.get",
-            return_value=response(
-                {"team_info": {"team_id": "org", "max_budget": 50, "budget_duration": "30d", "spend": 42}}
-            ),
+            return_value=team(max_budget=50, budget_duration="30d", spend=42),
         ),
         patch("api.infrastructure.litellm.client.httpx.post", return_value=response({})) as post,
     ):
-        client.ensure_organization_team("org")
+        client().apply_team_budget("org", budget, duration)
+    assert_that(post.call_args.args[0], equal_to(TEAM_UPDATE))
     assert_that(post.call_args.kwargs["json"], equal_to({"team_id": "org", **expected}))
 
 
-def test_concurrent_team_creation_is_verified_by_reread():
-    client = LiteLLMClient(MagicMock(), config())
+# --- key generation ----------------------------------------------------------
+
+
+def test_generated_key_carries_team_and_attribution_metadata():
+    c = client()
     with (
-        patch.object(client, "_master_key", return_value="master"),
-        patch(
-            "api.infrastructure.litellm.client.httpx.get",
-            side_effect=[response({}, 404), response({"team_info": {"team_id": "org"}})],
-        ),
-        patch("api.infrastructure.litellm.client.httpx.post", return_value=response({}, 400)),
-    ):
-        client.ensure_organization_team("org")
-
-
-def test_failed_team_creation_never_issues_key():
-    client = LiteLLMClient(MagicMock(), config())
-    with (
-        patch.object(client, "_master_key", return_value="master"),
-        patch("api.infrastructure.litellm.client.httpx.get", return_value=response({}, 404)),
-        patch("api.infrastructure.litellm.client.httpx.post", return_value=response({}, 403)) as post,
-    ):
-        with pytest.raises(LiteLLMError):
-            client.generate_key("agent", "Agent", "org")
-    assert_that([call.args[0] for call in post.call_args_list], equal_to(["http://litellm/team/new"]))
-
-
-def test_generated_key_has_team_and_existing_attribution_metadata():
-    client = LiteLLMClient(MagicMock(), config())
-    with (
-        patch.object(client, "_master_key", return_value="master"),
-        patch.object(client, "ensure_organization_team") as ensure,
+        patch.object(LiteLLMClient, "_master_key", return_value="master"),
+        patch.object(c, "ensure_team_exists") as ensure,
+        patch.object(c, "apply_team_budget") as apply_budget,
         patch("api.infrastructure.litellm.client.httpx.post", return_value=response({"key": "sk-test"})) as post,
     ):
-        assert_that(client.generate_key("agent", "Agent", "org"), equal_to("sk-test"))
+        assert_that(c.generate_key("agent", "Agent", "org"), equal_to("sk-test"))
     ensure.assert_called_once_with("org")
+    apply_budget.assert_not_called()
     assert_that(
         post.call_args.kwargs["json"],
         equal_to(
@@ -165,17 +172,160 @@ def test_generated_key_has_team_and_existing_attribution_metadata():
     )
 
 
-@pytest.mark.parametrize("fails", [False, True])
-def test_startup_reconciles_before_serving_and_aborts_on_failure(fails):
+def test_no_key_is_issued_when_the_team_cannot_be_provisioned():
+    with (
+        patch.object(LiteLLMClient, "_master_key", return_value="master"),
+        patch("api.infrastructure.litellm.client.httpx.get", return_value=response({}, 404)),
+        patch("api.infrastructure.litellm.client.httpx.post", return_value=response({}, 403)) as post,
+    ):
+        with pytest.raises(LiteLLMError):
+            client().generate_key("agent", "Agent", "org")
+    assert_that([call.args[0] for call in post.call_args_list], equal_to([TEAM_NEW]))
+
+
+# --- service: the Organization row is the source of policy -------------------
+
+
+def organization_service(**overrides):
+    from api.domains.organizations.service import OrganizationService
+
+    deps = {
+        "organization_repository": MagicMock(),
+        "litellm": MagicMock(),
+        "agent_service": MagicMock(),
+        "permission_policy": MagicMock(),
+        "event_delivery_dispatcher": MagicMock(),
+        "agent_settings_lookup": MagicMock(),
+        "agent_repository": MagicMock(),
+    }
+    deps.update(overrides)
+    return OrganizationService(**deps)
+
+
+def configured():
+    return patch("api.domains.organizations.service.get_config", return_value=config())
+
+
+def test_reconcile_applies_each_organizations_stored_budget():
+    repo = MagicMock()
+    repo.list_budget_policies.return_value = [("a", 50.0, "30d"), ("b", None, None)]
+    service = organization_service(organization_repository=repo)
+    with configured():
+        service.reconcile_llm_budgets()
+    assert_that(
+        [call.args for call in service.litellm.apply_team_budget.call_args_list],
+        equal_to([("a", 50.0, "30d"), ("b", None, None)]),
+    )
+
+
+def test_one_failing_organization_does_not_abort_the_sweep():
+    """Drift repair is best effort: budgets are applied when set, not here."""
+    repo = MagicMock()
+    repo.list_budget_policies.return_value = [("a", 1.0, "30d"), ("b", 2.0, "30d")]
+    service = organization_service(organization_repository=repo)
+    service.litellm.apply_team_budget.side_effect = [LiteLLMError("down"), None]
+    with configured():
+        service.reconcile_llm_budgets()
+    assert_that(service.litellm.apply_team_budget.call_count, equal_to(2))
+
+
+def test_reconcile_is_skipped_when_litellm_is_not_configured():
+    service = organization_service()
+    with patch(
+        "api.domains.organizations.service.get_config",
+        return_value=config(litellm_base_url="", litellm_secret_name=""),
+    ):
+        service.reconcile_llm_budgets()
+    service.litellm.apply_team_budget.assert_not_called()
+
+
+def test_setting_a_budget_stores_it_and_pushes_it_to_the_proxy():
+    repo = MagicMock()
+    organization = MagicMock(id="org", llm_budget_usd=None, llm_budget_duration=None)
+    repo.get.return_value = organization
+    service = organization_service(organization_repository=repo)
+    with configured():
+        service.set_llm_budget("org", 50.0, "30d")
+    assert_that(organization.llm_budget_usd, equal_to(50.0))
+    assert_that(organization.llm_budget_duration, equal_to("30d"))
+    repo.save.assert_called_once_with(organization)
+    service.litellm.apply_team_budget.assert_called_once_with("org", 50.0, "30d")
+
+
+def test_the_stored_budget_survives_a_proxy_failure():
+    """The row is authoritative; the proxy is a projection the sweep will repair."""
+    from fastapi import HTTPException
+
+    repo = MagicMock()
+    repo.get.return_value = MagicMock(id="org", llm_budget_usd=None, llm_budget_duration=None)
+    service = organization_service(organization_repository=repo)
+    service.litellm.apply_team_budget.side_effect = LiteLLMError("down")
+    with configured(), pytest.raises(HTTPException) as raised:
+        service.set_llm_budget("org", 50.0, "30d")
+    assert_that(raised.value.status_code, equal_to(502))
+    repo.save.assert_called_once()
+
+
+def test_setting_a_budget_on_a_missing_organization_is_404():
+    from fastapi import HTTPException
+
+    repo = MagicMock()
+    repo.get.return_value = None
+    service = organization_service(organization_repository=repo)
+    with configured(), pytest.raises(HTTPException) as raised:
+        service.set_llm_budget("nope", 50.0, "30d")
+    assert_that(raised.value.status_code, equal_to(404))
+
+
+def test_changing_only_the_amount_keeps_the_configured_window():
+    """The docs promise an amount-only change preserves the renewal date, and
+    apply_team_budget reschedules whenever the duration differs."""
+    repo = MagicMock()
+    organization = MagicMock(id="org", llm_budget_usd=50.0, llm_budget_duration="7d")
+    repo.get.return_value = organization
+    service = organization_service(organization_repository=repo)
+    with configured():
+        service.set_llm_budget("org", 75.0, None)
+    assert_that(organization.llm_budget_duration, equal_to("7d"))
+    service.litellm.apply_team_budget.assert_called_once_with("org", 75.0, "7d")
+
+
+def test_a_first_budget_without_a_window_gets_the_default():
+    repo = MagicMock()
+    organization = MagicMock(id="org", llm_budget_usd=None, llm_budget_duration=None)
+    repo.get.return_value = organization
+    service = organization_service(organization_repository=repo)
+    with configured():
+        service.set_llm_budget("org", 75.0, None)
+    assert_that(organization.llm_budget_duration, equal_to("30d"))
+
+
+def test_an_organization_deleted_mid_write_is_404_not_a_broken_response():
+    from fastapi import HTTPException
+
+    repo = MagicMock()
+    repo.get.return_value = MagicMock(id="org", llm_budget_usd=None, llm_budget_duration=None)
+    repo.get_platform_read.return_value = None
+    service = organization_service(organization_repository=repo)
+    with configured(), pytest.raises(HTTPException) as raised:
+        service.set_llm_budget("org", 50.0, "30d")
+    assert_that(raised.value.status_code, equal_to(404))
+
+
+# --- the reconciler runs as a CronJob, not inside the API --------------------
+
+
+def test_startup_never_touches_the_llm_proxy():
+    """Regression guard. Reconciliation lived in the lifespan and made the API's
+    readiness depend on LiteLLM's; it is a CronJob now and must stay one."""
     import asyncio
 
     from api.api_app import lifespan
+    from api.domains.organizations.service import OrganizationService
 
+    service = MagicMock()
     injector = MagicMock()
-    llm = MagicMock()
-    injector.get.side_effect = lambda cls: llm if cls is OrganizationService else MagicMock()
-    if fails:
-        llm.sync_llm_budgets.side_effect = LiteLLMError("unavailable")
+    injector.get.side_effect = lambda cls: service if cls is OrganizationService else MagicMock()
 
     async def run():
         with (
@@ -183,12 +333,652 @@ def test_startup_reconciles_before_serving_and_aborts_on_failure(fails):
             patch("api.api_app.get_config", return_value=config()),
             patch("api.api_app.seed_aai_cli_skills"),
         ):
-            if fails:
-                with pytest.raises(RuntimeError, match="Organization LiteLLM reconciliation failed"):
-                    async with lifespan(MagicMock()):
-                        pytest.fail("Must not serve after incomplete reconciliation")
-            else:
-                async with lifespan(MagicMock()):
-                    llm.sync_llm_budgets.assert_called_once_with()
+            async with lifespan(MagicMock()):
+                await asyncio.sleep(0.05)
 
     asyncio.run(run())
+    service.reconcile_llm_budgets.assert_not_called()
+
+
+def test_the_cronjob_entrypoint_runs_one_pass():
+    from api.domains.organizations import llm_budget_reconciliation
+
+    service = MagicMock()
+    with (
+        patch.object(llm_budget_reconciliation, "build_service", return_value=service),
+        patch("sys.argv", ["llm-budget-reconciliation"]),
+    ):
+        llm_budget_reconciliation.main()
+    service.reconcile_llm_budgets.assert_called_once_with()
+
+
+# --- key enrollment ----------------------------------------------------------
+
+SECRET_KEY = "sk-super-secret"
+KEY_UPDATE = "http://litellm/key/update"
+
+
+def key_info(team_id=None, found=True):
+    if not found:
+        return response({"error": "not found"}, 404)
+    return response({"info": {"team_id": team_id}})
+
+
+def test_a_teamless_key_reports_no_team():
+    with (
+        patch.object(LiteLLMClient, "_master_key", return_value="master"),
+        patch("api.infrastructure.litellm.client.httpx.get", return_value=key_info(None)),
+    ):
+        assert_that(client().get_key_team(SECRET_KEY), equal_to(None))
+
+
+def test_a_key_litellm_has_never_heard_of_is_distinct_from_a_teamless_one():
+    from api.infrastructure.litellm.client import LiteLLMKeyNotFound
+
+    with (
+        patch.object(LiteLLMClient, "_master_key", return_value="master"),
+        patch("api.infrastructure.litellm.client.httpx.get", return_value=key_info(found=False)),
+    ):
+        with pytest.raises(LiteLLMKeyNotFound):
+            client().get_key_team(SECRET_KEY)
+
+
+def test_enrolling_a_teamless_key_updates_it_and_verifies_the_result():
+    with (
+        patch.object(LiteLLMClient, "_master_key", return_value="master"),
+        patch(
+            "api.infrastructure.litellm.client.httpx.get",
+            side_effect=[key_info(None), key_info("org")],
+        ),
+        patch("api.infrastructure.litellm.client.httpx.post", return_value=response({})) as post,
+    ):
+        client().attach_key_to_team(SECRET_KEY, "org")
+    assert_that(post.call_args.args[0], equal_to(KEY_UPDATE))
+    assert_that(post.call_args.kwargs["json"], equal_to({"key": SECRET_KEY, "team_id": "org"}))
+
+
+def test_a_key_already_in_the_team_is_left_alone():
+    with (
+        patch.object(LiteLLMClient, "_master_key", return_value="master"),
+        patch("api.infrastructure.litellm.client.httpx.get", return_value=key_info("org")),
+        patch("api.infrastructure.litellm.client.httpx.post") as post,
+    ):
+        client().attach_key_to_team(SECRET_KEY, "org")
+    post.assert_not_called()
+
+
+def test_a_key_belonging_to_another_team_is_never_moved():
+    """Someone may have arranged that by hand; silently reassigning it would be worse
+    than leaving the Organization partially covered."""
+    with (
+        patch.object(LiteLLMClient, "_master_key", return_value="master"),
+        patch("api.infrastructure.litellm.client.httpx.get", return_value=key_info("someone-else")),
+        patch("api.infrastructure.litellm.client.httpx.post") as post,
+    ):
+        with pytest.raises(LiteLLMError):
+            client().attach_key_to_team(SECRET_KEY, "org")
+    post.assert_not_called()
+
+
+def test_an_update_litellm_silently_ignored_is_not_reported_as_enrolled():
+    """/key/update is the one call this feature cannot verify from its own response."""
+    with (
+        patch.object(LiteLLMClient, "_master_key", return_value="master"),
+        patch(
+            "api.infrastructure.litellm.client.httpx.get",
+            side_effect=[key_info(None), key_info(None)],
+        ),
+        patch("api.infrastructure.litellm.client.httpx.post", return_value=response({})),
+    ):
+        with pytest.raises(LiteLLMError):
+            client().attach_key_to_team(SECRET_KEY, "org")
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        {"side_effect": httpx.ConnectError("boom")},
+        {"return_value": response({}, 500)},
+    ],
+)
+def test_enrollment_failures_never_surface_the_key(failure):
+    """The key travels in /key/info's query string, so an httpx chain would carry it
+    into any traceback or log line built from the exception."""
+    with (
+        patch.object(LiteLLMClient, "_master_key", return_value="master"),
+        patch("api.infrastructure.litellm.client.httpx.get", **failure),
+    ):
+        with pytest.raises(LiteLLMError) as raised:
+            client().attach_key_to_team(SECRET_KEY, "org")
+    assert_that(SECRET_KEY in str(raised.value), equal_to(False))
+    assert_that(raised.value.__cause__ is None, equal_to(True))
+
+
+# --- coverage: what a limit would actually bind ------------------------------
+
+ORG = "01a0a1ce-0000-7000-8000-000000000001"
+
+
+def coverage_service(credentials, team_of, **overrides):
+    """team_of maps a decrypted key to its team, or an exception to raise for it."""
+    from api.infrastructure.litellm.client import LiteLLMError
+
+    agents = MagicMock()
+    agents.list_llm_credentials.return_value = credentials
+    litellm = MagicMock()
+
+    def get_key_team(key):
+        outcome = team_of[key]
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    litellm.get_key_team.side_effect = get_key_team
+
+    def attach(key, team_id):
+        if isinstance(team_of.get(key), Exception):
+            raise LiteLLMError("nope")
+        team_of[key] = team_id
+
+    litellm.attach_key_to_team.side_effect = attach
+    # No team spend unless a test opts in — otherwise the MagicMock default leaks
+    # into the response model.
+    litellm.get_team_budget_status.return_value = None
+    repo = MagicMock()
+    repo.get.return_value = MagicMock(id=ORG)
+    return organization_service(agent_repository=agents, litellm=litellm, organization_repository=repo, **overrides)
+
+
+def _decrypting():
+    return patch("api.domains.organizations.service.decrypt_token", side_effect=lambda value, _: value)
+
+
+def test_coverage_separates_enrolled_agents_from_the_rest():
+    from uuid import UUID as U
+
+    service = coverage_service(
+        [(U(ORG), "covered", "k1"), (U(ORG), "bare", "k2")],
+        {"k1": ORG, "k2": None},
+    )
+    with configured(), _decrypting():
+        coverage = service.get_llm_coverage(ORG)
+    assert_that(coverage.total_agents, equal_to(2))
+    assert_that(coverage.enrolled_agents, equal_to(1))
+    assert_that([a.status.value for a in coverage.uncovered], equal_to(["unenrolled"]))
+
+
+def test_reading_coverage_never_enrolls_anything():
+    from uuid import UUID as U
+
+    service = coverage_service([(U(ORG), "bare", "k2")], {"k2": None})
+    with configured(), _decrypting():
+        service.get_llm_coverage(ORG)
+    service.litellm.attach_key_to_team.assert_not_called()
+
+
+def test_enrolling_covers_teamless_keys_and_counts_them():
+    from uuid import UUID as U
+
+    service = coverage_service(
+        [(U(ORG), "a", "k1"), (U(ORG), "b", "k2")],
+        {"k1": ORG, "k2": None},
+    )
+    with configured(), _decrypting():
+        coverage = service.enroll_llm_keys(ORG)
+    assert_that(coverage.enrolled_agents, equal_to(2))
+    assert_that(coverage.newly_enrolled, equal_to(1))
+    assert_that(coverage.uncovered, equal_to([]))
+    service.litellm.ensure_team_exists.assert_called_once_with(ORG)
+
+
+def test_a_key_in_another_team_is_reported_by_name_not_moved():
+    from uuid import UUID as U
+
+    service = coverage_service([(U(ORG), "borrowed", "k1")], {"k1": "another-team"})
+    with configured(), _decrypting():
+        coverage = service.enroll_llm_keys(ORG)
+    assert_that(coverage.uncovered[0].agent_name, equal_to("borrowed"))
+    assert_that(coverage.uncovered[0].status.value, equal_to("other_team"))
+    service.litellm.attach_key_to_team.assert_not_called()
+
+
+def test_one_unreadable_agent_does_not_end_the_sweep():
+    from uuid import UUID as U
+
+    from api.infrastructure.litellm.client import LiteLLMKeyNotFound
+
+    service = coverage_service(
+        [(U(ORG), "gone", "k1"), (U(ORG), "fine", "k2")],
+        {"k1": LiteLLMKeyNotFound("missing"), "k2": None},
+    )
+    with configured(), _decrypting():
+        coverage = service.enroll_llm_keys(ORG)
+    assert_that(coverage.enrolled_agents, equal_to(1))
+    assert_that([a.status.value for a in coverage.uncovered], equal_to(["unknown_key"]))
+
+
+def test_an_undecryptable_key_is_reported_rather_than_raising():
+    from uuid import UUID as U
+
+    service = coverage_service([(U(ORG), "corrupt", "k1")], {"k1": None})
+    with (
+        configured(),
+        patch("api.domains.organizations.service.decrypt_token", side_effect=ValueError("bad key")),
+    ):
+        coverage = service.get_llm_coverage(ORG)
+    assert_that([a.status.value for a in coverage.uncovered], equal_to(["unreadable"]))
+
+
+def test_enrolling_an_unknown_organization_is_404():
+    from fastapi import HTTPException
+
+    service = coverage_service([], {})
+    service.organization_repository.get.return_value = None
+    with configured(), pytest.raises(HTTPException) as raised:
+        service.enroll_llm_keys(ORG)
+    assert_that(raised.value.status_code, equal_to(404))
+
+
+def test_an_unreachable_kubernetes_api_degrades_to_a_census_not_a_500():
+    """The master key is read through the Kubernetes API, which raises its own
+    exception types — those must not escape and fail the whole request."""
+    from uuid import UUID as U
+
+    service = coverage_service([(U(ORG), "a", "k1")], {"k1": None})
+    service.litellm.get_key_team.side_effect = RuntimeError("k8s unreachable")
+    with configured(), _decrypting():
+        coverage = service.get_llm_coverage(ORG)
+    assert_that(coverage.enrolled_agents, equal_to(0))
+    assert_that([a.status.value for a in coverage.uncovered], equal_to(["unreadable"]))
+
+
+def test_a_kubernetes_failure_reading_the_master_key_is_a_litellm_error():
+    """Every caller handles LiteLLMError and nothing else."""
+    k8s = MagicMock()
+    k8s.get_secret.side_effect = RuntimeError("connection refused")
+    with pytest.raises(LiteLLMError):
+        LiteLLMClient(k8s, config())._master_key()
+
+
+def test_enrolling_against_an_unreachable_proxy_is_502_not_500():
+    from uuid import UUID as U
+
+    from fastapi import HTTPException
+
+    service = coverage_service([(U(ORG), "a", "k1")], {"k1": None})
+    service.litellm.ensure_team_exists.side_effect = LiteLLMError("unreachable")
+    with configured(), pytest.raises(HTTPException) as raised:
+        service.enroll_llm_keys(ORG)
+    assert_that(raised.value.status_code, equal_to(502))
+
+
+# --- spend against the limit -------------------------------------------------
+
+
+def test_team_spend_is_read_from_the_proxy():
+    with (
+        patch.object(LiteLLMClient, "_master_key", return_value="master"),
+        patch(
+            "api.infrastructure.litellm.client.httpx.get",
+            return_value=team(max_budget=50, spend=12.5, budget_reset_at="2026-10-01T00:00:00Z"),
+        ),
+    ):
+        assert_that(
+            client().get_team_budget_status("org"),
+            equal_to({"spend": 12.5, "renews_at": "2026-10-01T00:00:00Z"}),
+        )
+
+
+def test_a_missing_team_has_no_spend_to_report():
+    with (
+        patch.object(LiteLLMClient, "_master_key", return_value="master"),
+        patch("api.infrastructure.litellm.client.httpx.get", return_value=response({}, 404)),
+    ):
+        assert_that(client().get_team_budget_status("org"), equal_to(None))
+
+
+def test_coverage_reports_spend_against_the_limit():
+    from uuid import UUID as U
+
+    service = coverage_service([(U(ORG), "a", "k1")], {"k1": ORG})
+    service.litellm.get_team_budget_status.return_value = {
+        "spend": 0.011985,
+        "renews_at": "2026-10-01T00:00:00Z",
+    }
+    with configured(), _decrypting():
+        coverage = service.get_llm_coverage(ORG)
+    assert_that(coverage.spend_usd, equal_to(0.011985))
+    assert_that(coverage.renews_at, equal_to("2026-10-01T00:00:00Z"))
+
+
+def test_an_unreadable_team_leaves_spend_unknown_rather_than_zero():
+    """A failed read must never render as $0 spent — that was the defect the whole
+    cost-tracking rewrite existed to remove."""
+    from uuid import UUID as U
+
+    service = coverage_service([(U(ORG), "a", "k1")], {"k1": ORG})
+    service.litellm.get_team_budget_status.side_effect = LiteLLMError("down")
+    with configured(), _decrypting():
+        coverage = service.get_llm_coverage(ORG)
+    assert_that(coverage.spend_usd, equal_to(None))
+    assert_that(coverage.renews_at, equal_to(None))
+
+
+# --- budget thresholds -------------------------------------------------------
+
+
+def budget_service(orgs, spend_by_org, **overrides):
+    repo = MagicMock()
+    repo.list_capped_organizations.return_value = orgs
+    service = organization_service(organization_repository=repo, **overrides)
+    service.litellm.get_team_budget_status.side_effect = lambda team_id: spend_by_org.get(team_id)
+    return service
+
+
+def capped(org_id="org", limit=50.0, alerted=None, key=None, renews="2026-10-01T00:00:00Z"):
+    return MagicMock(id=org_id, name="Acme", llm_budget_usd=limit, llm_alerted_threshold=alerted, llm_alert_key=key)
+
+
+def status_at(spend, renews="2026-10-01T00:00:00Z"):
+    return {"spend": spend, "renews_at": renews}
+
+
+def test_spend_below_every_threshold_alerts_nobody():
+    service = budget_service([capped()], {"org": status_at(10.0)})
+    with configured():
+        fired = service.check_llm_budget_thresholds()
+    assert_that(fired, equal_to([]))
+
+
+@pytest.mark.parametrize("spend,threshold", [(40.0, 80), (50.0, 100), (61.0, 100)])
+def test_crossing_a_threshold_fires_once(spend, threshold):
+    service = budget_service([capped()], {"org": status_at(spend)})
+    with configured():
+        fired = service.check_llm_budget_thresholds()
+    assert_that([(f["organization_id"], f["threshold_percent"]) for f in fired], equal_to([("org", threshold)]))
+
+
+def test_a_threshold_already_alerted_does_not_fire_again():
+    org = capped(alerted=80, key="2026-10-01T00:00:00Z|50.0")
+    service = budget_service([org], {"org": status_at(41.0)})
+    with configured():
+        fired = service.check_llm_budget_thresholds()
+    assert_that(fired, equal_to([]))
+
+
+def test_crossing_the_next_threshold_still_fires():
+    org = capped(alerted=80, key="2026-10-01T00:00:00Z|50.0")
+    service = budget_service([org], {"org": status_at(50.0)})
+    with configured():
+        fired = service.check_llm_budget_thresholds()
+    assert_that([f["threshold_percent"] for f in fired], equal_to([100]))
+
+
+def test_raising_the_limit_re_arms_the_thresholds():
+    """Otherwise raising a limit silences the Organization for the rest of the window."""
+    org = capped(limit=100.0, alerted=100, key="2026-10-01T00:00:00Z|50.0")
+    service = budget_service([org], {"org": status_at(85.0)})
+    with configured():
+        fired = service.check_llm_budget_thresholds()
+    assert_that([f["threshold_percent"] for f in fired], equal_to([80]))
+
+
+def test_a_renewed_window_re_arms_the_thresholds():
+    org = capped(alerted=100, key="2026-09-01T00:00:00Z|50.0")
+    service = budget_service([org], {"org": status_at(45.0, renews="2026-10-01T00:00:00Z")})
+    with configured():
+        fired = service.check_llm_budget_thresholds()
+    assert_that([f["threshold_percent"] for f in fired], equal_to([80]))
+
+
+def test_the_snapshot_is_stored_even_when_nothing_fires():
+    org = capped()
+    service = budget_service([org], {"org": status_at(10.0)})
+    with configured():
+        service.check_llm_budget_thresholds()
+    assert_that(org.llm_spend_usd, equal_to(10.0))
+    service.organization_repository.save.assert_called()
+
+
+def test_an_unreadable_team_neither_alerts_nor_overwrites_the_snapshot():
+    """An unknown figure must never read as a breach, nor as zero spent."""
+    org = capped()
+    org.llm_spend_usd = 33.0
+    service = budget_service([org], {})
+    service.litellm.get_team_budget_status.side_effect = LiteLLMError("down")
+    with configured():
+        fired = service.check_llm_budget_thresholds()
+    assert_that(fired, equal_to([]))
+    assert_that(org.llm_spend_usd, equal_to(33.0))
+
+
+def test_one_unreadable_organization_does_not_stop_the_others():
+    a, b = capped(org_id="a"), capped(org_id="b")
+    service = budget_service([a, b], {"b": status_at(50.0)})
+
+    def flaky(team_id):
+        if team_id == "a":
+            raise LiteLLMError("down")
+        return status_at(50.0)
+
+    service.litellm.get_team_budget_status.side_effect = flaky
+    with configured():
+        fired = service.check_llm_budget_thresholds()
+    assert_that([f["organization_id"] for f in fired], equal_to(["b"]))
+
+
+def test_the_alerts_cronjob_entrypoint_runs_one_pass():
+    from api.domains.organizations import llm_budget_alerts
+
+    service = MagicMock()
+    with (
+        patch.object(llm_budget_alerts, "build_service", return_value=service),
+        patch("sys.argv", ["llm-budget-alerts"]),
+    ):
+        llm_budget_alerts.main()
+    service.check_llm_budget_thresholds.assert_called_once_with()
+
+
+def test_uncapped_organizations_are_never_read_from_the_proxy():
+    """They have nothing to threshold against, so they cost no proxy call at all."""
+    service = budget_service([], {})
+    with configured():
+        assert_that(service.check_llm_budget_thresholds(), equal_to([]))
+    service.litellm.get_team_budget_status.assert_not_called()
+
+
+# --- the Organization's own view --------------------------------------------
+
+
+def org_budget_service(organization, **overrides):
+    repo = MagicMock()
+    repo.get.return_value = organization
+    return organization_service(organization_repository=repo, **overrides)
+
+
+def viewed(limit=50.0, spend=40.0, renews="2026-10-01T00:00:00Z", observed=True):
+    from datetime import UTC, datetime
+
+    return MagicMock(
+        id=ORG,
+        llm_budget_usd=limit,
+        llm_budget_duration="30d",
+        llm_spend_usd=spend,
+        llm_spend_observed_at=datetime.now(UTC) if observed else None,
+        llm_budget_renews_at=datetime.fromisoformat(renews) if renews else None,
+    )
+
+
+def test_an_organization_sees_its_own_limit_and_usage():
+    service = org_budget_service(viewed())
+    read = service.get_organization_llm_budget(ORG, MagicMock())
+    assert_that(read.limit_usd, equal_to(50.0))
+    assert_that(read.spend_usd, equal_to(40.0))
+    assert_that(read.state, equal_to("warning"))
+
+
+def test_reading_the_budget_requires_cost_read():
+    service = org_budget_service(viewed())
+    service.get_organization_llm_budget(ORG, MagicMock())
+    key = service.permission_policy.require_organization.call_args.args[2]
+    assert_that(str(key.value), equal_to("cost.read"))
+
+
+@pytest.mark.parametrize(
+    "spend,limit,expected",
+    [(10.0, 50.0, "ok"), (40.0, 50.0, "warning"), (50.0, 50.0, "exhausted"), (60.0, 50.0, "exhausted")],
+)
+def test_state_follows_spend_against_the_limit(spend, limit, expected):
+    service = org_budget_service(viewed(limit=limit, spend=spend))
+    assert_that(service.get_organization_llm_budget(ORG, MagicMock()).state, equal_to(expected))
+
+
+def test_an_uncapped_organization_reports_no_limit_at_all():
+    service = org_budget_service(viewed(limit=None, spend=None))
+    read = service.get_organization_llm_budget(ORG, MagicMock())
+    assert_that(read.state, equal_to("none"))
+    assert_that(read.limit_usd, equal_to(None))
+
+
+def test_a_limit_with_no_observation_yet_is_unknown_not_zero():
+    service = org_budget_service(viewed(spend=None, observed=False))
+    read = service.get_organization_llm_budget(ORG, MagicMock())
+    assert_that(read.state, equal_to("unknown"))
+    assert_that(read.spend_usd, equal_to(None))
+
+
+# --- configurable thresholds -------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        (None, [80, 100]),
+        ("", [80, 100]),
+        ("50,80,100", [50, 80, 100]),
+        ("100,50", [50, 100]),
+        ("90, 90 ,100", [90, 100]),
+    ],
+)
+def test_thresholds_parse_and_normalise(raw, expected):
+    values = {} if raw is None else {"organization_llm_budget_alert_thresholds": raw}
+    assert_that(config(**values).llm_budget_alert_thresholds, equal_to(expected))
+
+
+@pytest.mark.parametrize("raw", ["0,80", "101", "-5", "eighty", "80;100"])
+def test_invalid_thresholds_are_rejected(raw):
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        config(organization_llm_budget_alert_thresholds=raw)
+
+
+def test_a_configured_threshold_fires_instead_of_the_default():
+    service = budget_service([capped()], {"org": status_at(25.0)})
+    with patch(
+        "api.domains.organizations.service.get_config",
+        return_value=config(organization_llm_budget_alert_thresholds="50,100"),
+    ):
+        fired = service.check_llm_budget_thresholds()
+    assert_that([f["threshold_percent"] for f in fired], equal_to([50]))
+
+
+def test_the_warning_state_follows_the_lowest_configured_threshold():
+    service = org_budget_service(viewed(limit=50.0, spend=27.0))
+    with patch(
+        "api.domains.organizations.service.get_config",
+        return_value=config(organization_llm_budget_alert_thresholds="50,100"),
+    ):
+        assert_that(service.get_organization_llm_budget(ORG, MagicMock()).state, equal_to("warning"))
+
+
+# --- the notification itself -------------------------------------------------
+
+
+def budget_email_handler(recipients, already=None):
+    from api.domains.organizations.event_handlers import OrganizationBudgetEmailHandler
+
+    repo = MagicMock()
+    repo.find_budget_email_recipients.return_value = recipients
+    repo.find_notified_budget_recipients.return_value = already or set()
+    return OrganizationBudgetEmailHandler(repository=repo, email_service=MagicMock())
+
+
+def budget_event(name, threshold=80, spend=40.0, limit=50.0, renews="2026-10-01T00:00:00Z"):
+    return MagicMock(
+        event_name=name,
+        organization_id=ORG,
+        payload={
+            "organization_id": ORG,
+            "threshold_percent": threshold,
+            "spend_usd": spend,
+            "limit_usd": limit,
+            "renews_at": renews,
+            "subject_display": "Acme",
+        },
+    )
+
+
+def delivery_context():
+    return MagicMock(delivery_id="delivery-1")
+
+
+def test_a_warning_email_states_usage_without_naming_any_system():
+    from api.domains.events.catalog import ORGANIZATION_LLM_BUDGET_THRESHOLD_REACHED
+
+    handler = budget_email_handler([("owner@example.com", "Grace")])
+    handler.handle(budget_event(ORGANIZATION_LLM_BUDGET_THRESHOLD_REACHED), delivery_context())
+    sent = handler.email_service.send_organization_budget_email.call_args.kwargs
+    assert_that(sent["headline"], equal_to("80% of your model spend allowance used"))
+    assert_that("$40.00 of $50.00" in sent["body"], equal_to(True))
+    for leak in ("litellm", "LiteLLM", "team", "proxy", "cost_record"):
+        assert_that(leak in sent["body"] or leak in sent["headline"], equal_to(False))
+
+
+def test_an_exhausted_email_says_what_stopped_working():
+    from api.domains.events.catalog import ORGANIZATION_LLM_BUDGET_EXHAUSTED
+
+    handler = budget_email_handler([("owner@example.com", "Grace")])
+    handler.handle(budget_event(ORGANIZATION_LLM_BUDGET_EXHAUSTED, threshold=100, spend=50.0), delivery_context())
+    sent = handler.email_service.send_organization_budget_email.call_args.kwargs
+    assert_that(sent["headline"], equal_to("Model spend allowance reached"))
+    assert_that("can't make model calls" in sent["body"], equal_to(True))
+
+
+def test_every_owner_and_admin_is_emailed():
+    from api.domains.events.catalog import ORGANIZATION_LLM_BUDGET_EXHAUSTED
+
+    handler = budget_email_handler([("a@example.com", "A"), ("b@example.com", None)])
+    handler.handle(budget_event(ORGANIZATION_LLM_BUDGET_EXHAUSTED), delivery_context())
+    assert_that(handler.email_service.send_organization_budget_email.call_count, equal_to(2))
+
+
+def test_a_retry_skips_recipients_already_emailed():
+    from api.domains.events.catalog import ORGANIZATION_LLM_BUDGET_EXHAUSTED
+
+    handler = budget_email_handler([("a@example.com", "A"), ("b@example.com", "B")], already={"a@example.com"})
+    handler.handle(budget_event(ORGANIZATION_LLM_BUDGET_EXHAUSTED), delivery_context())
+    sent = [c.kwargs["receiver_email"] for c in handler.email_service.send_organization_budget_email.call_args_list]
+    assert_that(sent, equal_to(["b@example.com"]))
+
+
+def test_a_transient_failure_asks_for_a_retry():
+    from api.domains.events.catalog import ORGANIZATION_LLM_BUDGET_EXHAUSTED
+    from api.domains.events.handlers import RetryableEventHandlerError
+    from api.infrastructure.email.exceptions import RetryableEmailSendingException
+
+    handler = budget_email_handler([("a@example.com", "A")])
+    handler.email_service.send_organization_budget_email.side_effect = RetryableEmailSendingException(
+        "smtp down", email="a@example.com"
+    )
+    with pytest.raises(RetryableEventHandlerError):
+        handler.handle(budget_event(ORGANIZATION_LLM_BUDGET_EXHAUSTED), delivery_context())
+
+
+def test_a_sub_dollar_allowance_keeps_its_precision():
+    from api.domains.events.catalog import ORGANIZATION_LLM_BUDGET_EXHAUSTED
+
+    handler = budget_email_handler([("a@example.com", "A")])
+    handler.handle(budget_event(ORGANIZATION_LLM_BUDGET_EXHAUSTED, spend=0.011985, limit=0.01), delivery_context())
+    body = handler.email_service.send_organization_budget_email.call_args.kwargs["body"]
+    assert_that("$0.0120 of $0.0100" in body, equal_to(True))

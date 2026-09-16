@@ -3,6 +3,7 @@ from uuid import UUID
 
 from injector import inject, singleton
 from sqlalchemy import and_, func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import aliased
 from sqlmodel import Session, col, or_, select
 
@@ -10,6 +11,7 @@ from api.domains.events.repository import OutboxMessageRepository
 from api.domains.organizations.exceptions import OrganizationCreationLimitReached
 from api.domains.organizations.models import (
     Organization,
+    OrganizationBudgetEmailReceipt,
     OrganizationFilter,
     OrganizationRead,
     PlatformOrganizationRead,
@@ -77,6 +79,8 @@ class OrganizationRepository:
                 col(creator.id).label("creator_user_id"),
                 col(creator.email).label("creator_email"),
                 col(creator.full_name).label("creator_name"),
+                col(Organization.llm_budget_usd).label("llm_budget_usd"),
+                col(Organization.llm_budget_duration).label("llm_budget_duration"),
             )
             .select_from(Organization)
             .outerjoin(
@@ -124,10 +128,55 @@ class OrganizationRepository:
 
         return query
 
-    def list_ids(self) -> list[UUID]:
-        """System-only inventory; never exposed through a user-facing route."""
+    def find_budget_email_recipients(self, organization_id: UUID) -> list[tuple[str, str | None]]:
+        """Owners and Admins, i.e. the same audience `cost.read` gives the figures to.
+        Plain members are deliberately excluded."""
         with Session(self.delegate.engine) as session:
-            return list(session.exec(select(Organization.id)).all())
+            rows = session.exec(
+                select(User.email, User.full_name)
+                .join(OrganizationUser, col(OrganizationUser.user_id) == col(User.id))
+                .where(
+                    col(OrganizationUser.organization_id) == organization_id,
+                    col(OrganizationUser.role).in_([OrganizationRole.OWNER, OrganizationRole.ADMIN]),
+                )
+            ).all()
+        seen: dict[str, tuple[str, str | None]] = {}
+        for email, full_name in rows:
+            seen.setdefault(str(email).lower(), (str(email), full_name))
+        return list(seen.values())
+
+    def find_notified_budget_recipients(self, delivery_id: UUID) -> set[str]:
+        with Session(self.delegate.engine) as session:
+            return set(
+                session.exec(
+                    select(OrganizationBudgetEmailReceipt.recipient_email).where(
+                        col(OrganizationBudgetEmailReceipt.delivery_id) == delivery_id
+                    )
+                ).all()
+            )
+
+    def record_budget_recipient_notified(self, delivery_id: UUID, recipient_email: str) -> None:
+        with Session(self.delegate.engine) as session:
+            session.add(OrganizationBudgetEmailReceipt(delivery_id=delivery_id, recipient_email=recipient_email))
+            try:
+                session.commit()
+            except IntegrityError:
+                # The receipt already exists, which is exactly the idempotency it records.
+                session.rollback()
+
+    def list_capped_organizations(self) -> list[Organization]:
+        """Organizations with a spend limit set. Uncapped ones have nothing to
+        threshold against, so they are never read from the proxy at all."""
+        with Session(self.delegate.engine) as session:
+            return list(session.exec(select(Organization).where(col(Organization.llm_budget_usd).is_not(None))).all())
+
+    def list_budget_policies(self) -> list[tuple[UUID, float | None, str | None]]:
+        """System-only inventory of LLM spend policy; never exposed through a route."""
+        with Session(self.delegate.engine) as session:
+            rows = session.exec(
+                select(Organization.id, Organization.llm_budget_usd, Organization.llm_budget_duration)
+            ).all()
+            return [(row[0], row[1], row[2]) for row in rows]
 
     def get(self, organization_id: UUID) -> Organization | None:
         return self.delegate.find_by_id(Organization, organization_id)

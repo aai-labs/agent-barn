@@ -60,7 +60,7 @@ Reading the proxy at request time — the earlier arrangement — meant a failed
 
 ## Organization LLM budgets
 
-`../../api/domains/organizations/service.py` owns provisioning and reconciliation;
+`../../api/domains/organizations/service.py` owns budget storage and reconciliation;
 `../../api/infrastructure/litellm/client.py` owns the remote team/key API calls.
 
 When LiteLLM is configured, every Organization receives a LiteLLM team whose
@@ -68,34 +68,43 @@ When LiteLLM is configured, every Organization receives a LiteLLM team whose
 name. Both self-service Organization creation and platform user provisioning
 attempt team creation after the local transaction commits. A remote failure is
 logged without undoing the committed Organization; first Agent key creation
-retries team provisioning and fails rather than issuing an unassigned key.
+retries provisioning and fails rather than issuing an unassigned key.
 
-Agents retain individual virtual keys and attribution metadata. New keys include
-`team_id`. Product API startup reconciles Organization teams and their budget
-settings before serving traffic. It does not inspect or modify existing Agent
-keys. Initial enrollment of legacy keys is a separate one-off operational script,
-outside the application. Those keys are not covered by a team budget until they
-have been assigned to the corresponding Organization team.
+The two remote operations are deliberately separate. `ensure_team_exists` only
+provisions identity and is what the key-generation path calls: issuing a key must
+never re-assert a spend policy its caller was not given. `apply_team_budget` writes
+policy and runs only when an administrator sets a budget, or from the drift-repair
+sweep. One consequence is that a team created by key generation while the proxy was
+unreachable at budget-set time starts uncapped; the recurring CronJob is what closes
+that window, which is why reconciliation is scheduled rather than run once at startup.
 
-Budget enforcement is opt-in through the deployment environment; see
-[configuration and rollout](../guidelines/operations.md#organization-llm-budgets).
-Each Organization gets its own allowance. The deployment owns these team budget
-fields, so changes apply to existing teams on API restart. An unchanged policy
-performs no update; changing only the amount preserves the renewal date. Changing
-the duration schedules the next renewal from the update time. No reconciliation
-writes `spend` or resets accumulated usage. Removing the amount clears the limit
-and renewal schedule. Teams are retained on Organization deletion for historical
-attribution; their Agent keys have already been blocked by Agent deletion.
+The Organization row is authoritative and LiteLLM is a projection of it. A budget is
+stored first and pushed second, so a proxy failure surfaces as `502` with the
+setting retained for the next reconciliation rather than silently discarded. Only
+changed fields are written: an update reschedules the renewal date, so re-sending an
+unchanged policy would quietly move every Organization's window. No reconciliation
+writes `spend` or resets accumulated usage. Removing the amount clears the limit and
+the renewal schedule.
+
+Budgets are platform-administered. An Organization has no route to read or change
+its own ceiling — a cap a customer can raise is not a cost control. Teams are
+retained on Organization deletion for historical attribution; their Agent keys have
+already been blocked by Agent deletion.
+
+Agents retain individual virtual keys and attribution metadata, and new keys include
+`team_id`. Nothing here inspects or modifies existing Agent keys: initial enrollment
+of legacy keys is a separate one-off operational script, and those keys are not
+covered by a team budget until they have been assigned to their Organization's team.
 
 LiteLLM enforces its own recorded spend, independently of `cost_record` and
-OpenRouter cost healing. Historical requests made before team attachment are not
-retroactively assigned to the team's allowance. In-flight requests and delayed
-or missing LiteLLM cost accounting can exceed or undercount a cap; healing the
-Agent Barn cost table does not repair LiteLLM's budget counters. This is a proxy
-spend cutoff, not an exact provider-invoice ceiling. Only calls using these
-LiteLLM Agent keys count. A budget rejection does not stop the Agent container
-or suspend the Organization; model calls fail until the allowance renews or is
-raised/removed.
+OpenRouter cost healing. That figure is known to sit slightly below the truth —
+healing recovers costs LiteLLM booked as zero, into our table only, and cannot write
+them back — so a cap binds marginally late in real dollars and always fails open,
+never closed. Historical requests made before team attachment are not retroactively
+charged. In-flight requests can exceed any cap. This is a proxy spend cutoff, not an
+exact provider-invoice ceiling, and only calls using these LiteLLM Agent keys count.
+A budget rejection does not stop the Agent container or suspend the Organization;
+model calls fail until the allowance renews or is raised or removed.
 
 ## Operational
 
@@ -131,10 +140,13 @@ Agents own LiteLLM key creation, encryption, deletion blocking, and lifecycle st
 | OpenRouter client             | `../../api/infrastructure/openrouter/`      |
 | Agent key lifecycle           | `../../api/domains/agents/service.py`       |
 | CronJob                       | `../../helm/agentbarn-api/templates/cost-sync-cronjob.yaml` |
+| Org budget storage and policy | `../../api/domains/organizations/service.py`, `../../api/domains/organizations/routes.py` |
+| Org budget reconciler         | `../../api/domains/organizations/llm_budget_reconciliation.py` (`make reconcile-llm-budgets`), `../../helm/agentbarn-api/templates/llm-budget-reconciliation-cronjob.yaml` |
+| Org budget UI                 | `../../ui/src/features/organizations/components/llm-budget-card.tsx` |
 | UI schemas, hooks, and charts | `../../ui/src/features/costs/`              |
 | Local fixtures                | `../../api/scripts/seed_cost_fixtures.py` (`make seed-costs`) |
 | Investigation and evidence    | `../plans/AF-281-cost-tracking-findings.md` |
-| Tests                         | `../../api/tests/unit/test_cost_sync.py`, `../../api/tests/integration/test_costs.py`, `../../api/tests/integration/test_platform_costs.py`, `../../ui/tests/e2e/costs.spec.ts`, `../../ui/tests/e2e/platform-costs.spec.ts` |
+| Tests                         | `../../api/tests/unit/test_cost_sync.py`, `../../api/tests/integration/test_costs.py`, `../../api/tests/integration/test_platform_costs.py`, `../../ui/tests/e2e/costs.spec.ts`, `../../ui/tests/e2e/platform-costs.spec.ts`, `../../api/tests/unit/test_organization_llm.py`, `../../api/tests/integration/test_organization_llm.py`, `../../ui/tests/e2e/organization-llm-budget.spec.ts` |
 
 ## Change impact
 

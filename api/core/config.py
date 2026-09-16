@@ -49,9 +49,9 @@ class Config(BaseSettings):
     agent_image_pull_secret: str = ""
     agent_default_model: str = "litellm/openrouter/z-ai/glm-5.2"
     organization_creation_limit: int = 5
-    organization_llm_budget_usd: float | None = Field(default=None, ge=0, allow_inf_nan=False)
-    organization_llm_budget_duration: str = Field(default="30d", pattern=r"^[1-9][0-9]*[smhd]$")
-
+    # Percentages of an Organization's limit at which it is notified. Empty falls back
+    # to the default; 100 is always meaningful because it is the enforcement boundary.
+    organization_llm_budget_alert_thresholds: str = "80,100"
     api_external_url: str = ""
     # Agent workloads and the API run in the same namespace, so the short Service
     # name is portable between staging and production.
@@ -102,10 +102,25 @@ class Config(BaseSettings):
     agent_firecrawl_base_url: str = ""
     agent_firecrawl_api_key: str = ""
 
-    @field_validator("organization_llm_budget_usd", mode="before")
+    @field_validator("organization_llm_budget_alert_thresholds", mode="before")
     @classmethod
-    def empty_budget_is_unlimited(cls, value: object) -> object:
-        return None if isinstance(value, str) and not value.strip() else value
+    def valid_thresholds(cls, value: object) -> object:
+        """Validated at construction, not on use: a malformed list should refuse to
+        boot rather than silently alert nobody."""
+        if not isinstance(value, str) or not value.strip():
+            return "80,100"
+        try:
+            parsed = sorted({int(part.strip()) for part in value.split(",")})
+        except ValueError as error:
+            raise ValueError("Budget alert thresholds must be whole numbers, comma separated") from error
+        if not parsed or parsed[0] < 1 or parsed[-1] > 100:
+            raise ValueError("Budget alert thresholds must be between 1 and 100")
+        return ",".join(str(threshold) for threshold in parsed)
+
+    @property
+    def llm_budget_alert_thresholds(self) -> list[int]:
+        """Sorted and de-duplicated by the validator above."""
+        return [int(part) for part in self.organization_llm_budget_alert_thresholds.split(",")]
 
     @property
     def is_email_delivery_enabled(self) -> bool:

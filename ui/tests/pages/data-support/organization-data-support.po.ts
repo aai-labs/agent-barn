@@ -142,6 +142,109 @@ export class OrganizationDataSupport {
     });
   }
 
+  async interceptGetOrganizationLlmBudget({
+    organizationId = ORG_A_ID,
+    budget,
+    status = 200,
+  }: {
+    organizationId?: string;
+    budget?: unknown;
+    status?: number;
+  } = {}) {
+    await this.page.route(
+      `**/api/v1/organizations/${organizationId}/llm-budget`,
+      async (route) => {
+        if (route.request().method() !== "GET") {
+          await route.fallback();
+          return;
+        }
+        await route.fulfill({
+          status,
+          contentType: "application/json",
+          body: JSON.stringify(status >= 400 ? { detail: "Forbidden" } : (budget ?? { state: "none" })),
+        });
+      },
+    );
+  }
+
+  async interceptGetOrganizationLlmCoverage({
+    organizationId = ORG_A_ID,
+    coverage,
+  }: {
+    organizationId?: string;
+    coverage?: unknown;
+  } = {}) {
+    await this.page.route(
+      `**/api/v1/platform/organizations/${organizationId}/llm-budget/coverage`,
+      async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(
+            coverage ?? { total_agents: 0, enrolled_agents: 0, uncovered: [], newly_enrolled: 0 },
+          ),
+        });
+      },
+    );
+  }
+
+  async interceptEnrollOrganizationLlmKeys({
+    organizationId = ORG_A_ID,
+    coverage,
+    status = 200,
+  }: {
+    organizationId?: string;
+    coverage?: unknown;
+    status?: number;
+  } = {}) {
+    const calls: string[] = [];
+    await this.page.route(
+      `**/api/v1/platform/organizations/${organizationId}/llm-budget/enroll`,
+      async (route) => {
+        calls.push(route.request().method());
+        await route.fulfill({
+          status,
+          contentType: "application/json",
+          body: JSON.stringify(
+            status >= 400
+              ? { detail: "LiteLLM is not configured for this deployment" }
+              : (coverage ?? { total_agents: 2, enrolled_agents: 2, uncovered: [], newly_enrolled: 2 }),
+          ),
+        });
+      },
+    );
+    return calls;
+  }
+
+  /** Captures the PUT body so a test can assert what the card actually sent. */
+  async interceptSetPlatformOrganizationLlmBudget({
+    organizationId = ORG_A_ID,
+    organization,
+    status = 200,
+  }: {
+    organizationId?: string;
+    organization?: unknown;
+    status?: number;
+  } = {}) {
+    const requests: unknown[] = [];
+    await this.page.route(
+      `**/api/v1/platform/organizations/${organizationId}/llm-budget`,
+      async (route) => {
+        if (route.request().method() !== "PUT") {
+          await route.fallback();
+          return;
+        }
+        requests.push(route.request().postDataJSON());
+        await route.fulfill({
+          status,
+          contentType: "application/json",
+          body: JSON.stringify(status >= 400 ? { detail: "Proxy unavailable" } : organization),
+        });
+      },
+    );
+    return requests;
+  }
+
   async interceptGetPlatformOrganizationMembers({
     organizationId = ORG_A_ID,
     members,

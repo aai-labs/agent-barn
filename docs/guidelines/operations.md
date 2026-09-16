@@ -41,47 +41,47 @@ LiteLLM uses a non-overlapping rolling update (`maxSurge: 0`, `maxUnavailable: 1
 
 ## Organization LLM budgets
 
-Budget enforcement is disabled by default. With LiteLLM configured, teams are
-still provisioned and keys assigned even when no cap is set. No schema migration
-or Agent restart is required. The behavior contract is in
+Each Organization has its own LLM spend ceiling, set by a Platform Administrator
+through `PUT /platform/organizations/{id}/llm-budget`. There is no deployment-wide
+budget and no environment variable: an amount belongs to one Organization, and an
+Organization cannot raise its own. The behaviour contract is in
 [Costs](../features/costs.md#organization-llm-budgets).
 
-| Environment variable | Default | Meaning |
-| --- | --- | --- |
-| `ORGANIZATION_LLM_BUDGET_USD` | Empty/unset | Each Organization's independent USD allowance; empty removes enforcement. Non-negative finite number; `0` is a zero allowance. |
-| `ORGANIZATION_LLM_BUDGET_DURATION` | `30d` | Positive integer followed by `s`, `m`, `h`, or `d`; `30d` is a 30-day interval, not a calendar month. Only applied while an allowance is set. |
+Budgets are off until set. With LiteLLM configured, teams are still provisioned and
+new keys assigned even when no amount is set anywhere. No Agent restart is required,
+and a change takes effect as soon as it is saved — there is nothing to redeploy.
 
-Values flow through Helmfile to `organizationLlmBudgetUsd` and
-`organizationLlmBudgetDuration` in the API chart. Native and Compose development
-read the same variables from `.env`. Set these GitHub Actions repository variables
-before deploying the environments that need enforcement:
+`budget_usd` is a non-negative finite number, where `0` is a zero allowance and
+omitting it removes the cap. `budget_duration` is a positive integer followed by
+`s`, `m`, `h` or `d`, defaulting to `30d` — a 30-day interval, not a calendar month.
+Clearing the amount also clears the renewal schedule. Changing only the amount
+preserves spend and the renewal date; changing the duration moves the next renewal
+without resetting spend.
 
-| Deployment | USD variable | Optional duration variable |
-| --- | --- | --- |
-| `agentbarn.k8s.aai-labs.com` (`main`) | `ORGANIZATION_LLM_BUDGET_USD` | `ORGANIZATION_LLM_BUDGET_DURATION` |
-| `cloud.agentbarn.dev` (public release) | `PUBLIC_ORGANIZATION_LLM_BUDGET_USD` | `PUBLIC_ORGANIZATION_LLM_BUDGET_DURATION` |
-| k3s staging | `STAGING_ORGANIZATION_LLM_BUDGET_USD` | `STAGING_ORGANIZATION_LLM_BUDGET_DURATION` |
+Saving a budget writes the Organization row first and then pushes it to LiteLLM. A
+proxy failure returns `502` with the amount already stored, because losing an
+administrator's setting because the proxy blinked is worse than a delayed push. The
+`<release>-llm-budget-reconciler` CronJob pushes stored budgets onto their teams every
+15 minutes to repair exactly that kind of drift, logging
+`Organization LiteLLM budgets reconciled`. Like the other reconcilers it runs under
+`concurrencyPolicy: Forbid`, so one runner regardless of API replica count, and the
+API itself never contacts the proxy at startup. A budget saved while the proxy was
+unreachable is therefore applied within one interval rather than at the next restart.
+Run a pass by hand with `make reconcile-llm-budgets`.
 
-No dollar amount is hardcoded. Staging does not fall back to the main allowance.
-For example, setting the relevant USD variable to `50` gives each Organization
-$50 per 30 days. Saving a GitHub variable alone does not update running pods:
-redeploy the appropriate workflow. Clearing it and redeploying removes the cap
-from existing teams as well as new ones. No hostname-based logic is involved.
+`ORGANIZATION_LLM_BUDGET_ALERT_THRESHOLDS` sets the percentages at which an
+Organization's Owners and Admins are notified — comma separated, each between 1 and
+100, defaulting to `80,100`. A malformed list refuses to boot rather than quietly
+alerting nobody. The value is read by the API and by the
+`<release>-llm-budget-alerts` CronJob, which runs every 5 minutes over Organizations
+that have a limit set. Alerting is informational: the limit is enforced in the
+request path, so the interval only bounds how late someone is told.
 
-On rollout, the API reconciles Organization teams and budget settings before
-becoming ready. Look for `Organization LiteLLM teams and budgets synchronized` in
-the API log. A failure aborts startup; restarting retries without resetting spend.
-Check proxy availability and the Kubernetes master-key Secret when it fails.
-Existing Agent pods continue running independently of API readiness.
-
-Existing Agent keys are not automatically enrolled. Handle their initial team
-assignment with a separate one-off script before relying on the limits for those
-Agents. Historical pre-enrollment
-spend remains in reports but is not added to the new team counter. Verify each
-legacy key's `team_id` through the LiteLLM admin interface after enrollment.
-
-Changing only the amount preserves spend and renewal; changing duration moves
-the next renewal without resetting spend immediately.
+Existing Agent keys are not automatically enrolled into their Organization's team.
+Handle their initial assignment with a separate one-off script before relying on the
+limits for those Agents, and verify each legacy key's `team_id` through the LiteLLM
+admin interface afterwards. Historical pre-enrollment spend stays in reports but is
+not added to the new team counter.
 
 ## Transactional email
 

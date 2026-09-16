@@ -148,6 +148,22 @@ costs:
     # under concurrencyPolicy: Forbid, so an overrunning pass costs the next tick.
     schedule: "*/15 * * * *"
 
+organizationLlmBudgets:
+  # Percentages at which an Organization is notified. Empty uses 80,100.
+  alertThresholds: "80,100"
+  reconciliation:
+    enabled: true
+    # Every 15 minutes. Budgets are applied when an administrator saves them; this
+    # pass only repairs drift (a push that failed while the proxy was down, or a
+    # team edited by hand). Runs under Forbid like the other reconcilers.
+    schedule: "*/15 * * * *"
+  alerts:
+    enabled: true
+    # Every 5 minutes. Only Organizations with a limit set are read, and the pass is
+    # informational — the proxy enforces the limit in the request path, so this only
+    # bounds how late someone is told, never how much is spent.
+    schedule: "*/5 * * * *"
+
 worker:
   enabled: true
   replicaCount: 1
@@ -179,7 +195,3 @@ resources:
   limits:
     memory: 512Mi
     cpu: 500m
-
-# Empty disables budget enforcement; each Organization still gets a LiteLLM team.
-organizationLlmBudgetUsd: ""
-organizationLlmBudgetDuration: "30d"
