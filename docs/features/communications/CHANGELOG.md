@@ -2,7 +2,7 @@
 
 Status: Active
 Epic: Communications plugin architecture
-Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-ingest.md), [Runtime and Deployment](../../architecture/runtime-and-deployment.md), [gateway ownership ADR](../../adr/2026-08-22-agent-barn-owned-communications-gateway.md)
+Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-ingest.md), [Runtime and Deployment](../../architecture/runtime-and-deployment.md), [gateway ownership ADR](../../adr/2026-08-22-agent-barn-owned-communications-gateway.md), [native gateway ADR](../../adr/2026-09-16-native-runtime-gateways-for-chat-platforms.md)
 
 ## Current state
 
@@ -12,6 +12,12 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
 - Blockers: none.
 
 ## Changes
+
+### 2026-09-16 — Close Hermes native Slack ownership seams — PR pending
+
+- Changed: Agent Barn's supervisor, expired-lease recovery, and inbound/outbound Delivery claim paths all exclude native Hermes Platforms. This prevents stale Slack work from reaching either the shared runtime adapter or provider sender after the Connection has moved to Hermes.
+- Changed: Native Hermes disables the Agent Barn scheduled-completion capture and does not start its persisted spool drain; Hermes owns cron delivery for the whole runtime. Gateway-owned Connections on the same Agent can still use the runtime adapter for ordinary inbound delivery.
+- Changed: The Connection chooser omits Platforms that already have an active Connection. Delivery Journal rows show their historical stage without repeating the Delivery's live current status on every row; the current status remains visible once at the end of the Delivery timeline.
 
 ### 2026-09-16 — Provider-credit failure feedback across messaging channels — PR pending
 
