@@ -58,3 +58,43 @@ def test_timeout_failure_is_actionable_and_retryable() -> None:
         ),
     )
     assert_that(str(normalized.details), not_(contains_string("bot-secret")))
+
+
+def test_runtime_credit_exhaustion_names_the_billing_problem() -> None:
+    normalized = normalize_communication_error(
+        error_code="RuntimeError",
+        error_message=(
+            "Error code: 402 - {'error': {'message': 'OpenRouter credits exhausted. "
+            "Add credits at https://openrouter.ai/credits.', 'code': '402'}}"
+        ),
+        operation="runtime_processing",
+    )
+
+    assert_that(normalized.code, equal_to("RuntimeError"))
+    assert_that(
+        normalized.summary,
+        equal_to(
+            "The provider reports exhausted credits or billing; "
+            "add credits to the provider account, then retry (HTTP 402)"
+        ),
+    )
+    assert_that(
+        normalized.details,
+        has_properties(
+            category=equal_to(CommunicationErrorCategory.PROVIDER_REJECTED),
+            operation=equal_to("runtime_processing"),
+            http_status=equal_to(402),
+            retryable=is_(False),
+        ),
+    )
+
+
+def test_summary_without_a_status_in_the_message_is_unchanged() -> None:
+    normalized = normalize_communication_error(
+        error_code="RuntimeError",
+        error_message="the agent gave up",
+        operation="runtime_processing",
+    )
+
+    assert_that(normalized.summary, equal_to("The provider reported an error"))
+    assert_that(normalized.details, has_properties(http_status=none()))

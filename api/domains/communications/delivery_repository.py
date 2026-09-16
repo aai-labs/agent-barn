@@ -957,6 +957,11 @@ class CommunicationDeliveryRepository:
         elif succeeded:
             delivery.status = CommunicationDeliveryStatus.SUCCEEDED
             delivery.completed_at = now
+        elif safe_details is not None and not safe_details.retryable:
+            # A normalized non-retryable provider response, such as HTTP 402,
+            # is terminal even when the delivery still has retry attempts left.
+            delivery.status = CommunicationDeliveryStatus.DEAD_LETTERED
+            delivery.completed_at = now
         elif delivery.attempt_count >= max_attempts:
             delivery.status = CommunicationDeliveryStatus.DEAD_LETTERED
             delivery.completed_at = now

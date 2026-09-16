@@ -24,6 +24,7 @@ from api.domains.communications.delivery_repository import (
     CommunicationDeliveryCancelledError,
     CommunicationDeliveryRepository,
 )
+from api.domains.communications.error_details import normalize_communication_error
 from api.domains.communications.gateway_service import CommunicationsGatewayService
 from api.domains.communications.models import (
     CommunicationDelivery,
@@ -173,6 +174,39 @@ def test_runtime_claim_serializes_one_conversation() -> None:
                 second.envelope.provider_message_id if second is not None else None,
                 equal_to("provider-2"),
             )
+
+
+def test_non_retryable_runtime_failure_dead_letters_without_a_retry() -> None:
+    error_message = "Error code: 402 - provider credits exhausted"
+    normalized_error = normalize_communication_error(
+        error_code="RuntimeError",
+        error_message=error_message,
+        operation="runtime_processing",
+    )
+    assert_that(normalized_error.details, is_(not_(none())))
+
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        connection_id = _create_connection(context)
+        repository = context.injector.get(CommunicationDeliveryRepository)
+        accepted = repository.accept_inbound(connection_id=connection_id, envelope=_envelope("provider-1"))
+        claimed = repository.claim_next_inbound(agent_id=context.agent.id)
+
+        with when("the runtime reports the provider's non-retryable HTTP 402 failure"):
+            completed = repository.complete_runtime_delivery(
+                accepted.delivery_id,
+                agent_id=context.agent.id,
+                succeeded=False,
+                error_code="RuntimeError",
+                error_message=error_message,
+                error_details=normalized_error.details,
+            )
+
+        with then("the delivery is terminal immediately instead of being requeued"):
+            assert_that(claimed, is_(not_(none())))
+            assert_that(completed, is_(True))
+            delivery = _delivery(context, accepted.delivery_id)
+            assert_that(delivery.status, equal_to(CommunicationDeliveryStatus.DEAD_LETTERED))
+            assert_that(delivery.last_error_message, equal_to(normalized_error.summary))
 
 
 def test_runtime_claim_releases_one_answer_to_a_run_awaiting_input() -> None:
