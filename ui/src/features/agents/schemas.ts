@@ -113,6 +113,8 @@ export const AgentSchema = z.object({
   secrets: z.array(AgentSecretReadSchema).optional(),
   skills: z.array(AgentAssignedSkillSchema).default([]),
   configuredPlatformKeys: z.array(z.string()).default([]),
+  /** Platforms whose Connections this Agent's runtime runs itself; changing one requires a restart. */
+  nativePlatformKeys: z.array(z.string()).default([]),
   allowedActions: z.array(AgentPermissionKeySchema).default([]),
   createdAt: z.string(),
   updatedAt: z.string(),

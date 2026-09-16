@@ -833,7 +833,7 @@ test.describe("Agent Detail Page — Channels tab", () => {
     await expect(connectionDetailPage.deliveryEventCount(1)).toBeVisible();
     const deliveryRow = connectionDetailPage.deliveryTransitionRow(/provider delivered/i);
     await expect(deliveryRow).toContainText("Outbound");
-    await expect(deliveryRow).toContainText(/dead lettered/i);
+    await expect(deliveryRow).not.toContainText(/dead lettered/i);
     await deliveryRow.click();
     await expect(connectionDetailPage.deliveryTiming()).toBeVisible();
     await expect(connectionDetailPage.waitBeforeAttempt()).toBeVisible();
@@ -889,6 +889,13 @@ test.describe("Agent Detail Page — Channels tab", () => {
   });
 
   test("shows provider setup requirements before connecting", async ({ page }) => {
+    await page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}/connections`, async (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      await route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
+    });
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await agentDetailPage.configureButton().click();
+    await agentDetailPage.channelsTab().click();
     await agentDetailPage.addConnectionButton().click();
     await agentDetailPage.selectPlatformButton("Slack").click();
 
@@ -938,6 +945,15 @@ test.describe("Agent Detail Page — Channels tab", () => {
     await agentDetailPage.channelsTab().click();
   }
 
+  test("hides platforms that already have a Connection from the chooser", async ({ page }) => {
+    await serveSavedSlackConnection(page);
+
+    await agentDetailPage.addConnectionButton().click();
+
+    await expect(agentDetailPage.selectPlatformButton("Slack")).toHaveCount(0);
+    await expect(agentDetailPage.selectPlatformButton("Discord")).toBeVisible();
+  });
+
   test("configures a scheduled default through the Connection editor", async ({ page }) => {
     await serveSavedSlackConnection(page);
     await agentDetailPage.editConnectionButton("Team Slack").click();
@@ -954,6 +970,37 @@ test.describe("Agent Detail Page — Channels tab", () => {
       default_delivery_target: { kind: "channel", recipient: "channel-one" },
     }});
     expect(payload.settings.default_delivery_target).not.toHaveProperty("thread_id");
+  });
+
+  test("restarts a running Agent to apply a change to a Connection its runtime runs", async ({ page }) => {
+    await dataSupportPage.agents.interceptGetAgentRequest({
+      body: { ...mockAgent, agent_type: "hermes", native_platform_keys: ["slack"] },
+    });
+    await dataSupportPage.agents.interceptStopAgentRequest();
+    await dataSupportPage.agents.interceptStartAgentRequest();
+    await page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}/connections/*`, async (route) => {
+      if (route.request().method() !== "PATCH") return route.fallback();
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(savedSlackConnection) });
+    });
+    const calls: string[] = [];
+    page.on("request", (request) => {
+      const url = request.url();
+      if (request.method() === "POST" && /\/(stop|start)$/.test(url)) calls.push(url.endsWith("/stop") ? "stop" : "start");
+      if (request.method() === "PATCH" && url.includes("/connections/")) calls.push("update");
+    });
+    await serveSavedSlackConnection(page);
+
+    await agentDetailPage.editConnectionButton("Team Slack").click();
+    await expect(agentDetailPage.saveConnectionButton()).toHaveCount(0);
+    await page.getByRole("button", { name: "Save & Restart", exact: true }).click();
+
+    const dialog = page.getByRole("dialog", { name: "Apply changes and restart the Agent?" });
+    await expect(dialog).toBeVisible();
+    expect(calls).toEqual([]);
+    await dialog.getByRole("button", { name: "Save & Restart", exact: true }).click();
+
+    await expect(dialog).toBeHidden();
+    expect(calls).toEqual(["stop", "update", "start"]);
   });
 
   test("browses a saved Connection's own directory when editing it", async ({ page }) => {

@@ -43,7 +43,9 @@ import { DirectoryPickerDialog } from "@/features/communication-connections/comp
 import { SLACK_APP_MANIFEST } from "@/features/communication-connections/slack-manifest";
 import type { CommunicationConnection, CommunicationDirectoryEntry, CommunicationPlatform } from "@/features/communication-connections/schemas";
 
+import { useAgentApplyAndRestart } from "../hooks/use-agent-apply-and-restart";
 import type { Agent } from "../schemas";
+import { canAgent } from "../utils";
 import { AgentConfigurationSection } from "./agent-configuration-section";
 
 /** Built-in, lazily provisioned, one-per-agent, immutable — never user-added or user-edited. */
@@ -566,8 +568,13 @@ export function AgentChannelSettings({
   const platforms = useCommunicationPlatforms();
   // Web Chat is lazily provisioned on first send and can't be added by hand.
   const addablePlatforms = useMemo(
-    () => platforms.data?.filter((platform) => platform.key !== WEB_PLATFORM_KEY),
-    [platforms.data],
+    () => {
+      const connected = new Set(connections.data?.map((connection) => connection.platformKey));
+      return platforms.data?.filter(
+        (platform) => platform.key !== WEB_PLATFORM_KEY && !connected.has(platform.key),
+      );
+    },
+    [connections.data, platforms.data],
   );
   const { previewConnectionDirectory, createConnection, updateConnection, retireConnection } =
     useCommunicationConnectionActions();
@@ -582,6 +589,13 @@ export function AgentChannelSettings({
   const [retiring, setRetiring] = useState<CommunicationConnection | null>(
     null,
   );
+  const { applyAndRestart } = useAgentApplyAndRestart(agent);
+  const [restartChange, setRestartChange] = useState<{
+    confirmLabel: string;
+    run: () => Promise<void>;
+  } | null>(null);
+  const [isRestarting, setIsRestarting] = useState(false);
+  const canRestart = canAgent(agent, "agent.lifecycle.manage");
   const downloadAppPackage = useDownloadAppPackage();
   const fetchInstallLink = useInstallLink();
   const [packageBusyId, setPackageBusyId] = useState<string | null>(null);
@@ -693,6 +707,17 @@ export function AgentChannelSettings({
     setSlackPreview(null);
     setSlackPreviewError(null);
     setFormError(null);
+  }
+
+  /** The runtime runs this platform's Connections itself and reads them only at start,
+   * so a change to one on a running Agent is applied by restarting it. */
+  function restartsAgent(key: string | undefined) {
+    return agent.status === "RUNNING" && Boolean(key) && agent.nativePlatformKeys.includes(key!);
+  }
+
+  function applyChange(key: string, confirmLabel: string, change: () => Promise<void>) {
+    if (!restartsAgent(key)) return void change();
+    setRestartChange({ confirmLabel, run: () => applyAndRestart(change) });
   }
 
   async function addConnection() {
@@ -1057,14 +1082,24 @@ export function AgentChannelSettings({
                     <button
                       type="button"
                       className="af-btn af-btn-sm"
-                      disabled={updateConnection.isPending}
+                      disabled={
+                        updateConnection.isPending ||
+                        (restartsAgent(connection.platformKey) && !canRestart)
+                      }
                       onClick={() =>
-                        void updateConnection.mutateAsync({
-                          agentId: agent.id,
-                          connectionId: connection.id,
-                          revision: connection.revision,
-                          enabled: !connection.enabled,
-                        })
+                        applyChange(
+                          connection.platformKey,
+                          connection.enabled ? "Disable & Restart" : "Enable & Restart",
+                          () =>
+                            updateConnection
+                              .mutateAsync({
+                                agentId: agent.id,
+                                connectionId: connection.id,
+                                revision: connection.revision,
+                                enabled: !connection.enabled,
+                              })
+                              .then(() => undefined),
+                        )
                       }
                     >
                       {connection.enabled ? "Disable" : "Enable"}
@@ -1197,13 +1232,17 @@ export function AgentChannelSettings({
                         type="button"
                         className="af-btn af-btn-primary"
                         disabled={
-                          !editDisplayName.trim() || updateConnection.isPending
+                          !editDisplayName.trim() ||
+                          updateConnection.isPending ||
+                          (restartsAgent(connection.platformKey) && !canRestart)
                         }
-                        onClick={() => void saveConnection()}
+                        onClick={() => applyChange(connection.platformKey, "Save & Restart", saveConnection)}
                       >
                         {updateConnection.isPending
                           ? "Saving…"
-                          : "Save changes"}
+                          : restartsAgent(connection.platformKey)
+                            ? "Save & Restart"
+                            : "Save changes"}
                       </button>
                     </div>
                   </div>
@@ -1456,14 +1495,15 @@ export function AgentChannelSettings({
                   disabled={
                     !platformKey ||
                     !displayName.trim() ||
-                    createConnection.isPending
+                    createConnection.isPending ||
+                    (restartsAgent(platformKey) && !canRestart)
                   }
-                  onClick={() => void addConnection()}
+                  onClick={() => applyChange(platformKey, "Connect & Restart", addConnection)}
                 >
                   {createConnection.isPending
                     ? "Connecting…"
                     : selectedPlatform
-                      ? `Connect ${selectedPlatform.displayName}`
+                      ? `Connect ${selectedPlatform.displayName}${restartsAgent(platformKey) ? " & Restart" : ""}`
                       : "Choose a platform"}
                 </button>
               </div>
@@ -1478,19 +1518,52 @@ export function AgentChannelSettings({
           if (!open) setRetiring(null);
         }}
         title="Remove this connection?"
-        description="Pending deliveries are cancelled, credentials are scrubbed, and conversation history is preserved."
-        confirmLabel="Remove connection"
+        description={
+          restartsAgent(retiring?.platformKey)
+            ? "Pending deliveries are cancelled, credentials are scrubbed, and conversation history is preserved. The Agent restarts so it stops using this connection."
+            : "Pending deliveries are cancelled, credentials are scrubbed, and conversation history is preserved."
+        }
+        confirmLabel={restartsAgent(retiring?.platformKey) ? "Remove & Restart" : "Remove connection"}
         pendingLabel="Removing…"
         variant="destructive"
         isPending={retireConnection.isPending}
         onConfirm={async () => {
           if (!retiring) return;
-          await retireConnection.mutateAsync({
-            agentId: agent.id,
-            connectionId: retiring.id,
-            revision: retiring.revision,
-          });
+          if (restartsAgent(retiring.platformKey) && !canRestart) return;
+          const retire = () =>
+            retireConnection
+              .mutateAsync({
+                agentId: agent.id,
+                connectionId: retiring.id,
+                revision: retiring.revision,
+              })
+              .then(() => undefined);
+          await (restartsAgent(retiring.platformKey) ? applyAndRestart(retire) : retire());
           setRetiring(null);
+        }}
+      />
+
+      <ConfirmationDialog
+        open={Boolean(restartChange)}
+        onOpenChange={(open) => {
+          if (!open) setRestartChange(null);
+        }}
+        title="Apply changes and restart the Agent?"
+        description="This Agent's runtime runs this connection itself and only reads it when it starts. This saves the change, stops the Agent, and starts it again."
+        confirmLabel={restartChange?.confirmLabel ?? "Apply & Restart"}
+        pendingLabel="Applying & Restarting…"
+        isPending={isRestarting}
+        onConfirm={async () => {
+          if (!restartChange) return;
+          setIsRestarting(true);
+          try {
+            await restartChange.run();
+            setRestartChange(null);
+          } catch (error) {
+            toast.error(error instanceof Error ? error.message : "Could not restart the Agent.");
+          } finally {
+            setIsRestarting(false);
+          }
         }}
       />
     </AgentConfigurationSection>
