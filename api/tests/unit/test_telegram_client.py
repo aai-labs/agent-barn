@@ -79,6 +79,19 @@ def test_send_message_carries_the_provider_idempotency_key(mock_request):
     assert_that(json.loads(mock_request.call_args.kwargs["content"])["text"], equal_to("reply"))
 
 
+@patch("api.infrastructure.telegram.client.resilient_request")
+def test_send_message_can_reply_inside_a_topic_and_to_the_source_message(mock_request):
+    response = MagicMock(status_code=200)
+    response.json.return_value = {"ok": True, "result": {"message_id": 18}}
+    mock_request.return_value = response
+
+    send_message("bot-value", "chat-1", "failure notice", thread_id="7", reply_to_id="17")
+
+    payload = json.loads(mock_request.call_args.kwargs["content"])
+    assert_that(payload["message_thread_id"], equal_to(7))
+    assert_that(payload["reply_parameters"], equal_to({"message_id": 17}))
+
+
 def test_chunk_text_leaves_short_text_untouched():
     assert_that(_chunk_text("hello", limit=10), equal_to(["hello"]))
 

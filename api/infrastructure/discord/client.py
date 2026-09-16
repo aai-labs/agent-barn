@@ -93,6 +93,7 @@ class DiscordClient:
         reply_to_id: str | None = None,
         idempotency_key: str | None = None,
         files: Sequence[tuple[str, str, bytes]] = (),
+        components: list[dict[str, Any]] | None = None,
     ) -> str:
         """Post text plus (filename, media type, content) files; returns the first message id.
 
@@ -120,6 +121,7 @@ class DiscordClient:
                 if idempotency_key
                 else None,
                 files=file_batches[index] if index < len(file_batches) else (),
+                components=components if index == 0 else None,
             )
             for index in range(message_count)
         ]
@@ -133,8 +135,11 @@ class DiscordClient:
         reply_to_id: str | None,
         nonce: str | None,
         files: Sequence[tuple[str, str, bytes]],
+        components: list[dict[str, Any]] | None,
     ) -> str:
         payload: dict[str, Any] = {"content": text, "allowed_mentions": {"parse": []}}
+        if components:
+            payload["components"] = components
         if nonce:
             payload["nonce"] = nonce
             payload["enforce_nonce"] = True

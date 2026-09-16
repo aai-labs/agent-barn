@@ -2,6 +2,7 @@ import hashlib
 import json
 import logging
 from collections.abc import Sequence
+from typing import Any
 
 import httpx
 
@@ -130,14 +131,17 @@ def send_message(
     text: str,
     *,
     thread_id: str | None = None,
+    reply_to_id: str | None = None,
     idempotency_key: str | None = None,
 ) -> str:
     chunks = _chunk_text(text)
     message_id: str | None = None
     for index, chunk in enumerate(chunks):
-        payload: dict[str, str | int] = {"chat_id": chat_id, "text": chunk}
+        payload: dict[str, Any] = {"chat_id": chat_id, "text": chunk}
         if thread_id:
             payload["message_thread_id"] = int(thread_id)
+        if reply_to_id:
+            payload["reply_parameters"] = {"message_id": int(reply_to_id)}
         headers = {"Content-Type": "application/json"}
         if idempotency_key:
             # Keep the stable key on the transport boundary for deployments that

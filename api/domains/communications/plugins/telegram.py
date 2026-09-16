@@ -22,6 +22,8 @@ from api.domains.communications.plugins.base import (
     PlatformCredentials,
     PlatformPlugin,
     PlatformSettings,
+    ProcessingFeedbackContext,
+    best_effort_failure_notice,
     provider_attachment,
     provider_idempotency_key,
 )
@@ -100,6 +102,7 @@ class TelegramPlatformPlugin(PlatformPlugin):
             PlatformCapability.SUPERVISED_INGRESS,
             PlatformCapability.MENTIONS,
             PlatformCapability.THREADS,
+            PlatformCapability.PROCESSING_FEEDBACK,
         }
     )
     settings_model = TelegramSettings
@@ -164,6 +167,28 @@ class TelegramPlatformPlugin(PlatformPlugin):
         del settings, envelope
         assert isinstance(credentials, TelegramCredentials)
         return download_file(credentials.bot_token, attachment.id)
+
+    def processing_feedback(
+        self,
+        settings: PlatformSettings,
+        credentials: PlatformCredentials,
+        context: ProcessingFeedbackContext,
+    ) -> None:
+        del settings
+        assert isinstance(credentials, TelegramCredentials)
+        best_effort_failure_notice(
+            context,
+            lambda text, idempotency_key: send_message(
+                credentials.bot_token,
+                context.location.id,
+                text,
+                thread_id=context.location.thread_id,
+                reply_to_id=context.provider_message_id,
+                idempotency_key=idempotency_key,
+            ),
+            target=f"Telegram chat {context.location.id}",
+            logger=logger,
+        )
 
     def normalize_inbound(
         self,

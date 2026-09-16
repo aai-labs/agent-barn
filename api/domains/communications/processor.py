@@ -196,5 +196,6 @@ class OutboundCommunicationProcessor:
                 location=outbound.location,
                 provider_message_id=outbound.reply_to_provider_message_id,
                 source_delivery_id=outbound.source_delivery_id,
+                provider_metadata=outbound.provider_metadata,
             )
         )
