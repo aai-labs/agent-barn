@@ -99,6 +99,7 @@ test.describe("Agent Detail Page", () => {
               occurred_at: "2026-09-01T08:00:00Z",
               delivery_status: "PROCESSING",
               cancel_requested_at: null,
+              error_message: null,
             },
           ]),
         });
@@ -116,6 +117,44 @@ test.describe("Agent Detail Page", () => {
     await page.getByRole("button", { name: "Chat", exact: true }).click();
 
     await expect(page.getByRole("status").filter({ hasText: "Maya is working" })).toBeVisible();
+  });
+
+  test("shows the provider failure reason in web chat", async ({ page }) => {
+    const errorMessage =
+      "The provider reports exhausted credits or billing; add credits to the provider account, then retry (HTTP 402)";
+    await page.route("**/api/v1/organizations/*/agents/*/web-chat/**", async (route) => {
+      const path = new URL(route.request().url()).pathname;
+      if (path.endsWith("/messages")) {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify([
+            {
+              id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+              direction: "INBOUND",
+              content: "hello",
+              occurred_at: "2026-09-01T08:00:00Z",
+              delivery_status: "DEAD_LETTERED",
+              cancel_requested_at: null,
+              error_message: errorMessage,
+            },
+          ]),
+        });
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: path.endsWith("/stream") ? "text/event-stream" : "application/json",
+        body: path.endsWith("/stream") ? ": keep-alive\n\n" : "[]",
+      });
+    });
+
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await page.getByRole("button", { name: "About", exact: true }).click();
+    await page.getByRole("button", { name: "Chat", exact: true }).click();
+
+    const failureNotice = page.getByRole("alert").filter({ hasText: "I couldn't process that message" });
+    await expect(failureNotice).toContainText(errorMessage);
   });
 
   test("stops the active web chat generation", async ({ page }) => {
@@ -141,6 +180,7 @@ test.describe("Agent Detail Page", () => {
               occurred_at: "2026-09-01T08:00:00Z",
               delivery_status: deliveryStatus,
               cancel_requested_at: null,
+              error_message: null,
             },
           ]),
         });

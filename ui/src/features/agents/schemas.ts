@@ -229,6 +229,9 @@ export const WebChatMessageSchema = z.object({
   ]),
   cancelRequestedAt: z.string().nullable(),
   approval: WebChatApprovalSchema.nullish(),
+  // Additive during a rolling API deployment; new responses include null when
+  // no terminal error exists, while an older replica may omit the field.
+  errorMessage: z.string().nullable().optional(),
 });
 
 export const WebChatThreadSchema = z.object({

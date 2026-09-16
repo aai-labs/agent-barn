@@ -84,6 +84,8 @@ class WebChatService:
             content=envelope.text,
             occurred_at=envelope.occurred_at,
             delivery_status=accepted.status,
+            approval=None,
+            error_message=None,
         )
 
     def stop_generation(
@@ -322,6 +324,7 @@ class WebChatService:
             ),
             cancel_requested_at=delivery_state.cancel_requested_at if delivery_state is not None else None,
             approval=delivery_state.approval if delivery_state is not None else None,
+            error_message=delivery_state.error_message if delivery_state is not None else None,
         )
 
     @staticmethod

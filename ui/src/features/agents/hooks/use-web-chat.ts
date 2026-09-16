@@ -56,6 +56,7 @@ export function useWebChat(
           base[existingIndex].deliveryStatus === message.deliveryStatus
           && base[existingIndex].cancelRequestedAt === message.cancelRequestedAt
           && base[existingIndex].approval?.approvalId === message.approval?.approvalId
+          && base[existingIndex].errorMessage === message.errorMessage
         ) return base;
         return base.map((item, index) => (index === existingIndex ? message : item));
       });

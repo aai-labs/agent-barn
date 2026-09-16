@@ -1,8 +1,9 @@
 import hashlib
 import json
+import logging
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 from uuid import UUID
 
@@ -20,6 +21,15 @@ from api.domains.communications.models import (
     ProcessingFeedbackStage,
     ResolvedOutboundTarget,
 )
+
+_FAILURE_NOTICE_PREFIX = "⚠️ I couldn't process that message."
+_FALLBACK_FAILURE_SUMMARY = "The failure is recorded in this Connection's diagnostics."
+_FAILURE_NOTICE_IDEMPOTENCY_NAMESPACE = "failure-notice"
+
+
+def failure_notice(error_summary: str | None) -> str:
+    """Render the in-channel notice for a terminally failed Delivery."""
+    return f"{_FAILURE_NOTICE_PREFIX} {error_summary or _FALLBACK_FAILURE_SUMMARY}"
 
 
 def provider_idempotency_key(delivery_key: str) -> str:
@@ -88,6 +98,41 @@ class ProcessingFeedbackContext:
     location: ConversationLocation
     provider_message_id: str | None = None
     source_delivery_id: UUID | None = None
+    # Provider-owned routing data is needed by webhook platforms such as Teams
+    # to address a reply. It is copied from the normalized envelope and stays
+    # inside the trusted Platform Plugin boundary.
+    provider_metadata: dict[str, str | int | float | bool | None] = field(default_factory=dict)
+    # Already normalized and redacted by normalize_communication_error, so it is
+    # safe to show a channel; raw provider text never reaches a plugin.
+    error_summary: str | None = None
+
+
+def failure_feedback_idempotency_key(context: ProcessingFeedbackContext) -> str | None:
+    if context.source_delivery_id is None:
+        return None
+    # The notice is a separate provider message from the reply. Keep it in a
+    # distinct namespace so provider-native deduplication cannot turn a retry
+    # of the reply into the already-posted failure notice.
+    return provider_idempotency_key(f"{_FAILURE_NOTICE_IDEMPOTENCY_NAMESPACE}:{context.source_delivery_id}")
+
+
+def best_effort_failure_notice(
+    context: ProcessingFeedbackContext,
+    callback: Callable[[str, str | None], Any],
+    *,
+    target: str,
+    logger: logging.Logger,
+) -> None:
+    """Render and publish one terminal failure notice without raising."""
+    if context.stage != ProcessingFeedbackStage.FAILED:
+        return
+    try:
+        callback(
+            failure_notice(context.error_summary),
+            failure_feedback_idempotency_key(context),
+        )
+    except Exception as exc:
+        logger.warning("Communication failure notice failed for %s (%s)", target, type(exc).__name__)
 
 
 @dataclass(frozen=True)

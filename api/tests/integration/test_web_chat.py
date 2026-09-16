@@ -14,6 +14,7 @@ from api.domains.communications.models import (
     ApprovalRequest,
     CommunicationConnection,
     CommunicationDelivery,
+    CommunicationDeliveryStatus,
     RuntimeReplyCreate,
 )
 from api.domains.conversations.models import AgentChatMessage, ConversationType, MessageDirection
@@ -100,6 +101,37 @@ def test_send_then_list_messages_round_trips_on_the_default_thread():
             assert_that(messages[0]["content"], equal_to("hello there"))
             assert_that(messages[0]["direction"], equal_to("INBOUND"))
             assert_that(messages[0]["delivery_status"], equal_to("UNAVAILABLE"))
+
+
+def test_failed_web_chat_message_exposes_the_safe_error_summary():
+    error_summary = (
+        "The provider reports exhausted credits or billing; add credits to the provider account, then retry (HTTP 402)"
+    )
+    with given(_GIVEN) as context:
+        with when("I record a terminal provider failure for the sent message"):
+            sent_message = _send(context, "hello there")
+            delegate = context.injector.get(PostgresRepositoryDelegate)
+            with Session(delegate.engine) as session:
+                delivery = session.exec(
+                    select(CommunicationDelivery).where(
+                        CommunicationDelivery.message_id == UUID(str(sent_message["id"]))
+                    )
+                ).one()
+                delivery.status = CommunicationDeliveryStatus.DEAD_LETTERED
+                delivery.last_error_message = error_summary
+                session.add(delivery)
+                session.commit()
+
+        with when("I list the Web Chat messages"):
+            response = context.client.get(
+                f"{_BASE}/{context.agent.id}/web-chat/messages",
+                headers=_auth(context),
+            )
+
+        with then("the recent failure exposes the safe provider summary"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(response.json()[0]["delivery_status"], equal_to("DEAD_LETTERED"))
+            assert_that(response.json()[0]["error_message"], equal_to(error_summary))
 
 
 def test_reading_web_chat_does_not_auto_provision_a_connection():

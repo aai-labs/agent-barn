@@ -33,6 +33,8 @@ from api.domains.communications.plugins.base import (
     PlatformCredentials,
     PlatformPlugin,
     PlatformSettings,
+    ProcessingFeedbackContext,
+    best_effort_failure_notice,
     provider_idempotency_key,
 )
 from api.infrastructure.discord.client import DiscordClient
@@ -182,6 +184,7 @@ class DiscordPlatformPlugin(PlatformPlugin):
             PlatformCapability.ATTACHMENTS,
             PlatformCapability.SUPERVISED_INGRESS,
             PlatformCapability.MENTIONS,
+            PlatformCapability.PROCESSING_FEEDBACK,
             PlatformCapability.THREADS,
         }
     )
@@ -388,6 +391,26 @@ class DiscordPlatformPlugin(PlatformPlugin):
                     provider_metadata={APPROVAL_METADATA_KEY: approval_id, "guild_id": guild_id},
                 ),
             ),
+        )
+
+    def processing_feedback(
+        self,
+        settings: PlatformSettings,
+        credentials: PlatformCredentials,
+        context: ProcessingFeedbackContext,
+    ) -> None:
+        del settings
+        assert isinstance(credentials, DiscordCredentials)
+        best_effort_failure_notice(
+            context,
+            lambda text, idempotency_key: DiscordClient(credentials.bot_token).send_message(
+                context.location.id,
+                text,
+                reply_to_id=context.provider_message_id,
+                idempotency_key=idempotency_key,
+            ),
+            target=f"Discord channel {context.location.id}",
+            logger=logger,
         )
 
     def normalize_inbound(
