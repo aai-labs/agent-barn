@@ -56,14 +56,15 @@ import {
 export type ThreadGroupPart = MessagePrimitive.GroupedParts.GroupPart;
 
 /**
- * Optional component overrides for the thread. `AssistantMessage` and
- * `Welcome` replace whole sections; the remaining slots override how the
- * assistant message renders tool calls and part groups. Tool UIs registered
- * by name (toolkit `render`, `useAssistantDataUI`) take precedence over
- * `ToolFallback`.
+ * Optional component overrides for the thread. `AssistantMessage`,
+ * `UserMessage`, and `Welcome` replace whole sections; the remaining slots
+ * override how the assistant message renders tool calls and part groups. Tool
+ * UIs registered by name (toolkit `render`, `useAssistantDataUI`) take
+ * precedence over `ToolFallback`.
  */
 export type ThreadComponents = {
   AssistantMessage?: ComponentType | undefined;
+  UserMessage?: ComponentType | undefined;
   Welcome?: ComponentType | undefined;
   ToolFallback?: ToolCallMessagePartComponent | undefined;
   ToolGroup?:
@@ -199,11 +200,13 @@ const ThreadRoot: FC<{ isEmpty: boolean; autoFocus: boolean }> = ({
 };
 
 const ThreadMessage: FC = () => {
-  const { AssistantMessage: AssistantMessageComponent = AssistantMessage } =
-    useContext(ThreadComponentsContext);
+  const {
+    AssistantMessage: AssistantMessageComponent = AssistantMessage,
+    UserMessage: UserMessageComponent = UserMessage,
+  } = useContext(ThreadComponentsContext);
   const role = useAuiState((s) => s.message.role);
 
-  if (role === "user") return <UserMessage />;
+  if (role === "user") return <UserMessageComponent />;
   return <AssistantMessageComponent />;
 };
 

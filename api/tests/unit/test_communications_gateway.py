@@ -47,6 +47,7 @@ def _envelope() -> NormalizedCommunicationEnvelope:
         occurred_at="2026-08-24T10:00:00Z",
         location=ConversationLocation(id="C123", type="CHANNEL", thread_id="1724264405.531769"),
         text="hello",
+        provider_metadata={"route": "stored-provider-route"},
     )
 
 
@@ -267,6 +268,7 @@ def test_gateway_marks_claim_and_terminal_runtime_failure_at_lifecycle_seam() ->
     assert completed is True
     stages = [call.args[2].stage for call in plugin.processing_feedback.call_args_list]
     assert stages == [ProcessingFeedbackStage.CLAIMED, ProcessingFeedbackStage.FAILED]
+    assert plugin.processing_feedback.call_args_list[1].args[2].provider_metadata == envelope.provider_metadata
     published_agent_id, published_signal = cast(Mock, service.signals).publish.call_args.args
     assert published_agent_id == agent.id
     assert published_signal.type == CommunicationSignalType.MESSAGE_CHANGED

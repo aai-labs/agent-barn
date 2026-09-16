@@ -2,7 +2,7 @@ import hashlib
 import json
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 from uuid import UUID
 
@@ -96,6 +96,10 @@ class ProcessingFeedbackContext:
     location: ConversationLocation
     provider_message_id: str | None = None
     source_delivery_id: UUID | None = None
+    # Provider-owned routing data is needed by webhook platforms such as Teams
+    # to address a reply. It is copied from the normalized envelope and stays
+    # inside the trusted Platform Plugin boundary.
+    provider_metadata: dict[str, str | int | float | bool | None] = field(default_factory=dict)
     # Already normalized and redacted by normalize_communication_error, so it is
     # safe to show a channel; raw provider text never reaches a plugin.
     error_summary: str | None = None
