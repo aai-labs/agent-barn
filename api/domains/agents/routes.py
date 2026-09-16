@@ -16,6 +16,7 @@ from api.domains.agents.models import (
     AgentHealthRead,
     AgentLogHistoryRead,
     AgentLogsRead,
+    AgentNameSuggestionRead,
     AgentRead,
     AgentTemplateOverrideDraftRead,
     AgentTemplateOverrideDraftUpdate,
@@ -57,6 +58,14 @@ def list_agents(
         pagination=Pagination(page=page, size=page_size),
         context=context,
     )
+
+
+@agents_router.get("/name-suggestion", response_model=AgentNameSuggestionRead)
+def suggest_agent_name(
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[AgentService, Injected(AgentService)],
+) -> AgentNameSuggestionRead:
+    return service.suggest_agent_name(context)
 
 
 @agents_router.get("/models")

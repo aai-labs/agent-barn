@@ -2,7 +2,7 @@
 
 ## Read when
 
-Read before changing agent creation, Agent Access Roles, explicit Agent Access assignments, Agent General Access, lifecycle, runtime or platform selection, template pinning, Agent Template Overrides, model selection, skill assignment, credentials, logs, health, or Kubernetes resources.
+Read before changing agent creation, Agent Access Roles, explicit Agent Access assignments, Agent General Access, lifecycle, runtime or platform selection, template pinning, Agent Template Overrides, model selection, skill assignment, credentials, logs, health, Agent Restore Points, or Kubernetes resources.
 
 ## Role in the system
 
@@ -38,6 +38,8 @@ An Agent is the central execution aggregate. It connects organization tenancy, a
 - Provider requirements for assigned skills are validated during agent create/update against the agent's resulting Agent Secrets. During Agent creation, the service live-validates the exact submitted manual and shared credentials before allocating a LiteLLM key or persisting the Agent; providers without a live validator still receive schema validation and remain eligible for on-demand validation. Later edits to skill metadata are not revalidated at Agent start.
 - Agents are soft-deleted; deletion also removes runtime resources, retires all owned Communication Connections (releasing their provider credential identities), and attempts to block the LiteLLM key.
 - Secret values are encrypted at rest and omitted from read DTOs. Google Workspace credentials are validated as one service-scoped OAuth payload and materialized through the gog CLI; retired per-service Google providers are not supported.
+- Agent Restore Points capture and restore only while the Agent is `STOPPED`, and only one capture or restore may be in flight per Agent — enforced by a database constraint, not only a service check. The per-Agent retention cap counts manual restore points that still hold a volume: Pre-Restore Restore Points and failed captures do not consume it, so an Agent at the cap can still roll back and a run of failures cannot lock it out of capturing.
+- A restore point archive never contains credential material or state the runtime regenerates on boot, so it is not a byte-exact image of the volume. Reads authorize on `activity.read`; capture, restore, and delete on `agent.lifecycle.manage`. No restore-point-specific Permission exists.
 
 ## State model
 
@@ -48,6 +50,8 @@ RUNNING ────────────────── stop ────
 any non-deleted state ──── delete ──→ soft-deleted
 ```
 
+A capture or restore of an Agent Restore Point also blocks start and delete while it runs, because the Agent's volume is ReadWriteOnce and the Job holds it.
+
 Starting an already running agent and stopping an agent that is not running are conflicts. Start renders the pinned template anew, creates a fresh ingest key, rebuilds runtime resources, and clears a previous error on success.
 
 ## Primary flows
@@ -55,6 +59,26 @@ Starting an already running agent and stopping an agent that is not running are 
 ### Create
 
 Creation requires `agent.create`, resolves the requested Template Version or latest version, validates required Skills and tool-provider credentials, live-validates supported provider credentials from the exact request, and atomically persists the Agent with creator provenance and explicit Agent Owner access. It persists Agent Secrets, assigns Skills, and creates a per-Agent LiteLLM key when configured only after deterministic and live preflight validation. New Agents are headless and `STOPPED`; Communication Connections are added independently after creation. Agent General Access defaults to Restricted, so no other Member receives access automatically.
+
+### Suggested names
+
+The hiring dialog suggests `<first name> the <template name>`. It cycles initials A–Z using the
+Organization's total persisted Agent count modulo 26, including soft-deleted Agents and manually
+named Agents. Each suggestion randomly chooses a distinct spelling from the supplied names for
+that initial. Existing Agents contribute to the count and retain their names. Deleting an Agent
+does not rewind the sequence. No separate counter or name uniqueness constraint is maintained.
+
+`GET /organizations/{organization_id}/agents/name-suggestion` requires `agent.create` and returns
+only `first_name`; it does not reserve or persist a name. Concurrent dialogs may repeat names,
+and creation preserves the submitted name even when another creation has changed the count.
+The create API still requires `name`. Failed creation does not advance the count; failure to
+start an already-created Agent does.
+
+Before Template selection, and for the `General Purpose` display name, the suffix is `Assistant`.
+Other Template display names are used verbatim, truncated only when needed to fit the 255-character
+Agent name limit. Template changes update the suggestion until the user edits the name manually.
+The dialog retains its first name throughout the opening, offers manual entry and retrieval retry
+on failure, and has no shuffle control. Reopening fetches a fresh suggestion.
 
 ### Update
 
@@ -74,6 +98,16 @@ Start renders the pinned Template, decrypts Agent Secrets, selects Hermes/OpenCl
 
 Stop snapshots logs before removing active runtime resources and marking the Agent stopped. A successful transition to `STOPPED` emits `agent.stopped`; its email handler notifies the Agent Creator and users with Agent Owner access, de-duplicated by email. Delete removes runtime resources, retires all owned Communication Connections (cancelling pending deliveries and releasing provider credential identities), soft-deletes the Agent, and preserves the record for history and cost attribution. Individual Communication Connection retirement remains an independent Communications workflow.
 
+### Capture and restore
+
+An Agent Restore Point captures the Agent's persistent volume into its own volume, run by a Kubernetes Job that mounts both. Capture and restore each require a `STOPPED` Agent: the volume is ReadWriteOnce, so the Job cannot hold it while the Agent pod does. An Agent that has never started has no volume yet and is refused with a distinct message from the legitimate case of an Agent whose volume holds only regenerated state, which captures zero files and is still ready.
+
+The archive excludes credential material — for Hermes the plaintext provider-token store and its decryption key under `.config/aai-cli` — every file the runtime's start script rewrites on boot, and the durable message spool, whose restoration would re-send or drop queued messages. It retains each runtime's agent-owned `USER.md`, which lives in different places per runtime.
+
+Restore first captures the current volume as a Pre-Restore Restore Point, then validates the chosen archive, wipes the target and extracts, all inside one Job so the safety net is on disk before anything is destroyed. A corrupt or unsafe archive is rejected before the wipe, leaving the volume untouched. Restored files are given the ownership the volume already had, because OpenClaw's ownership repair on boot is not recursive. A restore is never retried automatically, because a second attempt would capture the already-wiped volume over the good backup. When a restore fails, the failed phase decides the outcome: if the safety net never finished, the Agent volume was never touched and the chosen restore point stays ready; if it did finish, the Pre-Restore Restore Point stays ready as the rollback path. When the phase cannot be established — which includes every restore killed by its time limit, since Kubernetes deletes the Job's pod and its logs with it — neither volume is released: the Pre-Restore Restore Point is marked failed but keeps its volume, so it can be inspected or deleted rather than lost.
+
+Two consequences are worth stating plainly. The runtime's own session history lives on the volume and rolls back with it, while Agent Barn's conversation record does not — after a restore the product's history is ahead of the runtime's, which is correct because the product record is the audit trail. And deleting an Agent destroys its restore points irreversibly even though the Agent row itself is only soft-deleted, so deletion is the one path this feature cannot undo.
+
 ### Manage access
 
 Share-management endpoints expose locked Agent Access Roles and one canonical Agent share snapshot. `GET /agents/{agent_id}/share` returns Agent General Access plus explicit Agent Access assignments, and `PUT /agents/{agent_id}/share` replaces both in one transaction. Implicit Organization Owner/Admin authority is not a revocable assignment. Share changes take effect on the next request; missing, cross-Organization, or inaccessible resources retain the documented 404 concealment behavior. Custom Agent Access Roles are added by AF-216, and access-management UI is added by AF-217.
@@ -87,6 +121,8 @@ Share-management endpoints expose locked Agent Access Roles and one canonical Ag
 | Tenant/access-scoped persistence            | `../../api/domains/agents/repository.py`                                                                                                                                                                     |
 | Agent visibility and effective actions      | `../../api/domains/agents/authorization.py`                                                                                                                                                                  |
 | Agent Access workflows                      | `../../api/domains/agents/access_service.py`                                                                                                                                                                 |
+| Restore point capture, restore, and reconciliation | `../../api/domains/restore_points/`                                                                                                                                   |
+| Restore point Job entrypoint and exclusion sets | `../../api/domains/agents/restore_point_job.py`                                                                                                                          |
 | HTTP routes                                 | `../../api/domains/agents/routes.py`                                                                                                                                                                         |
 | Communication Connections and Plugins       | `../../api/domains/communications/`                                                                                                                                                                          |
 | Runtime resources                           | `../../api/domains/agents/builders/`                                                                                                                                                                         |
@@ -103,6 +139,7 @@ Share-management endpoints expose locked Agent Access Roles and one canonical Ag
 - [`2026-08-09-agent-scoped-template-overrides.md`](../adr/2026-08-09-agent-scoped-template-overrides.md)
 - [`2026-08-19-organization-scoped-agent-settings.md`](../adr/2026-08-19-organization-scoped-agent-settings.md)
 - [`2026-08-22-agent-barn-owned-communications-gateway.md`](../adr/2026-08-22-agent-barn-owned-communications-gateway.md)
+- [`2026-09-10-restore-points-use-tar-jobs-not-csi-snapshots.md`](../adr/2026-09-10-restore-points-use-tar-jobs-not-csi-snapshots.md)
 
 ## Change impact
 

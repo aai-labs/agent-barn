@@ -208,6 +208,9 @@ def _on_post_llm_call(session_id=None, user_message=None, assistant_response=Non
 
     resolved = _resolve_chat(session_id)
     if resolved is None:
+        # boot-run.py's BOOT_SESSION_ID: the BOOT.md run has no chat by design.
+        if session_id == "agentbarn-boot":
+            return
         logger.warning(
             "telemetry-push dropping outbound message: no chat resolved for session_id=%s",
             session_id,

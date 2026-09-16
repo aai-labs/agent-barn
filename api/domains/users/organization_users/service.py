@@ -345,9 +345,16 @@ class OrganizationUserService:
         self.event_delivery_dispatcher.enqueue_immediate(delivery_ids)
 
         # Rescinding a still-pending member's access must also kill their invite link,
-        # which otherwise stays valid (it's tied to the user, not the membership).
+        # which otherwise stays valid (it's tied to the user, not the membership). That
+        # same link serves every org they belong to, though, so only someone left with no
+        # memberships at all loses it — leaving one org must not break onboarding for the
+        # others.
         user = self.user_repository.get(user_id)
-        if user is not None and user.email_verified_at is None:
+        if (
+            user is not None
+            and user.email_verified_at is None
+            and not self.organization_user_repository.get_by_user_id(user_id)
+        ):
             self.auth_service.revoke_pending_invites(user_id)
 
     def transfer_ownership(
@@ -391,10 +398,4 @@ class OrganizationUserService:
                 status_code=status.HTTP_409_CONFLICT,
                 detail="Member has already accepted their invite",
             )
-        _, invite_link = self.auth_service.invite_user(email=user.email, full_name=user.full_name)
-        if invite_link is None:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to generate invite link",
-            )
-        return invite_link
+        return self.auth_service.resend_invite(user)

@@ -12,7 +12,7 @@ Isolation contract:
 - Platform Administrators use platform routes; org URLs still require real membership.
 """
 
-from uuid import UUID, uuid7
+from uuid import UUID, uuid4, uuid7
 
 from fastapi import status
 from hamcrest import assert_that, equal_to
@@ -470,3 +470,45 @@ def test_platform_admin_without_membership_cannot_list_org_members_via_url():
     ) as context:
         response = context.client.get(f"/api/v1/organizations/{ORG_B}/members", headers=_headers(context))
         assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+
+
+def test_cannot_list_restore_points_from_another_org():
+    with given(_member_a_with_org_b_agent()) as context:
+        agent_id = context.agent.id
+        with when("a member of org A lists org B's restore points, scoped to org A"):
+            response = context.client.get(f"{_agents(ORG_A)}/{agent_id}/restore-points", headers=_headers(context))
+            with then("the agent is not found"):
+                assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
+
+
+def test_cannot_capture_a_restore_point_for_an_agent_from_another_org():
+    with given(_member_a_with_org_b_agent()) as context:
+        agent_id = context.agent.id
+        with when("a member of org A captures org B's agent, scoped to org A"):
+            response = context.client.post(
+                f"{_agents(ORG_A)}/{agent_id}/restore-points", json={}, headers=_headers(context)
+            )
+            with then("the agent is not found"):
+                assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
+
+
+def test_cannot_restore_a_restore_point_from_another_org():
+    with given(_member_a_with_org_b_agent()) as context:
+        agent_id = context.agent.id
+        with when("a member of org A restores against org B's agent, scoped to org A"):
+            response = context.client.post(
+                f"{_agents(ORG_A)}/{agent_id}/restore-points/{uuid4()}/restore", headers=_headers(context)
+            )
+            with then("the agent is not found"):
+                assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
+
+
+def test_cannot_delete_a_restore_point_from_another_org():
+    with given(_member_a_with_org_b_agent()) as context:
+        agent_id = context.agent.id
+        with when("a member of org A deletes a restore point on org B's agent, scoped to org A"):
+            response = context.client.delete(
+                f"{_agents(ORG_A)}/{agent_id}/restore-points/{uuid4()}", headers=_headers(context)
+            )
+            with then("the agent is not found"):
+                assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))

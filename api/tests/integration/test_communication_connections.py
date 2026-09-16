@@ -186,6 +186,9 @@ def test_platform_catalog_lists_the_shipped_plugins() -> None:
                 [item["key"] for item in catalogue],
                 contains_inanyorder("discord", "email", "slack", "teams", "telegram", "web"),
             )
+            slack = next(item for item in catalogue if item["key"] == "slack")
+            assert_that(slack["schema_version"], equal_to(2))
+            assert_that(slack["settings_schema"]["properties"], not_(has_key("verbose_mode")))
             hints = {item["key"]: item["setup_hint"] for item in catalogue}
             assert_that(
                 hints["slack"],

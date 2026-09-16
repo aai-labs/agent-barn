@@ -40,6 +40,7 @@ Use:
 
 - `200` for reads and updates returning a body.
 - `201` for creates.
+- `202` for work accepted now and completed asynchronously, where the response carries the record the client polls.
 - `204` for deletes or actions returning no body.
 - `400` for business precondition failures.
 - `401` for unauthenticated requests.

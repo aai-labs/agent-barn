@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from typing import Any, Protocol
 
 import httpx
-from pydantic import Field
+from pydantic import Field, model_validator
 from websockets.asyncio.client import connect
 
 from api.domains.communications.models import (
@@ -43,6 +43,14 @@ class SlackValidationConfig(Protocol):
 
 
 class SlackSettings(AgentInitiatedDeliverySettings, PlatformSettings):
+    @model_validator(mode="before")
+    @classmethod
+    def discard_legacy_verbose_mode(cls, values: object) -> object:
+        """Accept old Connection rows while retiring the unused setting."""
+        if isinstance(values, dict) and "verbose_mode" in values:
+            return {key: value for key, value in values.items() if key != "verbose_mode"}
+        return values
+
     channel_ids: list[str] = Field(
         default_factory=list,
         title="Allowed channels",
@@ -75,11 +83,6 @@ class SlackSettings(AgentInitiatedDeliverySettings, PlatformSettings):
             "threads already owned by this Agent."
         ),
     )
-    verbose_mode: bool = Field(
-        default=True,
-        title="Announce steps",
-        description="Post a running commentary of what it's doing, not just the final reply.",
-    )
 
 
 class SlackCredentials(PlatformCredentials):
@@ -106,6 +109,8 @@ _APPROVAL_METADATA_KEY = "approval_id"
 _SYNTHESIZED_MESSAGE_PREFIX = "action:"
 _APPROVAL_BLOCK_ID = "agentbarn_approval"
 _SECTION_TEXT_LIMIT = 3000
+_MARKDOWN_BLOCK_LIMIT = 12_000
+_SLACK_MARKUP = re.compile(r"<[@#!]")
 _APPROVAL_CHOICE_LABELS = {
     "once": "Allow once",
     "session": "Allow for session",
@@ -152,6 +157,19 @@ def _approval_blocks(approval: ApprovalRequest) -> list[dict]:
     ]
 
 
+def _message_blocks(envelope: OutboundCommunicationEnvelope) -> list[dict] | None:
+    if envelope.approval:
+        return _approval_blocks(envelope.approval)
+    # The markdown block renders the standard Markdown Agents write, which mrkdwn
+    # text shows as raw `**` and `[label](url)`. Slack documents no mention markup
+    # inside it, so text carrying <@user>, <#channel>, or <!here> stays mrkdwn.
+    # ponytail: replies over the 12,000-character markdown block cap fall back to
+    # raw mrkdwn; split them across messages if long replies become common.
+    if len(envelope.text) <= _MARKDOWN_BLOCK_LIMIT and not _SLACK_MARKUP.search(envelope.text):
+        return [{"type": "markdown", "text": envelope.text}]
+    return None
+
+
 def _resolve_unique_name(entries: list[dict], recipient: str, *, fields: tuple[str, ...]) -> str:
     """Reject ambiguous names instead of guessing which match the Agent meant."""
     name = recipient.lstrip("#@").casefold()
@@ -168,6 +186,7 @@ def _resolve_unique_name(entries: list[dict], recipient: str, *, fields: tuple[s
 class SlackPlatformPlugin(PlatformPlugin):
     key = "slack"
     display_name = "Slack"
+    schema_version = 2
     setup_hint = (
         "## Create a Slack app\n\n"
         "1. Open [Slack app management](https://api.slack.com/apps).\n"
@@ -331,13 +350,13 @@ class SlackPlatformPlugin(PlatformPlugin):
         idempotency_key: str,
     ) -> str:
         assert isinstance(credentials, SlackCredentials)
-        interactive = {"blocks": _approval_blocks(envelope.approval)} if envelope.approval else {}
+        blocks = _message_blocks(envelope)
         return SlackClient(credentials.bot_token).send_message(
             envelope.location.id,
             envelope.text,
             thread_id=envelope.location.thread_id,
             idempotency_key=provider_idempotency_key(idempotency_key),
-            **interactive,
+            **({"blocks": blocks} if blocks else {}),
         )
 
     def processing_feedback(
