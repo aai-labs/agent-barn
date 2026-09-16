@@ -4,12 +4,15 @@ from typing import Any
 
 from api.infrastructure.http import resilient_request
 from api.infrastructure.shared.cache import cached
+from api.infrastructure.shared.text import chunk_text
 
 _BASE = "https://discord.com/api/v10"
 _TIMEOUT_SECONDS = 15
 _DIRECTORY_CACHE_TTL_SECONDS = 600
 _MESSAGE_CHANNEL_TYPES = {0, 5, 10, 11, 12, 15}
 _MAX_NONCE_LENGTH = 25
+_MAX_CONTENT_LENGTH = 2_000
+_CHUNK_NONCE_PREFIX_LENGTH = _MAX_NONCE_LENGTH - 3
 
 
 class DiscordClient:
@@ -72,34 +75,42 @@ class DiscordClient:
         idempotency_key: str | None = None,
         components: list[dict[str, Any]] | None = None,
     ) -> str:
-        payload: dict[str, Any] = {"content": text, "allowed_mentions": {"parse": []}}
-        if components:
-            payload["components"] = components
-        if idempotency_key:
-            # Discord rejects a nonce longer than 25 characters with 400/50035, and the
-            # provider key is a 64-character digest. The prefix stays deterministic per
-            # Delivery, so retries still de-duplicate.
-            payload["nonce"] = idempotency_key[:_MAX_NONCE_LENGTH]
-            payload["enforce_nonce"] = True
-        if reply_to_id:
-            payload["message_reference"] = {
-                "message_id": reply_to_id,
-                "channel_id": channel_id,
-                "fail_if_not_exists": False,
-            }
-        response = resilient_request(
-            "POST",
-            f"{_BASE}/channels/{channel_id}/messages",
-            headers={"Authorization": f"Bot {self._bot_token}", "Content-Type": "application/json"},
-            content=json.dumps(payload).encode("utf-8"),
-            timeout=_TIMEOUT_SECONDS,
-            label="Discord create message",
-            retry_server_errors=True,
-        )
-        response.raise_for_status()
-        message_id = response.json().get("id")
-        if not message_id:
-            raise RuntimeError("Discord create message returned no message id")
+        chunks = [text] if components else chunk_text(text, _MAX_CONTENT_LENGTH)
+        message_id: str | None = None
+        for index, chunk in enumerate(chunks):
+            payload: dict[str, Any] = {"content": chunk, "allowed_mentions": {"parse": []}}
+            if components:
+                payload["components"] = components
+            if idempotency_key:
+                # Discord rejects a nonce longer than 25 characters with 400/50035, and the
+                # provider key is a 64-character digest. The prefix stays deterministic per
+                # Delivery, so retries still de-duplicate.
+                payload["nonce"] = (
+                    f"{idempotency_key[:_CHUNK_NONCE_PREFIX_LENGTH]}-{index}"
+                    if len(chunks) > 1
+                    else idempotency_key[:_MAX_NONCE_LENGTH]
+                )
+                payload["enforce_nonce"] = True
+            if reply_to_id and index == 0:
+                payload["message_reference"] = {
+                    "message_id": reply_to_id,
+                    "channel_id": channel_id,
+                    "fail_if_not_exists": False,
+                }
+            response = resilient_request(
+                "POST",
+                f"{_BASE}/channels/{channel_id}/messages",
+                headers={"Authorization": f"Bot {self._bot_token}", "Content-Type": "application/json"},
+                content=json.dumps(payload).encode("utf-8"),
+                timeout=_TIMEOUT_SECONDS,
+                label="Discord create message",
+                retry_server_errors=True,
+            )
+            response.raise_for_status()
+            message_id = response.json().get("id")
+            if not message_id:
+                raise RuntimeError("Discord create message returned no message id")
+        assert message_id is not None
         return str(message_id)
 
     def list_guilds(self) -> list[dict[str, str]]:

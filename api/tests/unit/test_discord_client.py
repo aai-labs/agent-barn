@@ -8,6 +8,12 @@ from api.infrastructure.discord.client import DiscordClient
 from api.infrastructure.shared.cache import clear_cache
 
 
+def _message_response(message_id: str) -> MagicMock:
+    response = MagicMock(status_code=200)
+    response.json.return_value = {"id": message_id}
+    return response
+
+
 @patch("api.infrastructure.discord.client.cached", side_effect=lambda _key, fetch, ttl: fetch())
 @patch("api.infrastructure.discord.client.resilient_request")
 def test_discord_client_resolves_user_and_channel_names(mock_request, _mock_cached):
@@ -112,3 +118,86 @@ def test_discord_client_sends_components_only_when_a_message_has_them(mock_reque
 
     assert_that("components" in plain, equal_to(False))
     assert_that(with_buttons["components"], equal_to(buttons))
+
+
+@patch("api.infrastructure.discord.client.resilient_request")
+def test_discord_client_sends_a_short_reply_as_one_unchanged_request(mock_request):
+    response = MagicMock(status_code=200)
+    response.json.return_value = {"id": "message-1"}
+    mock_request.return_value = response
+
+    provider_key = provider_idempotency_key("delivery-1")
+
+    message_id = DiscordClient("bot-value").send_message(
+        "channel-1",
+        "reply",
+        reply_to_id="origin-1",
+        idempotency_key=provider_key,
+    )
+
+    assert_that(message_id, equal_to("message-1"))
+    assert_that(mock_request.call_count, equal_to(1))
+    payload = json.loads(mock_request.call_args.kwargs["content"])
+    assert_that(payload["content"], equal_to("reply"))
+    assert_that(payload["nonce"], equal_to(provider_key[:25]))
+    assert_that(payload["enforce_nonce"], equal_to(True))
+    assert_that(payload["message_reference"]["message_id"], equal_to("origin-1"))
+
+
+@patch("api.infrastructure.discord.client.resilient_request")
+def test_discord_client_splits_a_reply_over_the_content_limit(mock_request):
+    mock_request.side_effect = [_message_response(f"message-{index}") for index in range(3)]
+
+    long_text = "a" * 5000
+    message_id = DiscordClient("bot-value").send_message(
+        "channel-1",
+        long_text,
+        idempotency_key=provider_idempotency_key("delivery-1"),
+    )
+
+    assert_that(message_id, equal_to("message-2"))
+    assert_that(mock_request.call_count, equal_to(3))
+    payloads = [json.loads(call.kwargs["content"]) for call in mock_request.call_args_list]
+    assert_that("".join(payload["content"] for payload in payloads), equal_to(long_text))
+    assert_that([len(payload["content"]) <= 2000 for payload in payloads], equal_to([True, True, True]))
+
+
+@patch("api.infrastructure.discord.client.resilient_request")
+def test_discord_client_gives_every_chunk_its_own_nonce(mock_request):
+    mock_request.side_effect = [_message_response(f"message-{index}") for index in range(3)]
+
+    DiscordClient("bot-value").send_message(
+        "channel-1",
+        "a" * 5000,
+        idempotency_key=provider_idempotency_key("delivery-1"),
+    )
+
+    nonces = [json.loads(call.kwargs["content"])["nonce"] for call in mock_request.call_args_list]
+    assert_that(len(set(nonces)), equal_to(3))
+    assert_that([len(nonce) <= 25 for nonce in nonces], equal_to([True, True, True]))
+
+
+@patch("api.infrastructure.discord.client.resilient_request")
+def test_discord_client_replies_to_the_origin_on_the_first_chunk_only(mock_request):
+    mock_request.side_effect = [_message_response(f"message-{index}") for index in range(3)]
+
+    DiscordClient("bot-value").send_message("channel-1", "a" * 5000, reply_to_id="origin-1")
+
+    payloads = [json.loads(call.kwargs["content"]) for call in mock_request.call_args_list]
+    assert_that(payloads[0]["message_reference"]["message_id"], equal_to("origin-1"))
+    assert_that(["message_reference" in payload for payload in payloads], equal_to([True, False, False]))
+
+
+@patch("api.infrastructure.discord.client.resilient_request")
+def test_discord_client_never_splits_a_message_carrying_components(mock_request):
+    response = MagicMock(status_code=200)
+    response.json.return_value = {"id": "message-1"}
+    mock_request.return_value = response
+    buttons = [{"type": 1, "components": [{"type": 2, "style": 2, "label": "Allow once", "custom_id": "value-1"}]}]
+
+    DiscordClient("bot-value").send_message("channel-1", "a" * 5000, components=buttons)
+
+    assert_that(mock_request.call_count, equal_to(1))
+    payload = json.loads(mock_request.call_args.kwargs["content"])
+    assert_that(payload["components"], equal_to(buttons))
+    assert_that(len(payload["content"]), equal_to(5000))
