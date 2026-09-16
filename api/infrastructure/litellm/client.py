@@ -115,6 +115,14 @@ class LiteLLMClient:
                     timeout=self._TIMEOUT,
                 )
                 response.raise_for_status()
+                # Verified by re-reading, like team creation and key enrollment: some
+                # versions accept an update and drop fields they do not recognise, and
+                # a silently ignored clear would leave the cap enforced while the row
+                # and the UI both report no limit.
+                applied = self._team_info(org_id, headers) or {}
+                unapplied = [name for name, value in changed.items() if applied.get(name) != value]
+                if unapplied:
+                    raise ValueError(f"LiteLLM did not apply {', '.join(sorted(unapplied))}")
         except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
             raise LiteLLMError("Failed to reconcile Organization LiteLLM team budget") from exc
 

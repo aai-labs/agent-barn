@@ -244,6 +244,7 @@ class EmailService:
         organization_name: str,
         headline: str,
         body: str,
+        reason: str,
     ) -> None:
         """Propagates EmailSendingException like the lifecycle send: the handler runs
         under the delivery framework and needs the retryable/terminal distinction."""
@@ -265,6 +266,7 @@ class EmailService:
                 EmailTemplateAttribute(name="organization_name", value=organization_name),
                 EmailTemplateAttribute(name="headline", value=headline),
                 EmailTemplateAttribute(name="body", value=body),
+                EmailTemplateAttribute(name="reason", value=reason),
             ],
         )
         try:

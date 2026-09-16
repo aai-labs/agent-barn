@@ -141,7 +141,15 @@ def test_only_changed_policy_fields_are_patched(budget, duration, expected):
         patch.object(LiteLLMClient, "_master_key", return_value="master"),
         patch(
             "api.infrastructure.litellm.client.httpx.get",
-            return_value=team(max_budget=50, budget_duration="30d", spend=42),
+            side_effect=[
+                team(max_budget=50, budget_duration="30d", spend=42),
+                # The re-read that confirms the write actually landed.
+                team(
+                    max_budget=budget,
+                    budget_duration=duration if budget is not None else None,
+                    spend=42,
+                ),
+            ],
         ),
         patch("api.infrastructure.litellm.client.httpx.post", return_value=response({})) as post,
     ):
@@ -667,11 +675,15 @@ def test_an_unreadable_team_leaves_spend_unknown_rather_than_zero():
 # --- budget thresholds -------------------------------------------------------
 
 
-def budget_service(orgs, spend_by_org, **overrides):
+def budget_service(orgs, spend_by_org, publishes=True, **overrides):
     repo = MagicMock()
     repo.list_capped_organizations.return_value = orgs
     service = organization_service(organization_repository=repo, **overrides)
     service.litellm.get_team_budget_status.side_effect = lambda team_id: spend_by_org.get(team_id)
+    # Staging goes through a real Session, which a mocked repository cannot provide.
+    # Threshold behaviour is the subject here; whether the outbox accepted the event
+    # is its own test.
+    service._publish_budget_crossing = MagicMock(return_value=publishes)
     return service
 
 
@@ -982,3 +994,127 @@ def test_a_sub_dollar_allowance_keeps_its_precision():
     handler.handle(budget_event(ORGANIZATION_LLM_BUDGET_EXHAUSTED, spend=0.011985, limit=0.01), delivery_context())
     body = handler.email_service.send_organization_budget_email.call_args.kwargs["body"]
     assert_that("$0.0120 of $0.0100" in body, equal_to(True))
+
+
+def budget_handler_with_platform(recipients, platform_admins, already=None):
+    handler = budget_email_handler(recipients, already)
+    handler.repository.find_platform_admin_recipients.return_value = platform_admins
+    return handler
+
+
+def _sent(handler):
+    return [c.kwargs["receiver_email"] for c in handler.email_service.send_organization_budget_email.call_args_list]
+
+
+def test_platform_admins_are_told_when_an_organization_is_cut_off():
+    from api.domains.events.catalog import ORGANIZATION_LLM_BUDGET_EXHAUSTED
+
+    handler = budget_handler_with_platform([("owner@acme.com", "Owner")], [("ops@platform.com", "Ops")])
+    handler.handle(budget_event(ORGANIZATION_LLM_BUDGET_EXHAUSTED, threshold=100), delivery_context())
+    assert_that(sorted(_sent(handler)), equal_to(["ops@platform.com", "owner@acme.com"]))
+
+
+def test_platform_admins_are_not_told_about_a_warning():
+    """An Organization approaching its limit is its own business; being cut off is
+    a support ticket heading our way."""
+    from api.domains.events.catalog import ORGANIZATION_LLM_BUDGET_THRESHOLD_REACHED
+
+    handler = budget_handler_with_platform([("owner@acme.com", "Owner")], [("ops@platform.com", "Ops")])
+    handler.handle(budget_event(ORGANIZATION_LLM_BUDGET_THRESHOLD_REACHED), delivery_context())
+    assert_that(_sent(handler), equal_to(["owner@acme.com"]))
+    handler.repository.find_platform_admin_recipients.assert_not_called()
+
+
+def test_someone_who_is_both_is_emailed_once():
+    from api.domains.events.catalog import ORGANIZATION_LLM_BUDGET_EXHAUSTED
+
+    handler = budget_handler_with_platform([("both@acme.com", "Both")], [("both@acme.com", "Both")])
+    handler.handle(budget_event(ORGANIZATION_LLM_BUDGET_EXHAUSTED, threshold=100), delivery_context())
+    assert_that(_sent(handler), equal_to(["both@acme.com"]))
+
+
+def test_each_audience_is_told_why_it_received_the_mail():
+    from api.domains.events.catalog import ORGANIZATION_LLM_BUDGET_EXHAUSTED
+
+    handler = budget_handler_with_platform([("owner@acme.com", "Owner")], [("ops@platform.com", "Ops")])
+    handler.handle(budget_event(ORGANIZATION_LLM_BUDGET_EXHAUSTED, threshold=100), delivery_context())
+    reasons = {
+        c.kwargs["receiver_email"]: c.kwargs["reason"]
+        for c in handler.email_service.send_organization_budget_email.call_args_list
+    }
+    assert_that("owner or admin" in reasons["owner@acme.com"], equal_to(True))
+    assert_that("platform administrator" in reasons["ops@platform.com"], equal_to(True))
+
+
+def test_the_budget_email_renders_with_every_attribute_it_is_given():
+    """Rendering is the only place a template/attribute mismatch shows up — the send
+    path returns early when delivery is disabled, so nothing else would catch it."""
+    from unittest.mock import MagicMock as Mock
+
+    from api.core.config import get_config
+    from api.infrastructure.email.models import EmailTemplate, EmailTemplateAttribute
+    from api.infrastructure.email.service import EmailService
+
+    service = EmailService.__new__(EmailService)
+    service.config = get_config()
+    service.client = Mock()
+    template = EmailTemplate(
+        file_name="organization-budget-template.mjml",
+        subject="Model spend allowance reached",
+        receiver_name="Grace",
+        receiver_email="owner@example.com",
+        attributes=[
+            EmailTemplateAttribute(name="user_name", value="Grace"),
+            EmailTemplateAttribute(name="organization_name", value="Northwind Labs"),
+            EmailTemplateAttribute(name="headline", value="Model spend allowance reached"),
+            EmailTemplateAttribute(name="body", value="Used its entire model spend allowance."),
+            EmailTemplateAttribute(name="reason", value="You received this because you are a platform administrator."),
+        ],
+    )
+    html = service.create_email(template).html_part
+    # The Organization has to be named: a platform administrator receiving this needs
+    # to know which one it is about.
+    for expected in ("Northwind Labs", "Model spend allowance reached", "platform administrator", "Grace"):
+        assert_that(expected in html, equal_to(True))
+    for leak in ("litellm", "LiteLLM", "cost_record", "team_id"):
+        assert_that(leak in html, equal_to(False))
+
+
+def test_a_threshold_is_only_recorded_once_its_notification_is_staged():
+    """Recording first and publishing after means a failed publish silences that
+    threshold for the rest of the window — the alert is never retried."""
+    org = capped()
+    service = budget_service([org], {"org": status_at(45.0)}, publishes=False)
+    with configured():
+        fired = service.check_llm_budget_thresholds()
+    assert_that(fired, equal_to([]))
+    assert_that(org.llm_alerted_threshold, equal_to(None))
+    # The spend snapshot is still worth keeping; only the alert state is withheld.
+    assert_that(org.llm_spend_usd, equal_to(45.0))
+
+
+def test_a_recorded_threshold_survives_into_the_next_pass():
+    org = capped()
+    service = budget_service([org], {"org": status_at(45.0)})
+    with configured():
+        service.check_llm_budget_thresholds()
+    assert_that(org.llm_alerted_threshold, equal_to(80))
+
+
+def test_a_silently_ignored_budget_clear_is_not_reported_as_success():
+    """Some versions accept an update and drop fields they do not recognise. Without
+    the re-read, "Remove limit" would leave the cap enforced while the row and the UI
+    both say there is none."""
+    with (
+        patch.object(LiteLLMClient, "_master_key", return_value="master"),
+        patch(
+            "api.infrastructure.litellm.client.httpx.get",
+            side_effect=[
+                team(max_budget=50, budget_duration="30d"),
+                team(max_budget=50, budget_duration="30d"),  # the clear did not take
+            ],
+        ),
+        patch("api.infrastructure.litellm.client.httpx.post", return_value=response({})),
+    ):
+        with pytest.raises(LiteLLMError):
+            client().apply_team_budget("org", None, None)

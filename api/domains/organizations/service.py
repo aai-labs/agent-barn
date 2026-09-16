@@ -215,16 +215,23 @@ class OrganizationService:
                 crossings = self._check_one_budget(organization)
             except Exception:
                 # One unreadable Organization must not cost every other one its check.
-                logger.warning("LLM budget threshold check failed for Organization %s", organization.id)
+                logger.exception("LLM budget threshold check failed for Organization %s", organization.id)
                 continue
             for crossing in crossings:
-                self._publish_budget_crossing(crossing)
-            fired.extend(crossings)
+                # Recorded only once the notification is staged. The other order means
+                # a failed publish marks the threshold alerted and it never fires
+                # again for this window — the alert is lost, not delayed.
+                if not self._publish_budget_crossing(crossing):
+                    continue
+                organization = crossing.pop("organization")
+                organization.llm_alerted_threshold = crossing["threshold_percent"]
+                self.organization_repository.save(organization)
+                fired.append(crossing)
         if fired:
             logger.info("Organization LLM budget thresholds crossed: %s", len(fired))
         return fired
 
-    def _publish_budget_crossing(self, crossing: dict) -> None:
+    def _publish_budget_crossing(self, crossing: dict) -> bool:
         """Staged through the outbox like any other domain event, so a failed
         notification is retried and shows up in the Event Delivery Monitor rather than
         vanishing."""
@@ -266,9 +273,11 @@ class OrganizationService:
                 session.commit()
             self.event_delivery_dispatcher.enqueue_immediate(delivery_ids)
         except Exception:
-            # The snapshot is already saved; losing the notification is better than
-            # losing the pass, and the next crossing will try again.
+            # The snapshot is already saved; the threshold is deliberately left
+            # unrecorded so the next pass retries this same crossing.
             logger.exception("Failed to publish LLM budget alert for Organization %s", organization_id)
+            return False
+        return True
 
     def _check_one_budget(self, organization: Organization) -> list[dict]:
         status_ = self.litellm.get_team_budget_status(str(organization.id))
@@ -297,9 +306,9 @@ class OrganizationService:
         already = organization.llm_alerted_threshold
         fired: list[dict] = []
         if highest is not None and (already is None or highest > already):
-            organization.llm_alerted_threshold = highest
             fired.append(
                 {
+                    "organization": organization,
                     "organization_id": organization.id,
                     "organization_name": organization.name,
                     "threshold_percent": highest,

@@ -92,9 +92,12 @@ retained on Organization deletion for historical attribution; their Agent keys h
 already been blocked by Agent deletion.
 
 Agents retain individual virtual keys and attribution metadata, and new keys include
-`team_id`. Nothing here inspects or modifies existing Agent keys: initial enrollment
-of legacy keys is a separate one-off operational script, and those keys are not
-covered by a team budget until they have been assigned to their Organization's team.
+`team_id`. Keys issued before an Organization had a team carry none, so a limit does
+not bind them until they are enrolled — `enroll_llm_keys` attaches them and refuses to
+move a key that already belongs to a different team. Coverage is read live rather than
+cached, because a key detached by hand would make a stored answer claim coverage the
+Organization does not have, and the budget controls stay hidden until every Agent is
+covered so a limit is never set over Agents it would silently miss.
 
 LiteLLM enforces its own recorded spend, independently of `cost_record` and
 OpenRouter cost healing. That figure is known to sit slightly below the truth —
@@ -104,7 +107,12 @@ never closed. Historical requests made before team attachment are not retroactiv
 charged. In-flight requests can exceed any cap. This is a proxy spend cutoff, not an
 exact provider-invoice ceiling, and only calls using these LiteLLM Agent keys count.
 A budget rejection does not stop the Agent container or suspend the Organization;
-model calls fail until the allowance renews or is raised or removed.
+model calls fail until the allowance renews or is raised or removed. Both runtimes'
+in-pod LLM proxy rewrites that rejection before the runtime sees it, so the person
+talking to the Agent is told the Organization has reached its limit rather than
+shown a raw error naming an internal team id. It is matched on the error body rather
+than the status, because the same 400 covers malformed requests and unknown models
+that must keep their own errors.
 
 ## Operational
 
@@ -142,7 +150,10 @@ Agents own LiteLLM key creation, encryption, deletion blocking, and lifecycle st
 | CronJob                       | `../../helm/agentbarn-api/templates/cost-sync-cronjob.yaml` |
 | Org budget storage and policy | `../../api/domains/organizations/service.py`, `../../api/domains/organizations/routes.py` |
 | Org budget reconciler         | `../../api/domains/organizations/llm_budget_reconciliation.py` (`make reconcile-llm-budgets`), `../../helm/agentbarn-api/templates/llm-budget-reconciliation-cronjob.yaml` |
-| Org budget UI                 | `../../ui/src/features/organizations/components/llm-budget-card.tsx` |
+| Org budget UI                 | `../../ui/src/features/organizations/components/llm-budget-card.tsx`, `../../ui/src/features/organizations/components/llm-budget-banner.tsx` |
+| Threshold alerts              | `../../api/domains/organizations/llm_budget_alerts.py` (`make run-llm-budget-alerts`), `../../helm/agentbarn-api/templates/llm-budget-alerts-cronjob.yaml` |
+| Budget notification email     | `../../api/domains/organizations/event_handlers.py`, `../../api/infrastructure/email/templates/organization-budget-template.mjml` |
+| Agent-facing rejection        | `../../api/domains/agents/scripts/hermes/healthz-server.py`, `../../api/domains/agents/scripts/openclaw/healthz-server.js` |
 | UI schemas, hooks, and charts | `../../ui/src/features/costs/`              |
 | Local fixtures                | `../../api/scripts/seed_cost_fixtures.py` (`make seed-costs`) |
 | Investigation and evidence    | `../plans/AF-281-cost-tracking-findings.md` |

@@ -67,7 +67,7 @@ administrator's setting because the proxy blinked is worse than a delayed push. 
 `concurrencyPolicy: Forbid`, so one runner regardless of API replica count, and the
 API itself never contacts the proxy at startup. A budget saved while the proxy was
 unreachable is therefore applied within one interval rather than at the next restart.
-Run a pass by hand with `make reconcile-llm-budgets`.
+Run either pass by hand with `make reconcile-llm-budgets` or `make run-llm-budget-alerts`.
 
 `ORGANIZATION_LLM_BUDGET_ALERT_THRESHOLDS` sets the percentages at which an
 Organization's Owners and Admins are notified — comma separated, each between 1 and
@@ -77,11 +77,11 @@ alerting nobody. The value is read by the API and by the
 that have a limit set. Alerting is informational: the limit is enforced in the
 request path, so the interval only bounds how late someone is told.
 
-Existing Agent keys are not automatically enrolled into their Organization's team.
-Handle their initial assignment with a separate one-off script before relying on the
-limits for those Agents, and verify each legacy key's `team_id` through the LiteLLM
-admin interface afterwards. Historical pre-enrollment spend stays in reports but is
-not added to the new team counter.
+Agents created before an Organization had a limit carry no team on their key, so a
+limit does not bind them until they are enrolled. A Platform Administrator does that
+from the Organization's page — the spend limit controls stay hidden until every Agent
+is covered, and the button reports anything it could not enroll by name. Historical
+pre-enrollment spend stays in reports but is not added to the new team counter.
 
 ## Transactional email
 

@@ -54,13 +54,32 @@ class OrganizationBudgetEmailHandler:
         headline, body = self._message(event.payload, exhausted=exhausted)
         organization_name = str(event.payload["subject_display"])
 
-        recipients = self.repository.find_budget_email_recipients(organization_id)
+        recipients = [
+            (email, name, f"You received this because you are an owner or admin of {organization_name}.")
+            for email, name in self.repository.find_budget_email_recipients(organization_id)
+        ]
+        if exhausted:
+            # Only the cut-off is ours to act on; an Organization merely approaching
+            # its limit is its own business.
+            # Lowercased: both lookups dedupe that way, so comparing raw would mail
+            # someone twice when their two records differ only in case.
+            addressed = {email.lower() for email, _, _ in recipients}
+            recipients += [
+                (
+                    email,
+                    name,
+                    "You received this because you are a platform administrator.",
+                )
+                for email, name in self.repository.find_platform_admin_recipients()
+                if email.lower() not in addressed
+            ]
+
         # A retry re-runs this handler from scratch, so skip anyone already emailed for
         # this delivery rather than notifying them twice.
         already_notified = self.repository.find_notified_budget_recipients(context.delivery_id)
         retryable: list[str] = []
         terminal: list[str] = []
-        for email, full_name in recipients:
+        for email, full_name, reason in recipients:
             if email in already_notified:
                 continue
             try:
@@ -70,6 +89,7 @@ class OrganizationBudgetEmailHandler:
                     organization_name=organization_name,
                     headline=headline,
                     body=body,
+                    reason=reason,
                 )
             except RetryableEmailSendingException:
                 retryable.append(email)

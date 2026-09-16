@@ -20,12 +20,15 @@
         <mj-text font-size="22px" font-weight="600" color="#1a1815" align="center" padding="32px 28px 14px 28px">
           {{ headline }}
         </mj-text>
+        <mj-text align="center" font-size="15px" font-weight="600" color="#57534e" padding="0 28px 18px 28px">
+          {{ organization_name }}
+        </mj-text>
         <mj-text align="left" padding="8px 28px">Hi {{ user_name }},</mj-text>
         <mj-text align="left" padding="4px 28px 18px 28px">
           {{ body }}
         </mj-text>
         <mj-text align="left" font-size="14px" color="#97928a" padding="20px 28px 30px 28px">
-          You received this because you are an owner or admin of {{ organization_name }}.
+          {{ reason }}
         </mj-text>
       </mj-column>
     </mj-section>

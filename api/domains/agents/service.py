@@ -125,6 +125,10 @@ from api.infrastructure.shared.models import PaginatedItems, Pagination
 
 logger = logging.getLogger(__name__)
 
+# Port of the in-pod LLM proxy. Shared by the URL the runtime dials and the
+# LLM_PROXY_PORT the healthz servers listen on — see the runtime scripts.
+AGENT_LLM_PROXY_PORT = 8090
+
 _CREDENTIAL_FIELDS = frozenset(
     {
         "secrets",
@@ -1893,7 +1897,10 @@ class AgentService:
             else ""
         )
         effective_model = agent.model or self.agent_settings_lookup.resolve_default_model(org_id)
-        llm_proxy_url = "http://localhost:8090"
+        # The runtime dials this and the in-pod proxy listens on it. Both come from
+        # AGENT_LLM_PROXY_PORT below so they cannot drift apart: setting the port
+        # without moving the URL would fail every model call with connection refused.
+        llm_proxy_url = f"http://localhost:{AGENT_LLM_PROXY_PORT}"
 
         # Re-check the allowlist at start time, not just create/update: the org's
         # allowlist can change after the agent was created, and a model that was
@@ -2064,6 +2071,7 @@ class AgentService:
                 "COMMUNICATIONS_API_KEY": communication_key,
                 "COMMUNICATIONS_PROTOCOL_VERSION": "2",
                 "LITELLM_PROXY_TARGET": self.config.agent_litellm_base_url,
+                "LLM_PROXY_PORT": str(AGENT_LLM_PROXY_PORT),
             }
         )
 
