@@ -5,7 +5,9 @@ import { Archive, Maximize2, MoreHorizontal, Minimize2, Pencil, Plus } from "luc
 import { useQueryState, parseAsString } from "nuqs";
 import {
   AssistantRuntimeProvider,
+  MessagePrimitive,
   useExternalStoreRuntime,
+  useAuiState,
   type ThreadMessageLike,
 } from "@assistant-ui/react";
 
@@ -39,14 +41,52 @@ interface ChatTabProps {
   isAgentWorking: boolean;
 }
 
+const WEB_CHAT_FAILURE_PREFIX = "⚠️ I couldn't process that message.";
+const WEB_CHAT_FAILURE_FALLBACK = "The failure is recorded in this Connection's diagnostics.";
+
 function convertMessage(message: WebChatMessage): ThreadMessageLike {
+  const failureMessage = ["DEAD_LETTERED", "UNAVAILABLE"].includes(message.deliveryStatus)
+    ? message.errorMessage || WEB_CHAT_FAILURE_FALLBACK
+    : null;
   return {
     id: message.id,
     role: message.direction === "OUTBOUND" ? "assistant" : "user",
     content: [{ type: "text", text: message.content }],
     createdAt: new Date(message.occurredAt),
+    ...(failureMessage
+      ? { metadata: { custom: { webChatErrorMessage: failureMessage } } }
+      : {}),
   };
 }
+
+const WebChatUserMessage = () => {
+  const errorMessage = useAuiState((state) => {
+    const value = state.message.metadata.custom?.webChatErrorMessage;
+    return typeof value === "string" ? value : null;
+  });
+
+  return (
+    <MessagePrimitive.Root
+      data-slot="aui_user-message-root"
+      className="fade-in slide-in-from-bottom-1 animate-in grid auto-rows-auto grid-cols-[minmax(72px,1fr)_auto] content-start gap-y-2 px-2 duration-150 [contain-intrinsic-size:auto_200px] [content-visibility:auto] [&:where(>*)]:col-start-2"
+      data-role="user"
+    >
+      <div className="aui-user-message-content-wrapper relative col-start-2 min-w-0">
+        <div className="aui-user-message-content peer bg-muted text-foreground rounded-xl px-4 py-2 wrap-break-word empty:hidden">
+          <MessagePrimitive.Parts />
+          {errorMessage && (
+            <div
+              role="alert"
+              className="border-destructive/30 bg-destructive/10 text-destructive mt-2 rounded-lg border px-3 py-2 text-left text-xs leading-relaxed"
+            >
+              {WEB_CHAT_FAILURE_PREFIX} {errorMessage}
+            </div>
+          )}
+        </div>
+      </div>
+    </MessagePrimitive.Root>
+  );
+};
 
 interface ChatThreadProps {
   agentName: string;
@@ -85,7 +125,10 @@ function ChatThread({
 
   return (
     <AssistantRuntimeProvider runtime={runtime}>
-      <Thread workingMessage={`${agentName} is working`} />
+      <Thread
+        components={{ UserMessage: WebChatUserMessage }}
+        workingMessage={`${agentName} is working`}
+      />
     </AssistantRuntimeProvider>
   );
 }

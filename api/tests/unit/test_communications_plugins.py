@@ -24,6 +24,7 @@ from api.domains.communications.plugins.base import (
     InboundAdmissionContext,
     PlatformPlugin,
     ProcessingFeedbackContext,
+    failure_notice,
     provider_idempotency_key,
 )
 from api.domains.communications.plugins.discord import DiscordPlatformPlugin
@@ -727,6 +728,51 @@ def test_telegram_send_passes_a_stable_provider_idempotency_key() -> None:
     )
 
 
+def test_telegram_declares_processing_feedback() -> None:
+    assert PlatformCapability.PROCESSING_FEEDBACK in TelegramPlatformPlugin(ValidationConfig()).capabilities
+
+
+def test_telegram_terminal_failure_replies_to_the_originating_message() -> None:
+    plugin = TelegramPlatformPlugin(ValidationConfig())
+    credentials = plugin.credentials_model.model_validate({"bot_token": "bot-value"})
+    source_delivery_id = uuid4()
+    context = ProcessingFeedbackContext(
+        connection_id=uuid4(),
+        stage=ProcessingFeedbackStage.FAILED,
+        location=ConversationLocation(id="chat-1", type="CHANNEL", thread_id="7"),
+        provider_message_id="42",
+        source_delivery_id=source_delivery_id,
+        error_summary="The provider reports exhausted credits or billing; add credits to the provider account, then retry (HTTP 402)",
+    )
+
+    with patch("api.domains.communications.plugins.telegram.send_message") as send:
+        plugin.processing_feedback(plugin.settings_model.model_validate({}), credentials, context)
+
+    send.assert_called_once_with(
+        "bot-value",
+        "chat-1",
+        failure_notice(context.error_summary),
+        thread_id="7",
+        reply_to_id="42",
+        idempotency_key=provider_idempotency_key(str(source_delivery_id)),
+    )
+
+
+def test_telegram_non_terminal_processing_feedback_stays_silent() -> None:
+    plugin = TelegramPlatformPlugin(ValidationConfig())
+    credentials = plugin.credentials_model.model_validate({"bot_token": "bot-value"})
+    context = ProcessingFeedbackContext(
+        connection_id=uuid4(),
+        stage=ProcessingFeedbackStage.CLAIMED,
+        location=ConversationLocation(id="chat-1", type="DM"),
+    )
+
+    with patch("api.domains.communications.plugins.telegram.send_message") as send:
+        plugin.processing_feedback(plugin.settings_model.model_validate({}), credentials, context)
+
+    send.assert_not_called()
+
+
 # --- inbound name enrichment ------------------------------------------------
 
 
@@ -969,6 +1015,7 @@ def test_teams_descriptor_declares_webhook_ingress() -> None:
 
     assert descriptor.key == "teams"
     assert PlatformCapability.WEBHOOK_INGRESS in descriptor.capabilities
+    assert PlatformCapability.PROCESSING_FEEDBACK in descriptor.capabilities
 
 
 def test_teams_normalizes_a_personal_message_as_a_dm() -> None:
@@ -1192,6 +1239,43 @@ def test_teams_send_posts_a_complete_activity_to_the_conversation() -> None:
     assert activity["recipient"] == {"id": _TEAMS_USER_ID}
     assert activity["replyToId"] == "1485983408511"
     assert_that(send.call_args.kwargs["idempotency_key"], equal_to(provider_idempotency_key("reply-1")))
+
+
+def test_teams_terminal_failure_replies_to_the_originating_conversation() -> None:
+    plugin = _teams_plugin()
+    credentials = _teams_credentials(plugin)
+    source_delivery_id = uuid4()
+    context = ProcessingFeedbackContext(
+        connection_id=uuid4(),
+        stage=ProcessingFeedbackStage.FAILED,
+        location=ConversationLocation(id=_TEAMS_CHANNEL_ID, type="CHANNEL", thread_id="1481567603816"),
+        provider_message_id="1485983408511",
+        source_delivery_id=source_delivery_id,
+        provider_metadata={
+            "service_url": _TEAMS_SERVICE_URL,
+            "conversation_id": f"{_TEAMS_CHANNEL_ID};messageid=1481567603816",
+            "from_id": _TEAMS_USER_ID,
+            "recipient_id": _TEAMS_BOT_ID,
+        },
+        error_summary="The provider reports exhausted credits or billing; add credits to the provider account, then retry (HTTP 402)",
+    )
+
+    with (
+        patch("api.domains.communications.plugins.teams.acquire_token", return_value="tok"),
+        patch("api.domains.communications.plugins.teams.send_activity", return_value="sent-1") as send,
+    ):
+        plugin.processing_feedback(plugin.settings_model.model_validate({}), credentials, context)
+
+    service_url, conversation_id, activity, token = send.call_args.args
+    assert service_url == _TEAMS_SERVICE_URL
+    assert conversation_id == f"{_TEAMS_CHANNEL_ID};messageid=1481567603816"
+    assert token == "tok"
+    assert activity["text"] == failure_notice(context.error_summary)
+    assert activity["conversation"] == {"id": conversation_id}
+    assert activity["from"] == {"id": _TEAMS_BOT_ID}
+    assert activity["recipient"] == {"id": _TEAMS_USER_ID}
+    assert activity["replyToId"] == "1485983408511"
+    assert send.call_args.kwargs["idempotency_key"] == provider_idempotency_key(str(source_delivery_id))
 
 
 def test_teams_send_without_a_service_url_is_rejected() -> None:

@@ -14,12 +14,15 @@ from api.domains.communications.models import (
     NormalizedCommunicationEnvelope,
     OutboundCommunicationEnvelope,
     PlatformCapability,
+    ProcessingFeedbackStage,
 )
 from api.domains.communications.plugins.base import (
     InboundAdmissionResult,
     PlatformCredentials,
     PlatformPlugin,
     PlatformSettings,
+    ProcessingFeedbackContext,
+    failure_notice,
     provider_idempotency_key,
 )
 from api.infrastructure.telegram.client import get_chat_display_name, send_message, validate_bot_token
@@ -91,6 +94,7 @@ class TelegramPlatformPlugin(PlatformPlugin):
             PlatformCapability.SUPERVISED_INGRESS,
             PlatformCapability.MENTIONS,
             PlatformCapability.THREADS,
+            PlatformCapability.PROCESSING_FEEDBACK,
         }
     )
     settings_model = TelegramSettings
@@ -130,6 +134,36 @@ class TelegramPlatformPlugin(PlatformPlugin):
             thread_id=envelope.location.thread_id,
             idempotency_key=provider_idempotency_key(idempotency_key),
         )
+
+    def processing_feedback(
+        self,
+        settings: PlatformSettings,
+        credentials: PlatformCredentials,
+        context: ProcessingFeedbackContext,
+    ) -> None:
+        del settings
+        assert isinstance(credentials, TelegramCredentials)
+        if context.stage != ProcessingFeedbackStage.FAILED:
+            return
+        try:
+            send_message(
+                credentials.bot_token,
+                context.location.id,
+                failure_notice(context.error_summary),
+                thread_id=context.location.thread_id,
+                reply_to_id=context.provider_message_id,
+                idempotency_key=(
+                    provider_idempotency_key(str(context.source_delivery_id))
+                    if context.source_delivery_id is not None
+                    else None
+                ),
+            )
+        except Exception as exc:
+            logger.warning(
+                "Telegram failure notice failed for chat %s (%s)",
+                context.location.id,
+                type(exc).__name__,
+            )
 
     def normalize_inbound(
         self,

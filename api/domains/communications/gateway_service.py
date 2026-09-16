@@ -122,6 +122,7 @@ class CommunicationsGatewayService:
                     stage=ProcessingFeedbackStage.FAILED,
                     location=stale.envelope.location,
                     provider_message_id=stale.envelope.provider_message_id,
+                    provider_metadata=stale.envelope.provider_metadata,
                 )
             )
         delivery = self.delivery_repository.claim_next_inbound(agent_id=agent.id, reclaim_expired=False)
@@ -139,6 +140,7 @@ class CommunicationsGatewayService:
                     stage=ProcessingFeedbackStage.CLAIMED,
                     location=delivery.envelope.location,
                     provider_message_id=delivery.envelope.provider_message_id,
+                    provider_metadata=delivery.envelope.provider_metadata,
                 )
             )
         return delivery
@@ -274,6 +276,7 @@ class CommunicationsGatewayService:
                         location=delivery.envelope.location,
                         provider_message_id=delivery.envelope.provider_message_id,
                         source_delivery_id=delivery_id,
+                        provider_metadata=delivery.envelope.provider_metadata,
                         error_summary=error_summary,
                     )
                 )
@@ -446,6 +449,7 @@ class CommunicationsGatewayService:
                 stage=stage,
                 location=envelope.location,
                 provider_message_id=envelope.provider_message_id,
+                provider_metadata=envelope.provider_metadata,
             ),
         )
 
