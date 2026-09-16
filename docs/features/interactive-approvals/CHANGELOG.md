@@ -9,12 +9,30 @@ Related context: [`../communications/CHANGELOG.md`](../communications/CHANGELOG.
 - Delivered: Slack renders clickable command-approval buttons and ingests clicks (AF-299, PR #198). The platform-neutral pieces every approval-capable plugin shares — the `approval_id` metadata key, the synthesized `action:` message-id prefix, choice labels, and the button-value codec — live in `api/domains/communications/plugins/approvals.py`. The runtime adapter keeps its own copy of the metadata key because it runs inside the Agent pod and cannot import the API; a unit test pins the two together.
 - Delivered: Web Chat renders approval buttons — one per offered choice — and sends the choice with its `approval_id`. Buttons are hidden from users without `agent.update`, disabled while the Agent is not working, and disabled once the approval is answered in that browser session (re-enabled if the answer fails to send).
 - In transition: nothing.
-- Next: Discord — bound the approval message under the 2000-character content limit (a live defect), then buttons and clicks.
+- Delivered: Discord renders approval buttons, ingests clicks, removes the buttons once an accepted click is answered, and keeps its prompt under the 2,000-character content limit.
+- Next: Telegram — baseline `normalize_inbound` tests and explicit `allowed_updates`, then buttons and clicks.
 - Blockers: Teams implementation waits on a live-tenant spike to confirm the `Action.Execute` invoke payload in personal chat, group chat and channel before any card code is written.
 
 Every slice must hold the shared contract: one button per offered choice; the typed reply stays usable; a click arrives as an ordinary inbound message whose conversation and thread match the pending approval; the click re-passes every policy gate a typed message passes; a synthesized `action:` id is never sent to a provider as a reply reference; and ordinary sends are unchanged. None of the planned slices changes the runtime adapter, so each ships with an API deploy alone.
 
 ## Changes
+
+### 2026-09-16 — AF-325 — Discord buttons and clicks
+
+- Delivered: a Discord approval prompt carries one button per offered choice, chunked into rows of five since a row holds no more. A click arrives as an ordinary inbound answer carrying its `approval_id`, and the conversation it lands in comes from the button itself, so it always matches the run that is waiting.
+- Delivered: the ingress forwards component interactions, which it previously dropped, and acknowledges each one over HTTP before persisting it, inside Discord's three-second deadline. An accepted click's acknowledgement also removes the buttons, so the same approval cannot be answered twice; a click that policy refuses is acknowledged without touching the message, so an outsider cannot strip the buttons from the people allowed to use them.
+- Changed: a click re-passes the server, channel, user, role and direct-message gates a typed message passes — the same code, in the same order — and the @mention requirement is replaced by proof the button sits on a message this Agent posted. A reply to a click no longer quotes the click's synthesized id, which Discord would reject.
+- Changed: a button value that would exceed Discord's 100-character identifier limit sends the prompt without buttons instead of failing the send.
+- Verified: unit tests cover each gate, the button set, the row split, the identifier limit, the reply reference, and the ingress path against a real websocket server — acknowledgement before persistence, and type 6 rather than 7 for a refused click. Removing any one of those guards fails its test. The Slack and Web Chat suites are unchanged and green.
+- Follow-up: Telegram.
+
+### 2026-09-16 — AF-325 — Discord approval prompts fit the message limit
+
+- Observed: Discord caps a message at 2,000 characters and the approval prompt reaches 2,538 for the longest command the runtime sends, so that send returned 400, retried and dead-lettered — blocking the conversation. A test reproduced the 2,538-character content before the fix.
+- Delivered: Discord renders its own approval content, bounding the command the way Slack bounds its section block and reporting how many characters are hidden.
+- Changed: the fallback line names the message to answer — "Or reply to your original request with one of: …" — because a Discord conversation is keyed by the message that started it, so a new message or a reply to the prompt itself reaches a different session and cannot resolve the waiting command. Buttons, which carry the right conversation, are the real fix and land next.
+- Verified: the bounded content stays under the limit and still names every offered choice; an ordinary reply is passed through byte-for-byte.
+- Follow-up: Discord buttons and clicks.
 
 ### 2026-09-15 — AF-325 — Web Chat buttons disable once answered
 

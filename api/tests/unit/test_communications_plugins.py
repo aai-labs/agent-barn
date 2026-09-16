@@ -1,14 +1,18 @@
+import asyncio
 import io
 import json
 import zipfile
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
+from json import dumps
+from types import SimpleNamespace
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 import pytest
 from hamcrest import assert_that, empty, equal_to, has_length
+from websockets.asyncio.server import ServerConnection, serve
 
 from api.domains.communications.models import (
     ApprovalRequest,
@@ -698,6 +702,347 @@ def test_discord_send_passes_a_stable_provider_idempotency_key() -> None:
         reply_to_id=None,
         idempotency_key=provider_idempotency_key("reply-1"),
     )
+
+
+def _discord_send_call(envelope: OutboundCommunicationEnvelope):
+    plugin = DiscordPlatformPlugin(ValidationConfig())
+    credentials = plugin.credentials_model.model_validate({"bot_token": "bot-value"})
+
+    with patch("api.domains.communications.plugins.discord.DiscordClient") as client_type:
+        client_type.return_value.send_message.return_value = "sent-1"
+        plugin.send(plugin.settings_model.model_validate({}), credentials, envelope, idempotency_key="reply-1")
+
+    return client_type.return_value.send_message.call_args
+
+
+def _discord_approval_envelope(*, command: str, choices: list[str]) -> OutboundCommunicationEnvelope:
+    return OutboundCommunicationEnvelope(
+        source_delivery_id=uuid4(),
+        location=ConversationLocation(id="channel-1", type="CHANNEL", thread_id="thread-1"),
+        text=f"```\n{command}\n```\nReply with one of: {', '.join(choices)}",
+        approval=ApprovalRequest(approval_id="run-1:1.0", command=command, choices=choices),
+    )
+
+
+def test_a_discord_approval_stays_inside_the_content_limit() -> None:
+    envelope = _discord_approval_envelope(command="x" * 2_500, choices=["once", "deny"])
+
+    content = _discord_send_call(envelope).args[1]
+
+    assert len(content) <= 2_000
+    assert "more characters not shown" in content
+
+
+def test_a_discord_approval_still_names_every_offered_choice() -> None:
+    envelope = _discord_approval_envelope(command="rm -rf build", choices=["once", "session", "always", "deny"])
+
+    content = _discord_send_call(envelope).args[1]
+
+    assert "```\nrm -rf build\n```" in content
+    assert "Or reply to your original request with one of: once, session, always, deny" in content
+
+
+def test_an_ordinary_discord_reply_is_sent_exactly_as_written() -> None:
+    envelope = OutboundCommunicationEnvelope(
+        source_delivery_id=uuid4(),
+        location=ConversationLocation(id="channel-1", type="CHANNEL"),
+        text="x" * 2_500,
+    )
+
+    assert _discord_send_call(envelope).args[1] == "x" * 2_500
+
+
+def _discord_interaction(
+    *,
+    choice: str = "once",
+    approval_id: str = "run-1:1.0",
+    thread_id: str = "message-1",
+    custom_id: str | None = None,
+    channel: str = "channel-1",
+    guild: str | None = "guild-1",
+    user: str = "user-1",
+    roles: list[str] | None = None,
+    posted_by: str | None = "bot-1",
+    bot_user_id: str | None = "bot-1",
+    clicker_is_bot: bool = False,
+) -> dict[str, Any]:
+    clicker = {"id": user, "username": "Ada", "bot": clicker_is_bot}
+    event: dict[str, Any] = {
+        "id": "interaction-1",
+        "token": "interaction-token",
+        "type": 3,
+        "channel_id": channel,
+        "data": {
+            "component_type": 2,
+            "custom_id": custom_id
+            if custom_id is not None
+            else f"agentbarn_approval|{thread_id}|{approval_id}|{choice}",
+        },
+        "message": {"id": "prompt-1", "author": {"id": posted_by, "bot": True} if posted_by else {}},
+    }
+    if guild:
+        event["guild_id"] = guild
+        event["member"] = {"nick": None, "roles": roles or [], "user": clicker}
+    else:
+        event["user"] = clicker
+    payload: dict[str, Any] = {"t": "INTERACTION_CREATE", "d": event}
+    if bot_user_id is not None:
+        payload["agentbarn_bot_user_id"] = bot_user_id
+    return payload
+
+
+def _discord_plugin_and_settings(**settings: Any) -> tuple[DiscordPlatformPlugin, Any]:
+    plugin = DiscordPlatformPlugin(ValidationConfig())
+    return plugin, plugin.settings_model.model_validate({"group_policy": "open", **settings})
+
+
+def test_a_discord_click_becomes_an_ordinary_inbound_answer() -> None:
+    plugin, settings = _discord_plugin_and_settings()
+
+    admitted = plugin.normalize_inbound(settings, _discord_interaction(choice="once"))
+
+    assert len(admitted) == 1
+    envelope = admitted[0]
+    assert envelope.text == "once"
+    assert envelope.sender.id == "user-1"
+    assert envelope.sender.display_name == "Ada"
+    assert envelope.location.id == "channel-1"
+    assert envelope.location.thread_id == "message-1"
+    assert envelope.provider_metadata["approval_id"] == "run-1:1.0"
+    assert envelope.reply_to_provider_message_id is None
+
+
+def test_a_discord_click_is_never_deduped_against_the_message_it_answers() -> None:
+    plugin, settings = _discord_plugin_and_settings()
+
+    envelope = plugin.normalize_inbound(settings, _discord_interaction()).envelopes[0]
+
+    assert envelope.provider_message_id == "action:interaction-1"
+
+
+def test_a_discord_click_still_obeys_the_guild_and_channel_allowlists() -> None:
+    plugin, settings = _discord_plugin_and_settings(group_policy="allowlist", guild_ids=["guild-9"])
+    _, channel_limited = _discord_plugin_and_settings(allowed_channel_ids=["channel-9"])
+
+    assert (
+        plugin.normalize_inbound(settings, _discord_interaction()).disposition
+        == CommunicationPolicyDisposition.CHANNEL_DENIED
+    )
+    assert (
+        plugin.normalize_inbound(channel_limited, _discord_interaction()).disposition
+        == CommunicationPolicyDisposition.CHANNEL_DENIED
+    )
+
+
+def test_a_discord_click_still_obeys_the_user_and_role_allowlists() -> None:
+    plugin, settings = _discord_plugin_and_settings(allowed_user_ids=["user-9"], allowed_role_ids=["role-9"])
+
+    assert (
+        plugin.normalize_inbound(settings, _discord_interaction(user="user-1")).disposition
+        == CommunicationPolicyDisposition.USER_DENIED
+    )
+    assert len(plugin.normalize_inbound(settings, _discord_interaction(user="user-1", roles=["role-9"]))) == 1
+
+
+def test_a_discord_click_still_obeys_the_dm_policy() -> None:
+    plugin, off = _discord_plugin_and_settings(dm_policy="off")
+    _, allowlisted = _discord_plugin_and_settings(dm_policy="allowlist", allowed_user_ids=["user-9"])
+    _, open_dms = _discord_plugin_and_settings(dm_policy="open")
+
+    assert (
+        plugin.normalize_inbound(off, _discord_interaction(guild=None)).disposition
+        == CommunicationPolicyDisposition.USER_DENIED
+    )
+    assert (
+        plugin.normalize_inbound(allowlisted, _discord_interaction(guild=None)).disposition
+        == CommunicationPolicyDisposition.USER_DENIED
+    )
+    assert len(plugin.normalize_inbound(open_dms, _discord_interaction(guild=None))) == 1
+
+
+def test_a_discord_click_on_a_message_this_agent_did_not_post_is_refused() -> None:
+    plugin, settings = _discord_plugin_and_settings()
+
+    assert (
+        plugin.normalize_inbound(settings, _discord_interaction(posted_by="someone-else")).disposition
+        == CommunicationPolicyDisposition.MENTION_REQUIRED
+    )
+    assert (
+        plugin.normalize_inbound(settings, _discord_interaction(posted_by=None)).disposition
+        == CommunicationPolicyDisposition.MENTION_REQUIRED
+    )
+    assert (
+        plugin.normalize_inbound(settings, _discord_interaction(bot_user_id=None)).disposition
+        == CommunicationPolicyDisposition.MENTION_REQUIRED
+    )
+
+
+def test_a_clicking_discord_bot_cannot_answer_an_approval() -> None:
+    plugin, settings = _discord_plugin_and_settings()
+
+    assert (
+        plugin.normalize_inbound(settings, _discord_interaction(clicker_is_bot=True)).disposition
+        == CommunicationPolicyDisposition.BOT_IGNORED
+    )
+    assert (
+        plugin.normalize_inbound(settings, _discord_interaction(user="bot-1")).disposition
+        == CommunicationPolicyDisposition.BOT_IGNORED
+    )
+
+
+def test_an_unrelated_discord_interaction_is_ignored_rather_than_malformed() -> None:
+    plugin, settings = _discord_plugin_and_settings()
+
+    assert (
+        plugin.normalize_inbound(settings, _discord_interaction(custom_id="some_other_app:button")).disposition
+        == CommunicationPolicyDisposition.EVENT_IGNORED
+    )
+
+
+def test_a_damaged_discord_approval_button_is_malformed() -> None:
+    plugin, settings = _discord_plugin_and_settings()
+
+    assert (
+        plugin.normalize_inbound(settings, _discord_interaction(custom_id="agentbarn_approval|thread-1")).disposition
+        == CommunicationPolicyDisposition.MALFORMED_PAYLOAD
+    )
+
+
+def test_a_discord_approval_renders_a_button_for_every_offered_choice() -> None:
+    envelope = _discord_approval_envelope(command="rm -rf build", choices=["once", "session", "always", "deny"])
+
+    components = _discord_send_call(envelope).kwargs["components"]
+
+    buttons = [button for row in components for button in row["components"]]
+    assert [button["label"] for button in buttons] == ["Allow once", "Allow for session", "Always allow", "Deny"]
+    assert [button["custom_id"] for button in buttons] == [
+        f"agentbarn_approval|thread-1|run-1:1.0|{choice}" for choice in ("once", "session", "always", "deny")
+    ]
+    assert all(row["type"] == 1 and len(row["components"]) <= 5 for row in components)
+
+
+def test_a_discord_approval_with_more_choices_than_a_row_holds_is_split_into_rows() -> None:
+    envelope = _discord_approval_envelope(command="x", choices=[f"choice-{index}" for index in range(7)])
+
+    components = _discord_send_call(envelope).kwargs["components"]
+
+    assert [len(row["components"]) for row in components] == [5, 2]
+
+
+def test_a_discord_approval_too_long_to_encode_falls_back_to_text() -> None:
+    envelope = _discord_approval_envelope(command="x", choices=["once"])
+    envelope = envelope.model_copy(
+        update={
+            "approval": ApprovalRequest(approval_id="r" * 120, command="x", choices=["once"]),
+        }
+    )
+
+    assert "components" not in _discord_send_call(envelope).kwargs
+
+
+def test_an_ordinary_discord_reply_carries_no_components() -> None:
+    envelope = OutboundCommunicationEnvelope(
+        source_delivery_id=uuid4(),
+        location=ConversationLocation(id="channel-1", type="CHANNEL"),
+        text="reply",
+    )
+
+    assert "components" not in _discord_send_call(envelope).kwargs
+
+
+def test_a_discord_reply_to_a_click_carries_no_message_reference() -> None:
+    envelope = OutboundCommunicationEnvelope(
+        source_delivery_id=uuid4(),
+        location=ConversationLocation(id="channel-1", type="CHANNEL", thread_id="message-1"),
+        text="That approval is no longer active.",
+        reply_to_provider_message_id="action:interaction-1",
+    )
+
+    assert _discord_send_call(envelope).kwargs["reply_to_id"] is None
+
+
+def _discord_ingress_log(payload: dict[str, Any], **settings: Any) -> list[tuple[str, Any]]:
+    plugin, plugin_settings = _discord_plugin_and_settings(**settings)
+    credentials = plugin.credentials_model.model_validate({"bot_token": "bot-value"})
+    log: list[tuple[str, Any]] = []
+
+    async def emit(emitted: dict[str, Any]) -> None:
+        log.append(("emit", emitted))
+
+    async def connected() -> None:
+        return None
+
+    async def post(url: str, *, json: dict[str, Any]) -> Any:
+        del url
+        log.append(("ack", json))
+        return SimpleNamespace(raise_for_status=lambda: None, status_code=204)
+
+    async def gateway(socket: ServerConnection) -> None:
+        await socket.send(dumps({"op": 10, "d": {"heartbeat_interval": 45_000}}))
+        await socket.recv()
+        await socket.send(dumps({"t": "READY", "d": {"user": {"id": "bot-1"}}}))
+        await socket.send(dumps(payload))
+        await asyncio.sleep(1)
+
+    async def exercise() -> None:
+        async with serve(gateway, "127.0.0.1", 0) as server:
+            port = server.sockets[0].getsockname()[1]
+            client = SimpleNamespace(post=post)
+            with (
+                patch(
+                    "api.domains.communications.plugins.discord.DiscordClient.get_gateway_url",
+                    return_value=f"ws://127.0.0.1:{port}",
+                ),
+                patch("api.domains.communications.plugins.discord.httpx.AsyncClient") as client_type,
+            ):
+                client_type.return_value.__aenter__ = AsyncMock(return_value=client)
+                client_type.return_value.__aexit__ = AsyncMock(return_value=False)
+                task = asyncio.create_task(plugin.run_ingress(plugin_settings, credentials, emit, connected))
+                for _ in range(200):
+                    if any(entry[0] == "emit" for entry in log):
+                        break
+                    await asyncio.sleep(0.01)
+                task.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await task
+
+    asyncio.run(exercise())
+    return log
+
+
+def test_a_discord_click_reaches_the_gateway_acknowledged_first() -> None:
+    log = _discord_ingress_log(_discord_interaction())
+
+    assert [entry[0] for entry in log] == ["ack", "emit"]
+    assert log[0][1] == {"type": 7, "data": {"components": []}}
+    assert log[1][1]["t"] == "INTERACTION_CREATE"
+    assert log[1][1]["agentbarn_bot_user_id"] == "bot-1"
+
+
+def test_a_refused_discord_click_is_acknowledged_without_removing_the_buttons() -> None:
+    log = _discord_ingress_log(_discord_interaction(), group_policy="allowlist", guild_ids=["guild-9"])
+
+    assert [entry[0] for entry in log] == ["ack", "emit"]
+    assert log[0][1] == {"type": 6}
+
+
+def test_a_discord_message_still_reaches_the_gateway_without_an_acknowledgement() -> None:
+    message = {
+        "t": "MESSAGE_CREATE",
+        "d": {
+            "id": "message-1",
+            "guild_id": "guild-1",
+            "channel_id": "channel-1",
+            "timestamp": "2026-08-22T10:00:00+00:00",
+            "content": "hello",
+            "author": {"id": "user-1", "username": "Ada", "bot": False},
+            "mentions": [{"id": "bot-1"}],
+        },
+    }
+
+    log = _discord_ingress_log(message)
+
+    assert [entry[0] for entry in log] == ["emit"]
 
 
 def test_telegram_send_passes_a_stable_provider_idempotency_key() -> None:
