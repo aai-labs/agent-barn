@@ -20,7 +20,6 @@ from api.domains.communications.models import (
     PlatformCapability,
 )
 from api.domains.communications.plugins.approvals import (
-    APPROVAL_CHOICE_LABELS,
     APPROVAL_COMPONENT_MAX_CHARS,
     APPROVAL_METADATA_KEY,
     SYNTHESIZED_MESSAGE_PREFIX,
@@ -76,7 +75,7 @@ def _approval_buttons(approval: ApprovalRequest, thread_id: str) -> list[dict[st
             {
                 "type": _BUTTON_TYPE,
                 "style": _DANGER_BUTTON_STYLE if choice == "deny" else _SECONDARY_BUTTON_STYLE,
-                "label": APPROVAL_CHOICE_LABELS.get(choice, choice)[:_BUTTON_LABEL_LIMIT],
+                "label": approval.choice_labels.get(choice, choice)[:_BUTTON_LABEL_LIMIT],
                 "custom_id": custom_id,
             }
         )
@@ -363,9 +362,9 @@ class DiscordPlatformPlugin(PlatformPlugin):
 
         if not thread_id:
             reference = clicked.get("message_reference")
-            thread_id = str(
-                (reference.get("message_id") if isinstance(reference, dict) else "") or clicked.get("id") or ""
-            )
+            thread_id = str(reference.get("message_id") or "") if isinstance(reference, dict) else ""
+            if not thread_id:
+                return InboundAdmissionResult(CommunicationPolicyDisposition.MALFORMED_PAYLOAD)
 
         return InboundAdmissionResult(
             CommunicationPolicyDisposition.ACCEPTED,

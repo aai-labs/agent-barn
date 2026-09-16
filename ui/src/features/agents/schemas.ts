@@ -211,6 +211,7 @@ export const WebChatApprovalSchema = z.object({
   approvalId: z.string(),
   command: z.string(),
   choices: z.array(z.string()),
+  choiceLabels: z.record(z.string(), z.string()).default({}),
 });
 
 export const WebChatMessageSchema = z.object({

@@ -6,7 +6,7 @@ Related context: [`../communications/CHANGELOG.md`](../communications/CHANGELOG.
 
 ## Current state
 
-- Delivered: Slack renders clickable command-approval buttons and ingests clicks (AF-299, PR #198). The platform-neutral pieces every approval-capable plugin shares — the `approval_id` metadata key, the synthesized `action:` message-id prefix, choice labels, and the button-value codec — live in `api/domains/communications/plugins/approvals.py`. The runtime adapter keeps its own copy of the metadata key because it runs inside the Agent pod and cannot import the API; a unit test pins the two together.
+- Delivered: Slack renders clickable command-approval buttons and ingests clicks (AF-299, PR #198). The platform-neutral pieces every approval-capable plugin shares — the `approval_id` metadata key, the synthesized `action:` message-id prefix, and the button-value codec — live in `api/domains/communications/plugins/approvals.py`; offered choice labels travel in the `ApprovalRequest` contract. The runtime adapter keeps its own copy of the metadata key because it runs inside the Agent pod and cannot import the API; a unit test pins the two together.
 - Delivered: Web Chat renders approval buttons — one per offered choice — and sends the choice with its `approval_id`. Buttons are hidden from users without `agent.update`, disabled while the Agent is not working, and disabled once the approval is answered in that browser session (re-enabled if the answer fails to send).
 - In transition: nothing.
 - Delivered: Discord renders approval buttons, ingests clicks, removes the buttons once an accepted click is answered, and keeps its prompt under the 2,000-character content limit.
@@ -64,6 +64,6 @@ Every slice must hold the shared contract: one button per offered choice; the ty
 
 ### 2026-09-15 — AF-325 — Shared approval module
 
-- Delivered: `plugins/approvals.py` with `APPROVAL_METADATA_KEY`, `SYNTHESIZED_MESSAGE_PREFIX`, `is_synthesized_message_id`, `APPROVAL_CHOICE_LABELS`, `encode_approval_value` and `decode_approval_value`.
+- Delivered: `plugins/approvals.py` with `APPROVAL_METADATA_KEY`, `SYNTHESIZED_MESSAGE_PREFIX`, `is_synthesized_message_id`, `encode_approval_value` and `decode_approval_value`; `ApprovalRequest.choice_labels` supplies display labels to each platform.
 - Changed: the Slack plugin imports these instead of defining them. No behaviour changed; the Slack plugin tests pass unmodified.
 - Follow-up: Web Chat API slice.

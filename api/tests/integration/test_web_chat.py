@@ -218,7 +218,7 @@ def _switch_to_viewer():
 def _agent_replies(context, text: str, approval: ApprovalRequest | None = None) -> None:
     deliveries = context.injector.get(CommunicationDeliveryRepository)
     claimed = deliveries.claim_next_inbound(agent_id=context.agent.id)
-    assert claimed is not None
+    assert_that(claimed, is_(not_(none())))
     deliveries.enqueue_runtime_reply(
         agent_id=context.agent.id,
         source_delivery_id=claimed.delivery_id,
@@ -247,7 +247,19 @@ def test_an_approval_prompt_carries_its_approval_to_the_browser():
             assert_that(messages[0]["approval"], none())
             assert_that(
                 messages[1]["approval"],
-                equal_to({"approval_id": "run_1:1726051234.5", "command": "rm -rf build", "choices": ["once", "deny"]}),
+                equal_to(
+                    {
+                        "approval_id": "run_1:1726051234.5",
+                        "command": "rm -rf build",
+                        "choices": ["once", "deny"],
+                        "choice_labels": {
+                            "once": "Allow once",
+                            "session": "Allow for session",
+                            "always": "Always allow",
+                            "deny": "Deny",
+                        },
+                    }
+                ),
             )
 
 
@@ -270,7 +282,7 @@ def test_a_live_stream_refresh_keeps_the_approval():
             )
 
         with then("the approval survives the refresh"):
-            assert refreshed is not None
+            assert_that(refreshed, is_(not_(none())))
             assert_that(refreshed[1].approval, equal_to(_APPROVAL))
 
 
