@@ -76,6 +76,17 @@ class Config(BaseSettings):
     # Content-free Communication journal history is pruned by the gateway
     # supervisor after this many days.
     communication_journal_retention_days: int = Field(default=31, ge=1, le=3650)
+    # Native gateway spike (ADR 2026-09-16): comma-separated Platform keys whose
+    # Connections run inside the Agent runtime's own gateway instead of the
+    # Communications supervisor. Hermes only; replaced by a per-Connection
+    # transport once the spike is accepted.
+    communications_native_platforms: str = ""
+
+    @property
+    def native_platform_keys(self) -> frozenset[str]:
+        """Platforms whose Hermes Agent Connections run in the runtime's native gateway."""
+        return frozenset(key.strip() for key in self.communications_native_platforms.split(",") if key.strip())
+
     # Socket timeout for Slack Web API calls. Large sweeps (e.g. users.list can be
     # ~320KB) are slow over a poor link; too tight a timeout cuts the body off
     # mid-stream (IncompleteRead). Generous default; in-cluster latency is low.

@@ -27,6 +27,10 @@ rm -f /opt/data/.env
 
 cp /app/config/telemetry-push-plugin.yaml /opt/data/plugins/telemetry-push/plugin.yaml
 cp /app/config/telemetry-push-init.py /opt/data/plugins/telemetry-push/__init__.py
+# Enabled only for native gateway Connections via plugins.enabled.
+mkdir -p /opt/data/plugins/agentbarn-observer
+cp /app/config/agentbarn-observer-plugin.yaml /opt/data/plugins/agentbarn-observer/plugin.yaml
+cp /app/config/agentbarn-observer-init.py /opt/data/plugins/agentbarn-observer/__init__.py
 
 for f in IDENTITY.md AGENTS.md TOOLS.md BOOT.md HEARTBEAT.md; do
     cp /app/config/$f /workspace/$f
@@ -65,10 +69,13 @@ fi
 mkdir -p /opt/data/plugins/agentbarn-messaging
 cp /app/config/hermes-messaging.py /opt/data/plugins/agentbarn-messaging/__init__.py
 printf 'name: agentbarn-messaging\nversion: "1.0"\ndescription: Bind explicit message requests to inbound executions\n' > /opt/data/plugins/agentbarn-messaging/plugin.yaml
-export AGENTBARN_SCHEDULED_DELIVERY=1
-# The scheduler (inside the gateway) and the drain loop must name the same file.
-export AGENTBARN_MESSAGE_SPOOL=/opt/data/agentbarn-messages.sqlite3
-python3 /app/config/agentbarn_message.py drain &
+# Native gateway agents set 0 in their Secret so Hermes delivers cron results itself.
+export AGENTBARN_SCHEDULED_DELIVERY="${AGENTBARN_SCHEDULED_DELIVERY:-1}"
+if [ "${AGENTBARN_SCHEDULED_DELIVERY}" = "1" ]; then
+  # The scheduler (inside the gateway) and the drain loop must name the same file.
+  export AGENTBARN_MESSAGE_SPOOL=/opt/data/agentbarn-messages.sqlite3
+  python3 /app/config/agentbarn_message.py drain &
+fi
 # Pinned Hermes never runs BOOT.md; OpenClaw bundles a gateway:startup hook for it.
 python3 /app/config/boot-run.py &
 exec hermes gateway run

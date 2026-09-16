@@ -9,7 +9,7 @@ import pytest
 from hamcrest import assert_that, empty, equal_to, is_
 
 from api.core.config import Config
-from api.domains.agents.models import Agent, AgentStatus
+from api.domains.agents.models import Agent, AgentStatus, AgentType
 from api.domains.communications.gateway_service import CommunicationsGatewayService
 from api.domains.communications.models import (
     AcceptedCommunicationRead,
@@ -276,6 +276,34 @@ def test_gateway_marks_claim_and_terminal_runtime_failure_at_lifecycle_seam() ->
     assert published_agent_id == agent.id
     assert published_signal.type == CommunicationSignalType.MESSAGE_CHANGED
     assert published_signal.delivery_id == delivery.delivery_id
+
+
+def test_native_platform_deliveries_are_not_reclaimed_or_claimed_by_the_gateway() -> None:
+    connection = cast(CommunicationConnection, _connection())
+    service, deliveries = _service(connection, _feedback_plugin())
+    service.config = Config(
+        agent_token_encryption_key="key",
+        communications_native_platforms="slack",
+    )
+    deliveries.reclaim_expired_inbound.return_value = []
+    deliveries.claim_next_inbound.return_value = None
+    agent = cast(
+        Agent,
+        SimpleNamespace(id=uuid4(), status=AgentStatus.RUNNING, agent_type=AgentType.HERMES),
+    )
+
+    assert service.claim_runtime_delivery(agent) is None
+
+    excluded = frozenset({"slack"})
+    deliveries.reclaim_expired_inbound.assert_called_once_with(
+        agent_id=agent.id,
+        excluded_platform_keys=excluded,
+    )
+    deliveries.claim_next_inbound.assert_called_once_with(
+        agent_id=agent.id,
+        reclaim_expired=False,
+        excluded_platform_keys=excluded,
+    )
 
 
 def test_cancel_persists_before_publishing_to_the_runtime_control_stream() -> None:

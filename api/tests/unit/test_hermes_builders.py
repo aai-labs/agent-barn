@@ -5,7 +5,10 @@ from api.domains.agents.builders import (
     build_hermes_deployment,
     build_hermes_gateway_config,
     build_secret_hermes_runtime,
+    native_slack_env,
 )
+from api.domains.agents.builders.hermes import HERMES_START_SH
+from api.domains.communications.models import ConversationLocation
 
 _AGENT_ID = UUID("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
 _ORG_ID = UUID("11111111-2222-3333-4444-555555555555")
@@ -20,6 +23,70 @@ def test_gateway_config_is_headless_and_keeps_telemetry() -> None:
     assert "slack" not in config
     assert "telegram" not in config
     assert "discord" not in config
+
+
+def test_native_slack_config_enables_the_observer_and_ignores_unknown_dms() -> None:
+    config = build_hermes_gateway_config("litellm/gpt-5", "http://litellm:4000", native_slack=True)
+
+    assert config["plugins"]["enabled"] == ["telemetry-push", "agentbarn-messaging", "agentbarn-observer"]
+    assert config["slack"]["unauthorized_dm_behavior"] == "ignore"
+    assert config["display"]["platforms"]["slack"]["tool_progress"] == "off"
+    assert config["display"]["platforms"]["slack"]["interim_assistant_messages"] is False
+
+    verbose = build_hermes_gateway_config("litellm/gpt-5", "http://litellm:4000", native_slack=True, verbose_mode=True)
+    assert verbose["display"]["platforms"]["slack"]["tool_progress"] == "all"
+    assert verbose["display"]["platforms"]["slack"]["tool_progress_grouping"] == "accumulate"
+    assert verbose["display"]["platforms"]["slack"]["interim_assistant_messages"] is True
+
+
+def test_native_slack_env_maps_connection_policy() -> None:
+    credentials = {"bot_token": "xoxb-1", "app_token": "xapp-1"}
+
+    locked = native_slack_env(
+        {"group_policy": "allowlist", "channel_ids": ["C1", "C2"], "dm_policy": "off"},
+        credentials,
+    )
+    assert locked["SLACK_BOT_TOKEN"] == "xoxb-1"
+    assert locked["SLACK_APP_TOKEN"] == "xapp-1"
+    assert locked["SLACK_ALLOWED_CHANNELS"] == "C1,C2"
+    assert locked["SLACK_DISABLE_DMS"] == "true"
+    assert locked["SLACK_ALLOW_ALL_USERS"] == "true"
+    assert locked["SLACK_THREAD_REQUIRE_MENTION"] == "true"
+
+    open_env = native_slack_env(
+        {
+            "group_policy": "open",
+            "dm_policy": "allowlist",
+            "dm_user_ids": ["U1"],
+            "thread_mention_policy": "start_only",
+        },
+        credentials,
+    )
+    assert "SLACK_ALLOWED_CHANNELS" not in open_env
+    assert open_env["SLACK_DISABLE_DMS"] == "false"
+    assert open_env["SLACK_ALLOWED_USERS"] == "U1"
+    assert "SLACK_ALLOW_ALL_USERS" not in open_env
+    assert open_env["SLACK_THREAD_REQUIRE_MENTION"] == "false"
+    assert open_env["AGENTBARN_SCHEDULED_DELIVERY"] == "0"
+    assert "SLACK_HOME_CHANNEL" not in open_env
+
+    home = native_slack_env(
+        {},
+        credentials,
+        ConversationLocation(id="C9", type="CHANNEL", display_name="alerts", thread_id="1700000000.000100"),
+    )
+    assert home["SLACK_HOME_CHANNEL"] == "C9"
+    assert home["SLACK_HOME_CHANNEL_NAME"] == "alerts"
+    assert home["SLACK_HOME_CHANNEL_THREAD_ID"] == "1700000000.000100"
+
+
+def test_native_gateway_does_not_drain_agent_barn_scheduled_completions() -> None:
+    guarded = HERMES_START_SH.split(
+        'if [ "${AGENTBARN_SCHEDULED_DELIVERY}" = "1" ]; then',
+        1,
+    )[1].split("\nfi", 1)[0]
+
+    assert "python3 /app/config/agentbarn_message.py drain &" in guarded
 
 
 def test_gateway_config_enables_persistent_memory_for_scheduled_runs() -> None:

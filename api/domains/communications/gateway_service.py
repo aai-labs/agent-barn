@@ -10,7 +10,7 @@ from injector import inject, singleton
 from redis.exceptions import RedisError
 
 from api.core.config import Config
-from api.domains.agents.models import Agent, AgentStatus
+from api.domains.agents.models import Agent, AgentStatus, AgentType
 from api.domains.agents.repository import AgentRepository
 from api.domains.communications.addressing import extract_local_part
 from api.domains.communications.delivery_repository import CommunicationDeliveryRepository
@@ -114,7 +114,13 @@ class CommunicationsGatewayService:
     def claim_runtime_delivery(self, agent: Agent) -> RuntimeDeliveryRead | None:
         if agent.status != AgentStatus.RUNNING:
             raise RuntimeError("Agent is not running")
-        expired = self.delivery_repository.reclaim_expired_inbound(agent_id=agent.id)
+        native_platform_keys = (
+            self.config.native_platform_keys if getattr(agent, "agent_type", None) == AgentType.HERMES else frozenset()
+        )
+        expired = self.delivery_repository.reclaim_expired_inbound(
+            agent_id=agent.id,
+            excluded_platform_keys=native_platform_keys,
+        )
         for stale in expired:
             self.notify_processing_feedback(
                 ProcessingFeedbackContext(
@@ -125,7 +131,11 @@ class CommunicationsGatewayService:
                     provider_metadata=stale.envelope.provider_metadata,
                 )
             )
-        delivery = self.delivery_repository.claim_next_inbound(agent_id=agent.id, reclaim_expired=False)
+        delivery = self.delivery_repository.claim_next_inbound(
+            agent_id=agent.id,
+            reclaim_expired=False,
+            excluded_platform_keys=native_platform_keys,
+        )
         if delivery is not None:
             delivery = self._for_runtime(delivery)
             delivery.execution_token = issue_execution_token(

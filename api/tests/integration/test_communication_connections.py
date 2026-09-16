@@ -456,13 +456,17 @@ def test_a_platform_without_a_managed_address_reports_none() -> None:
             assert_that(response.json()["managed_address"], equal_to(None))
 
 
-def test_two_email_connections_on_one_agent_get_different_addresses() -> None:
+def test_a_replacement_email_connection_gets_a_different_address() -> None:
     with given(_GIVEN_WITH_AGENT_EMAIL) as context:
-        with when("I add two Email connections"):
+        with when("I replace the Agent's Email connection"):
             first = context.client.post(_base(context), json=_email_payload("Support"), headers=_auth(context))
+            context.client.delete(
+                f"{_base(context)}/{first.json()['id']}?revision={first.json()['revision']}",
+                headers=_auth(context),
+            )
             second = context.client.post(_base(context), json=_email_payload("Sales"), headers=_auth(context))
 
-        with then("each is separately addressable"):
+        with then("the replacement is separately addressable"):
             assert_that(first.status_code, equal_to(status.HTTP_201_CREATED))
             assert_that(second.status_code, equal_to(status.HTTP_201_CREATED))
             assert_that(
@@ -545,26 +549,41 @@ def test_other_organization_agent_is_hidden() -> None:
             assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
 
 
-def test_agent_can_have_multiple_connections_for_the_same_platform() -> None:
+def test_agent_has_at_most_one_active_connection_per_platform() -> None:
     with given(_GIVEN) as context:
         client: TestClient = context.client
 
-        with when("I create two Discord connections"):
+        with when("I add a second Discord connection, a Slack one, and then replace the Discord one"):
             first = client.post(_base(context), json=_discord_payload(), headers=_auth(context))
             second = client.post(
                 _base(context),
                 json=_discord_payload("Partner Discord", "token-two"),
                 headers=_auth(context),
             )
+            other_platform = client.post(_base(context), json=_slack_payload(), headers=_auth(context))
+            client.delete(
+                f"{_base(context)}/{first.json()['id']}?revision={first.json()['revision']}",
+                headers=_auth(context),
+            )
+            replacement = client.post(
+                _base(context),
+                json=_discord_payload("Partner Discord", "token-two"),
+                headers=_auth(context),
+            )
             listed = client.get(_base(context), headers=_auth(context))
 
-        with then("both connections belong to the Agent without exposing credentials"):
+        with then("only one Connection per platform is active, without exposing credentials"):
             assert_that(first.status_code, equal_to(status.HTTP_201_CREATED))
-            assert_that(second.status_code, equal_to(status.HTTP_201_CREATED))
-            assert_that(listed.status_code, equal_to(status.HTTP_200_OK))
-            assert_that(len(listed.json()), equal_to(2))
             assert_that(first.json(), has_entries(platform_key="discord", display_name="Community Discord", revision=1))
             assert_that(first.json(), not_(has_key("credentials")))
+            assert_that(second.status_code, equal_to(status.HTTP_409_CONFLICT))
+            assert_that(second.json()["detail"], contains_string("already has a Connection on this platform"))
+            assert_that(other_platform.status_code, equal_to(status.HTTP_201_CREATED))
+            assert_that(replacement.status_code, equal_to(status.HTTP_201_CREATED))
+            assert_that(
+                sorted(item["platform_key"] for item in listed.json()),
+                equal_to(["discord", "slack"]),
+            )
 
 
 def test_retiring_agent_releases_all_platform_credentials() -> None:
@@ -1367,3 +1386,42 @@ def test_app_package_is_named_after_the_agent_not_the_connection() -> None:
             assert_that(manifest["name"]["short"], not_(equal_to("Microsoft Teams")))
             slug = context.agent.name.lower().replace(" ", "-")
             assert_that(response.headers["content-disposition"], contains_string(f"{slug}-teams-app.zip"))
+
+
+def _slack_connection_for_current_agent(key: str):
+    def step(context):
+        delegate: PostgresRepositoryDelegate = context.injector.get(PostgresRepositoryDelegate)
+        connection = CommunicationConnection(
+            organization_id=context.agent.organization_id,
+            agent_id=context.agent.id,
+            platform_key="slack",
+            display_name=key,
+            credentials_encrypted="unused",
+            driver_key_encrypted="unused",
+        )
+        delegate.save(connection)
+        setattr(context, key, connection)
+
+    return step
+
+
+def test_supervised_connections_exclude_native_platforms_only_on_hermes_agents():
+    with given(
+        [
+            *_GIVEN,
+            there_is_an_agent(name="OpenClaw Agent"),
+            _slack_connection_for_current_agent("openclaw_slack"),
+            there_is_an_agent(name="Hermes Agent", agent_type=AgentType.HERMES),
+            _slack_connection_for_current_agent("hermes_slack"),
+        ]
+    ) as context:
+        repository: CommunicationConnectionRepository = context.injector.get(CommunicationConnectionRepository)
+
+        with when("the supervisor lists Connections with Slack running natively"):
+            native = {connection.id for connection in repository.list_enabled(frozenset({"slack"}))}
+            gateway = {connection.id for connection in repository.list_enabled()}
+
+        with then("only the Hermes Agent's Slack Connection is left to its runtime"):
+            assert_that(context.openclaw_slack.id in native, equal_to(True))
+            assert_that(context.hermes_slack.id in native, equal_to(False))
+            assert_that({context.openclaw_slack.id, context.hermes_slack.id} <= gateway, equal_to(True))

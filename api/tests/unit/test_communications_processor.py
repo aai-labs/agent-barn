@@ -106,6 +106,26 @@ def test_outbound_success_feedback_runs_after_durable_provider_success() -> None
     assert_that(context.provider_metadata, equal_to(outbound.provider_metadata))
 
 
+def test_outbound_processor_does_not_claim_native_platform_deliveries() -> None:
+    delivery, _ = _delivery()
+    processor, _, deliveries = _processor(
+        delivery,
+        _plugin(),
+        status=CommunicationDeliveryStatus.SUCCEEDED,
+    )
+    processor.config = Config(
+        agent_token_encryption_key="key",
+        communications_native_platforms="slack",
+    )
+    deliveries.claim_next_outbound.return_value = None
+
+    assert processor.process_one() is False
+
+    deliveries.claim_next_outbound.assert_called_once_with(
+        native_platform_keys=frozenset({"slack"}),
+    )
+
+
 def test_outbound_terminal_failure_feedback_marks_failed_after_dead_letter() -> None:
     delivery, _ = _delivery()
     processor, gateway, _ = _processor(

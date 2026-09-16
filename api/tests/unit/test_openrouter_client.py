@@ -142,6 +142,8 @@ def _service(openrouter, allowlist=None, default_model=""):
 
     return AgentService(
         repository=MagicMock(),
+        connection_repository=MagicMock(),
+        plugins=MagicMock(),
         override_repository=MagicMock(),
         authorization=MagicMock(),
         template_repository=MagicMock(),

@@ -1,5 +1,6 @@
 import datetime as dt
 import fnmatch
+import json
 import logging
 import secrets
 from collections.abc import Iterator, Mapping
@@ -35,6 +36,7 @@ from api.domains.agents.builders import (
     build_secret_hermes_runtime,
     build_secret_runtime,
     build_service,
+    native_slack_env,
 )
 from api.domains.agents.error_messages import friendly_k8s_error, friendly_pod_reason
 from api.domains.agents.gog_artifacts import build_gog_env, build_gog_policy_md, build_gog_setup_sh
@@ -95,6 +97,9 @@ from api.domains.agents.runtime_policy import (
     build_role_scope_policy_md,
 )
 from api.domains.auth.models import CurrentUserContext
+from api.domains.communications.models import ConversationLocation, OutboundTargetRequest
+from api.domains.communications.plugins.registry import PlatformPluginRegistry
+from api.domains.communications.repository import CommunicationConnectionRepository
 from api.domains.events import ActorIdentity, ActorIdentityType, EventDeliveryDispatcher, resolve_actor_identity
 from api.domains.events.catalog import (
     AGENT_SECRET_ADDED,
@@ -212,6 +217,8 @@ class AgentService:
     organization_lookup: OrganizationLookupService
     restore_points: RestorePointService
     agent_settings_lookup: AgentSettingsLookupService
+    connection_repository: CommunicationConnectionRepository
+    plugins: PlatformPluginRegistry
 
     def _org_id(self, context: CurrentUserContext) -> UUID:
         return context.require_current_user_organization().organization_id
@@ -601,6 +608,9 @@ class AgentService:
             secrets=secrets_read,
             skills=skills_read,
             configured_platform_keys=configured_platform_keys or [],
+            native_platform_keys=sorted(self.config.native_platform_keys)
+            if agent.agent_type == AgentType.HERMES
+            else [],
             allowed_actions=allowed_actions or [],
             created_at=agent.created_at,
             updated_at=agent.updated_at,
@@ -1880,6 +1890,32 @@ class AgentService:
             started = self._start_agent_unchecked(current, actor)
         return self._get_agent_read(started, context)
 
+    def _native_slack_connection(self, agent_id: UUID) -> tuple[dict, dict, ConversationLocation | None] | None:
+        """The settings, credentials, and resolved home channel of a native Slack Connection."""
+        if "slack" not in self.config.native_platform_keys:
+            return None
+        connection = self.connection_repository.get_active_by_platform_key(agent_id, "slack")
+        if connection is None or not connection.enabled:
+            return None
+        credentials = json.loads(
+            decrypt_token(connection.credentials_encrypted, self.config.agent_token_encryption_key)
+        )
+        home_channel = None
+        target = connection.settings.get("default_delivery_target")
+        if target:
+            plugin = self.plugins.require("slack")
+            try:
+                # Same resolution and allowlist policy as gateway-delivered sends.
+                home_channel = plugin.resolve_outbound_target(
+                    plugin.settings_model.model_validate(connection.settings),
+                    plugin.credentials_model.model_validate(credentials),
+                    OutboundTargetRequest.model_validate(target),
+                ).location
+            except Exception as exc:
+                # A stale target must not block the Agent from starting.
+                logger.warning("Slack default delivery target for agent %s not resolved (%s)", agent_id, exc)
+        return connection.settings, credentials, home_channel
+
     def _start_agent_unchecked(self, agent: Agent, actor: ActorIdentity) -> Agent:
         """Start a known Agent after its caller has established authority."""
         agent_id = agent.id
@@ -1935,10 +1971,13 @@ class AgentService:
         service = build_service(agent.id, org_id, ns, org_name=org_name, agent_name=agent.name)
         if agent.agent_type == AgentType.HERMES:
             overlay = None
+            native_slack = self._native_slack_connection(agent.id)
             hermes_cfg = build_hermes_gateway_config(
                 effective_model,
                 llm_proxy_url,
                 approval_mode=CommandApprovalMode(agent.approval_mode).value,
+                native_slack=native_slack is not None,
+                verbose_mode=agent.verbose_mode,
             )
             secret = build_secret_hermes_runtime(
                 agent.id,
@@ -1951,6 +1990,8 @@ class AgentService:
                 verbose_mode=agent.verbose_mode,
                 approval_mode=CommandApprovalMode(agent.approval_mode).value,
             )
+            if native_slack is not None:
+                secret.string_data.update(native_slack_env(*native_slack))
             deployment = build_hermes_deployment(
                 agent.id,
                 org_id,

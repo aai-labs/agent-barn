@@ -172,6 +172,13 @@ class CommunicationConnection(BaseModel, table=True):
             postgresql_where=sa.text("retired_at IS NULL AND settings->>'default_delivery_target' IS NOT NULL"),
         ),
         sa.Index(
+            "uq_communication_connection_active_platform",
+            "agent_id",
+            "platform_key",
+            unique=True,
+            postgresql_where=sa.text("retired_at IS NULL"),
+        ),
+        sa.Index(
             "uq_communication_connection_active_name",
             "agent_id",
             sa.func.lower(sa.column("display_name")),
