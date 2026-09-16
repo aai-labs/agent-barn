@@ -17,6 +17,14 @@ Every slice must hold the shared contract: one button per offered choice; the ty
 
 ## Changes
 
+### 2026-09-16 — AF-325 — Discord buttons fit inside the identifier limit
+
+- Observed: the first live test in auto mode showed the prompt with no buttons. A button identifier carries the conversation, the approval identity and the choice, and Discord caps it at 100 characters; with real identifiers the `session` button reached 101, so the encoder's own guard dropped every button and the message went out as text. `once` and `deny` fit at 98, so manual mode would have looked correct — and the unit tests used short fixtures, so they stayed green.
+- Changed: the identifier is now compact — a two-character prefix and one-letter choice codes expanded back on the way in — which brings the worst case to 79. Choices the runtime invents are still carried whole.
+- Changed: three layers now stand between a longer identifier and a prompt without buttons. If the value would not fit, the conversation is dropped from it and taken from the message the button sits on instead, which is the message that started the run. Only if that still does not fit are the buttons omitted, and that now logs a warning instead of failing silently. A conversation that cannot be recovered ends in a refusal, never a wrong approval.
+- Verified: a test builds a prompt from real-shaped identifiers and asserts buttons are rendered; a budget test derives the longest identifier the constants can produce and fails if anyone lengthens them. Both fail against the code that shipped the defect. Round-trip tests cover every choice, an invented one, and another app's value.
+- Follow-up: Telegram, whose limit is 64 bytes and which reuses this encoding.
+
 ### 2026-09-16 — AF-325 — Discord buttons and clicks
 
 - Delivered: a Discord approval prompt carries one button per offered choice, chunked into rows of five since a row holds no more. A click arrives as an ordinary inbound answer carrying its `approval_id`, and the conversation it lands in comes from the button itself, so it always matches the run that is waiting.

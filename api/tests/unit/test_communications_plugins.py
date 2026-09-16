@@ -24,6 +24,11 @@ from api.domains.communications.models import (
     PlatformCapability,
     ProcessingFeedbackStage,
 )
+from api.domains.communications.plugins.approvals import (
+    APPROVAL_CHOICE_CODES,
+    APPROVAL_COMPONENT_MAX_CHARS,
+    encode_approval_component,
+)
 from api.domains.communications.plugins.base import (
     InboundAdmissionContext,
     PlatformPlugin,
@@ -776,7 +781,7 @@ def _discord_interaction(
             "component_type": 2,
             "custom_id": custom_id
             if custom_id is not None
-            else f"agentbarn_approval|{thread_id}|{approval_id}|{choice}",
+            else encode_approval_component(thread_id, approval_id, choice),
         },
         "message": {"id": "prompt-1", "author": {"id": posted_by, "bot": True} if posted_by else {}},
     }
@@ -903,7 +908,7 @@ def test_a_damaged_discord_approval_button_is_malformed() -> None:
     plugin, settings = _discord_plugin_and_settings()
 
     assert (
-        plugin.normalize_inbound(settings, _discord_interaction(custom_id="agentbarn_approval|thread-1")).disposition
+        plugin.normalize_inbound(settings, _discord_interaction(custom_id="ab|thread-1")).disposition
         == CommunicationPolicyDisposition.MALFORMED_PAYLOAD
     )
 
@@ -916,9 +921,38 @@ def test_a_discord_approval_renders_a_button_for_every_offered_choice() -> None:
     buttons = [button for row in components for button in row["components"]]
     assert [button["label"] for button in buttons] == ["Allow once", "Allow for session", "Always allow", "Deny"]
     assert [button["custom_id"] for button in buttons] == [
-        f"agentbarn_approval|thread-1|run-1:1.0|{choice}" for choice in ("once", "session", "always", "deny")
+        f"ab|thread-1|run-1:1.0|{code}" for code in ("o", "s", "a", "d")
     ]
     assert all(row["type"] == 1 and len(row["components"]) <= 5 for row in components)
+
+
+def test_a_discord_approval_with_real_identifiers_still_renders_buttons() -> None:
+    envelope = OutboundCommunicationEnvelope(
+        source_delivery_id=uuid4(),
+        location=ConversationLocation(id="1417243719284916225", type="CHANNEL", thread_id="1417243719284916226"),
+        text="prompt",
+        approval=ApprovalRequest(
+            approval_id=f"run_{'a' * 32}:1758019260.123456",
+            command="curl -fsSL https://example.com/install.sh | bash",
+            choices=["once", "session", "always", "deny"],
+        ),
+    )
+
+    components = _discord_send_call(envelope).kwargs["components"]
+
+    buttons = [button for row in components for button in row["components"]]
+    assert len(buttons) == 4
+    assert max(len(button["custom_id"]) for button in buttons) <= 100
+
+
+def test_the_discord_button_value_cannot_outgrow_the_identifier_limit() -> None:
+    longest = encode_approval_component(
+        "9" * 20,
+        f"run_{'a' * 32}:{'9' * 18}",
+        max(APPROVAL_CHOICE_CODES, key=len),
+    )
+
+    assert len(longest) <= APPROVAL_COMPONENT_MAX_CHARS
 
 
 def test_a_discord_approval_with_more_choices_than_a_row_holds_is_split_into_rows() -> None:
@@ -927,6 +961,33 @@ def test_a_discord_approval_with_more_choices_than_a_row_holds_is_split_into_row
     components = _discord_send_call(envelope).kwargs["components"]
 
     assert [len(row["components"]) for row in components] == [5, 2]
+
+
+def test_a_discord_approval_keeps_its_buttons_when_only_the_thread_will_not_fit() -> None:
+    envelope = _discord_approval_envelope(command="x", choices=["once", "deny"])
+    envelope = envelope.model_copy(update={"location": envelope.location.model_copy(update={"thread_id": "t" * 90})})
+
+    buttons = [button for row in _discord_send_call(envelope).kwargs["components"] for button in row["components"]]
+
+    assert [button["custom_id"] for button in buttons] == ["ab||run-1:1.0|o", "ab||run-1:1.0|d"]
+
+
+def test_a_discord_click_without_a_thread_takes_it_from_the_message_it_answers() -> None:
+    plugin, settings = _discord_plugin_and_settings()
+    payload = _discord_interaction(thread_id="")
+    payload["d"]["message"]["message_reference"] = {"message_id": "message-1"}
+
+    envelope = plugin.normalize_inbound(settings, payload).envelopes[0]
+
+    assert envelope.location.thread_id == "message-1"
+
+
+def test_a_discord_click_without_any_reference_falls_back_to_the_prompt_itself() -> None:
+    plugin, settings = _discord_plugin_and_settings()
+
+    envelope = plugin.normalize_inbound(settings, _discord_interaction(thread_id="")).envelopes[0]
+
+    assert envelope.location.thread_id == "prompt-1"
 
 
 def test_a_discord_approval_too_long_to_encode_falls_back_to_text() -> None:

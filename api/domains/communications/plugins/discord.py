@@ -66,7 +66,7 @@ def _approval_content(approval: ApprovalRequest) -> str:
     return f"```\n{fenced}\n```{fallback}"
 
 
-def _approval_components(approval: ApprovalRequest, thread_id: str) -> list[dict[str, Any]] | None:
+def _approval_buttons(approval: ApprovalRequest, thread_id: str) -> list[dict[str, Any]] | None:
     buttons: list[dict[str, Any]] = []
     for choice in approval.choices:
         custom_id = encode_approval_component(thread_id, approval.approval_id, choice)
@@ -84,6 +84,17 @@ def _approval_components(approval: ApprovalRequest, thread_id: str) -> list[dict
         {"type": _ACTION_ROW_TYPE, "components": buttons[start : start + _BUTTONS_PER_ROW]}
         for start in range(0, len(buttons), _BUTTONS_PER_ROW)
     ]
+
+
+def _approval_components(approval: ApprovalRequest, thread_id: str) -> list[dict[str, Any]] | None:
+    rows = _approval_buttons(approval, thread_id) or _approval_buttons(approval, "")
+    if rows is None:
+        logger.warning(
+            "Discord approval %s offers no buttons: its identifier exceeds %s characters",
+            approval.approval_id,
+            APPROVAL_COMPONENT_MAX_CHARS,
+        )
+    return rows
 
 
 class DiscordValidationConfig(Protocol):
@@ -343,11 +354,18 @@ class DiscordPlatformPlugin(PlatformPlugin):
         if denied is not None:
             return InboundAdmissionResult(denied)
 
-        clicked = event.get("message")
-        author = clicked.get("author") if isinstance(clicked, dict) else None
+        raw_clicked = event.get("message")
+        clicked: dict[str, Any] = raw_clicked if isinstance(raw_clicked, dict) else {}
+        author = clicked.get("author")
         posted_by = str(author.get("id") or "") if isinstance(author, dict) else ""
         if not bot_user_id or posted_by != bot_user_id:
             return InboundAdmissionResult(CommunicationPolicyDisposition.MENTION_REQUIRED)
+
+        if not thread_id:
+            reference = clicked.get("message_reference")
+            thread_id = str(
+                (reference.get("message_id") if isinstance(reference, dict) else "") or clicked.get("id") or ""
+            )
 
         return InboundAdmissionResult(
             CommunicationPolicyDisposition.ACCEPTED,
