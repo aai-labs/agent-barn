@@ -21,6 +21,14 @@ from api.domains.communications.models import (
     ResolvedOutboundTarget,
 )
 
+_FAILURE_NOTICE_PREFIX = "⚠️ I couldn't process that message."
+_FALLBACK_FAILURE_SUMMARY = "The failure is recorded in this Connection's diagnostics."
+
+
+def failure_notice(error_summary: str | None) -> str:
+    """Render the in-channel notice for a terminally failed Delivery."""
+    return f"{_FAILURE_NOTICE_PREFIX} {error_summary or _FALLBACK_FAILURE_SUMMARY}"
+
 
 def provider_idempotency_key(delivery_key: str) -> str:
     """Return a bounded opaque key safe to pass to a provider adapter.
