@@ -13,6 +13,11 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
 
 ## Changes
 
+### 2026-09-16 — Discord approval prompts fit the message limit — PR pending
+
+- Changed: a Discord command-approval prompt is rendered by the plugin instead of being sent as the runtime's text, so the command is bounded and the message stays inside Discord's 2,000-character `content` limit; a long command previously failed the send with 400 and dead-lettered the reply. Ordinary Discord replies are unchanged, including ones over the limit, which remain a known gap.
+- Changed: Discord ingress now forwards component interactions as well as messages, acknowledging each over HTTP before the gateway persists it, since the interaction token expires after three seconds. Message handling, intents, and every other platform's ingress are untouched.
+
 ### 2026-09-14 — Markdown replies on Slack — PR pending
 
 - Changed: Slack replies are sent as a `markdown` block, so the standard Markdown Agents write (bold, links, headings, lists, code blocks, tables) renders instead of showing raw `**` and `[label](url)`. The plain `text` is still sent as the notification fallback. A reply carrying Slack mention markup (`<@…>`, `<#…>`, `<!…>`), which the markdown block does not document, or longer than the block's 12,000-character cap keeps the previous mrkdwn text path. Approval prompts keep their existing section and button blocks.
