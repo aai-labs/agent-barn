@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 import pytest
-from hamcrest import assert_that, empty, equal_to, has_length
+from hamcrest import assert_that, empty, equal_to, has_length, none
 from websockets.asyncio.server import ServerConnection, serve
 
 from api.domains.communications.models import (
@@ -734,8 +734,8 @@ def test_a_discord_approval_stays_inside_the_content_limit() -> None:
 
     content = _discord_send_call(envelope).args[1]
 
-    assert len(content) <= 2_000
-    assert "more characters not shown" in content
+    assert_that(len(content) <= 2_000, equal_to(True))
+    assert_that("more characters not shown" in content, equal_to(True))
 
 
 def test_a_discord_approval_still_names_every_offered_choice() -> None:
@@ -743,8 +743,8 @@ def test_a_discord_approval_still_names_every_offered_choice() -> None:
 
     content = _discord_send_call(envelope).args[1]
 
-    assert "```\nrm -rf build\n```" in content
-    assert "Or reply to your original request with one of: once, session, always, deny" in content
+    assert_that("```\nrm -rf build\n```" in content, equal_to(True))
+    assert_that("Or reply to your original request with one of: once, session, always, deny" in content, equal_to(True))
 
 
 def test_an_ordinary_discord_reply_is_sent_exactly_as_written() -> None:
@@ -754,7 +754,7 @@ def test_an_ordinary_discord_reply_is_sent_exactly_as_written() -> None:
         text="x" * 2_500,
     )
 
-    assert _discord_send_call(envelope).args[1] == "x" * 2_500
+    assert_that(_discord_send_call(envelope).args[1], equal_to("x" * 2_500))
 
 
 def _discord_interaction(
@@ -806,15 +806,15 @@ def test_a_discord_click_becomes_an_ordinary_inbound_answer() -> None:
 
     admitted = plugin.normalize_inbound(settings, _discord_interaction(choice="once"))
 
-    assert len(admitted) == 1
+    assert_that(len(admitted), equal_to(1))
     envelope = admitted[0]
-    assert envelope.text == "once"
-    assert envelope.sender.id == "user-1"
-    assert envelope.sender.display_name == "Ada"
-    assert envelope.location.id == "channel-1"
-    assert envelope.location.thread_id == "message-1"
-    assert envelope.provider_metadata["approval_id"] == "run-1:1.0"
-    assert envelope.reply_to_provider_message_id is None
+    assert_that(envelope.text, equal_to("once"))
+    assert_that(envelope.sender.id, equal_to("user-1"))
+    assert_that(envelope.sender.display_name, equal_to("Ada"))
+    assert_that(envelope.location.id, equal_to("channel-1"))
+    assert_that(envelope.location.thread_id, equal_to("message-1"))
+    assert_that(envelope.provider_metadata["approval_id"], equal_to("run-1:1.0"))
+    assert_that(envelope.reply_to_provider_message_id, none())
 
 
 def test_a_discord_click_is_never_deduped_against_the_message_it_answers() -> None:
@@ -822,31 +822,33 @@ def test_a_discord_click_is_never_deduped_against_the_message_it_answers() -> No
 
     envelope = plugin.normalize_inbound(settings, _discord_interaction()).envelopes[0]
 
-    assert envelope.provider_message_id == "action:interaction-1"
+    assert_that(envelope.provider_message_id, equal_to("action:interaction-1"))
 
 
 def test_a_discord_click_still_obeys_the_guild_and_channel_allowlists() -> None:
     plugin, settings = _discord_plugin_and_settings(group_policy="allowlist", guild_ids=["guild-9"])
     _, channel_limited = _discord_plugin_and_settings(allowed_channel_ids=["channel-9"])
 
-    assert (
-        plugin.normalize_inbound(settings, _discord_interaction()).disposition
-        == CommunicationPolicyDisposition.CHANNEL_DENIED
+    assert_that(
+        plugin.normalize_inbound(settings, _discord_interaction()).disposition,
+        equal_to(CommunicationPolicyDisposition.CHANNEL_DENIED),
     )
-    assert (
-        plugin.normalize_inbound(channel_limited, _discord_interaction()).disposition
-        == CommunicationPolicyDisposition.CHANNEL_DENIED
+    assert_that(
+        plugin.normalize_inbound(channel_limited, _discord_interaction()).disposition,
+        equal_to(CommunicationPolicyDisposition.CHANNEL_DENIED),
     )
 
 
 def test_a_discord_click_still_obeys_the_user_and_role_allowlists() -> None:
     plugin, settings = _discord_plugin_and_settings(allowed_user_ids=["user-9"], allowed_role_ids=["role-9"])
 
-    assert (
-        plugin.normalize_inbound(settings, _discord_interaction(user="user-1")).disposition
-        == CommunicationPolicyDisposition.USER_DENIED
+    assert_that(
+        plugin.normalize_inbound(settings, _discord_interaction(user="user-1")).disposition,
+        equal_to(CommunicationPolicyDisposition.USER_DENIED),
     )
-    assert len(plugin.normalize_inbound(settings, _discord_interaction(user="user-1", roles=["role-9"]))) == 1
+    assert_that(
+        len(plugin.normalize_inbound(settings, _discord_interaction(user="user-1", roles=["role-9"]))), equal_to(1)
+    )
 
 
 def test_a_discord_click_still_obeys_the_dm_policy() -> None:
@@ -854,62 +856,62 @@ def test_a_discord_click_still_obeys_the_dm_policy() -> None:
     _, allowlisted = _discord_plugin_and_settings(dm_policy="allowlist", allowed_user_ids=["user-9"])
     _, open_dms = _discord_plugin_and_settings(dm_policy="open")
 
-    assert (
-        plugin.normalize_inbound(off, _discord_interaction(guild=None)).disposition
-        == CommunicationPolicyDisposition.USER_DENIED
+    assert_that(
+        plugin.normalize_inbound(off, _discord_interaction(guild=None)).disposition,
+        equal_to(CommunicationPolicyDisposition.USER_DENIED),
     )
-    assert (
-        plugin.normalize_inbound(allowlisted, _discord_interaction(guild=None)).disposition
-        == CommunicationPolicyDisposition.USER_DENIED
+    assert_that(
+        plugin.normalize_inbound(allowlisted, _discord_interaction(guild=None)).disposition,
+        equal_to(CommunicationPolicyDisposition.USER_DENIED),
     )
-    assert len(plugin.normalize_inbound(open_dms, _discord_interaction(guild=None))) == 1
+    assert_that(len(plugin.normalize_inbound(open_dms, _discord_interaction(guild=None))), equal_to(1))
 
 
 def test_a_discord_click_on_a_message_this_agent_did_not_post_is_refused() -> None:
     plugin, settings = _discord_plugin_and_settings()
 
-    assert (
-        plugin.normalize_inbound(settings, _discord_interaction(posted_by="someone-else")).disposition
-        == CommunicationPolicyDisposition.MENTION_REQUIRED
+    assert_that(
+        plugin.normalize_inbound(settings, _discord_interaction(posted_by="someone-else")).disposition,
+        equal_to(CommunicationPolicyDisposition.MENTION_REQUIRED),
     )
-    assert (
-        plugin.normalize_inbound(settings, _discord_interaction(posted_by=None)).disposition
-        == CommunicationPolicyDisposition.MENTION_REQUIRED
+    assert_that(
+        plugin.normalize_inbound(settings, _discord_interaction(posted_by=None)).disposition,
+        equal_to(CommunicationPolicyDisposition.MENTION_REQUIRED),
     )
-    assert (
-        plugin.normalize_inbound(settings, _discord_interaction(bot_user_id=None)).disposition
-        == CommunicationPolicyDisposition.MENTION_REQUIRED
+    assert_that(
+        plugin.normalize_inbound(settings, _discord_interaction(bot_user_id=None)).disposition,
+        equal_to(CommunicationPolicyDisposition.MENTION_REQUIRED),
     )
 
 
 def test_a_clicking_discord_bot_cannot_answer_an_approval() -> None:
     plugin, settings = _discord_plugin_and_settings()
 
-    assert (
-        plugin.normalize_inbound(settings, _discord_interaction(clicker_is_bot=True)).disposition
-        == CommunicationPolicyDisposition.BOT_IGNORED
+    assert_that(
+        plugin.normalize_inbound(settings, _discord_interaction(clicker_is_bot=True)).disposition,
+        equal_to(CommunicationPolicyDisposition.BOT_IGNORED),
     )
-    assert (
-        plugin.normalize_inbound(settings, _discord_interaction(user="bot-1")).disposition
-        == CommunicationPolicyDisposition.BOT_IGNORED
+    assert_that(
+        plugin.normalize_inbound(settings, _discord_interaction(user="bot-1")).disposition,
+        equal_to(CommunicationPolicyDisposition.BOT_IGNORED),
     )
 
 
 def test_an_unrelated_discord_interaction_is_ignored_rather_than_malformed() -> None:
     plugin, settings = _discord_plugin_and_settings()
 
-    assert (
-        plugin.normalize_inbound(settings, _discord_interaction(custom_id="some_other_app:button")).disposition
-        == CommunicationPolicyDisposition.EVENT_IGNORED
+    assert_that(
+        plugin.normalize_inbound(settings, _discord_interaction(custom_id="some_other_app:button")).disposition,
+        equal_to(CommunicationPolicyDisposition.EVENT_IGNORED),
     )
 
 
 def test_a_damaged_discord_approval_button_is_malformed() -> None:
     plugin, settings = _discord_plugin_and_settings()
 
-    assert (
-        plugin.normalize_inbound(settings, _discord_interaction(custom_id="ab|thread-1")).disposition
-        == CommunicationPolicyDisposition.MALFORMED_PAYLOAD
+    assert_that(
+        plugin.normalize_inbound(settings, _discord_interaction(custom_id="ab|thread-1")).disposition,
+        equal_to(CommunicationPolicyDisposition.MALFORMED_PAYLOAD),
     )
 
 
@@ -919,11 +921,14 @@ def test_a_discord_approval_renders_a_button_for_every_offered_choice() -> None:
     components = _discord_send_call(envelope).kwargs["components"]
 
     buttons = [button for row in components for button in row["components"]]
-    assert [button["label"] for button in buttons] == ["Allow once", "Allow for session", "Always allow", "Deny"]
-    assert [button["custom_id"] for button in buttons] == [
-        f"ab|thread-1|run-1:1.0|{code}" for code in ("o", "s", "a", "d")
-    ]
-    assert all(row["type"] == 1 and len(row["components"]) <= 5 for row in components)
+    assert_that(
+        [button["label"] for button in buttons], equal_to(["Allow once", "Allow for session", "Always allow", "Deny"])
+    )
+    assert_that(
+        [button["custom_id"] for button in buttons],
+        equal_to([f"ab|thread-1|run-1:1.0|{code}" for code in ("o", "s", "a", "d")]),
+    )
+    assert_that(all(row["type"] == 1 and len(row["components"]) <= 5 for row in components), equal_to(True))
 
 
 def test_a_discord_approval_with_real_identifiers_still_renders_buttons() -> None:
@@ -941,8 +946,8 @@ def test_a_discord_approval_with_real_identifiers_still_renders_buttons() -> Non
     components = _discord_send_call(envelope).kwargs["components"]
 
     buttons = [button for row in components for button in row["components"]]
-    assert len(buttons) == 4
-    assert max(len(button["custom_id"]) for button in buttons) <= 100
+    assert_that(len(buttons), equal_to(4))
+    assert_that(max(len(button["custom_id"]) for button in buttons) <= 100, equal_to(True))
 
 
 def test_the_discord_button_value_cannot_outgrow_the_identifier_limit() -> None:
@@ -952,7 +957,7 @@ def test_the_discord_button_value_cannot_outgrow_the_identifier_limit() -> None:
         max(APPROVAL_CHOICE_CODES, key=len),
     )
 
-    assert len(longest) <= APPROVAL_COMPONENT_MAX_CHARS
+    assert_that(len(longest) <= APPROVAL_COMPONENT_MAX_CHARS, equal_to(True))
 
 
 def test_a_discord_approval_with_more_choices_than_a_row_holds_is_split_into_rows() -> None:
@@ -960,7 +965,7 @@ def test_a_discord_approval_with_more_choices_than_a_row_holds_is_split_into_row
 
     components = _discord_send_call(envelope).kwargs["components"]
 
-    assert [len(row["components"]) for row in components] == [5, 2]
+    assert_that([len(row["components"]) for row in components], equal_to([5, 2]))
 
 
 def test_a_discord_approval_keeps_its_buttons_when_only_the_thread_will_not_fit() -> None:
@@ -969,7 +974,7 @@ def test_a_discord_approval_keeps_its_buttons_when_only_the_thread_will_not_fit(
 
     buttons = [button for row in _discord_send_call(envelope).kwargs["components"] for button in row["components"]]
 
-    assert [button["custom_id"] for button in buttons] == ["ab||run-1:1.0|o", "ab||run-1:1.0|d"]
+    assert_that([button["custom_id"] for button in buttons], equal_to(["ab||run-1:1.0|o", "ab||run-1:1.0|d"]))
 
 
 def test_a_discord_click_without_a_thread_takes_it_from_the_message_it_answers() -> None:
@@ -979,15 +984,15 @@ def test_a_discord_click_without_a_thread_takes_it_from_the_message_it_answers()
 
     envelope = plugin.normalize_inbound(settings, payload).envelopes[0]
 
-    assert envelope.location.thread_id == "message-1"
+    assert_that(envelope.location.thread_id, equal_to("message-1"))
 
 
-def test_a_discord_click_without_any_reference_falls_back_to_the_prompt_itself() -> None:
+def test_a_discord_click_without_any_reference_is_refused() -> None:
     plugin, settings = _discord_plugin_and_settings()
 
-    envelope = plugin.normalize_inbound(settings, _discord_interaction(thread_id="")).envelopes[0]
+    result = plugin.normalize_inbound(settings, _discord_interaction(thread_id=""))
 
-    assert envelope.location.thread_id == "prompt-1"
+    assert_that(result.disposition, equal_to(CommunicationPolicyDisposition.MALFORMED_PAYLOAD))
 
 
 def test_a_discord_approval_too_long_to_encode_falls_back_to_text() -> None:
@@ -998,7 +1003,7 @@ def test_a_discord_approval_too_long_to_encode_falls_back_to_text() -> None:
         }
     )
 
-    assert "components" not in _discord_send_call(envelope).kwargs
+    assert_that("components" in _discord_send_call(envelope).kwargs, equal_to(False))
 
 
 def test_an_ordinary_discord_reply_carries_no_components() -> None:
@@ -1008,7 +1013,7 @@ def test_an_ordinary_discord_reply_carries_no_components() -> None:
         text="reply",
     )
 
-    assert "components" not in _discord_send_call(envelope).kwargs
+    assert_that("components" in _discord_send_call(envelope).kwargs, equal_to(False))
 
 
 def test_a_discord_reply_to_a_click_carries_no_message_reference() -> None:
@@ -1019,7 +1024,7 @@ def test_a_discord_reply_to_a_click_carries_no_message_reference() -> None:
         reply_to_provider_message_id="action:interaction-1",
     )
 
-    assert _discord_send_call(envelope).kwargs["reply_to_id"] is None
+    assert_that(_discord_send_call(envelope).kwargs["reply_to_id"], none())
 
 
 def _discord_ingress_log(payload: dict[str, Any], **settings: Any) -> list[tuple[str, Any]]:
@@ -1074,17 +1079,17 @@ def _discord_ingress_log(payload: dict[str, Any], **settings: Any) -> list[tuple
 def test_a_discord_click_reaches_the_gateway_acknowledged_first() -> None:
     log = _discord_ingress_log(_discord_interaction())
 
-    assert [entry[0] for entry in log] == ["ack", "emit"]
-    assert log[0][1] == {"type": 7, "data": {"components": []}}
-    assert log[1][1]["t"] == "INTERACTION_CREATE"
-    assert log[1][1]["agentbarn_bot_user_id"] == "bot-1"
+    assert_that([entry[0] for entry in log], equal_to(["ack", "emit"]))
+    assert_that(log[0][1], equal_to({"type": 7, "data": {"components": []}}))
+    assert_that(log[1][1]["t"], equal_to("INTERACTION_CREATE"))
+    assert_that(log[1][1]["agentbarn_bot_user_id"], equal_to("bot-1"))
 
 
 def test_a_refused_discord_click_is_acknowledged_without_removing_the_buttons() -> None:
     log = _discord_ingress_log(_discord_interaction(), group_policy="allowlist", guild_ids=["guild-9"])
 
-    assert [entry[0] for entry in log] == ["ack", "emit"]
-    assert log[0][1] == {"type": 6}
+    assert_that([entry[0] for entry in log], equal_to(["ack", "emit"]))
+    assert_that(log[0][1], equal_to({"type": 6}))
 
 
 def test_a_discord_message_still_reaches_the_gateway_without_an_acknowledgement() -> None:
@@ -1103,7 +1108,7 @@ def test_a_discord_message_still_reaches_the_gateway_without_an_acknowledgement(
 
     log = _discord_ingress_log(message)
 
-    assert [entry[0] for entry in log] == ["emit"]
+    assert_that([entry[0] for entry in log], equal_to(["emit"]))
 
 
 def test_telegram_send_passes_a_stable_provider_idempotency_key() -> None:

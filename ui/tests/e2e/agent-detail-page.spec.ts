@@ -18,47 +18,13 @@ import {
   mockSecret,
   mockTemplates,
   mockToolCall,
+  mockWebChatApprovalPrompt,
   mockVersionsForKey,
 } from "../pages/data-support/agent-data-support.po";
 import { mockCustomSkill, mockPlatformSkill, MOCK_PLATFORM_SKILL_ID } from "../pages/data-support/skill-data-support.po";
 import { DataSupport } from "../pages/data-support/data-support.po";
 import { AgentDetailPage } from "../pages/agent-detail-page.po";
 import { CommunicationConnectionDetailPage } from "../pages/communication-connection-detail-page.po";
-
-type RouteHandler = Parameters<Page["route"]>[1];
-
-async function routeApprovalPrompt(page: Page, answer: RouteHandler) {
-  await page.route("**/api/v1/organizations/*/agents/*/web-chat/**", async (route, request) => {
-    const path = new URL(request.url()).pathname;
-    if (path.endsWith("/messages") && request.method() === "POST") {
-      await answer(route, request);
-      return;
-    }
-    if (path.endsWith("/messages")) {
-      await route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify([
-          {
-            id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
-            direction: "OUTBOUND",
-            content: "```\nrm -rf build\n```\nReply with one of: once, deny",
-            occurred_at: "2026-09-01T08:00:00Z",
-            delivery_status: "SUCCEEDED",
-            cancel_requested_at: null,
-            approval: { approval_id: "run_1:1726051234.5", command: "rm -rf build", choices: ["once", "deny"] },
-          },
-        ]),
-      });
-      return;
-    }
-    await route.fulfill({
-      status: 200,
-      contentType: path.endsWith("/stream") ? "text/event-stream" : "application/json",
-      body: path.endsWith("/stream") ? ": keep-alive\n\n" : "[]",
-    });
-  });
-}
 
 test.describe("Agent Detail Page", () => {
   test.describe.configure({ mode: "serial" });
@@ -196,10 +162,9 @@ test.describe("Agent Detail Page", () => {
 
   test("answers a command approval with a button", async ({ page }) => {
     const sentBodies: unknown[] = [];
-    await page.route("**/api/v1/organizations/*/agents/*/web-chat/**", async (route) => {
-      const path = new URL(route.request().url()).pathname;
-      if (path.endsWith("/messages") && route.request().method() === "POST") {
-        sentBodies.push(route.request().postDataJSON());
+    await dataSupportPage.agents.interceptWebChatApprovalPrompt({
+      answer: async (route, request) => {
+        sentBodies.push(request.postDataJSON());
         await route.fulfill({
           status: 202,
           contentType: "application/json",
@@ -213,31 +178,7 @@ test.describe("Agent Detail Page", () => {
             approval: null,
           }),
         });
-        return;
-      }
-      if (path.endsWith("/messages")) {
-        await route.fulfill({
-          status: 200,
-          contentType: "application/json",
-          body: JSON.stringify([
-            {
-              id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
-              direction: "OUTBOUND",
-              content: "```\nrm -rf build\n```\nReply with one of: once, deny",
-              occurred_at: "2026-09-01T08:00:00Z",
-              delivery_status: "SUCCEEDED",
-              cancel_requested_at: null,
-              approval: { approval_id: "run_1:1726051234.5", command: "rm -rf build", choices: ["once", "deny"] },
-            },
-          ]),
-        });
-        return;
-      }
-      await route.fulfill({
-        status: 200,
-        contentType: path.endsWith("/stream") ? "text/event-stream" : "application/json",
-        body: path.endsWith("/stream") ? ": keep-alive\n\n" : "[]",
-      });
+      },
     });
 
     await agentDetailPage.goto(MOCK_AGENT_ID);
@@ -251,9 +192,10 @@ test.describe("Agent Detail Page", () => {
 
   test("disables approval buttons once one is clicked", async ({ page }) => {
     let answers = 0;
-    await routeApprovalPrompt(page, async (route) => {
-      answers += 1;
-      await route.fulfill({
+    await dataSupportPage.agents.interceptWebChatApprovalPrompt({
+      answer: async (route) => {
+        answers += 1;
+        await route.fulfill({
         status: 202,
         contentType: "application/json",
         body: JSON.stringify({
@@ -265,7 +207,8 @@ test.describe("Agent Detail Page", () => {
           cancel_requested_at: null,
           approval: null,
         }),
-      });
+        });
+      },
     });
 
     await agentDetailPage.goto(MOCK_AGENT_ID);
@@ -277,8 +220,10 @@ test.describe("Agent Detail Page", () => {
   });
 
   test("re-enables approval buttons when the answer fails to send", async ({ page }) => {
-    await routeApprovalPrompt(page, async (route) => {
-      await route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ detail: "boom" }) });
+    await dataSupportPage.agents.interceptWebChatApprovalPrompt({
+      answer: async (route) => {
+        await route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ detail: "boom" }) });
+      },
     });
 
     await agentDetailPage.goto(MOCK_AGENT_ID);
@@ -293,31 +238,9 @@ test.describe("Agent Detail Page", () => {
     await dataSupportPage.agents.interceptGetAgentRequest({
       body: { ...mockAgent, allowed_actions: ["agent.read", "activity.read"] },
     });
-    await page.route("**/api/v1/organizations/*/agents/*/web-chat/**", async (route) => {
-      const path = new URL(route.request().url()).pathname;
-      if (path.endsWith("/messages")) {
-        await route.fulfill({
-          status: 200,
-          contentType: "application/json",
-          body: JSON.stringify([
-            {
-              id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
-              direction: "OUTBOUND",
-              content: "Reply with one of: once, deny",
-              occurred_at: "2026-09-01T08:00:00Z",
-              delivery_status: "SUCCEEDED",
-              cancel_requested_at: null,
-              approval: { approval_id: "run_1:1726051234.5", command: "rm -rf build", choices: ["once", "deny"] },
-            },
-          ]),
-        });
-        return;
-      }
-      await route.fulfill({
-        status: 200,
-        contentType: path.endsWith("/stream") ? "text/event-stream" : "application/json",
-        body: path.endsWith("/stream") ? ": keep-alive\n\n" : "[]",
-      });
+    await dataSupportPage.agents.interceptWebChatApprovalPrompt({
+      answer: async (route) => route.fallback(),
+      prompt: { ...mockWebChatApprovalPrompt, content: "Reply with one of: once, deny" },
     });
 
     await agentDetailPage.goto(MOCK_AGENT_ID);

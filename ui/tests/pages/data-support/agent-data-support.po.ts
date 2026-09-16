@@ -1,4 +1,4 @@
-import { Page } from "@playwright/test";
+import { Page, type Request, type Route } from "@playwright/test";
 
 export const MOCK_AGENT_ID = "33333333-3333-4333-8333-333333333333";
 export const MOCK_TEMPLATE_ID = "44444444-4444-4444-8444-444444444444";
@@ -112,6 +112,21 @@ export const mockAgent = {
   allowed_actions: mockAgentAllowedActions,
   created_at: "2026-03-14T00:00:00Z",
   updated_at: "2026-05-14T09:14:00Z",
+};
+
+export const mockWebChatApprovalPrompt = {
+  id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+  direction: "OUTBOUND",
+  content: "```\nrm -rf build\n```\nReply with one of: once, deny",
+  occurred_at: "2026-09-01T08:00:00Z",
+  delivery_status: "SUCCEEDED",
+  cancel_requested_at: null,
+  approval: {
+    approval_id: "run_1:1726051234.5",
+    command: "rm -rf build",
+    choices: ["once", "deny"],
+    choice_labels: { once: "Allow once", deny: "Deny" },
+  },
 };
 
 export const mockSecret = {
@@ -286,6 +301,31 @@ export function mockVersionsForKey(templateKey: string) {
 
 export class AgentDataSupport {
   constructor(private page: Page) {}
+
+  async interceptWebChatApprovalPrompt({
+    answer,
+    prompt = mockWebChatApprovalPrompt,
+  }: {
+    answer: (route: Route, request: Request) => Promise<void>;
+    prompt?: typeof mockWebChatApprovalPrompt;
+  }) {
+    await this.page.route("**/api/v1/organizations/*/agents/*/web-chat/**", async (route, request) => {
+      const path = new URL(request.url()).pathname;
+      if (path.endsWith("/messages") && request.method() === "POST") {
+        await answer(route, request);
+        return;
+      }
+      if (path.endsWith("/messages")) {
+        await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([prompt]) });
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: path.endsWith("/stream") ? "text/event-stream" : "application/json",
+        body: path.endsWith("/stream") ? ": keep-alive\n\n" : "[]",
+      });
+    });
+  }
 
   async interceptGetAgentsRequest({
     status = 200,

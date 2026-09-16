@@ -10,12 +10,6 @@ APPROVAL_CHOICE_CODES = {
     "deny": "d",
 }
 _APPROVAL_CHOICES_BY_CODE = {code: choice for choice, code in APPROVAL_CHOICE_CODES.items()}
-APPROVAL_CHOICE_LABELS = {
-    "once": "Allow once",
-    "session": "Allow for session",
-    "always": "Always allow",
-    "deny": "Deny",
-}
 
 
 def is_synthesized_message_id(message_id: str | None) -> bool:

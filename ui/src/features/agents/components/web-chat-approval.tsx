@@ -7,13 +7,6 @@ import type { WebChatApproval } from "../schemas";
 
 export const APPROVAL_DATA_PART = "approval";
 
-const CHOICE_LABELS: Record<string, string> = {
-  once: "Allow once",
-  session: "Allow for session",
-  always: "Always allow",
-  deny: "Deny",
-};
-
 interface WebChatApprovalRendererProps {
   canAnswer: boolean;
   disabled: boolean;
@@ -53,7 +46,7 @@ export function WebChatApprovalRenderer({ canAnswer, disabled, onAnswer }: WebCh
               disabled={isDisabled}
               onClick={() => void answer(choice, data.approvalId)}
             >
-              {CHOICE_LABELS[choice] ?? choice}
+              {data.choiceLabels[choice] ?? choice}
             </button>
           ))}
         </div>

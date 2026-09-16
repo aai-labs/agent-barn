@@ -24,7 +24,6 @@ from api.domains.communications.models import (
     ResolvedOutboundTarget,
 )
 from api.domains.communications.plugins.approvals import (
-    APPROVAL_CHOICE_LABELS,
     APPROVAL_METADATA_KEY,
     SYNTHESIZED_MESSAGE_PREFIX,
     decode_approval_value,
@@ -138,7 +137,7 @@ def _approval_blocks(approval: ApprovalRequest) -> list[dict]:
                 {
                     "type": "button",
                     "action_id": approval_action_id(choice),
-                    "text": {"type": "plain_text", "text": APPROVAL_CHOICE_LABELS.get(choice, choice)},
+                    "text": {"type": "plain_text", "text": approval.choice_labels.get(choice, choice)},
                     "value": encode_approval_value(approval.approval_id, choice),
                 }
                 for choice in approval.choices
