@@ -13,9 +13,15 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
 
 ## Changes
 
+### 2026-09-16 — Discord replies longer than the message limit — PR pending
+
+- Delivered: a Discord reply over 2,000 characters is split across messages instead of failing the send with 400 and dead-lettering the reply. Splitting prefers the nearest line break and counts UTF-16 units, reusing the chunker Telegram already had, now shared at `api/infrastructure/shared/text.py`; Telegram's behaviour is unchanged.
+- Changed: only the first message quotes the message being replied to, and each carries its own nonce — a shared nonce would have made Discord return the first message for every later one and silently drop the rest of the reply. The nonce prefix now shrinks to fit its index, so the 25-character cap holds no matter how many messages a reply becomes. A message carrying approval buttons is never split, so its buttons stay with its command.
+- Known gap: a failure partway through leaves part of the reply posted, and the retry re-sends from the beginning; Discord only suppresses a repeated nonce for a few minutes, while the retry backoff reaches five, so a late retry can repeat the earlier messages. Telegram has the same shape and no nonce at all.
+
 ### 2026-09-16 — Discord approval prompts fit the message limit — PR pending
 
-- Changed: a Discord command-approval prompt is rendered by the plugin instead of being sent as the runtime's text, so the command is bounded and the message stays inside Discord's 2,000-character `content` limit; a long command previously failed the send with 400 and dead-lettered the reply. Ordinary Discord replies are unchanged, including ones over the limit, which remain a known gap.
+- Changed: a Discord command-approval prompt is rendered by the plugin instead of being sent as the runtime's text, so the command is bounded and the message stays inside Discord's 2,000-character `content` limit; a long command previously failed the send with 400 and dead-lettered the reply.
 - Changed: Discord ingress now forwards component interactions as well as messages, acknowledging each over HTTP before the gateway persists it, since the interaction token expires after three seconds. Message handling, intents, and every other platform's ingress are untouched.
 
 ### 2026-09-14 — Markdown replies on Slack — PR pending

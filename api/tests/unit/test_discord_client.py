@@ -178,6 +178,22 @@ def test_discord_client_gives_every_chunk_its_own_nonce(mock_request):
 
 
 @patch("api.infrastructure.discord.client.resilient_request")
+def test_discord_client_keeps_every_nonce_within_the_limit_however_many_chunks(mock_request):
+    mock_request.side_effect = [_message_response(f"message-{index}") for index in range(101)]
+
+    DiscordClient("bot-value").send_message(
+        "channel-1",
+        "a" * 200_001,
+        idempotency_key=provider_idempotency_key("delivery-1"),
+    )
+
+    nonces = [json.loads(call.kwargs["content"])["nonce"] for call in mock_request.call_args_list]
+    assert_that(len(nonces), equal_to(101))
+    assert_that(max(len(nonce) for nonce in nonces), equal_to(25))
+    assert_that(len(set(nonces)), equal_to(101))
+
+
+@patch("api.infrastructure.discord.client.resilient_request")
 def test_discord_client_replies_to_the_origin_on_the_first_chunk_only(mock_request):
     mock_request.side_effect = [_message_response(f"message-{index}") for index in range(3)]
 

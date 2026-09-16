@@ -15,6 +15,17 @@ _MAX_CONTENT_LENGTH = 2_000
 _CHUNK_NONCE_PREFIX_LENGTH = _MAX_NONCE_LENGTH - 3
 
 
+def _chunk_nonce(idempotency_key: str, index: int, total: int) -> str:
+    # Discord rejects a nonce longer than 25 characters with 400/50035, and the
+    # provider key is a 64-character digest. The prefix stays deterministic per
+    # Delivery, so retries still de-duplicate.
+    if total == 1:
+        return idempotency_key[:_MAX_NONCE_LENGTH]
+    suffix = f"-{index}"
+    prefix_length = min(_CHUNK_NONCE_PREFIX_LENGTH, _MAX_NONCE_LENGTH - len(suffix))
+    return f"{idempotency_key[:prefix_length]}{suffix}"
+
+
 class DiscordClient:
     """Discord API client for Connection delivery and credential-scoped directories."""
 
@@ -82,14 +93,7 @@ class DiscordClient:
             if components:
                 payload["components"] = components
             if idempotency_key:
-                # Discord rejects a nonce longer than 25 characters with 400/50035, and the
-                # provider key is a 64-character digest. The prefix stays deterministic per
-                # Delivery, so retries still de-duplicate.
-                payload["nonce"] = (
-                    f"{idempotency_key[:_CHUNK_NONCE_PREFIX_LENGTH]}-{index}"
-                    if len(chunks) > 1
-                    else idempotency_key[:_MAX_NONCE_LENGTH]
-                )
+                payload["nonce"] = _chunk_nonce(idempotency_key, index, len(chunks))
                 payload["enforce_nonce"] = True
             if reply_to_id and index == 0:
                 payload["message_reference"] = {
@@ -110,7 +114,8 @@ class DiscordClient:
             message_id = response.json().get("id")
             if not message_id:
                 raise RuntimeError("Discord create message returned no message id")
-        assert message_id is not None
+        if message_id is None:
+            raise RuntimeError("Discord create message sent no chunks")
         return str(message_id)
 
     def list_guilds(self) -> list[dict[str, str]]:
