@@ -23,6 +23,7 @@ class ThreadSummary:
 class WebChatDeliveryState:
     status: CommunicationDeliveryStatus
     cancel_requested_at: datetime | None
+    error_message: str | None
 
 
 @inject
@@ -72,14 +73,16 @@ class WebChatRepository:
                     CommunicationDelivery.message_id,
                     CommunicationDelivery.status,
                     CommunicationDelivery.cancel_requested_at,
+                    CommunicationDelivery.last_error_message,
                 ).where(col(CommunicationDelivery.message_id).in_(message_ids))
             ).all()
             return {
                 message_id: WebChatDeliveryState(
                     status=CommunicationDeliveryStatus(status),
                     cancel_requested_at=cancel_requested_at,
+                    error_message=error_message,
                 )
-                for message_id, status, cancel_requested_at in rows
+                for message_id, status, cancel_requested_at, error_message in rows
             }
 
     def get_message_for_delivery(
@@ -97,6 +100,7 @@ class WebChatRepository:
                     CommunicationDelivery.message_id,
                     CommunicationDelivery.status,
                     CommunicationDelivery.cancel_requested_at,
+                    CommunicationDelivery.last_error_message,
                 ).where(
                     col(CommunicationDelivery.id) == delivery_id,
                     col(CommunicationDelivery.connection_id) == connection_id,
@@ -105,7 +109,7 @@ class WebChatRepository:
             if delivery_row is None:
                 return None
 
-            message_id, status, cancel_requested_at = delivery_row
+            message_id, status, cancel_requested_at, error_message = delivery_row
             message = session.exec(
                 select(AgentChatMessage).where(
                     col(AgentChatMessage.id) == message_id,
@@ -119,6 +123,7 @@ class WebChatRepository:
             return message, WebChatDeliveryState(
                 status=CommunicationDeliveryStatus(status),
                 cancel_requested_at=cancel_requested_at,
+                error_message=error_message,
             )
 
     def list_threads(

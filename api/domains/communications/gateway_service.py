@@ -122,6 +122,7 @@ class CommunicationsGatewayService:
                     stage=ProcessingFeedbackStage.FAILED,
                     location=stale.envelope.location,
                     provider_message_id=stale.envelope.provider_message_id,
+                    provider_metadata=stale.envelope.provider_metadata,
                 )
             )
         delivery = self.delivery_repository.claim_next_inbound(agent_id=agent.id, reclaim_expired=False)
@@ -139,6 +140,7 @@ class CommunicationsGatewayService:
                     stage=ProcessingFeedbackStage.CLAIMED,
                     location=delivery.envelope.location,
                     provider_message_id=delivery.envelope.provider_message_id,
+                    provider_metadata=delivery.envelope.provider_metadata,
                 )
             )
         return delivery
@@ -229,7 +231,11 @@ class CommunicationsGatewayService:
                 CommunicationSignal(type=CommunicationSignalType.MESSAGE_CHANGED, delivery_id=delivery_id),
             )
             if not result.succeeded:
-                self._notify_runtime_failure_feedback(agent.id, delivery_id)
+                self._notify_runtime_failure_feedback(
+                    agent.id,
+                    delivery_id,
+                    normalized_error.summary if normalized_error is not None else None,
+                )
         return completed
 
     def renew_runtime_delivery_lease(
@@ -247,7 +253,12 @@ class CommunicationsGatewayService:
             awaiting_input=awaiting_input,
         )
 
-    def _notify_runtime_failure_feedback(self, agent_id: UUID, delivery_id: UUID) -> None:
+    def _notify_runtime_failure_feedback(
+        self,
+        agent_id: UUID,
+        delivery_id: UUID,
+        error_summary: str | None = None,
+    ) -> None:
         """Notify terminal runtime failure without coupling it to completion."""
         try:
             status = self.delivery_repository.delivery_status(
@@ -264,6 +275,9 @@ class CommunicationsGatewayService:
                         stage=ProcessingFeedbackStage.FAILED,
                         location=delivery.envelope.location,
                         provider_message_id=delivery.envelope.provider_message_id,
+                        source_delivery_id=delivery_id,
+                        provider_metadata=delivery.envelope.provider_metadata,
+                        error_summary=error_summary,
                     )
                 )
         except Exception as exc:
@@ -416,6 +430,7 @@ class CommunicationsGatewayService:
                 stage=stage,
                 location=envelope.location,
                 provider_message_id=envelope.provider_message_id,
+                provider_metadata=envelope.provider_metadata,
             ),
         )
 

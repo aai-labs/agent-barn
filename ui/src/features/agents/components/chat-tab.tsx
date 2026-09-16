@@ -6,10 +6,11 @@ import { useQueryState, parseAsString } from "nuqs";
 import {
   AssistantRuntimeProvider,
   useExternalStoreRuntime,
+  useAuiState,
   type ThreadMessageLike,
 } from "@assistant-ui/react";
 
-import { Thread } from "@/components/assistant-ui/elements/thread.aui";
+import { Thread, UserMessage } from "@/components/assistant-ui/elements/thread.aui";
 import { Badge } from "@/components/badge";
 import {
   AlertDialog,
@@ -39,14 +40,39 @@ interface ChatTabProps {
   isAgentWorking: boolean;
 }
 
+const WEB_CHAT_FAILURE_PREFIX = "⚠️ I couldn't process that message.";
+const WEB_CHAT_FAILURE_FALLBACK = "The failure is recorded in this Connection's diagnostics.";
+
 function convertMessage(message: WebChatMessage): ThreadMessageLike {
+  const failureMessage = ["DEAD_LETTERED", "UNAVAILABLE"].includes(message.deliveryStatus)
+    ? message.errorMessage || WEB_CHAT_FAILURE_FALLBACK
+    : null;
   return {
     id: message.id,
     role: message.direction === "OUTBOUND" ? "assistant" : "user",
     content: [{ type: "text", text: message.content }],
     createdAt: new Date(message.occurredAt),
+    ...(failureMessage
+      ? { metadata: { custom: { webChatErrorMessage: failureMessage } } }
+      : {}),
   };
 }
+
+const WebChatUserMessage = () => {
+  const errorMessage = useAuiState((state) => {
+    const value = state.message.metadata.custom?.webChatErrorMessage;
+    return typeof value === "string" ? value : null;
+  });
+
+  return <UserMessage afterParts={errorMessage ? (
+    <div
+      role="alert"
+      className="border-destructive/30 bg-destructive/10 text-destructive mt-2 rounded-lg border px-3 py-2 text-left text-xs leading-relaxed"
+    >
+      {WEB_CHAT_FAILURE_PREFIX} {errorMessage}
+    </div>
+  ) : null} />;
+};
 
 interface ChatThreadProps {
   agentName: string;
@@ -85,7 +111,10 @@ function ChatThread({
 
   return (
     <AssistantRuntimeProvider runtime={runtime}>
-      <Thread workingMessage={`${agentName} is working`} />
+      <Thread
+        components={{ UserMessage: WebChatUserMessage }}
+        workingMessage={`${agentName} is working`}
+      />
     </AssistantRuntimeProvider>
   );
 }
