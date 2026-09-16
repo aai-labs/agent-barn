@@ -1,8 +1,15 @@
 APPROVAL_METADATA_KEY = "approval_id"
 SYNTHESIZED_MESSAGE_PREFIX = "action:"
-APPROVAL_COMPONENT_PREFIX = "agentbarn_approval"
+APPROVAL_COMPONENT_PREFIX = "ab"
 APPROVAL_COMPONENT_SEPARATOR = "|"
 APPROVAL_COMPONENT_MAX_CHARS = 100
+APPROVAL_CHOICE_CODES = {
+    "once": "o",
+    "session": "s",
+    "always": "a",
+    "deny": "d",
+}
+_APPROVAL_CHOICES_BY_CODE = {code: choice for choice, code in APPROVAL_CHOICE_CODES.items()}
 APPROVAL_CHOICE_LABELS = {
     "once": "Allow once",
     "session": "Allow for session",
@@ -29,11 +36,13 @@ def is_approval_component(value: str) -> bool:
 
 
 def encode_approval_component(thread_id: str, approval_id: str, choice: str) -> str:
-    return APPROVAL_COMPONENT_SEPARATOR.join((APPROVAL_COMPONENT_PREFIX, thread_id, approval_id, choice))
+    return APPROVAL_COMPONENT_SEPARATOR.join(
+        (APPROVAL_COMPONENT_PREFIX, thread_id, approval_id, APPROVAL_CHOICE_CODES.get(choice, choice))
+    )
 
 
 def decode_approval_component(value: str) -> tuple[str, str, str]:
     parts = value.split(APPROVAL_COMPONENT_SEPARATOR)
     if len(parts) != 4 or parts[0] != APPROVAL_COMPONENT_PREFIX:
         return "", "", ""
-    return parts[1], parts[2], parts[3]
+    return parts[1], parts[2], _APPROVAL_CHOICES_BY_CODE.get(parts[3], parts[3])
