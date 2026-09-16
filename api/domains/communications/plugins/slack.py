@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from typing import Any, Protocol
 
 import httpx
-from pydantic import Field
+from pydantic import Field, model_validator
 from websockets.asyncio.client import connect
 
 from api.domains.communications.models import (
@@ -51,6 +51,14 @@ class SlackValidationConfig(Protocol):
 
 
 class SlackSettings(AgentInitiatedDeliverySettings, PlatformSettings):
+    @model_validator(mode="before")
+    @classmethod
+    def discard_legacy_verbose_mode(cls, values: object) -> object:
+        """Accept old Connection rows while retiring the unused setting."""
+        if isinstance(values, dict) and "verbose_mode" in values:
+            return {key: value for key, value in values.items() if key != "verbose_mode"}
+        return values
+
     channel_ids: list[str] = Field(
         default_factory=list,
         title="Allowed channels",
@@ -82,11 +90,6 @@ class SlackSettings(AgentInitiatedDeliverySettings, PlatformSettings):
             "Start only requires an @mention to start a thread and then accepts unmentioned replies only in "
             "threads already owned by this Agent."
         ),
-    )
-    verbose_mode: bool = Field(
-        default=True,
-        title="Announce steps",
-        description="Post a running commentary of what it's doing, not just the final reply.",
     )
 
 
@@ -179,6 +182,7 @@ def _resolve_unique_name(entries: list[dict], recipient: str, *, fields: tuple[s
 class SlackPlatformPlugin(PlatformPlugin):
     key = "slack"
     display_name = "Slack"
+    schema_version = 2
     setup_hint = (
         "## Create a Slack app\n\n"
         "1. Open [Slack app management](https://api.slack.com/apps).\n"
