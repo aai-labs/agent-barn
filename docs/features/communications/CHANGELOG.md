@@ -24,6 +24,11 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
 - Changed: a Discord command-approval prompt is rendered by the plugin instead of being sent as the runtime's text, so the command is bounded and the message stays inside Discord's 2,000-character `content` limit; a long command previously failed the send with 400 and dead-lettered the reply.
 - Changed: Discord ingress now forwards component interactions as well as messages, acknowledging each over HTTP before the gateway persists it, since the interaction token expires after three seconds. Message handling, intents, and every other platform's ingress are untouched.
 
+### 2026-09-14 — Remove the obsolete Slack announce-steps setting — PR pending
+
+- Removed: Slack Connections no longer expose the unused **Announce steps** setting. The schema-driven Connection form drops the checkbox with the backend schema; the Agent-level **Verbose mode** setting remains the single control for runtime progress messages.
+- Changed: Slack's Connection schema advances to version 2. Existing `verbose_mode` values are removed from persisted Slack Connection settings, and validation temporarily discards that one legacy key so Connections written by an older replica remain usable during a rolling deployment. Other unknown settings remain rejected.
+
 ### 2026-09-14 — Markdown replies on Slack — PR pending
 
 - Changed: Slack replies are sent as a `markdown` block, so the standard Markdown Agents write (bold, links, headings, lists, code blocks, tables) renders instead of showing raw `**` and `[label](url)`. The plain `text` is still sent as the notification fallback. A reply carrying Slack mention markup (`<@…>`, `<#…>`, `<!…>`), which the markdown block does not document, or longer than the block's 12,000-character cap keeps the previous mrkdwn text path. Approval prompts keep their existing section and button blocks.

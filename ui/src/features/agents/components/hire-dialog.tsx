@@ -18,6 +18,8 @@ import {
   isAutoConfiguredProvider,
   type IntegrationDraft,
 } from "../integrations";
+import { useAgentNameSuggestion } from "../hooks/use-agent-name-suggestion";
+import { formatAgentName } from "../naming";
 import { useCreateAgent } from "../hooks/use-create-agent";
 import { useStartAgent } from "../hooks/use-start-agent";
 import { useModels } from "../hooks/use-models";
@@ -27,8 +29,6 @@ import { CredentialErrorAlert } from "./credential-error-alert";
 import { DialogShell, FormField } from "./hire-dialog-primitives";
 import { SkillsStep } from "./hire-dialog-steps";
 import { ModelChoice } from "./model-choice";
-
-const DEFAULT_AGENT_NAME = "Aria";
 
 interface HireDialogProps {
   onClose: () => void;
@@ -53,7 +53,8 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
   const { templates, isLoading } = useTemplates();
   const createAgent = useCreateAgent();
   const startAgent = useStartAgent();
-  const [name, setName] = useState(DEFAULT_AGENT_NAME);
+  const suggestion = useAgentNameSuggestion();
+  const [manualName, setManualName] = useState<string | null>(null);
   const [templateKey, setTemplateKey] = useState("");
   const [agentType, setAgentType] = useState<"openclaw" | "hermes">("hermes");
   const [model, setModel] = useState<string | null>(null);
@@ -65,6 +66,9 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
   const [error, setError] = useState<string | null>(null);
 
   const template = templates.find((candidate) => candidate.templateKey === templateKey);
+  const name = manualName ?? (suggestion.firstName
+    ? formatAgentName(suggestion.firstName, template?.templateName)
+    : "");
   const { standalone, groups } = splitRequiredSkills(template?.requiredSkills ?? []);
   const missingGroupChoice = groups.some((group) => !(groupChoices[group.key]?.length));
   const pending = createAgent.isPending || startAgent.isPending;
@@ -165,12 +169,19 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
           <h2 className="m-0 text-xl font-semibold tracking-tight">Hire a headless Agent</h2>
           <p className="mb-0 mt-1 text-sm" style={{ color: "var(--ink-3)" }}>Start with the runtime. Add a messaging platform or several connections afterward.</p>
         </div>
-        <button type="button" className="af-btn af-btn-ghost af-btn-icon" disabled={pending} onClick={onClose}><XIcon /></button>
+        <button type="button" aria-label="Close hiring dialog" className="af-btn af-btn-ghost af-btn-icon" disabled={pending} onClick={onClose}><XIcon /></button>
       </header>
 
       <div className="grid flex-1 gap-5 overflow-y-auto p-6 sm:grid-cols-2">
         <FormField label="Agent name">
-          <input className="af-input" value={name} onChange={(event) => setName(event.target.value)} autoFocus />
+          <input aria-label="Agent name" className="af-input" value={name} maxLength={255} onChange={(event) => setManualName(event.target.value)} autoFocus />
+          {suggestion.isLoading && <span role="status">Suggesting a name…</span>}
+          {suggestion.error && (
+            <span role="alert">
+              Could not suggest a name. Enter one or{" "}
+              <button type="button" onClick={() => void suggestion.retry()}>Retry name suggestion</button>.
+            </span>
+          )}
         </FormField>
         <FormField label="Runtime">
           <Select value={agentType} onValueChange={(value) => setAgentType(value as "openclaw" | "hermes")}>
