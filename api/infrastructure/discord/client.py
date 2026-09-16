@@ -8,6 +8,7 @@ from api.infrastructure.shared.cache import cached
 _BASE = "https://discord.com/api/v10"
 _TIMEOUT_SECONDS = 15
 _DIRECTORY_CACHE_TTL_SECONDS = 600
+_USER_AGENT = "AgentBarn/1.0"
 _MESSAGE_CHANNEL_TYPES = {0, 5, 10, 11, 12, 15}
 _MAX_NONCE_LENGTH = 25
 
@@ -24,7 +25,7 @@ class DiscordClient:
             response = resilient_request(
                 "GET",
                 f"{_BASE}{path}",
-                headers={"Authorization": f"Bot {self._bot_token}"},
+                headers={"Authorization": f"Bot {self._bot_token}", "User-Agent": _USER_AGENT},
                 params=params,
                 timeout=_TIMEOUT_SECONDS,
                 label=label,
@@ -87,7 +88,11 @@ class DiscordClient:
         response = resilient_request(
             "POST",
             f"{_BASE}/channels/{channel_id}/messages",
-            headers={"Authorization": f"Bot {self._bot_token}", "Content-Type": "application/json"},
+            headers={
+                "Authorization": f"Bot {self._bot_token}",
+                "Content-Type": "application/json",
+                "User-Agent": _USER_AGENT,
+            },
             content=json.dumps(payload).encode("utf-8"),
             timeout=_TIMEOUT_SECONDS,
             label="Discord create message",

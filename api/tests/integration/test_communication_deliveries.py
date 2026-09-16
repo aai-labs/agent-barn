@@ -96,7 +96,7 @@ def _create_connection(
         json={
             "platform_key": "discord",
             "display_name": display_name,
-            "settings": {"guild_ids": ["guild-one"]},
+            "settings": {"allowed_channel_ids": ["channel-one"]},
             "credentials": {"bot_token": bot_token},
         },
         headers=_auth(context),

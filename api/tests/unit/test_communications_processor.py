@@ -115,14 +115,14 @@ def test_outbound_processor_does_not_claim_native_platform_deliveries() -> None:
     )
     processor.config = Config(
         agent_token_encryption_key="key",
-        communications_native_platforms="slack",
+        communications_native_platforms="slack,discord",
     )
     deliveries.claim_next_outbound.return_value = None
 
     assert processor.process_one() is False
 
     deliveries.claim_next_outbound.assert_called_once_with(
-        native_platform_keys=frozenset({"slack"}),
+        native_platform_keys=frozenset({"slack", "discord"}),
     )
 
 

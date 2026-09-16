@@ -875,16 +875,15 @@ test.describe("Agent Detail Page — Channels tab", () => {
   test("edits Connection name and plugin settings without resending credentials", async () => {
     await agentDetailPage.editConnectionButton("Customer Discord").click();
     await agentDetailPage.connectionNameInput().fill("Renamed Discord");
-    // Array settings are chip inputs: clear the existing chip ("Community" is the
-    // directory label for guild-one), then add the new ID.
-    await agentDetailPage.removeArraySettingChip("Community").click();
-    await agentDetailPage.connectionSettingsInput("Guild IDs").fill("guild-updated");
+    // Array settings are chip inputs: clear the existing channel, then add the new ID.
+    await agentDetailPage.removeArraySettingChip("channel-one").click();
+    await agentDetailPage.connectionSettingsInput("Allowed channels").fill("channel-updated");
     const update = agentDetailPage.waitForConnectionMutation("PATCH");
     await agentDetailPage.saveConnectionButton().click();
     expect((await update).postDataJSON()).toEqual({
       revision: 3,
       display_name: "Renamed Discord",
-      settings: { guild_ids: ["guild-updated"] },
+      settings: { allowed_channel_ids: ["channel-updated"] },
     });
   });
 
@@ -1087,10 +1086,11 @@ test.describe("Agent Detail Page — Channels tab", () => {
     expect(connectionName).toBeLessThan(connectionSettings);
   });
 
-  test("creates another same-platform Connection from the plugin schema", async () => {
+  test("creates another same-platform Connection from the plugin schema", async ({ page }) => {
+    await serveSavedSlackConnection(page);
     await agentDetailPage.addConnectionButton().click();
     await agentDetailPage.selectPlatformButton("Discord").click();
-    await agentDetailPage.connectionSettingsInput("Guild IDs").fill("guild-two, guild-three");
+    await agentDetailPage.connectionSettingsInput("Allowed channels").fill("channel-two, channel-three");
     const botToken = agentDetailPage.credentialInput("Bot token");
     await botToken.fill("token-two");
     await expect(botToken).toHaveAttribute("type", "password");
@@ -1104,7 +1104,7 @@ test.describe("Agent Detail Page — Channels tab", () => {
       platform_key: "discord",
       display_name: "Discord",
       enabled: true,
-      settings: { guild_ids: ["guild-two", "guild-three"] },
+      settings: { allowed_channel_ids: ["channel-two", "channel-three"] },
       credentials: { bot_token: "token-two" },
     });
   });

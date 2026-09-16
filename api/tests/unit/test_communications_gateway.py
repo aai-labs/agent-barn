@@ -283,7 +283,7 @@ def test_native_platform_deliveries_are_not_reclaimed_or_claimed_by_the_gateway(
     service, deliveries = _service(connection, _feedback_plugin())
     service.config = Config(
         agent_token_encryption_key="key",
-        communications_native_platforms="slack",
+        communications_native_platforms="slack,discord",
     )
     deliveries.reclaim_expired_inbound.return_value = []
     deliveries.claim_next_inbound.return_value = None
@@ -294,7 +294,7 @@ def test_native_platform_deliveries_are_not_reclaimed_or_claimed_by_the_gateway(
 
     assert service.claim_runtime_delivery(agent) is None
 
-    excluded = frozenset({"slack"})
+    excluded = frozenset({"slack", "discord"})
     deliveries.reclaim_expired_inbound.assert_called_once_with(
         agent_id=agent.id,
         excluded_platform_keys=excluded,

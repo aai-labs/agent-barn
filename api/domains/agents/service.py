@@ -36,6 +36,7 @@ from api.domains.agents.builders import (
     build_secret_hermes_runtime,
     build_secret_runtime,
     build_service,
+    native_discord_env,
     native_slack_env,
 )
 from api.domains.agents.error_messages import friendly_k8s_error, friendly_pod_reason
@@ -1916,6 +1917,18 @@ class AgentService:
                 logger.warning("Slack default delivery target for agent %s not resolved (%s)", agent_id, exc)
         return connection.settings, credentials, home_channel
 
+    def _native_discord_connection(self, agent_id: UUID) -> tuple[dict, dict] | None:
+        """The settings and credentials of a native Discord Connection."""
+        if "discord" not in self.config.native_platform_keys:
+            return None
+        connection = self.connection_repository.get_active_by_platform_key(agent_id, "discord")
+        if connection is None or not connection.enabled:
+            return None
+        credentials = json.loads(
+            decrypt_token(connection.credentials_encrypted, self.config.agent_token_encryption_key)
+        )
+        return connection.settings, credentials
+
     def _start_agent_unchecked(self, agent: Agent, actor: ActorIdentity) -> Agent:
         """Start a known Agent after its caller has established authority."""
         agent_id = agent.id
@@ -1972,11 +1985,14 @@ class AgentService:
         if agent.agent_type == AgentType.HERMES:
             overlay = None
             native_slack = self._native_slack_connection(agent.id)
+            native_discord = self._native_discord_connection(agent.id)
             hermes_cfg = build_hermes_gateway_config(
                 effective_model,
                 llm_proxy_url,
                 approval_mode=CommandApprovalMode(agent.approval_mode).value,
                 native_slack=native_slack is not None,
+                native_discord=native_discord is not None,
+                discord_require_mention=(native_discord[0].get("require_mention", True) if native_discord else True),
                 verbose_mode=agent.verbose_mode,
             )
             secret = build_secret_hermes_runtime(
@@ -1992,6 +2008,8 @@ class AgentService:
             )
             if native_slack is not None:
                 secret.string_data.update(native_slack_env(*native_slack))
+            if native_discord is not None:
+                secret.string_data.update(native_discord_env(*native_discord))
             deployment = build_hermes_deployment(
                 agent.id,
                 org_id,

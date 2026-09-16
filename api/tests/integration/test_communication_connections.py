@@ -164,7 +164,7 @@ def _discord_payload(name: str = "Community Discord", bot_token: str = "token-on
     return {
         "platform_key": "discord",
         "display_name": name,
-        "settings": {"guild_ids": ["guild-one"]},
+        "settings": {"allowed_channel_ids": ["channel-one"]},
         "credentials": {"bot_token": bot_token},
     }
 
@@ -679,7 +679,7 @@ def test_connection_settings_name_and_credentials_can_be_updated() -> None:
                 json={
                     "revision": created["revision"],
                     "display_name": "Renamed Discord",
-                    "settings": {"guild_ids": ["guild-two"]},
+                    "settings": {"allowed_channel_ids": ["channel-two"]},
                     "credentials": {"bot_token": "rotated-token"},
                 },
                 headers=_auth(context),
@@ -692,12 +692,10 @@ def test_connection_settings_name_and_credentials_can_be_updated() -> None:
                 has_entries(
                     display_name="Renamed Discord",
                     settings={
-                        "guild_ids": ["guild-two"],
-                        "allowed_channel_ids": [],
+                        "allowed_channel_ids": ["channel-two"],
                         "allowed_user_ids": [],
                         "allowed_role_ids": [],
-                        "group_policy": "allowlist",
-                        "dm_policy": "off",
+                        "allow_all_users": False,
                         "require_mention": True,
                         "home_channel_id": None,
                     },
@@ -1388,13 +1386,13 @@ def test_app_package_is_named_after_the_agent_not_the_connection() -> None:
             assert_that(response.headers["content-disposition"], contains_string(f"{slug}-teams-app.zip"))
 
 
-def _slack_connection_for_current_agent(key: str):
+def _connection_for_current_agent(key: str, platform_key: str):
     def step(context):
         delegate: PostgresRepositoryDelegate = context.injector.get(PostgresRepositoryDelegate)
         connection = CommunicationConnection(
             organization_id=context.agent.organization_id,
             agent_id=context.agent.id,
-            platform_key="slack",
+            platform_key=platform_key,
             display_name=key,
             credentials_encrypted="unused",
             driver_key_encrypted="unused",
@@ -1410,18 +1408,35 @@ def test_supervised_connections_exclude_native_platforms_only_on_hermes_agents()
         [
             *_GIVEN,
             there_is_an_agent(name="OpenClaw Agent"),
-            _slack_connection_for_current_agent("openclaw_slack"),
+            _connection_for_current_agent("openclaw_slack", "slack"),
+            _connection_for_current_agent("openclaw_discord", "discord"),
             there_is_an_agent(name="Hermes Agent", agent_type=AgentType.HERMES),
-            _slack_connection_for_current_agent("hermes_slack"),
+            _connection_for_current_agent("hermes_slack", "slack"),
+            _connection_for_current_agent("hermes_discord", "discord"),
         ]
     ) as context:
         repository: CommunicationConnectionRepository = context.injector.get(CommunicationConnectionRepository)
 
-        with when("the supervisor lists Connections with Slack running natively"):
-            native = {connection.id for connection in repository.list_enabled(frozenset({"slack"}))}
+        with when("the supervisor lists Connections with Slack and Discord running natively"):
+            native = {connection.id for connection in repository.list_enabled(frozenset({"slack", "discord"}))}
             gateway = {connection.id for connection in repository.list_enabled()}
 
-        with then("only the Hermes Agent's Slack Connection is left to its runtime"):
-            assert_that(context.openclaw_slack.id in native, equal_to(True))
-            assert_that(context.hermes_slack.id in native, equal_to(False))
-            assert_that({context.openclaw_slack.id, context.hermes_slack.id} <= gateway, equal_to(True))
+        with then("only the Hermes Agent's native Connections are left to its runtime"):
+            assert_that(
+                {context.openclaw_slack.id, context.openclaw_discord.id} <= native,
+                equal_to(True),
+            )
+            assert_that(
+                {context.hermes_slack.id, context.hermes_discord.id}.isdisjoint(native),
+                equal_to(True),
+            )
+            assert_that(
+                {
+                    context.openclaw_slack.id,
+                    context.openclaw_discord.id,
+                    context.hermes_slack.id,
+                    context.hermes_discord.id,
+                }
+                <= gateway,
+                equal_to(True),
+            )

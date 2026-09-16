@@ -30,6 +30,7 @@ from api.domains.agents.models import (
 )
 from api.domains.agents.override_repository import AgentOverrideRepository
 from api.domains.agents.repository import AgentRepository
+from api.domains.communications.models import CommunicationConnection
 from api.domains.events.catalog import (
     AGENT_CREATED,
     AGENT_DELETED,
@@ -51,7 +52,7 @@ from api.domains.organizations.models import Organization
 from api.domains.organizations.repository import OrganizationRepository
 from api.domains.templates.models import AgentTemplate, PlatformTemplate
 from api.domains.templates.repository import TemplateRepository
-from api.infrastructure.crypto import decrypt_token
+from api.infrastructure.crypto import decrypt_token, encrypt_token
 from api.infrastructure.integration_validators.result import IntegrationValidationResult
 from api.infrastructure.kubernetes.client import KubernetesClient
 from api.infrastructure.litellm.client import LiteLLMClient, LiteLLMError
@@ -144,6 +145,22 @@ _GIVEN_WITH_HERMES_IMAGE = [
     there_is_an_organization_with_user_and_access_token(),
     use_org_for_auth(),
     there_is_a_template(),
+]
+
+_GIVEN_WITH_NATIVE_DISCORD = [
+    set_env_variable(
+        {
+            "AGENT_TOKEN_ENCRYPTION_KEY": TEST_ENCRYPTION_KEY,
+            "LITELLM_BASE_URL": "http://litellm:4000",
+            "LITELLM_SECRET_NAME": "litellm",
+            "AGENT_DEFAULT_MODEL": "litellm/gpt-5-mini",
+            "AGENT_LITELLM_BASE_URL": "http://litellm:4000",
+            "API_EXTERNAL_URL": "https://api.test.com",
+            "HERMES_IMAGE": "nousresearch/hermes-agent:v1.0",
+            "COMMUNICATIONS_NATIVE_PLATFORMS": "slack,discord",
+        }
+    ),
+    *_GIVEN_WITH_HERMES_IMAGE[1:],
 ]
 
 
@@ -2339,6 +2356,62 @@ def test_start_hermes_agent_configmap_has_hermes_config():
 
         with then("BOOTSTRAP.md is absent from the ConfigMap"):
             assert_that(config_map.data, is_not(has_key("BOOTSTRAP.md")))
+
+
+def _native_discord_connection(context) -> None:
+    delegate: PostgresRepositoryDelegate = context.injector.get(PostgresRepositoryDelegate)
+    delegate.save(
+        CommunicationConnection(
+            organization_id=context.agent.organization_id,
+            agent_id=context.agent.id,
+            platform_key="discord",
+            display_name="Native Discord",
+            settings={
+                "allowed_channel_ids": ["channel-1"],
+                "allowed_user_ids": ["user-1"],
+                "allowed_role_ids": ["role-1"],
+                "allow_all_users": False,
+                "require_mention": False,
+                "home_channel_id": "channel-home",
+            },
+            credentials_encrypted=encrypt_token(json.dumps({"bot_token": "discord-token"}), TEST_ENCRYPTION_KEY),
+            driver_key_encrypted=encrypt_token("unused", TEST_ENCRYPTION_KEY),
+        )
+    )
+
+
+def test_start_hermes_agent_runs_discord_in_the_native_gateway() -> None:
+    import yaml as _yaml
+
+    with given(
+        [
+            *_GIVEN_WITH_NATIVE_DISCORD,
+            there_is_an_agent(agent_type=AgentType.HERMES),
+            _native_discord_connection,
+        ]
+    ) as context:
+        client: TestClient = context.client
+        k8s: MagicMock = context.injector.get(KubernetesClient)
+
+        with when("I start a Hermes Agent with a native Discord Connection"):
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("Hermes owns Discord transport and receives its native authorization gates"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            config_map = k8s.create_config_map.call_args.args[1]
+            cfg = _yaml.safe_load(config_map.data["hermes-config.yaml"])
+            assert_that(cfg["discord"], equal_to({"require_mention": False, "thread_require_mention": False}))
+            assert_that(cfg["plugins"]["enabled"], has_item("agentbarn-observer"))
+
+            secret = k8s.create_secret.call_args.args[1].string_data
+            assert_that(secret["DISCORD_BOT_TOKEN"], equal_to("discord-token"))
+            assert_that(secret["DISCORD_ALLOW_ALL_USERS"], equal_to("false"))
+            assert_that(secret["DISCORD_ALLOWED_CHANNELS"], equal_to("channel-1"))
+            assert_that(secret["DISCORD_ALLOWED_USERS"], equal_to("user-1"))
+            assert_that(secret["DISCORD_ALLOWED_ROLES"], equal_to("role-1"))
+            assert_that(secret["DISCORD_HOME_CHANNEL"], equal_to("channel-home"))
+            assert_that(secret["AGENTBARN_SCHEDULED_DELIVERY"], equal_to("0"))
+            assert_that("AGENTBARN_DISCORD_POLICY" in secret, equal_to(False))
 
 
 @pytest.mark.parametrize(

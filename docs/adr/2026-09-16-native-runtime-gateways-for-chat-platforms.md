@@ -27,3 +27,7 @@ Slack, Discord, and then Microsoft Teams Communication Connections move back to 
 ## Phase 1 implementation note
 
 The Hermes Slack spike uses a deployment-level native Platform allowlist rather than the final per-Connection transport field. When Slack is native, Agent Barn excludes it from supervised ingress, expired-lease recovery, and runtime delivery claims. Hermes owns scheduled delivery for the whole runtime: the Agent Barn scheduler capture and persisted spool drain are both disabled, including for other Platforms on that Agent.
+
+## Phase 2 implementation note
+
+Discord uses the same deployment-level cutoff and observer. Agent Barn adopts Hermes' native Discord authorization surface—global user, role, and channel allowlists plus Allow all users—rather than maintaining distinct guild and DM policies Hermes cannot represent. Agent Barn projects these gates directly into Hermes; the observer reports content-free Connection Journal telemetry only and does not make admission decisions.

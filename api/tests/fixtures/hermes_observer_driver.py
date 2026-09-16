@@ -79,6 +79,23 @@ def main():
     if (got := stages(mod)) != expected:
         fail(f"run stages {got}, expected {expected}")
 
+    # Native Discord authorization is entirely Hermes-owned. The observer is
+    # telemetry-only and must never introduce a second policy decision.
+    discord_source = SessionSource(
+        platform=Platform.DISCORD,
+        chat_id="D1",
+        chat_type="dm",
+        user_id="U1",
+        message_id="discord-message-1",
+    )
+    discord_event = SimpleNamespace(text="secret discord text", source=discord_source, message_id="discord-message-1")
+    decision = hooks["pre_gateway_dispatch"](event=discord_event, gateway=gateway, session_store=store)
+    if decision is not None:
+        fail(f"Discord observation unexpectedly changed dispatch: {decision!r}")
+    expected = [("provider_observed", "discord:discord-message-1")]
+    if (got := stages(mod)) != expected:
+        fail(f"Discord policy stages {got}, expected {expected}")
+
     watermark = [0.0]
     delivery_ledger.record_obligation(
         obligation_id="o1",

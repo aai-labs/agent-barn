@@ -89,6 +89,7 @@ def _on_pre_gateway_dispatch(event=None, gateway=None, session_store=None, **_):
     if not platform or not message_id:
         return
     correlation_id = f"{platform}:{message_id}"
+    _emit("provider_observed", platform, correlation_id)
     try:
         session_key = gateway._session_key_for_source(source)  # ty: ignore[unresolved-attribute]
     except Exception:
@@ -96,7 +97,6 @@ def _on_pre_gateway_dispatch(event=None, gateway=None, session_store=None, **_):
     if session_key:
         with _lock:
             _remember(_latest_inbound, session_key, correlation_id)
-    _emit("provider_observed", platform, correlation_id)
 
 
 def _session_key_for(session_id: str | None) -> str | None:

@@ -135,10 +135,12 @@ def build_hermes_gateway_config(
     litellm_base_url: str,
     approval_mode: str = "auto",
     native_slack: bool = False,
+    native_discord: bool = False,
+    discord_require_mention: bool = True,
     verbose_mode: bool = False,
 ) -> dict:
     plugins = ["telemetry-push", "agentbarn-messaging"]
-    if native_slack:
+    if native_slack or native_discord:
         plugins.append("agentbarn-observer")
     config = _hermes_config_core(model, litellm_base_url, enabled_plugins=plugins, approval_mode=approval_mode)
     if native_slack:
@@ -151,6 +153,19 @@ def build_hermes_gateway_config(
         # The Agent's Verbose mode. Progress accumulates in one edited message
         # rather than a permanent Slack line per tool call.
         config["display"]["platforms"]["slack"] = {
+            "tool_progress": "all" if verbose_mode else "off",
+            "tool_progress_grouping": "accumulate",
+            "interim_assistant_messages": verbose_mode,
+        }
+    if native_discord:
+        config["discord"] = {
+            # Agent Barn's Discord contract requires the same mention policy in
+            # parent channels and threads. Hermes otherwise keeps responding in
+            # a thread after its first turn without another mention.
+            "require_mention": discord_require_mention,
+            "thread_require_mention": discord_require_mention,
+        }
+        config["display"]["platforms"]["discord"] = {
             "tool_progress": "all" if verbose_mode else "off",
             "tool_progress_grouping": "accumulate",
             "interim_assistant_messages": verbose_mode,
@@ -195,6 +210,27 @@ def native_slack_env(
         env["SLACK_HOME_CHANNEL_NAME"] = home_channel.display_name or ""
         if home_channel.thread_id:
             env["SLACK_HOME_CHANNEL_THREAD_ID"] = home_channel.thread_id
+    return env
+
+
+def native_discord_env(settings: dict, credentials: dict) -> dict[str, str]:
+    """Map the Discord Connection's native Hermes authorization gates."""
+    env = {
+        "DISCORD_BOT_TOKEN": credentials["bot_token"],
+        "DISCORD_ALLOW_ALL_USERS": "true" if settings.get("allow_all_users") else "false",
+        # Native Hermes delivers scheduled results to their origin or home.
+        "AGENTBARN_SCHEDULED_DELIVERY": "0",
+    }
+    for settings_key, env_key in (
+        ("allowed_channel_ids", "DISCORD_ALLOWED_CHANNELS"),
+        ("allowed_user_ids", "DISCORD_ALLOWED_USERS"),
+        ("allowed_role_ids", "DISCORD_ALLOWED_ROLES"),
+    ):
+        values = [str(value) for value in settings.get(settings_key, []) if str(value)]
+        if values:
+            env[env_key] = ",".join(values)
+    if home_channel_id := settings.get("home_channel_id"):
+        env["DISCORD_HOME_CHANNEL"] = str(home_channel_id)
     return env
 
 
