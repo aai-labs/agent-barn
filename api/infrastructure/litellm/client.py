@@ -15,6 +15,10 @@ class LiteLLMError(Exception):
     pass
 
 
+class LiteLLMKeyNotFound(LiteLLMError):
+    """LiteLLM has no record of the key — not the same as a key with no team."""
+
+
 @inject
 @dataclass
 @singleton
@@ -23,7 +27,13 @@ class LiteLLMClient:
     config: Config
 
     def _master_key(self) -> str:
-        secret = self.k8s.get_secret(self.config.litellm_secret_name, self.config.k8s_namespace)
+        try:
+            secret = self.k8s.get_secret(self.config.litellm_secret_name, self.config.k8s_namespace)
+        except Exception as exc:
+            # The Kubernetes client raises its own transport errors (urllib3, ssl,
+            # kubernetes.client). Every caller here handles LiteLLMError and nothing
+            # else, so letting those through turns a degraded proxy into a 500.
+            raise LiteLLMError("Could not read the LiteLLM master key") from exc
         if not secret or not secret.data:
             raise LiteLLMError(f"Secret '{self.config.litellm_secret_name}' not found or empty")
         raw = secret.data.get("LITELLM_MASTER_KEY", "")
@@ -39,8 +49,152 @@ class LiteLLMClient:
             "Content-Type": "application/json",
         }
 
+    _TIMEOUT = 10
+
+    def _team_info(self, org_id: str, headers: dict[str, str]) -> dict | None:
+        """The Organization's team, or None when it does not exist yet."""
+        url = f"{self.config.litellm_base_url}/team/info"
+        response = httpx.get(url, params={"team_id": org_id}, headers=headers, timeout=self._TIMEOUT)
+        if response.status_code == 404:
+            return None
+        response.raise_for_status()
+        info = response.json()["team_info"]
+        if info["team_id"] != org_id:
+            raise ValueError("Unexpected team identity")
+        return info
+
+    def _create_team(self, org_id: str, headers: dict[str, str], policy: dict) -> None:
+        created = httpx.post(
+            f"{self.config.litellm_base_url}/team/new",
+            json={"team_id": org_id, "team_alias": f"agentbarn-{org_id}", **policy},
+            headers=headers,
+            timeout=self._TIMEOUT,
+        )
+        # A concurrent process may have created the team first. Verify by re-reading;
+        # an arbitrary 400 response is not evidence of success.
+        if created.status_code not in (400, 409):
+            created.raise_for_status()
+        if self._team_info(org_id, headers) is None:
+            raise ValueError("Team absent after creation")
+
+    def ensure_team_exists(self, org_id: str) -> None:
+        """Provision the Organization's team if it is missing, leaving policy alone.
+
+        Deliberately never writes budget fields: this runs on the key-generation path,
+        whose caller has no business re-asserting a spend policy it was not given.
+        """
+        try:
+            headers = self._headers(self._master_key())
+            if self._team_info(org_id, headers) is None:
+                self._create_team(org_id, headers, {})
+        except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
+            raise LiteLLMError("Failed to provision Organization LiteLLM team") from exc
+
+    def apply_team_budget(self, org_id: str, max_budget: float | None, budget_duration: str | None) -> None:
+        """Reconcile the team's spend policy, without disturbing spend or reset dates.
+
+        Only changed fields are written: an update reschedules the renewal date, so
+        re-sending an unchanged policy would silently move every Organization's window.
+        """
+        desired = {
+            "max_budget": max_budget,
+            "budget_duration": budget_duration if max_budget is not None else None,
+        }
+        try:
+            headers = self._headers(self._master_key())
+            current = self._team_info(org_id, headers)
+            if current is None:
+                self._create_team(org_id, headers, desired)
+                return
+            changed = {name: value for name, value in desired.items() if current.get(name) != value}
+            if changed:
+                response = httpx.post(
+                    f"{self.config.litellm_base_url}/team/update",
+                    json={"team_id": org_id, **changed},
+                    headers=headers,
+                    timeout=self._TIMEOUT,
+                )
+                response.raise_for_status()
+                # Verified by re-reading, like team creation and key enrollment: some
+                # versions accept an update and drop fields they do not recognise, and
+                # a silently ignored clear would leave the cap enforced while the row
+                # and the UI both report no limit.
+                applied = self._team_info(org_id, headers) or {}
+                unapplied = [name for name, value in changed.items() if applied.get(name) != value]
+                if unapplied:
+                    raise ValueError(f"LiteLLM did not apply {', '.join(sorted(unapplied))}")
+        except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
+            raise LiteLLMError("Failed to reconcile Organization LiteLLM team budget") from exc
+
+    def get_team_budget_status(self, org_id: str) -> dict | None:
+        """Spend accrued against the team's limit, or None when there is no team.
+
+        This is the figure LiteLLM enforces on — deliberately not `cost_record`,
+        which carries corrections LiteLLM has never seen.
+        """
+        try:
+            info = self._team_info(org_id, self._headers(self._master_key()))
+        except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
+            raise LiteLLMError("Failed to read Organization team spend") from exc
+        if info is None:
+            return None
+        return {"spend": info.get("spend"), "renews_at": info.get("budget_reset_at")}
+
+    def get_key_team(self, key: str) -> str | None:
+        """The team this key belongs to, or None when it belongs to none.
+
+        Every failure path here deliberately drops the exception chain: the key
+        travels in /key/info's query string, so an httpx error would carry it into
+        any traceback or log line built from the cause.
+        """
+        try:
+            response = httpx.get(
+                f"{self.config.litellm_base_url}/key/info",
+                params={"key": key},
+                headers=self._headers(self._master_key()),
+                timeout=self._TIMEOUT,
+            )
+            if response.status_code == 404:
+                raise LiteLLMKeyNotFound("LiteLLM does not recognise this Agent key")
+            response.raise_for_status()
+            return response.json()["info"].get("team_id") or None
+        except LiteLLMKeyNotFound:
+            raise
+        except httpx.HTTPError, ValueError, KeyError, TypeError:
+            raise LiteLLMError("Failed to read Agent key team membership") from None
+
+    def attach_key_to_team(self, key: str, org_id: str) -> None:
+        """Enroll an existing Agent key into its Organization's team.
+
+        Preserves key identity, spend and blocked state. A key already in a
+        different team is refused rather than moved: someone may have arranged that
+        deliberately, and reassigning it silently would be worse than leaving the
+        Organization partially covered.
+        """
+        current_team = self.get_key_team(key)
+        if current_team == org_id:
+            return
+        if current_team:
+            raise LiteLLMError("Agent key already belongs to a different LiteLLM team")
+        try:
+            response = httpx.post(
+                f"{self.config.litellm_base_url}/key/update",
+                json={"key": key, "team_id": org_id},
+                headers=self._headers(self._master_key()),
+                timeout=self._TIMEOUT,
+            )
+            response.raise_for_status()
+        except httpx.HTTPError, ValueError, KeyError, TypeError:
+            raise LiteLLMError("Failed to attach Agent key to Organization team") from None
+        # Verified by re-reading rather than trusting the response: some LiteLLM
+        # versions accept an update and drop fields they do not recognise, which
+        # would otherwise report an unenrolled key as covered.
+        if self.get_key_team(key) != org_id:
+            raise LiteLLMError("LiteLLM did not apply the team assignment")
+
     def generate_key(self, agent_id: str, agent_name: str, org_id: str) -> str:
         """Returns a new plaintext LiteLLM key for the agent."""
+        self.ensure_team_exists(org_id)
         master_key = self._master_key()
         url = f"{self.config.litellm_base_url}/key/generate"
         try:
@@ -48,6 +202,7 @@ class LiteLLMClient:
                 url,
                 json={
                     "key_alias": f"{agent_name}-{agent_id}",
+                    "team_id": org_id,
                     "metadata": {
                         "agent_id": agent_id,
                         "organization_id": org_id,

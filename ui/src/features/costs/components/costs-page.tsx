@@ -15,6 +15,8 @@ import { AgentsBySpend } from "./agents-by-spend";
 import { CostChartsPanel } from "./cost-charts-panel";
 import { CostFilterBar } from "./cost-filter-bar";
 import { CostList } from "./cost-list";
+import { LlmBudgetBanner } from "@/features/organizations/components/llm-budget-banner";
+
 import { CostSummaryCards } from "./cost-summary-cards";
 
 const FILTER_DEFAULTS = {
@@ -121,6 +123,10 @@ export function CostsPage() {
         <button className="af-btn flex-shrink-0" onClick={handleRefresh}>
           <RefreshCw size={14} /> Refresh
         </button>
+      </div>
+
+      <div className="mb-6">
+        <LlmBudgetBanner show="warning" />
       </div>
 
       <CostSummaryCards summary={summary} isLoading={isLoadingSummary} />

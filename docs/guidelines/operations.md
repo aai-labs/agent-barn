@@ -39,6 +39,50 @@ The deployable services have independent Helm charts. `../../helmfile.yaml.gotmp
 
 LiteLLM uses a non-overlapping rolling update (`maxSurge: 0`, `maxUnavailable: 1`): the namespace quota cannot accommodate its old and replacement 2Gi pods at once. Upgrades briefly interrupt the proxy while Kubernetes replaces the pod; do not restore the default surge behavior unless the quota is increased first.
 
+## Organization LLM budgets
+
+Each Organization has its own LLM spend ceiling, set by a Platform Administrator
+through `PUT /platform/organizations/{id}/llm-budget`. There is no deployment-wide
+budget and no environment variable: an amount belongs to one Organization, and an
+Organization cannot raise its own. The behaviour contract is in
+[Costs](../features/costs.md#organization-llm-budgets).
+
+Budgets are off until set. With LiteLLM configured, teams are still provisioned and
+new keys assigned even when no amount is set anywhere. No Agent restart is required,
+and a change takes effect as soon as it is saved — there is nothing to redeploy.
+
+`budget_usd` is a non-negative finite number, where `0` is a zero allowance and
+omitting it removes the cap. `budget_duration` is a positive integer followed by
+`s`, `m`, `h` or `d`, defaulting to `30d` — a 30-day interval, not a calendar month.
+Clearing the amount also clears the renewal schedule. Changing only the amount
+preserves spend and the renewal date; changing the duration moves the next renewal
+without resetting spend.
+
+Saving a budget writes the Organization row first and then pushes it to LiteLLM. A
+proxy failure returns `502` with the amount already stored, because losing an
+administrator's setting because the proxy blinked is worse than a delayed push. The
+`<release>-llm-budget-reconciler` CronJob pushes stored budgets onto their teams every
+15 minutes to repair exactly that kind of drift, logging
+`Organization LiteLLM budgets reconciled`. Like the other reconcilers it runs under
+`concurrencyPolicy: Forbid`, so one runner regardless of API replica count, and the
+API itself never contacts the proxy at startup. A budget saved while the proxy was
+unreachable is therefore applied within one interval rather than at the next restart.
+Run either pass by hand with `make reconcile-llm-budgets` or `make run-llm-budget-alerts`.
+
+`ORGANIZATION_LLM_BUDGET_ALERT_THRESHOLDS` sets the percentages at which an
+Organization's Owners and Admins are notified — comma separated, each between 1 and
+100, defaulting to `80,100`. A malformed list refuses to boot rather than quietly
+alerting nobody. The value is read by the API and by the
+`<release>-llm-budget-alerts` CronJob, which runs every 5 minutes over Organizations
+that have a limit set. Alerting is informational: the limit is enforced in the
+request path, so the interval only bounds how late someone is told.
+
+Agents created before an Organization had a limit carry no team on their key, so a
+limit does not bind them until they are enrolled. A Platform Administrator does that
+from the Organization's page — the spend limit controls stay hidden until every Agent
+is covered, and the button reports anything it could not enroll by name. Historical
+pre-enrollment spend stays in reports but is not added to the new team counter.
+
 ## Transactional email
 
 Invites, password resets, and agent lifecycle notifications send through

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { api } from "@/shared/api";
 import { toastError } from "@/shared/toast";
@@ -10,6 +10,9 @@ import { currentUserContextKey } from "@/auth/utils";
 import {
   type CreateOrganizationFormData,
   OrganizationSchema,
+  type OrganizationLlmCoverage,
+  OrganizationLlmCoverageSchema,
+  PlatformOrganizationSchema,
 } from "../schemas";
 import { organizationsKey, platformOrganizationsKey } from "../utils";
 
@@ -94,5 +97,80 @@ export function useUpdateOrganization({ toastOnError = true }: { toastOnError?: 
           toastError(error, "Failed to save changes. Please try again.");
         }
       : undefined,
+  });
+}
+
+/** Set or clear an Organization's LLM spend ceiling. Platform administrators only. */
+export function useSetOrganizationLlmBudget(organizationId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (budget: { budgetUsd: number | null; budgetDuration?: string | null }) => {
+      const response = await api.put(
+        `/api/v1/platform/organizations/${organizationId}/llm-budget`,
+        budget,
+        { schema: PlatformOrganizationSchema },
+      );
+      return response.data;
+    },
+    onSettled: () => {
+      // Refetched on failure too: a 502 here means the amount was stored and only the
+      // proxy push failed, so the card must not keep rendering the previous value.
+      void queryClient.invalidateQueries({
+        queryKey: platformOrganizationsKey.detail(organizationId),
+      });
+      void queryClient.invalidateQueries({ queryKey: platformOrganizationsKey.lists() });
+    },
+    onError: (error) => {
+      toastError(error, "We couldn't update the LLM budget");
+    },
+  });
+}
+
+const llmCoverageKey = (organizationId: string) =>
+  [...platformOrganizationsKey.detail(organizationId), "llm-coverage"] as const;
+
+/** Read live from the proxy: a cached answer would keep claiming coverage after
+ *  someone detached a key by hand. */
+export function useOrganizationLlmCoverage(organizationId: string) {
+  const query = useQuery({
+    queryKey: llmCoverageKey(organizationId),
+    queryFn: async () => {
+      const response = await api.get<OrganizationLlmCoverage>(
+        `/api/v1/platform/organizations/${organizationId}/llm-budget/coverage`,
+        { schema: OrganizationLlmCoverageSchema },
+      );
+      return response.data;
+    },
+    enabled: !!organizationId,
+  });
+
+  return {
+    coverage: query.data ?? null,
+    isLoading: query.isPending,
+    error: query.error,
+  };
+}
+
+export function useEnrollOrganizationLlmKeys(organizationId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async () => {
+      const response = await api.post<OrganizationLlmCoverage>(
+        `/api/v1/platform/organizations/${organizationId}/llm-budget/enroll`,
+        {},
+        { schema: OrganizationLlmCoverageSchema },
+      );
+      return response.data;
+    },
+    onSettled: () => {
+      // Refetched on failure too: enrollment is partial by nature, so even a failed
+      // run can have covered some Agents.
+      void queryClient.invalidateQueries({ queryKey: llmCoverageKey(organizationId) });
+    },
+    onError: (error) => {
+      toastError(error, "We couldn't enroll this organization's agents");
+    },
   });
 }
