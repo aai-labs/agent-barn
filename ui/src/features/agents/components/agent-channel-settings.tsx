@@ -1144,8 +1144,25 @@ export function AgentChannelSettings({
                         />
                         <div className="flex flex-col gap-4">
                           {connection.platformKey === "discord" && (
-                            <label className="flex flex-col gap-1.5 text-sm font-medium">
-                              Browse server
+                            <div className="flex flex-col gap-1.5 text-sm font-medium">
+                              <div className="flex items-center justify-between gap-2">
+                                Browse server
+                                <button
+                                  type="button"
+                                  className="af-btn af-btn-sm"
+                                  aria-label="Refresh server list"
+                                  disabled={discordGuilds.isFetching}
+                                  onClick={() => void discordGuilds.refetch()}
+                                >
+                                  <RefreshCw
+                                    size={14}
+                                    className={
+                                      discordGuilds.isFetching ? "animate-spin" : undefined
+                                    }
+                                  />{" "}
+                                  Refresh
+                                </button>
+                              </div>
                               <Select
                                 value={discordGuildId}
                                 onValueChange={setDiscordGuildId}
@@ -1170,7 +1187,7 @@ export function AgentChannelSettings({
                                 Select a server, then choose its channels,
                                 users, or roles below. Manual IDs still work.
                               </span>
-                            </label>
+                            </div>
                           )}
                           <SchemaFields
                             schema={platform.settingsSchema}
