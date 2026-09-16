@@ -150,6 +150,7 @@ export const mockAgentInError = {
   status: "ERROR",
   running_model: "",
   last_error: mockProvisioningError,
+};
 export const mockWebChatApprovalPrompt = {
   id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
   direction: "OUTBOUND",
