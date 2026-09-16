@@ -24,6 +24,7 @@ from api.domains.communications.plugins.base import (
     PlatformPlugin,
     PlatformSettings,
     ProcessingFeedbackContext,
+    failure_notice,
     provider_idempotency_key,
 )
 from api.infrastructure.discord.client import DiscordClient
@@ -32,8 +33,6 @@ logger = logging.getLogger(__name__)
 
 _INSTALL_OAUTH_SCOPES = "bot%20applications.commands"
 _INSTALL_PERMISSIONS = 274878286912
-_FAILURE_NOTICE_PREFIX = "⚠️ I couldn't process that message."
-_FALLBACK_FAILURE_SUMMARY = "The failure is recorded in this Connection's diagnostics."
 
 
 class DiscordValidationConfig(Protocol):
@@ -217,7 +216,7 @@ class DiscordPlatformPlugin(PlatformPlugin):
         try:
             DiscordClient(credentials.bot_token).send_message(
                 context.location.id,
-                f"{_FAILURE_NOTICE_PREFIX} {context.error_summary or _FALLBACK_FAILURE_SUMMARY}",
+                failure_notice(context.error_summary),
                 reply_to_id=context.provider_message_id,
                 # One notice per dead-lettered Delivery, even if the hook re-runs.
                 idempotency_key=(
