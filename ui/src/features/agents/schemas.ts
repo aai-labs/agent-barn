@@ -350,6 +350,9 @@ export type AgentAssignedSkill = z.infer<typeof AgentAssignedSkillSchema>;
 export type TemplateRequiredSkill = z.infer<typeof TemplateRequiredSkillSchema>;
 export type AgentHealth = z.infer<typeof AgentHealthSchema>;
 export type AgentTemplateRead = z.infer<typeof AgentTemplateReadSchema>;
+export const AgentNameSuggestionSchema = z.object({ firstName: z.string().min(1) });
+export type AgentNameSuggestion = z.infer<typeof AgentNameSuggestionSchema>;
+
 export type TemplateSource = AgentTemplateRead["templateSource"];
 export type PaginatedTemplates = z.infer<typeof PaginatedTemplatesSchema>;
 export type PaginatedAgents = z.infer<typeof PaginatedAgentsSchema>;
