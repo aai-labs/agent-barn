@@ -48,8 +48,9 @@ export function platformCostSummary(overrides: Record<string, unknown> = {}) {
   return {
     ...costSummary(),
     daily_burn_rate: 4.77,
-    credits_remaining: null,
-    runway_days: null,
+    credits_status: "ok",
+    credits_remaining: 250,
+    credits_limit: 500,
     unattributed_spend: 1.97,
     unattributed_calls: 49,
     organizations: [

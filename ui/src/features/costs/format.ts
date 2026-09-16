@@ -56,15 +56,17 @@ function formatDollarsTerse(value: number): string {
  *  switches to cents, where "0.1¢" says in four characters what "$0.001" needs
  *  six to say, and the sub-cent end stops being a row of zeros to count.
  *
- *  "≤" is what keeps a bare edge from reading as the band's midpoint. The
- *  tooltip still gives the exact range, so nothing is lost by shortening here. */
+ *  The edge carries no "≤": Geist has no glyph at U+2264, so the browser drew
+ *  that one character in a fallback face and every label on the axis looked like
+ *  a different font. The chart's subtitle says the labels are upper bounds, and
+ *  the tooltip still gives each band's exact range. */
 export function formatHistogramTick(lower: number, upper: number | null): string {
   if (upper === null) return `>${formatDollarsTerse(lower)}`;
-  if (upper >= 1) return `≤${formatDollarsTerse(upper)}`;
+  if (upper >= 1) return formatDollarsTerse(upper);
   const cents = upper * 100;
   // toFixed then back through Number drops the float dust: 0.0001 * 100 is
   // 0.010000000000000002, which would otherwise print in full.
-  return `≤${Number(cents.toFixed(2))}¢`;
+  return `${Number(cents.toFixed(2))}¢`;
 }
 
 export function formatDuration(ms: number | null): string {

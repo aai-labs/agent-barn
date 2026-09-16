@@ -6,7 +6,7 @@ from api.domains.costs.models import CostFilter
 from api.domains.costs.platform_service import PlatformCostService
 from api.domains.costs.repository import CostRepository, CostTotals
 from api.domains.platform_admin.models import StatsGranularity, StatsWindow
-from api.infrastructure.openrouter.client import OpenRouterClient
+from api.infrastructure.openrouter.client import CreditsStatus, OpenRouterClient, OpenRouterCredits
 
 WINDOW = StatsWindow(
     start=datetime(2026, 8, 4, tzinfo=UTC),
@@ -50,11 +50,11 @@ class FakeOpenRouter:
     def __init__(self, credits):
         self.credits = credits
 
-    def get_credits_remaining(self):
+    def get_credits(self):
         return self.credits
 
 
-def _summary(*, spend="300.00", calls=100, credits=None):
+def _summary(*, spend="300.00", calls=100, credits=OpenRouterCredits(status=CreditsStatus.UNAVAILABLE)):
     # cast: the service takes concrete types because injector resolves it from
     # annotations. These stand in for the two reads the arithmetic below depends on.
     service = PlatformCostService(
@@ -68,35 +68,33 @@ def test_burn_rate_is_window_spend_divided_by_window_days():
     assert _summary(spend="300.00").daily_burn_rate == 10.0
 
 
-def test_runway_is_credits_divided_by_burn_rate():
-    summary = _summary(spend="300.00", credits=250.0)
+def test_a_healthy_read_carries_the_limit_and_what_is_left():
+    summary = _summary(credits=OpenRouterCredits(status=CreditsStatus.OK, limit=500.0, remaining=250.0))
 
+    assert summary.credits_status is CreditsStatus.OK
     assert summary.credits_remaining == 250.0
-    assert summary.runway_days == 25.0
+    assert summary.credits_limit == 500.0
 
 
-def test_runway_is_unknown_when_credit_is_unknown():
-    """None covers both "no credit limit set" and "the poll failed".
+def test_a_key_without_a_limit_is_not_reported_as_unavailable():
+    """The two used to collapse into a single null. They mean opposite things: one
+    key can spend freely, the other cannot be read at all."""
+    summary = _summary(credits=OpenRouterCredits(status=CreditsStatus.NO_LIMIT))
 
-    Neither should render as a number: runway is genuinely undefined, and inventing
-    a figure on a page about money is worse than admitting the gap.
-    """
-    summary = _summary(credits=None)
-
+    assert summary.credits_status is CreditsStatus.NO_LIMIT
     assert summary.credits_remaining is None
-    assert summary.runway_days is None
+    assert summary.credits_limit is None
 
 
-def test_runway_is_unknown_when_nothing_has_been_spent():
-    """Dividing by a zero burn rate would claim infinite runway from no evidence."""
-    summary = _summary(spend="0", calls=0, credits=500.0)
+def test_a_failed_poll_reports_unavailable_with_no_numbers():
+    summary = _summary(credits=OpenRouterCredits(status=CreditsStatus.UNAVAILABLE))
 
-    assert summary.daily_burn_rate == 0.0
-    assert summary.runway_days is None
+    assert summary.credits_status is CreditsStatus.UNAVAILABLE
+    assert summary.credits_remaining is None
 
 
-def test_a_spent_out_key_reports_no_runway_rather_than_no_answer():
-    summary = _summary(spend="300.00", credits=0.0)
+def test_a_spent_out_key_reports_zero_rather_than_no_answer():
+    summary = _summary(credits=OpenRouterCredits(status=CreditsStatus.OK, limit=500.0, remaining=0.0))
 
+    assert summary.credits_status is CreditsStatus.OK
     assert summary.credits_remaining == 0.0
-    assert summary.runway_days == 0.0

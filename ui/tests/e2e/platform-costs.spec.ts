@@ -45,33 +45,90 @@ test.describe("Platform costs (platform_admin)", () => {
     await expect(page.getByTestId("cost-unattributed")).toContainText("49 calls");
   });
 
-  test("runway reads Unknown rather than a number when credit is unknown", async ({
-    page,
-  }) => {
+  test("credits show what is left of the key's limit", async ({ page }) => {
     await data.costs.interceptPlatformSummary();
     await data.costs.interceptPlatformList({ items: [platformCostRecord()], total: 1 });
 
     await page.goto(PLATFORM_COSTS_URL);
 
-    await expect(page.getByTestId("cost-runway")).toContainText("Unknown");
-    await expect(page.getByTestId("cost-runway")).toContainText(
-      "no credit limit on the key",
-    );
+    await expect(page.getByTestId("cost-credits")).toContainText("$250.00");
+    await expect(page.getByTestId("cost-credits")).toContainText("of the key's $500.00 limit");
+    await expect(page.getByTestId("cost-credits-warning")).toHaveCount(0);
   });
 
-  test("runway shows days once credit is known", async ({ page }) => {
+  test("a key with no limit is not reported as a missing balance", async ({ page }) => {
     await data.costs.interceptPlatformSummary({
       summary: platformCostSummary({
-        credits_remaining: 250,
-        runway_days: 52.4,
+        credits_status: "no_limit",
+        credits_remaining: null,
+        credits_limit: null,
       }),
     });
     await data.costs.interceptPlatformList({ items: [platformCostRecord()], total: 1 });
 
     await page.goto(PLATFORM_COSTS_URL);
 
-    await expect(page.getByTestId("cost-runway")).toContainText("52 days");
-    await expect(page.getByTestId("cost-runway")).toContainText("$250.00 left");
+    await expect(page.getByTestId("cost-credits")).toContainText("No limit");
+    await expect(page.getByTestId("cost-credits-warning")).toHaveCount(0);
+  });
+
+  test("an unreadable balance says so rather than looking healthy", async ({ page }) => {
+    await data.costs.interceptPlatformSummary({
+      summary: platformCostSummary({
+        credits_status: "unavailable",
+        credits_remaining: null,
+        credits_limit: null,
+      }),
+    });
+    await data.costs.interceptPlatformList({ items: [platformCostRecord()], total: 1 });
+
+    await page.goto(PLATFORM_COSTS_URL);
+
+    await expect(page.getByTestId("cost-credits")).toContainText("Unavailable");
+    await expect(page.getByTestId("cost-credits-warning")).toContainText(
+      "could not be read",
+    );
+  });
+
+  test("a low balance warns before the credits run out", async ({ page }) => {
+    await data.costs.interceptPlatformSummary({
+      summary: platformCostSummary({
+        credits_status: "ok",
+        credits_remaining: 4.2,
+        credits_limit: 500,
+      }),
+    });
+    await data.costs.interceptPlatformList({ items: [platformCostRecord()], total: 1 });
+
+    await page.goto(PLATFORM_COSTS_URL);
+
+    const warning = page.getByTestId("cost-credits-warning");
+    await expect(warning).toContainText("close to its spending limit");
+    await expect(warning).toContainText("$4.20 left of the key's $500.00 limit");
+    await expect(warning.getByRole("link", { name: /key settings/i })).toBeVisible();
+  });
+
+  test("an exhausted balance says agents have stopped", async ({ page }) => {
+    await data.costs.interceptPlatformSummary({
+      summary: platformCostSummary({
+        credits_status: "ok",
+        credits_remaining: 0,
+        credits_limit: 500,
+      }),
+    });
+    await data.costs.interceptPlatformList({ items: [platformCostRecord()], total: 1 });
+
+    await page.goto(PLATFORM_COSTS_URL);
+
+    const warning = page.getByTestId("cost-credits-warning");
+    await expect(warning).toContainText("reached its spending limit");
+    await expect(warning).toContainText("cannot make model calls");
+    // The balance is the key's own cap, so account credit is not the remedy.
+    await expect(warning).toContainText("adding credit to the account does not lift it");
+    await expect(warning.getByRole("link", { name: /key settings/i })).toHaveAttribute(
+      "href",
+      "https://openrouter.ai/settings/keys",
+    );
   });
 
   test("organizations are ranked, and the unattributed row is kept in the list", async ({
