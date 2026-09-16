@@ -14,8 +14,10 @@ export type ProvisioningFailureDisplay = {
 
 const TITLE_BY_CODE: Record<string, string> = {
   QUOTA_EXHAUSTED: "Namespace quota exhausted",
+  LIMIT_EXCEEDED: "Namespace resource limit exceeded",
   CLUSTER_PERMISSION_DENIED: "Cluster permission denied",
   RESOURCE_REJECTED: "Cluster rejected the configuration",
+  NAMESPACE_MISSING: "Namespace not found",
   CLUSTER_UNAVAILABLE: "Cluster unreachable",
 };
 

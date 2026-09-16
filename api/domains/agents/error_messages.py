@@ -1,4 +1,7 @@
-from api.domains.agents.provisioning_errors import normalize_agent_provisioning_error
+from api.domains.agents.provisioning_errors import (
+    AgentProvisioningOperation,
+    normalize_agent_provisioning_error,
+)
 
 _POD_REASON_MESSAGES: dict[str, str] = {
     "CrashLoopBackOff": "Agent is crashing repeatedly on startup. Check the agent logs for details.",
@@ -20,6 +23,10 @@ def friendly_pod_reason(raw: str | None) -> str | None:
     return _POD_REASON_MESSAGES.get(raw, raw)
 
 
-def friendly_k8s_error(exc: Exception) -> str:
+def friendly_k8s_error(
+    exc: Exception,
+    *,
+    operation: AgentProvisioningOperation = AgentProvisioningOperation.START,
+) -> str:
     """One-line sanitized, parsed rendering of a provisioning failure."""
-    return normalize_agent_provisioning_error(exc).display_message
+    return normalize_agent_provisioning_error(exc, operation=operation).display_message

@@ -6,6 +6,7 @@ from hamcrest import assert_that, contains_string, equal_to, is_, is_not, none
 
 from api.domains.agents.provisioning_errors import (
     AgentProvisioningErrorCategory,
+    AgentProvisioningOperation,
     normalize_agent_provisioning_error,
     persisted_provisioning_error,
 )
@@ -354,3 +355,69 @@ def test_unknown_rbac_resources_keep_only_the_summary() -> None:
     failure = normalize_agent_provisioning_error(exc)
     assert_that(failure.code, equal_to("CLUSTER_PERMISSION_DENIED"))
     assert_that(failure.detail, is_(none()))
+
+
+def test_a_failed_backup_does_not_say_the_agent_could_not_start() -> None:
+    """Restore points share this classifier. Start-specific copy on a backup told the
+    user to start an agent that nobody was starting."""
+    exc = _pvc_quota_rejection()
+
+    backup = normalize_agent_provisioning_error(exc, operation=AgentProvisioningOperation.BACKUP)
+    restore = normalize_agent_provisioning_error(exc, operation=AgentProvisioningOperation.RESTORE)
+
+    assert_that(backup.summary, contains_string("The backup could not be created"))
+    assert_that(backup.summary, is_not(contains_string("could not start")))
+    assert_that(restore.summary, contains_string("The restore could not be completed"))
+    assert_that(backup.detail, equal_to(restore.detail))
+
+
+def test_a_missing_namespace_is_not_described_as_a_temporary_outage() -> None:
+    """A namespace that does not exist needs an administrator. Telling the user to try
+    again in a moment sends them into a loop."""
+    exc = _ApiException(404, _status_body('namespaces "agent-farm" not found', reason="NotFound", code=404))
+
+    normalized = normalize_agent_provisioning_error(exc)
+
+    assert_that(normalized.category, is_(AgentProvisioningErrorCategory.NAMESPACE_MISSING))
+    assert_that(normalized.summary, contains_string("administrator"))
+    assert_that(normalized.summary, is_not(contains_string("try again")))
+
+
+def test_a_limitrange_rejection_is_not_reported_as_an_rbac_problem() -> None:
+    """A LimitRange violation is a 403 like an RBAC denial, but the fix is the
+    namespace's per-object limits."""
+    exc = _ApiException(
+        403,
+        _status_body(
+            'persistentvolumeclaims "agent-x" is forbidden: maximum storage usage per '
+            "PersistentVolumeClaim is 500Mi, but request is 1Gi",
+            reason="Forbidden",
+            code=403,
+        ),
+    )
+
+    normalized = normalize_agent_provisioning_error(exc)
+
+    assert_that(normalized.category, is_(AgentProvisioningErrorCategory.LIMIT_EXCEEDED))
+    assert_that(normalized.summary, is_not(contains_string("RBAC")))
+    # Verified against a real k3d LimitRange: this is the message Kubernetes returns.
+    assert_that(normalized.detail, equal_to("storage per PersistentVolumeClaim: requested 1Gi, maximum 500Mi"))
+
+
+def test_a_counted_quota_axis_keeps_its_api_group() -> None:
+    """count/deployments.apps is the canonical axis name; without the group suffix the
+    detail was dropped and the operator lost the diagnosis."""
+    exc = _ApiException(
+        403,
+        _status_body(
+            "x is forbidden: exceeded quota: rq, requested: count/deployments.apps=1, "
+            "used: count/deployments.apps=5, limited: count/deployments.apps=5",
+            reason="Forbidden",
+            code=403,
+        ),
+    )
+
+    normalized = normalize_agent_provisioning_error(exc)
+
+    assert normalized.detail is not None
+    assert_that(normalized.detail, contains_string("count/deployments.apps"))

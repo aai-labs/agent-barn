@@ -30,6 +30,16 @@ export function AgentLifecycleMenu({ agent }: { agent: Agent }) {
   const pause = () => void stopAgent.mutateAsync(agent.id).catch(toastError);
   const restart = () => void restartAgent.restart(agent.id).catch(toastError);
 
+  if (restartAgent.isPending) {
+    return (
+      <div data-testid="agent-lifecycle-menu">
+        <button className="af-btn" disabled>
+          <RotateCcw /> Restarting…
+        </button>
+      </div>
+    );
+  }
+
   // A stopped Agent can only be started, so it gets a plain button rather than a
   // menu whose other entries would do nothing.
   if (agent.status !== "RUNNING") {
@@ -45,8 +55,7 @@ export function AgentLifecycleMenu({ agent }: { agent: Agent }) {
   return (
     <div className="flex" data-testid="agent-lifecycle-menu">
       <button className="af-btn" style={SEAM_LEFT} disabled={busy} onClick={pause}>
-        <PauseIcon />{" "}
-        {restartAgent.isPending ? "Restarting…" : stopAgent.isPending ? "Pausing…" : "Pause"}
+        <PauseIcon /> {stopAgent.isPending ? "Pausing…" : "Pause"}
       </button>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>

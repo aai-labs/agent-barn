@@ -10,6 +10,7 @@ caller, and still readable on the Agent afterwards.
 import json
 from typing import Any
 from unittest.mock import MagicMock, patch
+from uuid import uuid7
 
 from fastapi import HTTPException, status
 from hamcrest import assert_that, calling, contains_string, equal_to, is_, is_not, none, raises
@@ -17,6 +18,7 @@ from starlette.testclient import TestClient
 
 from api.domains.agents.models import AgentStatus
 from api.domains.agents.service import AgentService
+from api.domains.users.organization_users.models import OrganizationRole
 from api.infrastructure.kubernetes.client import KubernetesClient
 from api.tests.core.givenpy import given, then, when
 from api.tests.core.modules import (
@@ -36,6 +38,7 @@ from api.tests.steps.agent import (
 from api.tests.steps.database import database_is_clean, database_repo_is_ready
 from api.tests.steps.organization import there_is_an_organization_with_user_and_access_token
 from api.tests.steps.template import there_is_a_template
+from api.tests.steps.user import there_is_a_user, there_is_an_access_token_for_user
 
 _BASE = "/api/v1/organizations/{organization_id}/agents"
 
@@ -268,6 +271,37 @@ def test_a_precondition_failure_is_not_recorded_as_a_provisioning_failure() -> N
             body = client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context)).json()
             assert_that(body["status"], equal_to(AgentStatus.RUNNING.value))
             assert_that(body["last_error"], is_(none()))
+
+
+def test_a_failure_is_not_readable_by_an_organization_member_without_agent_access() -> None:
+    """Agent Access, not tenancy, is what gates the failure. A member of the same
+    Organization with no assignment to the Agent must not be able to read it."""
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        agent_id = context.agent.id
+        _quota_exhausted_namespace(context)
+
+        with when("the start fails and an unassigned member of the same org looks"):
+            client.post(f"{_BASE}/{agent_id}/start", headers=_auth(context))
+            member_id = uuid7()
+            there_is_a_user(
+                id=member_id,
+                email=f"member-{member_id}@example.com",
+                role=OrganizationRole.MEMBER,
+                organization_id=context.organization.id,
+            )(context)
+            there_is_an_access_token_for_user(member_id)(context)
+            response = client.get(f"{_BASE}/{agent_id}", headers=_auth(context))
+
+        with then("the member's token works but sees no agents"):
+            listed = client.get(_BASE, headers=_auth(context))
+            assert_that(listed.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(listed.json()["total"], equal_to(0))
+
+        with then("the agent is hidden and no failure is disclosed"):
+            assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
+            assert_that(response.text, is_not(contains_string("QUOTA_EXHAUSTED")))
+            assert_that(response.text, is_not(contains_string("last_error")))
 
 
 def test_a_failure_on_an_inaccessible_agent_is_not_readable_across_organizations() -> None:

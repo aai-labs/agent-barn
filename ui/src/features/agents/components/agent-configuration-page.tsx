@@ -143,7 +143,16 @@ export function AgentConfigurationPage({ agentId }: { agentId: string }) {
 
         {agent.status === "ERROR" &&
           (agent.lastError ? (
-            <AgentErrorBanner failure={agent.lastError} className="mb-8" />
+            <AgentErrorBanner failure={agent.lastError} className="mb-8">
+              {canReadActivity && (
+                <Link
+                  href={`${homeHref}/agents/${agent.id}?tab=logs`}
+                  className="mt-2 inline-block font-medium underline underline-offset-3"
+                >
+                  View Agent logs
+                </Link>
+              )}
+            </AgentErrorBanner>
           ) : (
             <Alert
               variant="destructive"

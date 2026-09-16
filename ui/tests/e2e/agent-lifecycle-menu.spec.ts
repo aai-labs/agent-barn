@@ -9,6 +9,8 @@ import {
   MOCK_AGENT_ID,
   mockAgent,
   mockAgentAllowedActions,
+  mockAgentInError,
+  mockProvisioningError,
 } from "../pages/data-support/agent-data-support.po";
 import { DataSupport } from "../pages/data-support/data-support.po";
 import { AgentDetailPage } from "../pages/agent-detail-page.po";
@@ -79,6 +81,30 @@ test.describe("Agent lifecycle menu", () => {
     await page.getByRole("menuitem", { name: "Restart", exact: true }).click();
 
     await Promise.all([stopped, started]);
+  });
+
+  test("a restart whose start fails reports the cause and leaves the banner", async ({
+    page,
+  }) => {
+    await dataSupport.agents.interceptGetAgentRequest({
+      body: { ...mockAgent, status: "RUNNING" },
+    });
+    await dataSupport.agents.interceptStopAgentRequest();
+    await dataSupport.agents.interceptStartAgentRequest({
+      status: 503,
+      detail: mockProvisioningError,
+    });
+
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await expect(page.getByRole("button", { name: "Pause", exact: true })).toBeVisible();
+
+    // The stop succeeds, so the refetched Agent is the one the failed start left behind.
+    await dataSupport.agents.interceptGetAgentRequest({ body: mockAgentInError });
+    await agentDetailPage.lifecycleMenuTrigger().click();
+    await page.getByRole("menuitem", { name: "Restart", exact: true }).click();
+
+    await expect(page.getByText("run out of resource quota").first()).toBeVisible();
+    await expect(agentDetailPage.provisioningErrorBanner()).toBeVisible();
   });
 
   test("a reader without lifecycle permission gets no control at all", async () => {

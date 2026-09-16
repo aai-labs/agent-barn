@@ -41,16 +41,35 @@ MAX_PROVISIONING_DETAIL_CHARS = 500
 
 class AgentProvisioningErrorCategory(str, enum.Enum):
     QUOTA_EXHAUSTED = "quota_exhausted"
+    LIMIT_EXCEEDED = "limit_exceeded"
     CLUSTER_PERMISSION_DENIED = "cluster_permission_denied"
     RESOURCE_REJECTED = "resource_rejected"
+    NAMESPACE_MISSING = "namespace_missing"
     CLUSTER_UNAVAILABLE = "cluster_unavailable"
     UNKNOWN = "unknown"
 
 
+class AgentProvisioningOperation(str, enum.Enum):
+    """What the caller was doing. Only the opening clause of the copy differs."""
+
+    START = "start"
+    BACKUP = "backup"
+    RESTORE = "restore"
+
+
+_LEAD_BY_OPERATION: dict[AgentProvisioningOperation, str] = {
+    AgentProvisioningOperation.START: "The agent could not start",
+    AgentProvisioningOperation.BACKUP: "The backup could not be created",
+    AgentProvisioningOperation.RESTORE: "The restore could not be completed",
+}
+
+
 _ERROR_CODES: dict[AgentProvisioningErrorCategory, str] = {
     AgentProvisioningErrorCategory.QUOTA_EXHAUSTED: "QUOTA_EXHAUSTED",
+    AgentProvisioningErrorCategory.LIMIT_EXCEEDED: "LIMIT_EXCEEDED",
     AgentProvisioningErrorCategory.CLUSTER_PERMISSION_DENIED: "CLUSTER_PERMISSION_DENIED",
     AgentProvisioningErrorCategory.RESOURCE_REJECTED: "RESOURCE_REJECTED",
+    AgentProvisioningErrorCategory.NAMESPACE_MISSING: "NAMESPACE_MISSING",
     AgentProvisioningErrorCategory.CLUSTER_UNAVAILABLE: "CLUSTER_UNAVAILABLE",
     AgentProvisioningErrorCategory.UNKNOWN: "PROVISIONING_FAILED",
 }
@@ -59,25 +78,30 @@ _CATEGORY_BY_CODE: dict[str, AgentProvisioningErrorCategory] = {
     code: category for category, code in _ERROR_CODES.items()
 }
 
-_SUMMARY_BY_CATEGORY: dict[AgentProvisioningErrorCategory, str] = {
+_CONDITION_BY_CATEGORY: dict[AgentProvisioningErrorCategory, str] = {
     AgentProvisioningErrorCategory.QUOTA_EXHAUSTED: (
-        "The agent could not start — its namespace has run out of resource quota. "
-        "Ask an administrator to free up or raise it, then start the agent again."
+        "its namespace has run out of resource quota. Ask an administrator to free up or raise it."
+    ),
+    AgentProvisioningErrorCategory.LIMIT_EXCEEDED: (
+        "the request is larger than the namespace allows for a single resource. "
+        "Ask an administrator to review the namespace limits."
     ),
     AgentProvisioningErrorCategory.CLUSTER_PERMISSION_DENIED: (
-        "The agent could not start — Agent Barn's service account is missing RBAC permission to "
-        "create the agent's resources. Ask an administrator to review them."
+        "Agent Barn's service account is missing RBAC permission to create the resources. "
+        "Ask an administrator to review them."
     ),
     AgentProvisioningErrorCategory.RESOURCE_REJECTED: (
-        "The agent could not start — the cluster rejected its resource definition as invalid. "
+        "the cluster rejected the resource definition as invalid. "
         "Ask an administrator to review the agent's runtime configuration."
     ),
+    AgentProvisioningErrorCategory.NAMESPACE_MISSING: (
+        "its Kubernetes namespace does not exist. Ask an administrator to check the cluster setup."
+    ),
     AgentProvisioningErrorCategory.CLUSTER_UNAVAILABLE: (
-        "The agent could not start — its Kubernetes namespace could not be reached. "
-        "This is often temporary, so try again in a moment."
+        "the Kubernetes API could not be reached. This is often temporary, so try again in a moment."
     ),
     AgentProvisioningErrorCategory.UNKNOWN: (
-        "The agent could not start — creating its runtime resources failed unexpectedly. "
+        "creating the Kubernetes resources failed unexpectedly. "
         "Try again; if it keeps failing, ask an administrator to check the cluster."
     ),
 }
@@ -85,7 +109,9 @@ _SUMMARY_BY_CATEGORY: dict[AgentProvisioningErrorCategory, str] = {
 # Only fixed resource names are safe to expose. Custom resource/quota names and
 # unfamiliar formats keep the category summary without a detail.
 _RESOURCE = r"(?:pods|persistentvolumeclaims|services|configmaps|deployments|replicasets|statefulsets|daemonsets|jobs|cronjobs|replicationcontrollers|resourcequotas)"
-_AXIS = rf"(?:requests\.(?:storage|cpu|memory|ephemeral-storage)|limits\.(?:cpu|memory|ephemeral-storage)|cpu|memory|services\.(?:nodeports|loadbalancers)|{_RESOURCE}|count/{_RESOURCE})"
+# Quota axes for non-core API groups carry the group: count/deployments.apps.
+_COUNTED = rf"{_RESOURCE}(?:\.(?:apps|batch))?"
+_AXIS = rf"(?:requests\.(?:storage|cpu|memory|ephemeral-storage)|limits\.(?:cpu|memory|ephemeral-storage)|cpu|memory|services\.(?:nodeports|loadbalancers)|{_RESOURCE}|count/{_COUNTED})"
 _QUANTITY = r"[0-9]{1,18}(?:\.[0-9]{1,9})?(?:[EPTGMK]i|[numkKMGTPE]|[eE][+-]?[0-9]{1,3})?"
 _PAIR = rf"{_AXIS}={_QUANTITY}"
 _QUOTA_SECTION = re.compile(
@@ -96,6 +122,15 @@ _QUOTA_PAIR = re.compile(rf"({_AXIS})=({_QUANTITY})")
 _QUOTA_ROW = rf"{_AXIS}: requested {_QUANTITY}, used {_QUANTITY}, limit {_QUANTITY}"
 _STORED_QUOTA = re.compile(rf"{_QUOTA_ROW}(?:; {_QUOTA_ROW}){{0,2}}")
 _RESOURCE_KIND = re.compile(rf'^({_RESOURCE})\s+"')
+# A LimitRange rejection names the constrained axis, the scope it applies to, the
+# limit and the request. Every part is a fixed word or a Kubernetes quantity.
+_LIMIT_AXIS = r"(?:storage|cpu|memory|ephemeral-storage)"
+_LIMIT_SCOPE = r"(?:PersistentVolumeClaim|Container|Pod)"
+_LIMIT_RANGE = re.compile(
+    rf"(maximum|minimum) ({_LIMIT_AXIS}) usage per ({_LIMIT_SCOPE}) is ({_QUANTITY}), "
+    rf"but (?:request|limit) is ({_QUANTITY})"
+)
+_STORED_LIMIT = re.compile(rf"{_LIMIT_AXIS} per {_LIMIT_SCOPE}: requested {_QUANTITY}, (?:maximum|minimum) {_QUANTITY}")
 _VERB = r"(?:create|get|update|delete|list|watch|patch)"
 _RBAC_RESOURCE = re.compile(rf'cannot\s+({_VERB})\s+resource\s+"({_RESOURCE})"')
 _STORED_RBAC = re.compile(rf"(?:cannot {_VERB} {_RESOURCE}|creating {_RESOURCE})")
@@ -119,12 +154,20 @@ class NormalizedAgentProvisioningError:
         return f"{self.summary} ({self.detail})" if self.detail else self.summary
 
 
-def normalize_agent_provisioning_error(exc: Exception) -> NormalizedAgentProvisioningError:
+def normalize_agent_provisioning_error(
+    exc: Exception,
+    *,
+    operation: AgentProvisioningOperation = AgentProvisioningOperation.START,
+) -> NormalizedAgentProvisioningError:
     """Classify a provisioning failure and rebuild a safe, bounded detail for it."""
     status_code = _status_code_of(exc)
     message = _cluster_message(exc)
     category = _classify(exc, status_code=status_code, message=message)
-    return _for_category(category, detail=_detail_for(category, message=message or "", exc=exc))
+    return _for_category(
+        category,
+        detail=_detail_for(category, message=message or "", exc=exc),
+        operation=operation,
+    )
 
 
 def persisted_provisioning_error(
@@ -152,11 +195,12 @@ def _for_category(
     category: AgentProvisioningErrorCategory,
     *,
     detail: str | None,
+    operation: AgentProvisioningOperation = AgentProvisioningOperation.START,
 ) -> NormalizedAgentProvisioningError:
     return NormalizedAgentProvisioningError(
         code=_ERROR_CODES[category],
         category=category,
-        summary=_SUMMARY_BY_CATEGORY[category],
+        summary=f"{_LEAD_BY_OPERATION[operation]} — {_CONDITION_BY_CATEGORY[category]}",
         detail=detail,
     )
 
@@ -207,12 +251,18 @@ def _classify(
     # account when the namespace has simply run out of a resource, so quota wins.
     if "exceeded quota" in lowered:
         return AgentProvisioningErrorCategory.QUOTA_EXHAUSTED
+    # A LimitRange rejection is also a 403 "forbidden", but the fix is the namespace's
+    # per-object limits, not a RoleBinding.
+    if " usage per " in lowered:
+        return AgentProvisioningErrorCategory.LIMIT_EXCEEDED
     if status_code == 403 or "forbidden" in lowered or "cannot create resource" in lowered:
         return AgentProvisioningErrorCategory.CLUSTER_PERMISSION_DENIED
     if status_code == 422 or "is invalid" in lowered or "unprocessable" in lowered:
         return AgentProvisioningErrorCategory.RESOURCE_REJECTED
+    # A 404 is the API server answering that something is absent. It does not come
+    # back on its own, so it must not be described as a temporary outage.
     if status_code == 404 or "not found" in lowered:
-        return AgentProvisioningErrorCategory.CLUSTER_UNAVAILABLE
+        return AgentProvisioningErrorCategory.NAMESPACE_MISSING
     # A 5xx means the API server answered, so the namespace is reachable.
     return AgentProvisioningErrorCategory.UNKNOWN
 
@@ -246,6 +296,8 @@ def _detail_for(
 ) -> str | None:
     if category is AgentProvisioningErrorCategory.QUOTA_EXHAUSTED:
         detail = _quota_detail(message)
+    elif category is AgentProvisioningErrorCategory.LIMIT_EXCEEDED:
+        detail = _limit_detail(message)
     elif category is AgentProvisioningErrorCategory.CLUSTER_PERMISSION_DENIED:
         detail = _rbac_detail(message)
     elif category is AgentProvisioningErrorCategory.UNKNOWN:
@@ -277,6 +329,15 @@ def _quota_detail(message: str) -> str | None:
     )
 
 
+def _limit_detail(message: str) -> str | None:
+    """Which axis the namespace caps, and how far the request is over it."""
+    match = _LIMIT_RANGE.search(message)
+    if match is None:
+        return None
+    bound, axis, scope, limit, requested = match.groups()
+    return f"{axis} per {scope}: requested {requested}, {bound} {limit}"
+
+
 def _rbac_detail(message: str) -> str | None:
     """The denied verb and resource kind, which is what an operator needs to grant.
 
@@ -301,6 +362,8 @@ def _bounded_safe_detail(detail: str | None, category: AgentProvisioningErrorCat
         return None
     if category is AgentProvisioningErrorCategory.QUOTA_EXHAUSTED:
         return detail if _STORED_QUOTA.fullmatch(detail) else None
+    if category is AgentProvisioningErrorCategory.LIMIT_EXCEEDED:
+        return detail if _STORED_LIMIT.fullmatch(detail) else None
     if category is AgentProvisioningErrorCategory.CLUSTER_PERMISSION_DENIED:
         return detail if _STORED_RBAC.fullmatch(detail) else None
     if category is AgentProvisioningErrorCategory.UNKNOWN:
