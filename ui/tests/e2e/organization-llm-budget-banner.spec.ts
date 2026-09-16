@@ -31,7 +31,12 @@ test.describe("Organization spend limit banner", () => {
     });
     await page.goto(COSTS_URL);
 
-    await expect(page.getByText(/used \$40\.00 of \$50\.00 of its model spend allowance/i)).toBeVisible();
+    await expect(
+      page.getByText(/used \$40\.00 of \$50\.00 of its model spend allowance this period/i),
+    ).toBeVisible();
+    // The cards cover a rolling range, not the allowance period — each has to say so
+    // or the two totals read as contradicting each other.
+    await expect(page.getByTestId("cost-total-spend")).toContainText(/last 30 days/i);
   });
 
   test("an exhausted limit is visible away from the costs page", async ({ page }) => {
