@@ -417,25 +417,6 @@ class CommunicationsGatewayService:
                 type(exc).__name__,
             )
 
-    def notify_connection_alert(self, connection_id: UUID, text: str) -> None:
-        """Best-effort operator notice for a failure with no Delivery."""
-        try:
-            connection = self.connection_repository.get_active(connection_id)
-            if connection is None:
-                return
-            plugin = self.plugins.require(connection.platform_key)
-            settings = plugin.settings_model.model_validate(connection.settings)
-            credentials = plugin.credentials_model.model_validate(
-                json.loads(decrypt_token(connection.credentials_encrypted, self.config.agent_token_encryption_key))
-            )
-            plugin.alert(settings, credentials, text)
-        except Exception as exc:
-            logger.warning(
-                "Communication connection alert failed for Connection %s (%s)",
-                connection_id,
-                type(exc).__name__,
-            )
-
     def _notify_processing_feedback(
         self,
         connection: CommunicationConnection,

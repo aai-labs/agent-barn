@@ -1,5 +1,6 @@
 import hashlib
 import json
+import logging
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
@@ -103,6 +104,31 @@ class ProcessingFeedbackContext:
     # Already normalized and redacted by normalize_communication_error, so it is
     # safe to show a channel; raw provider text never reaches a plugin.
     error_summary: str | None = None
+
+
+def failure_feedback_idempotency_key(context: ProcessingFeedbackContext) -> str | None:
+    if context.source_delivery_id is None:
+        return None
+    return provider_idempotency_key(str(context.source_delivery_id))
+
+
+def best_effort_failure_notice(
+    context: ProcessingFeedbackContext,
+    callback: Callable[[str, str | None], Any],
+    *,
+    target: str,
+    logger: logging.Logger,
+) -> None:
+    """Render and publish one terminal failure notice without raising."""
+    if context.stage != ProcessingFeedbackStage.FAILED:
+        return
+    try:
+        callback(
+            failure_notice(context.error_summary),
+            failure_feedback_idempotency_key(context),
+        )
+    except Exception as exc:
+        logger.warning("Communication failure notice failed for %s (%s)", target, type(exc).__name__)
 
 
 @dataclass(frozen=True)
@@ -318,16 +344,6 @@ class PlatformPlugin(ABC):
         accepted, retried, or terminally completed.
         """
         del settings, credentials, context
-
-    def alert(self, settings: PlatformSettings, credentials: PlatformCredentials, text: str) -> None:
-        """Post an operator notice with no originating conversation.
-
-        Connection-level failures (a refused ingress session, a revoked
-        credential) have no Delivery and no channel to reply into, so a
-        platform that configures an alert channel announces them there.
-        Platforms without one stay silent.
-        """
-        del settings, credentials, text
 
     async def run_ingress(
         self,

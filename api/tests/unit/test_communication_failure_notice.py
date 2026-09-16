@@ -9,11 +9,7 @@ from api.domains.communications.models import (
     ProcessingFeedbackStage,
 )
 from api.domains.communications.plugins.base import ProcessingFeedbackContext
-from api.domains.communications.plugins.discord import (
-    DiscordCredentials,
-    DiscordPlatformPlugin,
-    DiscordSettings,
-)
+from api.domains.communications.plugins.discord import DiscordCredentials, DiscordPlatformPlugin, DiscordSettings
 
 
 def _plugin() -> DiscordPlatformPlugin:
@@ -69,22 +65,6 @@ def test_a_send_failure_never_escapes_the_feedback_hook(mock_client) -> None:
         DiscordCredentials(bot_token="bot-value"),
         _context(ProcessingFeedbackStage.FAILED, error_summary="boom"),
     )
-
-
-@patch("api.domains.communications.plugins.discord.DiscordClient")
-def test_connection_alert_goes_to_the_home_channel(mock_client) -> None:
-    settings = DiscordSettings(home_channel_id="alerts-1")
-
-    _plugin().alert(settings, DiscordCredentials(bot_token="bot-value"), "ingress is down")
-
-    mock_client.return_value.send_message.assert_called_once_with("alerts-1", "ingress is down")
-
-
-@patch("api.domains.communications.plugins.discord.DiscordClient")
-def test_connection_alert_is_skipped_without_a_home_channel(mock_client) -> None:
-    _plugin().alert(DiscordSettings(), DiscordCredentials(bot_token="bot-value"), "ingress is down")
-
-    assert_that(mock_client.return_value.send_message.call_count, equal_to(0))
 
 
 @patch("api.domains.communications.plugins.slack.SlackClient")

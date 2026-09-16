@@ -16,7 +16,6 @@ from api.domains.communications.models import (
     NormalizedCommunicationEnvelope,
     OutboundCommunicationEnvelope,
     PlatformCapability,
-    ProcessingFeedbackStage,
 )
 from api.domains.communications.plugins.base import (
     InboundAdmissionResult,
@@ -24,7 +23,7 @@ from api.domains.communications.plugins.base import (
     PlatformPlugin,
     PlatformSettings,
     ProcessingFeedbackContext,
-    failure_notice,
+    best_effort_failure_notice,
     provider_idempotency_key,
 )
 from api.infrastructure.discord.client import DiscordClient
@@ -211,33 +210,17 @@ class DiscordPlatformPlugin(PlatformPlugin):
     ) -> None:
         del settings
         assert isinstance(credentials, DiscordCredentials)
-        if context.stage != ProcessingFeedbackStage.FAILED:
-            return
-        try:
-            DiscordClient(credentials.bot_token).send_message(
+        best_effort_failure_notice(
+            context,
+            lambda text, idempotency_key: DiscordClient(credentials.bot_token).send_message(
                 context.location.id,
-                failure_notice(context.error_summary),
+                text,
                 reply_to_id=context.provider_message_id,
-                # One notice per dead-lettered Delivery, even if the hook re-runs.
-                idempotency_key=(
-                    provider_idempotency_key(str(context.source_delivery_id))
-                    if context.source_delivery_id is not None
-                    else None
-                ),
-            )
-        except Exception as exc:
-            logger.warning(
-                "Discord failure notice failed for channel %s (%s)",
-                context.location.id,
-                type(exc).__name__,
-            )
-
-    def alert(self, settings: PlatformSettings, credentials: PlatformCredentials, text: str) -> None:
-        assert isinstance(settings, DiscordSettings)
-        assert isinstance(credentials, DiscordCredentials)
-        if not settings.home_channel_id:
-            return
-        DiscordClient(credentials.bot_token).send_message(settings.home_channel_id, text)
+                idempotency_key=idempotency_key,
+            ),
+            target=f"Discord channel {context.location.id}",
+            logger=logger,
+        )
 
     def normalize_inbound(
         self,

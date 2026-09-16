@@ -28,8 +28,6 @@ _RETRY_BACKOFF_MAX_SECONDS = 60.0
 # An ingress session that survived this long was genuinely connected; the next
 # failure starts a fresh backoff sequence instead of continuing to climb.
 _RETRY_BACKOFF_RESET_AFTER_SECONDS = 60.0
-_INGRESS_ALERT_PREFIX = "⚠️ This Agent stopped receiving messages on this Connection."
-_INGRESS_ALERT_FALLBACK = "See the Connection's diagnostics for details."
 
 
 @inject
@@ -44,9 +42,6 @@ class PlatformIngressSupervisor:
     plugins: PlatformPluginRegistry
     operations: CommunicationOperationalRepository | None = None
     owner_id: str = field(default_factory=lambda: str(uuid4()), init=False)
-    # Ingress retries every 60s forever, so a Connection gets one alert per
-    # failure streak, not one per attempt. Cleared when it next reaches READY.
-    _alerted_connections: set[UUID] = field(default_factory=set, init=False)
     _last_journal_prune_at: datetime = field(default_factory=lambda: datetime.min.replace(tzinfo=UTC), init=False)
 
     async def run(self, stop: asyncio.Event) -> None:
@@ -167,7 +162,6 @@ class PlatformIngressSupervisor:
                     await asyncio.to_thread(self.gateway.accept_plugin_payload, connection.id, payload)
 
                 async def connected() -> None:
-                    self._alerted_connections.discard(connection.id)
                     await asyncio.to_thread(
                         self.connections.record_health,
                         connection.id,
@@ -214,13 +208,6 @@ class PlatformIngressSupervisor:
                     error_message=normalized_error.summary,
                     error_details=normalized_error.details,
                 )
-                if connection.id not in self._alerted_connections:
-                    self._alerted_connections.add(connection.id)
-                    await asyncio.to_thread(
-                        self.gateway.notify_connection_alert,
-                        connection.id,
-                        f"{_INGRESS_ALERT_PREFIX} {normalized_error.summary or _INGRESS_ALERT_FALLBACK}",
-                    )
                 if time.monotonic() - session_started_at >= _RETRY_BACKOFF_RESET_AFTER_SECONDS:
                     backoff_seconds = _RETRY_BACKOFF_INITIAL_SECONDS
                 # Repeated connection attempts belong in the journal and metrics,

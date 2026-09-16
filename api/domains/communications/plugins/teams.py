@@ -13,7 +13,6 @@ from api.domains.communications.models import (
     NormalizedCommunicationEnvelope,
     OutboundCommunicationEnvelope,
     PlatformCapability,
-    ProcessingFeedbackStage,
 )
 from api.domains.communications.plugins.base import (
     InboundAdmissionResult,
@@ -21,7 +20,7 @@ from api.domains.communications.plugins.base import (
     PlatformPlugin,
     PlatformSettings,
     ProcessingFeedbackContext,
-    failure_notice,
+    best_effort_failure_notice,
     provider_idempotency_key,
 )
 from api.infrastructure.msteams.client import (
@@ -204,7 +203,7 @@ class TeamsPlatformPlugin(PlatformPlugin):
             location=envelope.location,
             provider_metadata=envelope.provider_metadata,
             reply_to_provider_message_id=envelope.reply_to_provider_message_id,
-            idempotency_key=idempotency_key,
+            provider_idempotency_key_value=provider_idempotency_key(idempotency_key),
         )
 
     def processing_feedback(
@@ -215,23 +214,19 @@ class TeamsPlatformPlugin(PlatformPlugin):
     ) -> None:
         del settings
         assert isinstance(credentials, TeamsCredentials)
-        if context.stage != ProcessingFeedbackStage.FAILED:
-            return
-        try:
-            self._send_activity(
+        best_effort_failure_notice(
+            context,
+            lambda text, idempotency_key: self._send_activity(
                 credentials,
-                text=failure_notice(context.error_summary),
+                text=text,
                 location=context.location,
                 provider_metadata=context.provider_metadata,
                 reply_to_provider_message_id=context.provider_message_id,
-                idempotency_key=(str(context.source_delivery_id) if context.source_delivery_id is not None else None),
-            )
-        except Exception as exc:
-            logger.warning(
-                "Teams failure notice failed for conversation %s (%s)",
-                context.location.id,
-                type(exc).__name__,
-            )
+                provider_idempotency_key_value=idempotency_key,
+            ),
+            target=f"Teams conversation {context.location.id}",
+            logger=logger,
+        )
 
     @staticmethod
     def _send_activity(
@@ -241,7 +236,7 @@ class TeamsPlatformPlugin(PlatformPlugin):
         location: ConversationLocation,
         provider_metadata: dict[str, str | int | float | bool | None],
         reply_to_provider_message_id: str | None,
-        idempotency_key: str | None,
+        provider_idempotency_key_value: str | None,
     ) -> str:
         metadata = provider_metadata
         service_url = str(metadata.get("service_url") or "")
@@ -269,7 +264,7 @@ class TeamsPlatformPlugin(PlatformPlugin):
             conversation_id,
             activity,
             token,
-            idempotency_key=(provider_idempotency_key(idempotency_key) if idempotency_key is not None else None),
+            idempotency_key=provider_idempotency_key_value,
         )
 
     def enrich_inbound(

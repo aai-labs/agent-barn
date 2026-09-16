@@ -5,13 +5,12 @@ import { Archive, Maximize2, MoreHorizontal, Minimize2, Pencil, Plus } from "luc
 import { useQueryState, parseAsString } from "nuqs";
 import {
   AssistantRuntimeProvider,
-  MessagePrimitive,
   useExternalStoreRuntime,
   useAuiState,
   type ThreadMessageLike,
 } from "@assistant-ui/react";
 
-import { Thread } from "@/components/assistant-ui/elements/thread.aui";
+import { Thread, UserMessage } from "@/components/assistant-ui/elements/thread.aui";
 import { Badge } from "@/components/badge";
 import {
   AlertDialog,
@@ -65,27 +64,14 @@ const WebChatUserMessage = () => {
     return typeof value === "string" ? value : null;
   });
 
-  return (
-    <MessagePrimitive.Root
-      data-slot="aui_user-message-root"
-      className="fade-in slide-in-from-bottom-1 animate-in grid auto-rows-auto grid-cols-[minmax(72px,1fr)_auto] content-start gap-y-2 px-2 duration-150 [contain-intrinsic-size:auto_200px] [content-visibility:auto] [&:where(>*)]:col-start-2"
-      data-role="user"
+  return <UserMessage afterParts={errorMessage ? (
+    <div
+      role="alert"
+      className="border-destructive/30 bg-destructive/10 text-destructive mt-2 rounded-lg border px-3 py-2 text-left text-xs leading-relaxed"
     >
-      <div className="aui-user-message-content-wrapper relative col-start-2 min-w-0">
-        <div className="aui-user-message-content peer bg-muted text-foreground rounded-xl px-4 py-2 wrap-break-word empty:hidden">
-          <MessagePrimitive.Parts />
-          {errorMessage && (
-            <div
-              role="alert"
-              className="border-destructive/30 bg-destructive/10 text-destructive mt-2 rounded-lg border px-3 py-2 text-left text-xs leading-relaxed"
-            >
-              {WEB_CHAT_FAILURE_PREFIX} {errorMessage}
-            </div>
-          )}
-        </div>
-      </div>
-    </MessagePrimitive.Root>
-  );
+      {WEB_CHAT_FAILURE_PREFIX} {errorMessage}
+    </div>
+  ) : null} />;
 };
 
 interface ChatThreadProps {
