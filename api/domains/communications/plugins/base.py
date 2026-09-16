@@ -24,6 +24,7 @@ from api.domains.communications.models import (
 
 _FAILURE_NOTICE_PREFIX = "⚠️ I couldn't process that message."
 _FALLBACK_FAILURE_SUMMARY = "The failure is recorded in this Connection's diagnostics."
+_FAILURE_NOTICE_IDEMPOTENCY_NAMESPACE = "failure-notice"
 
 
 def failure_notice(error_summary: str | None) -> str:
@@ -109,7 +110,10 @@ class ProcessingFeedbackContext:
 def failure_feedback_idempotency_key(context: ProcessingFeedbackContext) -> str | None:
     if context.source_delivery_id is None:
         return None
-    return provider_idempotency_key(str(context.source_delivery_id))
+    # The notice is a separate provider message from the reply. Keep it in a
+    # distinct namespace so provider-native deduplication cannot turn a retry
+    # of the reply into the already-posted failure notice.
+    return provider_idempotency_key(f"{_FAILURE_NOTICE_IDEMPOTENCY_NAMESPACE}:{context.source_delivery_id}")
 
 
 def best_effort_failure_notice(
