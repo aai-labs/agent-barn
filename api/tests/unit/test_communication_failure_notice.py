@@ -5,10 +5,15 @@ from hamcrest import assert_that, contains_string, equal_to, is_, none, not_
 
 from api.domains.communications.models import (
     ConversationLocation,
+    OutboundCommunicationEnvelope,
     PlatformCapability,
     ProcessingFeedbackStage,
 )
-from api.domains.communications.plugins.base import ProcessingFeedbackContext
+from api.domains.communications.plugins.base import (
+    ProcessingFeedbackContext,
+    failure_feedback_idempotency_key,
+    provider_idempotency_key,
+)
 from api.domains.communications.plugins.discord import DiscordCredentials, DiscordPlatformPlugin, DiscordSettings
 
 
@@ -46,6 +51,35 @@ def test_terminal_failure_replies_in_the_originating_thread_with_the_reason(mock
     assert_that(send.call_args.kwargs["reply_to_id"], equal_to("message-1"))
     # Deduplicated on the Delivery, so a re-run cannot double-post.
     assert_that(send.call_args.kwargs["idempotency_key"], not_(none()))
+
+
+@patch("api.domains.communications.plugins.discord.DiscordClient")
+def test_terminal_failure_notice_does_not_reuse_the_reply_idempotency_key(mock_client) -> None:
+    context = _context(ProcessingFeedbackStage.FAILED)
+    source_delivery_id = context.source_delivery_id
+    assert source_delivery_id is not None
+    plugin = _plugin()
+    credentials = DiscordCredentials(bot_token="bot-value")
+
+    plugin.send(
+        DiscordSettings(),
+        credentials,
+        OutboundCommunicationEnvelope(
+            source_delivery_id=source_delivery_id,
+            location=context.location,
+            text="the answer",
+            reply_to_provider_message_id=context.provider_message_id,
+        ),
+        idempotency_key=str(source_delivery_id),
+    )
+    plugin.processing_feedback(DiscordSettings(), credentials, context)
+
+    sends = mock_client.return_value.send_message.call_args_list
+    reply_key = sends[0].kwargs["idempotency_key"]
+    failure_notice_key = sends[1].kwargs["idempotency_key"]
+    assert_that(reply_key, equal_to(provider_idempotency_key(str(source_delivery_id))))
+    assert_that(failure_notice_key, equal_to(failure_feedback_idempotency_key(context)))
+    assert_that(failure_notice_key, not_(equal_to(reply_key)))
 
 
 @patch("api.domains.communications.plugins.discord.DiscordClient")

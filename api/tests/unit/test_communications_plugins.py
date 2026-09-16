@@ -24,6 +24,7 @@ from api.domains.communications.plugins.base import (
     InboundAdmissionContext,
     PlatformPlugin,
     ProcessingFeedbackContext,
+    failure_feedback_idempotency_key,
     failure_notice,
     provider_idempotency_key,
 )
@@ -757,7 +758,7 @@ def test_telegram_terminal_failure_replies_to_the_originating_message() -> None:
         failure_notice(context.error_summary),
         thread_id="7",
         reply_to_id="42",
-        idempotency_key=provider_idempotency_key(str(source_delivery_id)),
+        idempotency_key=failure_feedback_idempotency_key(context),
     )
 
 
@@ -1278,7 +1279,7 @@ def test_teams_terminal_failure_replies_to_the_originating_conversation() -> Non
     assert_that(activity["from"], equal_to({"id": _TEAMS_BOT_ID}))
     assert_that(activity["recipient"], equal_to({"id": _TEAMS_USER_ID}))
     assert_that(activity["replyToId"], equal_to("1485983408511"))
-    assert_that(send.call_args.kwargs["idempotency_key"], equal_to(provider_idempotency_key(str(source_delivery_id))))
+    assert_that(send.call_args.kwargs["idempotency_key"], equal_to(failure_feedback_idempotency_key(context)))
 
 
 def test_teams_send_without_a_service_url_is_rejected() -> None:
