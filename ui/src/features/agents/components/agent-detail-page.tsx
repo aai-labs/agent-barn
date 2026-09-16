@@ -10,20 +10,12 @@ import { ModelSourceBadge } from "./model-source-badge";
 import { PendingModelNote } from "./pending-model-note";
 import { useAgent } from "../hooks/use-agent";
 import { useAgentHealth } from "../hooks/use-agent-health";
-import { useStartAgent } from "../hooks/use-start-agent";
-import { useStopAgent } from "../hooks/use-stop-agent";
 import { useCommunicationConnections } from "@/features/communication-connections/hooks/use-communication-connections";
-import {
-  ChevLeftIcon,
-  PauseIcon,
-  PlayIcon,
-  CogIcon,
-  ShareIcon,
-} from "@/components/icons";
+import { ChevLeftIcon, CogIcon, ShareIcon } from "@/components/icons";
 import { AppErrorState } from "@/components/app-error-state";
-import { toastError } from "@/shared/toast";
 import { AgentAvatar } from "./agent-avatar";
 import { AgentErrorBanner, AgentHealthErrorBanner } from "./agent-error-banner";
+import { AgentLifecycleMenu } from "./agent-lifecycle-menu";
 import { AgentMetaBadges } from "./agent-meta-badges";
 import { StatusLine } from "./status-line";
 import { ChatTab } from "./chat-tab";
@@ -57,9 +49,6 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
     canReadActivity &&
       (agent?.status === "RUNNING" || agent?.status === "ERROR"),
   );
-  const stopAgent = useStopAgent();
-  const startAgent = useStartAgent();
-
   const [tab, setTab] = useQueryState(
     "tab",
     parseAsStringEnum<Tab>(VALID_TABS)
@@ -168,28 +157,7 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
                 </div>
               </div>
               <div className="flex gap-2">
-                {isRunning && canManageLifecycle && (
-                  <button
-                    className="af-btn"
-                    disabled={stopAgent.isPending}
-                    onClick={() => {
-                      void stopAgent.mutateAsync(agent.id).catch(toastError);
-                    }}
-                  >
-                    <PauseIcon /> {stopAgent.isPending ? "Pausing…" : "Pause"}
-                  </button>
-                )}
-                {!isRunning && canManageLifecycle && (
-                  <button
-                    className="af-btn"
-                    disabled={startAgent.isPending}
-                    onClick={() => {
-                      void startAgent.mutateAsync(agent.id).catch(toastError);
-                    }}
-                  >
-                    <PlayIcon /> {startAgent.isPending ? "Starting…" : "Start"}
-                  </button>
-                )}
+                {canManageLifecycle && <AgentLifecycleMenu agent={agent} />}
                 <Link
                   href={`${homeHref}/agents/${agent.id}/configuration`}
                   className="af-btn"

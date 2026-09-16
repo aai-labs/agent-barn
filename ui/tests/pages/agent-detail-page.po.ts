@@ -53,6 +53,14 @@ export class AgentDetailPage {
     return this.page.getByText(status, { exact: true });
   }
 
+  lifecycleMenu(): Locator {
+    return this.page.getByTestId("agent-lifecycle-menu");
+  }
+
+  lifecycleMenuTrigger(): Locator {
+    return this.page.getByRole("button", { name: "More lifecycle actions" });
+  }
+
   provisioningErrorBanner(): Locator {
     return this.page.getByTestId("agent-error-banner");
   }
