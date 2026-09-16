@@ -88,6 +88,9 @@ class ProcessingFeedbackContext:
     location: ConversationLocation
     provider_message_id: str | None = None
     source_delivery_id: UUID | None = None
+    # Already normalized and redacted by normalize_communication_error, so it is
+    # safe to show a channel; raw provider text never reaches a plugin.
+    error_summary: str | None = None
 
 
 @dataclass(frozen=True)
@@ -303,6 +306,16 @@ class PlatformPlugin(ABC):
         accepted, retried, or terminally completed.
         """
         del settings, credentials, context
+
+    def alert(self, settings: PlatformSettings, credentials: PlatformCredentials, text: str) -> None:
+        """Post an operator notice with no originating conversation.
+
+        Connection-level failures (a refused ingress session, a revoked
+        credential) have no Delivery and no channel to reply into, so a
+        platform that configures an alert channel announces them there.
+        Platforms without one stay silent.
+        """
+        del settings, credentials, text
 
     async def run_ingress(
         self,

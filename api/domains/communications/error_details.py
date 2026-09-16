@@ -66,10 +66,19 @@ _SUMMARY_BY_PROVIDER_CODE = {
         "in the Discord Developer Portal, then reconnect"
     ),
 }
+_SUMMARY_BY_HTTP_STATUS = {
+    402: "The provider reports exhausted credits or billing; add credits to the provider account, then retry",
+}
 _HTTP_PROVIDER_CODE_KEYS = ("error", "code", "error_code", "type")
 _REQUEST_ID_HEADERS = ("x-request-id", "x-correlation-id", "request-id", "x-slack-req-id", "cf-ray")
 _CODE_SUFFIX = re.compile(
     r"(?:error|failed|code|reason)\s*[:=]\s*([A-Za-z0-9][A-Za-z0-9_.:-]{0,99})\s*$",
+    re.IGNORECASE,
+)
+# Runtime-reported failures arrive as a string, not an httpx exception, so the
+# status the Agent's model provider returned is only recoverable from the text.
+_HTTP_STATUS_IN_MESSAGE = re.compile(
+    r"(?:\bhttp|error\s+code|status(?:\s+code)?)\s*[:=]?\s*([45]\d{2})\b",
     re.IGNORECASE,
 )
 _COMMON_EXCEPTION_NAMES = {
@@ -118,6 +127,8 @@ def normalize_communication_error(
     raw_code = error_code or (type(error).__name__ if error is not None else None)
     raw_message = error_message if error_message is not None else (str(error) if error is not None else "")
     http_status, provider_code, retry_after_seconds, request_id = _http_metadata(error)
+    if http_status is None:
+        http_status = _http_status_from_message(raw_message)
     if provider_code is None:
         provider_code = _websocket_provider_code(error)
     if provider_code is None:
@@ -177,7 +188,10 @@ def error_summary_from_details(details: CommunicationErrorDetails | Mapping[str,
         return _REDACTED_ERROR_SUMMARY
     summary = _SUMMARY_BY_PROVIDER_CODE.get(
         safe_details.provider_code or "",
-        _SUMMARY_BY_CATEGORY[safe_details.category],
+        _SUMMARY_BY_HTTP_STATUS.get(
+            safe_details.http_status or 0,
+            _SUMMARY_BY_CATEGORY[safe_details.category],
+        ),
     )
     qualifiers: list[str] = []
     if safe_details.http_status is not None:
@@ -328,6 +342,14 @@ def _provider_code_from_message(value: str) -> str | None:
     if match is None:
         return None
     return match.group(1)
+
+
+def _http_status_from_message(value: str) -> int | None:
+    # ponytail: 402 covers OpenRouter/Anthropic billing. OpenAI signals an
+    # exhausted quota as 429 + `insufficient_quota`, which still reads as
+    # "rate-limited" — key that off the provider code if it shows up.
+    match = _HTTP_STATUS_IN_MESSAGE.search(value)
+    return int(match.group(1)) if match is not None else None
 
 
 def _websocket_provider_code(error: BaseException | None) -> str | None:

@@ -16,12 +16,14 @@ from api.domains.communications.models import (
     NormalizedCommunicationEnvelope,
     OutboundCommunicationEnvelope,
     PlatformCapability,
+    ProcessingFeedbackStage,
 )
 from api.domains.communications.plugins.base import (
     InboundAdmissionResult,
     PlatformCredentials,
     PlatformPlugin,
     PlatformSettings,
+    ProcessingFeedbackContext,
     provider_idempotency_key,
 )
 from api.infrastructure.discord.client import DiscordClient
@@ -30,6 +32,8 @@ logger = logging.getLogger(__name__)
 
 _INSTALL_OAUTH_SCOPES = "bot%20applications.commands"
 _INSTALL_PERMISSIONS = 274878286912
+_FAILURE_NOTICE_PREFIX = "⚠️ I couldn't process that message."
+_FALLBACK_FAILURE_SUMMARY = "The failure is recorded in this Connection's diagnostics."
 
 
 class DiscordValidationConfig(Protocol):
@@ -118,6 +122,7 @@ class DiscordPlatformPlugin(PlatformPlugin):
             PlatformCapability.ATTACHMENTS,
             PlatformCapability.SUPERVISED_INGRESS,
             PlatformCapability.MENTIONS,
+            PlatformCapability.PROCESSING_FEEDBACK,
             PlatformCapability.THREADS,
         }
     )
@@ -198,6 +203,42 @@ class DiscordPlatformPlugin(PlatformPlugin):
             reply_to_id=envelope.reply_to_provider_message_id,
             idempotency_key=provider_idempotency_key(idempotency_key),
         )
+
+    def processing_feedback(
+        self,
+        settings: PlatformSettings,
+        credentials: PlatformCredentials,
+        context: ProcessingFeedbackContext,
+    ) -> None:
+        del settings
+        assert isinstance(credentials, DiscordCredentials)
+        if context.stage != ProcessingFeedbackStage.FAILED:
+            return
+        try:
+            DiscordClient(credentials.bot_token).send_message(
+                context.location.id,
+                f"{_FAILURE_NOTICE_PREFIX} {context.error_summary or _FALLBACK_FAILURE_SUMMARY}",
+                reply_to_id=context.provider_message_id,
+                # One notice per dead-lettered Delivery, even if the hook re-runs.
+                idempotency_key=(
+                    provider_idempotency_key(str(context.source_delivery_id))
+                    if context.source_delivery_id is not None
+                    else None
+                ),
+            )
+        except Exception as exc:
+            logger.warning(
+                "Discord failure notice failed for channel %s (%s)",
+                context.location.id,
+                type(exc).__name__,
+            )
+
+    def alert(self, settings: PlatformSettings, credentials: PlatformCredentials, text: str) -> None:
+        assert isinstance(settings, DiscordSettings)
+        assert isinstance(credentials, DiscordCredentials)
+        if not settings.home_channel_id:
+            return
+        DiscordClient(credentials.bot_token).send_message(settings.home_channel_id, text)
 
     def normalize_inbound(
         self,
