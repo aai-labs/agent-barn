@@ -78,6 +78,32 @@ def test_runtime_attachment_upload_rejects_an_invalid_runtime_key() -> None:
         assert_that(response.status_code, equal_to(401))
 
 
+def test_runtime_attachment_upload_rejects_oversized_content() -> None:
+    with given([*STEPS, messaging_ready]) as context:
+        response = context.communications_client.post(
+            f"/communications/v1/agents/{context.agent.id}/attachments",
+            content=b"x" * (20 * 1024 * 1024 + 1),
+            headers={
+                **context.runtime_headers,
+                "Content-Type": "application/octet-stream",
+                "Idempotency-Key": "too-large",
+                "X-Attachment-Filename": "too-large.bin",
+            },
+        )
+
+        assert_that(response.status_code, equal_to(413))
+
+
+def test_runtime_attachment_download_hides_unknown_deliveries() -> None:
+    with given([*STEPS, messaging_ready]) as context:
+        response = context.communications_client.get(
+            f"/communications/v1/agents/{context.agent.id}/deliveries/{uuid4()}/attachments/0",
+            headers=context.runtime_headers,
+        )
+
+        assert_that(response.status_code, equal_to(404))
+
+
 def test_runtime_downloads_an_inbound_provider_attachment() -> None:
     with given([*STEPS, messaging_ready]) as context:
         repository = context.injector.get(CommunicationDeliveryRepository)
@@ -111,6 +137,12 @@ def test_runtime_downloads_an_inbound_provider_attachment() -> None:
         assert_that(response.content, equal_to(b"a,b"))
         assert_that(response.headers["content-type"], equal_to("text/csv; charset=utf-8"))
         assert_that(response.headers["content-disposition"], contains_string("report.csv"))
+
+        missing = context.communications_client.get(
+            f"/communications/v1/agents/{context.agent.id}/deliveries/{accepted.delivery_id}/attachments/1",
+            headers=context.runtime_headers,
+        )
+        assert_that(missing.status_code, equal_to(404))
 
 
 @pytest.fixture(autouse=True)

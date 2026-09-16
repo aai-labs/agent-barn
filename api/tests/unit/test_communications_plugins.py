@@ -1066,6 +1066,7 @@ def test_teams_descriptor_declares_webhook_ingress() -> None:
 
     assert descriptor.key == "teams"
     assert PlatformCapability.WEBHOOK_INGRESS in descriptor.capabilities
+    assert PlatformCapability.ATTACHMENTS in descriptor.capabilities
 
 
 def test_teams_normalizes_a_personal_message_as_a_dm() -> None:
@@ -1310,6 +1311,60 @@ def test_teams_send_posts_a_complete_activity_to_the_conversation() -> None:
     assert activity["recipient"] == {"id": _TEAMS_USER_ID}
     assert activity["replyToId"] == "1485983408511"
     assert_that(send.call_args.kwargs["idempotency_key"], equal_to(provider_idempotency_key("reply-1")))
+
+
+def test_teams_personal_reply_offers_file_consent_cards() -> None:
+    plugin = _teams_plugin()
+    credentials = plugin.credentials_model.model_validate(
+        {"app_id": "app-1", "app_password": "secret", "tenant_id": "tenant-1"}
+    )
+    attachment = CommunicationAttachment(id=str(uuid4()), filename="report.csv", media_type="text/csv", size_bytes=3)
+    envelope = OutboundCommunicationEnvelope(
+        source_delivery_id=uuid4(),
+        location=ConversationLocation(id="personal-chat", type="DM"),
+        text="Here is the report.",
+        provider_metadata={"service_url": _TEAMS_SERVICE_URL, "conversation_id": "personal-chat"},
+    )
+
+    with (
+        patch("api.domains.communications.plugins.teams.acquire_token", return_value="tok"),
+        patch("api.domains.communications.plugins.teams.send_activity", return_value="sent-1") as send,
+    ):
+        plugin.send(
+            plugin.settings_model.model_validate({}),
+            credentials,
+            envelope,
+            idempotency_key="reply-1",
+            attachments=[AttachmentContent(attachment=attachment, content=b"a,b")],
+        )
+
+    card = send.call_args.args[2]["attachments"][0]
+    assert_that(card["contentType"], equal_to("application/vnd.microsoft.teams.card.file.consent"))
+    assert_that(card["content"]["acceptContext"], equal_to({"attachment_id": attachment.id}))
+
+
+def test_teams_parses_file_consent_acceptance() -> None:
+    attachment_id = str(uuid4())
+
+    consent = _teams_plugin().file_consent(
+        _teams_activity(
+            name="fileConsent/invoke",
+            value={
+                "type": "fileUpload",
+                "action": "accept",
+                "context": {"attachment_id": attachment_id},
+                "uploadInfo": {
+                    "uploadUrl": "https://upload.example/file",
+                    "uniqueId": "drive-item",
+                    "contentUrl": "https://sharepoint.example/file",
+                    "fileType": "csv",
+                },
+            },
+        )
+    )
+
+    assert_that(consent.accepted if consent else None, equal_to(True))
+    assert_that(consent.attachment_id if consent else None, equal_to(attachment_id))
 
 
 def test_teams_send_without_a_service_url_is_rejected() -> None:

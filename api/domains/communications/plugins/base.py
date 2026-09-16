@@ -2,7 +2,7 @@ import hashlib
 import json
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
@@ -61,6 +61,20 @@ def provider_attachment(
 class AttachmentContent:
     attachment: CommunicationAttachment
     content: bytes
+    provider_attachment_id: str | None = None
+    record_provider_attachment_id: Callable[[str], None] | None = None
+
+
+@dataclass(frozen=True)
+class ProviderFileConsent:
+    """A provider callback authorizing or declining one previously offered file."""
+
+    attachment_id: str
+    accepted: bool
+    upload_url: str | None = None
+    unique_id: str | None = None
+    content_url: str | None = None
+    file_type: str | None = None
 
 
 class PlatformSettings(BaseModel):
@@ -117,12 +131,6 @@ class ProcessingFeedbackContext:
     location: ConversationLocation
     provider_message_id: str | None = None
     source_delivery_id: UUID | None = None
-    # Provider-owned routing data is needed by webhook platforms such as Teams
-    # to address a feedback reply. It remains inside the trusted plugin boundary.
-    provider_metadata: dict[str, str | int | float | bool | None] = field(default_factory=dict)
-    # The gateway supplies only the normalized, safe error summary; raw provider
-    # payloads and credentials never reach a plugin through this context.
-    error_summary: str | None = None
 
 
 @dataclass(frozen=True)
@@ -326,6 +334,22 @@ class PlatformPlugin(ABC):
         """
         del settings, credentials, envelope, attachment
         raise NotImplementedError(f"{self.key} does not implement attachments")
+
+    def file_consent(self, payload: dict[str, Any]) -> ProviderFileConsent | None:
+        """Extract a provider's asynchronous file-upload approval callback."""
+        del payload
+        return None
+
+    def complete_file_consent(
+        self,
+        settings: PlatformSettings,
+        credentials: PlatformCredentials,
+        payload: dict[str, Any],
+        consent: ProviderFileConsent,
+        attachment: AttachmentContent,
+    ) -> None:
+        del settings, credentials, payload, consent, attachment
+        raise NotImplementedError(f"{self.key} does not implement file-consent upload")
 
     def list_directory_entries(
         self,

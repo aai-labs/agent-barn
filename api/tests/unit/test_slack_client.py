@@ -421,3 +421,17 @@ def test_upload_files_uses_slacks_external_upload_flow():
         "channel_id": "C123",
         "thread_ts": "111.222",
     }
+
+
+def test_upload_files_reuses_a_durably_recorded_external_file_id():
+    responses = [_resp({"ok": True})]
+    with patch("httpx.request", _mock_httpx(responses)) as mock:
+        SlackClient("bot-value").upload_files(
+            "C123",
+            [("report.csv", b"a,b", "F123", None)],
+            thread_id="111.222",
+        )
+
+    assert mock.call_count == 1
+    completion = json.loads(mock.call_args.kwargs["content"])
+    assert completion["files"] == [{"id": "F123", "title": "report.csv"}]

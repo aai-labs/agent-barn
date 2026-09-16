@@ -1,4 +1,5 @@
 from datetime import UTC, datetime, timedelta
+from typing import cast
 from unittest.mock import patch
 from uuid import UUID
 
@@ -513,8 +514,8 @@ def test_runtime_attachment_upload_is_idempotent_and_reply_metadata_is_canonical
             assert_that(attachment["size_bytes"], equal_to(3))
 
         with when("the provider delivery succeeds"):
-            claimed = repository.claim_next_outbound()
-            assert claimed is not None
+            claimed = cast(CommunicationDelivery, repository.claim_next_outbound())
+            assert_that(claimed, not_(none()))
             repository.complete_outbound(claimed.id, provider_message_id="provider-reply")
 
         with then("the no-longer-retryable bytes are removed"):

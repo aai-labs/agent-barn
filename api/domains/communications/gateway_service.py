@@ -42,6 +42,7 @@ from api.domains.communications.plugins.base import (
     PlatformPlugin,
     PlatformSettings,
     ProcessingFeedbackContext,
+    ProviderFileConsent,
 )
 from api.domains.communications.plugins.registry import PlatformPluginRegistry
 from api.domains.communications.repository import CommunicationConnectionRepository
@@ -125,7 +126,6 @@ class CommunicationsGatewayService:
                     stage=ProcessingFeedbackStage.FAILED,
                     location=stale.envelope.location,
                     provider_message_id=stale.envelope.provider_message_id,
-                    provider_metadata=stale.envelope.provider_metadata,
                 )
             )
         delivery = self.delivery_repository.claim_next_inbound(agent_id=agent.id, reclaim_expired=False)
@@ -143,7 +143,6 @@ class CommunicationsGatewayService:
                     stage=ProcessingFeedbackStage.CLAIMED,
                     location=delivery.envelope.location,
                     provider_message_id=delivery.envelope.provider_message_id,
-                    provider_metadata=delivery.envelope.provider_metadata,
                 )
             )
         return delivery
@@ -234,11 +233,7 @@ class CommunicationsGatewayService:
                 CommunicationSignal(type=CommunicationSignalType.MESSAGE_CHANGED, delivery_id=delivery_id),
             )
             if not result.succeeded:
-                self._notify_runtime_failure_feedback(
-                    agent.id,
-                    delivery_id,
-                    normalized_error.summary if normalized_error is not None else None,
-                )
+                self._notify_runtime_failure_feedback(agent.id, delivery_id)
         return completed
 
     def renew_runtime_delivery_lease(
@@ -260,7 +255,6 @@ class CommunicationsGatewayService:
         self,
         agent_id: UUID,
         delivery_id: UUID,
-        error_summary: str | None = None,
     ) -> None:
         """Notify terminal runtime failure without coupling it to completion."""
         try:
@@ -278,9 +272,6 @@ class CommunicationsGatewayService:
                         stage=ProcessingFeedbackStage.FAILED,
                         location=delivery.envelope.location,
                         provider_message_id=delivery.envelope.provider_message_id,
-                        source_delivery_id=delivery_id,
-                        provider_metadata=delivery.envelope.provider_metadata,
-                        error_summary=error_summary,
                     )
                 )
         except Exception as exc:
@@ -388,7 +379,46 @@ class CommunicationsGatewayService:
             return []
         plugin = self.plugins.require(connection.platform_key)
         settings = plugin.settings_model.model_validate(connection.settings)
+        consent = plugin.file_consent(payload)
+        if consent is not None:
+            self._complete_file_consent(connection, plugin, settings, payload, consent)
+            return []
         return self._accept_admitted_payload(connection, plugin, settings, payload)
+
+    def _complete_file_consent(
+        self,
+        connection: CommunicationConnection,
+        plugin: PlatformPlugin,
+        settings: PlatformSettings,
+        payload: dict[str, Any],
+        consent: ProviderFileConsent,
+    ) -> None:
+        """Upload one Teams personal-chat file after the recipient explicitly accepts it."""
+        try:
+            attachment_id = UUID(consent.attachment_id)
+        except ValueError as exc:
+            raise ValueError("File consent references an invalid attachment") from exc
+        stored = self.delivery_repository.pending_attachment_content(
+            agent_id=connection.agent_id,
+            connection_id=connection.id,
+            attachment_id=attachment_id,
+        )
+        if stored is None:
+            raise LookupError("File consent attachment is unavailable")
+        if consent.accepted:
+            credentials = plugin.credentials_model.model_validate(
+                json.loads(decrypt_token(connection.credentials_encrypted, self.config.agent_token_encryption_key))
+            )
+            plugin.complete_file_consent(
+                settings,
+                credentials,
+                payload,
+                consent,
+                AttachmentContent(
+                    attachment=self.delivery_repository.attachment_metadata(stored), content=stored.content
+                ),
+            )
+        self.delivery_repository.delete_attachment_content(agent_id=connection.agent_id, attachment_id=attachment_id)
 
     def _accept_admitted_payload(
         self,
@@ -481,7 +511,6 @@ class CommunicationsGatewayService:
                 stage=stage,
                 location=envelope.location,
                 provider_message_id=envelope.provider_message_id,
-                provider_metadata=envelope.provider_metadata,
             ),
         )
 

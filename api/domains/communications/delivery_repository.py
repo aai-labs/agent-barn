@@ -144,6 +144,67 @@ class CommunicationDeliveryRepository:
             except KeyError as exc:
                 raise LookupError("Attachment content not found") from exc
 
+    def retain_attachments_for_provider_consent(
+        self, *, agent_id: UUID, attachments: list[CommunicationAttachment]
+    ) -> None:
+        """Keep files after the consent-card delivery until Teams accepts or declines them."""
+        if not attachments:
+            return
+        attachment_ids = [UUID(item.id) for item in attachments]
+        with Session(self.delegate.engine) as session:
+            session.exec(
+                sa.update(CommunicationAttachmentContent)
+                .where(
+                    col(CommunicationAttachmentContent.agent_id) == agent_id,
+                    col(CommunicationAttachmentContent.id).in_(attachment_ids),
+                )
+                .values(pending_provider_consent=True)
+            )
+            session.commit()
+
+    def pending_attachment_content(
+        self, *, agent_id: UUID, connection_id: UUID, attachment_id: UUID
+    ) -> CommunicationAttachmentContent | None:
+        with Session(self.delegate.engine, expire_on_commit=False) as session:
+            return session.exec(
+                select(CommunicationAttachmentContent)
+                .join(
+                    CommunicationDelivery,
+                    col(CommunicationDelivery.id) == col(CommunicationAttachmentContent.outbound_delivery_id),
+                )
+                .where(
+                    col(CommunicationAttachmentContent.id) == attachment_id,
+                    col(CommunicationAttachmentContent.agent_id) == agent_id,
+                    col(CommunicationAttachmentContent.pending_provider_consent).is_(True),
+                    col(CommunicationDelivery.connection_id) == connection_id,
+                )
+            ).one_or_none()
+
+    def delete_attachment_content(self, *, agent_id: UUID, attachment_id: UUID) -> None:
+        with Session(self.delegate.engine) as session:
+            session.exec(
+                sa.delete(CommunicationAttachmentContent).where(
+                    col(CommunicationAttachmentContent.id) == attachment_id,
+                    col(CommunicationAttachmentContent.agent_id) == agent_id,
+                )
+            )
+            session.commit()
+
+    def record_provider_attachment_id(
+        self, *, agent_id: UUID, attachment_id: UUID, provider_attachment_id: str
+    ) -> None:
+        with Session(self.delegate.engine) as session:
+            session.exec(
+                sa.update(CommunicationAttachmentContent)
+                .where(
+                    col(CommunicationAttachmentContent.id) == attachment_id,
+                    col(CommunicationAttachmentContent.agent_id) == agent_id,
+                    col(CommunicationAttachmentContent.provider_attachment_id).is_(None),
+                )
+                .values(provider_attachment_id=provider_attachment_id)
+            )
+            session.commit()
+
     def accept_inbound(
         self,
         *,
@@ -636,6 +697,10 @@ class CommunicationDeliveryRepository:
             size_bytes=stored.size_bytes,
         )
 
+    def attachment_metadata(self, stored: CommunicationAttachmentContent) -> CommunicationAttachment:
+        """Return the runtime-safe metadata for stored attachment bytes."""
+        return self._attachment_metadata(stored)
+
     def claim_next_outbound(self, *, lease_seconds: int = 120) -> CommunicationDelivery | None:
         now = datetime.now(UTC)
         earlier_outbound = aliased(CommunicationDelivery)
@@ -819,6 +884,7 @@ class CommunicationDeliveryRepository:
                 sa.delete(CommunicationAttachmentContent).where(
                     col(CommunicationAttachmentContent.agent_id) == delivery.agent_id,
                     col(CommunicationAttachmentContent.id).in_(attachment_ids),
+                    col(CommunicationAttachmentContent.pending_provider_consent).is_(False),
                 )
             )
 

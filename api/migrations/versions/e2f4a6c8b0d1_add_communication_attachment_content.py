@@ -24,6 +24,8 @@ def upgrade() -> None:
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("agent_id", sa.Uuid(), nullable=False),
         sa.Column("outbound_delivery_id", sa.Uuid(), nullable=True),
+        sa.Column("pending_provider_consent", sa.Boolean(), nullable=False, server_default=sa.false()),
+        sa.Column("provider_attachment_id", AutoString(length=512), nullable=True),
         sa.Column("idempotency_key", AutoString(length=512), nullable=False),
         sa.Column("media_type", AutoString(length=255), nullable=False),
         sa.Column("filename", AutoString(length=255), nullable=False),
@@ -53,9 +55,18 @@ def upgrade() -> None:
         "communication_attachment_content",
         ["outbound_delivery_id"],
     )
+    op.create_index(
+        "ix_communication_attachment_content_pending_provider_consent",
+        "communication_attachment_content",
+        ["pending_provider_consent"],
+    )
 
 
 def downgrade() -> None:
+    op.drop_index(
+        "ix_communication_attachment_content_pending_provider_consent",
+        table_name="communication_attachment_content",
+    )
     op.drop_index(
         "ix_communication_attachment_content_outbound_delivery_id",
         table_name="communication_attachment_content",

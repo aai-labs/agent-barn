@@ -24,6 +24,7 @@ from api.domains.communications.plugins.base import (
     PlatformCredentials,
     PlatformPlugin,
     PlatformSettings,
+    ProviderFileConsent,
     provider_attachment,
     provider_idempotency_key,
 )
@@ -32,6 +33,7 @@ from api.infrastructure.msteams.client import (
     acquire_token,
     list_team_channels,
     send_activity,
+    upload_file,
     verify_inbound_jwt,
 )
 from api.infrastructure.msteams.client import (
@@ -118,8 +120,8 @@ class TeamsPlatformPlugin(PlatformPlugin):
         "2. Teams delivers channel and group-chat messages only when the bot is @mentioned.\n"
         "3. Allowed DM senders use the sender's Microsoft Entra object ID; Allowed channels use the Teams channel "
         "conversation ID, which looks like `19:....@thread.tacv2`.\n"
-        "4. Files sent to the bot are available in personal chats. Files produced by the Agent are reported by name, "
-        "but Teams cannot receive them until a consent-card or Microsoft Graph upload flow is configured."
+        "4. Files sent to or produced by the Agent are supported in personal chats. A produced file first requires the "
+        "recipient to approve Teams' consent card; channel and group-chat uploads require Microsoft Graph access."
     )
     post_setup_hint = (
         "## Finish setup\n\n"
@@ -132,6 +134,7 @@ class TeamsPlatformPlugin(PlatformPlugin):
     capabilities = frozenset(
         {
             PlatformCapability.APPLICATION_PROVISIONING,
+            PlatformCapability.ATTACHMENTS,
             PlatformCapability.SUPERVISED_INGRESS,
             PlatformCapability.WEBHOOK_INGRESS,
             PlatformCapability.MENTIONS,
@@ -205,7 +208,6 @@ class TeamsPlatformPlugin(PlatformPlugin):
         idempotency_key: str,
         attachments: Sequence[AttachmentContent] = (),
     ) -> str:
-        del attachments
         assert isinstance(credentials, TeamsCredentials)
         metadata = envelope.provider_metadata
         service_url = str(metadata.get("service_url") or "")
@@ -227,6 +229,23 @@ class TeamsPlatformPlugin(PlatformPlugin):
         if envelope.reply_to_provider_message_id:
             activity["replyToId"] = envelope.reply_to_provider_message_id
 
+        if attachments:
+            if envelope.location.type != "DM":
+                raise ValueError("Teams file uploads are supported only in personal chats")
+            activity["attachments"] = [
+                {
+                    "contentType": "application/vnd.microsoft.teams.card.file.consent",
+                    "name": item.attachment.filename or "attachment",
+                    "content": {
+                        "description": "A file produced by the Agent",
+                        "sizeInBytes": len(item.content),
+                        "acceptContext": {"attachment_id": item.attachment.id},
+                        "declineContext": {"attachment_id": item.attachment.id},
+                    },
+                }
+                for item in attachments
+            ]
+
         token = acquire_token(credentials.tenant_id, credentials.app_id, credentials.app_password)
         return send_activity(
             service_url,
@@ -234,6 +253,65 @@ class TeamsPlatformPlugin(PlatformPlugin):
             activity,
             token,
             idempotency_key=provider_idempotency_key(idempotency_key),
+        )
+
+    def file_consent(self, payload: dict[str, Any]) -> ProviderFileConsent | None:
+        if payload.get("name") != "fileConsent/invoke":
+            return None
+        value = payload.get("value")
+        if not isinstance(value, dict) or value.get("type") != "fileUpload":
+            return None
+        context = value.get("context")
+        if not isinstance(context, dict) or not isinstance(context.get("attachment_id"), str):
+            return None
+        action = value.get("action")
+        if action not in {"accept", "decline"}:
+            return None
+        upload_info = value.get("uploadInfo") if isinstance(value.get("uploadInfo"), dict) else {}
+        return ProviderFileConsent(
+            attachment_id=context["attachment_id"],
+            accepted=action == "accept",
+            upload_url=str(upload_info.get("uploadUrl") or "") or None,
+            unique_id=str(upload_info.get("uniqueId") or "") or None,
+            content_url=str(upload_info.get("contentUrl") or "") or None,
+            file_type=str(upload_info.get("fileType") or "") or None,
+        )
+
+    def complete_file_consent(
+        self,
+        settings: PlatformSettings,
+        credentials: PlatformCredentials,
+        payload: dict[str, Any],
+        consent: ProviderFileConsent,
+        attachment: AttachmentContent,
+    ) -> None:
+        del settings
+        assert isinstance(credentials, TeamsCredentials)
+        if not consent.upload_url or not consent.unique_id or not consent.content_url:
+            raise ValueError("Teams file-consent acceptance is missing upload information")
+        upload_file(consent.upload_url, attachment.content)
+        conversation = payload.get("conversation")
+        service_url = str(payload.get("serviceUrl") or "")
+        conversation_id = str(conversation.get("id") or "") if isinstance(conversation, dict) else ""
+        if not service_url or not conversation_id:
+            raise ValueError("Teams file-consent callback is missing conversation routing")
+        token = acquire_token(credentials.tenant_id, credentials.app_id, credentials.app_password)
+        send_activity(
+            service_url,
+            conversation_id,
+            {
+                "type": "message",
+                "text": f"Uploaded {attachment.attachment.filename or 'file'}.",
+                "attachments": [
+                    {
+                        "contentType": "application/vnd.microsoft.teams.card.file.info",
+                        "contentUrl": consent.content_url,
+                        "name": attachment.attachment.filename or "attachment",
+                        "content": {"uniqueId": consent.unique_id, "fileType": consent.file_type or ""},
+                    }
+                ],
+            },
+            token,
         )
 
     def enrich_inbound(

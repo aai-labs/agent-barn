@@ -376,12 +376,17 @@ class SlackPlatformPlugin(PlatformPlugin):
             **({"blocks": blocks} if blocks else {}),
         )
         if attachments:
-            # Slack's external upload flow has no idempotency field. The durable
-            # delivery retry keeps the same text client_msg_id, while Slack owns
-            # duplicate suppression for that message.
             client.upload_files(
                 envelope.location.id,
-                [(item.attachment.filename or "attachment", item.content) for item in attachments],
+                [
+                    (
+                        item.attachment.filename or "attachment",
+                        item.content,
+                        item.provider_attachment_id,
+                        item.record_provider_attachment_id,
+                    )
+                    for item in attachments
+                ],
                 thread_id=envelope.location.thread_id,
             )
         return message_id

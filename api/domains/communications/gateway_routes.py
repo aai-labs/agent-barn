@@ -246,17 +246,22 @@ def accept_email_inbound(
     return {"accepted": accepted}
 
 
-@provider_webhook_router.post("/{connection_id}", status_code=status.HTTP_202_ACCEPTED)
+@provider_webhook_router.post("/{connection_id}", status_code=status.HTTP_202_ACCEPTED, response_model=None)
 def accept_provider_webhook(
     connection_id: UUID,
     payload: dict[str, Any],
     service: Annotated[CommunicationsGatewayService, Injected(CommunicationsGatewayService)],
     authorization: Annotated[str, Header()],
-) -> dict[str, list[AcceptedCommunicationRead]]:
+) -> dict[str, list[AcceptedCommunicationRead]] | Response:
     try:
         accepted = service.accept_provider_webhook(connection_id, payload, authorization)
     except (PermissionError, NotImplementedError) as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Webhook authentication failed") from exc
+    except (LookupError, ValueError) as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    if payload.get("name") == "fileConsent/invoke":
+        # Bot Framework invoke activities require a synchronous success response.
+        return Response(status_code=status.HTTP_200_OK)
     return {"accepted": accepted}
 
 

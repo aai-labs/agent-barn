@@ -82,10 +82,31 @@ class OutboundCommunicationProcessor:
                         agent_id=delivery.agent_id,
                         attachments=outbound.attachments,
                     )
-                    attachment_contents = [
-                        AttachmentContent(attachment=metadata, content=content.content)
-                        for metadata, content in zip(outbound.attachments, stored, strict=True)
-                    ]
+                    attachment_contents = []
+                    for metadata, content in zip(outbound.attachments, stored, strict=True):
+                        attachment_id = getattr(content, "id", None)
+                        record_provider_attachment_id = None
+                        if isinstance(attachment_id, UUID):
+                            record_provider_attachment_id = lambda provider_id, attachment_id=attachment_id: (
+                                self.deliveries.record_provider_attachment_id(
+                                    agent_id=delivery.agent_id,
+                                    attachment_id=attachment_id,
+                                    provider_attachment_id=provider_id,
+                                )
+                            )
+                        attachment_contents.append(
+                            AttachmentContent(
+                                attachment=metadata,
+                                content=content.content,
+                                provider_attachment_id=getattr(content, "provider_attachment_id", None),
+                                record_provider_attachment_id=record_provider_attachment_id,
+                            )
+                        )
+                    if plugin.key == "teams":
+                        self.deliveries.retain_attachments_for_provider_consent(
+                            agent_id=delivery.agent_id,
+                            attachments=outbound.attachments,
+                        )
                 else:
                     names = ", ".join(item.filename or "attachment" for item in outbound.attachments)
                     outbound = outbound.model_copy(

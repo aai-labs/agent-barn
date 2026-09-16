@@ -438,6 +438,8 @@ class CommunicationAttachmentContent(BaseModel, table=True):
         ondelete="CASCADE",
         index=True,
     )
+    pending_provider_consent: bool = SqlField(default=False, nullable=False, index=True)
+    provider_attachment_id: str | None = SqlField(default=None, nullable=True, max_length=512)
     idempotency_key: str = SqlField(nullable=False, max_length=512)
     media_type: str = SqlField(nullable=False, max_length=255)
     filename: str = SqlField(nullable=False, max_length=255)

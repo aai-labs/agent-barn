@@ -194,13 +194,19 @@ class SlackClient:
     def upload_files(
         self,
         channel_id: str,
-        files: list[tuple[str, bytes]],
+        files: list[tuple],
         *,
         thread_id: str | None = None,
     ) -> None:
-        """Share (filename, content) pairs in one message via Slack's external upload flow."""
+        """Share files and durably reuse uploaded IDs when a delivery retries."""
         uploaded = []
-        for filename, content in files:
+        for item in files:
+            filename, content = item[:2]
+            uploaded_id = item[2] if len(item) > 2 else None
+            record_uploaded_id = item[3] if len(item) > 3 else None
+            if uploaded_id:
+                uploaded.append({"id": uploaded_id, "title": filename})
+                continue
             ticket = self._post("files.getUploadURLExternal", {"filename": filename, "length": len(content)})
             if not ticket.get("ok") or not ticket.get("upload_url"):
                 raise SlackFetchError(f"files.getUploadURLExternal error: {ticket.get('error', 'unknown_error')}")
@@ -212,7 +218,10 @@ class SlackClient:
                 label="Slack file upload",
             )
             response.raise_for_status()
-            uploaded.append({"id": ticket["file_id"], "title": filename})
+            file_id = str(ticket["file_id"])
+            if record_uploaded_id is not None:
+                record_uploaded_id(file_id)
+            uploaded.append({"id": file_id, "title": filename})
         payload: dict = {"files": uploaded, "channel_id": channel_id}
         if thread_id:
             payload["thread_ts"] = thread_id

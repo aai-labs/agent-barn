@@ -121,6 +121,21 @@ def download_attachment(url: str, *, token: str | None = None) -> bytes:
     return response.content
 
 
+def upload_file(url: str, content: bytes) -> None:
+    parsed = urlsplit(url)
+    if parsed.scheme != "https" or not parsed.hostname:
+        raise ValueError("Teams upload URL must be an absolute HTTPS URL")
+    response = resilient_request(
+        "POST",
+        url,
+        content=content,
+        timeout=_TIMEOUT_SECONDS,
+        label="Teams file upload",
+        retry_server_errors=True,
+    )
+    response.raise_for_status()
+
+
 def list_team_channels(service_url: str, team_id: str, token: str) -> dict[str, str | None]:
     """Map a team's channel ids to names via the Bot Framework Teams extension.
 
