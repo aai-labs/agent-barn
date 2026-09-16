@@ -207,6 +207,13 @@ export const ConversationChannelSchema = z.object({
   conversationType: z.enum(["CHANNEL", "DM"]),
 });
 
+export const WebChatApprovalSchema = z.object({
+  approvalId: z.string(),
+  command: z.string(),
+  choices: z.array(z.string()),
+  choiceLabels: z.record(z.string(), z.string()).default({}),
+});
+
 export const WebChatMessageSchema = z.object({
   id: z.string().uuid(),
   direction: z.enum(["INBOUND", "OUTBOUND"]),
@@ -221,6 +228,7 @@ export const WebChatMessageSchema = z.object({
     "UNAVAILABLE",
   ]),
   cancelRequestedAt: z.string().nullable(),
+  approval: WebChatApprovalSchema.nullish(),
   // Additive during a rolling API deployment; new responses include null when
   // no terminal error exists, while an older replica may omit the field.
   errorMessage: z.string().nullable().optional(),
@@ -366,6 +374,7 @@ export type AgentOverrideDraft = z.infer<typeof AgentOverrideDraftSchema>;
 export type AgentOverrideVersion = z.infer<typeof AgentOverrideVersionSchema>;
 export type AgentConfiguration = z.infer<typeof AgentConfigurationSchema>;
 export type WebChatMessage = z.infer<typeof WebChatMessageSchema>;
+export type WebChatApproval = z.infer<typeof WebChatApprovalSchema>;
 export type WebChatThread = z.infer<typeof WebChatThreadSchema>;
 export type ConversationMessage = z.infer<typeof ConversationMessageSchema>;
 export type ConversationChannel = z.infer<typeof ConversationChannelSchema>;

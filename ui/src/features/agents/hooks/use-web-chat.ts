@@ -55,6 +55,7 @@ export function useWebChat(
         if (
           base[existingIndex].deliveryStatus === message.deliveryStatus
           && base[existingIndex].cancelRequestedAt === message.cancelRequestedAt
+          && base[existingIndex].approval?.approvalId === message.approval?.approvalId
           && base[existingIndex].errorMessage === message.errorMessage
         ) return base;
         return base.map((item, index) => (index === existingIndex ? message : item));
@@ -64,10 +65,10 @@ export function useWebChat(
   );
 
   const sendMutation = useMutation({
-    mutationFn: async (text: string) => {
+    mutationFn: async ({ text, approvalId }: { text: string; approvalId?: string }) => {
       const response = await api.post<WebChatMessage>(
         `${orgApiBase}/agents/${agentId}/web-chat/messages`,
-        { text, threadId },
+        approvalId ? { text, threadId, approvalId } : { text, threadId },
         { schema: WebChatMessageSchema },
       );
       return response.data;
@@ -75,8 +76,8 @@ export function useWebChat(
   });
 
   const sendMessage = useCallback(
-    async (text: string) => {
-      const message = await sendMutation.mutateAsync(text);
+    async (text: string, approvalId?: string) => {
+      const message = await sendMutation.mutateAsync({ text, approvalId });
       appendMessage(message);
     },
     [appendMessage, sendMutation],
