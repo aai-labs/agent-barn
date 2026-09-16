@@ -64,6 +64,25 @@ K8S_NAMESPACE=agent-farm
 # requires a data migration (StatefulSet volumeClaimTemplates are immutable).
 STORAGE_CLASS=
 
+# ── Restore points ──
+# Full image ref the capture/restore Job runs. It must be the SAME build as the
+# API that creates the Job: the archive exclusion sets ship with that code, and
+# a stale image could archive the plaintext provider-token store the current one
+# excludes. In Kubernetes the chart wires this from its own image values; set it
+# by hand only when running the API outside the chart.
+API_IMAGE=
+# Size of each restore point's own PVC. Must be at least the agent PVC size
+# (1Gi) — a capture that fills this volume fails and is reclaimed.
+RESTORE_POINT_SIZE=1Gi
+# Manual restore points retained per Agent. Automatic pre-restore backups do not
+# count against it, so an Agent at the cap can still roll back. Failed captures
+# release their volume and are not counted either.
+RESTORE_POINT_MAX_PER_AGENT=5
+# Deadlines for the capture and restore Jobs. Restore does a capture's work plus
+# an extraction, so it is given longer.
+RESTORE_POINT_CAPTURE_TIMEOUT_SECONDS=900
+RESTORE_POINT_RESTORE_TIMEOUT_SECONDS=1800
+
 # Agents
 # Full image ref for agent pods, e.g. {REGISTRY_URL}/agentbarn-openclaw-base:{VERSION}
 AGENT_IMAGE=
@@ -103,10 +122,6 @@ LITELLM_MASTER_KEY=
 # These supersede AGENT_IMAGE above, which the API no longer reads.
 OPENCLAW_IMAGE=
 HERMES_IMAGE=
-
-# GitHub PAT with read access to aai-labs/aai-cli — the base-image
-# build clones that repo.
-GH_TOKEN=
 
 # In-container path to the kubeconfig, for the API started by `./run.sh`.
 # ./run.sh sets this automatically. Leave empty if you're not using k3d.

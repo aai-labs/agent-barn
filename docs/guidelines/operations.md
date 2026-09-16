@@ -67,8 +67,7 @@ talks to the provider; `EmailService` above it is transport-agnostic.
 Agents reachable by email get their own address on a dedicated subdomain, receive mail through a Cloudflare Email Worker, and reply through the same Email Sending path as transactional mail. Rationale for the Worker: [`../adr/2026-08-31-cloudflare-worker-for-inbound-email.md`](../adr/2026-08-31-cloudflare-worker-for-inbound-email.md).
 
 - **`AGENT_EMAIL_DOMAIN`** (GitHub variable, `STAGING_` variant) and **`EMAIL_INBOUND_SECRET`** (GitHub secret, `STAGING_` variant) flow through `helmfile.yaml.gotmpl` into the API chart's Secret. Unset leaves the Email platform refusing new Communication Connections; nothing else changes, so an environment whose Cloudflare domain is not yet onboarded can safely leave them blank. Both are read by the **Communications deployment** as well as the API — it mounts the same Secret with `envFrom`, so no separate wiring exists.
-- The two environments' `EMAIL_INBOUND_SECRET` values **must differ**. It is the only credential guarding mail injection, so a staging leak must not be usable against production.
-- Unlike the shared `CLOUDFLARE_API_TOKEN`, `EMAIL_INBOUND_SECRET` is **per-environment**: it is the only credential guarding mail injection, so a staging leak must not reach production. Generate with `openssl rand -hex 32`.
+- Unlike the shared `CLOUDFLARE_API_TOKEN`, `EMAIL_INBOUND_SECRET` is **per-environment**, and the two environments' values **must differ**: it is the only credential guarding mail injection, so a staging leak must not be usable against production. Generate with `openssl rand -hex 32`.
 - **The subdomain must be onboarded twice** — once under **Compute → Email Service → Email Routing** (inbound MX) and once under **Compute → Email Service → Email Sending** (the `From` address). They are separate flows with separate DKIM selectors (`cf2024-1._domainkey` and `cf-bounce._domainkey`). Sending verification can take up to 24 hours, and until it is Verified inbound works while every agent reply fails with a `550`-class error — a split that reads like a reply bug rather than a provisioning gap.
 - A subdomain is added from **inside the apex domain's settings** (Email Routing → select the apex → Settings → Subdomains), not as a new domain of its own. There is no top-level "onboard a subdomain" action.
 - **Subaddressing must be switched on explicitly** at **Email Routing → Settings**. It is **off by default**, and until it is enabled `agent+<slug>-<token>@…` matches no rule at all: the sender gets `550 5.1.1 Address does not exist` and **nothing is written to the Email Routing activity log**, because no rule ever matched. A bounce with an empty activity log is the signature of this being off.
@@ -172,10 +171,7 @@ kubeconfig portably with
 | `PUBLIC_SLACK_ALERTS_WEBHOOK_URL` | `#alerts` or a public-specific channel |
 
 Shared with k3s (already present): `CLOUDFLARE_ACCOUNT_ID`,
-`CLOUDFLARE_API_TOKEN`, `GOOGLE_CLOUD_CLIENT_SECRET`, and
-`AAI_CLI_REPO_ACCESS_TOKEN`. The last token only authenticates a clone of the
-public `aai-labs/aai-cli` repository; it does not need private-repository
-access.
+`CLOUDFLARE_API_TOKEN`, and `GOOGLE_CLOUD_CLIENT_SECRET`.
 
 ## Versioning and releases
 
@@ -236,3 +232,26 @@ Documentation-only changes do not change a service image and do not require a se
   `1`–`3650`). Its supervisor prunes expired entries; changing this window is
   an operational configuration change, not a release-version change.
 - On k3s, use `deploy.yml` rather than manually publishing mutable `latest` tags. Public hosted releases are git tags via `deploy-public.yml`.
+
+### Agent Restore Points
+
+- **The API's cluster identity needs `batch/jobs` (`create`, `get`, `list`, `delete`) and
+  `pods/log` (`get`).** Capture and restore run as Jobs, and their status and archive manifest
+  are read back from the Job pod's logs. `k8s/agent-farm-user.yaml` and its staging sibling
+  grant both, but the API pod authenticates with the kubeconfig in `POD_KUBECONFIG_B64`, not
+  that ServiceAccount — on a cluster where those are different identities, verify with
+  `kubectl auth can-i create jobs.batch` and `kubectl auth can-i get pods/log` against the
+  pod's kubeconfig. Without `pods/log` a capture still runs but reports no archive size and a
+  generic failure reason.
+- **The Job runs as root** (uid 0) to read files owned by the runtime user and to restore
+  ownership. It therefore requires a namespace that is not Pod Security `restricted`.
+  `agent-farm` is labelled `privileged` by `k8s/agent-farm-user.yaml`; namespaces created
+  out-of-band, including `agent-farm-staging`, inherit whatever the cluster defaults to.
+- **On `local-path`, restore points are node-local and unreplicated.** Each restore point gets
+  its own PVC sized by `RESTORE_POINT_SIZE`, provisioned on the node holding the Agent's
+  volume. They do not survive loss of that node, and they consume real node disk — the only
+  bound is `RESTORE_POINT_MAX_PER_AGENT`, which is per Agent and not per Organization.
+- Restore point rows resolve from live Job status when they are read. A capture nobody reads
+  keeps its Job until the Job's TTL reaps it; the row then resolves as failed and its volume is
+  reclaimed on the next read. Automatic reclamation of restore points nobody ever reads is
+  tracked separately from this ticket.

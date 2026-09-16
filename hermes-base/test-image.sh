@@ -27,4 +27,9 @@ docker run --rm \
     "$image" \
     /driver.py
 
+docker run --rm --network none \
+    -v "$repo_root/api/domains/agents/scripts/messaging:/messaging:ro" \
+    -v "$repo_root/api/tests/fixtures/hermes_message_completion_driver.py:/message-driver.py:ro" \
+    --entrypoint python3 "$image" /message-driver.py
+
 echo 'All Hermes image tests passed'

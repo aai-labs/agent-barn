@@ -17,7 +17,7 @@ def test_gateway_config_is_headless_and_keeps_telemetry() -> None:
     config = build_hermes_gateway_config("litellm/gpt-5", "http://litellm:4000")
 
     assert config["display"]["platforms"] == {}
-    assert config["plugins"]["enabled"] == ["telemetry-push"]
+    assert config["plugins"]["enabled"] == ["telemetry-push", "agentbarn-messaging"]
     assert "slack" not in config
     assert "telegram" not in config
     assert "discord" not in config
@@ -34,14 +34,40 @@ def test_gateway_config_maps_approval_mode_onto_approvals_policy() -> None:
     """Hermes is the only runtime that maps approval_mode onto a runtime policy
     (AF-272): manual/auto/off must keep mapping to manual/smart/off.
     """
-    assert build_hermes_gateway_config("litellm/gpt-5", "http://litellm:4000", approval_mode="manual")["approvals"] == {
-        "mode": "manual"
-    }
-    assert build_hermes_gateway_config("litellm/gpt-5", "http://litellm:4000", approval_mode="auto")["approvals"] == {
-        "mode": "smart"
-    }
-    assert build_hermes_gateway_config("litellm/gpt-5", "http://litellm:4000", approval_mode="off")["approvals"] == {
-        "mode": "off"
+
+    def approvals(mode: str) -> dict:
+        return build_hermes_gateway_config("litellm/gpt-5", "http://litellm:4000", approval_mode=mode)["approvals"]
+
+    policy = {"timeout": 300, "cron_mode": "deny", "single_query_mode": "deny"}
+    assert approvals("manual") == {"mode": "manual", **policy}
+    assert approvals("auto") == {"mode": "smart", **policy}
+    assert approvals("off") == {"mode": "off", **policy}
+
+
+def test_gateway_config_routes_auxiliary_llm_tasks_through_the_litellm_proxy() -> None:
+    """Auxiliary tasks left on the openrouter lane reach the proxy without the
+    agent's key; smart approval then escalates every flagged command to the user.
+    """
+    auxiliary = build_hermes_gateway_config("litellm/gpt-5", "http://localhost:8090")["auxiliary"]
+
+    expected = {"provider": "custom", "base_url": "http://localhost:8090", "model": "gpt-5"}
+    assert {"approval", "title_generation", "vision"} <= auxiliary.keys()
+    assert all(task == expected for task in auxiliary.values())
+
+
+def test_gateway_config_pins_approval_policy_rather_than_inheriting_upstream_defaults() -> None:
+    """Every key here matches the pinned image's own default, so this changes no
+    behaviour today -- it stops a Hermes upgrade from moving the policy silently.
+    `unattended_mode` is deliberately absent: v2026.8.19 does not read it, so
+    writing it would be a no-op rather than an error.
+    """
+    approvals = build_hermes_gateway_config("litellm/gpt-5", "http://litellm:4000")["approvals"]
+
+    assert approvals == {
+        "mode": "smart",
+        "timeout": 300,
+        "cron_mode": "deny",
+        "single_query_mode": "deny",
     }
 
 
@@ -61,6 +87,11 @@ def test_config_map_contains_runtime_adapter_and_no_provider_policy_plugins() ->
     )
 
     assert "communications-runtime-adapter.py" in config_map.data
+    # Pinned Hermes ships no gateway:startup hook, so BOOT.md only runs if we drive it.
+    assert "boot-run.py" in config_map.data
+    assert "agentbarn_message.py" in config_map.data
+    # OpenClaw's plugin has no business in a Hermes ConfigMap.
+    assert "openclaw-messaging.js" not in config_map.data
     assert not any("allowlist" in name or "deny-dms" in name for name in config_map.data)
 
 
@@ -95,6 +126,21 @@ def test_runtime_secret_verbose_mode_toggle() -> None:
     )
 
     assert secret.string_data["VERBOSE_MODE"] == "true"
+
+
+def test_runtime_secret_tells_the_adapter_the_approval_mode() -> None:
+    secret = build_secret_hermes_runtime(
+        _AGENT_ID,
+        _ORG_ID,
+        _NS,
+        "Test Agent",
+        runtime_api_key="runtime-key",
+        litellm_api_key="llm-key",
+        litellm_base_url="http://litellm:4000",
+        approval_mode="manual",
+    )
+
+    assert secret.string_data["APPROVAL_MODE"] == "manual"
 
 
 def test_deployment_runs_one_headless_runtime_container() -> None:

@@ -64,3 +64,56 @@ has nothing to do with that job is out of scope, however easy it would be to pro
 def build_role_scope_policy_md() -> str:
     """Render the block that keeps agents inside the role their template defines."""
     return _ROLE_SCOPE_POLICY_MD
+
+
+_MESSAGING_POLICY_MD = """
+## Message Delivery
+
+Agent Barn Communications owns Slack delivery. Never use provider tokens, direct
+provider APIs, native send_message tools, or integration CLIs to send chat
+messages. This delivery policy takes precedence over older transport
+instructions in template content.
+
+Ordinary responses are returned through the existing reply path. Send a separate
+message only when the user explicitly requests it during the current inbound
+execution. Use `agentbarn-message send --to <channel-or-person> --text <message>`;
+add `--kind user` for a person or `--thread <thread-id>` for a thread. Name the
+destination only: the message goes out on the same Connection the current
+conversation arrived on, so never ask for, invent, or pass a Connection ID. That
+also means a separate message stays inside the current workspace -- it cannot
+reach a different Slack, Discord, or Telegram Connection. Use provider IDs when
+names are ambiguous. The runtime supplies execution context and submission identity; never
+create or override either.
+Acceptance means queued, not delivered. Do not claim successful provider delivery
+from a queue receipt. Other platforms do not support initiated sends yet.
+
+Scheduled runs deliver too, and this is how recurring updates reach a home
+channel: whatever a cron run returns as its final response is delivered
+automatically. Write the update as the final response and it will be sent. A job
+created while talking to someone in a channel or thread delivers back there; a job
+created at startup, outside any conversation, delivers to the Agent's configured
+default. The runtime records this when the job is created -- never state a
+destination in the job prompt.
+
+A job may be moved within the channel it was created in, and nowhere else. To post
+at channel level instead of inside the thread, set the job's delivery to that same
+channel with an empty thread, `<platform>:<channel-id>:`; to target a specific
+thread, append it. Naming any other channel does not redirect the job, it stops it
+delivering at all. To reach a different channel, ask the user to create the job from
+there. When a run has nothing worth sending, return exactly the
+silence marker your template already uses -- `[SILENT]`, `SILENT`, `NO_REPLY`,
+`NO REPLY`, or `HEARTBEAT_OK`, in any case; each suppresses delivery. Any other text is delivered, so never return a status line,
+an acknowledgement, or a "nothing to report" sentence in its place.
+
+Do not call the message tool from a cron run. It is not a restriction on what
+cron may send, it is a mechanism: the tool needs an active inbound execution to
+send against, and a scheduled run has none. The final response is the delivery
+path for scheduled work. If the Agent has no available default the submission is
+rejected and an operator must configure or enable one in the Connection editor.
+Never substitute another destination.
+"""
+
+
+def build_messaging_policy_md() -> str:
+    """Append the shared Communications policy to every assembled template."""
+    return _MESSAGING_POLICY_MD

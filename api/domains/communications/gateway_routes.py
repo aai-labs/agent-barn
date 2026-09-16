@@ -2,17 +2,22 @@ from typing import Annotated, Any
 from uuid import UUID
 
 from fastapi import APIRouter, Header, HTTPException, Response, status
+from fastapi.responses import StreamingResponse
 from fastapi_injector import Injected
 
+from api.domains.communications.agent_message_service import AgentMessageService
+from api.domains.communications.delivery_repository import CommunicationDeliveryCancelledError
 from api.domains.communications.gateway_service import CommunicationsGatewayService
 from api.domains.communications.models import (
     AcceptedCommunicationRead,
+    AgentMessageCreate,
+    AgentMessageRead,
     RuntimeDeliveryRead,
     RuntimeDeliveryResult,
     RuntimeReplyCreate,
 )
 
-SUPPORTED_RUNTIME_PROTOCOL_VERSION = "1"
+SUPPORTED_RUNTIME_PROTOCOL_VERSIONS = frozenset({"1", "2"})
 
 runtime_communications_router = APIRouter(prefix="/agents", tags=["runtime-communications"])
 driver_communications_router = APIRouter(prefix="/connections", tags=["platform-driver-communications"])
@@ -25,7 +30,7 @@ def _authenticate(
     authorization: str,
     protocol_version: str,
 ):
-    if protocol_version != SUPPORTED_RUNTIME_PROTOCOL_VERSION:
+    if protocol_version not in SUPPORTED_RUNTIME_PROTOCOL_VERSIONS:
         raise HTTPException(
             status_code=status.HTTP_426_UPGRADE_REQUIRED,
             detail=f"Unsupported Communications protocol version: {protocol_version}",
@@ -35,6 +40,30 @@ def _authenticate(
         return service.authenticate_runtime(agent_id, provided_key)
     except PermissionError as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED) from exc
+
+
+@runtime_communications_router.get("/{agent_id}/control")
+def stream_runtime_control(
+    agent_id: UUID,
+    service: Annotated[CommunicationsGatewayService, Injected(CommunicationsGatewayService)],
+    authorization: Annotated[str, Header()],
+    protocol_version: Annotated[str, Header(alias="X-AgentBarn-Communications-Version")],
+) -> StreamingResponse:
+    if protocol_version != "2":
+        raise HTTPException(
+            status_code=status.HTTP_426_UPGRADE_REQUIRED,
+            detail="The persistent runtime control stream requires Communications protocol version 2",
+        )
+    agent = _authenticate(service, agent_id, authorization, protocol_version)
+    return StreamingResponse(
+        service.stream_runtime_control(agent),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @runtime_communications_router.post(
@@ -86,10 +115,11 @@ def renew_runtime_delivery_lease(
     service: Annotated[CommunicationsGatewayService, Injected(CommunicationsGatewayService)],
     authorization: Annotated[str, Header()],
     protocol_version: Annotated[str, Header(alias="X-AgentBarn-Communications-Version")],
+    awaiting_input: bool = False,
 ) -> Response:
     agent = _authenticate(service, agent_id, authorization, protocol_version)
     try:
-        renewed = service.renew_runtime_delivery_lease(agent, delivery_id)
+        renewed = service.renew_runtime_delivery_lease(agent, delivery_id, awaiting_input=awaiting_input)
     except RuntimeError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     if not renewed:
@@ -112,6 +142,8 @@ def enqueue_runtime_reply(
     agent = _authenticate(service, agent_id, authorization, protocol_version)
     try:
         outbound_delivery_id = service.enqueue_runtime_reply(agent, delivery_id, reply)
+    except CommunicationDeliveryCancelledError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except LookupError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     return {"delivery_id": outbound_delivery_id}
@@ -163,3 +195,16 @@ def accept_provider_webhook(
     except (PermissionError, NotImplementedError) as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Webhook authentication failed") from exc
     return {"accepted": accepted}
+
+
+@runtime_communications_router.post("/{agent_id}/messages", status_code=status.HTTP_202_ACCEPTED)
+def submit_agent_message(
+    agent_id: UUID,
+    request: AgentMessageCreate,
+    service: Annotated[CommunicationsGatewayService, Injected(CommunicationsGatewayService)],
+    messages: Annotated[AgentMessageService, Injected(AgentMessageService)],
+    authorization: Annotated[str, Header()],
+    protocol_version: Annotated[str, Header(alias="X-AgentBarn-Communications-Version")],
+) -> AgentMessageRead:
+    agent = _authenticate(service, agent_id, authorization, protocol_version)
+    return messages.submit_agent_message(agent, request)

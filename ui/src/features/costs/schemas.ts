@@ -113,6 +113,17 @@ export const PlatformCostSummarySchema = CostSummarySchema.extend({
   organizations: z.array(OrganizationSpendSchema).default([]),
 });
 
+export const AgentSpendSchema = z.object({
+  agentId: z.string().uuid().nullable().default(null),
+  agentName: z.string().nullable().default(null),
+  spend: z.number(),
+  calls: z.number().int(),
+  promptTokens: z.number().int(),
+  completionTokens: z.number().int(),
+});
+
+export const AgentSpendListSchema = z.array(AgentSpendSchema);
+
 /** Cost totals for a single agent, used by the agent detail surface. */
 export const AgentModelBreakdownSchema = z.object({
   model: z.string(),
@@ -126,12 +137,17 @@ export const AgentCostSchema = z.object({
   agentName: z.string(),
   model: z.string(),
   status: z.string(),
+  period: z.string().nullable().default(null),
+  fromDate: z.string(),
+  toDate: z.string(),
+  granularity: GranularitySchema,
   totalCost: z.number(),
   totalTokens: z.number().int(),
   promptTokens: z.number().int(),
   completionTokens: z.number().int(),
   memoryCost: z.number().default(0),
   modelsBreakdown: z.array(AgentModelBreakdownSchema).default([]),
+  spendOverTime: z.array(CostSeriesPointSchema).default([]),
 });
 
 export type CostSortDirection = z.infer<typeof CostSortDirectionSchema>;
@@ -151,3 +167,4 @@ export type CostSummary = z.infer<typeof CostSummarySchema>;
 export type OrganizationSpend = z.infer<typeof OrganizationSpendSchema>;
 export type PlatformCostSummary = z.infer<typeof PlatformCostSummarySchema>;
 export type AgentCost = z.infer<typeof AgentCostSchema>;
+export type AgentSpend = z.infer<typeof AgentSpendSchema>;

@@ -12,6 +12,7 @@ from api.domains.auth.models import CurrentUserContext
 from api.domains.costs.models import (
     AgentCostRead,
     AgentModelBreakdown,
+    AgentSpendRead,
     AgentSpendSeriesPoint,
     CostFilter,
     CostFilterOption,
@@ -129,6 +130,33 @@ class CostService:
             for model in self.repository.distinct_models(window, scoped)
         ]
 
+    def list_org_agent_spend(
+        self,
+        context: CurrentUserContext,
+        window: StatsWindow,
+        filters: CostFilter,
+    ) -> list[AgentSpendRead]:
+        """Every Agent that spent anything in the window, ranked.
+
+        Organization-wide, so it takes the Organization `cost.read` the summary takes
+        rather than a per-Agent check: the caller is asking about the whole
+        organization's spend, not about one Agent they have been assigned.
+        """
+        scoped = self._scoped(self._authorized_org(context), filters)
+        return [
+            AgentSpendRead(
+                agent_id=agent_id,
+                agent_name=agent_name,
+                spend=float(spend),
+                calls=calls,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+            )
+            for agent_id, agent_name, spend, calls, prompt_tokens, completion_tokens in (
+                self.repository.spend_by_agent(window, scoped)
+            )
+        ]
+
     def get_agent_cost(
         self,
         agent_id: UUID,
@@ -163,12 +191,19 @@ class CostService:
         memory_by_agent = self.honcho_usage.memory_cost_by_agent(
             window.start.date().isoformat(), window.end.date().isoformat()
         )
+        # Same series builder the organization summary uses; the filter above pins it
+        # to this agent, so the trend and the totals beside it describe one set of calls.
+        series = self.repository.spend_series(window, filters)
 
         return AgentCostRead(
             agent_id=agent.id,
             agent_name=agent.name,
             model=agent.model,
             status=_display_status(agent),
+            period=window.period,
+            from_date=window.start,
+            to_date=window.end,
+            granularity=window.granularity,
             total_cost=float(totals.spend),
             total_tokens=totals.prompt_tokens + totals.completion_tokens,
             prompt_tokens=totals.prompt_tokens,
@@ -182,6 +217,9 @@ class CostService:
                     completion_tokens=completion_tokens,
                 )
                 for model, spend, prompt_tokens, completion_tokens in breakdown
+            ],
+            spend_over_time=[
+                CostSeriesPoint(bucket=bucket, spend=float(spend), calls=calls) for bucket, spend, calls in series
             ],
         )
 

@@ -11,6 +11,7 @@ import pytest
 from hamcrest import assert_that, empty, equal_to, has_length
 
 from api.domains.communications.models import (
+    ApprovalRequest,
     CommunicationPolicyDisposition,
     CommunicationSender,
     ConversationLocation,
@@ -21,6 +22,7 @@ from api.domains.communications.models import (
 )
 from api.domains.communications.plugins.base import (
     InboundAdmissionContext,
+    PlatformPlugin,
     ProcessingFeedbackContext,
     provider_idempotency_key,
 )
@@ -29,6 +31,7 @@ from api.domains.communications.plugins.registry import PlatformPluginRegistry
 from api.domains.communications.plugins.slack import SlackPlatformPlugin
 from api.domains.communications.plugins.teams import TeamsPlatformPlugin
 from api.domains.communications.plugins.telegram import TelegramPlatformPlugin
+from api.domains.communications.plugins.web import WebPlatformPlugin
 from api.infrastructure.msteams.client import TeamsAuthError
 
 _TEAMS_BOT_ID = "28:c9e8c047-2a74-40a2-b28a-b162d5f5327c"
@@ -59,9 +62,16 @@ def test_registry_lists_shipped_plugins_in_stable_order() -> None:
             DiscordPlatformPlugin(config),
             SlackPlatformPlugin(config),
             TeamsPlatformPlugin(config),
+            WebPlatformPlugin(),
         ]
     )
-    assert [descriptor.key for descriptor in registry.descriptors()] == ["discord", "slack", "teams", "telegram"]
+    assert [descriptor.key for descriptor in registry.descriptors()] == [
+        "discord",
+        "slack",
+        "teams",
+        "telegram",
+        "web",
+    ]
     assert PlatformCapability.DIRECTORY_DISCOVERY in registry.require("slack").descriptor.capabilities
 
 
@@ -216,11 +226,245 @@ def _slack_event(
     return {"event": event, "agentbarn_bot_user_id": "bot-1"}
 
 
+def _slack_block_action(
+    *,
+    choice: str = "once",
+    approval_id: str = "run-1:1.0",
+    user: str = "user-1",
+    channel: str = "channel-1",
+    posted_by: str | None = "bot-1",
+    action_id: str | None = None,
+    bot_user_id: str | None = "bot-1",
+) -> dict:
+    message: dict = {"type": "message", "bot_id": "B123", "text": "approval"}
+    if posted_by is not None:
+        message["user"] = posted_by
+    payload = {
+        "type": "block_actions",
+        "user": {"id": user},
+        "channel": {"id": channel, "name": "general" if not channel.startswith("D") else "directmessage"},
+        "container": {
+            "type": "message",
+            "message_ts": "1724320800.000100",
+            "thread_ts": "1724320800.000100",
+            "channel_id": channel,
+        },
+        "message": message,
+        "actions": [
+            {
+                "type": "button",
+                "action_id": action_id if action_id is not None else f"agentbarn_approval:{choice}",
+                "block_id": "approval",
+                "value": f"{approval_id}:{choice}",
+                "action_ts": "1724320900.000200",
+            }
+        ],
+    }
+    if bot_user_id is not None:
+        payload["agentbarn_bot_user_id"] = bot_user_id
+    return payload
+
+
 def _slack_admission_context(*, owned: bool) -> InboundAdmissionContext:
     return InboundAdmissionContext(
         connection_id=uuid4(),
         thread_is_agent_owned=lambda _location: owned,
     )
+
+
+def test_an_approval_click_becomes_an_ordinary_inbound_answer() -> None:
+    plugin = SlackPlatformPlugin(ValidationConfig())
+    settings = plugin.settings_model.model_validate({"group_policy": "open"})
+
+    admitted = plugin.admit_inbound(
+        settings,
+        _slack_block_action(choice="once"),
+        context=_slack_admission_context(owned=False),
+    )
+
+    assert len(admitted) == 1
+    envelope = admitted[0]
+    assert envelope.text == "once"
+    assert envelope.sender.id == "user-1"
+    assert envelope.location.thread_id == "1724320800.000100"
+    assert envelope.provider_metadata["approval_id"] == "run-1:1.0"
+
+
+def test_repeat_clicks_are_not_deduped_into_nothing() -> None:
+    plugin = SlackPlatformPlugin(ValidationConfig())
+    settings = plugin.settings_model.model_validate({"group_policy": "open"})
+
+    envelope = plugin.normalize_inbound(settings, _slack_block_action()).envelopes[0]
+
+    assert envelope.provider_message_id == "action:1724320900.000200"
+    assert envelope.provider_message_id != "1724320800.000100"
+
+
+def test_a_click_still_obeys_the_channel_allowlist() -> None:
+    plugin = SlackPlatformPlugin(ValidationConfig())
+    settings = plugin.settings_model.model_validate({"group_policy": "allowlist", "channel_ids": ["channel-9"]})
+
+    result = plugin.normalize_inbound(settings, _slack_block_action(channel="channel-1"))
+
+    assert result.disposition == CommunicationPolicyDisposition.CHANNEL_DENIED
+
+
+def test_a_click_still_obeys_the_dm_policy() -> None:
+    plugin = SlackPlatformPlugin(ValidationConfig())
+    off = plugin.settings_model.model_validate({"dm_policy": "off"})
+    allowlisted = plugin.settings_model.model_validate({"dm_policy": "allowlist", "dm_user_ids": ["user-9"]})
+
+    assert (
+        plugin.normalize_inbound(off, _slack_block_action(channel="D123")).disposition
+        == CommunicationPolicyDisposition.USER_DENIED
+    )
+    assert (
+        plugin.normalize_inbound(allowlisted, _slack_block_action(channel="D123", user="user-1")).disposition
+        == CommunicationPolicyDisposition.USER_DENIED
+    )
+
+
+def test_a_click_on_a_message_this_agent_did_not_post_is_refused() -> None:
+    plugin = SlackPlatformPlugin(ValidationConfig())
+    settings = plugin.settings_model.model_validate({"group_policy": "open"})
+    context = _slack_admission_context(owned=True)
+
+    foreign = plugin.admit_inbound(settings, _slack_block_action(posted_by="someone-else"), context=context)
+    unattributed = plugin.admit_inbound(settings, _slack_block_action(posted_by=None), context=context)
+    unknown_bot = plugin.admit_inbound(settings, _slack_block_action(bot_user_id=None), context=context)
+
+    assert foreign == []
+    assert unattributed == []
+    assert unknown_bot == []
+
+
+def test_the_clicking_bot_cannot_answer_its_own_approval() -> None:
+    plugin = SlackPlatformPlugin(ValidationConfig())
+    settings = plugin.settings_model.model_validate({"group_policy": "open"})
+
+    result = plugin.normalize_inbound(settings, _slack_block_action(user="bot-1"))
+
+    assert result.disposition == CommunicationPolicyDisposition.BOT_IGNORED
+
+
+def test_an_unrelated_interaction_is_ignored_rather_than_malformed() -> None:
+    plugin = SlackPlatformPlugin(ValidationConfig())
+    settings = plugin.settings_model.model_validate({"group_policy": "open"})
+
+    result = plugin.normalize_inbound(settings, _slack_block_action(action_id="some_other_app:button"))
+
+    assert result.disposition == CommunicationPolicyDisposition.EVENT_IGNORED
+
+
+def test_an_approval_renders_buttons_for_exactly_the_offered_choices() -> None:
+    plugin = SlackPlatformPlugin(ValidationConfig())
+    credentials = plugin.credentials_model.model_validate({"bot_token": "bot-value", "app_token": "app-value"})
+    envelope = OutboundCommunicationEnvelope(
+        source_delivery_id=uuid4(),
+        location=ConversationLocation(id="channel-1", type="CHANNEL"),
+        text="```\nrm -rf build\n```\nReply with one of: once, deny",
+        approval=ApprovalRequest(approval_id="run-1:1.0", command="rm -rf build", choices=["once", "deny"]),
+    )
+
+    with patch("api.domains.communications.plugins.slack.SlackClient") as client_type:
+        client_type.return_value.send_message.return_value = "sent-1"
+        plugin.send(plugin.settings_model.model_validate({}), credentials, envelope, idempotency_key="reply-1")
+
+    blocks = client_type.return_value.send_message.call_args.kwargs["blocks"]
+    actions = next(block for block in blocks if block["type"] == "actions")
+    assert [element["action_id"] for element in actions["elements"]] == [
+        "agentbarn_approval:once",
+        "agentbarn_approval:deny",
+    ]
+    assert [element["value"] for element in actions["elements"]] == ["run-1:1.0:once", "run-1:1.0:deny"]
+    assert "```\nrm -rf build\n```" in blocks[0]["text"]["text"]
+
+
+def test_the_typed_answer_stays_available_alongside_the_buttons() -> None:
+    plugin = SlackPlatformPlugin(ValidationConfig())
+    credentials = plugin.credentials_model.model_validate({"bot_token": "bot-value", "app_token": "app-value"})
+    envelope = OutboundCommunicationEnvelope(
+        source_delivery_id=uuid4(),
+        location=ConversationLocation(id="channel-1", type="CHANNEL"),
+        text="prompt text",
+        approval=ApprovalRequest(approval_id="run-1:1.0", command="x", choices=["once", "session", "always", "deny"]),
+    )
+
+    with patch("api.domains.communications.plugins.slack.SlackClient") as client_type:
+        client_type.return_value.send_message.return_value = "sent-1"
+        plugin.send(plugin.settings_model.model_validate({}), credentials, envelope, idempotency_key="reply-1")
+
+    call = client_type.return_value.send_message.call_args
+    blocks = call.kwargs["blocks"]
+    context = next(block for block in blocks if block["type"] == "context")
+    assert call.args[1] == "prompt text"
+    assert "once, session, always, deny" in context["elements"][0]["text"]
+
+
+def test_a_command_too_long_for_a_section_block_is_bounded() -> None:
+    plugin = SlackPlatformPlugin(ValidationConfig())
+    credentials = plugin.credentials_model.model_validate({"bot_token": "bot-value", "app_token": "app-value"})
+    envelope = OutboundCommunicationEnvelope(
+        source_delivery_id=uuid4(),
+        location=ConversationLocation(id="channel-1", type="CHANNEL"),
+        text="prompt",
+        approval=ApprovalRequest(approval_id="run-1:1.0", command="x" * 9000, choices=["once"]),
+    )
+
+    with patch("api.domains.communications.plugins.slack.SlackClient") as client_type:
+        client_type.return_value.send_message.return_value = "sent-1"
+        plugin.send(plugin.settings_model.model_validate({}), credentials, envelope, idempotency_key="reply-1")
+
+    blocks = client_type.return_value.send_message.call_args.kwargs["blocks"]
+    assert len(blocks[0]["text"]["text"]) <= 3000
+    assert "more characters not shown" in blocks[0]["text"]["text"]
+
+
+def _slack_sent_kwargs(text: str) -> dict:
+    plugin = SlackPlatformPlugin(ValidationConfig())
+    credentials = plugin.credentials_model.model_validate({"bot_token": "bot-value", "app_token": "app-value"})
+    envelope = OutboundCommunicationEnvelope(
+        source_delivery_id=uuid4(),
+        location=ConversationLocation(id="channel-1", type="CHANNEL"),
+        text=text,
+    )
+
+    with patch("api.domains.communications.plugins.slack.SlackClient") as client_type:
+        client_type.return_value.send_message.return_value = "sent-1"
+        plugin.send(plugin.settings_model.model_validate({}), credentials, envelope, idempotency_key="reply-1")
+
+    return client_type.return_value.send_message.call_args.kwargs
+
+
+def test_an_ordinary_reply_renders_as_a_markdown_block() -> None:
+    text = "## Summary\n\n**Done** — see [the run](https://example.test/run)"
+
+    assert _slack_sent_kwargs(text)["blocks"] == [{"type": "markdown", "text": text}]
+
+
+def test_a_reply_with_slack_mention_markup_stays_mrkdwn_text() -> None:
+    assert "blocks" not in _slack_sent_kwargs("Done, <@U123> please review")
+
+
+def test_a_reply_over_the_markdown_block_cap_stays_mrkdwn_text() -> None:
+    assert "blocks" not in _slack_sent_kwargs("x" * 12_001)
+
+
+def test_a_click_never_receives_slack_reactions() -> None:
+    plugin = SlackPlatformPlugin(ValidationConfig())
+    settings = plugin.settings_model.model_validate({})
+    credentials = plugin.credentials_model.model_validate({"bot_token": "xoxb-token", "app_token": "xapp-token"})
+    context = ProcessingFeedbackContext(
+        connection_id=uuid4(),
+        stage=ProcessingFeedbackStage.ACCEPTED,
+        location=ConversationLocation(id="channel-1", type="CHANNEL", thread_id="1724320800.000100"),
+        provider_message_id="action:1724320900.000200",
+    )
+
+    with patch("api.domains.communications.plugins.slack.SlackClient") as client_type:
+        plugin.processing_feedback(settings, credentials, context)
+
+    client_type.return_value.add_reaction.assert_not_called()
 
 
 def test_slack_plugin_requires_a_direct_bot_mention_for_channel_messages() -> None:
@@ -425,6 +669,7 @@ def test_slack_send_passes_a_stable_provider_idempotency_key() -> None:
         "reply",
         thread_id=None,
         idempotency_key=provider_idempotency_key("reply-1"),
+        blocks=[{"type": "markdown", "text": "reply"}],
     )
 
 
@@ -1261,3 +1506,19 @@ def test_teams_offers_guidance_for_after_the_connection_is_saved() -> None:
     assert "Messaging endpoint" in (descriptor.post_setup_hint or "")
     assert "app package" in (descriptor.post_setup_hint or "")
     assert "client secret" in (descriptor.setup_hint or "")
+
+
+@pytest.mark.parametrize(
+    "plugin_class",
+    [SlackPlatformPlugin, DiscordPlatformPlugin, TelegramPlatformPlugin, TeamsPlatformPlugin],
+)
+def test_chat_platforms_hand_the_runtime_the_message_exactly_as_stored(plugin_class) -> None:
+    envelope = NormalizedCommunicationEnvelope(
+        provider_message_id="1724264405.531769",
+        occurred_at=datetime(2026, 8, 24, 10, 0, tzinfo=UTC),
+        location=ConversationLocation(id="C123", type="CHANNEL"),
+        text="the original message text",
+    )
+
+    assert plugin_class.runtime_prompt is PlatformPlugin.runtime_prompt
+    assert PlatformPlugin.runtime_prompt(plugin_class.__new__(plugin_class), envelope) == envelope.text

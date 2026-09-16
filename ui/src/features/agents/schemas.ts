@@ -209,6 +209,29 @@ export const ConversationChannelSchema = z.object({
   conversationType: z.enum(["CHANNEL", "DM"]),
 });
 
+export const WebChatMessageSchema = z.object({
+  id: z.string().uuid(),
+  direction: z.enum(["INBOUND", "OUTBOUND"]),
+  content: z.string(),
+  occurredAt: z.string(),
+  deliveryStatus: z.enum([
+    "PENDING",
+    "PROCESSING",
+    "SUCCEEDED",
+    "DEAD_LETTERED",
+    "CANCELLED",
+    "UNAVAILABLE",
+  ]),
+  cancelRequestedAt: z.string().nullable(),
+});
+
+export const WebChatThreadSchema = z.object({
+  threadId: z.string(),
+  title: z.string(),
+  lastOccurredAt: z.string().nullable(),
+  lastContent: z.string().nullable(),
+});
+
 export const ConversationsCursorSchema = z.object({
   beforeOccurredAt: z.string().nullable(),
   beforeId: z.string().uuid().nullable(),
@@ -329,6 +352,9 @@ export type AgentAssignedSkill = z.infer<typeof AgentAssignedSkillSchema>;
 export type TemplateRequiredSkill = z.infer<typeof TemplateRequiredSkillSchema>;
 export type AgentHealth = z.infer<typeof AgentHealthSchema>;
 export type AgentTemplateRead = z.infer<typeof AgentTemplateReadSchema>;
+export const AgentNameSuggestionSchema = z.object({ firstName: z.string().min(1) });
+export type AgentNameSuggestion = z.infer<typeof AgentNameSuggestionSchema>;
+
 export type TemplateSource = AgentTemplateRead["templateSource"];
 export type PaginatedTemplates = z.infer<typeof PaginatedTemplatesSchema>;
 export type PaginatedAgents = z.infer<typeof PaginatedAgentsSchema>;
@@ -338,6 +364,8 @@ export type AgentConfigurationVersion = z.infer<typeof AgentConfigurationVersion
 export type AgentOverrideDraft = z.infer<typeof AgentOverrideDraftSchema>;
 export type AgentOverrideVersion = z.infer<typeof AgentOverrideVersionSchema>;
 export type AgentConfiguration = z.infer<typeof AgentConfigurationSchema>;
+export type WebChatMessage = z.infer<typeof WebChatMessageSchema>;
+export type WebChatThread = z.infer<typeof WebChatThreadSchema>;
 export type ConversationMessage = z.infer<typeof ConversationMessageSchema>;
 export type ConversationChannel = z.infer<typeof ConversationChannelSchema>;
 export type ConversationsCursor = z.infer<typeof ConversationsCursorSchema>;

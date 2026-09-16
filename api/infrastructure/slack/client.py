@@ -155,8 +155,11 @@ class SlackClient:
         *,
         thread_id: str | None = None,
         idempotency_key: str | None = None,
+        blocks: list[dict] | None = None,
     ) -> str:
-        payload = {"channel": channel_id, "text": text}
+        payload: dict = {"channel": channel_id, "text": text}
+        if blocks:
+            payload["blocks"] = blocks
         if thread_id:
             payload["thread_ts"] = thread_id
         if idempotency_key:
@@ -170,6 +173,19 @@ class SlackClient:
         if not message_id:
             raise SlackFetchError("chat.postMessage returned no message id")
         return message_id
+
+    def get_conversation(self, channel_id: str) -> dict:
+        body = self._get("conversations.info", {"channel": channel_id})
+        if not body.get("ok") or not body.get("channel"):
+            raise SlackFetchError(f"conversations.info error: {body.get('error', 'unknown_error')}")
+        return body["channel"]
+
+    def open_dm(self, user_id: str) -> str:
+        body = self._post("conversations.open", {"users": user_id})
+        channel_id = (body.get("channel") or {}).get("id")
+        if not body.get("ok") or not channel_id:
+            raise SlackFetchError(f"conversations.open error: {body.get('error', 'unknown_error')}")
+        return str(channel_id)
 
     def add_reaction(self, channel_id: str, timestamp: str, name: str) -> None:
         """Add a reaction, treating Slack's duplicate response as success."""

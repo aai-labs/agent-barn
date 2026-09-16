@@ -7,20 +7,24 @@ from datetime import UTC, datetime
 from typing import Any, Protocol
 
 import httpx
-from pydantic import Field
+from pydantic import Field, model_validator
 from websockets.asyncio.client import connect
 
 from api.domains.communications.models import (
+    ApprovalRequest,
     CommunicationPolicyDisposition,
     CommunicationSender,
     ConversationLocation,
     CredentialUniquenessScope,
     NormalizedCommunicationEnvelope,
     OutboundCommunicationEnvelope,
+    OutboundTargetRequest,
     PlatformCapability,
     ProcessingFeedbackStage,
+    ResolvedOutboundTarget,
 )
 from api.domains.communications.plugins.base import (
+    AgentInitiatedDeliverySettings,
     InboundAdmissionContext,
     InboundAdmissionResult,
     PlatformCredentials,
@@ -38,7 +42,15 @@ class SlackValidationConfig(Protocol):
     skip_slack_token_validation: bool
 
 
-class SlackSettings(PlatformSettings):
+class SlackSettings(AgentInitiatedDeliverySettings, PlatformSettings):
+    @model_validator(mode="before")
+    @classmethod
+    def discard_legacy_verbose_mode(cls, values: object) -> object:
+        """Accept old Connection rows while retiring the unused setting."""
+        if isinstance(values, dict) and "verbose_mode" in values:
+            return {key: value for key, value in values.items() if key != "verbose_mode"}
+        return values
+
     channel_ids: list[str] = Field(
         default_factory=list,
         title="Allowed channels",
@@ -46,8 +58,8 @@ class SlackSettings(PlatformSettings):
     )
     dm_user_ids: list[str] = Field(
         default_factory=list,
-        title="Allowed DM senders",
-        description="User IDs allowed to direct-message this agent. Used when Direct messages is Allowlist.",
+        title="Allowed DM users",
+        description="User IDs allowed to exchange direct messages with this Agent, including initiated sends. Used when Direct messages is Allowlist.",
     )
     group_policy: str = Field(
         default="allowlist",
@@ -59,7 +71,7 @@ class SlackSettings(PlatformSettings):
         default="off",
         pattern="^(off|open|allowlist)$",
         title="Direct messages",
-        description="Off ignores DMs, Open accepts DMs from anyone, Allowlist restricts to Allowed DM senders.",
+        description="Off ignores DMs, Open accepts DMs from anyone, Allowlist restricts to Allowed DM users.",
     )
     thread_mention_policy: str = Field(
         default="every_message",
@@ -70,11 +82,6 @@ class SlackSettings(PlatformSettings):
             "Start only requires an @mention to start a thread and then accepts unmentioned replies only in "
             "threads already owned by this Agent."
         ),
-    )
-    verbose_mode: bool = Field(
-        default=True,
-        title="Announce steps",
-        description="Post a running commentary of what it's doing, not just the final reply.",
     )
 
 
@@ -97,9 +104,89 @@ class SlackCredentials(PlatformCredentials):
     )
 
 
+APPROVAL_ACTION_PREFIX = "agentbarn_approval:"
+_APPROVAL_METADATA_KEY = "approval_id"
+_SYNTHESIZED_MESSAGE_PREFIX = "action:"
+_APPROVAL_BLOCK_ID = "agentbarn_approval"
+_SECTION_TEXT_LIMIT = 3000
+_MARKDOWN_BLOCK_LIMIT = 12_000
+_SLACK_MARKUP = re.compile(r"<[@#!]")
+_APPROVAL_CHOICE_LABELS = {
+    "once": "Allow once",
+    "session": "Allow for session",
+    "always": "Always allow",
+    "deny": "Deny",
+}
+
+
+def approval_action_id(choice: str) -> str:
+    return f"{APPROVAL_ACTION_PREFIX}{choice}"
+
+
+def approval_action_value(approval_id: str, choice: str) -> str:
+    return f"{approval_id}:{choice}"
+
+
+def _approval_blocks(approval: ApprovalRequest) -> list[dict]:
+    fenced = approval.command.replace("```", "`\u200b``")
+    budget = _SECTION_TEXT_LIMIT - len("```\n\n```") - 40
+    if len(fenced) > budget:
+        hidden = len(fenced) - budget
+        fenced = f"{fenced[:budget]}\n[{hidden} more characters not shown]"
+    return [
+        {"type": "section", "text": {"type": "mrkdwn", "text": f"```\n{fenced}\n```"}},
+        {
+            "type": "actions",
+            "block_id": _APPROVAL_BLOCK_ID,
+            "elements": [
+                {
+                    "type": "button",
+                    "action_id": approval_action_id(choice),
+                    "text": {"type": "plain_text", "text": _APPROVAL_CHOICE_LABELS.get(choice, choice)},
+                    "value": approval_action_value(approval.approval_id, choice),
+                }
+                for choice in approval.choices
+            ],
+        },
+        {
+            "type": "context",
+            "elements": [
+                {"type": "mrkdwn", "text": f"Or reply with one of: {', '.join(approval.choices)}"},
+            ],
+        },
+    ]
+
+
+def _message_blocks(envelope: OutboundCommunicationEnvelope) -> list[dict] | None:
+    if envelope.approval:
+        return _approval_blocks(envelope.approval)
+    # The markdown block renders the standard Markdown Agents write, which mrkdwn
+    # text shows as raw `**` and `[label](url)`. Slack documents no mention markup
+    # inside it, so text carrying <@user>, <#channel>, or <!here> stays mrkdwn.
+    # ponytail: replies over the 12,000-character markdown block cap fall back to
+    # raw mrkdwn; split them across messages if long replies become common.
+    if len(envelope.text) <= _MARKDOWN_BLOCK_LIMIT and not _SLACK_MARKUP.search(envelope.text):
+        return [{"type": "markdown", "text": envelope.text}]
+    return None
+
+
+def _resolve_unique_name(entries: list[dict], recipient: str, *, fields: tuple[str, ...]) -> str:
+    """Reject ambiguous names instead of guessing which match the Agent meant."""
+    name = recipient.lstrip("#@").casefold()
+    matches = {
+        str(entry["id"])
+        for entry in entries
+        if any(str(entry.get(field) or "").lstrip("#@").casefold() == name for field in fields)
+    }
+    if len(matches) != 1:
+        raise ValueError("Unknown or ambiguous target; use its provider ID")
+    return matches.pop()
+
+
 class SlackPlatformPlugin(PlatformPlugin):
     key = "slack"
     display_name = "Slack"
+    schema_version = 2
     setup_hint = (
         "## Create a Slack app\n\n"
         "1. Open [Slack app management](https://api.slack.com/apps).\n"
@@ -120,11 +207,14 @@ class SlackPlatformPlugin(PlatformPlugin):
     )
     capabilities = frozenset(
         {
+            PlatformCapability.AGENT_INITIATED_DELIVERY,
             PlatformCapability.ATTACHMENTS,
+            PlatformCapability.SUPERVISED_INGRESS,
             PlatformCapability.DIRECTORY_DISCOVERY,
             PlatformCapability.MENTIONS,
             PlatformCapability.THREADS,
             PlatformCapability.PROCESSING_FEEDBACK,
+            PlatformCapability.INTERACTIVE_COMPONENTS,
         }
     )
     settings_model = SlackSettings
@@ -135,6 +225,69 @@ class SlackPlatformPlugin(PlatformPlugin):
 
     def __init__(self, config: SlackValidationConfig) -> None:
         self._skip_validation = config.skip_slack_token_validation
+
+    def resolve_outbound_target(
+        self,
+        settings: PlatformSettings,
+        credentials: PlatformCredentials,
+        request: OutboundTargetRequest,
+    ) -> ResolvedOutboundTarget:
+        assert isinstance(credentials, SlackCredentials)
+        client = SlackClient(credentials.bot_token)
+        recipient = request.recipient
+        if request.thread_id and not re.fullmatch(r"[0-9]+\.[0-9]{6}", request.thread_id):
+            raise ValueError("Slack thread must be a message timestamp")
+        user_id = None
+        if request.kind == "user":
+            user_id = (
+                recipient
+                if re.fullmatch(r"[UW][A-Z0-9]+", recipient)
+                else _resolve_unique_name(
+                    client.list_users(),
+                    recipient,
+                    fields=("name", "real_name", "display_name"),
+                )
+            )
+            provisional = ResolvedOutboundTarget(
+                location=ConversationLocation(id=user_id, type="DM"),
+                provider_metadata={"outbound_user_id": user_id},
+            )
+            self.validate_outbound_target(settings, provisional)
+            recipient = client.open_dm(user_id)
+        elif not re.fullmatch(r"[CDG][A-Z0-9]+", recipient):
+            recipient = _resolve_unique_name(client.list_channels(), recipient, fields=("name",))
+        conversation = client.get_conversation(recipient)
+        if conversation.get("is_mpim"):
+            raise ValueError("Group DMs are not supported for initiated delivery")
+        is_dm = bool(conversation.get("is_im"))
+        if (request.kind in {"user", "dm"}) != is_dm:
+            raise ValueError("Target kind does not match the Slack conversation")
+        target = ResolvedOutboundTarget(
+            location=ConversationLocation(
+                id=recipient,
+                type="DM" if is_dm else "CHANNEL",
+                display_name=conversation.get("name"),
+                thread_id=request.thread_id,
+            ),
+            provider_metadata={"outbound_user_id": user_id or conversation.get("user")},
+        )
+        self.validate_outbound_target(settings, target)
+        return target
+
+    def validate_outbound_target(self, settings: PlatformSettings, target: ResolvedOutboundTarget) -> None:
+        """Reuse the inbound allowlists as outbound restrictions; DMs stay off unless DM policy allows them."""
+        assert isinstance(settings, SlackSettings)
+        location = target.location
+        if location.type == "DM":
+            user_id = str(target.provider_metadata.get("outbound_user_id") or "")
+            if (
+                not user_id
+                or settings.dm_policy == "off"
+                or (settings.dm_policy == "allowlist" and user_id not in settings.dm_user_ids)
+            ):
+                raise PermissionError("Outbound recipient is not allowed by this Connection")
+        elif settings.group_policy == "allowlist" and location.id not in settings.channel_ids:
+            raise PermissionError("Outbound channel is not allowed by this Connection")
 
     def validate_external(self, settings: PlatformSettings, credentials: PlatformCredentials) -> str | None:
         assert isinstance(credentials, SlackCredentials)
@@ -197,11 +350,13 @@ class SlackPlatformPlugin(PlatformPlugin):
         idempotency_key: str,
     ) -> str:
         assert isinstance(credentials, SlackCredentials)
+        blocks = _message_blocks(envelope)
         return SlackClient(credentials.bot_token).send_message(
             envelope.location.id,
             envelope.text,
             thread_id=envelope.location.thread_id,
             idempotency_key=provider_idempotency_key(idempotency_key),
+            **({"blocks": blocks} if blocks else {}),
         )
 
     def processing_feedback(
@@ -268,11 +423,12 @@ class SlackPlatformPlugin(PlatformPlugin):
         context: ProcessingFeedbackContext,
         callback: Callable[[], None],
     ) -> None:
-        if not context.provider_message_id and action in {
+        message_id = context.provider_message_id or ""
+        if action in {
             "add acknowledgement reaction",
             "remove acknowledgement reaction",
             "add terminal reaction",
-        }:
+        } and (not message_id or message_id.startswith(_SYNTHESIZED_MESSAGE_PREFIX)):
             return
         try:
             callback()
@@ -285,12 +441,94 @@ class SlackPlatformPlugin(PlatformPlugin):
                 type(exc).__name__,
             )
 
+    def _normalize_block_action(
+        self,
+        settings: SlackSettings,
+        payload: dict[str, Any],
+    ) -> InboundAdmissionResult:
+        actions = payload.get("actions")
+        action = (
+            next(
+                (
+                    entry
+                    for entry in actions
+                    if isinstance(entry, dict) and str(entry.get("action_id") or "").startswith(APPROVAL_ACTION_PREFIX)
+                ),
+                None,
+            )
+            if isinstance(actions, list)
+            else None
+        )
+        if action is None:
+            return InboundAdmissionResult(CommunicationPolicyDisposition.EVENT_IGNORED)
+
+        user = payload.get("user")
+        channel = payload.get("channel")
+        container = payload.get("container")
+        if not isinstance(user, dict) or not isinstance(channel, dict) or not isinstance(container, dict):
+            return InboundAdmissionResult(CommunicationPolicyDisposition.MALFORMED_PAYLOAD)
+
+        sender_id = str(user.get("id") or "")
+        channel_id = str(channel.get("id") or "")
+        if not sender_id or not channel_id:
+            return InboundAdmissionResult(CommunicationPolicyDisposition.MALFORMED_PAYLOAD)
+        bot_user_id = self._bot_user_id(payload)
+        if bot_user_id and sender_id == bot_user_id:
+            return InboundAdmissionResult(CommunicationPolicyDisposition.BOT_IGNORED)
+
+        is_dm = channel_id.startswith("D") or str(channel.get("name") or "") == "directmessage"
+        if is_dm:
+            if settings.dm_policy == "off":
+                return InboundAdmissionResult(CommunicationPolicyDisposition.USER_DENIED)
+            if settings.dm_policy == "allowlist" and sender_id not in settings.dm_user_ids:
+                return InboundAdmissionResult(CommunicationPolicyDisposition.USER_DENIED)
+        elif settings.group_policy == "allowlist" and channel_id not in settings.channel_ids:
+            return InboundAdmissionResult(CommunicationPolicyDisposition.CHANNEL_DENIED)
+
+        action_ts = str(action.get("action_ts") or "")
+        if not action_ts:
+            return InboundAdmissionResult(CommunicationPolicyDisposition.MALFORMED_PAYLOAD)
+        try:
+            occurred_at = datetime.fromtimestamp(float(action_ts), tz=UTC)
+        except TypeError, ValueError, OSError:
+            return InboundAdmissionResult(CommunicationPolicyDisposition.MALFORMED_PAYLOAD)
+
+        approval_id, _, choice = str(action.get("value") or "").rpartition(":")
+        if not choice:
+            return InboundAdmissionResult(CommunicationPolicyDisposition.MALFORMED_PAYLOAD)
+
+        clicked = payload.get("message")
+        clicked_thread = clicked.get("thread_ts") if isinstance(clicked, dict) else None
+        thread_id = str(container.get("thread_ts") or clicked_thread or container.get("message_ts") or "")
+        if not thread_id:
+            return InboundAdmissionResult(CommunicationPolicyDisposition.MALFORMED_PAYLOAD)
+
+        return InboundAdmissionResult(
+            CommunicationPolicyDisposition.ACCEPTED,
+            (
+                NormalizedCommunicationEnvelope(
+                    provider_message_id=f"{_SYNTHESIZED_MESSAGE_PREFIX}{action_ts}",
+                    occurred_at=occurred_at,
+                    location=ConversationLocation(
+                        id=channel_id,
+                        type="DM" if is_dm else "CHANNEL",
+                        thread_id=thread_id,
+                    ),
+                    sender=CommunicationSender(id=sender_id),
+                    text=choice,
+                    provider_metadata={_APPROVAL_METADATA_KEY: approval_id},
+                ),
+            ),
+        )
+
     def normalize_inbound(
         self,
         settings: PlatformSettings,
         payload: dict[str, Any],
     ) -> InboundAdmissionResult:
         assert isinstance(settings, SlackSettings)
+        if payload.get("type") == "block_actions":
+            return self._normalize_block_action(settings, payload)
         event = payload.get("event")
         # Slack emits both app_mention and message events for a mentioned
         # channel message when both subscriptions are enabled. We consume the
@@ -370,6 +608,15 @@ class SlackPlatformPlugin(PlatformPlugin):
         assert isinstance(settings, SlackSettings)
         result = self.normalize_inbound(settings, payload)
         if result.disposition != CommunicationPolicyDisposition.ACCEPTED or not result.envelopes:
+            return result
+
+        if payload.get("type") == "block_actions":
+            bot_user_id = self._bot_user_id(payload)
+            message = payload.get("message")
+            if not bot_user_id or not isinstance(message, dict):
+                return InboundAdmissionResult(CommunicationPolicyDisposition.MENTION_REQUIRED)
+            if str(message.get("user") or "") != bot_user_id:
+                return InboundAdmissionResult(CommunicationPolicyDisposition.MENTION_REQUIRED)
             return result
 
         event = payload.get("event")
@@ -507,5 +754,9 @@ class SlackPlatformPlugin(PlatformPlugin):
                 if envelope_id and isinstance(payload, dict):
                     if bot_user_id:
                         payload = {**payload, "agentbarn_bot_user_id": bot_user_id}
+                    if message.get("type") == "interactive":
+                        await socket.send(json.dumps({"envelope_id": envelope_id}))
+                        await emit(payload)
+                        continue
                     await emit(payload)
                     await socket.send(json.dumps({"envelope_id": envelope_id}))

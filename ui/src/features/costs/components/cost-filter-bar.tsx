@@ -98,7 +98,7 @@ export const CostFilterBar = memo(function CostFilterBar({
         onValueChange={(value) => onChange("sort", value)}
       >
         <SelectTrigger
-          className="af-input"
+          className="af-input !h-auto"
           style={{ width: "10rem" }}
           aria-label="Sort"
           data-testid="cost-sort-filter"

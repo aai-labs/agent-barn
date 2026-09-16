@@ -62,7 +62,7 @@ export function OrgSwitcher() {
 
   return (
     <>
-      <div ref={ref} className="relative flex items-center gap-1.5">
+      <div ref={ref} className="relative flex min-w-0 items-center gap-1.5">
         <span className="text-[13px]" style={{ color: "var(--ink-5)" }}>
           /
         </span>
@@ -73,7 +73,7 @@ export function OrgSwitcher() {
           aria-haspopup="listbox"
           aria-expanded={open}
         >
-          <span className="max-w-[180px] truncate font-medium">
+          <span className="max-w-[110px] truncate font-medium sm:max-w-[180px]">
             {isPlatformView
               ? "Platform"
               : selectedOrganization?.name ?? "Organizations"}

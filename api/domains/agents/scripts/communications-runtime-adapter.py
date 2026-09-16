@@ -2,18 +2,23 @@
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent / "messaging"))
 import json
 import os
-import random
 import re
 import threading
 import time
 import urllib.error
 import urllib.request
-from collections.abc import Callable
+
+from agentbarn_message import bind_execution, unbind_execution  # ty: ignore[unresolved-import]
 
 COMMUNICATIONS_URL = os.environ["COMMUNICATIONS_URL"].rstrip("/")
 COMMUNICATIONS_API_KEY = os.environ["COMMUNICATIONS_API_KEY"]
+COMMUNICATIONS_PROTOCOL_VERSION = os.environ.get("COMMUNICATIONS_PROTOCOL_VERSION", "2")
 AGENT_ID = os.environ["AGENT_ID"]
 RUNTIME_API_URL = os.environ["RUNTIME_API_URL"].rstrip("/")
 RUNTIME_API_KEY = os.environ["RUNTIME_API_KEY"]
@@ -23,6 +28,10 @@ RUNTIME_MODEL = os.environ["RUNTIME_MODEL"]
 # /v1/chat/completions call, since only Hermes exposes the run/event/approval API.
 RUNTIME_KIND = os.environ.get("RUNTIME_KIND", "openclaw")
 VERBOSE_MODE = os.environ.get("VERBOSE_MODE", "false").lower() == "true"
+MANUAL_APPROVAL = os.environ.get("APPROVAL_MODE", "").lower() == "manual"
+CLAIM_SAFETY_POLL_INTERVAL_SECONDS = 5
+PENDING_CANCEL_TTL_SECONDS = 900
+MAX_PENDING_CANCEL_REQUESTS = 1_024
 
 # Runs currently waiting on a human approval, keyed by session. Process-local:
 # lost on a pod restart, same as an in-flight blocking call is today.
@@ -35,8 +44,25 @@ _PENDING_APPROVALS: dict[str, dict] = {}
 _ACTIVE_RUNS_LOCK = threading.Lock()
 _ACTIVE_RUNS: dict[str, ActiveRun] = {}
 
+# Communications control-plane calls (claim, reply, complete, renew) and the
+# runtime's own run/approval endpoints all answer immediately, so a peer that
+# stops responding must surface as an error the surrounding retry loop can act
+# on. It cannot be left to block: the delivery worker claims inside this call,
+# so a long stall there stops claiming entirely and logs nothing at all --
+# indistinguishable from an idle queue.
+_REQUEST_TIMEOUT_SECONDS = 30
+# The one exception: OpenClaw's blocking turn holds the connection open for the
+# whole model response.
+_RUNTIME_TURN_TIMEOUT_SECONDS = 900
+
 _LEASE_HEARTBEAT_SECONDS = 60
 _PROGRESS_RELAY_MIN_SECONDS = 3
+
+_APPROVAL_COMMAND_MAX_CHARS = 2_500
+_APPROVAL_CHOICES = frozenset({"once", "session", "always", "deny"})
+_APPROVAL_CHOICE_ALIASES = {"approve": "once", "approved": "once", "allow": "once"}
+_MANUAL_APPROVAL_CHOICES = ("once", "deny")
+_APPROVAL_METADATA_KEY = "approval_id"
 
 
 class ActiveRun:
@@ -51,44 +77,70 @@ class ActiveRun:
         self.thread.join(timeout)
 
 
-class IdleClaimBackoff:
-    """Bound idle claim cadence while retaining prompt bounded delivery."""
+class InFlightDelivery:
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._delivery_id: str | None = None
+        self._session_key: str | None = None
+        self._cancel_requested = False
+        self._pending_cancel_requests: dict[str, float] = {}
 
-    def __init__(
-        self,
-        *,
-        initial_seconds: float = 0.5,
-        max_seconds: float = 5.0,
-        multiplier: float = 2.0,
-        jitter_ratio: float = 0.2,
-        random_value: Callable[[], float] = random.random,
-    ) -> None:
-        if initial_seconds <= 0 or max_seconds < initial_seconds:
-            raise ValueError("Idle claim backoff bounds are invalid")
-        if multiplier < 1 or not 0 <= jitter_ratio < 1:
-            raise ValueError("Idle claim backoff parameters are invalid")
-        self._initial_seconds = initial_seconds
-        self._max_seconds = max_seconds
-        self._multiplier = multiplier
-        self._jitter_ratio = jitter_ratio
-        self._random_value = random_value
-        self._current_seconds = initial_seconds
+    def begin(self, delivery_id: str, session_key: str) -> None:
+        with self._lock:
+            now = time.monotonic()
+            self._prune_pending_cancels(now)
+            self._delivery_id = delivery_id
+            self._session_key = session_key
+            self._cancel_requested = self._pending_cancel_requests.pop(delivery_id, None) is not None
 
-    def next_delay(self) -> float:
-        base = self._current_seconds
-        self._current_seconds = min(self._max_seconds, base * self._multiplier)
-        jitter = (self._random_value() * 2 - 1) * self._jitter_ratio
-        return min(self._max_seconds, max(0.0, base * (1 + jitter)))
+    def clear(self, delivery_id: str) -> None:
+        with self._lock:
+            if self._delivery_id != delivery_id:
+                return
+            self._delivery_id = None
+            self._session_key = None
+            self._cancel_requested = False
+            self._pending_cancel_requests.pop(delivery_id, None)
 
-    def reset(self) -> None:
-        self._current_seconds = self._initial_seconds
+    def request_cancel(self, delivery_id: str) -> str | None:
+        with self._lock:
+            if self._delivery_id != delivery_id:
+                now = time.monotonic()
+                self._prune_pending_cancels(now)
+                self._pending_cancel_requests[delivery_id] = now
+                if len(self._pending_cancel_requests) > MAX_PENDING_CANCEL_REQUESTS:
+                    oldest_delivery_id = min(self._pending_cancel_requests.items(), key=lambda item: item[1])[0]
+                    del self._pending_cancel_requests[oldest_delivery_id]
+                return None
+            self._cancel_requested = True
+            return self._session_key
+
+    def is_cancel_requested(self, delivery_id: str) -> bool:
+        with self._lock:
+            return self._delivery_id == delivery_id and self._cancel_requested
+
+    def _prune_pending_cancels(self, now: float) -> None:
+        cutoff = now - PENDING_CANCEL_TTL_SECONDS
+        for delivery_id, requested_at in list(self._pending_cancel_requests.items()):
+            if requested_at < cutoff:
+                del self._pending_cancel_requests[delivery_id]
 
 
-def http_request(method: str, url: str, *, headers: dict[str, str], payload: dict | None = None):
+IN_FLIGHT = InFlightDelivery()
+
+
+def http_request(
+    method: str,
+    url: str,
+    *,
+    headers: dict[str, str],
+    payload: dict | None = None,
+    timeout: float = _REQUEST_TIMEOUT_SECONDS,
+):
     body = json.dumps(payload).encode() if payload is not None else None
     req = urllib.request.Request(url, method=method, headers=headers, data=body)
     try:
-        with urllib.request.urlopen(req, timeout=900) as response:
+        with urllib.request.urlopen(req, timeout=timeout) as response:
             if response.status == 204:
                 return None
             return json.loads(response.read())
@@ -102,7 +154,7 @@ def http_request(method: str, url: str, *, headers: dict[str, str], payload: dic
 def communications_headers() -> dict[str, str]:
     return {
         "Authorization": f"Bearer {COMMUNICATIONS_API_KEY}",
-        "X-AgentBarn-Communications-Version": "1",
+        "X-AgentBarn-Communications-Version": COMMUNICATIONS_PROTOCOL_VERSION,
         "Content-Type": "application/json",
     }
 
@@ -125,13 +177,24 @@ def session_key_for(delivery: dict) -> str:
     )
 
 
-def post_reply(delivery_id: str, text: str, *, suffix: str = "") -> None:
+def request_local_cancel(delivery_id: str) -> None:
+    # Neither pinned runtime exposes a proven abort handle for the OpenAI-style
+    # chat-completions request. Marking the in-flight turn is still immediate:
+    # its eventual result is suppressed locally and rejected atomically by the
+    # durable source-delivery check in Communications.
+    IN_FLIGHT.request_cancel(delivery_id)
+
+
+def post_reply(delivery_id: str, text: str, *, suffix: str = "", approval: dict | None = None) -> None:
     idempotency_key = f"{delivery_id}:{suffix}" if suffix else delivery_id
+    payload = {"idempotency_key": idempotency_key, "text": text}
+    if approval is not None:
+        payload["approval"] = approval
     http_request(
         "POST",
         f"{COMMUNICATIONS_URL}/agents/{AGENT_ID}/deliveries/{delivery_id}/replies",
         headers=communications_headers(),
-        payload={"idempotency_key": idempotency_key, "text": text},
+        payload=payload,
     )
 
 
@@ -148,27 +211,48 @@ def complete_delivery(delivery_id: str, *, succeeded: bool, error: Exception | N
     )
 
 
-def renew_delivery_lease(delivery_id: str) -> None:
+def renew_delivery_lease(delivery_id: str, *, awaiting_input: bool = False) -> None:
     http_request(
         "POST",
-        f"{COMMUNICATIONS_URL}/agents/{AGENT_ID}/deliveries/{delivery_id}/renew",
+        f"{COMMUNICATIONS_URL}/agents/{AGENT_ID}/deliveries/{delivery_id}/renew"
+        f"?awaiting_input={'true' if awaiting_input else 'false'}",
         headers=communications_headers(),
     )
 
 
-def _heartbeat_delivery_lease(delivery_id: str, stopped: threading.Event) -> None:
+def _is_awaiting_input(session_key: str) -> bool:
+    with _PENDING_APPROVALS_LOCK:
+        return session_key in _PENDING_APPROVALS
+
+
+def _publish_awaiting_input(delivery_id: str, session_key: str) -> None:
+    """Push the session's current parked state without waiting for the next
+    heartbeat, which would otherwise hold an answer for up to a full interval.
+
+    The value is read here rather than passed in: a run that parks again right
+    after an approval resolves must not be un-parked by the resolving call.
+    """
+    try:
+        renew_delivery_lease(delivery_id, awaiting_input=_is_awaiting_input(session_key))
+    except Exception as exc:
+        # The heartbeat re-sends this state every interval, so a lost
+        # transition costs latency, not correctness.
+        print(f"[communications-adapter] awaiting-input publish failed: {exc}", flush=True)
+
+
+def _heartbeat_delivery_lease(delivery_id: str, stopped: threading.Event, session_key: str) -> None:
     while not stopped.wait(_LEASE_HEARTBEAT_SECONDS):
         try:
-            renew_delivery_lease(delivery_id)
+            renew_delivery_lease(delivery_id, awaiting_input=_is_awaiting_input(session_key))
         except Exception as exc:
             # A transient renewal failure must not interrupt a healthy Hermes
             # run; the next heartbeat can still extend its original lease.
             print(f"[communications-adapter] lease renewal failed: {exc}", flush=True)
 
 
-def post_reply_best_effort(delivery_id: str, text: str, *, suffix: str = "") -> None:
+def post_reply_best_effort(delivery_id: str, text: str, *, suffix: str = "", approval: dict | None = None) -> None:
     try:
-        post_reply(delivery_id, text, suffix=suffix)
+        post_reply(delivery_id, text, suffix=suffix, approval=approval)
     except Exception as exc:
         # Progress and approval notices improve visibility, but neither is the
         # turn result. Keep draining so the final response can still arrive.
@@ -180,11 +264,14 @@ def run_delivery_chat_completions(delivery: dict) -> None:
     delivery_id = delivery["delivery_id"]
     envelope = delivery["envelope"]
     session_key = session_key_for(delivery)
+    IN_FLIGHT.begin(delivery_id, session_key)
+    bind_execution(session_key, delivery)
     try:
         result = http_request(
             "POST",
             f"{RUNTIME_API_URL}/v1/chat/completions",
             headers=runtime_headers(session_key, delivery_id),
+            timeout=_RUNTIME_TURN_TIMEOUT_SECONDS,
             payload={
                 "model": RUNTIME_MODEL,
                 "stream": False,
@@ -192,12 +279,32 @@ def run_delivery_chat_completions(delivery: dict) -> None:
                 "messages": [{"role": "user", "content": envelope.get("text", "")}],
             },
         )
-        reply = result["choices"][0]["message"]["content"]
-        post_reply(delivery_id, reply)
-        completion_error = None
+        if IN_FLIGHT.is_cancel_requested(delivery_id):
+            completion: dict = {
+                "succeeded": False,
+                "error_code": "CANCELLED",
+                "error_message": "Cancelled by user",
+            }
+        else:
+            reply = result["choices"][0]["message"]["content"]
+            post_reply(delivery_id, reply)
+            completion = {"succeeded": True}
     except Exception as exc:
-        completion_error = exc
-    complete_delivery(delivery_id, succeeded=completion_error is None, error=completion_error)
+        completion = {
+            "succeeded": False,
+            "error_code": type(exc).__name__,
+            "error_message": str(exc)[:500],
+        }
+    try:
+        http_request(
+            "POST",
+            f"{COMMUNICATIONS_URL}/agents/{AGENT_ID}/deliveries/{delivery_id}/complete",
+            headers=communications_headers(),
+            payload=completion,
+        )
+    finally:
+        IN_FLIGHT.clear(delivery_id)
+        unbind_execution(session_key)
 
 
 def iter_sse_events(response):
@@ -221,16 +328,46 @@ def iter_sse_events(response):
         yield event, "\n".join(data_lines)
 
 
+# Providers wrap mentions and links in their own angle-bracket markup, and a
+# reply that answers an approval carries it like any other message
+# ("<@U0BTHDYS4TY> always"). A model reading a turn can ignore that; an exact
+# choice match cannot, so it is stripped here rather than in any one plugin --
+# Slack, Discord, and Teams all reach this same comparison.
+_PROVIDER_MARKUP = re.compile(r"<[^>]*>")
+
+
 def resolve_pending_approval(session_key: str, delivery: dict) -> bool:
     """If session_key has a run waiting on approval, submit this delivery's text
     as the answer. Returns True once this delivery has been fully handled."""
     with _PENDING_APPROVALS_LOCK:
         pending = _PENDING_APPROVALS.get(session_key)
-    if pending is None:
-        return False
 
     delivery_id = delivery["delivery_id"]
-    choice = delivery["envelope"].get("text", "").strip().lower()
+    envelope = delivery["envelope"]
+    choice = _PROVIDER_MARKUP.sub(" ", envelope.get("text", "")).strip().lower()
+    clicked_approval_id = str((envelope.get("provider_metadata") or {}).get(_APPROVAL_METADATA_KEY) or "")
+
+    if pending is None:
+        # Only a click is unambiguously an approval answer. A typed word reaches
+        # the model as it always did -- "deny" is a normal reply to a normal
+        # question.
+        if clicked_approval_id:
+            post_reply_best_effort(delivery_id, "No command is waiting for approval.")
+            complete_delivery(delivery_id, succeeded=True)
+            return True
+        return False
+
+    if clicked_approval_id and clicked_approval_id != pending["approval_id"]:
+        post_reply_best_effort(delivery_id, "That approval is no longer active.")
+        complete_delivery(delivery_id, succeeded=True)
+        return True
+
+    choice = _APPROVAL_CHOICE_ALIASES.get(choice, choice)
+    if choice in _APPROVAL_CHOICES and choice not in pending["choices"]:
+        post_reply(delivery_id, f"Please reply with one of: {', '.join(pending['choices'])}")
+        complete_delivery(delivery_id, succeeded=True)
+        return True
+
     try:
         http_request(
             "POST",
@@ -259,6 +396,7 @@ def resolve_pending_approval(session_key: str, delivery: dict) -> bool:
 
     with _PENDING_APPROVALS_LOCK:
         _PENDING_APPROVALS.pop(session_key, None)
+    _publish_awaiting_input(pending["delivery_id"], session_key)
     complete_delivery(delivery_id, succeeded=True)
     return True
 
@@ -295,10 +433,11 @@ def _run_and_drain(delivery: dict, session_key: str) -> None:
     heartbeat_stopped = threading.Event()
     heartbeat = threading.Thread(
         target=_heartbeat_delivery_lease,
-        args=(delivery_id, heartbeat_stopped),
+        args=(delivery_id, heartbeat_stopped, session_key),
         daemon=True,
     )
     heartbeat.start()
+    bind_execution(session_key, delivery)
     try:
         started = http_request(
             "POST",
@@ -306,12 +445,18 @@ def _run_and_drain(delivery: dict, session_key: str) -> None:
             headers=runtime_headers(session_key, delivery_id),
             payload={"input": text, "session_id": session_key, "resume_session": True},
         )
-        _drain_run(started["run_id"], delivery_id, session_key)
+        _drain_run(
+            started["run_id"],
+            delivery_id,
+            session_key,
+            progress_updates=delivery.get("progress_updates", True),
+        )
     except Exception as exc:
         with _PENDING_APPROVALS_LOCK:
             _PENDING_APPROVALS.pop(session_key, None)
         complete_delivery(delivery_id, succeeded=False, error=exc)
     finally:
+        unbind_execution(session_key)
         heartbeat_stopped.set()
         with _ACTIVE_RUNS_LOCK:
             active = _ACTIVE_RUNS.get(session_key)
@@ -353,7 +498,23 @@ def _progress_line(event: str, payload: dict) -> str:
     return preview or tool or event
 
 
-def _drain_run(run_id: str, delivery_id: str, session_key: str) -> None:
+def _bounded_command(command) -> str:
+    fenced = str(command).replace("```", "`\u200b``")
+    if len(fenced) > _APPROVAL_COMMAND_MAX_CHARS:
+        hidden = len(fenced) - _APPROVAL_COMMAND_MAX_CHARS
+        fenced = f"{fenced[:_APPROVAL_COMMAND_MAX_CHARS]}\n[{hidden} more characters not shown]"
+    return fenced
+
+
+def _approval_prompt(command: str, choices: list) -> str:
+    return f"```\n{command}\n```\nReply with one of: {', '.join(choices)}"
+
+
+def _approval_id(run_id: str, payload: dict, sequence: int) -> str:
+    return f"{run_id}:{payload.get('timestamp') or sequence}"
+
+
+def _drain_run(run_id: str, delivery_id: str, session_key: str, *, progress_updates: bool = True) -> None:
     req = urllib.request.Request(
         f"{RUNTIME_API_URL}/v1/runs/{run_id}/events",
         method="GET",
@@ -377,17 +538,27 @@ def _drain_run(run_id: str, delivery_id: str, session_key: str) -> None:
 
             if event == "approval.request":
                 choices = payload.get("choices") or ["once", "session", "always", "deny"]
+                if MANUAL_APPROVAL:
+                    choices = [choice for choice in choices if choice in _MANUAL_APPROVAL_CHOICES] or choices
+                approval_id = _approval_id(run_id, payload, sequence)
                 with _PENDING_APPROVALS_LOCK:
                     _PENDING_APPROVALS[session_key] = {
                         "run_id": run_id,
+                        "approval_id": approval_id,
                         "delivery_id": delivery_id,
                         "choices": choices,
                     }
+                # Release this delivery's hold on the thread: the answer can
+                # only arrive as the next message here, and it cannot be
+                # claimed while this run counts as blocking.
+                _publish_awaiting_input(delivery_id, session_key)
                 description = payload.get("command") or payload.get("description") or "A command needs approval"
+                command = _bounded_command(description)
                 post_reply_best_effort(
                     delivery_id,
-                    f"{description}\nReply with one of: {', '.join(choices)}",
-                    suffix=str(sequence),
+                    _approval_prompt(command, choices),
+                    suffix=f"approval:{approval_id}",
+                    approval={"approval_id": approval_id, "command": command, "choices": choices},
                 )
                 continue
 
@@ -396,7 +567,11 @@ def _drain_run(run_id: str, delivery_id: str, session_key: str) -> None:
             # a distinct "thinking" step), so it always either duplicates or
             # cuts off the real final reply below.
             if event in ("tool.started", "subagent.start", "subagent.complete"):
-                if VERBOSE_MODE and time.monotonic() - last_progress_at >= _PROGRESS_RELAY_MIN_SECONDS:
+                if (
+                    VERBOSE_MODE
+                    and progress_updates
+                    and time.monotonic() - last_progress_at >= _PROGRESS_RELAY_MIN_SECONDS
+                ):
                     post_reply_best_effort(delivery_id, _progress_line(event, payload), suffix=str(sequence))
                     last_progress_at = time.monotonic()
                 continue
@@ -431,24 +606,82 @@ def run_delivery(delivery: dict) -> None:
         run_delivery_chat_completions(delivery)
 
 
-def main() -> None:
-    idle_backoff = IdleClaimBackoff()
-    while True:
-        try:
+class DeliveryWorker:
+    """Drain durable claims on signals, with a bounded lost-wakeup fallback."""
+
+    def __init__(self) -> None:
+        self._wake = threading.Event()
+        self._thread = threading.Thread(target=self._run, name="communications-delivery", daemon=True)
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def wake(self) -> None:
+        self._wake.set()
+
+    def _run(self) -> None:
+        while True:
+            # Redis is only a wakeup optimization. A publish can fail after
+            # PostgreSQL commits, so periodically retry the durable claim even
+            # when the control stream has not delivered a signal.
+            self._wake.wait(timeout=CLAIM_SAFETY_POLL_INTERVAL_SECONDS)
+            self._wake.clear()
+            try:
+                self._drain()
+            except Exception as exc:
+                print(f"[communications-adapter] delivery worker: {exc}", flush=True)
+                time.sleep(2)
+                self._wake.set()
+
+    def _drain(self) -> None:
+        while True:
             delivery = http_request(
                 "POST",
                 f"{COMMUNICATIONS_URL}/agents/{AGENT_ID}/deliveries/claim",
                 headers=communications_headers(),
             )
             if delivery is None:
-                time.sleep(idle_backoff.next_delay())
-                continue
-            idle_backoff.reset()
+                return
             run_delivery(delivery)
+
+
+def consume_control_stream(worker: DeliveryWorker) -> None:
+    req = urllib.request.Request(
+        f"{COMMUNICATIONS_URL}/agents/{AGENT_ID}/control",
+        method="GET",
+        headers={
+            "Authorization": f"Bearer {COMMUNICATIONS_API_KEY}",
+            "X-AgentBarn-Communications-Version": COMMUNICATIONS_PROTOCOL_VERSION,
+            "Accept": "text/event-stream",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=60) as response:
+        for raw_line in response:
+            line = raw_line.decode(errors="replace").strip()
+            if not line.startswith("data: "):
+                continue
+            try:
+                event = json.loads(line[6:])
+            except json.JSONDecodeError:
+                continue
+            if event.get("type") == "delivery_available":
+                worker.wake()
+            elif event.get("type") == "delivery_cancelled" and event.get("delivery_id"):
+                request_local_cancel(event["delivery_id"])
+
+
+def main() -> None:
+    worker = DeliveryWorker()
+    worker.start()
+    reconnect_delay = 1
+    while True:
+        try:
+            consume_control_stream(worker)
+            print("[communications-adapter] control stream closed; reconnecting", flush=True)
         except Exception as exc:
-            print(f"[communications-adapter] {exc}", flush=True)
-            idle_backoff.reset()
-            time.sleep(2)
+            print(f"[communications-adapter] control stream: {exc}", flush=True)
+        time.sleep(reconnect_delay)
+        reconnect_delay = min(15, reconnect_delay * 2)
 
 
 if __name__ == "__main__":

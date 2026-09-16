@@ -128,6 +128,7 @@ const PIPELINE_STAGES = [
   { key: "agentClaimed", label: "Agent claimed" },
   { key: "modelCompleted", label: "Model completed" },
   { key: "replyQueued", label: "Reply queued" },
+  { key: "initiatedQueued", label: "Agent-initiated queued" },
   { key: "providerDelivered", label: "Provider delivered" },
 ] as const;
 

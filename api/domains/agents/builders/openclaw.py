@@ -33,6 +33,10 @@ TELEMETRY_PUSH_PACKAGE_JSON: str = (_TELEMETRY_PUSH / "package.json").read_text(
 TELEMETRY_PUSH_PLUGIN_JSON: str = (_TELEMETRY_PUSH / "openclaw.plugin.json").read_text()
 COMMUNICATIONS_RUNTIME_ADAPTER_PY: str = (_COMMON_SCRIPTS / "communications-runtime-adapter.py").read_text()
 
+_MESSAGE_SCRIPTS = _COMMON_SCRIPTS / "messaging"
+AGENTBARN_MESSAGE_PY: str = (_MESSAGE_SCRIPTS / "agentbarn_message.py").read_text()
+OPENCLAW_MESSAGING_JS: str = (_MESSAGE_SCRIPTS / "openclaw-messaging.js").read_text()
+
 # The Honcho plugin defaults its sender-to-peer map to ~/.honcho, which is not
 # the mounted volume. Held there it is lost on every pod recreation and each
 # participant silently becomes a new peer with an empty representation.
@@ -148,14 +152,30 @@ def _openclaw_config_core(
             # memory-core stays in `allow` even when Honcho holds the slot: it is
             # not active without an entry, but start.sh needs it permitted to fall
             # back to when the plugin is missing, rather than leaving the Agent
-            # with no memory backend at all.
-            "allow": [_memory_plugin(honcho_workspace_id), _MEMORY_CORE, "active-memory", "telemetry-push"]
+            # with no memory backend at all. agentbarn-messaging is staging's
+            # agent-initiated delivery plugin, allowed and loaded regardless.
+            "allow": [
+                _memory_plugin(honcho_workspace_id),
+                _MEMORY_CORE,
+                "active-memory",
+                "telemetry-push",
+                "agentbarn-messaging",
+            ]
             if honcho_workspace_id
-            else [_MEMORY_CORE, "active-memory", "telemetry-push"],
-            "load": {"paths": ["/home/node/.openclaw/local-plugins/telemetry-push"]},
+            else [_MEMORY_CORE, "active-memory", "telemetry-push", "agentbarn-messaging"],
+            "load": {
+                "paths": [
+                    "/home/node/.openclaw/local-plugins/telemetry-push",
+                    "/home/node/.openclaw/local-plugins/agentbarn-messaging",
+                ]
+            },
             "slots": {"memory": _memory_plugin(honcho_workspace_id)},
             "entries": {
+                # `_memory_entry` gives memory-core an entry only when Honcho is off;
+                # when Honcho holds the slot, memory-core stays entry-less (fallback
+                # only) so there are never two active memory writers.
                 **_memory_entry(honcho_base_url, honcho_workspace_id),
+                "agentbarn-messaging": {"enabled": True},
                 "active-memory": {
                     "enabled": True,
                     "config": {
@@ -237,6 +257,8 @@ def build_config_map(
         data["telemetry-push-package.json"] = TELEMETRY_PUSH_PACKAGE_JSON
         data["telemetry-push-plugin.json"] = TELEMETRY_PUSH_PLUGIN_JSON
         data["communications-runtime-adapter.py"] = COMMUNICATIONS_RUNTIME_ADAPTER_PY
+        data["agentbarn_message.py"] = AGENTBARN_MESSAGE_PY
+        data["openclaw-messaging.js"] = OPENCLAW_MESSAGING_JS
     if aai_cli_config_toml is not None:
         data["aai-cli-config.toml"] = aai_cli_config_toml
     if aai_cli_setup_sh is not None:

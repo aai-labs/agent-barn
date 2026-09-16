@@ -1,3 +1,4 @@
+from unittest.mock import patch
 from uuid import uuid7
 
 from fastapi import status
@@ -70,8 +71,12 @@ def test_catalog_access_by_admin_is_allowed():
         ]
     ) as context:
         client: TestClient = context.client
-        response = client.get(
-            f"/api/v1/organizations/{org_a}/agents/models?catalog=true",
-            headers={"Authorization": f"Bearer {context.access_token}"},
-        )
+        with patch(
+            "api.infrastructure.openrouter.client.OpenRouterClient.list_models",
+            return_value=[{"id": "openai/gpt-5-mini", "name": "GPT-5 mini"}],
+        ):
+            response = client.get(
+                f"/api/v1/organizations/{org_a}/agents/models?catalog=true",
+                headers={"Authorization": f"Bearer {context.access_token}"},
+            )
         assert_that(response.status_code, equal_to(status.HTTP_200_OK))

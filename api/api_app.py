@@ -36,6 +36,7 @@ from api.domains.integrations.google_oauth.routes import integrations_router
 from api.domains.organizations.routes import org_router, platform_org_router
 from api.domains.platform_admin.routes import platform_stats_router
 from api.domains.rbac.seeder import RbacSeeder
+from api.domains.restore_points.routes import restore_points_router
 from api.domains.shared_credentials.routes import shared_credentials_router
 from api.domains.skills.repository import SkillRepository
 from api.domains.skills.routes import agent_skills_router, platform_skills_router, skills_router
@@ -46,6 +47,7 @@ from api.domains.tool_calls.routes import tool_calls_router
 from api.domains.users.organization_users.routes import member_router, platform_member_router
 from api.domains.users.routes import users_router
 from api.domains.users.service import UserService
+from api.domains.web_chat.routes import web_chat_router
 from api.infrastructure.email.logging_utils import (
     log_email_delivery_disabled_warning,
 )
@@ -107,6 +109,7 @@ def create_app(injector: Injector | None = None):
     subapi.include_router(auth_router)
     subapi.include_router(conversations_router)
     subapi.include_router(communications_router)
+    subapi.include_router(web_chat_router)
     subapi.include_router(costs_router)
     subapi.include_router(platform_costs_router)
     subapi.include_router(event_delivery_monitor_router)
@@ -123,6 +126,7 @@ def create_app(injector: Injector | None = None):
     subapi.include_router(templates_router)
     subapi.include_router(platform_templates_router)
     subapi.include_router(tool_calls_router)
+    subapi.include_router(restore_points_router)
     subapi.include_router(users_router)
 
     http_registry = setup_http_metrics(subapi)

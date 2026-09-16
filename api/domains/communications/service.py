@@ -167,7 +167,9 @@ class CommunicationsService:
                 detail="Workspace preview is available for Slack only",
             )
         try:
-            settings = plugin.settings_model.model_validate(data.settings)
+            preview_settings = dict(data.settings)
+            preview_settings.pop("default_delivery_target", None)
+            settings = plugin.settings_model.model_validate(preview_settings)
             credentials = plugin.credentials_model.model_validate(data.credentials)
             channels = plugin.list_directory_entries(settings, credentials, kind="channels")
             users = plugin.list_directory_entries(settings, credentials, kind="users")
@@ -191,6 +193,7 @@ class CommunicationsService:
         agent = self.authorization.require_action(context, agent_id, PermissionKey.AGENT_UPDATE)
         self.authorization.require_action_for_visible(context, agent, PermissionKey.AGENT_SECRET_MANAGE)
         plugin = self._require_plugin(data.platform_key)
+        self._reject_web_chat_mutation(plugin.key)
         validated = self._validate(
             plugin,
             data.settings,
@@ -257,6 +260,7 @@ class CommunicationsService:
         connection = self.repository.get_active_in_scope(connection_id, agent_id, action_scope)
         if connection is None:
             self._raise_not_found(connection_id)
+        self._reject_web_chat_mutation(connection.platform_key)
 
         if data.credentials is not None:
             self.authorization.require_action_for_visible(context, agent, PermissionKey.AGENT_SECRET_MANAGE)
@@ -300,8 +304,10 @@ class CommunicationsService:
         agent = self.authorization.require_action(context, agent_id, PermissionKey.AGENT_UPDATE)
         self.authorization.require_action_for_visible(context, agent, PermissionKey.AGENT_SECRET_MANAGE)
         action_scope = self.authorization.authorization_scope(context, PermissionKey.AGENT_UPDATE)
-        if self.repository.get_active_in_scope(connection_id, agent_id, action_scope) is None:
+        connection = self.repository.get_active_in_scope(connection_id, agent_id, action_scope)
+        if connection is None:
             self._raise_not_found(connection_id)
+        self._reject_web_chat_mutation(connection.platform_key)
         try:
             if not self.repository.retire(connection_id, expected_revision=revision):
                 self._raise_not_found(connection_id)
@@ -503,7 +509,7 @@ class CommunicationsService:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"{plugin.display_name} does not provide a bot install link",
             ) from exc
-        except (ValidationError, ValueError) as exc:
+        except (ValidationError, ValueError, PermissionError) as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
     def build_app_package(
@@ -540,8 +546,16 @@ class CommunicationsService:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"{plugin.display_name} does not provide an installable app package",
             ) from exc
-        except (ValidationError, ValueError) as exc:
+        except (ValidationError, ValueError, PermissionError) as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    @staticmethod
+    def _reject_web_chat_mutation(platform_key: str) -> None:
+        if platform_key == "web":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="The built-in Web Chat connection is managed by Agent Barn",
+            )
 
     def _require_plugin(self, key: str):
         try:
@@ -558,7 +572,7 @@ class CommunicationsService:
                 organization_id=organization_id,
                 agent_id=agent_id,
             )
-        except (ValidationError, ValueError) as exc:
+        except (ValidationError, ValueError, PermissionError) as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
     def _encrypt_credentials(self, credentials: dict) -> str:

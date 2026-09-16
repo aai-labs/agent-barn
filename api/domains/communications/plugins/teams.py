@@ -121,6 +121,7 @@ class TeamsPlatformPlugin(PlatformPlugin):
     capabilities = frozenset(
         {
             PlatformCapability.APPLICATION_PROVISIONING,
+            PlatformCapability.SUPERVISED_INGRESS,
             PlatformCapability.WEBHOOK_INGRESS,
             PlatformCapability.MENTIONS,
             PlatformCapability.THREADS,

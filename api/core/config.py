@@ -39,6 +39,12 @@ class Config(BaseSettings):
     # to the cluster's default StorageClass.
     storage_class: str = ""
 
+    api_image: str = ""
+    restore_point_size: str = "1Gi"
+    restore_point_max_per_agent: int = Field(default=5, ge=1, le=50)
+    restore_point_capture_timeout_seconds: int = Field(default=900, ge=60, le=7200)
+    restore_point_restore_timeout_seconds: int = Field(default=1800, ge=60, le=7200)
+
     openclaw_image: str = ""
     hermes_image: str = ""
     agent_token_encryption_key: str = ""

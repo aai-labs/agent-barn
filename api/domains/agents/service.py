@@ -51,6 +51,7 @@ from api.domains.agents.models import (
     AgentLogHistoryRead,
     AgentLogSnapshot,
     AgentLogsRead,
+    AgentNameSuggestionRead,
     AgentOverrideAuthorRead,
     AgentRead,
     AgentSecret,
@@ -82,13 +83,18 @@ from api.domains.agents.models import (
     encrypt_content,
     validate_content,
 )
+from api.domains.agents.naming import choose_first_name
 from api.domains.agents.override_repository import (
     AgentOverrideConcurrencyError,
     AgentOverrideRepository,
     AgentOverrideSnapshot,
 )
 from api.domains.agents.repository import AgentRepository
-from api.domains.agents.runtime_policy import build_chat_commands_policy_md, build_role_scope_policy_md
+from api.domains.agents.runtime_policy import (
+    build_chat_commands_policy_md,
+    build_messaging_policy_md,
+    build_role_scope_policy_md,
+)
 from api.domains.auth.models import CurrentUserContext
 from api.domains.events import ActorIdentity, ActorIdentityType, EventDeliveryDispatcher, resolve_actor_identity
 from api.domains.events.catalog import (
@@ -99,6 +105,7 @@ from api.domains.events.catalog import (
 )
 from api.domains.organizations.lookup import OrganizationLookupService
 from api.domains.rbac.catalog import PermissionKey
+from api.domains.restore_points.service import RestorePointService
 from api.domains.shared_credentials.repository import SharedCredentialRepository
 from api.domains.skills.models import PinnedSkill, Skill, SkillVersion, derive_tools_pointer
 from api.domains.skills.repository import SkillRepository
@@ -133,6 +140,10 @@ _CREDENTIAL_FIELDS = frozenset(
 
 
 _MAX_LOG_SNAPSHOT_BYTES = 1_048_576  # 1 MB
+
+RESTORE_POINT_IN_FLIGHT_DETAIL = (
+    "A restore point capture or restore is still running for this Agent. Wait for it to finish."
+)
 
 _OPENROUTER_MODEL_PREFIX = "litellm/openrouter/"
 
@@ -201,6 +212,7 @@ class AgentService:
     shared_credential_repository: SharedCredentialRepository
     event_delivery_dispatcher: EventDeliveryDispatcher
     organization_lookup: OrganizationLookupService
+    restore_points: RestorePointService
     agent_settings_lookup: AgentSettingsLookupService
     honcho: HonchoClient
 
@@ -701,6 +713,11 @@ class AgentService:
             type(delete_error).__name__,
             safe_message(delete_error),
         )
+
+    def suggest_agent_name(self, context: CurrentUserContext) -> AgentNameSuggestionRead:
+        org_id = self._org_id(context)
+        self.authorization.require_collection_scope(context, PermissionKey.AGENT_CREATE)
+        return AgentNameSuggestionRead(first_name=choose_first_name(self.repository.count_all_by_org(org_id)))
 
     def create_agent(self, data: AgentCreate, context: CurrentUserContext) -> AgentRead:
         org_id = self._org_id(context)
@@ -1846,7 +1863,24 @@ class AgentService:
 
     def start_agent(self, agent_id: UUID, context: CurrentUserContext) -> AgentRead:
         agent = self.authorization.require_action(context, agent_id, PermissionKey.AGENT_LIFECYCLE_MANAGE)
-        started = self._start_agent_unchecked(agent, resolve_actor_identity(context, agent.organization_id))
+        actor = resolve_actor_identity(context, agent.organization_id)
+        with self.repository.lifecycle_lock(agent.id) as acquired:
+            if not acquired:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"Agent {agent_id} has a lifecycle operation already in progress",
+                )
+            # Re-read status now that we hold the lock: it may have changed since
+            # the caller's copy was loaded above.
+            current = self.repository.get_by_id(agent.id)
+            if current is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent {agent_id} not found")
+            if self.restore_points.has_blocking_operation(current.id):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=RESTORE_POINT_IN_FLIGHT_DETAIL,
+                )
+            started = self._start_agent_unchecked(current, actor)
         return self._get_agent_read(started, context)
 
     def _start_agent_unchecked(self, agent: Agent, actor: ActorIdentity) -> Agent:
@@ -1907,7 +1941,7 @@ class AgentService:
             hermes_cfg = build_hermes_gateway_config(
                 effective_model,
                 llm_proxy_url,
-                approval_mode=str(agent.approval_mode),
+                approval_mode=CommandApprovalMode(agent.approval_mode).value,
                 honcho_enabled=self.config.honcho_enabled,
             )
             secret = build_secret_hermes_runtime(
@@ -1919,6 +1953,7 @@ class AgentService:
                 litellm_api_key=litellm_key,
                 litellm_base_url=llm_proxy_url,
                 verbose_mode=agent.verbose_mode,
+                approval_mode=CommandApprovalMode(agent.approval_mode).value,
             )
             deployment = build_hermes_deployment(
                 agent.id,
@@ -2056,7 +2091,7 @@ class AgentService:
                 "INGEST_API_KEY": ingest_key,
                 "COMMUNICATIONS_URL": self.config.communications_base_url,
                 "COMMUNICATIONS_API_KEY": communication_key,
-                "COMMUNICATIONS_PROTOCOL_VERSION": "1",
+                "COMMUNICATIONS_PROTOCOL_VERSION": "2",
                 "LITELLM_PROXY_TARGET": self.config.agent_litellm_base_url,
             }
         )
@@ -2113,6 +2148,7 @@ class AgentService:
             + build_local_tools_policy_md(s.name for s in mounted_skills)
             + build_chat_commands_policy_md()
             + build_role_scope_policy_md()
+            + build_messaging_policy_md()
         )
 
         if agent.agent_type == AgentType.HERMES:
@@ -2327,7 +2363,17 @@ class AgentService:
 
     def stop_agent(self, agent_id: UUID, context: CurrentUserContext) -> AgentRead:
         agent = self.authorization.require_action(context, agent_id, PermissionKey.AGENT_LIFECYCLE_MANAGE)
-        stopped = self._stop_agent_unchecked(agent, resolve_actor_identity(context, agent.organization_id))
+        actor = resolve_actor_identity(context, agent.organization_id)
+        with self.repository.lifecycle_lock(agent.id) as acquired:
+            if not acquired:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"Agent {agent_id} has a lifecycle operation already in progress",
+                )
+            current = self.repository.get_by_id(agent.id)
+            if current is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent {agent_id} not found")
+            stopped = self._stop_agent_unchecked(current, actor)
         return self._get_agent_read(stopped, context)
 
     def _stop_agent_unchecked(self, agent: Agent, actor: ActorIdentity) -> Agent:
@@ -2375,8 +2421,14 @@ class AgentService:
         failures: list[tuple[Agent, Exception]] = []
         for agent in agents:
             try:
-                stopped = self._stop_agent_unchecked(agent, actor)
-                started = self._start_agent_unchecked(stopped, actor)
+                with self.repository.lifecycle_lock(agent.id) as acquired:
+                    if not acquired:
+                        raise RuntimeError(f"Agent {agent.id} has a lifecycle operation already in progress")
+                    current = self.repository.get_by_id(agent.id)
+                    if current is None:
+                        raise RuntimeError(f"Agent {agent.id} not found")
+                    stopped = self._stop_agent_unchecked(current, actor)
+                    started = self._start_agent_unchecked(stopped, actor)
                 if started.status != AgentStatus.RUNNING:
                     failures.append((agent, RuntimeError(f"restart completed with status {started.status.value}")))
                     continue
@@ -2396,17 +2448,33 @@ class AgentService:
         ns = self.config.k8s_namespace
         name = f"agent-{agent.id}"
 
-        self.k8s.delete_deployment(name, ns)
-        self.k8s.delete_service(name, ns)
-        self.k8s.delete_pvc(name, ns)
-        self.k8s.delete_secret(name, ns)
-        self.k8s.delete_config_map(name, ns)
+        with self.repository.lifecycle_lock(agent.id) as acquired:
+            if not acquired:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"Agent {agent_id} has a lifecycle operation already in progress",
+                )
+            current = self.repository.get_by_id(agent.id)
+            if current is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent {agent_id} not found")
+            if self.restore_points.has_blocking_operation(current.id):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=RESTORE_POINT_IN_FLIGHT_DETAIL,
+                )
 
-        delete_result = self.repository.soft_delete_with_event(
-            agent,
-            actor=resolve_actor_identity(context, agent.organization_id),
-            actor_display=context.user.full_name or context.user.email,
-        )
+            self.k8s.delete_deployment(name, ns)
+            self.k8s.delete_service(name, ns)
+            self.k8s.delete_pvc(name, ns)
+            self.k8s.delete_secret(name, ns)
+            self.k8s.delete_config_map(name, ns)
+            self.restore_points.purge_agent(current.id)
+
+            delete_result = self.repository.soft_delete_with_event(
+                current,
+                actor=resolve_actor_identity(context, agent.organization_id),
+                actor_display=context.user.full_name or context.user.email,
+            )
         self.event_delivery_dispatcher.enqueue_immediate(delete_result.delivery_ids)
 
         if agent.litellm_key_encrypted:

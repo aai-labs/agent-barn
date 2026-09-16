@@ -51,8 +51,8 @@ jobs:
             # startup, Skill-discovery, PVC, and telemetry contracts, so
             # changes at those seams must run them too -- not just the API
             # suite.
-            if grep -qE '^(hermes-base/|api/domains/agents/builders/hermes\.py|api/domains/agents/scripts/hermes/|api/runtime_tests/|api/tests/fixtures/hermes_(pvc_permissions|session_store)_driver\.py)' /tmp/changed.txt; then hermes=true; fi
-            if grep -qE '^(openclaw-base/|api/domains/agents/scripts/openclaw/plugins/)' /tmp/changed.txt; then openclaw=true; fi
+            if grep -qE '^(hermes-base/|api/domains/agents/builders/hermes\.py|api/domains/agents/scripts/hermes/|api/domains/agents/scripts/messaging/|api/runtime_tests/|api/tests/fixtures/hermes_(pvc_permissions|session_store|message_completion)_driver\.py)' /tmp/changed.txt; then hermes=true; fi
+            if grep -qE '^(openclaw-base/|api/domains/agents/scripts/openclaw/|api/domains/agents/scripts/messaging/|api/tests/fixtures/openclaw_message_hooks_driver\.mjs)' /tmp/changed.txt; then openclaw=true; fi
             if grep -qE '^workers/' /tmp/changed.txt; then worker=true; fi
           fi
 

@@ -116,6 +116,7 @@ class DiscordPlatformPlugin(PlatformPlugin):
             PlatformCapability.DIRECTORY_DISCOVERY,
             PlatformCapability.INSTALL_LINK,
             PlatformCapability.ATTACHMENTS,
+            PlatformCapability.SUPERVISED_INGRESS,
             PlatformCapability.MENTIONS,
             PlatformCapability.THREADS,
         }

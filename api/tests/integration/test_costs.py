@@ -3,7 +3,7 @@ from unittest.mock import MagicMock
 from uuid import uuid7
 
 from fastapi import status
-from hamcrest import assert_that, equal_to, has_length
+from hamcrest import assert_that, close_to, equal_to, greater_than, has_length, not_none
 from sqlalchemy import text
 from starlette.testclient import TestClient
 
@@ -301,6 +301,64 @@ def test_get_agent_cost_returns_200_and_data():
             assert_that(data["agent_id"], equal_to(agent_id))
             assert_that(data["prompt_tokens"], equal_to(200))
             assert_that(data["models_breakdown"], has_length(1))
+
+
+def test_agent_spend_list_ranks_agents_by_spend():
+    with given([*_GIVEN, there_are_cost_records(count=2, spend="1.25")]) as context:
+        client: TestClient = context.client
+
+        with when("I list agent spend for the organization"):
+            response = client.get(f"{_BASE}/agents", headers=_auth(context))
+
+        with then("it returns one row per agent with its totals"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            rows = response.json()
+            assert_that(rows, has_length(1))
+            assert_that(rows[0]["agent_id"], equal_to(str(context.agent.id)))
+            assert_that(rows[0]["spend"], close_to(2.5, 0.0001))
+            assert_that(rows[0]["calls"], equal_to(2))
+            assert_that(rows[0]["prompt_tokens"], greater_than(0))
+
+
+def test_member_cannot_list_agent_spend():
+    """The ranked table is Organization-wide, so it takes the Organization `cost.read`
+    the summary takes rather than a per-Agent check."""
+    member_id = uuid7()
+    with given([*_GIVEN, _there_is_a_member_actor(member_id)]) as context:
+        response = context.client.get(f"{_BASE}/agents", headers=_auth(context))
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+
+
+def test_agent_cost_includes_a_spend_trend_for_the_agent():
+    """The per-Agent surface carries its own trend.
+
+    The organization summary also has one, but it is gated on the Organization-wide
+    `cost.read` an Agent Access Role never grants, so a per-Agent view cannot source
+    its chart from there.
+    """
+    with given(
+        [
+            *_GIVEN,
+            there_are_cost_records(count=1, spend="3.00", minutes_ago=5),
+            there_are_cost_records(count=1, spend="1.00", minutes_ago=60 * 24 * 3),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        agent_id = str(context.agent.id)
+
+        with when("I request the individual agent cost"):
+            response = client.get(f"{_BASE}/agents/{agent_id}", headers=_auth(context))
+
+        with then("it returns a bucketed series and the window it was grouped at"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            data = response.json()
+            assert_that(data["granularity"], not_none())
+            assert_that(data["from_date"], not_none())
+            assert_that(data["to_date"], not_none())
+            series = data["spend_over_time"]
+            assert_that(len(series), greater_than(0))
+            assert_that(sum(point["spend"] for point in series), close_to(4.0, 0.0001))
+            assert_that(sum(point["calls"] for point in series), equal_to(2))
 
 
 def test_agent_cost_respects_the_requested_window():

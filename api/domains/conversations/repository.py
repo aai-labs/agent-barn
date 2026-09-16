@@ -195,26 +195,28 @@ class ConversationRepository:
         occurred_at_utc = sa.func.timezone("UTC", col(AgentChatMessage.occurred_at))
         day = sa.func.date_trunc(unit.value, occurred_at_utc).label("day")
 
-        agent_predicates = []
-        if organization_id is not None:
-            agent_predicates.append(col(Agent.organization_id) == organization_id)
-        if created_by_user_id is not None:
-            agent_predicates.append(col(Agent.created_by_user_id) == created_by_user_id)
+        message_predicates = [
+            col(AgentChatMessage.occurred_at) >= window_start,
+            col(AgentChatMessage.occurred_at) < window_end,
+        ]
+        if agent_id is not None:
+            message_predicates.append(col(AgentChatMessage.agent_id) == agent_id)
         if platform is not None:
-            agent_predicates.append(
+            message_predicates.append(
                 sa.exists().where(
                     col(CommunicationConnection.id) == col(AgentChatMessage.connection_id),
                     col(CommunicationConnection.platform_key) == platform.value,
                 )
             )
 
+        agent_predicates = []
+        if organization_id is not None:
+            agent_predicates.append(col(Agent.organization_id) == organization_id)
+        if created_by_user_id is not None:
+            agent_predicates.append(col(Agent.created_by_user_id) == created_by_user_id)
+
         with Session(self.delegate.engine) as session:
-            query = select(sa.func.timezone("UTC", day), col(AgentChatMessage.agent_id)).where(
-                col(AgentChatMessage.occurred_at) >= window_start,
-                col(AgentChatMessage.occurred_at) < window_end,
-            )
-            if agent_id is not None:
-                query = query.where(col(AgentChatMessage.agent_id) == agent_id)
+            query = select(sa.func.timezone("UTC", day), col(AgentChatMessage.agent_id)).where(*message_predicates)
             if agent_predicates:
                 query = query.join(Agent, col(Agent.id) == col(AgentChatMessage.agent_id)).where(*agent_predicates)
 
@@ -233,6 +235,8 @@ class ConversationRepository:
 
         Provider channel identifiers are unique only within one Connection. Picks
         the latest non-null channel name for each (Connection, channel) pair.
+        Excludes the built-in Web Chat Connection: it already has its own live
+        Chat tab, so surfacing it again here would just duplicate that view.
         """
         with Session(self.delegate.engine) as session:
             query = (
@@ -244,6 +248,7 @@ class ConversationRepository:
                 )
                 .where(
                     col(AgentChatMessage.agent_id) == agent_id,
+                    col(CommunicationConnection.platform_key) != CommunicationPlatform.WEB.value,
                     *agent_scope_predicates(authorization_scope),
                 )
                 .order_by(

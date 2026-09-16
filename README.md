@@ -37,7 +37,7 @@ Credentials are encrypted at rest in your own PostgreSQL.
 - [What ships in the box](#what-ships-in-the-box) — [agents](#agents), [skills](#skills), [runtimes](#runtimes)
 - [Capabilities](#capabilities)
 - [Development](#development) — [native](#native-non-docker-development), [k3d](#local-kubernetes-k3d), [migrations](#database-migrations), [tests](#tests-and-checks), [troubleshooting](#troubleshooting)
-- [Deploying to Kubernetes](#deploying-to-kubernetes)
+- [Deploying to Kubernetes](#deploying-to-kubernetes) — [connecting agent email](#connecting-agent-email-manual-step)
 - [Repository layout](#repository-layout)
 - [Getting help and contributing](#getting-help-and-contributing)
 
@@ -65,10 +65,6 @@ native `dev-*` targets, tests, and lint (see [Development](#development)).
 **Required credentials**
 
 1. An **[OpenRouter](https://openrouter.ai) API key** — every agent's model calls route through it.
-2. A **GitHub token** — the current agent base-image Dockerfiles use it for an
-   authenticated clone of the public
-   [`aai-labs/aai-cli`](https://github.com/aai-labs/aai-cli) repository. It does
-   not need private-repository access.
 
 **Local ports** — these must be free:
 
@@ -113,7 +109,6 @@ anything not listed here has a working local default:
 | `LITELLM_MASTER_KEY`                                                 | a **stable** admin key — generate it below                                                                              |
 | `AGENT_LITELLM_BASE_URL`                                             | `http://host.docker.internal:7070` so agent pods can reach LiteLLM through the host                                    |
 | `OPENCLAW_IMAGE`, `HERMES_IMAGE`                                     | full `name:tag`; each tag must equal the matching `openclaw-base/VERSION` / `hermes-base/VERSION`                       |
-| `GH_TOKEN`                                                           | the GitHub token from above; no private-repository access is required                                                   |
 
 Generate the two keys:
 
@@ -608,6 +603,30 @@ reuses the explicitly tagged images already in the registry.
 Background:
 [`docs/architecture/runtime-and-deployment.md`](docs/architecture/runtime-and-deployment.md)
 and [`docs/guidelines/operations.md`](docs/guidelines/operations.md).
+
+### Connecting agent email (manual step)
+
+Agents reachable by email receive mail through a Cloudflare Email Worker. CI
+deploys the Worker, but **it cannot connect the routing rule** — Email Routing
+rules are Cloudflare dashboard state with no Terraform or API step in this
+repository, so mail bounces until someone points the rule at the Worker by hand.
+Do this once per environment, in this order:
+
+1. Merge to `staging`/`main`. The `deploy-worker` job publishes
+   `agentbarn-email-inbound-<environment>`. The Worker must exist first — the
+   routing rule's destination picker only lists deployed Workers.
+2. In Cloudflare, go to **Email → Email Routing → Routing rules** and point the
+   custom address `agent@<AGENT_EMAIL_DOMAIN>` at that Worker. One rule serves
+   every agent, provided **subaddressing is enabled** under Email Routing →
+   Settings — it is off by default, and while it is off every agent address
+   bounces `550 5.1.1` with nothing in the activity log.
+3. Only now delete any Worker you deployed with `wrangler --env local`. Deleting
+   it while a rule still points at it bounces all inbound mail for that
+   environment.
+
+Full setup — the two separate Cloudflare onboardings, the environment variables
+and secrets, quota limits, and secret rotation — is in
+[`docs/guidelines/operations.md`](docs/guidelines/operations.md#per-agent-email-addresses).
 
 ## Repository layout
 

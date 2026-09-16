@@ -1,9 +1,11 @@
 import json
+import threading
 from typing import cast
 from unittest.mock import MagicMock, patch
-from uuid import uuid7
+from uuid import UUID, uuid7
 
 import httpx
+import pytest
 from fastapi import HTTPException, status
 from hamcrest import (
     assert_that,
@@ -23,6 +25,7 @@ from api.domains.agents.models import (
     AgentTemplateOverrideSourceType,
     AgentTemplateOverrideVersion,
     AgentType,
+    CommandApprovalMode,
     SecretProvider,
 )
 from api.domains.agents.override_repository import AgentOverrideRepository
@@ -44,9 +47,11 @@ from api.domains.events.models import EventDeliveryStatus, OutboxMessage
 from api.domains.events.processor import EventDeliveryProcessor
 from api.domains.events.repository import OutboxMessageRepository
 from api.domains.events.security_audit import SecurityAuditRepository
+from api.domains.organizations.models import Organization
 from api.domains.organizations.repository import OrganizationRepository
 from api.domains.templates.models import AgentTemplate, PlatformTemplate
 from api.domains.templates.repository import TemplateRepository
+from api.infrastructure.crypto import decrypt_token
 from api.infrastructure.integration_validators.result import IntegrationValidationResult
 from api.infrastructure.kubernetes.client import KubernetesClient
 from api.infrastructure.litellm.client import LiteLLMClient, LiteLLMError
@@ -71,6 +76,7 @@ from api.tests.steps.agent import (
 )
 from api.tests.steps.database import database_is_clean, database_repo_is_ready
 from api.tests.steps.organization import (
+    there_is_an_organization,
     there_is_an_organization_with_user_and_access_token,
 )
 from api.tests.steps.template import (
@@ -1189,6 +1195,137 @@ def test_start_already_running_returns_409():
             assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
 
 
+def test_concurrent_start_requests_reject_the_loser_and_keep_credentials_consistent():
+    """Regression test for AF-287 / agent-barn#160: a second start request that
+    arrives while the first is still mid-provisioning must be rejected, not race
+    it to persist its own (different) credentials."""
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        k8s: MagicMock = context.injector.get(KubernetesClient)
+
+        entered_provisioning = threading.Event()
+        release_first_request = threading.Event()
+
+        def block_mid_provisioning(*args, **kwargs):
+            entered_provisioning.set()
+            release_first_request.wait(timeout=5)
+
+        k8s.create_deployment.side_effect = block_mid_provisioning
+
+        responses: dict[str, httpx.Response] = {}
+
+        def start_first():
+            responses["first"] = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with when("a second start request arrives while the first is still provisioning the runtime"):
+            first_thread = threading.Thread(target=start_first)
+            first_thread.start()
+            assert_that(entered_provisioning.wait(timeout=5), equal_to(True))
+
+            responses["second"] = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+            release_first_request.set()
+            first_thread.join(timeout=5)
+
+        with then("the second, competing request is rejected as a lifecycle conflict, not raced through"):
+            assert_that(responses["second"].status_code, equal_to(status.HTTP_409_CONFLICT))
+            assert_that(responses["second"].json()["detail"], contains_string("already in progress"))
+
+        with then("the first request completes and starts the agent"):
+            assert_that(responses["first"].status_code, equal_to(status.HTTP_200_OK))
+
+        with then("the persisted credentials match what was written into the runtime secret"):
+            persisted = context.injector.get(AgentRepository).get_by_id(context.agent.id)
+            assert persisted is not None
+            _, secret = k8s.create_secret.call_args.args
+            decrypted_ingest_key = decrypt_token(persisted.ingest_key_encrypted, TEST_ENCRYPTION_KEY)
+            assert_that(decrypted_ingest_key, equal_to(secret.string_data["INGEST_API_KEY"]))
+
+
+def test_start_agent_returns_404_if_deleted_while_racing_the_lock():
+    """Regression test for review feedback on AF-287: if the agent is soft-deleted
+    between the caller's authorization check and this request acquiring the
+    lifecycle lock, start must 404 rather than silently starting a stale copy."""
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        client: TestClient = context.client
+        repository: AgentRepository = context.injector.get(AgentRepository)
+
+        entered_before_lock = threading.Event()
+        release_start = threading.Event()
+        original_lifecycle_lock = repository.lifecycle_lock
+
+        def blocked_lifecycle_lock(agent_id: UUID):
+            # Only the start request (the first caller) should stall here; the
+            # delete that races it must go straight through to the real lock.
+            if not entered_before_lock.is_set():
+                entered_before_lock.set()
+                release_start.wait(timeout=5)
+            return original_lifecycle_lock(agent_id)
+
+        responses: dict[str, httpx.Response] = {}
+
+        def start_agent():
+            responses["start"] = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with when(
+            "the agent is deleted after the start request passes authorization "
+            "but before it acquires the lifecycle lock"
+        ):
+            with patch.object(repository, "lifecycle_lock", side_effect=blocked_lifecycle_lock):
+                start_thread = threading.Thread(target=start_agent)
+                start_thread.start()
+                assert_that(entered_before_lock.wait(timeout=5), equal_to(True))
+
+                delete_response = client.delete(f"{_BASE}/{context.agent.id}", headers=_auth(context))
+                assert_that(delete_response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
+
+                release_start.set()
+                start_thread.join(timeout=5)
+
+        with then("start 404s instead of provisioning a runtime for the deleted agent"):
+            assert_that(responses["start"].status_code, equal_to(status.HTTP_404_NOT_FOUND))
+
+
+def test_concurrent_delete_while_starting_is_rejected_as_conflict():
+    """Regression test for review feedback on AF-287: delete_agent now shares the
+    lifecycle lock with start/stop, so a delete racing an in-flight start is
+    rejected instead of tearing down k8s resources the start is still creating."""
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        client: TestClient = context.client
+        k8s: MagicMock = context.injector.get(KubernetesClient)
+
+        entered_provisioning = threading.Event()
+        release_start = threading.Event()
+
+        def block_mid_provisioning(*args, **kwargs):
+            entered_provisioning.set()
+            release_start.wait(timeout=5)
+
+        k8s.create_deployment.side_effect = block_mid_provisioning
+
+        responses: dict[str, httpx.Response] = {}
+
+        def start_agent():
+            responses["start"] = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with when("a delete request arrives while start is still provisioning the runtime"):
+            start_thread = threading.Thread(target=start_agent)
+            start_thread.start()
+            assert_that(entered_provisioning.wait(timeout=5), equal_to(True))
+
+            responses["delete"] = client.delete(f"{_BASE}/{context.agent.id}", headers=_auth(context))
+
+            release_start.set()
+            start_thread.join(timeout=5)
+
+        with then("the delete is rejected as a lifecycle conflict rather than tearing down the runtime mid-start"):
+            assert_that(responses["delete"].status_code, equal_to(status.HTTP_409_CONFLICT))
+            k8s.delete_deployment.assert_not_called()
+
+        with then("the start request completes normally"):
+            assert_that(responses["start"].status_code, equal_to(status.HTTP_200_OK))
+
+
 def test_start_agent_rejects_model_removed_from_allowlist():
     with given(
         [
@@ -2183,7 +2320,7 @@ def test_start_hermes_agent_configmap_has_hermes_config():
             cfg = _yaml.safe_load(config_map.data["hermes-config.yaml"])
             assert_that(cfg["model"]["base_url"], equal_to("http://localhost:8090"))
             assert_that(cfg["display"]["platforms"], equal_to({}))
-            assert_that(cfg["plugins"]["enabled"], equal_to(["telemetry-push"]))
+            assert_that(cfg["plugins"]["enabled"], equal_to(["telemetry-push", "agentbarn-messaging"]))
             assert_that(cfg, is_not(has_key("slack")))
 
         with then("the ConfigMap has the headless runtime adapter"):
@@ -2202,6 +2339,35 @@ def test_start_hermes_agent_configmap_has_hermes_config():
 
         with then("BOOTSTRAP.md is absent from the ConfigMap"):
             assert_that(config_map.data, is_not(has_key("BOOTSTRAP.md")))
+
+
+@pytest.mark.parametrize(
+    "approval_mode,runtime_mode",
+    [
+        (CommandApprovalMode.MANUAL, "manual"),
+        (CommandApprovalMode.AUTO, "smart"),
+        (CommandApprovalMode.OFF, "off"),
+    ],
+)
+def test_start_hermes_agent_carries_the_chosen_approval_mode_to_the_runtime(approval_mode, runtime_mode):
+    import yaml as _yaml
+
+    with given(
+        [*_GIVEN_WITH_HERMES_IMAGE, there_is_an_agent(agent_type=AgentType.HERMES, approval_mode=approval_mode)]
+    ) as context:
+        client: TestClient = context.client
+        k8s: MagicMock = context.injector.get(KubernetesClient)
+
+        with when("I start the Hermes agent"):
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("the runtime config and the adapter both receive the chosen mode"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            config_map = k8s.create_config_map.call_args.args[1]
+            cfg = _yaml.safe_load(config_map.data["hermes-config.yaml"])
+            assert_that(cfg["approvals"]["mode"], equal_to(runtime_mode))
+            _, secret = k8s.create_secret.call_args.args
+            assert_that(secret.string_data["APPROVAL_MODE"], equal_to(approval_mode.value))
 
 
 def test_start_hermes_agent_deployment_has_workspace_volume():
@@ -4616,3 +4782,94 @@ def test_start_agent_rejects_google_workspace_without_a_client():
         with then("the start is rejected with a reconnect hint"):
             assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
             assert_that(response.json()["detail"], contains_string("Google Workspace credential"))
+
+
+def test_name_suggestion_advances_after_creation_and_does_not_rewind_after_deletion():
+    with given(_GIVEN) as context:
+        client = context.client
+        base = _BASE.format(organization_id=context.organization.id)
+        headers = _auth(context)
+        with when("I request a suggestion before creating an Agent"):
+            suggestion = client.get(f"{base}/name-suggestion", headers=headers)
+        with then("the suggestion is an A name"):
+            assert_that(suggestion.status_code, equal_to(200))
+            first_name = suggestion.json()["first_name"]
+            assert_that(
+                first_name, is_in(("Alfie", "Andy", "Archie", "Arlo", "Amos", "Abe", "Adrian", "Alex", "Aaron", "Arie"))
+            )
+        with when("I create and read an Agent using the suggestion"):
+            name = f"{first_name} the Assistant"
+            created = client.post(base, json={**_VALID_CREATE, "name": name}, headers=headers)
+        with then("the submitted name is persisted"):
+            assert_that(created.status_code, equal_to(201))
+            agent_url = f"{base}/{created.json()['id']}"
+            saved = client.get(agent_url, headers=headers)
+            assert_that(saved.status_code, equal_to(200))
+            assert_that(saved.json()["name"], equal_to(name))
+        with when("I request another suggestion"):
+            next_name = client.get(f"{base}/name-suggestion", headers=headers)
+        with then("the next initial is B"):
+            assert_that(next_name.status_code, equal_to(200))
+            assert_that(next_name.json()["first_name"][0], equal_to("B"))
+        with when("I delete the Agent and request another suggestion"):
+            deleted = client.delete(agent_url, headers=headers)
+        with then("soft deletion does not rewind the initial"):
+            assert_that(deleted.status_code, equal_to(204))
+            suggestion = client.get(f"{base}/name-suggestion", headers=headers)
+            assert_that(suggestion.status_code, equal_to(200))
+            assert_that(suggestion.json()["first_name"][0], equal_to("B"))
+
+
+def test_name_suggestion_requires_authentication():
+    with given(_GIVEN) as context:
+        base = _BASE.format(organization_id=context.organization.id)
+        with when("I request a suggestion without authentication"):
+            response = context.client.get(f"{base}/name-suggestion")
+        with then("authentication is required"):
+            assert_that(response.status_code, equal_to(401))
+
+
+def test_name_suggestion_counts_only_the_active_organization():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        first_org_id = context.organization.id
+        with when("I join a second Organization without Agents"):
+            there_is_an_organization(name="Second Organization")(context)
+            response = context.client.get(
+                f"/api/v1/organizations/{context.organization.id}/agents/name-suggestion", headers=_auth(context)
+            )
+        with then("the second Organization starts at A"):
+            assert_that(response.status_code, equal_to(200))
+            assert_that(response.json()["first_name"][0], equal_to("A"))
+        with when("I request another suggestion in the first Organization"):
+            response = context.client.get(
+                f"/api/v1/organizations/{first_org_id}/agents/name-suggestion", headers=_auth(context)
+            )
+        with then("its existing Agent advances its initial to B"):
+            assert_that(response.status_code, equal_to(200))
+            assert_that(response.json()["first_name"][0], equal_to("B"))
+
+
+def test_name_suggestion_rejects_non_member():
+    with given(_GIVEN) as context:
+        other = context.injector.get(OrganizationRepository).save(Organization(name="Other Organization"))
+        with when("I request a suggestion from an Organization I have not joined"):
+            response = context.client.get(
+                f"/api/v1/organizations/{other.id}/agents/name-suggestion", headers=_auth(context)
+            )
+        with then("access is forbidden"):
+            assert_that(response.status_code, equal_to(403))
+
+
+def test_failed_creation_and_repeated_suggestions_do_not_advance_initial():
+    with given(_GIVEN) as context:
+        base = _BASE.format(organization_id=context.organization.id)
+        with when("I submit an invalid Template"):
+            response = context.client.post(
+                base, json={**_VALID_CREATE, "template_key": "missing"}, headers=_auth(context)
+            )
+        with then("creation fails and repeated reads still suggest A"):
+            assert_that(response.status_code, equal_to(404))
+            for _ in range(2):
+                response = context.client.get(f"{base}/name-suggestion", headers=_auth(context))
+                assert_that(response.status_code, equal_to(200))
+                assert_that(response.json()["first_name"][0], equal_to("A"))
