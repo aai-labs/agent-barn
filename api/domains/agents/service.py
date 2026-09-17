@@ -41,6 +41,8 @@ from api.domains.agents.builders import (
     native_discord_env,
     native_slack_channel,
     native_slack_env,
+    native_telegram_channel,
+    native_telegram_env,
 )
 from api.domains.agents.error_messages import friendly_k8s_error, friendly_pod_reason
 from api.domains.agents.gog_artifacts import build_gog_env, build_gog_policy_md, build_gog_setup_sh
@@ -1992,6 +1994,7 @@ class AgentService:
             overlay = None
             native_slack = self._native_slack_connection(agent.id)
             native_discord = self._native_connection_configuration(agent.id, "discord")
+            native_telegram = self._native_connection_configuration(agent.id, "telegram")
             hermes_cfg = build_hermes_gateway_config(
                 effective_model,
                 llm_proxy_url,
@@ -2000,6 +2003,14 @@ class AgentService:
                 native_discord=native_discord is not None,
                 discord_require_mention=(
                     native_discord.settings.get("require_mention", True) if native_discord else True
+                ),
+                native_telegram=native_telegram is not None,
+                telegram_groups_enabled=bool(
+                    native_telegram
+                    and (
+                        native_telegram.settings.get("group_policy") == "open"
+                        or native_telegram.settings.get("allowed_chat_ids")
+                    )
                 ),
                 verbose_mode=agent.verbose_mode,
             )
@@ -2018,6 +2029,8 @@ class AgentService:
                 secret.string_data.update(native_slack_env(*native_slack))
             if native_discord is not None:
                 secret.string_data.update(native_discord_env(native_discord.settings, native_discord.credentials))
+            if native_telegram is not None:
+                secret.string_data.update(native_telegram_env(native_telegram.settings, native_telegram.credentials))
             deployment = build_hermes_deployment(
                 agent.id,
                 org_id,
@@ -2034,6 +2047,9 @@ class AgentService:
             if native_discord := self._native_connection_configuration(agent.id, "discord"):
                 native_credentials["discord"] = native_discord.credentials
                 native_channels["discord"] = native_discord_channel(native_discord.settings)
+            if native_telegram := self._native_connection_configuration(agent.id, "telegram"):
+                native_credentials["telegram"] = native_telegram.credentials
+                native_channels["telegram"] = native_telegram_channel(native_telegram.settings)
             overlay = build_openclaw_gateway_config(effective_model, llm_proxy_url, native_channels)
             hermes_cfg = None
             secret = build_secret_runtime(

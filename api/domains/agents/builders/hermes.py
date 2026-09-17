@@ -47,6 +47,7 @@ _HERMES_HEADLESS_APPROVAL_MODE = "deny"
 # for proactive messages.
 _SLACK_NO_HOME_CHANNEL = "__agentbarn_no_home_channel__"
 _DISCORD_NO_HOME_CHANNEL = "__agentbarn_no_home_channel__"
+_TELEGRAM_NO_HOME_CHANNEL = "__agentbarn_no_home_channel__"
 # Every auxiliary.<task> block v2026.8.19 reads, minus the moa_* slots (MoA only).
 _HERMES_AUXILIARY_TASKS = (
     "vision",
@@ -143,10 +144,12 @@ def build_hermes_gateway_config(
     native_slack: bool = False,
     native_discord: bool = False,
     discord_require_mention: bool = True,
+    native_telegram: bool = False,
+    telegram_groups_enabled: bool = True,
     verbose_mode: bool = False,
 ) -> dict:
     plugins = ["telemetry-push", "agentbarn-messaging"]
-    if native_slack or native_discord:
+    if native_slack or native_discord or native_telegram:
         plugins.append("agentbarn-observer")
     config = _hermes_config_core(model, litellm_base_url, enabled_plugins=plugins, approval_mode=approval_mode)
     if native_slack:
@@ -175,6 +178,19 @@ def build_hermes_gateway_config(
             "thread_require_mention": discord_require_mention,
         }
         config["display"]["platforms"]["discord"] = {
+            "tool_progress": "all" if verbose_mode else "off",
+            "tool_progress_grouping": "accumulate",
+            "interim_assistant_messages": verbose_mode,
+        }
+    if native_telegram:
+        # Unknown DM senders would otherwise receive a pairing code.
+        telegram: dict = {"unauthorized_dm_behavior": "ignore"}
+        if not telegram_groups_enabled:
+            # An empty chat allowlist means "any group" to Hermes; an empty group
+            # sender allowlist is the only gate that turns groups off entirely.
+            telegram["group_allow_from"] = []
+        config["telegram"] = telegram
+        config["display"]["platforms"]["telegram"] = {
             "tool_progress": "all" if verbose_mode else "off",
             "tool_progress_grouping": "accumulate",
             "interim_assistant_messages": verbose_mode,
@@ -248,6 +264,38 @@ def native_discord_env(settings: dict, credentials: dict) -> dict[str, str]:
         env["DISCORD_HOME_CHANNEL"] = str(home_channel_id)
     else:
         env["DISCORD_HOME_CHANNEL"] = _DISCORD_NO_HOME_CHANNEL
+    return env
+
+
+def native_telegram_env(settings: dict, credentials: dict) -> dict[str, str]:
+    """Map a Telegram Connection onto the native Hermes Telegram adapter.
+
+    Groups always require a mention (or a reply to the bot); DMs never do. Hermes
+    authorizes a sender if any gate admits them, so a DM allowlist also admits
+    those users in groups; the adapter's chat allowlist still confines groups.
+    ``build_hermes_gateway_config(telegram_groups_enabled=False)`` closes groups
+    when the allowlist is empty.
+    """
+    env = {
+        "TELEGRAM_BOT_TOKEN": credentials["bot_token"],
+        "TELEGRAM_REQUIRE_MENTION": "true",
+        # Native Hermes delivers scheduled results to their origin.
+        "AGENTBARN_SCHEDULED_DELIVERY": "0",
+    }
+    if settings.get("group_policy", "allowlist") == "open":
+        env["TELEGRAM_GROUP_ALLOWED_CHATS"] = "*"
+    elif chat_ids := [str(value) for value in settings.get("allowed_chat_ids") or [] if str(value)]:
+        # The adapter drops other groups; the gateway admits any member of these.
+        env["TELEGRAM_ALLOWED_CHATS"] = env["TELEGRAM_GROUP_ALLOWED_CHATS"] = ",".join(chat_ids)
+    dm_policy = settings.get("dm_policy", "off")
+    if dm_policy == "open":
+        env["TELEGRAM_ALLOW_ALL_USERS"] = "true"
+    elif dm_policy == "allowlist" and (user_ids := [str(v) for v in settings.get("allowed_user_ids") or [] if str(v)]):
+        env["TELEGRAM_ALLOWED_USERS"] = ",".join(user_ids)
+    if home_channel_id := settings.get("home_channel_id"):
+        env["TELEGRAM_HOME_CHANNEL"] = str(home_channel_id)
+    else:
+        env["TELEGRAM_HOME_CHANNEL"] = _TELEGRAM_NO_HOME_CHANNEL
     return env
 
 

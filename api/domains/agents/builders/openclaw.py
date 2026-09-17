@@ -130,7 +130,7 @@ def build_openclaw_gateway_config(
     if channels:
         plugins = config["plugins"]
         plugins["allow"] += [*channels, "agentbarn-observer"]
-        # start.sh installs the channel plugins from npm; OpenClaw only grants plugin
+        # start.sh installs non-bundled channel plugins from npm; OpenClaw only grants plugin
         # state to official installs, so they must not be loaded by path.
         plugins["load"]["paths"].append(_OBSERVER_PLUGIN_PATH)
         for key in channels:
@@ -216,6 +216,34 @@ def native_discord_channel(settings: dict) -> dict:
     return channel
 
 
+def native_telegram_channel(settings: dict) -> dict:
+    """Map a Telegram Connection onto OpenClaw's bundled Telegram channel.
+
+    ``groups`` is the group allowlist and ``groupPolicy: "open"`` admits any member
+    of those groups. Groups always require a mention; DMs never do.
+    """
+    channel: dict = {"enabled": True, "dmPolicy": "disabled", "groupPolicy": "disabled"}
+    user_ids = [str(value) for value in settings.get("allowed_user_ids") or [] if str(value)]
+    dm_policy = settings.get("dm_policy", "off")
+    if dm_policy == "open":
+        channel.update(dmPolicy="open", allowFrom=["*"])
+    elif dm_policy == "allowlist" and user_ids:
+        # An empty allowlist drops every DM anyway and OpenClaw warns about it.
+        channel.update(dmPolicy="allowlist", allowFrom=user_ids)
+    if settings.get("group_policy", "allowlist") == "open":
+        group_ids = ["*"]
+    else:
+        group_ids = [str(value) for value in settings.get("allowed_chat_ids") or [] if str(value)]
+    if group_ids:
+        channel["groupPolicy"] = "open"
+        channel["groups"] = {group_id: {"requireMention": True} for group_id in group_ids}
+    if home_channel_id := settings.get("home_channel_id"):
+        channel["defaultTo"] = str(home_channel_id)
+    else:
+        channel["defaultTo"] = _NO_HOME_CHANNEL_TARGET
+    return channel
+
+
 def native_channel_env(credentials_by_platform: dict[str, dict]) -> dict[str, str]:
     """Secret entries for native channel tokens and the observer."""
     env = {
@@ -228,6 +256,8 @@ def native_channel_env(credentials_by_platform: dict[str, dict]) -> dict[str, st
         env["SLACK_APP_TOKEN"] = slack["app_token"]
     if discord := credentials_by_platform.get("discord"):
         env["DISCORD_BOT_TOKEN"] = discord["bot_token"]
+    if telegram := credentials_by_platform.get("telegram"):
+        env["TELEGRAM_BOT_TOKEN"] = telegram["bot_token"]
     return env
 
 

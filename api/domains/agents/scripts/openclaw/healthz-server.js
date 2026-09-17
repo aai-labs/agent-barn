@@ -23,8 +23,9 @@ const TERMINAL_LLM_ERRORS = {
 const NATIVE_CHANNELS = (process.env.AGENTBARN_NATIVE_CHANNELS || '').split(',').filter(Boolean);
 const lastChannelStage = {};
 
-// The Slack and Discord providers set connected: true once their socket is up;
-// until then a running channel is still connecting.
+// The Slack and Discord providers set connected: true once their socket is up,
+// and Telegram after its first successful poll; until then a running channel is
+// still connecting.
 function channelStage(snapshot) {
   if (!snapshot) return null;
   if (snapshot.running) return snapshot.connected === true ? 'connection_connected' : 'connection_connecting';
