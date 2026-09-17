@@ -1126,6 +1126,12 @@ test.describe("Agent Detail Page — Channels tab", () => {
     await refresh.click();
     expect((await guildsPreview).postDataJSON()).toMatchObject({ platform_key: "discord", kind: "guilds" });
 
+    const refreshedGuildsPreview = page.waitForRequest(
+      (request) => request.method() === "POST" && request.url().includes("/connection-directory-preview"),
+    );
+    await refresh.click();
+    expect((await refreshedGuildsPreview).postDataJSON()).toMatchObject({ platform_key: "discord", kind: "guilds" });
+
     await page.getByText("Choose a server to browse channels, users, and roles").click();
     await page.getByRole("option", { name: "Community" }).click();
 
@@ -1153,7 +1159,7 @@ test.describe("Agent Detail Page — Channels tab, Email connection", () => {
 
   test.use({ storageState: { cookies: [], origins: [] } });
 
-  test.beforeEach(async ({ page }) => {
+  test.beforeEach(async ({ page }, testInfo) => {
     agentDetailPage = new AgentDetailPage(page);
     dataSupportPage = new DataSupport(page);
 
@@ -1190,28 +1196,31 @@ test.describe("Agent Detail Page — Channels tab, Email connection", () => {
       });
     });
     await page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}/connections`, async (route) => {
+      const connections = testInfo.title === "asks for no credentials on a platform that has none"
+        ? []
+        : [{
+            id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+            agent_id: MOCK_AGENT_ID,
+            platform_key: "email",
+            display_name: "Email",
+            enabled: true,
+            schema_version: 1,
+            settings: { sender_policy: "allowlist", allowed_senders: ["@acme.test"] },
+            external_identity: null,
+            observed_status: "CONNECTED",
+            last_health_at: "2026-01-01T00:00:00Z",
+            last_error_code: null,
+            last_error_message: null,
+            webhook_url: null,
+            managed_address: EMAIL_ADDRESS,
+            revision: 1,
+            created_at: "2026-01-01T00:00:00Z",
+            updated_at: "2026-01-01T00:00:00Z",
+          }];
       await route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify([{
-          id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
-          agent_id: MOCK_AGENT_ID,
-          platform_key: "email",
-          display_name: "Email",
-          enabled: true,
-          schema_version: 1,
-          settings: { sender_policy: "allowlist", allowed_senders: ["@acme.test"] },
-          external_identity: null,
-          observed_status: "CONNECTED",
-          last_health_at: "2026-01-01T00:00:00Z",
-          last_error_code: null,
-          last_error_message: null,
-          webhook_url: null,
-          managed_address: EMAIL_ADDRESS,
-          revision: 1,
-          created_at: "2026-01-01T00:00:00Z",
-          updated_at: "2026-01-01T00:00:00Z",
-        }]),
+        body: JSON.stringify(connections),
       });
     });
 

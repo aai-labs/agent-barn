@@ -31,7 +31,10 @@ def test_discord_client_identifies_its_rest_requests_to_discord(mock_request):
 
     DiscordClient("discord-token").get_current_bot()
 
-    assert_that(mock_request.call_args.kwargs["headers"], equal_to({"Authorization": "Bot discord-token", "User-Agent": "AgentBarn/1.0"}))
+    assert_that(
+        mock_request.call_args.kwargs["headers"],
+        equal_to({"Authorization": "Bot discord-token", "User-Agent": "AgentBarn/1.0"}),
+    )
 
 
 @patch("api.infrastructure.discord.client.cached", side_effect=lambda _key, fetch, ttl: fetch())

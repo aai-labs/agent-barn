@@ -155,6 +155,12 @@ RESTORE_POINT_IN_FLIGHT_DETAIL = (
 _OPENROUTER_MODEL_PREFIX = "litellm/openrouter/"
 
 
+@dataclass(frozen=True)
+class _NativeConnectionConfiguration:
+    settings: dict[str, Any]
+    credentials: dict[str, Any]
+
+
 def _enrich_atlassian_content(content: Any) -> Any:
     """For Atlassian integrations using scoped API tokens, fetch and store the cloud_id.
 
@@ -1892,16 +1898,27 @@ class AgentService:
             started = self._start_agent_unchecked(current, actor)
         return self._get_agent_read(started, context)
 
-    def _native_slack_connection(self, agent_id: UUID) -> tuple[dict, dict, ConversationLocation | None] | None:
-        """The settings, credentials, and resolved home channel of a native Slack Connection."""
-        if "slack" not in self.config.native_platform_keys:
+    def _native_connection_configuration(
+        self,
+        agent_id: UUID,
+        platform_key: str,
+    ) -> _NativeConnectionConfiguration | None:
+        """Load an enabled Connection configured for native runtime transport."""
+        if platform_key not in self.config.native_platform_keys:
             return None
-        connection = self.connection_repository.get_active_by_platform_key(agent_id, "slack")
+        connection = self.connection_repository.get_active_by_platform_key(agent_id, platform_key)
         if connection is None or not connection.enabled:
             return None
         credentials = json.loads(
             decrypt_token(connection.credentials_encrypted, self.config.agent_token_encryption_key)
         )
+        return _NativeConnectionConfiguration(settings=connection.settings, credentials=credentials)
+
+    def _native_slack_connection(self, agent_id: UUID) -> tuple[dict, dict, ConversationLocation | None] | None:
+        """The settings, credentials, and resolved home channel of a native Slack Connection."""
+        connection = self._native_connection_configuration(agent_id, "slack")
+        if connection is None:
+            return None
         home_channel = None
         target = connection.settings.get("default_delivery_target")
         if target:
@@ -1910,25 +1927,13 @@ class AgentService:
                 # Same resolution and allowlist policy as gateway-delivered sends.
                 home_channel = plugin.resolve_outbound_target(
                     plugin.settings_model.model_validate(connection.settings),
-                    plugin.credentials_model.model_validate(credentials),
+                    plugin.credentials_model.model_validate(connection.credentials),
                     OutboundTargetRequest.model_validate(target),
                 ).location
             except Exception as exc:
                 # A stale target must not block the Agent from starting.
                 logger.warning("Slack default delivery target for agent %s not resolved (%s)", agent_id, exc)
-        return connection.settings, credentials, home_channel
-
-    def _native_discord_connection(self, agent_id: UUID) -> tuple[dict, dict] | None:
-        """The settings and credentials of a native Discord Connection."""
-        if "discord" not in self.config.native_platform_keys:
-            return None
-        connection = self.connection_repository.get_active_by_platform_key(agent_id, "discord")
-        if connection is None or not connection.enabled:
-            return None
-        credentials = json.loads(
-            decrypt_token(connection.credentials_encrypted, self.config.agent_token_encryption_key)
-        )
-        return connection.settings, credentials
+        return connection.settings, connection.credentials, home_channel
 
     def _start_agent_unchecked(self, agent: Agent, actor: ActorIdentity) -> Agent:
         """Start a known Agent after its caller has established authority."""
@@ -1986,14 +1991,16 @@ class AgentService:
         if agent.agent_type == AgentType.HERMES:
             overlay = None
             native_slack = self._native_slack_connection(agent.id)
-            native_discord = self._native_discord_connection(agent.id)
+            native_discord = self._native_connection_configuration(agent.id, "discord")
             hermes_cfg = build_hermes_gateway_config(
                 effective_model,
                 llm_proxy_url,
                 approval_mode=CommandApprovalMode(agent.approval_mode).value,
                 native_slack=native_slack is not None,
                 native_discord=native_discord is not None,
-                discord_require_mention=(native_discord[0].get("require_mention", True) if native_discord else True),
+                discord_require_mention=(
+                    native_discord.settings.get("require_mention", True) if native_discord else True
+                ),
                 verbose_mode=agent.verbose_mode,
             )
             secret = build_secret_hermes_runtime(
@@ -2010,7 +2017,7 @@ class AgentService:
             if native_slack is not None:
                 secret.string_data.update(native_slack_env(*native_slack))
             if native_discord is not None:
-                secret.string_data.update(native_discord_env(*native_discord))
+                secret.string_data.update(native_discord_env(native_discord.settings, native_discord.credentials))
             deployment = build_hermes_deployment(
                 agent.id,
                 org_id,
@@ -2024,9 +2031,9 @@ class AgentService:
             if native_slack := self._native_slack_connection(agent.id):
                 slack_settings, native_credentials["slack"], home_channel = native_slack
                 native_channels["slack"] = native_slack_channel(slack_settings, home_channel)
-            if native_discord := self._native_discord_connection(agent.id):
-                discord_settings, native_credentials["discord"] = native_discord
-                native_channels["discord"] = native_discord_channel(discord_settings)
+            if native_discord := self._native_connection_configuration(agent.id, "discord"):
+                native_credentials["discord"] = native_discord.credentials
+                native_channels["discord"] = native_discord_channel(native_discord.settings)
             overlay = build_openclaw_gateway_config(effective_model, llm_proxy_url, native_channels)
             hermes_cfg = None
             secret = build_secret_runtime(

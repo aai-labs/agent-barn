@@ -664,9 +664,15 @@ export function AgentChannelSettings({
   }
 
   /** Fetches (and caches) one directory preview kind for the add form's typed-in credentials. */
-  function fetchDirectoryPreview(noun: string, platformKey: string, kind: string, guildId?: string): void {
+  function fetchDirectoryPreview(
+    noun: string,
+    platformKey: string,
+    kind: string,
+    guildId?: string,
+    refresh = false,
+  ): void {
     const key = previewCacheKey(kind, guildId);
-    if (previewEntries[key] || previewConnectionDirectory.isPending) return;
+    if ((!refresh && previewEntries[key]) || previewConnectionDirectory.isPending) return;
     setPreviewErrors((prev) => ({ ...prev, [key]: "" }));
     void previewConnectionDirectory
       .mutateAsync({ agentId: agent.id, platformKey, kind, settings, credentials, guildId })
@@ -826,7 +832,7 @@ export function AgentChannelSettings({
   return (
     <AgentConfigurationSection
       title="Messaging connections"
-      description="Connect a messaging platform so people can message this Agent. Add as many as you like."
+      description="Connect messaging platforms so people can message this Agent. Each platform can have one active Connection."
       footer={
         canEdit && !adding ? (
           <button
@@ -1508,7 +1514,7 @@ export function AgentChannelSettings({
                                   className="af-btn af-btn-sm"
                                   aria-label="Refresh server list"
                                   disabled={previewConnectionDirectory.isPending || !credentials.botToken}
-                                  onClick={() => fetchDirectoryPreview("servers", "discord", "guilds")}
+                                  onClick={() => fetchDirectoryPreview("servers", "discord", "guilds", undefined, true)}
                                 >
                                   <RefreshCw
                                     size={14}

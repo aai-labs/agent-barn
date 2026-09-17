@@ -92,7 +92,7 @@ The AF-253 Agent Template Override contract is a dedicated section of the canoni
 
 ### Start
 
-Start renders the pinned Template, decrypts Agent Secrets, selects Hermes/OpenClaw builders, combines explicit Skills with provider-derived built-ins, materializes aai-cli integrations and Google Workspace's gog artifacts, appends Integration context and runtime behaviour policy, creates fresh Ingest and Communications protocol identities, and recreates Kubernetes resources. Gateway-owned Connection credentials stay in Communications; credentials for an enabled native Connection are materialized into Hermes at start. A successful transition to `RUNNING` emits `agent.started`; its email handler notifies the Agent Creator and users with Agent Owner access, de-duplicated by email.
+Start renders the pinned Template, decrypts Agent Secrets, selects Hermes/OpenClaw builders, combines explicit Skills with provider-derived built-ins, materializes aai-cli integrations and Google Workspace's gog artifacts, appends Integration context and runtime behaviour policy, creates fresh Ingest and Communications protocol identities, and recreates Kubernetes resources. Gateway-owned Connection credentials stay in Communications; credentials for an enabled native Connection are materialized into the selected Agent runtime at start. A successful transition to `RUNNING` emits `agent.started`; its email handler notifies the Agent Creator and users with Agent Owner access, de-duplicated by email.
 
 ### Stop and delete
 

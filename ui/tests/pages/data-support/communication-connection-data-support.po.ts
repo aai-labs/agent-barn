@@ -35,13 +35,14 @@ export class CommunicationConnectionDataSupport {
         await route.fallback();
         return;
       }
-      const kind = route.request().postDataJSON()?.kind;
-      const entries = {
+      const kind = route.request().postDataJSON()?.kind as string | undefined;
+      const entriesByKind: Record<string, { id: string; label: string; detail: string | null }[]> = {
         guilds: [{ id: "guild-one", label: "Community", detail: null }],
         channels: [{ id: "C1", label: "#ops", detail: null }],
         users: [{ id: "U1", label: "Aria", detail: "@aria" }],
         roles: [{ id: "role-one", label: "@Maintainer", detail: null }],
-      }[kind] ?? [];
+      };
+      const entries = kind ? entriesByKind[kind] ?? [] : [];
       await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ entries }) });
     });
 

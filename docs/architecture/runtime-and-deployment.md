@@ -10,7 +10,7 @@ Starting an agent is an API-orchestrated deployment flow:
 
 1. Load the organization-owned agent and its pinned template version.
 2. Render template Markdown with the agent identity.
-3. Decrypt Agent Secrets used by tool Integrations; gateway-owned Communication Connection credentials stay in Communications, while enabled native Connection credentials are projected into Hermes.
+3. Decrypt Agent Secrets used by tool Integrations; gateway-owned Communication Connection credentials stay in Communications, while enabled native Connection credentials are projected into the selected Agent runtime.
 4. Select Hermes or OpenClaw runtime builders.
 5. Combine explicitly assigned skills with eligible built-in provider skills.
 6. Materialize aai-cli integrations and Google Workspace's gog artifacts from encrypted Agent Secrets.

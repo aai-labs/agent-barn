@@ -38,6 +38,7 @@ STEPS = [
             "AGENT_DEFAULT_MODEL": "litellm/gpt-5-mini",
             "AGENT_LITELLM_BASE_URL": "http://litellm:4000",
             "SKIP_SLACK_TOKEN_VALIDATION": "true",
+            "COMMUNICATIONS_NATIVE_PLATFORMS": "",
         }
     ),
     prepare_injector(modules=[MockK8sModule(), MockLiteLLMModule()]),
