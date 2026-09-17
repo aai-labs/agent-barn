@@ -70,7 +70,7 @@ def test_native_slack_env_maps_connection_policy() -> None:
     assert "SLACK_ALLOW_ALL_USERS" not in open_env
     assert open_env["SLACK_THREAD_REQUIRE_MENTION"] == "false"
     assert open_env["AGENTBARN_SCHEDULED_DELIVERY"] == "0"
-    assert "SLACK_HOME_CHANNEL" not in open_env
+    assert open_env["SLACK_HOME_CHANNEL"] == "__agentbarn_no_home_channel__"
 
     home = native_slack_env(
         {},
@@ -121,6 +121,12 @@ def test_native_discord_env_maps_hermes_authorization_gates() -> None:
     assert env["DISCORD_HOME_CHANNEL"] == "channel-home"
     assert env["AGENTBARN_SCHEDULED_DELIVERY"] == "0"
     assert "AGENTBARN_DISCORD_POLICY" not in env
+
+
+def test_native_discord_env_uses_a_sentinel_when_home_is_unset() -> None:
+    env = native_discord_env({}, {"bot_token": "discord-token"})
+
+    assert env["DISCORD_HOME_CHANNEL"] == "__agentbarn_no_home_channel__"
 
 
 def test_native_gateway_does_not_drain_agent_barn_scheduled_completions() -> None:

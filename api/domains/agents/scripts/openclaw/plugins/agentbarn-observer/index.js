@@ -1,8 +1,7 @@
-// Report native channel Connection Journal stages to the ingest API.
+// Report native channel Journal stages and dashboard transcripts to the ingest API.
 //
-// Content-free by contract: only platform, stage, correlation, timing, and a
-// bounded error code leave the pod. Message text, sender identity, and provider
-// error text never do.
+// Journal events stay content-free. Transcript messages are a separate payload
+// collection so the dashboard can render native conversations.
 //
 // Correlation is the inbound provider message (`<platform>:<messageId>`). Runs
 // and sends only carry a session key, so each is attributed to the latest
@@ -15,7 +14,9 @@ const MAX_BUFFER = 500;
 const MAX_TRACKED = 1000;
 
 const buffer = [];
+const messages = [];
 const latestInbound = new Map(); // sessionKey -> correlationId
+let outboundSequence = 0;
 
 function nativeChannels() {
   return new Set((process.env.AGENTBARN_NATIVE_CHANNELS || "").split(",").filter(Boolean));
@@ -32,13 +33,26 @@ function emit(stage, platform, correlationId, errorCode) {
   });
 }
 
+function emitMessage(message) {
+  if (messages.length >= MAX_BUFFER) messages.shift();
+  messages.push({ ...message, occurred_at: new Date().toISOString() });
+}
+
+function conversationType(chatType) {
+  return ["dm", "direct", "direct_message"].includes(String(chatType || "").toLowerCase()) ? "DM" : "CHANNEL";
+}
+
+function channelId(event, ctx) {
+  return event.chatId || event.conversationId || ctx.chatId || ctx.conversationId || event.to || "";
+}
+
 function correlated(sessionKey) {
   return (sessionKey && latestInbound.get(sessionKey)) || null;
 }
 
 function flush(url, apiKey) {
-  if (buffer.length === 0) return;
-  const body = JSON.stringify({ events: buffer.splice(0) });
+  if (buffer.length === 0 && messages.length === 0) return;
+  const body = JSON.stringify({ events: buffer.splice(0), messages: messages.splice(0) });
   const request = http.request(url, {
     method: "POST",
     headers: {
@@ -70,6 +84,23 @@ export default {
       const correlationId = `${ctx.channelId}:${messageId}`;
       emit("provider_observed", ctx.channelId, correlationId);
       const sessionKey = ctx.sessionKey || event.sessionKey;
+      const content = event.content || event.text;
+      const location = channelId(event, ctx);
+      if (sessionKey && content && location) {
+        emitMessage({
+          platform: ctx.channelId,
+          provider_message_id: String(messageId),
+          session_key: sessionKey,
+          channel_id: String(location).replace(/^(channel|user):/, ""),
+          thread_id: event.threadId || ctx.threadId || null,
+          direction: "INBOUND",
+          conversation_type: conversationType(event.chatType || ctx.chatType),
+          sender_id: event.senderId || ctx.senderId || null,
+          sender_name: event.senderName || ctx.senderName || null,
+          channel_name: event.channelName || ctx.channelName || null,
+          content: String(content),
+        });
+      }
       if (!sessionKey) return;
       latestInbound.delete(sessionKey);
       latestInbound.set(sessionKey, correlationId);
@@ -94,6 +125,22 @@ export default {
       const correlationId = correlated(ctx.sessionKey || event.sessionKey);
       if (event.success) emit("provider_delivered", ctx.channelId, correlationId);
       else emit("provider_delivery_attempted", ctx.channelId, correlationId, "send_failed");
+      const sessionKey = ctx.sessionKey || event.sessionKey;
+      const content = event.content || event.text;
+      const location = channelId(event, ctx);
+      if (sessionKey && content && location) {
+        outboundSequence += 1;
+        emitMessage({
+          platform: ctx.channelId,
+          provider_message_id: String(event.messageId || `outbound:${sessionKey}:${outboundSequence}`),
+          session_key: sessionKey,
+          channel_id: String(location).replace(/^(channel|user):/, ""),
+          thread_id: event.threadId || ctx.threadId || null,
+          direction: "OUTBOUND",
+          conversation_type: conversationType(event.chatType || ctx.chatType),
+          content: String(content),
+        });
+      }
     });
 
     const url = `${INGEST_URL}/agents/${AGENT_ID}/communication-events`;

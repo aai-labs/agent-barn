@@ -13,6 +13,15 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
 
 ## Changes
 
+### 2026-09-17 — Mirror native runtime transcripts into dashboard history — PR pending
+
+- Fixed: native Slack and Discord conversations are now visible in the dashboard. The native runtime observer sends normalized inbound and outbound transcript messages alongside its existing content-free Connection Journal telemetry; Agent Barn authenticates the Agent, resolves its active Connection, and idempotently upserts the existing conversation-history rows. Journal entries remain content-free and native messages remain outside the claimable Communications Delivery workflow.
+- Fixed: the Hermes observer mirrors every observed outbound obligation state. A provider send that reaches `delivered` before the next two-second observer poll is therefore retained in dashboard history instead of being lost for missing its transient `attempting` state.
+
+### 2026-09-17 — Suppress native home-channel onboarding when intentionally unset — PR pending
+
+- Changed: Native Hermes Slack/Discord and OpenClaw Slack/Discord Connections without a configured default delivery target now receive an impossible home-channel sentinel. The runtimes therefore do not send their first-message home-channel setup notice. Explicitly configured home channels remain unchanged; an originless native cron delivery without one fails rather than being sent to an unintended real channel.
+
 ### 2026-09-17 — Move OpenClaw Slack and Discord to the native gateway — PR pending
 
 - Changed: enabled Slack and Discord Connections on OpenClaw Agents run in OpenClaw's native channel plugins when their Platform is in `COMMUNICATIONS_NATIVE_PLATFORMS`. The native cutoff (supervisor, expired-lease recovery, inbound and outbound claims) no longer checks the Agent's runtime. OpenClaw Agents already running with a native Platform lose gateway ingress on deploy and must be restarted onto base image 0.7.0.

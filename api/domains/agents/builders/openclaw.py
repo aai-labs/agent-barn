@@ -116,6 +116,7 @@ def _openclaw_config_core(
 
 
 _OBSERVER_PLUGIN_PATH = "/home/node/.openclaw/local-plugins/agentbarn-observer"
+_NO_HOME_CHANNEL_TARGET = "channel:__agentbarn_no_home_channel__"
 
 
 def build_openclaw_gateway_config(
@@ -167,6 +168,11 @@ def native_slack_channel(settings: dict, home_channel: ConversationLocation | No
     if home_channel is not None:
         # ponytail: a home thread is dropped; cron results post top-level in the home channel.
         channel["defaultTo"] = f"channel:{home_channel.id}"
+    else:
+        # OpenClaw shows an in-chat setup prompt when defaultTo is absent. Keep
+        # intentionally-unconfigured Connections quiet without selecting a real
+        # channel for originless proactive messages.
+        channel["defaultTo"] = _NO_HOME_CHANNEL_TARGET
     return channel
 
 
@@ -205,6 +211,8 @@ def native_discord_channel(settings: dict) -> dict:
         channel["dmPolicy"] = "disabled"
     if home_channel_id := settings.get("home_channel_id"):
         channel["defaultTo"] = f"channel:{home_channel_id}"
+    else:
+        channel["defaultTo"] = _NO_HOME_CHANNEL_TARGET
     return channel
 
 
