@@ -11,6 +11,7 @@ import {
   coerceBooleanFields,
   expandGithubContent,
   hasIncompleteIntegration,
+  isSignInOnlyProvider,
   type IntegrationDraft,
 } from "../integrations";
 
@@ -35,7 +36,10 @@ export function AgentKeysSettings({ agent, canEdit, editing, onEdit }: {
   async function applyChanges() {
     if (!hasChanges || hasIncompleteIntegration(secretDrafts)) return;
     const draftProviders = new Set(secretDrafts.map((draft) => draft.provider));
-    const manualDrafts = secretDrafts.filter((draft) => !draft.sharedCredentialId);
+    // Sign-in providers already saved their credential when the sign-in completed.
+    const manualDrafts = secretDrafts.filter(
+      (draft) => !draft.sharedCredentialId && !isSignInOnlyProvider(draft.provider),
+    );
     const sharedDrafts = secretDrafts.filter((draft) => Boolean(draft.sharedCredentialId));
 
     await applyAndRestart(() => updateAgent.mutateAsync({
@@ -98,6 +102,7 @@ export function AgentKeysSettings({ agent, canEdit, editing, onEdit }: {
             );
           })}
           <IntegrationsStep
+            agentId={agent.id}
             integrations={secretDrafts}
             onChange={setSecretDrafts}
             credentialError={credentialError}

@@ -72,6 +72,14 @@ _DIRECTORY_ERROR_STATUS = {
 }
 
 
+@dataclass(frozen=True)
+class TeamsAppIdentity:
+    """Which Microsoft app, in which tenant, is behind a Teams connection. Nothing secret."""
+
+    app_id: str
+    tenant_id: str
+
+
 @inject
 @singleton
 @dataclass
@@ -578,6 +586,28 @@ class CommunicationsService:
             json.dumps(credentials, sort_keys=True, separators=(",", ":")),
             self.config.agent_token_encryption_key,
         )
+
+    def get_teams_app_identity(self, agent_id: UUID, connection_id: UUID) -> TeamsAppIdentity:
+        """The app id and tenant of one agent's active, enabled Teams connection.
+
+        SharePoint signs people in on the same Microsoft app as the agent's Teams bot, as a
+        public client, so it needs only these two public values; the app's secret stays in
+        this domain. No user context: callers authorize before calling.
+        """
+        connection = self.repository.get_active(connection_id)
+        if connection is None or connection.agent_id != agent_id or connection.platform_key != "teams":
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Microsoft Teams connection not found for this agent.",
+            )
+        if not connection.enabled:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="The Microsoft Teams connection is turned off. Turn it on to use SharePoint.",
+            )
+        plugin = self._require_plugin(connection.platform_key)
+        credentials = self._decrypt_credentials(plugin, connection.credentials_encrypted)
+        return TeamsAppIdentity(app_id=credentials["app_id"], tenant_id=credentials["tenant_id"])
 
     def _decrypt_credentials(self, plugin, ciphertext: str) -> dict:
         try:
