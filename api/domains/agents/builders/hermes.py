@@ -41,6 +41,11 @@ COMMUNICATIONS_RUNTIME_ADAPTER_PY: str = (_COMMON_SCRIPTS / "communications-runt
 _HERMES_APPROVAL_MODE = {"manual": "manual", "auto": "smart", "off": "off"}
 _HERMES_APPROVAL_TIMEOUT_SECONDS = 300
 _HERMES_HEADLESS_APPROVAL_MODE = "deny"
+# Hermes shows a first-message onboarding notice whenever this variable is
+# absent. This deliberately cannot be a Slack channel ID: it suppresses that
+# notice without accidentally making an arbitrary real channel the destination
+# for proactive messages.
+_SLACK_NO_HOME_CHANNEL = "__agentbarn_no_home_channel__"
 # Every auxiliary.<task> block v2026.8.19 reads, minus the moa_* slots (MoA only).
 _HERMES_AUXILIARY_TASKS = (
     "vision",
@@ -213,6 +218,12 @@ def native_slack_env(
         env["SLACK_HOME_CHANNEL_NAME"] = home_channel.display_name or ""
         if home_channel.thread_id:
             env["SLACK_HOME_CHANNEL_THREAD_ID"] = home_channel.thread_id
+    else:
+        # Hermes uses only the presence of this variable to decide whether to
+        # show its home-channel onboarding message. A sentinel keeps an
+        # intentionally-unconfigured Connection quiet; an originless native
+        # cron delivery still fails safely rather than landing in a real channel.
+        env["SLACK_HOME_CHANNEL"] = _SLACK_NO_HOME_CHANNEL
     return env
 
 

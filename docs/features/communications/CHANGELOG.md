@@ -13,6 +13,10 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
 
 ## Changes
 
+### 2026-09-17 — Suppress native Slack home-channel onboarding when intentionally unset — PR pending
+
+- Changed: Native Hermes Slack Connections without a configured default delivery target now receive an impossible home-channel sentinel. Hermes therefore does not send its first-message home-channel setup notice. Explicitly configured home channels remain unchanged; an originless native Slack cron delivery without one fails rather than being sent to an unintended real channel.
+
 ### 2026-09-17 — Move OpenClaw Slack and Discord to the native gateway — PR pending
 
 - Changed: enabled Slack and Discord Connections on OpenClaw Agents run in OpenClaw's native channel plugins when their Platform is in `COMMUNICATIONS_NATIVE_PLATFORMS`. The native cutoff (supervisor, expired-lease recovery, inbound and outbound claims) no longer checks the Agent's runtime. OpenClaw Agents already running with a native Platform lose gateway ingress on deploy and must be restarted onto base image 0.7.0.

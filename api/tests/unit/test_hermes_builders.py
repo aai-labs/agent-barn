@@ -70,7 +70,7 @@ def test_native_slack_env_maps_connection_policy() -> None:
     assert "SLACK_ALLOW_ALL_USERS" not in open_env
     assert open_env["SLACK_THREAD_REQUIRE_MENTION"] == "false"
     assert open_env["AGENTBARN_SCHEDULED_DELIVERY"] == "0"
-    assert "SLACK_HOME_CHANNEL" not in open_env
+    assert open_env["SLACK_HOME_CHANNEL"] == "__agentbarn_no_home_channel__"
 
     home = native_slack_env(
         {},
