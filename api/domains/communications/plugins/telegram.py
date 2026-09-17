@@ -59,7 +59,10 @@ class TelegramSettings(PlatformSettings):
     home_channel_id: str | None = Field(
         default=None,
         title="Home chat",
-        description="Optional group or user chat ID that scheduled results without an originating chat are sent to.",
+        description=(
+            "Optional group or user chat ID that scheduled results without an originating chat are sent to "
+            "when the Agent runs Telegram natively."
+        ),
     )
 
 
@@ -84,8 +87,9 @@ class TelegramPlatformPlugin(PlatformPlugin):
         "## Configure Telegram\n\n"
         "1. This integration uses `getUpdates` long polling. Remove any existing webhook and stop other services polling "
         "the same bot token before connecting.\n"
-        "2. Add the bot to every group or channel it should handle. For ordinary group messages, use **@BotFather → "
-        "/setprivacy → Disable**; privacy mode otherwise delivers mainly commands, replies, and mentions.\n"
+        "2. Add the bot to every group or channel it should handle. When the Agent runs Telegram natively it answers "
+        "groups only when mentioned or replied to, which privacy mode already delivers. Otherwise, for ordinary group "
+        "messages, use **@BotFather → /setprivacy → Disable**.\n"
         "3. For channels, make the bot an administrator so it can receive channel posts and send replies.\n\n"
         "## Set Connection access\n\n"
         "1. Direct messages default to Off; set Direct messages to Open or Allowlist when DMs are needed.\n"
