@@ -172,6 +172,13 @@ class CommunicationConnection(BaseModel, table=True):
             postgresql_where=sa.text("retired_at IS NULL AND settings->>'default_delivery_target' IS NOT NULL"),
         ),
         sa.Index(
+            "uq_communication_connection_active_platform",
+            "agent_id",
+            "platform_key",
+            unique=True,
+            postgresql_where=sa.text("retired_at IS NULL"),
+        ),
+        sa.Index(
             "uq_communication_connection_active_name",
             "agent_id",
             sa.func.lower(sa.column("display_name")),
@@ -741,13 +748,14 @@ class CommunicationDirectoryPreview(PydanticBaseModel):
     model_config = ConfigDict(extra="forbid")
 
     platform_key: str = Field(min_length=1, max_length=64)
+    kind: str = Field(min_length=1, max_length=64)
     settings: dict[str, Any] = Field(default_factory=dict)
     credentials: dict[str, Any]
+    guild_id: str | None = Field(default=None, max_length=64)
 
 
 class CommunicationDirectoryPreviewRead(PydanticBaseModel):
-    channels: list[CommunicationDirectoryEntryRead] = Field(default_factory=list)
-    users: list[CommunicationDirectoryEntryRead] = Field(default_factory=list)
+    entries: list[CommunicationDirectoryEntryRead] = Field(default_factory=list)
 
 
 class CommunicationConnectionCreate(PydanticBaseModel):

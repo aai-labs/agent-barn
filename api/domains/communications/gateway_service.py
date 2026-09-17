@@ -114,7 +114,11 @@ class CommunicationsGatewayService:
     def claim_runtime_delivery(self, agent: Agent) -> RuntimeDeliveryRead | None:
         if agent.status != AgentStatus.RUNNING:
             raise RuntimeError("Agent is not running")
-        expired = self.delivery_repository.reclaim_expired_inbound(agent_id=agent.id)
+        native_platform_keys = self.config.native_platform_keys
+        expired = self.delivery_repository.reclaim_expired_inbound(
+            agent_id=agent.id,
+            excluded_platform_keys=native_platform_keys,
+        )
         for stale in expired:
             self.notify_processing_feedback(
                 ProcessingFeedbackContext(
@@ -125,7 +129,11 @@ class CommunicationsGatewayService:
                     provider_metadata=stale.envelope.provider_metadata,
                 )
             )
-        delivery = self.delivery_repository.claim_next_inbound(agent_id=agent.id, reclaim_expired=False)
+        delivery = self.delivery_repository.claim_next_inbound(
+            agent_id=agent.id,
+            reclaim_expired=False,
+            excluded_platform_keys=native_platform_keys,
+        )
         if delivery is not None:
             delivery = self._for_runtime(delivery)
             delivery.execution_token = issue_execution_token(

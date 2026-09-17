@@ -8,6 +8,7 @@ from api.infrastructure.shared.cache import cached
 _BASE = "https://discord.com/api/v10"
 _TIMEOUT_SECONDS = 15
 _DIRECTORY_CACHE_TTL_SECONDS = 600
+_USER_AGENT = "AgentBarn/1.0"
 _MESSAGE_CHANNEL_TYPES = {0, 5, 10, 11, 12, 15}
 _MAX_NONCE_LENGTH = 25
 
@@ -24,7 +25,7 @@ class DiscordClient:
             response = resilient_request(
                 "GET",
                 f"{_BASE}{path}",
-                headers={"Authorization": f"Bot {self._bot_token}"},
+                headers={"Authorization": f"Bot {self._bot_token}", "User-Agent": _USER_AGENT},
                 params=params,
                 timeout=_TIMEOUT_SECONDS,
                 label=label,
@@ -42,7 +43,22 @@ class DiscordClient:
         return body if isinstance(body, dict) else None
 
     def _get_list(self, path: str, *, label: str, params: dict[str, str] | None = None) -> list[dict]:
-        body = self._request(path, label=label, params=params)
+        # Unlike _get, this must not swallow errors into an empty list: it backs the
+        # guild/channel/member/role directory, which is cache.py-cached for 10 minutes
+        # and has no other way to distinguish "genuinely empty" from "call failed"
+        # (e.g. missing Server Members Intent) — a caller needs the raised error to
+        # surface it to the UI instead of caching a false empty result.
+        response = resilient_request(
+            "GET",
+            f"{_BASE}{path}",
+            headers={"Authorization": f"Bot {self._bot_token}", "User-Agent": _USER_AGENT},
+            params=params,
+            timeout=_TIMEOUT_SECONDS,
+            label=label,
+            retry_server_errors=True,
+        )
+        response.raise_for_status()
+        body = response.json()
         return [item for item in body if isinstance(item, dict)] if isinstance(body, list) else []
 
     def get_current_bot(self) -> dict[str, Any]:
@@ -87,7 +103,11 @@ class DiscordClient:
         response = resilient_request(
             "POST",
             f"{_BASE}/channels/{channel_id}/messages",
-            headers={"Authorization": f"Bot {self._bot_token}", "Content-Type": "application/json"},
+            headers={
+                "Authorization": f"Bot {self._bot_token}",
+                "Content-Type": "application/json",
+                "User-Agent": _USER_AGENT,
+            },
             content=json.dumps(payload).encode("utf-8"),
             timeout=_TIMEOUT_SECONDS,
             label="Discord create message",

@@ -103,15 +103,10 @@ class DiscordValidationConfig(Protocol):
 
 
 class DiscordSettings(PlatformSettings):
-    guild_ids: list[str] = Field(
-        default_factory=list,
-        title="Allowed servers",
-        description="Discord server (guild) IDs this agent may respond in. Used when Channel access is Allowlist.",
-    )
     allowed_channel_ids: list[str] = Field(
         default_factory=list,
         title="Allowed channels",
-        description="Channel IDs this agent may read and post in. Leave empty to allow any channel in an allowed server.",
+        description="Channel IDs this agent may respond in. A thread inherits its parent channel's access.",
     )
     allowed_user_ids: list[str] = Field(
         default_factory=list,
@@ -123,17 +118,13 @@ class DiscordSettings(PlatformSettings):
         title="Allowed roles",
         description="Members with any of these Discord role IDs may interact with this agent.",
     )
-    group_policy: str = Field(
-        default="allowlist",
-        pattern="^(open|allowlist)$",
-        title="Channel access",
-        description="Open responds in any server it's added to. Allowlist restricts it to Allowed servers.",
-    )
-    dm_policy: str = Field(
-        default="off",
-        pattern="^(off|open|allowlist)$",
-        title="Direct messages",
-        description="Off ignores DMs, Open accepts DMs from anyone, Allowlist restricts to Allowed users.",
+    allow_all_users: bool = Field(
+        default=False,
+        title="Allow all users",
+        description=(
+            "Allow messages from every Discord user in DMs and server channels. "
+            "When disabled, the native Discord adapter uses the configured user, role, and channel allowlists."
+        ),
     )
     require_mention: bool = Field(
         default=True, title="Require @mention", description="Only respond in servers when directly @mentioned."
@@ -157,6 +148,7 @@ class DiscordCredentials(PlatformCredentials):
 class DiscordPlatformPlugin(PlatformPlugin):
     key = "discord"
     display_name = "Discord"
+    schema_version = 2
     setup_hint = (
         "## Create and configure a bot\n\n"
         "1. In [Discord Developer Portal](https://discord.com/developers/applications), create or open an Application and "
@@ -172,10 +164,9 @@ class DiscordPlatformPlugin(PlatformPlugin):
         "threads are used.\n\n"
         "## Finish the Connection\n\n"
         "1. Paste the Bot Token into this Connection and save it.\n"
-        "2. The bot must belong to each allowed server and view every allowed channel. Enable **Developer Mode** to copy "
-        "guild, channel, user, and role IDs.\n"
-        "3. Direct messages are Off by default; enable them only when needed. When **Require @mention** is on, people must "
-        "mention the bot in server messages."
+        "2. The bot must view every allowed channel. Enable **Developer Mode** to copy channel, user, and role IDs.\n"
+        "3. By default the bot denies users not covered by an allowed user, role, or channel. Enable **Allow all users** "
+        "only when anyone may use the bot. When **Require @mention** is on, people must mention the bot in server messages."
     )
     capabilities = frozenset(
         {
@@ -276,13 +267,14 @@ class DiscordPlatformPlugin(PlatformPlugin):
         self,
         settings: DiscordSettings,
         *,
-        guild_id: str,
         channel_id: str,
     ) -> CommunicationPolicyDisposition | None:
-        if settings.group_policy == "allowlist" and guild_id not in settings.guild_ids:
-            return CommunicationPolicyDisposition.CHANNEL_DENIED
+        if settings.allow_all_users:
+            return None
         if settings.allowed_channel_ids and channel_id not in settings.allowed_channel_ids:
             return CommunicationPolicyDisposition.CHANNEL_DENIED
+        if not (settings.allowed_channel_ids or settings.allowed_user_ids or settings.allowed_role_ids):
+            return CommunicationPolicyDisposition.USER_DENIED
         return None
 
     def _member_disposition(
@@ -292,6 +284,8 @@ class DiscordPlatformPlugin(PlatformPlugin):
         sender_id: str,
         roles: list[str],
     ) -> CommunicationPolicyDisposition | None:
+        if settings.allow_all_users:
+            return None
         if (
             (settings.allowed_user_ids or settings.allowed_role_ids)
             and sender_id not in settings.allowed_user_ids
@@ -301,9 +295,10 @@ class DiscordPlatformPlugin(PlatformPlugin):
         return None
 
     def _dm_disposition(self, settings: DiscordSettings, sender_id: str) -> CommunicationPolicyDisposition | None:
-        if settings.dm_policy == "off":
-            return CommunicationPolicyDisposition.USER_DENIED
-        if settings.dm_policy == "allowlist" and sender_id not in settings.allowed_user_ids:
+        # Hermes applies its user allowlist to both DMs and servers, but only
+        # applies role allowlists to DMs with an additional guild setting that
+        # Agent Barn does not expose. Mirror the portable subset exactly.
+        if not settings.allow_all_users and sender_id not in settings.allowed_user_ids:
             return CommunicationPolicyDisposition.USER_DENIED
         return None
 
@@ -350,7 +345,7 @@ class DiscordPlatformPlugin(PlatformPlugin):
             roles = member.get("roles", [])
             if not isinstance(roles, list):
                 return InboundAdmissionResult(CommunicationPolicyDisposition.MALFORMED_PAYLOAD)
-            denied = self._location_disposition(settings, guild_id=guild_id, channel_id=channel_id) or (
+            denied = self._location_disposition(settings, channel_id=channel_id) or (
                 self._member_disposition(settings, sender_id=sender_id, roles=[str(role) for role in roles])
             )
         if denied is not None:
@@ -442,7 +437,7 @@ class DiscordPlatformPlugin(PlatformPlugin):
             if dm_denied is not None:
                 return InboundAdmissionResult(dm_denied)
         else:
-            location_denied = self._location_disposition(settings, guild_id=guild_id, channel_id=channel_id)
+            location_denied = self._location_disposition(settings, channel_id=channel_id)
             if location_denied is not None:
                 return InboundAdmissionResult(location_denied)
             raw_member = event.get("member")

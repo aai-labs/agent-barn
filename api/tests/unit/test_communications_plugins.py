@@ -161,7 +161,6 @@ def test_discord_plugin_normalizes_an_allowed_message_create_event() -> None:
     plugin = DiscordPlatformPlugin(config)
     settings = plugin.settings_model.model_validate(
         {
-            "guild_ids": ["guild-1"],
             "allowed_channel_ids": ["channel-1"],
             "require_mention": True,
         }
@@ -193,7 +192,7 @@ def test_discord_plugin_normalizes_an_allowed_message_create_event() -> None:
 
 def test_discord_plugin_ignores_unmentioned_group_messages() -> None:
     plugin = DiscordPlatformPlugin(ValidationConfig())
-    settings = plugin.settings_model.model_validate({"guild_ids": ["guild-1"]})
+    settings = plugin.settings_model.model_validate({"allow_all_users": True})
 
     assert (
         plugin.normalize_inbound(
@@ -800,7 +799,7 @@ def _discord_interaction(
 
 def _discord_plugin_and_settings(**settings: Any) -> tuple[DiscordPlatformPlugin, Any]:
     plugin = DiscordPlatformPlugin(ValidationConfig())
-    return plugin, plugin.settings_model.model_validate({"group_policy": "open", **settings})
+    return plugin, plugin.settings_model.model_validate({"allow_all_users": True, **settings})
 
 
 def test_a_discord_click_becomes_an_ordinary_inbound_answer() -> None:
@@ -827,22 +826,21 @@ def test_a_discord_click_is_never_deduped_against_the_message_it_answers() -> No
     assert_that(envelope.provider_message_id, equal_to("action:interaction-1"))
 
 
-def test_a_discord_click_still_obeys_the_guild_and_channel_allowlists() -> None:
-    plugin, settings = _discord_plugin_and_settings(group_policy="allowlist", guild_ids=["guild-9"])
-    _, channel_limited = _discord_plugin_and_settings(allowed_channel_ids=["channel-9"])
+def test_a_discord_click_still_obeys_the_channel_allowlist() -> None:
+    plugin, settings = _discord_plugin_and_settings(allow_all_users=False, allowed_channel_ids=["channel-9"])
 
     assert_that(
         plugin.normalize_inbound(settings, _discord_interaction()).disposition,
         equal_to(CommunicationPolicyDisposition.CHANNEL_DENIED),
     )
-    assert_that(
-        plugin.normalize_inbound(channel_limited, _discord_interaction()).disposition,
-        equal_to(CommunicationPolicyDisposition.CHANNEL_DENIED),
-    )
 
 
 def test_a_discord_click_still_obeys_the_user_and_role_allowlists() -> None:
-    plugin, settings = _discord_plugin_and_settings(allowed_user_ids=["user-9"], allowed_role_ids=["role-9"])
+    plugin, settings = _discord_plugin_and_settings(
+        allow_all_users=False,
+        allowed_user_ids=["user-9"],
+        allowed_role_ids=["role-9"],
+    )
 
     assert_that(
         plugin.normalize_inbound(settings, _discord_interaction(user="user-1")).disposition,
@@ -853,10 +851,10 @@ def test_a_discord_click_still_obeys_the_user_and_role_allowlists() -> None:
     )
 
 
-def test_a_discord_click_still_obeys_the_dm_policy() -> None:
-    plugin, off = _discord_plugin_and_settings(dm_policy="off")
-    _, allowlisted = _discord_plugin_and_settings(dm_policy="allowlist", allowed_user_ids=["user-9"])
-    _, open_dms = _discord_plugin_and_settings(dm_policy="open")
+def test_a_discord_dm_uses_the_native_user_gate() -> None:
+    plugin, off = _discord_plugin_and_settings(allow_all_users=False)
+    _, allowlisted = _discord_plugin_and_settings(allow_all_users=False, allowed_user_ids=["user-9"])
+    _, open_dms = _discord_plugin_and_settings()
 
     assert_that(
         plugin.normalize_inbound(off, _discord_interaction(guild=None)).disposition,
@@ -1088,7 +1086,7 @@ def test_a_discord_click_reaches_the_gateway_acknowledged_first() -> None:
 
 
 def test_a_refused_discord_click_is_acknowledged_without_removing_the_buttons() -> None:
-    log = _discord_ingress_log(_discord_interaction(), group_policy="allowlist", guild_ids=["guild-9"])
+    log = _discord_ingress_log(_discord_interaction(), allow_all_users=False, allowed_channel_ids=["channel-9"])
 
     assert_that([entry[0] for entry in log], equal_to(["ack", "emit"]))
     assert_that(log[0][1], equal_to({"type": 6}))

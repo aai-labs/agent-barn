@@ -105,7 +105,7 @@ The chat system through which an Agent interacts with people. Agent Barn support
 _Avoid_: runtime
 
 **Communication Connection**:
-An Agent-owned configured relationship to one bot, application, account, or endpoint on a Platform. An Agent may have multiple Communication Connections, including several on the same Platform.
+An Agent-owned configured relationship to one bot, application, account, or endpoint on a Platform. An Agent may have one active Communication Connection per Platform; retired Connections preserve history and may be replaced.
 _Avoid_: channel, integration, platform config
 
 **Connection Journal**:

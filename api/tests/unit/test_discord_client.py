@@ -1,7 +1,8 @@
 import json
 from unittest.mock import MagicMock, patch
 
-from hamcrest import assert_that, equal_to, none
+import httpx
+from hamcrest import assert_that, calling, equal_to, none, raises
 
 from api.domains.communications.plugins.base import provider_idempotency_key
 from api.infrastructure.discord.client import DiscordClient
@@ -22,6 +23,20 @@ def test_discord_client_resolves_user_and_channel_names(mock_request, _mock_cach
     assert_that(client.get_channel_display_name("channel-1"), equal_to("ops-alerts"))
 
 
+@patch("api.infrastructure.discord.client.resilient_request")
+def test_discord_client_identifies_its_rest_requests_to_discord(mock_request):
+    response = MagicMock(status_code=200)
+    response.json.return_value = {"id": "bot-1", "username": "agentbarn"}
+    mock_request.return_value = response
+
+    DiscordClient("discord-token").get_current_bot()
+
+    assert_that(
+        mock_request.call_args.kwargs["headers"],
+        equal_to({"Authorization": "Bot discord-token", "User-Agent": "AgentBarn/1.0"}),
+    )
+
+
 @patch("api.infrastructure.discord.client.cached", side_effect=lambda _key, fetch, ttl: fetch())
 @patch("api.infrastructure.discord.client.resilient_request")
 def test_discord_client_returns_none_when_resource_is_not_visible(mock_request, _mock_cached):
@@ -29,6 +44,25 @@ def test_discord_client_returns_none_when_resource_is_not_visible(mock_request, 
     client = DiscordClient("discord-token")
 
     assert_that(client.get_channel_display_name("channel-1"), none())
+
+
+@patch("api.infrastructure.discord.client.cached", side_effect=lambda _key, fetch, ttl: fetch())
+@patch("api.infrastructure.discord.client.resilient_request")
+def test_discord_client_raises_instead_of_hiding_a_forbidden_member_list(mock_request, _mock_cached):
+    """A 403 (e.g. Server Members Intent disabled) must propagate, not collapse to [].
+
+    Directory results are cached for 10 minutes: silently returning [] here would
+    look identical to a guild with no members and get cached as if it were correct,
+    leaving the "Allowed users" picker empty with no way to tell why.
+    """
+    response = MagicMock(status_code=403)
+    response.raise_for_status.side_effect = httpx.HTTPStatusError(
+        "Forbidden", request=MagicMock(), response=MagicMock(status_code=403)
+    )
+    mock_request.return_value = response
+    client = DiscordClient("discord-token")
+
+    assert_that(calling(client.list_guild_members).with_args("guild-1"), raises(httpx.HTTPStatusError))
 
 
 @patch("api.infrastructure.discord.client.cached", side_effect=lambda _key, fetch, ttl: fetch())

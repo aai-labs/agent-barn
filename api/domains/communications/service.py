@@ -161,18 +161,17 @@ class CommunicationsService:
         agent = self.authorization.require_action(context, agent_id, PermissionKey.AGENT_UPDATE)
         self.authorization.require_action_for_visible(context, agent, PermissionKey.AGENT_SECRET_MANAGE)
         plugin = self._require_plugin(data.platform_key)
-        if plugin.key != "slack" or PlatformCapability.DIRECTORY_DISCOVERY not in plugin.capabilities:
+        if PlatformCapability.DIRECTORY_DISCOVERY not in plugin.capabilities:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Workspace preview is available for Slack only",
+                detail="This platform does not support directory discovery",
             )
         try:
             preview_settings = dict(data.settings)
             preview_settings.pop("default_delivery_target", None)
             settings = plugin.settings_model.model_validate(preview_settings)
             credentials = plugin.credentials_model.model_validate(data.credentials)
-            channels = plugin.list_directory_entries(settings, credentials, kind="channels")
-            users = plugin.list_directory_entries(settings, credentials, kind="users")
+            entries = plugin.list_directory_entries(settings, credentials, kind=data.kind, guild_id=data.guild_id)
         except ValueError as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
         except HTTPException:
@@ -180,8 +179,7 @@ class CommunicationsService:
         except Exception as exc:
             self._raise_directory_error(exc, "preview_directory")
         return CommunicationDirectoryPreviewRead(
-            channels=[CommunicationDirectoryEntryRead.model_validate(entry) for entry in channels],
-            users=[CommunicationDirectoryEntryRead.model_validate(entry) for entry in users],
+            entries=[CommunicationDirectoryEntryRead.model_validate(entry) for entry in entries],
         )
 
     def create_connection(

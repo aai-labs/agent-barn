@@ -9,6 +9,9 @@ from .hermes import (
     build_hermes_deployment,
     build_hermes_gateway_config,
     build_secret_hermes_runtime,
+    native_discord_env,
+    native_slack_env,
+    native_telegram_env,
 )
 from .openclaw import (
     HEALTHZ_SERVER_JS,
@@ -21,6 +24,10 @@ from .openclaw import (
     build_deployment,
     build_openclaw_gateway_config,
     build_secret_runtime,
+    native_channel_env,
+    native_discord_channel,
+    native_slack_channel,
+    native_telegram_channel,
 )
 
 __all__ = [  # noqa: RUF022 - grouped by runtime (common/openclaw/hermes), not alphabetical
@@ -38,6 +45,10 @@ __all__ = [  # noqa: RUF022 - grouped by runtime (common/openclaw/hermes), not a
     "build_config_map",
     "build_secret_runtime",
     "build_deployment",
+    "native_channel_env",
+    "native_discord_channel",
+    "native_slack_channel",
+    "native_telegram_channel",
     # hermes
     "HERMES_BOOTLOADER_FOOTER",
     "HERMES_HEALTHZ_PY",
@@ -45,6 +56,9 @@ __all__ = [  # noqa: RUF022 - grouped by runtime (common/openclaw/hermes), not a
     "TELEMETRY_PUSH_PLUGIN_YAML",
     "TELEMETRY_PUSH_PLUGIN_INIT",
     "build_hermes_gateway_config",
+    "native_discord_env",
+    "native_slack_env",
+    "native_telegram_env",
     "build_hermes_config_map",
     "build_secret_hermes_runtime",
     "build_hermes_deployment",
