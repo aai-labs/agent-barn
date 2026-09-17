@@ -21,27 +21,32 @@ from pathlib import Path
 GROUP_A, GROUP_B = "-1001", "-1002"
 LISTED_USER, OTHER_USER = "111", "222"
 
-# (label, chat type, chat id, sender, mentions the bot)
+# (label, chat type, chat id, sender, how it addresses the bot: "mention", "reply", or None)
 MESSAGES = [
-    ("dm listed user", "private", LISTED_USER, LISTED_USER, False),
-    ("dm other user", "private", OTHER_USER, OTHER_USER, False),
-    ("group A mention", "supergroup", GROUP_A, OTHER_USER, True),
-    ("group A no mention", "supergroup", GROUP_A, OTHER_USER, False),
-    ("group B mention by listed user", "supergroup", GROUP_B, LISTED_USER, True),
+    ("dm listed user", "private", LISTED_USER, LISTED_USER, None),
+    ("dm other user", "private", OTHER_USER, OTHER_USER, None),
+    ("group A mention", "supergroup", GROUP_A, OTHER_USER, "mention"),
+    ("group A reply to bot", "supergroup", GROUP_A, OTHER_USER, "reply"),
+    ("group A no mention", "supergroup", GROUP_A, OTHER_USER, None),
+    ("group B mention by listed user", "supergroup", GROUP_B, LISTED_USER, "mention"),
 ]
 
 # Connection settings -> the labels that must be admitted; every other message must not be.
 CASES = [
     ({}, set()),
-    ({"allowed_chat_ids": [GROUP_A]}, {"group A mention"}),
+    ({"allowed_chat_ids": [GROUP_A]}, {"group A mention", "group A reply to bot"}),
     ({"dm_policy": "open"}, {"dm listed user", "dm other user"}),
+    # A blank chat ID is no allowlist, not "any group".
+    ({"dm_policy": "open", "allowed_chat_ids": [""]}, {"dm listed user", "dm other user"}),
+    # Closed groups drop a listed DM sender who mentions the bot in a group.
+    ({"dm_policy": "allowlist", "allowed_user_ids": [LISTED_USER]}, {"dm listed user"}),
     (
         {"dm_policy": "allowlist", "allowed_user_ids": [LISTED_USER], "group_policy": "open"},
-        {"dm listed user", "group A mention", "group B mention by listed user"},
+        {"dm listed user", "group A mention", "group A reply to bot", "group B mention by listed user"},
     ),
     (
         {"dm_policy": "allowlist", "allowed_user_ids": [LISTED_USER], "allowed_chat_ids": [GROUP_A]},
-        {"dm listed user", "group A mention"},
+        {"dm listed user", "group A mention", "group A reply to bot"},
     ),
 ]
 
@@ -51,10 +56,7 @@ def host(image: str) -> None:
     from api.domains.agents.builders.hermes import build_hermes_gateway_config, native_telegram_env
 
     for settings, admitted in CASES:
-        groups_enabled = settings.get("group_policy") == "open" or bool(settings.get("allowed_chat_ids"))
-        config = build_hermes_gateway_config(
-            "m/m", "http://x", native_telegram=True, telegram_groups_enabled=groups_enabled
-        )
+        config = build_hermes_gateway_config("m/m", "http://x", telegram_settings=settings)
         env = native_telegram_env(settings, {"bot_token": "123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw"})
         env_args = [arg for key, value in env.items() for arg in ("-e", f"{key}={value}")]
         subprocess.run(
@@ -98,7 +100,8 @@ def check() -> None:
     adapter._message_handler = runner._is_user_authorized  # the adapter finds its runner via __self__
 
     got = set()
-    for label, chat_type, chat_id, sender, mention in MESSAGES:
+    for label, chat_type, chat_id, sender, addressed in MESSAGES:
+        mention = addressed == "mention"
         message = SimpleNamespace(
             chat=SimpleNamespace(id=int(chat_id), type=chat_type, is_forum=False, title="chat"),
             from_user=SimpleNamespace(id=int(sender), username="user", full_name="User", is_bot=False),
@@ -109,7 +112,11 @@ def check() -> None:
             caption_entities=[],
             message_thread_id=None,
             is_topic_message=False,
-            reply_to_message=None,
+            reply_to_message=(
+                SimpleNamespace(from_user=adapter._bot, message_id=0, text="earlier reply")
+                if addressed == "reply"
+                else None
+            ),
             message_id=1,
         )
         if (

@@ -2004,14 +2004,7 @@ class AgentService:
                 discord_require_mention=(
                     native_discord.settings.get("require_mention", True) if native_discord else True
                 ),
-                native_telegram=native_telegram is not None,
-                telegram_groups_enabled=bool(
-                    native_telegram
-                    and (
-                        native_telegram.settings.get("group_policy") == "open"
-                        or native_telegram.settings.get("allowed_chat_ids")
-                    )
-                ),
+                telegram_settings=native_telegram.settings if native_telegram else None,
                 verbose_mode=agent.verbose_mode,
             )
             secret = build_secret_hermes_runtime(

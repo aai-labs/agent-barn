@@ -6,7 +6,7 @@ from kubernetes import client
 
 from api.domains.communications.models import ConversationLocation
 
-from .common import _labels, _resource_name
+from .common import _labels, _resource_name, _setting_ids
 
 # Explicit so agents stop inheriting the namespace LimitRange default of
 # 512Mi request / 2Gi limit. requests.memory is the binding quota axis
@@ -183,9 +183,9 @@ def native_discord_channel(settings: dict) -> dict:
     apply to every guild through OpenClaw's ``"*"`` guild entry.
     """
     allow_all = bool(settings.get("allow_all_users"))
-    users = [str(value) for value in settings.get("allowed_user_ids") or [] if str(value)]
-    roles = [str(value) for value in settings.get("allowed_role_ids") or [] if str(value)]
-    channel_ids = [str(value) for value in settings.get("allowed_channel_ids") or [] if str(value)]
+    users = _setting_ids(settings, "allowed_user_ids")
+    roles = _setting_ids(settings, "allowed_role_ids")
+    channel_ids = _setting_ids(settings, "allowed_channel_ids")
     channel: dict = {"enabled": True, "groupPolicy": "allowlist"}
     guild: dict = {"requireMention": settings.get("require_mention", True)}
     if not allow_all:
@@ -223,17 +223,16 @@ def native_telegram_channel(settings: dict) -> dict:
     of those groups. Groups always require a mention; DMs never do.
     """
     channel: dict = {"enabled": True, "dmPolicy": "disabled", "groupPolicy": "disabled"}
-    user_ids = [str(value) for value in settings.get("allowed_user_ids") or [] if str(value)]
+    user_ids = _setting_ids(settings, "allowed_user_ids")
     dm_policy = settings.get("dm_policy", "off")
     if dm_policy == "open":
         channel.update(dmPolicy="open", allowFrom=["*"])
     elif dm_policy == "allowlist" and user_ids:
         # An empty allowlist drops every DM anyway and OpenClaw warns about it.
         channel.update(dmPolicy="allowlist", allowFrom=user_ids)
-    if settings.get("group_policy", "allowlist") == "open":
-        group_ids = ["*"]
-    else:
-        group_ids = [str(value) for value in settings.get("allowed_chat_ids") or [] if str(value)]
+    group_ids = (
+        ["*"] if settings.get("group_policy", "allowlist") == "open" else _setting_ids(settings, "allowed_chat_ids")
+    )
     if group_ids:
         channel["groupPolicy"] = "open"
         channel["groups"] = {group_id: {"requireMention": True} for group_id in group_ids}
