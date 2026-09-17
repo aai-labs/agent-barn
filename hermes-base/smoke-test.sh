@@ -96,6 +96,24 @@ with tempfile.TemporaryDirectory() as temp_home:
         raise SystemExit('USER.md content was not rendered into the system prompt')
 "
 
+# Agent Barn gives Hermes both its application data directory and its persistent
+# workspace. Keep the runtime file-safety allowlist aligned with those mounts;
+# the API builder intentionally runs Hermes with /workspace as its terminal cwd.
+check workspace-write-safety-contract python3 -c "
+import os
+
+from agent.file_safety import get_safe_write_roots, get_write_denied_error
+
+required = {os.path.realpath('/opt/data'), os.path.realpath('/workspace')}
+roots = get_safe_write_roots()
+if not required <= roots:
+    raise SystemExit(f'write roots missing {sorted(required - roots)}: {sorted(roots)}')
+
+for path in ('/workspace/memory/2026-09-17.md', '/workspace/local/scan_prs.py'):
+    if error := get_write_denied_error(path):
+        raise SystemExit(error)
+"
+
 # Chromium is deliberately absent -- browser.cloud_provider=firecrawl routes the
 # browser tool to the shared service. Assert both the absence and that firecrawl
 # is genuinely registered in this runtime: a Hermes upgrade that drops the

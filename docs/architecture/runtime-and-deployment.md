@@ -77,6 +77,20 @@ The gateway supervisor isolates provider ingress per enabled Connection and coor
 
 Hermes scheduled runs are isolated sessions: they do not inherit Slack thread or interactive-session history unless a job explicitly supplies continuity context. They do load the agent's persistent `MEMORY.md` and `USER.md` stores into the system prompt, using the same enabled memory configuration as interactive runs. This contract requires Hermes `v2026.8.19` or newer and is verified inside the pinned base image because an API-side builder test alone cannot prove runtime behavior.
 
+Hermes Agents have two intentional writable mounts: `/opt/data` for Hermes-owned
+state and `/workspace` for the persistent Agent workspace. The base image and
+startup script set `HERMES_WRITE_SAFE_ROOT` to allow exactly those roots. Hermes'
+curated `USER.md` and `MEMORY.md` live under `/opt/data/memories/`; daily notes
+written as `memory/YYYY-MM-DD.md` remain workspace files under `/workspace`.
+
+OpenClaw has no ambient model-backed heartbeat: Agent Barn writes
+`agents.defaults.heartbeat.every: "0m"` and `target: "none"` on every start,
+so only explicit Agent cron jobs initiate proactive work. The OpenClaw startup
+script replaces this policy rather than inheriting an older PVC-held value. A
+pre-2026.8 workspace is detected from its runtime-owned state markers and is
+migrated once with non-interactive `openclaw doctor --fix` before the gateway
+starts; healthy workspaces never run the broad doctor repair during startup.
+
 Cron delivery is automatic. When a scheduled run has nothing actionable to deliver, its final response must be a recognized silence marker (`[SILENT]`, `SILENT`, `NO_REPLY`, `NO REPLY`, or `HEARTBEAT_OK`); ordinary prose such as `Nothing to flag today.` is a deliverable message, not a private acknowledgement.
 
 ## Telemetry and costs

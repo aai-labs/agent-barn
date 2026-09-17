@@ -49,6 +49,10 @@ HERMES_EXCLUDED = (
 
 OPENCLAW_EXCLUDED = (
     "local-plugins",
+    # OpenClaw records npm installs on the PVC, but this state is recreated at
+    # startup. It contains symlinks to the image's global package tree, which
+    # a restore archive must reject rather than preserve.
+    "npm",
     "openclaw.json",
     "agentbarn-messages.sqlite3",
     "workspace/skills",
@@ -84,11 +88,14 @@ def _walk_included_files(root: Path, runtime: str):
         current = Path(dir_path)
         rel_dir = current.relative_to(root).as_posix()
         prefix = "" if rel_dir == "." else rel_dir + "/"
-        dir_names[:] = sorted(d for d in dir_names if not is_excluded(prefix + d, runtime))
+        dir_names[:] = sorted(
+            d for d in dir_names if not is_excluded(prefix + d, runtime) and not (current / d).is_symlink()
+        )
         for file_name in sorted(file_names):
             rel_path = prefix + file_name
-            if not is_excluded(rel_path, runtime):
-                yield current / file_name, rel_path
+            path = current / file_name
+            if not is_excluded(rel_path, runtime) and not path.is_symlink():
+                yield path, rel_path
 
 
 def capture(source: Path, dest: Path, runtime: str) -> dict:
