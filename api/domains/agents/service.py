@@ -44,7 +44,8 @@ from api.domains.agents.builders import (
     native_telegram_channel,
     native_telegram_env,
 )
-from api.domains.agents.error_messages import friendly_k8s_error, friendly_pod_reason
+from api.domains.agents.error_messages import friendly_pod_reason
+from api.domains.agents.exceptions import AgentProvisioningPrecondition
 from api.domains.agents.gog_artifacts import build_gog_env, build_gog_policy_md, build_gog_setup_sh
 from api.domains.agents.models import (
     PROVIDER_DISPLAY_NAMES,
@@ -60,6 +61,7 @@ from api.domains.agents.models import (
     AgentLogsRead,
     AgentNameSuggestionRead,
     AgentOverrideAuthorRead,
+    AgentProvisioningErrorRead,
     AgentRead,
     AgentSecret,
     AgentSecretCreate,
@@ -95,6 +97,12 @@ from api.domains.agents.override_repository import (
     AgentOverrideConcurrencyError,
     AgentOverrideRepository,
     AgentOverrideSnapshot,
+)
+from api.domains.agents.provisioning_errors import (
+    AgentProvisioningErrorCategory,
+    NormalizedAgentProvisioningError,
+    normalize_agent_provisioning_error,
+    persisted_provisioning_error,
 )
 from api.domains.agents.repository import AgentRepository
 from api.domains.agents.runtime_policy import (
@@ -155,6 +163,36 @@ RESTORE_POINT_IN_FLIGHT_DETAIL = (
 )
 
 _OPENROUTER_MODEL_PREFIX = "litellm/openrouter/"
+
+_PROVISIONING_FAILURE_STATUS: dict[AgentProvisioningErrorCategory, int] = {
+    AgentProvisioningErrorCategory.QUOTA_EXHAUSTED: status.HTTP_503_SERVICE_UNAVAILABLE,
+    AgentProvisioningErrorCategory.CLUSTER_PERMISSION_DENIED: status.HTTP_503_SERVICE_UNAVAILABLE,
+    AgentProvisioningErrorCategory.CLUSTER_UNAVAILABLE: status.HTTP_503_SERVICE_UNAVAILABLE,
+    AgentProvisioningErrorCategory.RESOURCE_REJECTED: status.HTTP_500_INTERNAL_SERVER_ERROR,
+    AgentProvisioningErrorCategory.UNKNOWN: status.HTTP_500_INTERNAL_SERVER_ERROR,
+}
+
+
+def _provisioning_error_dto(normalized: NormalizedAgentProvisioningError) -> AgentProvisioningErrorRead:
+    return AgentProvisioningErrorRead(
+        code=normalized.code,
+        category=normalized.category,
+        summary=normalized.summary,
+        detail=normalized.detail,
+    )
+
+
+def _stored_provisioning_error(agent: Agent) -> NormalizedAgentProvisioningError | None:
+    return persisted_provisioning_error(
+        code=agent.last_error_code,
+        detail=agent.last_error_detail,
+        legacy_message=agent.last_error,
+    )
+
+
+def _provisioning_error_read(agent: Agent) -> AgentProvisioningErrorRead | None:
+    normalized = _stored_provisioning_error(agent)
+    return _provisioning_error_dto(normalized) if normalized is not None else None
 
 
 @dataclass(frozen=True)
@@ -617,6 +655,7 @@ class AgentService:
             # OpenClaw ignores verbose_mode for the same reason; report the
             # effective no-op default rather than a stored value.
             verbose_mode=agent.verbose_mode if agent.agent_type == AgentType.HERMES else False,
+            last_error=_provisioning_error_read(agent),
             secrets=secrets_read,
             skills=skills_read,
             configured_platform_keys=configured_platform_keys or [],
@@ -1939,13 +1978,49 @@ class AgentService:
 
     def _start_agent_unchecked(self, agent: Agent, actor: ActorIdentity) -> Agent:
         """Start a known Agent after its caller has established authority."""
+        try:
+            previous_status = self._provision_and_start(agent)
+        except AgentProvisioningPrecondition:
+            raise
+        except Exception as exc:
+            logger.exception("Failed to start agent %s", agent.id)
+            raise self._record_provisioning_failure(agent, exc) from exc
+        return self._persist_started(agent, actor, previous_status)
+
+    def _record_provisioning_failure(self, agent: Agent, exc: Exception) -> HTTPException:
+        """Persist a sanitized failure on the Agent and build the error to raise.
+
+        The full exception is already in the logs; only the normalized form is
+        persisted or returned, so no cluster text reaches a client.
+        """
+        normalized = normalize_agent_provisioning_error(exc)
+        agent.status = AgentStatus.ERROR
+        agent.last_error = normalized.display_message
+        agent.last_error_code = normalized.code
+        agent.last_error_detail = normalized.detail
+        try:
+            self.repository.save(agent)
+        except Exception:
+            # A database fault is one of the things that lands here, and it would
+            # raise again on this write. The caller still gets the classified cause.
+            logger.exception("Could not record the provisioning failure for agent %s", agent.id)
+        return HTTPException(
+            status_code=_PROVISIONING_FAILURE_STATUS.get(
+                normalized.category,
+                status.HTTP_500_INTERNAL_SERVER_ERROR,
+            ),
+            detail=_provisioning_error_dto(normalized).model_dump(mode="json"),
+        )
+
+    def _provision_and_start(self, agent: Agent) -> str:
+        """Build and create the Agent's Kubernetes resources. Returns its previous status."""
         agent_id = agent.id
         org_id = agent.organization_id
         # Stamped as Service labels for monitoring; resolved here (not in the
         # route) so every start path labels agents consistently.
         org_name = self.organization_lookup.get_name(org_id)
         if agent.status == AgentStatus.RUNNING:
-            raise HTTPException(
+            raise AgentProvisioningPrecondition(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=f"Agent {agent_id} is already running",
             )
@@ -1953,7 +2028,7 @@ class AgentService:
         previous_status = agent.status.value
         template = self.template_repository.get_pinned_template(agent)
         if template is None:
-            raise HTTPException(
+            raise AgentProvisioningPrecondition(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Agent {agent_id} has no pinned template",
             )
@@ -1983,7 +2058,7 @@ class AgentService:
         if agent.model:
             allowed_models = self.organization_lookup.get_allowed_models(org_id)
             if allowed_models is None or not is_model_allowed(agent.model, allowed_models):
-                raise HTTPException(
+                raise AgentProvisioningPrecondition(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail=f"Model '{agent.model}' is no longer in the organization's allowed model list",
                 )
@@ -2088,7 +2163,7 @@ class AgentService:
         if isinstance(gws_content, GoogleWorkspaceContent) and (
             not gws_content.client_id or not gws_content.client_secret
         ):
-            raise HTTPException(
+            raise AgentProvisioningPrecondition(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=(
                     f"{PROVIDER_DISPLAY_NAMES[SecretProvider.GOOGLE_WORKSPACE]} is missing a client id/secret "
@@ -2265,29 +2340,23 @@ class AgentService:
                 skills_json=skills_json,
             )
 
-        try:
-            self.k8s.delete_config_map(name, ns)
-            self.k8s.delete_secret(name, ns)
-            self.k8s.create_config_map(ns, config_map)
-            self.k8s.create_secret(ns, secret)
-            self.k8s.create_pvc(
-                ns,
-                build_pvc(agent.id, org_id, ns, self.config.storage_class or None),
-            )
-            self.k8s.create_service(ns, service)
-            self.k8s.create_deployment(ns, deployment)
-        except Exception as exc:
-            logger.exception("Failed to start agent %s", agent_id)
-            agent.status = AgentStatus.ERROR
-            agent.last_error = friendly_k8s_error(exc)
-            self.repository.save(agent)
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Failed to start agent {agent_id}",
-            )
+        # Failures here are recorded and normalized by _start_agent_unchecked, which
+        # wraps this whole method rather than only the cluster calls.
+        self.k8s.delete_config_map(name, ns)
+        self.k8s.delete_secret(name, ns)
+        self.k8s.create_config_map(ns, config_map)
+        self.k8s.create_secret(ns, secret)
+        self.k8s.create_pvc(
+            ns,
+            build_pvc(agent.id, org_id, ns, self.config.storage_class or None),
+        )
+        self.k8s.create_service(ns, service)
+        self.k8s.create_deployment(ns, deployment)
 
         agent.status = AgentStatus.RUNNING
         agent.last_error = None
+        agent.last_error_code = None
+        agent.last_error_detail = None
         # Pin what this pod was started on. The runtime reads its config once, so this
         # is the model it serves until someone restarts it — however the Organization
         # default moves in the meantime.
@@ -2297,6 +2366,15 @@ class AgentService:
             communication_key,
             self.config.agent_token_encryption_key,
         )
+        return previous_status
+
+    def _persist_started(self, agent: Agent, actor: ActorIdentity, previous_status: str) -> Agent:
+        """Record a start whose Kubernetes resources already exist.
+
+        Deliberately outside the failure handler. The workload is running by now, so
+        marking the Agent ERROR because this write failed would describe a state the
+        cluster is not in.
+        """
         result = self.repository.save_with_lifecycle_event(
             agent,
             event_name=AGENT_STARTED,
@@ -2682,7 +2760,8 @@ class AgentService:
         agent = self.authorization.require_action(context, agent_id, PermissionKey.ACTIVITY_READ)
 
         if agent.status == AgentStatus.ERROR:
-            return AgentHealthRead(status="error", reason=agent.last_error)
+            stored = _stored_provisioning_error(agent)
+            return AgentHealthRead(status="error", reason=stored.display_message if stored else None)
 
         if agent.status != AgentStatus.RUNNING:
             raise HTTPException(
