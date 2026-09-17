@@ -12,6 +12,9 @@ const CONFIG_PATH = path.join(HOME, '.openclaw', 'openclaw.json');
 const REPLACE_PATHS = [
   ['channels'],
   ['bindings'],
+  // Heartbeats are a platform cost policy, not Agent-owned PVC state. A
+  // deep-merge would retain OpenClaw's historical 30-minute default.
+  ['agents', 'defaults', 'heartbeat'],
 ];
 
 function getPath(obj, parts) {

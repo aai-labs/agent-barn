@@ -65,6 +65,10 @@ def _openclaw_config_core(
                 "model": {
                     "primary": model,
                 },
+                # Proactive work is owned by explicit Agent cron jobs. Leaving
+                # this unset makes OpenClaw run a model-backed heartbeat every
+                # 30 minutes, including on old PVCs that predate this config.
+                "heartbeat": {"every": "0m", "target": "none"},
             }
         },
         "channels": channels,

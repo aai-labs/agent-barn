@@ -20,6 +20,13 @@ Related context: [`../agents.md`](../agents.md), [`../../architecture/runtime-an
 
 ## Changes
 
+### 2026-09-17 — OpenClaw archive safety
+
+- Changed: OpenClaw's PVC-held npm install registry is regenerated during
+  startup and now remains outside a Restore Point. It can contain symlinks into
+  the runtime image, which are intentionally omitted from every archive because
+  the restore validator correctly refuses links that escape the destination.
+
 ### 2026-09-14 — AF-292 — Ticket 1 review fixes
 
 - Changed: OpenClaw's archive excluded every `workspace/*.md` except `USER.md`, so an Agent's own

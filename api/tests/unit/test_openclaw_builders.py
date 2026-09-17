@@ -11,7 +11,7 @@ from api.domains.agents.builders import (
     native_slack_channel,
     native_telegram_channel,
 )
-from api.domains.agents.builders.openclaw import OPENCLAW_GATEWAY_PORT
+from api.domains.agents.builders.openclaw import INIT_OPENCLAW_JS, OPENCLAW_GATEWAY_PORT
 from api.domains.communications.models import ConversationLocation
 
 _AGENT_ID = UUID("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
@@ -25,6 +25,23 @@ def test_gateway_config_is_headless_and_exposes_chat_completions() -> None:
     assert config["channels"] == {}
     assert config["bindings"] == []
     assert config["gateway"]["http"]["endpoints"]["chatCompletions"]["enabled"] is True
+
+
+def test_gateway_config_disables_ambient_model_backed_heartbeats() -> None:
+    config = build_openclaw_gateway_config("litellm/gpt-5", "http://litellm:4000")
+
+    assert config["agents"]["defaults"]["heartbeat"] == {"every": "0m", "target": "none"}
+
+
+def test_startup_migrates_only_known_legacy_workspace_state() -> None:
+    assert "openclaw-workspace-state.json" in START_SH
+    assert "workspace-state.json" in START_SH
+    assert "workspace-attestations" in START_SH
+    assert "openclaw doctor --fix --non-interactive" in START_SH
+
+
+def test_init_script_replaces_pvc_held_heartbeat_policy() -> None:
+    assert "['agents', 'defaults', 'heartbeat']" in INIT_OPENCLAW_JS
 
 
 def test_gateway_config_has_no_command_approval_support() -> None:
