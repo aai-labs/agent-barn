@@ -88,6 +88,13 @@ export const AgentAccessSettingsReadSchema = z.object({
   assignments: z.array(AgentAccessMemberReadSchema),
 });
 
+export const AgentProvisioningErrorSchema = z.object({
+  code: z.string(),
+  category: z.string(),
+  summary: z.string(),
+  detail: z.string().nullish(),
+});
+
 export const AgentSchema = z.object({
   id: z.string().uuid(),
   name: z.string(),
@@ -110,9 +117,12 @@ export const AgentSchema = z.object({
   pendingModel: z.string().default(""),
   approvalMode: z.enum(["manual", "auto", "off"]).default("auto"),
   verboseMode: z.boolean().default(false),
+  lastError: AgentProvisioningErrorSchema.nullish(),
   secrets: z.array(AgentSecretReadSchema).optional(),
   skills: z.array(AgentAssignedSkillSchema).default([]),
   configuredPlatformKeys: z.array(z.string()).default([]),
+  /** Platforms whose Connections this Agent's runtime runs itself; changing one requires a restart. */
+  nativePlatformKeys: z.array(z.string()).default([]),
   allowedActions: z.array(AgentPermissionKeySchema).default([]),
   createdAt: z.string(),
   updatedAt: z.string(),
@@ -207,6 +217,13 @@ export const ConversationChannelSchema = z.object({
   conversationType: z.enum(["CHANNEL", "DM"]),
 });
 
+export const WebChatApprovalSchema = z.object({
+  approvalId: z.string(),
+  command: z.string(),
+  choices: z.array(z.string()),
+  choiceLabels: z.record(z.string(), z.string()).default({}),
+});
+
 export const WebChatMessageSchema = z.object({
   id: z.string().uuid(),
   direction: z.enum(["INBOUND", "OUTBOUND"]),
@@ -221,6 +238,10 @@ export const WebChatMessageSchema = z.object({
     "UNAVAILABLE",
   ]),
   cancelRequestedAt: z.string().nullable(),
+  approval: WebChatApprovalSchema.nullish(),
+  // Additive during a rolling API deployment; new responses include null when
+  // no terminal error exists, while an older replica may omit the field.
+  errorMessage: z.string().nullable().optional(),
 });
 
 export const WebChatThreadSchema = z.object({
@@ -346,6 +367,7 @@ export const AgentConfigurationSchema = z.object({
 export type CommandApprovalMode = "manual" | "auto" | "off";
 export type AgentPermissionKey = z.infer<typeof AgentPermissionKeySchema>;
 export type Agent = z.infer<typeof AgentSchema>;
+export type AgentProvisioningError = z.infer<typeof AgentProvisioningErrorSchema>;
 export type AgentAssignedSkill = z.infer<typeof AgentAssignedSkillSchema>;
 export type TemplateRequiredSkill = z.infer<typeof TemplateRequiredSkillSchema>;
 export type AgentHealth = z.infer<typeof AgentHealthSchema>;
@@ -363,6 +385,7 @@ export type AgentOverrideDraft = z.infer<typeof AgentOverrideDraftSchema>;
 export type AgentOverrideVersion = z.infer<typeof AgentOverrideVersionSchema>;
 export type AgentConfiguration = z.infer<typeof AgentConfigurationSchema>;
 export type WebChatMessage = z.infer<typeof WebChatMessageSchema>;
+export type WebChatApproval = z.infer<typeof WebChatApprovalSchema>;
 export type WebChatThread = z.infer<typeof WebChatThreadSchema>;
 export type ConversationMessage = z.infer<typeof ConversationMessageSchema>;
 export type ConversationChannel = z.infer<typeof ConversationChannelSchema>;

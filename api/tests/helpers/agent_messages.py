@@ -38,6 +38,7 @@ STEPS = [
             "AGENT_DEFAULT_MODEL": "litellm/gpt-5-mini",
             "AGENT_LITELLM_BASE_URL": "http://litellm:4000",
             "SKIP_SLACK_TOKEN_VALIDATION": "true",
+            "COMMUNICATIONS_NATIVE_PLATFORMS": "",
         }
     ),
     prepare_injector(modules=[MockK8sModule(), MockLiteLLMModule()]),
@@ -150,14 +151,14 @@ def receipt_id(response):
     return UUID(response.json()["delivery_id"])
 
 
-def second_slack_connection(context):
-    """A second Slack workspace on the same Agent, which a send must never leak into."""
+def other_platform_connection(context):
+    """Another Connection on the same Agent, which a send must never leak into."""
     delegate = context.injector.get(PostgresRepositoryDelegate)
     connection = CommunicationConnection(
         organization_id=context.agent.organization_id,
         agent_id=context.agent.id,
-        platform_key="slack",
-        display_name="Other Slack",
+        platform_key="discord",
+        display_name="Other Discord",
         enabled=True,
         settings={"channel_ids": ["C456"]},
         credentials_encrypted=encrypt_token(

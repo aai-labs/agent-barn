@@ -21,6 +21,7 @@ from api.domains.agents.builders.restore_point import (
 from api.domains.agents.error_messages import friendly_k8s_error
 from api.domains.agents.models import Agent, AgentRestorePoint, AgentStatus, RestorePointOrigin, RestorePointStatus
 from api.domains.agents.override_repository import AgentOverrideRepository
+from api.domains.agents.provisioning_errors import AgentProvisioningOperation
 from api.domains.agents.repository import AgentRepository
 from api.domains.agents.restore_point_job import EXIT_BACKUP_FAILED, EXIT_RESTORE_FAILED
 from api.domains.agents.selection import SelectionValidator
@@ -660,7 +661,7 @@ class RestorePointService:
                 ),
             )
         except Exception as exc:
-            reason = friendly_k8s_error(exc)
+            reason = friendly_k8s_error(exc, operation=AgentProvisioningOperation.RESTORE)
             self.repository.mark_failed(backup.id, reason[:_MAX_FAILURE_REASON])
             self.repository.mark_restored(target.id, cancel_replay=True)
             self.k8s.delete_pvc(backup.pvc_name, namespace)
@@ -788,7 +789,7 @@ class RestorePointService:
             )
         except Exception as exc:
             restore_point.status = RestorePointStatus.FAILED
-            restore_point.failure_reason = friendly_k8s_error(exc)
+            restore_point.failure_reason = friendly_k8s_error(exc, operation=AgentProvisioningOperation.BACKUP)
             self.repository.save(restore_point)
             self.k8s.delete_pvc(restore_point.pvc_name, namespace)
             raise HTTPException(

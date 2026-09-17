@@ -6,10 +6,10 @@ from unittest.mock import AsyncMock, Mock, patch
 from uuid import uuid4
 
 import pytest
-from hamcrest import assert_that, empty, is_
+from hamcrest import assert_that, empty, equal_to, is_
 
 from api.core.config import Config
-from api.domains.agents.models import Agent, AgentStatus
+from api.domains.agents.models import Agent, AgentStatus, AgentType
 from api.domains.communications.gateway_service import CommunicationsGatewayService
 from api.domains.communications.models import (
     AcceptedCommunicationRead,
@@ -47,6 +47,7 @@ def _envelope() -> NormalizedCommunicationEnvelope:
         occurred_at="2026-08-24T10:00:00Z",
         location=ConversationLocation(id="C123", type="CHANNEL", thread_id="1724264405.531769"),
         text="hello",
+        provider_metadata={"route": "stored-provider-route"},
     )
 
 
@@ -61,7 +62,7 @@ def _service(
     connections.get_active.return_value = connection
     plugins = PlatformPluginRegistry([cast(PlatformPlugin, plugin)])
     service = CommunicationsGatewayService(
-        config=cast(Config, SimpleNamespace(agent_token_encryption_key="key")),
+        config=cast(Config, SimpleNamespace(agent_token_encryption_key="key", native_platform_keys=frozenset())),
         agent_repository=Mock(),
         delivery_repository=deliveries,
         connection_repository=connections,
@@ -267,10 +268,42 @@ def test_gateway_marks_claim_and_terminal_runtime_failure_at_lifecycle_seam() ->
     assert completed is True
     stages = [call.args[2].stage for call in plugin.processing_feedback.call_args_list]
     assert stages == [ProcessingFeedbackStage.CLAIMED, ProcessingFeedbackStage.FAILED]
+    assert_that(
+        plugin.processing_feedback.call_args_list[1].args[2].provider_metadata,
+        equal_to(envelope.provider_metadata),
+    )
     published_agent_id, published_signal = cast(Mock, service.signals).publish.call_args.args
     assert published_agent_id == agent.id
     assert published_signal.type == CommunicationSignalType.MESSAGE_CHANGED
     assert published_signal.delivery_id == delivery.delivery_id
+
+
+def test_native_platform_deliveries_are_not_reclaimed_or_claimed_by_the_gateway() -> None:
+    connection = cast(CommunicationConnection, _connection())
+    service, deliveries = _service(connection, _feedback_plugin())
+    service.config = Config(
+        agent_token_encryption_key="key",
+        communications_native_platforms="slack,discord",
+    )
+    deliveries.reclaim_expired_inbound.return_value = []
+    deliveries.claim_next_inbound.return_value = None
+    agent = cast(
+        Agent,
+        SimpleNamespace(id=uuid4(), status=AgentStatus.RUNNING, agent_type=AgentType.OPENCLAW),
+    )
+
+    assert service.claim_runtime_delivery(agent) is None
+
+    excluded = frozenset({"slack", "discord"})
+    deliveries.reclaim_expired_inbound.assert_called_once_with(
+        agent_id=agent.id,
+        excluded_platform_keys=excluded,
+    )
+    deliveries.claim_next_inbound.assert_called_once_with(
+        agent_id=agent.id,
+        reclaim_expired=False,
+        excluded_platform_keys=excluded,
+    )
 
 
 def test_cancel_persists_before_publishing_to_the_runtime_control_stream() -> None:

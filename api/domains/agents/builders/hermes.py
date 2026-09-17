@@ -4,7 +4,9 @@ from uuid import UUID
 import yaml
 from kubernetes import client
 
-from .common import _labels, _resource_name
+from api.domains.communications.models import ConversationLocation
+
+from .common import _labels, _resource_name, _setting_ids
 
 # Matches OpenClaw, so limits.memory (100Gi quota) never binds before
 # requests.memory (20Gi). Note the asymmetry in what the limit *does*: OpenClaw
@@ -23,6 +25,7 @@ AGENT_RESOURCES = client.V1ResourceRequirements(
 _SCRIPTS = Path(__file__).parent.parent / "scripts" / "hermes"
 _COMMON_SCRIPTS = _SCRIPTS.parent
 _TELEMETRY_PUSH = _SCRIPTS / "plugins" / "telemetry-push"
+_OBSERVER = _SCRIPTS / "plugins" / "agentbarn-observer"
 
 HERMES_BOOTLOADER_FOOTER: str = (_SCRIPTS / "bootloader-footer.md").read_text()
 HERMES_CONFIG_MERGE_PY: str = (_SCRIPTS / "config-merge.py").read_text()
@@ -30,12 +33,19 @@ HERMES_HEALTHZ_PY: str = (_SCRIPTS / "healthz-server.py").read_text()
 HERMES_START_SH: str = (_SCRIPTS / "start.sh").read_text()
 TELEMETRY_PUSH_PLUGIN_YAML: str = (_TELEMETRY_PUSH / "plugin.yaml").read_text()
 TELEMETRY_PUSH_PLUGIN_INIT: str = (_TELEMETRY_PUSH / "__init__.py").read_text()
+OBSERVER_PLUGIN_YAML: str = (_OBSERVER / "plugin.yaml").read_text()
+OBSERVER_PLUGIN_INIT: str = (_OBSERVER / "__init__.py").read_text()
 COMMUNICATIONS_RUNTIME_ADAPTER_PY: str = (_COMMON_SCRIPTS / "communications-runtime-adapter.py").read_text()
 
 
 _HERMES_APPROVAL_MODE = {"manual": "manual", "auto": "smart", "off": "off"}
 _HERMES_APPROVAL_TIMEOUT_SECONDS = 300
 _HERMES_HEADLESS_APPROVAL_MODE = "deny"
+# Hermes shows a first-message onboarding notice whenever this variable is
+# absent. This deliberately cannot be a real channel or chat ID: it suppresses
+# that notice without accidentally making an arbitrary real channel the
+# destination for proactive messages.
+_NO_HOME_CHANNEL = "__agentbarn_no_home_channel__"
 # Every auxiliary.<task> block v2026.8.19 reads, minus the moa_* slots (MoA only).
 _HERMES_AUXILIARY_TASKS = (
     "vision",
@@ -129,13 +139,162 @@ def build_hermes_gateway_config(
     model: str,
     litellm_base_url: str,
     approval_mode: str = "auto",
+    native_slack: bool = False,
+    native_discord: bool = False,
+    discord_require_mention: bool = True,
+    telegram_settings: dict | None = None,
+    verbose_mode: bool = False,
 ) -> dict:
-    return _hermes_config_core(
-        model,
-        litellm_base_url,
-        enabled_plugins=["telemetry-push", "agentbarn-messaging"],
-        approval_mode=approval_mode,
-    )
+    plugins = ["telemetry-push", "agentbarn-messaging"]
+    if native_slack or native_discord or telegram_settings is not None:
+        plugins.append("agentbarn-observer")
+    config = _hermes_config_core(model, litellm_base_url, enabled_plugins=plugins, approval_mode=approval_mode)
+    if native_slack:
+        config["slack"] = {
+            "reply_in_thread": True,
+            "reply_broadcast": False,
+            # Unknown DM senders would otherwise receive a pairing code.
+            "unauthorized_dm_behavior": "ignore",
+        }
+        # Slack's markdown block renders standard markdown, tables included, where
+        # mrkdwn would fence them as code. Hermes resends plain mrkdwn if rejected.
+        config["platforms"] = {"slack": {"extra": {"markdown_blocks": True}}}
+        # The Agent's Verbose mode. Progress accumulates in one edited message
+        # rather than a permanent Slack line per tool call.
+        config["display"]["platforms"]["slack"] = {
+            "tool_progress": "all" if verbose_mode else "off",
+            "tool_progress_grouping": "accumulate",
+            "interim_assistant_messages": verbose_mode,
+        }
+    if native_discord:
+        config["discord"] = {
+            # Agent Barn's Discord contract requires the same mention policy in
+            # parent channels and threads. Hermes otherwise keeps responding in
+            # a thread after its first turn without another mention.
+            "require_mention": discord_require_mention,
+            "thread_require_mention": discord_require_mention,
+        }
+        config["display"]["platforms"]["discord"] = {
+            "tool_progress": "all" if verbose_mode else "off",
+            "tool_progress_grouping": "accumulate",
+            "interim_assistant_messages": verbose_mode,
+        }
+    if telegram_settings is not None:
+        # Unknown DM senders would otherwise receive a pairing code.
+        telegram: dict = {"unauthorized_dm_behavior": "ignore"}
+        if telegram_settings.get("group_policy", "allowlist") != "open" and not _setting_ids(
+            telegram_settings, "allowed_chat_ids"
+        ):
+            # An empty chat allowlist means "any group" to Hermes; an empty group
+            # sender allowlist is the only gate that turns groups off entirely.
+            telegram["group_allow_from"] = []
+        config["telegram"] = telegram
+        config["display"]["platforms"]["telegram"] = {
+            "tool_progress": "all" if verbose_mode else "off",
+            "tool_progress_grouping": "accumulate",
+            "interim_assistant_messages": verbose_mode,
+        }
+    return config
+
+
+def native_slack_env(
+    settings: dict,
+    credentials: dict,
+    home_channel: ConversationLocation | None = None,
+) -> dict[str, str]:
+    """Map a Slack Connection onto the native Hermes Slack adapter's environment.
+
+    ``home_channel`` is the Connection's resolved default delivery target, which
+    native cron jobs without an origin deliver to.
+
+    ponytail: Hermes has one user allowlist for channels and DMs alike, so a DM
+    allowlist also restricts channel senders; model it separately if that matters
+    beyond the spike.
+    """
+    env = {
+        "SLACK_BOT_TOKEN": credentials["bot_token"],
+        "SLACK_APP_TOKEN": credentials["app_token"],
+        "SLACK_REQUIRE_MENTION": "true",
+        "SLACK_THREAD_REQUIRE_MENTION": "true" if settings.get("thread_mention_policy") != "start_only" else "false",
+        "SLACK_DISABLE_DMS": "true" if settings.get("dm_policy", "off") == "off" else "false",
+        # Hermes delivers scheduled results itself, to their origin or the home
+        # channel, instead of bridging them through the Communications gateway.
+        # ponytail: disables the bridge for every origin, so Web Chat cron jobs go
+        # undelivered on native agents; route per origin once transport is per Connection.
+        "AGENTBARN_SCHEDULED_DELIVERY": "0",
+    }
+    if settings.get("group_policy", "allowlist") == "allowlist":
+        env["SLACK_ALLOWED_CHANNELS"] = ",".join(settings.get("channel_ids") or [])
+    if settings.get("dm_policy") == "allowlist":
+        env["SLACK_ALLOWED_USERS"] = ",".join(settings.get("dm_user_ids") or [])
+    else:
+        env["SLACK_ALLOW_ALL_USERS"] = "true"
+    if home_channel is not None:
+        env["SLACK_HOME_CHANNEL"] = home_channel.id
+        env["SLACK_HOME_CHANNEL_NAME"] = home_channel.display_name or ""
+        if home_channel.thread_id:
+            env["SLACK_HOME_CHANNEL_THREAD_ID"] = home_channel.thread_id
+    else:
+        # Hermes uses only the presence of this variable to decide whether to
+        # show its home-channel onboarding message. A sentinel keeps an
+        # intentionally-unconfigured Connection quiet; an originless native
+        # cron delivery still fails safely rather than landing in a real channel.
+        env["SLACK_HOME_CHANNEL"] = _NO_HOME_CHANNEL
+    return env
+
+
+def native_discord_env(settings: dict, credentials: dict) -> dict[str, str]:
+    """Map the Discord Connection's native Hermes authorization gates."""
+    env = {
+        "DISCORD_BOT_TOKEN": credentials["bot_token"],
+        "DISCORD_ALLOW_ALL_USERS": "true" if settings.get("allow_all_users") else "false",
+        # Native Hermes delivers scheduled results to their origin or home.
+        "AGENTBARN_SCHEDULED_DELIVERY": "0",
+    }
+    for settings_key, env_key in (
+        ("allowed_channel_ids", "DISCORD_ALLOWED_CHANNELS"),
+        ("allowed_user_ids", "DISCORD_ALLOWED_USERS"),
+        ("allowed_role_ids", "DISCORD_ALLOWED_ROLES"),
+    ):
+        if values := _setting_ids(settings, settings_key):
+            env[env_key] = ",".join(values)
+    if home_channel_id := settings.get("home_channel_id"):
+        env["DISCORD_HOME_CHANNEL"] = str(home_channel_id)
+    else:
+        env["DISCORD_HOME_CHANNEL"] = _NO_HOME_CHANNEL
+    return env
+
+
+def native_telegram_env(settings: dict, credentials: dict) -> dict[str, str]:
+    """Map a Telegram Connection onto the native Hermes Telegram adapter.
+
+    Groups always require a mention (or a reply to the bot); DMs never do. Hermes
+    authorizes a sender if any gate admits them, so a DM allowlist also admits
+    those users in groups; the adapter's chat allowlist still confines groups.
+    ``build_hermes_gateway_config(telegram_settings=...)`` closes groups when the
+    allowlist is empty.
+    """
+    env = {
+        "TELEGRAM_BOT_TOKEN": credentials["bot_token"],
+        "TELEGRAM_REQUIRE_MENTION": "true",
+        # Native Hermes delivers scheduled results to their origin.
+        "AGENTBARN_SCHEDULED_DELIVERY": "0",
+    }
+    if settings.get("group_policy", "allowlist") == "open":
+        env["TELEGRAM_GROUP_ALLOWED_CHATS"] = "*"
+    elif chat_ids := _setting_ids(settings, "allowed_chat_ids"):
+        # The adapter drops other groups; the gateway admits any member of these.
+        env["TELEGRAM_ALLOWED_CHATS"] = env["TELEGRAM_GROUP_ALLOWED_CHATS"] = ",".join(chat_ids)
+    dm_policy = settings.get("dm_policy", "off")
+    if dm_policy == "open":
+        env["TELEGRAM_ALLOW_ALL_USERS"] = "true"
+    elif dm_policy == "allowlist" and (user_ids := _setting_ids(settings, "allowed_user_ids")):
+        env["TELEGRAM_ALLOWED_USERS"] = ",".join(user_ids)
+    if home_channel_id := settings.get("home_channel_id"):
+        env["TELEGRAM_HOME_CHANNEL"] = str(home_channel_id)
+    else:
+        env["TELEGRAM_HOME_CHANNEL"] = _NO_HOME_CHANNEL
+    return env
 
 
 def build_hermes_config_map(
@@ -166,6 +325,8 @@ def build_hermes_config_map(
         "hermes-config.yaml": yaml.dump(hermes_config, default_flow_style=False, sort_keys=False),
         "telemetry-push-plugin.yaml": TELEMETRY_PUSH_PLUGIN_YAML,
         "telemetry-push-init.py": TELEMETRY_PUSH_PLUGIN_INIT,
+        "agentbarn-observer-plugin.yaml": OBSERVER_PLUGIN_YAML,
+        "agentbarn-observer-init.py": OBSERVER_PLUGIN_INIT,
         "healthz-server.py": HERMES_HEALTHZ_PY,
         "config-merge.py": HERMES_CONFIG_MERGE_PY,
         "start.sh": HERMES_START_SH,
