@@ -34,6 +34,7 @@ def _make_service(agent_repo=None, tc_repo=None) -> IngestService:
         tool_call_repository=tc_repo or MagicMock(),
         connection_repository=MagicMock(),
         operational_repository=MagicMock(),
+        conversation_repository=MagicMock(),
     )
 
 

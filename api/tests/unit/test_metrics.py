@@ -63,6 +63,7 @@ def _make_service(tc_repo) -> IngestService:
         tool_call_repository=tc_repo,
         connection_repository=MagicMock(),
         operational_repository=MagicMock(),
+        conversation_repository=MagicMock(),
     )
 
 

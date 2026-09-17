@@ -335,4 +335,7 @@ def test_communication_events_mirror_native_transcripts_to_dashboard_conversatio
                 )
             assert_that(len(messages), equal_to(2))
             assert_that([message.content for message in messages], equal_to(["hello from Slack", "hello from Hermes"]))
-            assert_that([message.direction for message in messages], equal_to([MessageDirection.INBOUND, MessageDirection.OUTBOUND]))
+            assert_that(
+                [message.direction for message in messages],
+                equal_to([MessageDirection.INBOUND, MessageDirection.OUTBOUND]),
+            )
