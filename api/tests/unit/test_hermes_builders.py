@@ -123,6 +123,12 @@ def test_native_discord_env_maps_hermes_authorization_gates() -> None:
     assert "AGENTBARN_DISCORD_POLICY" not in env
 
 
+def test_native_discord_env_uses_a_sentinel_when_home_is_unset() -> None:
+    env = native_discord_env({}, {"bot_token": "discord-token"})
+
+    assert env["DISCORD_HOME_CHANNEL"] == "__agentbarn_no_home_channel__"
+
+
 def test_native_gateway_does_not_drain_agent_barn_scheduled_completions() -> None:
     guarded = HERMES_START_SH.split(
         'if [ "${AGENTBARN_SCHEDULED_DELIVERY}" = "1" ]; then',

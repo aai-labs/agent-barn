@@ -1,7 +1,9 @@
 import importlib.util
+import json
+import sqlite3
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 _PLUGIN = (
     Path(__file__).parents[2]
@@ -69,5 +71,51 @@ def test_discord_observation_mirrors_a_transcript_without_reimplementing_native_
             "channel_name": None,
             "content": "must not leave the runtime",
             "occurred_at": plugin._messages[0]["occurred_at"],
+        }
+    ]
+
+
+def test_delivered_obligation_is_mirrored_when_attempting_was_not_observed(tmp_path) -> None:
+    plugin = _load_plugin()
+    database = tmp_path / "state.db"
+    with sqlite3.connect(database) as conn:
+        conn.execute(
+            """
+            CREATE TABLE delivery_obligations (
+                obligation_id TEXT PRIMARY KEY,
+                session_key TEXT NOT NULL,
+                platform TEXT NOT NULL,
+                chat_id TEXT NOT NULL,
+                thread_id TEXT,
+                content TEXT NOT NULL,
+                state TEXT NOT NULL,
+                updated_at REAL NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            "INSERT INTO delivery_obligations VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            ("reply-1", "agent:main:discord:channel:C1", "discord", "C1", "T1", "fast reply", "delivered", 1.0),
+        )
+
+    plugin.poll_obligations(database, [0.0])
+    response = MagicMock()
+    response.__enter__.return_value = response
+    response.__exit__.return_value = None
+    with patch.object(plugin.urllib.request, "urlopen", return_value=response) as urlopen:
+        plugin._flush("https://ingest.test/communication-events", "test-key")
+
+    payload = json.loads(urlopen.call_args.args[0].data)
+    assert payload["messages"] == [
+        {
+            "platform": "discord",
+            "provider_message_id": "outbound:reply-1",
+            "session_key": "agent:main:discord:channel:C1",
+            "channel_id": "C1",
+            "thread_id": "T1",
+            "direction": "OUTBOUND",
+            "conversation_type": "CHANNEL",
+            "content": "fast reply",
+            "occurred_at": payload["messages"][0]["occurred_at"],
         }
     ]

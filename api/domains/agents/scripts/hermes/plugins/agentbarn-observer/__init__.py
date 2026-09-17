@@ -205,7 +205,11 @@ def poll_obligations(db_path: Path, watermark: list[float]) -> None:
         if stage:
             error_code = "send_failed" if state == "failed" else None
             _emit(stage, platform, _correlated(session_key), error_code=error_code)
-            if state == "attempting" and content:
+            # A successful provider send can move from pending to delivered
+            # between two observer polls. The obligation ID makes each state
+            # observation idempotent, so mirror on every observed state rather
+            # than losing those fast replies by waiting for ``attempting``.
+            if content:
                 _emit_message(
                     platform=platform,
                     provider_message_id=f"outbound:{obligation_id}",

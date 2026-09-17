@@ -46,6 +46,7 @@ _HERMES_HEADLESS_APPROVAL_MODE = "deny"
 # notice without accidentally making an arbitrary real channel the destination
 # for proactive messages.
 _SLACK_NO_HOME_CHANNEL = "__agentbarn_no_home_channel__"
+_DISCORD_NO_HOME_CHANNEL = "__agentbarn_no_home_channel__"
 # Every auxiliary.<task> block v2026.8.19 reads, minus the moa_* slots (MoA only).
 _HERMES_AUXILIARY_TASKS = (
     "vision",
@@ -245,6 +246,8 @@ def native_discord_env(settings: dict, credentials: dict) -> dict[str, str]:
             env[env_key] = ",".join(values)
     if home_channel_id := settings.get("home_channel_id"):
         env["DISCORD_HOME_CHANNEL"] = str(home_channel_id)
+    else:
+        env["DISCORD_HOME_CHANNEL"] = _DISCORD_NO_HOME_CHANNEL
     return env
 
 
