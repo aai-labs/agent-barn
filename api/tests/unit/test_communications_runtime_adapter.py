@@ -990,6 +990,19 @@ def test_hermes_delivery_explicitly_resumes_its_durable_session(monkeypatch: pyt
     }
 
 
+def _join_active_run(adapter, session_key: str, *, timeout: float = 5) -> None:
+    """Wait for the worker thread `run_delivery_hermes` spawned, if it is still there.
+
+    The mocked runs below finish fast enough that the thread can complete and remove
+    its own `_ACTIVE_RUNS` entry before this line runs -- indexing the dict directly
+    then raises `KeyError` on a run that has already finished, which is exactly the
+    outcome we wanted anyway.
+    """
+    active = adapter._ACTIVE_RUNS.get(session_key)
+    if active is not None:
+        active.join(timeout=timeout)
+
+
 def _event_delivery(delivery_id: str = "event-1", *, session_key: str = "event:connection-1:evt-1") -> dict:
     """A delivery the API marked EVENT: a job fired by a machine that is not waiting."""
     return {
@@ -1021,7 +1034,7 @@ def test_an_event_uses_the_session_the_server_chose(monkeypatch: pytest.MonkeyPa
 
     delivery = _event_delivery()
     adapter.run_delivery_hermes(delivery)
-    adapter._ACTIVE_RUNS["event:connection-1:evt-1"].join(timeout=5)
+    _join_active_run(adapter, "event:connection-1:evt-1")
 
     run_payload = next(payload for url, payload in calls if url.endswith("/v1/runs"))
     assert run_payload is not None
@@ -1043,7 +1056,7 @@ def test_a_conversation_still_resumes_when_the_server_says_nothing(monkeypatch: 
     monkeypatch.setattr(adapter.urllib.request, "urlopen", _fake_urlopen([("run.completed", {"output": "done"})]))
 
     adapter.run_delivery_hermes(_DELIVERY)
-    adapter._ACTIVE_RUNS[adapter.session_key_for(_DELIVERY)].join(timeout=5)
+    _join_active_run(adapter, adapter.session_key_for(_DELIVERY))
 
     run_payload = next(payload for url, payload in calls if url.endswith("/v1/runs"))
     assert run_payload is not None
@@ -1075,7 +1088,7 @@ def test_an_event_arriving_while_busy_is_released_not_acknowledged(monkeypatch: 
         adapter.run_delivery_hermes(_event_delivery("event-2"))
     finally:
         release.set()
-        adapter._ACTIVE_RUNS["event:connection-1:evt-1"].join(timeout=5)
+        _join_active_run(adapter, "event:connection-1:evt-1")
 
     assert [url for url, _ in calls if url.endswith("/release")] == [
         f"{adapter.COMMUNICATIONS_URL}/agents/{adapter.AGENT_ID}/deliveries/event-2/release"
@@ -1108,7 +1121,7 @@ def test_an_event_is_never_eaten_as_an_approval_answer(monkeypatch: pytest.Monke
     }
 
     adapter.run_delivery_hermes(_event_delivery())
-    adapter._ACTIVE_RUNS["event:connection-1:evt-1"].join(timeout=5)
+    _join_active_run(adapter, "event:connection-1:evt-1")
 
     assert [url for url, _ in calls if url.endswith("/approval")] == []
     assert any(url.endswith("/v1/runs") for url, _ in calls)
@@ -1139,7 +1152,7 @@ def test_an_approval_request_during_an_event_is_denied_rather_than_parked(
     )
 
     adapter.run_delivery_hermes(_event_delivery())
-    adapter._ACTIVE_RUNS["event:connection-1:evt-1"].join(timeout=5)
+    _join_active_run(adapter, "event:connection-1:evt-1")
 
     assert [payload for url, payload in calls if url.endswith("/approval")] == [{"choice": "deny"}]
     assert "event:connection-1:evt-1" not in adapter._PENDING_APPROVALS
