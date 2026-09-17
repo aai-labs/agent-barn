@@ -17,6 +17,11 @@ def _name_slug_label(name: str, fallback_id: UUID) -> str:
     return slug or str(fallback_id)
 
 
+def _setting_ids(settings: dict, key: str) -> list[str]:
+    """A Connection's ID-list setting as strings, without blanks."""
+    return [str(value) for value in settings.get(key) or [] if str(value)]
+
+
 def _labels(agent_id: UUID, org_id: UUID, runtime: str = "") -> dict[str, str]:
     # agentbarn.io/component is the stable selector shared by every agent's
     # resources (Deployment/Service selectors keep matching on "app" only);

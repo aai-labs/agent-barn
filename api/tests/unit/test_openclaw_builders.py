@@ -9,6 +9,7 @@ from api.domains.agents.builders import (
     native_channel_env,
     native_discord_channel,
     native_slack_channel,
+    native_telegram_channel,
 )
 from api.domains.agents.builders.openclaw import OPENCLAW_GATEWAY_PORT
 from api.domains.communications.models import ConversationLocation
@@ -205,15 +206,60 @@ def test_native_discord_channel_maps_global_gates_to_every_guild() -> None:
     assert "guilds" not in closed
 
 
+def test_native_telegram_channel_confines_groups_to_the_allowlist_and_requires_mentions() -> None:
+    channel = native_telegram_channel(
+        {"allowed_chat_ids": ["-1001"], "dm_policy": "allowlist", "allowed_user_ids": ["111"]}
+    )
+
+    assert channel == {
+        "enabled": True,
+        "dmPolicy": "allowlist",
+        "allowFrom": ["111"],
+        "groupPolicy": "open",
+        "groups": {"-1001": {"requireMention": True}},
+        "defaultTo": "channel:__agentbarn_no_home_channel__",
+    }
+
+
+def test_native_telegram_channel_opens_groups_and_dms() -> None:
+    channel = native_telegram_channel({"group_policy": "open", "dm_policy": "open"})
+
+    assert channel["groups"] == {"*": {"requireMention": True}}
+    assert (channel["dmPolicy"], channel["allowFrom"]) == ("open", ["*"])
+
+
+def test_native_telegram_channel_is_closed_by_default() -> None:
+    assert native_telegram_channel({"allowed_chat_ids": [""]}) == {
+        "enabled": True,
+        "dmPolicy": "disabled",
+        "groupPolicy": "disabled",
+        "defaultTo": "channel:__agentbarn_no_home_channel__",
+    }
+
+
+def test_native_telegram_channel_closes_dms_for_an_empty_allowlist() -> None:
+    # An empty allowlist drops every DM anyway, and OpenClaw warns about it.
+    assert native_telegram_channel({"dm_policy": "allowlist"})["dmPolicy"] == "disabled"
+
+
+def test_native_telegram_channel_sets_the_home_chat() -> None:
+    assert native_telegram_channel({"home_channel_id": "-1009"})["defaultTo"] == "-1009"
+
+
 def test_native_channel_env_carries_tokens_and_hands_over_scheduled_delivery() -> None:
     env = native_channel_env(
-        {"slack": {"bot_token": "xoxb", "app_token": "xapp"}, "discord": {"bot_token": "discord-token"}}
+        {
+            "slack": {"bot_token": "xoxb", "app_token": "xapp"},
+            "discord": {"bot_token": "discord-token"},
+            "telegram": {"bot_token": "123:abc"},
+        }
     )
 
     assert env == {
-        "AGENTBARN_NATIVE_CHANNELS": "slack,discord",
+        "AGENTBARN_NATIVE_CHANNELS": "slack,discord,telegram",
         "AGENTBARN_SCHEDULED_DELIVERY": "0",
         "SLACK_BOT_TOKEN": "xoxb",
         "SLACK_APP_TOKEN": "xapp",
         "DISCORD_BOT_TOKEN": "discord-token",
+        "TELEGRAM_BOT_TOKEN": "123:abc",
     }
