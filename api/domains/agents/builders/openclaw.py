@@ -150,6 +150,9 @@ def native_slack_channel(settings: dict, home_channel: ConversationLocation | No
         "mode": "socket",
         "requireMention": True,
         "replyToMode": "all",
+        # Replies stream through Slack's native API as markdown_text, so Slack renders
+        # tables; OpenClaw's plain send would convert them to fenced code.
+        "streaming": {"mode": "partial"},
         "groupPolicy": settings.get("group_policy", "allowlist"),
         # start_only accepts unmentioned replies in threads the Agent already joined.
         "implicitMentions": {"threadParticipation": settings.get("thread_mention_policy") == "start_only"},

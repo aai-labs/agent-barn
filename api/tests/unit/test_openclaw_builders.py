@@ -140,6 +140,7 @@ def test_native_channels_enable_installed_plugins_and_the_observer() -> None:
 
 def test_native_slack_channel_maps_connection_policy() -> None:
     locked = native_slack_channel({"channel_ids": ["C1"], "dm_user_ids": ["U1"], "dm_policy": "allowlist"})
+    assert locked["streaming"] == {"mode": "partial"}
     assert locked["groupPolicy"] == "allowlist"
     assert locked["channels"] == {"C1": {"enabled": True}}
     assert locked["dmPolicy"] == "allowlist"

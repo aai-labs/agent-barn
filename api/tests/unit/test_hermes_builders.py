@@ -31,6 +31,7 @@ def test_native_slack_config_enables_the_observer_and_ignores_unknown_dms() -> N
 
     assert config["plugins"]["enabled"] == ["telemetry-push", "agentbarn-messaging", "agentbarn-observer"]
     assert config["slack"]["unauthorized_dm_behavior"] == "ignore"
+    assert config["platforms"]["slack"]["extra"]["markdown_blocks"] is True
     assert config["display"]["platforms"]["slack"]["tool_progress"] == "off"
     assert config["display"]["platforms"]["slack"]["interim_assistant_messages"] is False
 

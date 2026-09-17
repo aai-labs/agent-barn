@@ -150,6 +150,9 @@ def build_hermes_gateway_config(
             # Unknown DM senders would otherwise receive a pairing code.
             "unauthorized_dm_behavior": "ignore",
         }
+        # Slack's markdown block renders standard markdown, tables included, where
+        # mrkdwn would fence them as code. Hermes resends plain mrkdwn if rejected.
+        config["platforms"] = {"slack": {"extra": {"markdown_blocks": True}}}
         # The Agent's Verbose mode. Progress accumulates in one edited message
         # rather than a permanent Slack line per tool call.
         config["display"]["platforms"]["slack"] = {
