@@ -1108,6 +1108,40 @@ test.describe("Agent Detail Page — Channels tab", () => {
       credentials: { bot_token: "token-two" },
     });
   });
+
+  test("browses Discord servers and channels from the add form using the typed-in bot token", async ({ page }) => {
+    await serveSavedSlackConnection(page);
+    await agentDetailPage.addConnectionButton().click();
+    await agentDetailPage.selectPlatformButton("Discord").click();
+
+    // Browsing needs a bot token, so it stays disabled until one is typed.
+    const refresh = page.getByRole("button", { name: "Refresh server list" });
+    await expect(refresh).toBeDisabled();
+    await agentDetailPage.credentialInput("Bot token").fill("token-one");
+    await expect(refresh).toBeEnabled();
+
+    const guildsPreview = page.waitForRequest(
+      (request) => request.method() === "POST" && request.url().includes("/connection-directory-preview"),
+    );
+    await refresh.click();
+    expect((await guildsPreview).postDataJSON()).toMatchObject({ platform_key: "discord", kind: "guilds" });
+
+    await page.getByText("Choose a server to browse channels, users, and roles").click();
+    await page.getByRole("option", { name: "Community" }).click();
+
+    const channelsPreview = page.waitForRequest(
+      (request) => request.method() === "POST" && request.url().includes("/connection-directory-preview"),
+    );
+    await agentDetailPage.browseDirectoryButton("Allowed channels").click();
+    expect((await channelsPreview).postDataJSON()).toMatchObject({
+      platform_key: "discord",
+      kind: "channels",
+      guild_id: "guild-one",
+    });
+    await agentDetailPage.directoryPickerOption(/#ops/).click();
+    await agentDetailPage.directoryPickerConfirmButton().click();
+    await expect(page.getByRole("button", { name: "Remove #ops", exact: true })).toBeVisible();
+  });
 });
 
 test.describe("Agent Detail Page — Channels tab, Email connection", () => {

@@ -237,25 +237,53 @@ def test_slack_workspace_preview_loads_directory_without_creating_a_connection()
             "api.infrastructure.slack.client.SlackClient.list_channels",
             return_value=[{"id": "C1", "name": "ops", "is_private": False}],
         ):
-            with patch(
-                "api.infrastructure.slack.client.SlackClient.list_users",
-                return_value=[{"id": "U1", "name": "aria", "real_name": "Aria", "display_name": ""}],
-            ):
-                response = context.client.post(
-                    f"/api/v1/organizations/{context.organization.id}/agents/{context.agent.id}/connection-directory-preview",
-                    json=preview,
-                    headers=_auth(context),
-                )
+            channels = context.client.post(
+                f"/api/v1/organizations/{context.organization.id}/agents/{context.agent.id}/connection-directory-preview",
+                json={**preview, "kind": "channels"},
+                headers=_auth(context),
+            )
+        with patch(
+            "api.infrastructure.slack.client.SlackClient.list_users",
+            return_value=[{"id": "U1", "name": "aria", "real_name": "Aria", "display_name": ""}],
+        ):
+            users = context.client.post(
+                f"/api/v1/organizations/{context.organization.id}/agents/{context.agent.id}/connection-directory-preview",
+                json={**preview, "kind": "users"},
+                headers=_auth(context),
+            )
+
+        assert_that(channels.status_code, equal_to(status.HTTP_200_OK))
+        assert_that(channels.json()["entries"], equal_to([{"id": "C1", "label": "#ops", "detail": None}]))
+        assert_that(users.status_code, equal_to(status.HTTP_200_OK))
+        assert_that(users.json()["entries"], equal_to([{"id": "U1", "label": "Aria", "detail": "@aria"}]))
+        assert_that(context.client.get(_base(context), headers=_auth(context)).json(), equal_to([]))
+
+
+def test_discord_bot_preview_loads_guilds_without_creating_a_connection() -> None:
+    with given(_GIVEN) as context:
+        preview = {
+            "platform_key": "discord",
+            "kind": "guilds",
+            "credentials": _discord_payload()["credentials"],
+        }
+        with patch(
+            "api.infrastructure.discord.client.DiscordClient.list_guilds",
+            return_value=[{"id": "guild-1", "name": "Community"}],
+        ):
+            response = context.client.post(
+                f"/api/v1/organizations/{context.organization.id}/agents/{context.agent.id}/connection-directory-preview",
+                json=preview,
+                headers=_auth(context),
+            )
 
         assert_that(response.status_code, equal_to(status.HTTP_200_OK))
-        assert_that(response.json()["channels"], equal_to([{"id": "C1", "label": "#ops", "detail": None}]))
-        assert_that(response.json()["users"], equal_to([{"id": "U1", "label": "Aria", "detail": "@aria"}]))
+        assert_that(response.json()["entries"], equal_to([{"id": "guild-1", "label": "Community", "detail": None}]))
         assert_that(context.client.get(_base(context), headers=_auth(context)).json(), equal_to([]))
 
 
 def test_slack_workspace_preview_reports_a_provider_failure_instead_of_a_server_error() -> None:
     with given(_GIVEN) as context:
-        preview = {"platform_key": "slack", "credentials": _slack_payload()["credentials"]}
+        preview = {"platform_key": "slack", "kind": "channels", "credentials": _slack_payload()["credentials"]}
         with patch(
             "api.infrastructure.slack.client.SlackClient.list_channels",
             side_effect=SlackFetchError("conversations.list error: missing_scope"),

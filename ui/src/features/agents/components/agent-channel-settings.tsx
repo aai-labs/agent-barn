@@ -583,8 +583,17 @@ export function AgentChannelSettings({
   const [displayName, setDisplayName] = useState("");
   const [settings, setSettings] = useState<Record<string, unknown>>({});
   const [credentials, setCredentials] = useState<Record<string, unknown>>({});
-  const [slackPreview, setSlackPreview] = useState<{ channels: CommunicationDirectoryEntry[]; users: CommunicationDirectoryEntry[] } | null>(null);
-  const [slackPreviewError, setSlackPreviewError] = useState<string | null>(null);
+  // Add-form directory previews, keyed by "<kind>" or "<kind>:<guildId>". Slack has one
+  // ungated directory; Discord's is scoped per server the bot token can see.
+  const [previewEntries, setPreviewEntries] = useState<Record<string, CommunicationDirectoryEntry[]>>({});
+  const [previewErrors, setPreviewErrors] = useState<Record<string, string>>({});
+  const [discordAddGuildId, setDiscordAddGuildId] = useState("");
+
+  function resetDirectoryPreviews() {
+    setPreviewEntries({});
+    setPreviewErrors({});
+    setDiscordAddGuildId("");
+  }
   const [formError, setFormError] = useState<string | null>(null);
   const [retiring, setRetiring] = useState<CommunicationConnection | null>(
     null,
@@ -650,32 +659,64 @@ export function AgentChannelSettings({
     };
   }
 
-  /** Browse sources for the add form. Slack has no Connection to read from yet, so the
-   * directory is previewed from the credentials typed above.
+  function previewCacheKey(kind: string, guildId?: string): string {
+    return guildId ? `${kind}:${guildId}` : kind;
+  }
+
+  /** Fetches (and caches) one directory preview kind for the add form's typed-in credentials. */
+  function fetchDirectoryPreview(noun: string, platformKey: string, kind: string, guildId?: string): void {
+    const key = previewCacheKey(kind, guildId);
+    if (previewEntries[key] || previewConnectionDirectory.isPending) return;
+    setPreviewErrors((prev) => ({ ...prev, [key]: "" }));
+    void previewConnectionDirectory
+      .mutateAsync({ agentId: agent.id, platformKey, kind, settings, credentials, guildId })
+      .then((result) => setPreviewEntries((prev) => ({ ...prev, [key]: result.entries })))
+      .catch(() => setPreviewErrors((prev) => ({ ...prev, [key]: directoryLoadError(noun) })));
+  }
+
+  /** Browse sources for the add form. Neither platform has a saved Connection to read
+   * from yet, so the directory is previewed from the credentials typed above.
    * Keys are camelCase: the API client camelizes response bodies, including the
    * property names inside a plugin's JSON settings schema. */
   function addBrowseSources(platform: CommunicationPlatform): Record<string, ArrayBrowseSource> {
-    if (platform.key !== "slack") return {};
-    const missingCredentials = !credentials.botToken || !credentials.appToken;
-    const source = (noun: string, entries: CommunicationDirectoryEntry[]): ArrayBrowseSource => ({
-      noun,
-      entries,
-      isLoading: previewConnectionDirectory.isPending,
-      error: slackPreviewError,
-      disabledReason: missingCredentials ? "Add the bot token and app-level token above to browse." : null,
-      onOpen: () => {
-        if (slackPreview || previewConnectionDirectory.isPending) return;
-        setSlackPreviewError(null);
-        void previewConnectionDirectory
-          .mutateAsync({ agentId: agent.id, platformKey: "slack", settings, credentials })
-          .then(setSlackPreview)
-          .catch(() => setSlackPreviewError(directoryLoadError(noun)));
-      },
-    });
-    return {
-      channelIds: source("channels", slackPreview?.channels ?? []),
-      dmUserIds: source("people", slackPreview?.users ?? []),
+    const previewSource = (
+      noun: string,
+      kind: string,
+      guildId: string | undefined,
+      disabledReason: string | null,
+    ): ArrayBrowseSource => {
+      const key = previewCacheKey(kind, guildId);
+      return {
+        noun,
+        entries: previewEntries[key] ?? [],
+        isLoading: previewConnectionDirectory.isPending,
+        error: previewErrors[key] || null,
+        disabledReason,
+        onOpen: () => fetchDirectoryPreview(noun, platform.key, kind, guildId),
+      };
     };
+    if (platform.key === "slack") {
+      const missingCredentials = !credentials.botToken || !credentials.appToken;
+      const disabledReason = missingCredentials ? "Add the bot token and app-level token above to browse." : null;
+      return {
+        channelIds: previewSource("channels", "channels", undefined, disabledReason),
+        dmUserIds: previewSource("people", "users", undefined, disabledReason),
+      };
+    }
+    if (platform.key === "discord") {
+      const missingCredentials = !credentials.botToken;
+      const disabledReason = missingCredentials
+        ? "Add the bot token above to browse."
+        : discordAddGuildId
+          ? null
+          : "Choose a server above to browse.";
+      return {
+        allowedChannelIds: previewSource("channels", "channels", discordAddGuildId, disabledReason),
+        allowedUserIds: previewSource("people", "users", discordAddGuildId, disabledReason),
+        allowedRoleIds: previewSource("roles", "roles", discordAddGuildId, disabledReason),
+      };
+    }
+    return {};
   }
 
   /** Browse sources for the edit form, backed by the saved Connection's own directory. */
@@ -704,8 +745,7 @@ export function AgentChannelSettings({
     setDisplayName(platform?.displayName ?? key);
     setSettings(schemaDefaults(platform?.settingsSchema ?? {}));
     setCredentials(schemaDefaults(platform?.credentialsSchema ?? {}));
-    setSlackPreview(null);
-    setSlackPreviewError(null);
+    resetDirectoryPreviews();
     setFormError(null);
   }
 
@@ -735,8 +775,7 @@ export function AgentChannelSettings({
       setDisplayName("");
       setSettings({});
       setCredentials({});
-      setSlackPreview(null);
-      setSlackPreviewError(null);
+      resetDirectoryPreviews();
       setFormError(null);
     } catch (error) {
       setFormError(
@@ -1429,7 +1468,7 @@ export function AgentChannelSettings({
                           <SchemaFields
                             schema={selectedPlatform.credentialsSchema}
                             values={credentials}
-                            onChange={(next) => { setCredentials(next); setSlackPreview(null); setSlackPreviewError(null); }}
+                            onChange={(next) => { setCredentials(next); resetDirectoryPreviews(); }}
                             secret
                           />
                         </div>
@@ -1460,6 +1499,53 @@ export function AgentChannelSettings({
                           Connection settings
                         </div>
                         <div className="flex flex-col gap-4">
+                          {selectedPlatform.key === "discord" && (
+                            <div className="flex flex-col gap-1.5 text-sm font-medium">
+                              <div className="flex items-center justify-between gap-2">
+                                Browse server
+                                <button
+                                  type="button"
+                                  className="af-btn af-btn-sm"
+                                  aria-label="Refresh server list"
+                                  disabled={previewConnectionDirectory.isPending || !credentials.botToken}
+                                  onClick={() => fetchDirectoryPreview("servers", "discord", "guilds")}
+                                >
+                                  <RefreshCw
+                                    size={14}
+                                    className={
+                                      previewConnectionDirectory.isPending ? "animate-spin" : undefined
+                                    }
+                                  />{" "}
+                                  Refresh
+                                </button>
+                              </div>
+                              <Select
+                                value={discordAddGuildId}
+                                onValueChange={setDiscordAddGuildId}
+                              >
+                                <SelectTrigger className="w-full">
+                                  <SelectValue placeholder="Choose a server to browse channels, users, and roles" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectGroup>
+                                    {(previewEntries.guilds ?? []).map((guild) => (
+                                      <SelectItem key={guild.id} value={guild.id}>
+                                        {guild.label}
+                                      </SelectItem>
+                                    ))}
+                                  </SelectGroup>
+                                </SelectContent>
+                              </Select>
+                              <span
+                                className="text-xs"
+                                style={{ color: "var(--ink-4)" }}
+                              >
+                                {credentials.botToken
+                                  ? "Select a server, then choose its channels, users, or roles below. Manual IDs still work."
+                                  : "Add the bot token above, then refresh to list its servers."}
+                              </span>
+                            </div>
+                          )}
                           <SchemaFields
                             schema={selectedPlatform.settingsSchema}
                             values={settings}

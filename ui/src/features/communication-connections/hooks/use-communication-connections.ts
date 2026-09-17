@@ -286,10 +286,19 @@ export function useCommunicationConnectionActions() {
   }
 
   const previewConnectionDirectory = useMutation({
-    mutationFn: async ({ agentId, platformKey, settings, credentials }: { agentId: string; platformKey: string; settings: Record<string, unknown>; credentials: Record<string, unknown> }) => {
+    mutationFn: async (
+      { agentId, platformKey, kind, settings, credentials, guildId }: {
+        agentId: string;
+        platformKey: string;
+        kind: string;
+        settings: Record<string, unknown>;
+        credentials: Record<string, unknown>;
+        guildId?: string;
+      },
+    ) => {
       const response = await api.post<CommunicationDirectoryPreview>(
         `${orgApiBase}/agents/${agentId}/connection-directory-preview`,
-        { platformKey, settings, credentials },
+        { platformKey, kind, settings, credentials, guildId },
         { schema: CommunicationDirectoryPreviewSchema },
       );
       return response.data;

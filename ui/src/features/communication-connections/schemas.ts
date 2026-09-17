@@ -29,8 +29,7 @@ export const CommunicationDirectoryEntrySchema = z.object({
 });
 
 export const CommunicationDirectoryPreviewSchema = z.object({
-  channels: z.array(CommunicationDirectoryEntrySchema),
-  users: z.array(CommunicationDirectoryEntrySchema),
+  entries: z.array(CommunicationDirectoryEntrySchema),
 });
 
 export const CommunicationPlatformSchema = z.object({

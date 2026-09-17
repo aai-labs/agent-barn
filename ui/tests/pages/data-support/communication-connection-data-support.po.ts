@@ -35,7 +35,14 @@ export class CommunicationConnectionDataSupport {
         await route.fallback();
         return;
       }
-      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ channels: [{ id: "C1", label: "#ops", detail: null }], users: [{ id: "U1", label: "Aria", detail: "@aria" }] }) });
+      const kind = route.request().postDataJSON()?.kind;
+      const entries = {
+        guilds: [{ id: "guild-one", label: "Community", detail: null }],
+        channels: [{ id: "C1", label: "#ops", detail: null }],
+        users: [{ id: "U1", label: "Aria", detail: "@aria" }],
+        roles: [{ id: "role-one", label: "@Maintainer", detail: null }],
+      }[kind] ?? [];
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ entries }) });
     });
 
     await this.page.route(`**/api/v1/organizations/*/agents/${agentId}/connections`, async (route) => {
