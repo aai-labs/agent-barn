@@ -22,6 +22,11 @@ RUN git clone --depth 1 https://github.com/aai-labs/aai-cli.git repo && \
 FROM nousresearch/hermes-agent:v2026.8.19
 ARG APT_MIRROR
 
+# Agent Barn mounts both Hermes' application data and its persistent workspace.
+# Keep generic file tools able to write to either mount without opening the
+# runtime up to arbitrary filesystem paths.
+ENV HERMES_WRITE_SAFE_ROOT=/opt/data:/workspace
+
 # Route scheduled completions through the durable bridge instead of native transports.
 COPY patch-agent-message-completions.py /tmp/patch-agent-message-completions.py
 RUN python3 /tmp/patch-agent-message-completions.py && rm /tmp/patch-agent-message-completions.py
