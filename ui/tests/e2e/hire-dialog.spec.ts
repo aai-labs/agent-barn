@@ -1,7 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 
 import { mockAgent, mockTemplates } from "../pages/data-support/agent-data-support.po";
-import { mockCustomSkill, mockJiraSkill } from "../pages/data-support/skill-data-support.po";
+import { mockCustomSkill, mockJiraSkill, mockSharePointSkill } from "../pages/data-support/skill-data-support.po";
 import { DataSupport } from "../pages/data-support/data-support.po";
 import { DashboardPage } from "../pages/dashboard-page.po";
 
@@ -210,6 +210,37 @@ test.describe("Hire Dialog", () => {
     await expect(requiredSection.getByText("my-tool", { exact: true })).toHaveCount(0);
     await expect(page.getByRole("heading", { name: "Additional skills" })).toBeVisible();
     await expect(page.getByText("my-tool", { exact: true })).toBeVisible();
+  });
+
+  test("explains that a template requiring SharePoint can't be hired yet", async ({ page }) => {
+    const sharePointRequiredSkill = {
+      id: mockSharePointSkill.id,
+      name: mockSharePointSkill.name,
+      source: mockSharePointSkill.source,
+      required_providers: mockSharePointSkill.requiredProviders,
+      tools_pointer: mockSharePointSkill.toolsPointer,
+      required: true,
+      created_at: mockSharePointSkill.createdAt,
+      updated_at: mockSharePointSkill.updatedAt,
+      group_key: null,
+    };
+    await dataSupport.agents.interceptGetTemplatesRequest({
+      body: {
+        page: 1,
+        page_size: 50,
+        total: 1,
+        items: [{ ...mockTemplates[0], required_skills: [sharePointRequiredSkill] }],
+      },
+    });
+    await dataSupport.skills.interceptGetSkillsRequest({ body: [mockSharePointSkill] });
+
+    await dashboardPage.goto();
+    await page.getByRole("button", { name: /hire agent/i }).click();
+    await chooseTemplate(page);
+
+    await expect(page.getByText("needs the agent to exist first", { exact: false })).toBeVisible();
+    await expect(page.getByText("connected after hiring", { exact: false })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Hire Agent", exact: true })).toBeDisabled();
   });
 
   test("shows credential validation failures as alerts inside the credential form", async ({ page }) => {

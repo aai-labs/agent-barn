@@ -3,8 +3,11 @@ import { expect, test } from "@playwright/test";
 import { TEST_ORG_ID } from "../constants";
 import {
   MOCK_CUSTOM_SKILL_ID,
+  MOCK_SHAREPOINT_SKILL_ID,
   mockCustomSkill,
+  mockSharePointSkill,
 } from "../pages/data-support/skill-data-support.po";
+import { mockCommunicationConnection } from "../fixtures/communication-connections";
 import { AgentConfigurationPage } from "../pages/agent-configuration-page.po";
 import {
   MOCK_AGENT_ID,
@@ -620,5 +623,261 @@ test.describe("Agent configuration page", () => {
 
     expect(sentBody?.skill_versions).toEqual([{ skill_id: MOCK_CUSTOM_SKILL_ID, version: 2 }]);
     await expect(page.getByRole("combobox", { name: "Version for my-tool" })).toHaveText("Version v2");
+  });
+
+  test.describe("SharePoint", () => {
+    const APP_ID = "5ff671c1-57c7-44ef-a7b5-8fe4f81227f9";
+    const TENANT_ID = "b6f28f4f-97fe-41e6-903a-ff6cc7633ae3";
+    const REDIRECT_URI = "http://127.0.0.1:3003/api/v1/integrations/microsoft/callback";
+    const ENTRA_APP = `https://entra.microsoft.com/#view/Microsoft_AAD_RegisteredApps/ApplicationMenuBlade/~`;
+    const teamsConnection = {
+      ...mockCommunicationConnection,
+      id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+      agent_id: MOCK_AGENT_ID,
+      platform_key: "teams",
+      display_name: "Microsoft Teams",
+    };
+    const setup = {
+      app_id: APP_ID,
+      tenant_id: TENANT_ID,
+      redirect_uri: REDIRECT_URI,
+      admin_consent_url: `https://login.microsoftonline.com/${TENANT_ID}/v2.0/adminconsent?client_id=${APP_ID}&scope=rw`,
+      read_only_admin_consent_url: `https://login.microsoftonline.com/${TENANT_ID}/v2.0/adminconsent?client_id=${APP_ID}&scope=ro`,
+    };
+
+    async function mockTeamsAndSetup(page: import("@playwright/test").Page, connections: unknown[]) {
+      await page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}/connections`, async (route) => {
+        await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(connections) });
+      });
+      await page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}/integrations/sharepoint/setup*`, async (route) => {
+        await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(setup) });
+      });
+    }
+
+    async function openSkillsWithSharePoint(
+      page: import("@playwright/test").Page,
+      connections: unknown[],
+      agentBodies: Record<string, unknown>[] = [{ ...mockAgent, status: "STOPPED", skills: [] }],
+    ) {
+      const dataSupport = new DataSupport(page);
+      const configurationPage = new AgentConfigurationPage(page);
+      await dataSupport.auth.interceptRefreshRequest();
+      await dataSupport.users.interceptGetUserContextRequest();
+      await dataSupport.users.interceptGetOrganizationsRequest();
+      let agentRequests = 0;
+      await page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}`, async (route) => {
+        if (route.request().method() !== "GET") {
+          await route.fallback();
+          return;
+        }
+        const body = agentBodies[Math.min(agentRequests, agentBodies.length - 1)];
+        agentRequests += 1;
+        await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
+      });
+      await dataSupport.agents.interceptGetAgentConfigurationRequest();
+      await dataSupport.skills.interceptGetAgentSkillsRequest({ body: [mockSharePointSkill] });
+      await mockTeamsAndSetup(page, connections);
+
+      await configurationPage.goto(MOCK_AGENT_ID, TEST_ORG_ID);
+      await configurationPage.sectionButton("Skills").click();
+      const section = page.locator('section[aria-label="Skills"]');
+      await section.getByRole("button", { name: "Add", exact: true }).click();
+      return section;
+    }
+
+    test("asks for a Microsoft Teams connection before SharePoint can be connected", async ({ page }) => {
+      const section = await openSkillsWithSharePoint(page, []);
+
+      await expect(section.getByText("Connect this agent to Microsoft Teams first")).toBeVisible();
+      await expect(section.getByRole("link", { name: "Add a Microsoft Teams connection" })).toHaveAttribute(
+        "href",
+        new RegExp(`/agents/${MOCK_AGENT_ID}/configuration\\?section=channels`),
+      );
+      await expect(section.getByRole("button", { name: "Sign in with Microsoft" })).toHaveCount(0);
+      await expect(section.getByRole("button", { name: "Apply", exact: true })).toBeDisabled();
+    });
+
+    test("walks through setting up the Teams app with direct links", async ({ page }) => {
+      const section = await openSkillsWithSharePoint(page, [teamsConnection]);
+      const guide = section.getByRole("list", { name: "Set up the Microsoft Teams app" });
+
+      await expect(guide.getByRole("link", { name: "Open the app in Microsoft Entra" })).toHaveAttribute(
+        "href",
+        `${ENTRA_APP}/Overview/appId/${APP_ID}`,
+      );
+      await expect(guide.getByText(APP_ID)).toBeVisible();
+
+      await expect(guide.getByText("Mobile and desktop applications", { exact: false }).first()).toBeVisible();
+      await expect(guide.getByText(REDIRECT_URI)).toBeVisible();
+      await expect(guide.getByRole("button", { name: "Copy redirect URI" })).toBeVisible();
+      await expect(guide.getByRole("link", { name: "Open Authentication" }).first()).toHaveAttribute(
+        "href",
+        `${ENTRA_APP}/Authentication/appId/${APP_ID}`,
+      );
+      await expect(guide.getByText("Allow public client flows", { exact: false }).first()).toBeVisible();
+
+      await expect(guide.getByRole("link", { name: "Open API permissions" }).first()).toHaveAttribute(
+        "href",
+        `${ENTRA_APP}/CallAnAPI/appId/${APP_ID}`,
+      );
+      await expect(guide.getByText("Sites.ReadWrite.All").first()).toBeVisible();
+      await section.getByLabel("Read-only", { exact: true }).check();
+      await expect(guide.getByText("Sites.Read.All").first()).toBeVisible();
+      await expect(guide.getByText("Sites.ReadWrite.All")).toHaveCount(0);
+
+      await expect(guide.getByRole("button", { name: "Copy approval link" })).toBeVisible();
+      for (const link of await guide.getByRole("link", { name: "Microsoft's guide" }).all()) {
+        await expect(link).toHaveAttribute("href", /^https:\/\/learn\.microsoft\.com\/en-us\/entra\//);
+      }
+      await expect(guide.getByRole("link", { name: "Microsoft's guide" })).toHaveCount(4);
+    });
+
+    test("lets an administrator approve from the panel", async ({ page }) => {
+      const section = await openSkillsWithSharePoint(page, [teamsConnection]);
+      // Stands in for Microsoft's admin consent page redirecting back to our callback.
+      await page.context().route("https://login.microsoftonline.com/**", async (route) => {
+        const callback = `${new URL(page.url()).origin}/api/v1/integrations/microsoft/callback?admin_consent=True`;
+        await route.fulfill({
+          status: 200,
+          contentType: "text/html",
+          body: `<script>location.replace(${JSON.stringify(callback)});</script>`,
+        });
+      });
+      await page.context().route("**/api/v1/integrations/microsoft/callback*", async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "text/html",
+          body: `<script>window.opener.postMessage({type: "microsoft-oauth", adminConsent: true}, window.location.origin); window.close();</script>`,
+        });
+      });
+
+      await section.getByRole("button", { name: "Approve as an administrator" }).click();
+
+      await expect(section.getByText("Approved for your organization")).toBeVisible();
+    });
+
+    test("signs in through the agent's Teams app and saves only the skill", async ({ page }) => {
+      const signedInAgent = {
+        ...mockAgent,
+        status: "STOPPED",
+        skills: [],
+        secrets: [{ provider: "sharepoint", secret_name: "SharePoint credential", shared_credential_id: null }],
+      };
+      const section = await openSkillsWithSharePoint(page, [teamsConnection], [
+        { ...mockAgent, status: "STOPPED", skills: [] },
+        signedInAgent,
+      ]);
+
+      let authorizeQuery: URLSearchParams | undefined;
+      await page.route(
+        `**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}/integrations/sharepoint/authorize-url*`,
+        async (route) => {
+          const url = new URL(route.request().url());
+          authorizeQuery = url.searchParams;
+          await route.fulfill({
+            status: 200,
+            contentType: "application/json",
+            body: JSON.stringify({
+              authorize_url: `${url.origin}/api/v1/integrations/microsoft/callback?code=the-code&state=the-state`,
+            }),
+          });
+        },
+      );
+      // Stands in for Microsoft redirecting the popup back to our callback page.
+      await page.context().route("**/api/v1/integrations/microsoft/callback*", async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "text/html",
+          body: `<script>window.opener.postMessage({type: "microsoft-oauth", code: "the-code", state: "the-state"}, window.location.origin); window.close();</script>`,
+        });
+      });
+      let signInBody: Record<string, unknown> | undefined;
+      await page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}/integrations/sharepoint/sign-in`, async (route) => {
+        signInBody = route.request().postDataJSON() as Record<string, unknown>;
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ email: "someone@contoso.com", read_only: true }),
+        });
+      });
+      let patchBody: Record<string, unknown> | undefined;
+      await page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}`, async (route) => {
+        if (route.request().method() !== "PATCH") {
+          await route.fallback();
+          return;
+        }
+        patchBody = route.request().postDataJSON() as Record<string, unknown>;
+        await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(signedInAgent) });
+      });
+
+      await section.getByLabel("Read-only", { exact: true }).check();
+      await expect(
+        section.getByText("Signing in saves SharePoint access for this agent straight away", { exact: false }),
+      ).toBeVisible();
+      await section.getByRole("button", { name: "Sign in with Microsoft" }).click();
+
+      await expect(section.getByText("Signed in as someone@contoso.com")).toBeVisible();
+      expect(authorizeQuery?.get("connection_id")).toBe(teamsConnection.id);
+      expect(authorizeQuery?.get("read_only")).toBe("true");
+      expect(signInBody).toEqual({ code: "the-code", state: "the-state" });
+
+      const footer = section.locator("footer");
+      await expect(footer.getByRole("button", { name: "Apply", exact: true })).toBeEnabled();
+      await footer.getByRole("button", { name: "Apply", exact: true }).click();
+      await page.getByRole("dialog").getByRole("button", { name: "Apply", exact: true }).click();
+
+      await expect.poll(() => patchBody).toBeDefined();
+      expect(patchBody?.skill_ids).toEqual([MOCK_SHAREPOINT_SKILL_ID]);
+      expect(patchBody?.secrets).toBeUndefined();
+    });
+
+    test("offers the Microsoft sign-in from the Integrations section", async ({ page }) => {
+      const dataSupport = new DataSupport(page);
+      const configurationPage = new AgentConfigurationPage(page);
+      await dataSupport.auth.interceptRefreshRequest();
+      await dataSupport.users.interceptGetUserContextRequest();
+      await dataSupport.users.interceptGetOrganizationsRequest();
+      await dataSupport.agents.interceptGetAgentRequest({ body: { ...mockAgent, status: "STOPPED" } });
+      await dataSupport.agents.interceptGetAgentConfigurationRequest();
+      await mockTeamsAndSetup(page, [teamsConnection]);
+
+      await configurationPage.goto(MOCK_AGENT_ID, TEST_ORG_ID);
+      await configurationPage.sectionButton("Integrations").click();
+      const section = page.locator('section[aria-label="Integrations"]');
+      await section.getByRole("button", { name: "Edit", exact: true }).click();
+      await section.getByRole("button", { name: "SharePoint" }).click();
+
+      await expect(section.getByRole("list", { name: "Set up the Microsoft Teams app" })).toBeVisible();
+      await expect(section.getByRole("button", { name: "Sign in with Microsoft" })).toBeDisabled();
+      await section.getByLabel("Read and write", { exact: true }).check();
+      await expect(section.getByRole("button", { name: "Sign in with Microsoft" })).toBeEnabled();
+      await expect(section.getByRole("button", { name: "Apply", exact: true })).toBeDisabled();
+    });
+
+    test("explains what to check when the sign-in window closes early", async ({ page }) => {
+      const section = await openSkillsWithSharePoint(page, [teamsConnection]);
+      await page.route(
+        `**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}/integrations/sharepoint/authorize-url*`,
+        async (route) => {
+          const url = new URL(route.request().url());
+          await route.fulfill({
+            status: 200,
+            contentType: "application/json",
+            body: JSON.stringify({ authorize_url: `${url.origin}/api/v1/integrations/microsoft/callback?closed=1` }),
+          });
+        },
+      );
+      // Stands in for Microsoft's own "Need admin approval" page, which the user closes.
+      await page.context().route("**/api/v1/integrations/microsoft/callback*", async (route) => {
+        await route.fulfill({ status: 200, contentType: "text/html", body: "<script>window.close();</script>" });
+      });
+
+      await section.getByLabel("Read-only", { exact: true }).check();
+      await section.getByRole("button", { name: "Sign in with Microsoft" }).click();
+
+      await expect(section.getByText("closed before it finished", { exact: false })).toBeVisible();
+      await expect(section.getByText("approve SharePoint access", { exact: false }).last()).toBeVisible();
+      await expect(section.getByText("Mobile and desktop applications", { exact: false }).last()).toBeVisible();
+    });
   });
 });

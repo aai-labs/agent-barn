@@ -10,7 +10,7 @@ Integrations make external services available to an Agent. Agent Secrets hold en
 
 ## Supported providers
 
-Provider credential contracts are defined by `SecretProvider` and its content models in `../../api/domains/agents/models.py`. Current providers cover GitHub, Jira, Confluence, Bitbucket, Google Workspace, Zoho Mail, Zoho Calendar, Firecrawl, Slack, and Pipedrive. The per-service Google providers (Gmail, Google Calendar, Google Sheets) are retired; affected agents must reconnect through Google Workspace.
+Provider credential contracts are defined by `SecretProvider` and its content models in `../../api/domains/agents/models.py`. Current providers cover GitHub, Jira, Confluence, Bitbucket, Google Workspace, Zoho Mail, Zoho Calendar, Firecrawl, Slack, Pipedrive, and SharePoint. The per-service Google providers (Gmail, Google Calendar, Google Sheets) are retired; affected agents must reconnect through Google Workspace.
 
 Providers reach their service through one of two CLIs: aai-cli (all of the above except Google Workspace) or gog (Google Workspace only). The two have separate runtime artifacts, secret stores, and agent policy blocks.
 
@@ -18,7 +18,7 @@ Providers reach their service through one of two CLIs: aai-cli (all of the above
 
 Shared Credentials are org-scoped, admin-managed credential payloads that any member can attach to an agent. They use the same encryption and provider content models as Agent Secrets.
 
-- Only manual-entry providers are supported for shared credentials (v1): GitHub, Jira, Confluence, Bitbucket, Zoho Mail. OAuth-based providers (Google Workspace) are excluded.
+- Only manual-entry providers are supported for shared credentials (v1): GitHub, Jira, Confluence, Bitbucket, Zoho Mail. OAuth-based providers (Google Workspace, SharePoint) are excluded.
 - An agent gets either a shared credential or a per-agent secret for a given provider, not both.
 - Any org member can list and attach shared credentials; only admins (owner/admin roles) can create, update, or delete them.
 - Multiple shared credentials per provider per org are allowed (e.g. "Production GitHub" and "Staging GitHub").
@@ -44,11 +44,31 @@ The flow serves Google Workspace, the only Google-backed provider. The authorize
 
 Scopes are derived per request from the selected services and access level rather than being fixed per provider. Stored services, read-only mode, and granted scopes are validated together before encryption. Google Workspace uses the gog CLI and its own credential materialization, separate from aai-cli. A user-supplied Web-application OAuth client is the expected setup; server-owned credentials remain supported where configured.
 
+## SharePoint sign-in
+
+SharePoint signs in with Microsoft (delegated `Sites.ReadWrite.All` or `Sites.Read.All`, plus `offline_access`) on the agent's **Microsoft Teams connection app**, so it is only offered to agents with a Teams connection. The sign-in is a **public client**: the code is redeemed with a PKCE verifier and never with the app's secret, which `CommunicationsService.get_teams_app_identity` does not even return (app id and tenant only). No app owned by the platform and no publisher verification are involved.
+
+One-time setup on the Teams app, walked through in the UI with direct Entra links:
+
+1. Redirect URI `{web_app_url}/api/v1/integrations/microsoft/callback` under **Mobile and desktop applications** (not Web). Under Web, Microsoft demands the secret and refuses the redemption with AADSTS7000218.
+2. **Allow public client flows: Yes.**
+3. API permissions → Microsoft Graph → Delegated → `Sites.ReadWrite.All` / `Sites.Read.All`.
+4. Where the organization restricts user consent (common since Microsoft's 2025 default for Files/Sites permissions), an administrator grants admin consent, on the API permissions page or through the approval link the UI offers (`/v2.0/adminconsent`, returning to the same callback).
+
+Flow:
+
+- `GET /organizations/{org}/agents/{agent}/integrations/sharepoint/setup?connection_id` returns the app id, tenant, redirect URI and the approval links (both access levels).
+- `GET …/authorize-url?connection_id&read_only` (agent update + secret manage) signs a state carrying agent, connection, access level, the user who started it and the PKCE verifier (Fernet-encrypted, since the state passes through Microsoft and the browser). The authority is the Teams app's tenant.
+- The unauthenticated callback posts `{code, state}` (or `{adminConsent: true}`) to the opener and maps Microsoft's errors to fixes: consent errors (`consent_required`, AADSTS65001/90094/90095) to "an administrator needs to approve"; a declined consent reads as cancelled.
+- `POST …/sign-in` re-checks state, user and permissions, redeems the code without a secret, requires the id_token `tid` to match the Teams app's tenant (GUIDs compared case-insensitively; a tenant given as a domain is trusted to the tenant-specific authority, and the stored credential always keeps Microsoft's `tid`), the SharePoint permission and a refresh token, and stores the `sharepoint` Agent Secret (connection, tenant, client id, account, granted permissions, access level, refresh token, a new `sign_in_id`) with its audit event. It returns only the email and access level. AADSTS7000218 maps to "check Mobile and desktop applications and public client flows". The generic secret upsert rejects `sharepoint` content (`SIGN_IN_ONLY_PROVIDERS`).
+
 ## Runtime materialization
 
 At start, Agent Service decrypts provider payloads, backfills configured Google Workspace client credentials where applicable, builds aai-cli configuration and secret-store setup, injects provider environment, mounts the Agent's exact Skill Version pins plus eligible bundled aai-cli Skills, and appends tool/integration policy to rendered template content. Provider handling is not complete until both storage validation and runtime materialization are updated.
 
 The aai-cli integrations policy is gated on providers that actually have an aai-cli profile. An agent whose only integration is profile-less Google Workspace must not receive instructions claiming that aai-cli profiles are required.
+
+SharePoint uses aai-cli's own `microsoft` profile, so aai-cli needs nothing Agent Barn–specific: `provider = "microsoft"`, `auth_type = "microsoft_delegated"`, the Teams app's `tenant_id` and `client_id`, `scope` = the SharePoint permission plus `offline_access`, and `refresh_token_secret = "microsoft.sharepoint_refresh_token"`. aai-cli refreshes as a public client and writes each rotated refresh token back to its store. The refresh token reaches the pod as `AAI_SECRET_MICROSOFT_SHAREPOINT_REFRESH_TOKEN`, but `aai-cli-setup.sh` writes it only when `AAI_SHAREPOINT_SIGN_IN_ID` differs from the marker beside the store, so a restart keeps the rotated token and a reconnect replaces it; the store therefore lives on a persistent volume (Hermes `/opt/data/.config/aai-cli`, OpenClaw `/home/node/.openclaw/aai-cli`). Microsoft refresh tokens expire after 90 days unused, so an agent that doesn't use SharePoint for that long needs a reconnect. When SharePoint is removed, the boot script (mounted even for agents with no aai-cli profiles) deletes the left-over token and marker from the store. The bundled `aai-microsoft` skill covers more Microsoft 365 services than the sign-in grants; the integrations text tells the agent it has SharePoint only.
 
 Google Workspace materializes through `gog_artifacts.py`: the pod Secret carries the OAuth client and refresh token as `GOG_*` environment, while a ConfigMap-mounted `gog-setup.sh` rebuilds gog state at boot. `GOG_HOME` is on the container filesystem and is wiped and rebuilt on every start; the encrypted Agent Secret remains the source of truth.
 
@@ -64,6 +84,7 @@ Google Workspace materializes through `gog_artifacts.py`: the pod Secret carries
 | Built-in skill definitions                         | `../../api/domains/agents/aai_cli_skills/bundled/skills/`, `../../api/domains/skills/skill_seeder.py`                                               |
 | Communication platform credentials                 | `../../api/domains/communications/`, [`communications/CHANGELOG.md`](communications/CHANGELOG.md)                                                   |
 | Google OAuth (Google Workspace)                    | `../../api/domains/integrations/google_oauth/routes.py`                                                                                             |
+| SharePoint sign-in                                 | `../../api/domains/agents/sharepoint_service.py`, `../../api/domains/agents/microsoft_identity.py`, `../../api/domains/integrations/microsoft_oauth/routes.py` |
 | Firecrawl runtime wiring                           | `../../api/domains/agents/service.py` (platform-default + per-agent override)                                                                       |
 | UI credential forms                                | `../../ui/src/features/agents/`, `../../ui/src/features/account/`                                                                                   |
 | Tests                                              | `../../api/tests/integration/test_agents.py`, `../../api/tests/integration/test_shared_credentials.py`, `../../api/tests/integration/test_communication_connections.py`, `../../api/tests/unit/test_google_oauth.py` |

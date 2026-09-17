@@ -15,6 +15,7 @@ import {
   coerceBooleanFields,
   expandGithubContent,
   hasIncompleteIntegration,
+  isSignInOnlyProvider,
   isAutoConfiguredProvider,
   type IntegrationDraft,
 } from "../integrations";
@@ -127,7 +128,12 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
       ),
     ].map((skill) => ({ skillId: skill.id, version: skill.version }));
     const manualSecrets = skillCredentials
-      .filter((draft) => !draft.sharedCredentialId && !isAutoConfiguredProvider(draft.provider))
+      .filter(
+        (draft) =>
+          !draft.sharedCredentialId &&
+          !isAutoConfiguredProvider(draft.provider) &&
+          !isSignInOnlyProvider(draft.provider),
+      )
       .map((draft) => ({
         provider: draft.provider,
         content: coerceBooleanFields(
