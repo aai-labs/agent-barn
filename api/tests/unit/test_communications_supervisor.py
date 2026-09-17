@@ -238,9 +238,7 @@ def test_reconcile_failure_does_not_end_the_supervisor() -> None:
     connections = Mock()
     connections.list_enabled.side_effect = [RuntimeError("database is starting up"), []]
     supervisor = PlatformIngressSupervisor(
-        config=cast(
-            Config, SimpleNamespace(agent_token_encryption_key="test-key", communication_journal_retention_days=7)
-        ),
+        config=Config(agent_token_encryption_key="test-key", communication_journal_retention_days=7),
         connections=connections,
         gateway=Mock(),
         plugins=Mock(),
@@ -274,7 +272,7 @@ def test_reconcile_does_not_lease_a_connection_without_supervised_ingress() -> N
     plugins = Mock()
     plugins.require.return_value = SimpleNamespace(capabilities=frozenset())
     supervisor = PlatformIngressSupervisor(
-        config=cast(Config, SimpleNamespace(agent_token_encryption_key="test-key")),
+        config=Config(agent_token_encryption_key="test-key"),
         connections=connections,
         gateway=Mock(),
         plugins=plugins,
@@ -286,6 +284,21 @@ def test_reconcile_does_not_lease_a_connection_without_supervised_ingress() -> N
     assert tasks == {}
     connections.claim_ingress_lease.assert_not_called()
     plugins.require.assert_called_once_with("web")
+
+
+def test_reconcile_asks_for_connections_less_native_platforms() -> None:
+    connections = Mock()
+    connections.list_enabled.return_value = []
+    supervisor = PlatformIngressSupervisor(
+        config=Config(agent_token_encryption_key="test-key", communications_native_platforms="discord, slack"),
+        connections=connections,
+        gateway=Mock(),
+        plugins=Mock(),
+    )
+
+    asyncio.run(supervisor._reconcile({}))
+
+    connections.list_enabled.assert_called_once_with(frozenset({"discord", "slack"}))
 
 
 def test_unsupported_supervised_ingress_fails_closed_as_degraded() -> None:

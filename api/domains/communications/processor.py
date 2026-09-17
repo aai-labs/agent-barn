@@ -38,7 +38,9 @@ class OutboundCommunicationProcessor:
     gateway: CommunicationsGatewayService
 
     def process_one(self) -> bool:
-        delivery = self.deliveries.claim_next_outbound()
+        delivery = self.deliveries.claim_next_outbound(
+            native_platform_keys=getattr(self.config, "native_platform_keys", frozenset()),
+        )
         if delivery is None:
             return False
         outbound: OutboundCommunicationEnvelope | None = None

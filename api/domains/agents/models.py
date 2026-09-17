@@ -1179,6 +1179,9 @@ class AgentRead(PydanticBaseModel):
     secrets: list[AgentSecretRead] = Field(default_factory=list)
     skills: list[AgentAssignedSkillRead] = Field(default_factory=list)
     configured_platform_keys: list[str] = Field(default_factory=list)
+    #: Platforms whose Connections this Agent's runtime runs natively. A change to
+    #: one of them takes effect only after the Agent restarts.
+    native_platform_keys: list[str] = Field(default_factory=list)
     approval_mode: CommandApprovalMode
     verbose_mode: bool
     allowed_actions: list[PermissionKey] = Field(default_factory=list)
