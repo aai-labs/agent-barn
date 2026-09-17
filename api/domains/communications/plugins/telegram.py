@@ -56,6 +56,11 @@ class TelegramSettings(PlatformSettings):
         title="Direct messages",
         description="Off ignores DMs, Open accepts DMs from anyone, Allowlist restricts to Allowed DM senders.",
     )
+    home_channel_id: str | None = Field(
+        default=None,
+        title="Home chat",
+        description="Optional group or user chat ID that scheduled results without an originating chat are sent to.",
+    )
 
 
 class TelegramCredentials(PlatformCredentials):
