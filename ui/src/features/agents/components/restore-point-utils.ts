@@ -3,6 +3,7 @@ import type {
   AgentConfigurationVersion,
   RestorePoint,
   RestorePointConfigManifest,
+  RestorePointSkill,
 } from "../schemas";
 
 export const RESTORE_POINT_STATUS_LABEL: Record<RestorePoint["status"], string> = {
@@ -13,6 +14,26 @@ export const RESTORE_POINT_STATUS_LABEL: Record<RestorePoint["status"], string> 
   FAILED: "Failed",
   DELETING: "Deleting",
 };
+
+/** What a system-created entry was taken for. Manual captures carry no badge. */
+export const RESTORE_POINT_ORIGIN_BADGE: Record<RestorePoint["origin"], string | null> = {
+  MANUAL: null,
+  PRE_RESTORE: "Before restore",
+  PRE_RESET: "Before reset",
+  PRE_UPGRADE: "Before upgrade",
+};
+
+/**
+ * Swaps Skill ids in a server message for the names the manifest recorded.
+ * Validation failures name the Skill by id ("Skill <uuid> not found"), which tells
+ * the reader nothing about which of their Skills is the problem.
+ */
+export function nameSkillsInMessage(message: string, skills: RestorePointSkill[]): string {
+  return skills.reduce(
+    (text, skill) => text.split(skill.skillId).join(`“${skill.name}”`),
+    message,
+  );
+}
 
 export function restorePointLabel(restorePoint: RestorePoint): string {
   if (restorePoint.label) return restorePoint.label;

@@ -513,6 +513,21 @@ class AgentRestorePoint(BaseModel, table=True):
         sa_column=Column(JSONB, nullable=False),
     )
     failure_reason: str | None = SqlField(default=None, nullable=True, max_length=500)
+    # Set when a restore is asked to bring the recorded configuration back with it.
+    # The configuration is written only after the Job confirms the volume is back,
+    # so the intent has to outlive the request that made it.
+    reapply_configuration: bool = SqlField(default=False, nullable=False, sa_column_kwargs={"server_default": "false"})
+    # Why the recorded configuration did not land, once the volume already has.
+    configuration_error: str | None = SqlField(default=None, nullable=True, max_length=500)
+    # Who asked for the restore, which is who authorized the configuration write that
+    # follows it. Not the same person as the one who captured the restore point.
+    restored_by_user_id: UUID | None = SqlField(
+        default=None,
+        foreign_key="user.id",
+        nullable=True,
+        ondelete="SET NULL",
+    )
+    restored_by_display: str | None = SqlField(default=None, nullable=True, max_length=255)
     captured_at: datetime | None = SqlField(
         default=None,
         nullable=True,

@@ -1,7 +1,7 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Body, Depends, Query, status
 from fastapi_injector import Injected
 
 from api.domains.auth.models import CurrentUserContext
@@ -10,6 +10,7 @@ from api.domains.restore_points.models import (
     AgentRestorePointCreate,
     AgentRestorePointList,
     AgentRestorePointRead,
+    AgentRestorePointRestore,
 )
 from api.domains.restore_points.service import RestorePointService
 from api.infrastructure.shared.models import Pagination
@@ -52,8 +53,23 @@ def restore_restore_point(
     restore_point_id: UUID,
     context: Annotated[CurrentUserContext, Depends(get_current_user())],
     service: Annotated[RestorePointService, Injected(RestorePointService)],
+    # Optional: a bare POST still means "restore the volume and nothing else".
+    payload: Annotated[AgentRestorePointRestore | None, Body()] = None,
 ):
-    return service.restore_restore_point(agent_id, restore_point_id, context)
+    return service.restore_restore_point(agent_id, restore_point_id, payload or AgentRestorePointRestore(), context)
+
+
+@restore_points_router.post(
+    "/{agent_id}/restore-points/{restore_point_id}/configuration",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def apply_recorded_configuration(
+    agent_id: UUID,
+    restore_point_id: UUID,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[RestorePointService, Injected(RestorePointService)],
+) -> None:
+    service.apply_recorded_configuration(agent_id, restore_point_id, context)
 
 
 @restore_points_router.delete(

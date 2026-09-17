@@ -1,6 +1,7 @@
 "use client";
 
-import { useInfiniteQuery } from "@tanstack/react-query";
+import { useEffect, useRef } from "react";
+import { useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
 
 import { api } from "@/shared/api";
 import { useOrganizationApiBase } from "@/features/organizations/hooks/use-organization-api-base";
@@ -21,12 +22,24 @@ export function isRestorePointBusy(restorePoint: RestorePoint): boolean {
   return !TERMINAL_STATUSES.has(restorePoint.status);
 }
 
+/** Work outstanding on the server, so the list has a reason to keep asking. */
+function hasOutstandingWork(restorePoint: RestorePoint): boolean {
+  // A replay is owed after the row goes terminal, and reconciliation only runs on a
+  // read — so polling has to outlast the status, or nothing would apply it.
+  return isRestorePointBusy(restorePoint) || restorePoint.reapplyConfiguration;
+}
+
 /**
  * The API reconciles non-terminal rows against their Kubernetes Job on read, so
  * polling is what advances a capture — nothing moves off PENDING until somebody asks.
  */
+function pagesOwingReplay(pages: PaginatedRestorePoints[] | undefined): boolean {
+  return (pages ?? []).some((page) => page.items.some((item) => item.reapplyConfiguration));
+}
+
 export function useRestorePoints(agentId: string, enabled = true) {
   const orgApiBase = useOrganizationApiBase();
+  const queryClient = useQueryClient();
   const query = useInfiniteQuery({
     queryKey: agentsKey.restorePoints(agentId),
     initialPageParam: 1,
@@ -41,10 +54,23 @@ export function useRestorePoints(agentId: string, enabled = true) {
       lastPage.page * lastPage.pageSize < lastPage.total ? lastPage.page + 1 : undefined,
     enabled: enabled && !!agentId,
     refetchInterval: (query) =>
-      query.state.data?.pages.some((page) => page.items.some(isRestorePointBusy))
+      query.state.data?.pages.some((page) => page.items.some(hasOutstandingWork))
         ? POLL_INTERVAL_MS
         : false,
   });
+
+  // A replay writes the Agent's template, skills and settings, and it finishes
+  // without the browser asking for it. When the last one clears, everything showing
+  // that configuration is out of date.
+  const owed = pagesOwingReplay(query.data?.pages);
+  const previouslyOwed = useRef(owed);
+  useEffect(() => {
+    if (previouslyOwed.current && !owed) {
+      void queryClient.invalidateQueries({ queryKey: agentsKey.detail(agentId) });
+      void queryClient.invalidateQueries({ queryKey: agentsKey.configuration(agentId) });
+    }
+    previouslyOwed.current = owed;
+  }, [agentId, owed, queryClient]);
 
   const pages = query.data?.pages ?? [];
   const first = pages[0];

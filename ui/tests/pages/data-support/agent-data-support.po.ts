@@ -141,6 +141,8 @@ export const mockRestorePoint = {
   archive_bytes: 2_097_152,
   file_count: 42,
   failure_reason: null,
+  reapply_configuration: false,
+  configuration_error: null,
   config_manifest: mockRestorePointManifest,
   created_at: "2026-05-14T09:00:00Z",
   captured_at: "2026-05-14T09:01:00Z",

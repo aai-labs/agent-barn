@@ -19,6 +19,7 @@ from hamcrest import (
     is_not,
     none,
 )
+from sqlmodel import Session
 from starlette.testclient import TestClient
 
 from api.domains.agents.models import (
@@ -50,6 +51,7 @@ from api.domains.events.repository import OutboxMessageRepository
 from api.domains.events.security_audit import SecurityAuditRepository
 from api.domains.organizations.models import Organization
 from api.domains.organizations.repository import OrganizationRepository
+from api.domains.skills.models import Skill
 from api.domains.skills.repository import SkillRepository
 from api.domains.templates.models import AgentTemplate, PlatformTemplate
 from api.domains.templates.repository import TemplateRepository
@@ -5309,3 +5311,49 @@ def test_selection_refuses_a_group_where_no_member_meets_the_required_version():
         with then("it is refused, naming the group"):
             assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
             assert_that(response.json()["detail"], contains_string("One of these template Skills"))
+
+
+def test_a_template_switch_is_not_blocked_by_a_credential_added_to_a_newer_skill_version():
+    """`Skill.required_providers` tracks the newest version, not the pinned one.
+
+    Both templates require Calendar v1 and the Agent stays on v1; a credential added
+    by Calendar v2 is about a version the Agent does not use.
+    """
+    with given(
+        [
+            *_GIVEN,
+            there_is_an_agent(),
+            there_is_a_skill(name="Calendar"),
+            skill_is_assigned_to_agent(),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        there_is_a_template(template_key="next-template", name="Next")(context)
+        there_is_a_template_skill()(context)
+
+        # Publishing v2 rewrites the lineage's denormalized requirement.
+        skill_repository: SkillRepository = context.injector.get(SkillRepository)
+        skill_repository.publish_version(context.skill.id, [("SKILL.md", "# Calendar v2")])
+        with Session(context.postgres_delegate.engine) as session:
+            skill = session.get(Skill, context.skill.id)
+            assert skill is not None
+            skill.required_providers = [SecretProvider.GITHUB]
+            session.add(skill)
+            session.commit()
+
+        agent = client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context)).json()
+
+        with when("I switch templates without touching the Skill"):
+            response = client.post(
+                _select_url(context),
+                json={
+                    "selection_type": "organization",
+                    "template_key": "next-template",
+                    "template_version": 1,
+                    "expected_agent_updated_at": agent["updated_at"],
+                },
+                headers=_auth(context),
+            )
+
+        with then("the switch is allowed"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))

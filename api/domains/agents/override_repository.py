@@ -10,6 +10,7 @@ from sqlmodel import Session, col, delete, select
 
 from api.domains.agents.models import (
     Agent,
+    AgentRestorePoint,
     AgentSkill,
     AgentTemplateOverrideDraft,
     AgentTemplateOverrideDraftSkill,
@@ -502,6 +503,7 @@ class AgentOverrideRepository:
         skill_pins: Collection[tuple[UUID, int]] = (),
         removed_skill_ids: Collection[UUID] = (),
         scalar_updates: Mapping[str, Any] | None = None,
+        restored_configuration_id: UUID | None = None,
     ) -> Agent:
         """Move the template pin, and any skill pins and settings that go with it,
         in one transaction: a commit between them would leave the Agent pinned to a
@@ -511,6 +513,22 @@ class AgentOverrideRepository:
             if agent is None:
                 raise ValueError("Agent not found")
             self._check_timestamp(agent.updated_at, expected_agent_updated_at)
+            if restored_configuration_id is not None:
+                restore_point = session.exec(
+                    select(AgentRestorePoint)
+                    .where(
+                        col(AgentRestorePoint.id) == restored_configuration_id,
+                        col(AgentRestorePoint.agent_id) == agent_id,
+                    )
+                    .with_for_update()
+                ).first()
+                if restore_point is None:
+                    raise AgentOverrideConcurrencyError("Restore point no longer exists")
+                # Persist completion with the pins and their audit events. An
+                # interrupted transaction leaves the replay discoverable.
+                restore_point.reapply_configuration = False
+                restore_point.configuration_error = None
+                session.add(restore_point)
             agent.platform_template_id = selected_id if selection_type == "platform" else None
             agent.agent_template_id = selected_id if selection_type == "organization" else None
             agent.agent_template_override_version_id = selected_id if selection_type == "override" else None

@@ -10,6 +10,7 @@ import { formatDate } from "@/shared/date";
 import { toastError } from "@/shared/toast";
 
 import {
+  useApplyRecordedConfiguration,
   useCreateRestorePoint,
   useDeleteRestorePoint,
 } from "../hooks/use-restore-point-actions";
@@ -19,8 +20,10 @@ import { AgentConfigurationSection } from "./agent-configuration-section";
 import { RestorePointConfigDiff } from "./restore-point-config-diff";
 import { RestorePointRestoreDialog } from "./restore-point-restore-dialog";
 import {
+  RESTORE_POINT_ORIGIN_BADGE,
   RESTORE_POINT_STATUS_LABEL,
   formatArchiveSize,
+  nameSkillsInMessage,
   restorePointLabel,
   restorePointTime,
 } from "./restore-point-utils";
@@ -99,6 +102,7 @@ export function AgentRestorePointsSettings({
   } = useRestorePoints(agent.id);
   const createRestorePoint = useCreateRestorePoint(agent.id);
   const deleteRestorePoint = useDeleteRestorePoint(agent.id);
+  const applyConfiguration = useApplyRecordedConfiguration(agent.id);
   const [label, setLabel] = useState("");
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [restoreTarget, setRestoreTarget] = useState<RestorePoint | null>(null);
@@ -220,7 +224,7 @@ export function AgentRestorePointsSettings({
         <div className="flex flex-col gap-2">
           {restorePoints.map((restorePoint) => {
             const isExpanded = expandedId === restorePoint.id;
-            const isSystem = restorePoint.origin !== "MANUAL";
+            const originBadge = RESTORE_POINT_ORIGIN_BADGE[restorePoint.origin];
             const timestamp = restorePointTime(restorePoint);
             return (
               <div
@@ -235,7 +239,7 @@ export function AgentRestorePointsSettings({
                       <span className="text-[0.88rem] font-medium" style={{ color: "var(--ink)" }}>
                         {restorePointLabel(restorePoint)}
                       </span>
-                      {isSystem && (
+                      {originBadge && (
                         <span
                           className="rounded-full px-2 py-0.5 text-[0.7rem] font-medium"
                           style={{
@@ -243,7 +247,7 @@ export function AgentRestorePointsSettings({
                             color: "var(--accent-ink)",
                           }}
                         >
-                          System-created
+                          {originBadge}
                         </span>
                       )}
                       <StatusPill restorePoint={restorePoint} />
@@ -289,6 +293,32 @@ export function AgentRestorePointsSettings({
                   </div>
                 </div>
 
+                {restorePoint.reapplyConfiguration && (
+                  <p className="mb-0 mt-2 text-[0.78rem]" style={{ color: "var(--ink-3)" }}>
+                    The recorded configuration will be re-applied once the files are back.
+                  </p>
+                )}
+
+                {restorePoint.configurationError && (
+                  <div className="mt-2 text-[0.78rem]" role="alert">
+                    <p className="mb-0" style={{ color: "var(--err)" }}>
+                      The recorded configuration was not re-applied: {nameSkillsInMessage(restorePoint.configurationError, restorePoint.configManifest.skills)}
+                    </p>
+                    {canManage && canEditConfiguration && (
+                      <button
+                        type="button"
+                        className="af-btn af-btn-sm mt-1.5"
+                        disabled={applyConfiguration.isPending || isRunning}
+                        onClick={() => {
+                          applyConfiguration.mutateAsync(restorePoint.id).catch(toastError);
+                        }}
+                      >
+                        Re-apply configuration
+                      </button>
+                    )}
+                  </div>
+                )}
+
                 {restorePoint.status === "FAILED" && restorePoint.failureReason && (
                   <p
                     className="mb-0 mt-2 text-[0.78rem]"
@@ -331,7 +361,7 @@ export function AgentRestorePointsSettings({
         onOpenChange={(open) => {
           if (!open) setRestoreTarget(null);
         }}
-        onRestored={() => setRestoreTarget(null)}
+        onRestoreStarted={() => setRestoreTarget(null)}
       />
 
       <ConfirmationDialog

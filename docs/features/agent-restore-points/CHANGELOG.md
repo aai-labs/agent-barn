@@ -27,7 +27,8 @@ Related context: [`../agents.md`](../agents.md), [`../../architecture/runtime-an
   Agent configuration page. It lists each restore point with its label, capture time, size,
   status, and a badge for system-created (`PRE_RESTORE`) entries; captures, restores, and
   deletes from there; and shows a failed entry's reason.
-- Added: the list polls while any entry is non-terminal and stops once none is. The API
+- Added: the list polls while any entry is non-terminal or owes configuration replay, and stops
+  once both are resolved. The API
   resolves a row's status only when someone reads it, so the poll is not a convenience — it is
   what advances a capture.
 - Added: each entry shows its captured configuration as a diff against the Agent's current one.
@@ -36,12 +37,41 @@ Related context: [`../agents.md`](../agents.md), [`../../architecture/runtime-an
   and restarts at v1, and two distinct Skill lineages may share a name and version. The current
   side is read from the active configuration version, which is the only read carrying the pin's
   scope; the Agent DTO reports only "shared" or "override".
-- Added: the restore dialog offers an opt-in, off-by-default replay of the recorded pins, gated
-  on `agent.update` in addition to the lifecycle permission that authorizes the volume operation.
-  The replay is one `select_agent_template` request carrying the recorded scope, template
-  version, skill pins and runtime settings, so a pin that is no longer valid is refused by the
-  same validation the configuration page uses and the recorded configuration either lands whole
-  or not at all.
+- Added: the restore dialog offers an opt-in, off-by-default replay of the recorded pins. Both
+  permissions are settled when the restore is requested — `agent.update` for the configuration
+  beside the lifecycle permission for the volume — because the configuration is written later,
+  by reconciliation, once the Job confirms the volume is back. The recorded configuration is
+  validated before the Job starts, so one that can no longer be applied refuses the restore
+  rather than costing the Agent its files first; the intent is stored on the restore point, and
+  the selection is rebuilt on the server from the stored manifest so that what was checked
+  before the Job is what is written after it. A restore that fails leaves the configuration
+  untouched, and nothing depends on a browser staying open. When the configuration cannot be
+  applied by then, the volume restore stands and the row records why it did not follow, with a
+  `POST …/restore-points/{id}/configuration` to try again.
+- Fixed (API): the replay intent survives an interruption. It is stored on the row and swept
+  separately from the status, so a process that stops between marking the restore done and
+  writing the configuration leaves work the next read finds — the row is terminal by then, and
+  the non-terminal sweep would never look at it again.
+- Fixed (API): two readers cannot both apply the same replay. The intent is re-read under the
+  Agent's lifecycle lock and cleared in the same transaction as the pins and audit events. An
+  interrupted transaction leaves it pending. Pending replay blocks start, delete, and further
+  volume operations; start and delete reconcile before taking the lock replay also needs.
+- Fixed (API): a restore that did not replace the volume clears the intent instead of applying
+  the configuration, including when provisioning the Job fails. A failed safety-net capture returns the 
+  row to `READY` because its archive is still good, which is not the same as the restore having happened.
+- Fixed (API): the deferred write is attributed to whoever asked for the restore. It used to
+  name whoever captured the restore point — often a different person, and the system for an
+  automatic backup.
+- Fixed (UI): the list keeps polling while a replay is owed, because reconciliation only runs on
+  a read; and when the last one clears, the Agent detail and configuration reads are refreshed,
+  so the model, skills, template and diff stop showing what they showed before the replay.
+- Changed (API): `select_agent_template`'s validation moved into a shared `SelectionValidator`,
+  so the check that runs before a restore and the write that runs after it cannot drift. The
+  Agent service keeps its helpers as delegations, so no existing call site moved.
+- Fixed (API): credentials are checked only for the Skills a request adds or re-pins. A Skill
+  lineage records its *newest* version's requirements, so checking every assigned required Skill
+  meant a credential added to a version the Agent does not use blocked an unrelated template
+  switch.
 - Added: restore is confirmed by typing the Agent's name into a destructive `ConfirmationDialog`
   that names what is replaced and says plainly that the runtime's session history rolls back
   with the volume while the conversation record here does not.

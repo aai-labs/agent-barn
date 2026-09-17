@@ -443,6 +443,10 @@ export const RestorePointSchema = z.object({
   archiveBytes: z.number().int().nullable(),
   fileCount: z.number().int().nullable(),
   failureReason: z.string().nullable(),
+  // True while a confirmed restore still owes the Agent its recorded configuration.
+  reapplyConfiguration: z.boolean().default(false),
+  // Set when the volume came back but the configuration did not.
+  configurationError: z.string().nullable().default(null),
   configManifest: RestorePointConfigManifestSchema,
   createdAt: z.string(),
   capturedAt: z.string().nullable(),

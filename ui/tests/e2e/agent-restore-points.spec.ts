@@ -193,79 +193,6 @@ test.describe("Agent restore points", () => {
     await expect(row).toContainText("Differs from the Agent's configuration now");
   });
 
-  test("replaces the destructive action once the restore is accepted", async ({ page }) => {
-    const dataSupport = new DataSupport(page);
-    const configurationPage = new AgentConfigurationPage(page);
-
-    await baseIntercepts(dataSupport);
-    await dataSupport.agents.interceptGetRestorePointsRequest();
-    await dataSupport.agents.interceptRestoreRestorePointRequest();
-    // The volume restore is accepted; only the configuration replay fails.
-    await dataSupport.agents.interceptSelectAgentTemplateRequest({
-      status: 400,
-      detail: "Required template skills must use the pinned versions: Calendar",
-    });
-
-    await openRestorePoints(configurationPage);
-    await configurationPage.restoreButton().click();
-    await configurationPage.reapplyConfigurationCheckbox().check();
-    await configurationPage.restoreConfirmNameInput().fill(mockAgent.name);
-
-    let restoreCalls = 0;
-    page.on("request", (request) => {
-      if (request.method() === "POST" && request.url().endsWith("/restore")) restoreCalls += 1;
-    });
-    await configurationPage.restoreConfirmButton().click();
-
-    const dialog = page.getByRole("dialog");
-    await expect(dialog).toContainText("was not re-applied");
-    await expect(dialog).toContainText("pinned versions");
-    await expect(dialog).toContainText("either lands whole or not at all");
-    await expect(dialog).toContainText("volume restore is unaffected");
-
-    // The destructive submit is gone: clicking again must not restore twice.
-    await expect(configurationPage.restoreConfirmButton()).toHaveCount(0);
-    await dialog.getByRole("button", { name: /^Done$/ }).click();
-    await expect(dialog).toBeHidden();
-    expect(restoreCalls).toBe(1);
-  });
-
-  test("replays the whole recorded configuration in one request", async ({ page }) => {
-    const dataSupport = new DataSupport(page);
-    const configurationPage = new AgentConfigurationPage(page);
-
-    await baseIntercepts(dataSupport);
-    await dataSupport.agents.interceptGetRestorePointsRequest();
-    await dataSupport.agents.interceptRestoreRestorePointRequest();
-    await dataSupport.agents.interceptSelectAgentTemplateRequest();
-
-    await openRestorePoints(configurationPage);
-    await configurationPage.restoreButton().click();
-    await configurationPage.reapplyConfigurationCheckbox().check();
-    await configurationPage.restoreConfirmNameInput().fill(mockAgent.name);
-
-    const selectRequest = page.waitForRequest(
-      (request) =>
-        request.method() === "POST" && request.url().endsWith("/configuration/select"),
-    );
-    let patchCalls = 0;
-    page.on("request", (request) => {
-      if (request.method() === "PATCH") patchCalls += 1;
-    });
-    await configurationPage.restoreConfirmButton().click();
-
-    // The template pin, the skill pins and the runtime settings ride in the one
-    // request the server validates and commits as a unit.
-    const body = (await selectRequest).postDataJSON();
-    expect(body.selection_type).toBe("organization");
-    expect(body.template_key).toBe(MOCK_TEMPLATE_KEY);
-    expect(body.template_version).toBe(1);
-    expect(body).toHaveProperty("skill_versions");
-    expect(body).toHaveProperty("verbose_mode");
-    expect(body.model).toBe("litellm/gpt-5-mini");
-    expect(patchCalls).toBe(0);
-  });
-
   test("does not offer configuration replay without agent.update", async ({ page }) => {
     const dataSupport = new DataSupport(page);
     const configurationPage = new AgentConfigurationPage(page);
@@ -435,118 +362,156 @@ test.describe("Agent restore points", () => {
     await expect(page.getByRole("tooltip")).toContainText("capacity is unknown");
   });
 
-  test("rebuilds a configuration retry from a fresh read of the Agent", async ({ page }) => {
+  test("says what an automatic entry was taken for", async ({ page }) => {
     const dataSupport = new DataSupport(page);
     const configurationPage = new AgentConfigurationPage(page);
 
-    // The Agent moves on after this page rendered, as another tab would move it.
-    let agentBody: unknown = { ...stoppedAgent, updated_at: "2026-05-14T09:14:00Z" };
-    await dataSupport.auth.interceptRefreshRequest();
-    await dataSupport.users.interceptGetUserContextRequest();
-    await dataSupport.users.interceptGetOrganizationsRequest();
-    await page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}`, async (route) => {
-      if (route.request().method() !== "GET") {
-        await route.fallback();
-        return;
-      }
-      await route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify(agentBody),
-      });
-    });
-    await dataSupport.agents.interceptGetAgentConfigurationRequest();
-    await dataSupport.agents.interceptGetRestorePointsRequest();
-    await dataSupport.agents.interceptRestoreRestorePointRequest();
-    await dataSupport.agents.interceptSelectAgentTemplateRequest({
-      status: 409,
-      detail: "The Agent changed since this page was loaded",
+    await baseIntercepts(dataSupport);
+    await dataSupport.agents.interceptGetRestorePointsRequest({
+      body: mockRestorePointsPage({ items: [mockPreRestorePoint, mockRestorePoint] }),
     });
 
     await openRestorePoints(configurationPage);
-    await configurationPage.restoreButton().click();
-    await configurationPage.reapplyConfigurationCheckbox().check();
-    await configurationPage.restoreConfirmNameInput().fill(mockAgent.name);
-    await configurationPage.restoreConfirmButton().click();
 
-    const dialog = page.getByRole("dialog");
-    await expect(dialog).toContainText("was not re-applied");
-
-    // Whatever changed the Agent has now settled; the retry must pick that up
-    // rather than resubmitting the timestamp this page opened with.
-    agentBody = { ...stoppedAgent, updated_at: "2026-05-14T11:45:00Z" };
-    await dataSupport.agents.interceptSelectAgentTemplateRequest();
-
-    const retryRequest = page.waitForRequest(
-      (request) =>
-        request.method() === "POST" && request.url().endsWith("/configuration/select"),
-    );
-    await dialog.getByRole("button", { name: /retry configuration/i }).click();
-
-    const body = (await retryRequest).postDataJSON();
-    expect(body.expected_agent_updated_at).toBe("2026-05-14T11:45:00Z");
+    const automatic = configurationPage.restorePointRow("Automatic backup before restore");
+    await expect(automatic).toContainText("Before restore");
+    await expect(automatic).not.toContainText("System-created");
+    // A manual capture carries no badge at all.
+    await expect(
+      configurationPage.restorePointRow("Before the rewrite"),
+    ).not.toContainText("Before restore");
   });
 
-  test("cannot be dismissed while the replay is still working", async ({ page }) => {
+  test("a refused replay stops the restore before anything is overwritten", async ({ page }) => {
     const dataSupport = new DataSupport(page);
     const configurationPage = new AgentConfigurationPage(page);
+    const skillId = "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa";
 
-    // The Agent read that the replay builds its request from is held open. No
-    // mutation is pending during that window, so nothing but an explicit
-    // whole-operation pending state keeps the dialog from being closed.
-    let holdAgentRead = false;
-    let releaseAgentRead: () => void = () => {};
-    const agentRead = new Promise<void>((resolve) => {
-      releaseAgentRead = resolve;
+    await baseIntercepts(dataSupport);
+    await dataSupport.agents.interceptGetRestorePointsRequest({
+      body: mockRestorePointsPage({
+        items: [
+          {
+            ...mockRestorePoint,
+            config_manifest: {
+              ...mockRestorePoint.config_manifest,
+              skills: [{ skill_id: skillId, name: "Calendar", pinned_version: 3 }],
+            },
+          },
+        ],
+      }),
     });
-
-    await dataSupport.auth.interceptRefreshRequest();
-    await dataSupport.users.interceptGetUserContextRequest();
-    await dataSupport.users.interceptGetOrganizationsRequest();
-    await page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}`, async (route) => {
-      if (route.request().method() !== "GET") {
-        await route.fallback();
-        return;
-      }
-      if (holdAgentRead) await agentRead;
-      await route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify(stoppedAgent),
-      });
-    });
-    await dataSupport.agents.interceptGetAgentConfigurationRequest();
-    await dataSupport.agents.interceptGetRestorePointsRequest();
-    await dataSupport.agents.interceptRestoreRestorePointRequest();
-    await dataSupport.agents.interceptSelectAgentTemplateRequest({
+    await dataSupport.agents.interceptRestoreRestorePointRequest({
       status: 400,
-      detail: "Model litellm/gpt-5-mini is not in the allowed model list",
+      detail: `Version 3 not found for skill ${skillId}`,
     });
 
     await openRestorePoints(configurationPage);
     await configurationPage.restoreButton().click();
     await configurationPage.reapplyConfigurationCheckbox().check();
     await configurationPage.restoreConfirmNameInput().fill(mockAgent.name);
-
-    holdAgentRead = true;
     await configurationPage.restoreConfirmButton().click();
 
     const dialog = page.getByRole("dialog");
-    // The restore has been accepted and the replay is mid-flight: every way out
-    // stays shut until there is an outcome to show.
-    await expect(dialog.getByRole("button", { name: /restoring/i })).toBeDisabled();
-    await expect(dialog.getByRole("button", { name: /^Cancel$/ })).toBeDisabled();
-    await expect(dialog.getByRole("button", { name: "Close" })).toHaveCount(0);
-    await page.keyboard.press("Escape");
-    await expect(dialog).toBeVisible();
+    await expect(dialog).toContainText("The restore was not started");
+    // Named from the manifest rather than shown as a UUID.
+    await expect(dialog).toContainText("Calendar");
+    await expect(dialog).not.toContainText(skillId);
+    await expect(dialog).toContainText("Nothing on the Agent's volume has been changed");
+  });
 
-    releaseAgentRead();
+  test("sends the replay choice with the restore and then closes", async ({ page }) => {
+    const dataSupport = new DataSupport(page);
+    const configurationPage = new AgentConfigurationPage(page);
 
-    // Only once the outcome exists does the dialog become dismissable, and the
-    // outcome is on screen rather than written into an unmounted component.
-    await expect(dialog).toContainText("was not re-applied");
-    await expect(dialog).toContainText("not in the allowed model list");
-    await expect(dialog.getByRole("button", { name: /^Done$/ })).toBeEnabled();
+    await baseIntercepts(dataSupport);
+    await dataSupport.agents.interceptGetRestorePointsRequest();
+    await dataSupport.agents.interceptRestoreRestorePointRequest();
+
+    await openRestorePoints(configurationPage);
+    await configurationPage.restoreButton().click();
+    await configurationPage.reapplyConfigurationCheckbox().check();
+    await configurationPage.restoreConfirmNameInput().fill(mockAgent.name);
+
+    const request = page.waitForRequest(
+      (r) => r.method() === "POST" && r.url().endsWith("/restore"),
+    );
+    let patchOrSelect = 0;
+    page.on("request", (r) => {
+      if (r.url().endsWith("/configuration/select") || r.method() === "PATCH") patchOrSelect += 1;
+    });
+    await configurationPage.restoreConfirmButton().click();
+
+    expect((await request).postDataJSON().reapply_configuration).toBe(true);
+    await expect(page.getByRole("dialog")).toBeHidden();
+    // The configuration is the server's job now; the browser writes nothing.
+    expect(patchOrSelect).toBe(0);
+  });
+
+  test("says a replay is still owed, and reports one that did not land", async ({ page }) => {
+    const dataSupport = new DataSupport(page);
+    const configurationPage = new AgentConfigurationPage(page);
+
+    await baseIntercepts(dataSupport);
+    await dataSupport.agents.interceptGetRestorePointsRequest({
+      body: mockRestorePointsPage({
+        items: [
+          { ...mockRestorePoint, status: "RESTORING", reapply_configuration: true },
+          {
+            ...mockPreRestorePoint,
+            configuration_error: "Organization Template Version not found",
+          },
+        ],
+      }),
+    });
+
+    await openRestorePoints(configurationPage);
+
+    await expect(configurationPage.restorePointRow("Before the rewrite")).toContainText(
+      "will be re-applied once the files are back",
+    );
+    const failed = configurationPage.restorePointRow("Automatic backup before restore");
+    await expect(failed).toContainText("The recorded configuration was not re-applied");
+    await expect(failed.getByRole("button", { name: /re-apply configuration/i })).toBeVisible();
+  });
+
+  test("refreshes the Agent's configuration once a replay lands", async ({ page }) => {
+    const dataSupport = new DataSupport(page);
+    const configurationPage = new AgentConfigurationPage(page);
+
+    // Owed first, then settled — the transition the browser never asked for.
+    let owed = true;
+    await baseIntercepts(dataSupport);
+    await dataSupport.agents.interceptGetRestorePointsRequest({
+      body: () =>
+        mockRestorePointsPage({
+          items: [{ ...mockRestorePoint, reapply_configuration: owed }],
+        }),
+    });
+
+    let agentReads = 0;
+    page.on("request", (request) => {
+      if (
+        request.method() === "GET" &&
+        request.url().includes(`/agents/${MOCK_AGENT_ID}`) &&
+        !request.url().includes("restore-points")
+      ) {
+        agentReads += 1;
+      }
+    });
+
+    await openRestorePoints(configurationPage);
+    await expect(configurationPage.restorePointRow("Before the rewrite")).toContainText(
+      "will be re-applied once the files are back",
+    );
+    const readsWhileOwed = agentReads;
+
+    owed = false;
+    // Polling outlasts the status precisely so the replay is picked up and seen.
+    await expect(configurationPage.restorePointRow("Before the rewrite")).not.toContainText(
+      "will be re-applied once the files are back",
+    );
+    await expect.poll(() => agentReads).toBeGreaterThan(readsWhileOwed);
   });
 
   test("lets a viewer read the list without offering any action", async ({ page }) => {
