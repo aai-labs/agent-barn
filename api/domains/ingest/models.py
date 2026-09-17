@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class IngestToolCallEvent(BaseModel):
@@ -22,3 +22,17 @@ class IngestToolResultEvent(BaseModel):
 class IngestBatchRequest(BaseModel):
     tool_calls: list[IngestToolCallEvent] = []
     tool_results: list[IngestToolResultEvent] = []
+
+
+class IngestCommunicationEvent(BaseModel):
+    """A content-free native gateway Journal stage reported by the runtime observer."""
+
+    stage: str = Field(max_length=64)
+    platform: str = Field(max_length=32)
+    correlation_id: str | None = Field(default=None, max_length=512)
+    occurred_at: datetime
+    error_code: str | None = Field(default=None, max_length=100)
+
+
+class IngestCommunicationEventBatch(BaseModel):
+    events: list[IngestCommunicationEvent] = Field(default_factory=list, max_length=500)

@@ -27,10 +27,10 @@ from api.tests.helpers.agent_messages import (
     change_connection,
     messaging_ready,
     origin_request,
+    other_platform_connection,
     receipt_id,
     rows,
     scheduled_request,
-    second_slack_connection,
     submit,
 )
 
@@ -161,9 +161,9 @@ def test_explicit_send_rejects_untrusted_context_and_named_connections(mutation,
 
 
 def test_explicit_send_stays_on_the_conversation_connection():
-    """An Agent can hold several Slack Connections; a send must not cross workspaces."""
+    """An Agent can hold Connections on several platforms; a send must not cross into another."""
     with given([*STEPS, messaging_ready]) as context:
-        other = second_slack_connection(context)
+        other = other_platform_connection(context)
         _, payload = _interactive(context)
         receipt = submit(context, payload)
         deliveries, _, _ = rows(context)
@@ -195,7 +195,8 @@ def test_database_enforces_one_default_including_disabled_connections():
         other = CommunicationConnection(
             organization_id=context.connection.organization_id,
             agent_id=context.connection.agent_id,
-            platform_key=context.connection.platform_key,
+            # Another platform, so only the one-default rule can reject it.
+            platform_key="discord",
             display_name="Another",
             enabled=False,
             settings=dict(context.connection.settings),
@@ -283,16 +284,6 @@ def test_scheduled_job_without_an_origin_still_uses_the_configured_default():
         deliveries, _, _ = rows(context)
         outbound = [item for item in deliveries if item.id == receipt_id(receipt)]
         assert_that(outbound[0].envelope["location"]["id"], equal_to("C123"))
-
-
-def test_origin_on_a_second_workspace_is_not_pulled_to_the_default_workspace():
-    with given([*STEPS, messaging_ready]) as context:
-        other = second_slack_connection(context)
-        agent_was_in_conversation(context, connection=other, channel="C456")
-        receipt = submit(context, origin_request(context, connection=other, channel="C456"))
-        deliveries, _, _ = rows(context)
-        outbound = [item for item in deliveries if item.id == receipt_id(receipt)]
-        assert_that(outbound[0].connection_id, equal_to(other.id))
 
 
 @pytest.mark.parametrize(

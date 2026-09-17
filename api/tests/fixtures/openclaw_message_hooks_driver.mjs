@@ -4,7 +4,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import crypto from "node:crypto";
 import plugin from "/messaging/openclaw-messaging.js";
-import { i as initialize, t as runner } from "/usr/local/lib/node_modules/openclaw/dist/hook-runner-global-BvDdPqDN.js";
+import { i as initialize, t as runner } from "/usr/local/lib/node_modules/openclaw/dist/hook-runner-global-ac8FBwry.js";
 const registry = { plugins: [{ id: plugin.id, status: "loaded" }], hooks: [], typedHooks: [] };
 plugin.register({ on(hookName, handler) { registry.typedHooks.push({ pluginId: plugin.id, hookName, handler }); } });
 initialize(registry);

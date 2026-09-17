@@ -141,36 +141,28 @@ image_available_locally() {
 import_image() {
   local tag="$1"
   step "Importing ${tag} → k3d cluster '${CLUSTER}'"
-  # k3d-runner sees the host Docker daemon via the mounted socket, so it can
-  # find the locally built image and stream it into the cluster's containerd.
-  #
-  # --mode direct streams the image from the runtime straight into each node.
-  # k3d's default ("tools-node") instead spawns a k3d-tools container that saves
-  # the image to a tarball on a shared volume for the node to read back, and that
-  # save has been seen exiting 0 without writing the tarball — the node then finds
-  # no such file and the image silently never lands. Direct mode drops the tools
-  # node, the shared volume and the tarball, and is roughly twice as fast for
-  # these multi-GB base images.
-  #
-  # It is not immune, though: direct mode has its own observed flake, the image
-  # stream over the Docker socket dying mid-copy ("use of closed network
-  # connection"). Both modes then do the same damaging thing — k3d logs the
-  # error and still exits 0 with "Successfully imported image(s)". So the real
-  # protection is below: confirm the tag actually reached the node, and retry.
-  # Unverified, a failed import is a green run whose only symptom is the next
-  # agent pod failing with an opaque "Failed to pull the agent image".
+  # Pipe `docker save` straight into the node's containerd. `k3d image import`
+  # has failed both ways on multi-GB base images: the default tools-node mode
+  # has exited 0 without writing its tarball, and --mode direct has had its
+  # Docker-socket stream die mid-copy ("use of closed network connection") on
+  # every retry — while k3d still reports success. The dev cluster is the
+  # single server node image_loaded_in_cluster already checks, so importing
+  # there is complete. Verify anyway: a failed import otherwise surfaces only
+  # as an opaque "Failed to pull the agent image" on the next agent pod.
   local attempt
   for attempt in 1 2 3; do
-    ${COMPOSE} run --rm k3d-runner k3d image import "${tag}" --cluster "${CLUSTER}" --mode direct
+    docker save "${tag}" \
+      | docker exec -i "k3d-${CLUSTER}-server-0" ctr -n k8s.io images import --all-platforms - \
+      || true
     if image_loaded_in_cluster "${tag}"; then
       green "  imported"
       return 0
     fi
     if [[ "${attempt}" != 3 ]]; then
-      printf '\033[33m  %s\033[0m\n' "import reported success but ${tag} is not in the cluster — retrying (${attempt}/2)"
+      printf '\033[33m  %s\033[0m\n' "${tag} is not in the cluster after import — retrying (${attempt}/2)"
     fi
   done
-  red "Failed to import ${tag} into cluster '${CLUSTER}': k3d reported success but the image is not in the node's containerd store. Check the k3d output above for a per-node import error."
+  red "Failed to import ${tag} into cluster '${CLUSTER}': the image is not in the node's containerd store. Check the ctr output above."
 }
 
 # ── main ──────────────────────────────────────────────────────────────────────

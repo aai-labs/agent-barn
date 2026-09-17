@@ -19,7 +19,9 @@ from api.domains.communications.plugins.base import (
     PlatformCredentials,
     PlatformPlugin,
     PlatformSettings,
+    ProcessingFeedbackContext,
     WebhookRequest,
+    best_effort_failure_notice,
     provider_idempotency_key,
 )
 from api.infrastructure.msteams.client import (
@@ -126,6 +128,7 @@ class TeamsPlatformPlugin(PlatformPlugin):
             PlatformCapability.WEBHOOK_INGRESS,
             PlatformCapability.MENTIONS,
             PlatformCapability.THREADS,
+            PlatformCapability.PROCESSING_FEEDBACK,
         }
     )
     settings_model = TeamsSettings
@@ -196,25 +199,66 @@ class TeamsPlatformPlugin(PlatformPlugin):
         idempotency_key: str,
     ) -> str:
         assert isinstance(credentials, TeamsCredentials)
-        metadata = envelope.provider_metadata
+        return self._send_activity(
+            credentials,
+            text=envelope.text,
+            location=envelope.location,
+            provider_metadata=envelope.provider_metadata,
+            reply_to_provider_message_id=envelope.reply_to_provider_message_id,
+            provider_idempotency_key_value=provider_idempotency_key(idempotency_key),
+        )
+
+    def processing_feedback(
+        self,
+        settings: PlatformSettings,
+        credentials: PlatformCredentials,
+        context: ProcessingFeedbackContext,
+    ) -> None:
+        del settings
+        assert isinstance(credentials, TeamsCredentials)
+        best_effort_failure_notice(
+            context,
+            lambda text, idempotency_key: self._send_activity(
+                credentials,
+                text=text,
+                location=context.location,
+                provider_metadata=context.provider_metadata,
+                reply_to_provider_message_id=context.provider_message_id,
+                provider_idempotency_key_value=idempotency_key,
+            ),
+            target=f"Teams conversation {context.location.id}",
+            logger=logger,
+        )
+
+    @staticmethod
+    def _send_activity(
+        credentials: TeamsCredentials,
+        *,
+        text: str,
+        location: ConversationLocation,
+        provider_metadata: dict[str, str | int | float | bool | None],
+        reply_to_provider_message_id: str | None,
+        provider_idempotency_key_value: str | None,
+    ) -> str:
+        metadata = provider_metadata
         service_url = str(metadata.get("service_url") or "")
         if not service_url:
             raise ValueError("Teams reply is missing the serviceUrl captured from its inbound activity")
 
         # The thread lives in the conversation id, so the stored raw value is
         # sent whole rather than the stripped location id.
-        conversation_id = str(metadata.get("conversation_id") or envelope.location.id)
+        conversation_id = str(metadata.get("conversation_id") or location.id)
         activity: dict[str, Any] = {
             "type": "message",
-            "text": envelope.text,
+            "text": text,
             "conversation": {"id": conversation_id},
         }
         if metadata.get("recipient_id"):
             activity["from"] = {"id": str(metadata["recipient_id"])}
         if metadata.get("from_id"):
             activity["recipient"] = {"id": str(metadata["from_id"])}
-        if envelope.reply_to_provider_message_id:
-            activity["replyToId"] = envelope.reply_to_provider_message_id
+        if reply_to_provider_message_id:
+            activity["replyToId"] = reply_to_provider_message_id
 
         token = acquire_token(credentials.tenant_id, credentials.app_id, credentials.app_password)
         return send_activity(
@@ -222,7 +266,7 @@ class TeamsPlatformPlugin(PlatformPlugin):
             conversation_id,
             activity,
             token,
-            idempotency_key=provider_idempotency_key(idempotency_key),
+            idempotency_key=provider_idempotency_key_value,
         )
 
     def enrich_inbound(

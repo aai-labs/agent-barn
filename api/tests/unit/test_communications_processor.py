@@ -4,6 +4,8 @@ from typing import cast
 from unittest.mock import Mock, patch
 from uuid import uuid4
 
+from hamcrest import assert_that, equal_to
+
 from api.core.config import Config
 from api.domains.communications.models import (
     CommunicationDeliveryStatus,
@@ -23,6 +25,7 @@ def _delivery() -> tuple[SimpleNamespace, OutboundCommunicationEnvelope]:
         location=ConversationLocation(id="C123", type="CHANNEL", thread_id="1724264405.531769"),
         text="reply",
         reply_to_provider_message_id="1724264405.531769",
+        provider_metadata={"service_url": "https://service.example"},
     )
     return (
         SimpleNamespace(
@@ -100,6 +103,27 @@ def test_outbound_success_feedback_runs_after_durable_provider_success() -> None
     assert context.location == outbound.location
     assert context.provider_message_id == outbound.reply_to_provider_message_id
     assert context.source_delivery_id == outbound.source_delivery_id
+    assert_that(context.provider_metadata, equal_to(outbound.provider_metadata))
+
+
+def test_outbound_processor_does_not_claim_native_platform_deliveries() -> None:
+    delivery, _ = _delivery()
+    processor, _, deliveries = _processor(
+        delivery,
+        _plugin(),
+        status=CommunicationDeliveryStatus.SUCCEEDED,
+    )
+    processor.config = Config(
+        agent_token_encryption_key="key",
+        communications_native_platforms="slack,discord",
+    )
+    deliveries.claim_next_outbound.return_value = None
+
+    assert processor.process_one() is False
+
+    deliveries.claim_next_outbound.assert_called_once_with(
+        native_platform_keys=frozenset({"slack", "discord"}),
+    )
 
 
 def test_outbound_terminal_failure_feedback_marks_failed_after_dead_letter() -> None:

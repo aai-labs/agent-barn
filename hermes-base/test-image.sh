@@ -27,6 +27,17 @@ docker run --rm \
     "$image" \
     /driver.py
 
+# Native gateway journal stages against Hermes' real ledger, status file, and hooks.
+docker run --rm --network none \
+    -e AGENT_ID=00000000-0000-0000-0000-000000000000 \
+    -e INGEST_URL=http://127.0.0.1:9/ingest/v1 \
+    -e INGEST_API_KEY=ci \
+    -v "$repo_root/api/domains/agents/scripts/hermes/plugins/agentbarn-observer:/plugin:ro" \
+    -v "$repo_root/api/tests/fixtures/hermes_observer_driver.py:/driver.py:ro" \
+    --entrypoint python3 \
+    "$image" \
+    /driver.py
+
 docker run --rm --network none \
     -v "$repo_root/api/domains/agents/scripts/messaging:/messaging:ro" \
     -v "$repo_root/api/tests/fixtures/hermes_message_completion_driver.py:/message-driver.py:ro" \

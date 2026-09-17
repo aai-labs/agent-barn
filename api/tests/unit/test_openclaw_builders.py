@@ -6,8 +6,12 @@ from api.domains.agents.builders import (
     build_deployment,
     build_openclaw_gateway_config,
     build_secret_runtime,
+    native_channel_env,
+    native_discord_channel,
+    native_slack_channel,
 )
 from api.domains.agents.builders.openclaw import OPENCLAW_GATEWAY_PORT
+from api.domains.communications.models import ConversationLocation
 
 _AGENT_ID = UUID("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
 _ORG_ID = UUID("11111111-2222-3333-4444-555555555555")
@@ -120,3 +124,93 @@ def test_deployment_recreates_rather_than_rolling_update() -> None:
 def test_deployment_carries_the_openclaw_runtime_label() -> None:
     deployment = build_deployment(_AGENT_ID, _ORG_ID, _NS, "openclaw:test")
     assert deployment.metadata.labels["agentbarn.io/runtime"] == "openclaw"
+
+
+def test_native_channels_enable_installed_plugins_and_the_observer() -> None:
+    config = build_openclaw_gateway_config(
+        "litellm/gpt-5", "http://litellm:4000", {"slack": {"enabled": True}, "discord": {"enabled": True}}
+    )
+
+    assert config["channels"] == {"slack": {"enabled": True}, "discord": {"enabled": True}}
+    assert {"slack", "discord", "agentbarn-observer"} <= set(config["plugins"]["allow"])
+    assert not any("@openclaw" in path for path in config["plugins"]["load"]["paths"])
+    assert config["plugins"]["entries"]["agentbarn-observer"]["enabled"] is True
+    assert "agentbarn-observer" not in build_openclaw_gateway_config("litellm/gpt-5", "http://x")["plugins"]["allow"]
+
+
+def test_native_slack_channel_maps_connection_policy() -> None:
+    locked = native_slack_channel({"channel_ids": ["C1"], "dm_user_ids": ["U1"], "dm_policy": "allowlist"})
+    assert locked["streaming"] == {"mode": "partial"}
+    assert locked["groupPolicy"] == "allowlist"
+    assert locked["channels"] == {"C1": {"enabled": True}}
+    assert locked["dmPolicy"] == "allowlist"
+    assert locked["allowFrom"] == ["U1"]
+    assert locked["implicitMentions"] == {"threadParticipation": False}
+    assert "botToken" not in locked
+
+    open_ = native_slack_channel(
+        {"group_policy": "open", "dm_policy": "open", "thread_mention_policy": "start_only"},
+        ConversationLocation(type="CHANNEL", id="C9"),
+    )
+    assert "channels" not in open_
+    assert open_["dmPolicy"] == "open"
+    assert open_["allowFrom"] == ["*"]
+    assert open_["implicitMentions"] == {"threadParticipation": True}
+    assert open_["defaultTo"] == "channel:C9"
+
+    assert native_slack_channel({})["dmPolicy"] == "disabled"
+
+
+def test_native_discord_channel_maps_global_gates_to_every_guild() -> None:
+    gated = native_discord_channel(
+        {
+            "allowed_channel_ids": ["c1"],
+            "allowed_user_ids": ["u1"],
+            "allowed_role_ids": ["r1"],
+            "require_mention": False,
+            "home_channel_id": "home",
+        }
+    )
+    assert gated["groupPolicy"] == "allowlist"
+    assert gated["guilds"] == {
+        "*": {
+            "requireMention": False,
+            "users": ["u1"],
+            "roles": ["r1"],
+            "channels": {"c1": {"enabled": True, "autoThread": True}},
+        }
+    }
+    assert (gated["dmPolicy"], gated["allowFrom"]) == ("allowlist", ["u1"])
+    assert gated["defaultTo"] == "channel:home"
+
+    everyone = native_discord_channel({"allow_all_users": True, "allowed_user_ids": ["u1"]})
+    assert everyone["guilds"] == {
+        "*": {"requireMention": True, "channels": {"*": {"enabled": True, "autoThread": True}}}
+    }
+    assert (everyone["dmPolicy"], everyone["allowFrom"]) == ("open", ["*"])
+
+    # Channel-only access admits anyone in those channels, and no DMs.
+    channels_only = native_discord_channel({"allowed_channel_ids": ["c1"]})
+    assert channels_only["guilds"]["*"] == {
+        "requireMention": True,
+        "channels": {"c1": {"enabled": True, "autoThread": True}},
+    }
+    assert channels_only["dmPolicy"] == "disabled"
+
+    closed = native_discord_channel({})
+    assert (closed["groupPolicy"], closed["dmPolicy"]) == ("disabled", "disabled")
+    assert "guilds" not in closed
+
+
+def test_native_channel_env_carries_tokens_and_hands_over_scheduled_delivery() -> None:
+    env = native_channel_env(
+        {"slack": {"bot_token": "xoxb", "app_token": "xapp"}, "discord": {"bot_token": "discord-token"}}
+    )
+
+    assert env == {
+        "AGENTBARN_NATIVE_CHANNELS": "slack,discord",
+        "AGENTBARN_SCHEDULED_DELIVERY": "0",
+        "SLACK_BOT_TOKEN": "xoxb",
+        "SLACK_APP_TOKEN": "xapp",
+        "DISCORD_BOT_TOKEN": "discord-token",
+    }

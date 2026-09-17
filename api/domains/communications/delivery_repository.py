@@ -183,36 +183,45 @@ class CommunicationDeliveryRepository:
         max_attempts: int = 5,
         reclaim_expired: bool = True,
         runtime_protocol_version: int = 1,
+        excluded_platform_keys: frozenset[str] = frozenset(),
     ) -> RuntimeDeliveryRead | None:
         if reclaim_expired:
-            self.reclaim_expired_inbound(agent_id=agent_id, max_attempts=max_attempts)
+            self.reclaim_expired_inbound(
+                agent_id=agent_id,
+                max_attempts=max_attempts,
+                excluded_platform_keys=excluded_platform_keys,
+            )
         now = datetime.now(UTC)
         active_ordering = aliased(CommunicationDelivery)
         with Session(self.delegate.engine) as session:
+            query = select(CommunicationDelivery).where(
+                col(CommunicationDelivery.agent_id) == agent_id,
+                col(CommunicationDelivery.direction) == CommunicationDirection.INBOUND,
+                col(CommunicationDelivery.status) == CommunicationDeliveryStatus.PENDING,
+                col(CommunicationDelivery.available_at) <= now,
+                # A pod runs whatever adapter it was handed when it started, so one
+                # predating a policy change can outlive the deploy. Withhold the
+                # kinds it cannot execute: they stay PENDING until it restarts,
+                # which is the safe failure.
+                col(CommunicationDelivery.kind).in_(kinds_for_protocol(runtime_protocol_version)),
+                # An in-flight delivery holds its ordering key so a thread
+                # never runs two turns at once -- unless its run is parked
+                # awaiting a human answer, which can only arrive as the
+                # next message on this very thread. Claiming that answer is
+                # what unblocks the run, so it must not be blocked by it.
+                ~sa.exists().where(
+                    col(active_ordering.ordering_key) == col(CommunicationDelivery.ordering_key),
+                    col(active_ordering.status) == CommunicationDeliveryStatus.PROCESSING,
+                    col(active_ordering.awaiting_input).is_(False),
+                ),
+            )
+            if excluded_platform_keys:
+                query = query.join(
+                    CommunicationConnection,
+                    col(CommunicationConnection.id) == col(CommunicationDelivery.connection_id),
+                ).where(col(CommunicationConnection.platform_key).not_in(excluded_platform_keys))
             query = (
-                select(CommunicationDelivery)
-                .where(
-                    col(CommunicationDelivery.agent_id) == agent_id,
-                    col(CommunicationDelivery.direction) == CommunicationDirection.INBOUND,
-                    col(CommunicationDelivery.status) == CommunicationDeliveryStatus.PENDING,
-                    col(CommunicationDelivery.available_at) <= now,
-                    # A pod runs whatever adapter it was handed when it started, so one
-                    # predating a policy change can outlive the deploy. Withhold the
-                    # kinds it cannot execute: they stay PENDING until it restarts,
-                    # which is the safe failure.
-                    col(CommunicationDelivery.kind).in_(kinds_for_protocol(runtime_protocol_version)),
-                    # An in-flight delivery holds its ordering key so a thread
-                    # never runs two turns at once -- unless its run is parked
-                    # awaiting a human answer, which can only arrive as the
-                    # next message on this very thread. Claiming that answer is
-                    # what unblocks the run, so it must not be blocked by it.
-                    ~sa.exists().where(
-                        col(active_ordering.ordering_key) == col(CommunicationDelivery.ordering_key),
-                        col(active_ordering.status) == CommunicationDeliveryStatus.PROCESSING,
-                        col(active_ordering.awaiting_input).is_(False),
-                    ),
-                )
-                .order_by(
+                query.order_by(
                     col(CommunicationDelivery.available_at).asc(),
                     col(CommunicationDelivery.created_at).asc(),
                     col(CommunicationDelivery.id).asc(),
@@ -323,22 +332,25 @@ class CommunicationDeliveryRepository:
         *,
         agent_id: UUID,
         max_attempts: int = 5,
+        excluded_platform_keys: frozenset[str] = frozenset(),
     ) -> list[RuntimeDeliveryRead]:
         """Reclaim stale runtime leases and return newly terminal deliveries."""
         now = datetime.now(UTC)
         dead_lettered: list[RuntimeDeliveryRead] = []
         reclaimed: list[CommunicationDelivery] = []
         with Session(self.delegate.engine, expire_on_commit=False) as session:
-            expired = session.exec(
-                select(CommunicationDelivery)
-                .where(
-                    col(CommunicationDelivery.agent_id) == agent_id,
-                    col(CommunicationDelivery.direction) == CommunicationDirection.INBOUND,
-                    col(CommunicationDelivery.status) == CommunicationDeliveryStatus.PROCESSING,
-                    col(CommunicationDelivery.lease_expires_at) < now,
-                )
-                .with_for_update(skip_locked=True)
-            ).all()
+            query = select(CommunicationDelivery).where(
+                col(CommunicationDelivery.agent_id) == agent_id,
+                col(CommunicationDelivery.direction) == CommunicationDirection.INBOUND,
+                col(CommunicationDelivery.status) == CommunicationDeliveryStatus.PROCESSING,
+                col(CommunicationDelivery.lease_expires_at) < now,
+            )
+            if excluded_platform_keys:
+                query = query.join(
+                    CommunicationConnection,
+                    col(CommunicationConnection.id) == col(CommunicationDelivery.connection_id),
+                ).where(col(CommunicationConnection.platform_key).not_in(excluded_platform_keys))
+            expired = session.exec(query.with_for_update(skip_locked=True)).all()
             for stale in expired:
                 self._apply_completion(
                     stale,
@@ -578,20 +590,29 @@ class CommunicationDeliveryRepository:
             session.refresh(delivery)
             return delivery.id
 
-    def claim_next_outbound(self, *, lease_seconds: int = 120) -> CommunicationDelivery | None:
+    def claim_next_outbound(
+        self,
+        *,
+        lease_seconds: int = 120,
+        native_platform_keys: frozenset[str] = frozenset(),
+    ) -> CommunicationDelivery | None:
         now = datetime.now(UTC)
         earlier_outbound = aliased(CommunicationDelivery)
         with Session(self.delegate.engine, expire_on_commit=False) as session:
-            session.exec(
-                sa.update(CommunicationDelivery)
-                .where(
-                    col(CommunicationDelivery.direction) == CommunicationDirection.OUTBOUND,
-                    col(CommunicationDelivery.status) == CommunicationDeliveryStatus.PROCESSING,
-                    col(CommunicationDelivery.lease_expires_at) < now,
-                )
-                .values(status=CommunicationDeliveryStatus.PENDING, claimed_at=None, lease_expires_at=None)
+            reclaim = sa.update(CommunicationDelivery).where(
+                col(CommunicationDelivery.direction) == CommunicationDirection.OUTBOUND,
+                col(CommunicationDelivery.status) == CommunicationDeliveryStatus.PROCESSING,
+                col(CommunicationDelivery.lease_expires_at) < now,
             )
-            delivery = session.exec(
+            if native_platform_keys:
+                native_connection_ids = select(CommunicationConnection.id).where(
+                    col(CommunicationConnection.platform_key).in_(native_platform_keys)
+                )
+                reclaim = reclaim.where(col(CommunicationDelivery.connection_id).not_in(native_connection_ids))
+            session.exec(
+                reclaim.values(status=CommunicationDeliveryStatus.PENDING, claimed_at=None, lease_expires_at=None)
+            )
+            query = (
                 select(CommunicationDelivery)
                 .join(
                     CommunicationConnection,
@@ -621,7 +642,11 @@ class CommunicationDeliveryRepository:
                         col(earlier_outbound.status).in_(_BLOCKING_OUTBOUND_STATUSES),
                     ),
                 )
-                .order_by(
+            )
+            if native_platform_keys:
+                query = query.where(col(CommunicationConnection.platform_key).not_in(native_platform_keys))
+            delivery = session.exec(
+                query.order_by(
                     col(CommunicationDelivery.available_at).asc(),
                     col(CommunicationDelivery.created_at).asc(),
                     col(CommunicationDelivery.id).asc(),
@@ -1026,6 +1051,11 @@ class CommunicationDeliveryRepository:
             delivery.last_error_message = delivery.last_error_message or "Cancelled by user"
         elif succeeded:
             delivery.status = CommunicationDeliveryStatus.SUCCEEDED
+            delivery.completed_at = now
+        elif safe_details is not None and not safe_details.retryable:
+            # A normalized non-retryable provider response, such as HTTP 402,
+            # is terminal even when the delivery still has retry attempts left.
+            delivery.status = CommunicationDeliveryStatus.DEAD_LETTERED
             delivery.completed_at = now
         elif delivery.attempt_count >= max_attempts:
             delivery.status = CommunicationDeliveryStatus.DEAD_LETTERED

@@ -13,6 +13,8 @@ export default {
   register(api) {
     api.on("agent_end", (event, ctx) => {
       if (ctx.trigger !== "cron" || !event.success) return;
+      // Native channel agents deliver scheduled results through OpenClaw itself.
+      if (process.env.AGENTBARN_SCHEDULED_DELIVERY === "0") return;
       const runId = ctx.runId || event.runId;
       if (!runId) throw new Error("Scheduled completion has no runtime run identity");
       const assistant = [...(event.messages || [])].reverse().find((message) => message.role === "assistant");
