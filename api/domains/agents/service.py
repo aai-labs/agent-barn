@@ -1,5 +1,6 @@
 import datetime as dt
 import fnmatch
+import json
 import logging
 import secrets
 from collections.abc import Iterator, Mapping
@@ -35,6 +36,11 @@ from api.domains.agents.builders import (
     build_secret_hermes_runtime,
     build_secret_runtime,
     build_service,
+    native_channel_env,
+    native_discord_channel,
+    native_discord_env,
+    native_slack_channel,
+    native_slack_env,
 )
 from api.domains.agents.error_messages import friendly_k8s_error, friendly_pod_reason
 from api.domains.agents.gog_artifacts import build_gog_env, build_gog_policy_md, build_gog_setup_sh
@@ -50,6 +56,7 @@ from api.domains.agents.models import (
     AgentLogHistoryRead,
     AgentLogSnapshot,
     AgentLogsRead,
+    AgentNameSuggestionRead,
     AgentOverrideAuthorRead,
     AgentRead,
     AgentSecret,
@@ -81,6 +88,7 @@ from api.domains.agents.models import (
     encrypt_content,
     validate_content,
 )
+from api.domains.agents.naming import choose_first_name
 from api.domains.agents.override_repository import (
     AgentOverrideConcurrencyError,
     AgentOverrideRepository,
@@ -93,6 +101,9 @@ from api.domains.agents.runtime_policy import (
     build_role_scope_policy_md,
 )
 from api.domains.auth.models import CurrentUserContext
+from api.domains.communications.models import ConversationLocation, OutboundTargetRequest
+from api.domains.communications.plugins.registry import PlatformPluginRegistry
+from api.domains.communications.repository import CommunicationConnectionRepository
 from api.domains.events import ActorIdentity, ActorIdentityType, EventDeliveryDispatcher, resolve_actor_identity
 from api.domains.events.catalog import (
     AGENT_SECRET_ADDED,
@@ -102,6 +113,7 @@ from api.domains.events.catalog import (
 )
 from api.domains.organizations.lookup import OrganizationLookupService
 from api.domains.rbac.catalog import PermissionKey
+from api.domains.restore_points.service import RestorePointService
 from api.domains.shared_credentials.repository import SharedCredentialRepository
 from api.domains.skills.models import PinnedSkill, Skill, SkillVersion, derive_tools_pointer
 from api.domains.skills.repository import SkillRepository
@@ -136,7 +148,17 @@ _CREDENTIAL_FIELDS = frozenset(
 
 _MAX_LOG_SNAPSHOT_BYTES = 1_048_576  # 1 MB
 
+RESTORE_POINT_IN_FLIGHT_DETAIL = (
+    "A restore point capture or restore is still running for this Agent. Wait for it to finish."
+)
+
 _OPENROUTER_MODEL_PREFIX = "litellm/openrouter/"
+
+
+@dataclass(frozen=True)
+class _NativeConnectionConfiguration:
+    settings: dict[str, Any]
+    credentials: dict[str, Any]
 
 
 def _enrich_atlassian_content(content: Any) -> Any:
@@ -203,7 +225,10 @@ class AgentService:
     shared_credential_repository: SharedCredentialRepository
     event_delivery_dispatcher: EventDeliveryDispatcher
     organization_lookup: OrganizationLookupService
+    restore_points: RestorePointService
     agent_settings_lookup: AgentSettingsLookupService
+    connection_repository: CommunicationConnectionRepository
+    plugins: PlatformPluginRegistry
 
     def _org_id(self, context: CurrentUserContext) -> UUID:
         return context.require_current_user_organization().organization_id
@@ -593,6 +618,7 @@ class AgentService:
             secrets=secrets_read,
             skills=skills_read,
             configured_platform_keys=configured_platform_keys or [],
+            native_platform_keys=sorted(self.config.native_platform_keys),
             allowed_actions=allowed_actions or [],
             created_at=agent.created_at,
             updated_at=agent.updated_at,
@@ -702,6 +728,11 @@ class AgentService:
             type(delete_error).__name__,
             safe_message(delete_error),
         )
+
+    def suggest_agent_name(self, context: CurrentUserContext) -> AgentNameSuggestionRead:
+        org_id = self._org_id(context)
+        self.authorization.require_collection_scope(context, PermissionKey.AGENT_CREATE)
+        return AgentNameSuggestionRead(first_name=choose_first_name(self.repository.count_all_by_org(org_id)))
 
     def create_agent(self, data: AgentCreate, context: CurrentUserContext) -> AgentRead:
         org_id = self._org_id(context)
@@ -1859,8 +1890,50 @@ class AgentService:
             current = self.repository.get_by_id(agent.id)
             if current is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent {agent_id} not found")
+            if self.restore_points.has_blocking_operation(current.id):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=RESTORE_POINT_IN_FLIGHT_DETAIL,
+                )
             started = self._start_agent_unchecked(current, actor)
         return self._get_agent_read(started, context)
+
+    def _native_connection_configuration(
+        self,
+        agent_id: UUID,
+        platform_key: str,
+    ) -> _NativeConnectionConfiguration | None:
+        """Load an enabled Connection configured for native runtime transport."""
+        if platform_key not in self.config.native_platform_keys:
+            return None
+        connection = self.connection_repository.get_active_by_platform_key(agent_id, platform_key)
+        if connection is None or not connection.enabled:
+            return None
+        credentials = json.loads(
+            decrypt_token(connection.credentials_encrypted, self.config.agent_token_encryption_key)
+        )
+        return _NativeConnectionConfiguration(settings=connection.settings, credentials=credentials)
+
+    def _native_slack_connection(self, agent_id: UUID) -> tuple[dict, dict, ConversationLocation | None] | None:
+        """The settings, credentials, and resolved home channel of a native Slack Connection."""
+        connection = self._native_connection_configuration(agent_id, "slack")
+        if connection is None:
+            return None
+        home_channel = None
+        target = connection.settings.get("default_delivery_target")
+        if target:
+            plugin = self.plugins.require("slack")
+            try:
+                # Same resolution and allowlist policy as gateway-delivered sends.
+                home_channel = plugin.resolve_outbound_target(
+                    plugin.settings_model.model_validate(connection.settings),
+                    plugin.credentials_model.model_validate(connection.credentials),
+                    OutboundTargetRequest.model_validate(target),
+                ).location
+            except Exception as exc:
+                # A stale target must not block the Agent from starting.
+                logger.warning("Slack default delivery target for agent %s not resolved (%s)", agent_id, exc)
+        return connection.settings, connection.credentials, home_channel
 
     def _start_agent_unchecked(self, agent: Agent, actor: ActorIdentity) -> Agent:
         """Start a known Agent after its caller has established authority."""
@@ -1917,10 +1990,18 @@ class AgentService:
         service = build_service(agent.id, org_id, ns, org_name=org_name, agent_name=agent.name)
         if agent.agent_type == AgentType.HERMES:
             overlay = None
+            native_slack = self._native_slack_connection(agent.id)
+            native_discord = self._native_connection_configuration(agent.id, "discord")
             hermes_cfg = build_hermes_gateway_config(
                 effective_model,
                 llm_proxy_url,
-                approval_mode=str(agent.approval_mode),
+                approval_mode=CommandApprovalMode(agent.approval_mode).value,
+                native_slack=native_slack is not None,
+                native_discord=native_discord is not None,
+                discord_require_mention=(
+                    native_discord.settings.get("require_mention", True) if native_discord else True
+                ),
+                verbose_mode=agent.verbose_mode,
             )
             secret = build_secret_hermes_runtime(
                 agent.id,
@@ -1931,8 +2012,12 @@ class AgentService:
                 litellm_api_key=litellm_key,
                 litellm_base_url=llm_proxy_url,
                 verbose_mode=agent.verbose_mode,
-                approval_mode=str(agent.approval_mode),
+                approval_mode=CommandApprovalMode(agent.approval_mode).value,
             )
+            if native_slack is not None:
+                secret.string_data.update(native_slack_env(*native_slack))
+            if native_discord is not None:
+                secret.string_data.update(native_discord_env(native_discord.settings, native_discord.credentials))
             deployment = build_hermes_deployment(
                 agent.id,
                 org_id,
@@ -1941,7 +2026,15 @@ class AgentService:
                 self.config.agent_image_pull_secret,
             )
         else:
-            overlay = build_openclaw_gateway_config(effective_model, llm_proxy_url)
+            native_channels: dict[str, dict] = {}
+            native_credentials: dict[str, dict] = {}
+            if native_slack := self._native_slack_connection(agent.id):
+                slack_settings, native_credentials["slack"], home_channel = native_slack
+                native_channels["slack"] = native_slack_channel(slack_settings, home_channel)
+            if native_discord := self._native_connection_configuration(agent.id, "discord"):
+                native_credentials["discord"] = native_discord.credentials
+                native_channels["discord"] = native_discord_channel(native_discord.settings)
+            overlay = build_openclaw_gateway_config(effective_model, llm_proxy_url, native_channels)
             hermes_cfg = None
             secret = build_secret_runtime(
                 agent.id,
@@ -1951,6 +2044,8 @@ class AgentService:
                 litellm_api_key=litellm_key,
                 litellm_base_url=llm_proxy_url,
             )
+            if native_credentials:
+                secret.string_data.update(native_channel_env(native_credentials))
             deployment = build_deployment(
                 agent.id,
                 org_id,
@@ -2408,12 +2503,18 @@ class AgentService:
             current = self.repository.get_by_id(agent.id)
             if current is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent {agent_id} not found")
+            if self.restore_points.has_blocking_operation(current.id):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=RESTORE_POINT_IN_FLIGHT_DETAIL,
+                )
 
             self.k8s.delete_deployment(name, ns)
             self.k8s.delete_service(name, ns)
             self.k8s.delete_pvc(name, ns)
             self.k8s.delete_secret(name, ns)
             self.k8s.delete_config_map(name, ns)
+            self.restore_points.purge_agent(current.id)
 
             delete_result = self.repository.soft_delete_with_event(
                 current,

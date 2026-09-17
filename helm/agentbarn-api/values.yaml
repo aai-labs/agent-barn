@@ -77,6 +77,11 @@ ingestBaseUrl: "http://agentbarn-api:8001/ingest/v1"
 # offers, e.g. "z-ai/glm-5.2,openai/gpt-5*". Empty offers the full catalogue.
 agentModelAllowlist: ""
 
+# Comma-separated Platform keys handled by the Agent runtime's native gateway,
+# e.g. "slack,discord". Empty keeps every Platform on the Communications
+# Gateway, providing an environment-level rollback switch.
+communicationsNativePlatforms: ""
+
 # Default model preselected in the picker and used at runtime when an agent has
 # no model set. Format: litellm/openrouter/<slug>. Empty uses the code default.
 agentDefaultModel: ""
@@ -91,6 +96,15 @@ agentImagePullSecret: "registry-pull-secret"
 
 # StorageClass for agent pod PVCs. Empty falls through to the cluster default.
 storageClass: ""
+
+# Agent Restore Points. The capture/restore Job runs the API's own image, wired
+# from registryPrefix/image above so it can never be a different build than the
+# API that created it. Size must be at least the agent PVC size (1Gi).
+restorePoints:
+  size: "1Gi"
+  maxPerAgent: 5
+  captureTimeoutSeconds: 900
+  restoreTimeoutSeconds: 1800
 
 registry:
   server: ""

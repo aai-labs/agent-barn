@@ -18,6 +18,7 @@ import {
   mockSecret,
   mockTemplates,
   mockToolCall,
+  mockWebChatApprovalPrompt,
   mockVersionsForKey,
 } from "../pages/data-support/agent-data-support.po";
 import { mockCustomSkill, mockPlatformSkill, MOCK_PLATFORM_SKILL_ID } from "../pages/data-support/skill-data-support.po";
@@ -98,6 +99,7 @@ test.describe("Agent Detail Page", () => {
               occurred_at: "2026-09-01T08:00:00Z",
               delivery_status: "PROCESSING",
               cancel_requested_at: null,
+              error_message: null,
             },
           ]),
         });
@@ -115,6 +117,44 @@ test.describe("Agent Detail Page", () => {
     await page.getByRole("button", { name: "Chat", exact: true }).click();
 
     await expect(page.getByRole("status").filter({ hasText: "Maya is working" })).toBeVisible();
+  });
+
+  test("shows the provider failure reason in web chat", async ({ page }) => {
+    const errorMessage =
+      "The provider reports exhausted credits or billing; add credits to the provider account, then retry (HTTP 402)";
+    await page.route("**/api/v1/organizations/*/agents/*/web-chat/**", async (route) => {
+      const path = new URL(route.request().url()).pathname;
+      if (path.endsWith("/messages")) {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify([
+            {
+              id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+              direction: "INBOUND",
+              content: "hello",
+              occurred_at: "2026-09-01T08:00:00Z",
+              delivery_status: "DEAD_LETTERED",
+              cancel_requested_at: null,
+              error_message: errorMessage,
+            },
+          ]),
+        });
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: path.endsWith("/stream") ? "text/event-stream" : "application/json",
+        body: path.endsWith("/stream") ? ": keep-alive\n\n" : "[]",
+      });
+    });
+
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await page.getByRole("button", { name: "About", exact: true }).click();
+    await page.getByRole("button", { name: "Chat", exact: true }).click();
+
+    const failureNotice = page.getByRole("alert").filter({ hasText: "I couldn't process that message" });
+    await expect(failureNotice).toContainText(errorMessage);
   });
 
   test("stops the active web chat generation", async ({ page }) => {
@@ -140,6 +180,7 @@ test.describe("Agent Detail Page", () => {
               occurred_at: "2026-09-01T08:00:00Z",
               delivery_status: deliveryStatus,
               cancel_requested_at: null,
+              error_message: null,
             },
           ]),
         });
@@ -157,6 +198,95 @@ test.describe("Agent Detail Page", () => {
 
     await expect.poll(() => stopRequests).toBe(1);
     await expect(page.getByRole("button", { name: "Stop generating" })).not.toBeVisible();
+  });
+
+  test("answers a command approval with a button", async ({ page }) => {
+    const sentBodies: unknown[] = [];
+    await dataSupportPage.agents.interceptWebChatApprovalPrompt({
+      answer: async (route, request) => {
+        sentBodies.push(request.postDataJSON());
+        await route.fulfill({
+          status: 202,
+          contentType: "application/json",
+          body: JSON.stringify({
+            id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+            direction: "INBOUND",
+            content: "once",
+            occurred_at: "2026-09-01T08:01:00Z",
+            delivery_status: "PENDING",
+            cancel_requested_at: null,
+            approval: null,
+          }),
+        });
+      },
+    });
+
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await expect(page.getByRole("button", { name: "Allow for session" })).toHaveCount(0);
+    await page.getByRole("button", { name: "Allow once" }).click();
+
+    await expect.poll(() => sentBodies).toEqual([
+      { text: "once", thread_id: "main", approval_id: "run_1:1726051234.5" },
+    ]);
+  });
+
+  test("disables approval buttons once one is clicked", async ({ page }) => {
+    let answers = 0;
+    await dataSupportPage.agents.interceptWebChatApprovalPrompt({
+      answer: async (route) => {
+        answers += 1;
+        await route.fulfill({
+        status: 202,
+        contentType: "application/json",
+        body: JSON.stringify({
+          id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+          direction: "INBOUND",
+          content: "once",
+          occurred_at: "2026-09-01T08:01:00Z",
+          delivery_status: "PENDING",
+          cancel_requested_at: null,
+          approval: null,
+        }),
+        });
+      },
+    });
+
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await page.getByRole("button", { name: "Allow once" }).click();
+
+    await expect(page.getByRole("button", { name: "Allow once" })).toBeDisabled();
+    await expect(page.getByRole("button", { name: "Deny" })).toBeDisabled();
+    await expect.poll(() => answers).toBe(1);
+  });
+
+  test("re-enables approval buttons when the answer fails to send", async ({ page }) => {
+    await dataSupportPage.agents.interceptWebChatApprovalPrompt({
+      answer: async (route) => {
+        await route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ detail: "boom" }) });
+      },
+    });
+
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    const failed = page.waitForResponse((response) => response.request().method() === "POST" && response.status() === 500);
+    await page.getByRole("button", { name: "Allow once" }).click();
+    await failed;
+
+    await expect(page.getByRole("button", { name: "Allow once" })).toBeEnabled();
+  });
+
+  test("hides approval buttons from someone who cannot update the Agent", async ({ page }) => {
+    await dataSupportPage.agents.interceptGetAgentRequest({
+      body: { ...mockAgent, allowed_actions: ["agent.read", "activity.read"] },
+    });
+    await dataSupportPage.agents.interceptWebChatApprovalPrompt({
+      answer: async (route) => route.fallback(),
+      prompt: { ...mockWebChatApprovalPrompt, content: "Reply with one of: once, deny" },
+    });
+
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+
+    await expect(page.getByText("Reply with one of: once, deny")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Allow once" })).toHaveCount(0);
   });
 
   test("guides an unreachable Agent to messaging setup", async ({ page }) => {
@@ -703,7 +833,7 @@ test.describe("Agent Detail Page — Channels tab", () => {
     await expect(connectionDetailPage.deliveryEventCount(1)).toBeVisible();
     const deliveryRow = connectionDetailPage.deliveryTransitionRow(/provider delivered/i);
     await expect(deliveryRow).toContainText("Outbound");
-    await expect(deliveryRow).toContainText(/dead lettered/i);
+    await expect(deliveryRow).not.toContainText(/dead lettered/i);
     await deliveryRow.click();
     await expect(connectionDetailPage.deliveryTiming()).toBeVisible();
     await expect(connectionDetailPage.waitBeforeAttempt()).toBeVisible();
@@ -745,20 +875,26 @@ test.describe("Agent Detail Page — Channels tab", () => {
   test("edits Connection name and plugin settings without resending credentials", async () => {
     await agentDetailPage.editConnectionButton("Customer Discord").click();
     await agentDetailPage.connectionNameInput().fill("Renamed Discord");
-    // Array settings are chip inputs: clear the existing chip ("Community" is the
-    // directory label for guild-one), then add the new ID.
-    await agentDetailPage.removeArraySettingChip("Community").click();
-    await agentDetailPage.connectionSettingsInput("Guild IDs").fill("guild-updated");
+    // Array settings are chip inputs: clear the existing channel, then add the new ID.
+    await agentDetailPage.removeArraySettingChip("channel-one").click();
+    await agentDetailPage.connectionSettingsInput("Allowed channels").fill("channel-updated");
     const update = agentDetailPage.waitForConnectionMutation("PATCH");
     await agentDetailPage.saveConnectionButton().click();
     expect((await update).postDataJSON()).toEqual({
       revision: 3,
       display_name: "Renamed Discord",
-      settings: { guild_ids: ["guild-updated"] },
+      settings: { allowed_channel_ids: ["channel-updated"] },
     });
   });
 
   test("shows provider setup requirements before connecting", async ({ page }) => {
+    await page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}/connections`, async (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      await route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
+    });
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await agentDetailPage.configureButton().click();
+    await agentDetailPage.channelsTab().click();
     await agentDetailPage.addConnectionButton().click();
     await agentDetailPage.selectPlatformButton("Slack").click();
 
@@ -808,6 +944,15 @@ test.describe("Agent Detail Page — Channels tab", () => {
     await agentDetailPage.channelsTab().click();
   }
 
+  test("hides platforms that already have a Connection from the chooser", async ({ page }) => {
+    await serveSavedSlackConnection(page);
+
+    await agentDetailPage.addConnectionButton().click();
+
+    await expect(agentDetailPage.selectPlatformButton("Slack")).toHaveCount(0);
+    await expect(agentDetailPage.selectPlatformButton("Discord")).toBeVisible();
+  });
+
   test("configures a scheduled default through the Connection editor", async ({ page }) => {
     await serveSavedSlackConnection(page);
     await agentDetailPage.editConnectionButton("Team Slack").click();
@@ -824,6 +969,37 @@ test.describe("Agent Detail Page — Channels tab", () => {
       default_delivery_target: { kind: "channel", recipient: "channel-one" },
     }});
     expect(payload.settings.default_delivery_target).not.toHaveProperty("thread_id");
+  });
+
+  test("restarts a running Agent to apply a change to a Connection its runtime runs", async ({ page }) => {
+    await dataSupportPage.agents.interceptGetAgentRequest({
+      body: { ...mockAgent, agent_type: "hermes", native_platform_keys: ["slack"] },
+    });
+    await dataSupportPage.agents.interceptStopAgentRequest();
+    await dataSupportPage.agents.interceptStartAgentRequest();
+    await page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}/connections/*`, async (route) => {
+      if (route.request().method() !== "PATCH") return route.fallback();
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(savedSlackConnection) });
+    });
+    const calls: string[] = [];
+    page.on("request", (request) => {
+      const url = request.url();
+      if (request.method() === "POST" && /\/(stop|start)$/.test(url)) calls.push(url.endsWith("/stop") ? "stop" : "start");
+      if (request.method() === "PATCH" && url.includes("/connections/")) calls.push("update");
+    });
+    await serveSavedSlackConnection(page);
+
+    await agentDetailPage.editConnectionButton("Team Slack").click();
+    await expect(agentDetailPage.saveConnectionButton()).toHaveCount(0);
+    await page.getByRole("button", { name: "Save & Restart", exact: true }).click();
+
+    const dialog = page.getByRole("dialog", { name: "Apply changes and restart the Agent?" });
+    await expect(dialog).toBeVisible();
+    expect(calls).toEqual([]);
+    await dialog.getByRole("button", { name: "Save & Restart", exact: true }).click();
+
+    await expect(dialog).toBeHidden();
+    expect(calls).toEqual(["stop", "update", "start"]);
   });
 
   test("browses a saved Connection's own directory when editing it", async ({ page }) => {
@@ -910,10 +1086,11 @@ test.describe("Agent Detail Page — Channels tab", () => {
     expect(connectionName).toBeLessThan(connectionSettings);
   });
 
-  test("creates another same-platform Connection from the plugin schema", async () => {
+  test("creates another same-platform Connection from the plugin schema", async ({ page }) => {
+    await serveSavedSlackConnection(page);
     await agentDetailPage.addConnectionButton().click();
     await agentDetailPage.selectPlatformButton("Discord").click();
-    await agentDetailPage.connectionSettingsInput("Guild IDs").fill("guild-two, guild-three");
+    await agentDetailPage.connectionSettingsInput("Allowed channels").fill("channel-two, channel-three");
     const botToken = agentDetailPage.credentialInput("Bot token");
     await botToken.fill("token-two");
     await expect(botToken).toHaveAttribute("type", "password");
@@ -927,9 +1104,49 @@ test.describe("Agent Detail Page — Channels tab", () => {
       platform_key: "discord",
       display_name: "Discord",
       enabled: true,
-      settings: { guild_ids: ["guild-two", "guild-three"] },
+      settings: { allowed_channel_ids: ["channel-two", "channel-three"] },
       credentials: { bot_token: "token-two" },
     });
+  });
+
+  test("browses Discord servers and channels from the add form using the typed-in bot token", async ({ page }) => {
+    await serveSavedSlackConnection(page);
+    await agentDetailPage.addConnectionButton().click();
+    await agentDetailPage.selectPlatformButton("Discord").click();
+
+    // Browsing needs a bot token, so it stays disabled until one is typed.
+    const refresh = page.getByRole("button", { name: "Refresh server list" });
+    await expect(refresh).toBeDisabled();
+    await agentDetailPage.credentialInput("Bot token").fill("token-one");
+    await expect(refresh).toBeEnabled();
+
+    const guildsPreview = page.waitForRequest(
+      (request) => request.method() === "POST" && request.url().includes("/connection-directory-preview"),
+    );
+    await refresh.click();
+    expect((await guildsPreview).postDataJSON()).toMatchObject({ platform_key: "discord", kind: "guilds" });
+
+    const refreshedGuildsPreview = page.waitForRequest(
+      (request) => request.method() === "POST" && request.url().includes("/connection-directory-preview"),
+    );
+    await refresh.click();
+    expect((await refreshedGuildsPreview).postDataJSON()).toMatchObject({ platform_key: "discord", kind: "guilds" });
+
+    await page.getByText("Choose a server to browse channels, users, and roles").click();
+    await page.getByRole("option", { name: "Community" }).click();
+
+    const channelsPreview = page.waitForRequest(
+      (request) => request.method() === "POST" && request.url().includes("/connection-directory-preview"),
+    );
+    await agentDetailPage.browseDirectoryButton("Allowed channels").click();
+    expect((await channelsPreview).postDataJSON()).toMatchObject({
+      platform_key: "discord",
+      kind: "channels",
+      guild_id: "guild-one",
+    });
+    await agentDetailPage.directoryPickerOption(/#ops/).click();
+    await agentDetailPage.directoryPickerConfirmButton().click();
+    await expect(page.getByRole("button", { name: "Remove #ops", exact: true })).toBeVisible();
   });
 });
 
@@ -942,7 +1159,7 @@ test.describe("Agent Detail Page — Channels tab, Email connection", () => {
 
   test.use({ storageState: { cookies: [], origins: [] } });
 
-  test.beforeEach(async ({ page }) => {
+  test.beforeEach(async ({ page }, testInfo) => {
     agentDetailPage = new AgentDetailPage(page);
     dataSupportPage = new DataSupport(page);
 
@@ -979,28 +1196,31 @@ test.describe("Agent Detail Page — Channels tab, Email connection", () => {
       });
     });
     await page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}/connections`, async (route) => {
+      const connections = testInfo.title === "asks for no credentials on a platform that has none"
+        ? []
+        : [{
+            id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+            agent_id: MOCK_AGENT_ID,
+            platform_key: "email",
+            display_name: "Email",
+            enabled: true,
+            schema_version: 1,
+            settings: { sender_policy: "allowlist", allowed_senders: ["@acme.test"] },
+            external_identity: null,
+            observed_status: "CONNECTED",
+            last_health_at: "2026-01-01T00:00:00Z",
+            last_error_code: null,
+            last_error_message: null,
+            webhook_url: null,
+            managed_address: EMAIL_ADDRESS,
+            revision: 1,
+            created_at: "2026-01-01T00:00:00Z",
+            updated_at: "2026-01-01T00:00:00Z",
+          }];
       await route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify([{
-          id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
-          agent_id: MOCK_AGENT_ID,
-          platform_key: "email",
-          display_name: "Email",
-          enabled: true,
-          schema_version: 1,
-          settings: { sender_policy: "allowlist", allowed_senders: ["@acme.test"] },
-          external_identity: null,
-          observed_status: "CONNECTED",
-          last_health_at: "2026-01-01T00:00:00Z",
-          last_error_code: null,
-          last_error_message: null,
-          webhook_url: null,
-          managed_address: EMAIL_ADDRESS,
-          revision: 1,
-          created_at: "2026-01-01T00:00:00Z",
-          updated_at: "2026-01-01T00:00:00Z",
-        }]),
+        body: JSON.stringify(connections),
       });
     });
 

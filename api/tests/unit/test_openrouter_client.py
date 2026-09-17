@@ -142,6 +142,8 @@ def _service(openrouter, allowlist=None, default_model=""):
 
     return AgentService(
         repository=MagicMock(),
+        connection_repository=MagicMock(),
+        plugins=MagicMock(),
         override_repository=MagicMock(),
         authorization=MagicMock(),
         template_repository=MagicMock(),
@@ -154,6 +156,7 @@ def _service(openrouter, allowlist=None, default_model=""):
         event_delivery_dispatcher=MagicMock(),
         organization_lookup=org_lookup,
         agent_settings_lookup=agent_settings_lookup,
+        restore_points=MagicMock(),
     )
 
 

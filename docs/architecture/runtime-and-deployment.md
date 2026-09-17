@@ -2,7 +2,7 @@
 
 ## Read when
 
-Read before changing Hermes/OpenClaw behavior, agent Kubernetes resources, runtime images, telemetry configuration, Helm charts, deployment workflows, or service versions.
+Read before changing Agent Restore Point Jobs, Hermes/OpenClaw behavior, agent Kubernetes resources, runtime images, telemetry configuration, Helm charts, deployment workflows, or service versions.
 
 ## Agent runtime assembly
 
@@ -10,13 +10,13 @@ Starting an agent is an API-orchestrated deployment flow:
 
 1. Load the organization-owned agent and its pinned template version.
 2. Render template Markdown with the agent identity.
-3. Decrypt Agent Secrets used by tool Integrations; Communication Connection credentials stay in the Communications service.
+3. Decrypt Agent Secrets used by tool Integrations; gateway-owned Communication Connection credentials stay in Communications, while enabled native Connection credentials are projected into the selected Agent runtime.
 4. Select Hermes or OpenClaw runtime builders.
 5. Combine explicitly assigned skills with eligible built-in provider skills.
 6. Materialize aai-cli integrations and Google Workspace's gog artifacts from encrypted Agent Secrets.
 7. Append tool pointers, integration policy, and unconditional runtime behaviour policies to rendered Markdown.
 8. Generate fresh Ingest and Communications protocol credentials.
-9. Build ConfigMap, Secret, PVC, Service, and Deployment resources, including the runtime-neutral communications adapter.
+9. Build ConfigMap, Secret, PVC, Service, and Deployment resources, including the runtime-neutral communications adapter and any enabled native gateway configuration.
 10. Apply resources through the Kubernetes client and mark the Agent running.
 
 Runtime behaviour policies are appended to `AGENTS.md` rather than stored in a template, because both runtimes auto-load `AGENTS.md` into the startup system prompt. They are unconditional and carry no role-specific wording, so custom and forked templates inherit them and the role-scope policy defers to whatever role the agent's own template defines.
@@ -37,11 +37,11 @@ Hermes uses `/workspace` as its terminal and messaging working directory while i
 
 ## Runtime-neutral communications
 
-Both Hermes and OpenClaw consume the same versioned Communications protocol. A sidecar-style runtime adapter opens an authenticated, outbound Server-Sent Events control stream to Communications. A `delivery_available` wakeup makes the adapter claim durable inbound Communication Deliveries and invoke the runtime's local API with a Connection-scoped session key, submit the reply against the source delivery, and complete the delivery. OpenClaw uses its chat-completions endpoint; Hermes uses `/v1/runs` so command approvals and progress remain available. Runtimes never receive provider tokens and contain no Slack, Telegram, or Discord transport configuration. Because the shared adapter is copied into the Python 3.12 OpenClaw image and the Python 3.13 Hermes image, Ruff targets its source to Python 3.12 and a source-parse test guards the oldest image grammar.
+Both Hermes and OpenClaw consume the same versioned Communications protocol for gateway-owned Connections. A sidecar-style runtime adapter opens an authenticated, outbound Server-Sent Events control stream to Communications. A `delivery_available` wakeup makes the adapter claim durable inbound Communication Deliveries and invoke the runtime's local API with a Connection-scoped session key, submit the reply against the source delivery, and complete the delivery. OpenClaw uses its chat-completions endpoint; Hermes uses `/v1/runs` so command approvals and progress remain available. Inbound and outbound claim paths exclude Platforms configured as native, including stale Deliveries created before cutover. Native Connections receive provider credentials and transport configuration at Agent start on both runtimes. Because the shared adapter is copied into the Python 3.12 OpenClaw image and the Python 3.13 Hermes image, Ruff targets its source to Python 3.12 and a source-parse test guards the oldest image grammar.
 
 Agent-initiated delivery uses the same Communications boundary. Interactive sends carry a server-issued token for the active inbound claim and are resolved only on that claim's Communication Connection; an interactive request cannot select the Agent's default or name a Connection. Scheduled final responses are captured into a durable SQLite spool and retried under one run identity until acknowledged, refused with a permanent 4xx, or about a day old; settled rows are pruned after seven days. On Hermes, a job created from a conversation retains its Connection/channel/thread origin, while startup-created work uses the Agent's one configured default. OpenClaw uses the default only when the completion has no recorded origin; its pinned cron hook exposes a delivery-channel label instead of the creating conversation, so unmappable completions are refused rather than diverted. The shared runtime client owns silence-marker filtering and destination parsing so Hermes and OpenClaw apply the same policy. Communications resolves and persists the destination before acknowledging acceptance, then the Platform Plugin revalidates current outbound policy before provider delivery. Only Slack currently advertises this capability.
 
-Hermes captures scheduled results at a fenced scheduler side-effect boundary in its pinned image and suppresses the runtime's native provider delivery. OpenClaw captures them from its in-process `agent_end` hook. In the pinned image a cron run's context names the delivery channel rather than the creating conversation (`channelId` is typically `slack`, isolated jobs run under their own cron session key, and session keys are lowercased), so the hook records that context as unmappable and refuses to redirect the completion to the default. Origin routing awaits capture at job creation. Both paths enqueue locally before returning from the completion hook, while a separate drain process performs network submission. Hermes also submits a non-empty `BOOT.md` through `/v1/runs` after the gateway becomes ready, under a reserved no-conversation session so startup-created jobs route to the configured default.
+For gateway-owned Hermes Agents, scheduled results are captured at a fenced scheduler side-effect boundary and native provider delivery is suppressed. For Hermes with a native Connection, `AGENTBARN_SCHEDULED_DELIVERY=0` disables that capture and the old spool drain for the whole runtime, so Hermes owns cron delivery on every Platform. OpenClaw captures scheduled results from its in-process `agent_end` hook; with a native Connection the same `AGENTBARN_SCHEDULED_DELIVERY=0` skips that capture and the spool drain, and OpenClaw delivers cron results to their origin or the Connection's `defaultTo`. Hermes also submits a non-empty `BOOT.md` through `/v1/runs` after the gateway becomes ready.
 
 Each Hermes turn explicitly sends `resume_session: true` with the stable Connection/location/thread session identity. The Hermes base image carries `hermes-base/patch-run-session-history.py`: the pinned upstream endpoint otherwise persists under `session_id` but starts with empty history. The patch loads native SQLite conversation history, follows compaction lineage, preserves tool-call metadata, and fails on unavailable history storage instead of silently starting over. New sessions legitimately have empty history. Explicit caller-supplied history cannot be combined with resume mode. This requires deploying the patched Hermes image together with the adapter. Existing Hermes session data remains on the Agent PVC and becomes available again on the next turn; no database migration or transcript reconstruction is required. The image patch fails the build if its upstream source anchor changes.
 
@@ -55,7 +55,7 @@ Runtime is persisted as `agent_type`. Platform is not an Agent field: an Agent m
 
 ## Platform Plugin boundary
 
-Agent Barn ships a code-owned Platform Plugin registry. Each plugin owns typed settings and credential schemas, external validation, credential uniqueness/fingerprinting, inbound normalization/admission, optional best-effort inbound name enrichment, provider-session behavior, outbound sending, and optional processing-feedback hooks. Slack uses supervised Socket Mode, Telegram uses supervised polling, and Discord uses a supervised Gateway session.
+Agent Barn ships a code-owned Platform Plugin registry. Each plugin owns typed settings and credential schemas, external validation, credential uniqueness/fingerprinting, inbound normalization/admission, optional best-effort inbound name enrichment, provider-session behavior, outbound sending, and optional processing-feedback hooks. Gateway-owned Slack uses supervised Socket Mode, Telegram uses supervised polling, and gateway-owned Discord uses a supervised Gateway session. When configured native, Slack and Discord instead run in the Agent pod on either runtime and are excluded from Communications supervision and Delivery claims. OpenClaw installs the `@openclaw/slack` and `@openclaw/discord` plugins from npm at its core version on first start, since only recorded npm installs get plugin state; its `agentbarn-observer` plugin reports content-free Journal stages and `healthz-server.js` reports channel health from `openclaw health`.
 
 Adding a shipped platform adds one plugin and provider client plus focused tests. The generic Connection persistence, CRUD routes, schema-driven UI, durable delivery pipeline, runtime protocol, and Agent builders do not gain platform branches. Plugins are trusted release artifacts, not dynamically installed packages.
 
@@ -63,11 +63,11 @@ Connection credentials are encrypted and never returned by read APIs. Communicat
 
 ## Mention gating
 
-Shared-room admission is a Platform Plugin concern. Plugin settings define open/allowlist group and direct-message policies plus provider-specific restrictions. Discord supports explicit mention gating and guild/channel/user/role constraints. Slack channel messages require a direct bot mention and expose a schema-driven thread policy: `every_message` requires a mention on every thread reply, while `start_only` admits unmentioned replies only after a matching Connection-scoped thread has persisted Agent state. Slack captures the bot user identity at ingress, ignores duplicate `app_mention` events in favor of `message` events, and applies DM/allowlist checks before mention admission. Durable ownership is supplied to plugins through the Communications admission seam; it is never process-local. Updating these settings increments the Connection revision and reconciles its gateway session; it does not rebuild the runtime.
+Shared-room admission is a Platform Plugin concern. Plugin settings define provider-specific restrictions. Discord exposes Hermes' native user, role, and channel gates plus an explicit Allow all users switch. A user allowlist applies in DMs and server messages; channel and role gates apply in server messages. There are no separate guild or DM policy switches. Native Hermes receives those gates directly and owns Discord admission; native OpenClaw receives them as a wildcard `guilds["*"]` entry (users, roles, channels) plus a DM `allowFrom`. The Agent Barn observer is telemetry-only on both. Slack channel messages require a direct bot mention and expose a schema-driven thread policy: `every_message` requires a mention on every thread reply, while `start_only` admits unmentioned replies only after a matching Connection-scoped thread has persisted Agent state. Slack captures the bot user identity at ingress, ignores duplicate `app_mention` events in favor of `message` events, and applies DM/allowlist checks before mention admission. Durable ownership is supplied to plugins through the Communications admission seam; it is never process-local. Updating a native Connection restarts a running Agent because its credentials and policy are projected only at boot; gateway-owned changes reconcile the supervisor session without rebuilding the runtime.
 
 ## Processing feedback
 
-Processing feedback is a best-effort Platform Plugin capability, separate from durable Communication Delivery state. Communications invokes the provider-neutral lifecycle seam after an inbound delivery is accepted, when runtime processing is claimed, and after terminal success or failure is known. Slack reacts with 👀 on acceptance, shows `assistant.threads.setStatus` while the runtime works, and replaces the acknowledgement with ✅ only after outbound provider delivery succeeds or ❌ after terminal failure. Slack lifecycle reactions target the canonical provider message timestamp, while status targets the conversation thread. Slack status and reaction calls are idempotent and safe to retry; failures are bounded warnings and never change delivery retry or completion state. Plugins without this capability no-op.
+Processing feedback is a best-effort Platform Plugin capability, separate from durable Communication Delivery state. Communications invokes the provider-neutral lifecycle seam after an inbound delivery is accepted, when runtime processing is claimed, and after terminal success or failure is known. Slack reacts with 👀 on acceptance, shows `assistant.threads.setStatus` while the runtime works, and replaces the acknowledgement with ✅ only after outbound provider delivery succeeds or ❌ after terminal failure. Slack lifecycle reactions target the canonical provider message timestamp, while status targets the conversation thread. On terminal runtime failure, Discord, Telegram, and Teams reply in the originating conversation with the same safe normalized reason; Telegram uses the source message's reply parameters, and Teams reuses the inbound activity's stored service/conversation routing. Slack, Discord, Telegram, and Teams feedback calls are best-effort and safe to retry; failures are bounded warnings and never change delivery retry or completion state. The built-in Web Chat adapter does not post a second provider notice; its read model exposes the durable safe error summary so the dashboard renders the same guidance. A normalized runtime failure marked non-retryable, including HTTP 402 provider credit or billing failures, transitions directly to `DEAD_LETTERED`; other failures retain bounded retry behavior. Plugins without this capability no-op.
 
 ## Connection failure recovery
 
@@ -98,6 +98,33 @@ Every release's namespace and `needs:` entries are templated on a `NAMESPACE` en
 ## Observability
 
 `../../helm/monitoring/` deploys namespace-scoped Prometheus, Grafana, and Alertmanager charts. The product API exposes platform probes on `:8000`, Ingest exposes telemetry metrics on `:8001`, and Communications exposes HTTP metrics on `:8002`; LiteLLM and Agent health services retain their existing scrape targets. Alert rules route through Alertmanager, and Grafana dashboards are provisioned from chart ConfigMaps.
+
+## Restore point Jobs
+
+Capture and restore run as `batch/v1` Jobs rather than pods managed by the API, and reuse the
+API's own image so the archive logic and its exclusion sets are always the same build as the
+API that scheduled them — `API_IMAGE` is rendered from the same chart expression as the API
+container's `image`. Nothing new is built or published.
+
+Both mount the Agent's `agent-<uuid>` PVC, which is why they require a stopped Agent: the
+volume is ReadWriteOnce and cannot be held by the Agent pod and a Job pod at once. Capture
+mounts the Agent volume read-only alongside a fresh per-restore-point PVC. Restore mounts
+three — the Agent volume writable, the new Pre-Restore destination, and the chosen archive
+read-only — and performs the safety-net capture and the extraction in one process, so the
+backup is on disk before anything is wiped.
+
+The Job runs as root. Extraction then applies the ownership the target volume already had,
+read before the wipe, because the two runtimes differ: Hermes' init container chowns `/opt/data`
+recursively, while OpenClaw's chowns only the mount point, so a restore cannot rely on the next
+start to repair ownership.
+
+The API learns each Job's outcome by reading its status, and its archive manifest by reading
+the Job pod's logs — the manifest is written onto the restore point's PVC, which the API cannot
+mount. Distinct exit codes separate a failed safety-net capture, where the Agent volume was
+never touched, from a failed extraction, where it was.
+
+CSI `VolumeSnapshot` is deliberately unused; see
+[`../adr/2026-09-10-restore-points-use-tar-jobs-not-csi-snapshots.md`](../adr/2026-09-10-restore-points-use-tar-jobs-not-csi-snapshots.md).
 
 ## Kubernetes client constraint
 

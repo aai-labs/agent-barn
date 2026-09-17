@@ -4,6 +4,7 @@ Owners/admins (and platform_admins) can list, add, change roles, remove members,
 invites, and transfer ownership; plain members and cross-org actors are forbidden.
 """
 
+from datetime import UTC, datetime, timedelta
 from uuid import uuid7
 
 from fastapi import status
@@ -12,12 +13,15 @@ from hamcrest import (
     contains_inanyorder,
     contains_string,
     equal_to,
+    greater_than,
     has_length,
     is_,
     none,
     not_none,
 )
 
+from api.domains.auth.models import PasswordResetToken
+from api.domains.auth.repository import PasswordResetTokenRepository
 from api.domains.events.catalog import (
     ORGANIZATION_MEMBER_ADDED,
     ORGANIZATION_MEMBER_REMOVED,
@@ -41,6 +45,7 @@ from api.tests.steps.rbac import role_lacks_permission
 from api.tests.steps.user import there_is_a_user, there_is_an_access_token_for_user
 
 ORG = uuid7()
+ORG2 = uuid7()
 OWNER_ID = uuid7()
 
 _GIVEN = [
@@ -74,6 +79,32 @@ def _there_is_an_owner():
         there_is_an_access_token_for_user(user_id=OWNER_ID)(context)
 
     return step
+
+
+def _the_owner_also_owns_a_second_org():
+    """A second org under the same owner, so a cross-org add can be driven with one token."""
+
+    def step(context):
+        there_is_a_user(
+            id=OWNER_ID,
+            email="owner@example.com",
+            organization_id=ORG2,
+            role=OrganizationRole.OWNER,
+        )(context)
+
+    return step
+
+
+def _unused_tokens_of(context, user_id) -> list[PasswordResetToken]:
+    repo: PasswordResetTokenRepository = context.injector.get(PasswordResetTokenRepository)
+    return repo.delegate.find_all(PasswordResetToken, user_id=user_id, is_used=False)
+
+
+def _set_password(context, token: str):
+    return context.client.post(
+        "/api/v1/auth/set-password",
+        json={"token": token, "new_password": "NewPassword123", "full_name": "X"},
+    )
 
 
 def _role_of(context, user_id, org_id=ORG) -> OrganizationRole:
@@ -330,6 +361,8 @@ def test_add_member_with_owner_role_is_rejected():
 
 
 def test_add_existing_active_member_sends_no_invite():
+    """No existing user is ever sent a link by an org add — an active one has nothing
+    outstanding to refresh either."""
     with given(
         [
             *_GIVEN,
@@ -638,7 +671,8 @@ def test_owner_can_remove_admin():
 
 
 def test_removing_pending_member_revokes_their_invite():
-    """A rescinded invite link must stop working once the member is removed."""
+    """A rescinded invite link must stop working once the member is removed — this user
+    belongs to no other org, so nothing else depends on the link."""
     with given([*_GIVEN, _there_is_an_owner()]) as context:
         add = context.client.post(
             _members_url(),
@@ -686,6 +720,152 @@ def test_duplicate_add_does_not_invalidate_existing_invite():
             json={"token": token, "new_password": "NewPassword123", "full_name": "X"},
         )
         assert_that(accept.status_code, equal_to(status.HTTP_200_OK))
+
+
+def test_adding_pending_user_to_another_org_keeps_their_invite():
+    """AF-244: an invite link belongs to the account. A second org add must not mint a
+    replacement or kill the link the user already holds."""
+    with given([*_GIVEN, _there_is_an_owner(), _the_owner_also_owns_a_second_org()]) as context:
+        first = context.client.post(
+            _members_url(),
+            json={"email": "pending@example.com", "role": "MEMBER"},
+            headers=_auth(context),
+        )
+        assert_that(first.status_code, equal_to(status.HTTP_201_CREATED))
+        token = first.json()["invite_link"].split("token=")[1]
+
+        with when("the same person is added to a second organization"):
+            second = context.client.post(
+                _members_url(ORG2),
+                json={"email": "pending@example.com", "role": "MEMBER"},
+                headers=_auth(context),
+            )
+
+            with then("they are a member of both, with no second link issued"):
+                assert_that(second.status_code, equal_to(status.HTTP_201_CREATED))
+                assert_that(second.json()["invite_link"], is_(none()))
+                assert_that(second.json()["member"]["is_pending"], is_(True))
+
+            with then("the link from the first invite still works"):
+                assert_that(_set_password(context, token).status_code, equal_to(status.HTTP_200_OK))
+
+
+def test_second_add_refreshes_expiry_without_changing_the_token():
+    """The outstanding token is reused as-is; only its expiry moves, so a stale invite
+    can't lock a freshly added member out."""
+    with given([*_GIVEN, _there_is_an_owner(), _the_owner_also_owns_a_second_org()]) as context:
+        first = context.client.post(
+            _members_url(),
+            json={"email": "pending@example.com", "role": "MEMBER"},
+            headers=_auth(context),
+        )
+        user_id = first.json()["member"]["user_id"]
+        before = _unused_tokens_of(context, user_id)
+        assert_that(before, has_length(1))
+
+        context.client.post(
+            _members_url(ORG2),
+            json={"email": "pending@example.com", "role": "MEMBER"},
+            headers=_auth(context),
+        )
+
+        after = _unused_tokens_of(context, user_id)
+        with then("there is still exactly one token, unchanged, expiring later"):
+            assert_that(after, has_length(1))
+            assert_that(after[0].token_hash, equal_to(before[0].token_hash))
+            assert_that(after[0].expires_at, greater_than(before[0].expires_at))
+
+
+def test_expired_invite_is_revived_by_a_later_add():
+    """Someone added weeks after their first invite can still use the link they have."""
+    with given([*_GIVEN, _there_is_an_owner(), _the_owner_also_owns_a_second_org()]) as context:
+        first = context.client.post(
+            _members_url(),
+            json={"email": "pending@example.com", "role": "MEMBER"},
+            headers=_auth(context),
+        )
+        user_id = first.json()["member"]["user_id"]
+        token = first.json()["invite_link"].split("token=")[1]
+
+        repo: PasswordResetTokenRepository = context.injector.get(PasswordResetTokenRepository)
+        stale = _unused_tokens_of(context, user_id)[0]
+        stale.expires_at = datetime.now(UTC) - timedelta(days=3)
+        repo.save(stale)
+        assert_that(_set_password(context, token).status_code, equal_to(status.HTTP_410_GONE))
+
+        with when("they are added to a second organization"):
+            context.client.post(
+                _members_url(ORG2),
+                json={"email": "pending@example.com", "role": "MEMBER"},
+                headers=_auth(context),
+            )
+
+            with then("the same link works again"):
+                assert_that(_set_password(context, token).status_code, equal_to(status.HTTP_200_OK))
+
+
+def test_adding_pending_user_without_a_token_issues_no_link():
+    """Adding never mints a link for someone who already exists, even when they have none
+    left. Resend invite is the only way back."""
+    pending_id = uuid7()
+    with given(
+        [
+            *_GIVEN,
+            _there_is_an_owner(),
+            there_is_a_user(
+                id=pending_id,
+                email="tokenless@example.com",
+                organization_id=ORG2,
+                role=OrganizationRole.MEMBER,
+                email_verified=False,
+            ),
+        ]
+    ) as context:
+        added = context.client.post(
+            _members_url(),
+            json={"email": "tokenless@example.com", "role": "MEMBER"},
+            headers=_auth(context),
+        )
+        assert_that(added.status_code, equal_to(status.HTTP_201_CREATED))
+        assert_that(added.json()["invite_link"], is_(none()))
+        assert_that(_unused_tokens_of(context, pending_id), has_length(0))
+
+        with when("the owner resends the invite"):
+            resent = context.client.post(
+                f"{_members_url()}/{pending_id}/resend-invite",
+                headers=_auth(context),
+            )
+
+            with then("a working link is minted"):
+                assert_that(resent.status_code, equal_to(status.HTTP_200_OK))
+                token = resent.json()["invite_link"].split("token=")[1]
+                assert_that(_set_password(context, token).status_code, equal_to(status.HTTP_200_OK))
+
+
+def test_removing_pending_member_from_one_org_keeps_invite_for_another():
+    """The link is account-wide, so leaving one org must not break onboarding for the
+    orgs the user still belongs to."""
+    with given([*_GIVEN, _there_is_an_owner(), _the_owner_also_owns_a_second_org()]) as context:
+        first = context.client.post(
+            _members_url(),
+            json={"email": "pending@example.com", "role": "MEMBER"},
+            headers=_auth(context),
+        )
+        member_id = first.json()["member"]["user_id"]
+        token = first.json()["invite_link"].split("token=")[1]
+
+        context.client.post(
+            _members_url(ORG2),
+            json={"email": "pending@example.com", "role": "MEMBER"},
+            headers=_auth(context),
+        )
+
+        with when("they are removed from the first organization"):
+            removed = context.client.delete(f"{_members_url()}/{member_id}", headers=_auth(context))
+
+            with then("the invite survives for the organization they are still in"):
+                assert_that(removed.status_code, equal_to(status.HTTP_204_NO_CONTENT))
+                assert_that(_set_password(context, token).status_code, equal_to(status.HTTP_200_OK))
 
 
 def test_cannot_remove_owner():

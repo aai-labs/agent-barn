@@ -166,6 +166,9 @@ services:
     volumes:
       - ./ui:/app
       - aai_ui_node_modules:/app/node_modules
+      # Next's dev cache is thousands of small files; keeping it off the bind
+      # mount avoids Docker Desktop's slow bind-mount I/O on macOS/Windows.
+      - aai_ui_next_cache:/app/.next
     ports:
       - "${UI_PORT:-3000}:3000"
 
@@ -232,3 +235,4 @@ volumes:
   aai_litellm_db_data:
   aai_redis_data:
   aai_ui_node_modules:
+  aai_ui_next_cache:

@@ -83,6 +83,11 @@ Agents reachable by email get their own address on a dedicated subdomain, receiv
 - **Agent mail draws on the same account-wide sending quota** as invites, password resets, and lifecycle notifications, across both environments. A chatty Agent can starve real user invites; see the quota note above.
 - Relevant limits: 200 routing rules per domain, 200 verified destination addresses per account, 30 domains per zone, 25 MiB inbound message size.
 
+## Native runtime gateway rollout
+
+- **`COMMUNICATIONS_NATIVE_PLATFORMS`** is one shared GitHub variable containing a comma-separated native runtime Platform allowlist. Set it to **`slack,discord`** to enable the Hermes/OpenClaw native Slack and Discord gateways in every deployment workflow. It flows through `helmfile.yaml.gotmpl` into the API chart's shared Secret, so both the API and Communications processes receive the same cutoff.
+- Empty is the rollback setting: all Platforms remain on the Communications Gateway. Restart affected Agents after deploying a change so their runtime configuration is rebuilt.
+
 ## Staging environment
 
 Staging is a fully separate stack in its own namespace (`agent-farm-staging`),
@@ -232,3 +237,26 @@ Documentation-only changes do not change a service image and do not require a se
   `1`–`3650`). Its supervisor prunes expired entries; changing this window is
   an operational configuration change, not a release-version change.
 - On k3s, use `deploy.yml` rather than manually publishing mutable `latest` tags. Public hosted releases are git tags via `deploy-public.yml`.
+
+### Agent Restore Points
+
+- **The API's cluster identity needs `batch/jobs` (`create`, `get`, `list`, `delete`) and
+  `pods/log` (`get`).** Capture and restore run as Jobs, and their status and archive manifest
+  are read back from the Job pod's logs. `k8s/agent-farm-user.yaml` and its staging sibling
+  grant both, but the API pod authenticates with the kubeconfig in `POD_KUBECONFIG_B64`, not
+  that ServiceAccount — on a cluster where those are different identities, verify with
+  `kubectl auth can-i create jobs.batch` and `kubectl auth can-i get pods/log` against the
+  pod's kubeconfig. Without `pods/log` a capture still runs but reports no archive size and a
+  generic failure reason.
+- **The Job runs as root** (uid 0) to read files owned by the runtime user and to restore
+  ownership. It therefore requires a namespace that is not Pod Security `restricted`.
+  `agent-farm` is labelled `privileged` by `k8s/agent-farm-user.yaml`; namespaces created
+  out-of-band, including `agent-farm-staging`, inherit whatever the cluster defaults to.
+- **On `local-path`, restore points are node-local and unreplicated.** Each restore point gets
+  its own PVC sized by `RESTORE_POINT_SIZE`, provisioned on the node holding the Agent's
+  volume. They do not survive loss of that node, and they consume real node disk — the only
+  bound is `RESTORE_POINT_MAX_PER_AGENT`, which is per Agent and not per Organization.
+- Restore point rows resolve from live Job status when they are read. A capture nobody reads
+  keeps its Job until the Job's TTL reaps it; the row then resolves as failed and its volume is
+  reclaimed on the next read. Automatic reclamation of restore points nobody ever reads is
+  tracked separately from this ticket.

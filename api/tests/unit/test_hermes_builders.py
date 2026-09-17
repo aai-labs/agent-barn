@@ -5,7 +5,11 @@ from api.domains.agents.builders import (
     build_hermes_deployment,
     build_hermes_gateway_config,
     build_secret_hermes_runtime,
+    native_discord_env,
+    native_slack_env,
 )
+from api.domains.agents.builders.hermes import HERMES_START_SH
+from api.domains.communications.models import ConversationLocation
 
 _AGENT_ID = UUID("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
 _ORG_ID = UUID("11111111-2222-3333-4444-555555555555")
@@ -20,6 +24,118 @@ def test_gateway_config_is_headless_and_keeps_telemetry() -> None:
     assert "slack" not in config
     assert "telegram" not in config
     assert "discord" not in config
+
+
+def test_native_slack_config_enables_the_observer_and_ignores_unknown_dms() -> None:
+    config = build_hermes_gateway_config("litellm/gpt-5", "http://litellm:4000", native_slack=True)
+
+    assert config["plugins"]["enabled"] == ["telemetry-push", "agentbarn-messaging", "agentbarn-observer"]
+    assert config["slack"]["unauthorized_dm_behavior"] == "ignore"
+    assert config["platforms"]["slack"]["extra"]["markdown_blocks"] is True
+    assert config["display"]["platforms"]["slack"]["tool_progress"] == "off"
+    assert config["display"]["platforms"]["slack"]["interim_assistant_messages"] is False
+
+    verbose = build_hermes_gateway_config("litellm/gpt-5", "http://litellm:4000", native_slack=True, verbose_mode=True)
+    assert verbose["display"]["platforms"]["slack"]["tool_progress"] == "all"
+    assert verbose["display"]["platforms"]["slack"]["tool_progress_grouping"] == "accumulate"
+    assert verbose["display"]["platforms"]["slack"]["interim_assistant_messages"] is True
+
+
+def test_native_slack_env_maps_connection_policy() -> None:
+    credentials = {"bot_token": "xoxb-1", "app_token": "xapp-1"}
+
+    locked = native_slack_env(
+        {"group_policy": "allowlist", "channel_ids": ["C1", "C2"], "dm_policy": "off"},
+        credentials,
+    )
+    assert locked["SLACK_BOT_TOKEN"] == "xoxb-1"
+    assert locked["SLACK_APP_TOKEN"] == "xapp-1"
+    assert locked["SLACK_ALLOWED_CHANNELS"] == "C1,C2"
+    assert locked["SLACK_DISABLE_DMS"] == "true"
+    assert locked["SLACK_ALLOW_ALL_USERS"] == "true"
+    assert locked["SLACK_THREAD_REQUIRE_MENTION"] == "true"
+
+    open_env = native_slack_env(
+        {
+            "group_policy": "open",
+            "dm_policy": "allowlist",
+            "dm_user_ids": ["U1"],
+            "thread_mention_policy": "start_only",
+        },
+        credentials,
+    )
+    assert "SLACK_ALLOWED_CHANNELS" not in open_env
+    assert open_env["SLACK_DISABLE_DMS"] == "false"
+    assert open_env["SLACK_ALLOWED_USERS"] == "U1"
+    assert "SLACK_ALLOW_ALL_USERS" not in open_env
+    assert open_env["SLACK_THREAD_REQUIRE_MENTION"] == "false"
+    assert open_env["AGENTBARN_SCHEDULED_DELIVERY"] == "0"
+    assert open_env["SLACK_HOME_CHANNEL"] == "__agentbarn_no_home_channel__"
+
+    home = native_slack_env(
+        {},
+        credentials,
+        ConversationLocation(id="C9", type="CHANNEL", display_name="alerts", thread_id="1700000000.000100"),
+    )
+    assert home["SLACK_HOME_CHANNEL"] == "C9"
+    assert home["SLACK_HOME_CHANNEL_NAME"] == "alerts"
+    assert home["SLACK_HOME_CHANNEL_THREAD_ID"] == "1700000000.000100"
+
+
+def test_native_discord_config_enables_observer_and_maps_verbose_mode() -> None:
+    config = build_hermes_gateway_config(
+        "litellm/gpt-5",
+        "http://litellm:4000",
+        native_discord=True,
+        discord_require_mention=False,
+    )
+
+    assert config["plugins"]["enabled"] == ["telemetry-push", "agentbarn-messaging", "agentbarn-observer"]
+    assert config["discord"] == {"require_mention": False, "thread_require_mention": False}
+    assert config["display"]["platforms"]["discord"]["tool_progress"] == "off"
+
+    verbose = build_hermes_gateway_config(
+        "litellm/gpt-5", "http://litellm:4000", native_discord=True, verbose_mode=True
+    )
+    assert verbose["display"]["platforms"]["discord"]["tool_progress"] == "all"
+    assert verbose["display"]["platforms"]["discord"]["tool_progress_grouping"] == "accumulate"
+    assert verbose["display"]["platforms"]["discord"]["interim_assistant_messages"] is True
+
+
+def test_native_discord_env_maps_hermes_authorization_gates() -> None:
+    settings = {
+        "allowed_channel_ids": ["channel-1"],
+        "allowed_user_ids": ["user-1"],
+        "allowed_role_ids": ["role-1"],
+        "allow_all_users": False,
+        "home_channel_id": "channel-home",
+    }
+
+    env = native_discord_env(settings, {"bot_token": "discord-token"})
+
+    assert env["DISCORD_BOT_TOKEN"] == "discord-token"
+    assert env["DISCORD_ALLOW_ALL_USERS"] == "false"
+    assert env["DISCORD_ALLOWED_CHANNELS"] == "channel-1"
+    assert env["DISCORD_ALLOWED_USERS"] == "user-1"
+    assert env["DISCORD_ALLOWED_ROLES"] == "role-1"
+    assert env["DISCORD_HOME_CHANNEL"] == "channel-home"
+    assert env["AGENTBARN_SCHEDULED_DELIVERY"] == "0"
+    assert "AGENTBARN_DISCORD_POLICY" not in env
+
+
+def test_native_discord_env_uses_a_sentinel_when_home_is_unset() -> None:
+    env = native_discord_env({}, {"bot_token": "discord-token"})
+
+    assert env["DISCORD_HOME_CHANNEL"] == "__agentbarn_no_home_channel__"
+
+
+def test_native_gateway_does_not_drain_agent_barn_scheduled_completions() -> None:
+    guarded = HERMES_START_SH.split(
+        'if [ "${AGENTBARN_SCHEDULED_DELIVERY}" = "1" ]; then',
+        1,
+    )[1].split("\nfi", 1)[0]
+
+    assert "python3 /app/config/agentbarn_message.py drain &" in guarded
 
 
 def test_gateway_config_enables_persistent_memory_for_scheduled_runs() -> None:
@@ -41,6 +157,17 @@ def test_gateway_config_maps_approval_mode_onto_approvals_policy() -> None:
     assert approvals("manual") == {"mode": "manual", **policy}
     assert approvals("auto") == {"mode": "smart", **policy}
     assert approvals("off") == {"mode": "off", **policy}
+
+
+def test_gateway_config_routes_auxiliary_llm_tasks_through_the_litellm_proxy() -> None:
+    """Auxiliary tasks left on the openrouter lane reach the proxy without the
+    agent's key; smart approval then escalates every flagged command to the user.
+    """
+    auxiliary = build_hermes_gateway_config("litellm/gpt-5", "http://localhost:8090")["auxiliary"]
+
+    expected = {"provider": "custom", "base_url": "http://localhost:8090", "model": "gpt-5"}
+    assert {"approval", "title_generation", "vision"} <= auxiliary.keys()
+    assert all(task == expected for task in auxiliary.values())
 
 
 def test_gateway_config_pins_approval_policy_rather_than_inheriting_upstream_defaults() -> None:

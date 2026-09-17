@@ -4,6 +4,8 @@ from uuid import UUID
 
 from kubernetes import client
 
+from api.domains.communications.models import ConversationLocation
+
 from .common import _labels, _resource_name
 
 # Explicit so agents stop inheriting the namespace LimitRange default of
@@ -19,6 +21,7 @@ AGENT_RESOURCES = client.V1ResourceRequirements(
 _SCRIPTS = Path(__file__).parent.parent / "scripts" / "openclaw"
 _COMMON_SCRIPTS = _SCRIPTS.parent
 _TELEMETRY_PUSH = _SCRIPTS / "plugins" / "telemetry-push"
+_OBSERVER = _SCRIPTS / "plugins" / "agentbarn-observer"
 
 # OpenClaw's gateway binds this port and its own `openclaw health` CLI resolves
 # the same value with no way to override it, so the runtime must not be moved
@@ -31,6 +34,9 @@ START_SH: str = (_SCRIPTS / "start.sh").read_text()
 TELEMETRY_PUSH_INDEX_JS: str = (_TELEMETRY_PUSH / "index.js").read_text()
 TELEMETRY_PUSH_PACKAGE_JSON: str = (_TELEMETRY_PUSH / "package.json").read_text()
 TELEMETRY_PUSH_PLUGIN_JSON: str = (_TELEMETRY_PUSH / "openclaw.plugin.json").read_text()
+OBSERVER_INDEX_JS: str = (_OBSERVER / "index.js").read_text()
+OBSERVER_PACKAGE_JSON: str = (_OBSERVER / "package.json").read_text()
+OBSERVER_PLUGIN_JSON: str = (_OBSERVER / "openclaw.plugin.json").read_text()
 COMMUNICATIONS_RUNTIME_ADAPTER_PY: str = (_COMMON_SCRIPTS / "communications-runtime-adapter.py").read_text()
 
 _MESSAGE_SCRIPTS = _COMMON_SCRIPTS / "messaging"
@@ -59,9 +65,6 @@ def _openclaw_config_core(
                 "model": {
                     "primary": model,
                 },
-                "memorySearch": {
-                    "provider": "none",
-                },
             }
         },
         "channels": channels,
@@ -72,7 +75,7 @@ def _openclaw_config_core(
             "profile": "full",
             "exec": {"mode": "full"},
         },
-        "memory": {"backend": "builtin"},
+        "memory": {"search": {"provider": "none"}},
         "plugins": {
             "allow": ["memory-core", "active-memory", "telemetry-push", "agentbarn-messaging"],
             "load": {
@@ -112,8 +115,120 @@ def _openclaw_config_core(
     }
 
 
-def build_openclaw_gateway_config(model: str, litellm_base_url: str) -> dict:
-    return _openclaw_config_core(model, litellm_base_url, binding_channel=None, channels={})
+_OBSERVER_PLUGIN_PATH = "/home/node/.openclaw/local-plugins/agentbarn-observer"
+_NO_HOME_CHANNEL_TARGET = "channel:__agentbarn_no_home_channel__"
+
+
+def build_openclaw_gateway_config(
+    model: str,
+    litellm_base_url: str,
+    native_channels: dict[str, dict] | None = None,
+) -> dict:
+    """``native_channels`` maps a Platform key to its OpenClaw ``channels.<key>`` block."""
+    channels = native_channels or {}
+    config = _openclaw_config_core(model, litellm_base_url, binding_channel=None, channels=channels)
+    if channels:
+        plugins = config["plugins"]
+        plugins["allow"] += [*channels, "agentbarn-observer"]
+        # start.sh installs the channel plugins from npm; OpenClaw only grants plugin
+        # state to official installs, so they must not be loaded by path.
+        plugins["load"]["paths"].append(_OBSERVER_PLUGIN_PATH)
+        for key in channels:
+            plugins["entries"][key] = {"enabled": True}
+        plugins["entries"]["agentbarn-observer"] = {"enabled": True, "hooks": {"allowConversationAccess": True}}
+    return config
+
+
+def native_slack_channel(settings: dict, home_channel: ConversationLocation | None = None) -> dict:
+    """Map a Slack Connection's policy onto OpenClaw's native Slack channel.
+
+    Tokens stay in the Secret (``SLACK_BOT_TOKEN``/``SLACK_APP_TOKEN``), not the
+    config file persisted on the PVC.
+    """
+    dm_policy = settings.get("dm_policy", "off")
+    channel = {
+        "enabled": True,
+        "mode": "socket",
+        "requireMention": True,
+        "replyToMode": "all",
+        # Replies stream through Slack's native API as markdown_text, so Slack renders
+        # tables; OpenClaw's plain send would convert them to fenced code.
+        "streaming": {"mode": "partial"},
+        "groupPolicy": settings.get("group_policy", "allowlist"),
+        # start_only accepts unmentioned replies in threads the Agent already joined.
+        "implicitMentions": {"threadParticipation": settings.get("thread_mention_policy") == "start_only"},
+        "dmPolicy": {"off": "disabled"}.get(dm_policy, dm_policy),
+    }
+    if channel["groupPolicy"] == "allowlist":
+        channel["channels"] = {channel_id: {"enabled": True} for channel_id in settings.get("channel_ids") or []}
+    if dm_policy == "open":
+        channel["allowFrom"] = ["*"]
+    elif dm_policy == "allowlist":
+        channel["allowFrom"] = list(settings.get("dm_user_ids") or [])
+    if home_channel is not None:
+        # ponytail: a home thread is dropped; cron results post top-level in the home channel.
+        channel["defaultTo"] = f"channel:{home_channel.id}"
+    else:
+        # OpenClaw shows an in-chat setup prompt when defaultTo is absent. Keep
+        # intentionally-unconfigured Connections quiet without selecting a real
+        # channel for originless proactive messages.
+        channel["defaultTo"] = _NO_HOME_CHANNEL_TARGET
+    return channel
+
+
+def native_discord_channel(settings: dict) -> dict:
+    """Map a Discord Connection's global gates onto OpenClaw's native Discord channel.
+
+    Agent Barn's channel, user, and role allowlists are not guild-scoped, so they
+    apply to every guild through OpenClaw's ``"*"`` guild entry.
+    """
+    allow_all = bool(settings.get("allow_all_users"))
+    users = [str(value) for value in settings.get("allowed_user_ids") or [] if str(value)]
+    roles = [str(value) for value in settings.get("allowed_role_ids") or [] if str(value)]
+    channel_ids = [str(value) for value in settings.get("allowed_channel_ids") or [] if str(value)]
+    channel: dict = {"enabled": True, "groupPolicy": "allowlist"}
+    guild: dict = {"requireMention": settings.get("require_mention", True)}
+    if not allow_all:
+        if users:
+            guild["users"] = users
+        if roles:
+            guild["roles"] = roles
+    # Reply in a thread per message, as Hermes does. Threads inherit their parent
+    # channel's entry, and "*" keeps an empty channel allowlist unrestricted.
+    # ponytail: OpenClaw skips requireMention inside threads the bot created, and
+    # has no switch to keep it; Hermes still requires the mention there.
+    guild["channels"] = {channel_id: {"enabled": True, "autoThread": True} for channel_id in channel_ids or ["*"]}
+    if allow_all or users or roles or channel_ids:
+        channel["guilds"] = {"*": guild}
+    else:
+        channel["groupPolicy"] = "disabled"
+    # Roles cannot be resolved without a guild, so DMs admit listed users only.
+    if allow_all:
+        channel.update(dmPolicy="open", allowFrom=["*"])
+    elif users:
+        channel.update(dmPolicy="allowlist", allowFrom=users)
+    else:
+        channel["dmPolicy"] = "disabled"
+    if home_channel_id := settings.get("home_channel_id"):
+        channel["defaultTo"] = f"channel:{home_channel_id}"
+    else:
+        channel["defaultTo"] = _NO_HOME_CHANNEL_TARGET
+    return channel
+
+
+def native_channel_env(credentials_by_platform: dict[str, dict]) -> dict[str, str]:
+    """Secret entries for native channel tokens and the observer."""
+    env = {
+        "AGENTBARN_NATIVE_CHANNELS": ",".join(credentials_by_platform),
+        # The native gateway delivers scheduled results to their origin or defaultTo.
+        "AGENTBARN_SCHEDULED_DELIVERY": "0",
+    }
+    if slack := credentials_by_platform.get("slack"):
+        env["SLACK_BOT_TOKEN"] = slack["bot_token"]
+        env["SLACK_APP_TOKEN"] = slack["app_token"]
+    if discord := credentials_by_platform.get("discord"):
+        env["DISCORD_BOT_TOKEN"] = discord["bot_token"]
+    return env
 
 
 def build_config_map(
@@ -152,6 +267,9 @@ def build_config_map(
         data["telemetry-push-index.js"] = TELEMETRY_PUSH_INDEX_JS
         data["telemetry-push-package.json"] = TELEMETRY_PUSH_PACKAGE_JSON
         data["telemetry-push-plugin.json"] = TELEMETRY_PUSH_PLUGIN_JSON
+        data["agentbarn-observer-index.js"] = OBSERVER_INDEX_JS
+        data["agentbarn-observer-package.json"] = OBSERVER_PACKAGE_JSON
+        data["agentbarn-observer-plugin.json"] = OBSERVER_PLUGIN_JSON
         data["communications-runtime-adapter.py"] = COMMUNICATIONS_RUNTIME_ADAPTER_PY
         data["agentbarn_message.py"] = AGENTBARN_MESSAGE_PY
         data["openclaw-messaging.js"] = OPENCLAW_MESSAGING_JS

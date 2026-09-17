@@ -83,7 +83,7 @@ def send_web_chat_message(
     context: Annotated[CurrentUserContext, Depends(get_current_user())],
     service: Annotated[WebChatService, Injected(WebChatService)],
 ) -> WebChatMessageRead:
-    return service.send_message(agent_id, data.text, data.thread_id, context)
+    return service.send_message(agent_id, data.text, data.thread_id, context, approval_id=data.approval_id)
 
 
 @web_chat_router.post(
