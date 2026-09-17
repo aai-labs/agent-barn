@@ -62,7 +62,7 @@ def _service(
     connections.get_active.return_value = connection
     plugins = PlatformPluginRegistry([cast(PlatformPlugin, plugin)])
     service = CommunicationsGatewayService(
-        config=cast(Config, SimpleNamespace(agent_token_encryption_key="key")),
+        config=cast(Config, SimpleNamespace(agent_token_encryption_key="key", native_platform_keys=frozenset())),
         agent_repository=Mock(),
         delivery_repository=deliveries,
         connection_repository=connections,
@@ -289,7 +289,7 @@ def test_native_platform_deliveries_are_not_reclaimed_or_claimed_by_the_gateway(
     deliveries.claim_next_inbound.return_value = None
     agent = cast(
         Agent,
-        SimpleNamespace(id=uuid4(), status=AgentStatus.RUNNING, agent_type=AgentType.HERMES),
+        SimpleNamespace(id=uuid4(), status=AgentStatus.RUNNING, agent_type=AgentType.OPENCLAW),
     )
 
     assert service.claim_runtime_delivery(agent) is None

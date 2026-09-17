@@ -10,7 +10,7 @@ from injector import inject, singleton
 from redis.exceptions import RedisError
 
 from api.core.config import Config
-from api.domains.agents.models import Agent, AgentStatus, AgentType
+from api.domains.agents.models import Agent, AgentStatus
 from api.domains.agents.repository import AgentRepository
 from api.domains.communications.addressing import extract_local_part
 from api.domains.communications.delivery_repository import CommunicationDeliveryRepository
@@ -114,9 +114,7 @@ class CommunicationsGatewayService:
     def claim_runtime_delivery(self, agent: Agent) -> RuntimeDeliveryRead | None:
         if agent.status != AgentStatus.RUNNING:
             raise RuntimeError("Agent is not running")
-        native_platform_keys = (
-            self.config.native_platform_keys if getattr(agent, "agent_type", None) == AgentType.HERMES else frozenset()
-        )
+        native_platform_keys = self.config.native_platform_keys
         expired = self.delivery_repository.reclaim_expired_inbound(
             agent_id=agent.id,
             excluded_platform_keys=native_platform_keys,

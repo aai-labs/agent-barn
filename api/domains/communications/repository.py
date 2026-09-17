@@ -9,7 +9,7 @@ from injector import inject, singleton
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, col, select
 
-from api.domains.agents.models import Agent, AgentType
+from api.domains.agents.models import Agent
 from api.domains.agents.repository import agent_scope_predicates
 from api.domains.communications.email_address_repository import release_agent_email_addresses
 from api.domains.communications.error_details import error_code_from_details
@@ -155,21 +155,15 @@ class CommunicationConnectionRepository:
             ).one_or_none()
 
     def list_enabled(self, native_platform_keys: frozenset[str] = frozenset()) -> list[CommunicationConnection]:
-        """Enabled Connections, less those a Hermes Agent's native gateway runs itself."""
+        """Enabled Connections, less those the Agent runtime's native gateway runs itself."""
         with Session(self.delegate.engine) as session:
             return list(
                 session.exec(
                     select(CommunicationConnection)
-                    .join(Agent, col(Agent.id) == col(CommunicationConnection.agent_id))
                     .where(
                         col(CommunicationConnection.enabled).is_(True),
                         col(CommunicationConnection.retired_at).is_(None),
-                        sa.not_(
-                            sa.and_(
-                                col(CommunicationConnection.platform_key).in_(native_platform_keys),
-                                col(Agent.agent_type) == AgentType.HERMES,
-                            )
-                        ),
+                        col(CommunicationConnection.platform_key).not_in(native_platform_keys),
                     )
                     .order_by(col(CommunicationConnection.id))
                 ).all()

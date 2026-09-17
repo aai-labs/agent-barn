@@ -2096,7 +2096,7 @@ def test_start_agent_configmap_and_headless_gateway_overlay_are_correct():
 
         with then("tools, memory, and the core/active-memory plugins are enabled"):
             assert_that(overlay["tools"]["profile"], equal_to("full"))
-            assert_that(overlay["memory"]["backend"], equal_to("builtin"))
+            assert_that(overlay["memory"], equal_to({"search": {"provider": "none"}}))
             assert_that(overlay["plugins"]["slots"]["memory"], equal_to("memory-core"))
             assert_that(overlay["plugins"]["entries"]["memory-core"]["enabled"], equal_to(True))
             assert_that(
@@ -2412,6 +2412,57 @@ def test_start_hermes_agent_runs_discord_in_the_native_gateway() -> None:
             assert_that(secret["DISCORD_HOME_CHANNEL"], equal_to("channel-home"))
             assert_that(secret["AGENTBARN_SCHEDULED_DELIVERY"], equal_to("0"))
             assert_that("AGENTBARN_DISCORD_POLICY" in secret, equal_to(False))
+
+
+def _native_slack_connection(context) -> None:
+    delegate: PostgresRepositoryDelegate = context.injector.get(PostgresRepositoryDelegate)
+    delegate.save(
+        CommunicationConnection(
+            organization_id=context.agent.organization_id,
+            agent_id=context.agent.id,
+            platform_key="slack",
+            display_name="Native Slack",
+            settings={"channel_ids": ["C1"], "group_policy": "allowlist", "dm_policy": "off"},
+            credentials_encrypted=encrypt_token(
+                json.dumps({"bot_token": "xoxb-token", "app_token": "xapp-token"}), TEST_ENCRYPTION_KEY
+            ),
+            driver_key_encrypted=encrypt_token("unused", TEST_ENCRYPTION_KEY),
+        )
+    )
+
+
+def test_start_openclaw_agent_runs_slack_and_discord_in_the_native_gateway() -> None:
+    with given(
+        [
+            *_GIVEN_WITH_NATIVE_DISCORD,
+            there_is_an_agent(),
+            _native_slack_connection,
+            _native_discord_connection,
+        ]
+    ) as context:
+        client: TestClient = context.client
+        k8s: MagicMock = context.injector.get(KubernetesClient)
+
+        with when("I start an OpenClaw Agent with native Slack and Discord Connections"):
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("OpenClaw owns both transports with the Connections' gates and tokens"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            config_map = k8s.create_config_map.call_args.args[1]
+            overlay = json.loads(config_map.data["openclaw-config-overlay.json"])
+            assert_that(overlay["channels"]["slack"]["channels"], equal_to({"C1": {"enabled": True}}))
+            assert_that(overlay["channels"]["slack"]["dmPolicy"], equal_to("disabled"))
+            assert_that(overlay["channels"]["discord"]["guilds"]["*"]["users"], equal_to(["user-1"]))
+            assert_that(overlay["plugins"]["allow"], has_item("agentbarn-observer"))
+            assert_that(config_map.data, has_key("agentbarn-observer-index.js"))
+            assert_that("xoxb-token" in config_map.data["openclaw-config-overlay.json"], equal_to(False))
+
+            secret = k8s.create_secret.call_args.args[1].string_data
+            assert_that(secret["SLACK_BOT_TOKEN"], equal_to("xoxb-token"))
+            assert_that(secret["SLACK_APP_TOKEN"], equal_to("xapp-token"))
+            assert_that(secret["DISCORD_BOT_TOKEN"], equal_to("discord-token"))
+            assert_that(secret["AGENTBARN_NATIVE_CHANNELS"], equal_to("slack,discord"))
+            assert_that(secret["AGENTBARN_SCHEDULED_DELIVERY"], equal_to("0"))
 
 
 @pytest.mark.parametrize(

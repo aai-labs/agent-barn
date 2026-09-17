@@ -9,7 +9,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import aliased
 from sqlmodel import Session, col, select
 
-from api.domains.agents.models import Agent, AgentStatus, AgentType
+from api.domains.agents.models import Agent, AgentStatus
 from api.domains.communications.error_details import error_code_from_details
 from api.domains.communications.models import (
     AcceptedCommunicationRead,
@@ -529,13 +529,8 @@ class CommunicationDeliveryRepository:
                 col(CommunicationDelivery.lease_expires_at) < now,
             )
             if native_platform_keys:
-                native_connection_ids = (
-                    select(CommunicationConnection.id)
-                    .join(Agent, col(Agent.id) == col(CommunicationConnection.agent_id))
-                    .where(
-                        col(CommunicationConnection.platform_key).in_(native_platform_keys),
-                        col(Agent.agent_type) == AgentType.HERMES,
-                    )
+                native_connection_ids = select(CommunicationConnection.id).where(
+                    col(CommunicationConnection.platform_key).in_(native_platform_keys)
                 )
                 reclaim = reclaim.where(col(CommunicationDelivery.connection_id).not_in(native_connection_ids))
             session.exec(
@@ -573,14 +568,7 @@ class CommunicationDeliveryRepository:
                 )
             )
             if native_platform_keys:
-                query = query.join(Agent, col(Agent.id) == col(CommunicationConnection.agent_id)).where(
-                    sa.not_(
-                        sa.and_(
-                            col(CommunicationConnection.platform_key).in_(native_platform_keys),
-                            col(Agent.agent_type) == AgentType.HERMES,
-                        )
-                    )
-                )
+                query = query.where(col(CommunicationConnection.platform_key).not_in(native_platform_keys))
             delivery = session.exec(
                 query.order_by(
                     col(CommunicationDelivery.available_at).asc(),

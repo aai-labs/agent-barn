@@ -36,7 +36,10 @@ from api.domains.agents.builders import (
     build_secret_hermes_runtime,
     build_secret_runtime,
     build_service,
+    native_channel_env,
+    native_discord_channel,
     native_discord_env,
+    native_slack_channel,
     native_slack_env,
 )
 from api.domains.agents.error_messages import friendly_k8s_error, friendly_pod_reason
@@ -609,9 +612,7 @@ class AgentService:
             secrets=secrets_read,
             skills=skills_read,
             configured_platform_keys=configured_platform_keys or [],
-            native_platform_keys=sorted(self.config.native_platform_keys)
-            if agent.agent_type == AgentType.HERMES
-            else [],
+            native_platform_keys=sorted(self.config.native_platform_keys),
             allowed_actions=allowed_actions or [],
             created_at=agent.created_at,
             updated_at=agent.updated_at,
@@ -2018,7 +2019,15 @@ class AgentService:
                 self.config.agent_image_pull_secret,
             )
         else:
-            overlay = build_openclaw_gateway_config(effective_model, llm_proxy_url)
+            native_channels: dict[str, dict] = {}
+            native_credentials: dict[str, dict] = {}
+            if native_slack := self._native_slack_connection(agent.id):
+                slack_settings, native_credentials["slack"], home_channel = native_slack
+                native_channels["slack"] = native_slack_channel(slack_settings, home_channel)
+            if native_discord := self._native_discord_connection(agent.id):
+                discord_settings, native_credentials["discord"] = native_discord
+                native_channels["discord"] = native_discord_channel(discord_settings)
+            overlay = build_openclaw_gateway_config(effective_model, llm_proxy_url, native_channels)
             hermes_cfg = None
             secret = build_secret_runtime(
                 agent.id,
@@ -2028,6 +2037,8 @@ class AgentService:
                 litellm_api_key=litellm_key,
                 litellm_base_url=llm_proxy_url,
             )
+            if native_credentials:
+                secret.string_data.update(native_channel_env(native_credentials))
             deployment = build_deployment(
                 agent.id,
                 org_id,

@@ -23,6 +23,9 @@ from .openclaw import (
     build_deployment,
     build_openclaw_gateway_config,
     build_secret_runtime,
+    native_channel_env,
+    native_discord_channel,
+    native_slack_channel,
 )
 
 __all__ = [  # noqa: RUF022 - grouped by runtime (common/openclaw/hermes), not alphabetical
@@ -40,6 +43,9 @@ __all__ = [  # noqa: RUF022 - grouped by runtime (common/openclaw/hermes), not a
     "build_config_map",
     "build_secret_runtime",
     "build_deployment",
+    "native_channel_env",
+    "native_discord_channel",
+    "native_slack_channel",
     # hermes
     "HERMES_BOOTLOADER_FOOTER",
     "HERMES_HEALTHZ_PY",

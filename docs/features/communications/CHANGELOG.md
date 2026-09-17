@@ -13,6 +13,13 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
 
 ## Changes
 
+### 2026-09-17 — Move OpenClaw Slack and Discord to the native gateway — PR pending
+
+- Changed: enabled Slack and Discord Connections on OpenClaw Agents run in OpenClaw's native channel plugins when their Platform is in `COMMUNICATIONS_NATIVE_PLATFORMS`. The native cutoff (supervisor, expired-lease recovery, inbound and outbound claims) no longer checks the Agent's runtime. OpenClaw Agents already running with a native Platform lose gateway ingress on deploy and must be restarted onto base image 0.7.0.
+- Changed: `openclaw-base` 0.7.0 moves core to 2026.8.2 (2026.6.11 had a reply-session init race that dropped Discord file uploads). OpenClaw Agents install `@openclaw/slack`, `@openclaw/discord`, and the Firecrawl plugin from npm at the core's version on first start, because 2026.8 only trusts recorded npm installs with plugin state.
+- Changed: Agent start projects each native Connection into `channels.slack`/`channels.discord`. Tokens go into the Secret, and `AGENTBARN_SCHEDULED_DELIVERY=0` hands cron delivery to OpenClaw. Discord replies open a thread per message, as on Hermes, but OpenClaw does not require a mention inside threads it created. Slack's DM allowlist applies only to DMs here, while Hermes applies it to channel senders too.
+- Delivered: the `agentbarn-observer` OpenClaw plugin reports `provider_observed`, `agent_claimed`, `model_completed`, and delivery stages. `healthz-server.js` reports connection health transitions from the gateway health snapshot. Both are content-free, and base-image CI drives the observer through the pinned hook runner.
+
 ### 2026-09-16 — Move Hermes Discord to its native gateway — PR pending
 
 - Changed: enabled Discord Connections on Hermes can run in Hermes' native Discord adapter alongside native Slack. Agent Barn projects the bot token, mention policy, home channel, and Verbose mode at Agent start; Hermes owns sessions, replies, approvals, progress, reconnects, and scheduled delivery.

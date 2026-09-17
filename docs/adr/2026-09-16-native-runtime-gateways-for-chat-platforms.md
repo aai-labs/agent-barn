@@ -17,7 +17,7 @@ Slack, Discord, and then Microsoft Teams Communication Connections move back to 
 - Native Connections lose Postgres-authoritative at-least-once delivery, dead-letter retry, and in-place reconnect. The runtime's own delivery ledger and reconnect loop replace them. Recovery becomes an Agent restart, and credential changes require a rollout.
 - Journal entries, health, and delivery status for native Connections are runtime-reported and best-effort, and they stay content-free. Mirrored Communication Deliveries are never claimable or retryable.
 - Teams keeps its registered Azure messaging endpoint. The gateway verifies the Bot Framework token and relays the activity, with its authorization header, to the Agent pod over the cluster network, so no Agent pod is publicly exposed.
-- Hermes is adopted first because its pinned image ships Slack, Discord, and Teams adapters with native approvals. OpenClaw follows a core upgrade that is compatible with its Slack and Discord channel packages.
+- Hermes is adopted first because its pinned image ships Slack, Discord, and Teams adapters with native approvals. OpenClaw follows with the `@openclaw/slack` and `@openclaw/discord` channel packages published for its pinned core, so no core upgrade is needed.
 
 ## Revisit when
 
@@ -31,3 +31,7 @@ The Hermes Slack spike uses a deployment-level native Platform allowlist rather 
 ## Phase 2 implementation note
 
 Discord uses the same deployment-level cutoff and observer. Agent Barn adopts Hermes' native Discord authorization surface—global user, role, and channel allowlists plus Allow all users—rather than maintaining distinct guild and DM policies Hermes cannot represent. Agent Barn projects these gates directly into Hermes; the observer reports content-free Connection Journal telemetry only and does not make admission decisions.
+
+## Phase 3 implementation note
+
+OpenClaw uses the same deployment-level cutoff, now applied regardless of runtime. Agent start installs the official Slack and Discord plugins from npm at the core's version (OpenClaw 2026.8 grants plugin state only to recorded npm installs, not to packages loaded by path) and configures them with a `channels.slack`/`channels.discord` block projected from the Connection; tokens stay in the Secret. Discord's global gates map onto OpenClaw's wildcard guild entry. An `agentbarn-observer` plugin reports content-free message, run, and send stages from OpenClaw hooks, and the pod's health server reports channel health from the gateway's own health snapshot. OpenClaw command approvals stay off, as before.

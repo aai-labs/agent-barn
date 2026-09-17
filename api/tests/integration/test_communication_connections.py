@@ -1403,7 +1403,7 @@ def _connection_for_current_agent(key: str, platform_key: str):
     return step
 
 
-def test_supervised_connections_exclude_native_platforms_only_on_hermes_agents():
+def test_supervised_connections_exclude_native_platforms_on_every_runtime():
     with given(
         [
             *_GIVEN,
@@ -1416,27 +1416,17 @@ def test_supervised_connections_exclude_native_platforms_only_on_hermes_agents()
         ]
     ) as context:
         repository: CommunicationConnectionRepository = context.injector.get(CommunicationConnectionRepository)
+        connections = {
+            context.openclaw_slack.id,
+            context.openclaw_discord.id,
+            context.hermes_slack.id,
+            context.hermes_discord.id,
+        }
 
         with when("the supervisor lists Connections with Slack and Discord running natively"):
             native = {connection.id for connection in repository.list_enabled(frozenset({"slack", "discord"}))}
             gateway = {connection.id for connection in repository.list_enabled()}
 
-        with then("only the Hermes Agent's native Connections are left to its runtime"):
-            assert_that(
-                {context.openclaw_slack.id, context.openclaw_discord.id} <= native,
-                equal_to(True),
-            )
-            assert_that(
-                {context.hermes_slack.id, context.hermes_discord.id}.isdisjoint(native),
-                equal_to(True),
-            )
-            assert_that(
-                {
-                    context.openclaw_slack.id,
-                    context.openclaw_discord.id,
-                    context.hermes_slack.id,
-                    context.hermes_discord.id,
-                }
-                <= gateway,
-                equal_to(True),
-            )
+        with then("both runtimes' native Connections are left to the runtime"):
+            assert_that(connections.isdisjoint(native), equal_to(True))
+            assert_that(connections <= gateway, equal_to(True))
