@@ -158,7 +158,9 @@ def test_native_slack_channel_maps_connection_policy() -> None:
     assert open_["implicitMentions"] == {"threadParticipation": True}
     assert open_["defaultTo"] == "channel:C9"
 
-    assert native_slack_channel({})["dmPolicy"] == "disabled"
+    unset = native_slack_channel({})
+    assert unset["dmPolicy"] == "disabled"
+    assert unset["defaultTo"] == "channel:__agentbarn_no_home_channel__"
 
 
 def test_native_discord_channel_maps_global_gates_to_every_guild() -> None:
@@ -188,6 +190,7 @@ def test_native_discord_channel_maps_global_gates_to_every_guild() -> None:
         "*": {"requireMention": True, "channels": {"*": {"enabled": True, "autoThread": True}}}
     }
     assert (everyone["dmPolicy"], everyone["allowFrom"]) == ("open", ["*"])
+    assert everyone["defaultTo"] == "channel:__agentbarn_no_home_channel__"
 
     # Channel-only access admits anyone in those channels, and no DMs.
     channels_only = native_discord_channel({"allowed_channel_ids": ["c1"]})

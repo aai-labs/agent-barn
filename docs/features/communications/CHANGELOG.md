@@ -13,9 +13,13 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
 
 ## Changes
 
-### 2026-09-17 — Suppress native Slack home-channel onboarding when intentionally unset — PR pending
+### 2026-09-17 — Mirror native runtime transcripts into dashboard history — PR pending
 
-- Changed: Native Hermes Slack Connections without a configured default delivery target now receive an impossible home-channel sentinel. Hermes therefore does not send its first-message home-channel setup notice. Explicitly configured home channels remain unchanged; an originless native Slack cron delivery without one fails rather than being sent to an unintended real channel.
+- Fixed: native Slack and Discord conversations are now visible in the dashboard. The native runtime observer sends normalized inbound and outbound transcript messages alongside its existing content-free Connection Journal telemetry; Agent Barn authenticates the Agent, resolves its active Connection, and idempotently upserts the existing conversation-history rows. Journal entries remain content-free and native messages remain outside the claimable Communications Delivery workflow.
+
+### 2026-09-17 — Suppress native home-channel onboarding when intentionally unset — PR pending
+
+- Changed: Native Hermes Slack and OpenClaw Slack/Discord Connections without a configured default delivery target now receive an impossible home-channel sentinel. The runtimes therefore do not send their first-message home-channel setup notice. Explicitly configured home channels remain unchanged; an originless native cron delivery without one fails rather than being sent to an unintended real channel.
 
 ### 2026-09-17 — Move OpenClaw Slack and Discord to the native gateway — PR pending
 

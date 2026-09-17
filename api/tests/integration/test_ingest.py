@@ -11,6 +11,7 @@ from api.domains.communications.models import (
     CommunicationJournalEntry,
     ConnectionObservedStatus,
 )
+from api.domains.conversations.models import AgentChatMessage, MessageDirection
 from api.domains.rbac.policy import AuthorizationScope
 from api.domains.tool_calls.repository import ToolCallRepository
 from api.infrastructure.crypto import encrypt_token
@@ -274,3 +275,64 @@ def test_communication_events_reject_wrong_key():
 
         with then("it returns 401"):
             assert_that(response.status_code, equal_to(status.HTTP_401_UNAUTHORIZED))
+
+
+def test_communication_events_mirror_native_transcripts_to_dashboard_conversations():
+    with given(
+        [*_GIVEN, there_is_an_agent(), _set_ingest_key(), _native_slack_connection(), _create_ingest_client()]
+    ) as context:
+        observed_at = datetime(2026, 9, 17, 12, 0, tzinfo=UTC).isoformat()
+        payload = {
+            "events": [],
+            "messages": [
+                {
+                    "platform": "slack",
+                    "provider_message_id": "1700000000.000100",
+                    "session_key": "agent:main:slack:channel:C1",
+                    "channel_id": "C1",
+                    "thread_id": "1700000000.000100",
+                    "direction": "INBOUND",
+                    "conversation_type": "CHANNEL",
+                    "sender_id": "U1",
+                    "sender_name": "Mauricio",
+                    "channel_name": "support",
+                    "content": "hello from Slack",
+                    "occurred_at": observed_at,
+                },
+                {
+                    "platform": "slack",
+                    "provider_message_id": "outbound:obligation-1",
+                    "session_key": "agent:main:slack:channel:C1",
+                    "channel_id": "C1",
+                    "thread_id": "1700000000.000100",
+                    "direction": "OUTBOUND",
+                    "conversation_type": "CHANNEL",
+                    "content": "hello from Hermes",
+                    "occurred_at": observed_at,
+                },
+            ],
+        }
+
+        with when("the observer reports an inbound message and its reply twice"):
+            first = context.ingest_client.post(
+                f"/ingest/v1/agents/{context.agent.id}/communication-events", json=payload, headers=_auth(context)
+            )
+            second = context.ingest_client.post(
+                f"/ingest/v1/agents/{context.agent.id}/communication-events", json=payload, headers=_auth(context)
+            )
+
+        with then("the dashboard's conversation table has one message per provider message"):
+            assert_that(first.status_code, equal_to(status.HTTP_204_NO_CONTENT))
+            assert_that(second.status_code, equal_to(status.HTTP_204_NO_CONTENT))
+            delegate: PostgresRepositoryDelegate = context.injector.get(PostgresRepositoryDelegate)
+            with Session(delegate.engine) as session:
+                messages = list(
+                    session.exec(
+                        select(AgentChatMessage)
+                        .where(col(AgentChatMessage.connection_id) == context.connection.id)
+                        .order_by(col(AgentChatMessage.openclaw_msg_id))
+                    ).all()
+                )
+            assert_that(len(messages), equal_to(2))
+            assert_that([message.content for message in messages], equal_to(["hello from Slack", "hello from Hermes"]))
+            assert_that([message.direction for message in messages], equal_to([MessageDirection.INBOUND, MessageDirection.OUTBOUND]))

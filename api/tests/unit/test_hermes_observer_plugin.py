@@ -38,7 +38,7 @@ def _source(**overrides):
     return SimpleNamespace(**values)
 
 
-def test_discord_observation_does_not_reimplement_native_adapter_policy() -> None:
+def test_discord_observation_mirrors_a_transcript_without_reimplementing_native_adapter_policy() -> None:
     plugin = _load_plugin()
     event = SimpleNamespace(
         source=_source(chat_type="dm", guild_id=None, scope_id=None, chat_id="dm-1"),
@@ -46,10 +46,28 @@ def test_discord_observation_does_not_reimplement_native_adapter_policy() -> Non
         text="must not leave the runtime",
     )
 
-    result = plugin._on_pre_gateway_dispatch(event=event, gateway=MagicMock())
+    gateway = MagicMock()
+    gateway._session_key_for_source.return_value = "agent:main:discord:dm:dm-1"
+    result = plugin._on_pre_gateway_dispatch(event=event, gateway=gateway)
 
     assert result is None
     assert [(entry["stage"], entry.get("error_code")) for entry in plugin._buffer] == [
         ("provider_observed", None),
     ]
     assert all("text" not in entry for entry in plugin._buffer)
+    assert plugin._messages == [
+        {
+            "platform": "discord",
+            "provider_message_id": "message-1",
+            "session_key": "agent:main:discord:dm:dm-1",
+            "channel_id": "dm-1",
+            "thread_id": None,
+            "direction": "INBOUND",
+            "conversation_type": "DM",
+            "sender_id": "user-1",
+            "sender_name": None,
+            "channel_name": None,
+            "content": "must not leave the runtime",
+            "occurred_at": plugin._messages[0]["occurred_at"],
+        }
+    ]
