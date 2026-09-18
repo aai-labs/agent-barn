@@ -130,7 +130,7 @@ export function AgentRestorePointsSettings({
     if (isRunning) return "Stop the Agent before capturing a restore point.";
     if (hasWorkInFlight) return "A capture or restore is already running for this Agent.";
     if (atCap) {
-      return `This Agent has ${manualCount} of ${cap} restore points. Delete one before capturing another.`;
+      return `All ${cap} captures are used. Delete one before capturing another.`;
     }
     return null;
   }
@@ -159,7 +159,7 @@ export function AgentRestorePointsSettings({
   const captureButton = (
     <button
       type="button"
-      className="af-btn af-btn-sm af-btn-primary"
+      className="af-btn af-btn-primary"
       disabled={captureBlockedReason !== null || createRestorePoint.isPending}
       onClick={() => void capture()}
     >
@@ -173,6 +173,15 @@ export function AgentRestorePointsSettings({
         title="Restore points"
         description="Capture the Agent's working files before a risky change, and roll back to them if it goes wrong."
       >
+        {hasCapacityData && (
+          <p className="mb-3 text-[0.8rem]" style={{ color: "var(--ink-3)" }} data-testid="restore-point-capacity">
+            {manualCount} of {cap} captures used.{" "}
+            <span style={{ color: "var(--ink-4)" }}>
+              Automatic backups taken before a restore don&apos;t count towards this.
+            </span>
+          </p>
+        )}
+
         {canManage && (
           <div className="mb-5 flex flex-wrap items-center gap-2">
             <input

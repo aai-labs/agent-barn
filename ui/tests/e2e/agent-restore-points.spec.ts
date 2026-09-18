@@ -110,7 +110,7 @@ test.describe("Agent restore points", () => {
     await expect(configurationPage.captureRestorePointButton()).toBeDisabled();
 
     await configurationPage.captureAction().hover();
-    await expect(page.getByRole("tooltip")).toContainText("2 of 2");
+    await expect(page.getByRole("tooltip")).toContainText("All 2 captures are used");
   });
 
   test("will not capture while the Agent is running", async ({ page }) => {
@@ -346,7 +346,7 @@ test.describe("Agent restore points", () => {
     await expect(configurationPage.restorePointRow("Before the rewrite")).toBeVisible();
     await expect(configurationPage.captureRestorePointButton()).toBeDisabled();
     await configurationPage.captureAction().hover();
-    await expect(page.getByRole("tooltip")).toContainText("1 of 1");
+    await expect(page.getByRole("tooltip")).toContainText("All 1 captures are used");
   });
 
   test("keeps capture disabled when the list cannot be loaded at all", async ({ page }) => {
@@ -512,6 +512,28 @@ test.describe("Agent restore points", () => {
       "will be re-applied once the files are back",
     );
     await expect.poll(() => agentReads).toBeGreaterThan(readsWhileOwed);
+  });
+
+  test("shows how many captures are used, and that backups are not counted", async ({ page }) => {
+    const dataSupport = new DataSupport(page);
+    const configurationPage = new AgentConfigurationPage(page);
+
+    await baseIntercepts(dataSupport);
+    // Two entries, but only one of them is a capture the user took.
+    await dataSupport.agents.interceptGetRestorePointsRequest({
+      body: mockRestorePointsPage({
+        items: [mockRestorePoint, mockPreRestorePoint],
+        cap: 5,
+        manualCount: 1,
+      }),
+    });
+
+    await openRestorePoints(configurationPage);
+
+    const capacity = page.getByTestId("restore-point-capacity");
+    await expect(capacity).toContainText("1 of 5 captures used");
+    await expect(capacity).toContainText("Automatic backups taken before a restore don't count");
+    await expect(configurationPage.restorePointRows()).toHaveCount(2);
   });
 
   test("lets a viewer read the list without offering any action", async ({ page }) => {
