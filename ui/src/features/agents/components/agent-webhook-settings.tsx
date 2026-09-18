@@ -246,7 +246,7 @@ export function AgentWebhookSettings({ agent, canEdit }: { agent: Agent; canEdit
                 className="af-input w-full"
                 value={displayName}
                 onChange={(event) => setDisplayName(event.target.value)}
-                placeholder="Jira automation"
+                placeholder="CI pipeline"
                 autoFocus
               />
               <p className="mt-1.5 text-xs" style={{ color: "var(--ink-4)" }}>
