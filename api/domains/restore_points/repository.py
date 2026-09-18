@@ -111,6 +111,22 @@ class RestorePointRepository:
     def has_non_terminal_operation(self, agent_id: UUID) -> bool:
         return self._exists_with_status(agent_id, NON_TERMINAL_STATUSES)
 
+    def find_owing_replay_for_agent(self, agent_id: UUID) -> list[AgentRestorePoint]:
+        """Rows whose volume is back but whose recorded configuration is not written.
+
+        READY only, never FAILED: a restore that did not succeed must not have its
+        configuration applied. The flag outlives the status, so a process that stops
+        between marking the restore done and writing the configuration leaves work
+        the next read finds.
+        """
+        with Session(self.delegate.engine) as session:
+            query = select(AgentRestorePoint).where(
+                col(AgentRestorePoint.agent_id) == agent_id,
+                col(AgentRestorePoint.reapply_configuration).is_(True),
+                col(AgentRestorePoint.status) == RestorePointStatus.READY,
+            )
+            return list(session.exec(query).all())
+
     def find_non_terminal_for_agent(self, agent_id: UUID) -> list[AgentRestorePoint]:
         with Session(self.delegate.engine) as session:
             query = select(AgentRestorePoint).where(
@@ -148,7 +164,7 @@ class RestorePointRepository:
             },
         )
 
-    def mark_restored(self, restore_point_id: UUID) -> bool:
+    def mark_restored(self, restore_point_id: UUID, *, cancel_replay: bool = False) -> bool:
         return self._conditional_update(
             restore_point_id,
             (RestorePointStatus.RESTORING,),
@@ -156,8 +172,19 @@ class RestorePointRepository:
                 "status": RestorePointStatus.READY,
                 "failure_reason": None,
                 "job_name": None,
+                **({"reapply_configuration": False, "configuration_error": None} if cancel_replay else {}),
             },
         )
+
+    def mark_configuration_failed(self, restore_point_id: UUID, reason: str) -> None:
+        """Record why replay could not complete and clear its pending intent."""
+        with Session(self.delegate.engine) as session:
+            session.exec(
+                update(AgentRestorePoint)
+                .where(col(AgentRestorePoint.id) == restore_point_id)
+                .values(reapply_configuration=False, configuration_error=reason)
+            )
+            session.commit()
 
     def mark_failed(self, restore_point_id: UUID, reason: str) -> bool:
         return self._conditional_update(
@@ -167,6 +194,7 @@ class RestorePointRepository:
                 "status": RestorePointStatus.FAILED,
                 "failure_reason": reason,
                 "job_name": None,
+                "reapply_configuration": False,
             },
         )
 
@@ -227,6 +255,9 @@ class RestorePointRepository:
         event_name: str,
         actor: ActorIdentity,
         payload: dict,
+        reapply_configuration: bool = False,
+        restored_by_user_id: UUID | None = None,
+        restored_by_display: str | None = None,
     ) -> RestorePointEventResult | None:
         with Session(self.delegate.engine, expire_on_commit=False) as session:
             row = session.exec(
@@ -241,6 +272,12 @@ class RestorePointRepository:
                 return None
             row.status = new_status
             row.job_name = job_name
+            # Stored with the transition so the intent and the operation it belongs to
+            # are written together, and reconciliation can find it later.
+            row.reapply_configuration = reapply_configuration
+            row.configuration_error = None
+            row.restored_by_user_id = restored_by_user_id
+            row.restored_by_display = restored_by_display
             row.updated_at = datetime.now(UTC)
             session.add(row)
             session.flush()

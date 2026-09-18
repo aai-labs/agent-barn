@@ -20,10 +20,13 @@ from api.domains.agents.builders.restore_point import (
 )
 from api.domains.agents.error_messages import friendly_k8s_error
 from api.domains.agents.models import Agent, AgentRestorePoint, AgentStatus, RestorePointOrigin, RestorePointStatus
+from api.domains.agents.override_repository import AgentOverrideRepository
 from api.domains.agents.provisioning_errors import AgentProvisioningOperation
 from api.domains.agents.repository import AgentRepository
 from api.domains.agents.restore_point_job import EXIT_BACKUP_FAILED, EXIT_RESTORE_FAILED
+from api.domains.agents.selection import SelectionValidator
 from api.domains.auth.models import CurrentUserContext
+from api.domains.events import ActorIdentity, ActorIdentityType
 from api.domains.events.catalog import (
     AGENT_RESTORE_POINT_CREATED,
     AGENT_RESTORE_POINT_DELETED,
@@ -34,12 +37,18 @@ from api.domains.rbac.catalog import PermissionKey
 from api.domains.restore_points.models import (
     NON_TERMINAL_STATUSES,
     AgentRestorePointCreate,
+    AgentRestorePointList,
     AgentRestorePointRead,
+    AgentRestorePointRestore,
     RestorePointConfigManifest,
+    RestorePointSkill,
+    selection_from_manifest,
 )
 from api.domains.restore_points.repository import RestorePointRepository
+from api.domains.skills.repository import SkillRepository
+from api.domains.templates.repository import TemplateRepository
 from api.infrastructure.kubernetes import KubernetesClient
-from api.infrastructure.shared.models import PaginatedItems, Pagination
+from api.infrastructure.shared.models import Pagination
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +66,22 @@ CAPTURE_IN_FLIGHT_DETAIL = "A restore point operation is already in progress for
 NOT_READY_DETAIL = "Only a ready restore point can be restored."
 DELETE_IN_FLIGHT_DETAIL = "This restore point is still being worked on. Wait for it to finish, then delete it."
 PRE_RESTORE_LABEL = "Automatic backup before restore"
+NOT_REPLAYABLE_DETAIL = "This restore point predates the recorded configuration, so there is nothing to re-apply."
+
+
+def _selection_type(agent: Agent) -> str:
+    """The pin's origin as ``select_agent_template`` names it.
+
+    The display pin type collapses platform and organization templates into
+    "shared", which is enough to render but not enough to re-apply.
+    """
+    if agent.platform_template_id is not None:
+        return "platform"
+    if agent.agent_template_id is not None:
+        return "organization"
+    if agent.agent_template_override_version_id is not None:
+        return "override"
+    return ""
 
 
 def _capture_job_name(restore_point_id: UUID) -> str:
@@ -105,6 +130,10 @@ class RestorePointService:
     repository: RestorePointRepository
     agent_repository: AgentRepository
     agent_authorization: AgentAuthorization
+    template_repository: TemplateRepository
+    skill_repository: SkillRepository
+    override_repository: AgentOverrideRepository
+    selection: SelectionValidator
     k8s: KubernetesClient
     event_delivery_dispatcher: EventDeliveryDispatcher
 
@@ -130,10 +159,18 @@ class RestorePointService:
         agent_id: UUID,
         context: CurrentUserContext,
         pagination: Pagination,
-    ) -> PaginatedItems[AgentRestorePointRead]:
+    ) -> AgentRestorePointList:
         scope = self._read_scope(agent_id, context)
         self.reconcile_agent(agent_id)
-        return self.repository.find_by_agent(agent_id, pagination, scope)
+        page = self.repository.find_by_agent(agent_id, pagination, scope)
+        return AgentRestorePointList(
+            page=page.page,
+            page_size=page.page_size,
+            total=page.total,
+            items=page.items,
+            cap=self.config.restore_point_max_per_agent,
+            manual_count=self.repository.count_manual_for_agent(agent_id),
+        )
 
     def reconcile_agent(self, agent_id: UUID) -> None:
         """Resolve non-terminal rows from live Job status.
@@ -153,6 +190,21 @@ class RestorePointService:
             except Exception:
                 logger.warning("Could not reconcile restore point %s", row.id, exc_info=True)
 
+        # Separate pass, and driven by the stored intent rather than by what just
+        # happened above: a replay owed by an earlier read — or by a process that
+        # stopped before writing it — is still found here.
+        try:
+            owed = self.repository.find_owing_replay_for_agent(agent_id)
+        except Exception:
+            logger.warning("Could not load pending configuration replays for agent %s", agent_id, exc_info=True)
+            return
+
+        for row in owed:
+            try:
+                self._apply_recorded_configuration_after_restore(row)
+            except Exception:
+                logger.warning("Could not re-apply the recorded configuration for %s", row.id, exc_info=True)
+
     def _reconcile_row(self, row: AgentRestorePoint) -> None:
         namespace = self.config.k8s_namespace
         if not row.job_name:
@@ -170,6 +222,8 @@ class RestorePointService:
 
         if status_block.succeeded:
             if row.status == RestorePointStatus.RESTORING:
+                # The configuration is not written here. The intent stays on the row
+                # and is picked up below, so work is never lost between the two.
                 self.repository.mark_restored(row.id)
             else:
                 self._succeed(row)
@@ -216,6 +270,14 @@ class RestorePointService:
 
         outcome = self._restore_outcome(row.job_name or "", namespace)
         if row.status == RestorePointStatus.RESTORING:
+            # Neither branch replaced the volume, so any configuration owed for this
+            # restore is owed no longer. BACKUP_FAILED returns the row to READY
+            # because the archive is still good — not because the restore happened.
+            if row.reapply_configuration:
+                self.repository.mark_configuration_failed(
+                    row.id,
+                    "The restore did not complete, so the recorded configuration was not applied.",
+                )
             if outcome == _RestoreOutcome.BACKUP_FAILED:
                 self.repository.mark_restored(row.id)
             else:
@@ -352,6 +414,7 @@ class RestorePointService:
         self,
         agent_id: UUID,
         restore_point_id: UUID,
+        payload: AgentRestorePointRestore,
         context: CurrentUserContext,
     ) -> AgentRestorePointRead:
         agent = self.agent_authorization.require_action(context, agent_id, PermissionKey.AGENT_LIFECYCLE_MANAGE)
@@ -375,8 +438,19 @@ class RestorePointService:
                 )
             if target.status != RestorePointStatus.READY:
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=NOT_READY_DETAIL)
-            if self.repository.has_non_terminal_operation(agent_id):
+            if self.repository.has_non_terminal_operation(agent_id) or self.repository.find_owing_replay_for_agent(
+                agent_id
+            ):
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=CAPTURE_IN_FLIGHT_DETAIL)
+
+            if payload.reapply_configuration:
+                # Authorized here, applied later: the write happens in reconciliation
+                # once the Job confirms the volume is back, so the permission for it
+                # has to be settled while the requester is still on the call.
+                self.agent_authorization.require_action_for_visible(context, current, PermissionKey.AGENT_UPDATE)
+                # Before the Job, not after it: a configuration that cannot be applied
+                # must not cost the Agent its files first.
+                self._validate_recorded_configuration(current, target)
 
             job_name = _restore_job_name(target.id)
             backup = self._create_pre_restore_row(current, job_name)
@@ -388,6 +462,9 @@ class RestorePointService:
                 event_name=AGENT_RESTORE_POINT_RESTORED,
                 actor=resolve_actor_identity(context, current.organization_id),
                 payload=self._event_payload(current, target, context),
+                reapply_configuration=payload.reapply_configuration,
+                restored_by_user_id=context.user.id,
+                restored_by_display=context.user.full_name or context.user.email,
             )
             if result is None:
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=NOT_READY_DETAIL)
@@ -398,6 +475,139 @@ class RestorePointService:
 
         refreshed = self.repository.get_in_scope(restore_point_id, agent_id, scope)
         return AgentRestorePointRead.model_validate(refreshed or target)
+
+    def _apply_recorded_configuration_after_restore(self, row: AgentRestorePoint) -> None:
+        """Write the recorded configuration once the restore has confirmed success.
+
+        Deferred work, not a request: authorization was settled when the restore was
+        asked for, and the actor recorded here is the Member who asked. A failure is
+        stored on the row rather than raised — reconciliation runs inside somebody
+        else's read and must not fail it, and the volume is already back either way.
+        """
+        # The lock is what keeps this from running beside a start, a delete, or a
+        # second reconciler: once the row is terminal nothing else holds the Agent.
+        with self.agent_repository.lifecycle_lock(row.agent_id) as acquired:
+            if not acquired:
+                return
+            agent = self.agent_repository.get_by_id(row.agent_id)
+            if agent is None or agent.status == AgentStatus.RUNNING:
+                return
+            # Re-read under the lifecycle lock: another reconciler may have
+            # completed this replay since the sweep loaded its copy.
+            pending = self.repository.find_owing_replay_for_agent(row.agent_id)
+            refreshed = next((pending_row for pending_row in pending if pending_row.id == row.id), None)
+            if refreshed is None:
+                return
+            row = refreshed
+            try:
+                self._write_recorded_configuration(
+                    agent,
+                    row,
+                    self._replay_actor(row, agent),
+                    row.restored_by_display or "Agent Barn",
+                )
+            except HTTPException as exc:
+                self.repository.mark_configuration_failed(row.id, str(exc.detail)[:_MAX_FAILURE_REASON])
+            except Exception:
+                logger.warning("Could not re-apply the recorded configuration for %s", row.id, exc_info=True)
+                self.repository.mark_configuration_failed(row.id, "The recorded configuration could not be re-applied.")
+
+    def _replay_actor(self, row: AgentRestorePoint, agent: Agent) -> ActorIdentity:
+        """The Member who asked for the restore, since they authorized this write."""
+        if row.restored_by_user_id is None:
+            return ActorIdentity(
+                type=ActorIdentityType.SYSTEM, id="restore-points", organization_id=agent.organization_id
+            )
+        return ActorIdentity(
+            type=ActorIdentityType.USER,
+            id=row.restored_by_user_id,
+            organization_id=agent.organization_id,
+        )
+
+    def _write_recorded_configuration(
+        self,
+        agent: Agent,
+        target: AgentRestorePoint,
+        actor: ActorIdentity,
+        actor_display: str = "Agent Barn",
+    ) -> None:
+        selection = self._recorded_selection(agent, target)
+        # Skills the Agent has now but the manifest does not are dropped, so the
+        # replay lands on exactly the recorded set rather than a superset.
+        recorded = set(selection.skill_ids)
+        selection.removed_skill_ids = [
+            row.skill_id for row in self.agent_repository.get_skills_for_agent(agent.id) if row.skill_id not in recorded
+        ]
+        resolved = self.selection.resolve(agent, selection, agent.organization_id)
+        self.override_repository.select_pin(
+            agent.id,
+            agent.organization_id,
+            selection_type=selection.selection_type,
+            selected_id=resolved.selected_id,
+            expected_agent_updated_at=agent.updated_at,
+            actor=actor,
+            actor_display=actor_display,
+            template_key=resolved.template_key,
+            selected_version=resolved.version,
+            skill_pins=[(pin.skill_id, pin.version) for pin in resolved.skill_pins],
+            removed_skill_ids=resolved.removed_skill_ids,
+            scalar_updates=resolved.scalar_updates,
+            restored_configuration_id=target.id,
+        )
+
+    def apply_recorded_configuration(
+        self,
+        agent_id: UUID,
+        restore_point_id: UUID,
+        context: CurrentUserContext,
+    ) -> None:
+        """Write the configuration this restore point recorded.
+
+        Separate from the restore because the volume comes back first: applying
+        before the Job finishes would leave the configuration changed even when the
+        files never were. The selection is rebuilt here from the stored manifest
+        rather than sent by the client, so what was checked before the Job is what
+        gets written after it.
+        """
+        agent = self.agent_authorization.require_action(context, agent_id, PermissionKey.AGENT_UPDATE)
+        scope = self.agent_authorization.authorization_scope(context, PermissionKey.ACTIVITY_READ)
+
+        with self.agent_repository.lifecycle_lock(agent.id) as acquired:
+            if not acquired:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=CAPTURE_IN_FLIGHT_DETAIL)
+            current = self.agent_repository.get_by_id(agent.id)
+            if current is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent {agent_id} not found")
+            if current.status == AgentStatus.RUNNING:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=AGENT_RUNNING_RESTORE_DETAIL)
+
+            target = self.repository.get_in_scope(restore_point_id, agent_id, scope)
+            if target is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Restore point {restore_point_id} not found",
+                )
+
+            if self.repository.has_non_terminal_operation(agent_id) or self.repository.find_owing_replay_for_agent(
+                agent_id
+            ):
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=CAPTURE_IN_FLIGHT_DETAIL)
+
+            self._write_recorded_configuration(
+                current,
+                target,
+                resolve_actor_identity(context, current.organization_id),
+                context.user.full_name or context.user.email,
+            )
+
+    def _recorded_selection(self, agent: Agent, target: AgentRestorePoint):
+        selection = selection_from_manifest(target.config_manifest, agent.updated_at)
+        if selection is None:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=NOT_REPLAYABLE_DETAIL)
+        return selection
+
+    def _validate_recorded_configuration(self, agent: Agent, target: AgentRestorePoint) -> None:
+        self.selection.resolve(agent, self._recorded_selection(agent, target), agent.organization_id)
 
     def _create_pre_restore_row(self, agent: Agent, job_name: str) -> AgentRestorePoint:
         backup_id = uuid7()
@@ -453,7 +663,7 @@ class RestorePointService:
         except Exception as exc:
             reason = friendly_k8s_error(exc, operation=AgentProvisioningOperation.RESTORE)
             self.repository.mark_failed(backup.id, reason[:_MAX_FAILURE_REASON])
-            self.repository.mark_restored(target.id)
+            self.repository.mark_restored(target.id, cancel_replay=True)
             self.k8s.delete_pvc(backup.pvc_name, namespace)
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=reason) from exc
 
@@ -473,7 +683,7 @@ class RestorePointService:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Restore point {restore_point_id} not found",
             )
-        if restore_point.status in NON_TERMINAL_STATUSES:
+        if restore_point.status in NON_TERMINAL_STATUSES or restore_point.reapply_configuration:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=DELETE_IN_FLIGHT_DETAIL)
 
         agent = self.agent_repository.get_by_id(agent_id)
@@ -503,13 +713,15 @@ class RestorePointService:
             logger.warning("Could not enqueue restore point event deliveries", exc_info=True)
 
     def has_blocking_operation(self, agent_id: UUID) -> bool:
-        """True when a capture or restore is genuinely still running.
+        """True while volume work or its requested configuration replay is pending.
 
         Reconciles first so a finished or ttl-reaped Job resolves to terminal
         rather than blocking the Agent — and its Organization — forever.
         """
         self.reconcile_agent(agent_id)
-        return self.repository.has_non_terminal_operation(agent_id)
+        return self.repository.has_non_terminal_operation(agent_id) or bool(
+            self.repository.find_owing_replay_for_agent(agent_id)
+        )
 
     def purge_agent(self, agent_id: UUID) -> None:
         """Remove every restore point resource belonging to one Agent.
@@ -530,7 +742,9 @@ class RestorePointService:
         if agent.status == AgentStatus.RUNNING:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=AGENT_RUNNING_DETAIL)
 
-        if self.repository.has_non_terminal_operation(agent.id):
+        if self.repository.has_non_terminal_operation(agent.id) or self.repository.find_owing_replay_for_agent(
+            agent.id
+        ):
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=CAPTURE_IN_FLIGHT_DETAIL)
 
         cap = self.config.restore_point_max_per_agent
@@ -584,12 +798,27 @@ class RestorePointService:
             ) from exc
 
     def _build_config_manifest(self, agent: Agent) -> RestorePointConfigManifest:
+        """The Agent's pins at capture time, shaped for display and replay.
+
+        Resolved the same way the Agent read DTO resolves them, so a client can
+        diff the two without mapping between vocabularies.
+        """
+        pin = self.template_repository.get_pinned_template_info_for_agents([agent]).get(agent.id)
+        template_key, template_version, _, override_version = pin or ("", 0, "", None)
         return RestorePointConfigManifest(
             agent_type=agent.agent_type,
+            template_key=template_key,
+            template_version=template_version,
+            template_selection_type=_selection_type(agent),
+            override_version=override_version,
             model=agent.model or "",
             effective_model=agent.running_model or agent.model or "",
             approval_mode=agent.approval_mode,
             verbose_mode=agent.verbose_mode,
+            skills=[
+                RestorePointSkill(skill_id=skill.id, name=skill.name, pinned_version=row.pinned_version)
+                for row, skill in self.skill_repository.get_agent_skills_with_details(agent.id)
+            ],
         )
 
     def _read_scope(self, agent_id: UUID, context: CurrentUserContext):

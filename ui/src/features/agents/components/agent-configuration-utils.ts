@@ -20,6 +20,7 @@ export type AgentConfigurationSectionKey =
   | "skills"
   | "keys"
   | "override"
+  | "restore"
   | "danger";
 
 export type AgentConfigurationSection = {
@@ -58,6 +59,11 @@ export const AGENT_CONFIGURATION_SECTIONS: AgentConfigurationSection[] = [
     key: "override",
     label: "Agent-owned override",
     description: "Draft, edit, and publish a private template snapshot.",
+  },
+  {
+    key: "restore",
+    label: "Restore points",
+    description: "Capture and roll back the Agent's working files.",
   },
   {
     key: "danger",

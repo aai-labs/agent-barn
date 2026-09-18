@@ -417,3 +417,77 @@ export type AgentAccessSettingsAssignmentUpdate = z.infer<
   typeof AgentAccessSettingsAssignmentUpdateSchema
 >;
 export type AgentAccessSettingsUpdate = z.infer<typeof AgentAccessSettingsUpdateSchema>;
+
+export const RestorePointStatusSchema = z.enum([
+  "PENDING",
+  "CAPTURING",
+  "RESTORING",
+  "READY",
+  "FAILED",
+  "DELETING",
+]);
+
+export const RestorePointOriginSchema = z.enum([
+  "MANUAL",
+  "PRE_RESTORE",
+  "PRE_RESET",
+  "PRE_UPGRADE",
+]);
+
+export const RestorePointSkillSchema = z.object({
+  skillId: z.string().uuid(),
+  name: z.string(),
+  pinnedVersion: z.number().int(),
+});
+
+// Versioned free-form JSON: a row captured before a field existed omits it, so
+// every field defaults rather than failing the parse.
+export const RestorePointConfigManifestSchema = z.object({
+  version: z.number().int().default(1),
+  agentType: z.string().default(""),
+  templateKey: z.string().default(""),
+  templateVersion: z.number().int().default(0),
+  templateSelectionType: z.enum(["platform", "organization", "override", ""]).catch(""),
+  overrideVersion: z.number().int().nullish().default(null),
+  model: z.string().default(""),
+  effectiveModel: z.string().default(""),
+  approvalMode: z.string().default(""),
+  verboseMode: z.boolean().default(false),
+  skills: z.array(RestorePointSkillSchema).default([]),
+});
+
+export const RestorePointSchema = z.object({
+  id: z.string().uuid(),
+  agentId: z.string().uuid(),
+  label: z.string().nullable(),
+  status: RestorePointStatusSchema,
+  origin: RestorePointOriginSchema,
+  agentType: z.string(),
+  archiveBytes: z.number().int().nullable(),
+  fileCount: z.number().int().nullable(),
+  failureReason: z.string().nullable(),
+  // True while a confirmed restore still owes the Agent its recorded configuration.
+  reapplyConfiguration: z.boolean().default(false),
+  // Set when the volume came back but the configuration did not.
+  configurationError: z.string().nullable().default(null),
+  configManifest: RestorePointConfigManifestSchema,
+  createdAt: z.string(),
+  capturedAt: z.string().nullable(),
+});
+
+export const PaginatedRestorePointsSchema = z.object({
+  page: z.number().int().min(1),
+  pageSize: z.number().int().min(1),
+  total: z.number().int().min(0),
+  items: z.array(RestorePointSchema),
+  // The cap counts neither system-created backups nor failed captures; total counts both.
+  cap: z.number().int().min(1),
+  manualCount: z.number().int().min(0),
+});
+
+export type RestorePointStatus = z.infer<typeof RestorePointStatusSchema>;
+export type RestorePointOrigin = z.infer<typeof RestorePointOriginSchema>;
+export type RestorePointSkill = z.infer<typeof RestorePointSkillSchema>;
+export type RestorePointConfigManifest = z.infer<typeof RestorePointConfigManifestSchema>;
+export type RestorePoint = z.infer<typeof RestorePointSchema>;
+export type PaginatedRestorePoints = z.infer<typeof PaginatedRestorePointsSchema>;
