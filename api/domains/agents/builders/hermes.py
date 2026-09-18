@@ -6,7 +6,7 @@ from kubernetes import client
 
 from api.domains.communications.models import ConversationLocation
 
-from .common import _labels, _resource_name
+from .common import _labels, _resource_name, _setting_ids
 
 # Matches OpenClaw, so limits.memory (100Gi quota) never binds before
 # requests.memory (20Gi). Note the asymmetry in what the limit *does*: OpenClaw
@@ -41,6 +41,11 @@ COMMUNICATIONS_RUNTIME_ADAPTER_PY: str = (_COMMON_SCRIPTS / "communications-runt
 _HERMES_APPROVAL_MODE = {"manual": "manual", "auto": "smart", "off": "off"}
 _HERMES_APPROVAL_TIMEOUT_SECONDS = 300
 _HERMES_HEADLESS_APPROVAL_MODE = "deny"
+# Hermes shows a first-message onboarding notice whenever this variable is
+# absent. This deliberately cannot be a real channel or chat ID: it suppresses
+# that notice without accidentally making an arbitrary real channel the
+# destination for proactive messages.
+_NO_HOME_CHANNEL = "__agentbarn_no_home_channel__"
 # Every auxiliary.<task> block v2026.8.19 reads, minus the moa_* slots (MoA only).
 _HERMES_AUXILIARY_TASKS = (
     "vision",
@@ -137,10 +142,11 @@ def build_hermes_gateway_config(
     native_slack: bool = False,
     native_discord: bool = False,
     discord_require_mention: bool = True,
+    telegram_settings: dict | None = None,
     verbose_mode: bool = False,
 ) -> dict:
     plugins = ["telemetry-push", "agentbarn-messaging"]
-    if native_slack or native_discord:
+    if native_slack or native_discord or telegram_settings is not None:
         plugins.append("agentbarn-observer")
     config = _hermes_config_core(model, litellm_base_url, enabled_plugins=plugins, approval_mode=approval_mode)
     if native_slack:
@@ -169,6 +175,21 @@ def build_hermes_gateway_config(
             "thread_require_mention": discord_require_mention,
         }
         config["display"]["platforms"]["discord"] = {
+            "tool_progress": "all" if verbose_mode else "off",
+            "tool_progress_grouping": "accumulate",
+            "interim_assistant_messages": verbose_mode,
+        }
+    if telegram_settings is not None:
+        # Unknown DM senders would otherwise receive a pairing code.
+        telegram: dict = {"unauthorized_dm_behavior": "ignore"}
+        if telegram_settings.get("group_policy", "allowlist") != "open" and not _setting_ids(
+            telegram_settings, "allowed_chat_ids"
+        ):
+            # An empty chat allowlist means "any group" to Hermes; an empty group
+            # sender allowlist is the only gate that turns groups off entirely.
+            telegram["group_allow_from"] = []
+        config["telegram"] = telegram
+        config["display"]["platforms"]["telegram"] = {
             "tool_progress": "all" if verbose_mode else "off",
             "tool_progress_grouping": "accumulate",
             "interim_assistant_messages": verbose_mode,
@@ -213,6 +234,12 @@ def native_slack_env(
         env["SLACK_HOME_CHANNEL_NAME"] = home_channel.display_name or ""
         if home_channel.thread_id:
             env["SLACK_HOME_CHANNEL_THREAD_ID"] = home_channel.thread_id
+    else:
+        # Hermes uses only the presence of this variable to decide whether to
+        # show its home-channel onboarding message. A sentinel keeps an
+        # intentionally-unconfigured Connection quiet; an originless native
+        # cron delivery still fails safely rather than landing in a real channel.
+        env["SLACK_HOME_CHANNEL"] = _NO_HOME_CHANNEL
     return env
 
 
@@ -229,11 +256,44 @@ def native_discord_env(settings: dict, credentials: dict) -> dict[str, str]:
         ("allowed_user_ids", "DISCORD_ALLOWED_USERS"),
         ("allowed_role_ids", "DISCORD_ALLOWED_ROLES"),
     ):
-        values = [str(value) for value in settings.get(settings_key, []) if str(value)]
-        if values:
+        if values := _setting_ids(settings, settings_key):
             env[env_key] = ",".join(values)
     if home_channel_id := settings.get("home_channel_id"):
         env["DISCORD_HOME_CHANNEL"] = str(home_channel_id)
+    else:
+        env["DISCORD_HOME_CHANNEL"] = _NO_HOME_CHANNEL
+    return env
+
+
+def native_telegram_env(settings: dict, credentials: dict) -> dict[str, str]:
+    """Map a Telegram Connection onto the native Hermes Telegram adapter.
+
+    Groups always require a mention (or a reply to the bot); DMs never do. Hermes
+    authorizes a sender if any gate admits them, so a DM allowlist also admits
+    those users in groups; the adapter's chat allowlist still confines groups.
+    ``build_hermes_gateway_config(telegram_settings=...)`` closes groups when the
+    allowlist is empty.
+    """
+    env = {
+        "TELEGRAM_BOT_TOKEN": credentials["bot_token"],
+        "TELEGRAM_REQUIRE_MENTION": "true",
+        # Native Hermes delivers scheduled results to their origin.
+        "AGENTBARN_SCHEDULED_DELIVERY": "0",
+    }
+    if settings.get("group_policy", "allowlist") == "open":
+        env["TELEGRAM_GROUP_ALLOWED_CHATS"] = "*"
+    elif chat_ids := _setting_ids(settings, "allowed_chat_ids"):
+        # The adapter drops other groups; the gateway admits any member of these.
+        env["TELEGRAM_ALLOWED_CHATS"] = env["TELEGRAM_GROUP_ALLOWED_CHATS"] = ",".join(chat_ids)
+    dm_policy = settings.get("dm_policy", "off")
+    if dm_policy == "open":
+        env["TELEGRAM_ALLOW_ALL_USERS"] = "true"
+    elif dm_policy == "allowlist" and (user_ids := _setting_ids(settings, "allowed_user_ids")):
+        env["TELEGRAM_ALLOWED_USERS"] = ",".join(user_ids)
+    if home_channel_id := settings.get("home_channel_id"):
+        env["TELEGRAM_HOME_CHANNEL"] = str(home_channel_id)
+    else:
+        env["TELEGRAM_HOME_CHANNEL"] = _NO_HOME_CHANNEL
     return env
 
 

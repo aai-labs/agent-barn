@@ -7,6 +7,7 @@ from api.domains.agents.builders import (
     build_secret_hermes_runtime,
     native_discord_env,
     native_slack_env,
+    native_telegram_env,
 )
 from api.domains.agents.builders.hermes import HERMES_START_SH
 from api.domains.communications.models import ConversationLocation
@@ -70,7 +71,7 @@ def test_native_slack_env_maps_connection_policy() -> None:
     assert "SLACK_ALLOW_ALL_USERS" not in open_env
     assert open_env["SLACK_THREAD_REQUIRE_MENTION"] == "false"
     assert open_env["AGENTBARN_SCHEDULED_DELIVERY"] == "0"
-    assert "SLACK_HOME_CHANNEL" not in open_env
+    assert open_env["SLACK_HOME_CHANNEL"] == "__agentbarn_no_home_channel__"
 
     home = native_slack_env(
         {},
@@ -121,6 +122,83 @@ def test_native_discord_env_maps_hermes_authorization_gates() -> None:
     assert env["DISCORD_HOME_CHANNEL"] == "channel-home"
     assert env["AGENTBARN_SCHEDULED_DELIVERY"] == "0"
     assert "AGENTBARN_DISCORD_POLICY" not in env
+
+
+def test_native_discord_env_uses_a_sentinel_when_home_is_unset() -> None:
+    env = native_discord_env({}, {"bot_token": "discord-token"})
+
+    assert env["DISCORD_HOME_CHANNEL"] == "__agentbarn_no_home_channel__"
+
+
+_TELEGRAM_TOKEN = {"bot_token": "123:abc"}
+
+
+def test_native_telegram_config_ignores_unknown_dms() -> None:
+    config = build_hermes_gateway_config(
+        "litellm/gpt-5", "http://litellm:4000", telegram_settings={"group_policy": "open"}
+    )
+
+    assert config["plugins"]["enabled"] == ["telemetry-push", "agentbarn-messaging", "agentbarn-observer"]
+    assert config["telegram"] == {"unauthorized_dm_behavior": "ignore"}
+    assert config["display"]["platforms"]["telegram"]["tool_progress"] == "off"
+
+
+def test_native_telegram_config_closes_groups_without_an_allowlist() -> None:
+    config = build_hermes_gateway_config("litellm/gpt-5", "http://litellm:4000", telegram_settings={})
+
+    assert config["telegram"]["group_allow_from"] == []
+
+
+def test_native_telegram_config_treats_blank_chat_ids_as_no_allowlist() -> None:
+    # Hermes reads a missing chat allowlist as "any group", so blanks must close groups.
+    config = build_hermes_gateway_config(
+        "litellm/gpt-5", "http://litellm:4000", telegram_settings={"allowed_chat_ids": [""], "dm_policy": "open"}
+    )
+
+    assert config["telegram"]["group_allow_from"] == []
+
+
+def test_native_telegram_config_shows_tool_progress_in_verbose_mode() -> None:
+    config = build_hermes_gateway_config(
+        "litellm/gpt-5", "http://litellm:4000", telegram_settings={}, verbose_mode=True
+    )
+
+    assert config["display"]["platforms"]["telegram"]["tool_progress"] == "all"
+
+
+def test_native_telegram_env_confines_groups_to_the_allowlist_and_requires_mentions() -> None:
+    env = native_telegram_env({"allowed_chat_ids": ["-1001"], "allowed_user_ids": ["111"]}, _TELEGRAM_TOKEN)
+
+    assert env == {
+        "TELEGRAM_BOT_TOKEN": "123:abc",
+        "TELEGRAM_REQUIRE_MENTION": "true",
+        "AGENTBARN_SCHEDULED_DELIVERY": "0",
+        "TELEGRAM_ALLOWED_CHATS": "-1001",
+        "TELEGRAM_GROUP_ALLOWED_CHATS": "-1001",
+        "TELEGRAM_HOME_CHANNEL": "__agentbarn_no_home_channel__",
+    }
+
+
+def test_native_telegram_env_opens_groups_and_dms() -> None:
+    env = native_telegram_env({"group_policy": "open", "dm_policy": "open"}, _TELEGRAM_TOKEN)
+
+    assert env["TELEGRAM_GROUP_ALLOWED_CHATS"] == "*"
+    assert "TELEGRAM_ALLOWED_CHATS" not in env
+    assert env["TELEGRAM_ALLOW_ALL_USERS"] == "true"
+
+
+def test_native_telegram_env_maps_the_dm_allowlist() -> None:
+    env = native_telegram_env({"dm_policy": "allowlist", "allowed_user_ids": ["111"]}, _TELEGRAM_TOKEN)
+
+    assert env["TELEGRAM_ALLOWED_USERS"] == "111"
+    assert "TELEGRAM_GROUP_ALLOWED_CHATS" not in env
+    assert "TELEGRAM_ALLOW_ALL_USERS" not in env
+
+
+def test_native_telegram_env_sets_the_home_chat() -> None:
+    env = native_telegram_env({"home_channel_id": "-1009"}, _TELEGRAM_TOKEN)
+
+    assert env["TELEGRAM_HOME_CHANNEL"] == "-1009"
 
 
 def test_native_gateway_does_not_drain_agent_barn_scheduled_completions() -> None:

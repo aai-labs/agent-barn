@@ -46,13 +46,14 @@ class PlatformCostService:
 
         window_days = (window.end - window.start).total_seconds() / _SECONDS_PER_DAY
         daily_burn = base.total_spend / window_days if window_days > 0 else 0.0
-        credits = self.openrouter.get_credits_remaining()
+        credits = self.openrouter.get_credits()
 
         return PlatformCostSummaryRead(
             **base.model_dump(),
             daily_burn_rate=daily_burn,
-            credits_remaining=credits,
-            runway_days=(credits / daily_burn) if credits is not None and daily_burn > 0 else None,
+            credits_status=credits.status,
+            credits_remaining=credits.remaining,
+            credits_limit=credits.limit,
             unattributed_spend=float(unattributed_spend),
             unattributed_calls=unattributed_calls,
             organizations=[

@@ -63,42 +63,50 @@ def _run(steps: list[dict]) -> list[dict]:
         server.shutdown()
         server.server_close()
         os.unlink(steps_path)
-    return [event for payload in server.payloads for event in payload["events"]]
+    return server.payloads
 
 
 def test_native_channel_turn_reports_content_free_journal_stages() -> None:
     session = {"sessionKey": "agent:main:slack:channel:c1"}
-    events = _run(
+    payloads = _run(
         [
             {
                 "hook": "message_received",
                 "event": {"content": "secret text", "senderId": "U1", "messageId": "1700.1"},
-                "ctx": {"channelId": "slack", **session},
+                "ctx": {"channelId": "slack", "chatId": "c1", **session},
             },
             # Gateway-owned platforms are not the observer's to report.
             {
                 "hook": "message_received",
                 "event": {"content": "other", "messageId": "9"},
-                "ctx": {"channelId": "telegram", "sessionKey": "agent:main:telegram:1"},
+                "ctx": {"channelId": "telegram", "chatId": "9", "sessionKey": "agent:main:telegram:1"},
             },
             {"hook": "before_agent_run", "event": {"prompt": "secret text"}, "ctx": session},
             {"hook": "agent_end", "event": {"success": True, "messages": []}, "ctx": session},
             {
                 "hook": "message_sent",
-                "event": {"to": "channel:c1", "content": "reply", "success": True},
-                "ctx": {"channelId": "slack", **session},
+                "event": {"to": "channel:c1", "content": "reply", "messageId": "reply-1", "success": True},
+                "ctx": {"channelId": "slack", "chatId": "c1", **session},
             },
             {
                 "hook": "message_sent",
-                "event": {"to": "channel:c1", "content": "reply", "success": False, "error": "provider text"},
-                "ctx": {"channelId": "slack", **session},
+                "event": {
+                    "to": "channel:c1",
+                    "content": "reply",
+                    "messageId": "reply-2",
+                    "success": False,
+                    "error": "provider text",
+                },
+                "ctx": {"channelId": "slack", "chatId": "c1", **session},
             },
             # A cron run has no inbound message to correlate with.
             {"hook": "agent_end", "event": {"success": True, "messages": []}, "ctx": {"sessionKey": "cron:job"}},
         ]
     )
 
-    batch = IngestCommunicationEventBatch.model_validate({"events": events})
+    events = [event for payload in payloads for event in payload["events"]]
+    messages = [message for payload in payloads for message in payload["messages"]]
+    batch = IngestCommunicationEventBatch.model_validate({"events": events, "messages": messages})
     assert_that(
         [(e.stage, e.platform, e.correlation_id, e.error_code) for e in batch.events],
         equal_to(
@@ -112,3 +120,13 @@ def test_native_channel_turn_reports_content_free_journal_stages() -> None:
         ),
     )
     assert_that(any(text in json.dumps(events) for text in ("secret", "reply", "provider text", "U1")), equal_to(False))
+    assert_that(
+        [(message.direction, message.content, message.channel_id) for message in batch.messages],
+        equal_to(
+            [
+                ("INBOUND", "secret text", "c1"),
+                ("OUTBOUND", "reply", "c1"),
+                ("OUTBOUND", "reply", "c1"),
+            ]
+        ),
+    )

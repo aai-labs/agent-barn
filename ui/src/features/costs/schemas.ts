@@ -101,10 +101,13 @@ export const OrganizationSpendSchema = z.object({
   agents: z.number().int(),
 });
 
+export const CreditsStatusSchema = z.enum(["ok", "no_limit", "unavailable"]);
+
 export const PlatformCostSummarySchema = CostSummarySchema.extend({
   dailyBurnRate: z.number().default(0),
+  creditsStatus: CreditsStatusSchema.default("unavailable"),
   creditsRemaining: z.number().nullable().default(null),
-  runwayDays: z.number().nullable().default(null),
+  creditsLimit: z.number().nullable().default(null),
   unattributedSpend: z.number().default(0),
   unattributedCalls: z.number().int().default(0),
   organizations: z.array(OrganizationSpendSchema).default([]),

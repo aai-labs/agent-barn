@@ -304,8 +304,8 @@ def test_unattributed_spend_is_reported_separately_but_still_counted():
             assert_that(body["total_spend"], equal_to(7.0))
 
 
-def test_burn_rate_is_spend_per_day_and_runway_is_unknown_without_credits():
-    """Runway must be null rather than a number when credit is unknown.
+def test_burn_rate_is_spend_per_day_and_the_balance_is_unavailable_without_a_key():
+    """The balance must report "unavailable" rather than a number when the poll cannot run.
 
     OpenRouter reports null for a key with no credit limit, and a failed poll looks
     the same. Inventing a figure on a page about money is worse than admitting the
@@ -324,12 +324,13 @@ def test_burn_rate_is_spend_per_day_and_runway_is_unknown_without_credits():
         with when("the admin asks for a 30-day summary"):
             response = context.client.get(f"{_BASE}/summary?period=THIRTY_DAYS", headers=_auth(context.access_token))
 
-        with then("burn rate is spend over the window and runway is unknown"):
+        with then("burn rate is spend over the window and the balance is unavailable"):
             body = response.json()
             assert_that(body["total_spend"], equal_to(30.0))
             assert_that(body["daily_burn_rate"], close_to(1.0, 0.01))
+            assert_that(body["credits_status"], equal_to("unavailable"))
             assert_that(body["credits_remaining"], none())
-            assert_that(body["runway_days"], none())
+            assert_that(body["credits_limit"], none())
 
 
 def test_platform_rows_carry_the_organization_the_org_surface_must_not_expose():

@@ -18,6 +18,7 @@ import { CostChartsPanel } from "./cost-charts-panel";
 import { CostFilterBar } from "./cost-filter-bar";
 import { CostList } from "./cost-list";
 import { CostSummaryCards, StatCard } from "./cost-summary-cards";
+import { OpenRouterCreditsCard, OpenRouterCreditsWarning } from "./openrouter-credits";
 import { OrganizationsBySpend } from "./organizations-by-spend";
 
 const FILTER_DEFAULTS = {
@@ -151,6 +152,8 @@ export function PlatformCostsPage() {
         </button>
       </div>
 
+      {summary && <OpenRouterCreditsWarning summary={summary} />}
+
       <CostSummaryCards
         summary={summary}
         isLoading={isLoadingSummary}
@@ -164,22 +167,7 @@ export function PlatformCostsPage() {
               hint="over this period"
               testId="cost-burn-rate"
             />
-            <StatCard
-              label="Runway"
-              // Null covers "no credit limit set" and "the poll failed" alike.
-              // Both are "we don't know", and neither should read as a number.
-              value={
-                summary.runwayDays === null
-                  ? "Unknown"
-                  : `${Math.floor(summary.runwayDays).toLocaleString()} days`
-              }
-              hint={
-                summary.creditsRemaining === null
-                  ? "no credit limit on the key"
-                  : `${formatSpend(summary.creditsRemaining)} left`
-              }
-              testId="cost-runway"
-            />
+            <OpenRouterCreditsCard summary={summary} />
             <StatCard
               label="Unattributed"
               value={formatSpend(summary.unattributedSpend)}

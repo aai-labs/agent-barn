@@ -22,6 +22,7 @@ import {
   type AgentConfigurationSectionKey,
 } from "./agent-configuration-utils";
 import { AgentDangerZoneSettings } from "./agent-danger-zone-settings";
+import { AgentErrorBanner } from "./agent-error-banner";
 import { AgentKeysSettings } from "./agent-keys-settings";
 import { AgentMetaBadges } from "./agent-meta-badges";
 import { AgentOverrideSettings } from "./agent-override-settings";
@@ -141,33 +142,44 @@ export function AgentConfigurationPage({ agentId }: { agentId: string }) {
           </div>
         </div>
 
-        {agent.status === "ERROR" && (
-          <Alert
-            variant="destructive"
-            className="mb-8 items-start border-destructive/30 bg-destructive/5 px-4 py-3"
-          >
-            <CircleAlert aria-hidden />
-            <AlertTitle>Agent needs attention</AlertTitle>
-            <AlertDescription>
-              <span className="block">
-                The Agent could not start with its current configuration.
-              </span>
-              <span className="mt-1 block">
-                {health?.reason
-                  ? `Runtime reported: ${health.reason}`
-                  : "Review the Agent logs, resolve the underlying issue, and start the Agent again."}
-              </span>
+        {agent.status === "ERROR" &&
+          (agent.lastError ? (
+            <AgentErrorBanner failure={agent.lastError} className="mb-8">
               {canReadActivity && (
                 <Link
                   href={`${homeHref}/agents/${agent.id}?tab=logs`}
-                  className="mt-1 inline-block font-medium text-destructive underline underline-offset-3"
+                  className="mt-2 inline-block font-medium underline underline-offset-3"
                 >
                   View Agent logs
                 </Link>
               )}
-            </AlertDescription>
-          </Alert>
-        )}
+            </AgentErrorBanner>
+          ) : (
+            <Alert
+              variant="destructive"
+              className="mb-8 items-start border-destructive/30 bg-destructive/5 px-4 py-3"
+            >
+              <CircleAlert aria-hidden />
+              <AlertTitle>Agent needs attention</AlertTitle>
+              <AlertDescription>
+                <span className="block">
+                  The Agent could not start with its current configuration.
+                </span>
+                <span className="mt-1 block">
+                  {health?.reason ??
+                    "Review the Agent logs, resolve the underlying issue, and start the Agent again."}
+                </span>
+                {canReadActivity && (
+                  <Link
+                    href={`${homeHref}/agents/${agent.id}?tab=logs`}
+                    className="mt-1 inline-block font-medium text-destructive underline underline-offset-3"
+                  >
+                    View Agent logs
+                  </Link>
+                )}
+              </AlertDescription>
+            </Alert>
+          ))}
 
         <div className="grid gap-8 lg:grid-cols-[14rem_minmax(0,1fr)] lg:items-start">
           <AgentConfigurationSidebar

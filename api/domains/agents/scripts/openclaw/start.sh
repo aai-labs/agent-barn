@@ -40,6 +40,8 @@ install_plugin() {
 }
 install_plugin @openclaw/firecrawl-plugin
 for channel in $(echo "${AGENTBARN_NATIVE_CHANNELS:-}" | tr ',' ' '); do
+  # Telegram ships inside the core package; there is no @openclaw/telegram.
+  [ "$channel" = telegram ] && continue
   install_plugin "@openclaw/$channel"
 done
 

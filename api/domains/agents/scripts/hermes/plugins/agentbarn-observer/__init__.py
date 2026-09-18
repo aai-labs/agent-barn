@@ -1,8 +1,8 @@
-"""Report native gateway Connection Journal stages to the ingest API.
+"""Report native gateway Journal stages and dashboard transcripts to the ingest API.
 
-Content-free by contract: only platform, stage, correlation, timing, and a
-bounded error code leave the pod. Message text, sender identity, and provider
-error text never do.
+Journal events remain content-free. Transcript messages are sent separately so
+the dashboard can render native platform conversations; provider error text
+never leaves the pod.
 
 Correlation is the inbound provider message (``<platform>:<message_id>``).
 Runs and sends only carry a session, so each is attributed to the latest
@@ -45,6 +45,7 @@ _OBLIGATION_STAGES = {
 }
 
 _buffer: list[dict] = []
+_messages: list[dict] = []
 _lock = threading.Lock()
 _latest_inbound: OrderedDict[str, str] = OrderedDict()  # session_key -> correlation_id
 _session_keys: OrderedDict[str, str] = OrderedDict()  # session_id -> session_key
@@ -69,6 +70,17 @@ def _emit(stage: str, platform: str, correlation_id: str | None = None, **extra)
         if len(_buffer) >= _MAX_BUFFER:
             _buffer.pop(0)
         _buffer.append(event)
+
+
+def _emit_message(**message) -> None:
+    with _lock:
+        if len(_messages) >= _MAX_BUFFER:
+            _messages.pop(0)
+        _messages.append(message)
+
+
+def _conversation_type(chat_type: object) -> str:
+    return "DM" if str(chat_type).lower() in {"dm", "direct", "direct_message"} else "CHANNEL"
 
 
 def platform_stage(state: str | None) -> str | None:
@@ -97,6 +109,22 @@ def _on_pre_gateway_dispatch(event=None, gateway=None, session_store=None, **_):
     if session_key:
         with _lock:
             _remember(_latest_inbound, session_key, correlation_id)
+        text = getattr(event, "text", None)
+        if text:
+            _emit_message(
+                platform=platform,
+                provider_message_id=str(message_id),
+                session_key=session_key,
+                channel_id=str(getattr(source, "chat_id", "")),
+                thread_id=getattr(source, "thread_id", None) or getattr(source, "parent_chat_id", None),
+                direction="INBOUND",
+                conversation_type=_conversation_type(getattr(source, "chat_type", None)),
+                sender_id=getattr(source, "user_id", None),
+                sender_name=getattr(source, "user_name", None) or getattr(source, "username", None),
+                channel_name=getattr(source, "chat_name", None),
+                content=str(text),
+                occurred_at=_now(),
+            )
 
 
 def _session_key_for(session_id: str | None) -> str | None:
@@ -164,29 +192,48 @@ def poll_obligations(db_path: Path, watermark: list[float]) -> None:
     try:
         with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=1) as conn:
             rows = conn.execute(
-                "SELECT session_key, platform, state, updated_at FROM delivery_obligations"
+                "SELECT obligation_id, session_key, platform, chat_id, thread_id, content, state, updated_at"
+                " FROM delivery_obligations"
                 " WHERE updated_at > ? ORDER BY updated_at",
                 (watermark[0],),
             ).fetchall()
     except sqlite3.Error:
         return  # table absent until the first final response
-    for session_key, platform, state, updated_at in rows:
+    for obligation_id, session_key, platform, chat_id, thread_id, content, state, updated_at in rows:
         watermark[0] = max(watermark[0], updated_at)
         stage = obligation_stage(state)
         if stage:
             error_code = "send_failed" if state == "failed" else None
             _emit(stage, platform, _correlated(session_key), error_code=error_code)
+            # A successful provider send can move from pending to delivered
+            # between two observer polls. The obligation ID makes each state
+            # observation idempotent, so mirror on every observed state rather
+            # than losing those fast replies by waiting for ``attempting``.
+            if content:
+                _emit_message(
+                    platform=platform,
+                    provider_message_id=f"outbound:{obligation_id}",
+                    session_key=session_key,
+                    channel_id=chat_id,
+                    thread_id=thread_id,
+                    direction="OUTBOUND",
+                    conversation_type="DM" if ":dm:" in session_key else "CHANNEL",
+                    content=content,
+                    occurred_at=_now(),
+                )
 
 
 def _flush(url: str, api_key: str) -> None:
     with _lock:
         events = _buffer[:]
+        messages = _messages[:]
         _buffer.clear()
-    if not events:
+        _messages.clear()
+    if not events and not messages:
         return
     request = urllib.request.Request(
         url,
-        data=json.dumps({"events": events}).encode(),
+        data=json.dumps({"events": events, "messages": messages}).encode(),
         headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
         method="POST",
     )
@@ -195,7 +242,7 @@ def _flush(url: str, api_key: str) -> None:
             pass
     except Exception as exc:
         # ponytail: best-effort journal, drops on a failed flush; add retry if gaps show up in diagnostics.
-        logger.warning("agentbarn-observer dropped %d events: %s", len(events), exc)
+        logger.warning("agentbarn-observer dropped %d events and %d messages: %s", len(events), len(messages), exc)
 
 
 def _loop(url: str, api_key: str, home: Path) -> None:

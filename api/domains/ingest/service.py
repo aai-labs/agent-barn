@@ -13,6 +13,8 @@ from api.domains.agents.repository import AgentRepository
 from api.domains.communications.models import CommunicationJournalStage, ConnectionObservedStatus
 from api.domains.communications.operations import CommunicationOperationalRepository
 from api.domains.communications.repository import CommunicationConnectionRepository
+from api.domains.conversations.models import AgentChatMessage
+from api.domains.conversations.repository import ConversationRepository
 from api.domains.ingest.models import IngestBatchRequest, IngestCommunicationEventBatch
 from api.domains.tool_calls.repository import ToolCallRepository
 from api.infrastructure.crypto import decrypt_token
@@ -35,6 +37,7 @@ class IngestService:
     tool_call_repository: ToolCallRepository
     connection_repository: CommunicationConnectionRepository
     operational_repository: CommunicationOperationalRepository
+    conversation_repository: ConversationRepository
 
     def authenticate(self, agent_id: UUID, provided_key: str) -> Agent:
         agent = self.agent_repository.get_by_id(agent_id)
@@ -93,6 +96,36 @@ class IngestService:
                 occurred_at=event.occurred_at,
                 error_code=event.error_code,
             )
+        self._record_native_transcripts(agent, batch)
+
+    def _record_native_transcripts(self, agent: Agent, batch: IngestCommunicationEventBatch) -> None:
+        """Mirror observer-reported native messages into the dashboard transcript."""
+        connection_ids: dict[str, UUID | None] = {}
+        messages: list[AgentChatMessage] = []
+        for transcript in batch.messages:
+            if transcript.platform not in connection_ids:
+                connection_ids[transcript.platform] = self._native_connection_id(agent.id, transcript.platform)
+            connection_id = connection_ids[transcript.platform]
+            if connection_id is None:
+                continue
+            messages.append(
+                AgentChatMessage(
+                    agent_id=agent.id,
+                    connection_id=connection_id,
+                    openclaw_msg_id=transcript.provider_message_id,
+                    session_key=transcript.session_key,
+                    channel_id=transcript.channel_id,
+                    thread_id=transcript.thread_id,
+                    direction=transcript.direction,
+                    conversation_type=transcript.conversation_type,
+                    sender_id=transcript.sender_id,
+                    sender_name=transcript.sender_name,
+                    channel_name=transcript.channel_name,
+                    content=transcript.content,
+                    occurred_at=transcript.occurred_at,
+                )
+            )
+        self.conversation_repository.upsert_messages(messages)
 
     def _native_connection_id(self, agent_id: UUID, platform: str) -> UUID | None:
         try:

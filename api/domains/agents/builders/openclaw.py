@@ -6,7 +6,7 @@ from kubernetes import client
 
 from api.domains.communications.models import ConversationLocation
 
-from .common import _labels, _resource_name
+from .common import _labels, _resource_name, _setting_ids
 
 # Explicit so agents stop inheriting the namespace LimitRange default of
 # 512Mi request / 2Gi limit. requests.memory is the binding quota axis
@@ -116,6 +116,7 @@ def _openclaw_config_core(
 
 
 _OBSERVER_PLUGIN_PATH = "/home/node/.openclaw/local-plugins/agentbarn-observer"
+_NO_HOME_CHANNEL_TARGET = "channel:__agentbarn_no_home_channel__"
 
 
 def build_openclaw_gateway_config(
@@ -129,7 +130,7 @@ def build_openclaw_gateway_config(
     if channels:
         plugins = config["plugins"]
         plugins["allow"] += [*channels, "agentbarn-observer"]
-        # start.sh installs the channel plugins from npm; OpenClaw only grants plugin
+        # start.sh installs non-bundled channel plugins from npm; OpenClaw only grants plugin
         # state to official installs, so they must not be loaded by path.
         plugins["load"]["paths"].append(_OBSERVER_PLUGIN_PATH)
         for key in channels:
@@ -167,6 +168,11 @@ def native_slack_channel(settings: dict, home_channel: ConversationLocation | No
     if home_channel is not None:
         # ponytail: a home thread is dropped; cron results post top-level in the home channel.
         channel["defaultTo"] = f"channel:{home_channel.id}"
+    else:
+        # OpenClaw shows an in-chat setup prompt when defaultTo is absent. Keep
+        # intentionally-unconfigured Connections quiet without selecting a real
+        # channel for originless proactive messages.
+        channel["defaultTo"] = _NO_HOME_CHANNEL_TARGET
     return channel
 
 
@@ -177,9 +183,9 @@ def native_discord_channel(settings: dict) -> dict:
     apply to every guild through OpenClaw's ``"*"`` guild entry.
     """
     allow_all = bool(settings.get("allow_all_users"))
-    users = [str(value) for value in settings.get("allowed_user_ids") or [] if str(value)]
-    roles = [str(value) for value in settings.get("allowed_role_ids") or [] if str(value)]
-    channel_ids = [str(value) for value in settings.get("allowed_channel_ids") or [] if str(value)]
+    users = _setting_ids(settings, "allowed_user_ids")
+    roles = _setting_ids(settings, "allowed_role_ids")
+    channel_ids = _setting_ids(settings, "allowed_channel_ids")
     channel: dict = {"enabled": True, "groupPolicy": "allowlist"}
     guild: dict = {"requireMention": settings.get("require_mention", True)}
     if not allow_all:
@@ -205,6 +211,35 @@ def native_discord_channel(settings: dict) -> dict:
         channel["dmPolicy"] = "disabled"
     if home_channel_id := settings.get("home_channel_id"):
         channel["defaultTo"] = f"channel:{home_channel_id}"
+    else:
+        channel["defaultTo"] = _NO_HOME_CHANNEL_TARGET
+    return channel
+
+
+def native_telegram_channel(settings: dict) -> dict:
+    """Map a Telegram Connection onto OpenClaw's bundled Telegram channel.
+
+    ``groups`` is the group allowlist and ``groupPolicy: "open"`` admits any member
+    of those groups. Groups always require a mention; DMs never do.
+    """
+    channel: dict = {"enabled": True, "dmPolicy": "disabled", "groupPolicy": "disabled"}
+    user_ids = _setting_ids(settings, "allowed_user_ids")
+    dm_policy = settings.get("dm_policy", "off")
+    if dm_policy == "open":
+        channel.update(dmPolicy="open", allowFrom=["*"])
+    elif dm_policy == "allowlist" and user_ids:
+        # An empty allowlist drops every DM anyway and OpenClaw warns about it.
+        channel.update(dmPolicy="allowlist", allowFrom=user_ids)
+    group_ids = (
+        ["*"] if settings.get("group_policy", "allowlist") == "open" else _setting_ids(settings, "allowed_chat_ids")
+    )
+    if group_ids:
+        channel["groupPolicy"] = "open"
+        channel["groups"] = {group_id: {"requireMention": True} for group_id in group_ids}
+    if home_channel_id := settings.get("home_channel_id"):
+        channel["defaultTo"] = str(home_channel_id)
+    else:
+        channel["defaultTo"] = _NO_HOME_CHANNEL_TARGET
     return channel
 
 
@@ -220,6 +255,8 @@ def native_channel_env(credentials_by_platform: dict[str, dict]) -> dict[str, st
         env["SLACK_APP_TOKEN"] = slack["app_token"]
     if discord := credentials_by_platform.get("discord"):
         env["DISCORD_BOT_TOKEN"] = discord["bot_token"]
+    if telegram := credentials_by_platform.get("telegram"):
+        env["TELEGRAM_BOT_TOKEN"] = telegram["bot_token"]
     return env
 
 
