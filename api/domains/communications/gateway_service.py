@@ -162,8 +162,7 @@ class CommunicationsGatewayService:
             raise RuntimeError(f"Connection {delivery.connection_id} is no longer active")
         try:
             plugin = self.plugins.require(connection.platform_key)
-            settings = plugin.settings_model.model_validate(connection.settings)
-            prompt = plugin.runtime_prompt(settings, delivery.envelope)
+            prompt = plugin.runtime_prompt(delivery.envelope)
         except Exception as exc:
             raise RuntimeError(f"Could not prepare runtime delivery for Connection {delivery.connection_id}") from exc
         return delivery.model_copy(

@@ -83,7 +83,7 @@ def _feedback_plugin() -> Mock:
     plugin.settings_model = SlackSettings
     plugin.credentials_model = SlackCredentials
     plugin.supports_progress_updates = True
-    plugin.runtime_prompt.side_effect = lambda settings, envelope: envelope.text
+    plugin.runtime_prompt.side_effect = lambda envelope: envelope.text
     plugin.admit_inbound.return_value = InboundAdmissionResult(
         CommunicationPolicyDisposition.ACCEPTED,
         (_envelope(),),
@@ -403,7 +403,7 @@ def test_a_claimed_delivery_carries_whether_its_platform_accepts_progress_update
 def test_a_claimed_delivery_carries_the_prompt_its_platform_builds_for_the_runtime() -> None:
     connection = cast(CommunicationConnection, _connection())
     plugin = _feedback_plugin()
-    plugin.runtime_prompt.side_effect = lambda settings, envelope: f"FRAMING\n\n{envelope.text}"
+    plugin.runtime_prompt.side_effect = lambda envelope: f"FRAMING\n\n{envelope.text}"
     service, deliveries = _service(connection, plugin)
     delivery = RuntimeDeliveryRead(
         delivery_id=uuid4(),

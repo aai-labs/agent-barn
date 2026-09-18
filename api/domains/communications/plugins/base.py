@@ -195,6 +195,11 @@ class PlatformPlugin(ABC):
     credentials_model: type[PlatformCredentials]
     credential_uniqueness_scope: CredentialUniquenessScope = CredentialUniquenessScope.NONE
     supports_progress_updates: bool = True
+    # Every platform but webhook is one account per Agent, matching the native runtime
+    # gateway's own "one account per platform" rule (ADR 2026-09-16). Webhook has no
+    # provider account behind it, so an Agent may hold as many as it wants -- see
+    # `singleton_key` on CommunicationConnection, which this flag decides at write time.
+    allows_multiple_connections: bool = False
 
     def resolve_outbound_target(
         self,
@@ -207,15 +212,13 @@ class PlatformPlugin(ABC):
     def validate_outbound_target(self, settings: PlatformSettings, target: ResolvedOutboundTarget) -> None:
         raise NotImplementedError("This platform does not support agent-initiated delivery")
 
-    def runtime_prompt(self, settings: PlatformSettings, envelope: NormalizedCommunicationEnvelope) -> str:
+    def runtime_prompt(self, envelope: NormalizedCommunicationEnvelope) -> str:
         """What the Agent is actually asked, rendered at claim time.
 
-        Takes settings because what a platform wants said can be configured per
-        Connection -- a webhook's prompt template is the whole point of the trigger.
         Rendering here rather than at admission keeps the stored envelope the raw
-        provider fact, so fixing a bad template fixes the next attempt too.
+        provider fact, so a plugin that reframes the runtime prompt can still fix the
+        next attempt without a data migration.
         """
-        del settings
         return envelope.text
 
     @property
@@ -258,6 +261,26 @@ class PlatformPlugin(ABC):
 
     def validate_stored_credentials(self, raw_credentials: dict[str, Any]) -> dict[str, Any]:
         return self.credentials_model.model_validate(raw_credentials).model_dump(mode="json")
+
+    def mint_credentials(self) -> dict[str, Any]:
+        """Credential values this platform generates rather than asking a user for.
+
+        Merged over user-supplied credentials before validation, so a minted value
+        always wins -- a caller cannot choose its own secret for a platform that mints
+        one. Empty by default: most platforms authenticate against a real external
+        account, so there is nothing here to generate.
+        """
+        return {}
+
+    def reveal_once(self, credentials: PlatformCredentials) -> dict[str, str]:
+        """Values to show the user exactly once, straight after they are minted.
+
+        Called right after `mint_credentials` populated the connection, and again after
+        a credential rotation. Never called for a plain read: there is no path back to a
+        stored secret's plaintext.
+        """
+        del credentials
+        return {}
 
     def credential_fingerprint(self, credentials: PlatformCredentials) -> str | None:
         if self.credential_uniqueness_scope == CredentialUniquenessScope.NONE:

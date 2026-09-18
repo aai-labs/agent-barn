@@ -242,6 +242,42 @@ def test_list_channels_excludes_the_built_in_web_chat_connection():
             assert_that(ids, equal_to({"CDB1"}))
 
 
+def test_list_channels_excludes_webhook_connections():
+    """A webhook call is a request/response pair with a status and an error -- its own
+    list on the webhook's detail view (AF-320 revision), not a conversation. The
+    agent_chat_message row is still written (see distinct_channels' docstring); it is
+    just not surfaced here, same treatment as Web Chat above."""
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        client: TestClient = context.client
+        webhook_connection = _seed_connection(context, "Jira automation", platform_key="webhook")
+
+        _seed_message(
+            context,
+            direction=MessageDirection.INBOUND,
+            channel_id="CDB1",
+            content="slack-channel",
+            channel_name="slack-known",
+        )
+        _seed_message(
+            context,
+            direction=MessageDirection.INBOUND,
+            channel_id="events",
+            content="Write release notes for PROJ-1.",
+            connection=webhook_connection,
+        )
+
+        with when("I list channels"):
+            response = client.get(
+                f"{_BASE}/{context.agent.id}/conversations/channels",
+                headers=_auth(context),
+            )
+
+        with then("only the Slack channel is returned"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            ids = {c["channel_id"] for c in response.json()}
+            assert_that(ids, equal_to({"CDB1"}))
+
+
 # --- /conversations/connections/{connection_id}/channels/{channel_id}/messages ---
 
 

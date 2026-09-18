@@ -189,9 +189,9 @@ class CommunicationConnection(BaseModel, table=True):
             postgresql_where=sa.text("retired_at IS NULL AND settings->>'default_delivery_target' IS NOT NULL"),
         ),
         sa.Index(
-            "uq_communication_connection_active_platform",
+            "uq_communication_connection_active_singleton",
             "agent_id",
-            "platform_key",
+            "singleton_key",
             unique=True,
             postgresql_where=sa.text("retired_at IS NULL"),
         ),
@@ -213,6 +213,17 @@ class CommunicationConnection(BaseModel, table=True):
     organization_id: UUID = SqlField(nullable=False)
     agent_id: UUID = SqlField(nullable=False)
     platform_key: str = SqlField(nullable=False, max_length=64)
+    # NULL for a platform that allows several active Connections per Agent (today,
+    # only webhook); otherwise a copy of platform_key, enforcing "one active
+    # Connection per platform per Agent" through uq_communication_connection_active_
+    # singleton. Postgres treats NULLs in a unique index as distinct from each other,
+    # so a multi-connection platform is simply unconstrained here. Set from
+    # PlatformPlugin.allows_multiple_connections at write time -- see
+    # CommunicationsService._singleton_key. get_active_by_platform_key still assumes
+    # at most one active row per (agent_id, platform_key); that holds for every
+    # caller of it today (web, native platforms, and ingest, which already handles
+    # MultipleResultsFound), just not in general once a platform sets this to NULL.
+    singleton_key: str | None = SqlField(default=None, nullable=True, max_length=64)
     display_name: str = SqlField(nullable=False, max_length=255)
     enabled: bool = SqlField(
         default=True,
@@ -461,11 +472,6 @@ class NormalizedCommunicationEnvelope(PydanticBaseModel):
     attachments: list[CommunicationAttachment] = Field(default_factory=list)
     reply_to_provider_message_id: str | None = Field(default=None, max_length=512)
     provider_metadata: dict[str, str | int | float | bool | None] = Field(default_factory=dict)
-    # provider_metadata is flat scalars, so it cannot carry a webhook body. A machine
-    # event hands the agent structured JSON; flattening it into prose here would throw
-    # away the shape the caller deliberately sent. Declared, so extra="forbid" allows it,
-    # and defaulted, so envelopes stored before this field existed still validate.
-    payload: dict[str, Any] | None = Field(default=None)
 
 
 class AcceptedCommunicationRead(PydanticBaseModel):
@@ -494,6 +500,36 @@ class CommunicationJournalEntryRead(PydanticBaseModel):
     queue_wait_ms: float | None = None
     processing_ms: float | None = None
     next_retry_at: datetime | None = None
+
+
+class CommunicationCallResponseRead(PydanticBaseModel):
+    """One reply the Agent sent back for a call. A list, not one value: nothing stops
+    an Agent from replying to a webhook event more than once."""
+
+    text: str
+    status: CommunicationDeliveryStatus
+    occurred_at: datetime
+
+
+class CommunicationCallRead(PydanticBaseModel):
+    """One inbound request to a Connection and whatever the Agent sent back for it.
+
+    Distinct from CommunicationJournalEntryRead, which is content-free operational
+    telemetry (stages, timings, error codes) by design. This carries the actual prompt
+    and response text, so it belongs on a Connection's own calls view, not diagnostics.
+    """
+
+    delivery_id: UUID
+    event_id: str
+    occurred_at: datetime
+    status: CommunicationDeliveryStatus
+    attempt_count: int
+    ordering_key: str | None
+    prompt: str
+    completed_at: datetime | None
+    last_error_code: str | None
+    last_error_message: str | None
+    responses: list[CommunicationCallResponseRead]
 
 
 class CommunicationPipelineCounts(PydanticBaseModel):
@@ -853,6 +889,10 @@ class CommunicationConnectionRead(PydanticBaseModel):
     last_error_details: CommunicationErrorDetails | None = None
     webhook_url: str | None = None
     managed_address: str | None = None
+    # Only set on the response to create_connection and rotate_connection_credentials,
+    # straight after a value was minted. Never set on a list or a plain read: there is
+    # no path back to a stored secret's plaintext.
+    credential_reveal: dict[str, str] | None = None
     revision: int
     created_at: datetime
     updated_at: datetime

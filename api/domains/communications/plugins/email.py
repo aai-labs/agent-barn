@@ -172,8 +172,7 @@ class EmailPlatformPlugin(PlatformPlugin):
             ),
         )
 
-    def runtime_prompt(self, settings: PlatformSettings, envelope: NormalizedCommunicationEnvelope) -> str:
-        del settings
+    def runtime_prompt(self, envelope: NormalizedCommunicationEnvelope) -> str:
         return _readable_message(
             envelope.sender.id or "",
             envelope.sender.display_name,

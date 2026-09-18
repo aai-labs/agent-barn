@@ -15,6 +15,7 @@ import { canAgent } from "../utils";
 import { AgentAvatar } from "./agent-avatar";
 import { AgentChannelSettings } from "./agent-channel-settings";
 import { AgentConfigurationSidebar } from "./agent-configuration-sidebar";
+import { AgentWebhookSettings } from "./agent-webhook-settings";
 import {
   AGENT_CONFIGURATION_SECTIONS,
   configurationSectionLabel,
@@ -204,6 +205,12 @@ export function AgentConfigurationPage({ agentId }: { agentId: string }) {
                 agent={agent}
                 canEdit={canEdit}
                 autoOpen={connect}
+              />
+            )}
+            {activeSection === "webhooks" && (
+              <AgentWebhookSettings
+                agent={agent}
+                canEdit={canEdit}
               />
             )}
             {activeSection === "skills" && (

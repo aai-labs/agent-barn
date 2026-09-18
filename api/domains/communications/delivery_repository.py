@@ -1,3 +1,4 @@
+from collections import defaultdict
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
@@ -12,6 +13,7 @@ from sqlmodel import Session, col, select
 from api.domains.agents.models import Agent, AgentStatus
 from api.domains.communications.error_details import error_code_from_details
 from api.domains.communications.execution_policy import (
+    ORDERING_KEY_METADATA,
     conversation_ordering_key,
     kind_for_location,
     kinds_for_protocol,
@@ -21,6 +23,8 @@ from api.domains.communications.execution_policy import (
 )
 from api.domains.communications.models import (
     AcceptedCommunicationRead,
+    CommunicationCallRead,
+    CommunicationCallResponseRead,
     CommunicationConnection,
     CommunicationDelivery,
     CommunicationDeliveryStatus,
@@ -47,6 +51,7 @@ from api.domains.events.catalog import (
 )
 from api.domains.events.models import ActorIdentity, ActorIdentityType, SubjectIdentity, SubjectIdentityType
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
+from api.infrastructure.shared.models import PaginatedItems, Pagination
 
 
 class CommunicationDeliveryRetryError(RuntimeError):
@@ -589,6 +594,80 @@ class CommunicationDeliveryRepository:
             session.commit()
             session.refresh(delivery)
             return delivery.id
+
+    def list_calls(self, connection_id: UUID, *, pagination: Pagination) -> PaginatedItems[CommunicationCallRead]:
+        """One page of a Connection's inbound requests, newest first, each paired with
+        whatever the Agent sent back for it.
+
+        The request-response link is OutboundCommunicationEnvelope.source_delivery_id,
+        which lives inside the envelope JSONB -- nothing else pairs the two halves.
+        AgentChatMessage.session_key is per-subject rather than per-event by design
+        (see execution_policy), and an outbound delivery carries no session_key at all
+        (see enqueue_runtime_reply). An Agent can reply more than once to one call, so
+        responses is a list, not a single value.
+        """
+        with Session(self.delegate.engine) as session:
+            base_predicates = (
+                col(CommunicationDelivery.connection_id) == connection_id,
+                col(CommunicationDelivery.direction) == CommunicationDirection.INBOUND,
+            )
+            total = session.exec(
+                select(sa.func.count()).select_from(CommunicationDelivery).where(*base_predicates)
+            ).one()
+            inbound_rows = list(
+                session.exec(
+                    select(CommunicationDelivery)
+                    .where(*base_predicates)
+                    .order_by(col(CommunicationDelivery.created_at).desc(), col(CommunicationDelivery.id).desc())
+                    .offset((pagination.page - 1) * pagination.size)
+                    .limit(pagination.size)
+                ).all()
+            )
+            responses_by_source: dict[UUID, list[CommunicationDelivery]] = defaultdict(list)
+            if inbound_rows:
+                inbound_ids = {str(row.id) for row in inbound_rows}
+                outbound_rows = session.exec(
+                    select(CommunicationDelivery).where(
+                        col(CommunicationDelivery.connection_id) == connection_id,
+                        col(CommunicationDelivery.direction) == CommunicationDirection.OUTBOUND,
+                        col(CommunicationDelivery.envelope).op("->>")("source_delivery_id").in_(inbound_ids),
+                    )
+                ).all()
+                for outbound in outbound_rows:
+                    source_id = outbound.envelope.get("source_delivery_id")
+                    if source_id is not None:
+                        responses_by_source[UUID(source_id)].append(outbound)
+        return PaginatedItems(
+            page=pagination.page,
+            page_size=pagination.size,
+            total=total,
+            items=[self._call_read(row, responses_by_source.get(row.id, [])) for row in inbound_rows],
+        )
+
+    @staticmethod
+    def _call_read(delivery: CommunicationDelivery, responses: list[CommunicationDelivery]) -> CommunicationCallRead:
+        envelope = delivery.envelope
+        metadata = envelope.get("provider_metadata") or {}
+        return CommunicationCallRead(
+            delivery_id=delivery.id,
+            event_id=delivery.idempotency_key,
+            occurred_at=delivery.created_at,
+            status=delivery.status,
+            attempt_count=delivery.attempt_count,
+            ordering_key=metadata.get(ORDERING_KEY_METADATA),
+            prompt=envelope.get("text") or "",
+            completed_at=delivery.completed_at,
+            last_error_code=delivery.last_error_code,
+            last_error_message=delivery.last_error_message,
+            responses=[
+                CommunicationCallResponseRead(
+                    text=response.envelope.get("text") or "",
+                    status=response.status,
+                    occurred_at=response.created_at,
+                )
+                for response in sorted(responses, key=lambda item: item.created_at)
+            ],
+        )
 
     def claim_next_outbound(
         self,

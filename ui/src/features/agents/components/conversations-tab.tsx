@@ -14,9 +14,8 @@ interface ConversationsTabProps {
 }
 
 function channelLabel(ch: ConversationChannel): string {
-  // A DM is a person and an EVENT is a subject a machine sent about. Neither is a
-  // channel, so neither gets a #.
-  if (ch.conversationType === "DM" || ch.conversationType === "EVENT") {
+  // A DM is a person, not a channel, so it doesn't get a #.
+  if (ch.conversationType === "DM") {
     return ch.channelName ?? ch.channelId;
   }
   return `#${ch.channelName ?? ch.channelId.toLowerCase()}`;
@@ -77,7 +76,6 @@ export function ConversationsTab({ agent }: ConversationsTabProps) {
 
   const channelConvos = channels.filter((c) => c.conversationType === "CHANNEL");
   const dmConvos = channels.filter((c) => c.conversationType === "DM");
-  const eventConvos = channels.filter((c) => c.conversationType === "EVENT");
 
   return (
     <div
@@ -87,7 +85,6 @@ export function ConversationsTab({ agent }: ConversationsTabProps) {
       <ConversationSidebar
         channelConvos={channelConvos}
         dmConvos={dmConvos}
-        eventConvos={eventConvos}
         activeChannelKey={channelSelectionKey(activeChannel)}
         onSelect={setSelectedChannel}
       />
@@ -104,13 +101,11 @@ export function ConversationsTab({ agent }: ConversationsTabProps) {
 function ConversationSidebar({
   channelConvos,
   dmConvos,
-  eventConvos,
   activeChannelKey,
   onSelect,
 }: {
   channelConvos: ConversationChannel[];
   dmConvos: ConversationChannel[];
-  eventConvos: ConversationChannel[];
   activeChannelKey: string;
   onSelect: (id: string) => void;
 }) {
@@ -161,20 +156,6 @@ function ConversationSidebar({
             Direct Messages
           </div>
           {dmConvos.map((ch) => <SidebarItem key={channelSelectionKey(ch)} ch={ch} />)}
-        </>
-      )}
-      {eventConvos.length > 0 && (
-        <>
-          <div
-            className="px-4 py-3 text-[0.75rem] uppercase tracking-[0.08em] font-semibold"
-            style={{
-              color: "var(--ink-3)",
-              marginTop: channelConvos.length > 0 || dmConvos.length > 0 ? "0.25rem" : 0,
-            }}
-          >
-            Events
-          </div>
-          {eventConvos.map((ch) => <SidebarItem key={channelSelectionKey(ch)} ch={ch} />)}
         </>
       )}
     </div>

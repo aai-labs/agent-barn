@@ -2033,5 +2033,4 @@ def test_chat_platforms_hand_the_runtime_the_message_exactly_as_stored(plugin_cl
     )
 
     assert plugin_class.runtime_prompt is PlatformPlugin.runtime_prompt
-    settings = plugin_class.settings_model.model_construct()
-    assert PlatformPlugin.runtime_prompt(plugin_class.__new__(plugin_class), settings, envelope) == envelope.text
+    assert PlatformPlugin.runtime_prompt(plugin_class.__new__(plugin_class), envelope) == envelope.text
