@@ -145,33 +145,31 @@ export function AgentWebhookSettings({ agent, canEdit }: { agent: Agent; canEdit
     if (selectedId === retiring.id) void setSelectedId(null);
   }
 
-  if (reveal) {
-    return (
-      <RevealPanel
-        reveal={reveal}
-        onAcknowledge={() => {
-          if (reveal.mode === "create") void setSelectedId(reveal.connection.id);
-          setReveal(null);
-        }}
-      />
-    );
-  }
-
-  if (selected) {
-    return (
-      <WebhookDetail
-        agent={agent}
-        connection={selected}
-        canEdit={canEdit}
-        onBack={() => void setSelectedId(null)}
-        onRegenerated={(connection, secret) => setReveal({ mode: "regenerate", connection, secret })}
-        onRetire={() => setRetiring(selected)}
-      />
-    );
-  }
-
+  // The retire confirmation is triggered from WebhookDetail but owned here, so it has
+  // to stay mounted across every view below -- otherwise confirming "Remove" while on
+  // the detail view sets `retiring` with nothing on screen to show it, and the dialog
+  // only appears once a later render happens to take the list branch (e.g. after
+  // "Back to webhooks"). One dialog, rendered unconditionally, fixes that for good.
   return (
     <>
+      {reveal ? (
+        <RevealPanel
+          reveal={reveal}
+          onAcknowledge={() => {
+            if (reveal.mode === "create") void setSelectedId(reveal.connection.id);
+            setReveal(null);
+          }}
+        />
+      ) : selected ? (
+        <WebhookDetail
+          agent={agent}
+          connection={selected}
+          canEdit={canEdit}
+          onBack={() => void setSelectedId(null)}
+          onRegenerated={(connection, secret) => setReveal({ mode: "regenerate", connection, secret })}
+          onRetire={() => setRetiring(selected)}
+        />
+      ) : (
       <AgentConfigurationSection
         title="Webhooks"
         description="URLs external systems can call to make this Agent run a job."
@@ -285,6 +283,7 @@ export function AgentWebhookSettings({ agent, canEdit }: { agent: Agent; canEdit
           )}
         </div>
       </AgentConfigurationSection>
+      )}
 
       <ConfirmationDialog
         open={retiring !== null}
