@@ -39,6 +39,50 @@ The deployable services have independent Helm charts. `../../helmfile.yaml.gotmp
 
 LiteLLM uses a non-overlapping rolling update (`maxSurge: 0`, `maxUnavailable: 1`): the namespace quota cannot accommodate its old and replacement 2Gi pods at once. Upgrades briefly interrupt the proxy while Kubernetes replaces the pod; do not restore the default surge behavior unless the quota is increased first.
 
+## Organization LLM budgets
+
+Budget enforcement is disabled by default. With LiteLLM configured, teams are
+still provisioned and keys assigned even when no cap is set. No schema migration
+or Agent restart is required. The behavior contract is in
+[Costs](../features/costs.md#organization-llm-budgets).
+
+| Environment variable | Default | Meaning |
+| --- | --- | --- |
+| `ORGANIZATION_LLM_BUDGET_USD` | Empty/unset | Each Organization's independent USD allowance; empty removes enforcement. Non-negative finite number; `0` is a zero allowance. |
+| `ORGANIZATION_LLM_BUDGET_DURATION` | `30d` | Positive integer followed by `s`, `m`, `h`, or `d`; `30d` is a 30-day interval, not a calendar month. Only applied while an allowance is set. |
+
+Values flow through Helmfile to `organizationLlmBudgetUsd` and
+`organizationLlmBudgetDuration` in the API chart. Native and Compose development
+read the same variables from `.env`. Set these GitHub Actions repository variables
+before deploying the environments that need enforcement:
+
+| Deployment | USD variable | Optional duration variable |
+| --- | --- | --- |
+| `agentbarn.k8s.aai-labs.com` (`main`) | `ORGANIZATION_LLM_BUDGET_USD` | `ORGANIZATION_LLM_BUDGET_DURATION` |
+| `cloud.agentbarn.dev` (public release) | `PUBLIC_ORGANIZATION_LLM_BUDGET_USD` | `PUBLIC_ORGANIZATION_LLM_BUDGET_DURATION` |
+| k3s staging | `STAGING_ORGANIZATION_LLM_BUDGET_USD` | `STAGING_ORGANIZATION_LLM_BUDGET_DURATION` |
+
+No dollar amount is hardcoded. Staging does not fall back to the main allowance.
+For example, setting the relevant USD variable to `50` gives each Organization
+$50 per 30 days. Saving a GitHub variable alone does not update running pods:
+redeploy the appropriate workflow. Clearing it and redeploying removes the cap
+from existing teams as well as new ones. No hostname-based logic is involved.
+
+On rollout, the API reconciles Organization teams and budget settings before
+becoming ready. Look for `Organization LiteLLM teams and budgets synchronized` in
+the API log. A failure aborts startup; restarting retries without resetting spend.
+Check proxy availability and the Kubernetes master-key Secret when it fails.
+Existing Agent pods continue running independently of API readiness.
+
+Existing Agent keys are not automatically enrolled. Handle their initial team
+assignment with a separate one-off script before relying on the limits for those
+Agents. Historical pre-enrollment
+spend remains in reports but is not added to the new team counter. Verify each
+legacy key's `team_id` through the LiteLLM admin interface after enrollment.
+
+Changing only the amount preserves spend and renewal; changing duration moves
+the next renewal without resetting spend immediately.
+
 ## Transactional email
 
 Invites, password resets, and agent lifecycle notifications send through
