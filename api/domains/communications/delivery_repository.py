@@ -1,3 +1,4 @@
+from collections import defaultdict
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
@@ -11,8 +12,19 @@ from sqlmodel import Session, col, select
 
 from api.domains.agents.models import Agent, AgentStatus
 from api.domains.communications.error_details import error_code_from_details
+from api.domains.communications.execution_policy import (
+    ORDERING_KEY_METADATA,
+    conversation_ordering_key,
+    kind_for_location,
+    kinds_for_protocol,
+    ordering_key_for,
+    runtime_execution,
+    session_key_for,
+)
 from api.domains.communications.models import (
     AcceptedCommunicationRead,
+    CommunicationCallRead,
+    CommunicationCallResponseRead,
     CommunicationConnection,
     CommunicationDelivery,
     CommunicationDeliveryStatus,
@@ -20,6 +32,7 @@ from api.domains.communications.models import (
     CommunicationErrorDetails,
     CommunicationJournalStage,
     ConversationLocation,
+    DeliveryKind,
     NormalizedCommunicationEnvelope,
     OutboundCommunicationEnvelope,
     RuntimeDeliveryRead,
@@ -38,6 +51,7 @@ from api.domains.events.catalog import (
 )
 from api.domains.events.models import ActorIdentity, ActorIdentityType, SubjectIdentity, SubjectIdentityType
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
+from api.infrastructure.shared.models import PaginatedItems, Pagination
 
 
 class CommunicationDeliveryRetryError(RuntimeError):
@@ -132,8 +146,10 @@ class CommunicationDeliveryRepository:
                 message_id=message_id,
                 direction=CommunicationDirection.INBOUND,
                 status=delivery_status,
+                kind=kind_for_location(envelope.location),
+                session_key=session_key_for(connection_id, envelope),
                 idempotency_key=envelope.provider_message_id,
-                ordering_key=self.ordering_key(connection_id, envelope),
+                ordering_key=ordering_key_for(connection_id, envelope),
                 available_at=now,
                 completed_at=now if delivery_status == CommunicationDeliveryStatus.UNAVAILABLE else None,
                 last_error_code="AGENT_STOPPED" if delivery_status == CommunicationDeliveryStatus.UNAVAILABLE else None,
@@ -171,6 +187,7 @@ class CommunicationDeliveryRepository:
         lease_seconds: int = 120,
         max_attempts: int = 5,
         reclaim_expired: bool = True,
+        runtime_protocol_version: int = 1,
         excluded_platform_keys: frozenset[str] = frozenset(),
     ) -> RuntimeDeliveryRead | None:
         if reclaim_expired:
@@ -187,6 +204,11 @@ class CommunicationDeliveryRepository:
                 col(CommunicationDelivery.direction) == CommunicationDirection.INBOUND,
                 col(CommunicationDelivery.status) == CommunicationDeliveryStatus.PENDING,
                 col(CommunicationDelivery.available_at) <= now,
+                # A pod runs whatever adapter it was handed when it started, so one
+                # predating a policy change can outlive the deploy. Withhold the
+                # kinds it cannot execute: they stay PENDING until it restarts,
+                # which is the safe failure.
+                col(CommunicationDelivery.kind).in_(kinds_for_protocol(runtime_protocol_version)),
                 # An in-flight delivery holds its ordering key so a thread
                 # never runs two turns at once -- unless its run is parked
                 # awaiting a human answer, which can only arrive as the
@@ -236,13 +258,7 @@ class CommunicationDeliveryRepository:
                 )
             session.commit()
             session.refresh(delivery)
-            return RuntimeDeliveryRead(
-                delivery_id=delivery.id,
-                message_id=delivery.message_id,
-                connection_id=delivery.connection_id,
-                attempt_count=delivery.attempt_count,
-                envelope=NormalizedCommunicationEnvelope.model_validate(delivery.envelope),
-            )
+            return self._runtime_delivery(delivery)
 
     def find_active_inbound_delivery(
         self,
@@ -354,15 +370,7 @@ class CommunicationDeliveryRepository:
                 self._stage_completion_journal(session, stale, now=now)
                 reclaimed.append(stale)
                 if stale.status == CommunicationDeliveryStatus.DEAD_LETTERED:
-                    dead_lettered.append(
-                        RuntimeDeliveryRead(
-                            delivery_id=stale.id,
-                            message_id=stale.message_id,
-                            connection_id=stale.connection_id,
-                            attempt_count=stale.attempt_count,
-                            envelope=NormalizedCommunicationEnvelope.model_validate(stale.envelope),
-                        )
-                    )
+                    dead_lettered.append(self._runtime_delivery(stale))
             session.commit()
         for stale in reclaimed:
             self._record_completion_metric(stale)
@@ -400,6 +408,70 @@ class CommunicationDeliveryRepository:
             delivery.lease_expires_at = now + timedelta(seconds=lease_seconds)
             delivery.awaiting_input = awaiting_input
             session.add(delivery)
+            session.commit()
+            return True
+
+    def release_runtime_delivery(
+        self,
+        delivery_id: UUID,
+        *,
+        agent_id: UUID,
+        max_attempts: int = 5,
+        retry_after_seconds: int = 5,
+    ) -> bool:
+        """Put a claimed delivery back on the queue because its work never started.
+
+        Completing a delivery whose work did not happen is the failure this epic exists
+        to stop: the sender is told "done", nothing was done, and there is no trace. A
+        release says the opposite -- nothing happened, try again -- so the attempt that
+        was spent claiming it is given back.
+
+        Bounded on purpose. A session that stays busy forever would otherwise spin here,
+        so past the attempt ceiling this fails the delivery normally and lets it
+        dead-letter, which is visible, rather than looping quietly.
+        """
+        now = datetime.now(UTC)
+        with Session(self.delegate.engine) as session:
+            delivery = session.exec(
+                select(CommunicationDelivery)
+                .where(
+                    col(CommunicationDelivery.id) == delivery_id,
+                    col(CommunicationDelivery.agent_id) == agent_id,
+                    col(CommunicationDelivery.direction) == CommunicationDirection.INBOUND,
+                    col(CommunicationDelivery.status) == CommunicationDeliveryStatus.PROCESSING,
+                )
+                .with_for_update()
+            ).one_or_none()
+            if delivery is None:
+                return False
+            if delivery.cancel_requested_at is not None or delivery.attempt_count >= max_attempts:
+                self._apply_completion(
+                    delivery,
+                    succeeded=False,
+                    now=now,
+                    max_attempts=max_attempts,
+                    error_code="RELEASE_LIMIT",
+                    error_message="The Agent was busy every time this delivery was claimed",
+                    error_details=None,
+                )
+            else:
+                delivery.status = CommunicationDeliveryStatus.PENDING
+                delivery.attempt_count = max(0, delivery.attempt_count - 1)
+                delivery.available_at = now + timedelta(seconds=retry_after_seconds)
+                delivery.claimed_at = None
+                delivery.lease_expires_at = None
+                delivery.awaiting_input = False
+            session.add(delivery)
+            if self.operations is not None:
+                self.operations.stage_journal(
+                    session=session,
+                    organization_id=delivery.organization_id,
+                    agent_id=delivery.agent_id,
+                    connection_id=delivery.connection_id,
+                    delivery_id=delivery.id,
+                    stage=CommunicationJournalStage.RETRY_REQUESTED,
+                    attempt_number=delivery.attempt_count,
+                )
             session.commit()
             return True
 
@@ -476,7 +548,11 @@ class CommunicationDeliveryRepository:
                 agent_id=agent_id,
                 connection_id=source.connection_id,
                 openclaw_msg_id=f"outbound:{reply.idempotency_key}",
-                session_key=source.ordering_key,
+                # The transcript's grouping key, matching the inbound half of this
+                # exchange. Not source.ordering_key: for an event that is the caller's
+                # concurrency contract, which deliberately has nothing to do with where
+                # the conversation lives. Identical to today's value for a chat turn.
+                session_key=conversation_ordering_key(source.connection_id, inbound.location),
                 channel_id=inbound.location.id,
                 thread_id=inbound.location.thread_id,
                 channel_name=inbound.location.display_name,
@@ -493,6 +569,11 @@ class CommunicationDeliveryRepository:
                 connection_id=source.connection_id,
                 message_id=message.id,
                 direction=CommunicationDirection.OUTBOUND,
+                # A reply answers whatever it was sent by, so it carries the same
+                # contract. Nothing reads this on an outbound row yet; leaving it
+                # defaulted would quietly label every event reply a conversation for
+                # whoever wires up the reply path.
+                kind=source.kind,
                 status=CommunicationDeliveryStatus.PENDING,
                 idempotency_key=reply.idempotency_key,
                 ordering_key=source.ordering_key,
@@ -513,6 +594,80 @@ class CommunicationDeliveryRepository:
             session.commit()
             session.refresh(delivery)
             return delivery.id
+
+    def list_calls(self, connection_id: UUID, *, pagination: Pagination) -> PaginatedItems[CommunicationCallRead]:
+        """One page of a Connection's inbound requests, newest first, each paired with
+        whatever the Agent sent back for it.
+
+        The request-response link is OutboundCommunicationEnvelope.source_delivery_id,
+        which lives inside the envelope JSONB -- nothing else pairs the two halves.
+        AgentChatMessage.session_key is per-subject rather than per-event by design
+        (see execution_policy), and an outbound delivery carries no session_key at all
+        (see enqueue_runtime_reply). An Agent can reply more than once to one call, so
+        responses is a list, not a single value.
+        """
+        with Session(self.delegate.engine) as session:
+            base_predicates = (
+                col(CommunicationDelivery.connection_id) == connection_id,
+                col(CommunicationDelivery.direction) == CommunicationDirection.INBOUND,
+            )
+            total = session.exec(
+                select(sa.func.count()).select_from(CommunicationDelivery).where(*base_predicates)
+            ).one()
+            inbound_rows = list(
+                session.exec(
+                    select(CommunicationDelivery)
+                    .where(*base_predicates)
+                    .order_by(col(CommunicationDelivery.created_at).desc(), col(CommunicationDelivery.id).desc())
+                    .offset((pagination.page - 1) * pagination.size)
+                    .limit(pagination.size)
+                ).all()
+            )
+            responses_by_source: dict[UUID, list[CommunicationDelivery]] = defaultdict(list)
+            if inbound_rows:
+                inbound_ids = {str(row.id) for row in inbound_rows}
+                outbound_rows = session.exec(
+                    select(CommunicationDelivery).where(
+                        col(CommunicationDelivery.connection_id) == connection_id,
+                        col(CommunicationDelivery.direction) == CommunicationDirection.OUTBOUND,
+                        col(CommunicationDelivery.envelope).op("->>")("source_delivery_id").in_(inbound_ids),
+                    )
+                ).all()
+                for outbound in outbound_rows:
+                    source_id = outbound.envelope.get("source_delivery_id")
+                    if source_id is not None:
+                        responses_by_source[UUID(source_id)].append(outbound)
+        return PaginatedItems(
+            page=pagination.page,
+            page_size=pagination.size,
+            total=total,
+            items=[self._call_read(row, responses_by_source.get(row.id, [])) for row in inbound_rows],
+        )
+
+    @staticmethod
+    def _call_read(delivery: CommunicationDelivery, responses: list[CommunicationDelivery]) -> CommunicationCallRead:
+        envelope = delivery.envelope
+        metadata = envelope.get("provider_metadata") or {}
+        return CommunicationCallRead(
+            delivery_id=delivery.id,
+            event_id=delivery.idempotency_key,
+            occurred_at=delivery.created_at,
+            status=delivery.status,
+            attempt_count=delivery.attempt_count,
+            ordering_key=metadata.get(ORDERING_KEY_METADATA),
+            prompt=envelope.get("text") or "",
+            completed_at=delivery.completed_at,
+            last_error_code=delivery.last_error_code,
+            last_error_message=delivery.last_error_message,
+            responses=[
+                CommunicationCallResponseRead(
+                    text=response.envelope.get("text") or "",
+                    status=response.status,
+                    occurred_at=response.created_at,
+                )
+                for response in sorted(responses, key=lambda item: item.created_at)
+            ],
+        )
 
     def claim_next_outbound(
         self,
@@ -616,13 +771,7 @@ class CommunicationDeliveryRepository:
             ).one_or_none()
             if delivery is None:
                 return None
-            return RuntimeDeliveryRead(
-                delivery_id=delivery.id,
-                message_id=delivery.message_id,
-                connection_id=delivery.connection_id,
-                attempt_count=delivery.attempt_count,
-                envelope=NormalizedCommunicationEnvelope.model_validate(delivery.envelope),
-            )
+            return self._runtime_delivery(delivery)
 
     @staticmethod
     def select_inbound(source_id: UUID, agent_id: UUID) -> Any:
@@ -996,13 +1145,31 @@ class CommunicationDeliveryRepository:
             delivery.claimed_at = None
 
     @staticmethod
-    def ordering_key_for_location(connection_id: UUID, location: ConversationLocation) -> str:
-        thread = location.thread_id or "root"
-        return f"{connection_id}:{location.id}:{thread}"
+    def _runtime_delivery(delivery: CommunicationDelivery) -> RuntimeDeliveryRead:
+        """The wire view of a delivery, with its execution contract resolved.
+
+        `session_key` falls back to deriving the key when the column is null, which is
+        every row written before the column existed.
+        """
+        envelope = NormalizedCommunicationEnvelope.model_validate(delivery.envelope)
+        return RuntimeDeliveryRead(
+            delivery_id=delivery.id,
+            message_id=delivery.message_id,
+            connection_id=delivery.connection_id,
+            attempt_count=delivery.attempt_count,
+            envelope=envelope,
+            kind=DeliveryKind(delivery.kind),
+            execution=runtime_execution(
+                delivery.kind,
+                delivery.session_key or session_key_for(delivery.connection_id, envelope),
+            ),
+        )
 
     @staticmethod
-    def ordering_key(connection_id: UUID, envelope: NormalizedCommunicationEnvelope) -> str:
-        return CommunicationDeliveryRepository.ordering_key_for_location(connection_id, envelope.location)
+    def ordering_key_for_location(connection_id: UUID, location: ConversationLocation) -> str:
+        """A conversation's ordering key. Callers that already hold a location, and only
+        ever deal in conversations, keep using this; `execution_policy` owns the formula."""
+        return conversation_ordering_key(connection_id, location)
 
     @staticmethod
     def _message_values(
@@ -1012,7 +1179,11 @@ class CommunicationDeliveryRepository:
         envelope: NormalizedCommunicationEnvelope,
         now: datetime,
     ) -> dict[str, Any]:
-        session_key = CommunicationDeliveryRepository.ordering_key(connection_id, envelope)
+        # The transcript's own grouping key, not the runtime session key. They are
+        # different things that happened to share a formula, and changing this one would
+        # silently give new rows a different shape from every row already stored.
+        # For an event this groups the timeline by subject, which is what the UI shows.
+        session_key = conversation_ordering_key(connection_id, envelope.location)
         return {
             "id": uuid7(),
             "created_at": now,

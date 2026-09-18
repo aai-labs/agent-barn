@@ -14,6 +14,7 @@ interface ConversationsTabProps {
 }
 
 function channelLabel(ch: ConversationChannel): string {
+  // A DM is a person, not a channel, so it doesn't get a #.
   if (ch.conversationType === "DM") {
     return ch.channelName ?? ch.channelId;
   }

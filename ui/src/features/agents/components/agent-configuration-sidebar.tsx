@@ -6,6 +6,7 @@ import {
   SlidersHorizontal,
   Sparkles,
   UserRound,
+  Webhook,
 } from "lucide-react";
 
 import {
@@ -18,6 +19,7 @@ const ICONS = {
   template: FileCode2,
   profile: UserRound,
   channels: MessageSquare,
+  webhooks: Webhook,
   skills: Sparkles,
   keys: KeyRound,
   override: SlidersHorizontal,

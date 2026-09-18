@@ -59,6 +59,10 @@ export const CommunicationConnectionSchema = z.object({
   lastErrorDetails: CommunicationErrorDetailsSchema.nullable().optional(),
   webhookUrl: z.string().url().nullable(),
   managedAddress: z.string().nullable(),
+  // Only present right after create or a credential rotation -- the one moment a
+  // generated secret's plaintext exists to show. Never present on a list or a plain
+  // read; there is no path back to a stored secret.
+  credentialReveal: z.record(z.string(), z.string()).nullish(),
   revision: z.number().int().positive(),
   createdAt: z.string(),
   updatedAt: z.string(),
@@ -185,10 +189,40 @@ export const CommunicationInstallLinkSchema = z.object({
   url: z.string().url(),
 });
 
+export const CommunicationCallResponseSchema = z.object({
+  text: z.string(),
+  status: z.enum(["PENDING", "PROCESSING", "SUCCEEDED", "DEAD_LETTERED", "CANCELLED", "UNAVAILABLE"]),
+  occurredAt: z.string(),
+});
+
+export const CommunicationCallSchema = z.object({
+  deliveryId: z.string().uuid(),
+  eventId: z.string(),
+  occurredAt: z.string(),
+  status: z.enum(["PENDING", "PROCESSING", "SUCCEEDED", "DEAD_LETTERED", "CANCELLED", "UNAVAILABLE"]),
+  attemptCount: z.number().int().nonnegative(),
+  orderingKey: z.string().nullable(),
+  prompt: z.string(),
+  completedAt: z.string().nullable(),
+  lastErrorCode: z.string().nullable(),
+  lastErrorMessage: z.string().nullable(),
+  responses: z.array(CommunicationCallResponseSchema),
+});
+
+export const PaginatedCommunicationCallsSchema = z.object({
+  page: z.number().int().min(1),
+  pageSize: z.number().int().min(1),
+  total: z.number().int().min(0),
+  items: z.array(CommunicationCallSchema),
+});
+
 export type CommunicationDirectoryEntry = z.infer<typeof CommunicationDirectoryEntrySchema>;
 export type CommunicationDirectoryPreview = z.infer<typeof CommunicationDirectoryPreviewSchema>;
 export type CommunicationPlatform = z.infer<typeof CommunicationPlatformSchema>;
 export type CommunicationInstallLink = z.infer<typeof CommunicationInstallLinkSchema>;
+export type CommunicationCallResponse = z.infer<typeof CommunicationCallResponseSchema>;
+export type CommunicationCall = z.infer<typeof CommunicationCallSchema>;
+export type PaginatedCommunicationCalls = z.infer<typeof PaginatedCommunicationCallsSchema>;
 export type CommunicationConnection = z.infer<typeof CommunicationConnectionSchema>;
 export type CommunicationDiagnostics = z.infer<typeof CommunicationDiagnosticsSchema>;
 export type CommunicationJournalEntry = z.infer<typeof CommunicationJournalEntrySchema>;
@@ -250,4 +284,10 @@ export type UpdateCommunicationConnection = {
   enabled?: boolean;
   settings?: Record<string, unknown>;
   credentials?: Record<string, unknown>;
+};
+
+export type RotateCommunicationConnectionCredentials = {
+  agentId: string;
+  connectionId: string;
+  revision: number;
 };

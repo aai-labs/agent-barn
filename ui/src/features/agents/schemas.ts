@@ -214,7 +214,8 @@ export const ConversationChannelSchema = z.object({
   platformKey: z.string(),
   channelId: z.string(),
   channelName: z.string().nullable(),
-  conversationType: z.enum(["CHANNEL", "DM"]),
+  // EVENT is a machine trigger, not a place a person talks. Grouped separately.
+  conversationType: z.enum(["CHANNEL", "DM", "EVENT"]),
 });
 
 export const WebChatApprovalSchema = z.object({

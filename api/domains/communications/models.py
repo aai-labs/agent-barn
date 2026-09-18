@@ -32,6 +32,7 @@ class CommunicationPlatform(str, enum.Enum):
     DISCORD = "discord"
     WEB = "web"
     EMAIL = "email"
+    WEBHOOK = "webhook"
 
 
 class PlatformCapability(str, enum.Enum):
@@ -61,6 +62,22 @@ class CredentialUniquenessScope(str, enum.Enum):
     AGENT = "agent"
     ORGANIZATION = "organization"
     GLOBAL = "global"
+
+
+class DeliveryKind(str, enum.Enum):
+    """What the sender expects back, which is not the same as where it came from.
+
+    A CONVERSATION has a human on the other end who will wait, retry and answer a
+    question. An EVENT is a job fired by a machine that does none of those. Origin
+    (Teams vs Jira) and contract (chat vs job) are independent axes, so this rides
+    on the delivery rather than on the plugin.
+
+    Nothing outside `execution_policy` compares one of these. Read a field off a
+    policy instead; see that module for why.
+    """
+
+    CONVERSATION = "CONVERSATION"
+    EVENT = "EVENT"
 
 
 class CommunicationDirection(str, enum.Enum):
@@ -172,9 +189,9 @@ class CommunicationConnection(BaseModel, table=True):
             postgresql_where=sa.text("retired_at IS NULL AND settings->>'default_delivery_target' IS NOT NULL"),
         ),
         sa.Index(
-            "uq_communication_connection_active_platform",
+            "uq_communication_connection_active_singleton",
             "agent_id",
-            "platform_key",
+            "singleton_key",
             unique=True,
             postgresql_where=sa.text("retired_at IS NULL"),
         ),
@@ -196,6 +213,17 @@ class CommunicationConnection(BaseModel, table=True):
     organization_id: UUID = SqlField(nullable=False)
     agent_id: UUID = SqlField(nullable=False)
     platform_key: str = SqlField(nullable=False, max_length=64)
+    # NULL for a platform that allows several active Connections per Agent (today,
+    # only webhook); otherwise a copy of platform_key, enforcing "one active
+    # Connection per platform per Agent" through uq_communication_connection_active_
+    # singleton. Postgres treats NULLs in a unique index as distinct from each other,
+    # so a multi-connection platform is simply unconstrained here. Set from
+    # PlatformPlugin.allows_multiple_connections at write time -- see
+    # CommunicationsService._singleton_key. get_active_by_platform_key still assumes
+    # at most one active row per (agent_id, platform_key); that holds for every
+    # caller of it today (web, native platforms, and ingest, which already handles
+    # MultipleResultsFound), just not in general once a platform sets this to NULL.
+    singleton_key: str | None = SqlField(default=None, nullable=True, max_length=64)
     display_name: str = SqlField(nullable=False, max_length=255)
     enabled: bool = SqlField(
         default=True,
@@ -312,6 +340,15 @@ class CommunicationDelivery(BaseModel, table=True):
         default=CommunicationDeliveryStatus.PENDING,
         sa_column=Column(sa.String(32), nullable=False, server_default="PENDING"),
     )
+    # Set once at admission and never changed: a delivery's contract with its sender is
+    # fixed the moment it arrives. See `execution_policy` for what each kind means.
+    kind: DeliveryKind = SqlField(
+        default=DeliveryKind.CONVERSATION,
+        sa_column=Column(sa.String(16), nullable=False, server_default="CONVERSATION"),
+    )
+    # The runtime session this delivery runs in. Carried rather than recomputed by the
+    # pod, so one policy has one owner. Null on rows written before this existed.
+    session_key: str | None = SqlField(default=None, nullable=True, max_length=1024)
     idempotency_key: str = SqlField(nullable=False, max_length=512)
     submission_key: str | None = SqlField(default=None, nullable=True, max_length=64)
     request_digest: str | None = SqlField(default=None, nullable=True, max_length=64)
@@ -412,7 +449,7 @@ class CommunicationAttachment(PydanticBaseModel):
 
 class ConversationLocation(PydanticBaseModel):
     id: str = Field(min_length=1, max_length=512)
-    type: str = Field(pattern="^(CHANNEL|DM)$")
+    type: str = Field(pattern="^(CHANNEL|DM|EVENT)$")
     display_name: str | None = Field(default=None, max_length=255)
     thread_id: str | None = Field(default=None, max_length=512)
 
@@ -463,6 +500,36 @@ class CommunicationJournalEntryRead(PydanticBaseModel):
     queue_wait_ms: float | None = None
     processing_ms: float | None = None
     next_retry_at: datetime | None = None
+
+
+class CommunicationCallResponseRead(PydanticBaseModel):
+    """One reply the Agent sent back for a call. A list, not one value: nothing stops
+    an Agent from replying to a webhook event more than once."""
+
+    text: str
+    status: CommunicationDeliveryStatus
+    occurred_at: datetime
+
+
+class CommunicationCallRead(PydanticBaseModel):
+    """One inbound request to a Connection and whatever the Agent sent back for it.
+
+    Distinct from CommunicationJournalEntryRead, which is content-free operational
+    telemetry (stages, timings, error codes) by design. This carries the actual prompt
+    and response text, so it belongs on a Connection's own calls view, not diagnostics.
+    """
+
+    delivery_id: UUID
+    event_id: str
+    occurred_at: datetime
+    status: CommunicationDeliveryStatus
+    attempt_count: int
+    ordering_key: str | None
+    prompt: str
+    completed_at: datetime | None
+    last_error_code: str | None
+    last_error_message: str | None
+    responses: list[CommunicationCallResponseRead]
 
 
 class CommunicationPipelineCounts(PydanticBaseModel):
@@ -580,6 +647,24 @@ class CommunicationRetryRead(PydanticBaseModel):
     requested_at: datetime
 
 
+class RuntimeExecutionRead(PydanticBaseModel):
+    """The execution contract handed to the pod, resolved server-side from the kind.
+
+    The pod is told rather than asked to work it out. Today the API and the adapter
+    derive the session key independently from the same inputs, which is exactly how two
+    copies of one policy drift apart once they stop agreeing.
+
+    Every field has a default matching today's behaviour, so an adapter that has never
+    heard of this block keeps running conversations byte-for-byte as it does now.
+    """
+
+    session_key: str
+    resume_session: bool = True
+    approvals_enabled: bool = True
+    busy_notice: str | None = None
+    busy_releases: bool = False
+
+
 class RuntimeDeliveryRead(PydanticBaseModel):
     delivery_id: UUID
     message_id: UUID
@@ -588,6 +673,8 @@ class RuntimeDeliveryRead(PydanticBaseModel):
     envelope: NormalizedCommunicationEnvelope
     progress_updates: bool = True
     execution_token: str | None = None
+    kind: DeliveryKind = DeliveryKind.CONVERSATION
+    execution: RuntimeExecutionRead | None = None
 
 
 class RuntimeDeliveryResult(PydanticBaseModel):
@@ -802,6 +889,10 @@ class CommunicationConnectionRead(PydanticBaseModel):
     last_error_details: CommunicationErrorDetails | None = None
     webhook_url: str | None = None
     managed_address: str | None = None
+    # Only set on the response to create_connection and rotate_connection_credentials,
+    # straight after a value was minted. Never set on a list or a plain read: there is
+    # no path back to a stored secret's plaintext.
+    credential_reveal: dict[str, str] | None = None
     revision: int
     created_at: datetime
     updated_at: datetime
