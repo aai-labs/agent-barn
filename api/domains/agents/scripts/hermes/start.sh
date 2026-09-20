@@ -6,18 +6,6 @@ printf '#!/bin/sh\nexec python3 /app/config/agentbarn_message.py "$@"\n' > /tmp/
 chmod 755 /tmp/agentbarn-bin/agentbarn-message
 export PATH="/tmp/agentbarn-bin:$PATH"
 
-safe_write_roots="${HERMES_WRITE_SAFE_ROOT:-}"
-case ":${safe_write_roots}:" in
-  *:/opt/data:*) ;;
-  *) safe_write_roots="${safe_write_roots:+${safe_write_roots}:}/opt/data" ;;
-esac
-case ":${safe_write_roots}:" in
-  *:/workspace:*) ;;
-  *) safe_write_roots="${safe_write_roots}:/workspace" ;;
-esac
-export HERMES_WRITE_SAFE_ROOT="${safe_write_roots}"
-unset safe_write_roots
-
 python3 /app/config/healthz-server.py &
 python3 /app/config/communications-runtime-adapter.py &
 
