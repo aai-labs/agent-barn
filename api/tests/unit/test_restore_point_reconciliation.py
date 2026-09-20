@@ -301,3 +301,15 @@ def test_every_run_logs_a_summary():
 
     assert_that(mock_logger.info.call_count, equal_to(1))
     assert_that(mock_logger.info.call_args[0][0], contains_string("reconciliation summary"))
+
+
+def test_one_malformed_resource_does_not_abort_the_sweep():
+    orphan_id = uuid4()
+    broken = _resource("restore-point-broken", created=1)
+    cluster = FakeCluster(pvcs=[broken, _resource("restore-point-orphan", orphan_id)])
+
+    result = _reconciler(FakeRepository(), cluster=cluster).run_once()
+
+    assert_that(result.failed, equal_to(1))
+    assert_that(result.orphans_deleted, equal_to(1))
+    assert_that(cluster.deleted_pvcs, equal_to(["restore-point-orphan"]))

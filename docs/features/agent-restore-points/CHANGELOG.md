@@ -70,6 +70,19 @@ Related context: [`../agents.md`](../agents.md), [`../../architecture/runtime-an
   because it cannot be positively identified and guessing is worse than leaking. And an empty or
   failed volume listing fails no rows at all — an empty set matches every READY row, which is
   exactly the catastrophic case.
+- Fixed: the reconciler deleted the archive of a healthy restore point. A READY row that still
+  owed a configuration replay is claimed on purpose — that is how an owed replay is found, since
+  it lives on a terminal row — but it was then put through the same resolution as a stranded
+  operation. `job_name` is cleared when a restore completes, so that resolution saw a row with no
+  Job, treated it as a capture that never produced one, and released its volume. The status write
+  was correctly refused as terminal; the volume deletion ran anyway, so the row went on reporting
+  READY with its archive gone until the missing-volume pass failed it. Resolution now skips
+  terminal rows, and a capture releases its volume only when it is the caller that actually
+  failed the row — either alone prevents it.
+- Coverage: the defect survived because the reconciler's unit tests drive a fake service and the
+  service's tests never run from a real claim, so nothing executed the claim and the real
+  resolution together. There is now an integration test that runs `run_once` against the real
+  service and repository.
 - Added: `mark_ready_row_failed`, because `mark_failed` only transitions from non-terminal
   statuses and a READY row whose volume has gone is terminal — the existing method would have
   written nothing and the pass would have reported success while changing no row.

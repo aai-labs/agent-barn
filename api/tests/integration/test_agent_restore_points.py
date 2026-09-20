@@ -43,6 +43,7 @@ from api.domains.restore_points.constants import (
     RESTORE_POINT_RECONCILIATION_MISSING_VOLUME_LIMIT,
     RESTORE_POINT_RECONCILIATION_STALE_SECONDS,
 )
+from api.domains.restore_points.reconciliation import RestorePointReconciler
 from api.domains.restore_points.repository import RestorePointRepository
 from api.domains.restore_points.service import RestorePointService
 from api.domains.templates.models import AgentTemplate
@@ -1574,3 +1575,49 @@ def test_only_restore_points_that_still_exist_are_reported_as_known():
         with then("only the surviving row is known, and an empty query is not run"):
             assert_that(known, equal_to({live.id}))
             assert_that(repository.find_existing_ids(set()), equal_to(set()))
+
+
+def test_a_ready_row_owing_a_replay_keeps_its_archive_when_the_reconciler_resolves_it():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        there_is_a_template(template_key="recorded-template", name="Recorded")(context)
+        repository = context.injector.get(RestorePointRepository)
+        row = _seed_with_manifest(context, _manifest_for(context, template_key="recorded-template"))
+        row.reapply_configuration = True
+        row.job_name = None
+        repository.save(row)
+        k8s = context.injector.get(KubernetesClient)
+        k8s.delete_pvc.reset_mock()
+
+        with when("the reconciler resolves it the way the claim hands it over"):
+            context.injector.get(RestorePointService).reconcile_row(row, respect_grace=False)
+
+        with then("the archive it still owes a replay for is left intact"):
+            assert_that(k8s.delete_pvc.called, equal_to(False))
+            body = context.client.get(f"{_url(context)}/{row.id}", headers=_auth(context)).json()
+            assert_that(body["status"], equal_to(RestorePointStatus.READY.value))
+
+
+def test_a_full_reconciler_run_applies_an_owed_replay_without_touching_the_archive():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        there_is_a_template(template_key="recorded-template", name="Recorded")(context)
+        repository = context.injector.get(RestorePointRepository)
+        row = _seed_with_manifest(context, _manifest_for(context, template_key="recorded-template"))
+        row.reapply_configuration = True
+        row.job_name = None
+        repository.save(row)
+        _backdate(context, row.id)
+        k8s = context.injector.get(KubernetesClient)
+        k8s.delete_pvc.reset_mock()
+        k8s.list_pvcs.return_value = []
+        k8s.list_jobs.return_value = []
+
+        with when("the reconciler runs the way the CronJob runs it"):
+            result = context.injector.get(RestorePointReconciler).run_once()
+
+        with then("the replay lands and the archive survives"):
+            assert_that(result.claimed, equal_to(1))
+            assert_that(result.replays_attempted, equal_to(1))
+            assert_that(k8s.delete_pvc.called, equal_to(False))
+            assert_that(repository.find_owing_replay_for_agent(context.agent.id), equal_to([]))
+            body = context.client.get(f"{_url(context)}/{row.id}", headers=_auth(context)).json()
+            assert_that(body["status"], equal_to(RestorePointStatus.READY.value))

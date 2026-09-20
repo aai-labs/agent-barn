@@ -225,19 +225,19 @@ class RestorePointReconciler:
             if self._expired(started) or deleted >= RESTORE_POINT_ORPHAN_DELETE_LIMIT:
                 break
             name = _object_name(item)
-            restore_point_id = _labelled_id(item)
-            if restore_point_id is None:
-                unidentified += 1
-                logger.warning(
-                    "Restore point %s %s carries no %s label and will not be reclaimed automatically.",
-                    kind,
-                    name,
-                    RESTORE_POINT_ID_LABEL_KEY,
-                )
-                continue
-            if restore_point_id in known or not _created_before(item, cutoff):
-                continue
             try:
+                restore_point_id = _labelled_id(item)
+                if restore_point_id is None:
+                    unidentified += 1
+                    logger.warning(
+                        "Restore point %s %s carries no %s label and will not be reclaimed automatically.",
+                        kind,
+                        name,
+                        RESTORE_POINT_ID_LABEL_KEY,
+                    )
+                    continue
+                if restore_point_id in known or not _created_before(item, cutoff):
+                    continue
                 self._delete(kind, name)
                 deleted += 1
                 logger.info("Reclaimed orphaned restore point %s %s", kind, name)

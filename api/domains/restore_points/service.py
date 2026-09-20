@@ -37,6 +37,7 @@ from api.domains.rbac.catalog import PermissionKey
 from api.domains.restore_points.constants import RESTORE_POINT_RECONCILIATION_PENDING_GRACE_SECONDS
 from api.domains.restore_points.models import (
     NON_TERMINAL_STATUSES,
+    TERMINAL_STATUSES,
     AgentRestorePointCreate,
     AgentRestorePointList,
     AgentRestorePointRead,
@@ -212,6 +213,13 @@ class RestorePointService:
 
     def _reconcile_row(self, row: AgentRestorePoint, *, respect_grace: bool = True) -> None:
         namespace = self.config.k8s_namespace
+        if row.status in TERMINAL_STATUSES:
+            # The reconciler also claims terminal rows that still owe a configuration
+            # replay. There is no Job left to read — mark_ready and mark_restored clear
+            # job_name — so resolving one would fail a healthy row and release the
+            # archive it is still holding.
+            return
+
         if not row.job_name:
             self._resolve_untracked(row, "The restore point has no job to track.", respect_grace)
             return
@@ -328,8 +336,8 @@ class RestorePointService:
             file_count=manifest.get("file_count"),
         )
 
-    def _fail(self, row: AgentRestorePoint, reason: str) -> None:
-        self.repository.mark_failed(row.id, reason[:_MAX_FAILURE_REASON])
+    def _fail(self, row: AgentRestorePoint, reason: str) -> bool:
+        return self.repository.mark_failed(row.id, reason[:_MAX_FAILURE_REASON])
 
     def _fail_capture(self, row: AgentRestorePoint, reason: str) -> None:
         """Fail a capture and release the volume it was writing into.
@@ -337,9 +345,13 @@ class RestorePointService:
         A capture that never finished leaves no usable archive, so its destination
         volume is dead weight. A row failing as a *restore target* keeps its
         volume: that archive is intact and is what the retry reads from.
+
+        The volume goes only when this call is the one that failed the row. A
+        conditional update that matched nothing means the row was never ours to
+        fail, and releasing storage on that basis destroys an archive something
+        else still owns.
         """
-        self._fail(row, reason)
-        if row.pvc_name:
+        if self._fail(row, reason) and row.pvc_name:
             self.k8s.delete_pvc(row.pvc_name, self.config.k8s_namespace)
 
     def _read_manifest(self, row: AgentRestorePoint) -> dict:
