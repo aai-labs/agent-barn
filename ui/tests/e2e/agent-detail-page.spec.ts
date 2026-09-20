@@ -1803,6 +1803,13 @@ test.describe("Agent Detail Page — About tab", () => {
     await dataSupportPage.agents.interceptGetTemplatesRequest();
     await dataSupportPage.agents.interceptGetAgentConfigurationRequest();
     await dataSupportPage.agents.interceptGetModelsRequest();
+    await page.route(`**/costs/agents/${MOCK_AGENT_ID}*`, async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(agentCost()),
+      });
+    });
   });
 
   test("renders the agent's spend trend and totals", async ({ page }) => {
@@ -1965,5 +1972,148 @@ test.describe("Agent Detail Page — About tab", () => {
     await expect(
       page.getByText("We couldn't load this agent's spend."),
     ).toBeVisible();
+  });
+
+  test("summarises how the agent is set up", async ({ page }) => {
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await page.getByRole("button", { name: "About", exact: true }).click();
+
+    const overview = page.getByTestId("agent-about-overview");
+    await expect(overview).toContainText("OpenClaw");
+    await expect(overview).toContainText("gpt-5-mini");
+    // The blueprint reads off the active configuration, not the raw template key.
+    await expect(overview).toContainText("Maya");
+    await expect(overview).toContainText("v1");
+    await expect(overview).toContainText("Full access — no approval prompts");
+    await expect(overview).toContainText("Mar 14, 2026");
+  });
+
+  test("names a Hermes agent's approval mode instead of full access", async ({
+    page,
+  }) => {
+    await dataSupportPage.agents.interceptGetAgentRequest({
+      body: { ...mockAgent, agent_type: "hermes", approval_mode: "manual", verbose_mode: true },
+    });
+
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await page.getByRole("button", { name: "About", exact: true }).click();
+
+    const overview = page.getByTestId("agent-about-overview");
+    await expect(overview).toContainText("Hermes");
+    await expect(overview).toContainText("Manual — every command waits for approval");
+    await expect(overview).toContainText("Shows progress while working");
+  });
+
+  test("lists the agent's skills without opening configuration", async ({
+    page,
+  }) => {
+    await dataSupportPage.agents.interceptGetAgentRequest({
+      body: {
+        ...mockAgent,
+        skills: [
+          {
+            ...mockAssignedSkill,
+            version: 3,
+            scope: "organization",
+            required: true,
+          },
+          {
+            ...mockAssignedSkill,
+            id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+            name: "jira",
+            scope: "agent",
+            required_providers: ["jira"],
+            update_available: true,
+          },
+        ],
+      },
+    });
+
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await page.getByRole("button", { name: "About", exact: true }).click();
+
+    const skills = page.getByTestId("agent-about-skills");
+    await expect(skills.getByRole("heading", { name: "Skills (2)" })).toBeVisible();
+    await expect(skills).toContainText("Required");
+    await expect(skills).toContainText("Update available");
+    // Provider requirements are named the way the skills catalogue names them.
+    await expect(skills).toContainText("GitHub");
+    await expect(skills).toContainText("Jira");
+    await expect(skills.getByRole("link", { name: /github/i })).toHaveAttribute(
+      "href",
+      `/dashboard/${TEST_ORG_ID}/agents/${MOCK_AGENT_ID}/skills/${mockAssignedSkill.id}`,
+    );
+  });
+
+  test("says so plainly when the agent has no skills", async ({ page }) => {
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await page.getByRole("button", { name: "About", exact: true }).click();
+
+    await expect(page.getByTestId("agent-about-skills")).toContainText(
+      "No skills assigned yet",
+    );
+  });
+
+  test("shows where the agent can be reached", async ({ page }) => {
+    await dataSupportPage.communicationConnections.interceptChannelsRequests({
+      agentId: MOCK_AGENT_ID,
+    });
+
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await page.getByRole("button", { name: "About", exact: true }).click();
+
+    const messaging = page.getByTestId("agent-about-messaging");
+    await expect(messaging).toContainText(mockCommunicationConnection.display_name);
+    await expect(messaging).toContainText(
+      `Connected as ${mockCommunicationConnection.external_identity}`,
+    );
+    await expect(messaging).toContainText("Connected");
+  });
+
+  test("falls back to the agent's own platform list when connections fail", async ({
+    page,
+  }) => {
+    await page.route(
+      `**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}/connections`,
+      async (route) => {
+        await route.fulfill({
+          status: 500,
+          contentType: "application/json",
+          body: JSON.stringify({ detail: "Connections unavailable" }),
+        });
+      },
+    );
+
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await page.getByRole("button", { name: "About", exact: true }).click();
+
+    const messaging = page.getByTestId("agent-about-messaging");
+    await expect(messaging).toContainText("Slack");
+    await expect(messaging).toContainText("Discord");
+  });
+
+  test("names the accounts the agent can act through", async ({ page }) => {
+    await dataSupportPage.agents.interceptGetAgentRequest({
+      body: {
+        ...mockAgent,
+        secrets: [
+          mockSecret,
+          {
+            provider: "jira",
+            secret_name: "jira-secret",
+            shared_credential_id: "77777777-7777-4777-8777-777777777777",
+            shared_credential_name: "Team Jira",
+          },
+        ],
+      },
+    });
+
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await page.getByRole("button", { name: "About", exact: true }).click();
+
+    const integrations = page.getByTestId("agent-about-integrations");
+    await expect(integrations).toContainText("GitHub");
+    await expect(integrations).toContainText("Agent-owned");
+    await expect(integrations).toContainText("Shared · Team Jira");
   });
 });
