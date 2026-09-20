@@ -648,6 +648,7 @@ class RestorePointService:
                 namespace,
                 build_restore_job(
                     job_name=job_name,
+                    restore_point_id=target.id,
                     agent_id=agent.id,
                     org_id=agent.organization_id,
                     namespace=namespace,
@@ -776,6 +777,7 @@ class RestorePointService:
                 namespace,
                 build_capture_job(
                     job_name=restore_point.job_name or _capture_job_name(restore_point.id),
+                    restore_point_id=restore_point.id,
                     agent_id=agent.id,
                     org_id=agent.organization_id,
                     namespace=namespace,

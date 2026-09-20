@@ -21,6 +21,16 @@ Related context: [`../agents.md`](../agents.md), [`../../architecture/runtime-an
 
 ## Changes
 
+### 2026-09-20 — AF-297 — Reclaim stranded restore points and orphaned volumes
+
+- Changed: restore point PVCs and Jobs carry `agentbarn.io/restore-point-id`. Reclamation has to
+  resolve a Kubernetes object back to the row that owns it, and `job_name` cannot serve: it is
+  cleared when a row goes terminal, so every finished Job would look unowned. A restore Job is
+  labelled with the restore point it restores *from*, matching the id its name already embeds,
+  because one Job serves both that row and the Pre-Restore backup taken beside it.
+- Note: objects created before this change carry no id label. The sweep refuses to delete what it
+  cannot identify, so they are reported and left for one manual cleanup rather than guessed at.
+
 ### 2026-09-14 — AF-298 — Restore points in the Agent configuration page
 
 - Added: a "Restore points" section between "Agent-owned override" and "Danger zone" on the

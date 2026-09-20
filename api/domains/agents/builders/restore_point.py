@@ -15,6 +15,9 @@ from api.domains.agents.restore_point_job import (
 )
 
 COMPONENT_LABEL = "restore-point"
+COMPONENT_LABEL_KEY = "agentbarn.io/component"
+AGENT_ID_LABEL_KEY = "agentbarn.io/agent-id"
+RESTORE_POINT_ID_LABEL_KEY = "agentbarn.io/restore-point-id"
 
 SOURCE_MOUNT_PATH = "/source"
 DEST_MOUNT_PATH = "/dest"
@@ -38,11 +41,12 @@ def restore_point_resource_name(restore_point_id: UUID) -> str:
     return f"restore-point-{restore_point_id}"
 
 
-def _labels(agent_id: UUID, org_id: UUID) -> dict[str, str]:
+def _labels(restore_point_id: UUID, agent_id: UUID, org_id: UUID) -> dict[str, str]:
     return {
         "org-id": str(org_id),
-        "agentbarn.io/component": COMPONENT_LABEL,
-        "agentbarn.io/agent-id": str(agent_id),
+        COMPONENT_LABEL_KEY: COMPONENT_LABEL,
+        AGENT_ID_LABEL_KEY: str(agent_id),
+        RESTORE_POINT_ID_LABEL_KEY: str(restore_point_id),
     }
 
 
@@ -58,7 +62,7 @@ def build_restore_point_pvc(
         metadata=client.V1ObjectMeta(
             name=restore_point_resource_name(restore_point_id),
             namespace=namespace,
-            labels=_labels(agent_id, org_id),
+            labels=_labels(restore_point_id, agent_id, org_id),
         ),
         spec=client.V1PersistentVolumeClaimSpec(
             access_modes=["ReadWriteOnce"],
@@ -78,6 +82,7 @@ def _volume(name: str, claim_name: str) -> client.V1Volume:
 def _build_job(
     *,
     job_name: str,
+    restore_point_id: UUID,
     agent_id: UUID,
     org_id: UUID,
     namespace: str,
@@ -88,7 +93,7 @@ def _build_job(
     backoff_limit: int,
     image_pull_secret: str | None,
 ) -> client.V1Job:
-    labels = _labels(agent_id, org_id)
+    labels = _labels(restore_point_id, agent_id, org_id)
     return client.V1Job(
         metadata=client.V1ObjectMeta(name=job_name, namespace=namespace, labels=labels),
         spec=client.V1JobSpec(
@@ -126,6 +131,7 @@ def _build_job(
 def build_capture_job(
     *,
     job_name: str,
+    restore_point_id: UUID,
     agent_id: UUID,
     org_id: UUID,
     namespace: str,
@@ -138,6 +144,7 @@ def build_capture_job(
 ) -> client.V1Job:
     return _build_job(
         job_name=job_name,
+        restore_point_id=restore_point_id,
         agent_id=agent_id,
         org_id=org_id,
         namespace=namespace,
@@ -161,6 +168,7 @@ def build_capture_job(
 def build_restore_job(
     *,
     job_name: str,
+    restore_point_id: UUID,
     agent_id: UUID,
     org_id: UUID,
     namespace: str,
@@ -174,6 +182,7 @@ def build_restore_job(
 ) -> client.V1Job:
     return _build_job(
         job_name=job_name,
+        restore_point_id=restore_point_id,
         agent_id=agent_id,
         org_id=org_id,
         namespace=namespace,

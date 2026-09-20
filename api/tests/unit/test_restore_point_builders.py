@@ -39,6 +39,7 @@ def _mounts(job) -> dict[str, tuple[str, bool]]:
 def _capture_job(**overrides):
     kwargs: dict[str, Any] = {
         "job_name": _JOB,
+        "restore_point_id": _RESTORE_POINT_ID,
         "agent_id": _AGENT_ID,
         "org_id": _ORG_ID,
         "namespace": _NS,
@@ -55,6 +56,7 @@ def _capture_job(**overrides):
 def _restore_job(**overrides):
     kwargs: dict[str, Any] = {
         "job_name": "rp-res-11111111-1111-1111-1111-111111111111-abc123",
+        "restore_point_id": _RESTORE_POINT_ID,
         "agent_id": _AGENT_ID,
         "org_id": _ORG_ID,
         "namespace": _NS,
@@ -79,6 +81,7 @@ def test_restore_point_pvc_is_named_and_labelled_for_reclamation():
             {
                 "agentbarn.io/component": "restore-point",
                 "agentbarn.io/agent-id": str(_AGENT_ID),
+                "agentbarn.io/restore-point-id": str(_RESTORE_POINT_ID),
                 "org-id": str(_ORG_ID),
             }
         ),
@@ -193,9 +196,17 @@ def test_jobs_carry_the_reclamation_labels():
                 {
                     "agentbarn.io/component": "restore-point",
                     "agentbarn.io/agent-id": str(_AGENT_ID),
+                    "agentbarn.io/restore-point-id": str(_RESTORE_POINT_ID),
                 }
             ),
         )
+
+
+def test_a_restore_job_is_labelled_with_the_restore_point_it_restores_from():
+    job = _restore_job()
+
+    assert_that(job.metadata.labels["agentbarn.io/restore-point-id"], equal_to(str(_RESTORE_POINT_ID)))
+    assert_that(job.metadata.name, equal_to(f"rp-res-{_RESTORE_POINT_ID}-abc123"))
 
 
 def test_image_pull_secret_is_applied_only_when_configured():
