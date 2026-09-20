@@ -1,7 +1,8 @@
+import enum
 import logging
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 
 import httpx
@@ -19,14 +20,74 @@ _cache: dict[str, tuple[float, list[dict]]] = {}
 _cache_lock = threading.Lock()
 _key_locks: dict[str, threading.Lock] = {}
 
+
+class CreditsStatus(str, enum.Enum):
+    OK = "ok"
+    NO_LIMIT = "no_limit"
+    UNAVAILABLE = "unavailable"
+
+
+@dataclass(frozen=True)
+class OpenRouterCredits:
+    """What the key reports about its credit limit.
+
+    The three statuses are kept apart because they call for different answers:
+    OK has numbers, NO_LIMIT means the key can spend without a ceiling, and
+    UNAVAILABLE means the poll failed and we know nothing. The monitoring rules
+    draw the same distinction — OpenRouterCreditsLow gates on a healthy probe so
+    that an unknown can never read as low.
+    """
+
+    status: CreditsStatus
+    limit: float | None = None
+    remaining: float | None = None
+
+
 # Remaining credit, cached separately from the catalogue: it changes constantly,
 # whereas the catalogue barely moves, so they cannot share a TTL.
-_credits_cache: tuple[float, float | None] | None = None
+_credits_cache: tuple[float, OpenRouterCredits] | None = None
 _credits_lock = threading.Lock()
 
 
 class OpenRouterError(Exception):
     pass
+
+
+def _optional_number(value: object) -> float | None:
+    """A number, or None for a value that is not one. Bools are not numbers here."""
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    return float(value)
+
+
+def _classify(data: object) -> OpenRouterCredits:
+    """Turn a /key payload into one of the three states.
+
+    An absent `limit_remaining` is not the same as an explicit null. Null is
+    OpenRouter saying "this key has no limit"; absent means we did not get the
+    answer, and treating the two alike would cache a healthy-looking state from a
+    malformed response and silence the unavailable warning.
+    """
+    if not isinstance(data, Mapping):
+        return OpenRouterCredits(status=CreditsStatus.UNAVAILABLE)
+
+    payload = {str(key): value for key, value in data.items()}
+    if "limit_remaining" not in payload:
+        return OpenRouterCredits(status=CreditsStatus.UNAVAILABLE)
+
+    raw_remaining = payload["limit_remaining"]
+    if raw_remaining is None:
+        return OpenRouterCredits(status=CreditsStatus.NO_LIMIT)
+
+    remaining = _optional_number(raw_remaining)
+    if remaining is None:
+        return OpenRouterCredits(status=CreditsStatus.UNAVAILABLE)
+
+    return OpenRouterCredits(
+        status=CreditsStatus.OK,
+        limit=_optional_number(payload.get("limit")),
+        remaining=remaining,
+    )
 
 
 def clear_models_cache() -> None:
@@ -81,13 +142,8 @@ class OpenRouterClient:
         """Returns the OpenRouter catalogue as {id, name, context_length, pricing}."""
         return _cached(self.config.openrouter_base_url, self._fetch_models)
 
-    def get_credits_remaining(self) -> float | None:
-        """Credit left on the inference key, or None when there is no answer.
-
-        None covers two different situations on purpose, and neither should be shown
-        as a number: the key has no credit limit set (OpenRouter reports null), or
-        the poll failed. Runway is undefined in both cases, and inventing a figure
-        for a page about money is worse than admitting we do not know.
+    def get_credits(self) -> OpenRouterCredits:
+        """The key's credit limit and what is left of it.
 
         Reads GET /key rather than the account-wide /credits endpoint, which needs a
         management key that can also mint and delete keys — too much privilege for a
@@ -100,7 +156,7 @@ class OpenRouterClient:
             if _credits_cache is not None and now - _credits_cache[0] < ttl:
                 return _credits_cache[1]
 
-        remaining: float | None = None
+        credits = OpenRouterCredits(status=CreditsStatus.UNAVAILABLE)
         if self.config.openrouter_api_key:
             try:
                 resp = httpx.get(
@@ -109,16 +165,15 @@ class OpenRouterClient:
                     timeout=10,
                 )
                 resp.raise_for_status()
-                limit_remaining = resp.json()["data"]["limit_remaining"]
-                remaining = None if limit_remaining is None else float(limit_remaining)
+                credits = _classify(resp.json()["data"])
             except Exception:
-                # Never let a credit poll fail a cost page. The caller renders
-                # "unknown" runway and everything else on the page still works.
+                # Never let a credit poll fail a cost page. The caller reports that
+                # the balance is unavailable and the rest of the page still works.
                 logger.warning("Failed to read OpenRouter credit balance", exc_info=True)
 
         with _credits_lock:
-            _credits_cache = (time.monotonic(), remaining)
-        return remaining
+            _credits_cache = (time.monotonic(), credits)
+        return credits
 
     def get_generation(self, generation_id: str) -> dict | None:
         """Return the true cost and token counts OpenRouter recorded for one call.

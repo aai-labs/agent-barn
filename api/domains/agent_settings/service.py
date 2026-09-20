@@ -13,7 +13,7 @@ from api.domains.agent_settings.models import (
 )
 from api.domains.agent_settings.repository import AgentSettingsRepository
 from api.domains.agents.repository import AgentRepository
-from api.domains.agents.service import is_model_allowed
+from api.domains.agents.selection import is_model_allowed
 from api.domains.auth.models import CurrentUserContext
 from api.domains.events import EventDeliveryDispatcher, resolve_actor_identity
 from api.domains.organizations.lookup import OrganizationLookupService
