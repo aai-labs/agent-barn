@@ -1544,3 +1544,33 @@ def test_apply_owed_replay_writes_the_recorded_configuration():
             template = context.injector.get(TemplateRepository).get_pinned_template(agent)
             assert template is not None
             assert_that(template.template_key, equal_to("recorded-template"))
+
+
+def test_failing_a_ready_row_whose_volume_is_gone_writes_through():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        repository: RestorePointRepository = context.injector.get(RestorePointRepository)
+        row = _seed(context, status_value=RestorePointStatus.READY)
+
+        with when("the reconciler fails a terminal row whose archive volume has gone"):
+            written = repository.mark_ready_row_failed(row.id, "The archive volume is no longer in the cluster.")
+
+        with then("the write lands, which mark_failed could not do from a terminal status"):
+            assert_that(written, equal_to(True))
+            assert_that(repository.mark_failed(row.id, "second attempt"), equal_to(False))
+            body = context.client.get(f"{_url(context)}/{row.id}", headers=_auth(context)).json()
+            assert_that(body["status"], equal_to(RestorePointStatus.FAILED.value))
+            assert_that(body["failure_reason"], contains_string("no longer in the cluster"))
+
+
+def test_only_restore_points_that_still_exist_are_reported_as_known():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        repository: RestorePointRepository = context.injector.get(RestorePointRepository)
+        live = _seed(context, status_value=RestorePointStatus.READY)
+        deleted = uuid.uuid4()
+
+        with when("the sweep matches cluster labels against rows"):
+            known = repository.find_existing_ids({live.id, deleted})
+
+        with then("only the surviving row is known, and an empty query is not run"):
+            assert_that(known, equal_to({live.id}))
+            assert_that(repository.find_existing_ids(set()), equal_to(set()))

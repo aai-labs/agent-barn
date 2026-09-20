@@ -45,6 +45,21 @@ Related context: [`../agents.md`](../agents.md), [`../../architecture/runtime-an
 - Added: `reconcile_row(row, respect_grace=...)` and `apply_owed_replay(row)` on
   `RestorePointService`, the two seams the reconciler drives rather than restating what the read
   path already does. The read path keeps the grace window unchanged.
+- Added: `restore_points/reconciliation.py` — a bounded pass that claims stale rows and resolves
+  them from live Job status, applies any configuration replay they still owe, fails READY rows
+  whose archive volume has gone, and deletes restore point Jobs and volumes no row owns. Bound by
+  a batch size, a wall-clock budget, and a per-run deletion cap; wired through `@provider` and run
+  as `python -c "… import main; main()"`, since `-m` re-imports the module under a second name and
+  breaks the injector's Protocol bindings.
+- Decision: the sweep destroys storage from a list-and-compare, so three things constrain it. An
+  object younger than the minimum age is left alone, because it may belong to a row being
+  provisioned right now. An object with no `restore-point-id` label is logged and never deleted,
+  because it cannot be positively identified and guessing is worse than leaking. And an empty or
+  failed volume listing fails no rows at all — an empty set matches every READY row, which is
+  exactly the catastrophic case.
+- Added: `mark_ready_row_failed`, because `mark_failed` only transitions from non-terminal
+  statuses and a READY row whose volume has gone is terminal — the existing method would have
+  written nothing and the pass would have reported success while changing no row.
 - Fixed: without `respect_grace`, the reconciliation pass would have resolved nothing. Claiming a
   row bumps its `updated_at`, which makes it look freshly committed to the 60-second grace that
   exists to protect a row whose Job has not been created yet — so every row the cron claimed

@@ -173,6 +173,25 @@ class RestorePointRepository:
             )
             return list(session.exec(query).all())
 
+    def find_existing_ids(self, restore_point_ids: set[UUID]) -> set[UUID]:
+        if not restore_point_ids:
+            return set()
+        with Session(self.delegate.engine) as session:
+            query = select(col(AgentRestorePoint.id)).where(col(AgentRestorePoint.id).in_(restore_point_ids))
+            return set(session.exec(query).all())
+
+    def mark_ready_row_failed(self, restore_point_id: UUID, reason: str) -> bool:
+        return self._conditional_update(
+            restore_point_id,
+            (RestorePointStatus.READY,),
+            {
+                "status": RestorePointStatus.FAILED,
+                "failure_reason": reason,
+                "job_name": None,
+                "reapply_configuration": False,
+            },
+        )
+
     def find_non_terminal_for_agent(self, agent_id: UUID) -> list[AgentRestorePoint]:
         with Session(self.delegate.engine) as session:
             query = select(AgentRestorePoint).where(
