@@ -1495,3 +1495,52 @@ def test_ready_rows_whose_volume_is_gone_are_reported_and_live_ones_are_not():
 
         with then("only the ready row without a volume is reported"):
             assert_that([row.id for row in found], equal_to([missing.id]))
+
+
+def test_the_read_path_still_leaves_a_freshly_committed_row_alone():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        seeded = _reconcilable(context, job_name="rp-cap-not-created-yet")
+        context.injector.get(KubernetesClient).get_job.return_value = None
+        service = context.injector.get(RestorePointService)
+
+        with when("a read reconciles the row inside the grace window"):
+            service.reconcile_row(seeded)
+
+        with then("it is left non-terminal for the next read"):
+            body = context.client.get(f"{_url(context)}/{seeded.id}", headers=_auth(context)).json()
+            assert_that(body["status"], equal_to(RestorePointStatus.PENDING.value))
+
+
+def test_the_reconciler_resolves_a_claimed_row_without_waiting_out_the_grace_window():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        seeded = _reconcilable(context, job_name="rp-cap-vanished")
+        context.injector.get(KubernetesClient).get_job.return_value = None
+        service = context.injector.get(RestorePointService)
+
+        with when("the reconciler resolves a row whose claim has just bumped updated_at"):
+            service.reconcile_row(seeded, respect_grace=False)
+
+        with then("the row is failed rather than skipped as fresh"):
+            body = context.client.get(f"{_url(context)}/{seeded.id}", headers=_auth(context)).json()
+            assert_that(body["status"], equal_to(RestorePointStatus.FAILED.value))
+
+
+def test_apply_owed_replay_writes_the_recorded_configuration():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        there_is_a_template(template_key="recorded-template", name="Recorded")(context)
+        repository = context.injector.get(RestorePointRepository)
+        row = _seed_with_manifest(context, _manifest_for(context, template_key="recorded-template"))
+        row.reapply_configuration = True
+        repository.save(row)
+        service = context.injector.get(RestorePointService)
+
+        with when("the reconciler applies the owed replay directly"):
+            service.apply_owed_replay(row)
+
+        with then("the configuration lands and nothing is still owed"):
+            assert_that(repository.find_owing_replay_for_agent(context.agent.id), equal_to([]))
+            agent = context.injector.get(AgentRepository).get_by_id(context.agent.id)
+            assert agent is not None
+            template = context.injector.get(TemplateRepository).get_pinned_template(agent)
+            assert template is not None
+            assert_that(template.template_key, equal_to("recorded-template"))

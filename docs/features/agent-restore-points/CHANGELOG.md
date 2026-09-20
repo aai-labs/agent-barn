@@ -42,6 +42,14 @@ Related context: [`../agents.md`](../agents.md), [`../../architecture/runtime-an
   everything.
 - Moved: the 60-second pending grace from `service.py` to the new constants module, so the read
   path and the reconciler read one definition.
+- Added: `reconcile_row(row, respect_grace=...)` and `apply_owed_replay(row)` on
+  `RestorePointService`, the two seams the reconciler drives rather than restating what the read
+  path already does. The read path keeps the grace window unchanged.
+- Fixed: without `respect_grace`, the reconciliation pass would have resolved nothing. Claiming a
+  row bumps its `updated_at`, which makes it look freshly committed to the 60-second grace that
+  exists to protect a row whose Job has not been created yet — so every row the cron claimed
+  would have been skipped as too young. The cron has already waited the longer staleness
+  threshold to select the row at all.
 
 ### 2026-09-14 — AF-298 — Restore points in the Agent configuration page
 

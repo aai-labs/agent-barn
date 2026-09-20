@@ -204,15 +204,23 @@ class RestorePointService:
             except Exception:
                 logger.warning("Could not re-apply the recorded configuration for %s", row.id, exc_info=True)
 
-    def _reconcile_row(self, row: AgentRestorePoint) -> None:
+    def reconcile_row(self, row: AgentRestorePoint, *, respect_grace: bool = True) -> None:
+        self._reconcile_row(row, respect_grace=respect_grace)
+
+    def apply_owed_replay(self, row: AgentRestorePoint) -> None:
+        self._apply_recorded_configuration_after_restore(row)
+
+    def _reconcile_row(self, row: AgentRestorePoint, *, respect_grace: bool = True) -> None:
         namespace = self.config.k8s_namespace
         if not row.job_name:
-            self._resolve_untracked(row, "The restore point has no job to track.")
+            self._resolve_untracked(row, "The restore point has no job to track.", respect_grace)
             return
 
         job = self.k8s.get_job(row.job_name, namespace)
         if job is None:
-            self._resolve_untracked(row, "The job that was running this operation is no longer available.")
+            self._resolve_untracked(
+                row, "The job that was running this operation is no longer available.", respect_grace
+            )
             return
 
         status_block = job.status
@@ -237,7 +245,7 @@ class RestorePointService:
                 row.id, RestorePointStatus.CAPTURING, from_statuses=(RestorePointStatus.PENDING,)
             )
 
-    def _resolve_untracked(self, row: AgentRestorePoint, reason: str) -> None:
+    def _resolve_untracked(self, row: AgentRestorePoint, reason: str, respect_grace: bool = True) -> None:
         """Resolve a row with no Job to read — but only once it has had time to get one.
 
         A row is committed before its Job is created, so a read landing in that
@@ -246,7 +254,7 @@ class RestorePointService:
         releases the one it never finished writing.
         """
         grace = timedelta(seconds=RESTORE_POINT_RECONCILIATION_PENDING_GRACE_SECONDS)
-        if row.updated_at > datetime.now(UTC) - grace:
+        if respect_grace and row.updated_at > datetime.now(UTC) - grace:
             return
         if row.status == RestorePointStatus.RESTORING:
             self._fail(row, reason)
