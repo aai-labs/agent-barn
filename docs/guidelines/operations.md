@@ -256,7 +256,29 @@ Documentation-only changes do not change a service image and do not require a se
   its own PVC sized by `RESTORE_POINT_SIZE`, provisioned on the node holding the Agent's
   volume. They do not survive loss of that node, and they consume real node disk — the only
   bound is `RESTORE_POINT_MAX_PER_AGENT`, which is per Agent and not per Organization.
-- Restore point rows resolve from live Job status when they are read. A capture nobody reads
-  keeps its Job until the Job's TTL reaps it; the row then resolves as failed and its volume is
-  reclaimed on the next read. Automatic reclamation of restore points nobody ever reads is
-  tracked separately from this ticket.
+- Restore point rows resolve from live Job status when they are read, and a
+  `<release>-restore-point-reconciliation` CronJob resolves the ones nobody reads. It runs every
+  10 minutes (`restorePoints.reconciliation.schedule`, disable with
+  `restorePoints.reconciliation.enabled=false`) under `concurrencyPolicy: Forbid`, and needs the
+  same `batch/jobs` and PVC permissions as the API pod because it authenticates with the same
+  mounted kubeconfig. Run one pass by hand with `make reconcile-restore-points`, which targets
+  whatever `K8S_KUBECONFIG_PATH` and `K8S_NAMESPACE` point at — check both before invoking it
+  against a shared cluster.
+- **The reconciler deletes storage**, so watch its first few runs in staging before trusting the
+  schedule. Each run logs a one-line summary: `claimed`, `resolved`, `replays_attempted`,
+  `volumes_missing`, `orphans_deleted`, `orphans_unidentified`, `failed`. A non-zero
+  `orphans_unidentified` means resources exist that it refuses to touch — see the next point. A
+  climbing `failed` means rows are being claimed and not resolved, which is where to look first
+  if volumes stop being reclaimed.
+- **Restore point PVCs and Jobs created before chart `0.10.0` need one manual cleanup.**
+  Reclamation matches a resource to its row through the `agentbarn.io/restore-point-id` label,
+  which older resources do not carry, and the sweep will not delete what it cannot positively
+  identify. Find them with
+  `kubectl get pvc,job -l 'agentbarn.io/component=restore-point,!agentbarn.io/restore-point-id'`
+  and check each id against `agent_restore_point` before deleting. Delete Jobs before PVCs: a PVC
+  still mounted by a pod stays `Terminating` behind its finalizer.
+- The sweep is deliberately conservative in three further ways, so a stale database or a bad
+  listing cannot empty the namespace: a resource younger than
+  `RESTORE_POINT_ORPHAN_MIN_AGE_SECONDS` is left alone, deletions are capped at
+  `RESTORE_POINT_ORPHAN_DELETE_LIMIT` per run, and a failed or empty PVC listing fails no rows at
+  all. A large backlog therefore drains over several runs rather than one.

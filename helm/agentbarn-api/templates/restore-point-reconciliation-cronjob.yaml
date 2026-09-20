@@ -1,0 +1,67 @@
+{{- if .Values.restorePoints.reconciliation.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ .Release.Name }}-restore-point-reconciliation
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "agentbarn-api.labels" . | nindent 4 }}
+    app.kubernetes.io/component: restore-point-reconciliation
+spec:
+  # Must stay longer than RESTORE_POINT_RECONCILIATION_MAX_RUNTIME_SECONDS
+  # (api/domains/restore_points/constants.py). Under Forbid, a run that outlives its
+  # window does not overlap — it silently costs the next tick instead.
+  schedule: {{ .Values.restorePoints.reconciliation.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            {{- include "agentbarn-api.selectorLabels" . | nindent 12 }}
+            app.kubernetes.io/component: restore-point-reconciliation
+        spec:
+          restartPolicy: OnFailure
+          # Like cost-sync and unlike the event reconciler, this job talks to the
+          # Kubernetes API: it lists restore point Jobs and PVCs and deletes the ones
+          # no row owns. That needs the service account, the namespace, and the
+          # mounted kubeconfig below.
+          serviceAccountName: {{ .Release.Name }}
+          imagePullSecrets:
+            {{- toYaml .Values.imagePullSecrets | nindent 12 }}
+          containers:
+            - name: restore-point-reconciliation
+              image: "{{ .Values.registryPrefix }}/{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+              imagePullPolicy: {{ .Values.image.pullPolicy }}
+              # Not `python -m api.domains.restore_points.reconciliation`: running the
+              # module as __main__ re-imports it under a second module name, so its
+              # RestorePointReconciler class no longer matches the one AppModule's
+              # @provider registered a binding for — injector falls back to raw
+              # construction and fails on the Protocol-typed args.
+              command:
+                - python
+                - -c
+                - "from api.domains.restore_points.reconciliation import main; main()"
+              envFrom:
+                # Carries DB_CONNECTION_URL, REDIS_URL (a resolved row's Domain Events
+                # are dispatched after the write) and AGENT_TOKEN_ENCRYPTION_KEY.
+                - secretRef:
+                    name: {{ .Values.secretName }}
+              env:
+                - name: K8S_NAMESPACE
+                  value: {{ .Release.Namespace }}
+                - name: K8S_KUBECONFIG_PATH
+                  value: /etc/kubeconfig/kubeconfig
+              volumeMounts:
+                - name: kubeconfig
+                  mountPath: /etc/kubeconfig
+                  readOnly: true
+              resources:
+                {{- toYaml .Values.worker.resources | nindent 16 }}
+          volumes:
+            - name: kubeconfig
+              secret:
+                secretName: {{ .Values.kubeconfigSecretName | default (printf "%s-kubeconfig" .Release.Name) }}
+{{- end }}

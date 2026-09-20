@@ -9,15 +9,17 @@ Related context: [`../agents.md`](../agents.md), [`../../architecture/runtime-an
 - Delivered: server-side capture, list, read, restore, and delete of an Agent Restore Point, with
   reconcile-on-read resolving rows from live Job status, lifecycle guards on start and delete,
   and `agent.restore_point.*` Domain Events.
-- In transition: nothing. The API surface is complete for Ticket 1 and safe to depend on.
-- Next: Ticket 2 (reclaim stranded restore points and orphaned volumes). Ticket 3 — the Agent
-  configuration page section and the opt-in replay of the captured configuration — is delivered
-  on AF-298, which branches from this work and merges after it.
-- Blockers: **Ticket 2 must ship in the same release as Ticket 1.** Ticket 1 resolves a row's
-  status when someone reads it; a capture nobody ever reads keeps its row non-terminal until a
-  read reclaims it, so restore points created and abandoned can hold a PVC indefinitely. The
-  guards reconcile before evaluating, so this cannot make an Agent permanently undeletable, but
-  it is a storage leak shipped alongside a storage feature.
+- Delivered: reconciliation on a schedule (AF-297), so a row's status no longer depends on
+  somebody reading it and restore point volumes no row owns are reclaimed.
+- In transition: nothing. Tickets 1, 2 and 3 are complete.
+- Next: nothing planned. Storage remains unmetered per Organization — the only bound is
+  `RESTORE_POINT_MAX_PER_AGENT`, which is per Agent.
+- Blockers: **no capture or restore has yet run end to end in a cluster with a rebuilt API
+  image.** Every check so far is unit tests, mocked services, and the Kubernetes client against
+  k3d. The `pods/log` grant is also unverified on staging and prod; without it a capture still
+  runs but records no archive measurements and a generic failure reason. Watch the reconciler's
+  first runs in staging before trusting the schedule — it is the one path here that deletes
+  storage.
 
 ## Changes
 
@@ -30,6 +32,17 @@ Related context: [`../agents.md`](../agents.md), [`../../architecture/runtime-an
   because one Job serves both that row and the Pre-Restore backup taken beside it.
 - Note: objects created before this change carry no id label. The sweep refuses to delete what it
   cannot identify, so they are reported and left for one manual cleanup rather than guessed at.
+  `docs/guidelines/operations.md` has the query and the order to delete in.
+- Added: a `<release>-restore-point-reconciliation` CronJob on a 10-minute schedule, gated on
+  `restorePoints.reconciliation.enabled` and modelled on the cost-sync template rather than the
+  event reconciler's — this job talks to the Kubernetes API, so it needs the service account, the
+  namespace and the mounted kubeconfig that the event reconciler does without. `agentbarn-api`
+  chart `0.9.1` → `0.10.0`; `make reconcile-restore-points` runs one pass locally.
+- Documented: the CronJob, its summary log line, the pre-`0.10.0` manual cleanup, and the three
+  limits that keep the sweep conservative, in `operations.md`; the reconciliation pass and its
+  label matching in `runtime-and-deployment.md`; and, in the RBAC brief, the narrow exception
+  that lets scheduled background work query Agent-subordinate tables without an accessible-Agent
+  join, with the three conditions it depends on.
 - Added: `restore_points/constants.py`, and the claim the reconciler runs on. A restore point has
   no status to flip on claim, so the claim is `SELECT … FOR UPDATE SKIP LOCKED` over stale rows
   that bumps `updated_at` in the same transaction — which is what stops a concurrent run's
