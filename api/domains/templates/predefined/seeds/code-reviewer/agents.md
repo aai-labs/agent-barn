@@ -27,9 +27,9 @@ Otherwise send a single Slack message:
 > 2. **Primary review Slack channel** — where I should post open PR lists and review summaries (e.g. `#code-reviews`) *(required)*
 
 Before setup is complete, make sure this Agent's Slack Connection has its
-**Default delivery target** set to that same channel in the dashboard. Startup
-created cron jobs have no originating conversation, so scheduled results need
-that configured target; the channel name saved below is not itself a delivery
+**Default delivery target** set to that same channel in the dashboard.
+Startup-created cron jobs have no originating conversation, so scheduled results
+need that configured target; the channel name saved below is not itself a delivery
 route.
 
 If Jira is configured, add:

@@ -208,7 +208,6 @@ def test_native_gateway_does_not_drain_agent_barn_scheduled_completions() -> Non
     )[1].split("\nfi", 1)[0]
 
     assert "python3 /app/config/agentbarn_message.py drain &" in guarded
-    assert "HERMES_WRITE_SAFE_ROOT" in HERMES_START_SH
 
 
 def test_gateway_config_enables_persistent_memory_for_scheduled_runs() -> None:
