@@ -79,8 +79,10 @@ Hermes scheduled runs are isolated sessions: they do not inherit Slack thread or
 
 Hermes Agents have two intentional writable mounts: `/opt/data` for Hermes-owned
 state and `/workspace` for the persistent Agent workspace. The base image sets
-`HERMES_WRITE_SAFE_ROOT=/opt/data:/workspace`, so Hermes' file tools may write
-only under those roots; the image smoke test pins both the allowed and denied
+`HERMES_WRITE_SAFE_ROOT=/opt/data:/workspace`, and the startup script appends
+either root when the environment omits it, so an Agent still running an older
+base image gets both. Hermes' file tools may write only under those roots plus
+any the deployment adds; the image smoke test pins both the allowed and denied
 paths. Hermes' curated `USER.md` and `MEMORY.md` live under
 `/opt/data/memories/`; daily notes written as `memory/YYYY-MM-DD.md` remain
 workspace files under `/workspace`.

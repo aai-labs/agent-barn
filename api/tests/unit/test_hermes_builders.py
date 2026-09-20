@@ -1,3 +1,4 @@
+from pathlib import Path
 from uuid import UUID
 
 from api.domains.agents.builders import (
@@ -208,6 +209,18 @@ def test_native_gateway_does_not_drain_agent_barn_scheduled_completions() -> Non
     )[1].split("\nfi", 1)[0]
 
     assert "python3 /app/config/agentbarn_message.py drain &" in guarded
+
+
+def test_startup_keeps_the_image_write_roots_and_adds_the_runtime_mounts() -> None:
+    dockerfile = (Path(__file__).parents[3] / "hermes-base" / "Dockerfile").read_text()
+    image_roots = next(
+        line.split("=", 1)[1] for line in dockerfile.splitlines() if line.startswith("ENV HERMES_WRITE_SAFE_ROOT=")
+    ).split(":")
+
+    assert image_roots == ["/opt/data", "/workspace"]
+    for root in image_roots:
+        assert f"*:{root}:*" in HERMES_START_SH
+    assert 'export HERMES_WRITE_SAFE_ROOT="${safe_write_roots}"' in HERMES_START_SH
 
 
 def test_gateway_config_enables_persistent_memory_for_scheduled_runs() -> None:
