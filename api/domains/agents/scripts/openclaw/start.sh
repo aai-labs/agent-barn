@@ -6,27 +6,6 @@ printf '#!/bin/sh\nexec python3 /app/config/agentbarn_message.py "$@"\n' > /tmp/
 chmod 755 /tmp/agentbarn-bin/agentbarn-message
 export PATH="/tmp/agentbarn-bin:$PATH"
 
-# OpenClaw 2026.8 refuses to start when a pre-migration workspace state is
-# present. The markers are runtime-owned and doctor removes them atomically;
-# only invoke its broader repair on an affected PVC, never on ordinary boots.
-workspace=/home/node/.openclaw/workspace
-state_dir=/home/node/.openclaw
-has_legacy_workspace_state() {
-  [ -e "$workspace/openclaw-workspace-state.json" ] ||
-    [ -e "$workspace/.openclaw/workspace-state.json" ] ||
-    find "$state_dir/workspace-attestations" -maxdepth 1 -type f \
-      \( -name '*.attested' -o -name '*.attested.doctor-importing' \) -print -quit 2>/dev/null \
-      | grep -q . ||
-    find "$(dirname "$workspace")" -maxdepth 1 -type f \
-      \( -name 'workspace.attested' -o -name 'workspace.attested.doctor-importing' \) -print -quit 2>/dev/null \
-      | grep -q .
-}
-if has_legacy_workspace_state; then
-  echo "[start] Migrating legacy OpenClaw workspace state"
-  openclaw doctor --fix --non-interactive
-fi
-unset workspace state_dir
-
 node /app/config/healthz-server.js &
 python3 /app/config/communications-runtime-adapter.py &
 node /app/config/init-openclaw.js
@@ -48,6 +27,8 @@ mkdir -p "$MESSAGE_PLUGIN_DIR"
 cp /app/config/openclaw-messaging.js "$MESSAGE_PLUGIN_DIR/index.js"
 printf '{"name":"agentbarn-messaging","type":"module","openclaw":{"extensions":["./index.js"]}}' > "$MESSAGE_PLUGIN_DIR/package.json"
 printf '{"id":"agentbarn-messaging","name":"Agent Barn messaging","configSchema":{"type":"object","additionalProperties":false,"properties":{}}}' > "$MESSAGE_PLUGIN_DIR/openclaw.plugin.json"
+
+sh /app/config/legacy-workspace-migration.sh || echo "[start] legacy workspace migration failed; continuing"
 
 # Official plugins install from npm at the core's version: OpenClaw only grants plugin
 # state to npm installs it recorded, and those records live on the PVC. A reinstall

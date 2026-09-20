@@ -89,7 +89,9 @@ so only explicit Agent cron jobs initiate proactive work. The OpenClaw startup
 script replaces this policy rather than inheriting an older PVC-held value. A
 pre-2026.8 workspace is detected from its runtime-owned state markers and is
 migrated once with non-interactive `openclaw doctor --fix` before the gateway
-starts; healthy workspaces never run the broad doctor repair during startup.
+starts, after the config and plugin directories are prepared so doctor validates
+the config Agent Barn just wrote; healthy workspaces never run the broad doctor
+repair during startup. A failed migration is logged and does not stop startup.
 
 Cron delivery is automatic. When a scheduled run has nothing actionable to deliver, its final response must be a recognized silence marker (`[SILENT]`, `SILENT`, `NO_REPLY`, `NO REPLY`, or `HEARTBEAT_OK`); ordinary prose such as `Nothing to flag today.` is a deliverable message, not a private acknowledgement.
 

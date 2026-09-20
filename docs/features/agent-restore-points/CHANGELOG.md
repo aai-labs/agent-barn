@@ -24,8 +24,9 @@ Related context: [`../agents.md`](../agents.md), [`../../architecture/runtime-an
 
 - Changed: OpenClaw's PVC-held npm install registry is regenerated during
   startup and now remains outside a Restore Point. It can contain symlinks into
-  the runtime image, which are intentionally omitted from every archive because
-  the restore validator correctly refuses links that escape the destination.
+  the runtime image, so OpenClaw archives omit every symlink: the restore
+  validator correctly refuses links that escape the destination. Hermes
+  archives are unchanged and still keep symlinks.
 
 ### 2026-09-14 — AF-292 — Ticket 1 review fixes
 

@@ -270,6 +270,20 @@ def test_openclaw_capture_excludes_symlinks_that_cannot_be_safely_restored(tmp_p
     validate_archive(dest / ARCHIVE_NAME, source)
 
 
+def test_hermes_capture_keeps_relative_symlinks_inside_the_volume(tmp_path):
+    source, dest = tmp_path / "src", tmp_path / "dst"
+    source.mkdir()
+    dest.mkdir()
+    _hermes_volume(source)
+    (source / "workspace" / "notes-link.md").symlink_to("notes.md")
+
+    capture(source, dest, _HERMES)
+
+    with tarfile.open(dest / ARCHIVE_NAME, "r:gz") as tar:
+        assert_that([member.name for member in tar.getmembers()], has_item("workspace/notes-link.md"))
+    validate_archive(dest / ARCHIVE_NAME, source)
+
+
 def test_capture_writes_a_manifest_with_byte_size_and_file_count(tmp_path):
     source, dest = tmp_path / "src", tmp_path / "dst"
     source.mkdir()
