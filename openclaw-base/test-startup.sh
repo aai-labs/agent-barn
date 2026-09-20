@@ -15,6 +15,7 @@ from api.domains.agents.builders import build_openclaw_gateway_config
 print(json.dumps(build_openclaw_gateway_config("litellm/gpt-5", "http://litellm:4000")))
 ') > "$work/openclaw-config-overlay.json"
 cp "$scripts/init-openclaw.js" "$scripts/legacy-workspace-migration.sh" "$work/"
+chmod -R a+rX "$work"
 
 run() {
     docker run --rm --network none -v "$work:/app/config:ro" --entrypoint sh "$image" -c "$1"
