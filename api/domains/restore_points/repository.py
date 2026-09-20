@@ -3,7 +3,7 @@ from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 from injector import inject, singleton
-from sqlalchemy import func, update
+from sqlalchemy import and_, func, or_, update
 from sqlmodel import Session, col, select
 
 from api.domains.agents.models import Agent, AgentRestorePoint, RestorePointOrigin, RestorePointStatus
@@ -124,6 +124,71 @@ class RestorePointRepository:
                 col(AgentRestorePoint.agent_id) == agent_id,
                 col(AgentRestorePoint.reapply_configuration).is_(True),
                 col(AgentRestorePoint.status) == RestorePointStatus.READY,
+            )
+            return list(session.exec(query).all())
+
+    def claim_reconciliation_candidates(
+        self,
+        *,
+        stale_before: datetime,
+        limit: int,
+        skip_locked: bool = True,
+        claimed_at: datetime | None = None,
+    ) -> list[AgentRestorePoint]:
+        """Rows the background reconciler takes responsibility for this run.
+
+        No CurrentUserContext and no authorization scope: the reconciler runs on a
+        schedule with no Active Organization to scope against, and is never reachable
+        from a route.
+
+        Bumping ``updated_at`` inside the locking transaction is the claim. There is no
+        status to flip, so a concurrent run's staleness filter is what must stop
+        matching these rows, and it does so the moment this commits. A run that dies
+        mid-resolve simply leaves them to go stale again.
+        """
+        claimed_at = claimed_at or datetime.now(UTC)
+        statement = (
+            select(AgentRestorePoint)
+            .where(
+                col(AgentRestorePoint.updated_at) <= stale_before,
+                or_(
+                    col(AgentRestorePoint.status).in_(NON_TERMINAL_STATUSES),
+                    and_(
+                        col(AgentRestorePoint.status) == RestorePointStatus.READY,
+                        col(AgentRestorePoint.reapply_configuration).is_(True),
+                    ),
+                ),
+            )
+            .order_by(col(AgentRestorePoint.updated_at))
+            .limit(limit)
+            .with_for_update(skip_locked=skip_locked)
+        )
+        with Session(self.delegate.engine, expire_on_commit=False) as session:
+            rows = list(session.exec(statement))
+            for row in rows:
+                row.updated_at = claimed_at
+                session.add(row)
+            session.commit()
+            return rows
+
+    def find_ready_rows_missing_volumes(self, live_pvc_names: set[str], limit: int) -> list[AgentRestorePoint]:
+        """READY rows whose archive volume is no longer in the cluster.
+
+        No CurrentUserContext and no authorization scope, for the same reason as
+        claim_reconciliation_candidates.
+
+        The caller must have established that ``live_pvc_names`` reflects a successful
+        listing: an empty set from a failed one would match every row.
+        """
+        with Session(self.delegate.engine) as session:
+            query = (
+                select(AgentRestorePoint)
+                .where(
+                    col(AgentRestorePoint.status) == RestorePointStatus.READY,
+                    col(AgentRestorePoint.pvc_name).not_in(live_pvc_names),
+                )
+                .order_by(col(AgentRestorePoint.created_at))
+                .limit(limit)
             )
             return list(session.exec(query).all())
 

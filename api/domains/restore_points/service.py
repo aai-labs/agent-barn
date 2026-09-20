@@ -34,6 +34,7 @@ from api.domains.events.catalog import (
 )
 from api.domains.events.dispatch import EventDeliveryDispatcher, resolve_actor_identity
 from api.domains.rbac.catalog import PermissionKey
+from api.domains.restore_points.constants import RESTORE_POINT_RECONCILIATION_PENDING_GRACE_SECONDS
 from api.domains.restore_points.models import (
     NON_TERMINAL_STATUSES,
     AgentRestorePointCreate,
@@ -53,8 +54,6 @@ from api.infrastructure.shared.models import Pagination
 logger = logging.getLogger(__name__)
 
 _MAX_FAILURE_REASON = 500
-
-RESTORE_POINT_RECONCILIATION_PENDING_GRACE_SECONDS = 60
 
 CAPTURE_TIMEOUT_SETTING = "RESTORE_POINT_CAPTURE_TIMEOUT_SECONDS"
 RESTORE_TIMEOUT_SETTING = "RESTORE_POINT_RESTORE_TIMEOUT_SECONDS"

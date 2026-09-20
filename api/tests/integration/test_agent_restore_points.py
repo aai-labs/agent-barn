@@ -38,6 +38,11 @@ from api.domains.events.catalog import (
 )
 from api.domains.events.dispatch import EventDeliveryDispatcher
 from api.domains.events.models import ActorIdentity, ActorIdentityType, EventScope, OutboxMessage
+from api.domains.restore_points.constants import (
+    RESTORE_POINT_RECONCILIATION_BATCH_SIZE,
+    RESTORE_POINT_RECONCILIATION_MISSING_VOLUME_LIMIT,
+    RESTORE_POINT_RECONCILIATION_STALE_SECONDS,
+)
 from api.domains.restore_points.repository import RestorePointRepository
 from api.domains.restore_points.service import RestorePointService
 from api.domains.templates.models import AgentTemplate
@@ -1401,3 +1406,92 @@ def test_pending_replay_blocks_lifecycle_operations_while_the_lock_is_held():
             assert_that(blocked, equal_to(True))
             service.reconcile_agent(context.agent.id)
             assert_that(service.has_blocking_operation(context.agent.id), equal_to(False))
+
+
+def _claim(context, limit=RESTORE_POINT_RECONCILIATION_BATCH_SIZE):
+    repository: RestorePointRepository = context.injector.get(RestorePointRepository)
+    return repository.claim_reconciliation_candidates(
+        stale_before=datetime.now(UTC) - timedelta(seconds=RESTORE_POINT_RECONCILIATION_STALE_SECONDS),
+        limit=limit,
+    )
+
+
+def _stale_restoring(context, job_name):
+    repository: RestorePointRepository = context.injector.get(RestorePointRepository)
+    row = _seed(context, status_value=RestorePointStatus.RESTORING)
+    row.job_name = job_name
+    repository.save(row)
+    _backdate(context, row.id)
+    return row
+
+
+def test_the_claim_selects_only_rows_that_have_been_stale_long_enough():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        _reconcilable(context, job_name="rp-cap-fresh")
+        stale = _stale_restoring(context, "rp-res-stale")
+
+        with when("the reconciler claims candidates"):
+            claimed = _claim(context)
+
+        with then("only the stale row is claimed"):
+            assert_that([row.id for row in claimed], equal_to([stale.id]))
+
+
+def test_the_claim_includes_a_ready_row_that_still_owes_a_configuration_replay():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        repository: RestorePointRepository = context.injector.get(RestorePointRepository)
+        owing = _seed(context, status_value=RestorePointStatus.READY)
+        owing.reapply_configuration = True
+        repository.save(owing)
+        settled = _seed(context, status_value=RestorePointStatus.READY)
+        _backdate(context, owing.id)
+        _backdate(context, settled.id)
+
+        with when("the reconciler claims candidates"):
+            claimed = _claim(context)
+
+        with then("the owed replay is claimed and the settled row is left alone"):
+            assert_that([row.id for row in claimed], equal_to([owing.id]))
+
+
+def test_claiming_a_row_excludes_it_from_the_next_claim():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        stale = _reconcilable(context, job_name="rp-cap-stale")
+        _backdate(context, stale.id)
+
+        with when("two runs claim in succession"):
+            first = _claim(context)
+            second = _claim(context)
+
+        with then("the second run sees nothing, because the first bumped the row out of the window"):
+            assert_that([row.id for row in first], equal_to([stale.id]))
+            assert_that(second, equal_to([]))
+
+
+def test_the_claim_is_bounded_by_its_batch_size():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        for index in range(3):
+            _stale_restoring(context, f"rp-res-{index}")
+
+        with when("the reconciler claims with a smaller batch size"):
+            claimed = _claim(context, limit=2)
+
+        with then("only that many rows are claimed"):
+            assert_that(claimed, has_length(2))
+
+
+def test_ready_rows_whose_volume_is_gone_are_reported_and_live_ones_are_not():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        repository: RestorePointRepository = context.injector.get(RestorePointRepository)
+        present = _seed(context, status_value=RestorePointStatus.READY)
+        missing = _seed(context, status_value=RestorePointStatus.READY)
+        capturing = _seed(context, status_value=RestorePointStatus.CAPTURING)
+
+        with when("the live volumes are compared against the rows"):
+            found = repository.find_ready_rows_missing_volumes(
+                {present.pvc_name, capturing.pvc_name},
+                limit=RESTORE_POINT_RECONCILIATION_MISSING_VOLUME_LIMIT,
+            )
+
+        with then("only the ready row without a volume is reported"):
+            assert_that([row.id for row in found], equal_to([missing.id]))

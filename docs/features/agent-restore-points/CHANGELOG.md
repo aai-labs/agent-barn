@@ -30,6 +30,18 @@ Related context: [`../agents.md`](../agents.md), [`../../architecture/runtime-an
   because one Job serves both that row and the Pre-Restore backup taken beside it.
 - Note: objects created before this change carry no id label. The sweep refuses to delete what it
   cannot identify, so they are reported and left for one manual cleanup rather than guessed at.
+- Added: `restore_points/constants.py`, and the claim the reconciler runs on. A restore point has
+  no status to flip on claim, so the claim is `SELECT … FOR UPDATE SKIP LOCKED` over stale rows
+  that bumps `updated_at` in the same transaction — which is what stops a concurrent run's
+  staleness filter matching them. One claim covers both non-terminal rows and READY rows that
+  still owe a configuration replay, because a second claim in the same run would find nothing the
+  first had left.
+- Added: `find_ready_rows_missing_volumes`, for the terminal rows the claim cannot reach — a READY
+  row whose archive volume is gone is still offered for restore until something says otherwise.
+  Its caller must establish that the volume listing succeeded, since an empty set matches
+  everything.
+- Moved: the 60-second pending grace from `service.py` to the new constants module, so the read
+  path and the reconciler read one definition.
 
 ### 2026-09-14 — AF-298 — Restore points in the Agent configuration page
 
