@@ -28,8 +28,6 @@ import { formatDate } from "@/shared/date";
 import type { Agent } from "../schemas";
 import { AgentConfigurationSection } from "./agent-configuration-section";
 
-/** Webhook has its own tab (AF-320 revision) — a machine caller is not messaging
- * anyone, and this is the one platform an Agent can hold several of. */
 const WEBHOOK_PLATFORM_KEY = "webhook";
 
 const STATUS_LABEL: Record<string, string> = {
@@ -63,8 +61,7 @@ function StatusDot({ status }: { status: string }) {
   );
 }
 
-/** A ready-to-paste signed request, so this page doubles as the thing you test
- * the connection against. HMAC-SHA256 over the raw body, hex-encoded. */
+/** A ready-to-paste signed request: HMAC-SHA256 over the raw body, hex-encoded. */
 function curlExample(url: string, secret: string): string {
   const body = '{"event_id":"evt-1","prompt":"Say hello and nothing else."}';
   return [
@@ -145,11 +142,8 @@ export function AgentWebhookSettings({ agent, canEdit }: { agent: Agent; canEdit
     if (selectedId === retiring.id) void setSelectedId(null);
   }
 
-  // The retire confirmation is triggered from WebhookDetail but owned here, so it has
-  // to stay mounted across every view below -- otherwise confirming "Remove" while on
-  // the detail view sets `retiring` with nothing on screen to show it, and the dialog
-  // only appears once a later render happens to take the list branch (e.g. after
-  // "Back to webhooks"). One dialog, rendered unconditionally, fixes that for good.
+  // Rendered outside the view switch: Remove is clicked in WebhookDetail, so the dialog
+  // must stay mounted there too.
   return (
     <>
       {reveal ? (

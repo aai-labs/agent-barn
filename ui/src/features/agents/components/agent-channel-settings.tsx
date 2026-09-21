@@ -50,8 +50,7 @@ import { AgentConfigurationSection } from "./agent-configuration-section";
 
 /** Built-in, lazily provisioned, one-per-agent, immutable — never user-added or user-edited. */
 const WEB_PLATFORM_KEY = "web";
-/** Webhook connections have their own "Webhooks" tab (AF-320 revision) — a machine
- * caller is not messaging anyone, and one Agent legitimately holds several of them. */
+/** Webhooks have their own tab; they are not a way to message the Agent. */
 const WEBHOOK_PLATFORM_KEY = "webhook";
 
 function titleCase(text: string): string {
@@ -260,9 +259,6 @@ type SchemaProperty = {
   type?: string;
   default?: unknown;
   pattern?: string;
-  // Set by a plugin's Pydantic model. "textarea" asks for a multi-line field,
-  // which a prompt written by a person needs and a token does not.
-  format?: string;
   items?: { type?: string };
 };
 
@@ -427,18 +423,6 @@ function SchemaTextInput({
         value={value}
         onChange={(next) => onChange(next)}
         browse={browse}
-      />
-    );
-  }
-
-  if (property.format === "textarea") {
-    return (
-      <textarea
-        className="af-input w-full"
-        rows={6}
-        spellCheck={false}
-        value={String(value)}
-        onChange={(event) => onChange(event.target.value)}
       />
     );
   }
