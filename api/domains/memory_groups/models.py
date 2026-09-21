@@ -49,3 +49,27 @@ class MemoryGroupUpdate(PydanticBaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str = Field(min_length=1, max_length=255)
+
+
+class ShareMemoryItemCreate(PydanticBaseModel):
+    """Share one memory item from a source group's pool into other groups' pools."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    # The Honcho conclusion id, as the memory list returns it.
+    memory_id: str = Field(min_length=1, max_length=255, alias="memoryId")
+    target_group_ids: list[UUID] = Field(min_length=1, max_length=20, alias="targetGroupIds")
+
+
+class ShareMemoryItemTargetResult(PydanticBaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    group_id: UUID = Field(alias="groupId")
+    shared: bool
+    error: str | None = None
+
+
+class ShareMemoryItemResult(PydanticBaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    results: list[ShareMemoryItemTargetResult]

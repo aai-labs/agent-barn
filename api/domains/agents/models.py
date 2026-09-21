@@ -585,6 +585,43 @@ class SharedMemoryFact(BaseModel, table=True):
     shared_by_user_id: UUID | None = SqlField(default=None, foreign_key="user.id", nullable=True)
 
 
+class SharedPoolMemoryFact(BaseModel, table=True):
+    """Provenance for a memory shared from one memory pool (group) into another.
+
+    The group equivalent of `SharedMemoryFact`: the same Honcho limitation applies
+    (a conclusion carries no metadata), so a fact shared into a pool is
+    indistinguishable from one the pool derived itself. This table is that
+    distinction, joined back on read to badge the item "Shared from <group>".
+
+    Lives in the agents domain, not `memory_groups`, so the memory read path can
+    join it without a cross-domain import cycle (`memory_groups → agents` is the
+    one allowed direction). The source group id is returned raw and the name is
+    resolved client-side, so this never reaches across into the group table.
+    """
+
+    __tablename__: str = "shared_pool_memory_fact"
+
+    __table_args__ = (
+        sa.UniqueConstraint("conclusion_id", name="uq_shared_pool_memory_fact_conclusion_id"),
+        sa.Index("ix_shared_pool_memory_fact_target_group", "target_group_id"),
+    )
+
+    # The Honcho conclusion this describes. A correction replaces the conclusion
+    # and its id, so this is carried forward rather than re-created.
+    conclusion_id: str = SqlField(nullable=False, max_length=255)
+    # CASCADE: deleting a group is the one sanctioned way to erase its pool, so a
+    # row describing memory in that pool has nothing left to explain afterwards.
+    target_group_id: UUID = SqlField(foreign_key="memory_group.id", nullable=False, ondelete="CASCADE")
+    # SET NULL, not CASCADE: deleting the source group must not erase the badge on
+    # a memory the destination pool still holds. "Shared from a group that no
+    # longer exists" is worth more than silently reverting to self-derived.
+    source_group_id: UUID | None = SqlField(
+        default=None, foreign_key="memory_group.id", nullable=True, ondelete="SET NULL"
+    )
+    # Who performed the share. Nullable so the row survives the user being removed.
+    shared_by_user_id: UUID | None = SqlField(default=None, foreign_key="user.id", nullable=True)
+
+
 class AgentTemplateSkill(BaseModel, table=True):
     __tablename__: str = "agent_template_skill"
 

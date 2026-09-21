@@ -12,9 +12,13 @@ import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { toastError } from "@/shared/toast";
 
+import { useActiveOrgRole } from "@/features/organizations/hooks/use-active-org-role";
+import { useMemoryGroups } from "@/features/memory-groups/hooks/use-memory-groups";
+import { useMemoryGroupMutations } from "@/features/memory-groups/hooks/use-memory-group-mutations";
+
 import { type MemoryScope, useAgentMemory, useAgentMemoryFacets, useAgentMemorySearch } from "../hooks/use-agent-memory";
 import type { AgentMemoryFacet, AgentMemoryItem } from "../schemas";
-import { ShareMemoryDialog } from "./share-memory-dialog";
+import { ShareMemoryToGroupDialog } from "./share-memory-to-group-dialog";
 
 const PAGE_SIZE = 50;
 
@@ -28,15 +32,18 @@ const PAGE_SIZE = 50;
  *  chip saying so on every row is weight without signal — it would bury the shared
  *  and inferred ones that actually differ. `sharedAt` without a name means the
  *  source agent has been deleted. */
-function OriginPill({ item }: { item: AgentMemoryItem }) {
-  const shared = Boolean(item.sharedFrom || item.sharedAt);
+function OriginPill({ item, groupName }: { item: AgentMemoryItem; groupName?: string | null }) {
+  const sharedFromGroup = Boolean(item.sharedFromGroupId);
+  const shared = Boolean(item.sharedFrom || item.sharedAt || sharedFromGroup);
   if (!shared && item.level !== "deductive") return null;
 
-  const label = item.sharedFrom
-    ? `Shared by ${item.sharedFrom}`
-    : item.sharedAt
-      ? "Shared by a deleted agent"
-      : "Inferred";
+  const label = sharedFromGroup
+    ? `Shared from ${groupName ?? "another group"}`
+    : item.sharedFrom
+      ? `Shared by ${item.sharedFrom}`
+      : item.sharedAt
+        ? "Shared in"
+        : "Inferred";
 
   return (
     <span
@@ -76,7 +83,9 @@ function collapse(items: AgentMemoryItem[]): MemoryRow[] {
     const existing = rows.get(item.content);
     if (existing) {
       existing.ids.push(item.id);
-      if (!existing.item.sharedFrom && item.sharedFrom) existing.item = item;
+      const existingHasOrigin = existing.item.sharedFrom || existing.item.sharedFromGroupId;
+      const itemHasOrigin = item.sharedFrom || item.sharedFromGroupId;
+      if (!existingHasOrigin && itemHasOrigin) existing.item = item;
     } else {
       rows.set(item.content, { item, ids: [item.id] });
     }
@@ -93,7 +102,17 @@ function MemoryRowSkeleton() {
   );
 }
 
-export function AgentMemoryPage({ agentId, agentName }: { agentId: string; agentName: string }) {
+export function AgentMemoryPage({
+  agentId,
+  agentName,
+  sourceGroupId,
+}: {
+  agentId: string;
+  agentName: string;
+  // The agent's memory group, or null when it is in none. Sharing an item is a
+  // pool-to-pool operation, so it is only offered when the agent has a pool.
+  sourceGroupId: string | null;
+}) {
   const [page, setPage] = useState(1);
   // null = the "Everyone" facet; otherwise a peer id sent to the API as `observed`.
   const [peer, setPeer] = useState<string | null>(null);
@@ -101,7 +120,14 @@ export function AgentMemoryPage({ agentId, agentName }: { agentId: string; agent
   // contributed. Switching scope changes which facets exist, so it resets the
   // peer filter and page.
   const [scope, setScope] = useState<MemoryScope>("pool");
-  const { memory, isLoading, error, forget, correct, share } = useAgentMemory(agentId, page, PAGE_SIZE, peer, scope);
+  const { memory, isLoading, error, forget, correct } = useAgentMemory(agentId, page, PAGE_SIZE, peer, scope);
+  const { canManage } = useActiveOrgRole();
+  const { shareItem } = useMemoryGroupMutations();
+  // Names for the "Shared from <group>" badge: the read returns only the id, so the
+  // client resolves it against the groups it already has.
+  const { groups } = useMemoryGroups();
+  const groupNameById = useMemo(() => new Map(groups.map((g) => [g.id, g.name])), [groups]);
+  const canShareToGroup = canManage && sourceGroupId !== null;
   const [editingId, setEditingId] = useState<string | null>(null);
   const [sharing, setSharing] = useState<AgentMemoryItem | null>(null);
   const [draft, setDraft] = useState("");
@@ -365,7 +391,10 @@ export function AgentMemoryPage({ agentId, agentName }: { agentId: string; agent
                         {item.content}
                       </p>
                       <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                        <OriginPill item={item} />
+                        <OriginPill
+                          item={item}
+                          groupName={item.sharedFromGroupId ? groupNameById.get(item.sharedFromGroupId) : null}
+                        />
                         {item.createdAt && (
                           <span className="text-xs" style={{ color: "var(--ink-4)" }}>
                             {new Date(item.createdAt).toLocaleDateString(undefined, {
@@ -401,19 +430,21 @@ export function AgentMemoryPage({ agentId, agentName }: { agentId: string; agent
                         </TooltipTrigger>
                         <TooltipContent>Edit</TooltipContent>
                       </Tooltip>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Button
-                            size="icon"
-                            variant="ghost"
-                            aria-label="Share this memory with another agent"
-                            onClick={() => setSharing(item)}
-                          >
-                            <Share2 size={14} />
-                          </Button>
-                        </TooltipTrigger>
-                        <TooltipContent>Share with another agent</TooltipContent>
-                      </Tooltip>
+                      {canShareToGroup && (
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              aria-label="Share this memory with another group"
+                              onClick={() => setSharing(item)}
+                            >
+                              <Share2 size={14} />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>Share with another group</TooltipContent>
+                        </Tooltip>
+                      )}
                       <Tooltip>
                         <TooltipTrigger asChild>
                           <Button
@@ -456,13 +487,14 @@ export function AgentMemoryPage({ agentId, agentName }: { agentId: string; agent
         </div>
       )}
 
-      {sharing && (
-        <ShareMemoryDialog
+      {sharing && sourceGroupId && (
+        <ShareMemoryToGroupDialog
           open
           onOpenChange={(next) => !next && setSharing(null)}
-          sourceAgentId={agentId}
-          initialContent={sharing.content}
-          share={share}
+          sourceGroupId={sourceGroupId}
+          memoryId={sharing.id}
+          content={sharing.content}
+          shareItem={shareItem}
         />
       )}
     </div>

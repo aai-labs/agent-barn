@@ -10,6 +10,8 @@ from api.domains.memory_groups.models import (
     MemoryGroupCreate,
     MemoryGroupRead,
     MemoryGroupUpdate,
+    ShareMemoryItemCreate,
+    ShareMemoryItemResult,
 )
 from api.domains.memory_groups.service import MemoryGroupService
 
@@ -60,6 +62,16 @@ def delete_memory_group(
 ):
     service.delete_group(group_id, context)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@memory_groups_router.post("/{source_group_id}/shared-items", response_model=ShareMemoryItemResult)
+def share_memory_item(
+    source_group_id: UUID,
+    data: ShareMemoryItemCreate,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[MemoryGroupService, Injected(MemoryGroupService)],
+):
+    return service.share_item(source_group_id, data, context)
 
 
 @memory_groups_router.put("/{group_id}/agents/{agent_id}", status_code=status.HTTP_204_NO_CONTENT)

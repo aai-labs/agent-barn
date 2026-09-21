@@ -6,6 +6,7 @@ from fastapi import HTTPException, status
 from injector import inject, singleton
 
 from api.core.config import Config
+from api.domains.agents.memory_sharing import SharedPoolMemoryService
 from api.domains.agents.service import AgentService
 from api.domains.auth.models import CurrentUserContext
 from api.domains.memory_groups.models import (
@@ -13,6 +14,9 @@ from api.domains.memory_groups.models import (
     MemoryGroupCreate,
     MemoryGroupRead,
     MemoryGroupUpdate,
+    ShareMemoryItemCreate,
+    ShareMemoryItemResult,
+    ShareMemoryItemTargetResult,
 )
 from api.domains.memory_groups.repository import MemoryGroupRepository
 from api.domains.rbac.catalog import PermissionKey
@@ -22,6 +26,12 @@ from api.infrastructure.honcho.client import HonchoClient, HonchoError, workspac
 logger = logging.getLogger(__name__)
 
 _MANAGE_DETAIL = "You don't have permission to manage memory groups."
+
+# A shared item is written onto the destination pool's neutral "owner" peer rather
+# than any member's peer: it is knowledge handed to the whole pool, not something a
+# particular Agent concluded. Pool-wide recall aggregates every peer, so placement
+# does not change what is recalled; it only keeps attribution honest.
+_SHARE_PEER = "owner"
 
 
 @inject
@@ -40,6 +50,7 @@ class MemoryGroupService:
     honcho: HonchoClient
     config: Config
     agent_service: AgentService
+    pool_memory: SharedPoolMemoryService
 
     def _org_id(self, context: CurrentUserContext) -> UUID:
         return context.require_current_user_organization().organization_id
@@ -111,3 +122,58 @@ class MemoryGroupService:
                 # Best-effort: the group is gone from the product either way. A
                 # left-behind workspace is recoverable; failing the delete is not.
                 logger.warning("Could not purge memory pool for deleted group %s: %s", group_id, exc)
+
+    def share_item(
+        self, source_group_id: UUID, payload: ShareMemoryItemCreate, context: CurrentUserContext
+    ) -> ShareMemoryItemResult:
+        """Copy one memory item from a source pool into other pools.
+
+        The cross-pool equivalent of promoting a fact: within a group memory is
+        already shared, so this is the one path that crosses the workspace boundary
+        between distinct pools. The item is copied (Honcho has no cross-workspace
+        move), badged with its origin group, and recalled pool-wide in each
+        destination like any other pooled memory.
+        """
+        org_id = self._require_manager(context)
+        if not self.config.honcho_enabled:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Memory sharing requires Honcho-backed memory to be enabled.",
+            )
+        source = self._get_or_404(source_group_id, org_id)
+
+        # Resolve and validate every target up front — a bad target is a client
+        # error, not a per-item outcome — then do the writes, where a Honcho hiccup
+        # against one pool is a genuine per-target result.
+        targets: list[MemoryGroup] = []
+        for target_id in dict.fromkeys(payload.target_group_ids):
+            if target_id == source_group_id:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="A group cannot share memory with itself.",
+                )
+            targets.append(self._get_or_404(target_id, org_id))
+
+        try:
+            item = self.honcho.find_conclusion(workspace_id_for_pool(source.id), payload.memory_id)
+        except HonchoError as exc:
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+        if item is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Memory not found.")
+        content = str(item.get("content") or "")
+        if not content:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Memory not found.")
+
+        shared_by = getattr(context.user, "id", None)
+        results: list[ShareMemoryItemTargetResult] = []
+        for target in targets:
+            try:
+                created = self.honcho.share_fact(workspace_id_for_pool(target.id), _SHARE_PEER, content)
+            except HonchoError as exc:
+                results.append(ShareMemoryItemTargetResult(group_id=target.id, shared=False, error=str(exc)))
+                continue
+            self.pool_memory.record_share(
+                created, source_group_id=source.id, target_group_id=target.id, shared_by_user_id=shared_by
+            )
+            results.append(ShareMemoryItemTargetResult(group_id=target.id, shared=True))
+        return ShareMemoryItemResult(results=results)

@@ -235,6 +235,22 @@ class HonchoClient:
     def delete_conclusion(self, workspace_id: str, conclusion_id: str) -> None:
         self._request("DELETE", f"/workspaces/{workspace_id}/conclusions/{conclusion_id}")
 
+    def find_conclusion(self, workspace_id: str, conclusion_id: str) -> dict | None:
+        """Locate one conclusion by id, or None if it is not in the workspace.
+
+        Honcho exposes no get-by-id for conclusions, so this walks pages. Bounded
+        rather than unbounded: callers act on something the user just saw in the
+        list, not on an arbitrary scan of an unbounded workspace.
+        """
+        for page in range(1, 21):
+            items, total = self.list_conclusions(workspace_id, page=page, size=100)
+            for item in items:
+                if str(item.get("id")) == conclusion_id:
+                    return item
+            if not items or page * 100 >= total:
+                return None
+        return None
+
     def create_conclusion(self, workspace_id: str, *, content: str, observer: str, observed: str) -> dict:
         """Store an operator-authored conclusion.
 

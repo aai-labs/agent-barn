@@ -15,3 +15,22 @@ export const MemoryGroupsSchema = z.array(MemoryGroupSchema);
 
 export type CreateMemoryGroupData = { name: string };
 export type RenameMemoryGroupData = { id: string; name: string };
+
+// One result per destination group: a share can succeed for some pools and fail
+// for others, so each is reported on its own.
+export const ShareMemoryItemResultSchema = z.object({
+  results: z.array(
+    z.object({
+      groupId: z.string().uuid(),
+      shared: z.boolean(),
+      error: z.string().nullable().optional(),
+    }),
+  ),
+});
+export type ShareMemoryItemResult = z.infer<typeof ShareMemoryItemResultSchema>;
+
+export type ShareMemoryItemData = {
+  sourceGroupId: string;
+  memoryId: string;
+  targetGroupIds: string[];
+};

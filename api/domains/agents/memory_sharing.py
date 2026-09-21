@@ -23,7 +23,12 @@ from pydantic import BaseModel, ConfigDict, Field
 from api.core.config import Config
 from api.domains.agents.authorization import AgentAuthorization
 from api.domains.agents.models import Agent, AgentType
-from api.domains.agents.repository import SharedMemoryFactRepository, SharedMemoryProvenance
+from api.domains.agents.repository import (
+    PoolMemoryProvenance,
+    SharedMemoryFactRepository,
+    SharedMemoryProvenance,
+    SharedPoolMemoryFactRepository,
+)
 from api.domains.auth.models import CurrentUserContext
 from api.domains.rbac.catalog import PermissionKey
 from api.infrastructure.honcho.client import (
@@ -95,6 +100,11 @@ class MemoryItemRead(BaseModel):
     # a name that is `None` while `shared_at` is set means the source Agent is gone.
     shared_from: str | None = Field(default=None, alias="sharedFrom")
     shared_at: str | None = Field(default=None, alias="sharedAt")
+    # Set only for a memory shared in from another pool (group). The id, not the
+    # name: the client resolves the name from its groups list, so the read path
+    # never crosses into the memory_groups domain. `None` here with `shared_at`
+    # set means the source group has been deleted.
+    shared_from_group_id: UUID | None = Field(default=None, alias="sharedFromGroupId")
 
 
 class MemoryFacet(BaseModel):
@@ -136,7 +146,14 @@ class MemoryItemUpdate(BaseModel):
 _MAX_SEARCH_PEERS = 8
 
 
-def _to_memory_item(raw: dict, shared: SharedMemoryProvenance | None = None) -> MemoryItemRead:
+def _to_memory_item(
+    raw: dict,
+    shared: SharedMemoryProvenance | None = None,
+    pool_shared: PoolMemoryProvenance | None = None,
+) -> MemoryItemRead:
+    # An item shared in from another pool carries a share timestamp too, so fall
+    # back to it when there is no Agent-level share on the same conclusion.
+    shared_at = (shared.shared_at if shared else None) or (pool_shared.shared_at if pool_shared else None)
     return MemoryItemRead(
         id=str(raw.get("id")),
         content=str(raw.get("content") or ""),
@@ -145,7 +162,8 @@ def _to_memory_item(raw: dict, shared: SharedMemoryProvenance | None = None) -> 
         level=str(raw.get("level") or "explicit"),
         createdAt=raw.get("created_at"),
         sharedFrom=shared.source_agent_name if shared else None,
-        sharedAt=shared.shared_at.isoformat() if shared and shared.shared_at else None,
+        sharedAt=shared_at.isoformat() if shared_at else None,
+        sharedFromGroupId=pool_shared.source_group_id if pool_shared else None,
     )
 
 
@@ -378,6 +396,7 @@ class AgentMemoryService:
     honcho: HonchoClient
     config: Config
     provenance: SharedMemoryFactRepository
+    pool_provenance: SharedPoolMemoryFactRepository
 
     def _require(self, agent_id: UUID, permission: PermissionKey, context: CurrentUserContext) -> Agent:
         if not self.config.honcho_enabled:
@@ -437,9 +456,11 @@ class AgentMemoryService:
             facets = self._memory_facets(workspace, observer, ai_peer, agent.name) if observed is None else []
         except HonchoError as exc:
             raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
-        shared = self.provenance.find_for_conclusions([str(i.get("id")) for i in items])
+        ids = [str(i.get("id")) for i in items]
+        shared = self.provenance.find_for_conclusions(ids)
+        pool_shared = self.pool_provenance.find_for_conclusions(ids)
         return MemoryPage(
-            items=[_to_memory_item(i, shared.get(str(i.get("id")))) for i in items],
+            items=[_to_memory_item(i, shared.get(str(i.get("id"))), pool_shared.get(str(i.get("id")))) for i in items],
             total=total,
             page=page,
             size=size,
@@ -472,6 +493,7 @@ class AgentMemoryService:
         except HonchoError as exc:
             raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
         self.provenance.forget(memory_id)
+        self.pool_provenance.forget(memory_id)
 
     def correct(
         self, agent_id: UUID, memory_id: str, payload: MemoryItemUpdate, context: CurrentUserContext
@@ -500,7 +522,12 @@ class AgentMemoryService:
             raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
         new_id = str(created.get("id"))
         self.provenance.carry_forward(memory_id, new_id)
-        return _to_memory_item(created, self.provenance.find_for_conclusions([new_id]).get(new_id))
+        self.pool_provenance.carry_forward(memory_id, new_id)
+        return _to_memory_item(
+            created,
+            self.provenance.find_for_conclusions([new_id]).get(new_id),
+            self.pool_provenance.find_for_conclusions([new_id]).get(new_id),
+        )
 
     def search_memory(
         self, agent_id: UUID, query: str, context: CurrentUserContext, *, limit: int
@@ -536,17 +563,50 @@ class AgentMemoryService:
         return [_to_memory_item(i) for i in results[:limit]]
 
     def _find(self, workspace: str, memory_id: str) -> dict | None:
-        """Locate one memory so a correction can preserve its peer pair.
+        """Locate one memory so a correction can preserve its peer pair."""
+        return self.honcho.find_conclusion(workspace, memory_id)
 
-        Honcho exposes no get-by-id for conclusions, so this walks pages. Bounded
-        rather than unbounded: a correction is a UI action on something the caller
-        just saw, not a scan.
-        """
-        for page in range(1, 21):
-            items, total = self.honcho.list_conclusions(workspace, page=page, size=100)
-            for item in items:
-                if str(item.get("id")) == memory_id:
-                    return item
-            if not items or page * 100 >= total:
-                return None
-        return None
+
+@inject
+@singleton
+@dataclass
+class SharedPoolMemoryService:
+    """Records where a pool's shared-in memories came from.
+
+    The provenance table lives in this (agents) domain so the memory read path can
+    join it without a cross-domain cycle. `memory_groups` performs the cross-pool
+    copy (it owns the group authz and the pool workspaces) and calls this to badge
+    the result — `memory_groups → agents` is the one allowed direction.
+    """
+
+    provenance: SharedPoolMemoryFactRepository
+
+    def record_share(
+        self,
+        created: list[dict],
+        *,
+        source_group_id: UUID,
+        target_group_id: UUID,
+        shared_by_user_id: UUID | None,
+    ) -> None:
+        """Badge each shared conclusion with its origin group, best-effort.
+
+        By the time this runs the fact is already in the destination pool, so a
+        provenance-write hiccup must not turn a successful share into a 500 — the
+        memory simply shows unbadged, which is recoverable, whereas raising here
+        reports failure for a change that happened."""
+        for conclusion in created:
+            try:
+                self.provenance.record(
+                    conclusion_id=str(conclusion.get("id")),
+                    target_group_id=target_group_id,
+                    source_group_id=source_group_id,
+                    shared_by_user_id=shared_by_user_id,
+                )
+            except Exception:
+                logger.warning(
+                    "Shared conclusion %s into pool %s but could not record its provenance",
+                    conclusion.get("id"),
+                    target_group_id,
+                    exc_info=True,
+                )

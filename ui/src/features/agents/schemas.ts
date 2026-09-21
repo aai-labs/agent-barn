@@ -417,6 +417,10 @@ export const AgentMemoryItemSchema = z.object({
   // source agent has been deleted.
   sharedFrom: z.string().nullable().optional(),
   sharedAt: z.string().nullable().optional(),
+  // Set only for a memory shared in from another pool (group). The id, not the
+  // name — the client resolves the name from its groups list. Null with a set
+  // sharedAt means the source group has since been deleted.
+  sharedFromGroupId: z.string().uuid().nullable().optional(),
 });
 
 // One peer the memory can be filtered to, with its real count. `peer` is the id

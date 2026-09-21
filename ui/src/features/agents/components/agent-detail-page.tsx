@@ -321,7 +321,7 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
             {resolvedTab === "logs" && <LogsTab agent={agent} />}
             {resolvedTab === "work" && <WorkTab agent={agent} />}
             {resolvedTab === "memory" && (
-              <AgentMemoryPage agentId={agent.id} agentName={agent.name} />
+              <AgentMemoryPage agentId={agent.id} agentName={agent.name} sourceGroupId={agent.memoryGroupId} />
             )}
             {resolvedTab === "about" && <AboutTab agent={agent} />}
           </>

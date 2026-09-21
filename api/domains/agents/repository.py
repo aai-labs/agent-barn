@@ -22,6 +22,7 @@ from api.domains.agents.models import (
     AgentStatus,
     SecretProvider,
     SharedMemoryFact,
+    SharedPoolMemoryFact,
 )
 from api.domains.communications.email_address_repository import release_agent_email_addresses
 from api.domains.communications.models import (
@@ -1485,6 +1486,81 @@ class SharedMemoryFactRepository:
         with Session(self.delegate.engine) as session:
             for fact in session.exec(
                 select(SharedMemoryFact).where(col(SharedMemoryFact.conclusion_id) == old_conclusion_id)
+            ).all():
+                fact.conclusion_id = new_conclusion_id
+                session.add(fact)
+            session.commit()
+
+
+@dataclass(frozen=True)
+class PoolMemoryProvenance:
+    """Where a pooled memory came from, for one conclusion.
+
+    Only the source group's id — the name is resolved client-side, so this never
+    reaches into the `memory_groups` domain from here. `source_group_id` is None
+    when the source group has since been deleted (the FK is SET NULL).
+    """
+
+    source_group_id: UUID | None
+    shared_at: datetime | None
+
+
+@inject
+@singleton
+@dataclass
+class SharedPoolMemoryFactRepository:
+    """Tracks which pooled memories were shared in from another pool.
+
+    The group-level counterpart of `SharedMemoryFactRepository`: same shape, keyed
+    by group instead of Agent. Kept separate so each answers one narrow question.
+    """
+
+    delegate: PostgresRepositoryDelegate
+
+    def record(
+        self,
+        *,
+        conclusion_id: str,
+        target_group_id: UUID,
+        source_group_id: UUID,
+        shared_by_user_id: UUID | None,
+    ) -> None:
+        self.delegate.save(
+            SharedPoolMemoryFact(
+                conclusion_id=conclusion_id,
+                target_group_id=target_group_id,
+                source_group_id=source_group_id,
+                shared_by_user_id=shared_by_user_id,
+            )
+        )
+
+    def find_for_conclusions(self, conclusion_ids: list[str]) -> dict[str, PoolMemoryProvenance]:
+        """Provenance for the conclusions on one page, keyed by conclusion id."""
+        if not conclusion_ids:
+            return {}
+        with Session(self.delegate.engine) as session:
+            query = select(SharedPoolMemoryFact).where(col(SharedPoolMemoryFact.conclusion_id).in_(conclusion_ids))
+            return {
+                fact.conclusion_id: PoolMemoryProvenance(
+                    source_group_id=fact.source_group_id,
+                    shared_at=fact.created_at,
+                )
+                for fact in session.exec(query).all()
+            }
+
+    def forget(self, conclusion_id: str) -> None:
+        with Session(self.delegate.engine) as session:
+            for fact in session.exec(
+                select(SharedPoolMemoryFact).where(col(SharedPoolMemoryFact.conclusion_id) == conclusion_id)
+            ).all():
+                session.delete(fact)
+            session.commit()
+
+    def carry_forward(self, old_conclusion_id: str, new_conclusion_id: str) -> None:
+        """Follow a corrected memory to its replacement (see the Agent-level twin)."""
+        with Session(self.delegate.engine) as session:
+            for fact in session.exec(
+                select(SharedPoolMemoryFact).where(col(SharedPoolMemoryFact.conclusion_id) == old_conclusion_id)
             ).all():
                 fact.conclusion_id = new_conclusion_id
                 session.add(fact)

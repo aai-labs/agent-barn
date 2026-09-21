@@ -6,7 +6,15 @@ import { api } from "@/shared/api";
 import { useOrganizationApiBase } from "@/features/organizations/hooks/use-organization-api-base";
 import { agentsKey } from "@/features/agents/utils";
 
-import { CreateMemoryGroupData, MemoryGroup, MemoryGroupSchema, RenameMemoryGroupData } from "../schemas";
+import {
+  CreateMemoryGroupData,
+  MemoryGroup,
+  MemoryGroupSchema,
+  RenameMemoryGroupData,
+  ShareMemoryItemData,
+  ShareMemoryItemResult,
+  ShareMemoryItemResultSchema,
+} from "../schemas";
 import { memoryGroupsKey } from "../utils";
 
 export function useMemoryGroupMutations() {
@@ -60,5 +68,19 @@ export function useMemoryGroupMutations() {
     onSuccess: invalidateGroupsAndAgents,
   });
 
-  return { create, rename, remove, addAgent, removeAgent };
+  // Copies one memory item from the source group's pool into other groups' pools.
+  // It writes into the *destination* pools, so nothing the caller is currently
+  // viewing changes — there is nothing to invalidate here.
+  const shareItem = useMutation({
+    mutationFn: async ({ sourceGroupId, memoryId, targetGroupIds }: ShareMemoryItemData) => {
+      const response = await api.post<ShareMemoryItemResult>(
+        `${base}/${sourceGroupId}/shared-items`,
+        { memoryId, targetGroupIds },
+        { schema: ShareMemoryItemResultSchema },
+      );
+      return response.data;
+    },
+  });
+
+  return { create, rename, remove, addAgent, removeAgent, shareItem };
 }
