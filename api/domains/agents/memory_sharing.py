@@ -301,9 +301,9 @@ class MemorySharingService:
                 results.append(SharedFactTargetResult(agentId=target_agent_id, shared=False, error=str(exc)))
         return SharedFactResult(results=results)
 
-    # An Agent's memory is erased when it is deleted, so this is the escape hatch:
-    # copy what it learned into another Agent first. Deliberately bounded — it is a
-    # rescue path at deletion time, not a migration tool.
+    # Copies a source pool's conclusions into other Agents' pools — the one path
+    # that crosses the workspace boundary between distinct pools. Deliberately
+    # bounded: a rescue-sized batch, not a migration tool.
     MAX_CARRY_OVER = 500
 
     def carry_over(

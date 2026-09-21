@@ -1,8 +1,10 @@
 # Honcho backs Agent memory, scoped to one workspace per Agent
 
-Status: Accepted
+Status: Superseded by [2026-09-21 — Agent memory is shared in pools, opted into by group membership](2026-09-21-shared-memory-pools-via-groups.md)
 Date: 2026-09-03
 Origin: [AF-280](https://aai-labs.atlassian.net/browse/AF-280)
+
+> **Superseded 2026-09-21.** The per-Agent workspace and explicit-copy sharing this ADR describes were replaced before release by shared **memory pools** keyed to a group, where group membership is the opt-in. The Honcho backing, the runtime placement, and the "no migration / no file import" reasoning still hold; the one-workspace-per-Agent model, per-Agent cost attribution, explicit cross-Agent copying, and erase-on-Agent-delete do not. See the superseding ADR.
 
 Agent memory is currently Markdown on the Agent's PersistentVolumeClaim plus OpenClaw's file-backed `memory-core` slot with embedding search disabled, so what an Agent has learned is readable only from inside its own pod and nothing on the platform can query it. Honcho becomes the memory backend for opted-in Agents, with one Honcho workspace per Agent. How it sits differs by runtime, because the runtimes differ: in OpenClaw it occupies the single memory slot instead of `memory-core`, while Hermes takes it as a memory provider alongside `MEMORY.md` and `USER.md`, which stay the operator-editable baseline. The goal is memory quality and platform-readable memory. Isolation stays per-Agent by default; selective cross-Agent sharing is layered on top as an explicit, operator-driven promotion (see **Consequences**) rather than any form of automatic or workspace-level merging.
 

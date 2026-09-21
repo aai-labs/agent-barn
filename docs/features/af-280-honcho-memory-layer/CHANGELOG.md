@@ -2,16 +2,30 @@
 
 Status: Active
 Epic: AF-280
-Related context: [`../agents.md`](../agents.md), [`../costs.md`](../costs.md), [`../../architecture/runtime-and-deployment.md`](../../architecture/runtime-and-deployment.md), [`../../adr/2026-09-03-honcho-backed-agent-memory.md`](../../adr/2026-09-03-honcho-backed-agent-memory.md)
+Related context: [`../agents.md`](../agents.md), [`../costs.md`](../costs.md), [`../../architecture/runtime-and-deployment.md`](../../architecture/runtime-and-deployment.md), [`../../adr/2026-09-21-shared-memory-pools-via-groups.md`](../../adr/2026-09-21-shared-memory-pools-via-groups.md) (supersedes [`../../adr/2026-09-03-honcho-backed-agent-memory.md`](../../adr/2026-09-03-honcho-backed-agent-memory.md))
 
 ## Current state
 
-- Delivered: the Honcho service charts, their Helmfile releases, an embedding route on LiteLLM, runtime wiring for both OpenClaw and Hermes behind a fleet-wide toggle that defaults to off, per-Agent memory cost attribution, explicit cross-Agent memory sharing, and erasure of an Agent's memory when it is deleted with carry-over offered first.
-- In transition: with `HONCHO_ENABLED` unset nothing changes, and Agents already running keep file-backed memory until they are stopped and started once. The toggle is fleet-wide, so enabling it moves every OpenClaw Agent on its next restart rather than a chosen subset.
-- Next: commit. Everything designed for this feature is built. The Organization-wide memory directory was built and then removed with the move back to erasing memory on deletion; it is preserved on `AF-280-org-memory-view-backup`.
+- Delivered: the Honcho service charts, their Helmfile releases, an embedding route on LiteLLM, and runtime wiring for both OpenClaw and Hermes. Memory is **opt-in via shared pools**: a memory group is a pool, and adding an Agent to a group is the opt-in. Agents in a pool keep distinct Honcho peers (contributions stay attributable) and recall pool-wide — OpenClaw through the `honcho-pool-recall` plugin, Hermes through the `hermes-base` ≥ 0.2.4 dialectic patch. Memory cost is one pool-level number (the Honcho LiteLLM key's own spend), not split per Agent. The memory tab has a scope filter (whole pool vs this Agent's contributions). Group management is org-scoped, gated on `memory_group.manage` (seeded to org Owners/Admins by migration).
+- Safety: deleting one Agent never erases a shared pool (`delete_workspace` refuses a pool workspace); deleting the *group* is the one sanctioned way to erase a pool. Opting an Agent out revokes access but leaves its contributions in the pool.
+- In transition: with `HONCHO_ENABLED` unset nothing changes. With it set, still nothing moves until an operator creates a group and adds Agents; the change reaches an Agent on its next start. There is no automatic migration of prior file-backed memory into a pool.
+- Superseded within this epic: the pre-release per-Agent design (one workspace per Agent, fleet-wide toggle, per-Agent cost attribution, explicit cross-Agent copy/carry-over, erase-on-Agent-delete). Its ADR is marked superseded; the org-wide memory directory that a previous cut explored is preserved on `AF-280-org-memory-view-backup`. The `token_totals_by_workspace` repository helper is left in place though the per-Agent cost split that used it is gone.
 - Blockers: none. Kubernetes mints Honcho's LiteLLM key itself; a local compose run still needs `HONCHO_LITELLM_KEY` and `HONCHO_ENABLED=true` in `.env`, since compose has no install hook.
 
 ## Changes
+
+### 2026-09-21 — AF-280 — memory becomes opt-in shared pools, keyed to groups
+
+Reworked memory from per-Agent isolation into opt-in shared pools before release. A live spike settled the core design question: dropping distinct Agents into one Honcho workspace does **not** make them see each other's memory — recall is per-`(observer, observed)` — but the workspace-level dialectic (`POST /v3/workspaces/{ws}/chat`) aggregates across every peer. Shared recall is therefore a deliberate recall change on each runtime, not a free consequence of a shared workspace. See the new ADR for the full decision record.
+
+- **Groups as pools.** New `memory_group` domain (org-scoped, unique name per org). `agent.memory_group_id` is a nullable FK (`SET NULL` on group delete); an Agent in a group uses the workspace `af-pool-<group id>`, an Agent in no group has no shared memory. `memory_active` = Honcho deployed **and** the Agent is in a group. One group per Agent (single FK) — many-to-many is deferred.
+- **Opt-in / opt-out is group membership.** Adding an Agent to a group turns its shared memory on (next start); removing it turns it off. Opt-out only revokes access — past contributions stay in the pool. No migration of prior file-backed memory.
+- **Distinct identities, pool-wide recall.** Each Agent keeps a distinct Honcho peer. OpenClaw needed an explicit agent entry to stop every Agent being `agent-main` (`agents.list`, workspace/agentDir pinned to today's defaults so opting in never relocates files) plus a first-party `honcho-pool-recall` plugin for the workspace-level query (the stock plugin still captures). Hermes's baked-in `_chat_once` is patched to the same query in `hermes-base` 0.2.4. Both verified live — an Agent surfaces a fact a *different* Agent in its pool learned.
+- **Pool-level cost.** Honcho holds one LiteLLM credential, so that key's spend is the whole memory bill — reported as one org-level number, not apportioned per Agent. Per-workspace telemetry is still recorded, for analytics only; it no longer drives cost.
+- **Delete safety.** `delete_workspace` refuses a pool workspace, so deleting one Agent can never erase a pool shared by others. Deleting a *group* is the one deliberate path that erases a pool (`delete_pool_workspace`) and drops members via the FK.
+- **Permission.** New org-scoped `memory_group.manage` (seeded by migration to org Owners and Admins) gates create/rename/delete and Agent assignment.
+- **UI.** Settings gains a Memory Groups panel (create, rename, delete with confirmation, add/remove Agent chips), admin-only. The Agent memory tab gains a scope control — "Whole group" vs "This agent" — above the peer filters.
+- **Data model migrations.** The per-Agent `memory_enabled`/`memory_pool_id` columns are dropped and replaced by `memory_group_id` + the `memory_group` table; the `memory_group.manage` permission is inserted (trigger-disabled bulk insert). Applied by the normal Alembic run on deploy.
 
 ### 2026-09-07 — AF-280 — cut memory noise at the source, drop the Facts-only filter
 
