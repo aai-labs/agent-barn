@@ -19,6 +19,9 @@ class MessageDirection(str, enum.Enum):
 class ConversationType(str, enum.Enum):
     CHANNEL = "CHANNEL"
     DM = "DM"
+    # A machine event, not a place a person talks. It shares this table so an
+    # agent keeps one inbox and one operator view; the UI groups it separately.
+    EVENT = "EVENT"
 
 
 class AgentChatMessage(BaseModel, table=True):

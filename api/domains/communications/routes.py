@@ -8,6 +8,7 @@ from fastapi_injector import Injected
 from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.utils import get_current_user
 from api.domains.communications.models import (
+    CommunicationCallRead,
     CommunicationConnectionCreate,
     CommunicationConnectionRead,
     CommunicationConnectionUpdate,
@@ -141,6 +142,20 @@ def update_communication_connection(
     return service.update_connection(agent_id, connection_id, data, context)
 
 
+@communications_router.post(
+    "/agents/{agent_id}/connections/{connection_id}/rotate-credentials",
+    response_model=CommunicationConnectionRead,
+)
+def rotate_communication_connection_credentials(
+    agent_id: UUID,
+    connection_id: UUID,
+    revision: Annotated[int, Query(ge=1)],
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[CommunicationsService, Injected(CommunicationsService)],
+):
+    return service.rotate_connection_credentials(agent_id, connection_id, revision, context)
+
+
 @communications_router.delete(
     "/agents/{agent_id}/connections/{connection_id}",
     status_code=status.HTTP_204_NO_CONTENT,
@@ -216,6 +231,21 @@ def list_communication_connection_journal(
         delivery_id=delivery_id,
         order=order,
     )
+
+
+@communications_router.get(
+    "/agents/{agent_id}/connections/{connection_id}/calls",
+    response_model=PaginatedItems[CommunicationCallRead],
+)
+def list_communication_connection_calls(
+    agent_id: UUID,
+    connection_id: UUID,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[CommunicationsService, Injected(CommunicationsService)],
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=100)] = 20,
+):
+    return service.list_calls(agent_id, connection_id, context, page=page, page_size=page_size)
 
 
 @communications_router.post(

@@ -49,6 +49,7 @@ HERMES_EXCLUDED = (
 
 OPENCLAW_EXCLUDED = (
     "local-plugins",
+    "npm",
     "openclaw.json",
     "agentbarn-messages.sqlite3",
     "workspace/skills",
@@ -87,8 +88,9 @@ def _walk_included_files(root: Path, runtime: str):
         dir_names[:] = sorted(d for d in dir_names if not is_excluded(prefix + d, runtime))
         for file_name in sorted(file_names):
             rel_path = prefix + file_name
-            if not is_excluded(rel_path, runtime):
-                yield current / file_name, rel_path
+            path = current / file_name
+            if not is_excluded(rel_path, runtime) and not (runtime == RUNTIME_OPENCLAW and path.is_symlink()):
+                yield path, rel_path
 
 
 def capture(source: Path, dest: Path, runtime: str) -> dict:

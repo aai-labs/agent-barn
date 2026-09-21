@@ -169,6 +169,12 @@ def _discord_payload(name: str = "Community Discord", bot_token: str = "token-on
     }
 
 
+def _webhook_payload(name: str = "Jira automation") -> dict:
+    # No secret: webhook mints its own signing_secret. See test_webhook_triggers.py for
+    # the reveal-once contract this deliberately does not exercise here.
+    return {"platform_key": "webhook", "display_name": name, "credentials": {}}
+
+
 def test_platform_catalog_lists_the_shipped_plugins() -> None:
     with given(_GIVEN) as context:
         client: TestClient = context.client
@@ -184,7 +190,7 @@ def test_platform_catalog_lists_the_shipped_plugins() -> None:
             catalogue = response.json()
             assert_that(
                 [item["key"] for item in catalogue],
-                contains_inanyorder("discord", "email", "slack", "teams", "telegram", "web"),
+                contains_inanyorder("discord", "email", "slack", "teams", "telegram", "web", "webhook"),
             )
             slack = next(item for item in catalogue if item["key"] == "slack")
             assert_that(slack["schema_version"], equal_to(2))
@@ -611,6 +617,31 @@ def test_agent_has_at_most_one_active_connection_per_platform() -> None:
             assert_that(
                 sorted(item["platform_key"] for item in listed.json()),
                 equal_to(["discord", "slack"]),
+            )
+
+
+def test_webhook_is_the_one_platform_that_allows_more_than_one_connection() -> None:
+    """Every other platform is one active account per Agent (the previous test); webhook has
+    no provider account, so an Agent may hold one per calling system."""
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+
+        with when("I add two webhook connections and a Slack connection"):
+            first = client.post(_base(context), json=_webhook_payload("Jira"), headers=_auth(context))
+            second = client.post(_base(context), json=_webhook_payload("CI"), headers=_auth(context))
+            slack = client.post(_base(context), json=_slack_payload(), headers=_auth(context))
+            listed = client.get(_base(context), headers=_auth(context))
+
+        with then("both webhooks are active, each with its own minted secret"):
+            assert_that(first.status_code, equal_to(status.HTTP_201_CREATED))
+            assert_that(second.status_code, equal_to(status.HTTP_201_CREATED))
+            assert_that(slack.status_code, equal_to(status.HTTP_201_CREATED))
+            first_secret = first.json()["credential_reveal"]["signing_secret"]
+            second_secret = second.json()["credential_reveal"]["signing_secret"]
+            assert_that(first_secret, not_(equal_to(second_secret)))
+            assert_that(
+                sorted(item["display_name"] for item in listed.json() if item["platform_key"] == "webhook"),
+                equal_to(["CI", "Jira"]),
             )
 
 

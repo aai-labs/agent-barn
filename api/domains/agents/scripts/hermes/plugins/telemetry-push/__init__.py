@@ -28,6 +28,9 @@ _ingest_url = None
 _ingest_api_key = None
 _flush_thread = None
 
+_BOOT_SESSION_ID = "agentbarn-boot"
+_CRON_SESSION_PREFIX = "cron_"
+
 
 def _next_counter():
     global _counter
@@ -208,8 +211,10 @@ def _on_post_llm_call(session_id=None, user_message=None, assistant_response=Non
 
     resolved = _resolve_chat(session_id)
     if resolved is None:
-        # boot-run.py's BOOT_SESSION_ID: the BOOT.md run has no chat by design.
-        if session_id == "agentbarn-boot":
+        # Boot and cron sessions have no chat by design. Their user-facing output
+        # is handled by the scheduled-completion path, not this chat telemetry hook.
+        runtime_session_id = str(session_id or "")
+        if runtime_session_id == _BOOT_SESSION_ID or runtime_session_id.startswith(_CRON_SESSION_PREFIX):
             return
         logger.warning(
             "telemetry-push dropping outbound message: no chat resolved for session_id=%s",

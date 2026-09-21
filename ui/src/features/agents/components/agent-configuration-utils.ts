@@ -17,6 +17,7 @@ export type AgentConfigurationSectionKey =
   | "profile"
   | "template"
   | "channels"
+  | "webhooks"
   | "skills"
   | "keys"
   | "override"
@@ -44,6 +45,11 @@ export const AGENT_CONFIGURATION_SECTIONS: AgentConfigurationSection[] = [
     key: "channels",
     label: "Messaging",
     description: "Where this Agent receives messages and sends replies.",
+  },
+  {
+    key: "webhooks",
+    label: "Webhooks",
+    description: "URLs external systems can call to make this Agent run a job.",
   },
   {
     key: "skills",
