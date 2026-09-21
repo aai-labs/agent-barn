@@ -6,7 +6,7 @@ Read before changing API composition, dependency injection, route/service/reposi
 
 ## Composition and layering
 
-The API image has three HTTP composition roots. `../../api/api_app.py` serves organization and platform product routes at `/api/v1` on port 8000. `../../api/ingest_app.py` serves runtime telemetry at `/ingest/v1` on port 8001. `../../api/communications_app.py` serves provider webhooks and the runtime-neutral delivery protocol at `/communications/v1` on port 8002; its lifespan also runs provider ingress supervision and outbound delivery. Each root attaches the shared Injector, while authentication and exposed routes remain boundary-specific.
+The API image has three HTTP composition roots. `../../api/api_app.py` serves organization and platform product routes at `/api/v1` on port 8000, plus the stable public provider webhook paths at `/communications/v1/webhooks/email/inbound` and `/communications/v1/webhooks/{connection_id}`. `../../api/ingest_app.py` serves runtime telemetry at `/ingest/v1` on port 8001. `../../api/communications_app.py` serves the runtime-neutral delivery protocol and gateway-owned provider-webhook fallback at `/communications/v1` on port 8002; its lifespan also runs provider ingress supervision and outbound delivery. Each root attaches the shared Injector, while authentication and exposed routes remain boundary-specific.
 
 The default dependency direction is:
 
@@ -55,7 +55,7 @@ Product API startup deliberately does **not** reconcile [Organization LiteLLM bu
 
 | Concern | Source |
 |---|---|
-| Product API composition and router registry | `../../api/api_app.py` |
+| Product API composition, public provider-webhook adapters, and Teams runtime webhook relay | `../../api/api_app.py`, `../../api/domains/communications/runtime_webhook_routes.py`, `../../api/domains/communications/teams_runtime_webhook.py` |
 | Ingest API composition and process entry | `../../api/ingest_app.py`, `../../api/ingest_main.py`, `../../api/start.sh` |
 | Communications composition and process entry | `../../api/communications_app.py`, `../../api/communications_main.py` |
 | Injector configuration | `../../api/core/utils.py`, `../../api/infrastructure/app.py` |
@@ -71,4 +71,4 @@ Product API startup deliberately does **not** reconcile [Organization LiteLLM bu
 
 ## Change impact
 
-When adding or moving a product router, update `../../api/api_app.py`; telemetry routes belong to `../../api/ingest_app.py`, and gateway/provider/runtime communication routes belong to `../../api/communications_app.py`. When a schema changes, update the database model, API DTO where required, migration, integration tests, and corresponding UI Zod schema. When a workflow spans repositories, verify whether partial persistence is acceptable before relying on the default session-per-operation behavior. When a mutation produces a Domain Event, use a domain-specific transaction boundary and update the Domain Events feature guide if the envelope, delivery lifecycle, privacy rules, or excluded scope changes.
+When adding or moving a product router, update `../../api/api_app.py`; telemetry routes belong to `../../api/ingest_app.py`, public provider-webhook adapters belong to the API, and the runtime communications protocol plus gateway-owned fallback routes belong to `../../api/communications_app.py`. When a schema changes, update the database model, API DTO where required, migration, integration tests, and corresponding UI Zod schema. When a workflow spans repositories, verify whether partial persistence is acceptable before relying on the default session-per-operation behavior. When a mutation produces a Domain Event, use a domain-specific transaction boundary and update the Domain Events feature guide if the envelope, delivery lifecycle, privacy rules, or excluded scope changes.

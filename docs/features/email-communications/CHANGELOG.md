@@ -39,6 +39,11 @@ Confirmed against Cloudflare's documentation while planning; recorded here becau
 
 ## Changes
 
+### 2026-09-21 — Email inbound adapter moves to the product API — PR pending
+
+- Changed: `POST /communications/v1/webhooks/email/inbound` is now composed by the product API rather than the dedicated Communications process. The public URL, Worker payload, shared-secret authentication, silent unknown-address handling, sender policy, idempotency, and durable-delivery behavior are unchanged. This removes the last email-specific ingress split while the underlying delivery service remains shared during the wider gateway retirement.
+- Changed: ingress sends the complete `/communications/v1/webhooks` prefix to the API. The Worker and deployment comments now name the API as the endpoint owner; local tunnel guidance exposes the API service.
+
 ### 2026-09-21 — Production inbound email rejected every message with 401 — PR pending
 
 - Delivered: The hosted public cluster is now given `AGENT_EMAIL_DOMAIN` and `EMAIL_INBOUND_SECRET`. `deploy-public.yml` passed neither to helmfile, so the chart Secret rendered `""`, and `accept_email_inbound`'s `if not secret` rejected every message before comparing anything. No value on the Worker could ever have matched; setting a secret would not have fixed it.

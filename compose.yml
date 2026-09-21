@@ -67,6 +67,9 @@ services:
       # Agent pods run in k3d, outside this Compose network, so they reach the
       # Communications gateway through the same host hop as Ingest and LiteLLM.
       COMMUNICATIONS_BASE_URL: ${COMMUNICATIONS_BASE_URL:-http://host.docker.internal:${COMMUNICATIONS_PORT:-8002}/communications/v1}
+      # The API container cannot resolve k3d cluster DNS, so runtime-owned Teams
+      # relays through `make forward-teams` on the host instead.
+      TEAMS_RUNTIME_WEBHOOK_URL: ${TEAMS_RUNTIME_WEBHOOK_URL:-http://host.docker.internal:3978/api/messages}
       # The rest of the agent config (AGENT_*, LITELLM_SECRET_NAME, OPENCLAW_IMAGE,
       # ...) arrives via env_file above. Only the values that must differ inside
       # the container are overridden here.

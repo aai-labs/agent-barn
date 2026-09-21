@@ -65,6 +65,9 @@ class Config(BaseSettings):
     communications_base_url: str = (
         "http://agentbarn-api-communications.agent-farm.svc.cluster.local:8002/communications/v1"
     )
+    # Where the API relays runtime-owned Teams activities. Local Docker/k3d
+    # cannot resolve cluster DNS, so compose overrides this with a port-forward.
+    teams_runtime_webhook_url: str = "http://agent-{agent_id}.{namespace}.svc.cluster.local:3978/api/messages"
     skip_slack_token_validation: bool = False
     skip_telegram_token_validation: bool = False
     skip_discord_token_validation: bool = False

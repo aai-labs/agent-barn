@@ -105,7 +105,7 @@ def _payload(to: str, **overrides) -> dict[str, Any]:
 
 
 def _post(context, payload: dict[str, Any], secret: str = INBOUND_SECRET):
-    return context.communications_client.post(
+    return context.client.post(
         INBOUND_PATH,
         json=payload,
         headers={"Authorization": f"Bearer {secret}"},
@@ -212,7 +212,7 @@ def test_a_missing_authorization_header_is_rejected() -> None:
         _create_email_connection(context)
 
         with when("the request carries no credential at all"):
-            response = context.communications_client.post(INBOUND_PATH, json=_payload("whatever@x.test"))
+            response = context.client.post(INBOUND_PATH, json=_payload("whatever@x.test"))
 
         with then("the route refuses it"):
             assert_that(response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_ENTITY))

@@ -28,6 +28,7 @@ from api.domains.auth.routes import auth_router
 from api.domains.communications.metrics import refresh_communication_metrics
 from api.domains.communications.operations import CommunicationOperationalRepository
 from api.domains.communications.routes import communications_router
+from api.domains.communications.runtime_webhook_routes import runtime_provider_webhook_router
 from api.domains.conversations.routes import conversations_router
 from api.domains.costs.platform_routes import platform_costs_router
 from api.domains.costs.routes import costs_router
@@ -128,6 +129,9 @@ def create_app(injector: Injector | None = None):
     subapi.include_router(tool_calls_router)
     subapi.include_router(restore_points_router)
     subapi.include_router(users_router)
+    # This remains outside /api/v1 because Azure has the historical public
+    # Connection webhook URL registered at /communications/v1/webhooks/{id}.
+    app_v1.include_router(runtime_provider_webhook_router)
 
     http_registry = setup_http_metrics(subapi)
 
