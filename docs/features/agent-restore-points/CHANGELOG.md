@@ -21,6 +21,34 @@ Related context: [`../agents.md`](../agents.md), [`../../architecture/runtime-an
 
 ## Changes
 
+### 2026-09-21 — AF-298 — OpenClaw volumes with npm plugins could not be restored
+
+- Fixed: an OpenClaw Agent that had ever installed an npm plugin produced an archive that
+  could never be restored. Every managed npm install links the core into the plugin project
+  from `/usr/local`, outside the volume. The capture Job runs the API image, where that path
+  does not exist, so the link is dangling; `os.walk` classifies entries by following them, a
+  dangling link fails `is_dir` and arrives among the files, and `tarfile` records it with its
+  absolute target. `data_filter` then rejects that member and the restore fails after the
+  safety-net capture has already run. The Agent volume is untouched — validation precedes the
+  wipe — but the restore point is unusable. Capture now drops a link whose target leaves the
+  volume and keeps everything else, including links that stay inside it, such as npm's own
+  `.bin` shims. Hermes was never affected: nothing on its volume is a symlink.
+- Fixed: the start script recreates the dropped link rather than reinstalling the plugin.
+  `npm/` and `state/` have to be captured together — OpenClaw records an install in
+  `state/openclaw.sqlite`, and restoring that record beside a missing tree leaves an install
+  that cannot be repaired: it refuses the package with "no authoritative runtime child list",
+  and `plugins registry --refresh`, `plugins uninstall` and `doctor --fix` do not clear it.
+  Both come back together now, so only the link is missing, and recreating it needs no npm,
+  no network and no registry.
+- Fixed (API): both restore point provisioning handlers log the exception. The reason stored
+  on the row is deliberately reduced to fixed copy, so the cluster's own account of a
+  rejection — which field it refused — had no surviving record anywhere.
+- Fixed: `migrations/env.py` passes `disable_existing_loggers=False`. The model imports at the
+  top of that file create every `api.*` logger before `fileConfig` runs, so a process that
+  applies migrations in-process — the test harness runs them against a live app — silenced
+  application logging for the rest of its life. No log assertion could pass, and existing
+  tests asserting that secrets stay out of the logs were passing against empty output.
+
 ### 2026-09-14 — AF-298 — Restore points in the Agent configuration page
 
 - Added: a "Restore points" section between "Agent-owned override" and "Danger zone" on the

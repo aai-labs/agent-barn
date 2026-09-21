@@ -252,6 +252,79 @@ def test_openclaw_capture_excludes_regenerated_state_and_the_message_spool(tmp_p
         assert_that(names, is_not(has_item(excluded)))
 
 
+_PEER_LINK_DIR = "npm/projects/openclaw-firecrawl-plugin-69f7ab/node_modules/@openclaw/firecrawl-plugin/node_modules"
+
+
+def _with_peer_link(root: Path) -> Path:
+    """The link OpenClaw writes into every npm plugin project, pointing at /usr/local."""
+    peer = root / _PEER_LINK_DIR
+    peer.mkdir(parents=True)
+    link = peer / "openclaw"
+    link.symlink_to("/usr/local/lib/node_modules/openclaw")
+    return link
+
+
+def test_a_link_leaving_the_volume_is_dropped_but_the_tree_around_it_is_kept(tmp_path):
+    """The npm tree is captured; only the link the archive cannot carry is left out.
+
+    The capture Job runs the API image, where the link's target does not exist, so
+    it is dangling: os.walk classifies entries by following them, a dangling one
+    fails is_dir and arrives among the files, and tarfile would record it with its
+    absolute target -- which the extract filter rejects, failing the whole restore.
+    """
+    source, dest = tmp_path / "src", tmp_path / "dst"
+    source.mkdir()
+    dest.mkdir()
+    _openclaw_volume(source)
+    _with_peer_link(source)
+    _write(source, "npm/projects/openclaw-firecrawl-plugin-69f7ab/package.json", "{}")
+
+    capture(source, dest, _OPENCLAW)
+
+    with tarfile.open(dest / ARCHIVE_NAME, "r:gz") as tar:
+        members = tar.getmembers()
+    assert_that([m.name for m in members if m.issym() or m.islnk()], equal_to([]))
+    assert_that(_members(dest), has_item("npm/projects/openclaw-firecrawl-plugin-69f7ab/package.json"))
+    assert_that(_members(dest), has_item("workspace/notes.md"))
+
+
+def test_a_link_that_stays_inside_the_volume_is_captured_and_restored(tmp_path):
+    """npm's own .bin shims are relative and extract safely, so they are preserved."""
+    source, backup, archive = tmp_path / "src", tmp_path / "bak", tmp_path / "arc"
+    for path in (source, backup, archive):
+        path.mkdir()
+    _openclaw_volume(source)
+    _write(source, "npm/pkg/semver/bin/semver.js", "#!/usr/bin/env node")
+    shim_dir = source / "npm/pkg/.bin"
+    shim_dir.mkdir(parents=True)
+    (shim_dir / "semver").symlink_to("../semver/bin/semver.js")
+
+    capture(source, archive, _OPENCLAW)
+    restore(source, backup, archive, _OPENCLAW)
+
+    shim = source / "npm/pkg/.bin/semver"
+    assert_that(shim.is_symlink(), equal_to(True))
+    assert_that(shim.resolve().read_text(), equal_to("#!/usr/bin/env node"))
+
+
+def test_an_openclaw_capture_carrying_the_peer_link_still_restores(tmp_path):
+    source, backup, archive = tmp_path / "src", tmp_path / "bak", tmp_path / "arc"
+    for path in (source, backup, archive):
+        path.mkdir()
+    _openclaw_volume(source)
+    _with_peer_link(source)
+    _write(source, "npm/projects/openclaw-firecrawl-plugin-69f7ab/package.json", "{}")
+    capture(source, archive, _OPENCLAW)
+
+    restore(source, backup, archive, _OPENCLAW)
+
+    assert_that((source / "workspace/notes.md").read_text(), equal_to("agent work"))
+    # The tree comes back so it stays consistent with OpenClaw's records in state/;
+    # only the link is absent, and the start script recreates it.
+    assert_that((source / "npm/projects/openclaw-firecrawl-plugin-69f7ab/package.json").exists(), equal_to(True))
+    assert_that((source / _PEER_LINK_DIR / "openclaw").exists(), equal_to(False))
+
+
 def test_capture_writes_a_manifest_with_byte_size_and_file_count(tmp_path):
     source, dest = tmp_path / "src", tmp_path / "dst"
     source.mkdir()

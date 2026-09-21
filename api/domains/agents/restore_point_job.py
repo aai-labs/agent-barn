@@ -79,6 +79,24 @@ def is_excluded(rel_path: str, runtime: str) -> bool:
     return _matches_prefix(rel_path, excluded)
 
 
+def _escapes_root(path: Path, rel_path: str) -> bool:
+    """Whether a symlink at ``rel_path`` resolves outside the volume.
+
+    OpenClaw links the core into each npm plugin project from /usr/local, and the
+    capture Job runs the API image where that path is absent. os.walk classifies
+    entries by following them, so a dangling link fails is_dir, arrives among the
+    files, and tarfile records it with its absolute target -- which the extract
+    filter then rejects, failing the whole restore. Such a link carries nothing
+    the archive can hold, and the start script recreates it, so it is dropped
+    here. A link that stays inside the volume is kept and extracts normally.
+    """
+    target = os.readlink(path)
+    if posixpath.isabs(target) or ntpath.isabs(target):
+        return True
+    resolved = posixpath.normpath(posixpath.join(posixpath.dirname(rel_path), target))
+    return resolved == ".." or resolved.startswith("../")
+
+
 def _walk_included_files(root: Path, runtime: str):
     for dir_path, dir_names, file_names in os.walk(root, followlinks=False):
         current = Path(dir_path)
@@ -87,8 +105,12 @@ def _walk_included_files(root: Path, runtime: str):
         dir_names[:] = sorted(d for d in dir_names if not is_excluded(prefix + d, runtime))
         for file_name in sorted(file_names):
             rel_path = prefix + file_name
-            if not is_excluded(rel_path, runtime):
-                yield current / file_name, rel_path
+            if is_excluded(rel_path, runtime):
+                continue
+            path = current / file_name
+            if path.is_symlink() and _escapes_root(path, rel_path):
+                continue
+            yield path, rel_path
 
 
 def capture(source: Path, dest: Path, runtime: str) -> dict:
