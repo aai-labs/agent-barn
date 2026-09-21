@@ -277,6 +277,11 @@ class CommunicationsService:
         if data.credentials is not None:
             self.authorization.require_action_for_visible(context, agent, PermissionKey.AGENT_SECRET_MANAGE)
         plugin = self._require_plugin(connection.platform_key)
+        if data.credentials is not None and plugin.mint_credentials():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"{plugin.display_name} credentials are generated, not chosen. Use rotate-credentials to replace them.",
+            )
         credentials = data.credentials or self._decrypt_credentials(plugin, connection.credentials_encrypted)
         settings = data.settings if data.settings is not None else connection.settings
         validated = self._validate(
@@ -313,12 +318,7 @@ class CommunicationsService:
         revision: int,
         context: CurrentUserContext,
     ) -> CommunicationConnectionRead:
-        """Re-mint a Connection's generated credentials and reveal the new value once.
-
-        Only meaningful for a platform that mints something (webhook's signing secret);
-        every other platform authenticates against a real external account and has
-        nothing here to rotate.
-        """
+        """Re-mint a Connection's generated credentials and reveal the new value once."""
         agent = self.authorization.require_action(context, agent_id, PermissionKey.AGENT_UPDATE)
         self.authorization.require_action_for_visible(context, agent, PermissionKey.AGENT_SECRET_MANAGE)
         action_scope = self.authorization.authorization_scope(context, PermissionKey.AGENT_UPDATE)
@@ -488,12 +488,7 @@ class CommunicationsService:
         page: int,
         page_size: int,
     ) -> PaginatedItems[CommunicationCallRead]:
-        """A Connection's inbound requests paired with the Agent's replies.
-
-        Generic over any Connection -- every platform can answer "what came in, what
-        went back" the same way. Today only the webhook tab calls it; the UI simply has
-        no other content for it, since every other platform has its own live view.
-        """
+        """A Connection's inbound requests paired with the Agent's replies."""
         self.authorization.require_visible(context, agent_id)
         read_scope = self.authorization.authorization_scope(context, PermissionKey.AGENT_READ)
         connection = self.repository.get_active_in_scope(connection_id, agent_id, read_scope)

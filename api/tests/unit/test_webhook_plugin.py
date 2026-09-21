@@ -17,7 +17,7 @@ from api.domains.communications.models import (
     OutboundCommunicationEnvelope,
     PlatformCapability,
 )
-from api.domains.communications.plugins.base import PlatformPlugin, WebhookRequest
+from api.domains.communications.plugins.base import PlatformPlugin, WebhookRequest, WebhookRequestRejected
 from api.domains.communications.plugins.webhook import (
     MAX_PROMPT_CHARS,
     MIN_SECRET_LENGTH,
@@ -95,7 +95,7 @@ def test_the_minted_secret_is_revealed_once() -> None:
 def test_a_valid_signed_request_is_accepted() -> None:
     plugin = _plugin()
 
-    plugin.verify_webhook(WebhookSettings(), _credentials(), _request())
+    plugin.verify_webhook(_credentials(), _request())
 
 
 def test_a_body_changed_after_signing_is_rejected() -> None:
@@ -110,7 +110,7 @@ def test_a_body_changed_after_signing_is_rejected() -> None:
     )
 
     with pytest.raises(PermissionError):
-        plugin.verify_webhook(WebhookSettings(), _credentials(), tampered)
+        plugin.verify_webhook(_credentials(), tampered)
 
 
 def test_a_missing_signature_is_rejected() -> None:
@@ -124,18 +124,18 @@ def test_a_missing_signature_is_rejected() -> None:
     )
 
     with pytest.raises(PermissionError):
-        plugin.verify_webhook(WebhookSettings(), _credentials(), without)
+        plugin.verify_webhook(_credentials(), without)
 
 
 def test_the_version_header_is_required_and_checked() -> None:
     """A versioned contract that never checks its version is not versioned."""
     plugin = _plugin()
 
-    with pytest.raises(ValueError, match=VERSION_HEADER):
-        plugin.verify_webhook(WebhookSettings(), _credentials(), _request(version=None))
+    with pytest.raises(WebhookRequestRejected, match=VERSION_HEADER):
+        plugin.verify_webhook(_credentials(), _request(version=None))
 
-    with pytest.raises(ValueError, match="Unsupported webhook contract version"):
-        plugin.verify_webhook(WebhookSettings(), _credentials(), _request(version="99"))
+    with pytest.raises(WebhookRequestRejected, match="Unsupported webhook contract version"):
+        plugin.verify_webhook(_credentials(), _request(version="99"))
 
 
 def test_the_version_header_is_case_insensitive() -> None:
@@ -149,7 +149,7 @@ def test_the_version_header_is_case_insensitive() -> None:
         headers={**request.headers, VERSION_HEADER.lower(): "1"},
     )
 
-    plugin.verify_webhook(WebhookSettings(), _credentials(), lowered)
+    plugin.verify_webhook(_credentials(), lowered)
 
 
 @pytest.mark.parametrize(
@@ -167,12 +167,18 @@ def test_the_version_header_is_case_insensitive() -> None:
     ],
 )
 def test_an_unusable_request_says_why(body: dict, message: str) -> None:
-    """A machine caller cannot read a 202 and guess. These are ValueErrors so the route
-    answers 400 with the reason."""
+    """A machine caller cannot read a 202 and guess, so the route answers 400 with the reason."""
     plugin = _plugin()
 
-    with pytest.raises(ValueError, match=message):
-        plugin.verify_webhook(WebhookSettings(), _credentials(), _request(body))
+    with pytest.raises(WebhookRequestRejected, match=message):
+        plugin.verify_webhook(_credentials(), _request(body))
+
+
+def test_a_rejected_request_is_not_a_value_error() -> None:
+    """The route returns a WebhookRequestRejected message to the caller. pydantic's
+    ValidationError is a ValueError and can quote a stored secret, so the two must never be
+    catchable as one another."""
+    assert not issubclass(WebhookRequestRejected, ValueError)
 
 
 def test_a_subject_field_is_accepted_and_simply_ignored() -> None:
@@ -181,7 +187,7 @@ def test_a_subject_field_is_accepted_and_simply_ignored() -> None:
     integration, a copy-pasted example) should not be broken by it."""
     plugin = _plugin()
 
-    plugin.verify_webhook(WebhookSettings(), _credentials(), _request(_body(subject="whatever")))
+    plugin.verify_webhook(_credentials(), _request(_body(subject="whatever")))
     [envelope] = plugin.normalize_inbound(WebhookSettings(), _body(subject="whatever"))
 
     assert_that(envelope.provider_metadata.get("subject"), is_(None))

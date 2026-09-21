@@ -9,16 +9,20 @@ ordering, and never being told a job ran when it did not.
 import hashlib
 import hmac
 import json
+from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
 from fastapi import status
 from hamcrest import assert_that, contains_string, equal_to, has_length, is_, not_
 from sqlmodel import Session, col, select
+from starlette.testclient import TestClient
 
 from api.domains.agents.models import AgentStatus
 from api.domains.agents.repository import AgentRepository
+from api.domains.communications.gateway_routes import MAX_WEBHOOK_BODY_BYTES
 from api.domains.communications.models import (
+    CommunicationConnection,
     CommunicationDelivery,
     CommunicationDeliveryStatus,
     CommunicationDirection,
@@ -303,12 +307,40 @@ def test_a_released_delivery_goes_back_without_spending_an_attempt() -> None:
             assert_that(delivery.completed_at, is_(None))
 
 
+def test_releasing_a_cancelled_delivery_ends_it_as_cancelled() -> None:
+    """A cancel request wins over a release, and must not be recorded as the Agent being busy."""
+    with given(_GIVEN) as context:
+        connection = _create_webhook_connection(context)
+        secret = connection["credential_reveal"]["signing_secret"]
+        _fire(context, connection["id"], secret)
+        claimed = context.communications_client.post(
+            f"/communications/v1/agents/{context.agent.id}/deliveries/claim",
+            headers=_runtime_auth(context),
+        ).json()
+        delegate = context.injector.get(PostgresRepositoryDelegate)
+        with Session(delegate.engine) as session:
+            row = session.get(CommunicationDelivery, UUID(claimed["delivery_id"]))
+            assert row is not None
+            row.cancel_requested_at = datetime.now(UTC)
+            session.add(row)
+            session.commit()
+
+        with when("the runtime releases the delivery"):
+            response = context.communications_client.post(
+                f"/communications/v1/agents/{context.agent.id}/deliveries/{claimed['delivery_id']}/release",
+                headers=_runtime_auth(context),
+            )
+
+        with then("it ends as cancelled, not requeued and not blamed on a busy Agent"):
+            assert_that(response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
+            [delivery] = _deliveries(context)
+            assert_that(delivery.status, equal_to(CommunicationDeliveryStatus.CANCELLED))
+            assert_that(delivery.last_error_code, equal_to("CANCELLED"))
+
+
 def test_the_event_is_recorded_as_a_machine_event_but_not_surfaced_as_a_conversation() -> None:
-    """The agent_chat_message row is still written -- CommunicationDelivery.message_id
-    is NOT NULL, and platform activity stats read this table directly -- but a webhook
-    call is no longer a conversation view concept (AF-320 revision): it belongs on the
-    webhook's own calls list instead. See test_conversations.py for the list-channels
-    side of this."""
+    """The transcript row is still written (a delivery needs one), but a webhook call is
+    listed on the webhook's own calls list, not as a conversation."""
     with given(_GIVEN) as context:
         connection = _create_webhook_connection(context)
         secret = connection["credential_reveal"]["signing_secret"]
@@ -466,6 +498,89 @@ def test_a_reply_inherits_the_contract_and_the_thread_of_what_it_answers() -> No
             # concurrency key, which has nothing to do with where the event lives.
             assert_that(len(messages), equal_to(2))
             assert_that(messages[0].session_key, equal_to(messages[1].session_key))
+
+
+def test_the_signing_secret_cannot_be_chosen_through_an_update() -> None:
+    with given(_GIVEN) as context:
+        connection = _create_webhook_connection(context)
+        secret = connection["credential_reveal"]["signing_secret"]
+        chosen = "c" * 40
+
+        with when("a user tries to set their own secret with a PATCH"):
+            response = context.client.patch(
+                f"/api/v1/organizations/{context.organization.id}/agents/{context.agent.id}"
+                f"/connections/{connection['id']}",
+                json={"revision": connection["revision"], "credentials": {"signing_secret": chosen}},
+                headers=_auth(context),
+            )
+
+        with then("it is refused, pointing at rotate-credentials"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+            assert_that(response.json()["detail"], contains_string("rotate-credentials"))
+
+        with then("the generated secret still works and the chosen one does not"):
+            assert_that(_fire(context, connection["id"], chosen).status_code, equal_to(status.HTTP_401_UNAUTHORIZED))
+            assert_that(_fire(context, connection["id"], secret).status_code, equal_to(status.HTTP_202_ACCEPTED))
+
+
+def test_an_unsigned_request_never_gets_a_stored_credential_echoed_back() -> None:
+    """Stored credentials are validated before the signature is checked. When one no
+    longer fits its model, pydantic's message quotes it, and that must not reach a caller
+    who has not authenticated."""
+    stale_secret = "stale-secret-" + "x" * 30
+    with given(_GIVEN) as context:
+        connection = _create_webhook_connection(context)
+        delegate = context.injector.get(PostgresRepositoryDelegate)
+        with Session(delegate.engine) as session:
+            row = session.get(CommunicationConnection, UUID(connection["id"]))
+            assert row is not None
+            row.credentials_encrypted = encrypt_token(
+                json.dumps({"auth_mode": "hmac", "secret": stale_secret}), TEST_ENCRYPTION_KEY
+            )
+            session.add(row)
+            session.commit()
+
+        with when("an unsigned request arrives"):
+            client = TestClient(context.communications_app, raise_server_exceptions=False)
+            response = client.post(
+                f"/communications/v1/webhooks/{connection['id']}",
+                content=json.dumps(_body()).encode(),
+                headers={VERSION_HEADER: "1", "Content-Type": "application/json"},
+            )
+
+        with then("nothing about the stored credential comes back"):
+            assert_that(response.text, not_(contains_string(stale_secret)))
+            assert_that(response.status_code, not_(equal_to(status.HTTP_400_BAD_REQUEST)))
+
+
+def test_a_body_that_declares_it_is_too_large_is_refused_without_being_read() -> None:
+    with given(_GIVEN) as context:
+        connection = _create_webhook_connection(context)
+
+        with when("Content-Length is over the cap but the body is tiny"):
+            response = context.communications_client.post(
+                f"/communications/v1/webhooks/{connection['id']}",
+                content=b"{}",
+                headers={"Content-Length": str(MAX_WEBHOOK_BODY_BYTES + 1), "Content-Type": "application/json"},
+            )
+
+        with then("it is refused as too large; a body that had been read would be a 400 or 401"):
+            assert_that(response.status_code, equal_to(status.HTTP_413_CONTENT_TOO_LARGE))
+
+
+def test_a_body_with_no_declared_length_is_still_capped_after_it_is_read() -> None:
+    with given(_GIVEN) as context:
+        connection = _create_webhook_connection(context)
+
+        with when("an oversized body is sent chunked, so there is no Content-Length"):
+            response = context.communications_client.post(
+                f"/communications/v1/webhooks/{connection['id']}",
+                content=iter([b"x" * (MAX_WEBHOOK_BODY_BYTES + 1)]),
+                headers={"Content-Type": "application/json"},
+            )
+
+        with then("it is still refused"):
+            assert_that(response.status_code, equal_to(status.HTTP_413_CONTENT_TOO_LARGE))
 
 
 def test_regenerating_the_secret_keeps_the_url_but_retires_the_old_signature() -> None:

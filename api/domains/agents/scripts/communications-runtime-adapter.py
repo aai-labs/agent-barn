@@ -63,8 +63,7 @@ _APPROVAL_CHOICES = frozenset({"once", "session", "always", "deny"})
 _APPROVAL_CHOICE_ALIASES = {"approve": "once", "approved": "once", "allow": "once"}
 _MANUAL_APPROVAL_CHOICES = ("once", "deny")
 _APPROVAL_METADATA_KEY = "approval_id"
-# What a waiting person is told when their message lands mid-run. The server now
-# sends this per delivery; this is the fallback for an older server.
+# Fallback for a server that does not send busy_notice.
 _BUSY_NOTICE = "I'm still working on your previous message. Please try again shortly."
 
 
@@ -173,12 +172,8 @@ def runtime_headers(session_key: str, idempotency_key: str) -> dict[str, str]:
 
 
 def session_key_for(delivery: dict) -> str:
-    """Derive a conversation's session key locally.
-
-    Kept as the fallback for a server that does not send an execution block yet. The
-    format is also what scripts/messaging/agentbarn_message.py parses to find a
-    scheduled job's origin conversation, so it must not change.
-    """
+    """Fallback for a server that sends no execution block. The format is also parsed by
+    scripts/messaging/agentbarn_message.py, so it must not change."""
     envelope = delivery["envelope"]
     return (
         f"connection:{delivery['connection_id']}:"
@@ -187,11 +182,7 @@ def session_key_for(delivery: dict) -> str:
 
 
 def execution_for(delivery: dict) -> dict:
-    """How this delivery should be run, as decided by the API.
-
-    Every field falls back to what this adapter did before the server sent any of this,
-    so an older server keeps working and conversations behave identically either way.
-    """
+    """How the API says to run this delivery; each field falls back to the old behaviour."""
     execution = delivery.get("execution") or {}
     return {
         "session_key": execution.get("session_key") or session_key_for(delivery),
@@ -237,11 +228,7 @@ def complete_delivery(delivery_id: str, *, succeeded: bool, error: Exception | N
 
 
 def release_delivery(delivery_id: str) -> None:
-    """Hand a claimed delivery back unrun so the queue retries it.
-
-    The opposite of completing it: nothing ran, so nothing is reported as done and the
-    attempt spent claiming it is given back.
-    """
+    """Hand a claimed delivery back unrun; the attempt spent claiming it is given back."""
     http_request(
         "POST",
         f"{COMMUNICATIONS_URL}/agents/{AGENT_ID}/deliveries/{delivery_id}/release",
@@ -301,9 +288,7 @@ def run_delivery_chat_completions(delivery: dict) -> None:
     """Original single blocking-turn path, kept for OpenClaw pods."""
     delivery_id = delivery["delivery_id"]
     envelope = delivery["envelope"]
-    # This path runs one blocking turn at a time, so the busy, approval and resume
-    # policies have nothing to act on here. The session key still comes from the server
-    # so both runtimes agree on what a delivery's session is.
+    # One blocking turn at a time, so the busy, approval and resume policies do not apply.
     session_key = execution_for(delivery)["session_key"]
     IN_FLIGHT.begin(delivery_id, session_key)
     bind_execution(session_key, delivery)
@@ -465,8 +450,7 @@ def run_delivery_hermes(delivery: dict) -> None:
             # Someone is waiting: tell them, and treat the reply as the outcome.
             post_reply(delivery["delivery_id"], execution["busy_notice"])
         if execution["busy_releases"]:
-            # Nobody is waiting and nobody will resend. Completing this would report
-            # work that never happened, so put it back on the queue instead.
+            # Nobody will resend, and completing it would report work that never ran.
             release_delivery(delivery["delivery_id"])
         else:
             # Acknowledge it immediately instead of letting it churn through lease
@@ -493,8 +477,6 @@ def _run_and_drain(delivery: dict, session_key: str) -> None:
             "POST",
             f"{RUNTIME_API_URL}/v1/runs",
             headers=runtime_headers(session_key, delivery_id),
-            # A conversation resumes its thread; a discrete job starts clean so
-            # unrelated events never pile into one ever-growing context.
             payload={"input": text, "session_id": session_key, "resume_session": execution["resume_session"]},
         )
         _drain_run(
@@ -611,9 +593,7 @@ def _drain_run(
 
             if event == "approval.request":
                 if not approvals_enabled:
-                    # There is no one to ask. Parking here would hold the claim until
-                    # the lease expired and the run would be retried into the same
-                    # wall, so deny once and let the run finish and report honestly.
+                    # No one to ask; parking would hold the claim until the lease expired.
                     _answer_approval(run_id, delivery_id, session_key, "deny")
                     continue
                 choices = payload.get("choices") or ["once", "session", "always", "deny"]

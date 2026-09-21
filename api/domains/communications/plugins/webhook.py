@@ -1,21 +1,8 @@
-"""A generic HTTP trigger: any external system can make an Agent do a named job.
+"""A generic HTTP trigger: an external system POSTs a signed request whose `prompt` is the
+instruction the Agent runs.
 
-Unlike every other plugin here, there is no provider on the other side -- no Slack, no
-mailbox, no bot framework. The caller is whatever a user pointed at the URL: Jira
-automation, a CI job, another Agent. That changes two things.
-
-First, the instruction comes from the request itself. A caller sends `prompt` -- the
-job to do, with whatever data it needs folded in as text -- and that is exactly what
-the Agent is asked. There is no connection-level template standing between the two:
-the caller already knows what it wants done.
-
-Second, nobody is waiting. The delivery is admitted as an EVENT (see `execution_policy`),
-which is what stops the runtime treating it like a chat turn someone will retry.
-
-The direct cost of letting the caller supply the prompt: whoever holds the signing
-secret can make the Agent do anything it is capable of, not just the one job a fixed
-template would have allowed. That is an accepted trade, not an oversight -- see the
-AF-320 revision plan.
+There is no provider on the other side, so the delivery is admitted as an EVENT (see
+`execution_policy`): nobody is waiting on it, and the runtime must not treat it as a chat turn.
 """
 
 import hashlib
@@ -40,27 +27,20 @@ from api.domains.communications.plugins.base import (
     PlatformPlugin,
     PlatformSettings,
     WebhookRequest,
+    WebhookRequestRejected,
 )
 
 VERSION_HEADER = "X-AgentBarn-Webhook-Version"
 SIGNATURE_HEADER = "X-AgentBarn-Signature"
 SUPPORTED_VERSIONS = frozenset({"1"})
 
-# The prompt is echoed back in the calls list and stored in the transcript, so it is
-# not a place to put a file. Generous enough for any real instruction plus a chunk of
-# pasted data, small enough to bound cost.
 MAX_PROMPT_CHARS = 64_000
 MAX_ORDERING_KEY_LENGTH = 256
 
-# Every event for a connection shares this location: with no per-request identity to
-# group by (see AF-320 revision plan -- `subject` was dropped), there is nothing to
-# vary the channel id by, and it is not read anywhere. Per-event identity lives in the
-# delivery's session_key (`event:{connection_id}:{event_id}`), which does not use this.
+# One location for all of a connection's events. Per-event identity is the delivery's
+# session_key (`event:{connection_id}:{event_id}`), not this.
 EVENT_LOCATION_ID = "events"
 
-# secrets.token_urlsafe(32) is ~43 base64url characters, comfortably past this floor.
-# Kept as a floor rather than a fixed length so verify_stored_credentials still accepts
-# a value minted by a future, longer generator.
 MIN_SECRET_LENGTH = 32
 
 
@@ -89,9 +69,7 @@ class WebhookCredentials(PlatformCredentials):
 
 
 def _contains_nul(value: str) -> bool:
-    """PostgreSQL's jsonb rejects a NUL inside a string, and the prompt is stored as
-    jsonb via the envelope. Better a clear 400 to the caller than a 500 from the
-    database."""
+    """PostgreSQL's jsonb rejects NUL, and the prompt is stored in a jsonb envelope."""
     return "\x00" in value
 
 
@@ -126,10 +104,7 @@ class WebhookPlatformPlugin(PlatformPlugin):
     capabilities = frozenset({PlatformCapability.WEBHOOK_INGRESS})
     settings_model = WebhookSettings
     credentials_model = WebhookCredentials
-    # Nobody is watching a progress message, and there is no chat window to put it in.
     supports_progress_updates = False
-    # No provider account behind this platform, so an Agent may hold as many webhooks
-    # as it wants -- one per calling system, each with its own URL and secret.
     allows_multiple_connections = True
 
     def mint_credentials(self) -> dict[str, Any]:
@@ -141,32 +116,23 @@ class WebhookPlatformPlugin(PlatformPlugin):
 
     def validate_external(self, settings: PlatformSettings, credentials: PlatformCredentials) -> str | None:
         del settings, credentials
-        # There is no provider to call. The secret is minted by us, and the first real
-        # signed request is what proves the caller has a copy of it.
         return None
 
-    def verify_webhook(
-        self,
-        settings: PlatformSettings,
-        credentials: PlatformCredentials,
-        request: WebhookRequest,
-    ) -> None:
+    def verify_webhook(self, credentials: PlatformCredentials, request: WebhookRequest) -> None:
         """Authenticate the caller, then check the request is usable at all.
 
-        Contract checks live here rather than in normalize_inbound because a machine
-        caller has to be told. A rejection from normalize_inbound is a disposition, which
-        the caller sees as 202 and an empty list -- indistinguishable from success.
+        Contract errors are raised here, not from normalize_inbound: a rejection there is a
+        disposition, which the caller sees as a 202 and cannot tell from success.
         """
-        del settings
         assert isinstance(credentials, WebhookCredentials)
 
         self._verify_signature(credentials, request)
 
         version = request.header(VERSION_HEADER)
         if version is None:
-            raise ValueError(f"Missing {VERSION_HEADER} header. Send {VERSION_HEADER}: 1.")
+            raise WebhookRequestRejected(f"Missing {VERSION_HEADER} header. Send {VERSION_HEADER}: 1.")
         if version not in SUPPORTED_VERSIONS:
-            raise ValueError(f"Unsupported webhook contract version {version!r}. Supported: 1.")
+            raise WebhookRequestRejected(f"Unsupported webhook contract version {version!r}. Supported: 1.")
 
         self._verify_contract(request.payload)
 
@@ -175,8 +141,7 @@ class WebhookPlatformPlugin(PlatformPlugin):
         provided = (request.header(SIGNATURE_HEADER) or "").strip()
         if not provided:
             raise PermissionError(f"Missing {SIGNATURE_HEADER} header")
-        # Signed over the bytes that arrived, not over a re-serialized parse: two
-        # different byte strings can produce the same dict, and only one was signed.
+        # Over the raw bytes: two different byte strings can parse to the same dict.
         expected = (
             "sha256=" + hmac.new(credentials.signing_secret.encode(), request.raw_body, hashlib.sha256).hexdigest()
         )
@@ -187,37 +152,36 @@ class WebhookPlatformPlugin(PlatformPlugin):
     def _verify_contract(payload: dict[str, Any]) -> None:
         event_id = payload.get("event_id")
         if not isinstance(event_id, str) or not event_id.strip():
-            raise ValueError("event_id is required and must be a non-empty string")
+            raise WebhookRequestRejected("event_id is required and must be a non-empty string")
         if len(event_id) > 512:
-            raise ValueError("event_id must be 512 characters or fewer")
+            raise WebhookRequestRejected("event_id must be 512 characters or fewer")
 
         prompt = payload.get("prompt")
-        # ValueError, not TypeError: this is a malformed request from a caller, which the
-        # route turns into a 400. A TypeError would surface as a 500 and read as our bug.
         if not isinstance(prompt, str) or not prompt.strip():
-            raise ValueError("prompt is required and must be a non-empty string")
+            raise WebhookRequestRejected("prompt is required and must be a non-empty string")
         if len(prompt) > MAX_PROMPT_CHARS:
-            raise ValueError(f"prompt must be {MAX_PROMPT_CHARS} characters or fewer")
+            raise WebhookRequestRejected(f"prompt must be {MAX_PROMPT_CHARS} characters or fewer")
         if _contains_nul(prompt):
-            raise ValueError("prompt must not contain NUL characters")
+            raise WebhookRequestRejected("prompt must not contain NUL characters")
 
         ordering_key = payload.get("ordering_key")
         if ordering_key is not None and (
             not isinstance(ordering_key, str) or len(ordering_key) > MAX_ORDERING_KEY_LENGTH
         ):
-            raise ValueError(f"ordering_key must be a string of {MAX_ORDERING_KEY_LENGTH} characters or fewer")
+            raise WebhookRequestRejected(
+                f"ordering_key must be a string of {MAX_ORDERING_KEY_LENGTH} characters or fewer"
+            )
 
         response_url = payload.get("response_url")
         if response_url is not None and not isinstance(response_url, str):
-            raise ValueError("response_url must be a string")
+            raise WebhookRequestRejected("response_url must be a string")
 
     def normalize_inbound(self, settings: PlatformSettings, payload: dict[str, Any]) -> InboundAdmissionResult:
         del settings
         event_id = str(payload.get("event_id") or "").strip()
         prompt = payload.get("prompt")
         if not event_id or not isinstance(prompt, str) or not prompt.strip():
-            # verify_webhook already rejected these with a 400. Reaching here means the
-            # payload came from somewhere that skipped it, so refuse rather than guess.
+            # verify_webhook rejects these first; this covers a payload that skipped it.
             return InboundAdmissionResult(CommunicationPolicyDisposition.MALFORMED_PAYLOAD)
 
         metadata: dict[str, str | int | float | bool | None] = {"event_id": event_id}
@@ -232,8 +196,6 @@ class WebhookPlatformPlugin(PlatformPlugin):
                 NormalizedCommunicationEnvelope(
                     provider_message_id=event_id,
                     occurred_at=datetime.now(UTC),
-                    # EVENT is what makes this a job rather than a chat turn. All of a
-                    # connection's events share one location -- see EVENT_LOCATION_ID.
                     location=ConversationLocation(id=EVENT_LOCATION_ID, type="EVENT", display_name="Events"),
                     text=prompt,
                     provider_metadata=metadata,
@@ -250,8 +212,6 @@ class WebhookPlatformPlugin(PlatformPlugin):
         idempotency_key: str,
     ) -> str:
         del settings, credentials, idempotency_key
-        # There is nothing to send back yet. The Agent's reply is already a durable row
-        # in agent_chat_message and shows in this connection's calls list, and posting
-        # it to a caller's response_url is a later change. Without this no-op every
-        # reply would hit the base class's NotImplementedError, retry, and dead-letter.
+        # Nothing to send back yet (AF-322). Without this no-op every reply would hit the
+        # base class's NotImplementedError, retry, and dead-letter.
         return f"webhook:{envelope.source_delivery_id}"

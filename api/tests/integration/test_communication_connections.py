@@ -621,10 +621,8 @@ def test_agent_has_at_most_one_active_connection_per_platform() -> None:
 
 
 def test_webhook_is_the_one_platform_that_allows_more_than_one_connection() -> None:
-    """Every other platform is one active account per Agent (the previous test).
-    Webhook has no provider account behind it, so an Agent may hold as many as it
-    wants -- one per calling system. This is the AF-320 revision's singleton_key
-    behaviour: NULL for webhook, so it sits outside the unique index entirely."""
+    """Every other platform is one active account per Agent (the previous test); webhook has
+    no provider account, so an Agent may hold one per calling system."""
     with given(_GIVEN) as context:
         client: TestClient = context.client
 

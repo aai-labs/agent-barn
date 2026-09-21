@@ -173,13 +173,7 @@ class TeamsPlatformPlugin(PlatformPlugin):
             terms_url=self._terms_url,
         )
 
-    def verify_webhook(
-        self,
-        settings: PlatformSettings,
-        credentials: PlatformCredentials,
-        request: WebhookRequest,
-    ) -> None:
-        del settings
+    def verify_webhook(self, credentials: PlatformCredentials, request: WebhookRequest) -> None:
         assert isinstance(credentials, TeamsCredentials)
         try:
             verify_inbound_jwt(

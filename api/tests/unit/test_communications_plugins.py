@@ -1993,7 +1993,6 @@ def test_teams_rejected_webhook_token_raises_the_gateways_permission_error() -> 
     ):
         with pytest.raises(PermissionError):
             plugin.verify_webhook(
-                plugin.settings_model.model_construct(),
                 _teams_credentials(plugin),
                 _webhook_request({"type": "message"}, authorization="Bearer nope"),
             )

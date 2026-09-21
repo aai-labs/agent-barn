@@ -204,10 +204,7 @@ class CommunicationDeliveryRepository:
                 col(CommunicationDelivery.direction) == CommunicationDirection.INBOUND,
                 col(CommunicationDelivery.status) == CommunicationDeliveryStatus.PENDING,
                 col(CommunicationDelivery.available_at) <= now,
-                # A pod runs whatever adapter it was handed when it started, so one
-                # predating a policy change can outlive the deploy. Withhold the
-                # kinds it cannot execute: they stay PENDING until it restarts,
-                # which is the safe failure.
+                # Withhold kinds this pod's protocol version cannot execute; they stay PENDING.
                 col(CommunicationDelivery.kind).in_(kinds_for_protocol(runtime_protocol_version)),
                 # An in-flight delivery holds its ordering key so a thread
                 # never runs two turns at once -- unless its run is parked
@@ -421,14 +418,9 @@ class CommunicationDeliveryRepository:
     ) -> bool:
         """Put a claimed delivery back on the queue because its work never started.
 
-        Completing a delivery whose work did not happen is the failure this epic exists
-        to stop: the sender is told "done", nothing was done, and there is no trace. A
-        release says the opposite -- nothing happened, try again -- so the attempt that
-        was spent claiming it is given back.
-
-        Bounded on purpose. A session that stays busy forever would otherwise spin here,
-        so past the attempt ceiling this fails the delivery normally and lets it
-        dead-letter, which is visible, rather than looping quietly.
+        The attempt spent claiming it is given back, so a busy Agent does not use up the
+        delivery's attempts. A delivery cancelled in the meantime ends as cancelled, and one
+        whose earlier attempts already used the budget fails visibly rather than requeue.
         """
         now = datetime.now(UTC)
         with Session(self.delegate.engine) as session:
@@ -444,14 +436,24 @@ class CommunicationDeliveryRepository:
             ).one_or_none()
             if delivery is None:
                 return False
-            if delivery.cancel_requested_at is not None or delivery.attempt_count >= max_attempts:
+            if delivery.cancel_requested_at is not None:
+                self._apply_completion(
+                    delivery,
+                    succeeded=False,
+                    now=now,
+                    max_attempts=max_attempts,
+                    error_code=None,
+                    error_message=None,
+                    error_details=None,
+                )
+            elif delivery.attempt_count >= max_attempts:
                 self._apply_completion(
                     delivery,
                     succeeded=False,
                     now=now,
                     max_attempts=max_attempts,
                     error_code="RELEASE_LIMIT",
-                    error_message="The Agent was busy every time this delivery was claimed",
+                    error_message="The Agent was busy on this delivery's last attempt",
                     error_details=None,
                 )
             else:
@@ -548,10 +550,7 @@ class CommunicationDeliveryRepository:
                 agent_id=agent_id,
                 connection_id=source.connection_id,
                 openclaw_msg_id=f"outbound:{reply.idempotency_key}",
-                # The transcript's grouping key, matching the inbound half of this
-                # exchange. Not source.ordering_key: for an event that is the caller's
-                # concurrency contract, which deliberately has nothing to do with where
-                # the conversation lives. Identical to today's value for a chat turn.
+                # Not source.ordering_key: for an event that is the caller's concurrency key.
                 session_key=conversation_ordering_key(source.connection_id, inbound.location),
                 channel_id=inbound.location.id,
                 thread_id=inbound.location.thread_id,
@@ -569,10 +568,7 @@ class CommunicationDeliveryRepository:
                 connection_id=source.connection_id,
                 message_id=message.id,
                 direction=CommunicationDirection.OUTBOUND,
-                # A reply answers whatever it was sent by, so it carries the same
-                # contract. Nothing reads this on an outbound row yet; leaving it
-                # defaulted would quietly label every event reply a conversation for
-                # whoever wires up the reply path.
+                # A reply carries the contract of what it answers.
                 kind=source.kind,
                 status=CommunicationDeliveryStatus.PENDING,
                 idempotency_key=reply.idempotency_key,
@@ -596,15 +592,12 @@ class CommunicationDeliveryRepository:
             return delivery.id
 
     def list_calls(self, connection_id: UUID, *, pagination: Pagination) -> PaginatedItems[CommunicationCallRead]:
-        """One page of a Connection's inbound requests, newest first, each paired with
-        whatever the Agent sent back for it.
+        """One page of a Connection's inbound requests, newest first, each with the replies
+        the Agent sent for it.
 
-        The request-response link is OutboundCommunicationEnvelope.source_delivery_id,
-        which lives inside the envelope JSONB -- nothing else pairs the two halves.
-        AgentChatMessage.session_key is per-subject rather than per-event by design
-        (see execution_policy), and an outbound delivery carries no session_key at all
-        (see enqueue_runtime_reply). An Agent can reply more than once to one call, so
-        responses is a list, not a single value.
+        A reply is linked to its request only by `source_delivery_id` inside the outbound
+        envelope; the chat transcript's session_key groups by location, not by exchange. An
+        Agent may reply more than once, so `responses` is a list.
         """
         with Session(self.delegate.engine) as session:
             base_predicates = (
@@ -1146,11 +1139,8 @@ class CommunicationDeliveryRepository:
 
     @staticmethod
     def _runtime_delivery(delivery: CommunicationDelivery) -> RuntimeDeliveryRead:
-        """The wire view of a delivery, with its execution contract resolved.
-
-        `session_key` falls back to deriving the key when the column is null, which is
-        every row written before the column existed.
-        """
+        """The wire view of a delivery. `session_key` is derived when the column is null,
+        which is every row written before it existed."""
         envelope = NormalizedCommunicationEnvelope.model_validate(delivery.envelope)
         return RuntimeDeliveryRead(
             delivery_id=delivery.id,
@@ -1167,8 +1157,7 @@ class CommunicationDeliveryRepository:
 
     @staticmethod
     def ordering_key_for_location(connection_id: UUID, location: ConversationLocation) -> str:
-        """A conversation's ordering key. Callers that already hold a location, and only
-        ever deal in conversations, keep using this; `execution_policy` owns the formula."""
+        """A conversation's ordering key; `execution_policy` owns the formula."""
         return conversation_ordering_key(connection_id, location)
 
     @staticmethod
@@ -1179,10 +1168,8 @@ class CommunicationDeliveryRepository:
         envelope: NormalizedCommunicationEnvelope,
         now: datetime,
     ) -> dict[str, Any]:
-        # The transcript's own grouping key, not the runtime session key. They are
-        # different things that happened to share a formula, and changing this one would
-        # silently give new rows a different shape from every row already stored.
-        # For an event this groups the timeline by subject, which is what the UI shows.
+        # The transcript's grouping key, not the runtime session key: they share a formula
+        # but are separate, and changing this one would give new rows a different shape.
         session_key = conversation_ordering_key(connection_id, envelope.location)
         return {
             "id": uuid7(),

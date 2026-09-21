@@ -243,10 +243,7 @@ def test_list_channels_excludes_the_built_in_web_chat_connection():
 
 
 def test_list_channels_excludes_webhook_connections():
-    """A webhook call is a request/response pair with a status and an error -- its own
-    list on the webhook's detail view (AF-320 revision), not a conversation. The
-    agent_chat_message row is still written (see distinct_channels' docstring); it is
-    just not surfaced here, same treatment as Web Chat above."""
+    """Webhook calls are listed on the webhook's own detail view, not as a conversation."""
     with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
         client: TestClient = context.client
         webhook_connection = _seed_connection(context, "Jira automation", platform_key="webhook")

@@ -167,8 +167,6 @@ class CommunicationsGatewayService:
             raise RuntimeError(f"Could not prepare runtime delivery for Connection {delivery.connection_id}") from exc
         return delivery.model_copy(
             update={
-                # Two independent reasons to stay quiet: the platform cannot show
-                # progress, or this delivery's sender is a machine that is not watching.
                 "progress_updates": plugin.supports_progress_updates and policy_for(delivery.kind).progress_updates,
                 "envelope": delivery.envelope.model_copy(update={"text": prompt}),
             }
@@ -581,9 +579,8 @@ class CommunicationsGatewayService:
         if connection is None or not connection.enabled:
             raise PermissionError("Communication Connection not found")
         plugin = self.plugins.require(connection.platform_key)
-        settings = plugin.settings_model.model_validate(connection.settings)
         credentials = plugin.credentials_model.model_validate(
             json.loads(decrypt_token(connection.credentials_encrypted, self.config.agent_token_encryption_key))
         )
-        plugin.verify_webhook(settings, credentials, request)
+        plugin.verify_webhook(credentials, request)
         return self.accept_plugin_payload(connection.id, request.payload)

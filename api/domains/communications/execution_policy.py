@@ -1,18 +1,8 @@
 """How one delivery is executed, decided once per kind and read as data everywhere else.
 
-The seam between a chat turn and a machine event is not about origin -- Teams-vs-Jira is
-origin, conversation-vs-job is contract, and the two are independent. So the contract
-rides on the delivery, and this module is the only place that knows what each contract
-means.
-
-**Nothing outside this module compares a `DeliveryKind`.** Call sites take a policy and
-read a field. That rule is the whole point: a `kind` with `if kind == EVENT` spread over a
-dozen files is worse than no kind at all, because then the difference is everywhere and
-nowhere. A third kind must be one row in `_POLICIES`, not a new branch in the repository,
-the gateway, the route and the pod adapter.
-
-The dataclass therefore holds plain data only. Anything that needs arguments is a module
-function dispatching through a dict keyed by kind.
+Nothing outside this module compares a `DeliveryKind`: call sites take a policy and read a
+field. A third kind is one row in `_POLICIES`, not a new branch in the repository, gateway,
+route and pod adapter.
 """
 
 from dataclasses import dataclass
@@ -25,8 +15,7 @@ from api.domains.communications.models import (
     RuntimeExecutionRead,
 )
 
-# How an event declares its concurrency contract. The plugin parses the caller's request
-# into this key; the ordering builder below reads it back out. One definition, two users.
+# Where an event's caller-declared ordering key is kept in provider_metadata.
 ORDERING_KEY_METADATA = "ordering_key"
 
 _BUSY_NOTICE = "I'm still working on your previous message. Please try again shortly."
@@ -37,17 +26,15 @@ class ExecutionPolicy:
     """What one kind of delivery expects. Plain data: no callables, no behaviour."""
 
     kind: DeliveryKind
-    # A pod runs the adapter it was given when it started, so an old pod can outlive this
-    # deploy indefinitely. Claims are filtered on the version the pod negotiated.
+    # An old pod keeps its old adapter until restarted, so claims are filtered on the
+    # protocol version the pod negotiated.
     min_runtime_protocol_version: int
     resume_session: bool
     approvals_enabled: bool
     progress_updates: bool
-    # What to tell the sender when the agent is already busy. None means say nothing:
-    # there is no one reading, and a chat line in an event's transcript is noise.
+    # None means say nothing when the agent is busy: nobody is reading an event.
     busy_notice: str | None
-    # Whether a delivery that could not run goes back on the queue instead of being
-    # completed. Completing work that did not happen is the bug this epic exists to fix.
+    # Requeue a delivery that could not run instead of completing it.
     busy_releases: bool
 
 
@@ -64,12 +51,8 @@ _CONVERSATION = ExecutionPolicy(
 _EVENT = ExecutionPolicy(
     kind=DeliveryKind.EVENT,
     min_runtime_protocol_version=3,
-    # Each event is a discrete job. Resuming would pile unrelated work into one
-    # ever-growing context and let yesterday's event colour today's answer.
-    resume_session=False,
-    # A machine cannot answer a question. Asking one parks the run until the lease
-    # expires, so events run with approvals off and fail instead of hanging.
-    approvals_enabled=False,
+    resume_session=False,  # each event is a discrete job
+    approvals_enabled=False,  # a machine cannot answer, and the run would park until the lease expires
     progress_updates=False,
     busy_notice=None,
     busy_releases=True,
@@ -77,18 +60,13 @@ _EVENT = ExecutionPolicy(
 
 _POLICIES: dict[DeliveryKind, ExecutionPolicy] = {policy.kind: policy for policy in (_CONVERSATION, _EVENT)}
 
-# The one place a location type becomes a kind. Anything not listed is a conversation,
-# which keeps every existing plugin and the direct web-chat path working untouched.
+# Anything not listed is a conversation, so every existing plugin is untouched.
 _KIND_BY_LOCATION_TYPE: dict[str, DeliveryKind] = {"EVENT": DeliveryKind.EVENT}
 
 
 def kind_for_location(location: ConversationLocation) -> DeliveryKind:
-    """Read the contract off the envelope.
-
-    Derived from the location rather than declared by the plugin because
-    `web_chat.service` admits envelopes straight into the delivery repository, bypassing
-    plugin admission. One fact, every path.
-    """
+    """Derived from the location, not declared by the plugin: `web_chat.service` admits
+    envelopes straight into the delivery repository, bypassing plugin admission."""
     return _KIND_BY_LOCATION_TYPE.get(location.type, DeliveryKind.CONVERSATION)
 
 
@@ -107,23 +85,20 @@ def conversation_ordering_key(connection_id: UUID, location: ConversationLocatio
 
 
 def _conversation_session_key(connection_id: UUID, envelope: NormalizedCommunicationEnvelope) -> str:
-    # Byte-identical to the adapter's own `session_key_for`, and to the format
-    # `scripts/messaging/agentbarn_message.py` parses to find a scheduled job's origin
-    # conversation. Changing this string orphans every live runtime session.
+    # Must stay byte-identical to the adapter's `session_key_for` and to the format
+    # `scripts/messaging/agentbarn_message.py` parses. Changing it orphans live sessions.
     return f"connection:{conversation_ordering_key(connection_id, envelope.location)}"
 
 
 def _event_session_key(connection_id: UUID, envelope: NormalizedCommunicationEnvelope) -> str:
-    # Deliberately not "connection:"-prefixed: an event has no conversation to reply into,
-    # so origin resolution should find none. Keyed on the event id, which the contract
-    # requires and dedupes on, so it is fresh per event and stable across attempts.
+    # Not "connection:"-prefixed, so origin resolution finds no conversation to reply into.
+    # Fresh per event, stable across attempts.
     return f"event:{connection_id}:{envelope.provider_message_id}"
 
 
 def _event_ordering_key(connection_id: UUID, envelope: NormalizedCommunicationEnvelope) -> str:
-    # Ordering is a caller contract: same key serialises, different keys run at once.
-    # Absent means unique -- never a shared constant, or every caller who skipped the
-    # docs gets silently serialised behind strangers.
+    # Same key serialises, different keys run at once. Absent means unique, never a shared
+    # constant, or callers who omit it would serialise behind each other.
     declared = str(envelope.provider_metadata.get(ORDERING_KEY_METADATA) or "").strip()
     if declared:
         return f"{connection_id}:order:{declared}"
@@ -154,11 +129,7 @@ def ordering_key_for(connection_id: UUID, envelope: NormalizedCommunicationEnvel
 
 
 def runtime_execution(kind: DeliveryKind | str, session_key: str) -> RuntimeExecutionRead:
-    """Flatten a policy into the block the pod is handed.
-
-    The pod reads fields; it does not know what a kind is. That keeps the contract in
-    one place and lets an older pod fall back to its own defaults field by field.
-    """
+    """Flatten a policy into the block the pod is handed; the pod never sees a kind."""
     policy = policy_for(DeliveryKind(kind))
     return RuntimeExecutionRead(
         session_key=session_key,

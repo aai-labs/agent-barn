@@ -18,11 +18,10 @@ from api.domains.communications.models import (
     RuntimeDeliveryResult,
     RuntimeReplyCreate,
 )
-from api.domains.communications.plugins.base import WebhookRequest
+from api.domains.communications.plugins.base import WebhookRequest, WebhookRequestRejected
 
-# 3 added the delivery execution contract (kind, server-owned session key, event
-# policy). Older versions stay accepted: a pod runs the adapter it was given when it
-# started, so it keeps speaking its own version until the Agent is restarted.
+# 3 added the delivery execution contract (kind, session key, event policy). Older pods
+# keep speaking their own version until the Agent is restarted, so they stay accepted.
 SUPPORTED_RUNTIME_PROTOCOL_VERSIONS = frozenset({"1", "2", "3"})
 _CONTROL_STREAM_PROTOCOL_VERSIONS = frozenset({"2", "3"})
 
@@ -123,11 +122,7 @@ def release_runtime_delivery(
     authorization: Annotated[str, Header()],
     protocol_version: Annotated[str, Header(alias="X-AgentBarn-Communications-Version")],
 ) -> Response:
-    """Return a claimed delivery to the queue because the Agent could not start it.
-
-    Distinct from complete: nothing ran, so nothing should be reported as done and the
-    attempt spent claiming it is given back.
-    """
+    """Return a claimed delivery to the queue because the Agent could not start it."""
     agent = _authenticate(service, agent_id, authorization, protocol_version)
     if not service.release_runtime_delivery(agent, delivery_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Communication Delivery not found")
@@ -212,8 +207,9 @@ def accept_email_inbound(
     return {"accepted": accepted}
 
 
-# This endpoint is reachable by anyone who learns a Connection id, and nothing is
-# authenticated until the plugin has seen the body. Cap what we are willing to read.
+# The endpoint is public until a plugin has verified the request. A declared Content-Length
+# over this is refused without reading; a body with no declared length (chunked) is read in
+# full and then checked, so a limit that holds against that belongs at the ingress.
 MAX_WEBHOOK_BODY_BYTES = 256 * 1024
 
 
@@ -222,18 +218,20 @@ async def accept_provider_webhook(
     connection_id: UUID,
     request: Request,
     service: Annotated[CommunicationsGatewayService, Injected(CommunicationsGatewayService)],
-    # Optional because not every scheme uses it: a signature-based caller authenticates
-    # with a header of its own and sends no Authorization at all. Requiring one here
-    # would reject those callers with a 422 before any plugin saw the request.
+    # Optional: a signature-based caller sends no Authorization header at all.
     authorization: Annotated[str, Header()] = "",
 ) -> dict[str, list[AcceptedCommunicationRead]]:
-    # The body is read raw rather than declared as a parsed dict: an HMAC signature is
-    # over the bytes that were sent, and re-serializing a parsed dict does not reproduce
-    # them. Parsing here is what lets a plugin verify before anyone trusts the content.
+    declared_length = request.headers.get("content-length", "")
+    if declared_length.isdigit() and int(declared_length) > MAX_WEBHOOK_BODY_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+            detail="Webhook body is too large",
+        )
+    # Raw bytes, not a parsed dict: a signature covers what was sent.
     raw_body = await request.body()
     if len(raw_body) > MAX_WEBHOOK_BODY_BYTES:
         raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
             detail="Webhook body is too large",
         )
     try:
@@ -250,15 +248,11 @@ async def accept_provider_webhook(
         headers=dict(request.headers),
     )
     try:
-        # The service does blocking database and decryption work. Sync endpoints get a
-        # threadpool from FastAPI automatically; this one is async for the raw body, so
-        # it hands that work off explicitly rather than stalling the event loop.
+        # The service does blocking database and decryption work; keep it off the event loop.
         accepted = await run_in_threadpool(service.accept_provider_webhook, connection_id, webhook_request)
     except (PermissionError, NotImplementedError) as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Webhook authentication failed") from exc
-    except ValueError as exc:
-        # The caller is who they claim to be, but the request itself is unusable --
-        # an unsupported contract version, a missing required field.
+    except WebhookRequestRejected as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     return {"accepted": accepted}
 

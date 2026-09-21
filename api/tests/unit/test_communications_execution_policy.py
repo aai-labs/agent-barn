@@ -120,17 +120,17 @@ def test_events_without_an_ordering_key_never_serialise_against_anything() -> No
     assert_that(first, not_(equal_to(second)))
 
 
-def test_events_sharing_an_ordering_key_serialise_even_across_subjects() -> None:
-    """The caller's key is the whole contract. Two events that declare the same key must
-    queue behind one another even when they are about different things."""
+def test_events_sharing_an_ordering_key_serialise_even_across_locations() -> None:
+    """The caller's key is the whole contract: two events that declare the same key queue
+    behind one another whatever their location."""
     shared = {ORDERING_KEY_METADATA: "PROJ-1"}
     first = ordering_key_for(
         _CONNECTION_ID,
-        _envelope(location_type="EVENT", location_id="subject-a", provider_message_id="evt-1", metadata=shared),
+        _envelope(location_type="EVENT", location_id="location-a", provider_message_id="evt-1", metadata=shared),
     )
     second = ordering_key_for(
         _CONNECTION_ID,
-        _envelope(location_type="EVENT", location_id="subject-b", provider_message_id="evt-2", metadata=shared),
+        _envelope(location_type="EVENT", location_id="location-b", provider_message_id="evt-2", metadata=shared),
     )
 
     assert_that(first, equal_to(second))

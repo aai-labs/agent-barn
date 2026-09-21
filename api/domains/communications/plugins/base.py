@@ -89,13 +89,18 @@ class InboundAdmissionContext:
     thread_is_agent_owned: Callable[[ConversationLocation], bool]
 
 
+class WebhookRequestRejected(Exception):
+    """An authentic webhook request the plugin cannot use. The message goes back to the
+    caller, so it must be safe to show. Not a ValueError on purpose: pydantic's
+    ValidationError is one, and its message can quote a stored credential."""
+
+
 @dataclass(frozen=True)
 class WebhookRequest:
-    """One inbound provider webhook, before anything trusts it.
+    """One inbound provider webhook before anything trusts it.
 
-    Carries the raw bytes as well as the parsed body: a signature is over what was
-    actually sent, and re-serializing a parsed dict does not reproduce it. Headers come
-    along because a versioned contract puts its version there.
+    Carries the raw bytes because a signature covers what was sent, and re-serializing
+    the parsed body does not reproduce them.
     """
 
     raw_body: bytes
@@ -195,10 +200,7 @@ class PlatformPlugin(ABC):
     credentials_model: type[PlatformCredentials]
     credential_uniqueness_scope: CredentialUniquenessScope = CredentialUniquenessScope.NONE
     supports_progress_updates: bool = True
-    # Every platform but webhook is one account per Agent, matching the native runtime
-    # gateway's own "one account per platform" rule (ADR 2026-09-16). Webhook has no
-    # provider account behind it, so an Agent may hold as many as it wants -- see
-    # `singleton_key` on CommunicationConnection, which this flag decides at write time.
+    # False: one account per platform per Agent (ADR 2026-09-16). Webhook has no account.
     allows_multiple_connections: bool = False
 
     def resolve_outbound_target(
@@ -213,12 +215,6 @@ class PlatformPlugin(ABC):
         raise NotImplementedError("This platform does not support agent-initiated delivery")
 
     def runtime_prompt(self, envelope: NormalizedCommunicationEnvelope) -> str:
-        """What the Agent is actually asked, rendered at claim time.
-
-        Rendering here rather than at admission keeps the stored envelope the raw
-        provider fact, so a plugin that reframes the runtime prompt can still fix the
-        next attempt without a data migration.
-        """
         return envelope.text
 
     @property
@@ -263,22 +259,11 @@ class PlatformPlugin(ABC):
         return self.credentials_model.model_validate(raw_credentials).model_dump(mode="json")
 
     def mint_credentials(self) -> dict[str, Any]:
-        """Credential values this platform generates rather than asking a user for.
-
-        Merged over user-supplied credentials before validation, so a minted value
-        always wins -- a caller cannot choose its own secret for a platform that mints
-        one. Empty by default: most platforms authenticate against a real external
-        account, so there is nothing here to generate.
-        """
+        """Credentials this platform generates itself, merged over any supplied on create."""
         return {}
 
     def reveal_once(self, credentials: PlatformCredentials) -> dict[str, str]:
-        """Values to show the user exactly once, straight after they are minted.
-
-        Called right after `mint_credentials` populated the connection, and again after
-        a credential rotation. Never called for a plain read: there is no path back to a
-        stored secret's plaintext.
-        """
+        """Values to show the user once, right after they are minted or rotated."""
         del credentials
         return {}
 
@@ -414,17 +399,11 @@ class PlatformPlugin(ABC):
         """
         raise NotImplementedError(f"{self.key} does not implement supervised ingress")
 
-    def verify_webhook(
-        self,
-        settings: PlatformSettings,
-        credentials: PlatformCredentials,
-        request: WebhookRequest,
-    ) -> None:
+    def verify_webhook(self, credentials: PlatformCredentials, request: WebhookRequest) -> None:
         """Authenticate a provider webhook before normalization.
 
-        Raise PermissionError to reject the caller, ValueError to reject the request
-        itself (an unsupported contract version, say). Takes settings because how a
-        Connection authenticates can be configured per Connection.
+        Raise PermissionError to reject the caller, or WebhookRequestRejected to reject
+        an authentic request that cannot be used.
         """
         raise NotImplementedError(f"{self.key} does not implement webhook ingress")
 

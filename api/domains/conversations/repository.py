@@ -235,13 +235,9 @@ class ConversationRepository:
 
         Provider channel identifiers are unique only within one Connection. Picks
         the latest non-null channel name for each (Connection, channel) pair.
-        Excludes two built-in Connections that already have their own view and would
-        just be duplicated here: Web Chat has its own live Chat tab, and webhook calls
-        have their own list on the webhook's detail view (AF-320 revision) -- a
-        request/response pair with a status and an error reads as a log line, not a
-        conversation. The agent_chat_message rows for a webhook event are still
-        written (CommunicationDelivery.message_id is NOT NULL, and platform activity
-        stats read this table directly); they are just not surfaced here.
+        Excludes Connections that have their own view: Web Chat (its Chat tab) and webhook
+        (the calls list on its detail view). Their transcript rows are still written, since
+        a delivery needs one and platform stats read the table; they are just not shown here.
         """
         with Session(self.delegate.engine) as session:
             query = (
