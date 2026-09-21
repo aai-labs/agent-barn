@@ -606,7 +606,7 @@ class AgentService:
             # OpenClaw ignores verbose_mode for the same reason; report the
             # effective no-op default rather than a stored value.
             verbose_mode=agent.verbose_mode if agent.agent_type == AgentType.HERMES else False,
-            memory_enabled=agent.memory_enabled,
+            memory_group_id=agent.memory_group_id,
             secrets=secrets_read,
             skills=skills_read,
             configured_platform_keys=configured_platform_keys or [],
@@ -1677,9 +1677,6 @@ class AgentService:
         if "verbose_mode" in updated:
             agent.verbose_mode = updated["verbose_mode"]
 
-        if "memory_enabled" in updated:
-            agent.memory_enabled = updated["memory_enabled"]
-
         # Validate skill changes against the effective template's required skills
         if effective_template is None:
             effective_template = self.template_repository.get_pinned_template(agent)
@@ -2457,6 +2454,21 @@ class AgentService:
         """Number of non-deleted agents in an org. Used by other domains (e.g. org
         deletion) to decide whether an org can be safely torn down."""
         return self.repository.count_active_by_org(organization_id)
+
+    def set_memory_group(self, agent_id: UUID, group_id: UUID | None, org_id: UUID) -> None:
+        """Assign an Agent to a memory group, or clear it (group_id=None).
+
+        Internal: the memory-groups service authorizes (MEMORY_GROUP_MANAGE) and
+        validates that the group exists in the org before calling this, so here we
+        only scope the Agent to the org and write the field. Takes effect on the
+        Agent's next start (like other config), which points it at the group's
+        shared workspace — or, when cleared, at no memory.
+        """
+        agent = self.repository.get_by_id(agent_id)
+        if agent is None or agent.organization_id != org_id or agent.deleted_at is not None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent {agent_id} not found")
+        agent.memory_group_id = group_id
+        self.repository.save(agent)
 
     def delete_agent(self, agent_id: UUID, context: CurrentUserContext) -> None:
         agent = self.authorization.require_action(context, agent_id, PermissionKey.AGENT_DELETE)

@@ -356,16 +356,14 @@ class Agent(BaseModel, table=True):
         default=False,
         sa_column=Column(sa.Boolean(), nullable=False, server_default=sa.false()),
     )
-    # Opt-in to the shared memory layer. Off by default: memory is per-Agent
-    # opt-in, not fleet-wide. When on (and Honcho is deployed), the Agent joins
-    # a memory pool and shares memory with the other opted-in Agents in it.
-    memory_enabled: bool = SqlField(
-        default=False,
-        sa_column=Column(sa.Boolean(), nullable=False, server_default=sa.false()),
+    # The memory group this Agent belongs to, or null for none. Membership is the
+    # opt-in: an Agent in a group shares one Honcho workspace (af-pool-<group id>)
+    # with the group's other Agents and sees their memory; with no group it has no
+    # shared memory. SET NULL on group delete so removing a group just drops
+    # membership (opt-out) rather than blocking the delete.
+    memory_group_id: UUID | None = SqlField(
+        default=None, foreign_key="memory_group.id", nullable=True, ondelete="SET NULL"
     )
-    # The pool this Agent's memory lives in. Null means the org "house pool"
-    # (see memory_pool_id_for_agent); a value names a specific shared pool.
-    memory_pool_id: str | None = SqlField(default=None, nullable=True)
 
 
 class AgentAccess(BaseModel, table=True):
@@ -912,7 +910,6 @@ class AgentUpdate(PydanticBaseModel):
     removed_secret_providers: list[SecretProvider] | None = None
     approval_mode: CommandApprovalMode | None = None
     verbose_mode: bool | None = None
-    memory_enabled: bool | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -933,13 +930,6 @@ class AgentUpdate(PydanticBaseModel):
     def reject_null_verbose_mode(cls, values: object) -> object:
         if isinstance(values, dict) and values.get("verbose_mode", ...) is None:
             raise ValueError("verbose_mode must be omitted rather than null")
-        return values
-
-    @model_validator(mode="before")
-    @classmethod
-    def reject_null_memory_enabled(cls, values: object) -> object:
-        if isinstance(values, dict) and values.get("memory_enabled", ...) is None:
-            raise ValueError("memory_enabled must be omitted rather than null")
         return values
 
     @model_validator(mode="after")
@@ -1236,8 +1226,9 @@ class AgentRead(PydanticBaseModel):
     configured_platform_keys: list[str] = Field(default_factory=list)
     approval_mode: CommandApprovalMode
     verbose_mode: bool
-    #: Whether this Agent participates in the shared memory layer (opt-in).
-    memory_enabled: bool
+    #: The memory group this Agent belongs to, or null for none. Membership is the
+    #: opt-in to shared memory; managed through the memory-groups API.
+    memory_group_id: UUID | None
     allowed_actions: list[PermissionKey] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime

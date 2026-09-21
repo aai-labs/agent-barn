@@ -33,6 +33,7 @@ from api.domains.costs.platform_routes import platform_costs_router
 from api.domains.costs.routes import costs_router
 from api.domains.events.routes import event_delivery_monitor_router
 from api.domains.integrations.google_oauth.routes import integrations_router
+from api.domains.memory_groups.routes import memory_groups_router
 from api.domains.organizations.routes import org_router, platform_org_router
 from api.domains.platform_admin.routes import platform_stats_router
 from api.domains.rbac.seeder import RbacSeeder
@@ -111,6 +112,7 @@ def create_app(injector: Injector | None = None):
     subapi.include_router(communications_router)
     subapi.include_router(web_chat_router)
     subapi.include_router(costs_router)
+    subapi.include_router(memory_groups_router)
     subapi.include_router(platform_costs_router)
     subapi.include_router(event_delivery_monitor_router)
     subapi.include_router(platform_stats_router)

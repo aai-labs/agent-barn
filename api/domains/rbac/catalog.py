@@ -39,6 +39,9 @@ class PermissionKey(str, Enum):
     SKILL_MANAGE = "skill.manage"
     ACTIVITY_READ = "activity.read"
     COST_READ = "cost.read"
+    # Manage memory groups (create/rename/delete, assign Agents). Org-scoped
+    # management, like the membership.* keys — not an agent-access permission.
+    MEMORY_GROUP_MANAGE = "memory_group.manage"
 
 
 @dataclass(frozen=True)
@@ -95,6 +98,7 @@ PERMISSIONS: tuple[PermissionSeed, ...] = (
     PermissionSeed(UUID("222ab95b-f67b-5275-8139-3f601574f3e1"), PermissionKey.SKILL_MANAGE),
     PermissionSeed(UUID("3f24e385-7c5e-56f0-828c-502985376af9"), PermissionKey.ACTIVITY_READ),
     PermissionSeed(UUID("b6557147-248a-5d34-8bb2-7c51944d9ee7"), PermissionKey.COST_READ),
+    PermissionSeed(UUID("cefd77e7-0e67-500e-8fe4-37879667c6e6"), PermissionKey.MEMORY_GROUP_MANAGE),
 )
 PERMISSION_ID_BY_KEY = {permission.key: permission.id for permission in PERMISSIONS}
 
@@ -115,6 +119,7 @@ _OWNER_ORGANIZATION_KEYS = frozenset(
         PermissionKey.SKILL_MANAGE,
         PermissionKey.ACTIVITY_READ,
         PermissionKey.COST_READ,
+        PermissionKey.MEMORY_GROUP_MANAGE,
     }
 )
 _ADMIN_ORGANIZATION_KEYS = _OWNER_ORGANIZATION_KEYS - {

@@ -204,22 +204,23 @@ def ai_peer_name_for_agent(agent: Agent) -> str:
 def memory_active(agent: Agent, *, honcho_enabled: bool) -> bool:
     """Whether the shared memory layer is on for this Agent right now.
 
-    Two gates: the infra flag (is Honcho deployed at all) and the Agent's own
-    opt-in (`memory_enabled`). Opting out flips this to False, so the next start
-    gives the Agent no pool config — it loses read/write access to the pool while
-    its past contributions stay there. Nothing here deletes memory.
+    Two gates: the infra flag (is Honcho deployed at all) and the Agent's
+    membership in a memory group. Membership is the opt-in — removing the Agent
+    from its group flips this to False, so the next start gives it no pool config:
+    it loses read/write access while its past contributions stay in the pool.
+    Nothing here deletes memory.
     """
-    return honcho_enabled and agent.memory_enabled
+    return honcho_enabled and agent.memory_group_id is not None
 
 
 def memory_pool_id_for_agent(agent: Agent) -> str:
-    """The id of the memory pool an Agent belongs to.
+    """The id of the memory pool an Agent's memory lives in — its group's id.
 
-    A named pool if the Agent has been assigned one; otherwise the org "house
-    pool", whose id is the organization's own id. Every opted-in Agent in the
-    same pool shares one Honcho workspace and therefore one shared memory.
+    Only meaningful when the Agent belongs to a group; callers gate on
+    `memory_active` first. Every Agent in the same group shares one Honcho
+    workspace (`af-pool-<group id>`) and therefore one shared memory.
     """
-    return agent.memory_pool_id or str(agent.organization_id)
+    return str(agent.memory_group_id)
 
 
 def memory_workspace_for_agent(agent: Agent) -> str:

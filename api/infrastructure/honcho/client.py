@@ -161,6 +161,21 @@ class HonchoClient:
         """
         if pool_id_from_workspace(workspace_id) is not None:
             raise HonchoError(f"Refusing to delete shared memory pool workspace '{workspace_id}'")
+        self._delete_workspace_unchecked(workspace_id)
+
+    def delete_pool_workspace(self, workspace_id: str) -> None:
+        """Delete a memory pool's workspace, deliberately.
+
+        This is the one sanctioned path to erase shared memory — used when a
+        memory group is deleted, where erasing the pool is the intent. It skips
+        the guard in `delete_workspace` (which refuses pools so a per-Agent purge
+        can never wipe a group's shared memory by accident).
+        """
+        self._delete_workspace_unchecked(workspace_id)
+
+    def _delete_workspace_unchecked(self, workspace_id: str) -> None:
+        # Sessions first (Honcho 409s on a workspace delete while any remain);
+        # both deletes are async 202, so the caller retries until it takes.
         for session_id in self.list_sessions(workspace_id):
             self.delete_session(workspace_id, session_id)
         self._request("DELETE", f"/workspaces/{workspace_id}")

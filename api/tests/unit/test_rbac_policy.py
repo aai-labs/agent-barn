@@ -65,6 +65,7 @@ def test_organization_role_permission_matrix_is_exact():
         PermissionKey.SKILL_MANAGE,
         PermissionKey.ACTIVITY_READ,
         PermissionKey.COST_READ,
+        PermissionKey.MEMORY_GROUP_MANAGE,
     }
     expected = {
         OrganizationRole.OWNER: owner_permissions,

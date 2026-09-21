@@ -77,6 +77,26 @@ def test_delete_workspace_refuses_a_shared_pool():
     request.assert_not_called()
 
 
+def test_delete_pool_workspace_deliberately_erases_a_pool():
+    """Group deletion erases the shared pool through the deliberate method, which
+    is NOT blocked by the guard that stops the per-Agent purge from touching a
+    pool. Sessions still go first."""
+    client = HonchoClient(config=Config(honcho_base_url="http://honcho"))
+    calls: list[str] = []
+
+    with (
+        patch.object(HonchoClient, "list_sessions", return_value=["s1"]),
+        patch.object(HonchoClient, "delete_session", side_effect=lambda w, s: calls.append(f"session:{s}")),
+        patch.object(HonchoClient, "_request", side_effect=lambda m, path, **kw: calls.append(f"{m}:{path}")),
+    ):
+        client.delete_pool_workspace("af-pool-11111111-2222-3333-4444-555555555555")
+
+    assert_that(
+        calls,
+        equal_to(["session:s1", "DELETE:/workspaces/af-pool-11111111-2222-3333-4444-555555555555"]),
+    )
+
+
 def test_sessions_are_deleted_before_the_workspace():
     """Honcho returns 409 on a workspace delete while any session remains, which is
     the normal state for an Agent that did any work — confirmed against a live
