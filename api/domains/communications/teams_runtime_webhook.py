@@ -85,7 +85,9 @@ class TeamsRuntimeWebhookRelay:
         agent = self.agent_repository.get_by_id(connection.agent_id)
         if agent is None or agent.deleted_at is not None or agent.status != AgentStatus.RUNNING:
             raise RuntimeWebhookUnavailable("Teams Agent runtime is not running")
-        target = f"http://agent-{connection.agent_id}.{self.config.k8s_namespace}.svc.cluster.local:3978/api/messages"
+        target = self.config.teams_runtime_webhook_url.format(
+            agent_id=connection.agent_id, namespace=self.config.k8s_namespace
+        )
         try:
             response = resilient_request(
                 "POST",

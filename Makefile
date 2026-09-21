@@ -3,7 +3,7 @@ COMPOSE := docker compose -f compose.yml
 .PHONY: \
 	setup run stop stop-clean \
 	restart-ui \
-	dev-api dev-ingest dev-communications dev-ui dev-worker reconcile seed-event-deliveries seed-costs seed-agent-overrides migrate merge-heads rollback makemigrations test-api test-ui lint-ui check-ui coverage check-api check-migrations check-monitoring fix-api test check fix \
+	dev-api dev-ingest dev-communications dev-ui dev-worker reconcile forward-teams seed-event-deliveries seed-costs seed-agent-overrides migrate merge-heads rollback makemigrations test-api test-ui lint-ui check-ui coverage check-api check-migrations check-monitoring fix-api test check fix \
 	db-up db-down db-logs db-restart redis-up redis-down redis-logs
 
 # One-command local dev: validates .env, brings up k3d + LiteLLM, loads agent
@@ -66,6 +66,13 @@ dev-ingest:
 # Communications on its own — `make dev-api` already starts it.
 dev-communications:
 	cd api && uv run python -m fastapi dev communications_main.py --host 0.0.0.0 --port $(COMMUNICATIONS_PORT)
+
+# Local runtime-owned Teams: the API (Docker or host) cannot reach Agent Services
+# in k3d, so expose one Agent's webhook port on the host. Re-run after the pod
+# restarts. Usage: make forward-teams AGENT=<agent-uuid>
+forward-teams:
+	@test -n "$(AGENT)" || { echo "usage: make forward-teams AGENT=<agent-uuid>"; exit 1; }
+	KUBECONFIG=.k3d/kubeconfig-host.yaml kubectl -n agent-farm port-forward --address 0.0.0.0 svc/agent-$(AGENT) 3978:3978
 
 dev-ui:
 	cd ui && pnpm dev

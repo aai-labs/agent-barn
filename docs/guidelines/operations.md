@@ -87,6 +87,7 @@ Agents reachable by email get their own address on a dedicated subdomain, receiv
 
 - **`COMMUNICATIONS_NATIVE_PLATFORMS`** is one shared GitHub variable containing a comma-separated native runtime Platform allowlist. Set it to **`slack,discord,telegram,teams`** to enable the Hermes/OpenClaw native gateways for all four chat Platforms in every deployment workflow. It flows through `helmfile.yaml.gotmpl` into the API chart's shared Secret, so both the API and Communications processes receive the same cutoff.
 - Empty is the rollback setting: all Platforms remain on the Communications Gateway. Restart affected Agents after deploying a change so their runtime configuration and private Service ports are rebuilt. Runtime-owned Teams begins relaying as soon as the flag reaches the API, so restart every running Teams Agent promptly; until its Service exposes port 3978 and its runtime listener starts, Bot Framework receives 503 and retries. The public Teams URL does not change: ingress routes `/communications/v1/webhooks` to the API, which proxies gateway-owned Teams to Communications only for rollback.
+- **Local runtime-owned Teams:** the API container cannot resolve k3d cluster DNS or reach ClusterIPs, so the relay target comes from `TEAMS_RUNTIME_WEBHOOK_URL` (default `http://agent-{agent_id}.{namespace}.svc.cluster.local:3978/api/messages`; `compose.yml` overrides it to `host.docker.internal:3978`). Run `make forward-teams AGENT=<agent-uuid>` to publish that Agent's port 3978 on the host, and re-run it after the pod restarts.
 
 ## Staging environment
 

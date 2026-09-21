@@ -139,6 +139,7 @@ def _teams_runtime_service(
                 agent_token_encryption_key="key",
                 native_platform_keys=frozenset({"teams"}),
                 k8s_namespace="agent-farm",
+                teams_runtime_webhook_url=Config.model_fields["teams_runtime_webhook_url"].default,
             ),
         ),
         agent_repository=agents,
@@ -185,6 +186,24 @@ def test_runtime_teams_webhook_is_verified_and_relayed_to_the_private_agent_serv
     assert request.call_args.kwargs["headers"]["Authorization"] == "Bearer signed-token"
     assert json.loads(request.call_args.kwargs["content"]) == _teams_activity()
     assert request.call_args.kwargs["max_retries"] == 0
+
+
+def test_runtime_teams_webhook_target_url_is_configurable() -> None:
+    service, plugin, connection = _teams_runtime_service()
+    service.config.teams_runtime_webhook_url = "http://host.docker.internal:3978/api/messages"
+    upstream = SimpleNamespace(status_code=200, content=b"", headers={})
+
+    with (
+        patch(
+            "api.domains.communications.teams_runtime_webhook.decrypt_token",
+            return_value=json.dumps({"app_id": "app", "app_password": "secret", "tenant_id": "tenant"}),
+        ),
+        patch.object(plugin, "verify_webhook"),
+        patch("api.domains.communications.teams_runtime_webhook.resilient_request", return_value=upstream) as request,
+    ):
+        service.relay(connection.id, _teams_activity(), "Bearer signed-token")
+
+    assert request.call_args.args[1] == "http://host.docker.internal:3978/api/messages"
 
 
 def test_runtime_teams_webhook_policy_denial_is_acknowledged_without_relay() -> None:
