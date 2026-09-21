@@ -3,6 +3,7 @@
 import { useCallback, useMemo } from "react";
 import { RefreshCw } from "lucide-react";
 
+import { LlmBudgetBanner } from "@/features/organizations/components/llm-budget-banner";
 import { useRequireOrgManager } from "@/features/organizations/hooks/use-require-org-manager";
 
 import { useCostFilterOptions } from "../hooks/use-cost-filter-options";
@@ -15,8 +16,6 @@ import { AgentsBySpend } from "./agents-by-spend";
 import { CostChartsPanel } from "./cost-charts-panel";
 import { CostFilterBar } from "./cost-filter-bar";
 import { CostList } from "./cost-list";
-import { LlmBudgetBanner } from "@/features/organizations/components/llm-budget-banner";
-
 import { CostSummaryCards } from "./cost-summary-cards";
 
 const FILTER_DEFAULTS = {

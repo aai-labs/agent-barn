@@ -1,4 +1,5 @@
 import base64
+import hashlib
 import logging
 from dataclasses import dataclass
 
@@ -26,7 +27,15 @@ class LiteLLMClient:
     k8s: KubernetesClient
     config: Config
 
+    _cached_master_key: str | None = None
+
     def _master_key(self) -> str:
+        """Resolved once per process. It used to be fetched from the Kubernetes API on
+        every call, which a per-Agent sweep paid for on top of each proxy call. The
+        client is a singleton, so a rotated Secret needs a restart — the same as every
+        other value read at startup."""
+        if self._cached_master_key is not None:
+            return self._cached_master_key
         try:
             secret = self.k8s.get_secret(self.config.litellm_secret_name, self.config.k8s_namespace)
         except Exception as exc:
@@ -39,9 +48,8 @@ class LiteLLMClient:
         raw = secret.data.get("LITELLM_MASTER_KEY", "")
         if not raw:
             raise LiteLLMError("LITELLM_MASTER_KEY not found in litellm secret")
-        if isinstance(raw, bytes):
-            return raw.decode()
-        return base64.b64decode(raw).decode()
+        self._cached_master_key = raw.decode() if isinstance(raw, bytes) else base64.b64decode(raw).decode()
+        return self._cached_master_key
 
     def _headers(self, master_key: str) -> dict[str, str]:
         return {
@@ -150,7 +158,9 @@ class LiteLLMClient:
         try:
             response = httpx.get(
                 f"{self.config.litellm_base_url}/key/info",
-                params={"key": key},
+                # The hash, not the key: LiteLLM resolves either, and a query string
+                # reaches its access log, any intermediate proxy and log aggregation.
+                params={"key": hashlib.sha256(key.encode()).hexdigest()},
                 headers=self._headers(self._master_key()),
                 timeout=self._TIMEOUT,
             )
@@ -163,15 +173,21 @@ class LiteLLMClient:
         except httpx.HTTPError, ValueError, KeyError, TypeError:
             raise LiteLLMError("Failed to read Agent key team membership") from None
 
-    def attach_key_to_team(self, key: str, org_id: str) -> None:
+    _UNREAD = object()
+
+    def attach_key_to_team(self, key: str, org_id: str, current_team: str | None | object = _UNREAD) -> None:
         """Enroll an existing Agent key into its Organization's team.
 
         Preserves key identity, spend and blocked state. A key already in a
         different team is refused rather than moved: someone may have arranged that
         deliberately, and reassigning it silently would be worse than leaving the
         Organization partially covered.
+
+        `current_team` lets a caller that has just read the membership hand it over
+        rather than pay for the same lookup twice; omitted, it is read here.
         """
-        current_team = self.get_key_team(key)
+        if current_team is self._UNREAD:
+            current_team = self.get_key_team(key)
         if current_team == org_id:
             return
         if current_team:

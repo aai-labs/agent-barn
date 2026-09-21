@@ -83,7 +83,8 @@ test.describe("Platform organization LLM budget", () => {
     await page.goto(DETAIL_URL);
 
     await page.getByLabel("Spend limit in USD").fill("25");
-    await page.getByLabel("Budget window").selectOption("7d");
+    await page.getByLabel("Budget window").click();
+    await page.getByRole("option", { name: "per 7 days" }).click();
     await page.getByRole("button", { name: "Save" }).click();
 
     await expect.poll(() => requests).toEqual([{ budget_usd: 25, budget_duration: "7d" }]);
@@ -111,7 +112,7 @@ test.describe("Platform organization LLM budget", () => {
     await page.goto(DETAIL_URL);
 
     await page.getByLabel("Spend limit in USD").fill("-5");
-    await expect(page.getByText(/enter a positive amount/i)).toBeVisible();
+    await expect(page.getByText(/enter an amount of zero or more/i)).toBeVisible();
     await expect(page.getByRole("button", { name: "Save" })).toBeDisabled();
     expect(requests).toEqual([]);
   });
@@ -298,5 +299,40 @@ test.describe("Spend against the limit", () => {
 
     await expect(page.getByText(/spend against this limit is unavailable right now/i)).toBeVisible();
     await expect(page.getByText(/\$0\.00 of/)).toHaveCount(0);
+  });
+});
+
+test.describe("Unknown coverage", () => {
+  let data: DataSupport;
+  test.use({ storageState: { cookies: [], origins: [] } });
+
+  test.beforeEach(async ({ page }) => {
+    data = new DataSupport(page);
+    await data.auth.interceptRefreshRequest();
+    await data.users.interceptGetUserContextRequest();
+    await data.organizations.interceptGetPlatformOrganizationMembers();
+  });
+
+  test("a failed coverage check hides the controls rather than letting a limit through", async ({
+    page,
+  }) => {
+    await data.organizations.interceptGetPlatformOrganization({
+      organization: organization({ usd: null, duration: null }),
+    });
+    await data.organizations.interceptGetOrganizationLlmCoverage({ status: 503 });
+    await page.goto(DETAIL_URL);
+
+    await expect(page.getByText(/couldn't check which agents this limit would cover/i)).toBeVisible();
+    await expect(page.getByLabel("Spend limit in USD")).toHaveCount(0);
+  });
+
+  test("an organization that already has a limit can still remove it", async ({ page }) => {
+    await data.organizations.interceptGetPlatformOrganization({
+      organization: organization({ usd: 50, duration: "30d" }),
+    });
+    await data.organizations.interceptGetOrganizationLlmCoverage({ status: 503 });
+    await page.goto(DETAIL_URL);
+
+    await expect(page.getByRole("button", { name: /remove limit/i })).toBeVisible();
   });
 });

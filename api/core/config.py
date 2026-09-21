@@ -132,6 +132,11 @@ class Config(BaseSettings):
             raise ValueError("Budget alert thresholds must be whole numbers, comma separated") from error
         if not parsed or parsed[0] < 1 or parsed[-1] > 100:
             raise ValueError("Budget alert thresholds must be between 1 and 100")
+        # 100 is the enforcement boundary, not a notification preference. Omitting it
+        # would leave an exhausted Organization with a banner saying so and no mail:
+        # only the highest crossed threshold fires, and a lower one is already spent.
+        if parsed[-1] != 100:
+            parsed.append(100)
         return ",".join(str(threshold) for threshold in parsed)
 
     @property

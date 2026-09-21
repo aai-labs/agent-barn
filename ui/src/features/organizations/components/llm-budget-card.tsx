@@ -4,6 +4,15 @@ import { useState } from "react";
 import { AlertTriangle, Loader2, Wallet } from "lucide-react";
 
 import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+
+import {
   useEnrollOrganizationLlmKeys,
   useOrganizationLlmCoverage,
   useSetOrganizationLlmBudget,
@@ -59,7 +68,11 @@ export function LlmBudgetCard({ organization }: { organization: PlatformOrganiza
   );
   const [duration, setDuration] = useState(organization.llmBudgetDuration ?? DEFAULT_DURATION);
   const setBudget = useSetOrganizationLlmBudget(organization.id);
-  const { coverage, isLoading: coverageLoading } = useOrganizationLlmCoverage(organization.id);
+  const {
+    coverage,
+    isLoading: coverageLoading,
+    error: coverageError,
+  } = useOrganizationLlmCoverage(organization.id);
   const enroll = useEnrollOrganizationLlmKeys(organization.id);
 
   const trimmed = amount.trim();
@@ -72,7 +85,11 @@ export function LlmBudgetCard({ organization }: { organization: PlatformOrganiza
   // set now would quietly not apply to it. Gate the controls rather than let an
   // administrator configure a cap that does nothing.
   const uncoveredCount = coverage ? coverage.totalAgents - coverage.enrolledAgents : 0;
-  const gated = !coverageLoading && !!coverage && uncoveredCount > 0 && !hasLimit;
+  // Unknown coverage gates too. Letting a failed check fall through to the controls
+  // would set a limit over agents it might silently miss — the opposite of what the
+  // gate is for. An organization that already has a limit is never gated out.
+  const coverageUnknown = !coverageLoading && (!!coverageError || !coverage);
+  const gated = !hasLimit && (coverageUnknown || (!!coverage && uncoveredCount > 0));
   const spend = coverage?.spendUsd;
   const exhausted =
     hasLimit && spend != null && organization.llmBudgetUsd != null && spend >= organization.llmBudgetUsd;
@@ -92,7 +109,12 @@ export function LlmBudgetCard({ organization }: { organization: PlatformOrganiza
           : "Set one to cap what this organization can spend on model calls."}
       </p>
 
-      {gated ? (
+      {gated && coverageUnknown ? (
+        <p className="m-0 text-[13px]" style={{ color: "var(--err)" }}>
+          We couldn&apos;t check which agents this limit would cover, so it can&apos;t be
+          set right now. Try again shortly.
+        </p>
+      ) : gated && coverage ? (
         <EnrollmentGate
           uncovered={coverage.uncovered}
           uncoveredCount={uncoveredCount}
@@ -123,20 +145,28 @@ export function LlmBudgetCard({ organization }: { organization: PlatformOrganiza
             />
           </div>
 
-          <select
-            className="af-select"
-            style={{ width: 170 }}
+          <Select
             value={duration}
             disabled={busy || trimmed === ""}
-            aria-label="Budget window"
-            onChange={(event) => setDuration(event.target.value)}
+            onValueChange={setDuration}
           >
-            {DURATIONS.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
+            <SelectTrigger
+              className="af-input !h-auto"
+              style={{ width: "10.5rem" }}
+              aria-label="Budget window"
+            >
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectGroup>
+                {DURATIONS.map((option) => (
+                  <SelectItem key={option.value} value={option.value}>
+                    {option.label}
+                  </SelectItem>
+                ))}
+              </SelectGroup>
+            </SelectContent>
+          </Select>
 
           <button
             className="af-btn af-btn-primary"
@@ -172,7 +202,7 @@ export function LlmBudgetCard({ organization }: { organization: PlatformOrganiza
 
       {invalid && !gated && (
         <p className="m-0 mt-2 text-[12.5px]" style={{ color: "var(--err)" }}>
-          Enter a positive amount, or clear the field to remove the limit.
+          Enter an amount of zero or more, or clear the field to remove the limit.
         </p>
       )}
 

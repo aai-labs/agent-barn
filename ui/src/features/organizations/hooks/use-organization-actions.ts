@@ -14,7 +14,11 @@ import {
   OrganizationLlmCoverageSchema,
   PlatformOrganizationSchema,
 } from "../schemas";
-import { organizationsKey, platformOrganizationsKey } from "../utils";
+import {
+  organizationLlmCoverageKey,
+  organizationsKey,
+  platformOrganizationsKey,
+} from "../utils";
 
 export function useCreateOrganization() {
   const queryClient = useQueryClient();
@@ -116,8 +120,11 @@ export function useSetOrganizationLlmBudget(organizationId: string) {
     onSettled: () => {
       // Refetched on failure too: a 502 here means the amount was stored and only the
       // proxy push failed, so the card must not keep rendering the previous value.
+      // `exact` so this does not also re-run the per-Agent coverage sweep, which a
+      // budget change cannot affect.
       void queryClient.invalidateQueries({
         queryKey: platformOrganizationsKey.detail(organizationId),
+        exact: true,
       });
       void queryClient.invalidateQueries({ queryKey: platformOrganizationsKey.lists() });
     },
@@ -127,14 +134,11 @@ export function useSetOrganizationLlmBudget(organizationId: string) {
   });
 }
 
-const llmCoverageKey = (organizationId: string) =>
-  [...platformOrganizationsKey.detail(organizationId), "llm-coverage"] as const;
-
 /** Read live from the proxy: a cached answer would keep claiming coverage after
  *  someone detached a key by hand. */
 export function useOrganizationLlmCoverage(organizationId: string) {
   const query = useQuery({
-    queryKey: llmCoverageKey(organizationId),
+    queryKey: organizationLlmCoverageKey.detail(organizationId),
     queryFn: async () => {
       const response = await api.get<OrganizationLlmCoverage>(
         `/api/v1/platform/organizations/${organizationId}/llm-budget/coverage`,
@@ -142,6 +146,9 @@ export function useOrganizationLlmCoverage(organizationId: string) {
       );
       return response.data;
     },
+    // A sweep costs one proxy call per Agent, and enrollment is a rare, deliberate
+    // act — without this it re-ran on every mount of the page.
+    staleTime: 60_000,
     enabled: !!organizationId,
   });
 
@@ -167,7 +174,7 @@ export function useEnrollOrganizationLlmKeys(organizationId: string) {
     onSettled: () => {
       // Refetched on failure too: enrollment is partial by nature, so even a failed
       // run can have covered some Agents.
-      void queryClient.invalidateQueries({ queryKey: llmCoverageKey(organizationId) });
+      void queryClient.invalidateQueries({ queryKey: organizationLlmCoverageKey.detail(organizationId) });
     },
     onError: (error) => {
       toastError(error, "We couldn't enroll this organization's agents");

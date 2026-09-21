@@ -170,18 +170,22 @@ export class OrganizationDataSupport {
   async interceptGetOrganizationLlmCoverage({
     organizationId = ORG_A_ID,
     coverage,
+    status = 200,
   }: {
     organizationId?: string;
     coverage?: unknown;
+    status?: number;
   } = {}) {
     await this.page.route(
       `**/api/v1/platform/organizations/${organizationId}/llm-budget/coverage`,
       async (route) => {
         await route.fulfill({
-          status: 200,
+          status,
           contentType: "application/json",
           body: JSON.stringify(
-            coverage ?? { total_agents: 0, enrolled_agents: 0, uncovered: [], newly_enrolled: 0 },
+            status >= 400
+              ? { detail: "Coverage unavailable" }
+              : (coverage ?? { total_agents: 0, enrolled_agents: 0, uncovered: [], newly_enrolled: 0 }),
           ),
         });
       },

@@ -195,23 +195,21 @@ def test_no_key_is_issued_when_the_team_cannot_be_provisioned():
 
 
 def organization_service(**overrides):
-    from api.domains.organizations.service import OrganizationService
+    from api.domains.organizations.llm_budget_service import OrganizationLlmBudgetService
 
     deps = {
         "organization_repository": MagicMock(),
+        "agent_repository": MagicMock(),
         "litellm": MagicMock(),
-        "agent_service": MagicMock(),
         "permission_policy": MagicMock(),
         "event_delivery_dispatcher": MagicMock(),
-        "agent_settings_lookup": MagicMock(),
-        "agent_repository": MagicMock(),
     }
     deps.update(overrides)
-    return OrganizationService(**deps)
+    return OrganizationLlmBudgetService(**deps)
 
 
 def configured():
-    return patch("api.domains.organizations.service.get_config", return_value=config())
+    return patch("api.domains.organizations.llm_budget_service.get_config", return_value=config())
 
 
 def test_reconcile_applies_each_organizations_stored_budget():
@@ -240,7 +238,7 @@ def test_one_failing_organization_does_not_abort_the_sweep():
 def test_reconcile_is_skipped_when_litellm_is_not_configured():
     service = organization_service()
     with patch(
-        "api.domains.organizations.service.get_config",
+        "api.domains.organizations.llm_budget_service.get_config",
         return_value=config(litellm_base_url="", litellm_secret_name=""),
     ):
         service.reconcile_llm_budgets()
@@ -349,11 +347,11 @@ def test_startup_never_touches_the_llm_proxy():
 
 
 def test_the_cronjob_entrypoint_runs_one_pass():
-    from api.domains.organizations import llm_budget_reconciliation
+    from api.domains.organizations import llm_budget_cron, llm_budget_reconciliation
 
     service = MagicMock()
     with (
-        patch.object(llm_budget_reconciliation, "build_service", return_value=service),
+        patch.object(llm_budget_cron, "build_service", return_value=service),
         patch("sys.argv", ["llm-budget-reconciliation"]),
     ):
         llm_budget_reconciliation.main()
@@ -483,7 +481,7 @@ def coverage_service(credentials, team_of, **overrides):
 
     litellm.get_key_team.side_effect = get_key_team
 
-    def attach(key, team_id):
+    def attach(key, team_id, current_team=None):
         if isinstance(team_of.get(key), Exception):
             raise LiteLLMError("nope")
         team_of[key] = team_id
@@ -498,7 +496,7 @@ def coverage_service(credentials, team_of, **overrides):
 
 
 def _decrypting():
-    return patch("api.domains.organizations.service.decrypt_token", side_effect=lambda value, _: value)
+    return patch("api.domains.organizations.llm_budget_service.decrypt_token", side_effect=lambda value, _: value)
 
 
 def test_coverage_separates_enrolled_agents_from_the_rest():
@@ -571,7 +569,7 @@ def test_an_undecryptable_key_is_reported_rather_than_raising():
     service = coverage_service([(U(ORG), "corrupt", "k1")], {"k1": None})
     with (
         configured(),
-        patch("api.domains.organizations.service.decrypt_token", side_effect=ValueError("bad key")),
+        patch("api.domains.organizations.llm_budget_service.decrypt_token", side_effect=ValueError("bad key")),
     ):
         coverage = service.get_llm_coverage(ORG)
     assert_that([a.status.value for a in coverage.uncovered], equal_to(["unreadable"]))
@@ -707,7 +705,7 @@ def test_crossing_a_threshold_fires_once(spend, threshold):
     service = budget_service([capped()], {"org": status_at(spend)})
     with configured():
         fired = service.check_llm_budget_thresholds()
-    assert_that([(f["organization_id"], f["threshold_percent"]) for f in fired], equal_to([("org", threshold)]))
+    assert_that([(f.organization.id, f.threshold_percent) for f in fired], equal_to([("org", threshold)]))
 
 
 def test_a_threshold_already_alerted_does_not_fire_again():
@@ -723,7 +721,7 @@ def test_crossing_the_next_threshold_still_fires():
     service = budget_service([org], {"org": status_at(50.0)})
     with configured():
         fired = service.check_llm_budget_thresholds()
-    assert_that([f["threshold_percent"] for f in fired], equal_to([100]))
+    assert_that([f.threshold_percent for f in fired], equal_to([100]))
 
 
 def test_raising_the_limit_re_arms_the_thresholds():
@@ -732,7 +730,7 @@ def test_raising_the_limit_re_arms_the_thresholds():
     service = budget_service([org], {"org": status_at(85.0)})
     with configured():
         fired = service.check_llm_budget_thresholds()
-    assert_that([f["threshold_percent"] for f in fired], equal_to([80]))
+    assert_that([f.threshold_percent for f in fired], equal_to([80]))
 
 
 def test_a_renewed_window_re_arms_the_thresholds():
@@ -740,7 +738,7 @@ def test_a_renewed_window_re_arms_the_thresholds():
     service = budget_service([org], {"org": status_at(45.0, renews="2026-10-01T00:00:00Z")})
     with configured():
         fired = service.check_llm_budget_thresholds()
-    assert_that([f["threshold_percent"] for f in fired], equal_to([80]))
+    assert_that([f.threshold_percent for f in fired], equal_to([80]))
 
 
 def test_the_snapshot_is_stored_even_when_nothing_fires():
@@ -776,15 +774,15 @@ def test_one_unreadable_organization_does_not_stop_the_others():
     service.litellm.get_team_budget_status.side_effect = flaky
     with configured():
         fired = service.check_llm_budget_thresholds()
-    assert_that([f["organization_id"] for f in fired], equal_to(["b"]))
+    assert_that([f.organization.id for f in fired], equal_to(["b"]))
 
 
 def test_the_alerts_cronjob_entrypoint_runs_one_pass():
-    from api.domains.organizations import llm_budget_alerts
+    from api.domains.organizations import llm_budget_alerts, llm_budget_cron
 
     service = MagicMock()
     with (
-        patch.object(llm_budget_alerts, "build_service", return_value=service),
+        patch.object(llm_budget_cron, "build_service", return_value=service),
         patch("sys.argv", ["llm-budget-alerts"]),
     ):
         llm_budget_alerts.main()
@@ -888,17 +886,17 @@ def test_invalid_thresholds_are_rejected(raw):
 def test_a_configured_threshold_fires_instead_of_the_default():
     service = budget_service([capped()], {"org": status_at(25.0)})
     with patch(
-        "api.domains.organizations.service.get_config",
+        "api.domains.organizations.llm_budget_service.get_config",
         return_value=config(organization_llm_budget_alert_thresholds="50,100"),
     ):
         fired = service.check_llm_budget_thresholds()
-    assert_that([f["threshold_percent"] for f in fired], equal_to([50]))
+    assert_that([f.threshold_percent for f in fired], equal_to([50]))
 
 
 def test_the_warning_state_follows_the_lowest_configured_threshold():
     service = org_budget_service(viewed(limit=50.0, spend=27.0))
     with patch(
-        "api.domains.organizations.service.get_config",
+        "api.domains.organizations.llm_budget_service.get_config",
         return_value=config(organization_llm_budget_alert_thresholds="50,100"),
     ):
         assert_that(service.get_organization_llm_budget(ORG, MagicMock()).state, equal_to("warning"))
@@ -1118,3 +1116,68 @@ def test_a_silently_ignored_budget_clear_is_not_reported_as_success():
     ):
         with pytest.raises(LiteLLMError):
             client().apply_team_budget("org", None, None)
+
+
+def test_a_configured_list_without_100_still_alerts_on_exhaustion():
+    """100% is the enforcement boundary, not a notification preference: the banner
+    says exhausted regardless, so an alert list that omits it leaves the two
+    surfaces disagreeing and the "allowance reached" mail never sent."""
+    service = budget_service([capped()], {"org": status_at(50.0)})
+    with patch(
+        "api.domains.organizations.llm_budget_service.get_config",
+        return_value=config(organization_llm_budget_alert_thresholds="50,90"),
+    ):
+        fired = service.check_llm_budget_thresholds()
+    assert_that([f.threshold_percent for f in fired], equal_to([100]))
+
+
+def test_100_is_always_present_however_the_list_is_configured():
+    assert_that(config(organization_llm_budget_alert_thresholds="50").llm_budget_alert_thresholds, equal_to([50, 100]))
+    assert_that(config(organization_llm_budget_alert_thresholds="100").llm_budget_alert_thresholds, equal_to([100]))
+
+
+# --- cost of a sweep ---------------------------------------------------------
+
+
+def test_the_master_key_is_read_once_not_per_call():
+    """Every client call resolved it through the Kubernetes API; a coverage sweep
+    paid that per Agent on top of the proxy call."""
+    import base64
+
+    k8s = MagicMock()
+    k8s.get_secret.return_value = MagicMock(data={"LITELLM_MASTER_KEY": base64.b64encode(b"master").decode()})
+    c = LiteLLMClient(k8s, config())
+    with patch("api.infrastructure.litellm.client.httpx.get", return_value=key_info("org")):
+        c.get_key_team("sk-a")
+        c.get_key_team("sk-b")
+        c.get_key_team("sk-c")
+    assert_that(k8s.get_secret.call_count, equal_to(1))
+
+
+def test_enrolling_does_not_re_read_a_team_the_caller_already_knows():
+    """attach_key_to_team read /key/info before the update and again after; the
+    caller had just read it to decide the key needed enrolling at all."""
+    with (
+        patch.object(LiteLLMClient, "_master_key", return_value="master"),
+        patch("api.infrastructure.litellm.client.httpx.get", return_value=key_info("org")) as get,
+        patch("api.infrastructure.litellm.client.httpx.post", return_value=response({})) as post,
+    ):
+        client().attach_key_to_team(SECRET_KEY, "org", current_team=None)
+    # One read: the verification after the write. The pre-read is the caller's.
+    assert_that(get.call_count, equal_to(1))
+    assert_that(post.call_args.args[0], equal_to(KEY_UPDATE))
+
+
+def test_a_key_is_looked_up_by_hash_so_it_never_enters_a_query_string():
+    """A query string reaches the proxy's access log, any intermediate proxy and log
+    aggregation — for every Agent, on every sweep."""
+    import hashlib
+
+    with (
+        patch.object(LiteLLMClient, "_master_key", return_value="master"),
+        patch("api.infrastructure.litellm.client.httpx.get", return_value=key_info("org")) as get,
+    ):
+        client().get_key_team(SECRET_KEY)
+    sent = get.call_args.kwargs["params"]["key"]
+    assert_that(sent, equal_to(hashlib.sha256(SECRET_KEY.encode()).hexdigest()))
+    assert_that(SECRET_KEY in str(get.call_args), equal_to(False))

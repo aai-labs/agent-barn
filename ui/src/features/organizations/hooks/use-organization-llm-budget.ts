@@ -8,6 +8,7 @@ import {
   type OrganizationLlmBudget,
   OrganizationLlmBudgetSchema,
 } from "../schemas";
+import { organizationLlmBudgetKey } from "../utils";
 import { useActiveOrgRole } from "./use-active-org-role";
 
 /** The Organization's own view of its spend limit.
@@ -20,7 +21,7 @@ export function useOrganizationLlmBudget() {
   const organizationId = selectedOrganization?.id ?? null;
 
   const query = useQuery({
-    queryKey: ["organizations", organizationId, "llm-budget"] as const,
+    queryKey: organizationLlmBudgetKey.detail(organizationId ?? ""),
     queryFn: async () => {
       const response = await api.get<OrganizationLlmBudget>(
         `/api/v1/organizations/${organizationId}/llm-budget`,
@@ -28,6 +29,9 @@ export function useOrganizationLlmBudget() {
       );
       return response.data;
     },
+    // Served from a stored snapshot refreshed on a schedule, so polling it on every
+    // mount buys nothing.
+    staleTime: 60_000,
     enabled: !!organizationId && canManage,
   });
 
