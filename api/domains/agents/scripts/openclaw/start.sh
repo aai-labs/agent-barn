@@ -78,6 +78,16 @@ cp /app/config/telemetry-push-index.js "$PLUGIN_DIR/index.js"
 cp /app/config/telemetry-push-package.json "$PLUGIN_DIR/package.json"
 cp /app/config/telemetry-push-plugin.json "$PLUGIN_DIR/openclaw.plugin.json"
 
+# Pool-wide memory recall plugin. Materialized whenever its files are shipped;
+# the config only loads it (plugins.load.paths) when memory is on.
+if [ -f /app/config/honcho-pool-recall-index.js ]; then
+  RECALL_PLUGIN_DIR="/home/node/.openclaw/local-plugins/honcho-pool-recall"
+  mkdir -p "$RECALL_PLUGIN_DIR"
+  cp /app/config/honcho-pool-recall-index.js "$RECALL_PLUGIN_DIR/index.js"
+  cp /app/config/honcho-pool-recall-package.json "$RECALL_PLUGIN_DIR/package.json"
+  cp /app/config/honcho-pool-recall-plugin.json "$RECALL_PLUGIN_DIR/openclaw.plugin.json"
+fi
+
 openclaw plugins install @openclaw/firecrawl-plugin 2>&1 || echo "[start] firecrawl plugin install failed"
 
 if [ -f /app/config/aai-cli-setup.sh ]; then

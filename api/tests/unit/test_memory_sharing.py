@@ -49,16 +49,17 @@ def test_hermes_ai_peer_matches_what_build_honcho_config_sets():
     assert_that(ai_peer_name_for_agent(agent), equal_to("agent-scrum-master"))
 
 
-def test_openclaw_ai_peer_is_fixed_regardless_of_agent_name():
-    """Every OpenClaw Agent's config names its one logical agent "main"
-    (`builders/openclaw.py`), and Honcho's own OpenClaw plugin docs fix the AI
-    peer as `agent-{openclaw_agent_id}` — so this is `agent-main` for every
-    OpenClaw Agent. Workspace isolation is what separates them, not this name."""
+def test_openclaw_ai_peer_is_distinct_per_agent():
+    """OpenClaw derives its Honcho peer as `agent-{logical id}`. In a shared
+    memory pool, Agents must have distinct peers so their memory stays
+    attributable — so the logical id is the Agent's own id (the builder declares
+    an explicit agent entry with it), not the old shared "main"."""
     first = _agent(AgentType.OPENCLAW, name="reviewer")
     second = _agent(AgentType.OPENCLAW, name="a-totally-different-name")
 
-    assert_that(ai_peer_name_for_agent(first), equal_to("agent-main"))
-    assert_that(ai_peer_name_for_agent(second), equal_to("agent-main"))
+    assert_that(ai_peer_name_for_agent(first), equal_to(f"agent-{first.id}"))
+    assert_that(ai_peer_name_for_agent(second), equal_to(f"agent-{second.id}"))
+    assert_that(ai_peer_name_for_agent(first) != ai_peer_name_for_agent(second), equal_to(True))
 
 
 def _service(*, honcho_enabled: bool = True):
@@ -109,7 +110,9 @@ def test_shares_into_every_target_with_its_own_ai_peer():
     assert_that(result.results, has_length(2))
     assert_that(all(r.shared for r in result.results), equal_to(True))
     calls = {c.args[1] for c in honcho.share_fact.call_args_list}
-    assert_that(calls, equal_to({"agent-agent-a", "agent-main"}))
+    # Hermes peer is agent-<name>; OpenClaw peer is now agent-<id> (distinct per
+    # Agent), not the old shared agent-main.
+    assert_that(calls, equal_to({"agent-agent-a", f"agent-{target_b.id}"}))
 
 
 def test_one_targets_honcho_failure_does_not_swallow_another_targets_success():

@@ -34,7 +34,12 @@ from api.domains.agents.models import Agent, AgentType
 from api.domains.agents.repository import SharedMemoryFactRepository, SharedMemoryProvenance
 from api.domains.auth.models import CurrentUserContext
 from api.domains.rbac.catalog import PermissionKey
-from api.infrastructure.honcho.client import HonchoClient, HonchoError, workspace_id_for_agent
+from api.infrastructure.honcho.client import (
+    HonchoClient,
+    HonchoError,
+    workspace_id_for_agent,
+    workspace_id_for_pool,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -168,20 +173,52 @@ def _facet_for_peer(peer: str, count: int, agent_name: str, ai_peer_name: str) -
     return MemoryFacet(peer=peer, label=f"About {peer}", count=count, isSelf=False)
 
 
+def openclaw_logical_agent_id(agent: Agent) -> str:
+    """The OpenClaw logical agent id used as this Agent's memory identity.
+
+    OpenClaw derives its Honcho peer as `agent-<logical id>`. Historically every
+    Agent used the implicit default "main", so all OpenClaw Agents collided on
+    `agent-main` — harmless when each had its own workspace, but in a shared
+    memory pool their peers must be distinct or their memory is indistinguishable.
+    The Agent's own id is stable and unique, so it is the logical id: the builder
+    declares an explicit agent entry keyed by it (`builders/openclaw.py`), and
+    the plugin then names the peer `agent-<id>`.
+    """
+    return str(agent.id)
+
+
 def ai_peer_name_for_agent(agent: Agent) -> str:
     """The Honcho peer that represents an Agent's own runtime, not its users.
 
     Hermes: set by us in `build_honcho_config` (`builders/hermes.py`), one peer
-    name per Agent. OpenClaw: fixed by the plugin as `agent-{openclaw_agent_id}`
-    (Honcho's own integration docs), and every Agent's OpenClaw config names its
-    one logical agent "main" (`builders/openclaw.py`), so this is `agent-main` for
-    every OpenClaw Agent — workspace isolation is what separates them, not the
-    peer name. Neither convention is ours to invent; both are read from what the
-    builders already emit or what Honcho's docs specify.
+    name per Agent. OpenClaw: fixed by the plugin as `agent-{logical id}`
+    (Honcho's own integration docs), where the logical id is
+    `openclaw_logical_agent_id`. Neither convention is ours to invent; both are
+    read from what the builders emit or what Honcho's docs specify.
     """
     if agent.agent_type == AgentType.HERMES:
         return f"agent-{agent.name}"
-    return "agent-main"
+    return f"agent-{openclaw_logical_agent_id(agent)}"
+
+
+def memory_pool_id_for_agent(agent: Agent) -> str:
+    """The id of the memory pool an Agent belongs to.
+
+    A named pool if the Agent has been assigned one; otherwise the org "house
+    pool", whose id is the organization's own id. Every opted-in Agent in the
+    same pool shares one Honcho workspace and therefore one shared memory.
+    """
+    return agent.memory_pool_id or str(agent.organization_id)
+
+
+def memory_workspace_for_agent(agent: Agent) -> str:
+    """The shared Honcho workspace an opted-in Agent reads and writes.
+
+    Pool-derived, so several Agents resolve to the same workspace and see each
+    other's memory. Callers gate on `honcho_enabled` and the Agent's opt-in
+    (`memory_enabled`) before using this — it does not itself check either.
+    """
+    return workspace_id_for_pool(memory_pool_id_for_agent(agent))
 
 
 @inject

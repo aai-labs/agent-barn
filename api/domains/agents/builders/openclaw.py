@@ -19,6 +19,7 @@ AGENT_RESOURCES = client.V1ResourceRequirements(
 _SCRIPTS = Path(__file__).parent.parent / "scripts" / "openclaw"
 _COMMON_SCRIPTS = _SCRIPTS.parent
 _TELEMETRY_PUSH = _SCRIPTS / "plugins" / "telemetry-push"
+_HONCHO_POOL_RECALL = _SCRIPTS / "plugins" / "honcho-pool-recall"
 
 # OpenClaw's gateway binds this port and its own `openclaw health` CLI resolves
 # the same value with no way to override it, so the runtime must not be moved
@@ -31,6 +32,9 @@ START_SH: str = (_SCRIPTS / "start.sh").read_text()
 TELEMETRY_PUSH_INDEX_JS: str = (_TELEMETRY_PUSH / "index.js").read_text()
 TELEMETRY_PUSH_PACKAGE_JSON: str = (_TELEMETRY_PUSH / "package.json").read_text()
 TELEMETRY_PUSH_PLUGIN_JSON: str = (_TELEMETRY_PUSH / "openclaw.plugin.json").read_text()
+HONCHO_POOL_RECALL_INDEX_JS: str = (_HONCHO_POOL_RECALL / "index.js").read_text()
+HONCHO_POOL_RECALL_PACKAGE_JSON: str = (_HONCHO_POOL_RECALL / "package.json").read_text()
+HONCHO_POOL_RECALL_PLUGIN_JSON: str = (_HONCHO_POOL_RECALL / "openclaw.plugin.json").read_text()
 COMMUNICATIONS_RUNTIME_ADAPTER_PY: str = (_COMMON_SCRIPTS / "communications-runtime-adapter.py").read_text()
 
 _MESSAGE_SCRIPTS = _COMMON_SCRIPTS / "messaging"
@@ -50,6 +54,21 @@ HONCHO_RECALL_TIMEOUT_MS: int = 60000
 
 _MEMORY_CORE = "memory-core"
 _MEMORY_HONCHO = "openclaw-honcho"
+# Our first-party pool-wide recall plugin. The stock openclaw-honcho plugin only
+# recalls an Agent's own view; this one asks the whole pool (see the plugin's
+# index.js). Loaded only when memory is on, alongside the stock plugin.
+_MEMORY_POOL_RECALL = "honcho-pool-recall"
+_HONCHO_POOL_RECALL_PATH = "/home/node/.openclaw/local-plugins/honcho-pool-recall"
+
+# OpenClaw's implicit default paths for its single default agent, captured from a
+# live pod: workspace holds the rendered persona files (AGENTS.md, SOUL.md, the
+# memory-core store), agentDir holds auth + sessions. When memory is on we declare
+# an explicit agent entry to give the Agent a distinct logical id (so its Honcho
+# peer is `agent-<id>`, not the shared `agent-main`) — and pin these paths to the
+# defaults so opting in changes only the peer name, never where files live. Each
+# Agent runs in its own pod, so the paths need not be unique across Agents.
+_OPENCLAW_WORKSPACE_DIR = "~/.openclaw/workspace"
+_OPENCLAW_AGENT_DIR = "~/.openclaw/agents/main"
 
 # The Honcho plugin runs an internal memory-search sub-agent, and its turns — the
 # sub-agent's own instruction prompt and its bounded "NONE" replies — are captured
@@ -111,8 +130,14 @@ def _openclaw_config_core(
     channels: dict,
     honcho_base_url: str | None = None,
     honcho_workspace_id: str | None = None,
+    honcho_agent_id: str | None = None,
 ) -> dict:
     provider, _, model_name = model.partition("/")
+    # When memory is on, `honcho_agent_id` is this Agent's distinct logical id;
+    # otherwise the runtime's implicit default "main". It names the routing
+    # target (bindings), the active-memory scope, and — via an explicit agent
+    # entry below — the Honcho peer.
+    logical_agent_id = honcho_agent_id or "main"
     return {
         "models": {
             "providers": {
@@ -130,11 +155,33 @@ def _openclaw_config_core(
                 "memorySearch": {
                     "provider": "none",
                 },
-            }
+            },
+            # Only when memory is on: an explicit agent entry with the distinct
+            # logical id, so the Honcho peer becomes `agent-<id>` instead of the
+            # shared `agent-main`. The runtime schema is `agents.list` (an array
+            # of {id, default, workspace, agentDir, ...}), verified against the
+            # runtime's own config type — not `agents.entries`. workspace/agentDir
+            # are pinned to today's defaults so opting in never relocates files.
+            **(
+                {
+                    "list": [
+                        {
+                            "id": logical_agent_id,
+                            "default": True,
+                            "workspace": _OPENCLAW_WORKSPACE_DIR,
+                            "agentDir": _OPENCLAW_AGENT_DIR,
+                        }
+                    ]
+                }
+                if honcho_agent_id
+                else {}
+            ),
         },
         "channels": channels,
         "bindings": (
-            [{"type": "route", "agentId": "main", "match": {"channel": binding_channel}}] if binding_channel else []
+            [{"type": "route", "agentId": logical_agent_id, "match": {"channel": binding_channel}}]
+            if binding_channel
+            else []
         ),
         "tools": {
             "profile": "full",
@@ -156,6 +203,7 @@ def _openclaw_config_core(
             # agent-initiated delivery plugin, allowed and loaded regardless.
             "allow": [
                 _memory_plugin(honcho_workspace_id),
+                _MEMORY_POOL_RECALL,
                 _MEMORY_CORE,
                 "active-memory",
                 "telemetry-push",
@@ -167,6 +215,8 @@ def _openclaw_config_core(
                 "paths": [
                     "/home/node/.openclaw/local-plugins/telemetry-push",
                     "/home/node/.openclaw/local-plugins/agentbarn-messaging",
+                    # Pool-wide recall loads only when memory is on.
+                    *([_HONCHO_POOL_RECALL_PATH] if honcho_workspace_id else []),
                 ]
             },
             "slots": {"memory": _memory_plugin(honcho_workspace_id)},
@@ -175,11 +225,19 @@ def _openclaw_config_core(
                 # when Honcho holds the slot, memory-core stays entry-less (fallback
                 # only) so there are never two active memory writers.
                 **_memory_entry(honcho_base_url, honcho_workspace_id),
+                # Pool-wide recall runs beside the stock plugin (which keeps
+                # capture); allowConversationAccess lets its before_prompt_build
+                # hook read the turn so it can query relevant memories.
+                **(
+                    {_MEMORY_POOL_RECALL: {"enabled": True, "hooks": {"allowConversationAccess": True}}}
+                    if honcho_workspace_id
+                    else {}
+                ),
                 "agentbarn-messaging": {"enabled": True},
                 "active-memory": {
                     "enabled": True,
                     "config": {
-                        "agents": ["main"],
+                        "agents": [logical_agent_id],
                         "allowedChatTypes": ["direct", "group", "channel"],
                         "modelFallbackPolicy": "default-remote",
                         "queryMode": "recent",
@@ -209,6 +267,7 @@ def build_openclaw_gateway_config(
     *,
     honcho_base_url: str | None = None,
     honcho_workspace_id: str | None = None,
+    honcho_agent_id: str | None = None,
 ) -> dict:
     return _openclaw_config_core(
         model,
@@ -217,6 +276,7 @@ def build_openclaw_gateway_config(
         channels={},
         honcho_base_url=honcho_base_url,
         honcho_workspace_id=honcho_workspace_id,
+        honcho_agent_id=honcho_agent_id,
     )
 
 
@@ -256,6 +316,9 @@ def build_config_map(
         data["telemetry-push-index.js"] = TELEMETRY_PUSH_INDEX_JS
         data["telemetry-push-package.json"] = TELEMETRY_PUSH_PACKAGE_JSON
         data["telemetry-push-plugin.json"] = TELEMETRY_PUSH_PLUGIN_JSON
+        data["honcho-pool-recall-index.js"] = HONCHO_POOL_RECALL_INDEX_JS
+        data["honcho-pool-recall-package.json"] = HONCHO_POOL_RECALL_PACKAGE_JSON
+        data["honcho-pool-recall-plugin.json"] = HONCHO_POOL_RECALL_PLUGIN_JSON
         data["communications-runtime-adapter.py"] = COMMUNICATIONS_RUNTIME_ADAPTER_PY
         data["agentbarn_message.py"] = AGENTBARN_MESSAGE_PY
         data["openclaw-messaging.js"] = OPENCLAW_MESSAGING_JS

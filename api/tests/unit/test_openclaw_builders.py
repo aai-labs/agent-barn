@@ -131,6 +131,84 @@ def test_gateway_config_keeps_file_backed_memory_when_honcho_is_not_configured()
     assert config["memory"]["backend"] == "builtin"
 
 
+def test_gateway_config_stays_the_default_agent_when_memory_is_off() -> None:
+    """Without memory, nothing declares an explicit agent entry — the runtime's
+    implicit default agent "main" is untouched, so memory-off Agents are
+    byte-for-byte as before."""
+    config = build_openclaw_gateway_config("litellm/gpt-5", "http://litellm:4000")
+
+    assert "list" not in config["agents"]
+    assert config["plugins"]["entries"]["active-memory"]["config"]["agents"] == ["main"]
+
+
+def test_gateway_config_gives_a_distinct_agent_identity_when_memory_is_on() -> None:
+    """In a shared pool, Agents must have distinct Honcho peers. An explicit agent
+    entry keyed by the distinct logical id makes the plugin name the peer
+    `agent-<id>`; its workspace/agentDir are pinned to OpenClaw's defaults so
+    opting in never relocates the Agent's files."""
+    config = build_openclaw_gateway_config(
+        "litellm/gpt-5",
+        "http://litellm:4000",
+        honcho_base_url="http://honcho:8000",
+        honcho_workspace_id="af-pool-org-1",
+        honcho_agent_id="01a0682a-c0cd-7702-8b9f-46bac319438f",
+    )
+
+    # The runtime schema is agents.list (an array), not agents.entries (a map).
+    entries = config["agents"]["list"]
+    entry = next(e for e in entries if e["id"] == "01a0682a-c0cd-7702-8b9f-46bac319438f")
+    assert entry["default"] is True
+    # Pinned to today's implicit defaults — opting in must not move files/sessions.
+    assert entry["workspace"] == "~/.openclaw/workspace"
+    assert entry["agentDir"] == "~/.openclaw/agents/main"
+    # active-memory follows the same logical id, not the shared "main".
+    assert config["plugins"]["entries"]["active-memory"]["config"]["agents"] == ["01a0682a-c0cd-7702-8b9f-46bac319438f"]
+
+
+def test_pool_recall_plugin_loads_only_when_memory_is_on() -> None:
+    """The first-party pool-wide recall plugin runs beside the stock Honcho
+    plugin. It is loaded (allow + load path + entry) only when memory is on;
+    a memory-off Agent never loads it."""
+    off = build_openclaw_gateway_config("litellm/gpt-5", "http://litellm:4000")
+    assert "honcho-pool-recall" not in off["plugins"]["allow"]
+    assert not any("honcho-pool-recall" in p for p in off["plugins"]["load"]["paths"])
+    assert "honcho-pool-recall" not in off["plugins"]["entries"]
+
+    on = build_openclaw_gateway_config(
+        "litellm/gpt-5",
+        "http://litellm:4000",
+        honcho_base_url="http://honcho:8000",
+        honcho_workspace_id="af-pool-org-1",
+        honcho_agent_id="01a0682a-c0cd-7702-8b9f-46bac319438f",
+    )
+    assert "honcho-pool-recall" in on["plugins"]["allow"]
+    assert any("honcho-pool-recall" in p for p in on["plugins"]["load"]["paths"])
+    entry = on["plugins"]["entries"]["honcho-pool-recall"]
+    assert entry["enabled"] is True
+    # It needs conversation access so its before_prompt_build hook can read the turn.
+    assert entry["hooks"]["allowConversationAccess"] is True
+
+
+def test_config_map_ships_the_pool_recall_plugin_files() -> None:
+    config_map = build_config_map(
+        _AGENT_ID,
+        _ORG_ID,
+        _NS,
+        "soul",
+        "identity",
+        "user",
+        "tools",
+        "agents",
+        "boot",
+        "bootstrap",
+        "heartbeat",
+        openclaw_config_overlay=build_openclaw_gateway_config("litellm/gpt-5", "http://litellm:4000"),
+    )
+    assert "honcho-pool-recall-index.js" in config_map.data
+    assert "honcho-pool-recall-package.json" in config_map.data
+    assert "honcho-pool-recall-plugin.json" in config_map.data
+
+
 def test_gateway_config_moves_the_memory_slot_to_honcho_when_configured() -> None:
     """Honcho occupies the single memory slot rather than running beside
     memory-core: two writers over the same semantic state is the condition the

@@ -39,6 +39,7 @@ from api.domains.agents.builders import (
 )
 from api.domains.agents.error_messages import friendly_k8s_error, friendly_pod_reason
 from api.domains.agents.gog_artifacts import build_gog_env, build_gog_policy_md, build_gog_setup_sh
+from api.domains.agents.memory_sharing import memory_workspace_for_agent, openclaw_logical_agent_id
 from api.domains.agents.models import (
     PROVIDER_DISPLAY_NAMES,
     Agent,
@@ -115,7 +116,7 @@ from api.domains.templates.repository import TemplateRepository
 from api.domains.templates.requirements import effective_required_ids, split_requirements
 from api.domains.users.models import User
 from api.infrastructure.crypto import decrypt_token, encrypt_token
-from api.infrastructure.honcho.client import HonchoClient, HonchoError, workspace_id_for_agent
+from api.infrastructure.honcho.client import HonchoClient, HonchoError
 from api.infrastructure.integration_validators import (
     PROVIDER_VALIDATORS,
     format_validation_result,
@@ -601,6 +602,7 @@ class AgentService:
             # OpenClaw ignores verbose_mode for the same reason; report the
             # effective no-op default rather than a stored value.
             verbose_mode=agent.verbose_mode if agent.agent_type == AgentType.HERMES else False,
+            memory_enabled=agent.memory_enabled,
             secrets=secrets_read,
             skills=skills_read,
             configured_platform_keys=configured_platform_keys or [],
@@ -1671,6 +1673,9 @@ class AgentService:
         if "verbose_mode" in updated:
             agent.verbose_mode = updated["verbose_mode"]
 
+        if "memory_enabled" in updated:
+            agent.memory_enabled = updated["memory_enabled"]
+
         # Validate skill changes against the effective template's required skills
         if effective_template is None:
             effective_template = self.template_repository.get_pinned_template(agent)
@@ -1936,13 +1941,18 @@ class AgentService:
 
         runtime_api_key = secrets.token_urlsafe(32)
         service = build_service(agent.id, org_id, ns, org_name=org_name, agent_name=agent.name)
+        # Memory is per-Agent opt-in on top of the infra flag (is Honcho deployed
+        # at all). When on, the Agent reads and writes its pool's shared
+        # workspace so it can see the other opted-in Agents' memory.
+        memory_on = self.config.honcho_enabled and agent.memory_enabled
+        memory_workspace = memory_workspace_for_agent(agent) if memory_on else None
         if agent.agent_type == AgentType.HERMES:
             overlay = None
             hermes_cfg = build_hermes_gateway_config(
                 effective_model,
                 llm_proxy_url,
                 approval_mode=CommandApprovalMode(agent.approval_mode).value,
-                honcho_enabled=self.config.honcho_enabled,
+                honcho_enabled=memory_on,
             )
             secret = build_secret_hermes_runtime(
                 agent.id,
@@ -1966,10 +1976,13 @@ class AgentService:
             overlay = build_openclaw_gateway_config(
                 effective_model,
                 llm_proxy_url,
-                honcho_base_url=self.config.agent_honcho_base_url if self.config.honcho_enabled else None,
-                # Derivable from the Agent id so a workspace never needs its own
-                # mapping row, and deletion can find it without one.
-                honcho_workspace_id=workspace_id_for_agent(agent.id) if self.config.honcho_enabled else None,
+                honcho_base_url=self.config.agent_honcho_base_url if memory_on else None,
+                # The Agent's shared pool workspace, or None when memory is off
+                # for this Agent — see memory_workspace_for_agent.
+                honcho_workspace_id=memory_workspace,
+                # Distinct logical id so pooled Agents get distinct Honcho peers
+                # (agent-<id>) rather than colliding on the default agent-main.
+                honcho_agent_id=openclaw_logical_agent_id(agent) if memory_on else None,
             )
             hermes_cfg = None
             secret = build_secret_runtime(
@@ -2168,10 +2181,10 @@ class AgentService:
                 honcho_config=(
                     build_honcho_config(
                         base_url=self.config.agent_honcho_base_url,
-                        workspace_id=workspace_id_for_agent(agent.id),
+                        workspace_id=memory_workspace,
                         agent_name=agent.name,
                     )
-                    if self.config.honcho_enabled
+                    if memory_on and memory_workspace is not None
                     else None
                 ),
                 aai_cli_config_toml=aai_config_toml,
@@ -2226,11 +2239,9 @@ class AgentService:
         # ("the peer asked X") out of stored memory. Done on every start so it also
         # backfills Agents that predate it, and best-effort: memory is opt-in and
         # its store may be unreachable, neither of which should fail an Agent start.
-        if self.config.honcho_enabled:
+        if memory_on and memory_workspace is not None:
             try:
-                self.honcho.ensure_deriver_instructions(
-                    workspace_id_for_agent(agent.id), self.honcho.DERIVER_INSTRUCTIONS
-                )
+                self.honcho.ensure_deriver_instructions(memory_workspace, self.honcho.DERIVER_INSTRUCTIONS)
             except HonchoError:
                 logger.warning("Could not set memory deriver instructions for agent %s", agent_id, exc_info=True)
         # Pin what this pod was started on. The runtime reads its config once, so this

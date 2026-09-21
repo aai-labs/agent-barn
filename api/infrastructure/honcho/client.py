@@ -14,8 +14,37 @@ def workspace_id_for_agent(agent_id: object) -> str:
 
     Deriving it rather than storing it means workspace ownership needs no
     mapping row: any code that has the Agent id can name its workspace.
+
+    This is the legacy one-workspace-per-Agent name. Opted-in Agents now share a
+    pool workspace instead (see `workspace_id_for_pool`); this remains only for
+    reading/cleaning up workspaces created under the old scheme.
     """
     return f"af-{agent_id}"
+
+
+POOL_WORKSPACE_PREFIX = "af-pool-"
+
+
+def workspace_id_for_pool(pool_id: object) -> str:
+    """Derive the shared Honcho workspace name for a memory pool.
+
+    A pool is one workspace shared by every opted-in Agent in it, so they can
+    see each other's memory. The `af-pool-` prefix keeps pool workspaces
+    distinguishable from legacy per-Agent `af-<uuid>` workspaces (cost
+    attribution relies on telling them apart — see `pool_id_from_workspace`).
+    """
+    return f"{POOL_WORKSPACE_PREFIX}{pool_id}"
+
+
+def pool_id_from_workspace(workspace_id: str) -> str | None:
+    """Recover a pool id from a pool workspace name, or None if it is not one.
+
+    Returns None for legacy per-Agent workspaces (`af-<uuid>`) so callers that
+    aggregate cost per pool never mistake an old per-Agent workspace for a pool.
+    """
+    if workspace_id.startswith(POOL_WORKSPACE_PREFIX):
+        return workspace_id[len(POOL_WORKSPACE_PREFIX) :]
+    return None
 
 
 class HonchoError(Exception):
