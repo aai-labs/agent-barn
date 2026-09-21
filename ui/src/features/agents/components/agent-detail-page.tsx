@@ -17,6 +17,7 @@ import { AgentAvatar } from "./agent-avatar";
 import { AgentErrorBanner, AgentHealthErrorBanner } from "./agent-error-banner";
 import { AgentLifecycleMenu } from "./agent-lifecycle-menu";
 import { AgentMetaBadges } from "./agent-meta-badges";
+import { AgentUpdateButton } from "./agent-update-button";
 import { StatusLine } from "./status-line";
 import { ChatTab } from "./chat-tab";
 import { ConversationsTab } from "./conversations-tab";
@@ -158,6 +159,9 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
                 </div>
               </div>
               <div className="flex gap-2">
+                {canManageLifecycle && agent.updateAvailable && (
+                  <AgentUpdateButton agent={agent} />
+                )}
                 {canManageLifecycle && <AgentLifecycleMenu agent={agent} />}
                 <Link
                   href={`${homeHref}/agents/${agent.id}/configuration`}

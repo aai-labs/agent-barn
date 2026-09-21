@@ -8,20 +8,46 @@ Related context: [`../agents.md`](../agents.md),
 
 ## Current state
 
-- Delivered: a runtime configuration digest derived from the static closure of
-  the Agent assembly code plus the runtime image references,
-  `Agent.running_config_digest` recording the digest a running pod started on,
-  and `AgentRead.update_available` reporting when the two disagree. The API
-  contract is complete; no UI surfaces it yet.
+- Delivered: the full advisory update signal, end to end. A runtime
+  configuration digest derived from the static closure of the Agent assembly
+  code plus the runtime image references, `Agent.running_config_digest`
+  recording what a running pod started on, `AgentRead.update_available`
+  reporting when the two disagree, and a black Update control on the Agent page
+  that runs the existing stop/start.
 - In transition: Agents that were already running when `running_config_digest`
   was introduced report `update_available` until they are next started. That is
   accurate rather than a defect — those pods predate the record — but it means
-  the first deploy carrying AF-271-04 will show the control on the existing
-  fleet.
-- Next: AF-271-04 — the Update control on the Agent page.
+  the deploy carrying AF-271-04 shows the control across the existing fleet
+  once.
+- Next: AF-271-05 — document the mechanism in the architecture guide and close
+  this log.
 - Blockers: none.
 
 ## Changes
+
+### 2026-09-21 — AF-271-04
+
+- Delivered: `AgentUpdateButton`, rendered in the Agent detail toolbar before
+  the lifecycle control when the server reports `update_available` and the
+  actor holds `agent.lifecycle.manage`. It reuses `useRestartAgent`, so the
+  Update action and the existing Restart menu item are the same stop/start.
+- Changed: UI only — `AgentSchema.updateAvailable`, one new component, one line
+  in `agent-detail-page.tsx`, and Playwright page-object, fixture, and spec
+  coverage. No API, schema, or deployment surface.
+- Decision: the control reuses the existing `.af-btn-primary` black variant
+  rather than introducing a style, and carries no confirmation dialog, matching
+  the Restart menu item it duplicates.
+- Decision: visibility is driven entirely by the server's `update_available`
+  and `allowed_actions`, with no client-side re-derivation from Agent status,
+  per the RBAC brief's backend/UI contract rule.
+- Known gap: `AgentUpdateButton` and `AgentLifecycleMenu` each hold their own
+  `useRestartAgent` instance, so a restart begun from one does not disable the
+  other. Both paths are serialised by the Agent lifecycle lock, so the second
+  click returns 409 rather than corrupting state.
+- Coverage: `ui/tests/e2e/agent-update-button.spec.ts` — hidden when no update
+  is available, hidden for a stopped Agent, hidden without lifecycle
+  permission, visible beside the lifecycle control when available, and a click
+  issuing stop then start.
 
 ### 2026-09-21 — AF-271-03
 
