@@ -10,6 +10,7 @@ from api.domains.agents.builders.restore_point import (
     COMPONENT_LABEL,
     COMPONENT_LABEL_KEY,
     RESTORE_POINT_ID_LABEL_KEY,
+    restore_point_id_from_name,
 )
 from api.domains.agents.models import AgentRestorePoint
 from api.domains.restore_points.constants import (
@@ -20,6 +21,7 @@ from api.domains.restore_points.constants import (
     RESTORE_POINT_RECONCILIATION_MISSING_VOLUME_LIMIT,
     RESTORE_POINT_RECONCILIATION_STALE_SECONDS,
 )
+from api.domains.restore_points.models import TERMINAL_STATUSES
 
 logger = logging.getLogger(__name__)
 
@@ -77,18 +79,28 @@ class RestorePointReconciliationCluster(Protocol):
     def delete_job(self, name: str, namespace: str) -> None: ...
 
 
-def _labelled_id(item: Any) -> UUID | None:
-    metadata = getattr(item, "metadata", None)
-    labels = getattr(metadata, "labels", None) or {}
-    try:
-        return UUID(labels[RESTORE_POINT_ID_LABEL_KEY])
-    except KeyError, TypeError, ValueError:
-        return None
-
-
 def _object_name(item: Any) -> str:
     metadata = getattr(item, "metadata", None)
     return getattr(metadata, "name", None) or ""
+
+
+def _as_uuid(value: str | None) -> UUID | None:
+    if not value:
+        return None
+    try:
+        return UUID(value)
+    except ValueError:
+        return None
+
+
+def _restore_point_id(item: Any) -> UUID | None:
+    """The restore point a resource belongs to, by label or by name.
+
+    The name is the fallback for resources created before the label existed.
+    """
+    metadata = getattr(item, "metadata", None)
+    labels = getattr(metadata, "labels", None) or {}
+    return _as_uuid(labels.get(RESTORE_POINT_ID_LABEL_KEY)) or restore_point_id_from_name(_object_name(item))
 
 
 def _created_before(item: Any, cutoff: datetime) -> bool:
@@ -135,13 +147,17 @@ class RestorePointReconciler:
         for row in rows:
             if self._expired(started):
                 break
-            try:
-                self.service.reconcile_row(row, respect_grace=False)
-                resolved += 1
-            except Exception:
-                failed += 1
-                logger.warning("Could not reconcile restore point %s", row.id, exc_info=True)
-                continue
+            # A terminal row is only ever claimed for the replay it still owes, and
+            # has no Job left to read, so resolving it would do nothing and report
+            # that it had.
+            if row.status not in TERMINAL_STATUSES:
+                try:
+                    self.service.reconcile_row(row, respect_grace=False)
+                    resolved += 1
+                except Exception:
+                    failed += 1
+                    logger.warning("Could not reconcile restore point %s", row.id, exc_info=True)
+                    continue
             if not row.reapply_configuration:
                 continue
             try:
@@ -210,7 +226,7 @@ class RestorePointReconciler:
         candidates: list[tuple[str, Any]] = [("job", job) for job in objects.jobs]
         candidates += [("pvc", pvc) for pvc in objects.pvcs]
 
-        identified = {found for found in (_labelled_id(item) for _, item in candidates) if found is not None}
+        identified = {found for found in (_restore_point_id(item) for _, item in candidates) if found is not None}
         try:
             known = self.repository.find_existing_ids(identified)
         except Exception:
@@ -226,7 +242,7 @@ class RestorePointReconciler:
                 break
             name = _object_name(item)
             try:
-                restore_point_id = _labelled_id(item)
+                restore_point_id = _restore_point_id(item)
                 if restore_point_id is None:
                     unidentified += 1
                     logger.warning(

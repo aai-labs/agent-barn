@@ -1,3 +1,4 @@
+import secrets
 from uuid import UUID
 
 from kubernetes import client
@@ -19,6 +20,11 @@ COMPONENT_LABEL_KEY = "agentbarn.io/component"
 AGENT_ID_LABEL_KEY = "agentbarn.io/agent-id"
 RESTORE_POINT_ID_LABEL_KEY = "agentbarn.io/restore-point-id"
 
+PVC_NAME_PREFIX = "restore-point-"
+CAPTURE_JOB_NAME_PREFIX = "rp-cap-"
+RESTORE_JOB_NAME_PREFIX = "rp-res-"
+_UUID_LENGTH = 36
+
 SOURCE_MOUNT_PATH = "/source"
 DEST_MOUNT_PATH = "/dest"
 TARGET_MOUNT_PATH = "/target"
@@ -38,7 +44,33 @@ _JOB_RESOURCES = client.V1ResourceRequirements(
 
 
 def restore_point_resource_name(restore_point_id: UUID) -> str:
-    return f"restore-point-{restore_point_id}"
+    return f"{PVC_NAME_PREFIX}{restore_point_id}"
+
+
+def capture_job_name(restore_point_id: UUID) -> str:
+    return f"{CAPTURE_JOB_NAME_PREFIX}{restore_point_id}"
+
+
+def restore_job_name(restore_point_id: UUID) -> str:
+    return f"{RESTORE_JOB_NAME_PREFIX}{restore_point_id}-{secrets.token_hex(3)}"
+
+
+def restore_point_id_from_name(name: str) -> UUID | None:
+    """The restore point a resource belongs to, read back out of its own name.
+
+    Reclamation prefers the id label, but resources created before that label
+    existed carry only a name. These names are generated here, so parsing one is
+    a second exact identifier rather than a guess; anything that does not match
+    a prefix this module produces still resolves to None and is left alone.
+    """
+    for prefix in (PVC_NAME_PREFIX, CAPTURE_JOB_NAME_PREFIX, RESTORE_JOB_NAME_PREFIX):
+        if not name.startswith(prefix):
+            continue
+        try:
+            return UUID(name[len(prefix) :][:_UUID_LENGTH])
+        except ValueError:
+            return None
+    return None
 
 
 def _labels(restore_point_id: UUID, agent_id: UUID, org_id: UUID) -> dict[str, str]:

@@ -13,6 +13,11 @@ spec:
   # window does not overlap — it silently costs the next tick instead.
   schedule: {{ .Values.restorePoints.reconciliation.schedule | quote }}
   concurrencyPolicy: Forbid
+  # Bounds how far back a missed window may be started. Left unset, the controller
+  # counts every miss since the last run and gives up permanently past 100 of them
+  # — about 17 hours of controller downtime at a 10-minute schedule, after which
+  # nothing is reclaimed until someone notices.
+  startingDeadlineSeconds: 300
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 3
   jobTemplate:

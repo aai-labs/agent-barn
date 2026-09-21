@@ -6,6 +6,7 @@ from uuid import UUID, uuid4
 from hamcrest import assert_that, contains_string, empty, equal_to, has_length, is_not
 
 from api.domains.agents.builders.restore_point import RESTORE_POINT_ID_LABEL_KEY
+from api.domains.agents.models import RestorePointStatus
 from api.domains.restore_points.constants import (
     RESTORE_POINT_ORPHAN_DELETE_LIMIT,
     RESTORE_POINT_ORPHAN_MIN_AGE_SECONDS,
@@ -23,7 +24,7 @@ _RECENT = datetime.now(UTC)
 
 
 class FakeRow:
-    def __init__(self, *, status="PENDING", reapply_configuration=False, pvc_name=None):
+    def __init__(self, *, status=RestorePointStatus.PENDING, reapply_configuration=False, pvc_name=None):
         self.id = uuid4()
         self.status = status
         self.reapply_configuration = reapply_configuration
@@ -148,7 +149,7 @@ def test_the_claim_asks_for_rows_stale_past_the_threshold_and_is_bounded():
 
 
 def test_a_row_that_owes_a_replay_is_resolved_and_then_replayed():
-    owing = FakeRow(status="READY", reapply_configuration=True)
+    owing = FakeRow(status=RestorePointStatus.READY, reapply_configuration=True)
     settled = FakeRow()
     service = FakeService()
 
@@ -170,8 +171,18 @@ def test_one_row_failing_does_not_stop_the_rest_of_the_batch():
     assert_that(service.reconciled, equal_to([(healthy.id, False)]))
 
 
-def test_a_failing_replay_is_counted_without_losing_the_resolution():
-    owing = FakeRow(status="READY", reapply_configuration=True)
+def test_a_failing_replay_is_counted_as_a_failure():
+    owing = FakeRow(status=RestorePointStatus.READY, reapply_configuration=True)
+    service = FakeService(replay_error_for=owing.id)
+
+    result = _reconciler(FakeRepository(candidates=[owing]), service).run_once()
+
+    assert_that(result.replays_attempted, equal_to(0))
+    assert_that(result.failed, equal_to(1))
+
+
+def test_a_failing_replay_on_a_live_row_does_not_lose_its_resolution():
+    owing = FakeRow(status=RestorePointStatus.RESTORING, reapply_configuration=True)
     service = FakeService(replay_error_for=owing.id)
 
     result = _reconciler(FakeRepository(candidates=[owing]), service).run_once()
@@ -182,7 +193,7 @@ def test_a_failing_replay_is_counted_without_losing_the_resolution():
 
 
 def test_ready_rows_whose_volume_is_gone_are_failed():
-    stranded = FakeRow(status="READY", pvc_name="restore-point-gone")
+    stranded = FakeRow(status=RestorePointStatus.READY, pvc_name="restore-point-gone")
     repository = FakeRepository(missing=[stranded])
     cluster = FakeCluster(pvcs=[_resource("restore-point-live")])
 
@@ -195,7 +206,7 @@ def test_ready_rows_whose_volume_is_gone_are_failed():
 
 
 def test_an_empty_volume_listing_never_fails_a_row():
-    repository = FakeRepository(missing=[FakeRow(status="READY")])
+    repository = FakeRepository(missing=[FakeRow(status=RestorePointStatus.READY)])
 
     result = _reconciler(repository, cluster=FakeCluster(pvcs=[], jobs=[])).run_once()
 
@@ -205,7 +216,7 @@ def test_an_empty_volume_listing_never_fails_a_row():
 
 
 def test_a_failed_listing_skips_both_cluster_passes():
-    repository = FakeRepository(missing=[FakeRow(status="READY")])
+    repository = FakeRepository(missing=[FakeRow(status=RestorePointStatus.READY)])
     cluster = FakeCluster(list_error=True)
 
     result = _reconciler(repository, cluster=cluster).run_once()
@@ -252,14 +263,48 @@ def test_a_resource_younger_than_the_minimum_age_is_left_alone():
     assert_that(cluster.deleted_pvcs, empty())
 
 
-def test_an_unlabelled_resource_is_reported_and_never_deleted():
-    cluster = FakeCluster(pvcs=[_resource("restore-point-legacy", labelled=False)])
+def test_a_resource_identifiable_by_neither_route_is_reported_and_never_deleted():
+    cluster = FakeCluster(pvcs=[_resource("some-other-volume", labelled=False)])
 
     result = _reconciler(FakeRepository(), cluster=cluster).run_once()
 
     assert_that(result.orphans_unidentified, equal_to(1))
     assert_that(result.orphans_deleted, equal_to(0))
     assert_that(cluster.deleted_pvcs, empty())
+
+
+def test_an_unlabelled_resource_is_identified_by_its_generated_name():
+    orphan_id = uuid4()
+    cluster = FakeCluster(
+        pvcs=[_resource(f"restore-point-{orphan_id}", labelled=False)],
+        jobs=[_resource(f"rp-cap-{orphan_id}", labelled=False)],
+    )
+
+    result = _reconciler(FakeRepository(), cluster=cluster).run_once()
+
+    assert_that(result.orphans_unidentified, equal_to(0))
+    assert_that(result.orphans_deleted, equal_to(2))
+
+
+def test_an_unlabelled_resource_a_row_still_owns_is_left_alone():
+    owned_id = uuid4()
+    cluster = FakeCluster(pvcs=[_resource(f"restore-point-{owned_id}", labelled=False)])
+
+    result = _reconciler(FakeRepository(existing_ids={owned_id}), cluster=cluster).run_once()
+
+    assert_that(result.orphans_deleted, equal_to(0))
+    assert_that(cluster.deleted_pvcs, empty())
+
+
+def test_a_terminal_row_claimed_only_for_its_replay_is_not_counted_as_resolved():
+    owing = FakeRow(status=RestorePointStatus.READY, reapply_configuration=True)
+    service = FakeService()
+
+    result = _reconciler(FakeRepository(candidates=[owing]), service).run_once()
+
+    assert_that(result.resolved, equal_to(0))
+    assert_that(result.replays_attempted, equal_to(1))
+    assert_that(service.reconciled, empty())
 
 
 def test_deletions_are_capped_per_run():

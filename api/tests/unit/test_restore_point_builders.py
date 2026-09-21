@@ -12,6 +12,9 @@ from api.domains.agents.builders.restore_point import (
     build_capture_job,
     build_restore_job,
     build_restore_point_pvc,
+    capture_job_name,
+    restore_job_name,
+    restore_point_id_from_name,
     restore_point_resource_name,
 )
 from api.domains.agents.restore_point_job import ARCHIVE_NAME, capture, main
@@ -263,3 +266,19 @@ def test_restore_job_env_drives_the_entrypoint(tmp_path, monkeypatch):
     assert_that((target / "memories" / "USER.md").read_text(), equal_to("captured profile"))
     assert_that((target / "stale.md").exists(), equal_to(False))
     assert_that((backup / ARCHIVE_NAME).exists(), equal_to(True))
+
+
+def test_every_generated_resource_name_round_trips_back_to_its_restore_point():
+    names = [
+        restore_point_resource_name(_RESTORE_POINT_ID),
+        capture_job_name(_RESTORE_POINT_ID),
+        restore_job_name(_RESTORE_POINT_ID),
+    ]
+
+    for name in names:
+        assert_that(restore_point_id_from_name(name), equal_to(_RESTORE_POINT_ID))
+
+
+def test_a_name_we_did_not_generate_yields_no_restore_point():
+    for name in ("agent-22222222-2222-2222-2222-222222222222", "restore-point-nope", "rp-cap-", "litellm", ""):
+        assert_that(restore_point_id_from_name(name), none())

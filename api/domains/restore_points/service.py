@@ -1,7 +1,6 @@
 import enum
 import json
 import logging
-import secrets
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid7
@@ -16,6 +15,8 @@ from api.domains.agents.builders.restore_point import (
     build_capture_job,
     build_restore_job,
     build_restore_point_pvc,
+    capture_job_name,
+    restore_job_name,
     restore_point_resource_name,
 )
 from api.domains.agents.error_messages import friendly_k8s_error
@@ -82,14 +83,6 @@ def _selection_type(agent: Agent) -> str:
     if agent.agent_template_override_version_id is not None:
         return "override"
     return ""
-
-
-def _capture_job_name(restore_point_id: UUID) -> str:
-    return f"rp-cap-{restore_point_id}"
-
-
-def _restore_job_name(restore_point_id: UUID) -> str:
-    return f"rp-res-{restore_point_id}-{secrets.token_hex(3)}"
 
 
 class _RestoreOutcome(str, enum.Enum):
@@ -414,7 +407,7 @@ class RestorePointService:
                 origin=RestorePointOrigin.MANUAL,
                 agent_type=current.agent_type,
                 pvc_name=restore_point_resource_name(restore_point_id),
-                job_name=_capture_job_name(restore_point_id),
+                job_name=capture_job_name(restore_point_id),
                 config_manifest=self._build_config_manifest(current).model_dump(mode="json"),
             )
             result = self.repository.save_with_event(
@@ -471,7 +464,7 @@ class RestorePointService:
                 # must not cost the Agent its files first.
                 self._validate_recorded_configuration(current, target)
 
-            job_name = _restore_job_name(target.id)
+            job_name = restore_job_name(target.id)
             backup = self._create_pre_restore_row(current, job_name)
             result = self.repository.update_status_with_event(
                 target.id,
@@ -795,7 +788,7 @@ class RestorePointService:
             self.k8s.create_job(
                 namespace,
                 build_capture_job(
-                    job_name=restore_point.job_name or _capture_job_name(restore_point.id),
+                    job_name=restore_point.job_name or capture_job_name(restore_point.id),
                     restore_point_id=restore_point.id,
                     agent_id=agent.id,
                     org_id=agent.organization_id,

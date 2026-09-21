@@ -125,10 +125,13 @@ never touched, from a failed extraction, where it was.
 
 A row's status is otherwise only resolved when someone reads it, so a CronJob runs the same
 resolution on a schedule and reclaims what no row owns. It matches a Job or PVC back to its row
-through the `agentbarn.io/restore-point-id` label rather than through `job_name`, which is
-cleared when a row goes terminal. Because that pass deletes storage from a list-and-compare, it
-skips resources younger than a minimum age, caps deletions per run, refuses to delete a resource
-carrying no id label, and fails no rows at all when the volume listing is empty or failed.
+through the `agentbarn.io/restore-point-id` label, falling back to the resource's own generated
+name — never through `job_name`, which is cleared when a row goes terminal. The name fallback is
+what reaches resources created before that label existed; both routes are exact, because the
+builders generate the names. Because that pass deletes storage from a list-and-compare, it skips
+resources younger than a minimum age, caps deletions per run, refuses to delete a resource
+identifiable by neither route, and fails no rows at all when the volume listing is empty or
+failed.
 
 CSI `VolumeSnapshot` is deliberately unused; see
 [`../adr/2026-09-10-restore-points-use-tar-jobs-not-csi-snapshots.md`](../adr/2026-09-10-restore-points-use-tar-jobs-not-csi-snapshots.md).
