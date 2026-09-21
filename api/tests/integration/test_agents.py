@@ -22,6 +22,7 @@ from hamcrest import (
 from sqlmodel import Session
 from starlette.testclient import TestClient
 
+from api.core.config import Config
 from api.domains.agents.models import (
     AgentStatus,
     AgentTemplateOverrideSourceType,
@@ -32,6 +33,7 @@ from api.domains.agents.models import (
 )
 from api.domains.agents.override_repository import AgentOverrideRepository
 from api.domains.agents.repository import AgentRepository
+from api.domains.agents.runtime_digest import agent_runtime_config_digest
 from api.domains.communications.models import CommunicationConnection
 from api.domains.events.catalog import (
     AGENT_CREATED,
@@ -1154,6 +1156,41 @@ def test_start_agent_sets_status_running():
             )
 
 
+def test_start_agent_records_the_runtime_config_digest():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        config: Config = context.injector.get(Config)
+
+        with when("I start the agent"):
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("the Agent records the digest of the code and images its pod was built from"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            persisted = context.injector.get(AgentRepository).get_by_id(context.agent.id)
+            assert persisted is not None
+            assert_that(
+                persisted.running_config_digest,
+                equal_to(agent_runtime_config_digest(config.openclaw_image, config.hermes_image)),
+            )
+
+
+def test_failed_start_records_no_runtime_config_digest():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        k8s: MagicMock = context.injector.get(KubernetesClient)
+        k8s.create_deployment.side_effect = RuntimeError("cluster unavailable")
+
+        with when("provisioning fails before the runtime is created"):
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("no digest is recorded because no pod was built"):
+            assert_that(response.status_code, equal_to(status.HTTP_500_INTERNAL_SERVER_ERROR))
+            persisted = context.injector.get(AgentRepository).get_by_id(context.agent.id)
+            assert persisted is not None
+            assert_that(persisted.status, equal_to(AgentStatus.ERROR))
+            assert_that(persisted.running_config_digest, equal_to(""))
+
+
 def test_start_agent_emits_started_domain_event_and_delivery():
     with given([*_GIVEN, there_is_an_agent()]) as context:
         client: TestClient = context.client
@@ -1398,6 +1435,28 @@ def test_stop_agent_sets_status_stopped():
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
             assert_that(response.json()["status"], equal_to(AgentStatus.STOPPED.value))
             k8s.delete_deployment.assert_called_once()
+
+
+def test_stop_agent_clears_the_runtime_config_digest():
+    with given(
+        [
+            *_GIVEN,
+            there_is_an_agent(status=AgentStatus.RUNNING),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        repository: AgentRepository = context.injector.get(AgentRepository)
+        context.agent.running_config_digest = "a" * 64
+        repository.save(context.agent)
+
+        with when("I stop the agent"):
+            response = client.post(f"{_BASE}/{context.agent.id}/stop", headers=_auth(context))
+
+        with then("the recorded digest is cleared because no pod is running"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            persisted = repository.get_by_id(context.agent.id)
+            assert persisted is not None
+            assert_that(persisted.running_config_digest, equal_to(""))
 
 
 def test_stop_agent_emits_stopped_domain_event_and_delivery():

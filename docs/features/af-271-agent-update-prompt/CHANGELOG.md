@@ -9,15 +9,37 @@ Related context: [`../agents.md`](../agents.md),
 ## Current state
 
 - Delivered: a runtime configuration digest derived from the static closure of
-  the Agent assembly code plus the runtime image references. It is computed and
-  tested but not yet read, written, or exposed, so no runtime behaviour changes.
-- In transition: nothing. The digest has no persisted counterpart until
-  AF-271-02 adds `Agent.running_config_digest`, so nothing can compare against
-  it yet.
-- Next: AF-271-02 — persist the digest a pod started on.
+  the Agent assembly code plus the runtime image references, and
+  `Agent.running_config_digest`, which records the digest a running pod was
+  started on. Nothing reads the column yet, so no client behaviour changes.
+- In transition: the column is written but not exposed. Agents already running
+  when the migration lands keep the empty default until their next start, which
+  is what makes them report an available update once AF-271-03 exposes the
+  comparison.
+- Next: AF-271-03 — expose `AgentRead.update_available`.
 - Blockers: none.
 
 ## Changes
+
+### 2026-09-21 — AF-271-02
+
+- Delivered: `Agent.running_config_digest`, stamped in `_provision_and_start`
+  beside `running_model` and cleared in `_stop_agent_unchecked`, so the Agent
+  row records which code and images its live pod was actually built from.
+- Changed: schema (`agent.running_config_digest`, `String(64)`,
+  `server_default=""`) with migration `f2b9d4c7a610` off head `43ac1fbc7ff1`.
+  No API, UI, or deployment surface.
+- Decision: no backfill. An Agent running when the migration lands genuinely
+  predates the tracking, so it keeps the empty default and reports an available
+  update on the next read rather than being assumed current.
+- Finding: `AgentRepository.save_with_lifecycle_event` copies an explicit
+  allow-list of fields onto the locked row, so a lifecycle write that is not
+  listed there is silently dropped. Both digest tests failed on the first run
+  for exactly this reason; `running_config_digest` is now listed alongside
+  `running_model`.
+- Coverage: `api/tests/integration/test_agents.py` — start records the digest,
+  stop clears it, and a start that fails before the runtime exists records
+  nothing.
 
 ### 2026-09-21 — AF-271-01
 

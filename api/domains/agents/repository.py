@@ -845,6 +845,7 @@ class AgentRepository:
             persisted.last_error_detail = agent.last_error_detail
             persisted.ingest_key_encrypted = agent.ingest_key_encrypted
             persisted.running_model = agent.running_model
+            persisted.running_config_digest = agent.running_config_digest
             persisted.communication_key_encrypted = agent.communication_key_encrypted
             session.add(persisted)
             session.flush()

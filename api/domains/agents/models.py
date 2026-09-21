@@ -337,6 +337,10 @@ class Agent(BaseModel, table=True):
         default="",
         sa_column=Column(sa.String(), nullable=False, server_default=""),
     )
+    running_config_digest: str = SqlField(
+        default="",
+        sa_column=Column(sa.String(64), nullable=False, server_default=""),
+    )
     agent_type: AgentType = SqlField(
         default=AgentType.OPENCLAW,
         sa_column=Column(sa.String(20), nullable=False, server_default="openclaw"),
