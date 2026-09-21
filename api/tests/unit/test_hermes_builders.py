@@ -8,8 +8,9 @@ from api.domains.agents.builders import (
     native_discord_env,
     native_slack_env,
     native_telegram_env,
+    runtime_teams_env,
 )
-from api.domains.agents.builders.hermes import HERMES_START_SH
+from api.domains.agents.builders.hermes import HERMES_BOOTLOADER_FOOTER, HERMES_START_SH
 from api.domains.communications.models import ConversationLocation
 
 _AGENT_ID = UUID("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
@@ -201,6 +202,40 @@ def test_native_telegram_env_sets_the_home_chat() -> None:
     assert env["TELEGRAM_HOME_CHANNEL"] == "-1009"
 
 
+def test_runtime_teams_config_enables_observer_and_verbose_progress() -> None:
+    config = build_hermes_gateway_config("litellm/gpt-5", "http://litellm:4000", runtime_teams=True, verbose_mode=True)
+
+    assert "agentbarn-observer" in config["plugins"]["enabled"]
+    assert config["display"]["platforms"]["teams"] == {
+        "tool_progress": "all",
+        "tool_progress_grouping": "accumulate",
+        "interim_assistant_messages": True,
+    }
+
+
+def test_runtime_teams_env_keeps_credentials_in_the_secret_and_sets_home() -> None:
+    env = runtime_teams_env(
+        {"home_channel_id": "19:home@thread.tacv2"},
+        {"app_id": "app-id", "app_password": "secret", "tenant_id": "tenant-id"},
+    )
+
+    assert env == {
+        "TEAMS_CLIENT_ID": "app-id",
+        "TEAMS_CLIENT_SECRET": "secret",
+        "TEAMS_TENANT_ID": "tenant-id",
+        "TEAMS_ALLOW_ALL_USERS": "true",
+        "TEAMS_PORT": "3978",
+        "TEAMS_HOME_CHANNEL": "19:home@thread.tacv2",
+        "AGENTBARN_SCHEDULED_DELIVERY": "0",
+    }
+
+
+def test_runtime_teams_env_uses_no_home_sentinel() -> None:
+    env = runtime_teams_env({}, {"app_id": "app-id", "app_password": "secret", "tenant_id": "tenant-id"})
+
+    assert env["TEAMS_HOME_CHANNEL"] == "__agentbarn_no_home_channel__"
+
+
 def test_native_gateway_does_not_drain_agent_barn_scheduled_completions() -> None:
     guarded = HERMES_START_SH.split(
         'if [ "${AGENTBARN_SCHEDULED_DELIVERY}" = "1" ]; then',
@@ -215,6 +250,13 @@ def test_gateway_config_enables_persistent_memory_for_scheduled_runs() -> None:
 
     assert config["memory"]["memory_enabled"] is True
     assert config["memory"]["user_profile_enabled"] is True
+
+
+def test_hermes_startup_context_exposes_runtime_memory_paths() -> None:
+    assert "/opt/data/memories/USER.md" in HERMES_BOOTLOADER_FOOTER
+    assert "/opt/data/memories/MEMORY.md" in HERMES_BOOTLOADER_FOOTER
+    assert "/workspace/memory/YYYY-MM-DD.md" in HERMES_BOOTLOADER_FOOTER
+    assert "Do not\nread or write `/workspace/USER.md`" in HERMES_BOOTLOADER_FOOTER
 
 
 def test_gateway_config_maps_approval_mode_onto_approvals_policy() -> None:

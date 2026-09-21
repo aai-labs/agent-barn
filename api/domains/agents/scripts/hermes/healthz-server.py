@@ -8,7 +8,7 @@ from urllib.error import URLError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
-PROXY_PORT = 8090
+PROXY_PORT = int(os.environ.get("LLM_PROXY_PORT", "8090"))
 PORT = int(os.environ.get("HEALTHZ_PORT", "8081"))
 HERMES_URL = "http://127.0.0.1:8642/v1/models"
 POLL_INTERVAL = 10
@@ -22,6 +22,31 @@ _TERMINAL_LLM_ERRORS: dict[int, str] = {
     402: "OpenRouter credits exhausted. Add credits at https://openrouter.ai/credits.",
     403: "LLM API access denied. Check your account permissions.",
 }
+
+_BUDGET_EXHAUSTED = (
+    "This organization has reached its model spend limit. "
+    "Contact your administrator to raise it or wait for the limit to reset."
+)
+
+
+# An exhausted limit has been seen as a 400 and is documented as a 429 depending on
+# which budget was hit and which proxy version answered. Both are buffered and matched
+# on the error body, so a version difference cannot leak the upstream text.
+_BUDGET_STATUSES = (400, 429)
+
+
+def _budget_message(body: bytes) -> str | None:
+    """Matched on the body rather than the status: these statuses also carry malformed
+    requests, unknown models and rate limits, which must keep their own errors. The
+    upstream text names an internal team id, so it is replaced, never passed through.
+    """
+    try:
+        error = json.loads(body).get("error") or {}
+    except (ValueError, AttributeError):
+        return None
+    if not isinstance(error, dict) or error.get("type") != "budget_exceeded":
+        return None
+    return _BUDGET_EXHAUSTED
 
 
 def _poll() -> None:
@@ -172,8 +197,16 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             upstream = conn.getresponse()
 
             clean_msg = _TERMINAL_LLM_ERRORS.get(upstream.status)
+            buffered: bytes | None = None
+            if clean_msg is None and upstream.status in _BUDGET_STATUSES:
+                # Only these are buffered. Everything else is either already mapped or
+                # must keep streaming, which reading it here would break.
+                buffered = upstream.read()
+                clean_msg = _budget_message(buffered)
+
             if clean_msg:
-                upstream.read()
+                if buffered is None:
+                    upstream.read()
                 clean_body = json.dumps(
                     {"error": {"message": clean_msg, "type": None, "param": None, "code": str(upstream.status)}}
                 ).encode()
@@ -192,11 +225,15 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                         self.send_header(key, val)
                 self.end_headers()
                 headers_sent = True
-                while True:
-                    chunk = upstream.read(8192)
-                    if not chunk:
-                        break
-                    self.wfile.write(chunk)
+                if buffered is not None:
+                    # Already consumed while checking for a budget rejection.
+                    self.wfile.write(buffered)
+                else:
+                    while True:
+                        chunk = upstream.read(8192)
+                        if not chunk:
+                            break
+                        self.wfile.write(chunk)
         except Exception:
             if not headers_sent:
                 self.send_response(502)

@@ -744,6 +744,37 @@ test.describe("Agent Detail Page — Channels tab", () => {
     await expect(agentDetailPage.connectionProviderStatus("Connected")).toBeVisible();
   });
 
+  test("shows a selectable webhook URL and copies it", async ({ page, context }) => {
+    const webhookUrl = "https://api.example.test/communications/v1/webhooks/bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+    await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+    await page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}/connections`, async (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify([
+          {
+            ...mockCommunicationConnection,
+            platform_key: "teams",
+            display_name: "Microsoft Teams",
+            webhook_url: webhookUrl,
+          },
+        ]),
+      });
+    });
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await agentDetailPage.configureButton().click();
+    await agentDetailPage.channelsTab().click();
+
+    const webhookInput = page.getByRole("textbox", { name: "Webhook URL" });
+    await expect(webhookInput).toHaveValue(webhookUrl);
+    await expect(webhookInput).toHaveAttribute("readonly", "");
+    const copyWebhook = page.getByRole("button", { name: "Copy webhook URL" });
+    await copyWebhook.click();
+    await expect(copyWebhook).toHaveAttribute("title", "Webhook URL copied");
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(webhookUrl);
+  });
+
   test("builds the recommended install link on demand for a Discord Connection", async ({ page }) => {
     const installUrl =
       "https://discord.com/oauth2/authorize?client_id=123456789012345678&scope=bot%20applications.commands&permissions=274878286912";

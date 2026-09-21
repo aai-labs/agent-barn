@@ -31,6 +31,7 @@ OPENCLAW_GATEWAY_PORT = 18789
 INIT_OPENCLAW_JS: str = (_SCRIPTS / "init-openclaw.js").read_text()
 HEALTHZ_SERVER_JS: str = (_SCRIPTS / "healthz-server.js").read_text()
 START_SH: str = (_SCRIPTS / "start.sh").read_text()
+LEGACY_WORKSPACE_MIGRATION_SH: str = (_SCRIPTS / "legacy-workspace-migration.sh").read_text()
 TELEMETRY_PUSH_INDEX_JS: str = (_TELEMETRY_PUSH / "index.js").read_text()
 TELEMETRY_PUSH_PACKAGE_JSON: str = (_TELEMETRY_PUSH / "package.json").read_text()
 TELEMETRY_PUSH_PLUGIN_JSON: str = (_TELEMETRY_PUSH / "openclaw.plugin.json").read_text()
@@ -65,6 +66,7 @@ def _openclaw_config_core(
                 "model": {
                     "primary": model,
                 },
+                "heartbeat": {"every": "0m", "target": "none"},
             }
         },
         "channels": channels,
@@ -243,6 +245,29 @@ def native_telegram_channel(settings: dict) -> dict:
     return channel
 
 
+def runtime_teams_channel(settings: dict) -> dict:
+    """Configure OpenClaw's runtime-owned Microsoft Teams webhook adapter.
+
+    Credentials remain Kubernetes Secret values and are read from OpenClaw's
+    documented ``MSTEAMS_*`` environment variables rather than being written to
+    its persistent config.
+    Agent Barn's public relay owns Connection policy enforcement.
+    """
+    channel = {
+        "enabled": True,
+        "webhook": {"port": 3978, "path": "/api/messages"},
+        "dmPolicy": "open",
+        "allowFrom": ["*"],
+        "groupPolicy": "open",
+        "groupAllowFrom": ["*"],
+    }
+    if home_channel_id := settings.get("home_channel_id"):
+        channel["defaultTo"] = f"conversation:{home_channel_id}"
+    else:
+        channel["defaultTo"] = "conversation:__agentbarn_no_home_channel__"
+    return channel
+
+
 def native_channel_env(credentials_by_platform: dict[str, dict]) -> dict[str, str]:
     """Secret entries for native channel tokens and the observer."""
     env = {
@@ -257,6 +282,10 @@ def native_channel_env(credentials_by_platform: dict[str, dict]) -> dict[str, st
         env["DISCORD_BOT_TOKEN"] = discord["bot_token"]
     if telegram := credentials_by_platform.get("telegram"):
         env["TELEGRAM_BOT_TOKEN"] = telegram["bot_token"]
+    if teams := credentials_by_platform.get("msteams"):
+        env["MSTEAMS_APP_ID"] = teams["app_id"]
+        env["MSTEAMS_APP_PASSWORD"] = teams["app_password"]
+        env["MSTEAMS_TENANT_ID"] = teams["tenant_id"]
     return env
 
 
@@ -293,6 +322,7 @@ def build_config_map(
         data["init-openclaw.js"] = INIT_OPENCLAW_JS
         data["healthz-server.js"] = HEALTHZ_SERVER_JS
         data["start.sh"] = START_SH
+        data["legacy-workspace-migration.sh"] = LEGACY_WORKSPACE_MIGRATION_SH
         data["telemetry-push-index.js"] = TELEMETRY_PUSH_INDEX_JS
         data["telemetry-push-package.json"] = TELEMETRY_PUSH_PACKAGE_JSON
         data["telemetry-push-plugin.json"] = TELEMETRY_PUSH_PLUGIN_JSON

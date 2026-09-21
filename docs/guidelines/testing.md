@@ -166,18 +166,23 @@ hooks directly. Shared setup lives in
   `node` is required; a missing `node` MUST fail rather than skip.
 - Fakes of runtime objects can only prove our own logic. Anything that depends
   on runtime behavior MUST also be checked inside the pinned image. The Hermes
-  SessionStore, PVC, native Telegram access, and image smoke contracts run through
+  SessionStore, PVC, native Telegram access, Teams runtime webhook, and image smoke contracts run through
   `../../hermes-base/test-image.sh`, invoked by
   `../../.github/workflows/hermes-base.yml`. Both that workflow and
   `../../.github/workflows/openclaw-base.yml` smoke-test their base images. CI
   selects the matching workflow when base-image, builder, startup, or
   telemetry-plugin paths change.
+- `../../openclaw-base/test-startup.sh` proves OpenClaw startup behavior in the
+  pinned image: a legacy workspace PVC migrates with `doctor --fix` and a clean
+  one never runs doctor, and a stale PVC heartbeat is replaced and stays
+  disabled through validation and doctor.
 - `../../hermes-base/test-image.sh` is the single entrypoint for Hermes image
   verification. It runs the image smoke test, builds the real Deployment spec
   and exercises its init container against a fresh root-owned Docker volume,
   verifies non-root writes to startup state and workspace, drives each native
   Telegram access policy through the pinned adapter and gateway authorization
-  chain, and runs the telemetry plugin against the real SessionStore. The workflow invokes this
+  chain, pins the Teams runtime listener's environment/port/path contract, and runs
+  the telemetry plugin against the real SessionStore. The workflow invokes this
   entrypoint when either the Hermes builder or base image changes.
 - The separate `../../api/runtime_tests/` pytest suite starts Agent Barn's
   generated runtime configuration in the real image and proves materialized

@@ -10,8 +10,9 @@ from api.domains.agents.builders import (
     native_discord_channel,
     native_slack_channel,
     native_telegram_channel,
+    runtime_teams_channel,
 )
-from api.domains.agents.builders.openclaw import OPENCLAW_GATEWAY_PORT
+from api.domains.agents.builders.openclaw import LEGACY_WORKSPACE_MIGRATION_SH, OPENCLAW_GATEWAY_PORT
 from api.domains.communications.models import ConversationLocation
 
 _AGENT_ID = UUID("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
@@ -25,6 +26,39 @@ def test_gateway_config_is_headless_and_exposes_chat_completions() -> None:
     assert config["channels"] == {}
     assert config["bindings"] == []
     assert config["gateway"]["http"]["endpoints"]["chatCompletions"]["enabled"] is True
+
+
+def test_gateway_config_disables_ambient_model_backed_heartbeats() -> None:
+    config = build_openclaw_gateway_config("litellm/gpt-5", "http://litellm:4000")
+
+    assert config["agents"]["defaults"]["heartbeat"] == {"every": "0m", "target": "none"}
+
+
+def test_startup_migrates_legacy_state_after_config_and_plugin_dirs_exist() -> None:
+    migration = START_SH.index("legacy-workspace-migration.sh")
+
+    assert START_SH.index("init-openclaw.js") < migration
+    assert START_SH.index("$MESSAGE_PLUGIN_DIR/openclaw.plugin.json") < migration
+    assert migration < START_SH.index("OPENCLAW_VERSION=")
+
+
+def test_config_map_ships_the_legacy_workspace_migration_script() -> None:
+    config_map = build_config_map(
+        _AGENT_ID,
+        _ORG_ID,
+        _NS,
+        "soul",
+        "identity",
+        "user",
+        "tools",
+        "agents",
+        "boot",
+        "bootstrap",
+        "heartbeat",
+        openclaw_config_overlay={},
+    )
+
+    assert config_map.data["legacy-workspace-migration.sh"] == LEGACY_WORKSPACE_MIGRATION_SH
 
 
 def test_gateway_config_has_no_command_approval_support() -> None:
@@ -246,20 +280,42 @@ def test_native_telegram_channel_sets_the_home_chat() -> None:
     assert native_telegram_channel({"home_channel_id": "-1009"})["defaultTo"] == "-1009"
 
 
+def test_runtime_teams_channel_uses_environment_credentials_and_the_private_webhook() -> None:
+    channel = runtime_teams_channel({"home_channel_id": "19:home@thread.tacv2"})
+
+    assert channel == {
+        "enabled": True,
+        "webhook": {"port": 3978, "path": "/api/messages"},
+        "dmPolicy": "open",
+        "allowFrom": ["*"],
+        "groupPolicy": "open",
+        "groupAllowFrom": ["*"],
+        "defaultTo": "conversation:19:home@thread.tacv2",
+    }
+
+
+def test_runtime_teams_channel_uses_no_home_sentinel() -> None:
+    assert runtime_teams_channel({})["defaultTo"] == "conversation:__agentbarn_no_home_channel__"
+
+
 def test_native_channel_env_carries_tokens_and_hands_over_scheduled_delivery() -> None:
     env = native_channel_env(
         {
             "slack": {"bot_token": "xoxb", "app_token": "xapp"},
             "discord": {"bot_token": "discord-token"},
             "telegram": {"bot_token": "123:abc"},
+            "msteams": {"app_id": "app-id", "app_password": "secret", "tenant_id": "tenant-id"},
         }
     )
 
     assert env == {
-        "AGENTBARN_NATIVE_CHANNELS": "slack,discord,telegram",
+        "AGENTBARN_NATIVE_CHANNELS": "slack,discord,telegram,msteams",
         "AGENTBARN_SCHEDULED_DELIVERY": "0",
         "SLACK_BOT_TOKEN": "xoxb",
         "SLACK_APP_TOKEN": "xapp",
         "DISCORD_BOT_TOKEN": "discord-token",
         "TELEGRAM_BOT_TOKEN": "123:abc",
+        "MSTEAMS_APP_ID": "app-id",
+        "MSTEAMS_APP_PASSWORD": "secret",
+        "MSTEAMS_TENANT_ID": "tenant-id",
     }

@@ -2,7 +2,7 @@ name = "agentbarn-email-inbound"
 main = "src/index.js"
 compatibility_date = "2026-08-01"
 
-# INBOUND_URL is the Communications gateway endpoint. It must be reachable from
+# INBOUND_URL is the product API's email ingress endpoint. It must be reachable from
 # Cloudflare's edge, so a local k3d cluster needs a tunnel (see
 # docs/guidelines/operations.md).
 #

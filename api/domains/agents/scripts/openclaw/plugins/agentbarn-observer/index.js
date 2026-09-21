@@ -22,6 +22,10 @@ function nativeChannels() {
   return new Set((process.env.AGENTBARN_NATIVE_CHANNELS || "").split(",").filter(Boolean));
 }
 
+function productPlatform(channelId) {
+  return channelId === "msteams" ? "teams" : channelId;
+}
+
 function emit(stage, platform, correlationId, errorCode) {
   if (buffer.length >= MAX_BUFFER) buffer.shift();
   buffer.push({
@@ -81,14 +85,15 @@ export default {
     api.on("message_received", (event, ctx) => {
       const messageId = event.messageId || ctx.messageId;
       if (!native.has(ctx.channelId) || !messageId) return;
-      const correlationId = `${ctx.channelId}:${messageId}`;
-      emit("provider_observed", ctx.channelId, correlationId);
+      const platform = productPlatform(ctx.channelId);
+      const correlationId = `${platform}:${messageId}`;
+      emit("provider_observed", platform, correlationId);
       const sessionKey = ctx.sessionKey || event.sessionKey;
       const content = event.content || event.text;
       const location = channelId(event, ctx);
       if (sessionKey && content && location) {
         emitMessage({
-          platform: ctx.channelId,
+          platform,
           provider_message_id: String(messageId),
           session_key: sessionKey,
           channel_id: String(location).replace(/^(channel|user):/, ""),
@@ -123,15 +128,16 @@ export default {
     api.on("message_sent", (event, ctx) => {
       if (!native.has(ctx.channelId)) return;
       const correlationId = correlated(ctx.sessionKey || event.sessionKey);
-      if (event.success) emit("provider_delivered", ctx.channelId, correlationId);
-      else emit("provider_delivery_attempted", ctx.channelId, correlationId, "send_failed");
+      const platform = productPlatform(ctx.channelId);
+      if (event.success) emit("provider_delivered", platform, correlationId);
+      else emit("provider_delivery_attempted", platform, correlationId, "send_failed");
       const sessionKey = ctx.sessionKey || event.sessionKey;
       const content = event.content || event.text;
       const location = channelId(event, ctx);
       if (sessionKey && content && location) {
         outboundSequence += 1;
         emitMessage({
-          platform: ctx.channelId,
+          platform,
           provider_message_id: String(event.messageId || `outbound:${sessionKey}:${outboundSequence}`),
           session_key: sessionKey,
           channel_id: String(location).replace(/^(channel|user):/, ""),
