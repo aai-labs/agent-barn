@@ -21,6 +21,14 @@ Related context: [`../agents.md`](../agents.md), [`../../architecture/runtime-an
 
 ## Changes
 
+### 2026-09-17 — OpenClaw archive safety
+
+- Changed: OpenClaw's PVC-held npm install registry is regenerated during
+  startup and now remains outside a Restore Point. It can contain symlinks into
+  the runtime image, so OpenClaw archives omit every symlink: the restore
+  validator correctly refuses links that escape the destination. Hermes
+  archives are unchanged and still keep symlinks.
+
 ### 2026-09-14 — AF-298 — Restore points in the Agent configuration page
 
 - Added: a "Restore points" section between "Agent-owned override" and "Danger zone" on the
