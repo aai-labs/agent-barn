@@ -1,6 +1,6 @@
 # AF-271 Agent update prompt — change log
 
-Status: Active
+Status: Completed
 Epic: AF-271
 Related context: [`../agents.md`](../agents.md),
 [`../agent-settings.md`](../agent-settings.md),
@@ -8,22 +8,44 @@ Related context: [`../agents.md`](../agents.md),
 
 ## Current state
 
-- Delivered: the full advisory update signal, end to end. A runtime
-  configuration digest derived from the static closure of the Agent assembly
-  code plus the runtime image references, `Agent.running_config_digest`
-  recording what a running pod started on, `AgentRead.update_available`
-  reporting when the two disagree, and a black Update control on the Agent page
-  that runs the existing stop/start.
-- In transition: Agents that were already running when `running_config_digest`
-  was introduced report `update_available` until they are next started. That is
-  accurate rather than a defect — those pods predate the record — but it means
-  the deploy carrying AF-271-04 shows the control across the existing fleet
-  once.
-- Next: AF-271-05 — document the mechanism in the architecture guide and close
-  this log.
+- Delivered: the advisory update signal, end to end. A runtime configuration
+  digest derived from the static closure of the Agent assembly code plus the
+  runtime image references, `Agent.running_config_digest` recording what a
+  running pod started on, `AgentRead.update_available` reporting when the two
+  disagree, and a black Update control on the Agent page that runs the existing
+  stop/start. Durable facts now live in [`../agents.md`](../agents.md) and
+  [`../../architecture/runtime-and-deployment.md`](../../architecture/runtime-and-deployment.md).
+- In transition: **on the deploy that carries this epic, every already-running
+  Agent reports an available update at once.** Those pods predate the record, so
+  the report is accurate rather than a defect, and it clears per Agent on the
+  next start. An operator fleet rebuild
+  (`rebuild_running_agents_for_maintenance`) clears it for everyone.
+- Next: nothing. The epic is complete.
 - Blockers: none.
 
+## Why this log is retained
+
+Per [`../../guidelines/epics.md`](../../guidelines/epics.md), a completed log is
+kept only when its migration or compatibility history stays useful. The one-time
+fleet-wide prompt above is a live deployment concern, and the closure
+measurement in AF-271-01 is the evidence for why the watched set must stay
+computed — a future change proposing a hand-maintained list should read it
+first. Delete this log once the fleet has turned over.
+
 ## Changes
+
+### 2026-09-21 — AF-271-05
+
+- Delivered: the runtime configuration digest is documented in
+  [`../../architecture/runtime-and-deployment.md`](../../architecture/runtime-and-deployment.md)
+  — a new step 11 in the assembly list, a `Runtime configuration digest`
+  subsection covering how the closure is derived, the two asset roots, the
+  normalisation rules, and the five known limits, plus a source-map row.
+- Changed: documentation only.
+- Decision: the resolver's re-export and relative-import requirements are
+  recorded in the architecture doc rather than left in commit history, because
+  skipping either silently drops the runtime builders from the closure and the
+  failure is invisible without a test.
 
 ### 2026-09-21 — AF-271-04
 
