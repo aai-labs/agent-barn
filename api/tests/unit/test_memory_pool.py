@@ -11,6 +11,7 @@ from unittest.mock import Mock
 from hamcrest import assert_that, equal_to, is_, none
 
 from api.domains.agents.memory_sharing import (
+    memory_active,
     memory_pool_id_for_agent,
     memory_workspace_for_agent,
 )
@@ -21,11 +22,24 @@ from api.infrastructure.honcho.client import (
 )
 
 
-def _agent(*, organization_id: uuid.UUID, memory_pool_id: str | None) -> Agent:
+def _agent(*, organization_id: uuid.UUID, memory_pool_id: str | None, memory_enabled: bool = True) -> Agent:
     agent = Mock(spec=Agent)
     agent.organization_id = organization_id
     agent.memory_pool_id = memory_pool_id
+    agent.memory_enabled = memory_enabled
     return agent
+
+
+def test_memory_active_requires_both_infra_and_opt_in():
+    """Memory is on only when Honcho is deployed AND the Agent has opted in.
+    Opting out (memory_enabled false) drops pool access on the next start; the
+    Agent's past contributions stay in the pool (this only gates access)."""
+    org = uuid.uuid4()
+    opted_in = _agent(organization_id=org, memory_pool_id=None, memory_enabled=True)
+    opted_out = _agent(organization_id=org, memory_pool_id=None, memory_enabled=False)
+    assert_that(memory_active(opted_in, honcho_enabled=True), equal_to(True))
+    assert_that(memory_active(opted_out, honcho_enabled=True), equal_to(False))
+    assert_that(memory_active(opted_in, honcho_enabled=False), equal_to(False))
 
 
 def test_workspace_id_for_pool_prefixes_pool():

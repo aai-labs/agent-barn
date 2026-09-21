@@ -152,7 +152,15 @@ class HonchoClient:
 
         A workspace that was never created returns 404, which `_request` maps to
         None; erasing nothing is the intended outcome there, not an error.
+
+        Refuses a shared pool workspace outright: a pool is shared by every
+        opted-in Agent in it, so erasing it on one Agent's deletion would wipe
+        everyone's memory. Deleting a pool is a deliberate, separate operation,
+        never a side effect of the per-Agent purge — this is a structural guard,
+        not a promise the caller passes the right name.
         """
+        if pool_id_from_workspace(workspace_id) is not None:
+            raise HonchoError(f"Refusing to delete shared memory pool workspace '{workspace_id}'")
         for session_id in self.list_sessions(workspace_id):
             self.delete_session(workspace_id, session_id)
         self._request("DELETE", f"/workspaces/{workspace_id}")

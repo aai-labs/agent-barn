@@ -93,13 +93,20 @@ class AgentLifecycleEmailHandler:
 @inject
 @dataclass
 class AgentMemoryPurgeHandler:
-    """Erase a deleted Agent's memory.
+    """Erase a deleted Agent's private memory workspace.
 
     Deleting an Agent already destroys its volume, secret, and every other trace,
     and there is no restore path — retaining derived conclusions about real people,
     owned by an Agent nobody owns and under no retention policy, would be the odd
     exception rather than a safeguard. Anything worth keeping is copied out first
     through the carry-over the delete flow offers.
+
+    This erases only the legacy per-Agent workspace (`af-<agent id>`). An opted-in
+    Agent's memory lives in a shared pool (`af-pool-<id>`) that many Agents use, so
+    it is deliberately left intact — the pool is never a per-Agent workspace name,
+    and `delete_workspace` refuses a pool id outright as a structural guard. A
+    pooled Agent's own contributions stay in the pool after deletion, matching
+    opt-out: this layer only ever removes an Agent's *isolated* memory.
 
     This runs as a retried delivery rather than inline in `delete_agent` because
     Honcho refuses a workspace delete while any session remains (409), and both the

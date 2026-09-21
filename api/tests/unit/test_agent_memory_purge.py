@@ -61,6 +61,22 @@ def test_nothing_is_erased_when_the_memory_backend_is_off():
     honcho.delete_workspace.assert_not_called()
 
 
+def test_delete_workspace_refuses_a_shared_pool():
+    """A pool workspace is shared by every opted-in Agent in it. Deleting one Agent
+    must never be able to erase it — so the purge path itself refuses a pool id,
+    a structural guard rather than a promise the caller passes the right name."""
+    client = HonchoClient(config=Config(honcho_base_url="http://honcho"))
+    with (
+        patch.object(HonchoClient, "list_sessions") as list_sessions,
+        patch.object(HonchoClient, "_request") as request,
+        pytest.raises(HonchoError),
+    ):
+        client.delete_workspace("af-pool-11111111-2222-3333-4444-555555555555")
+    # It must refuse before touching anything.
+    list_sessions.assert_not_called()
+    request.assert_not_called()
+
+
 def test_sessions_are_deleted_before_the_workspace():
     """Honcho returns 409 on a workspace delete while any session remains, which is
     the normal state for an Agent that did any work — confirmed against a live

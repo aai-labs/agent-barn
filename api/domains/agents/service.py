@@ -39,7 +39,11 @@ from api.domains.agents.builders import (
 )
 from api.domains.agents.error_messages import friendly_k8s_error, friendly_pod_reason
 from api.domains.agents.gog_artifacts import build_gog_env, build_gog_policy_md, build_gog_setup_sh
-from api.domains.agents.memory_sharing import memory_workspace_for_agent, openclaw_logical_agent_id
+from api.domains.agents.memory_sharing import (
+    memory_active,
+    memory_workspace_for_agent,
+    openclaw_logical_agent_id,
+)
 from api.domains.agents.models import (
     PROVIDER_DISPLAY_NAMES,
     Agent,
@@ -1944,7 +1948,7 @@ class AgentService:
         # Memory is per-Agent opt-in on top of the infra flag (is Honcho deployed
         # at all). When on, the Agent reads and writes its pool's shared
         # workspace so it can see the other opted-in Agents' memory.
-        memory_on = self.config.honcho_enabled and agent.memory_enabled
+        memory_on = memory_active(agent, honcho_enabled=self.config.honcho_enabled)
         memory_workspace = memory_workspace_for_agent(agent) if memory_on else None
         if agent.agent_type == AgentType.HERMES:
             overlay = None

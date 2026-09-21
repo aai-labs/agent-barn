@@ -201,6 +201,17 @@ def ai_peer_name_for_agent(agent: Agent) -> str:
     return f"agent-{openclaw_logical_agent_id(agent)}"
 
 
+def memory_active(agent: Agent, *, honcho_enabled: bool) -> bool:
+    """Whether the shared memory layer is on for this Agent right now.
+
+    Two gates: the infra flag (is Honcho deployed at all) and the Agent's own
+    opt-in (`memory_enabled`). Opting out flips this to False, so the next start
+    gives the Agent no pool config — it loses read/write access to the pool while
+    its past contributions stay there. Nothing here deletes memory.
+    """
+    return honcho_enabled and agent.memory_enabled
+
+
 def memory_pool_id_for_agent(agent: Agent) -> str:
     """The id of the memory pool an Agent belongs to.
 
