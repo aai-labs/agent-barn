@@ -257,6 +257,26 @@ jobs:
           printf '%s' '${{ github.ref_name == 'staging' && secrets.STAGING_KUBECONFIG_B64 || secrets.KUBECONFIG_B64 }}' | base64 -d > ~/.kube/config
           chmod 600 ~/.kube/config
 
+      # The `A && B || C` idiom below yields C whenever B is empty, so an unset
+      # STAGING_EMAIL_INBOUND_SECRET would hand the staging cluster the main
+      # branch's credential while the Worker published its own — every message
+      # would then 401. Checked here rather than reworking the idiom, which is
+      # used for every secret in this job. Silent when the domain is unset,
+      # because email is inert then and unrelated deploys must not start failing.
+      - name: Require a matching inbound secret when agent email is configured
+        env:
+          AGENT_EMAIL_DOMAIN: ${{ github.ref_name == 'staging' && vars.STAGING_AGENT_EMAIL_DOMAIN || vars.AGENT_EMAIL_DOMAIN }}
+          STAGING_SECRET: ${{ secrets.STAGING_EMAIL_INBOUND_SECRET }}
+          MAIN_SECRET: ${{ secrets.EMAIL_INBOUND_SECRET }}
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          [ -n "$AGENT_EMAIL_DOMAIN" ] || exit 0
+          case "$BRANCH" in
+            staging) secret="$STAGING_SECRET"; name="STAGING_EMAIL_INBOUND_SECRET" ;;
+            *)       secret="$MAIN_SECRET";    name="EMAIL_INBOUND_SECRET" ;;
+          esac
+          [ -n "$secret" ] || { echo "::error::$name is unset while its agent email domain is configured; inbound email would 401."; exit 1; }
+
       - name: Helmfile sync
         env:
           KUBECONFIG: /home/runner/.kube/config
@@ -314,9 +334,16 @@ jobs:
   # Runs after `deploy` on purpose: the Worker posts inbound mail into the
   # Communications service, so the cluster must already hold the matching
   # EMAIL_INBOUND_SECRET before the Worker starts presenting it.
+  #
+  # Staging only. This workflow's `main` branch deploys the k3s `agent-farm`
+  # namespace, but the production Worker's INBOUND_URL is api.agentbarn.dev —
+  # the Talos cluster deployed by deploy-public.yml. Publishing it here handed
+  # it this workflow's secret while it posted into a cluster configured by
+  # another, so every production message was rejected with 401. The production
+  # Worker is published by deploy-public.yml, alongside the cluster it targets.
   deploy-worker:
     needs: [detect-changes, resolve-env, deploy]
-    if: ${{ needs.detect-changes.outputs.worker == 'true' && needs.deploy.result == 'success' }}
+    if: ${{ needs.detect-changes.outputs.worker == 'true' && needs.deploy.result == 'success' && github.ref_name == 'staging' }}
     uses: ./.github/workflows/worker.yml
     secrets: inherit
     with:
