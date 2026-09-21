@@ -141,7 +141,7 @@ function SkillsSection({
   return (
     <Section
       title={`Skills (${agent.skills.length})`}
-      description={`What ${agent.name} has been taught to do.`}
+      description={`Configured skills for ${agent.name}`}
       action={
         <Link href={configurationHref("skills")} className="af-btn af-btn-sm">
           Manage skills
