@@ -1,23 +1,15 @@
-"""Explicit cross-Agent memory sharing.
+"""Agent memory: pool-shared, plus explicit cross-Agent sharing.
 
-Honcho workspaces are isolated per Agent by default (see the ADR at
-docs/adr/2026-09-03-honcho-backed-agent-memory.md), and nothing crosses that
-boundary automatically. This is the one deliberate crossing: an operator picks a
-specific fact and an explicit set of destination Agents, and it is written into
-each destination's Honcho workspace as a conclusion on that Agent's own
-self-model, which is where its recall looks. Nothing is read out of the source
-Agent — "source" here is audit context, the operator's own knowledge is what
-supplies the content.
+Agents in the same memory group share one Honcho workspace, so within a group
+memory is shared automatically (that's the point of a pool). This module holds
+the read/manage surface over that shared memory (list/search/forget/correct,
+scoped to the pool) and the resolvers that map an Agent to its pool workspace and
+peer identity.
 
-Honcho has no cross-workspace sharing and cannot grow one: `workspace_name`
-participates in nearly every composite foreign key, so isolation is a schema
-property rather than a policy. Copying into the destination is therefore the only
-mechanism available, not a shortcut around a better one.
-
-Both source and every destination must be a currently active Agent. Retaining
-a deleted Agent's Honcho workspace (see the ADR) makes promoting from it a
-reasonable future ask, but doing so needs deleted-Agent read authorization the
-`AgentAuthorization` layer does not have yet, so it is out of scope here.
+It also keeps the older explicit-sharing paths (share_fact, carry_over): writing
+a specific fact into named Agents' pools. In the pool model within-group sharing
+is automatic, so these are largely superseded — they remain for writing across
+pools or seeding memory, and are gated on the target being in a group.
 """
 
 import logging
@@ -37,7 +29,6 @@ from api.domains.rbac.catalog import PermissionKey
 from api.infrastructure.honcho.client import (
     HonchoClient,
     HonchoError,
-    workspace_id_for_agent,
     workspace_id_for_pool,
 )
 
@@ -287,9 +278,16 @@ class MemorySharingService:
             target_agent = self.agent_authorization.require_action(
                 context, target_agent_id, PermissionKey.AGENT_MEMORY_MANAGE
             )
+            if not memory_active(target_agent, honcho_enabled=self.config.honcho_enabled):
+                results.append(
+                    SharedFactTargetResult(
+                        agentId=target_agent_id, shared=False, error="Agent is not in a memory group."
+                    )
+                )
+                continue
             try:
                 created = self.honcho.share_fact(
-                    workspace_id_for_agent(target_agent.id),
+                    memory_workspace_for_agent(target_agent),
                     ai_peer_name_for_agent(target_agent),
                     payload.content,
                 )
@@ -319,13 +317,18 @@ class MemorySharingService:
         # Reading the source's memory, not just naming it, so this needs the memory
         # read grant rather than the plain agent read that sharing a typed-in fact takes.
         source = self.agent_authorization.require_action(context, source_agent_id, PermissionKey.AGENT_MEMORY_READ)
+        if not memory_active(source, honcho_enabled=self.config.honcho_enabled):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="This agent is not in a memory group, so it has no memory to carry over.",
+            )
         targets = [
             self.agent_authorization.require_action(context, target_id, PermissionKey.AGENT_MEMORY_MANAGE)
             for target_id in payload.target_agent_ids
         ]
 
         try:
-            items = self.honcho.list_all_conclusions(workspace_id_for_agent(source.id), limit=self.MAX_CARRY_OVER + 1)
+            items = self.honcho.list_all_conclusions(memory_workspace_for_agent(source), limit=self.MAX_CARRY_OVER + 1)
         except HonchoError as exc:
             raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
         truncated = len(items) > self.MAX_CARRY_OVER
@@ -335,7 +338,12 @@ class MemorySharingService:
         results: list[SharedFactTargetResult] = []
         copied = 0
         for target in targets:
-            workspace = workspace_id_for_agent(target.id)
+            if not memory_active(target, honcho_enabled=self.config.honcho_enabled):
+                results.append(
+                    SharedFactTargetResult(agentId=target.id, shared=False, error="Agent is not in a memory group.")
+                )
+                continue
+            workspace = memory_workspace_for_agent(target)
             peer = ai_peer_name_for_agent(target)
             failure: str | None = None
             for content in contents:
@@ -382,26 +390,51 @@ class AgentMemoryService:
         # erase. Reaching a deleted Agent needs organization-wide visibility.
         return self.agent_authorization.require_action_allowing_deleted(context, agent_id, permission)
 
-    def list_memory(
-        self, agent_id: UUID, context: CurrentUserContext, *, page: int, size: int, observed: str | None = None
-    ) -> MemoryPage:
-        """One page of what the Agent has learned, optionally filtered to one peer.
+    def _require_pool(self, agent: Agent) -> str:
+        """The Agent's pool workspace, or a 409 if it has no shared memory.
 
-        Everything is scoped to the Agent as observer: the view is what the Agent
-        concluded, not the Honcho-derived self-models of the people it talked to,
-        which restate the same facts under a second peer pair. That scoping is
-        also why nothing here has to de-duplicate — each fact appears once.
+        Used by the write paths (forget/correct): there is nothing to manage when
+        the Agent belongs to no group.
+        """
+        if not memory_active(agent, honcho_enabled=self.config.honcho_enabled):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="This agent is not in a memory group, so it has no shared memory.",
+            )
+        return memory_workspace_for_agent(agent)
+
+    def list_memory(
+        self,
+        agent_id: UUID,
+        context: CurrentUserContext,
+        *,
+        page: int,
+        size: int,
+        observed: str | None = None,
+        scope: str = "pool",
+    ) -> MemoryPage:
+        """One page of memory from the Agent's pool, optionally filtered to one peer.
+
+        `scope="pool"` (default) shows what the whole pool knows — every member's
+        conclusions, so the Agent sees what the others learned. `scope="mine"`
+        narrows to what THIS Agent concluded (observer = its own peer). An Agent
+        with no group has no shared memory, so the page is empty.
         """
         agent = self._require(agent_id, PermissionKey.AGENT_MEMORY_READ, context)
-        workspace = workspace_id_for_agent(agent.id)
+        if not memory_active(agent, honcho_enabled=self.config.honcho_enabled):
+            return MemoryPage(items=[], total=0, page=page, size=size, facets=[])
+        workspace = memory_workspace_for_agent(agent)
         ai_peer = ai_peer_name_for_agent(agent)
+        # "mine" scopes to this Agent as observer; "pool" leaves observer open so
+        # every member's conclusions are included.
+        observer = ai_peer if scope == "mine" else None
         try:
             items, total = self.honcho.list_conclusions(
-                workspace, page=page, size=size, observer=ai_peer, observed=observed
+                workspace, page=page, size=size, observer=observer, observed=observed
             )
             # Facets describe the whole workspace, so they are computed only for the
             # unfiltered view — asking for them under a filter would be redundant work.
-            facets = self._memory_facets(workspace, ai_peer, agent.name) if observed is None else []
+            facets = self._memory_facets(workspace, observer, ai_peer, agent.name) if observed is None else []
         except HonchoError as exc:
             raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
         shared = self.provenance.find_for_conclusions([str(i.get("id")) for i in items])
@@ -413,20 +446,17 @@ class AgentMemoryService:
             facets=facets,
         )
 
-    def _memory_facets(self, workspace: str, ai_peer: str, agent_name: str) -> list[MemoryFacet]:
-        """The peers the Agent has memory about, each with its real count.
+    def _memory_facets(self, workspace: str, observer: str | None, ai_peer: str, agent_name: str) -> list[MemoryFacet]:
+        """The peers the pool has memory about, each with its real count.
 
-        One count call per observed peer. Peers are few in practice — an Agent has
-        a handful of correspondents — and each call is `size=1` for the total only.
-        The Agent's own self-model sorts first, then the rest by size, so the tab's
-        default facet order puts "what it knows about itself" and the busiest
-        person up front.
+        `observer` scopes the count (None = the whole pool's conclusions about the
+        peer; the Agent's own peer = just what this Agent concluded). `ai_peer`
+        always labels the Agent's own peer as its self-model, whichever scope. The
+        self-model sorts first, then the rest by size.
         """
-        # Every peer in the workspace is a candidate; the count guard below drops
-        # any the Agent never actually formed a conclusion about.
         facets: list[MemoryFacet] = []
         for peer in self.honcho.list_peers(workspace):
-            _, count = self.honcho.list_conclusions(workspace, page=1, size=1, observer=ai_peer, observed=peer)
+            _, count = self.honcho.list_conclusions(workspace, page=1, size=1, observer=observer, observed=peer)
             if count:
                 facets.append(_facet_for_peer(peer, count, agent_name, ai_peer))
         facets.sort(key=lambda f: (not f.is_self, -f.count, f.label))
@@ -436,8 +466,9 @@ class AgentMemoryService:
         # Not agent.update: removing what an Agent knows changes what it believes,
         # which is a different power from changing how it is configured.
         agent = self._require(agent_id, PermissionKey.AGENT_MEMORY_MANAGE, context)
+        workspace = self._require_pool(agent)
         try:
-            self.honcho.delete_conclusion(workspace_id_for_agent(agent.id), memory_id)
+            self.honcho.delete_conclusion(workspace, memory_id)
         except HonchoError as exc:
             raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
         self.provenance.forget(memory_id)
@@ -453,7 +484,7 @@ class AgentMemoryService:
         a level — a corrected deduction stops being labelled a deduction.
         """
         agent = self._require(agent_id, PermissionKey.AGENT_MEMORY_MANAGE, context)
-        workspace = workspace_id_for_agent(agent.id)
+        workspace = self._require_pool(agent)
         try:
             existing = self._find(workspace, memory_id)
             if existing is None:
@@ -483,7 +514,9 @@ class AgentMemoryService:
         slow query against every pair that has ever existed.
         """
         agent = self._require(agent_id, PermissionKey.AGENT_MEMORY_READ, context)
-        workspace = workspace_id_for_agent(agent.id)
+        if not memory_active(agent, honcho_enabled=self.config.honcho_enabled):
+            return []
+        workspace = memory_workspace_for_agent(agent)
         try:
             peers = self.honcho.list_peers(workspace)
             results: list[dict] = []

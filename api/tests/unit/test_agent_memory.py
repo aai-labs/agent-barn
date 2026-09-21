@@ -29,6 +29,8 @@ def _agent() -> Agent:
     agent.id = AGENT_ID
     agent.name = "watcher"
     agent.agent_type = AgentType.HERMES
+    # In a group, so it has shared memory (memory_active is true).
+    agent.memory_group_id = AGENT_ID
     return agent
 
 
@@ -309,5 +311,17 @@ def test_filtering_to_a_peer_scopes_the_query_and_skips_facets():
     assert_that(page.facets, equal_to([]))
     honcho.list_peers.assert_not_called()
     assert_that(honcho.list_conclusions.call_args.kwargs["observed"], equal_to("owner"))
-    # Always scoped to the Agent as observer, filtered or not.
+    # Default scope is the whole pool, so observer is left open (every member's
+    # conclusions), not pinned to this Agent.
+    assert_that(honcho.list_conclusions.call_args.kwargs["observer"], equal_to(None))
+
+
+def test_mine_scope_pins_the_query_to_this_agent():
+    """scope="mine" narrows the pool view to what THIS Agent concluded — its own
+    peer as observer."""
+    service, _, honcho, _provenance = _service()
+    honcho.list_conclusions.return_value = ([], 0)
+
+    service.list_memory(AGENT_ID, _context(), page=1, size=50, observed="owner", scope="mine")
+
     assert_that(honcho.list_conclusions.call_args.kwargs["observer"], equal_to("agent-watcher"))

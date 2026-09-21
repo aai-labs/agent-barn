@@ -1,4 +1,4 @@
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, Response, status
@@ -123,8 +123,9 @@ def list_agent_memory(
     page: int = Query(default=1, ge=1),
     size: int = Query(default=50, ge=1, le=100),
     observed: str | None = Query(default=None),
+    scope: Literal["pool", "mine"] = Query(default="pool"),
 ):
-    return service.list_memory(agent_id, context, page=page, size=size, observed=observed)
+    return service.list_memory(agent_id, context, page=page, size=size, observed=observed, scope=scope)
 
 
 @agents_router.get("/{agent_id}/memory/search", response_model=list[MemoryItemRead], response_model_by_alias=True)
