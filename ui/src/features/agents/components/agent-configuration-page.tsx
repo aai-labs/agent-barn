@@ -15,6 +15,7 @@ import { canAgent } from "../utils";
 import { AgentAvatar } from "./agent-avatar";
 import { AgentChannelSettings } from "./agent-channel-settings";
 import { AgentConfigurationSidebar } from "./agent-configuration-sidebar";
+import { AgentWebhookSettings } from "./agent-webhook-settings";
 import {
   AGENT_CONFIGURATION_SECTIONS,
   configurationSectionLabel,
@@ -26,6 +27,7 @@ import { AgentKeysSettings } from "./agent-keys-settings";
 import { AgentMetaBadges } from "./agent-meta-badges";
 import { AgentOverrideSettings } from "./agent-override-settings";
 import { AgentProfileSettings } from "./agent-profile-settings";
+import { AgentRestorePointsSettings } from "./agent-restore-points-settings";
 import { AgentSkillsSettings } from "./agent-skills-settings";
 import { AgentTemplateSelectionSettings } from "./agent-template-selection-settings";
 
@@ -47,11 +49,14 @@ export function AgentConfigurationPage({ agentId }: { agentId: string }) {
     agentId,
     canReadActivity && agent?.status === "ERROR",
   );
+  // Restore points read from the activity surface, so an Agent the viewer can see
+  // but has no activity access to does not offer the section at all.
+  const sections = canReadActivity
+    ? AGENT_CONFIGURATION_SECTIONS
+    : AGENT_CONFIGURATION_SECTIONS.filter((item) => item.key !== "restore");
   const [activeSection, setActiveSection] = useQueryState(
     "section",
-    parseAsStringEnum<AgentConfigurationSectionKey>(
-      AGENT_CONFIGURATION_SECTIONS.map((item) => item.key),
-    )
+    parseAsStringEnum<AgentConfigurationSectionKey>(sections.map((item) => item.key))
       .withDefault("profile")
       .withOptions({ scroll: false, history: "replace" }),
   );
@@ -97,7 +102,8 @@ export function AgentConfigurationPage({ agentId }: { agentId: string }) {
   const canEdit = canAgent(agent, "agent.update");
   const canManageSecrets = canAgent(agent, "agent.secret.manage");
   const canDelete = canAgent(agent, "agent.delete");
-  const section = AGENT_CONFIGURATION_SECTIONS.find((item) => item.key === activeSection) ?? AGENT_CONFIGURATION_SECTIONS[0];
+  const canManageLifecycle = canAgent(agent, "agent.lifecycle.manage");
+  const section = sections.find((item) => item.key === activeSection) ?? sections[0];
 
   function selectSection(nextSection: AgentConfigurationSectionKey) {
     void setActiveSection(nextSection);
@@ -184,6 +190,7 @@ export function AgentConfigurationPage({ agentId }: { agentId: string }) {
           <AgentConfigurationSidebar
             activeSection={activeSection}
             onSectionChange={selectSection}
+            sections={sections}
           />
 
           <div className="min-w-0">
@@ -218,6 +225,12 @@ export function AgentConfigurationPage({ agentId }: { agentId: string }) {
                 autoOpen={connect}
               />
             )}
+            {activeSection === "webhooks" && (
+              <AgentWebhookSettings
+                agent={agent}
+                canEdit={canEdit}
+              />
+            )}
             {activeSection === "skills" && (
               <AgentSkillsSettings
                 agent={agent}
@@ -240,6 +253,14 @@ export function AgentConfigurationPage({ agentId }: { agentId: string }) {
                 editing={editingSection === "override"}
                 onEdit={() => toggleEditing("override")}
                 onPublished={handleOverridePublished}
+              />
+            )}
+            {activeSection === "restore" && canReadActivity && (
+              <AgentRestorePointsSettings
+                agent={agent}
+                active={configuration.active}
+                canManage={canManageLifecycle}
+                canEditConfiguration={canEdit}
               />
             )}
             {activeSection === "danger" && (

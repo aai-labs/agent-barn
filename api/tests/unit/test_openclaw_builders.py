@@ -12,7 +12,7 @@ from api.domains.agents.builders import (
     native_telegram_channel,
     runtime_teams_channel,
 )
-from api.domains.agents.builders.openclaw import OPENCLAW_GATEWAY_PORT
+from api.domains.agents.builders.openclaw import LEGACY_WORKSPACE_MIGRATION_SH, OPENCLAW_GATEWAY_PORT
 from api.domains.communications.models import ConversationLocation
 
 _AGENT_ID = UUID("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
@@ -26,6 +26,39 @@ def test_gateway_config_is_headless_and_exposes_chat_completions() -> None:
     assert config["channels"] == {}
     assert config["bindings"] == []
     assert config["gateway"]["http"]["endpoints"]["chatCompletions"]["enabled"] is True
+
+
+def test_gateway_config_disables_ambient_model_backed_heartbeats() -> None:
+    config = build_openclaw_gateway_config("litellm/gpt-5", "http://litellm:4000")
+
+    assert config["agents"]["defaults"]["heartbeat"] == {"every": "0m", "target": "none"}
+
+
+def test_startup_migrates_legacy_state_after_config_and_plugin_dirs_exist() -> None:
+    migration = START_SH.index("legacy-workspace-migration.sh")
+
+    assert START_SH.index("init-openclaw.js") < migration
+    assert START_SH.index("$MESSAGE_PLUGIN_DIR/openclaw.plugin.json") < migration
+    assert migration < START_SH.index("OPENCLAW_VERSION=")
+
+
+def test_config_map_ships_the_legacy_workspace_migration_script() -> None:
+    config_map = build_config_map(
+        _AGENT_ID,
+        _ORG_ID,
+        _NS,
+        "soul",
+        "identity",
+        "user",
+        "tools",
+        "agents",
+        "boot",
+        "bootstrap",
+        "heartbeat",
+        openclaw_config_overlay={},
+    )
+
+    assert config_map.data["legacy-workspace-migration.sh"] == LEGACY_WORKSPACE_MIGRATION_SH
 
 
 def test_gateway_config_has_no_command_approval_support() -> None:

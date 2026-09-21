@@ -172,6 +172,10 @@ hooks directly. Shared setup lives in
   `../../.github/workflows/openclaw-base.yml` smoke-test their base images. CI
   selects the matching workflow when base-image, builder, startup, or
   telemetry-plugin paths change.
+- `../../openclaw-base/test-startup.sh` proves OpenClaw startup behavior in the
+  pinned image: a legacy workspace PVC migrates with `doctor --fix` and a clean
+  one never runs doctor, and a stale PVC heartbeat is replaced and stays
+  disabled through validation and doctor.
 - `../../hermes-base/test-image.sh` is the single entrypoint for Hermes image
   verification. It runs the image smoke test, builds the real Deployment spec
   and exercises its init container against a fresh root-owned Docker volume,

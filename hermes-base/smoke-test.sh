@@ -96,6 +96,44 @@ with tempfile.TemporaryDirectory() as temp_home:
         raise SystemExit('USER.md content was not rendered into the system prompt')
 "
 
+check workspace-write-safety-contract python3 -c "
+import os
+
+from agent.file_safety import get_safe_write_roots, get_write_denied_error
+
+required = {os.path.realpath('/opt/data'), os.path.realpath('/workspace')}
+roots = get_safe_write_roots()
+if not required <= roots:
+    raise SystemExit(f'write roots missing {sorted(required - roots)}: {sorted(roots)}')
+
+for path in ('/workspace/memory/2026-09-17.md', '/workspace/local/scan_prs.py', '/opt/data/memories/USER.md'):
+    if error := get_write_denied_error(path):
+        raise SystemExit(error)
+
+for path in ('/etc/passwd', '/etc/cron.d/agentbarn', '/app/config/start.sh'):
+    if not get_write_denied_error(path):
+        raise SystemExit(f'write to {path} is no longer denied')
+"
+
+check cron-session-id-contract python3 -c "
+import ast
+import inspect
+
+from cron import scheduler
+
+tree = ast.parse(inspect.getsource(scheduler.run_job))
+prefixes = [
+    node.values[0].value
+    for node in ast.walk(tree)
+    if isinstance(node, ast.JoinedStr)
+    and node.values
+    and isinstance(node.values[0], ast.Constant)
+    and node.values[0].value.startswith('cron_')
+]
+if 'cron_' not in prefixes:
+    raise SystemExit('run_job no longer builds its session id with the cron_ prefix')
+"
+
 # Chromium is deliberately absent -- browser.cloud_provider=firecrawl routes the
 # browser tool to the shared service. Assert both the absence and that firecrawl
 # is genuinely registered in this runtime: a Hermes upgrade that drops the

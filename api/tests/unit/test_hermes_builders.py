@@ -10,7 +10,7 @@ from api.domains.agents.builders import (
     native_telegram_env,
     runtime_teams_env,
 )
-from api.domains.agents.builders.hermes import HERMES_START_SH
+from api.domains.agents.builders.hermes import HERMES_BOOTLOADER_FOOTER, HERMES_START_SH
 from api.domains.communications.models import ConversationLocation
 
 _AGENT_ID = UUID("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
@@ -250,6 +250,13 @@ def test_gateway_config_enables_persistent_memory_for_scheduled_runs() -> None:
 
     assert config["memory"]["memory_enabled"] is True
     assert config["memory"]["user_profile_enabled"] is True
+
+
+def test_hermes_startup_context_exposes_runtime_memory_paths() -> None:
+    assert "/opt/data/memories/USER.md" in HERMES_BOOTLOADER_FOOTER
+    assert "/opt/data/memories/MEMORY.md" in HERMES_BOOTLOADER_FOOTER
+    assert "/workspace/memory/YYYY-MM-DD.md" in HERMES_BOOTLOADER_FOOTER
+    assert "Do not\nread or write `/workspace/USER.md`" in HERMES_BOOTLOADER_FOOTER
 
 
 def test_gateway_config_maps_approval_mode_onto_approvals_policy() -> None:

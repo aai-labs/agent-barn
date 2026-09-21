@@ -14,6 +14,7 @@ from api.domains.agents.models import AgentStatus
 from api.domains.agents.repository import AgentRepository
 from api.domains.communications.models import CommunicationJournalStage, CommunicationPolicyDisposition
 from api.domains.communications.operations import CommunicationOperationalRepository
+from api.domains.communications.plugins.base import WebhookRequest
 from api.domains.communications.plugins.registry import PlatformPluginRegistry
 from api.domains.communications.plugins.teams import TeamsPlatformPlugin, TeamsSettings
 from api.domains.communications.repository import CommunicationConnectionRepository
@@ -65,7 +66,15 @@ class TeamsRuntimeWebhookRelay:
         credentials = plugin.credentials_model.model_validate(
             json.loads(decrypt_token(connection.credentials_encrypted, self.config.agent_token_encryption_key))
         )
-        plugin.verify_webhook(credentials, payload, authorization)
+        plugin.verify_webhook(
+            credentials,
+            WebhookRequest(
+                raw_body=json.dumps(payload, separators=(",", ":")).encode(),
+                payload=payload,
+                authorization=authorization,
+                headers={"Authorization": authorization},
+            ),
+        )
         settings = plugin.settings_model.model_validate(connection.settings)
         assert isinstance(settings, TeamsSettings)
 

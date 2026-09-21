@@ -96,6 +96,14 @@ export type SelectAgentTemplateData = {
   templateVersion?: number;
   overrideVersion?: number;
   expectedAgentUpdatedAt: string;
+  // Required skill pins are validated against the assignments the Agent will end up
+  // with, so skills and settings that move with the template must ride along.
+  skillIds?: string[];
+  removedSkillIds?: string[];
+  skillVersions?: Array<{ skillId: string; version: number }>;
+  model?: string | null;
+  approvalMode?: "manual" | "auto" | "off";
+  verboseMode?: boolean;
 };
 
 export function useSelectAgentTemplate() {

@@ -179,6 +179,9 @@ def test_runtime_teams_webhook_is_verified_and_relayed_to_the_private_agent_serv
 
     assert result == RuntimeWebhookRelayResponse(200, b'{"ok":true}', "application/json")
     verify.assert_called_once()
+    verification_request = verify.call_args.args[1]
+    assert verification_request.payload == _teams_activity()
+    assert verification_request.authorization == "Bearer signed-token"
     assert request.call_args.args == (
         "POST",
         f"http://agent-{connection.agent_id}.agent-farm.svc.cluster.local:3978/api/messages",
@@ -483,6 +486,7 @@ def test_native_platform_deliveries_are_not_reclaimed_or_claimed_by_the_gateway(
     deliveries.claim_next_inbound.assert_called_once_with(
         agent_id=agent.id,
         reclaim_expired=False,
+        runtime_protocol_version=1,
         excluded_platform_keys=excluded,
     )
 

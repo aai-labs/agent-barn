@@ -3,7 +3,7 @@ COMPOSE := docker compose -f compose.yml
 .PHONY: \
 	setup run stop stop-clean \
 	restart-ui \
-	dev-api dev-ingest dev-communications dev-ui dev-worker reconcile forward-teams seed-event-deliveries seed-costs seed-agent-overrides migrate merge-heads rollback makemigrations test-api test-ui lint-ui check-ui coverage check-api check-migrations check-monitoring fix-api test check fix \
+	dev-api dev-ingest dev-communications dev-ui dev-worker reconcile reconcile-llm-budgets run-llm-budget-alerts forward-teams seed-event-deliveries seed-costs seed-agent-overrides migrate merge-heads rollback makemigrations test-api test-ui lint-ui check-ui coverage check-api check-migrations check-monitoring fix-api test check fix \
 	db-up db-down db-logs db-restart redis-up redis-down redis-logs
 
 # One-command local dev: validates .env, brings up k3d + LiteLLM, loads agent
@@ -86,6 +86,15 @@ dev-worker:
 # One-shot reconciliation pass; production runs this on a CronJob schedule.
 reconcile:
 	cd api && uv run python -m api.domains.events.reconciliation
+
+# Both run as CronJobs in a deployment; these are the same passes by hand. Named to
+# match `reconcile`, not `check-*`: they mutate the proxy and send notifications,
+# unlike every other check-* target, which is static verification.
+reconcile-llm-budgets:
+	cd api && uv run python -c "from api.domains.organizations.llm_budget_reconciliation import main; main()"
+
+run-llm-budget-alerts:
+	cd api && uv run python -c "from api.domains.organizations.llm_budget_alerts import main; main()"
 
 # Local-only: populate the dev database with realistic Event Deliveries for
 # manually exercising the Platform Event Delivery Monitor UI. Safe to re-run.

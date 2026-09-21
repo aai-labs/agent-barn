@@ -50,6 +50,8 @@ import { AgentConfigurationSection } from "./agent-configuration-section";
 
 /** Built-in, lazily provisioned, one-per-agent, immutable — never user-added or user-edited. */
 const WEB_PLATFORM_KEY = "web";
+/** Webhooks have their own tab; they are not a way to message the Agent. */
+const WEBHOOK_PLATFORM_KEY = "webhook";
 
 function titleCase(text: string): string {
   return text.replace(/[_-]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
@@ -619,7 +621,10 @@ export function AgentChannelSettings({
     () => {
       const connected = new Set(connections.data?.map((connection) => connection.platformKey));
       return platforms.data?.filter(
-        (platform) => platform.key !== WEB_PLATFORM_KEY && !connected.has(platform.key),
+        (platform) =>
+          platform.key !== WEB_PLATFORM_KEY &&
+          platform.key !== WEBHOOK_PLATFORM_KEY &&
+          !connected.has(platform.key),
       );
     },
     [connections.data, platforms.data],
@@ -907,7 +912,9 @@ export function AgentChannelSettings({
             <CircleAlert size={15} /> Could not load communication connections.
           </div>
         )}
-        {connections.data?.map((connection) => (
+        {connections.data
+          ?.filter((connection) => connection.platformKey !== WEBHOOK_PLATFORM_KEY)
+          .map((connection) => (
           <div
             key={connection.id}
             className="rounded-xl p-4"
@@ -1351,7 +1358,8 @@ export function AgentChannelSettings({
           </div>
         ))}
         {!connections.isPending &&
-          connections.data?.length === 0 &&
+          (connections.data?.filter((connection) => connection.platformKey !== WEBHOOK_PLATFORM_KEY)
+            .length ?? 0) === 0 &&
           !adding && (
             <div
               className="flex flex-col items-center gap-2 rounded-xl p-6 text-center"

@@ -22,6 +22,8 @@ Do not take action between 22:00 and 08:00 in the operator's timezone. During ni
 
 The review-health-scan cron actively fetches open PRs and prompts the team lead. This is intentional — the agent surfaces what needs review proactively, but waits for the team lead to confirm before starting each review.
 
-## Fallback (no cron name in context)
+## No unnamed work
 
-If the heartbeat context includes no cron job name, run cron:review-health-scan (AGENTS.md) and reply `HEARTBEAT_OK` if nothing needs action.
+If there is no cron job name in the heartbeat context, reply `HEARTBEAT_OK`.
+Only the explicit `review-health-scan` cron may fetch pull requests or prompt
+the team lead.

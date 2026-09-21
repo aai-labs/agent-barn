@@ -20,6 +20,7 @@ from api.domains.communications.plugins.base import (
     PlatformPlugin,
     PlatformSettings,
     ProcessingFeedbackContext,
+    WebhookRequest,
     best_effort_failure_notice,
     provider_idempotency_key,
 )
@@ -182,18 +183,13 @@ class TeamsPlatformPlugin(PlatformPlugin):
             terms_url=self._terms_url,
         )
 
-    def verify_webhook(
-        self,
-        credentials: PlatformCredentials,
-        payload: dict[str, Any],
-        authorization: str,
-    ) -> None:
+    def verify_webhook(self, credentials: PlatformCredentials, request: WebhookRequest) -> None:
         assert isinstance(credentials, TeamsCredentials)
         try:
             verify_inbound_jwt(
-                authorization,
+                request.authorization,
                 credentials.app_id,
-                service_url=str(payload.get("serviceUrl") or ""),
+                service_url=str(request.payload.get("serviceUrl") or ""),
             )
         except TeamsAuthError as exc:
             raise PermissionError(str(exc)) from exc
