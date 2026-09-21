@@ -311,8 +311,8 @@ jobs:
   # Phase 5: Publish the Cloudflare Email Worker
   # ═══════════════════════════════════════════════════════════════
 
-  # Runs after `deploy` on purpose: the Worker posts inbound mail into the
-  # Communications service, so the cluster must already hold the matching
+  # Runs after `deploy` on purpose: the Worker posts inbound mail into the API,
+  # so the cluster must already hold the matching
   # EMAIL_INBOUND_SECRET before the Worker starts presenting it.
   deploy-worker:
     needs: [detect-changes, resolve-env, deploy]

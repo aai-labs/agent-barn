@@ -7,6 +7,8 @@ from fastapi import APIRouter, Header, HTTPException, Response, status
 from fastapi_injector import Injected
 
 from api.core.config import Config
+from api.domains.communications.gateway_service import CommunicationsGatewayService
+from api.domains.communications.models import AcceptedCommunicationRead
 from api.domains.communications.teams_runtime_webhook import (
     RuntimeWebhookUnavailable,
     TeamsRuntimeWebhookRelay,
@@ -14,6 +16,20 @@ from api.domains.communications.teams_runtime_webhook import (
 from api.infrastructure.http import resilient_request
 
 runtime_provider_webhook_router = APIRouter(prefix="/communications/v1/webhooks", tags=["provider-webhooks"])
+
+
+@runtime_provider_webhook_router.post("/email/inbound", status_code=status.HTTP_202_ACCEPTED)
+def accept_email_inbound_at_api_edge(
+    payload: dict[str, Any],
+    service: Annotated[CommunicationsGatewayService, Injected(CommunicationsGatewayService)],
+    authorization: Annotated[str, Header()],
+) -> dict[str, list[AcceptedCommunicationRead]]:
+    """Accept mailbox-addressed email at the API edge without a gateway hop."""
+    try:
+        accepted = service.accept_email_inbound(payload, authorization)
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Webhook authentication failed") from exc
+    return {"accepted": accepted}
 
 
 @runtime_provider_webhook_router.post("/{connection_id}", response_model=None)
