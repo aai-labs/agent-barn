@@ -108,6 +108,14 @@ _Avoid_: runtime
 An Agent-owned configured relationship to one bot, application, account, or endpoint on a Platform. An Agent may have one active Communication Connection per Platform; retired Connections preserve history and may be replaced.
 _Avoid_: channel, integration, platform config
 
+**Runtime-owned Connection**:
+A Communication Connection whose provider transport, session, and delivery behavior run inside the Agent Runtime rather than the Communications Gateway. Agent Barn still owns the Connection record, credentials, policy, and operational visibility.
+_Avoid_: native Connection
+
+**Runtime Webhook Relay**:
+The product API boundary that authenticates and policy-checks a provider webhook, then forwards the accepted request to a private Agent Runtime listener and returns that listener's HTTP response to the provider.
+_Avoid_: native webhook, native service
+
 **Connection Journal**:
 The append-only, content-free operational history for one Communication Connection. Its entries are either Delivery Transitions, which belong to one durable Communication Delivery, or Connection Events, which record provider connectivity and recovery without a Delivery.
 _Avoid_: message log, provider payload, diagnostics snapshot

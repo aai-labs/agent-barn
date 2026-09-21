@@ -26,9 +26,9 @@ spec:
             pathType: Prefix
             backend:
               service:
-                name: {{ $.Release.Name }}-communications
+                name: {{ $.Release.Name }}
                 port:
-                  number: {{ $.Values.communications.service.port }}
+                  number: {{ $.Values.service.port }}
           # /api only: the outer app also serves /metrics, which must stay
           # cluster-internal (Prometheus scrapes the Service directly, not
           # the ingress) — a / prefix would expose it to the internet.

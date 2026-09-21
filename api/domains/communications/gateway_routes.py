@@ -7,7 +7,9 @@ from fastapi_injector import Injected
 
 from api.domains.communications.agent_message_service import AgentMessageService
 from api.domains.communications.delivery_repository import CommunicationDeliveryCancelledError
-from api.domains.communications.gateway_service import CommunicationsGatewayService
+from api.domains.communications.gateway_service import (
+    CommunicationsGatewayService,
+)
 from api.domains.communications.models import (
     AcceptedCommunicationRead,
     AgentMessageCreate,
@@ -183,18 +185,18 @@ def accept_email_inbound(
     return {"accepted": accepted}
 
 
-@provider_webhook_router.post("/{connection_id}", status_code=status.HTTP_202_ACCEPTED)
+@provider_webhook_router.post("/{connection_id}", status_code=status.HTTP_202_ACCEPTED, response_model=None)
 def accept_provider_webhook(
     connection_id: UUID,
     payload: dict[str, Any],
     service: Annotated[CommunicationsGatewayService, Injected(CommunicationsGatewayService)],
     authorization: Annotated[str, Header()],
-) -> dict[str, list[AcceptedCommunicationRead]]:
+) -> dict[str, list[AcceptedCommunicationRead]] | Response:
     try:
-        accepted = service.accept_provider_webhook(connection_id, payload, authorization)
+        result = service.accept_provider_webhook(connection_id, payload, authorization)
     except (PermissionError, NotImplementedError) as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Webhook authentication failed") from exc
-    return {"accepted": accepted}
+    return {"accepted": result}
 
 
 @runtime_communications_router.post("/{agent_id}/messages", status_code=status.HTTP_202_ACCEPTED)

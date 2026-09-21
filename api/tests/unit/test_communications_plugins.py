@@ -40,7 +40,7 @@ from api.domains.communications.plugins.base import (
 from api.domains.communications.plugins.discord import DiscordPlatformPlugin
 from api.domains.communications.plugins.registry import PlatformPluginRegistry
 from api.domains.communications.plugins.slack import SlackPlatformPlugin
-from api.domains.communications.plugins.teams import TeamsPlatformPlugin
+from api.domains.communications.plugins.teams import TeamsPlatformPlugin, TeamsSettings
 from api.domains.communications.plugins.telegram import TelegramPlatformPlugin
 from api.domains.communications.plugins.web import WebPlatformPlugin
 from api.infrastructure.msteams.client import TeamsAuthError
@@ -1563,6 +1563,26 @@ def test_teams_group_allowlist_matches_the_stripped_channel_id() -> None:
 
     assert_that(result.disposition, equal_to(CommunicationPolicyDisposition.CHANNEL_DENIED))
     assert_that(result, empty())
+
+
+def test_teams_runtime_relay_applies_dm_policy_to_approval_invokes() -> None:
+    plugin = _teams_plugin()
+    allowed = TeamsSettings.model_validate({"dm_policy": "allowlist", "dm_user_ids": [_TEAMS_AAD_ID]})
+    blocked = TeamsSettings.model_validate({"dm_policy": "allowlist", "dm_user_ids": ["someone-else"]})
+    invoke = _teams_activity(type="invoke")
+
+    assert plugin.runtime_relay_disposition(allowed, invoke) == CommunicationPolicyDisposition.ACCEPTED
+    assert plugin.runtime_relay_disposition(blocked, invoke) == CommunicationPolicyDisposition.USER_DENIED
+
+
+def test_teams_runtime_relay_forwards_authenticated_lifecycle_activities() -> None:
+    plugin = _teams_plugin()
+    settings = TeamsSettings.model_validate({})
+
+    assert (
+        plugin.runtime_relay_disposition(settings, _teams_activity(type="conversationUpdate"))
+        == CommunicationPolicyDisposition.ACCEPTED
+    )
 
 
 def test_teams_captures_addressable_ids_for_replies() -> None:

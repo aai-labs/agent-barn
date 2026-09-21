@@ -8,6 +8,7 @@ from api.domains.agents.builders import (
     native_discord_env,
     native_slack_env,
     native_telegram_env,
+    runtime_teams_env,
 )
 from api.domains.agents.builders.hermes import HERMES_START_SH
 from api.domains.communications.models import ConversationLocation
@@ -199,6 +200,40 @@ def test_native_telegram_env_sets_the_home_chat() -> None:
     env = native_telegram_env({"home_channel_id": "-1009"}, _TELEGRAM_TOKEN)
 
     assert env["TELEGRAM_HOME_CHANNEL"] == "-1009"
+
+
+def test_runtime_teams_config_enables_observer_and_verbose_progress() -> None:
+    config = build_hermes_gateway_config("litellm/gpt-5", "http://litellm:4000", runtime_teams=True, verbose_mode=True)
+
+    assert "agentbarn-observer" in config["plugins"]["enabled"]
+    assert config["display"]["platforms"]["teams"] == {
+        "tool_progress": "all",
+        "tool_progress_grouping": "accumulate",
+        "interim_assistant_messages": True,
+    }
+
+
+def test_runtime_teams_env_keeps_credentials_in_the_secret_and_sets_home() -> None:
+    env = runtime_teams_env(
+        {"home_channel_id": "19:home@thread.tacv2"},
+        {"app_id": "app-id", "app_password": "secret", "tenant_id": "tenant-id"},
+    )
+
+    assert env == {
+        "TEAMS_CLIENT_ID": "app-id",
+        "TEAMS_CLIENT_SECRET": "secret",
+        "TEAMS_TENANT_ID": "tenant-id",
+        "TEAMS_ALLOW_ALL_USERS": "true",
+        "TEAMS_PORT": "3978",
+        "TEAMS_HOME_CHANNEL": "19:home@thread.tacv2",
+        "AGENTBARN_SCHEDULED_DELIVERY": "0",
+    }
+
+
+def test_runtime_teams_env_uses_no_home_sentinel() -> None:
+    env = runtime_teams_env({}, {"app_id": "app-id", "app_password": "secret", "tenant_id": "tenant-id"})
+
+    assert env["TEAMS_HOME_CHANNEL"] == "__agentbarn_no_home_channel__"
 
 
 def test_native_gateway_does_not_drain_agent_barn_scheduled_completions() -> None:

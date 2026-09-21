@@ -33,7 +33,7 @@ class _Handler(BaseHTTPRequestHandler):
         pass
 
 
-def _run(steps: list[dict]) -> list[dict]:
+def _run(steps: list[dict], native_channels: str = "slack,discord") -> list[dict]:
     node = shutil.which("node")
     assert node is not None, "node is required to exercise the OpenClaw plugin"
     with socket.socket() as probe:
@@ -50,7 +50,7 @@ def _run(steps: list[dict]) -> list[dict]:
         "AGENT_ID": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
         "INGEST_URL": f"http://127.0.0.1:{port}",
         "INGEST_API_KEY": "test-key",
-        "AGENTBARN_NATIVE_CHANNELS": "slack,discord",
+        "AGENTBARN_NATIVE_CHANNELS": native_channels,
     }
     proc = subprocess.Popen([node, str(_DRIVER), str(_PLUGIN / "index.js"), steps_path], env=env, text=True)
     try:
@@ -130,3 +130,28 @@ def test_native_channel_turn_reports_content_free_journal_stages() -> None:
             ]
         ),
     )
+
+
+def test_openclaw_msteams_events_use_the_product_teams_platform_key() -> None:
+    session = {"sessionKey": "agent:main:msteams:conversation:c1"}
+    payloads = _run(
+        [
+            {
+                "hook": "message_received",
+                "event": {"content": "hello", "messageId": "activity-1", "conversationId": "c1"},
+                "ctx": {"channelId": "msteams", "conversationId": "c1", **session},
+            },
+            {
+                "hook": "message_sent",
+                "event": {"content": "reply", "messageId": "activity-2", "success": True},
+                "ctx": {"channelId": "msteams", "conversationId": "c1", **session},
+            },
+        ],
+        native_channels="msteams",
+    )
+
+    events = [event for payload in payloads for event in payload["events"]]
+    messages = [message for payload in payloads for message in payload["messages"]]
+    assert {event["platform"] for event in events} == {"teams"}
+    assert {message["platform"] for message in messages} == {"teams"}
+    assert events[0]["correlation_id"] == "teams:activity-1"

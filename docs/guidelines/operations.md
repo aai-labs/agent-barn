@@ -85,8 +85,8 @@ Agents reachable by email get their own address on a dedicated subdomain, receiv
 
 ## Native runtime gateway rollout
 
-- **`COMMUNICATIONS_NATIVE_PLATFORMS`** is one shared GitHub variable containing a comma-separated native runtime Platform allowlist. Set it to **`slack,discord`** to enable the Hermes/OpenClaw native Slack and Discord gateways in every deployment workflow. It flows through `helmfile.yaml.gotmpl` into the API chart's shared Secret, so both the API and Communications processes receive the same cutoff.
-- Empty is the rollback setting: all Platforms remain on the Communications Gateway. Restart affected Agents after deploying a change so their runtime configuration is rebuilt.
+- **`COMMUNICATIONS_NATIVE_PLATFORMS`** is one shared GitHub variable containing a comma-separated native runtime Platform allowlist. Set it to **`slack,discord,telegram,teams`** to enable the Hermes/OpenClaw native gateways for all four chat Platforms in every deployment workflow. It flows through `helmfile.yaml.gotmpl` into the API chart's shared Secret, so both the API and Communications processes receive the same cutoff.
+- Empty is the rollback setting: all Platforms remain on the Communications Gateway. Restart affected Agents after deploying a change so their runtime configuration and private Service ports are rebuilt. Runtime-owned Teams begins relaying as soon as the flag reaches the API, so restart every running Teams Agent promptly; until its Service exposes port 3978 and its runtime listener starts, Bot Framework receives 503 and retries. The public Teams URL does not change: ingress routes `/communications/v1/webhooks` to the API, which proxies gateway-owned Teams to Communications only for rollback.
 
 ## Staging environment
 

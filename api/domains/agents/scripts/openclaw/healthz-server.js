@@ -23,6 +23,10 @@ const TERMINAL_LLM_ERRORS = {
 const NATIVE_CHANNELS = (process.env.AGENTBARN_NATIVE_CHANNELS || '').split(',').filter(Boolean);
 const lastChannelStage = {};
 
+function productPlatform(channelId) {
+  return channelId === 'msteams' ? 'teams' : channelId;
+}
+
 // The Slack and Discord providers set connected: true once their socket is up,
 // and Telegram after its first successful poll; until then a running channel is
 // still connecting.
@@ -42,7 +46,7 @@ function reportChannelHealth(channels) {
     lastChannelStage[platform] = stage;
     events.push({
       stage,
-      platform,
+      platform: productPlatform(platform),
       occurred_at: new Date().toISOString(),
       ...(stage === 'connection_error' ? { error_code: 'channel_stopped' } : {}),
     });

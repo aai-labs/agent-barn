@@ -243,6 +243,29 @@ def native_telegram_channel(settings: dict) -> dict:
     return channel
 
 
+def runtime_teams_channel(settings: dict) -> dict:
+    """Configure OpenClaw's runtime-owned Microsoft Teams webhook adapter.
+
+    Credentials remain Kubernetes Secret values and are read from OpenClaw's
+    documented ``MSTEAMS_*`` environment variables rather than being written to
+    its persistent config.
+    Agent Barn's public relay owns Connection policy enforcement.
+    """
+    channel = {
+        "enabled": True,
+        "webhook": {"port": 3978, "path": "/api/messages"},
+        "dmPolicy": "open",
+        "allowFrom": ["*"],
+        "groupPolicy": "open",
+        "groupAllowFrom": ["*"],
+    }
+    if home_channel_id := settings.get("home_channel_id"):
+        channel["defaultTo"] = f"conversation:{home_channel_id}"
+    else:
+        channel["defaultTo"] = "conversation:__agentbarn_no_home_channel__"
+    return channel
+
+
 def native_channel_env(credentials_by_platform: dict[str, dict]) -> dict[str, str]:
     """Secret entries for native channel tokens and the observer."""
     env = {
@@ -257,6 +280,10 @@ def native_channel_env(credentials_by_platform: dict[str, dict]) -> dict[str, st
         env["DISCORD_BOT_TOKEN"] = discord["bot_token"]
     if telegram := credentials_by_platform.get("telegram"):
         env["TELEGRAM_BOT_TOKEN"] = telegram["bot_token"]
+    if teams := credentials_by_platform.get("msteams"):
+        env["MSTEAMS_APP_ID"] = teams["app_id"]
+        env["MSTEAMS_APP_PASSWORD"] = teams["app_password"]
+        env["MSTEAMS_TENANT_ID"] = teams["tenant_id"]
     return env
 
 

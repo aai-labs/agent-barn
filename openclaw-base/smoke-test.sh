@@ -16,6 +16,7 @@ check "python>=3.12" python3 -c "import sys; assert sys.version_info >= (3, 12)"
 check node           node --version
 check npm            npm --version
 check openclaw       openclaw --version
+check msteams-plugin sh -c 'test "$(jq -r .version /opt/openclaw-preinstalled/npm/node_modules/@openclaw/msteams/package.json)" = "2026.8.2"'
 check gog            gog --version
 check git            git --version
 check bash           bash --version

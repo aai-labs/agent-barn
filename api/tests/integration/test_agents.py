@@ -157,7 +157,7 @@ _GIVEN_WITH_NATIVE_PLATFORMS = [
             "AGENT_LITELLM_BASE_URL": "http://litellm:4000",
             "API_EXTERNAL_URL": "https://api.test.com",
             "HERMES_IMAGE": "nousresearch/hermes-agent:v1.0",
-            "COMMUNICATIONS_NATIVE_PLATFORMS": "slack,discord,telegram",
+            "COMMUNICATIONS_NATIVE_PLATFORMS": "slack,discord,telegram,teams",
         }
     ),
     *_GIVEN_WITH_HERMES_IMAGE[1:],
@@ -2466,6 +2466,56 @@ def test_start_hermes_agent_runs_telegram_in_the_native_gateway() -> None:
             assert_that(secret["AGENTBARN_SCHEDULED_DELIVERY"], equal_to("0"))
 
 
+def _runtime_teams_connection(context) -> None:
+    delegate: PostgresRepositoryDelegate = context.injector.get(PostgresRepositoryDelegate)
+    delegate.save(
+        CommunicationConnection(
+            organization_id=context.agent.organization_id,
+            agent_id=context.agent.id,
+            platform_key="teams",
+            display_name="Runtime Teams",
+            settings={"dm_policy": "allowlist", "dm_user_ids": ["aad-user"], "home_channel_id": "19:home"},
+            credentials_encrypted=encrypt_token(
+                json.dumps({"app_id": "teams-app", "app_password": "teams-secret", "tenant_id": "teams-tenant"}),
+                TEST_ENCRYPTION_KEY,
+            ),
+            driver_key_encrypted=encrypt_token("unused", TEST_ENCRYPTION_KEY),
+        )
+    )
+
+
+def test_start_hermes_agent_runs_teams_in_the_runtime_transport() -> None:
+    import yaml as _yaml
+
+    with given(
+        [
+            *_GIVEN_WITH_NATIVE_PLATFORMS,
+            there_is_an_agent(agent_type=AgentType.HERMES),
+            _runtime_teams_connection,
+        ]
+    ) as context:
+        client: TestClient = context.client
+        k8s: MagicMock = context.injector.get(KubernetesClient)
+
+        with when("I start a Hermes Agent with a runtime-owned Teams Connection"):
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("Hermes owns Teams while the public relay remains on Agent Barn"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            config_map = k8s.create_config_map.call_args.args[1]
+            cfg = _yaml.safe_load(config_map.data["hermes-config.yaml"])
+            assert_that(cfg["plugins"]["enabled"], has_item("agentbarn-observer"))
+            assert_that(cfg["display"]["platforms"]["teams"]["tool_progress"], equal_to("off"))
+
+            secret = k8s.create_secret.call_args.args[1].string_data
+            assert_that(secret["TEAMS_CLIENT_ID"], equal_to("teams-app"))
+            assert_that(secret["TEAMS_CLIENT_SECRET"], equal_to("teams-secret"))
+            assert_that(secret["TEAMS_TENANT_ID"], equal_to("teams-tenant"))
+            assert_that(secret["TEAMS_HOME_CHANNEL"], equal_to("19:home"))
+            service = k8s.create_service.call_args.args[1]
+            assert_that([port.name for port in service.spec.ports], has_item("webhook"))
+
+
 def _native_slack_connection(context) -> None:
     delegate: PostgresRepositoryDelegate = context.injector.get(PostgresRepositoryDelegate)
     delegate.save(
@@ -2491,12 +2541,13 @@ def test_start_openclaw_agent_runs_chat_platforms_in_the_native_gateway() -> Non
             _native_slack_connection,
             _native_discord_connection,
             _native_telegram_connection,
+            _runtime_teams_connection,
         ]
     ) as context:
         client: TestClient = context.client
         k8s: MagicMock = context.injector.get(KubernetesClient)
 
-        with when("I start an OpenClaw Agent with native Slack, Discord, and Telegram Connections"):
+        with when("I start an OpenClaw Agent with native chat platform Connections"):
             response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
 
         with then("OpenClaw owns every transport with the Connections' gates and tokens"):
@@ -2508,6 +2559,8 @@ def test_start_openclaw_agent_runs_chat_platforms_in_the_native_gateway() -> Non
             assert_that(overlay["channels"]["discord"]["guilds"]["*"]["users"], equal_to(["user-1"]))
             assert_that(overlay["channels"]["telegram"]["groups"], equal_to({"-1001": {"requireMention": True}}))
             assert_that(overlay["channels"]["telegram"]["defaultTo"], equal_to("-1009"))
+            assert_that(overlay["channels"]["msteams"].get("appPassword"), equal_to(None))
+            assert_that(overlay["channels"]["msteams"]["webhook"], equal_to({"port": 3978, "path": "/api/messages"}))
             assert_that(overlay["plugins"]["allow"], has_item("agentbarn-observer"))
             assert_that(config_map.data, has_key("agentbarn-observer-index.js"))
             assert_that("xoxb-token" in config_map.data["openclaw-config-overlay.json"], equal_to(False))
@@ -2517,8 +2570,11 @@ def test_start_openclaw_agent_runs_chat_platforms_in_the_native_gateway() -> Non
             assert_that(secret["SLACK_APP_TOKEN"], equal_to("xapp-token"))
             assert_that(secret["DISCORD_BOT_TOKEN"], equal_to("discord-token"))
             assert_that(secret["TELEGRAM_BOT_TOKEN"], equal_to("123:telegram-token"))
-            assert_that(secret["AGENTBARN_NATIVE_CHANNELS"], equal_to("slack,discord,telegram"))
+            assert_that(secret["MSTEAMS_APP_PASSWORD"], equal_to("teams-secret"))
+            assert_that(secret["AGENTBARN_NATIVE_CHANNELS"], equal_to("slack,discord,telegram,msteams"))
             assert_that(secret["AGENTBARN_SCHEDULED_DELIVERY"], equal_to("0"))
+            service = k8s.create_service.call_args.args[1]
+            assert_that([port.name for port in service.spec.ports], has_item("webhook"))
 
 
 @pytest.mark.parametrize(

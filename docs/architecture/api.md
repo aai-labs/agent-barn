@@ -6,7 +6,7 @@ Read before changing API composition, dependency injection, route/service/reposi
 
 ## Composition and layering
 
-The API image has three HTTP composition roots. `../../api/api_app.py` serves organization and platform product routes at `/api/v1` on port 8000. `../../api/ingest_app.py` serves runtime telemetry at `/ingest/v1` on port 8001. `../../api/communications_app.py` serves provider webhooks and the runtime-neutral delivery protocol at `/communications/v1` on port 8002; its lifespan also runs provider ingress supervision and outbound delivery. Each root attaches the shared Injector, while authentication and exposed routes remain boundary-specific.
+The API image has three HTTP composition roots. `../../api/api_app.py` serves organization and platform product routes at `/api/v1` on port 8000, plus the stable public Teams webhook at `/communications/v1/webhooks/{connection_id}`. `../../api/ingest_app.py` serves runtime telemetry at `/ingest/v1` on port 8001. `../../api/communications_app.py` serves the runtime-neutral delivery protocol and gateway-owned provider webhooks at `/communications/v1` on port 8002; its lifespan also runs provider ingress supervision and outbound delivery. Each root attaches the shared Injector, while authentication and exposed routes remain boundary-specific.
 
 The default dependency direction is:
 
@@ -53,7 +53,7 @@ The application lifespan ensures a bootstrap Platform Administrator, seeds built
 
 | Concern | Source |
 |---|---|
-| Product API composition and router registry | `../../api/api_app.py` |
+| Product API composition, router registry, and Teams runtime webhook relay | `../../api/api_app.py`, `../../api/domains/communications/runtime_webhook_routes.py`, `../../api/domains/communications/teams_runtime_webhook.py` |
 | Ingest API composition and process entry | `../../api/ingest_app.py`, `../../api/ingest_main.py`, `../../api/start.sh` |
 | Communications composition and process entry | `../../api/communications_app.py`, `../../api/communications_main.py` |
 | Injector configuration | `../../api/core/utils.py`, `../../api/infrastructure/app.py` |

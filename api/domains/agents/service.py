@@ -43,6 +43,8 @@ from api.domains.agents.builders import (
     native_slack_env,
     native_telegram_channel,
     native_telegram_env,
+    runtime_teams_channel,
+    runtime_teams_env,
 )
 from api.domains.agents.error_messages import friendly_pod_reason
 from api.domains.agents.exceptions import AgentProvisioningPrecondition
@@ -2064,7 +2066,15 @@ class AgentService:
                 )
 
         runtime_api_key = secrets.token_urlsafe(32)
-        service = build_service(agent.id, org_id, ns, org_name=org_name, agent_name=agent.name)
+        runtime_teams = self._native_connection_configuration(agent.id, "teams")
+        service = build_service(
+            agent.id,
+            org_id,
+            ns,
+            include_webhook_port=runtime_teams is not None,
+            org_name=org_name,
+            agent_name=agent.name,
+        )
         if agent.agent_type == AgentType.HERMES:
             overlay = None
             native_slack = self._native_slack_connection(agent.id)
@@ -2080,6 +2090,7 @@ class AgentService:
                     native_discord.settings.get("require_mention", True) if native_discord else True
                 ),
                 telegram_settings=native_telegram.settings if native_telegram else None,
+                runtime_teams=runtime_teams is not None,
                 verbose_mode=agent.verbose_mode,
             )
             secret = build_secret_hermes_runtime(
@@ -2099,6 +2110,8 @@ class AgentService:
                 secret.string_data.update(native_discord_env(native_discord.settings, native_discord.credentials))
             if native_telegram is not None:
                 secret.string_data.update(native_telegram_env(native_telegram.settings, native_telegram.credentials))
+            if runtime_teams is not None:
+                secret.string_data.update(runtime_teams_env(runtime_teams.settings, runtime_teams.credentials))
             deployment = build_hermes_deployment(
                 agent.id,
                 org_id,
@@ -2118,6 +2131,9 @@ class AgentService:
             if native_telegram := self._native_connection_configuration(agent.id, "telegram"):
                 native_credentials["telegram"] = native_telegram.credentials
                 native_channels["telegram"] = native_telegram_channel(native_telegram.settings)
+            if runtime_teams is not None:
+                native_credentials["msteams"] = runtime_teams.credentials
+                native_channels["msteams"] = runtime_teams_channel(runtime_teams.settings)
             overlay = build_openclaw_gateway_config(effective_model, llm_proxy_url, native_channels)
             hermes_cfg = None
             secret = build_secret_runtime(
