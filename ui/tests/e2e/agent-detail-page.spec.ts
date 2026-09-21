@@ -766,7 +766,7 @@ test.describe("Agent Detail Page — Channels tab", () => {
     await agentDetailPage.configureButton().click();
     await agentDetailPage.channelsTab().click();
 
-    const webhookInput = page.getByLabel("Webhook URL");
+    const webhookInput = page.getByRole("textbox", { name: "Webhook URL" });
     await expect(webhookInput).toHaveValue(webhookUrl);
     await expect(webhookInput).toHaveAttribute("readonly", "");
     const copyWebhook = page.getByRole("button", { name: "Copy webhook URL" });
