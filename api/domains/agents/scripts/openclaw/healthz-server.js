@@ -36,6 +36,54 @@ function budgetMessage(body) {
   }
 }
 
+// Native channel Connections have no supervisor session, so their health
+// transitions reach the Connection Journal from the gateway's own snapshot.
+// Content-free: provider error text (lastError) never leaves the pod.
+const NATIVE_CHANNELS = (process.env.AGENTBARN_NATIVE_CHANNELS || '').split(',').filter(Boolean);
+const lastChannelStage = {};
+
+// The Slack and Discord providers set connected: true once their socket is up,
+// and Telegram after its first successful poll; until then a running channel is
+// still connecting.
+function channelStage(snapshot) {
+  if (!snapshot) return null;
+  if (snapshot.running) return snapshot.connected === true ? 'connection_connected' : 'connection_connecting';
+  return snapshot.restartPending ? 'connection_degraded' : 'connection_error';
+}
+
+function reportChannelHealth(channels) {
+  const { AGENT_ID, INGEST_URL, INGEST_API_KEY } = process.env;
+  if (!AGENT_ID || !INGEST_URL || !INGEST_API_KEY) return;
+  const events = [];
+  for (const platform of NATIVE_CHANNELS) {
+    const stage = channelStage(channels[platform]);
+    if (!stage || lastChannelStage[platform] === stage) continue;
+    lastChannelStage[platform] = stage;
+    events.push({
+      stage,
+      platform,
+      occurred_at: new Date().toISOString(),
+      ...(stage === 'connection_error' ? { error_code: 'channel_stopped' } : {}),
+    });
+  }
+  if (events.length === 0) return;
+  const body = JSON.stringify({ events });
+  const req = http.request(`${INGEST_URL}/agents/${AGENT_ID}/communication-events`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${INGEST_API_KEY}`,
+      'Content-Length': Buffer.byteLength(body),
+    },
+    timeout: 10_000,
+  });
+  req.on('response', (res) => res.resume());
+  // ponytail: best-effort, a dropped transition shows on the next change; retry if health gaps show up.
+  req.on('error', (err) => console.error(`[healthz] channel health report failed: ${err.message}`));
+  req.on('timeout', () => req.destroy(new Error('timeout')));
+  req.end(body);
+}
+
 function refresh() {
   if (refreshing) return;
   refreshing = true;
@@ -46,7 +94,7 @@ function refresh() {
       return;
     }
     try {
-      JSON.parse(stdout);
+      reportChannelHealth(JSON.parse(stdout).channels || {});
       cache = { ok: true, everConnected: true };
     } catch {
       cache = { ok: false, everConnected: false, reason: 'failed to parse health output' };

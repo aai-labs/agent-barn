@@ -45,7 +45,8 @@ Reading the proxy at request time — the earlier arrangement — meant a failed
 - On the org surface `organization_id` is pinned by the route and never read from the query string.
 - The platform surface has its own routes, service and read model. The org surface must have no code path that can return another organization's name or spend.
 - The unattributed bucket stays inside platform totals and is also reported separately. Excluding it would make the platform total exceed the sum of the organizations listed beneath it.
-- Runway is null whenever credit or burn rate is unknown; it is never a fabricated number.
+- The OpenRouter balance is reported as one of three states, never as a bare number: `ok` carries the key's remaining credit and its limit, `no_limit` means the key spends without a ceiling, and `unavailable` means the poll failed. The last two used to collapse into a single null, which let "we cannot read it" render the same as "there is nothing to worry about".
+- The platform surface warns when a healthy read falls below $5, the threshold the `OpenRouterCreditsLow` alert uses, so the page and the pager cannot disagree. An `unavailable` read warns separately, matching `OpenRouterCreditsUnknown`.
 
 ### Authorization and status
 

@@ -29,7 +29,7 @@ const platformLinks = [
   {
     href: "/dashboard/platform/costs",
     title: "Platform Costs",
-    description: "Model spend across every organization, with burn rate and runway.",
+    description: "Model spend across every organization, with burn rate and OpenRouter credits.",
     Icon: Receipt,
   },
   {

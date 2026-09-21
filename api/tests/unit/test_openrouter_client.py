@@ -9,7 +9,9 @@ from api.domains.agents.service import (
     is_model_allowed,
 )
 from api.infrastructure.openrouter.client import (
+    CreditsStatus,
     OpenRouterClient,
+    OpenRouterCredits,
     clear_models_cache,
 )
 
@@ -142,6 +144,8 @@ def _service(openrouter, allowlist=None, default_model=""):
 
     return AgentService(
         repository=MagicMock(),
+        connection_repository=MagicMock(),
+        plugins=MagicMock(),
         override_repository=MagicMock(),
         authorization=MagicMock(),
         template_repository=MagicMock(),
@@ -155,6 +159,7 @@ def _service(openrouter, allowlist=None, default_model=""):
         organization_lookup=org_lookup,
         agent_settings_lookup=agent_settings_lookup,
         restore_points=MagicMock(),
+        selection=MagicMock(),
     )
 
 
@@ -227,3 +232,64 @@ def test_service_injects_default_when_absent_from_catalog():
         "litellm/openrouter/openai/gpt-5-mini",
         "litellm/openrouter/qwen/qwen3.6-plus",
     }
+
+
+def _credits(payload: dict, key: str = "sk-test") -> OpenRouterCredits:
+    with (
+        patch.object(get_config(), "openrouter_api_key", key),
+        patch("api.infrastructure.openrouter.client.httpx.get", _mock_get(payload)),
+    ):
+        return _client().get_credits()
+
+
+def test_credits_report_the_limit_and_what_is_left():
+    credits = _credits({"data": {"limit": 500, "limit_remaining": 32.85}})
+
+    assert credits.status is CreditsStatus.OK
+    assert credits.remaining == 32.85
+    assert credits.limit == 500.0
+
+
+def test_an_explicit_null_remaining_means_the_key_has_no_limit():
+    credits = _credits({"data": {"limit": None, "limit_remaining": None}})
+
+    assert credits.status is CreditsStatus.NO_LIMIT
+    assert credits.remaining is None
+
+
+def test_an_absent_remaining_is_unavailable_not_no_limit():
+    """A missing field is not OpenRouter saying "no limit" — it is no answer.
+
+    Treating them alike caches a healthy-looking state from a malformed response
+    and silences the warning that says the balance is unknown.
+    """
+    credits = _credits({"data": {}})
+
+    assert credits.status is CreditsStatus.UNAVAILABLE
+
+
+def test_a_non_numeric_remaining_is_unavailable():
+    credits = _credits({"data": {"limit_remaining": "lots"}})
+
+    assert credits.status is CreditsStatus.UNAVAILABLE
+
+
+def test_a_payload_that_is_not_an_object_is_unavailable():
+    credits = _credits({"data": []})
+
+    assert credits.status is CreditsStatus.UNAVAILABLE
+
+
+def test_an_unusable_limit_still_leaves_the_remaining_balance_usable():
+    """The limit only enriches the display; losing it must not lose the balance."""
+    credits = _credits({"data": {"limit": "unlimited", "limit_remaining": 12.5}})
+
+    assert credits.status is CreditsStatus.OK
+    assert credits.remaining == 12.5
+    assert credits.limit is None
+
+
+def test_without_a_key_the_balance_is_unavailable_and_nothing_is_polled():
+    credits = _credits({"data": {"limit_remaining": 5.0}}, key="")
+
+    assert credits.status is CreditsStatus.UNAVAILABLE

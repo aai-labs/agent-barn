@@ -201,6 +201,8 @@ releases:
         value: {{ env "AGENT_DEFAULT_MODEL" | default "" | quote }}
       - name: agentModelAllowlist
         value: {{ env "AGENT_MODEL_ALLOWLIST" | default "" | quote }}
+      - name: communicationsNativePlatforms
+        value: {{ env "COMMUNICATIONS_NATIVE_PLATFORMS" | default "" | quote }}
       - name: registry.server
         value: {{ env "REGISTRY_SERVER" | required "REGISTRY_SERVER is required" | quote }}
       - name: registry.username

@@ -14,10 +14,12 @@ from hamcrest import (
     greater_than,
     has_item,
     has_key,
+    has_length,
     is_in,
     is_not,
     none,
 )
+from sqlmodel import Session
 from starlette.testclient import TestClient
 
 from api.domains.agents.models import (
@@ -30,6 +32,7 @@ from api.domains.agents.models import (
 )
 from api.domains.agents.override_repository import AgentOverrideRepository
 from api.domains.agents.repository import AgentRepository
+from api.domains.communications.models import CommunicationConnection
 from api.domains.events.catalog import (
     AGENT_CREATED,
     AGENT_DELETED,
@@ -49,9 +52,11 @@ from api.domains.events.repository import OutboxMessageRepository
 from api.domains.events.security_audit import SecurityAuditRepository
 from api.domains.organizations.models import Organization
 from api.domains.organizations.repository import OrganizationRepository
+from api.domains.skills.models import Skill
+from api.domains.skills.repository import SkillRepository
 from api.domains.templates.models import AgentTemplate, PlatformTemplate
 from api.domains.templates.repository import TemplateRepository
-from api.infrastructure.crypto import decrypt_token
+from api.infrastructure.crypto import decrypt_token, encrypt_token
 from api.infrastructure.integration_validators.result import IntegrationValidationResult
 from api.infrastructure.kubernetes.client import KubernetesClient
 from api.infrastructure.litellm.client import LiteLLMClient, LiteLLMError
@@ -144,6 +149,22 @@ _GIVEN_WITH_HERMES_IMAGE = [
     there_is_an_organization_with_user_and_access_token(),
     use_org_for_auth(),
     there_is_a_template(),
+]
+
+_GIVEN_WITH_NATIVE_PLATFORMS = [
+    set_env_variable(
+        {
+            "AGENT_TOKEN_ENCRYPTION_KEY": TEST_ENCRYPTION_KEY,
+            "LITELLM_BASE_URL": "http://litellm:4000",
+            "LITELLM_SECRET_NAME": "litellm",
+            "AGENT_DEFAULT_MODEL": "litellm/gpt-5-mini",
+            "AGENT_LITELLM_BASE_URL": "http://litellm:4000",
+            "API_EXTERNAL_URL": "https://api.test.com",
+            "HERMES_IMAGE": "nousresearch/hermes-agent:v1.0",
+            "COMMUNICATIONS_NATIVE_PLATFORMS": "slack,discord,telegram",
+        }
+    ),
+    *_GIVEN_WITH_HERMES_IMAGE[1:],
 ]
 
 
@@ -2079,7 +2100,7 @@ def test_start_agent_configmap_and_headless_gateway_overlay_are_correct():
 
         with then("tools, memory, and the core/active-memory plugins are enabled"):
             assert_that(overlay["tools"]["profile"], equal_to("full"))
-            assert_that(overlay["memory"]["backend"], equal_to("builtin"))
+            assert_that(overlay["memory"], equal_to({"search": {"provider": "none"}}))
             assert_that(overlay["plugins"]["slots"]["memory"], equal_to("memory-core"))
             assert_that(overlay["plugins"]["entries"]["memory-core"]["enabled"], equal_to(True))
             assert_that(
@@ -2339,6 +2360,169 @@ def test_start_hermes_agent_configmap_has_hermes_config():
 
         with then("BOOTSTRAP.md is absent from the ConfigMap"):
             assert_that(config_map.data, is_not(has_key("BOOTSTRAP.md")))
+
+
+def _native_discord_connection(context) -> None:
+    delegate: PostgresRepositoryDelegate = context.injector.get(PostgresRepositoryDelegate)
+    delegate.save(
+        CommunicationConnection(
+            organization_id=context.agent.organization_id,
+            agent_id=context.agent.id,
+            platform_key="discord",
+            display_name="Native Discord",
+            settings={
+                "allowed_channel_ids": ["channel-1"],
+                "allowed_user_ids": ["user-1"],
+                "allowed_role_ids": ["role-1"],
+                "allow_all_users": False,
+                "require_mention": False,
+                "home_channel_id": "channel-home",
+            },
+            credentials_encrypted=encrypt_token(json.dumps({"bot_token": "discord-token"}), TEST_ENCRYPTION_KEY),
+            driver_key_encrypted=encrypt_token("unused", TEST_ENCRYPTION_KEY),
+        )
+    )
+
+
+def test_start_hermes_agent_runs_discord_in_the_native_gateway() -> None:
+    import yaml as _yaml
+
+    with given(
+        [
+            *_GIVEN_WITH_NATIVE_PLATFORMS,
+            there_is_an_agent(agent_type=AgentType.HERMES),
+            _native_discord_connection,
+        ]
+    ) as context:
+        client: TestClient = context.client
+        k8s: MagicMock = context.injector.get(KubernetesClient)
+
+        with when("I start a Hermes Agent with a native Discord Connection"):
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("Hermes owns Discord transport and receives its native authorization gates"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            config_map = k8s.create_config_map.call_args.args[1]
+            cfg = _yaml.safe_load(config_map.data["hermes-config.yaml"])
+            assert_that(cfg["discord"], equal_to({"require_mention": False, "thread_require_mention": False}))
+            assert_that(cfg["plugins"]["enabled"], has_item("agentbarn-observer"))
+
+            secret = k8s.create_secret.call_args.args[1].string_data
+            assert_that(secret["DISCORD_BOT_TOKEN"], equal_to("discord-token"))
+            assert_that(secret["DISCORD_ALLOW_ALL_USERS"], equal_to("false"))
+            assert_that(secret["DISCORD_ALLOWED_CHANNELS"], equal_to("channel-1"))
+            assert_that(secret["DISCORD_ALLOWED_USERS"], equal_to("user-1"))
+            assert_that(secret["DISCORD_ALLOWED_ROLES"], equal_to("role-1"))
+            assert_that(secret["DISCORD_HOME_CHANNEL"], equal_to("channel-home"))
+            assert_that(secret["AGENTBARN_SCHEDULED_DELIVERY"], equal_to("0"))
+            assert_that("AGENTBARN_DISCORD_POLICY" in secret, equal_to(False))
+
+
+def _native_telegram_connection(context) -> None:
+    delegate: PostgresRepositoryDelegate = context.injector.get(PostgresRepositoryDelegate)
+    delegate.save(
+        CommunicationConnection(
+            organization_id=context.agent.organization_id,
+            agent_id=context.agent.id,
+            platform_key="telegram",
+            display_name="Native Telegram",
+            settings={
+                "allowed_chat_ids": ["-1001"],
+                "dm_policy": "allowlist",
+                "allowed_user_ids": ["111"],
+                "home_channel_id": "-1009",
+            },
+            credentials_encrypted=encrypt_token(json.dumps({"bot_token": "123:telegram-token"}), TEST_ENCRYPTION_KEY),
+            driver_key_encrypted=encrypt_token("unused", TEST_ENCRYPTION_KEY),
+        )
+    )
+
+
+def test_start_hermes_agent_runs_telegram_in_the_native_gateway() -> None:
+    import yaml as _yaml
+
+    with given(
+        [
+            *_GIVEN_WITH_NATIVE_PLATFORMS,
+            there_is_an_agent(agent_type=AgentType.HERMES),
+            _native_telegram_connection,
+        ]
+    ) as context:
+        client: TestClient = context.client
+        k8s: MagicMock = context.injector.get(KubernetesClient)
+
+        with when("I start a Hermes Agent with a native Telegram Connection"):
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("Hermes owns Telegram transport, requires group mentions, and keeps the Connection's gates"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            config_map = k8s.create_config_map.call_args.args[1]
+            cfg = _yaml.safe_load(config_map.data["hermes-config.yaml"])
+            assert_that(cfg["telegram"], equal_to({"unauthorized_dm_behavior": "ignore"}))
+            assert_that(cfg["plugins"]["enabled"], has_item("agentbarn-observer"))
+
+            secret = k8s.create_secret.call_args.args[1].string_data
+            assert_that(secret["TELEGRAM_BOT_TOKEN"], equal_to("123:telegram-token"))
+            assert_that(secret["TELEGRAM_REQUIRE_MENTION"], equal_to("true"))
+            assert_that(secret["TELEGRAM_ALLOWED_CHATS"], equal_to("-1001"))
+            assert_that(secret["TELEGRAM_ALLOWED_USERS"], equal_to("111"))
+            assert_that(secret["TELEGRAM_HOME_CHANNEL"], equal_to("-1009"))
+            assert_that(secret["AGENTBARN_SCHEDULED_DELIVERY"], equal_to("0"))
+
+
+def _native_slack_connection(context) -> None:
+    delegate: PostgresRepositoryDelegate = context.injector.get(PostgresRepositoryDelegate)
+    delegate.save(
+        CommunicationConnection(
+            organization_id=context.agent.organization_id,
+            agent_id=context.agent.id,
+            platform_key="slack",
+            display_name="Native Slack",
+            settings={"channel_ids": ["C1"], "group_policy": "allowlist", "dm_policy": "off"},
+            credentials_encrypted=encrypt_token(
+                json.dumps({"bot_token": "xoxb-token", "app_token": "xapp-token"}), TEST_ENCRYPTION_KEY
+            ),
+            driver_key_encrypted=encrypt_token("unused", TEST_ENCRYPTION_KEY),
+        )
+    )
+
+
+def test_start_openclaw_agent_runs_chat_platforms_in_the_native_gateway() -> None:
+    with given(
+        [
+            *_GIVEN_WITH_NATIVE_PLATFORMS,
+            there_is_an_agent(),
+            _native_slack_connection,
+            _native_discord_connection,
+            _native_telegram_connection,
+        ]
+    ) as context:
+        client: TestClient = context.client
+        k8s: MagicMock = context.injector.get(KubernetesClient)
+
+        with when("I start an OpenClaw Agent with native Slack, Discord, and Telegram Connections"):
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("OpenClaw owns every transport with the Connections' gates and tokens"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            config_map = k8s.create_config_map.call_args.args[1]
+            overlay = json.loads(config_map.data["openclaw-config-overlay.json"])
+            assert_that(overlay["channels"]["slack"]["channels"], equal_to({"C1": {"enabled": True}}))
+            assert_that(overlay["channels"]["slack"]["dmPolicy"], equal_to("disabled"))
+            assert_that(overlay["channels"]["discord"]["guilds"]["*"]["users"], equal_to(["user-1"]))
+            assert_that(overlay["channels"]["telegram"]["groups"], equal_to({"-1001": {"requireMention": True}}))
+            assert_that(overlay["channels"]["telegram"]["defaultTo"], equal_to("-1009"))
+            assert_that(overlay["plugins"]["allow"], has_item("agentbarn-observer"))
+            assert_that(config_map.data, has_key("agentbarn-observer-index.js"))
+            assert_that("xoxb-token" in config_map.data["openclaw-config-overlay.json"], equal_to(False))
+
+            secret = k8s.create_secret.call_args.args[1].string_data
+            assert_that(secret["SLACK_BOT_TOKEN"], equal_to("xoxb-token"))
+            assert_that(secret["SLACK_APP_TOKEN"], equal_to("xapp-token"))
+            assert_that(secret["DISCORD_BOT_TOKEN"], equal_to("discord-token"))
+            assert_that(secret["TELEGRAM_BOT_TOKEN"], equal_to("123:telegram-token"))
+            assert_that(secret["AGENTBARN_NATIVE_CHANNELS"], equal_to("slack,discord,telegram"))
+            assert_that(secret["AGENTBARN_SCHEDULED_DELIVERY"], equal_to("0"))
 
 
 @pytest.mark.parametrize(
@@ -4873,3 +5057,483 @@ def test_failed_creation_and_repeated_suggestions_do_not_advance_initial():
                 response = context.client.get(f"{base}/name-suggestion", headers=_auth(context))
                 assert_that(response.status_code, equal_to(200))
                 assert_that(response.json()["first_name"][0], equal_to("A"))
+
+
+def _select_url(context) -> str:
+    return f"{_BASE}/{context.agent.id}/configuration/select"
+
+
+def test_selection_applies_a_template_and_its_skill_pins_together():
+    """The case two requests cannot express.
+
+    The recorded template requires the Skill at v1 while the Agent currently holds
+    v2. Selecting the template alone is refused because the Agent's skills do not
+    satisfy it yet; re-pinning the skill alone is refused because the Agent's
+    current template requires v2. Sent together they validate as one.
+    """
+    with given(
+        [
+            *_GIVEN,
+            there_is_an_agent(),
+            there_is_a_skill(name="Calendar"),
+            skill_is_assigned_to_agent(),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        skill_repository: SkillRepository = context.injector.get(SkillRepository)
+        skill_repository.publish_version(context.skill.id, [("SKILL.md", "# Calendar v2")])
+        agent_repository: AgentRepository = context.injector.get(AgentRepository)
+        agent_repository.re_pin_skill(context.agent.id, context.skill.id, 2)
+
+        there_is_a_template(template_key="recorded-template", name="Recorded")(context)
+        there_is_a_template_skill()(context)
+        agent = client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context)).json()
+
+        with when("I select the template without its skill pin"):
+            refused = client.post(
+                _select_url(context),
+                json={
+                    "selection_type": "organization",
+                    "template_key": "recorded-template",
+                    "template_version": 1,
+                    "expected_agent_updated_at": agent["updated_at"],
+                },
+                headers=_auth(context),
+            )
+
+        with then("it is refused against the Agent's current assignments"):
+            assert_that(refused.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+            assert_that(refused.json()["detail"], contains_string("must be pinned to version 1"))
+
+        with when("I select the template and its skill pin together"):
+            accepted = client.post(
+                _select_url(context),
+                json={
+                    "selection_type": "organization",
+                    "template_key": "recorded-template",
+                    "template_version": 1,
+                    "expected_agent_updated_at": agent["updated_at"],
+                    "skill_versions": [{"skill_id": str(context.skill.id), "version": 1}],
+                },
+                headers=_auth(context),
+            )
+
+        with then("both land"):
+            assert_that(accepted.status_code, equal_to(status.HTTP_200_OK))
+            body = accepted.json()
+            assert_that(body["template_key"], equal_to("recorded-template"))
+            assert_that(body["skills"][0]["version"], equal_to(1))
+
+
+def test_selection_takes_the_named_scope_when_a_fork_shadows_the_platform_lineage():
+    """An Organization fork shares its platform lineage's key and restarts at v1,
+    so key and version alone name two different templates."""
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        delegate = context.injector.get(PostgresRepositoryDelegate)
+        platform = PlatformTemplate(
+            template_key="shadowed-lineage",
+            template_name="Shadowed",
+            version=1,
+            soul_md="platform soul",
+            identity_md="platform identity",
+            user_md="platform user",
+            tools_md="platform tools",
+            agents_md="platform agents",
+            boot_md="platform boot",
+            bootstrap_md="platform bootstrap",
+            heartbeat_md="platform heartbeat",
+        )
+        delegate.save(platform)
+        there_is_a_template(template_key="shadowed-lineage", name="Fork", version=1)(context)
+        agent = client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context)).json()
+
+        with when("I select the platform template at the shadowed key and version"):
+            response = client.post(
+                _select_url(context),
+                json={
+                    "selection_type": "platform",
+                    "template_key": "shadowed-lineage",
+                    "template_version": 1,
+                    "expected_agent_updated_at": agent["updated_at"],
+                },
+                headers=_auth(context),
+            )
+
+        with then("the platform lineage is pinned, not the fork that shadows it"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            repository: AgentRepository = context.injector.get(AgentRepository)
+            pinned = repository.get_by_id(context.agent.id)
+            assert pinned is not None
+            assert_that(pinned.platform_template_id, equal_to(platform.id))
+            assert_that(pinned.agent_template_id, none())
+
+
+def test_a_rejected_selection_writes_nothing():
+    # Hermes, because approval and verbose mode are Hermes-only: on OpenClaw the
+    # settings would be refused on their own and the model would never be reached.
+    with given(
+        [
+            *_GIVEN,
+            there_is_an_agent(agent_type=AgentType.HERMES),
+            there_is_a_skill(name="Calendar"),
+            skill_is_assigned_to_agent(),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        org_repo: OrganizationRepository = context.injector.get(OrganizationRepository)
+        org = org_repo.get(context.organization.id)
+        assert org is not None
+        org.allowed_models = ["openai/gpt-4o"]
+        org_repo.save(org)
+        there_is_a_template(template_key="recorded-template", name="Recorded")(context)
+        agent = client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context)).json()
+        original_pin = agent["template_key"]
+
+        with when("the selection carries a model the Organization does not allow"):
+            response = client.post(
+                _select_url(context),
+                json={
+                    "selection_type": "organization",
+                    "template_key": "recorded-template",
+                    "template_version": 1,
+                    "expected_agent_updated_at": agent["updated_at"],
+                    "model": "litellm/openrouter/anthropic/claude-opus-5",
+                    "verbose_mode": True,
+                },
+                headers=_auth(context),
+            )
+
+        with then("it is refused for the model, not for something incidental"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+            assert_that(response.json()["detail"], contains_string("not in the allowed model list"))
+
+        with then("the template pin and every setting are untouched"):
+            after = client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context)).json()
+            assert_that(after["template_key"], equal_to(original_pin))
+            assert_that(after["verbose_mode"], equal_to(False))
+            assert_that(after["model"], equal_to(agent["model"]))
+
+
+def test_a_rejected_skill_pin_leaves_the_template_pin_alone():
+    with given([*_GIVEN, there_is_an_agent(), there_is_a_skill(name="Calendar")]) as context:
+        client: TestClient = context.client
+        there_is_a_template(template_key="recorded-template", name="Recorded")(context)
+        agent = client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context)).json()
+        original_pin = agent["template_key"]
+
+        with when("the selection pins a Skill version that was never published"):
+            response = client.post(
+                _select_url(context),
+                json={
+                    "selection_type": "organization",
+                    "template_key": "recorded-template",
+                    "template_version": 1,
+                    "expected_agent_updated_at": agent["updated_at"],
+                    "skill_ids": [str(context.skill.id)],
+                    "skill_versions": [{"skill_id": str(context.skill.id), "version": 99}],
+                },
+                headers=_auth(context),
+            )
+
+        with then("it is refused and nothing moved"):
+            assert_that(response.status_code, is_in([status.HTTP_400_BAD_REQUEST, status.HTTP_404_NOT_FOUND]))
+            after = client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context)).json()
+            assert_that(after["template_key"], equal_to(original_pin))
+            assert_that(after["skills"], has_length(0))
+
+
+def test_selection_applies_recorded_runtime_settings_in_the_same_request():
+    with given([*_GIVEN, there_is_an_agent(agent_type=AgentType.HERMES)]) as context:
+        client: TestClient = context.client
+        there_is_a_template(template_key="recorded-template", name="Recorded")(context)
+        agent = client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context)).json()
+
+        with when("I select a template and the settings recorded alongside it"):
+            response = client.post(
+                _select_url(context),
+                json={
+                    "selection_type": "organization",
+                    "template_key": "recorded-template",
+                    "template_version": 1,
+                    "expected_agent_updated_at": agent["updated_at"],
+                    "approval_mode": "manual",
+                    "verbose_mode": True,
+                },
+                headers=_auth(context),
+            )
+
+        with then("the pin and the settings move together"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            body = response.json()
+            assert_that(body["template_key"], equal_to("recorded-template"))
+            assert_that(body["approval_mode"], equal_to("manual"))
+            assert_that(body["verbose_mode"], equal_to(True))
+
+
+def test_selection_accepts_one_member_of_a_required_skill_group():
+    """A group means "at least one of", so the unchosen alternative is neither
+    assigned, version-pinned, nor credentialed — and must not be demanded."""
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        there_is_a_template(template_key="group-template", name="Grouped")(context)
+        there_is_a_template_skill_group(("GitHub", "Bitbucket"))(context)
+        group = _group_skill_ids(context)
+        agent = client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context)).json()
+
+        with when("I select the template assigning only one member of the group"):
+            response = client.post(
+                _select_url(context),
+                json={
+                    "selection_type": "organization",
+                    "template_key": "group-template",
+                    "template_version": 1,
+                    "expected_agent_updated_at": agent["updated_at"],
+                    "skill_ids": [group["GitHub"]],
+                    "skill_versions": [{"skill_id": group["GitHub"], "version": 1}],
+                },
+                headers=_auth(context),
+            )
+
+        with then("the selection is accepted and the alternative stays unassigned"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assigned = {skill["name"] for skill in response.json()["skills"]}
+            assert_that(assigned, equal_to({"GitHub"}))
+
+
+def test_selection_still_requires_at_least_one_group_member():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        there_is_a_template(template_key="group-template", name="Grouped")(context)
+        there_is_a_template_skill_group(("GitHub", "Bitbucket"))(context)
+        agent = client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context)).json()
+
+        with when("I select the template without any member of the group"):
+            response = client.post(
+                _select_url(context),
+                json={
+                    "selection_type": "organization",
+                    "template_key": "group-template",
+                    "template_version": 1,
+                    "expected_agent_updated_at": agent["updated_at"],
+                },
+                headers=_auth(context),
+            )
+
+        with then("it is refused"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+            assert_that(response.json()["detail"], contains_string("At least one"))
+
+
+def test_selection_refuses_a_skill_whose_provider_is_not_configured():
+    """The provider invariant covers optional Skills too: a replay can reintroduce
+    one whose credential was removed after it was captured."""
+    with given(
+        [
+            *_GIVEN,
+            there_is_an_agent(),
+            there_is_a_skill(name="Repo Reader", required_providers=[SecretProvider.GITHUB]),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        there_is_a_template(template_key="recorded-template", name="Recorded")(context)
+        agent = client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context)).json()
+
+        with when("the selection assigns a Skill whose provider has no credential"):
+            response = client.post(
+                _select_url(context),
+                json={
+                    "selection_type": "organization",
+                    "template_key": "recorded-template",
+                    "template_version": 1,
+                    "expected_agent_updated_at": agent["updated_at"],
+                    "skill_ids": [str(context.skill.id)],
+                    "skill_versions": [{"skill_id": str(context.skill.id), "version": 1}],
+                },
+                headers=_auth(context),
+            )
+
+        with then("it is refused and nothing is assigned"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+            assert_that(response.json()["detail"], contains_string("github"))
+            after = client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context)).json()
+            assert_that(after["skills"], has_length(0))
+
+
+def test_a_skill_only_selection_advances_the_agent_revision():
+    """Otherwise a stale expected_agent_updated_at stays acceptable, and the
+    optimistic-concurrency check that runs under the row lock never fires."""
+    with given(
+        [
+            *_GIVEN,
+            there_is_an_agent(),
+            there_is_a_skill(name="Calendar"),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        skill_repository: SkillRepository = context.injector.get(SkillRepository)
+        skill_repository.publish_version(context.skill.id, [("SKILL.md", "# Calendar v2")])
+        agent = client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context)).json()
+        pinned = context.injector.get(TemplateRepository).get_pinned_template(context.agent)
+        assert pinned is not None
+        stale_timestamp = agent["updated_at"]
+
+        selection = {
+            "selection_type": "organization",
+            "template_key": pinned.template_key,
+            "template_version": pinned.version,
+            "expected_agent_updated_at": stale_timestamp,
+            "skill_ids": [str(context.skill.id)],
+            "skill_versions": [{"skill_id": str(context.skill.id), "version": 1}],
+        }
+
+        with when("I re-select the pin the Agent already holds while assigning a Skill"):
+            first = client.post(_select_url(context), json=selection, headers=_auth(context))
+
+        with then("it succeeds and the Agent's revision moves"):
+            assert_that(first.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(first.json()["updated_at"], is_not(equal_to(stale_timestamp)))
+
+        with when("a second request arrives carrying the timestamp from before"):
+            second = client.post(
+                _select_url(context),
+                json={**selection, "skill_versions": [{"skill_id": str(context.skill.id), "version": 2}]},
+                headers=_auth(context),
+            )
+
+        with then("it is refused as stale rather than silently overwriting"):
+            assert_that(second.status_code, equal_to(status.HTTP_409_CONFLICT))
+
+
+def test_selection_rejects_null_runtime_settings():
+    with given([*_GIVEN, there_is_an_agent(agent_type=AgentType.HERMES)]) as context:
+        client: TestClient = context.client
+        there_is_a_template(template_key="recorded-template", name="Recorded")(context)
+        agent = client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context)).json()
+
+        for field in ("approval_mode", "verbose_mode"):
+            with when(f"the selection sends an explicit null {field}"):
+                response = client.post(
+                    _select_url(context),
+                    json={
+                        "selection_type": "organization",
+                        "template_key": "recorded-template",
+                        "template_version": 1,
+                        "expected_agent_updated_at": agent["updated_at"],
+                        field: None,
+                    },
+                    headers=_auth(context),
+                )
+
+            with then("it is a validation error, not a database error"):
+                assert_that(response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_CONTENT))
+
+
+def test_selection_accepts_a_group_alternative_at_a_different_version():
+    """`update_agent` accepts GitHub v1 alongside Bitbucket v2 when the group asks
+    for v1 of either: one member satisfies it and the other is the caller's
+    business. Replaying that same configuration must not be refused."""
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        there_is_a_template(template_key="group-template", name="Grouped")(context)
+        there_is_a_template_skill_group(("GitHub", "Bitbucket"))(context)
+        group = _group_skill_ids(context)
+        skill_repository: SkillRepository = context.injector.get(SkillRepository)
+        bitbucket_id = UUID(group["Bitbucket"])
+        skill_repository.publish_version(bitbucket_id, [("SKILL.md", "# Bitbucket v2")])
+        agent = client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context)).json()
+
+        selection = {
+            "selection_type": "organization",
+            "template_key": "group-template",
+            "template_version": 1,
+            "expected_agent_updated_at": agent["updated_at"],
+            "skill_ids": [group["GitHub"], group["Bitbucket"]],
+            "skill_versions": [
+                {"skill_id": group["GitHub"], "version": 1},
+                {"skill_id": group["Bitbucket"], "version": 2},
+            ],
+        }
+
+        with when("I select with one member at the required version and the other beyond it"):
+            response = client.post(_select_url(context), json=selection, headers=_auth(context))
+
+        with then("the satisfied group is enough"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            versions = {skill["name"]: skill["version"] for skill in response.json()["skills"]}
+            assert_that(versions, equal_to({"GitHub": 1, "Bitbucket": 2}))
+
+
+def test_selection_refuses_a_group_where_no_member_meets_the_required_version():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        there_is_a_template(template_key="group-template", name="Grouped")(context)
+        there_is_a_template_skill_group(("GitHub", "Bitbucket"))(context)
+        group = _group_skill_ids(context)
+        skill_repository: SkillRepository = context.injector.get(SkillRepository)
+        skill_repository.publish_version(UUID(group["Bitbucket"]), [("SKILL.md", "# Bitbucket v2")])
+        agent = client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context)).json()
+
+        with when("I select assigning only a member that is not at the required version"):
+            response = client.post(
+                _select_url(context),
+                json={
+                    "selection_type": "organization",
+                    "template_key": "group-template",
+                    "template_version": 1,
+                    "expected_agent_updated_at": agent["updated_at"],
+                    "skill_ids": [group["Bitbucket"]],
+                    "skill_versions": [{"skill_id": group["Bitbucket"], "version": 2}],
+                },
+                headers=_auth(context),
+            )
+
+        with then("it is refused, naming the group"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+            assert_that(response.json()["detail"], contains_string("One of these template Skills"))
+
+
+def test_a_template_switch_is_not_blocked_by_a_credential_added_to_a_newer_skill_version():
+    """`Skill.required_providers` tracks the newest version, not the pinned one.
+
+    Both templates require Calendar v1 and the Agent stays on v1; a credential added
+    by Calendar v2 is about a version the Agent does not use.
+    """
+    with given(
+        [
+            *_GIVEN,
+            there_is_an_agent(),
+            there_is_a_skill(name="Calendar"),
+            skill_is_assigned_to_agent(),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        there_is_a_template(template_key="next-template", name="Next")(context)
+        there_is_a_template_skill()(context)
+
+        # Publishing v2 rewrites the lineage's denormalized requirement.
+        skill_repository: SkillRepository = context.injector.get(SkillRepository)
+        skill_repository.publish_version(context.skill.id, [("SKILL.md", "# Calendar v2")])
+        with Session(context.postgres_delegate.engine) as session:
+            skill = session.get(Skill, context.skill.id)
+            assert skill is not None
+            skill.required_providers = [SecretProvider.GITHUB]
+            session.add(skill)
+            session.commit()
+
+        agent = client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context)).json()
+
+        with when("I switch templates without touching the Skill"):
+            response = client.post(
+                _select_url(context),
+                json={
+                    "selection_type": "organization",
+                    "template_key": "next-template",
+                    "template_version": 1,
+                    "expected_agent_updated_at": agent["updated_at"],
+                },
+                headers=_auth(context),
+            )
+
+        with then("the switch is allowed"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))

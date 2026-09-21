@@ -21,10 +21,12 @@ import {
   type AgentConfigurationSectionKey,
 } from "./agent-configuration-utils";
 import { AgentDangerZoneSettings } from "./agent-danger-zone-settings";
+import { AgentErrorBanner } from "./agent-error-banner";
 import { AgentKeysSettings } from "./agent-keys-settings";
 import { AgentMetaBadges } from "./agent-meta-badges";
 import { AgentOverrideSettings } from "./agent-override-settings";
 import { AgentProfileSettings } from "./agent-profile-settings";
+import { AgentRestorePointsSettings } from "./agent-restore-points-settings";
 import { AgentSkillsSettings } from "./agent-skills-settings";
 import { AgentTemplateSelectionSettings } from "./agent-template-selection-settings";
 
@@ -46,11 +48,14 @@ export function AgentConfigurationPage({ agentId }: { agentId: string }) {
     agentId,
     canReadActivity && agent?.status === "ERROR",
   );
+  // Restore points read from the activity surface, so an Agent the viewer can see
+  // but has no activity access to does not offer the section at all.
+  const sections = canReadActivity
+    ? AGENT_CONFIGURATION_SECTIONS
+    : AGENT_CONFIGURATION_SECTIONS.filter((item) => item.key !== "restore");
   const [activeSection, setActiveSection] = useQueryState(
     "section",
-    parseAsStringEnum<AgentConfigurationSectionKey>(
-      AGENT_CONFIGURATION_SECTIONS.map((item) => item.key),
-    )
+    parseAsStringEnum<AgentConfigurationSectionKey>(sections.map((item) => item.key))
       .withDefault("profile")
       .withOptions({ scroll: false, history: "replace" }),
   );
@@ -96,7 +101,8 @@ export function AgentConfigurationPage({ agentId }: { agentId: string }) {
   const canEdit = canAgent(agent, "agent.update");
   const canManageSecrets = canAgent(agent, "agent.secret.manage");
   const canDelete = canAgent(agent, "agent.delete");
-  const section = AGENT_CONFIGURATION_SECTIONS.find((item) => item.key === activeSection) ?? AGENT_CONFIGURATION_SECTIONS[0];
+  const canManageLifecycle = canAgent(agent, "agent.lifecycle.manage");
+  const section = sections.find((item) => item.key === activeSection) ?? sections[0];
 
   function selectSection(nextSection: AgentConfigurationSectionKey) {
     void setActiveSection(nextSection);
@@ -140,38 +146,50 @@ export function AgentConfigurationPage({ agentId }: { agentId: string }) {
           </div>
         </div>
 
-        {agent.status === "ERROR" && (
-          <Alert
-            variant="destructive"
-            className="mb-8 items-start border-destructive/30 bg-destructive/5 px-4 py-3"
-          >
-            <CircleAlert aria-hidden />
-            <AlertTitle>Agent needs attention</AlertTitle>
-            <AlertDescription>
-              <span className="block">
-                The Agent could not start with its current configuration.
-              </span>
-              <span className="mt-1 block">
-                {health?.reason
-                  ? `Runtime reported: ${health.reason}`
-                  : "Review the Agent logs, resolve the underlying issue, and start the Agent again."}
-              </span>
+        {agent.status === "ERROR" &&
+          (agent.lastError ? (
+            <AgentErrorBanner failure={agent.lastError} className="mb-8">
               {canReadActivity && (
                 <Link
                   href={`${homeHref}/agents/${agent.id}?tab=logs`}
-                  className="mt-1 inline-block font-medium text-destructive underline underline-offset-3"
+                  className="mt-2 inline-block font-medium underline underline-offset-3"
                 >
                   View Agent logs
                 </Link>
               )}
-            </AlertDescription>
-          </Alert>
-        )}
+            </AgentErrorBanner>
+          ) : (
+            <Alert
+              variant="destructive"
+              className="mb-8 items-start border-destructive/30 bg-destructive/5 px-4 py-3"
+            >
+              <CircleAlert aria-hidden />
+              <AlertTitle>Agent needs attention</AlertTitle>
+              <AlertDescription>
+                <span className="block">
+                  The Agent could not start with its current configuration.
+                </span>
+                <span className="mt-1 block">
+                  {health?.reason ??
+                    "Review the Agent logs, resolve the underlying issue, and start the Agent again."}
+                </span>
+                {canReadActivity && (
+                  <Link
+                    href={`${homeHref}/agents/${agent.id}?tab=logs`}
+                    className="mt-1 inline-block font-medium text-destructive underline underline-offset-3"
+                  >
+                    View Agent logs
+                  </Link>
+                )}
+              </AlertDescription>
+            </Alert>
+          ))}
 
         <div className="grid gap-8 lg:grid-cols-[14rem_minmax(0,1fr)] lg:items-start">
           <AgentConfigurationSidebar
             activeSection={activeSection}
             onSectionChange={selectSection}
+            sections={sections}
           />
 
           <div className="min-w-0">
@@ -228,6 +246,14 @@ export function AgentConfigurationPage({ agentId }: { agentId: string }) {
                 editing={editingSection === "override"}
                 onEdit={() => toggleEditing("override")}
                 onPublished={handleOverridePublished}
+              />
+            )}
+            {activeSection === "restore" && canReadActivity && (
+              <AgentRestorePointsSettings
+                agent={agent}
+                active={configuration.active}
+                canManage={canManageLifecycle}
+                canEditConfiguration={canEdit}
               />
             )}
             {activeSection === "danger" && (

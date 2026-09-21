@@ -1,7 +1,8 @@
 import json
 from unittest.mock import MagicMock, patch
 
-from hamcrest import assert_that, equal_to, none
+import httpx
+from hamcrest import assert_that, calling, equal_to, none, raises
 
 from api.domains.communications.plugins.base import provider_idempotency_key
 from api.infrastructure.discord.client import DiscordClient
@@ -22,6 +23,20 @@ def test_discord_client_resolves_user_and_channel_names(mock_request, _mock_cach
     assert_that(client.get_channel_display_name("channel-1"), equal_to("ops-alerts"))
 
 
+@patch("api.infrastructure.discord.client.resilient_request")
+def test_discord_client_identifies_its_rest_requests_to_discord(mock_request):
+    response = MagicMock(status_code=200)
+    response.json.return_value = {"id": "bot-1", "username": "agentbarn"}
+    mock_request.return_value = response
+
+    DiscordClient("discord-token").get_current_bot()
+
+    assert_that(
+        mock_request.call_args.kwargs["headers"],
+        equal_to({"Authorization": "Bot discord-token", "User-Agent": "AgentBarn/1.0"}),
+    )
+
+
 @patch("api.infrastructure.discord.client.cached", side_effect=lambda _key, fetch, ttl: fetch())
 @patch("api.infrastructure.discord.client.resilient_request")
 def test_discord_client_returns_none_when_resource_is_not_visible(mock_request, _mock_cached):
@@ -29,6 +44,25 @@ def test_discord_client_returns_none_when_resource_is_not_visible(mock_request, 
     client = DiscordClient("discord-token")
 
     assert_that(client.get_channel_display_name("channel-1"), none())
+
+
+@patch("api.infrastructure.discord.client.cached", side_effect=lambda _key, fetch, ttl: fetch())
+@patch("api.infrastructure.discord.client.resilient_request")
+def test_discord_client_raises_instead_of_hiding_a_forbidden_member_list(mock_request, _mock_cached):
+    """A 403 (e.g. Server Members Intent disabled) must propagate, not collapse to [].
+
+    Directory results are cached for 10 minutes: silently returning [] here would
+    look identical to a guild with no members and get cached as if it were correct,
+    leaving the "Allowed users" picker empty with no way to tell why.
+    """
+    response = MagicMock(status_code=403)
+    response.raise_for_status.side_effect = httpx.HTTPStatusError(
+        "Forbidden", request=MagicMock(), response=MagicMock(status_code=403)
+    )
+    mock_request.return_value = response
+    client = DiscordClient("discord-token")
+
+    assert_that(calling(client.list_guild_members).with_args("guild-1"), raises(httpx.HTTPStatusError))
 
 
 @patch("api.infrastructure.discord.client.cached", side_effect=lambda _key, fetch, ttl: fetch())
@@ -95,3 +129,44 @@ def test_discord_client_carries_the_provider_idempotency_key(mock_request):
     assert_that(payload["nonce"], equal_to(provider_key[:25]))
     assert_that(len(payload["nonce"]), equal_to(25))
     assert_that(payload["enforce_nonce"], equal_to(True))
+
+
+@patch("api.infrastructure.discord.client.resilient_request")
+def test_discord_client_sends_components_only_when_a_message_has_them(mock_request):
+    response = MagicMock(status_code=200)
+    response.json.return_value = {"id": "message-1"}
+    mock_request.return_value = response
+    buttons = [{"type": 1, "components": [{"type": 2, "style": 2, "label": "Allow once", "custom_id": "value-1"}]}]
+
+    DiscordClient("bot-value").send_message("channel-1", "reply")
+    plain = json.loads(mock_request.call_args.kwargs["content"])
+
+    DiscordClient("bot-value").send_message("channel-1", "approval", components=buttons)
+    with_buttons = json.loads(mock_request.call_args.kwargs["content"])
+
+    assert_that("components" in plain, equal_to(False))
+    assert_that(with_buttons["components"], equal_to(buttons))
+
+
+@patch("api.infrastructure.discord.client.resilient_request")
+def test_discord_client_sends_a_short_reply_as_one_unchanged_request(mock_request):
+    response = MagicMock(status_code=200)
+    response.json.return_value = {"id": "message-1"}
+    mock_request.return_value = response
+
+    provider_key = provider_idempotency_key("delivery-1")
+
+    message_id = DiscordClient("bot-value").send_message(
+        "channel-1",
+        "reply",
+        reply_to_id="origin-1",
+        idempotency_key=provider_key,
+    )
+
+    assert_that(message_id, equal_to("message-1"))
+    assert_that(mock_request.call_count, equal_to(1))
+    payload = json.loads(mock_request.call_args.kwargs["content"])
+    assert_that(payload["content"], equal_to("reply"))
+    assert_that(payload["nonce"], equal_to(provider_key[:25]))
+    assert_that(payload["enforce_nonce"], equal_to(True))
+    assert_that(payload["message_reference"]["message_id"], equal_to("origin-1"))

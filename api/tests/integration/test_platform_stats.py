@@ -140,11 +140,18 @@ def _seed_message(
     suffix="",
     platform=CommunicationPlatform.SLACK,
 ):
-    """One received message on a Connection of its own, through the gateway."""
+    """One received message on the Agent's Connection for that platform, through the gateway."""
     delegate: PostgresRepositoryDelegate = context.injector.get(PostgresRepositoryDelegate)
     agent = delegate.find_by_id(Agent, agent_id)
     assert agent is not None
-    connection = _seed_connection(context, agent=agent, platform=platform)
+    connection = delegate.find_one_by_query(
+        CommunicationConnection,
+        select(CommunicationConnection).where(
+            col(CommunicationConnection.agent_id) == agent.id,
+            col(CommunicationConnection.platform_key) == platform.value,
+            col(CommunicationConnection.retired_at).is_(None),
+        ),
+    ) or _seed_connection(context, agent=agent, platform=platform)
     return _accept_inbound(context, connection=connection, occurred_at=occurred_at, suffix=suffix)
 
 

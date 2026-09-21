@@ -127,6 +127,11 @@ Agents reachable by email get their own address on a dedicated subdomain, receiv
 - **Agent mail draws on the same account-wide sending quota** as invites, password resets, and lifecycle notifications, across both environments. A chatty Agent can starve real user invites; see the quota note above.
 - Relevant limits: 200 routing rules per domain, 200 verified destination addresses per account, 30 domains per zone, 25 MiB inbound message size.
 
+## Native runtime gateway rollout
+
+- **`COMMUNICATIONS_NATIVE_PLATFORMS`** is one shared GitHub variable containing a comma-separated native runtime Platform allowlist. Set it to **`slack,discord`** to enable the Hermes/OpenClaw native Slack and Discord gateways in every deployment workflow. It flows through `helmfile.yaml.gotmpl` into the API chart's shared Secret, so both the API and Communications processes receive the same cutoff.
+- Empty is the rollback setting: all Platforms remain on the Communications Gateway. Restart affected Agents after deploying a change so their runtime configuration is rebuilt.
+
 ## Staging environment
 
 Staging is a fully separate stack in its own namespace (`agent-farm-staging`),

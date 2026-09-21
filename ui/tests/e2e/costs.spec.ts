@@ -36,6 +36,70 @@ test.describe("Organization costs", () => {
     await expect(page.getByText("glm-5.2")).toBeVisible();
   });
 
+  test("a legend of long agent names stays inside its card", async ({ page }) => {
+    const names = [
+      "Aria the Research Assistant",
+      "Meticulous Documentation Bot",
+      "Quarterly Reporting Analyst",
+      "Customer Escalation Handler",
+      "Infrastructure Cost Auditor",
+      "Onboarding Concierge Agent",
+    ];
+    const series = names.flatMap((agent_name, i) =>
+      ["2026-08-04", "2026-08-05", "2026-08-06"].map((day, j) => ({
+        bucket: `${day}T00:00:00Z`,
+        agent_id: `0000000${i}-0000-4000-8000-00000000000${i}`,
+        agent_name,
+        spend: 1 + i * 0.7 + j * 0.3,
+      })),
+    );
+
+    await data.costs.interceptOrgSummary({
+      summary: { ...costSummary(), spend_by_agent_over_time: series },
+    });
+    await data.costs.interceptOrgList({ items: [], total: 0 });
+
+    await page.goto(COSTS_URL);
+
+    const card = page.getByTestId("spend-by-agent-card");
+    await expect(card).toBeVisible();
+    const cardBox = (await card.boundingBox())!;
+
+    // Each entry, not the flex container around them: the container is sized by its
+    // parent and stays put while its children run off both edges, which is the
+    // failure being guarded. Measuring the container passes on the broken layout.
+    const entries = card.locator(".recharts-legend-wrapper > div > div");
+    await expect(entries).toHaveCount(names.length);
+
+    for (let i = 0; i < names.length; i += 1) {
+      const entry = entries.nth(i);
+      await expect(entry).toHaveText(new RegExp(names[i]));
+      const box = (await entry.boundingBox())!;
+      expect(box.x, `"${names[i]}" starts left of the card`).toBeGreaterThanOrEqual(
+        cardBox.x,
+      );
+      expect(
+        box.x + box.width,
+        `"${names[i]}" runs past the right of the card`,
+      ).toBeLessThanOrEqual(cardBox.x + cardBox.width);
+    }
+  });
+
+  test("cost-per-call ticks avoid glyphs the page font cannot draw", async ({ page }) => {
+    await data.costs.interceptOrgSummary();
+    await data.costs.interceptOrgList({ items: [], total: 0 });
+
+    await page.goto(COSTS_URL);
+
+    // Geist has no glyph at U+2264, so a "≤" here was drawn in a fallback face and
+    // the whole axis read as a different font.
+    const ticks = page.getByTestId("cost-per-call-card").locator(".recharts-cartesian-axis-tick-value");
+    await expect(ticks.first()).toBeVisible();
+    for (const text of await ticks.allTextContents()) {
+      expect(text).not.toMatch(/[\u2264\u2265]/);
+    }
+  });
+
   test("a filter lands in the URL and narrows the request", async ({ page }) => {
     await data.costs.interceptOrgSummary();
     await data.costs.interceptOrgList({ items: [costRecord()], total: 1 });

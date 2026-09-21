@@ -8,3 +8,7 @@ docker run --rm --network none \
     -v "$repo_root/api/domains/agents/scripts/messaging:/messaging:ro" \
     -v "$repo_root/api/tests/fixtures/openclaw_message_hooks_driver.mjs:/driver.mjs:ro" \
     --entrypoint node "$image" /driver.mjs
+docker run --rm --network none \
+    -v "$repo_root/api/domains/agents/scripts/openclaw/plugins/agentbarn-observer:/observer:ro" \
+    -v "$repo_root/api/tests/fixtures/openclaw_observer_driver.mjs:/observer-driver.mjs:ro" \
+    --entrypoint node "$image" /observer-driver.mjs

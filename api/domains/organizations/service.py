@@ -11,7 +11,8 @@ from sqlmodel import Session, select
 from api.core.config import get_config
 from api.domains.agent_settings.lookup import AgentSettingsLookupService
 from api.domains.agents.repository import AgentRepository
-from api.domains.agents.service import _OPENROUTER_MODEL_PREFIX, AgentService, is_model_allowed
+from api.domains.agents.selection import _OPENROUTER_MODEL_PREFIX, is_model_allowed
+from api.domains.agents.service import AgentService
 from api.domains.auth.models import CurrentUserContext
 from api.domains.events import (
     ActorIdentity,

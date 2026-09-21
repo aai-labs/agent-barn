@@ -13,6 +13,7 @@ from sqlmodel import Column, Enum, Index
 from sqlmodel import Field as SqlField
 
 from api.domains.agents.google_workspace_scopes import required_service_scopes
+from api.domains.agents.provisioning_errors import AgentProvisioningErrorCategory
 from api.domains.rbac.catalog import PermissionKey
 from api.domains.users.organization_users.models import OrganizationRole
 from api.infrastructure.crypto import decrypt_token, encrypt_token
@@ -340,11 +341,17 @@ class Agent(BaseModel, table=True):
         default=AgentType.OPENCLAW,
         sa_column=Column(sa.String(20), nullable=False, server_default="openclaw"),
     )
+    # Provisioning failure, as normalized by provisioning_errors.py. `last_error` is
+    # the one-line display rendering (summary + detail); `last_error_code` names the
+    # category the read boundary rebuilds the rest from, and its absence on a row
+    # that has `last_error` marks pre-normalization text that was never sanitized.
     last_error: str | None = SqlField(
         default=None,
         nullable=True,
         sa_type=sa.Text,
     )
+    last_error_code: str | None = SqlField(default=None, nullable=True, max_length=100)
+    last_error_detail: str | None = SqlField(default=None, nullable=True, max_length=500)
 
     ingest_key_encrypted: str | None = SqlField(default=None, nullable=True)
     communication_key_encrypted: str | None = SqlField(default=None, nullable=True)
@@ -513,6 +520,21 @@ class AgentRestorePoint(BaseModel, table=True):
         sa_column=Column(JSONB, nullable=False),
     )
     failure_reason: str | None = SqlField(default=None, nullable=True, max_length=500)
+    # Set when a restore is asked to bring the recorded configuration back with it.
+    # The configuration is written only after the Job confirms the volume is back,
+    # so the intent has to outlive the request that made it.
+    reapply_configuration: bool = SqlField(default=False, nullable=False, sa_column_kwargs={"server_default": "false"})
+    # Why the recorded configuration did not land, once the volume already has.
+    configuration_error: str | None = SqlField(default=None, nullable=True, max_length=500)
+    # Who asked for the restore, which is who authorized the configuration write that
+    # follows it. Not the same person as the one who captured the restore point.
+    restored_by_user_id: UUID | None = SqlField(
+        default=None,
+        foreign_key="user.id",
+        nullable=True,
+        ondelete="SET NULL",
+    )
+    restored_by_display: str | None = SqlField(default=None, nullable=True, max_length=255)
     captured_at: datetime | None = SqlField(
         default=None,
         nullable=True,
@@ -1004,11 +1026,43 @@ class AgentTemplateOverridePublish(PydanticBaseModel):
 
 
 class AgentTemplateSelection(PydanticBaseModel):
+    """A configuration selection: the template pin, and optionally the skill pins
+    and runtime settings that must hold with it.
+
+    Required skill pins are validated against the assignments the Agent *will* have,
+    so a template and its own skills have to arrive in one request.
+    """
+
     selection_type: Literal["platform", "organization", "override"]
     template_key: str | None = Field(default=None, min_length=1, max_length=255)
     template_version: int | None = Field(default=None, ge=1)
     override_version: int | None = Field(default=None, ge=1)
     expected_agent_updated_at: datetime
+
+    # Same vocabulary as AgentUpdate: additive assignment plus explicit removal.
+    skill_ids: list[UUID] = Field(default_factory=list)
+    removed_skill_ids: list[UUID] = Field(default_factory=list)
+    skill_versions: list[SkillVersionPin] = Field(default_factory=list)
+
+    # Unset means "leave as it is"; a null model clears the override, as in AgentUpdate.
+    model: str | None = None
+    approval_mode: CommandApprovalMode | None = None
+    verbose_mode: bool | None = None
+
+    # These columns are not nullable; only `model` gives null a meaning.
+    @model_validator(mode="before")
+    @classmethod
+    def reject_null_approval_mode(cls, values: object) -> object:
+        if isinstance(values, dict) and values.get("approval_mode", ...) is None:
+            raise ValueError("approval_mode must be omitted rather than null")
+        return values
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_null_verbose_mode(cls, values: object) -> object:
+        if isinstance(values, dict) and values.get("verbose_mode", ...) is None:
+            raise ValueError("verbose_mode must be omitted rather than null")
+        return values
 
     @model_validator(mode="after")
     def validate_target(self) -> AgentTemplateSelection:
@@ -1019,6 +1073,9 @@ class AgentTemplateSelection(PydanticBaseModel):
                 )
         elif self.override_version is None or self.template_key is not None or self.template_version is not None:
             raise ValueError("Override selection requires override_version, and no template_key or template_version")
+        overlap = set(self.skill_ids) & set(self.removed_skill_ids)
+        if overlap:
+            raise ValueError("A Skill cannot be both assigned and removed in the same selection")
         return self
 
 
@@ -1152,6 +1209,21 @@ class AgentAssignedSkillRead(PydanticBaseModel):
 AgentModelSource = Literal["default", "override"]
 
 
+class AgentProvisioningErrorRead(PydanticBaseModel):
+    """A failed start, as shown to anyone who can read the Agent.
+
+    Every field is derived from the stored category or rebuilt from validated
+    fragments; no cluster text reaches this DTO. See `provisioning_errors.py`.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    code: str
+    category: AgentProvisioningErrorCategory
+    summary: str
+    detail: str | None = None
+
+
 class AgentRead(PydanticBaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -1179,8 +1251,12 @@ class AgentRead(PydanticBaseModel):
     secrets: list[AgentSecretRead] = Field(default_factory=list)
     skills: list[AgentAssignedSkillRead] = Field(default_factory=list)
     configured_platform_keys: list[str] = Field(default_factory=list)
+    #: Platforms whose Connections this Agent's runtime runs natively. A change to
+    #: one of them takes effect only after the Agent restarts.
+    native_platform_keys: list[str] = Field(default_factory=list)
     approval_mode: CommandApprovalMode
     verbose_mode: bool
+    last_error: AgentProvisioningErrorRead | None = None
     allowed_actions: list[PermissionKey] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime

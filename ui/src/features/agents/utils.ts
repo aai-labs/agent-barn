@@ -48,6 +48,7 @@ export const agentsKey = {
   webChatThreads: (agentId: string) =>
     [..._agentsKeyBase.detail(agentId), "web-chat-threads"] as const,
   logs: (id: string) => [..._agentsKeyBase.detail(id), "logs"] as const,
+  restorePoints: (id: string) => [..._agentsKeyBase.detail(id), "restore-points"] as const,
   slackChannels: (id: string) => [..._agentsKeyBase.detail(id), "slack-channels"] as const,
   slackUsers: (id: string) => [..._agentsKeyBase.detail(id), "slack-users"] as const,
   models: () => [..._agentsKeyBase.all, "models"] as const,

@@ -23,6 +23,13 @@ from api.domains.communications.models import (
     ProcessingFeedbackStage,
     ResolvedOutboundTarget,
 )
+from api.domains.communications.plugins.approvals import (
+    APPROVAL_METADATA_KEY,
+    SYNTHESIZED_MESSAGE_PREFIX,
+    decode_approval_value,
+    encode_approval_value,
+    is_synthesized_message_id,
+)
 from api.domains.communications.plugins.base import (
     AgentInitiatedDeliverySettings,
     InboundAdmissionContext,
@@ -31,6 +38,7 @@ from api.domains.communications.plugins.base import (
     PlatformPlugin,
     PlatformSettings,
     ProcessingFeedbackContext,
+    best_effort_failure_notice,
     provider_idempotency_key,
 )
 from api.infrastructure.slack.client import SlackClient
@@ -105,26 +113,14 @@ class SlackCredentials(PlatformCredentials):
 
 
 APPROVAL_ACTION_PREFIX = "agentbarn_approval:"
-_APPROVAL_METADATA_KEY = "approval_id"
-_SYNTHESIZED_MESSAGE_PREFIX = "action:"
 _APPROVAL_BLOCK_ID = "agentbarn_approval"
 _SECTION_TEXT_LIMIT = 3000
 _MARKDOWN_BLOCK_LIMIT = 12_000
 _SLACK_MARKUP = re.compile(r"<[@#!]")
-_APPROVAL_CHOICE_LABELS = {
-    "once": "Allow once",
-    "session": "Allow for session",
-    "always": "Always allow",
-    "deny": "Deny",
-}
 
 
 def approval_action_id(choice: str) -> str:
     return f"{APPROVAL_ACTION_PREFIX}{choice}"
-
-
-def approval_action_value(approval_id: str, choice: str) -> str:
-    return f"{approval_id}:{choice}"
 
 
 def _approval_blocks(approval: ApprovalRequest) -> list[dict]:
@@ -142,8 +138,8 @@ def _approval_blocks(approval: ApprovalRequest) -> list[dict]:
                 {
                     "type": "button",
                     "action_id": approval_action_id(choice),
-                    "text": {"type": "plain_text", "text": _APPROVAL_CHOICE_LABELS.get(choice, choice)},
-                    "value": approval_action_value(approval.approval_id, choice),
+                    "text": {"type": "plain_text", "text": approval.choice_labels.get(choice, choice)},
+                    "value": encode_approval_value(approval.approval_id, choice),
                 }
                 for choice in approval.choices
             ],
@@ -416,6 +412,19 @@ class SlackPlatformPlugin(PlatformPlugin):
                 "white_check_mark" if context.stage == ProcessingFeedbackStage.SUCCEEDED else "x",
             ),
         )
+        # An "x" reaction says a message was dropped but never why, so the
+        # normalized reason goes in the thread beside it.
+        best_effort_failure_notice(
+            context,
+            lambda text, idempotency_key: client.send_message(
+                context.location.id,
+                text,
+                thread_id=context.location.thread_id or context.provider_message_id,
+                idempotency_key=idempotency_key,
+            ),
+            target=f"Slack channel {context.location.id} thread {context.location.thread_id or 'root'}",
+            logger=logger,
+        )
 
     @staticmethod
     def _best_effort_feedback(
@@ -428,7 +437,7 @@ class SlackPlatformPlugin(PlatformPlugin):
             "add acknowledgement reaction",
             "remove acknowledgement reaction",
             "add terminal reaction",
-        } and (not message_id or message_id.startswith(_SYNTHESIZED_MESSAGE_PREFIX)):
+        } and (not message_id or is_synthesized_message_id(message_id)):
             return
         try:
             callback()
@@ -493,7 +502,7 @@ class SlackPlatformPlugin(PlatformPlugin):
         except TypeError, ValueError, OSError:
             return InboundAdmissionResult(CommunicationPolicyDisposition.MALFORMED_PAYLOAD)
 
-        approval_id, _, choice = str(action.get("value") or "").rpartition(":")
+        approval_id, choice = decode_approval_value(str(action.get("value") or ""))
         if not choice:
             return InboundAdmissionResult(CommunicationPolicyDisposition.MALFORMED_PAYLOAD)
 
@@ -507,7 +516,7 @@ class SlackPlatformPlugin(PlatformPlugin):
             CommunicationPolicyDisposition.ACCEPTED,
             (
                 NormalizedCommunicationEnvelope(
-                    provider_message_id=f"{_SYNTHESIZED_MESSAGE_PREFIX}{action_ts}",
+                    provider_message_id=f"{SYNTHESIZED_MESSAGE_PREFIX}{action_ts}",
                     occurred_at=occurred_at,
                     location=ConversationLocation(
                         id=channel_id,
@@ -516,7 +525,7 @@ class SlackPlatformPlugin(PlatformPlugin):
                     ),
                     sender=CommunicationSender(id=sender_id),
                     text=choice,
-                    provider_metadata={_APPROVAL_METADATA_KEY: approval_id},
+                    provider_metadata={APPROVAL_METADATA_KEY: approval_id},
                 ),
             ),
         )

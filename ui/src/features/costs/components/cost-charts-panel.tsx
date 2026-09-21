@@ -48,7 +48,7 @@ export const CostChartsPanel = memo(function CostChartsPanel({
         />
       </ChartCard>
 
-      <ChartCard title="Spend by agent">
+      <ChartCard title="Spend by agent" testId="spend-by-agent-card">
         <SpendByAgentChart
           series={summary.spendByAgentOverTime}
           granularity={summary.granularity}
@@ -64,7 +64,8 @@ export const CostChartsPanel = memo(function CostChartsPanel({
 
       <ChartCard
         title="Cost per call"
-        subtitle="Calls whose cost has not been recovered yet sit in the cheapest band."
+        testId="cost-per-call-card"
+        subtitle="Each bar covers calls up to its label. Calls whose cost has not been recovered yet sit in the cheapest band."
       >
         <CostHistogramChart buckets={summary.costPerCallHistogram} />
       </ChartCard>
@@ -75,14 +76,16 @@ export const CostChartsPanel = memo(function CostChartsPanel({
 function ChartCard({
   title,
   subtitle,
+  testId,
   children,
 }: {
   title: string;
   subtitle?: string;
+  testId?: string;
   children: React.ReactNode;
 }) {
   return (
-    <div className="af-card p-4">
+    <div className="af-card p-4" data-testid={testId}>
       <h2
         className="text-[14px] font-semibold m-0 mb-1"
         style={{ color: "var(--ink)" }}
