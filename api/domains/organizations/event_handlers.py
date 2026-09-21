@@ -117,14 +117,14 @@ class OrganizationBudgetEmailHandler:
         # Deliberately says nothing about where the figure comes from — the recipient
         # cares what they can spend, not which system counted it.
         if exhausted:
-            headline = "Model spend allowance reached"
+            headline = "Model spend limit reached"
             body = (
-                f"Your organization has used its entire model spend allowance ({used}). "
-                "Agents can't make model calls until the allowance resets or is raised."
+                f"Your organization has used its entire model spend limit ({used}). "
+                "Agents can't make model calls until the limit resets or is raised."
             )
         else:
-            headline = f"{payload['threshold_percent']}% of your model spend allowance used"
-            body = f"Your organization has used {used} of its model spend allowance."
+            headline = f"{payload['threshold_percent']}% of your model spend limit used"
+            body = f"Your organization has used {used} of its model spend limit."
         if renews:
             body = f"{body} It resets on {str(renews)[:10]}."
         return headline, body

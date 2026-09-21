@@ -32,7 +32,7 @@ test.describe("Organization spend limit banner", () => {
     await page.goto(COSTS_URL);
 
     await expect(
-      page.getByText(/used \$40\.00 of \$50\.00 of its model spend allowance this period/i),
+      page.getByText(/used \$40\.00 of \$50\.00 of its model spend limit this period/i),
     ).toBeVisible();
     // The cards cover a rolling range, not the allowance period — each has to say so
     // or the two totals read as contradicting each other.
@@ -57,7 +57,7 @@ test.describe("Organization spend limit banner", () => {
     });
     await page.goto(COSTS_URL);
 
-    await expect(page.getByText(/model spend allowance/i)).toHaveCount(0);
+    await expect(page.getByText(/model spend limit/i)).toHaveCount(0);
   });
 
   test("an unobserved limit is not presented as safe or breached", async ({ page }) => {
@@ -67,7 +67,7 @@ test.describe("Organization spend limit banner", () => {
     });
     await page.goto(COSTS_URL);
 
-    await expect(page.getByText(/model spend allowance/i)).toHaveCount(0);
+    await expect(page.getByText(/model spend limit/i)).toHaveCount(0);
   });
 
   test("a member sees no banner", async ({ page }) => {
@@ -89,7 +89,7 @@ test.describe("Organization spend limit banner", () => {
     });
     await page.goto(AGENTS_URL);
 
-    await expect(page.getByText(/model spend allowance/i)).toHaveCount(0);
+    await expect(page.getByText(/model spend limit/i)).toHaveCount(0);
     expect(asked).toBe(false);
   });
 });

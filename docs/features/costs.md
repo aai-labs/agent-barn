@@ -108,7 +108,7 @@ never closed. Historical requests made before team attachment are not retroactiv
 charged. In-flight requests can exceed any cap. This is a proxy spend cutoff, not an
 exact provider-invoice ceiling, and only calls using these LiteLLM Agent keys count.
 A budget rejection does not stop the Agent container or suspend the Organization;
-model calls fail until the allowance renews or is raised or removed. Both runtimes'
+model calls fail until the limit renews or is raised or removed. Both runtimes'
 in-pod LLM proxy rewrites that rejection before the runtime sees it, so the person
 talking to the Agent is told the Organization has reached its limit rather than
 shown a raw error naming an internal team id. It is matched on the error body rather

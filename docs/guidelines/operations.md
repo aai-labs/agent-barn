@@ -51,7 +51,7 @@ Budgets are off until set. With LiteLLM configured, teams are still provisioned 
 new keys assigned even when no amount is set anywhere. No Agent restart is required,
 and a change takes effect as soon as it is saved — there is nothing to redeploy.
 
-`budget_usd` is a non-negative finite number, where `0` is a zero allowance and
+`budget_usd` is a non-negative finite number, where `0` is a limit of nothing and
 omitting it removes the cap. `budget_duration` is a positive integer followed by
 `s`, `m`, `h` or `d`, defaulting to `30d` — a 30-day interval, not a calendar month.
 Clearing the amount also clears the renewal schedule. Changing only the amount

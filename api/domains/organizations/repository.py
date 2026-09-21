@@ -25,6 +25,15 @@ from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.infrastructure.shared.models import PaginatedItems, Pagination
 
 
+def _deduped_recipients(rows) -> list[tuple[str, str | None]]:
+    """One entry per address, compared case-insensitively while keeping the stored
+    casing for display."""
+    seen: dict[str, tuple[str, str | None]] = {}
+    for email, full_name in rows:
+        seen.setdefault(str(email).lower(), (str(email), full_name))
+    return list(seen.values())
+
+
 @inject
 @singleton
 @dataclass
@@ -140,20 +149,14 @@ class OrganizationRepository:
                     col(OrganizationUser.role).in_([OrganizationRole.OWNER, OrganizationRole.ADMIN]),
                 )
             ).all()
-        seen: dict[str, tuple[str, str | None]] = {}
-        for email, full_name in rows:
-            seen.setdefault(str(email).lower(), (str(email), full_name))
-        return list(seen.values())
+        return _deduped_recipients(rows)
 
     def find_platform_admin_recipients(self) -> list[tuple[str, str | None]]:
         """Platform Administrators, for the one budget event that is our problem too:
         an Organization cut off from model calls is a support ticket inbound."""
         with Session(self.delegate.engine) as session:
             rows = session.exec(select(User.email, User.full_name).where(col(User.is_platform_admin).is_(True))).all()
-        seen: dict[str, tuple[str, str | None]] = {}
-        for email, full_name in rows:
-            seen.setdefault(str(email).lower(), (str(email), full_name))
-        return list(seen.values())
+        return _deduped_recipients(rows)
 
     def find_notified_budget_recipients(self, delivery_id: UUID) -> set[str]:
         with Session(self.delegate.engine) as session:

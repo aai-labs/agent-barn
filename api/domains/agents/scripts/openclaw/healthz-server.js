@@ -19,7 +19,7 @@ const TERMINAL_LLM_ERRORS = {
 
 const BUDGET_EXHAUSTED =
   'This organization has reached its model spend limit. ' +
-  'Contact your administrator to raise it or wait for the allowance to reset.';
+  'Contact your administrator to raise it or wait for the limit to reset.';
 
 // An exhausted limit has been seen as a 400 and is documented as a 429 depending on
 // which budget was hit and which proxy version answered. Both are buffered and matched

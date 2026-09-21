@@ -51,8 +51,8 @@ export function LlmBudgetBanner({ show }: { show: "warning" | "exhausted" }) {
       )}
       <span>
         {exhausted
-          ? `This organization has used its entire model spend allowance (${used}). Agents can't make model calls until it resets or is raised.${renewalSuffix(budget.renewsAt)}`
-          : `This organization has used ${used} of its model spend allowance this period.${renewalSuffix(budget.renewsAt)}`}
+          ? `This organization has used its entire model spend limit (${used}). Agents can't make model calls until it resets or is raised.${renewalSuffix(budget.renewsAt)}`
+          : `This organization has used ${used} of its model spend limit this period.${renewalSuffix(budget.renewsAt)}`}
       </span>
     </div>
   );

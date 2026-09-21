@@ -939,7 +939,7 @@ def test_a_warning_email_states_usage_without_naming_any_system():
     handler = budget_email_handler([("owner@example.com", "Grace")])
     handler.handle(budget_event(ORGANIZATION_LLM_BUDGET_THRESHOLD_REACHED), delivery_context())
     sent = handler.email_service.send_organization_budget_email.call_args.kwargs
-    assert_that(sent["headline"], equal_to("80% of your model spend allowance used"))
+    assert_that(sent["headline"], equal_to("80% of your model spend limit used"))
     assert_that("$40.00 of $50.00" in sent["body"], equal_to(True))
     for leak in ("litellm", "LiteLLM", "team", "proxy", "cost_record"):
         assert_that(leak in sent["body"] or leak in sent["headline"], equal_to(False))
@@ -951,7 +951,7 @@ def test_an_exhausted_email_says_what_stopped_working():
     handler = budget_email_handler([("owner@example.com", "Grace")])
     handler.handle(budget_event(ORGANIZATION_LLM_BUDGET_EXHAUSTED, threshold=100, spend=50.0), delivery_context())
     sent = handler.email_service.send_organization_budget_email.call_args.kwargs
-    assert_that(sent["headline"], equal_to("Model spend allowance reached"))
+    assert_that(sent["headline"], equal_to("Model spend limit reached"))
     assert_that("can't make model calls" in sent["body"], equal_to(True))
 
 
@@ -1058,21 +1058,21 @@ def test_the_budget_email_renders_with_every_attribute_it_is_given():
     service.client = Mock()
     template = EmailTemplate(
         file_name="organization-budget-template.mjml",
-        subject="Model spend allowance reached",
+        subject="Model spend limit reached",
         receiver_name="Grace",
         receiver_email="owner@example.com",
         attributes=[
             EmailTemplateAttribute(name="user_name", value="Grace"),
             EmailTemplateAttribute(name="organization_name", value="Northwind Labs"),
-            EmailTemplateAttribute(name="headline", value="Model spend allowance reached"),
-            EmailTemplateAttribute(name="body", value="Used its entire model spend allowance."),
+            EmailTemplateAttribute(name="headline", value="Model spend limit reached"),
+            EmailTemplateAttribute(name="body", value="Used its entire model spend limit."),
             EmailTemplateAttribute(name="reason", value="You received this because you are a platform administrator."),
         ],
     )
     html = service.create_email(template).html_part
     # The Organization has to be named: a platform administrator receiving this needs
     # to know which one it is about.
-    for expected in ("Northwind Labs", "Model spend allowance reached", "platform administrator", "Grace"):
+    for expected in ("Northwind Labs", "Model spend limit reached", "platform administrator", "Grace"):
         assert_that(expected in html, equal_to(True))
     for leak in ("litellm", "LiteLLM", "cost_record", "team_id"):
         assert_that(leak in html, equal_to(False))
