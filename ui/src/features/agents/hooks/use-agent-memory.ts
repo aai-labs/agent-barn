@@ -19,15 +19,23 @@ import {
 } from "../schemas";
 import { agentsKey } from "../utils";
 
-export function useAgentMemory(agentId: string | undefined, page = 1, size = 50, observed: string | null = null) {
+export type MemoryScope = "pool" | "mine";
+
+export function useAgentMemory(
+  agentId: string | undefined,
+  page = 1,
+  size = 50,
+  observed: string | null = null,
+  scope: MemoryScope = "pool",
+) {
   const queryClient = useQueryClient();
   const orgApiBase = useOrganizationApiBase();
   const base = `${orgApiBase}/agents/${agentId}/memory`;
 
   const query = useQuery({
-    queryKey: agentsKey.memory(agentId ?? "", page, observed),
+    queryKey: agentsKey.memory(agentId ?? "", page, observed, scope),
     queryFn: async () => {
-      const params = new URLSearchParams({ page: String(page), size: String(size) });
+      const params = new URLSearchParams({ page: String(page), size: String(size), scope });
       if (observed) params.set("observed", observed);
       const response = await api.get<AgentMemoryPage>(`${base}?${params.toString()}`, {
         schema: AgentMemoryPageSchema,
@@ -138,14 +146,14 @@ export function useAgentMemorySearch(agentId: string | undefined, query: string)
  *  the chips to stay visible under a filter — so they live in their own cached
  *  query keyed only by agent, refetched when memory is invalidated. A size-1
  *  unfiltered read is enough: the API computes facets regardless of page size. */
-export function useAgentMemoryFacets(agentId: string | undefined) {
+export function useAgentMemoryFacets(agentId: string | undefined, scope: MemoryScope = "pool") {
   const orgApiBase = useOrganizationApiBase();
 
   const query = useQuery({
-    queryKey: [...agentsKey.detail(agentId ?? ""), "memory-facets"],
+    queryKey: agentsKey.memoryFacets(agentId ?? "", scope),
     queryFn: async () => {
       const response = await api.get<AgentMemoryPage>(
-        `${orgApiBase}/agents/${agentId}/memory?page=1&size=1`,
+        `${orgApiBase}/agents/${agentId}/memory?page=1&size=1&scope=${scope}`,
         { schema: AgentMemoryPageSchema },
       );
       return response.data.facets;

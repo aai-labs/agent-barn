@@ -12,7 +12,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { toastError } from "@/shared/toast";
 
-import { useAgentMemory, useAgentMemoryFacets, useAgentMemorySearch } from "../hooks/use-agent-memory";
+import { type MemoryScope, useAgentMemory, useAgentMemoryFacets, useAgentMemorySearch } from "../hooks/use-agent-memory";
 import type { AgentMemoryFacet, AgentMemoryItem } from "../schemas";
 import { ShareMemoryDialog } from "./share-memory-dialog";
 
@@ -97,7 +97,11 @@ export function AgentMemoryPage({ agentId, agentName }: { agentId: string; agent
   const [page, setPage] = useState(1);
   // null = the "Everyone" facet; otherwise a peer id sent to the API as `observed`.
   const [peer, setPeer] = useState<string | null>(null);
-  const { memory, isLoading, error, forget, correct, share } = useAgentMemory(agentId, page, PAGE_SIZE, peer);
+  // "pool" = everything the agent's group knows; "mine" = only what this agent
+  // contributed. Switching scope changes which facets exist, so it resets the
+  // peer filter and page.
+  const [scope, setScope] = useState<MemoryScope>("pool");
+  const { memory, isLoading, error, forget, correct, share } = useAgentMemory(agentId, page, PAGE_SIZE, peer, scope);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [sharing, setSharing] = useState<AgentMemoryItem | null>(null);
   const [draft, setDraft] = useState("");
@@ -108,7 +112,7 @@ export function AgentMemoryPage({ agentId, agentName }: { agentId: string; agent
   // Facets come from their own cached query, not the paged list, so the chips stay
   // put while a filter is active — picking a peer must not remove the control
   // needed to pick another or return to Everyone.
-  const facets = useAgentMemoryFacets(agentId);
+  const facets = useAgentMemoryFacets(agentId, scope);
   const everyoneCount = facets.reduce((sum, f) => sum + f.count, 0);
 
   const loaded = useMemo(
@@ -121,6 +125,12 @@ export function AgentMemoryPage({ agentId, agentName }: { agentId: string; agent
 
   const selectPeer = (next: string | null) => {
     setPeer(next);
+    setPage(1);
+  };
+
+  const selectScope = (next: MemoryScope) => {
+    setScope(next);
+    setPeer(null);
     setPage(1);
   };
 
@@ -194,6 +204,43 @@ export function AgentMemoryPage({ agentId, agentName }: { agentId: string; agent
           </button>
         )}
       </div>
+
+      {/* Scope: the whole group's shared memory vs. only what this agent added.
+          Shown once there is memory to scope (and kept visible in "mine" so an
+          empty result can be switched back). */}
+      {!isSearching && (total > 0 || facets.length > 0 || scope === "mine") && (
+        <div
+          className="inline-flex rounded-lg p-0.5"
+          role="group"
+          aria-label="Whose memory to show"
+          style={{ background: "var(--bg-sunken)", border: "1px solid var(--line)" }}
+        >
+          {(
+            [
+              { value: "pool", label: "Whole group" },
+              { value: "mine", label: "This agent" },
+            ] as const
+          ).map((option) => {
+            const active = scope === option.value;
+            return (
+              <button
+                key={option.value}
+                type="button"
+                onClick={() => selectScope(option.value)}
+                aria-pressed={active}
+                className="rounded-md px-3 py-1 text-[0.8125rem] font-medium transition-colors duration-150"
+                style={
+                  active
+                    ? { background: "var(--bg-elev)", color: "var(--ink)", boxShadow: "var(--shadow-sm, 0 1px 2px rgb(0 0 0 / 0.06))" }
+                    : { background: "transparent", color: "var(--ink-3)" }
+                }
+              >
+                {option.label}
+              </button>
+            );
+          })}
+        </div>
+      )}
 
       {/* Peer facets. Hidden while searching, which spans every peer already, and
           when there is only the Everyone chip (a single-peer agent needs no filter). */}

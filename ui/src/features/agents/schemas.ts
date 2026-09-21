@@ -112,6 +112,9 @@ export const AgentSchema = z.object({
   pendingModel: z.string().default(""),
   approvalMode: z.enum(["manual", "auto", "off"]).default("auto"),
   verboseMode: z.boolean().default(false),
+  /** The memory group this Agent belongs to, or null for none. Managed via the
+   *  memory-groups API; membership is the opt-in to shared memory. */
+  memoryGroupId: z.string().uuid().nullable().default(null),
   secrets: z.array(AgentSecretReadSchema).optional(),
   skills: z.array(AgentAssignedSkillSchema).default([]),
   configuredPlatformKeys: z.array(z.string()).default([]),
