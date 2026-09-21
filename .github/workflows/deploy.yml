@@ -314,9 +314,16 @@ jobs:
   # Runs after `deploy` on purpose: the Worker posts inbound mail into the
   # Communications service, so the cluster must already hold the matching
   # EMAIL_INBOUND_SECRET before the Worker starts presenting it.
+  #
+  # Staging only. This workflow's `main` branch deploys the k3s `agent-farm`
+  # namespace, but the production Worker's INBOUND_URL is api.agentbarn.dev —
+  # the Talos cluster deployed by deploy-public.yml. Publishing it here handed
+  # it this workflow's secret while it posted into a cluster configured by
+  # another, so every production message was rejected with 401. The production
+  # Worker is published by deploy-public.yml, alongside the cluster it targets.
   deploy-worker:
     needs: [detect-changes, resolve-env, deploy]
-    if: ${{ needs.detect-changes.outputs.worker == 'true' && needs.deploy.result == 'success' }}
+    if: ${{ needs.detect-changes.outputs.worker == 'true' && needs.deploy.result == 'success' && github.ref_name == 'staging' }}
     uses: ./.github/workflows/worker.yml
     secrets: inherit
     with:

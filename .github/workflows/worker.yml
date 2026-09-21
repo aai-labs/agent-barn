@@ -59,16 +59,17 @@ jobs:
           node-version: "24"
           cache: pnpm
           cache-dependency-path: workers/email-inbound/pnpm-lock.yaml
-      # `A && B || C` yields C when B is an empty string, so an unset staging
-      # secret would silently publish the production one. The cluster resolves the
-      # same expression, so the two would still agree and mail would flow — staging
-      # would just be running on production's credential. Fail loudly instead.
-      - name: Require a staging-specific inbound secret
+      # Keyed on the `environment` input, not on github.ref_name: the public
+      # cluster deploys from a vX.Y.Z tag, so a ref-name test cannot tell which
+      # cluster this Worker will post into and silently selected the wrong secret.
+      # An empty value here 401s every inbound message, because the API rejects a
+      # blank configured secret outright. Fail the publish instead.
+      - name: Require an inbound secret for the target environment
         env:
-          STAGING_SECRET: ${{ secrets.STAGING_EMAIL_INBOUND_SECRET }}
+          INBOUND_SECRET: ${{ inputs.environment == 'staging' && secrets.STAGING_EMAIL_INBOUND_SECRET || secrets.PUBLIC_EMAIL_INBOUND_SECRET }}
         run: |
-          if [ "$GITHUB_REF_NAME" = "staging" ] && [ -z "$STAGING_SECRET" ]; then
-            echo "::error::STAGING_EMAIL_INBOUND_SECRET is unset; staging would fall back to the production secret."
+          if [ -z "$INBOUND_SECRET" ]; then
+            echo "::error::No inbound secret is set for the '${{ inputs.environment }}' environment; every inbound email would be rejected with 401."
             exit 1
           fi
       # `secrets` uploads EMAIL_INBOUND_SECRET on every publish, so the Worker and
@@ -84,4 +85,4 @@ jobs:
           secrets: |
             EMAIL_INBOUND_SECRET
         env:
-          EMAIL_INBOUND_SECRET: ${{ github.ref_name == 'staging' && secrets.STAGING_EMAIL_INBOUND_SECRET || secrets.EMAIL_INBOUND_SECRET }}
+          EMAIL_INBOUND_SECRET: ${{ inputs.environment == 'staging' && secrets.STAGING_EMAIL_INBOUND_SECRET || secrets.PUBLIC_EMAIL_INBOUND_SECRET }}
