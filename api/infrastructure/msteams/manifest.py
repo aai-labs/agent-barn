@@ -10,7 +10,7 @@ _COLOR_ICON = _ASSETS / "teams-color.png"
 _OUTLINE_ICON = _ASSETS / "teams-outline.png"
 _SCHEMA_URL = "https://developer.microsoft.com/json-schemas/teams/v1.17/MicrosoftTeams.schema.json"
 _MANIFEST_VERSION = "1.17"
-_PACKAGE_VERSION = "1.0.0"
+_PACKAGE_VERSION = "1.0.1"
 _MANIFEST_NAMESPACE = uuid.UUID("6ba7b812-9dad-11d1-80b4-00c04fd430c8")
 _SHORT_NAME_MAX = 30
 _SHORT_DESCRIPTION_MAX = 80
@@ -67,7 +67,7 @@ def build_app_package(
             {
                 "botId": app_id,
                 "scopes": ["personal", "team", "groupChat"],
-                "supportsFiles": False,
+                "supportsFiles": True,
                 "isNotificationOnly": False,
             }
         ],

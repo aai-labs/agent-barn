@@ -126,7 +126,9 @@ class TeamsPlatformPlugin(PlatformPlugin):
         "must be reachable from the public internet.\n"
         "2. Download the app package and upload it in Teams: **Apps → Manage your apps → Upload a custom app**. Add it to "
         "every team and chat this Agent should serve.\n"
-        "3. Re-upload the package after renaming the Agent to refresh how it appears in Teams."
+        "3. Files can be sent to the Agent in a one-to-one Teams chat. Teams does not support bot file uploads in channels "
+        "or group chats.\n"
+        "4. Re-upload the package after renaming the Agent to refresh how it appears in Teams."
     )
     capabilities = frozenset(
         {

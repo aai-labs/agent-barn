@@ -1909,6 +1909,7 @@ def test_teams_app_package_contains_a_valid_manifest_and_icons() -> None:
     assert manifest["manifestVersion"] == "1.17"
     assert manifest["bots"][0]["botId"] == "app-1"
     assert manifest["bots"][0]["scopes"] == ["personal", "team", "groupChat"]
+    assert manifest["bots"][0]["supportsFiles"] is True
     assert manifest["developer"]["websiteUrl"] == "https://example.test"
 
 
