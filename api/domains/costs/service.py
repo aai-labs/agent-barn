@@ -82,10 +82,11 @@ class CostService:
         summary = build_cost_summary(self.repository, window, scoped)
         # Memory spend is billed on Honcho's separate credential, so it is added
         # here rather than coming from the cost_record table the summary reads.
-        memory_by_agent = self.honcho_usage.memory_cost_by_agent(
-            window.start.date().isoformat(), window.end.date().isoformat()
+        # It is one pool-level figure (Agents share memory pools), not per-Agent.
+        summary.total_memory_cost = round(
+            self.honcho_usage.memory_cost_total(window.start.date().isoformat(), window.end.date().isoformat()),
+            12,
         )
-        summary.total_memory_cost = round(sum(memory_by_agent.values()), 12)
         return summary
 
     def list_org_costs(
@@ -188,9 +189,6 @@ class CostService:
         filters = CostFilter(organization_id=agent.organization_id, agent_id=agent.id)
         totals = self.repository.totals(window, filters)
         breakdown = self.repository.model_breakdown(window, filters)
-        memory_by_agent = self.honcho_usage.memory_cost_by_agent(
-            window.start.date().isoformat(), window.end.date().isoformat()
-        )
         # Same series builder the organization summary uses; the filter above pins it
         # to this agent, so the trend and the totals beside it describe one set of calls.
         series = self.repository.spend_series(window, filters)
@@ -208,7 +206,9 @@ class CostService:
             total_tokens=totals.prompt_tokens + totals.completion_tokens,
             prompt_tokens=totals.prompt_tokens,
             completion_tokens=totals.completion_tokens,
-            memory_cost=memory_by_agent.get(agent.id, 0.0),
+            # Memory cost is pool-level, not per-Agent (Agents share pools), so the
+            # per-Agent view carries no memory figure — see the org summary total.
+            memory_cost=0.0,
             models_breakdown=[
                 AgentModelBreakdown(
                     model=model,

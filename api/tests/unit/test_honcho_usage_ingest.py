@@ -1,13 +1,12 @@
-"""Turning Honcho's CloudEvents telemetry into attributable token usage.
+"""Recording Honcho's CloudEvents telemetry, and reporting its total spend.
 
-Honcho sends every model call to LiteLLM on one service credential with no
-workspace identity, so LiteLLM sees an undifferentiated stream. Its telemetry
-does name the workspace and count tokens, and those shares are what divide
-LiteLLM's authoritative total for Honcho's key.
+Honcho sends every model call to LiteLLM on one service credential, so LiteLLM's
+figure for that key is the whole memory bill — one pool-level number. The
+per-call telemetry is still recorded per workspace for analytics, but memory cost
+is the key's total, reported as-is rather than split per Agent.
 """
 
 from typing import cast
-from uuid import UUID
 
 from hamcrest import assert_that, contains_exactly, empty, equal_to
 
@@ -158,58 +157,29 @@ def _cost_service(totals, spend: float):
     )
 
 
-def test_memory_cost_splits_the_real_spend_by_measured_token_share() -> None:
-    """Honcho holds one credential for the whole fleet, so LiteLLM reports one
-    figure. Shares divide that figure, so they always reconcile to it."""
-    agent_a = "af-11111111-1111-1111-1111-111111111111"
-    agent_b = "af-22222222-2222-2222-2222-222222222222"
-    service = _cost_service([(agent_a, 750, 0), (agent_b, 250, 0)], spend=10.0)
+def test_memory_cost_total_is_the_honcho_keys_full_spend() -> None:
+    """Honcho holds one credential for all memory work, so LiteLLM's figure for
+    that key is the whole memory bill — one pool-level number, reported as-is
+    (Agents share pools, so there is nothing to split per Agent)."""
+    service = _cost_service([], spend=12.5)
 
-    costs = service.memory_cost_by_agent("2026-09-01", "2026-09-30")
-
-    assert_that(round(sum(costs.values()), 6), equal_to(10.0))
-    assert_that(round(costs[UUID(agent_a.removeprefix("af-"))], 4), equal_to(7.5))
-    assert_that(round(costs[UUID(agent_b.removeprefix("af-"))], 4), equal_to(2.5))
+    assert_that(service.memory_cost_total("2026-09-01", "2026-09-30"), equal_to(12.5))
 
 
-def test_non_agent_workspaces_still_count_toward_the_denominator() -> None:
-    """Dropping them from the divisor would inflate every Agent's share of a bill
-    they did not incur alone."""
-    agent_a = "af-11111111-1111-1111-1111-111111111111"
-    service = _cost_service([(agent_a, 500, 0), ("some-other-workspace", 500, 0)], spend=10.0)
-
-    costs = service.memory_cost_by_agent("2026-09-01", "2026-09-30")
-
-    assert_that(round(costs[UUID(agent_a.removeprefix("af-"))], 4), equal_to(5.0))
-
-
-def test_no_usage_reports_nothing_rather_than_dividing_by_zero() -> None:
-    service = _cost_service([], spend=10.0)
-
-    assert_that(service.memory_cost_by_agent("2026-09-01", "2026-09-30"), equal_to({}))
-
-
-def test_usage_on_the_end_date_itself_is_counted() -> None:
-    """The caller's end date is a calendar day, not an instant. Parsing it bare
-    gives midnight, which excludes everything that happened during that day —
-    on a live system that is all of today's usage, so every share reads zero."""
-    from datetime import UTC, datetime
-
-    captured: dict[str, datetime] = {}
-
-    class _WindowRepo(_FakeRepository):
-        def token_totals_by_workspace(self, start, end):
-            captured["start"], captured["end"] = start, end
-            return []
-
+def test_memory_cost_total_is_zero_without_a_configured_key() -> None:
+    """No memory credential configured means no memory bill to report."""
     from api.core.config import Config
 
     service = HonchoUsageService(
-        repository=cast(HonchoUsageRepository, _WindowRepo()),
+        repository=cast(HonchoUsageRepository, _FakeRepository()),
         litellm=cast("LiteLLMClient", None),
-        config=Config(honcho_litellm_key="sk-honcho"),
+        config=Config(honcho_litellm_key=""),
     )
-    service.memory_cost_by_agent("2026-09-01", "2026-09-03")
 
-    # An event at 20:17 on the end date must fall inside the window.
-    assert captured["end"] > datetime(2026, 9, 3, 20, 17, tzinfo=UTC)
+    assert_that(service.memory_cost_total("2026-09-01", "2026-09-30"), equal_to(0.0))
+
+
+def test_memory_cost_total_is_zero_when_the_key_has_no_spend() -> None:
+    service = _cost_service([], spend=0.0)
+
+    assert_that(service.memory_cost_total("2026-09-01", "2026-09-30"), equal_to(0.0))
