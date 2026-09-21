@@ -1191,6 +1191,61 @@ def test_failed_start_records_no_runtime_config_digest():
             assert_that(persisted.running_config_digest, equal_to(""))
 
 
+def test_agent_read_reports_no_update_available_after_a_start():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+
+        with when("I start the agent and read it back"):
+            client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+            response = client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context))
+
+        with then("it reports no available update because the pod matches the current platform"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(response.json()["update_available"], equal_to(False))
+
+
+def test_agent_read_reports_update_available_when_the_recorded_digest_differs():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        client: TestClient = context.client
+        repository: AgentRepository = context.injector.get(AgentRepository)
+        context.agent.running_config_digest = "a" * 64
+        repository.save(context.agent)
+
+        with when("I read an Agent whose pod was built from older platform code"):
+            response = client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context))
+
+        with then("it reports an available update"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(response.json()["update_available"], equal_to(True))
+
+
+def test_stopped_agent_reports_no_update_available():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        client: TestClient = context.client
+
+        with when("I read a stopped Agent"):
+            response = client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context))
+
+        with then("it reports no available update because it has no pod to update"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(response.json()["update_available"], equal_to(False))
+
+
+def test_errored_agent_reports_no_update_available():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.ERROR)]) as context:
+        client: TestClient = context.client
+        repository: AgentRepository = context.injector.get(AgentRepository)
+        context.agent.running_config_digest = "a" * 64
+        repository.save(context.agent)
+
+        with when("I read an Agent whose last start failed"):
+            response = client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context))
+
+        with then("it reports no available update whatever digest is recorded"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(response.json()["update_available"], equal_to(False))
+
+
 def test_start_agent_emits_started_domain_event_and_delivery():
     with given([*_GIVEN, there_is_an_agent()]) as context:
         client: TestClient = context.client

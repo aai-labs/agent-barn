@@ -9,17 +9,38 @@ Related context: [`../agents.md`](../agents.md),
 ## Current state
 
 - Delivered: a runtime configuration digest derived from the static closure of
-  the Agent assembly code plus the runtime image references, and
-  `Agent.running_config_digest`, which records the digest a running pod was
-  started on. Nothing reads the column yet, so no client behaviour changes.
-- In transition: the column is written but not exposed. Agents already running
-  when the migration lands keep the empty default until their next start, which
-  is what makes them report an available update once AF-271-03 exposes the
-  comparison.
-- Next: AF-271-03 — expose `AgentRead.update_available`.
+  the Agent assembly code plus the runtime image references,
+  `Agent.running_config_digest` recording the digest a running pod started on,
+  and `AgentRead.update_available` reporting when the two disagree. The API
+  contract is complete; no UI surfaces it yet.
+- In transition: Agents that were already running when `running_config_digest`
+  was introduced report `update_available` until they are next started. That is
+  accurate rather than a defect — those pods predate the record — but it means
+  the first deploy carrying AF-271-04 will show the control on the existing
+  fleet.
+- Next: AF-271-04 — the Update control on the Agent page.
 - Blockers: none.
 
 ## Changes
+
+### 2026-09-21 — AF-271-03
+
+- Delivered: `AgentRead.update_available`, true only for a `RUNNING` Agent whose
+  recorded digest differs from what the API would build now. It rides on the
+  existing Agent read, so it inherits `require_visible` / `agent.read` and adds
+  no endpoint and no authorization surface.
+- Changed: API read contract (`AgentRead.update_available`) and
+  [`../agents.md`](../agents.md) — a new invariant beside the model-inheritance
+  rules, the Start and Stop flow descriptions, and a source-map row for
+  `runtime_digest.py`.
+- Decision: the signal stays advisory and narrow. It blocks nothing, changes no
+  Agent behaviour, and clears on restart. It reports platform code and runtime
+  images only, so `pending_model`, Template `source_update`, and the
+  Skill-level `update_available` keep their own surfaces untouched.
+- Decision: `STOPPED` and `ERROR` Agents always report `false`, whatever digest
+  is stored. The field describes a live pod, and neither state has one.
+- Coverage: `api/tests/integration/test_agents.py` — false after a start, true
+  when the recorded digest differs, and false for both `STOPPED` and `ERROR`.
 
 ### 2026-09-21 — AF-271-02
 

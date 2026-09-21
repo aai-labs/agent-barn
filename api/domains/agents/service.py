@@ -514,6 +514,11 @@ class AgentService:
             # A running pod that started on something else is the only case a surface
             # must not report the resolved value as current.
             pending_model=(resolved_model if agent.running_model and agent.running_model != resolved_model else ""),
+            update_available=(
+                agent.status == AgentStatus.RUNNING
+                and agent.running_config_digest
+                != agent_runtime_config_digest(self.config.openclaw_image, self.config.hermes_image)
+            ),
             # OpenClaw ignores approval_mode; report the effective AUTO default
             # instead of a stored value from before this became enforced, so
             # reads stay truthful even for agents persisted prior to this check.
