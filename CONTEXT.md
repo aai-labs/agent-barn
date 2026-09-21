@@ -20,6 +20,14 @@ _Avoid_: deleted Organization, disabled Membership
 The deployment-configured maximum number of non-deleted Organizations attributed to one Organization Creator. Active and Suspended Organizations both count, and Platform Privilege does not bypass the limit.
 _Avoid_: Membership limit, ownership limit, Platform Administrator quota
 
+**Model Spend Limit**:
+The amount an Organization may spend on model calls in one renewal period, set and changed only by a Platform Administrator. An Organization can neither see nor change its own. Absent means no limit; zero is a real limit of nothing. Enforced by the proxy at request time, so it binds late rather than exactly — a spend cutoff, not an invoice ceiling.
+_Avoid_: budget, allowance, quota, cap
+
+**Spend Limit Coverage**:
+Whether an Organization's Agents are actually bound by its Model Spend Limit. An Agent issued a key before the Organization had one is not covered until it is enrolled, so a limit set over uncovered Agents would silently miss them.
+_Avoid_: enrolment status, team membership
+
 **Platform Administrator**:
 A user with platform-level authority to administer Agent Barn outside any single Organization. A Platform Administrator may also have normal Memberships, but platform authority is separate from Organization Membership authority.
 _Avoid_: superuser, super admin, global role
