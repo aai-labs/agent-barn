@@ -1,19 +1,13 @@
-"""allow multiple active webhook Communication Connections per Agent
+"""allow multiple active webhook Connections per Agent
 
 Revision ID: 43eefac934c1
 Revises: 396d82ade4b7
 Create Date: 2026-09-17 00:00:00.000000
 
-AF-320 revision: webhook has no provider account behind it, unlike every other
-Platform, so an Agent may hold more than one active webhook Connection -- one per
-calling system. Every other Platform keeps today's "one active Connection per
-Platform per Agent" rule unchanged.
-
-Replaces the platform_key-keyed unique index with one keyed on a new nullable
-singleton_key column: a copy of platform_key for every Platform except webhook,
-NULL for webhook. Postgres treats NULLs in a unique index as distinct from each
-other, so NULL rows are simply unconstrained while every other row keeps exactly
-today's guarantee.
+Replaces the platform-keyed unique index with one on a new nullable singleton_key: a copy of
+platform_key for every Platform except webhook, NULL for webhook. NULLs are distinct in a
+unique index, so webhook Connections are unconstrained and every other Platform keeps one
+active Connection per Agent.
 """
 
 from collections.abc import Sequence
