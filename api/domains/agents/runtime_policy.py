@@ -117,3 +117,21 @@ Never substitute another destination.
 def build_messaging_policy_md() -> str:
     """Append the shared Communications policy to every assembled template."""
     return _MESSAGING_POLICY_MD
+
+
+_TRIGGERED_RUNS_POLICY_MD = """
+## Triggered Runs
+
+A run whose message starts with "Triggered by a webhook event" was started by another
+system, not by a person. Nobody is there to answer questions.
+
+The same event can be delivered more than once, for example when the runtime restarts in
+the middle of a run. Before you create anything outside the run (a page, a ticket, a
+comment), look in the destination for the result of this same work, and update it instead
+of making a second copy.
+"""
+
+
+def build_triggered_runs_policy_md() -> str:
+    """Append the guidance for runs that another system starts to every assembled template."""
+    return _TRIGGERED_RUNS_POLICY_MD

@@ -514,6 +514,15 @@ class CommunicationCallRead(PydanticBaseModel):
     responses: list[CommunicationCallResponseRead]
 
 
+class CommunicationRunLoadRead(PydanticBaseModel):
+    """How busy an Agent is with event runs. Chat is not counted: the cap that `max_in_flight`
+    reports never holds a chat message back."""
+
+    in_flight: int
+    max_in_flight: int
+    queued: int
+
+
 class CommunicationPipelineCounts(PydanticBaseModel):
     provider_observed: int = 0
     policy_admitted: int = 0

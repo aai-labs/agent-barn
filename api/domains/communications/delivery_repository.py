@@ -10,14 +10,22 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import aliased
 from sqlmodel import Session, col, select
 
+from api.core.config import Config
 from api.domains.agents.models import Agent, AgentStatus
-from api.domains.communications.error_details import error_code_from_details
+from api.domains.communications.error_details import (
+    BACKLOG_CAP_EXCEEDED_MESSAGE,
+    LEASE_EXPIRED_MESSAGE,
+    error_code_from_details,
+)
 from api.domains.communications.execution_policy import (
     ORDERING_KEY_METADATA,
+    DeliveryLimits,
     conversation_ordering_key,
     kind_for_location,
     kinds_for_protocol,
     ordering_key_for,
+    policy_for,
+    run_capped_kinds,
     runtime_execution,
     session_key_for,
 )
@@ -31,6 +39,7 @@ from api.domains.communications.models import (
     CommunicationDirection,
     CommunicationErrorDetails,
     CommunicationJournalStage,
+    CommunicationRunLoadRead,
     ConversationLocation,
     DeliveryKind,
     NormalizedCommunicationEnvelope,
@@ -68,21 +77,32 @@ _BLOCKING_OUTBOUND_STATUSES = (
     CommunicationDeliveryStatus.DEAD_LETTERED,
 )
 
+# Why a delivery was dead-lettered without ever running.
+BACKLOG_CAP_ERROR_CODE = "BACKLOG_CAP_EXCEEDED"
+
 
 @inject
 @singleton
 @dataclass
 class CommunicationDeliveryRepository:
     delegate: PostgresRepositoryDelegate
+    config: Config
     operations: CommunicationOperationalRepository | None = None
+
+    def _resolve_limits(self, override: DeliveryLimits | None) -> DeliveryLimits:
+        """The limits in force: config unless a caller passes its own, which tests do."""
+        return override if override is not None else DeliveryLimits.from_config(self.config)
 
     def accept_inbound(
         self,
         *,
         connection_id: UUID,
         envelope: NormalizedCommunicationEnvelope,
+        limits: DeliveryLimits | None = None,
     ) -> AcceptedCommunicationRead:
         now = datetime.now(UTC)
+        kind = kind_for_location(envelope.location)
+        policy = policy_for(kind)
         with Session(self.delegate.engine) as session:
             connection = session.exec(
                 select(CommunicationConnection)
@@ -134,9 +154,11 @@ class CommunicationDeliveryRepository:
                     duplicate=True,
                 )
 
+            # An event has nobody waiting on it, so it waits for the agent to start instead of
+            # being dropped. Chat is dropped, as before.
             delivery_status = (
                 CommunicationDeliveryStatus.PENDING
-                if agent.status == AgentStatus.RUNNING
+                if agent.status == AgentStatus.RUNNING or policy.queue_while_stopped
                 else CommunicationDeliveryStatus.UNAVAILABLE
             )
             delivery = CommunicationDelivery(
@@ -146,7 +168,7 @@ class CommunicationDeliveryRepository:
                 message_id=message_id,
                 direction=CommunicationDirection.INBOUND,
                 status=delivery_status,
-                kind=kind_for_location(envelope.location),
+                kind=kind,
                 session_key=session_key_for(connection_id, envelope),
                 idempotency_key=envelope.provider_message_id,
                 ordering_key=ordering_key_for(connection_id, envelope),
@@ -171,8 +193,16 @@ class CommunicationDeliveryRepository:
                     error_code=delivery.last_error_code,
                     error_summary=delivery.last_error_message,
                 )
+            # A queued event makes room for itself: past the cap the oldest waiting one is dropped.
+            shed = (
+                self._shed_backlog(session, connection_id, cap=self._resolve_limits(limits).backlog_cap, now=now)
+                if policy.queue_while_stopped
+                else []
+            )
             session.commit()
             session.refresh(delivery)
+            for dropped in shed:
+                self._record_completion_metric(dropped)
             return AcceptedCommunicationRead(
                 message_id=message_id,
                 delivery_id=delivery.id,
@@ -185,27 +215,41 @@ class CommunicationDeliveryRepository:
         *,
         agent_id: UUID,
         lease_seconds: int = 120,
-        max_attempts: int = 5,
+        limits: DeliveryLimits | None = None,
         reclaim_expired: bool = True,
         runtime_protocol_version: int = 1,
         excluded_platform_keys: frozenset[str] = frozenset(),
     ) -> RuntimeDeliveryRead | None:
+        limits = self._resolve_limits(limits)
         if reclaim_expired:
             self.reclaim_expired_inbound(
                 agent_id=agent_id,
-                max_attempts=max_attempts,
+                limits=limits,
                 excluded_platform_keys=excluded_platform_keys,
             )
         now = datetime.now(UTC)
         active_ordering = aliased(CommunicationDelivery)
         with Session(self.delegate.engine) as session:
+            # Withhold kinds this pod's protocol version cannot execute; they stay PENDING.
+            claimable = kinds_for_protocol(runtime_protocol_version)
+            # At the in-flight cap the capped kinds are skipped as well. Chat is never counted, so an
+            # event burst cannot hold up a reply. Skipped rows stay PENDING with no attempt spent.
+            capped = claimable & run_capped_kinds()
+            if capped and (
+                self._capped_inbound_count(
+                    session, agent_id, CommunicationDeliveryStatus.PROCESSING, excluded_platform_keys
+                )
+                >= limits.max_in_flight_runs
+            ):
+                claimable -= capped
+            if not claimable:
+                return None
             query = select(CommunicationDelivery).where(
                 col(CommunicationDelivery.agent_id) == agent_id,
                 col(CommunicationDelivery.direction) == CommunicationDirection.INBOUND,
                 col(CommunicationDelivery.status) == CommunicationDeliveryStatus.PENDING,
                 col(CommunicationDelivery.available_at) <= now,
-                # Withhold kinds this pod's protocol version cannot execute; they stay PENDING.
-                col(CommunicationDelivery.kind).in_(kinds_for_protocol(runtime_protocol_version)),
+                col(CommunicationDelivery.kind).in_(claimable),
                 # An in-flight delivery holds its ordering key so a thread
                 # never runs two turns at once -- unless its run is parked
                 # awaiting a human answer, which can only arrive as the
@@ -256,6 +300,90 @@ class CommunicationDeliveryRepository:
             session.commit()
             session.refresh(delivery)
             return self._runtime_delivery(delivery)
+
+    def _shed_backlog(
+        self,
+        session: Session,
+        connection_id: UUID,
+        *,
+        cap: int,
+        now: datetime,
+    ) -> list[CommunicationDelivery]:
+        """Dead-letter the oldest waiting deliveries beyond `cap`, so a backlog cannot grow without bound.
+
+        A row a claim is holding is skipped and left for the next admission to shed.
+        """
+        waiting = (
+            col(CommunicationDelivery.connection_id) == connection_id,
+            col(CommunicationDelivery.direction) == CommunicationDirection.INBOUND,
+            col(CommunicationDelivery.status) == CommunicationDeliveryStatus.PENDING,
+        )
+        count = session.exec(select(sa.func.count()).select_from(CommunicationDelivery).where(*waiting)).one()
+        excess = count - cap
+        if excess <= 0:
+            return []
+        oldest = list(
+            session.exec(
+                select(CommunicationDelivery)
+                .where(*waiting)
+                .order_by(col(CommunicationDelivery.created_at).asc(), col(CommunicationDelivery.id).asc())
+                .limit(excess)
+                .with_for_update(skip_locked=True)
+            ).all()
+        )
+        for delivery in oldest:
+            delivery.status = CommunicationDeliveryStatus.DEAD_LETTERED
+            delivery.completed_at = now
+            delivery.last_error_code = BACKLOG_CAP_ERROR_CODE
+            delivery.last_error_message = BACKLOG_CAP_EXCEEDED_MESSAGE
+            session.add(delivery)
+            self._stage_dead_lettered(session, delivery, now=now)
+        return oldest
+
+    @staticmethod
+    def _capped_inbound_count(
+        session: Session,
+        agent_id: UUID,
+        status: CommunicationDeliveryStatus,
+        excluded_platform_keys: frozenset[str],
+    ) -> int:
+        """Inbound deliveries in one status, of the kinds the in-flight cap governs."""
+        query = (
+            select(sa.func.count())
+            .select_from(CommunicationDelivery)
+            .where(
+                col(CommunicationDelivery.agent_id) == agent_id,
+                col(CommunicationDelivery.direction) == CommunicationDirection.INBOUND,
+                col(CommunicationDelivery.status) == status,
+                col(CommunicationDelivery.kind).in_(run_capped_kinds()),
+            )
+        )
+        if excluded_platform_keys:
+            query = query.join(
+                CommunicationConnection,
+                col(CommunicationConnection.id) == col(CommunicationDelivery.connection_id),
+            ).where(col(CommunicationConnection.platform_key).not_in(excluded_platform_keys))
+        return session.exec(query).one()
+
+    def run_load(
+        self,
+        agent_id: UUID,
+        *,
+        excluded_platform_keys: frozenset[str] = frozenset(),
+        limits: DeliveryLimits | None = None,
+    ) -> CommunicationRunLoadRead:
+        """How busy an Agent is with event runs, next to the cap that holds the rest back."""
+        limits = self._resolve_limits(limits)
+        with Session(self.delegate.engine) as session:
+            return CommunicationRunLoadRead(
+                in_flight=self._capped_inbound_count(
+                    session, agent_id, CommunicationDeliveryStatus.PROCESSING, excluded_platform_keys
+                ),
+                max_in_flight=limits.max_in_flight_runs,
+                queued=self._capped_inbound_count(
+                    session, agent_id, CommunicationDeliveryStatus.PENDING, excluded_platform_keys
+                ),
+            )
 
     def find_active_inbound_delivery(
         self,
@@ -333,10 +461,11 @@ class CommunicationDeliveryRepository:
         self,
         *,
         agent_id: UUID,
-        max_attempts: int = 5,
+        limits: DeliveryLimits | None = None,
         excluded_platform_keys: frozenset[str] = frozenset(),
     ) -> list[RuntimeDeliveryRead]:
         """Reclaim stale runtime leases and return newly terminal deliveries."""
+        limits = self._resolve_limits(limits)
         now = datetime.now(UTC)
         dead_lettered: list[RuntimeDeliveryRead] = []
         reclaimed: list[CommunicationDelivery] = []
@@ -358,9 +487,10 @@ class CommunicationDeliveryRepository:
                     stale,
                     succeeded=False,
                     now=now,
-                    max_attempts=max_attempts,
+                    # Nothing was reported, so this is inferred, not a reported failure.
+                    max_attempts=self._max_attempts(stale, limits, reported=False),
                     error_code="LEASE_EXPIRED",
-                    error_message="Runtime did not complete this delivery before its claim lease expired",
+                    error_message=LEASE_EXPIRED_MESSAGE,
                     error_details=None,
                 )
                 session.add(stale)
@@ -413,7 +543,7 @@ class CommunicationDeliveryRepository:
         delivery_id: UUID,
         *,
         agent_id: UUID,
-        max_attempts: int = 5,
+        limits: DeliveryLimits | None = None,
         retry_after_seconds: int = 5,
     ) -> bool:
         """Put a claimed delivery back on the queue because its work never started.
@@ -436,6 +566,8 @@ class CommunicationDeliveryRepository:
             ).one_or_none()
             if delivery is None:
                 return False
+            # A release means nothing ran, which is no more a reported failure than a lease running out.
+            max_attempts = self._max_attempts(delivery, self._resolve_limits(limits), reported=False)
             if delivery.cancel_requested_at is not None:
                 self._apply_completion(
                     delivery,
@@ -847,7 +979,7 @@ class CommunicationDeliveryRepository:
         error_code: str | None = None,
         error_message: str | None = None,
         error_details: CommunicationErrorDetails | dict[str, Any] | None = None,
-        max_attempts: int = 5,
+        limits: DeliveryLimits | None = None,
     ) -> bool:
         now = datetime.now(UTC)
         with Session(self.delegate.engine) as session:
@@ -867,7 +999,8 @@ class CommunicationDeliveryRepository:
                 delivery,
                 succeeded=succeeded,
                 now=now,
-                max_attempts=max_attempts,
+                # The pod told us the run failed, so this is a reported failure.
+                max_attempts=self._max_attempts(delivery, self._resolve_limits(limits), reported=True),
                 error_code=error_code,
                 error_message=error_message,
                 error_details=error_details,
@@ -994,25 +1127,7 @@ class CommunicationDeliveryRepository:
             error_details=error_details,
         )
         if delivery.status == CommunicationDeliveryStatus.DEAD_LETTERED:
-            self.operations.stage_journal(
-                session=session,
-                organization_id=delivery.organization_id,
-                agent_id=delivery.agent_id,
-                connection_id=delivery.connection_id,
-                delivery_id=delivery.id,
-                stage=CommunicationJournalStage.DEAD_LETTERED,
-                attempt_number=delivery.attempt_count,
-                occurred_at=now,
-                error_code=delivery.last_error_code,
-                error_summary=delivery.last_error_message,
-                error_details=error_details,
-            )
-            self._stage_delivery_event(
-                session,
-                delivery,
-                event_name=COMMUNICATION_DELIVERY_DEAD_LETTERED,
-                occurred_at=now,
-            )
+            self._stage_dead_lettered(session, delivery, now=now, error_details=error_details)
         elif delivery.status == CommunicationDeliveryStatus.SUCCEEDED and self.operations.has_stage(
             session,
             delivery_id=delivery.id,
@@ -1034,6 +1149,37 @@ class CommunicationDeliveryRepository:
                 event_name=COMMUNICATION_DELIVERY_RECOVERED,
                 occurred_at=now,
             )
+
+    def _stage_dead_lettered(
+        self,
+        session: Session,
+        delivery: CommunicationDelivery,
+        *,
+        now: datetime,
+        error_details: CommunicationErrorDetails | dict[str, Any] | None = None,
+    ) -> None:
+        """Journal and announce a delivery that ended dead-lettered."""
+        if self.operations is None:
+            return
+        self.operations.stage_journal(
+            session=session,
+            organization_id=delivery.organization_id,
+            agent_id=delivery.agent_id,
+            connection_id=delivery.connection_id,
+            delivery_id=delivery.id,
+            stage=CommunicationJournalStage.DEAD_LETTERED,
+            attempt_number=delivery.attempt_count,
+            occurred_at=now,
+            error_code=delivery.last_error_code,
+            error_summary=delivery.last_error_message,
+            error_details=error_details,
+        )
+        self._stage_delivery_event(
+            session,
+            delivery,
+            event_name=COMMUNICATION_DELIVERY_DEAD_LETTERED,
+            occurred_at=now,
+        )
 
     def _stage_delivery_event(
         self,
@@ -1091,6 +1237,14 @@ class CommunicationDeliveryRepository:
         from api.domains.communications.metrics import record_delivery_outcome
 
         record_delivery_outcome(delivery)
+
+    @staticmethod
+    def _max_attempts(delivery: CommunicationDelivery, limits: DeliveryLimits, *, reported: bool) -> int:
+        """How many claims this delivery gets. A failure the runtime reported and a lease that
+        merely ran out are different: a run that failed will fail again, but a pod that died
+        reported nothing and probably did nothing."""
+        attempts = limits.attempts_for(delivery.kind)
+        return attempts.after_failure if reported else attempts.after_lease_expiry
 
     @classmethod
     def _apply_completion(

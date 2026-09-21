@@ -5,9 +5,11 @@ field. A third kind is one row in `_POLICIES`, not a new branch in the repositor
 route and pod adapter.
 """
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from uuid import UUID
 
+from api.core.config import Config
 from api.domains.communications.models import (
     ConversationLocation,
     DeliveryKind,
@@ -36,6 +38,11 @@ class ExecutionPolicy:
     busy_notice: str | None
     # Requeue a delivery that could not run instead of completing it.
     busy_releases: bool
+    # Keep the delivery instead of dropping it while the agent is stopped. A chat message that
+    # sat for days would be answered long after it mattered; an event still has work to do.
+    queue_while_stopped: bool
+    # Runs of this kind count toward the per-agent in-flight cap, and are the ones held back at it.
+    counts_toward_run_cap: bool
 
 
 _CONVERSATION = ExecutionPolicy(
@@ -46,6 +53,8 @@ _CONVERSATION = ExecutionPolicy(
     progress_updates=True,
     busy_notice=_BUSY_NOTICE,
     busy_releases=False,
+    queue_while_stopped=False,
+    counts_toward_run_cap=False,  # one turn per thread already; capping it would delay replies
 )
 
 _EVENT = ExecutionPolicy(
@@ -56,9 +65,56 @@ _EVENT = ExecutionPolicy(
     progress_updates=False,
     busy_notice=None,
     busy_releases=True,
+    queue_while_stopped=True,
+    counts_toward_run_cap=True,  # ordering keys let events run in parallel, so they need a ceiling
 )
 
 _POLICIES: dict[DeliveryKind, ExecutionPolicy] = {policy.kind: policy for policy in (_CONVERSATION, _EVENT)}
+
+# Chat keeps its fixed budget: it always has a person on the other end who can resend.
+CONVERSATION_MAX_ATTEMPTS = 5
+
+
+@dataclass(frozen=True)
+class AttemptLimits:
+    """How many times a delivery may be claimed before it is dead-lettered."""
+
+    # The runtime told us the run failed. It will usually fail again, and it may have done part
+    # of its work, so running it again costs money and can repeat side effects.
+    after_failure: int
+    # Nothing was reported: the pod died or its lease ran out. The work most likely never
+    # finished, so another try on a healthy pod is worth it.
+    after_lease_expiry: int
+
+
+@dataclass(frozen=True)
+class DeliveryLimits:
+    """The numbers that bound a delivery, resolved once from config. The per-kind table of
+    attempts lives in `from_config`; nothing else compares a kind to choose a number."""
+
+    attempts: Mapping[DeliveryKind, AttemptLimits]
+    # Per connection: waiting deliveries beyond this many are dead-lettered, oldest first.
+    backlog_cap: int
+    # Per agent: runs of the capped kinds going at once.
+    max_in_flight_runs: int
+
+    @classmethod
+    def from_config(cls, config: Config) -> DeliveryLimits:
+        return cls(
+            attempts={
+                DeliveryKind.CONVERSATION: AttemptLimits(CONVERSATION_MAX_ATTEMPTS, CONVERSATION_MAX_ATTEMPTS),
+                DeliveryKind.EVENT: AttemptLimits(
+                    config.communications_event_max_attempts_after_failure,
+                    config.communications_event_max_attempts_after_lease_expiry,
+                ),
+            },
+            backlog_cap=config.communications_event_backlog_cap,
+            max_in_flight_runs=config.communications_max_in_flight_event_runs_per_agent,
+        )
+
+    def attempts_for(self, kind: DeliveryKind | str) -> AttemptLimits:
+        return self.attempts[DeliveryKind(kind)]
+
 
 # Anything not listed is a conversation, so every existing plugin is untouched.
 _KIND_BY_LOCATION_TYPE: dict[str, DeliveryKind] = {"EVENT": DeliveryKind.EVENT}
@@ -77,6 +133,11 @@ def policy_for(kind: DeliveryKind) -> ExecutionPolicy:
 def kinds_for_protocol(version: int) -> frozenset[DeliveryKind]:
     """Which kinds a pod speaking this protocol version may be handed."""
     return frozenset(policy.kind for policy in _POLICIES.values() if version >= policy.min_runtime_protocol_version)
+
+
+def run_capped_kinds() -> frozenset[DeliveryKind]:
+    """Which kinds count toward the per-agent in-flight cap and are held back once it is reached."""
+    return frozenset(policy.kind for policy in _POLICIES.values() if policy.counts_toward_run_cap)
 
 
 def conversation_ordering_key(connection_id: UUID, location: ConversationLocation) -> str:

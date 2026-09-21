@@ -76,6 +76,16 @@ class Config(BaseSettings):
     # Content-free Communication journal history is pruned by the gateway
     # supervisor after this many days.
     communication_journal_retention_days: int = Field(default=31, ge=1, le=3650)
+    # Webhook events wait in the queue while their agent is stopped or busy. Chat deliveries
+    # keep a fixed 5 attempts and are not limited by any of these.
+    # Per webhook connection: past this many waiting events, the oldest is dead-lettered.
+    communications_event_backlog_cap: int = Field(default=100, ge=1, le=10_000)
+    # Per agent: event runs going at once. At the cap, further events stay queued.
+    communications_max_in_flight_event_runs_per_agent: int = Field(default=3, ge=1, le=50)
+    # Attempts for an event whose run reported a failure. 1 makes that failure final.
+    communications_event_max_attempts_after_failure: int = Field(default=1, ge=1, le=10)
+    # Attempts for an event whose claim lease expired (pod restart, node loss).
+    communications_event_max_attempts_after_lease_expiry: int = Field(default=2, ge=1, le=10)
     # Native gateway spike (ADR 2026-09-16): comma-separated Platform keys whose
     # Connections run inside the Agent runtime's own gateway instead of the
     # Communications supervisor, for Hermes and OpenClaw alike. Replaced by a

@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent / "messaging"))
+import http.client
 import json
 import os
 import re
@@ -57,6 +58,14 @@ _RUNTIME_TURN_TIMEOUT_SECONDS = 900
 
 _LEASE_HEARTBEAT_SECONDS = 60
 _PROGRESS_RELAY_MIN_SECONDS = 3
+
+# This adapter starts before the runtime does. Each runtime documents a probe that needs no
+# credentials: Hermes' /health is a liveness check, and OpenClaw's /startup says startup work is
+# finished and the gateway is not draining.
+RUNTIME_READY_PATH = "/health" if RUNTIME_KIND == "hermes" else "/startup"
+_RUNTIME_PROBE_TIMEOUT_SECONDS = 5
+_RUNTIME_PROBE_INTERVAL_SECONDS = 2
+_RUNTIME_WAIT_LOG_SECONDS = 30
 
 _APPROVAL_COMMAND_MAX_CHARS = 2_500
 _APPROVAL_CHOICES = frozenset({"once", "session", "always", "deny"})
@@ -665,6 +674,42 @@ def run_delivery(delivery: dict) -> None:
         run_delivery_chat_completions(delivery)
 
 
+def runtime_is_up() -> bool:
+    """One probe of the runtime. Any HTTP answer below 500 means it is listening, so a version
+    that lacks the probe path still passes. A refused connection, a timeout or a 5xx means it
+    is not ready yet."""
+    req = urllib.request.Request(f"{RUNTIME_API_URL}{RUNTIME_READY_PATH}", method="GET")
+    try:
+        with urllib.request.urlopen(req, timeout=_RUNTIME_PROBE_TIMEOUT_SECONDS):
+            return True
+    except urllib.error.HTTPError as exc:
+        return exc.code < 500
+    except (OSError, http.client.HTTPException):
+        return False
+
+
+def wait_for_runtime() -> None:
+    """Hold off claiming until the runtime answers.
+
+    The API marks an agent running as soon as its Deployment exists, and the start script launches
+    this adapter before the runtime. Claiming straight away makes every delivery fail with a
+    refused connection, and a failed event is final, so a whole backlog would be lost at start.
+    Waiting costs nothing: unclaimed deliveries stay queued.
+    """
+    started = time.monotonic()
+    next_log = 0.0
+    while not runtime_is_up():
+        waited = time.monotonic() - started
+        if waited >= next_log:
+            print(
+                f"[communications-adapter] waiting for the runtime at {RUNTIME_API_URL}{RUNTIME_READY_PATH} "
+                f"({int(waited)}s)",
+                flush=True,
+            )
+            next_log = waited + _RUNTIME_WAIT_LOG_SECONDS
+        time.sleep(_RUNTIME_PROBE_INTERVAL_SECONDS)
+
+
 class DeliveryWorker:
     """Drain durable claims on signals, with a bounded lost-wakeup fallback."""
 
@@ -679,6 +724,7 @@ class DeliveryWorker:
         self._wake.set()
 
     def _run(self) -> None:
+        wait_for_runtime()
         while True:
             # Redis is only a wakeup optimization. A publish can fail after
             # PostgreSQL commits, so periodically retry the durable claim even

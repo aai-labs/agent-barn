@@ -9,26 +9,35 @@ ordering, and never being told a job ran when it did not.
 import hashlib
 import hmac
 import json
-from datetime import UTC, datetime
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import status
-from hamcrest import assert_that, contains_string, equal_to, has_length, is_, not_
+from hamcrest import assert_that, contains_string, equal_to, has_item, has_length, is_, less_than_or_equal_to, not_
 from sqlmodel import Session, col, select
 from starlette.testclient import TestClient
 
+from api.core.config import get_config
 from api.domains.agents.models import AgentStatus
 from api.domains.agents.repository import AgentRepository
+from api.domains.communications.delivery_repository import CommunicationDeliveryRepository
+from api.domains.communications.execution_policy import DeliveryLimits
 from api.domains.communications.gateway_routes import MAX_WEBHOOK_BODY_BYTES
 from api.domains.communications.models import (
     CommunicationConnection,
     CommunicationDelivery,
     CommunicationDeliveryStatus,
     CommunicationDirection,
+    CommunicationJournalEntry,
+    CommunicationJournalStage,
+    CommunicationSender,
+    ConversationLocation,
     DeliveryKind,
+    NormalizedCommunicationEnvelope,
 )
-from api.domains.communications.plugins.webhook import SIGNATURE_HEADER, VERSION_HEADER
+from api.domains.communications.plugins.webhook import EVENT_HEADER_PREFIX, SIGNATURE_HEADER, VERSION_HEADER
 from api.domains.conversations.models import AgentChatMessage, ConversationType
 from api.infrastructure.crypto import encrypt_token
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
@@ -61,6 +70,7 @@ _GIVEN = [
             "AGENT_DEFAULT_MODEL": "litellm/gpt-5-mini",
             "AGENT_LITELLM_BASE_URL": "http://litellm:4000",
             "API_EXTERNAL_URL": "https://api.agentbarn.test",
+            "SKIP_DISCORD_TOKEN_VALIDATION": "true",
         }
     ),
     prepare_injector(modules=[MockK8sModule(), MockLiteLLMModule()]),
@@ -130,6 +140,107 @@ def _deliveries(context) -> list[CommunicationDelivery]:
         )
 
 
+_GIVEN_STOPPED = [*_GIVEN[:-1], there_is_an_agent(status=AgentStatus.STOPPED)]
+
+
+def _start_agent(context) -> None:
+    context.agent.status = AgentStatus.RUNNING
+    context.injector.get(AgentRepository).save(context.agent)
+
+
+def _claim(context):
+    return context.communications_client.post(
+        f"/communications/v1/agents/{context.agent.id}/deliveries/claim",
+        headers=_runtime_auth(context),
+    )
+
+
+def _complete(context, delivery_id: str, *, succeeded: bool, error_code: str | None = None):
+    body: dict[str, Any] = {"succeeded": succeeded}
+    if error_code is not None:
+        body.update(error_code=error_code, error_message="the run failed")
+    return context.communications_client.post(
+        f"/communications/v1/agents/{context.agent.id}/deliveries/{delivery_id}/complete",
+        json=body,
+        headers=_runtime_auth(context),
+    )
+
+
+def _fire_events(context, connection: dict[str, Any], count: int, *, prefix: str = "evt") -> None:
+    secret = connection["credential_reveal"]["signing_secret"]
+    for number in range(1, count + 1):
+        response = _fire(context, connection["id"], secret, _body(f"{prefix}-{number}"))
+        assert_that(response.status_code, equal_to(status.HTTP_202_ACCEPTED))
+
+
+def _edit_delivery(context, delivery_id: str, **changes) -> None:
+    delegate = context.injector.get(PostgresRepositoryDelegate)
+    with Session(delegate.engine) as session:
+        row = session.get(CommunicationDelivery, UUID(delivery_id))
+        assert row is not None
+        for name, value in changes.items():
+            setattr(row, name, value)
+        session.add(row)
+        session.commit()
+
+
+def _expire_lease(context, delivery_id: str) -> None:
+    _edit_delivery(context, delivery_id, lease_expires_at=datetime.now(UTC) - timedelta(seconds=1))
+
+
+def _clear_backoff(context, delivery_id: str) -> None:
+    _edit_delivery(context, delivery_id, available_at=datetime.now(UTC) - timedelta(seconds=1))
+
+
+def _create_chat_connection(context) -> UUID:
+    response = context.client.post(
+        f"/api/v1/organizations/{context.organization.id}/agents/{context.agent.id}/connections",
+        json={
+            "platform_key": "discord",
+            "display_name": "Team Discord",
+            "settings": {"allowed_channel_ids": ["channel-one"]},
+            "credentials": {"bot_token": "chat-token"},
+        },
+        headers=_auth(context),
+    )
+    assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+    return UUID(response.json()["id"])
+
+
+def _chat_envelope(message_id: str) -> NormalizedCommunicationEnvelope:
+    # One thread per message, so chat messages do not queue behind each other.
+    return NormalizedCommunicationEnvelope(
+        provider_message_id=message_id,
+        occurred_at=datetime.now(UTC),
+        location=ConversationLocation(id="channel-one", type="CHANNEL", thread_id=f"thread-{message_id}"),
+        sender=CommunicationSender(id="person-one", display_name="Person One"),
+        text=f"message {message_id}",
+    )
+
+
+def _event_envelope(event_id: str) -> NormalizedCommunicationEnvelope:
+    return NormalizedCommunicationEnvelope(
+        provider_message_id=event_id,
+        occurred_at=datetime.now(UTC),
+        location=ConversationLocation(id="events", type="EVENT", display_name="Events"),
+        text=PROMPT,
+        provider_metadata={"event_id": event_id},
+    )
+
+
+def _small_backlog(cap: int) -> DeliveryLimits:
+    return replace(DeliveryLimits.from_config(get_config()), backlog_cap=cap)
+
+
+def _journal_stages(context, delivery_id: UUID) -> list[CommunicationJournalStage]:
+    delegate = context.injector.get(PostgresRepositoryDelegate)
+    with Session(delegate.engine) as session:
+        rows = session.exec(
+            select(CommunicationJournalEntry).where(col(CommunicationJournalEntry.delivery_id) == delivery_id)
+        ).all()
+    return [CommunicationJournalStage(row.stage) for row in rows]
+
+
 def test_a_user_gets_a_url_and_a_secret_to_paste_into_the_calling_system() -> None:
     with given(_GIVEN) as context:
         with when("a user adds a webhook trigger to their agent"):
@@ -176,23 +287,21 @@ def test_a_signed_event_makes_the_agent_run_the_job() -> None:
             assert_that(delivery.envelope["text"], equal_to(PROMPT))
 
 
-def test_the_claimed_delivery_carries_the_callers_prompt_unchanged() -> None:
+def test_the_claimed_delivery_tells_the_agent_it_was_triggered_and_carries_the_callers_prompt() -> None:
     with given(_GIVEN) as context:
         connection = _create_webhook_connection(context)
         secret = connection["credential_reveal"]["signing_secret"]
         _fire(context, connection["id"], secret)
 
         with when("the agent claims its pending delivery"):
-            response = context.communications_client.post(
-                f"/communications/v1/agents/{context.agent.id}/deliveries/claim",
-                headers=_runtime_auth(context),
-            )
+            response = _claim(context)
 
-        with then("the runtime is told exactly what the caller asked for"):
+        with then("the runtime is told the run was triggered, then given exactly what the caller asked for"):
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
             delivery = response.json()
             assert_that(delivery["kind"], equal_to("EVENT"))
-            assert_that(delivery["envelope"]["text"], equal_to(PROMPT))
+            assert_that(delivery["envelope"]["text"].startswith(EVENT_HEADER_PREFIX), is_(True))
+            assert_that(delivery["envelope"]["text"].endswith(f"\n\n{PROMPT}"), is_(True))
             assert_that(delivery["progress_updates"], is_(False))
             execution = delivery["execution"]
             assert_that(execution["resume_session"], is_(False))
@@ -201,6 +310,11 @@ def test_the_claimed_delivery_carries_the_callers_prompt_unchanged() -> None:
             assert_that(execution["busy_notice"], is_(None))
             # An event has no conversation to reply into.
             assert_that(execution["session_key"].startswith("connection:"), is_(False))
+
+        with then("the caller's own view of the call still shows only their prompt"):
+            calls = context.client.get(_calls_url(context, connection["id"]), headers=_auth(context))
+            [call] = calls.json()["items"]
+            assert_that(call["prompt"], equal_to(PROMPT))
 
 
 def test_an_agent_on_the_previous_protocol_is_never_handed_an_event() -> None:
@@ -788,3 +902,348 @@ def test_a_webhook_with_no_calls_yet_has_an_empty_list() -> None:
         with then("the list is simply empty"):
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
             assert_that(response.json()["items"], equal_to([]))
+
+
+# --- AF-321: never lose a triggered event ------------------------------------------------------
+
+
+def test_an_event_for_a_stopped_agent_waits_while_a_chat_message_is_still_dropped() -> None:
+    with given(_GIVEN_STOPPED) as context:
+        connection = _create_webhook_connection(context)
+        secret = connection["credential_reveal"]["signing_secret"]
+        chat_connection_id = _create_chat_connection(context)
+        deliveries = context.injector.get(CommunicationDeliveryRepository)
+
+        with when("an event and a chat message both arrive while the agent is stopped"):
+            response = _fire(context, connection["id"], secret)
+            chat = deliveries.accept_inbound(connection_id=chat_connection_id, envelope=_chat_envelope("chat-1"))
+
+        with then("the event waits, and the chat message is dropped as before"):
+            assert_that(response.status_code, equal_to(status.HTTP_202_ACCEPTED))
+            [event_row] = [row for row in _deliveries(context) if row.kind == DeliveryKind.EVENT]
+            assert_that(event_row.status, equal_to(CommunicationDeliveryStatus.PENDING))
+            assert_that(event_row.completed_at, is_(None))
+            assert_that(event_row.last_error_code, is_(None))
+            assert_that(chat.status, equal_to(CommunicationDeliveryStatus.UNAVAILABLE))
+            [chat_row] = [row for row in _deliveries(context) if row.kind == DeliveryKind.CONVERSATION]
+            assert_that(chat_row.last_error_code, equal_to("AGENT_STOPPED"))
+            assert_that(chat_row.completed_at, is_(not_(None)))
+
+        with when("the agent starts"):
+            _start_agent(context)
+            claimed = _claim(context)
+            nothing_else = _claim(context)
+
+        with then("only the event is handed to it"):
+            assert_that(claimed.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(claimed.json()["kind"], equal_to("EVENT"))
+            assert_that(nothing_else.status_code, equal_to(status.HTTP_204_NO_CONTENT))
+
+
+def test_a_backlog_built_up_while_stopped_runs_oldest_first_once_the_agent_starts() -> None:
+    with given(_GIVEN_STOPPED) as context:
+        connection = _create_webhook_connection(context)
+        _fire_events(context, connection, 3)
+        _start_agent(context)
+
+        with when("the agent starts and drains its queue"):
+            claimed = [_claim(context).json()["envelope"]["provider_message_id"] for _ in range(3)]
+
+        with then("events run in the order they arrived"):
+            assert_that(claimed, equal_to(["evt-1", "evt-2", "evt-3"]))
+
+
+def test_past_the_backlog_cap_the_oldest_waiting_event_is_dead_lettered() -> None:
+    with given(_GIVEN_STOPPED) as context:
+        connection = _create_webhook_connection(context)
+        connection_id = UUID(connection["id"])
+        deliveries = context.injector.get(CommunicationDeliveryRepository)
+
+        with when("a third event arrives at a webhook that keeps at most two waiting"):
+            for event_id in ("evt-1", "evt-2", "evt-3"):
+                deliveries.accept_inbound(
+                    connection_id=connection_id,
+                    envelope=_event_envelope(event_id),
+                    limits=_small_backlog(2),
+                )
+
+        with then("the oldest is dropped with a code that names the cap, and the newest two still wait"):
+            oldest, middle, newest = _deliveries(context)
+            assert_that(oldest.status, equal_to(CommunicationDeliveryStatus.DEAD_LETTERED))
+            assert_that(oldest.last_error_code, equal_to("BACKLOG_CAP_EXCEEDED"))
+            assert_that(oldest.completed_at, is_(not_(None)))
+            assert_that(oldest.attempt_count, equal_to(0))
+            assert_that(middle.status, equal_to(CommunicationDeliveryStatus.PENDING))
+            assert_that(newest.status, equal_to(CommunicationDeliveryStatus.PENDING))
+            assert_that(_journal_stages(context, oldest.id), has_item(CommunicationJournalStage.DEAD_LETTERED))
+
+        with then("the caller can read why on the call"):
+            calls = context.client.get(_calls_url(context, connection["id"]), headers=_auth(context))
+            dropped = next(call for call in calls.json()["items"] if call["event_id"] == "evt-1")
+            assert_that(dropped["status"], equal_to("DEAD_LETTERED"))
+            assert_that(dropped["last_error_code"], equal_to("BACKLOG_CAP_EXCEEDED"))
+            assert_that(dropped["last_error_message"], contains_string("Too many events were waiting"))
+
+
+def test_the_newest_event_is_never_the_one_dropped() -> None:
+    with given(_GIVEN_STOPPED) as context:
+        connection = _create_webhook_connection(context)
+        connection_id = UUID(connection["id"])
+        deliveries = context.injector.get(CommunicationDeliveryRepository)
+
+        with when("two events arrive at a webhook that keeps only one waiting"):
+            for event_id in ("evt-1", "evt-2"):
+                deliveries.accept_inbound(
+                    connection_id=connection_id,
+                    envelope=_event_envelope(event_id),
+                    limits=_small_backlog(1),
+                )
+
+        with then("the older one goes and the one just accepted stays"):
+            older, newer = _deliveries(context)
+            assert_that(older.status, equal_to(CommunicationDeliveryStatus.DEAD_LETTERED))
+            assert_that(newer.status, equal_to(CommunicationDeliveryStatus.PENDING))
+
+
+def test_a_chat_backlog_is_never_dropped_by_the_event_cap() -> None:
+    with given(_GIVEN) as context:
+        chat_connection_id = _create_chat_connection(context)
+        deliveries = context.injector.get(CommunicationDeliveryRepository)
+
+        with when("more chat messages wait than an event backlog would be allowed"):
+            for message_id in ("chat-1", "chat-2", "chat-3"):
+                deliveries.accept_inbound(
+                    connection_id=chat_connection_id,
+                    envelope=_chat_envelope(message_id),
+                    limits=_small_backlog(1),
+                )
+
+        with then("every one of them is still waiting"):
+            statuses = [row.status for row in _deliveries(context)]
+            assert_that(statuses, equal_to([CommunicationDeliveryStatus.PENDING] * 3))
+
+
+def test_queued_events_end_when_their_agent_is_deleted() -> None:
+    with given(_GIVEN_STOPPED) as context:
+        connection = _create_webhook_connection(context)
+        _fire_events(context, connection, 2)
+
+        with when("the agent is deleted while they wait"):
+            response = context.client.delete(
+                f"/api/v1/organizations/{context.organization.id}/agents/{context.agent.id}",
+                headers=_auth(context),
+            )
+
+        with then("nothing is left waiting for an agent that no longer exists"):
+            assert_that(response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
+            rows = _deliveries(context)
+            assert_that(rows, has_length(2))
+            for row in rows:
+                assert_that(row.status, equal_to(CommunicationDeliveryStatus.CANCELLED))
+                assert_that(row.last_error_code, equal_to("CONNECTION_RETIRED"))
+
+
+def test_queued_events_end_when_their_webhook_is_removed() -> None:
+    with given(_GIVEN_STOPPED) as context:
+        connection = _create_webhook_connection(context)
+        _fire_events(context, connection, 2)
+
+        with when("the webhook is removed while they wait"):
+            response = context.client.delete(
+                f"/api/v1/organizations/{context.organization.id}/agents/{context.agent.id}"
+                f"/connections/{connection['id']}?revision={connection['revision']}",
+                headers=_auth(context),
+            )
+
+        with then("nothing is left waiting on a webhook that no longer exists"):
+            assert_that(response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
+            rows = _deliveries(context)
+            assert_that(rows, has_length(2))
+            for row in rows:
+                assert_that(row.status, equal_to(CommunicationDeliveryStatus.CANCELLED))
+
+
+def test_an_event_whose_run_reports_failure_runs_exactly_once() -> None:
+    with given(_GIVEN) as context:
+        connection = _create_webhook_connection(context)
+        _fire_events(context, connection, 1)
+        claimed = _claim(context).json()
+
+        # A timeout is classified as retryable, so it is the kind of failure chat retries five times.
+        # An unrecognised error would be final for any delivery and would not show the new cap at work.
+        with when("the run reports that it failed with a transient-looking error"):
+            response = _complete(context, claimed["delivery_id"], succeeded=False, error_code="TimeoutError")
+
+        with then("the event is final after one attempt, and the reason is kept"):
+            assert_that(response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
+            [delivery] = _deliveries(context)
+            assert_that(delivery.status, equal_to(CommunicationDeliveryStatus.DEAD_LETTERED))
+            assert_that(delivery.attempt_count, equal_to(1))
+            assert_that(delivery.completed_at, is_(not_(None)))
+            assert_that(delivery.last_error_code, is_(not_(None)))
+
+        with then("no second run is ever handed out"):
+            _clear_backoff(context, claimed["delivery_id"])
+            assert_that(_claim(context).status_code, equal_to(status.HTTP_204_NO_CONTENT))
+
+        with then("the caller can read the reason afterwards"):
+            calls = context.client.get(_calls_url(context, connection["id"]), headers=_auth(context))
+            [call] = calls.json()["items"]
+            assert_that(call["status"], equal_to("DEAD_LETTERED"))
+            assert_that(call["last_error_code"], equal_to(delivery.last_error_code))
+
+
+def test_an_event_whose_pod_dies_is_run_again_and_ends_after_two_attempts() -> None:
+    with given(_GIVEN) as context:
+        connection = _create_webhook_connection(context)
+        _fire_events(context, connection, 1)
+        first = _claim(context).json()
+
+        with when("the pod dies mid-run and the claim's lease runs out"):
+            _expire_lease(context, first["delivery_id"])
+            reclaim = _claim(context)
+
+        with then("the event is waiting again, with one attempt used and the cause recorded"):
+            assert_that(reclaim.status_code, equal_to(status.HTTP_204_NO_CONTENT))
+            [delivery] = _deliveries(context)
+            assert_that(delivery.status, equal_to(CommunicationDeliveryStatus.PENDING))
+            assert_that(delivery.attempt_count, equal_to(1))
+            assert_that(delivery.last_error_code, equal_to("LEASE_EXPIRED"))
+
+        with when("a healthy pod takes it and that pod dies too"):
+            _clear_backoff(context, first["delivery_id"])
+            second = _claim(context)
+            _expire_lease(context, first["delivery_id"])
+            _claim(context)
+
+        with then("it ends after two attempts, and the reason reads as written"):
+            assert_that(second.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(second.json()["attempt_count"], equal_to(2))
+            [delivery] = _deliveries(context)
+            assert_that(delivery.status, equal_to(CommunicationDeliveryStatus.DEAD_LETTERED))
+            assert_that(delivery.attempt_count, equal_to(2))
+            assert_that(delivery.last_error_code, equal_to("LEASE_EXPIRED"))
+            assert_that(delivery.last_error_message or "", contains_string("claim lease expired"))
+
+
+def test_an_agent_at_its_cap_claims_no_further_events_until_a_run_finishes() -> None:
+    with given(_GIVEN) as context:
+        connection = _create_webhook_connection(context)
+        _fire_events(context, connection, 4)
+
+        with when("the agent asks for work until it is told there is none"):
+            claims = [_claim(context) for _ in range(4)]
+
+        with then("it holds three runs, and the fourth event is left waiting untouched"):
+            codes = [response.status_code for response in claims]
+            assert_that(codes, equal_to([200, 200, 200, 204]))
+            [waiting] = [row for row in _deliveries(context) if row.status == CommunicationDeliveryStatus.PENDING]
+            assert_that(waiting.attempt_count, equal_to(0))
+            assert_that(waiting.envelope["provider_message_id"], equal_to("evt-4"))
+
+        with when("one run finishes"):
+            _complete(context, claims[0].json()["delivery_id"], succeeded=True)
+            next_claim = _claim(context)
+
+        with then("the waiting event is handed out"):
+            assert_that(next_claim.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(next_claim.json()["envelope"]["provider_message_id"], equal_to("evt-4"))
+
+
+def test_chat_is_still_handed_out_when_events_hold_every_slot() -> None:
+    with given(_GIVEN) as context:
+        connection = _create_webhook_connection(context)
+        chat_connection_id = _create_chat_connection(context)
+        deliveries = context.injector.get(CommunicationDeliveryRepository)
+        _fire_events(context, connection, 3)
+        for _ in range(3):
+            assert_that(_claim(context).status_code, equal_to(status.HTTP_200_OK))
+        _fire_events(context, connection, 1, prefix="late")
+        deliveries.accept_inbound(connection_id=chat_connection_id, envelope=_chat_envelope("chat-1"))
+
+        with when("the agent asks for more work with every event slot taken"):
+            chat = _claim(context)
+            after = _claim(context)
+
+        with then("it is handed the chat message, and the extra event keeps waiting"):
+            assert_that(chat.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(chat.json()["kind"], equal_to("CONVERSATION"))
+            assert_that(after.status_code, equal_to(status.HTTP_204_NO_CONTENT))
+
+
+def test_a_chat_run_in_flight_does_not_use_up_an_event_slot() -> None:
+    with given(_GIVEN) as context:
+        connection = _create_webhook_connection(context)
+        chat_connection_id = _create_chat_connection(context)
+        deliveries = context.injector.get(CommunicationDeliveryRepository)
+        _fire_events(context, connection, 2)
+        for _ in range(2):
+            _claim(context)
+        deliveries.accept_inbound(connection_id=chat_connection_id, envelope=_chat_envelope("chat-1"))
+        assert_that(_claim(context).json()["kind"], equal_to("CONVERSATION"))
+
+        with when("a third and a fourth event arrive while the chat run is going"):
+            _fire_events(context, connection, 2, prefix="more")
+            third = _claim(context)
+            fourth = _claim(context)
+
+        with then("three events run beside the chat run, and only the fourth is held"):
+            assert_that(third.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(third.json()["kind"], equal_to("EVENT"))
+            assert_that(fourth.status_code, equal_to(status.HTTP_204_NO_CONTENT))
+
+
+def test_a_burst_larger_than_the_cap_is_fully_processed_without_ever_exceeding_it() -> None:
+    with given(_GIVEN) as context:
+        connection = _create_webhook_connection(context)
+        _fire_events(context, connection, 7)
+        finished = 0
+
+        with when("the agent works through the burst, claiming as much as it may each time"):
+            for _ in range(10):
+                in_flight: list[str] = []
+                while (response := _claim(context)).status_code == status.HTTP_200_OK:
+                    in_flight.append(response.json()["delivery_id"])
+                processing = [
+                    row for row in _deliveries(context) if row.status == CommunicationDeliveryStatus.PROCESSING
+                ]
+                assert_that(len(processing), less_than_or_equal_to(3))
+                for delivery_id in in_flight:
+                    _complete(context, delivery_id, succeeded=True)
+                    finished += 1
+                if finished == 7:
+                    break
+
+        with then("every event ran, just not all at once"):
+            assert_that(finished, equal_to(7))
+            statuses = {row.status for row in _deliveries(context)}
+            assert_that(statuses, equal_to({CommunicationDeliveryStatus.SUCCEEDED}))
+
+
+def _run_load_url(context, agent_id: UUID | str | None = None) -> str:
+    return f"/api/v1/organizations/{context.organization.id}/agents/{agent_id or context.agent.id}/connection-runs"
+
+
+def test_the_run_load_reports_event_runs_against_the_cap() -> None:
+    with given(_GIVEN) as context:
+        connection = _create_webhook_connection(context)
+        chat_connection_id = _create_chat_connection(context)
+        deliveries = context.injector.get(CommunicationDeliveryRepository)
+        _fire_events(context, connection, 5)
+        for _ in range(2):
+            _claim(context)
+        deliveries.accept_inbound(connection_id=chat_connection_id, envelope=_chat_envelope("chat-1"))
+
+        with when("the agent's run load is read"):
+            response = context.client.get(_run_load_url(context), headers=_auth(context))
+
+        with then("it counts event runs only: two running, three waiting, against a cap of three"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(response.json(), equal_to({"in_flight": 2, "max_in_flight": 3, "queued": 3}))
+
+
+def test_the_run_load_of_an_unknown_agent_is_not_found() -> None:
+    with given(_GIVEN) as context:
+        response = context.client.get(_run_load_url(context, uuid4()), headers=_auth(context))
+
+        assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))

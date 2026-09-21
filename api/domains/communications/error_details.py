@@ -30,10 +30,16 @@ _SENSITIVE_PARTS = (
 )
 _REDACTED_ERROR_CODE = "REDACTED"
 _REDACTED_ERROR_SUMMARY = "Provider error details were redacted"
+# Messages the delivery repository writes itself. They are allowlisted below so they are shown
+# as written instead of being redacted like provider text.
+LEASE_EXPIRED_MESSAGE = "Runtime did not complete this delivery before its claim lease expired"
+BACKLOG_CAP_EXCEEDED_MESSAGE = "Too many events were waiting for this connection, so the oldest was dropped"
 _SAFE_ERROR_SUMMARIES = {
     "agent was not running when the message arrived": "Agent was not running when the message arrived",
     "communication connection is unavailable": "Communication Connection is unavailable",
     "communication connection was retired": "Communication Connection was retired",
+    LEASE_EXPIRED_MESSAGE.casefold(): LEASE_EXPIRED_MESSAGE,
+    BACKLOG_CAP_EXCEEDED_MESSAGE.casefold(): BACKLOG_CAP_EXCEEDED_MESSAGE,
     _REDACTED_ERROR_SUMMARY.casefold(): _REDACTED_ERROR_SUMMARY,
 }
 _ERROR_CODES = {

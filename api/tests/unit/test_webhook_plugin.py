@@ -1,11 +1,12 @@
 """The webhook plugin is the only ingress where the caller is a machine that will never
 retry, never clarify, and never read a reply. These tests pin the two things that
 protects: the contract is checked before anything is trusted, and the caller's own
-prompt reaches the runtime unchanged."""
+prompt reaches the runtime unchanged, below one fixed line saying it was triggered."""
 
 import hashlib
 import hmac
 import json
+from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
@@ -14,11 +15,13 @@ from hamcrest import assert_that, equal_to, is_, not_
 from api.domains.communications.models import (
     CommunicationPolicyDisposition,
     ConversationLocation,
+    NormalizedCommunicationEnvelope,
     OutboundCommunicationEnvelope,
     PlatformCapability,
 )
-from api.domains.communications.plugins.base import PlatformPlugin, WebhookRequest, WebhookRequestRejected
+from api.domains.communications.plugins.base import WebhookRequest, WebhookRequestRejected
 from api.domains.communications.plugins.webhook import (
+    EVENT_HEADER_PREFIX,
     MAX_PROMPT_CHARS,
     MIN_SECRET_LENGTH,
     SIGNATURE_HEADER,
@@ -211,10 +214,34 @@ def test_an_admitted_event_is_marked_as_one_and_carries_the_prompt_as_its_text()
     assert_that(envelope.provider_metadata["response_url"], equal_to("https://hooks.example.com/x"))
 
 
-def test_runtime_prompt_is_the_base_behaviour() -> None:
-    """With no connection-level template, the base class's `return envelope.text` is
-    exactly right -- webhook does not override it."""
-    assert_that(WebhookPlatformPlugin.runtime_prompt, is_(PlatformPlugin.runtime_prompt))
+def _event(event_id: str, text: str) -> NormalizedCommunicationEnvelope:
+    return NormalizedCommunicationEnvelope(
+        provider_message_id=event_id,
+        occurred_at=datetime.now(UTC),
+        location=ConversationLocation(id="events", type="EVENT"),
+        text=text,
+    )
+
+
+def test_the_agent_is_told_the_run_was_triggered_and_still_gets_the_callers_prompt() -> None:
+    """The runtime only ever sees the prompt, so the header is the one thing that tells the agent
+    another system started it. The caller's own text follows, unchanged."""
+    prompt = _plugin().runtime_prompt(_event("evt-1", "Write release notes for PROJ-1."))
+
+    assert_that(prompt.startswith(EVENT_HEADER_PREFIX), is_(True))
+    assert_that(prompt.endswith("\n\nWrite release notes for PROJ-1."), is_(True))
+
+
+def test_the_header_carries_nothing_from_the_caller() -> None:
+    """The event id is left out on purpose: the agent has no way to look one up."""
+    first = _event("evt-1", "one")
+    second = _event("evt-2", "a different prompt")
+
+    header_one = _plugin().runtime_prompt(first).removesuffix("one")
+    header_two = _plugin().runtime_prompt(second).removesuffix("a different prompt")
+
+    assert_that(header_one, equal_to(header_two))
+    assert_that("evt-" in header_one, is_(False))
 
 
 def test_a_secret_must_be_long_enough_to_be_worth_having() -> None:

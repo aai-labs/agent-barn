@@ -11,12 +11,16 @@ from uuid import UUID
 import pytest
 from hamcrest import assert_that, equal_to, is_, not_
 
+from api.core.config import Config
 from api.domains.communications.execution_policy import (
     ORDERING_KEY_METADATA,
+    AttemptLimits,
+    DeliveryLimits,
     kind_for_location,
     kinds_for_protocol,
     ordering_key_for,
     policy_for,
+    run_capped_kinds,
     session_key_for,
 )
 from api.domains.communications.models import (
@@ -163,3 +167,52 @@ def test_every_kind_has_a_policy() -> None:
     """A new kind without a policy row must fail here, not at claim time in production."""
     for kind in DeliveryKind:
         assert_that(policy_for(kind).kind, equal_to(kind))
+
+
+def test_only_an_event_is_queued_while_the_agent_is_stopped() -> None:
+    """A chat message that sat for days would be answered long after it mattered. An event still has work to do."""
+    assert_that(policy_for(DeliveryKind.EVENT).queue_while_stopped, is_(True))
+    assert_that(policy_for(DeliveryKind.CONVERSATION).queue_while_stopped, is_(False))
+
+
+def test_only_events_count_toward_the_run_cap() -> None:
+    assert_that(run_capped_kinds(), equal_to(frozenset({DeliveryKind.EVENT})))
+    assert_that(policy_for(DeliveryKind.CONVERSATION).counts_toward_run_cap, is_(False))
+
+
+def test_default_limits_give_an_event_one_attempt_after_a_failure_and_two_after_a_lease_expiry() -> None:
+    limits = DeliveryLimits.from_config(Config.model_construct())
+
+    assert_that(limits.attempts_for(DeliveryKind.EVENT), equal_to(AttemptLimits(after_failure=1, after_lease_expiry=2)))
+    assert_that(limits.backlog_cap, equal_to(100))
+    assert_that(limits.max_in_flight_runs, equal_to(3))
+
+
+def test_chat_keeps_five_attempts_whichever_way_it_failed() -> None:
+    limits = DeliveryLimits.from_config(Config.model_construct())
+
+    assert_that(limits.attempts_for(DeliveryKind.CONVERSATION), equal_to(AttemptLimits(5, 5)))
+
+
+def test_event_limits_follow_config_and_chat_limits_do_not() -> None:
+    config = Config.model_construct(
+        communications_event_backlog_cap=7,
+        communications_max_in_flight_event_runs_per_agent=2,
+        communications_event_max_attempts_after_failure=3,
+        communications_event_max_attempts_after_lease_expiry=4,
+    )
+
+    limits = DeliveryLimits.from_config(config)
+
+    assert_that(limits.attempts_for(DeliveryKind.EVENT), equal_to(AttemptLimits(3, 4)))
+    assert_that(limits.attempts_for(DeliveryKind.CONVERSATION), equal_to(AttemptLimits(5, 5)))
+    assert_that(limits.backlog_cap, equal_to(7))
+    assert_that(limits.max_in_flight_runs, equal_to(2))
+
+
+def test_every_kind_has_attempt_limits() -> None:
+    """A new kind without limits must fail here, not when its first delivery fails in production."""
+    limits = DeliveryLimits.from_config(Config.model_construct())
+
+    for kind in DeliveryKind:
+        assert_that(limits.attempts_for(kind), is_(not_(None)))

@@ -1,8 +1,11 @@
 import ast
+import http.client
 import importlib.util
 import io
 import json
 import threading
+import urllib.error
+from email.message import Message
 from pathlib import Path
 from types import ModuleType
 from typing import Any, Self
@@ -251,6 +254,7 @@ def test_delivery_worker_safety_poll_claims_without_a_control_signal(monkeypatch
     run_delivery = Mock()
     monkeypatch.setattr(adapter, "http_request", claim)
     monkeypatch.setattr(adapter, "run_delivery", run_delivery)
+    monkeypatch.setattr(adapter, "wait_for_runtime", Mock())
 
     class Wake:
         def __init__(self) -> None:
@@ -1157,3 +1161,144 @@ def test_an_approval_request_during_an_event_is_denied_rather_than_parked(
     assert [payload for url, payload in calls if url.endswith("/approval")] == [{"choice": "deny"}]
     assert "event:connection-1:evt-1" not in adapter._PENDING_APPROVALS
     assert [payload for url, payload in calls if url.endswith("/complete")] == [{"succeeded": True}]
+
+
+# --- waiting for the runtime -------------------------------------------------
+
+
+class _Answer:
+    """What `urlopen` returns for a request the runtime answered."""
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, *_exc: object) -> bool:
+        return False
+
+
+def _probes(*outcomes: object):
+    """A `urlopen` stand-in that raises or answers in turn, recording what it was asked for."""
+    urls: list[str] = []
+    remaining = list(outcomes)
+
+    def urlopen(request, timeout=None):
+        urls.append(request.full_url)
+        outcome = remaining.pop(0)
+        if isinstance(outcome, BaseException):
+            raise outcome
+        return outcome
+
+    return urlopen, urls
+
+
+def _http_error(code: int) -> urllib.error.HTTPError:
+    return urllib.error.HTTPError("http://runtime.test/probe", code, "status", Message(), None)
+
+
+def test_the_runtime_is_up_when_it_answers(monkeypatch: pytest.MonkeyPatch) -> None:
+    adapter = _load_adapter(monkeypatch)
+    urlopen, _urls = _probes(_Answer())
+    monkeypatch.setattr(adapter.urllib.request, "urlopen", urlopen)
+
+    assert adapter.runtime_is_up() is True
+
+
+@pytest.mark.parametrize("code", [401, 404])
+def test_any_answer_below_500_means_the_runtime_is_up(monkeypatch: pytest.MonkeyPatch, code: int) -> None:
+    """A version without the probe path still answers, so it must not be waited on forever."""
+    adapter = _load_adapter(monkeypatch)
+    urlopen, _urls = _probes(_http_error(code))
+    monkeypatch.setattr(adapter.urllib.request, "urlopen", urlopen)
+
+    assert adapter.runtime_is_up() is True
+
+
+@pytest.mark.parametrize("code", [500, 503])
+def test_a_server_error_means_the_runtime_is_not_ready(monkeypatch: pytest.MonkeyPatch, code: int) -> None:
+    adapter = _load_adapter(monkeypatch)
+    urlopen, _urls = _probes(_http_error(code))
+    monkeypatch.setattr(adapter.urllib.request, "urlopen", urlopen)
+
+    assert adapter.runtime_is_up() is False
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        urllib.error.URLError("refused"),
+        ConnectionRefusedError(),
+        TimeoutError(),
+        http.client.RemoteDisconnected("closed"),
+    ],
+)
+def test_a_refused_or_dropped_connection_means_the_runtime_is_not_up(
+    monkeypatch: pytest.MonkeyPatch, error: BaseException
+) -> None:
+    adapter = _load_adapter(monkeypatch)
+    urlopen, _urls = _probes(error)
+    monkeypatch.setattr(adapter.urllib.request, "urlopen", urlopen)
+
+    assert adapter.runtime_is_up() is False
+
+
+@pytest.mark.parametrize(
+    ("runtime_kind", "expected_url"),
+    [
+        ("hermes", "http://runtime.test/health"),
+        ("openclaw", "http://runtime.test/startup"),
+        # A pod that does not set RUNTIME_KIND is an OpenClaw pod.
+        (None, "http://runtime.test/startup"),
+    ],
+)
+def test_each_runtime_is_probed_at_the_path_it_documents(
+    monkeypatch: pytest.MonkeyPatch, runtime_kind: str | None, expected_url: str
+) -> None:
+    adapter = _load_adapter(monkeypatch, runtime_kind=runtime_kind)
+    urlopen, urls = _probes(_Answer())
+    monkeypatch.setattr(adapter.urllib.request, "urlopen", urlopen)
+
+    adapter.runtime_is_up()
+
+    assert urls == [expected_url]
+
+
+def test_waiting_for_the_runtime_ends_only_once_it_answers(monkeypatch: pytest.MonkeyPatch) -> None:
+    adapter = _load_adapter(monkeypatch)
+    urlopen, urls = _probes(urllib.error.URLError("refused"), _http_error(503), _Answer())
+    sleeps: list[float] = []
+    monkeypatch.setattr(adapter.urllib.request, "urlopen", urlopen)
+    monkeypatch.setattr(adapter.time, "sleep", sleeps.append)
+
+    adapter.wait_for_runtime()
+
+    assert len(urls) == 3
+    assert sleeps == [adapter._RUNTIME_PROBE_INTERVAL_SECONDS] * 2
+
+
+def test_the_delivery_worker_waits_for_the_runtime_before_its_first_claim(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A claim made before the runtime is up fails, and a failed event is final."""
+    adapter = _load_adapter(monkeypatch)
+    order: list[str] = []
+    monkeypatch.setattr(adapter, "wait_for_runtime", lambda: order.append("wait"))
+    monkeypatch.setattr(adapter, "http_request", lambda *_args, **_kwargs: order.append("claim"))
+
+    class Wake:
+        def __init__(self) -> None:
+            self.waits = 0
+
+        def wait(self, *, timeout: float) -> bool:
+            self.waits += 1
+            if self.waits > 1:
+                raise KeyboardInterrupt
+            return False
+
+        def clear(self) -> None:
+            return None
+
+    worker = adapter.DeliveryWorker()
+    worker._wake = Wake()
+
+    with pytest.raises(KeyboardInterrupt):
+        worker._run()
+
+    assert order == ["wait", "claim"]

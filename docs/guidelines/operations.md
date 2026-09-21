@@ -236,6 +236,19 @@ Documentation-only changes do not change a service image and do not require a se
   `COMMUNICATION_JOURNAL_RETENTION_DAYS` days (default `31`, bounded to
   `1`–`3650`). Its supervisor prunes expired entries; changing this window is
   an operational configuration change, not a release-version change.
+- Webhook events are bounded by four settings. They apply to webhook (event) deliveries only;
+  chat is not limited by them and keeps a fixed 5 attempts.
+  - `COMMUNICATIONS_EVENT_BACKLOG_CAP` (default `100`, bounded to `1`–`10000`): events one
+    webhook keeps waiting. Past it, the oldest is dead-lettered with `BACKLOG_CAP_EXCEEDED`.
+  - `COMMUNICATIONS_MAX_IN_FLIGHT_EVENT_RUNS_PER_AGENT` (default `3`, `1`–`50`): event runs one
+    agent has going at once. Further events stay queued, with no attempt used. Chat is not counted.
+  - `COMMUNICATIONS_EVENT_MAX_ATTEMPTS_AFTER_FAILURE` (default `1`, `1`–`10`): attempts for an
+    event whose run reported a failure. `1` makes that failure final.
+  - `COMMUNICATIONS_EVENT_MAX_ATTEMPTS_AFTER_LEASE_EXPIRY` (default `2`, `1`–`10`): attempts for
+    an event whose claim lease expired, for example after a pod restart or a lost node.
+  Both the API and the Communications process read them, so give them the same values. They are
+  not in the Helm chart yet, like `COMMUNICATION_JOURNAL_RETENTION_DAYS`, so changing one in a
+  cluster needs a chart change.
 - On k3s, use `deploy.yml` rather than manually publishing mutable `latest` tags. Public hosted releases are git tags via `deploy-public.yml`.
 
 ### Agent Restore Points

@@ -41,6 +41,11 @@ MAX_ORDERING_KEY_LENGTH = 256
 # session_key (`event:{connection_id}:{event_id}`), not this.
 EVENT_LOCATION_ID = "events"
 
+# The agent sees only the caller's prompt, so this line is what tells it the run came from another
+# system and that nobody is waiting on it. `runtime_policy` describes the same phrase to the agent.
+EVENT_HEADER_PREFIX = "Triggered by a webhook event"
+_EVENT_HEADER = f"{EVENT_HEADER_PREFIX}. No one is waiting for a reply, and this event may be delivered more than once."
+
 MIN_SECRET_LENGTH = 32
 
 
@@ -95,7 +100,10 @@ class WebhookPlatformPlugin(PlatformPlugin):
         "• A 202 means accepted for processing, not finished. Delivery is at-least-once, so write the "
         "instruction so that running it twice on one event is harmless.\n"
         "• Every call and the Agent's response to it appear in this connection's calls list.\n"
-        "• Events that arrive while the Agent is stopped are not processed yet."
+        "• Events that arrive while the Agent is stopped wait, and run once it starts. The number that "
+        "can wait is limited: past the limit the oldest is dropped and shown as failed.\n"
+        "• A run that fails is not run again. If the Agent restarts in the middle of a run, that event "
+        "runs once more."
     )
     post_setup_hint = (
         "Paste the URL and secret above into the calling system. If this agent was already running when you "
@@ -202,6 +210,9 @@ class WebhookPlatformPlugin(PlatformPlugin):
                 ),
             ),
         )
+
+    def runtime_prompt(self, envelope: NormalizedCommunicationEnvelope) -> str:
+        return f"{_EVENT_HEADER}\n\n{envelope.text}"
 
     def send(
         self,

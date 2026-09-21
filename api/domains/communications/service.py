@@ -39,6 +39,7 @@ from api.domains.communications.models import (
     CommunicationJournalStage,
     CommunicationReconnectRead,
     CommunicationRetryRead,
+    CommunicationRunLoadRead,
     ConnectionObservedStatus,
     PlatformCapability,
     PlatformDescriptorRead,
@@ -497,6 +498,16 @@ class CommunicationsService:
         if self.delivery_repository is None:
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Calls are unavailable")
         return self.delivery_repository.list_calls(connection_id, pagination=Pagination(page=page, size=page_size))
+
+    def run_load(self, agent_id: UUID, context: CurrentUserContext) -> CommunicationRunLoadRead:
+        """How many event runs an Agent has going and waiting, against its cap."""
+        self.authorization.require_visible(context, agent_id)
+        if self.delivery_repository is None:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Run load is unavailable")
+        return self.delivery_repository.run_load(
+            agent_id,
+            excluded_platform_keys=self.config.native_platform_keys,
+        )
 
     def reconnect_connection(
         self,

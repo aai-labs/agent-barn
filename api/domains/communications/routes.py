@@ -22,6 +22,7 @@ from api.domains.communications.models import (
     CommunicationJournalStage,
     CommunicationReconnectRead,
     CommunicationRetryRead,
+    CommunicationRunLoadRead,
     PlatformDescriptorRead,
 )
 from api.domains.communications.service import MAX_DIAGNOSTICS_WINDOW_DAYS, CommunicationsService
@@ -51,6 +52,18 @@ def list_communication_connections(
     service: Annotated[CommunicationsService, Injected(CommunicationsService)],
 ):
     return service.list_connections(agent_id, context)
+
+
+@communications_router.get(
+    "/agents/{agent_id}/connection-runs",
+    response_model=CommunicationRunLoadRead,
+)
+def get_communication_run_load(
+    agent_id: UUID,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[CommunicationsService, Injected(CommunicationsService)],
+):
+    return service.run_load(agent_id, context)
 
 
 @communications_router.get(

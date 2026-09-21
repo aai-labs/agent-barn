@@ -407,21 +407,21 @@ def test_runtime_claim_dead_letters_an_inbound_delivery_after_repeated_lease_exp
         accepted = repository.accept_inbound(connection_id=connection_id, envelope=_envelope("provider-1"))
         delegate = context.injector.get(PostgresRepositoryDelegate)
 
-        claimed = repository.claim_next_inbound(agent_id=context.agent.id, max_attempts=5)
+        claimed = repository.claim_next_inbound(agent_id=context.agent.id)
         assert_that(claimed, is_(not_(none())))
         for _ in range(4):
             _expire_lease(delegate, accepted.delivery_id)
             # This call performs the reclaim (PROCESSING -> PENDING with a
             # backoff window) internally but can't claim in the same pass,
             # since the backoff pushes available_at into the future.
-            assert_that(repository.claim_next_inbound(agent_id=context.agent.id, max_attempts=5), none())
+            assert_that(repository.claim_next_inbound(agent_id=context.agent.id), none())
             _clear_backoff(delegate, accepted.delivery_id)
-            claimed = repository.claim_next_inbound(agent_id=context.agent.id, max_attempts=5)
+            claimed = repository.claim_next_inbound(agent_id=context.agent.id)
             assert_that(claimed, is_(not_(none())))
 
         with when("the delivery's lease expires a fifth time"):
             _expire_lease(delegate, accepted.delivery_id)
-            final_claim = repository.claim_next_inbound(agent_id=context.agent.id, max_attempts=5)
+            final_claim = repository.claim_next_inbound(agent_id=context.agent.id)
 
         with then("it dead-letters instead of retrying forever"):
             assert_that(claimed.attempt_count, equal_to(5))
@@ -935,3 +935,44 @@ def test_a_conversations_transcript_key_keeps_the_shape_every_stored_row_already
         with then("its transcript key is still connection:channel:thread with no prefix"):
             message = _message(context, accepted.message_id)
             assert_that(message.session_key, equal_to(f"{connection_id}:channel-one:thread-one"))
+
+
+def test_a_chat_delivery_is_retried_after_a_reported_failure_until_its_fifth_attempt() -> None:
+    """Events end at once when their run reports a failure. A chat message keeps its five attempts."""
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        connection_id = _create_connection(context)
+        repository = context.injector.get(CommunicationDeliveryRepository)
+        delegate = context.injector.get(PostgresRepositoryDelegate)
+        accepted = repository.accept_inbound(connection_id=connection_id, envelope=_envelope("provider-1"))
+
+        def fail_the_run() -> None:
+            assert_that(
+                repository.complete_runtime_delivery(
+                    accepted.delivery_id,
+                    agent_id=context.agent.id,
+                    succeeded=False,
+                    error_code="TimeoutError",
+                    error_message="timed out",
+                ),
+                is_(True),
+            )
+
+        with when("the runtime reports a failure on each of the first four attempts"):
+            for attempt in range(1, 5):
+                claimed = repository.claim_next_inbound(agent_id=context.agent.id)
+                assert_that(claimed.attempt_count if claimed is not None else None, equal_to(attempt))
+                fail_the_run()
+                assert_that(
+                    _delivery(context, accepted.delivery_id).status, equal_to(CommunicationDeliveryStatus.PENDING)
+                )
+                _clear_backoff(delegate, accepted.delivery_id)
+
+        with when("it fails a fifth time"):
+            claimed = repository.claim_next_inbound(agent_id=context.agent.id)
+            assert_that(claimed.attempt_count if claimed is not None else None, equal_to(5))
+            fail_the_run()
+
+        with then("it is finally dead-lettered"):
+            delivery = _delivery(context, accepted.delivery_id)
+            assert_that(delivery.status, equal_to(CommunicationDeliveryStatus.DEAD_LETTERED))
+            assert_that(delivery.attempt_count, equal_to(5))

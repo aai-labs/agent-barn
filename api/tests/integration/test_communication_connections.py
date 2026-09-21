@@ -1,6 +1,7 @@
 import io
 import json
 import zipfile
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 from uuid import UUID, uuid4
@@ -29,10 +30,12 @@ from hamcrest import (
 from sqlmodel import Session, col, select
 from starlette.testclient import TestClient
 
+from api.core.config import get_config
 from api.domains.agents.models import AgentStatus, AgentType
 from api.domains.communications.delivery_repository import CommunicationDeliveryRepository
 from api.domains.communications.email_address_repository import AgentEmailAddressRepository
 from api.domains.communications.error_details import normalize_communication_error
+from api.domains.communications.execution_policy import AttemptLimits, DeliveryLimits
 from api.domains.communications.models import (
     AgentEmailAddress,
     CommunicationConnection,
@@ -41,6 +44,7 @@ from api.domains.communications.models import (
     CommunicationSender,
     ConnectionObservedStatus,
     ConversationLocation,
+    DeliveryKind,
     NormalizedCommunicationEnvelope,
     RuntimeReplyCreate,
 )
@@ -982,6 +986,12 @@ def _envelope(message_id: str) -> NormalizedCommunicationEnvelope:
     )
 
 
+def _one_attempt_for_chat() -> DeliveryLimits:
+    """Chat normally gets 5 attempts. A test that wants its first failure to be final asks for one."""
+    limits = DeliveryLimits.from_config(get_config())
+    return replace(limits, attempts={**limits.attempts, DeliveryKind.CONVERSATION: AttemptLimits(1, 1)})
+
+
 def test_connection_summary_reports_richer_health_and_delivery_signals() -> None:
     with given([*_GIVEN[:-1], there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
         client: TestClient = context.client
@@ -1021,7 +1031,7 @@ def test_connection_summary_reports_richer_health_and_delivery_signals() -> None
                     succeeded=False,
                     error_code="model_error",
                     error_message="the model failed",
-                    max_attempts=1,
+                    limits=_one_attempt_for_chat(),
                 ),
                 is_(True),
             )
@@ -1274,7 +1284,7 @@ def test_retryable_journal_filter_excludes_dead_lettered_inbound_deliveries() ->
                 succeeded=False,
                 error_code="runtime_timeout",
                 error_message="runtime failed",
-                max_attempts=1,
+                limits=_one_attempt_for_chat(),
             ),
             is_(True),
         )

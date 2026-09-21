@@ -1,4 +1,9 @@
-from api.domains.agents.runtime_policy import build_chat_commands_policy_md, build_role_scope_policy_md
+from api.domains.agents.runtime_policy import (
+    build_chat_commands_policy_md,
+    build_role_scope_policy_md,
+    build_triggered_runs_policy_md,
+)
+from api.domains.communications.plugins.webhook import EVENT_HEADER_PREFIX
 
 # --- build_chat_commands_policy_md --------------------------------------------
 
@@ -80,3 +85,30 @@ def test_role_scope_policy_md_is_runtime_neutral():
 def test_role_scope_policy_md_does_not_mention_profiles():
     # Same "no integrations configured" contract the chat-commands block guards.
     assert "--profile" not in build_role_scope_policy_md()
+
+
+# --- build_triggered_runs_policy_md -------------------------------------------
+
+
+def test_triggered_runs_policy_md_is_always_emitted():
+    md = build_triggered_runs_policy_md()
+    assert md.strip() != ""
+    assert "## Triggered Runs" in md
+
+
+def test_triggered_runs_policy_md_names_the_phrase_the_webhook_header_starts_with():
+    # The agent recognises a triggered run by this phrase, so the block and the header must not drift.
+    assert EVENT_HEADER_PREFIX in build_triggered_runs_policy_md()
+
+
+def test_triggered_runs_policy_md_tells_the_agent_to_check_the_destination_not_an_id():
+    md = build_triggered_runs_policy_md()
+    assert "destination" in md
+    # The agent has no way to look an event id up, so it must not be told to.
+    assert "event id" not in md.lower()
+
+
+def test_triggered_runs_policy_md_is_runtime_neutral():
+    md = build_triggered_runs_policy_md()
+    assert "Hermes" not in md
+    assert "OpenClaw" not in md

@@ -241,6 +241,9 @@ class CommunicationsGatewayService:
                 agent.id,
                 CommunicationSignal(type=CommunicationSignalType.MESSAGE_CHANGED, delivery_id=delivery_id),
             )
+            # A slot may just have opened for an event the per-agent cap was holding back. Without
+            # this the pod only finds it on its next five-second poll.
+            self._publish_signal(agent.id, CommunicationSignal(type=CommunicationSignalType.DELIVERY_AVAILABLE))
             if not result.succeeded:
                 self._notify_runtime_failure_feedback(
                     agent.id,

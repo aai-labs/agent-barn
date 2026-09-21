@@ -272,10 +272,13 @@ def test_gateway_marks_claim_and_terminal_runtime_failure_at_lifecycle_seam() ->
         plugin.processing_feedback.call_args_list[1].args[2].provider_metadata,
         equal_to(envelope.provider_metadata),
     )
-    published_agent_id, published_signal = cast(Mock, service.signals).publish.call_args.args
-    assert published_agent_id == agent.id
-    assert published_signal.type == CommunicationSignalType.MESSAGE_CHANGED
-    assert published_signal.delivery_id == delivery.delivery_id
+    published = [call.args for call in cast(Mock, service.signals).publish.call_args_list]
+    # A finished run also wakes the pod: a slot may have opened for an event the per-agent cap held back.
+    assert [(agent_id, signal.type) for agent_id, signal in published] == [
+        (agent.id, CommunicationSignalType.MESSAGE_CHANGED),
+        (agent.id, CommunicationSignalType.DELIVERY_AVAILABLE),
+    ]
+    assert published[0][1].delivery_id == delivery.delivery_id
 
 
 def test_native_platform_deliveries_are_not_reclaimed_or_claimed_by_the_gateway() -> None:
