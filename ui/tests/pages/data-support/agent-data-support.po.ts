@@ -114,6 +114,74 @@ export const mockAgent = {
   updated_at: "2026-05-14T09:14:00Z",
 };
 
+export const MOCK_RESTORE_POINT_ID = "55555555-5555-4555-8555-555555555555";
+export const MOCK_PRE_RESTORE_POINT_ID = "66666666-6666-4666-8666-666666666666";
+
+export const mockRestorePointManifest = {
+  version: 2,
+  agent_type: "openclaw",
+  template_key: MOCK_TEMPLATE_KEY,
+  template_version: 1,
+  template_selection_type: "organization",
+  override_version: null,
+  model: "litellm/gpt-5-mini",
+  effective_model: "litellm/gpt-5-mini",
+  approval_mode: "auto",
+  verbose_mode: false,
+  skills: [],
+};
+
+export const mockRestorePoint = {
+  id: MOCK_RESTORE_POINT_ID,
+  agent_id: MOCK_AGENT_ID,
+  label: "Before the rewrite",
+  status: "READY",
+  origin: "MANUAL",
+  agent_type: "openclaw",
+  archive_bytes: 2_097_152,
+  file_count: 42,
+  failure_reason: null,
+  reapply_configuration: false,
+  configuration_error: null,
+  config_manifest: mockRestorePointManifest,
+  created_at: "2026-05-14T09:00:00Z",
+  captured_at: "2026-05-14T09:01:00Z",
+};
+
+export const mockCapturingRestorePoint = {
+  ...mockRestorePoint,
+  status: "CAPTURING",
+  archive_bytes: null,
+  file_count: null,
+  captured_at: null,
+};
+
+export const mockPreRestorePoint = {
+  ...mockRestorePoint,
+  id: MOCK_PRE_RESTORE_POINT_ID,
+  label: "Automatic backup before restore",
+  origin: "PRE_RESTORE",
+};
+
+export function mockRestorePointsPage({
+  items = [mockRestorePoint],
+  cap = 5,
+  manualCount,
+}: {
+  items?: unknown[];
+  cap?: number;
+  manualCount?: number;
+} = {}) {
+  return {
+    page: 1,
+    page_size: 20,
+    total: items.length,
+    items,
+    cap,
+    manual_count: manualCount ?? items.length,
+  };
+}
+
 // The classified failure the API returns for the quota exhaustion reported in
 // AF staging: the same shape on the Agent read and as a failed start's error body.
 export const mockProvisioningError = {
@@ -1223,6 +1291,131 @@ export class AgentDataSupport {
           status,
           contentType: "application/json",
           body: JSON.stringify(status >= 400 ? { detail } : body),
+        });
+      },
+    );
+  }
+
+  /**
+   * Restore point list. `body` may be a function, resolved per request, so a test
+   * can move a capture along between reads — which is how the real thing behaves,
+   * since the API resolves a row only when someone reads it.
+   */
+  async interceptGetRestorePointsRequest({
+    agentId = MOCK_AGENT_ID,
+    status = 200,
+    detail = "Unable to load restore points",
+    body,
+    secondPageBody,
+  }: {
+    agentId?: string;
+    status?: number;
+    detail?: string;
+    body?: unknown | (() => unknown);
+    secondPageBody?: unknown;
+  } = {}) {
+    await this.page.route(
+      `**/api/v1/organizations/*/agents/${agentId}/restore-points*`,
+      async (route) => {
+        if (route.request().method() !== "GET") {
+          await route.fallback();
+          return;
+        }
+        const requestedPage = Number(new URL(route.request().url()).searchParams.get("page") ?? 1);
+        const firstPage =
+          typeof body === "function" ? (body as () => unknown)() : (body ?? mockRestorePointsPage());
+        const payload = requestedPage > 1 && secondPageBody ? secondPageBody : firstPage;
+        await route.fulfill({
+          status,
+          contentType: "application/json",
+          body: JSON.stringify(status >= 400 ? { detail } : payload),
+        });
+      },
+    );
+  }
+
+  async interceptCreateRestorePointRequest({
+    agentId = MOCK_AGENT_ID,
+    status = 202,
+    detail = "Unable to capture a restore point",
+    body,
+  }: {
+    agentId?: string;
+    status?: number;
+    detail?: string;
+    body?: unknown;
+  } = {}) {
+    await this.page.route(
+      `**/api/v1/organizations/*/agents/${agentId}/restore-points`,
+      async (route) => {
+        if (route.request().method() !== "POST") {
+          await route.fallback();
+          return;
+        }
+        await route.fulfill({
+          status,
+          contentType: "application/json",
+          body: JSON.stringify(
+            status >= 400 ? { detail } : (body ?? mockCapturingRestorePoint),
+          ),
+        });
+      },
+    );
+  }
+
+  async interceptRestoreRestorePointRequest({
+    agentId = MOCK_AGENT_ID,
+    restorePointId = MOCK_RESTORE_POINT_ID,
+    status = 202,
+    detail = "Unable to restore",
+    body,
+  }: {
+    agentId?: string;
+    restorePointId?: string;
+    status?: number;
+    detail?: string;
+    body?: unknown;
+  } = {}) {
+    await this.page.route(
+      `**/api/v1/organizations/*/agents/${agentId}/restore-points/${restorePointId}/restore`,
+      async (route) => {
+        if (route.request().method() !== "POST") {
+          await route.fallback();
+          return;
+        }
+        await route.fulfill({
+          status,
+          contentType: "application/json",
+          body: JSON.stringify(
+            status >= 400 ? { detail } : (body ?? { ...mockRestorePoint, status: "RESTORING" }),
+          ),
+        });
+      },
+    );
+  }
+
+  async interceptDeleteRestorePointRequest({
+    agentId = MOCK_AGENT_ID,
+    restorePointId = MOCK_RESTORE_POINT_ID,
+    status = 204,
+    detail = "Unable to delete",
+  }: {
+    agentId?: string;
+    restorePointId?: string;
+    status?: number;
+    detail?: string;
+  } = {}) {
+    await this.page.route(
+      `**/api/v1/organizations/*/agents/${agentId}/restore-points/${restorePointId}`,
+      async (route) => {
+        if (route.request().method() !== "DELETE") {
+          await route.fallback();
+          return;
+        }
+        await route.fulfill({
+          status,
+          contentType: status >= 400 ? "application/json" : "text/plain",
+          body: status >= 400 ? JSON.stringify({ detail }) : "",
         });
       },
     );

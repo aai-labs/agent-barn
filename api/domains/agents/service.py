@@ -3,7 +3,7 @@ import fnmatch
 import json
 import logging
 import secrets
-from collections.abc import Iterator, Mapping
+from collections.abc import Collection, Iterator, Mapping
 from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
@@ -110,6 +110,12 @@ from api.domains.agents.runtime_policy import (
     build_messaging_policy_md,
     build_role_scope_policy_md,
 )
+from api.domains.agents.selection import (
+    SelectionValidator,
+    ensure_approval_mode_supported,
+    ensure_verbose_mode_supported,
+    is_model_allowed,
+)
 from api.domains.auth.models import CurrentUserContext
 from api.domains.communications.models import ConversationLocation, OutboundTargetRequest
 from api.domains.communications.plugins.registry import PlatformPluginRegistry
@@ -161,8 +167,6 @@ _MAX_LOG_SNAPSHOT_BYTES = 1_048_576  # 1 MB
 RESTORE_POINT_IN_FLIGHT_DETAIL = (
     "A restore point capture or restore is still running for this Agent. Wait for it to finish."
 )
-
-_OPENROUTER_MODEL_PREFIX = "litellm/openrouter/"
 
 _PROVISIONING_FAILURE_STATUS: dict[AgentProvisioningErrorCategory, int] = {
     AgentProvisioningErrorCategory.QUOTA_EXHAUSTED: status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -235,20 +239,6 @@ def filter_models_by_allowlist(catalog: list[dict], allowlist: list[str]) -> lis
     return [model for model in catalog if any(fnmatch.fnmatch(model["id"].lower(), pattern) for pattern in patterns)]
 
 
-def is_model_allowed(model: str, allowlist: list[str]) -> bool:
-    """Whether a stored model string (litellm/openrouter/<slug>) is permitted by
-    the allowlist globs. An empty allowlist blocks everything. The litellm/
-    gateway prefix is stripped so patterns match the OpenRouter slug.
-    """
-    if not allowlist:
-        return False
-    patterns = [p.strip().lower() for p in allowlist if p.strip()]
-    if not patterns:
-        return False
-    slug = model.removeprefix(_OPENROUTER_MODEL_PREFIX).lower()
-    return any(fnmatch.fnmatch(slug, pattern) for pattern in patterns)
-
-
 @inject
 @singleton
 @dataclass
@@ -267,6 +257,7 @@ class AgentService:
     organization_lookup: OrganizationLookupService
     restore_points: RestorePointService
     agent_settings_lookup: AgentSettingsLookupService
+    selection: SelectionValidator
     connection_repository: CommunicationConnectionRepository
     plugins: PlatformPluginRegistry
 
@@ -300,54 +291,15 @@ class AgentService:
         return self.repository.agent_inventory_since(window_start, window_end, **kwargs)
 
     def _ensure_model_allowed(self, model: str | None, org_id: UUID) -> None:
-        """Rejects models outside the allowlist. litellm is cluster-internal, so
-        create/update are the only paths that can set an agent's model; enforcing
-        here is sufficient. An empty/None model defers to the resolved default.
-
-        The resolved default is admitted whatever the allowlist says. When the
-        Organization set its own default that is already true by invariant; the case
-        this covers is an Organization following a platform default its allowlist
-        does not cover, where the model picker offers that default and rejecting it
-        would make the one pre-selected option unsavable.
-        """
-        if model:
-            allowed_models = self.organization_lookup.get_allowed_models(org_id)
-            if allowed_models is None:
-                raise HTTPException(status_code=404, detail="Organization not found")
-            if is_model_allowed(model, allowed_models):
-                return
-            if model == self.agent_settings_lookup.resolve_default_model(org_id):
-                return
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Model '{model}' is not in the allowed model list",
-            )
+        self.selection.ensure_model_allowed(model, org_id)
 
     @staticmethod
     def _ensure_approval_mode_supported(agent_type: AgentType, approval_mode: CommandApprovalMode | None) -> None:
-        """OpenClaw has no user-configurable command-approval control; only Hermes
-        maps approval_mode onto a runtime policy (see builders/hermes.py). An
-        omitted value defers to the AgentCreate/AgentUpdate default of AUTO, which
-        is a no-op for OpenClaw, but an explicit non-AUTO value would silently
-        have no effect, so it is rejected rather than accepted and ignored.
-        """
-        if agent_type == AgentType.OPENCLAW and approval_mode is not None and approval_mode != CommandApprovalMode.AUTO:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="OpenClaw does not support command approval; approval_mode is Hermes-only.",
-            )
+        ensure_approval_mode_supported(agent_type, approval_mode)
 
     @staticmethod
     def _ensure_verbose_mode_supported(agent_type: AgentType, verbose_mode: bool | None) -> None:
-        """OpenClaw has no progress-message channel wired up yet; only Hermes
-        reads verbose_mode (see builders/hermes.py). An explicit True would
-        silently have no effect, so it is rejected rather than accepted and ignored.
-        """
-        if agent_type == AgentType.OPENCLAW and verbose_mode:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="OpenClaw does not support verbose progress messages; verbose_mode is Hermes-only.",
-            )
+        ensure_verbose_mode_supported(agent_type, verbose_mode)
 
     @staticmethod
     def _build_skill_pointers(skills: list[Skill]) -> str:
@@ -422,110 +374,23 @@ class AgentService:
 
     def _resolve_skill_pins(
         self,
-        skill_ids: list[UUID],
+        added_skill_ids: list[UUID],
         pins: list[SkillVersionPin],
         current_skill_ids: set[UUID],
         removed_skill_ids: list[UUID],
         org_id: UUID,
         agent_id: UUID | None = None,
     ) -> list[SkillVersionPin]:
-        """Resolve every agent assignment to an explicit pinned version.
-
-        Added skills pin to a requested version when given, else to the skill's
-        latest at apply time. Existing skills can be re-pinned through the same
-        ``pins`` list. Every pin must reference a skill the agent ends up with,
-        and the requested version must exist (it can later be deleted only after
-        no agent pins it, so a valid pin never dangles from version deletion).
-        """
-        overlap = set(skill_ids) & set(removed_skill_ids)
-        if overlap:
-            ids = ", ".join(str(skill_id) for skill_id in sorted(overlap, key=str))
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Skill ID(s) cannot be both added and removed: {ids}",
-            )
-
-        pin_map: dict[UUID, SkillVersionPin] = {}
-        for pin in pins:
-            if pin.skill_id in pin_map:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Duplicate skill version pin for skill {pin.skill_id}",
-                )
-            pin_map[pin.skill_id] = pin
-        remaining_ids = current_skill_ids - set(removed_skill_ids)
-        allowed_ids = remaining_ids | set(skill_ids)
-        extras = set(pin_map) - allowed_ids
-        if extras:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Skill version pins must reference a skill the agent ends up with",
-            )
-
-        requested_ids = set(skill_ids) | set(pin_map)
-        if requested_ids:
-            visible_skills = (
-                self.skill_repository.find_visible_for_agent(agent_id, org_id)
-                if agent_id is not None
-                else self.skill_repository.find_accessible_for_org(org_id)
-            )
-            accessible_ids = {skill.id for skill in visible_skills}
-            inaccessible_ids = requested_ids - accessible_ids
-            if inaccessible_ids:
-                skill_id = min(inaccessible_ids, key=str)
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"Skill {skill_id} not found",
-                )
-
-        resolved: list[SkillVersionPin] = []
-        resolved_ids: set[UUID] = set()
-        for skill_id in dict.fromkeys(skill_ids):
-            pin = pin_map.get(skill_id)
-            if pin is None:
-                latest = self.skill_repository.get_latest_version(skill_id)
-                pin = SkillVersionPin(skill_id=skill_id, version=latest.version if latest else 1)
-            else:
-                if self.skill_repository.get_version(skill_id, pin.version) is None:
-                    raise HTTPException(
-                        status_code=status.HTTP_404_NOT_FOUND,
-                        detail=f"Version {pin.version} not found for skill {skill_id}",
-                    )
-            resolved.append(pin)
-            resolved_ids.add(skill_id)
-        for pin in pins:
-            if pin.skill_id in current_skill_ids and pin.skill_id not in resolved_ids:
-                if self.skill_repository.get_version(pin.skill_id, pin.version) is None:
-                    raise HTTPException(
-                        status_code=status.HTTP_404_NOT_FOUND,
-                        detail=f"Version {pin.version} not found for skill {pin.skill_id}",
-                    )
-                resolved.append(pin)
-                resolved_ids.add(pin.skill_id)
-        return resolved
+        return self.selection.resolve_skill_pins(
+            added_skill_ids, pins, current_skill_ids, removed_skill_ids, org_id, agent_id
+        )
 
     def _validate_required_skill_versions(
         self,
         required_map: Mapping[UUID, tuple[int, str | None]],
         pinned_versions: Mapping[UUID, int],
     ) -> None:
-        """Require Template Skills to be present at the Template's exact pin."""
-        standalone_ids, required_groups = split_requirements(required_map)
-        for skill_id in standalone_ids:
-            required_version, _ = required_map[skill_id]
-            if pinned_versions.get(skill_id) != required_version:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Required template Skill {skill_id} must be pinned to version {required_version}",
-                )
-        for member_ids in required_groups.values():
-            if any(pinned_versions.get(skill_id) == required_map[skill_id][0] for skill_id in member_ids):
-                continue
-            names = sorted(s.name for s in self.skill_repository.get_many_by_ids(list(member_ids)))
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"One of these template Skills must be pinned to its required version: {', '.join(names)}",
-            )
+        self.selection.validate_required_skill_versions(required_map, pinned_versions)
 
     def _validate_skill_update(
         self,
@@ -1260,66 +1125,22 @@ class AgentService:
                 detail=f"Agent {agent_id} must be stopped before selecting a Template Version",
             )
 
-        selected_id: UUID
-        selected_template_key: str | None
-        selected_version: int | None
-        required_map: Mapping[UUID, tuple[int, str | None]]
-        if data.selection_type == "platform":
-            assert data.template_key is not None and data.template_version is not None
-            selected = self.template_repository.get_platform_template_by_key_version(
-                data.template_key,
-                data.template_version,
-            )
-            if selected is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Platform Template Version not found")
-            selected_id = selected.id
-            selected_template_key = selected.template_key
-            selected_version = selected.version
-            required_map = self.template_repository.get_required_skill_map_for(selected)
-        elif data.selection_type == "organization":
-            assert data.template_key is not None and data.template_version is not None
-            selected = self.template_repository.get_org_template_by_key_version(
-                org_id,
-                data.template_key,
-                data.template_version,
-            )
-            if selected is None:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail="Organization Template Version not found",
-                )
-            selected_id = selected.id
-            selected_template_key = selected.template_key
-            selected_version = selected.version
-            required_map = self.template_repository.get_required_skill_map_for(selected)
-        else:
-            assert data.override_version is not None
-            selected_override = self.override_repository.get_version(
-                agent.id,
-                org_id,
-                data.override_version,
-            )
-            if selected_override is None:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail="Agent Template Override Version not found",
-                )
-            selected_id = selected_override.id
-            selected_template_key = None
-            selected_version = selected_override.version
-            required_map = self.override_repository.get_version_skill_map(selected_override.id)
-        self._validate_override_requirements(agent, required_map, org_id)
+        resolved = self.selection.resolve(agent, data, org_id)
+
         try:
             selected_agent = self.override_repository.select_pin(
                 agent.id,
                 org_id,
                 selection_type=data.selection_type,
-                selected_id=selected_id,
+                selected_id=resolved.selected_id,
                 expected_agent_updated_at=data.expected_agent_updated_at,
                 actor=resolve_actor_identity(context, org_id),
                 actor_display=context.user.full_name or context.user.email,
-                template_key=selected_template_key,
-                selected_version=selected_version,
+                template_key=resolved.template_key,
+                selected_version=resolved.version,
+                skill_pins=[(pin.skill_id, pin.version) for pin in resolved.skill_pins],
+                removed_skill_ids=resolved.removed_skill_ids,
+                scalar_updates=resolved.scalar_updates,
             )
         except AgentOverrideConcurrencyError as exc:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
@@ -1327,58 +1148,21 @@ class AgentService:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
         return self._get_agent_read(selected_agent, context)
 
+    def _validate_incoming_skill_providers(
+        self,
+        agent: Agent,
+        incoming_skill_ids: Collection[UUID],
+    ) -> None:
+        self.selection.validate_incoming_skill_providers(agent, incoming_skill_ids)
+
     def _validate_override_requirements(
         self,
         agent: Agent,
         required_map: Mapping[UUID, tuple[int, str | None]],
         org_id: UUID,
+        prospective_pins: Mapping[UUID, int] | None = None,
     ) -> None:
-        if not required_map:
-            return
-        accessible = {skill.id: skill for skill in self.skill_repository.find_visible_for_agent(agent.id, org_id)}
-        missing_ids = set(required_map) - accessible.keys()
-        if missing_ids:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Override requires a Skill that is no longer available to this Organization",
-            )
-        assigned_rows = self.skill_repository.get_agent_skills_with_details(agent.id)
-        assigned_versions = {skill.id: row.pinned_version for row, skill in assigned_rows}
-        assigned_ids = set(assigned_versions)
-        wrong_versions = {
-            skill_id
-            for skill_id, (required_version, _) in required_map.items()
-            if assigned_versions.get(skill_id) != required_version
-        }
-        if wrong_versions:
-            names = ", ".join(sorted(accessible[skill_id].name for skill_id in wrong_versions))
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Required template skills must use the pinned versions: {names}",
-            )
-        standalone_ids, groups = split_requirements(required_map)
-        if standalone_ids - assigned_ids:
-            missing = ", ".join(sorted(accessible[skill_id].name for skill_id in standalone_ids - assigned_ids))
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Required template skills must be assigned to the Agent: {missing}",
-            )
-        for group_key, member_ids in sorted(groups.items()):
-            if not member_ids & assigned_ids:
-                names = ", ".join(sorted(accessible[skill_id].name for skill_id in member_ids))
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"At least one of these template skills must be assigned to the Agent: {names}",
-                )
-        providers = {secret.provider for secret in self.repository.get_secrets_for_agent(agent.id)}
-        for skill_id in required_map:
-            missing_providers = set(accessible[skill_id].required_providers) - providers
-            if missing_providers:
-                names = ", ".join(sorted(provider.value for provider in missing_providers))
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Required Skill '{accessible[skill_id].name}' needs configured providers: {names}",
-                )
+        self.selection.validate_override_requirements(agent, required_map, org_id, prospective_pins)
 
     def _resolve_override_skill_map(
         self,
@@ -1920,6 +1704,9 @@ class AgentService:
     def start_agent(self, agent_id: UUID, context: CurrentUserContext) -> AgentRead:
         agent = self.authorization.require_action(context, agent_id, PermissionKey.AGENT_LIFECYCLE_MANAGE)
         actor = resolve_actor_identity(context, agent.organization_id)
+        # Complete deferred replay before taking the lock it also needs. The
+        # check under the lock still catches any newly started restore.
+        self.restore_points.reconcile_agent(agent.id)
         with self.repository.lifecycle_lock(agent.id) as acquired:
             if not acquired:
                 raise HTTPException(
@@ -2581,6 +2368,7 @@ class AgentService:
         ns = self.config.k8s_namespace
         name = f"agent-{agent.id}"
 
+        self.restore_points.reconcile_agent(agent.id)
         with self.repository.lifecycle_lock(agent.id) as acquired:
             if not acquired:
                 raise HTTPException(

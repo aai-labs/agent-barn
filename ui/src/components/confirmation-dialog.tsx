@@ -23,6 +23,8 @@ type ConfirmationDialogProps = {
   pendingLabel?: string;
   onConfirm: () => void | Promise<void>;
   isPending?: boolean;
+  /** Blocks confirmation until the dialog's own content says it is safe. */
+  confirmDisabled?: boolean;
   variant?: ConfirmationDialogVariant;
   icon?: ReactNode;
   children?: ReactNode;
@@ -37,6 +39,7 @@ export function ConfirmationDialog({
   pendingLabel = "Confirming…",
   onConfirm,
   isPending = false,
+  confirmDisabled = false,
   variant = "default",
   icon,
   children,
@@ -108,7 +111,7 @@ export function ConfirmationDialog({
               isDestructive ? "af-btn af-btn-danger" : "af-btn af-btn-primary"
             }
             onClick={() => void onConfirm()}
-            disabled={isPending}
+            disabled={isPending || confirmDisabled}
           >
             {isPending && <Loader2 size={14} className="animate-spin" />}
             {isPending ? pendingLabel : confirmLabel}
