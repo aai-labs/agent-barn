@@ -1,7 +1,7 @@
 import base64
 import hashlib
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import httpx
 from injector import inject, singleton
@@ -27,7 +27,11 @@ class LiteLLMClient:
     k8s: KubernetesClient
     config: Config
 
-    _cached_master_key: str | None = None
+    # init=False keeps it out of the constructor. Annotated without it, injector
+    # treats it as a dependency and supplies "", which is not None — so the cache
+    # hit on an empty key, the Kubernetes Secret was never read, and every call
+    # went out as `Authorization: Bearer `, failing agent creation.
+    _cached_master_key: str | None = field(default=None, init=False)
 
     def _master_key(self) -> str:
         """Resolved once per process. It used to be fetched from the Kubernetes API on
