@@ -38,7 +38,10 @@ def accept_provider_webhook_at_api_edge(
     payload: dict[str, Any],
     relay: Annotated[TeamsRuntimeWebhookRelay, Injected(TeamsRuntimeWebhookRelay)],
     config: Annotated[Config, Injected(Config)],
-    authorization: Annotated[str, Header()],
+    # Optional: a signature-based caller (e.g. the webhook plugin) sends no
+    # Authorization header at all. Required-vs-optional is only enforced here;
+    # the fallback proxy below still forwards whatever value it got.
+    authorization: Annotated[str, Header()] = "",
 ) -> Response:
     """Keep the public URL stable while runtime-owned Teams bypasses Communications."""
     try:
