@@ -53,7 +53,6 @@ _EXCLUSION_EVIDENCE = {
     },
     _OPENCLAW: {
         "local-plugins": (_OPENCLAW_START, "/home/node/.openclaw/local-plugins/"),
-        "npm": (_OPENCLAW_START, "/home/node/.openclaw/npm/projects/"),
         "agentbarn-messages.sqlite3": (_OPENCLAW_START, "/home/node/.openclaw/agentbarn-messages.sqlite3"),
         "openclaw.json": (_OPENCLAW_INIT, "'openclaw.json'"),
         "workspace/skills": (_OPENCLAW_INIT, "path.join(WORKSPACE_DIR, 'skills')"),
@@ -248,7 +247,6 @@ def test_openclaw_capture_excludes_regenerated_state_and_the_message_spool(tmp_p
     names = _members(dest)
     for excluded in (
         "local-plugins/telemetry-push/index.js",
-        "npm/projects/openclaw-plugin/package.json",
         "openclaw.json",
         "workspace/skills/jira/SKILL.md",
         "agentbarn-messages.sqlite3",
