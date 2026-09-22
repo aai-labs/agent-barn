@@ -165,6 +165,9 @@ HONCHO_TELEMETRY_KEY=
 # Comma-separated fnmatch globs limiting OpenRouter models, e.g. z-ai/glm-5.2,openai/gpt-5*
 # Empty offers the full catalogue.
 AGENT_MODEL_ALLOWLIST=
+# Comma-separated Platform keys handled by native runtime gateways, e.g.
+# slack,discord. Empty keeps all Platforms on the Communications Gateway.
+COMMUNICATIONS_NATIVE_PLATFORMS=
 # Default model. Format: litellm/openrouter/<slug>
 # e.g. litellm/openrouter/z-ai/glm-5.2. Empty uses the API's built-in default.
 AGENT_DEFAULT_MODEL=

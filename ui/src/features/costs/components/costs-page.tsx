@@ -3,6 +3,7 @@
 import { useCallback, useMemo } from "react";
 import { RefreshCw } from "lucide-react";
 
+import { LlmBudgetBanner } from "@/features/organizations/components/llm-budget-banner";
 import { useRequireOrgManager } from "@/features/organizations/hooks/use-require-org-manager";
 
 import { useCostFilterOptions } from "../hooks/use-cost-filter-options";
@@ -127,6 +128,10 @@ export function CostsPage() {
         <button className="af-btn flex-shrink-0" onClick={handleRefresh}>
           <RefreshCw size={14} /> Refresh
         </button>
+      </div>
+
+      <div className="mb-6">
+        <LlmBudgetBanner show="warning" />
       </div>
 
       <CostSummaryCards summary={summary} isLoading={isLoadingSummary} />

@@ -19,13 +19,15 @@ from hamcrest import (
 from sqlmodel import Session, col, select
 from starlette.testclient import TestClient
 
-from api.domains.agents.models import AgentStatus
+from api.domains.agents.models import AgentStatus, AgentType
 from api.domains.communications.delivery_repository import (
     CommunicationDeliveryCancelledError,
     CommunicationDeliveryRepository,
 )
+from api.domains.communications.error_details import normalize_communication_error
 from api.domains.communications.gateway_service import CommunicationsGatewayService
 from api.domains.communications.models import (
+    CommunicationConnection,
     CommunicationDelivery,
     CommunicationDeliveryStatus,
     CommunicationJournalEntry,
@@ -94,7 +96,7 @@ def _create_connection(
         json={
             "platform_key": "discord",
             "display_name": display_name,
-            "settings": {"guild_ids": ["guild-one"]},
+            "settings": {"allowed_channel_ids": ["channel-one"]},
             "credentials": {"bot_token": bot_token},
         },
         headers=_auth(context),
@@ -173,6 +175,116 @@ def test_runtime_claim_serializes_one_conversation() -> None:
                 second.envelope.provider_message_id if second is not None else None,
                 equal_to("provider-2"),
             )
+
+
+def test_runtime_claim_skips_native_platform_deliveries() -> None:
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        delegate = context.injector.get(PostgresRepositoryDelegate)
+        native_connection = CommunicationConnection(
+            organization_id=context.agent.organization_id,
+            agent_id=context.agent.id,
+            platform_key="slack",
+            display_name="Native Slack",
+            credentials_encrypted="unused",
+            driver_key_encrypted="unused",
+        )
+        delegate.save(native_connection)
+        gateway_connection_id = _create_connection(context)
+        repository = context.injector.get(CommunicationDeliveryRepository)
+        native = repository.accept_inbound(
+            connection_id=native_connection.id,
+            envelope=_envelope("native-first"),
+        )
+        gateway = repository.accept_inbound(
+            connection_id=gateway_connection_id,
+            envelope=_envelope("gateway-second"),
+        )
+
+        claimed = repository.claim_next_inbound(
+            agent_id=context.agent.id,
+            excluded_platform_keys=frozenset({"slack"}),
+        )
+
+        assert_that(claimed.delivery_id if claimed else None, equal_to(gateway.delivery_id))
+        assert_that(_delivery(context, native.delivery_id).status, equal_to(CommunicationDeliveryStatus.PENDING))
+
+
+def test_outbound_claim_skips_native_platform_deliveries() -> None:
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING, agent_type=AgentType.HERMES)]) as context:
+        delegate = context.injector.get(PostgresRepositoryDelegate)
+        native_connection = CommunicationConnection(
+            organization_id=context.agent.organization_id,
+            agent_id=context.agent.id,
+            platform_key="slack",
+            display_name="Native Slack",
+            credentials_encrypted="unused",
+            driver_key_encrypted="unused",
+        )
+        delegate.save(native_connection)
+        gateway_connection_id = _create_connection(context)
+        repository = context.injector.get(CommunicationDeliveryRepository)
+
+        native_source = repository.accept_inbound(
+            connection_id=native_connection.id,
+            envelope=_envelope("native-source"),
+        )
+        gateway_source = repository.accept_inbound(
+            connection_id=gateway_connection_id,
+            envelope=_envelope("gateway-source"),
+        )
+        repository.claim_next_inbound(agent_id=context.agent.id)
+        repository.claim_next_inbound(
+            agent_id=context.agent.id,
+            excluded_platform_keys=frozenset({"slack"}),
+        )
+        native_reply_id = repository.enqueue_runtime_reply(
+            agent_id=context.agent.id,
+            source_delivery_id=native_source.delivery_id,
+            reply=RuntimeReplyCreate(idempotency_key="native-reply", text="native reply"),
+        )
+        gateway_reply_id = repository.enqueue_runtime_reply(
+            agent_id=context.agent.id,
+            source_delivery_id=gateway_source.delivery_id,
+            reply=RuntimeReplyCreate(idempotency_key="gateway-reply", text="gateway reply"),
+        )
+
+        claimed = repository.claim_next_outbound(native_platform_keys=frozenset({"slack"}))
+
+        assert_that(claimed.id if claimed else None, equal_to(gateway_reply_id))
+        assert_that(_delivery(context, native_reply_id).status, equal_to(CommunicationDeliveryStatus.PENDING))
+
+
+def test_non_retryable_runtime_failure_dead_letters_without_a_retry() -> None:
+    error_message = "Error code: 402 - provider credits exhausted"
+    normalized_error = normalize_communication_error(
+        error_code="RuntimeError",
+        error_message=error_message,
+        operation="runtime_processing",
+    )
+    assert_that(normalized_error.details, is_(not_(none())))
+
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        connection_id = _create_connection(context)
+        repository = context.injector.get(CommunicationDeliveryRepository)
+        accepted = repository.accept_inbound(connection_id=connection_id, envelope=_envelope("provider-1"))
+        claimed = repository.claim_next_inbound(agent_id=context.agent.id)
+
+        with when("the runtime reports the provider's non-retryable HTTP 402 failure"):
+            completed = repository.complete_runtime_delivery(
+                accepted.delivery_id,
+                agent_id=context.agent.id,
+                succeeded=False,
+                error_code="RuntimeError",
+                error_message=error_message,
+                error_details=normalized_error.details,
+            )
+
+        with then("the delivery is terminal immediately instead of being requeued"):
+            assert_that(claimed, is_(not_(none())))
+            assert_that(completed, is_(True))
+            delivery = _delivery(context, accepted.delivery_id)
+            assert_that(delivery.status, equal_to(CommunicationDeliveryStatus.DEAD_LETTERED))
+            assert_that(delivery.last_error_message, equal_to(normalized_error.summary))
 
 
 def test_runtime_claim_releases_one_answer_to_a_run_awaiting_input() -> None:
@@ -340,11 +452,16 @@ def test_runtime_can_renew_its_live_inbound_delivery_lease() -> None:
 def test_thread_state_is_durable_and_connection_scoped() -> None:
     with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
         connection_id = _create_connection(context, bot_token="gateway-token-one")
-        second_connection_id = _create_connection(
-            context,
-            bot_token="gateway-token-two",
-            display_name="Gateway Discord Two",
+        second_connection = CommunicationConnection(
+            organization_id=context.agent.organization_id,
+            agent_id=context.agent.id,
+            platform_key="telegram",
+            display_name="Gateway Telegram",
+            credentials_encrypted="unused",
+            driver_key_encrypted="unused",
         )
+        context.injector.get(PostgresRepositoryDelegate).save(second_connection)
+        second_connection_id = second_connection.id
         repository = context.injector.get(CommunicationDeliveryRepository)
         envelope = _envelope("provider-owned")
 
@@ -801,3 +918,20 @@ def test_cancelled_source_rejects_runtime_reply_atomically() -> None:
         with Session(delegate.engine) as session:
             leaked = session.exec(select(AgentChatMessage).where(AgentChatMessage.content == "must not leak")).all()
         assert_that(leaked, empty())
+
+
+def test_a_conversations_transcript_key_keeps_the_shape_every_stored_row_already_has() -> None:
+    """The message row's session_key groups a thread in the transcript. It is not the
+    runtime session key, though the two once shared a formula. Changing it would give
+    new rows a different shape from every row already in the table, in an indexed
+    column, with no migration -- and nothing would fail loudly."""
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        connection_id = _create_connection(context)
+        repository = context.injector.get(CommunicationDeliveryRepository)
+
+        with when("a chat message is admitted"):
+            accepted = repository.accept_inbound(connection_id=connection_id, envelope=_envelope("provider-1"))
+
+        with then("its transcript key is still connection:channel:thread with no prefix"):
+            message = _message(context, accepted.message_id)
+            assert_that(message.session_key, equal_to(f"{connection_id}:channel-one:thread-one"))

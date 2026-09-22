@@ -63,6 +63,8 @@ _APPROVAL_CHOICES = frozenset({"once", "session", "always", "deny"})
 _APPROVAL_CHOICE_ALIASES = {"approve": "once", "approved": "once", "allow": "once"}
 _MANUAL_APPROVAL_CHOICES = ("once", "deny")
 _APPROVAL_METADATA_KEY = "approval_id"
+# Fallback for a server that does not send busy_notice.
+_BUSY_NOTICE = "I'm still working on your previous message. Please try again shortly."
 
 
 class ActiveRun:
@@ -170,11 +172,25 @@ def runtime_headers(session_key: str, idempotency_key: str) -> dict[str, str]:
 
 
 def session_key_for(delivery: dict) -> str:
+    """Fallback for a server that sends no execution block. The format is also parsed by
+    scripts/messaging/agentbarn_message.py, so it must not change."""
     envelope = delivery["envelope"]
     return (
         f"connection:{delivery['connection_id']}:"
         f"{envelope['location']['id']}:{envelope['location'].get('thread_id') or 'root'}"
     )
+
+
+def execution_for(delivery: dict) -> dict:
+    """How the API says to run this delivery; each field falls back to the old behaviour."""
+    execution = delivery.get("execution") or {}
+    return {
+        "session_key": execution.get("session_key") or session_key_for(delivery),
+        "resume_session": execution.get("resume_session", True),
+        "approvals_enabled": execution.get("approvals_enabled", True),
+        "busy_notice": execution.get("busy_notice", _BUSY_NOTICE),
+        "busy_releases": execution.get("busy_releases", False),
+    }
 
 
 def request_local_cancel(delivery_id: str) -> None:
@@ -208,6 +224,15 @@ def complete_delivery(delivery_id: str, *, succeeded: bool, error: Exception | N
         f"{COMMUNICATIONS_URL}/agents/{AGENT_ID}/deliveries/{delivery_id}/complete",
         headers=communications_headers(),
         payload=completion,
+    )
+
+
+def release_delivery(delivery_id: str) -> None:
+    """Hand a claimed delivery back unrun; the attempt spent claiming it is given back."""
+    http_request(
+        "POST",
+        f"{COMMUNICATIONS_URL}/agents/{AGENT_ID}/deliveries/{delivery_id}/release",
+        headers=communications_headers(),
     )
 
 
@@ -263,7 +288,8 @@ def run_delivery_chat_completions(delivery: dict) -> None:
     """Original single blocking-turn path, kept for OpenClaw pods."""
     delivery_id = delivery["delivery_id"]
     envelope = delivery["envelope"]
-    session_key = session_key_for(delivery)
+    # One blocking turn at a time, so the busy, approval and resume policies do not apply.
+    session_key = execution_for(delivery)["session_key"]
     IN_FLIGHT.begin(delivery_id, session_key)
     bind_execution(session_key, delivery)
     try:
@@ -402,8 +428,9 @@ def resolve_pending_approval(session_key: str, delivery: dict) -> bool:
 
 
 def run_delivery_hermes(delivery: dict) -> None:
-    session_key = session_key_for(delivery)
-    if resolve_pending_approval(session_key, delivery):
+    execution = execution_for(delivery)
+    session_key = execution["session_key"]
+    if execution["approvals_enabled"] and resolve_pending_approval(session_key, delivery):
         return
     active_delivery_id: str | None = None
     with _ACTIVE_RUNS_LOCK:
@@ -419,10 +446,16 @@ def run_delivery_hermes(delivery: dict) -> None:
             _ACTIVE_RUNS[session_key] = ActiveRun(delivery_id=delivery["delivery_id"], thread=thread)
     if active_delivery_id is not None:
         # A later message is a distinct durable delivery, not a reclaim.
-        # Acknowledge it immediately instead of letting it churn through lease
-        # expiry while preserving session ordering.
-        post_reply(delivery["delivery_id"], "I'm still working on your previous message. Please try again shortly.")
-        complete_delivery(delivery["delivery_id"], succeeded=True)
+        if execution["busy_notice"]:
+            # Someone is waiting: tell them, and treat the reply as the outcome.
+            post_reply(delivery["delivery_id"], execution["busy_notice"])
+        if execution["busy_releases"]:
+            # Nobody will resend, and completing it would report work that never ran.
+            release_delivery(delivery["delivery_id"])
+        else:
+            # Acknowledge it immediately instead of letting it churn through lease
+            # expiry while preserving session ordering.
+            complete_delivery(delivery["delivery_id"], succeeded=True)
         return
     thread.start()
 
@@ -430,6 +463,7 @@ def run_delivery_hermes(delivery: dict) -> None:
 def _run_and_drain(delivery: dict, session_key: str) -> None:
     delivery_id = delivery["delivery_id"]
     text = delivery["envelope"].get("text", "")
+    execution = execution_for(delivery)
     heartbeat_stopped = threading.Event()
     heartbeat = threading.Thread(
         target=_heartbeat_delivery_lease,
@@ -443,13 +477,14 @@ def _run_and_drain(delivery: dict, session_key: str) -> None:
             "POST",
             f"{RUNTIME_API_URL}/v1/runs",
             headers=runtime_headers(session_key, delivery_id),
-            payload={"input": text, "session_id": session_key, "resume_session": True},
+            payload={"input": text, "session_id": session_key, "resume_session": execution["resume_session"]},
         )
         _drain_run(
             started["run_id"],
             delivery_id,
             session_key,
             progress_updates=delivery.get("progress_updates", True),
+            approvals_enabled=execution["approvals_enabled"],
         )
     except Exception as exc:
         with _PENDING_APPROVALS_LOCK:
@@ -514,7 +549,27 @@ def _approval_id(run_id: str, payload: dict, sequence: int) -> str:
     return f"{run_id}:{payload.get('timestamp') or sequence}"
 
 
-def _drain_run(run_id: str, delivery_id: str, session_key: str, *, progress_updates: bool = True) -> None:
+def _answer_approval(run_id: str, delivery_id: str, session_key: str, choice: str) -> None:
+    """Answer a runtime approval prompt without involving a person."""
+    try:
+        http_request(
+            "POST",
+            f"{RUNTIME_API_URL}/v1/runs/{run_id}/approval",
+            headers=runtime_headers(session_key, delivery_id),
+            payload={"choice": choice},
+        )
+    except Exception as exc:
+        print(f"[communications-adapter] could not answer approval automatically: {exc}", flush=True)
+
+
+def _drain_run(
+    run_id: str,
+    delivery_id: str,
+    session_key: str,
+    *,
+    progress_updates: bool = True,
+    approvals_enabled: bool = True,
+) -> None:
     req = urllib.request.Request(
         f"{RUNTIME_API_URL}/v1/runs/{run_id}/events",
         method="GET",
@@ -537,6 +592,10 @@ def _drain_run(run_id: str, delivery_id: str, session_key: str, *, progress_upda
             event = payload.get("event", sse_event)
 
             if event == "approval.request":
+                if not approvals_enabled:
+                    # No one to ask; parking would hold the claim until the lease expired.
+                    _answer_approval(run_id, delivery_id, session_key, "deny")
+                    continue
                 choices = payload.get("choices") or ["once", "session", "always", "deny"]
                 if MANUAL_APPROVAL:
                     choices = [choice for choice in choices if choice in _MANUAL_APPROVAL_CHOICES] or choices

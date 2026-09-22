@@ -10,6 +10,8 @@ from unittest.mock import Mock, call
 
 import pytest
 
+from api.domains.communications.plugins.approvals import APPROVAL_METADATA_KEY
+
 _ADAPTER_PATH = Path(__file__).parents[2] / "domains" / "agents" / "scripts" / "communications-runtime-adapter.py"
 
 
@@ -99,6 +101,12 @@ def _fake_urlopen(events: list[tuple[str, dict]], *, then_block: bool = False):
         return _FakeSSEResponse(_sse_bytes(events), then_block=then_block)
 
     return _urlopen
+
+
+def test_adapter_reads_approval_clicks_under_the_key_every_plugin_writes(monkeypatch: pytest.MonkeyPatch) -> None:
+    adapter = _load_adapter(monkeypatch, runtime_kind="hermes")
+
+    assert adapter._APPROVAL_METADATA_KEY == APPROVAL_METADATA_KEY
 
 
 def test_adapter_source_parses_for_the_oldest_runtime_image() -> None:
@@ -980,3 +988,172 @@ def test_hermes_delivery_explicitly_resumes_its_durable_session(monkeypatch: pyt
         "session_id": "connection:conn-1:chan-1:root",
         "resume_session": True,
     }
+
+
+def _join_active_run(adapter, session_key: str, *, timeout: float = 5) -> None:
+    """Wait for the worker thread `run_delivery_hermes` spawned, if it is still there.
+
+    The mocked runs below finish fast enough that the thread can complete and remove
+    its own `_ACTIVE_RUNS` entry before this line runs -- indexing the dict directly
+    then raises `KeyError` on a run that has already finished, which is exactly the
+    outcome we wanted anyway.
+    """
+    active = adapter._ACTIVE_RUNS.get(session_key)
+    if active is not None:
+        active.join(timeout=timeout)
+
+
+def _event_delivery(delivery_id: str = "event-1", *, session_key: str = "event:connection-1:evt-1") -> dict:
+    """A delivery the API marked EVENT: a job fired by a machine that is not waiting."""
+    return {
+        "delivery_id": delivery_id,
+        "connection_id": "connection-1",
+        "progress_updates": False,
+        "envelope": {"text": "do the job", "location": {"id": "events", "thread_id": None}},
+        "execution": {
+            "session_key": session_key,
+            "resume_session": False,
+            "approvals_enabled": False,
+            "busy_notice": None,
+            "busy_releases": True,
+        },
+    }
+
+
+def test_an_event_uses_the_session_the_server_chose(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The API owns the session key so it cannot drift from the ordering policy."""
+    adapter = _load_adapter(monkeypatch, runtime_kind="hermes")
+    calls: list[tuple[str, dict | None]] = []
+
+    def fake_http_request(method, url, *, headers, payload=None):
+        calls.append((url, payload))
+        return {"run_id": "run-1"} if url.endswith("/v1/runs") else None
+
+    monkeypatch.setattr(adapter, "http_request", fake_http_request)
+    monkeypatch.setattr(adapter.urllib.request, "urlopen", _fake_urlopen([("run.completed", {"output": "done"})]))
+
+    delivery = _event_delivery()
+    adapter.run_delivery_hermes(delivery)
+    _join_active_run(adapter, "event:connection-1:evt-1")
+
+    run_payload = next(payload for url, payload in calls if url.endswith("/v1/runs"))
+    assert run_payload is not None
+    assert run_payload["session_id"] == "event:connection-1:evt-1"
+    # A discrete job starts clean; resuming would pile unrelated events into one context.
+    assert run_payload["resume_session"] is False
+
+
+def test_a_conversation_still_resumes_when_the_server_says_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An adapter newer than its server must behave exactly as it did before."""
+    adapter = _load_adapter(monkeypatch, runtime_kind="hermes")
+    calls: list[tuple[str, dict | None]] = []
+
+    def fake_http_request(method, url, *, headers, payload=None):
+        calls.append((url, payload))
+        return {"run_id": "run-1"} if url.endswith("/v1/runs") else None
+
+    monkeypatch.setattr(adapter, "http_request", fake_http_request)
+    monkeypatch.setattr(adapter.urllib.request, "urlopen", _fake_urlopen([("run.completed", {"output": "done"})]))
+
+    adapter.run_delivery_hermes(_DELIVERY)
+    _join_active_run(adapter, adapter.session_key_for(_DELIVERY))
+
+    run_payload = next(payload for url, payload in calls if url.endswith("/v1/runs"))
+    assert run_payload is not None
+    assert run_payload["session_id"] == adapter.session_key_for(_DELIVERY)
+    assert run_payload["session_id"].startswith("connection:")
+    assert run_payload["resume_session"] is True
+
+
+def test_an_event_arriving_while_busy_is_released_not_acknowledged(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The single most important fix in the epic. Completing a delivery whose work never
+    ran tells the caller "done", does nothing, and leaves no trace."""
+    adapter = _load_adapter(monkeypatch, runtime_kind="hermes")
+    calls: list[tuple[str, dict | None]] = []
+    release = threading.Event()
+
+    def fake_http_request(method, url, *, headers, payload=None):
+        calls.append((url, payload))
+        if url.endswith("/v1/runs"):
+            release.wait(timeout=5)
+            return {"run_id": "run-1"}
+        return None
+
+    monkeypatch.setattr(adapter, "http_request", fake_http_request)
+    monkeypatch.setattr(adapter.urllib.request, "urlopen", _fake_urlopen([("run.completed", {"output": "done"})]))
+
+    first = _event_delivery()
+    adapter.run_delivery_hermes(first)
+    try:
+        adapter.run_delivery_hermes(_event_delivery("event-2"))
+    finally:
+        release.set()
+        _join_active_run(adapter, "event:connection-1:evt-1")
+
+    assert [url for url, _ in calls if url.endswith("/release")] == [
+        f"{adapter.COMMUNICATIONS_URL}/agents/{adapter.AGENT_ID}/deliveries/event-2/release"
+    ]
+    # Only the first delivery's own run reports a completion. The second reports none.
+    assert [payload for url, payload in calls if url.endswith("/complete")] == [{"succeeded": True}]
+    # And nothing chatty is posted into an event's transcript.
+    assert [payload for url, payload in calls if url.endswith("/replies")] == [
+        {"idempotency_key": "event-1:1", "text": "done"}
+    ]
+
+
+def test_an_event_is_never_eaten_as_an_approval_answer(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A parked run consumes the next message on its session as the answer. An event
+    must start its own run instead of being swallowed by someone else's question."""
+    adapter = _load_adapter(monkeypatch, runtime_kind="hermes")
+    calls: list[tuple[str, dict | None]] = []
+
+    def fake_http_request(method, url, *, headers, payload=None):
+        calls.append((url, payload))
+        return {"run_id": "run-2"} if url.endswith("/v1/runs") else None
+
+    monkeypatch.setattr(adapter, "http_request", fake_http_request)
+    monkeypatch.setattr(adapter.urllib.request, "urlopen", _fake_urlopen([("run.completed", {"output": "done"})]))
+    adapter._PENDING_APPROVALS["event:connection-1:evt-1"] = {
+        "run_id": "run-1",
+        "approval_id": "approval-1",
+        "delivery_id": "earlier",
+        "choices": ["once", "deny"],
+    }
+
+    adapter.run_delivery_hermes(_event_delivery())
+    _join_active_run(adapter, "event:connection-1:evt-1")
+
+    assert [url for url, _ in calls if url.endswith("/approval")] == []
+    assert any(url.endswith("/v1/runs") for url, _ in calls)
+
+
+def test_an_approval_request_during_an_event_is_denied_rather_than_parked(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Nobody can answer, so parking would hold the claim until the lease expired and
+    retry into the same wall. Deny, finish, and report honestly instead."""
+    adapter = _load_adapter(monkeypatch, runtime_kind="hermes")
+    calls: list[tuple[str, dict | None]] = []
+
+    def fake_http_request(method, url, *, headers, payload=None):
+        calls.append((url, payload))
+        return {"run_id": "run-1"} if url.endswith("/v1/runs") else None
+
+    monkeypatch.setattr(adapter, "http_request", fake_http_request)
+    monkeypatch.setattr(
+        adapter.urllib.request,
+        "urlopen",
+        _fake_urlopen(
+            [
+                ("approval.request", {"command": "rm -rf /", "choices": ["once", "deny"]}),
+                ("run.completed", {"output": "finished without it"}),
+            ]
+        ),
+    )
+
+    adapter.run_delivery_hermes(_event_delivery())
+    _join_active_run(adapter, "event:connection-1:evt-1")
+
+    assert [payload for url, payload in calls if url.endswith("/approval")] == [{"choice": "deny"}]
+    assert "event:connection-1:evt-1" not in adapter._PENDING_APPROVALS
+    assert [payload for url, payload in calls if url.endswith("/complete")] == [{"succeeded": True}]

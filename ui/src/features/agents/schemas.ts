@@ -90,6 +90,13 @@ export const AgentAccessSettingsReadSchema = z.object({
   assignments: z.array(AgentAccessMemberReadSchema),
 });
 
+export const AgentProvisioningErrorSchema = z.object({
+  code: z.string(),
+  category: z.string(),
+  summary: z.string(),
+  detail: z.string().nullish(),
+});
+
 export const AgentSchema = z.object({
   id: z.string().uuid(),
   name: z.string(),
@@ -110,14 +117,19 @@ export const AgentSchema = z.object({
   runningModel: z.string().default(""),
   /** Set only when a restart would move a running Agent onto a different model. */
   pendingModel: z.string().default(""),
+  /** True when a running Agent's pod was built from older platform code or images. */
+  updateAvailable: z.boolean().default(false),
   approvalMode: z.enum(["manual", "auto", "off"]).default("auto"),
   verboseMode: z.boolean().default(false),
   /** The memory group this Agent belongs to, or null for none. Managed via the
    *  memory-groups API; membership is the opt-in to shared memory. */
   memoryGroupId: z.string().uuid().nullable().default(null),
+  lastError: AgentProvisioningErrorSchema.nullish(),
   secrets: z.array(AgentSecretReadSchema).optional(),
   skills: z.array(AgentAssignedSkillSchema).default([]),
   configuredPlatformKeys: z.array(z.string()).default([]),
+  /** Platforms whose Connections this Agent's runtime runs itself; changing one requires a restart. */
+  nativePlatformKeys: z.array(z.string()).default([]),
   allowedActions: z.array(AgentPermissionKeySchema).default([]),
   createdAt: z.string(),
   updatedAt: z.string(),
@@ -209,7 +221,15 @@ export const ConversationChannelSchema = z.object({
   platformKey: z.string(),
   channelId: z.string(),
   channelName: z.string().nullable(),
-  conversationType: z.enum(["CHANNEL", "DM"]),
+  // EVENT is a machine trigger, not a place a person talks. Grouped separately.
+  conversationType: z.enum(["CHANNEL", "DM", "EVENT"]),
+});
+
+export const WebChatApprovalSchema = z.object({
+  approvalId: z.string(),
+  command: z.string(),
+  choices: z.array(z.string()),
+  choiceLabels: z.record(z.string(), z.string()).default({}),
 });
 
 export const WebChatMessageSchema = z.object({
@@ -226,6 +246,10 @@ export const WebChatMessageSchema = z.object({
     "UNAVAILABLE",
   ]),
   cancelRequestedAt: z.string().nullable(),
+  approval: WebChatApprovalSchema.nullish(),
+  // Additive during a rolling API deployment; new responses include null when
+  // no terminal error exists, while an older replica may omit the field.
+  errorMessage: z.string().nullable().optional(),
 });
 
 export const WebChatThreadSchema = z.object({
@@ -351,6 +375,7 @@ export const AgentConfigurationSchema = z.object({
 export type CommandApprovalMode = "manual" | "auto" | "off";
 export type AgentPermissionKey = z.infer<typeof AgentPermissionKeySchema>;
 export type Agent = z.infer<typeof AgentSchema>;
+export type AgentProvisioningError = z.infer<typeof AgentProvisioningErrorSchema>;
 export type AgentAssignedSkill = z.infer<typeof AgentAssignedSkillSchema>;
 export type TemplateRequiredSkill = z.infer<typeof TemplateRequiredSkillSchema>;
 export type AgentHealth = z.infer<typeof AgentHealthSchema>;
@@ -368,6 +393,7 @@ export type AgentOverrideDraft = z.infer<typeof AgentOverrideDraftSchema>;
 export type AgentOverrideVersion = z.infer<typeof AgentOverrideVersionSchema>;
 export type AgentConfiguration = z.infer<typeof AgentConfigurationSchema>;
 export type WebChatMessage = z.infer<typeof WebChatMessageSchema>;
+export type WebChatApproval = z.infer<typeof WebChatApprovalSchema>;
 export type WebChatThread = z.infer<typeof WebChatThreadSchema>;
 export type ConversationMessage = z.infer<typeof ConversationMessageSchema>;
 export type ConversationChannel = z.infer<typeof ConversationChannelSchema>;
@@ -440,3 +466,77 @@ export const AgentMemoryPageSchema = z.object({
 export type AgentMemoryItem = z.infer<typeof AgentMemoryItemSchema>;
 export type AgentMemoryFacet = z.infer<typeof AgentMemoryFacetSchema>;
 export type AgentMemoryPage = z.infer<typeof AgentMemoryPageSchema>;
+
+export const RestorePointStatusSchema = z.enum([
+  "PENDING",
+  "CAPTURING",
+  "RESTORING",
+  "READY",
+  "FAILED",
+  "DELETING",
+]);
+
+export const RestorePointOriginSchema = z.enum([
+  "MANUAL",
+  "PRE_RESTORE",
+  "PRE_RESET",
+  "PRE_UPGRADE",
+]);
+
+export const RestorePointSkillSchema = z.object({
+  skillId: z.string().uuid(),
+  name: z.string(),
+  pinnedVersion: z.number().int(),
+});
+
+// Versioned free-form JSON: a row captured before a field existed omits it, so
+// every field defaults rather than failing the parse.
+export const RestorePointConfigManifestSchema = z.object({
+  version: z.number().int().default(1),
+  agentType: z.string().default(""),
+  templateKey: z.string().default(""),
+  templateVersion: z.number().int().default(0),
+  templateSelectionType: z.enum(["platform", "organization", "override", ""]).catch(""),
+  overrideVersion: z.number().int().nullish().default(null),
+  model: z.string().default(""),
+  effectiveModel: z.string().default(""),
+  approvalMode: z.string().default(""),
+  verboseMode: z.boolean().default(false),
+  skills: z.array(RestorePointSkillSchema).default([]),
+});
+
+export const RestorePointSchema = z.object({
+  id: z.string().uuid(),
+  agentId: z.string().uuid(),
+  label: z.string().nullable(),
+  status: RestorePointStatusSchema,
+  origin: RestorePointOriginSchema,
+  agentType: z.string(),
+  archiveBytes: z.number().int().nullable(),
+  fileCount: z.number().int().nullable(),
+  failureReason: z.string().nullable(),
+  // True while a confirmed restore still owes the Agent its recorded configuration.
+  reapplyConfiguration: z.boolean().default(false),
+  // Set when the volume came back but the configuration did not.
+  configurationError: z.string().nullable().default(null),
+  configManifest: RestorePointConfigManifestSchema,
+  createdAt: z.string(),
+  capturedAt: z.string().nullable(),
+});
+
+export const PaginatedRestorePointsSchema = z.object({
+  page: z.number().int().min(1),
+  pageSize: z.number().int().min(1),
+  total: z.number().int().min(0),
+  items: z.array(RestorePointSchema),
+  // The cap counts neither system-created backups nor failed captures; total counts both.
+  cap: z.number().int().min(1),
+  manualCount: z.number().int().min(0),
+});
+
+export type RestorePointStatus = z.infer<typeof RestorePointStatusSchema>;
+export type RestorePointOrigin = z.infer<typeof RestorePointOriginSchema>;
+export type RestorePointSkill = z.infer<typeof RestorePointSkillSchema>;
+export type RestorePointConfigManifest = z.infer<typeof RestorePointConfigManifestSchema>;
+export type RestorePoint = z.infer<typeof RestorePointSchema>;
+export type PaginatedRestorePoints = z.infer<typeof PaginatedRestorePointsSchema>;

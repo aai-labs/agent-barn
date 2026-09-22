@@ -319,6 +319,8 @@ jobs:
           GRAFANA_HOST: ${{ vars.PUBLIC_GRAFANA_HOST }}
           STORAGE_CLASS: ${{ vars.PUBLIC_STORAGE_CLASS }}
           SENDER_EMAIL: ${{ vars.PUBLIC_SENDER_EMAIL }}
+          AGENT_EMAIL_DOMAIN: ${{ vars.PUBLIC_AGENT_EMAIL_DOMAIN }}
+          EMAIL_INBOUND_SECRET: ${{ secrets.PUBLIC_EMAIL_INBOUND_SECRET }}
           POSTGRES_APP_USER: ${{ vars.POSTGRES_APP_USER }}
           POSTGRES_APP_DB: ${{ vars.POSTGRES_APP_DB }}
           POSTGRES_APP_PASSWORD: ${{ secrets.PUBLIC_POSTGRES_APP_PASSWORD }}
@@ -350,4 +352,28 @@ jobs:
           GOOGLE_CLOUD_CLIENT_SECRET: ${{ secrets.GOOGLE_CLOUD_CLIENT_SECRET }}
           AGENT_DEFAULT_MODEL: ${{ vars.AGENT_DEFAULT_MODEL }}
           AGENT_MODEL_ALLOWLIST: ${{ vars.AGENT_MODEL_ALLOWLIST }}
+          ORGANIZATION_LLM_BUDGET_ALERT_THRESHOLDS: ${{ vars.ORGANIZATION_LLM_BUDGET_ALERT_THRESHOLDS }}
+          COMMUNICATIONS_NATIVE_PLATFORMS: ${{ vars.COMMUNICATIONS_NATIVE_PLATFORMS }}
         run: helmfile -f helmfile.yaml.gotmpl sync --wait
+
+  # Runs after `deploy` on purpose: the Worker posts inbound mail into this
+  # cluster's Communications service, so the cluster must already hold the
+  # matching EMAIL_INBOUND_SECRET before the Worker starts presenting it.
+  # Published here rather than from deploy.yml because this is the workflow
+  # that deploys api.agentbarn.dev, the host the production Worker posts to.
+  # Gated on the domain variable, not the secret: an environment that has not
+  # onboarded an agent email domain leaves the platform inert by design, and
+  # must not start failing its deploy on a Worker it never wanted. With the
+  # domain set, a missing secret does fail the publish, which is the point.
+  deploy-worker:
+    needs: [resolve, deploy]
+    if: ${{ needs.deploy.result == 'success' && vars.PUBLIC_AGENT_EMAIL_DOMAIN != '' }}
+    uses: ./.github/workflows/worker.yml
+    secrets: inherit
+    with:
+      deploy: true
+      environment: production
+      # Pinned like every other job here: a workflow_dispatch of an existing tag
+      # runs from the dispatch ref, so an unpinned checkout would publish a
+      # Worker built from a different commit than the release being deployed.
+      ref: ${{ needs.resolve.outputs.sha }}

@@ -1,14 +1,18 @@
+import asyncio
 import io
 import json
 import zipfile
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
+from json import dumps
+from types import SimpleNamespace
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 import pytest
-from hamcrest import assert_that, empty, equal_to, has_length
+from hamcrest import assert_that, empty, equal_to, has_length, is_, none
+from websockets.asyncio.server import ServerConnection, serve
 
 from api.domains.communications.models import (
     ApprovalRequest,
@@ -20,16 +24,24 @@ from api.domains.communications.models import (
     PlatformCapability,
     ProcessingFeedbackStage,
 )
+from api.domains.communications.plugins.approvals import (
+    APPROVAL_CHOICE_CODES,
+    APPROVAL_COMPONENT_MAX_CHARS,
+    encode_approval_component,
+)
 from api.domains.communications.plugins.base import (
     InboundAdmissionContext,
     PlatformPlugin,
     ProcessingFeedbackContext,
+    WebhookRequest,
+    failure_feedback_idempotency_key,
+    failure_notice,
     provider_idempotency_key,
 )
 from api.domains.communications.plugins.discord import DiscordPlatformPlugin
 from api.domains.communications.plugins.registry import PlatformPluginRegistry
 from api.domains.communications.plugins.slack import SlackPlatformPlugin
-from api.domains.communications.plugins.teams import TeamsPlatformPlugin
+from api.domains.communications.plugins.teams import TeamsPlatformPlugin, TeamsSettings
 from api.domains.communications.plugins.telegram import TelegramPlatformPlugin
 from api.domains.communications.plugins.web import WebPlatformPlugin
 from api.infrastructure.msteams.client import TeamsAuthError
@@ -150,7 +162,6 @@ def test_discord_plugin_normalizes_an_allowed_message_create_event() -> None:
     plugin = DiscordPlatformPlugin(config)
     settings = plugin.settings_model.model_validate(
         {
-            "guild_ids": ["guild-1"],
             "allowed_channel_ids": ["channel-1"],
             "require_mention": True,
         }
@@ -182,7 +193,7 @@ def test_discord_plugin_normalizes_an_allowed_message_create_event() -> None:
 
 def test_discord_plugin_ignores_unmentioned_group_messages() -> None:
     plugin = DiscordPlatformPlugin(ValidationConfig())
-    settings = plugin.settings_model.model_validate({"guild_ids": ["guild-1"]})
+    settings = plugin.settings_model.model_validate({"allow_all_users": True})
 
     assert (
         plugin.normalize_inbound(
@@ -700,6 +711,407 @@ def test_discord_send_passes_a_stable_provider_idempotency_key() -> None:
     )
 
 
+def _discord_send_call(envelope: OutboundCommunicationEnvelope):
+    plugin = DiscordPlatformPlugin(ValidationConfig())
+    credentials = plugin.credentials_model.model_validate({"bot_token": "bot-value"})
+
+    with patch("api.domains.communications.plugins.discord.DiscordClient") as client_type:
+        client_type.return_value.send_message.return_value = "sent-1"
+        plugin.send(plugin.settings_model.model_validate({}), credentials, envelope, idempotency_key="reply-1")
+
+    return client_type.return_value.send_message.call_args
+
+
+def _discord_approval_envelope(*, command: str, choices: list[str]) -> OutboundCommunicationEnvelope:
+    return OutboundCommunicationEnvelope(
+        source_delivery_id=uuid4(),
+        location=ConversationLocation(id="channel-1", type="CHANNEL", thread_id="thread-1"),
+        text=f"```\n{command}\n```\nReply with one of: {', '.join(choices)}",
+        approval=ApprovalRequest(approval_id="run-1:1.0", command=command, choices=choices),
+    )
+
+
+def test_a_discord_approval_stays_inside_the_content_limit() -> None:
+    envelope = _discord_approval_envelope(command="x" * 2_500, choices=["once", "deny"])
+
+    content = _discord_send_call(envelope).args[1]
+
+    assert_that(len(content) <= 2_000, equal_to(True))
+    assert_that("more characters not shown" in content, equal_to(True))
+
+
+def test_a_discord_approval_still_names_every_offered_choice() -> None:
+    envelope = _discord_approval_envelope(command="rm -rf build", choices=["once", "session", "always", "deny"])
+
+    content = _discord_send_call(envelope).args[1]
+
+    assert_that("```\nrm -rf build\n```" in content, equal_to(True))
+    assert_that("Or reply to your original request with one of: once, session, always, deny" in content, equal_to(True))
+
+
+def test_an_ordinary_discord_reply_is_sent_exactly_as_written() -> None:
+    envelope = OutboundCommunicationEnvelope(
+        source_delivery_id=uuid4(),
+        location=ConversationLocation(id="channel-1", type="CHANNEL"),
+        text="x" * 2_500,
+    )
+
+    assert_that(_discord_send_call(envelope).args[1], equal_to("x" * 2_500))
+
+
+def _discord_interaction(
+    *,
+    choice: str = "once",
+    approval_id: str = "run-1:1.0",
+    thread_id: str = "message-1",
+    custom_id: str | None = None,
+    channel: str = "channel-1",
+    guild: str | None = "guild-1",
+    user: str = "user-1",
+    roles: list[str] | None = None,
+    posted_by: str | None = "bot-1",
+    bot_user_id: str | None = "bot-1",
+    clicker_is_bot: bool = False,
+) -> dict[str, Any]:
+    clicker = {"id": user, "username": "Ada", "bot": clicker_is_bot}
+    event: dict[str, Any] = {
+        "id": "interaction-1",
+        "token": "interaction-token",
+        "type": 3,
+        "channel_id": channel,
+        "data": {
+            "component_type": 2,
+            "custom_id": custom_id
+            if custom_id is not None
+            else encode_approval_component(thread_id, approval_id, choice),
+        },
+        "message": {"id": "prompt-1", "author": {"id": posted_by, "bot": True} if posted_by else {}},
+    }
+    if guild:
+        event["guild_id"] = guild
+        event["member"] = {"nick": None, "roles": roles or [], "user": clicker}
+    else:
+        event["user"] = clicker
+    payload: dict[str, Any] = {"t": "INTERACTION_CREATE", "d": event}
+    if bot_user_id is not None:
+        payload["agentbarn_bot_user_id"] = bot_user_id
+    return payload
+
+
+def _discord_plugin_and_settings(**settings: Any) -> tuple[DiscordPlatformPlugin, Any]:
+    plugin = DiscordPlatformPlugin(ValidationConfig())
+    return plugin, plugin.settings_model.model_validate({"allow_all_users": True, **settings})
+
+
+def test_a_discord_click_becomes_an_ordinary_inbound_answer() -> None:
+    plugin, settings = _discord_plugin_and_settings()
+
+    admitted = plugin.normalize_inbound(settings, _discord_interaction(choice="once"))
+
+    assert_that(len(admitted), equal_to(1))
+    envelope = admitted[0]
+    assert_that(envelope.text, equal_to("once"))
+    assert_that(envelope.sender.id, equal_to("user-1"))
+    assert_that(envelope.sender.display_name, equal_to("Ada"))
+    assert_that(envelope.location.id, equal_to("channel-1"))
+    assert_that(envelope.location.thread_id, equal_to("message-1"))
+    assert_that(envelope.provider_metadata["approval_id"], equal_to("run-1:1.0"))
+    assert_that(envelope.reply_to_provider_message_id, none())
+
+
+def test_a_discord_click_is_never_deduped_against_the_message_it_answers() -> None:
+    plugin, settings = _discord_plugin_and_settings()
+
+    envelope = plugin.normalize_inbound(settings, _discord_interaction()).envelopes[0]
+
+    assert_that(envelope.provider_message_id, equal_to("action:interaction-1"))
+
+
+def test_a_discord_click_still_obeys_the_channel_allowlist() -> None:
+    plugin, settings = _discord_plugin_and_settings(allow_all_users=False, allowed_channel_ids=["channel-9"])
+
+    assert_that(
+        plugin.normalize_inbound(settings, _discord_interaction()).disposition,
+        equal_to(CommunicationPolicyDisposition.CHANNEL_DENIED),
+    )
+
+
+def test_a_discord_click_still_obeys_the_user_and_role_allowlists() -> None:
+    plugin, settings = _discord_plugin_and_settings(
+        allow_all_users=False,
+        allowed_user_ids=["user-9"],
+        allowed_role_ids=["role-9"],
+    )
+
+    assert_that(
+        plugin.normalize_inbound(settings, _discord_interaction(user="user-1")).disposition,
+        equal_to(CommunicationPolicyDisposition.USER_DENIED),
+    )
+    assert_that(
+        len(plugin.normalize_inbound(settings, _discord_interaction(user="user-1", roles=["role-9"]))), equal_to(1)
+    )
+
+
+def test_a_discord_dm_uses_the_native_user_gate() -> None:
+    plugin, off = _discord_plugin_and_settings(allow_all_users=False)
+    _, allowlisted = _discord_plugin_and_settings(allow_all_users=False, allowed_user_ids=["user-9"])
+    _, open_dms = _discord_plugin_and_settings()
+
+    assert_that(
+        plugin.normalize_inbound(off, _discord_interaction(guild=None)).disposition,
+        equal_to(CommunicationPolicyDisposition.USER_DENIED),
+    )
+    assert_that(
+        plugin.normalize_inbound(allowlisted, _discord_interaction(guild=None)).disposition,
+        equal_to(CommunicationPolicyDisposition.USER_DENIED),
+    )
+    assert_that(len(plugin.normalize_inbound(open_dms, _discord_interaction(guild=None))), equal_to(1))
+
+
+def test_a_discord_click_on_a_message_this_agent_did_not_post_is_refused() -> None:
+    plugin, settings = _discord_plugin_and_settings()
+
+    assert_that(
+        plugin.normalize_inbound(settings, _discord_interaction(posted_by="someone-else")).disposition,
+        equal_to(CommunicationPolicyDisposition.MENTION_REQUIRED),
+    )
+    assert_that(
+        plugin.normalize_inbound(settings, _discord_interaction(posted_by=None)).disposition,
+        equal_to(CommunicationPolicyDisposition.MENTION_REQUIRED),
+    )
+    assert_that(
+        plugin.normalize_inbound(settings, _discord_interaction(bot_user_id=None)).disposition,
+        equal_to(CommunicationPolicyDisposition.MENTION_REQUIRED),
+    )
+
+
+def test_a_clicking_discord_bot_cannot_answer_an_approval() -> None:
+    plugin, settings = _discord_plugin_and_settings()
+
+    assert_that(
+        plugin.normalize_inbound(settings, _discord_interaction(clicker_is_bot=True)).disposition,
+        equal_to(CommunicationPolicyDisposition.BOT_IGNORED),
+    )
+    assert_that(
+        plugin.normalize_inbound(settings, _discord_interaction(user="bot-1")).disposition,
+        equal_to(CommunicationPolicyDisposition.BOT_IGNORED),
+    )
+
+
+def test_an_unrelated_discord_interaction_is_ignored_rather_than_malformed() -> None:
+    plugin, settings = _discord_plugin_and_settings()
+
+    assert_that(
+        plugin.normalize_inbound(settings, _discord_interaction(custom_id="some_other_app:button")).disposition,
+        equal_to(CommunicationPolicyDisposition.EVENT_IGNORED),
+    )
+
+
+def test_a_damaged_discord_approval_button_is_malformed() -> None:
+    plugin, settings = _discord_plugin_and_settings()
+
+    assert_that(
+        plugin.normalize_inbound(settings, _discord_interaction(custom_id="ab|thread-1")).disposition,
+        equal_to(CommunicationPolicyDisposition.MALFORMED_PAYLOAD),
+    )
+
+
+def test_a_discord_approval_renders_a_button_for_every_offered_choice() -> None:
+    envelope = _discord_approval_envelope(command="rm -rf build", choices=["once", "session", "always", "deny"])
+
+    components = _discord_send_call(envelope).kwargs["components"]
+
+    buttons = [button for row in components for button in row["components"]]
+    assert_that(
+        [button["label"] for button in buttons], equal_to(["Allow once", "Allow for session", "Always allow", "Deny"])
+    )
+    assert_that(
+        [button["custom_id"] for button in buttons],
+        equal_to([f"ab|thread-1|run-1:1.0|{code}" for code in ("o", "s", "a", "d")]),
+    )
+    assert_that(all(row["type"] == 1 and len(row["components"]) <= 5 for row in components), equal_to(True))
+
+
+def test_a_discord_approval_with_real_identifiers_still_renders_buttons() -> None:
+    envelope = OutboundCommunicationEnvelope(
+        source_delivery_id=uuid4(),
+        location=ConversationLocation(id="1417243719284916225", type="CHANNEL", thread_id="1417243719284916226"),
+        text="prompt",
+        approval=ApprovalRequest(
+            approval_id=f"run_{'a' * 32}:1758019260.123456",
+            command="curl -fsSL https://example.com/install.sh | bash",
+            choices=["once", "session", "always", "deny"],
+        ),
+    )
+
+    components = _discord_send_call(envelope).kwargs["components"]
+
+    buttons = [button for row in components for button in row["components"]]
+    assert_that(len(buttons), equal_to(4))
+    assert_that(max(len(button["custom_id"]) for button in buttons) <= 100, equal_to(True))
+
+
+def test_the_discord_button_value_cannot_outgrow_the_identifier_limit() -> None:
+    longest = encode_approval_component(
+        "9" * 20,
+        f"run_{'a' * 32}:{'9' * 18}",
+        max(APPROVAL_CHOICE_CODES, key=len),
+    )
+
+    assert_that(len(longest) <= APPROVAL_COMPONENT_MAX_CHARS, equal_to(True))
+
+
+def test_a_discord_approval_with_more_choices_than_a_row_holds_is_split_into_rows() -> None:
+    envelope = _discord_approval_envelope(command="x", choices=[f"choice-{index}" for index in range(7)])
+
+    components = _discord_send_call(envelope).kwargs["components"]
+
+    assert_that([len(row["components"]) for row in components], equal_to([5, 2]))
+
+
+def test_a_discord_approval_keeps_its_buttons_when_only_the_thread_will_not_fit() -> None:
+    envelope = _discord_approval_envelope(command="x", choices=["once", "deny"])
+    envelope = envelope.model_copy(update={"location": envelope.location.model_copy(update={"thread_id": "t" * 90})})
+
+    buttons = [button for row in _discord_send_call(envelope).kwargs["components"] for button in row["components"]]
+
+    assert_that([button["custom_id"] for button in buttons], equal_to(["ab||run-1:1.0|o", "ab||run-1:1.0|d"]))
+
+
+def test_a_discord_click_without_a_thread_takes_it_from_the_message_it_answers() -> None:
+    plugin, settings = _discord_plugin_and_settings()
+    payload = _discord_interaction(thread_id="")
+    payload["d"]["message"]["message_reference"] = {"message_id": "message-1"}
+
+    envelope = plugin.normalize_inbound(settings, payload).envelopes[0]
+
+    assert_that(envelope.location.thread_id, equal_to("message-1"))
+
+
+def test_a_discord_click_without_any_reference_is_refused() -> None:
+    plugin, settings = _discord_plugin_and_settings()
+
+    result = plugin.normalize_inbound(settings, _discord_interaction(thread_id=""))
+
+    assert_that(result.disposition, equal_to(CommunicationPolicyDisposition.MALFORMED_PAYLOAD))
+
+
+def test_a_discord_approval_too_long_to_encode_falls_back_to_text() -> None:
+    envelope = _discord_approval_envelope(command="x", choices=["once"])
+    envelope = envelope.model_copy(
+        update={
+            "approval": ApprovalRequest(approval_id="r" * 120, command="x", choices=["once"]),
+        }
+    )
+
+    assert_that("components" in _discord_send_call(envelope).kwargs, equal_to(False))
+
+
+def test_an_ordinary_discord_reply_carries_no_components() -> None:
+    envelope = OutboundCommunicationEnvelope(
+        source_delivery_id=uuid4(),
+        location=ConversationLocation(id="channel-1", type="CHANNEL"),
+        text="reply",
+    )
+
+    assert_that("components" in _discord_send_call(envelope).kwargs, equal_to(False))
+
+
+def test_a_discord_reply_to_a_click_carries_no_message_reference() -> None:
+    envelope = OutboundCommunicationEnvelope(
+        source_delivery_id=uuid4(),
+        location=ConversationLocation(id="channel-1", type="CHANNEL", thread_id="message-1"),
+        text="That approval is no longer active.",
+        reply_to_provider_message_id="action:interaction-1",
+    )
+
+    assert_that(_discord_send_call(envelope).kwargs["reply_to_id"], none())
+
+
+def _discord_ingress_log(payload: dict[str, Any], **settings: Any) -> list[tuple[str, Any]]:
+    plugin, plugin_settings = _discord_plugin_and_settings(**settings)
+    credentials = plugin.credentials_model.model_validate({"bot_token": "bot-value"})
+    log: list[tuple[str, Any]] = []
+
+    async def emit(emitted: dict[str, Any]) -> None:
+        log.append(("emit", emitted))
+
+    async def connected() -> None:
+        return None
+
+    async def post(url: str, *, json: dict[str, Any]) -> Any:
+        del url
+        log.append(("ack", json))
+        return SimpleNamespace(raise_for_status=lambda: None, status_code=204)
+
+    async def gateway(socket: ServerConnection) -> None:
+        await socket.send(dumps({"op": 10, "d": {"heartbeat_interval": 45_000}}))
+        await socket.recv()
+        await socket.send(dumps({"t": "READY", "d": {"user": {"id": "bot-1"}}}))
+        await socket.send(dumps(payload))
+        await asyncio.sleep(1)
+
+    async def exercise() -> None:
+        async with serve(gateway, "127.0.0.1", 0) as server:
+            port = server.sockets[0].getsockname()[1]
+            client = SimpleNamespace(post=post)
+            with (
+                patch(
+                    "api.domains.communications.plugins.discord.DiscordClient.get_gateway_url",
+                    return_value=f"ws://127.0.0.1:{port}",
+                ),
+                patch("api.domains.communications.plugins.discord.httpx.AsyncClient") as client_type,
+            ):
+                client_type.return_value.__aenter__ = AsyncMock(return_value=client)
+                client_type.return_value.__aexit__ = AsyncMock(return_value=False)
+                task = asyncio.create_task(plugin.run_ingress(plugin_settings, credentials, emit, connected))
+                for _ in range(200):
+                    if any(entry[0] == "emit" for entry in log):
+                        break
+                    await asyncio.sleep(0.01)
+                task.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await task
+
+    asyncio.run(exercise())
+    return log
+
+
+def test_a_discord_click_reaches_the_gateway_acknowledged_first() -> None:
+    log = _discord_ingress_log(_discord_interaction())
+
+    assert_that([entry[0] for entry in log], equal_to(["ack", "emit"]))
+    assert_that(log[0][1], equal_to({"type": 7, "data": {"components": []}}))
+    assert_that(log[1][1]["t"], equal_to("INTERACTION_CREATE"))
+    assert_that(log[1][1]["agentbarn_bot_user_id"], equal_to("bot-1"))
+
+
+def test_a_refused_discord_click_is_acknowledged_without_removing_the_buttons() -> None:
+    log = _discord_ingress_log(_discord_interaction(), allow_all_users=False, allowed_channel_ids=["channel-9"])
+
+    assert_that([entry[0] for entry in log], equal_to(["ack", "emit"]))
+    assert_that(log[0][1], equal_to({"type": 6}))
+
+
+def test_a_discord_message_still_reaches_the_gateway_without_an_acknowledgement() -> None:
+    message = {
+        "t": "MESSAGE_CREATE",
+        "d": {
+            "id": "message-1",
+            "guild_id": "guild-1",
+            "channel_id": "channel-1",
+            "timestamp": "2026-08-22T10:00:00+00:00",
+            "content": "hello",
+            "author": {"id": "user-1", "username": "Ada", "bot": False},
+            "mentions": [{"id": "bot-1"}],
+        },
+    }
+
+    log = _discord_ingress_log(message)
+
+    assert_that([entry[0] for entry in log], equal_to(["emit"]))
+
+
 def test_telegram_send_passes_a_stable_provider_idempotency_key() -> None:
     plugin = TelegramPlatformPlugin(ValidationConfig())
     credentials = plugin.credentials_model.model_validate({"bot_token": "bot-value"})
@@ -725,6 +1137,54 @@ def test_telegram_send_passes_a_stable_provider_idempotency_key() -> None:
         thread_id=None,
         idempotency_key=provider_idempotency_key("reply-1"),
     )
+
+
+def test_telegram_declares_processing_feedback() -> None:
+    assert_that(
+        PlatformCapability.PROCESSING_FEEDBACK in TelegramPlatformPlugin(ValidationConfig()).capabilities,
+        is_(True),
+    )
+
+
+def test_telegram_terminal_failure_replies_to_the_originating_message() -> None:
+    plugin = TelegramPlatformPlugin(ValidationConfig())
+    credentials = plugin.credentials_model.model_validate({"bot_token": "bot-value"})
+    source_delivery_id = uuid4()
+    context = ProcessingFeedbackContext(
+        connection_id=uuid4(),
+        stage=ProcessingFeedbackStage.FAILED,
+        location=ConversationLocation(id="chat-1", type="CHANNEL", thread_id="7"),
+        provider_message_id="42",
+        source_delivery_id=source_delivery_id,
+        error_summary="The provider reports exhausted credits or billing; add credits to the provider account, then retry (HTTP 402)",
+    )
+
+    with patch("api.domains.communications.plugins.telegram.send_message") as send:
+        plugin.processing_feedback(plugin.settings_model.model_validate({}), credentials, context)
+
+    send.assert_called_once_with(
+        "bot-value",
+        "chat-1",
+        failure_notice(context.error_summary),
+        thread_id="7",
+        reply_to_id="42",
+        idempotency_key=failure_feedback_idempotency_key(context),
+    )
+
+
+def test_telegram_non_terminal_processing_feedback_stays_silent() -> None:
+    plugin = TelegramPlatformPlugin(ValidationConfig())
+    credentials = plugin.credentials_model.model_validate({"bot_token": "bot-value"})
+    context = ProcessingFeedbackContext(
+        connection_id=uuid4(),
+        stage=ProcessingFeedbackStage.CLAIMED,
+        location=ConversationLocation(id="chat-1", type="DM"),
+    )
+
+    with patch("api.domains.communications.plugins.telegram.send_message") as send:
+        plugin.processing_feedback(plugin.settings_model.model_validate({}), credentials, context)
+
+    send.assert_not_called()
 
 
 # --- inbound name enrichment ------------------------------------------------
@@ -969,6 +1429,7 @@ def test_teams_descriptor_declares_webhook_ingress() -> None:
 
     assert descriptor.key == "teams"
     assert PlatformCapability.WEBHOOK_INGRESS in descriptor.capabilities
+    assert_that(PlatformCapability.PROCESSING_FEEDBACK in descriptor.capabilities, is_(True))
 
 
 def test_teams_normalizes_a_personal_message_as_a_dm() -> None:
@@ -1105,6 +1566,26 @@ def test_teams_group_allowlist_matches_the_stripped_channel_id() -> None:
     assert_that(result, empty())
 
 
+def test_teams_runtime_relay_applies_dm_policy_to_approval_invokes() -> None:
+    plugin = _teams_plugin()
+    allowed = TeamsSettings.model_validate({"dm_policy": "allowlist", "dm_user_ids": [_TEAMS_AAD_ID]})
+    blocked = TeamsSettings.model_validate({"dm_policy": "allowlist", "dm_user_ids": ["someone-else"]})
+    invoke = _teams_activity(type="invoke")
+
+    assert plugin.runtime_relay_disposition(allowed, invoke) == CommunicationPolicyDisposition.ACCEPTED
+    assert plugin.runtime_relay_disposition(blocked, invoke) == CommunicationPolicyDisposition.USER_DENIED
+
+
+def test_teams_runtime_relay_forwards_authenticated_lifecycle_activities() -> None:
+    plugin = _teams_plugin()
+    settings = TeamsSettings.model_validate({})
+
+    assert (
+        plugin.runtime_relay_disposition(settings, _teams_activity(type="conversationUpdate"))
+        == CommunicationPolicyDisposition.ACCEPTED
+    )
+
+
 def test_teams_captures_addressable_ids_for_replies() -> None:
     plugin = _teams_plugin()
     settings = plugin.settings_model.model_validate({"dm_policy": "open"})
@@ -1192,6 +1673,43 @@ def test_teams_send_posts_a_complete_activity_to_the_conversation() -> None:
     assert activity["recipient"] == {"id": _TEAMS_USER_ID}
     assert activity["replyToId"] == "1485983408511"
     assert_that(send.call_args.kwargs["idempotency_key"], equal_to(provider_idempotency_key("reply-1")))
+
+
+def test_teams_terminal_failure_replies_to_the_originating_conversation() -> None:
+    plugin = _teams_plugin()
+    credentials = _teams_credentials(plugin)
+    source_delivery_id = uuid4()
+    context = ProcessingFeedbackContext(
+        connection_id=uuid4(),
+        stage=ProcessingFeedbackStage.FAILED,
+        location=ConversationLocation(id=_TEAMS_CHANNEL_ID, type="CHANNEL", thread_id="1481567603816"),
+        provider_message_id="1485983408511",
+        source_delivery_id=source_delivery_id,
+        provider_metadata={
+            "service_url": _TEAMS_SERVICE_URL,
+            "conversation_id": f"{_TEAMS_CHANNEL_ID};messageid=1481567603816",
+            "from_id": _TEAMS_USER_ID,
+            "recipient_id": _TEAMS_BOT_ID,
+        },
+        error_summary="The provider reports exhausted credits or billing; add credits to the provider account, then retry (HTTP 402)",
+    )
+
+    with (
+        patch("api.domains.communications.plugins.teams.acquire_token", return_value="tok"),
+        patch("api.domains.communications.plugins.teams.send_activity", return_value="sent-1") as send,
+    ):
+        plugin.processing_feedback(plugin.settings_model.model_validate({}), credentials, context)
+
+    service_url, conversation_id, activity, token = send.call_args.args
+    assert_that(service_url, equal_to(_TEAMS_SERVICE_URL))
+    assert_that(conversation_id, equal_to(f"{_TEAMS_CHANNEL_ID};messageid=1481567603816"))
+    assert_that(token, equal_to("tok"))
+    assert_that(activity["text"], equal_to(failure_notice(context.error_summary)))
+    assert_that(activity["conversation"], equal_to({"id": conversation_id}))
+    assert_that(activity["from"], equal_to({"id": _TEAMS_BOT_ID}))
+    assert_that(activity["recipient"], equal_to({"id": _TEAMS_USER_ID}))
+    assert_that(activity["replyToId"], equal_to("1485983408511"))
+    assert_that(send.call_args.kwargs["idempotency_key"], equal_to(failure_feedback_idempotency_key(context)))
 
 
 def test_teams_send_without_a_service_url_is_rejected() -> None:
@@ -1392,6 +1910,7 @@ def test_teams_app_package_contains_a_valid_manifest_and_icons() -> None:
     assert manifest["manifestVersion"] == "1.17"
     assert manifest["bots"][0]["botId"] == "app-1"
     assert manifest["bots"][0]["scopes"] == ["personal", "team", "groupChat"]
+    assert manifest["bots"][0]["supportsFiles"] is True
     assert manifest["developer"]["websiteUrl"] == "https://example.test"
 
 
@@ -1476,6 +1995,16 @@ def test_teams_manifest_uses_only_fields_its_declared_schema_allows() -> None:
     assert set(manifest["bots"][0]["scopes"]) <= {"team", "personal", "groupChat"}
 
 
+def _webhook_request(payload: dict, *, authorization: str = "", headers: dict | None = None) -> WebhookRequest:
+    """Build the request a plugin sees, with raw bytes that really are this payload."""
+    return WebhookRequest(
+        raw_body=json.dumps(payload).encode(),
+        payload=payload,
+        authorization=authorization,
+        headers=headers or {},
+    )
+
+
 def test_teams_rejected_webhook_token_raises_the_gateways_permission_error() -> None:
     plugin = _teams_plugin()
 
@@ -1484,7 +2013,10 @@ def test_teams_rejected_webhook_token_raises_the_gateways_permission_error() -> 
         side_effect=TeamsAuthError("Bot Framework token verification failed"),
     ):
         with pytest.raises(PermissionError):
-            plugin.verify_webhook(_teams_credentials(plugin), {"type": "message"}, "Bearer nope")
+            plugin.verify_webhook(
+                _teams_credentials(plugin),
+                _webhook_request({"type": "message"}, authorization="Bearer nope"),
+            )
 
 
 def test_teams_rejected_credentials_raise_value_error_like_every_other_plugin() -> None:

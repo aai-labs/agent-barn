@@ -11,6 +11,7 @@ from sqlmodel import Column
 from sqlmodel import Field as SqlField
 
 from api.domains.platform_admin.models import StatsGranularity, StatsPeriod
+from api.infrastructure.openrouter.client import CreditsStatus
 from api.infrastructure.postgres.models import BaseModel
 
 # ---------------------------------------------------------------------------
@@ -391,12 +392,12 @@ class PlatformCostSummaryRead(CostSummaryRead):
 
     # Spend over the window divided by its length in days.
     daily_burn_rate: float = 0.0
-    # Credit left on the OpenRouter key. None means either no credit limit is set or
-    # the poll failed — both are "we don't know", and neither should render as a number.
+    # "ok" carries the numbers below; "no_limit" means the key spends without a
+    # ceiling; "unavailable" means the poll failed and nothing is known. Clients must
+    # keep the last two apart — an unknown balance is not a healthy one.
+    credits_status: CreditsStatus = CreditsStatus.UNAVAILABLE
     credits_remaining: float | None = None
-    # Days of credit left at the current burn rate. None whenever either input is
-    # unknown or nothing has been spent.
-    runway_days: float | None = None
+    credits_limit: float | None = None
     unattributed_spend: float = 0.0
     unattributed_calls: int = 0
     organizations: list[OrganizationSpendRead] = Field(default_factory=list)

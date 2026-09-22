@@ -20,6 +20,8 @@ from api.domains.communications.plugins.base import (
     PlatformCredentials,
     PlatformPlugin,
     PlatformSettings,
+    ProcessingFeedbackContext,
+    best_effort_failure_notice,
     provider_idempotency_key,
 )
 from api.infrastructure.telegram.client import get_chat_display_name, send_message, validate_bot_token
@@ -54,6 +56,14 @@ class TelegramSettings(PlatformSettings):
         title="Direct messages",
         description="Off ignores DMs, Open accepts DMs from anyone, Allowlist restricts to Allowed DM senders.",
     )
+    home_channel_id: str | None = Field(
+        default=None,
+        title="Home chat",
+        description=(
+            "Optional group or user chat ID that scheduled results without an originating chat are sent to "
+            "when the Agent runs Telegram natively."
+        ),
+    )
 
 
 class TelegramCredentials(PlatformCredentials):
@@ -77,8 +87,9 @@ class TelegramPlatformPlugin(PlatformPlugin):
         "## Configure Telegram\n\n"
         "1. This integration uses `getUpdates` long polling. Remove any existing webhook and stop other services polling "
         "the same bot token before connecting.\n"
-        "2. Add the bot to every group or channel it should handle. For ordinary group messages, use **@BotFather → "
-        "/setprivacy → Disable**; privacy mode otherwise delivers mainly commands, replies, and mentions.\n"
+        "2. Add the bot to every group or channel it should handle. When the Agent runs Telegram natively it answers "
+        "groups only when mentioned or replied to, which privacy mode already delivers. Otherwise, for ordinary group "
+        "messages, use **@BotFather → /setprivacy → Disable**.\n"
         "3. For channels, make the bot an administrator so it can receive channel posts and send replies.\n\n"
         "## Set Connection access\n\n"
         "1. Direct messages default to Off; set Direct messages to Open or Allowlist when DMs are needed.\n"
@@ -91,6 +102,7 @@ class TelegramPlatformPlugin(PlatformPlugin):
             PlatformCapability.SUPERVISED_INGRESS,
             PlatformCapability.MENTIONS,
             PlatformCapability.THREADS,
+            PlatformCapability.PROCESSING_FEEDBACK,
         }
     )
     settings_model = TelegramSettings
@@ -129,6 +141,28 @@ class TelegramPlatformPlugin(PlatformPlugin):
             envelope.text,
             thread_id=envelope.location.thread_id,
             idempotency_key=provider_idempotency_key(idempotency_key),
+        )
+
+    def processing_feedback(
+        self,
+        settings: PlatformSettings,
+        credentials: PlatformCredentials,
+        context: ProcessingFeedbackContext,
+    ) -> None:
+        del settings
+        assert isinstance(credentials, TelegramCredentials)
+        best_effort_failure_notice(
+            context,
+            lambda text, idempotency_key: send_message(
+                credentials.bot_token,
+                context.location.id,
+                text,
+                thread_id=context.location.thread_id,
+                reply_to_id=context.provider_message_id,
+                idempotency_key=idempotency_key,
+            ),
+            target=f"Telegram chat {context.location.id}",
+            logger=logger,
         )
 
     def normalize_inbound(

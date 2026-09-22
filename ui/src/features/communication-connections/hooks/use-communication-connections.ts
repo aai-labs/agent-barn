@@ -15,6 +15,7 @@ import {
   CommunicationDirectoryPreviewSchema,
   CommunicationDiagnosticsSchema,
   PaginatedCommunicationJournalEntriesSchema,
+  PaginatedCommunicationCallsSchema,
   CommunicationReconnectSchema,
   CommunicationRetrySchema,
   CommunicationPlatformSchema,
@@ -29,18 +30,22 @@ import {
   type CommunicationJournalKind,
   type CommunicationJournalWindow,
   type PaginatedCommunicationJournalEntries,
+  type PaginatedCommunicationCalls,
   type CommunicationReconnect,
   type CommunicationRetry,
   type CreateCommunicationConnection,
   type UpdateCommunicationConnection,
+  type RotateCommunicationConnectionCredentials,
 } from "../schemas";
 
 export const communicationConnectionsKey = createQueryKeyStructure("communication-connections");
 export const communicationPlatformsKey = createQueryKeyStructure("communication-platforms");
 export const communicationDiagnosticsKey = createQueryKeyStructure("communication-connection-diagnostics");
 export const communicationJournalKey = createQueryKeyStructure("communication-connection-journal");
+export const communicationCallsKey = createQueryKeyStructure("communication-connection-calls");
 
 const JOURNAL_PAGE_SIZE = 20;
+const CALLS_PAGE_SIZE = 20;
 
 export function useCommunicationPlatforms() {
   const orgApiBase = useOrganizationApiBase();
@@ -232,6 +237,45 @@ export function useCommunicationDeliveryLifecycle(
   return { ...query, entries };
 }
 
+/** A Connection's inbound calls paired with the Agent's replies, newest first.
+ * Generic over any Connection (see the API docstring); the webhook tab is the only
+ * caller today, since every other platform already has its own live view. */
+export function useCommunicationConnectionCalls(agentId: string, connectionId: string) {
+  const orgApiBase = useOrganizationApiBase();
+  const { selectedOrganization } = useOrganizationContext();
+  const organizationId = selectedOrganization?.id ?? "";
+  const query = useInfiniteQuery({
+    queryKey: communicationCallsKey.list({ organizationId, agentId, connectionId }),
+    queryFn: async ({ pageParam }) => {
+      const params = new URLSearchParams({ page: String(pageParam), page_size: String(CALLS_PAGE_SIZE) });
+      const response = await api.get<PaginatedCommunicationCalls>(
+        `${orgApiBase}/agents/${agentId}/connections/${connectionId}/calls?${params.toString()}`,
+        { schema: PaginatedCommunicationCallsSchema },
+      );
+      return response.data;
+    },
+    initialPageParam: 1,
+    getNextPageParam: (lastPage) => {
+      const nextPage = lastPage.page + 1;
+      return nextPage <= Math.ceil(lastPage.total / lastPage.pageSize) ? nextPage : undefined;
+    },
+    enabled: Boolean(agentId && connectionId),
+  });
+  const calls = Array.from(
+    new Map((query.data?.pages.flatMap((page) => page.items) ?? []).map((call) => [call.deliveryId, call])).values(),
+  );
+  return {
+    calls,
+    total: query.data?.pages[0]?.total ?? 0,
+    isLoading: query.isPending,
+    isFetchingNextPage: query.isFetchingNextPage,
+    hasNextPage: query.hasNextPage,
+    fetchNextPage: query.fetchNextPage,
+    error: query.error,
+    refetch: query.refetch,
+  };
+}
+
 export function useInstallLink() {
   const orgApiBase = useOrganizationApiBase();
 
@@ -286,10 +330,19 @@ export function useCommunicationConnectionActions() {
   }
 
   const previewConnectionDirectory = useMutation({
-    mutationFn: async ({ agentId, platformKey, settings, credentials }: { agentId: string; platformKey: string; settings: Record<string, unknown>; credentials: Record<string, unknown> }) => {
+    mutationFn: async (
+      { agentId, platformKey, kind, settings, credentials, guildId }: {
+        agentId: string;
+        platformKey: string;
+        kind: string;
+        settings: Record<string, unknown>;
+        credentials: Record<string, unknown>;
+        guildId?: string;
+      },
+    ) => {
       const response = await api.post<CommunicationDirectoryPreview>(
         `${orgApiBase}/agents/${agentId}/connection-directory-preview`,
-        { platformKey, settings, credentials },
+        { platformKey, kind, settings, credentials, guildId },
         { schema: CommunicationDirectoryPreviewSchema },
       );
       return response.data;
@@ -330,6 +383,18 @@ export function useCommunicationConnectionActions() {
     onSuccess: invalidate,
   });
 
+  const rotateConnectionCredentials = useMutation({
+    mutationFn: async ({ agentId, connectionId, revision }: RotateCommunicationConnectionCredentials) => {
+      const response = await api.post<CommunicationConnection>(
+        `${orgApiBase}/agents/${agentId}/connections/${connectionId}/rotate-credentials?revision=${revision}`,
+        undefined,
+        { schema: CommunicationConnectionSchema },
+      );
+      return response.data;
+    },
+    onSuccess: (connection) => invalidate(connection.agentId),
+  });
+
   const reconnectConnection = useMutation({
     mutationFn: async ({ agentId, connectionId }: { agentId: string; connectionId: string }) => {
       const response = await api.post<CommunicationReconnect>(
@@ -354,5 +419,13 @@ export function useCommunicationConnectionActions() {
     onSuccess: (_data, variables) => invalidateDiagnostics(variables.agentId),
   });
 
-  return { previewConnectionDirectory, createConnection, updateConnection, retireConnection, reconnectConnection, retryDelivery };
+  return {
+    previewConnectionDirectory,
+    createConnection,
+    updateConnection,
+    retireConnection,
+    rotateConnectionCredentials,
+    reconnectConnection,
+    retryDelivery,
+  };
 }

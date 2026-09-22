@@ -90,7 +90,7 @@ class PlatformIngressSupervisor:
                     type(exc).__name__,
                 )
             self._last_journal_prune_at = now
-        enabled_connections = await asyncio.to_thread(self.connections.list_enabled)
+        enabled_connections = await asyncio.to_thread(self.connections.list_enabled, self.config.native_platform_keys)
         enabled = {
             connection.id: connection for connection in enabled_connections if self._needs_ingress_task(connection)
         }

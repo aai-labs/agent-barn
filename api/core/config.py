@@ -2,7 +2,7 @@ from functools import lru_cache
 from pathlib import Path
 
 from dotenv import load_dotenv
-from pydantic import Field, PostgresDsn
+from pydantic import Field, PostgresDsn, field_validator
 from pydantic_settings import BaseSettings
 
 ROOT_ENV_PATH = Path(__file__).resolve().parents[2] / ".env"
@@ -72,6 +72,9 @@ class Config(BaseSettings):
     # Honcho's token telemetry is divided against; it is never used to call a model.
     honcho_litellm_key: str = ""
     organization_creation_limit: int = 5
+    # Percentages of an Organization's limit at which it is notified. Empty falls back
+    # to the default; 100 is always meaningful because it is the enforcement boundary.
+    organization_llm_budget_alert_thresholds: str = "80,100"
     api_external_url: str = ""
     # Agent workloads and the API run in the same namespace, so the short Service
     # name is portable between staging and production.
@@ -79,6 +82,9 @@ class Config(BaseSettings):
     communications_base_url: str = (
         "http://agentbarn-api-communications.agent-farm.svc.cluster.local:8002/communications/v1"
     )
+    # Where the API relays runtime-owned Teams activities. Local Docker/k3d
+    # cannot resolve cluster DNS, so compose overrides this with a port-forward.
+    teams_runtime_webhook_url: str = "http://agent-{agent_id}.{namespace}.svc.cluster.local:3978/api/messages"
     skip_slack_token_validation: bool = False
     skip_telegram_token_validation: bool = False
     skip_discord_token_validation: bool = False
@@ -93,6 +99,17 @@ class Config(BaseSettings):
     # Content-free Communication journal history is pruned by the gateway
     # supervisor after this many days.
     communication_journal_retention_days: int = Field(default=31, ge=1, le=3650)
+    # Native gateway spike (ADR 2026-09-16): comma-separated Platform keys whose
+    # Connections run inside the Agent runtime's own gateway instead of the
+    # Communications supervisor, for Hermes and OpenClaw alike. Replaced by a
+    # per-Connection transport once the spike is accepted.
+    communications_native_platforms: str = ""
+
+    @property
+    def native_platform_keys(self) -> frozenset[str]:
+        """Platforms whose Agent Connections run in the runtime's native gateway."""
+        return frozenset(key.strip() for key in self.communications_native_platforms.split(",") if key.strip())
+
     # Socket timeout for Slack Web API calls. Large sweeps (e.g. users.list can be
     # ~320KB) are slow over a poor link; too tight a timeout cuts the body off
     # mid-stream (IncompleteRead). Generous default; in-cluster latency is low.
@@ -121,6 +138,31 @@ class Config(BaseSettings):
 
     agent_firecrawl_base_url: str = ""
     agent_firecrawl_api_key: str = ""
+
+    @field_validator("organization_llm_budget_alert_thresholds", mode="before")
+    @classmethod
+    def valid_thresholds(cls, value: object) -> object:
+        """Validated at construction, not on use: a malformed list should refuse to
+        boot rather than silently alert nobody."""
+        if not isinstance(value, str) or not value.strip():
+            return "80,100"
+        try:
+            parsed = sorted({int(part.strip()) for part in value.split(",")})
+        except ValueError as error:
+            raise ValueError("Budget alert thresholds must be whole numbers, comma separated") from error
+        if not parsed or parsed[0] < 1 or parsed[-1] > 100:
+            raise ValueError("Budget alert thresholds must be between 1 and 100")
+        # 100 is the enforcement boundary, not a notification preference. Omitting it
+        # would leave an exhausted Organization with a banner saying so and no mail:
+        # only the highest crossed threshold fires, and a lower one is already spent.
+        if parsed[-1] != 100:
+            parsed.append(100)
+        return ",".join(str(threshold) for threshold in parsed)
+
+    @property
+    def llm_budget_alert_thresholds(self) -> list[int]:
+        """Sorted and de-duplicated by the validator above."""
+        return [int(part) for part in self.organization_llm_budget_alert_thresholds.split(",")]
 
     @property
     def is_email_delivery_enabled(self) -> bool:

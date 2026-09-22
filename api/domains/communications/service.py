@@ -3,7 +3,7 @@ import secrets
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import NoReturn
+from typing import Any, NoReturn
 from uuid import UUID
 
 from fastapi import HTTPException, status
@@ -23,6 +23,7 @@ from api.domains.communications.email_address_repository import AgentEmailAddres
 from api.domains.communications.error_details import normalize_communication_error
 from api.domains.communications.models import (
     AgentEmailAddress,
+    CommunicationCallRead,
     CommunicationConnection,
     CommunicationConnectionCreate,
     CommunicationConnectionRead,
@@ -161,18 +162,17 @@ class CommunicationsService:
         agent = self.authorization.require_action(context, agent_id, PermissionKey.AGENT_UPDATE)
         self.authorization.require_action_for_visible(context, agent, PermissionKey.AGENT_SECRET_MANAGE)
         plugin = self._require_plugin(data.platform_key)
-        if plugin.key != "slack" or PlatformCapability.DIRECTORY_DISCOVERY not in plugin.capabilities:
+        if PlatformCapability.DIRECTORY_DISCOVERY not in plugin.capabilities:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Workspace preview is available for Slack only",
+                detail="This platform does not support directory discovery",
             )
         try:
             preview_settings = dict(data.settings)
             preview_settings.pop("default_delivery_target", None)
             settings = plugin.settings_model.model_validate(preview_settings)
             credentials = plugin.credentials_model.model_validate(data.credentials)
-            channels = plugin.list_directory_entries(settings, credentials, kind="channels")
-            users = plugin.list_directory_entries(settings, credentials, kind="users")
+            entries = plugin.list_directory_entries(settings, credentials, kind=data.kind, guild_id=data.guild_id)
         except ValueError as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
         except HTTPException:
@@ -180,8 +180,7 @@ class CommunicationsService:
         except Exception as exc:
             self._raise_directory_error(exc, "preview_directory")
         return CommunicationDirectoryPreviewRead(
-            channels=[CommunicationDirectoryEntryRead.model_validate(entry) for entry in channels],
-            users=[CommunicationDirectoryEntryRead.model_validate(entry) for entry in users],
+            entries=[CommunicationDirectoryEntryRead.model_validate(entry) for entry in entries],
         )
 
     def create_connection(
@@ -194,10 +193,13 @@ class CommunicationsService:
         self.authorization.require_action_for_visible(context, agent, PermissionKey.AGENT_SECRET_MANAGE)
         plugin = self._require_plugin(data.platform_key)
         self._reject_web_chat_mutation(plugin.key)
+        # Minted values win: a caller cannot choose its own value for a credential this
+        # platform generates itself (a webhook's signing secret).
+        raw_credentials = {**data.credentials, **plugin.mint_credentials()}
         validated = self._validate(
             plugin,
             data.settings,
-            data.credentials,
+            raw_credentials,
             organization_id=agent.organization_id,
             agent_id=agent.id,
         )
@@ -205,6 +207,7 @@ class CommunicationsService:
             organization_id=agent.organization_id,
             agent_id=agent.id,
             platform_key=plugin.key,
+            singleton_key=self._singleton_key(plugin),
             display_name=data.display_name.strip(),
             enabled=data.enabled,
             schema_version=plugin.schema_version,
@@ -224,9 +227,18 @@ class CommunicationsService:
                 connection,
                 allocate_address=self._address_allocator(plugin, agent) if self._allocates_address(plugin) else None,
             )
-            return self._read(created)
+            return self._read(created, credential_reveal=self._reveal_once(plugin, validated.credentials))
         except CommunicationConnectionConflictError as exc:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+    @staticmethod
+    def _singleton_key(plugin) -> str | None:
+        return None if plugin.allows_multiple_connections else plugin.key
+
+    @staticmethod
+    def _reveal_once(plugin, credentials: dict[str, Any]) -> dict[str, str] | None:
+        revealed = plugin.reveal_once(plugin.credentials_model.model_validate(credentials))
+        return revealed or None
 
     def _allocates_address(self, plugin) -> bool:
         return PlatformCapability.MANAGED_ADDRESS in plugin.capabilities
@@ -265,6 +277,11 @@ class CommunicationsService:
         if data.credentials is not None:
             self.authorization.require_action_for_visible(context, agent, PermissionKey.AGENT_SECRET_MANAGE)
         plugin = self._require_plugin(connection.platform_key)
+        if data.credentials is not None and plugin.mint_credentials():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"{plugin.display_name} credentials are generated, not chosen. Use rotate-credentials to replace them.",
+            )
         credentials = data.credentials or self._decrypt_credentials(plugin, connection.credentials_encrypted)
         settings = data.settings if data.settings is not None else connection.settings
         validated = self._validate(
@@ -291,6 +308,46 @@ class CommunicationsService:
         try:
             updated = self.repository.update(connection, expected_revision=data.revision)
             return self._read(updated)
+        except CommunicationConnectionConflictError as exc:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+    def rotate_connection_credentials(
+        self,
+        agent_id: UUID,
+        connection_id: UUID,
+        revision: int,
+        context: CurrentUserContext,
+    ) -> CommunicationConnectionRead:
+        """Re-mint a Connection's generated credentials and reveal the new value once."""
+        agent = self.authorization.require_action(context, agent_id, PermissionKey.AGENT_UPDATE)
+        self.authorization.require_action_for_visible(context, agent, PermissionKey.AGENT_SECRET_MANAGE)
+        action_scope = self.authorization.authorization_scope(context, PermissionKey.AGENT_UPDATE)
+        connection = self.repository.get_active_in_scope(connection_id, agent_id, action_scope)
+        if connection is None:
+            self._raise_not_found(connection_id)
+        self._reject_web_chat_mutation(connection.platform_key)
+        plugin = self._require_plugin(connection.platform_key)
+        minted = plugin.mint_credentials()
+        if not minted:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"{plugin.display_name} connections have no generated credential to rotate",
+            )
+        current_credentials = self._decrypt_credentials(plugin, connection.credentials_encrypted)
+        validated = self._validate(
+            plugin,
+            connection.settings,
+            {**current_credentials, **minted},
+            organization_id=agent.organization_id,
+            agent_id=agent.id,
+        )
+        connection.credentials_encrypted = self._encrypt_credentials(validated.credentials)
+        connection.external_identity = validated.external_identity
+        connection.credential_fingerprint = validated.credential_fingerprint
+        connection.credential_scope_key = validated.credential_scope_key
+        try:
+            updated = self.repository.update(connection, expected_revision=revision)
+            return self._read(updated, credential_reveal=self._reveal_once(plugin, validated.credentials))
         except CommunicationConnectionConflictError as exc:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
@@ -421,6 +478,25 @@ class CommunicationsService:
             delivery_id=delivery_id,
             order=order,
         )
+
+    def list_calls(
+        self,
+        agent_id: UUID,
+        connection_id: UUID,
+        context: CurrentUserContext,
+        *,
+        page: int,
+        page_size: int,
+    ) -> PaginatedItems[CommunicationCallRead]:
+        """A Connection's inbound requests paired with the Agent's replies."""
+        self.authorization.require_visible(context, agent_id)
+        read_scope = self.authorization.authorization_scope(context, PermissionKey.AGENT_READ)
+        connection = self.repository.get_active_in_scope(connection_id, agent_id, read_scope)
+        if connection is None:
+            self._raise_not_found(connection_id)
+        if self.delivery_repository is None:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Calls are unavailable")
+        return self.delivery_repository.list_calls(connection_id, pagination=Pagination(page=page, size=page_size))
 
     def reconnect_connection(
         self,
@@ -595,6 +671,8 @@ class CommunicationsService:
         self,
         connection: CommunicationConnection,
         addresses: dict[UUID, str] | None = None,
+        *,
+        credential_reveal: dict[str, str] | None = None,
     ) -> CommunicationConnectionRead:
         plugin = self.plugins.require(connection.platform_key)
         addressed_by_mailbox = PlatformCapability.MANAGED_ADDRESS in plugin.capabilities
@@ -622,6 +700,7 @@ class CommunicationsService:
                 "last_error_details": safe_details,
                 "webhook_url": webhook_url,
                 "managed_address": managed_address,
+                "credential_reveal": credential_reveal,
             }
         )
 

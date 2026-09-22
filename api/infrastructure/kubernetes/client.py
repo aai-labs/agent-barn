@@ -193,18 +193,20 @@ class KubernetesClient:
 
     def create_service(self, namespace: str, manifest: client.V1Service) -> client.V1Service:
         # Not _create_or_get: agent stop keeps the Service (stable ClusterIP),
-        # so a restart must refresh its labels here or new monitoring labels
-        # (org-name, agent-name, agentbarn.io/component) would never propagate.
+        # so a restart must refresh its labels and ports here, or new monitoring
+        # labels (org-name, agent-name, agentbarn.io/component) and the runtime
+        # Teams webhook port would never propagate. JSON Patch replaces the port
+        # list outright so a disabled Connection's port is dropped too.
         try:
             return self._core_v1.create_namespaced_service(namespace, manifest)
         except ApiException as e:
             if e.status != 409:
                 raise
-            self._core_v1.patch_namespaced_service(
-                manifest.metadata.name,
-                namespace,
-                {"metadata": {"labels": manifest.metadata.labels}},
-            )
+            patch = [{"op": "add", "path": "/metadata/labels", "value": manifest.metadata.labels or {}}]
+            if manifest.spec is not None and manifest.spec.ports:
+                ports = client.ApiClient().sanitize_for_serialization(manifest.spec.ports)
+                patch.append({"op": "replace", "path": "/spec/ports", "value": ports})
+            self._core_v1.patch_namespaced_service(manifest.metadata.name, namespace, patch)
             return self._core_v1.read_namespaced_service(manifest.metadata.name, namespace)
 
     def delete_service(self, name: str, namespace: str) -> None:
@@ -283,12 +285,15 @@ class KubernetesClient:
     def list_config_maps(self, namespace: str, label_selector: str = "") -> list[client.V1ConfigMap]:
         return self._core_v1.list_namespaced_config_map(namespace, label_selector=label_selector).items
 
-    def _newest_job_pod(self, job_name: str, namespace: str) -> client.V1Pod | None:
-        pods = self._core_v1.list_namespaced_pod(namespace, label_selector=f"job-name={job_name}")
+    def _newest_pod(self, label_selector: str, namespace: str) -> client.V1Pod | None:
+        pods = self._core_v1.list_namespaced_pod(namespace, label_selector=label_selector)
         candidates = [p for p in pods.items if p.metadata.deletion_timestamp is None]
         if not candidates:
             return None
         return max(candidates, key=lambda p: p.metadata.creation_timestamp or datetime.min.replace(tzinfo=UTC))
+
+    def _newest_job_pod(self, job_name: str, namespace: str) -> client.V1Pod | None:
+        return self._newest_pod(f"job-name={job_name}", namespace)
 
     def get_pod_name_for_job(self, job_name: str, namespace: str) -> str | None:
         pod = self._newest_job_pod(job_name, namespace)
@@ -346,28 +351,28 @@ class KubernetesClient:
 
     def get_pod_readiness(self, deployment_name: str, namespace: str) -> tuple[str | None, str | None]:
         """Returns (status, reason). status is one of: 'ready', 'initializing', 'crashed', None."""
-        pods = self._core_v1.list_namespaced_pod(namespace, label_selector=f"app={deployment_name}")
-        for pod in pods.items:
-            if pod.status.phase == "Failed":
-                reason = None
-                for cs in pod.status.container_statuses or []:
-                    if cs.state and cs.state.terminated:
-                        reason = cs.state.terminated.reason or (
-                            f"exit code {cs.state.terminated.exit_code}"
-                            if cs.state.terminated.exit_code is not None
-                            else None
-                        )
-                        break
-                return "crashed", reason
-            if pod.status.phase in ("Pending", "Running"):
-                conditions = pod.status.conditions or []
-                if any(c.type == "Ready" and c.status == "True" for c in conditions):
-                    return "ready", None
-                container_statuses = pod.status.container_statuses or []
-                for cs in container_statuses:
-                    if cs.state and cs.state.waiting and cs.state.waiting.reason in self._TERMINAL_WAITING_REASONS:
-                        return "crashed", cs.state.waiting.reason
-                return "initializing", None
+        pod = self._newest_pod(f"app={deployment_name}", namespace)
+        if pod is None:
+            return None, None
+        if pod.status.phase == "Failed":
+            reason = None
+            for cs in pod.status.container_statuses or []:
+                if cs.state and cs.state.terminated:
+                    reason = cs.state.terminated.reason or (
+                        f"exit code {cs.state.terminated.exit_code}"
+                        if cs.state.terminated.exit_code is not None
+                        else None
+                    )
+                    break
+            return "crashed", reason
+        if pod.status.phase in ("Pending", "Running"):
+            conditions = pod.status.conditions or []
+            if any(c.type == "Ready" and c.status == "True" for c in conditions):
+                return "ready", None
+            for cs in pod.status.container_statuses or []:
+                if cs.state and cs.state.waiting and cs.state.waiting.reason in self._TERMINAL_WAITING_REASONS:
+                    return "crashed", cs.state.waiting.reason
+            return "initializing", None
         return None, None
 
     def read_pod_logs(

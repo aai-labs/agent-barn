@@ -32,6 +32,7 @@ class CommunicationPlatform(str, enum.Enum):
     DISCORD = "discord"
     WEB = "web"
     EMAIL = "email"
+    WEBHOOK = "webhook"
 
 
 class PlatformCapability(str, enum.Enum):
@@ -61,6 +62,17 @@ class CredentialUniquenessScope(str, enum.Enum):
     AGENT = "agent"
     ORGANIZATION = "organization"
     GLOBAL = "global"
+
+
+class DeliveryKind(str, enum.Enum):
+    """What the sender expects back. A CONVERSATION has a human who will wait, retry and
+    answer questions; an EVENT is a job fired by a machine that does none of those.
+
+    Nothing outside `execution_policy` compares one of these; read a field off its policy.
+    """
+
+    CONVERSATION = "CONVERSATION"
+    EVENT = "EVENT"
 
 
 class CommunicationDirection(str, enum.Enum):
@@ -172,6 +184,13 @@ class CommunicationConnection(BaseModel, table=True):
             postgresql_where=sa.text("retired_at IS NULL AND settings->>'default_delivery_target' IS NOT NULL"),
         ),
         sa.Index(
+            "uq_communication_connection_active_singleton",
+            "agent_id",
+            "singleton_key",
+            unique=True,
+            postgresql_where=sa.text("retired_at IS NULL"),
+        ),
+        sa.Index(
             "uq_communication_connection_active_name",
             "agent_id",
             sa.func.lower(sa.column("display_name")),
@@ -189,6 +208,11 @@ class CommunicationConnection(BaseModel, table=True):
     organization_id: UUID = SqlField(nullable=False)
     agent_id: UUID = SqlField(nullable=False)
     platform_key: str = SqlField(nullable=False, max_length=64)
+    # A copy of platform_key, or NULL for a platform that allows several Connections per
+    # Agent (webhook); NULLs are distinct in the unique index. Note that
+    # get_active_by_platform_key assumes one row per (agent, platform), which holds for its
+    # callers today but not for a multi-connection platform.
+    singleton_key: str | None = SqlField(default=None, nullable=True, max_length=64)
     display_name: str = SqlField(nullable=False, max_length=255)
     enabled: bool = SqlField(
         default=True,
@@ -305,6 +329,13 @@ class CommunicationDelivery(BaseModel, table=True):
         default=CommunicationDeliveryStatus.PENDING,
         sa_column=Column(sa.String(32), nullable=False, server_default="PENDING"),
     )
+    # Set at admission and never changed.
+    kind: DeliveryKind = SqlField(
+        default=DeliveryKind.CONVERSATION,
+        sa_column=Column(sa.String(16), nullable=False, server_default="CONVERSATION"),
+    )
+    # The runtime session this delivery runs in; null on rows that predate the column.
+    session_key: str | None = SqlField(default=None, nullable=True, max_length=1024)
     idempotency_key: str = SqlField(nullable=False, max_length=512)
     submission_key: str | None = SqlField(default=None, nullable=True, max_length=64)
     request_digest: str | None = SqlField(default=None, nullable=True, max_length=64)
@@ -405,7 +436,7 @@ class CommunicationAttachment(PydanticBaseModel):
 
 class ConversationLocation(PydanticBaseModel):
     id: str = Field(min_length=1, max_length=512)
-    type: str = Field(pattern="^(CHANNEL|DM)$")
+    type: str = Field(pattern="^(CHANNEL|DM|EVENT)$")
     display_name: str | None = Field(default=None, max_length=255)
     thread_id: str | None = Field(default=None, max_length=512)
 
@@ -456,6 +487,31 @@ class CommunicationJournalEntryRead(PydanticBaseModel):
     queue_wait_ms: float | None = None
     processing_ms: float | None = None
     next_retry_at: datetime | None = None
+
+
+class CommunicationCallResponseRead(PydanticBaseModel):
+    """One reply the Agent sent back for a call."""
+
+    text: str
+    status: CommunicationDeliveryStatus
+    occurred_at: datetime
+
+
+class CommunicationCallRead(PydanticBaseModel):
+    """One inbound request to a Connection and what the Agent sent back for it. Unlike the
+    content-free journal, this carries the prompt and reply text."""
+
+    delivery_id: UUID
+    event_id: str
+    occurred_at: datetime
+    status: CommunicationDeliveryStatus
+    attempt_count: int
+    ordering_key: str | None
+    prompt: str
+    completed_at: datetime | None
+    last_error_code: str | None
+    last_error_message: str | None
+    responses: list[CommunicationCallResponseRead]
 
 
 class CommunicationPipelineCounts(PydanticBaseModel):
@@ -573,6 +629,17 @@ class CommunicationRetryRead(PydanticBaseModel):
     requested_at: datetime
 
 
+class RuntimeExecutionRead(PydanticBaseModel):
+    """The execution contract handed to the pod, resolved server-side so the pod does not
+    derive it. Defaults match conversation behaviour, so an older adapter is unaffected."""
+
+    session_key: str
+    resume_session: bool = True
+    approvals_enabled: bool = True
+    busy_notice: str | None = None
+    busy_releases: bool = False
+
+
 class RuntimeDeliveryRead(PydanticBaseModel):
     delivery_id: UUID
     message_id: UUID
@@ -581,6 +648,8 @@ class RuntimeDeliveryRead(PydanticBaseModel):
     envelope: NormalizedCommunicationEnvelope
     progress_updates: bool = True
     execution_token: str | None = None
+    kind: DeliveryKind = DeliveryKind.CONVERSATION
+    execution: RuntimeExecutionRead | None = None
 
 
 class RuntimeDeliveryResult(PydanticBaseModel):
@@ -595,6 +664,14 @@ class ApprovalRequest(PydanticBaseModel):
     approval_id: str = Field(min_length=1, max_length=512)
     command: str = Field(min_length=1, max_length=100_000)
     choices: list[str] = Field(min_length=1, max_length=16)
+    choice_labels: dict[str, str] = Field(
+        default_factory=lambda: {
+            "once": "Allow once",
+            "session": "Allow for session",
+            "always": "Always allow",
+            "deny": "Deny",
+        }
+    )
 
 
 class RuntimeReplyCreate(PydanticBaseModel):
@@ -733,13 +810,14 @@ class CommunicationDirectoryPreview(PydanticBaseModel):
     model_config = ConfigDict(extra="forbid")
 
     platform_key: str = Field(min_length=1, max_length=64)
+    kind: str = Field(min_length=1, max_length=64)
     settings: dict[str, Any] = Field(default_factory=dict)
     credentials: dict[str, Any]
+    guild_id: str | None = Field(default=None, max_length=64)
 
 
 class CommunicationDirectoryPreviewRead(PydanticBaseModel):
-    channels: list[CommunicationDirectoryEntryRead] = Field(default_factory=list)
-    users: list[CommunicationDirectoryEntryRead] = Field(default_factory=list)
+    entries: list[CommunicationDirectoryEntryRead] = Field(default_factory=list)
 
 
 class CommunicationConnectionCreate(PydanticBaseModel):
@@ -786,6 +864,8 @@ class CommunicationConnectionRead(PydanticBaseModel):
     last_error_details: CommunicationErrorDetails | None = None
     webhook_url: str | None = None
     managed_address: str | None = None
+    # Set only on the create and rotate responses; a stored secret cannot be read back.
+    credential_reveal: dict[str, str] | None = None
     revision: int
     created_at: datetime
     updated_at: datetime

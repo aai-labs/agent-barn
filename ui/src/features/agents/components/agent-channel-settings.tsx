@@ -43,11 +43,15 @@ import { DirectoryPickerDialog } from "@/features/communication-connections/comp
 import { SLACK_APP_MANIFEST } from "@/features/communication-connections/slack-manifest";
 import type { CommunicationConnection, CommunicationDirectoryEntry, CommunicationPlatform } from "@/features/communication-connections/schemas";
 
+import { useAgentApplyAndRestart } from "../hooks/use-agent-apply-and-restart";
 import type { Agent } from "../schemas";
+import { canAgent } from "../utils";
 import { AgentConfigurationSection } from "./agent-configuration-section";
 
 /** Built-in, lazily provisioned, one-per-agent, immutable — never user-added or user-edited. */
 const WEB_PLATFORM_KEY = "web";
+/** Webhooks have their own tab; they are not a way to message the Agent. */
+const WEBHOOK_PLATFORM_KEY = "webhook";
 
 function titleCase(text: string): string {
   return text.replace(/[_-]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
@@ -67,6 +71,54 @@ function StatusDot({ color, label }: { color: string; label: string }) {
       />
       {label}
     </span>
+  );
+}
+
+function WebhookUrlField({ connectionId, url }: { connectionId: string; url: string }) {
+  const [copied, setCopied] = useState(false);
+  const inputId = `webhook-url-${connectionId}`;
+
+  async function copyWebhookUrl() {
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopied(true);
+      toast.success("Webhook URL copied to clipboard");
+    } catch {
+      toast.error("Could not copy the webhook URL. Select the address and copy it manually.");
+    }
+  }
+
+  return (
+    <div
+      className="mt-3 rounded-lg p-3"
+      style={{ border: "1px solid var(--line)", background: "var(--bg-soft)" }}
+    >
+      <label htmlFor={inputId} className="mb-1.5 block text-xs font-medium" style={{ color: "var(--ink)" }}>
+        Webhook URL
+      </label>
+      <div className="flex gap-2">
+        <input
+          id={inputId}
+          readOnly
+          value={url}
+          className="af-input min-w-0 flex-1 font-mono text-xs"
+          onFocus={(event) => event.currentTarget.select()}
+        />
+        <button
+          type="button"
+          className="af-btn af-btn-sm flex-shrink-0"
+          aria-label="Copy webhook URL"
+          title={copied ? "Webhook URL copied" : "Copy webhook URL"}
+          onClick={() => void copyWebhookUrl()}
+        >
+          {copied ? <Check size={14} aria-hidden="true" /> : <Copy size={14} aria-hidden="true" />}
+          <span className="sr-only">{copied ? "Copied" : "Copy"}</span>
+        </button>
+      </div>
+      <p className="mt-1.5 text-xs" style={{ color: "var(--ink-3)" }}>
+        Paste this address into the provider&apos;s webhook settings.
+      </p>
+    </div>
   );
 }
 
@@ -566,8 +618,16 @@ export function AgentChannelSettings({
   const platforms = useCommunicationPlatforms();
   // Web Chat is lazily provisioned on first send and can't be added by hand.
   const addablePlatforms = useMemo(
-    () => platforms.data?.filter((platform) => platform.key !== WEB_PLATFORM_KEY),
-    [platforms.data],
+    () => {
+      const connected = new Set(connections.data?.map((connection) => connection.platformKey));
+      return platforms.data?.filter(
+        (platform) =>
+          platform.key !== WEB_PLATFORM_KEY &&
+          platform.key !== WEBHOOK_PLATFORM_KEY &&
+          !connected.has(platform.key),
+      );
+    },
+    [connections.data, platforms.data],
   );
   const { previewConnectionDirectory, createConnection, updateConnection, retireConnection } =
     useCommunicationConnectionActions();
@@ -576,12 +636,28 @@ export function AgentChannelSettings({
   const [displayName, setDisplayName] = useState("");
   const [settings, setSettings] = useState<Record<string, unknown>>({});
   const [credentials, setCredentials] = useState<Record<string, unknown>>({});
-  const [slackPreview, setSlackPreview] = useState<{ channels: CommunicationDirectoryEntry[]; users: CommunicationDirectoryEntry[] } | null>(null);
-  const [slackPreviewError, setSlackPreviewError] = useState<string | null>(null);
+  // Add-form directory previews, keyed by "<kind>" or "<kind>:<guildId>". Slack has one
+  // ungated directory; Discord's is scoped per server the bot token can see.
+  const [previewEntries, setPreviewEntries] = useState<Record<string, CommunicationDirectoryEntry[]>>({});
+  const [previewErrors, setPreviewErrors] = useState<Record<string, string>>({});
+  const [discordAddGuildId, setDiscordAddGuildId] = useState("");
+
+  function resetDirectoryPreviews() {
+    setPreviewEntries({});
+    setPreviewErrors({});
+    setDiscordAddGuildId("");
+  }
   const [formError, setFormError] = useState<string | null>(null);
   const [retiring, setRetiring] = useState<CommunicationConnection | null>(
     null,
   );
+  const { applyAndRestart } = useAgentApplyAndRestart(agent);
+  const [restartChange, setRestartChange] = useState<{
+    confirmLabel: string;
+    run: () => Promise<void>;
+  } | null>(null);
+  const [isRestarting, setIsRestarting] = useState(false);
+  const canRestart = canAgent(agent, "agent.lifecycle.manage");
   const downloadAppPackage = useDownloadAppPackage();
   const fetchInstallLink = useInstallLink();
   const [packageBusyId, setPackageBusyId] = useState<string | null>(null);
@@ -636,32 +712,70 @@ export function AgentChannelSettings({
     };
   }
 
-  /** Browse sources for the add form. Slack has no Connection to read from yet, so the
-   * directory is previewed from the credentials typed above.
+  function previewCacheKey(kind: string, guildId?: string): string {
+    return guildId ? `${kind}:${guildId}` : kind;
+  }
+
+  /** Fetches (and caches) one directory preview kind for the add form's typed-in credentials. */
+  function fetchDirectoryPreview(
+    noun: string,
+    platformKey: string,
+    kind: string,
+    guildId?: string,
+    refresh = false,
+  ): void {
+    const key = previewCacheKey(kind, guildId);
+    if ((!refresh && previewEntries[key]) || previewConnectionDirectory.isPending) return;
+    setPreviewErrors((prev) => ({ ...prev, [key]: "" }));
+    void previewConnectionDirectory
+      .mutateAsync({ agentId: agent.id, platformKey, kind, settings, credentials, guildId })
+      .then((result) => setPreviewEntries((prev) => ({ ...prev, [key]: result.entries })))
+      .catch(() => setPreviewErrors((prev) => ({ ...prev, [key]: directoryLoadError(noun) })));
+  }
+
+  /** Browse sources for the add form. Neither platform has a saved Connection to read
+   * from yet, so the directory is previewed from the credentials typed above.
    * Keys are camelCase: the API client camelizes response bodies, including the
    * property names inside a plugin's JSON settings schema. */
   function addBrowseSources(platform: CommunicationPlatform): Record<string, ArrayBrowseSource> {
-    if (platform.key !== "slack") return {};
-    const missingCredentials = !credentials.botToken || !credentials.appToken;
-    const source = (noun: string, entries: CommunicationDirectoryEntry[]): ArrayBrowseSource => ({
-      noun,
-      entries,
-      isLoading: previewConnectionDirectory.isPending,
-      error: slackPreviewError,
-      disabledReason: missingCredentials ? "Add the bot token and app-level token above to browse." : null,
-      onOpen: () => {
-        if (slackPreview || previewConnectionDirectory.isPending) return;
-        setSlackPreviewError(null);
-        void previewConnectionDirectory
-          .mutateAsync({ agentId: agent.id, platformKey: "slack", settings, credentials })
-          .then(setSlackPreview)
-          .catch(() => setSlackPreviewError(directoryLoadError(noun)));
-      },
-    });
-    return {
-      channelIds: source("channels", slackPreview?.channels ?? []),
-      dmUserIds: source("people", slackPreview?.users ?? []),
+    const previewSource = (
+      noun: string,
+      kind: string,
+      guildId: string | undefined,
+      disabledReason: string | null,
+    ): ArrayBrowseSource => {
+      const key = previewCacheKey(kind, guildId);
+      return {
+        noun,
+        entries: previewEntries[key] ?? [],
+        isLoading: previewConnectionDirectory.isPending,
+        error: previewErrors[key] || null,
+        disabledReason,
+        onOpen: () => fetchDirectoryPreview(noun, platform.key, kind, guildId),
+      };
     };
+    if (platform.key === "slack") {
+      const missingCredentials = !credentials.botToken || !credentials.appToken;
+      const disabledReason = missingCredentials ? "Add the bot token and app-level token above to browse." : null;
+      return {
+        channelIds: previewSource("channels", "channels", undefined, disabledReason),
+        dmUserIds: previewSource("people", "users", undefined, disabledReason),
+      };
+    }
+    if (platform.key === "discord") {
+      const missingCredentials = !credentials.botToken;
+      const disabledReason = missingCredentials
+        ? "Add the bot token above to browse."
+        : discordAddGuildId
+          ? null
+          : "Choose a server above to browse.";
+      return {
+        allowedChannelIds: previewSource("channels", "channels", discordAddGuildId, disabledReason),
+        allowedUserIds: previewSource("people", "users", discordAddGuildId, disabledReason),
+        allowedRoleIds: previewSource("roles", "roles", discordAddGuildId, disabledReason),
+      };
+    }
+    return {};
   }
 
   /** Browse sources for the edit form, backed by the saved Connection's own directory. */
@@ -690,9 +804,19 @@ export function AgentChannelSettings({
     setDisplayName(platform?.displayName ?? key);
     setSettings(schemaDefaults(platform?.settingsSchema ?? {}));
     setCredentials(schemaDefaults(platform?.credentialsSchema ?? {}));
-    setSlackPreview(null);
-    setSlackPreviewError(null);
+    resetDirectoryPreviews();
     setFormError(null);
+  }
+
+  /** The runtime runs this platform's Connections itself and reads them only at start,
+   * so a change to one on a running Agent is applied by restarting it. */
+  function restartsAgent(key: string | undefined) {
+    return agent.status === "RUNNING" && Boolean(key) && agent.nativePlatformKeys.includes(key!);
+  }
+
+  function applyChange(key: string, confirmLabel: string, change: () => Promise<void>) {
+    if (!restartsAgent(key)) return void change();
+    setRestartChange({ confirmLabel, run: () => applyAndRestart(change) });
   }
 
   async function addConnection() {
@@ -710,8 +834,7 @@ export function AgentChannelSettings({
       setDisplayName("");
       setSettings({});
       setCredentials({});
-      setSlackPreview(null);
-      setSlackPreviewError(null);
+      resetDirectoryPreviews();
       setFormError(null);
     } catch (error) {
       setFormError(
@@ -762,7 +885,7 @@ export function AgentChannelSettings({
   return (
     <AgentConfigurationSection
       title="Messaging connections"
-      description="Connect a messaging platform so people can message this Agent. Add as many as you like."
+      description="Connect messaging platforms so people can message this Agent. Each platform can have one active Connection."
       footer={
         canEdit && !adding ? (
           <button
@@ -789,7 +912,9 @@ export function AgentChannelSettings({
             <CircleAlert size={15} /> Could not load communication connections.
           </div>
         )}
-        {connections.data?.map((connection) => (
+        {connections.data
+          ?.filter((connection) => connection.platformKey !== WEBHOOK_PLATFORM_KEY)
+          .map((connection) => (
           <div
             key={connection.id}
             className="rounded-xl p-4"
@@ -896,17 +1021,7 @@ export function AgentChannelSettings({
                     </div>
                   )}
                   {connection.webhookUrl && (
-                    <div
-                      className="mt-2 text-xs"
-                      style={{ color: "var(--ink-3)" }}
-                    >
-                      Paste this URL into{" "}
-                      {platforms.data?.find(
-                        (p) => p.key === connection.platformKey,
-                      )?.displayName ?? "the platform"}
-                      &apos;s webhook settings:{" "}
-                      <code className="break-all">{connection.webhookUrl}</code>
-                    </div>
+                    <WebhookUrlField connectionId={connection.id} url={connection.webhookUrl} />
                   )}
                   {connection.managedAddress && (
                     <div className="mt-2 flex flex-wrap items-center gap-2 text-xs" style={{ color: "var(--ink-3)" }}>
@@ -1057,14 +1172,24 @@ export function AgentChannelSettings({
                     <button
                       type="button"
                       className="af-btn af-btn-sm"
-                      disabled={updateConnection.isPending}
+                      disabled={
+                        updateConnection.isPending ||
+                        (restartsAgent(connection.platformKey) && !canRestart)
+                      }
                       onClick={() =>
-                        void updateConnection.mutateAsync({
-                          agentId: agent.id,
-                          connectionId: connection.id,
-                          revision: connection.revision,
-                          enabled: !connection.enabled,
-                        })
+                        applyChange(
+                          connection.platformKey,
+                          connection.enabled ? "Disable & Restart" : "Enable & Restart",
+                          () =>
+                            updateConnection
+                              .mutateAsync({
+                                agentId: agent.id,
+                                connectionId: connection.id,
+                                revision: connection.revision,
+                                enabled: !connection.enabled,
+                              })
+                              .then(() => undefined),
+                        )
                       }
                     >
                       {connection.enabled ? "Disable" : "Enable"}
@@ -1109,8 +1234,25 @@ export function AgentChannelSettings({
                         />
                         <div className="flex flex-col gap-4">
                           {connection.platformKey === "discord" && (
-                            <label className="flex flex-col gap-1.5 text-sm font-medium">
-                              Browse server
+                            <div className="flex flex-col gap-1.5 text-sm font-medium">
+                              <div className="flex items-center justify-between gap-2">
+                                Browse server
+                                <button
+                                  type="button"
+                                  className="af-btn af-btn-sm"
+                                  aria-label="Refresh server list"
+                                  disabled={discordGuilds.isFetching}
+                                  onClick={() => void discordGuilds.refetch()}
+                                >
+                                  <RefreshCw
+                                    size={14}
+                                    className={
+                                      discordGuilds.isFetching ? "animate-spin" : undefined
+                                    }
+                                  />{" "}
+                                  Refresh
+                                </button>
+                              </div>
                               <Select
                                 value={discordGuildId}
                                 onValueChange={setDiscordGuildId}
@@ -1135,7 +1277,7 @@ export function AgentChannelSettings({
                                 Select a server, then choose its channels,
                                 users, or roles below. Manual IDs still work.
                               </span>
-                            </label>
+                            </div>
                           )}
                           <SchemaFields
                             schema={platform.settingsSchema}
@@ -1197,13 +1339,17 @@ export function AgentChannelSettings({
                         type="button"
                         className="af-btn af-btn-primary"
                         disabled={
-                          !editDisplayName.trim() || updateConnection.isPending
+                          !editDisplayName.trim() ||
+                          updateConnection.isPending ||
+                          (restartsAgent(connection.platformKey) && !canRestart)
                         }
-                        onClick={() => void saveConnection()}
+                        onClick={() => applyChange(connection.platformKey, "Save & Restart", saveConnection)}
                       >
                         {updateConnection.isPending
                           ? "Saving…"
-                          : "Save changes"}
+                          : restartsAgent(connection.platformKey)
+                            ? "Save & Restart"
+                            : "Save changes"}
                       </button>
                     </div>
                   </div>
@@ -1212,7 +1358,8 @@ export function AgentChannelSettings({
           </div>
         ))}
         {!connections.isPending &&
-          connections.data?.length === 0 &&
+          (connections.data?.filter((connection) => connection.platformKey !== WEBHOOK_PLATFORM_KEY)
+            .length ?? 0) === 0 &&
           !adding && (
             <div
               className="flex flex-col items-center gap-2 rounded-xl p-6 text-center"
@@ -1373,7 +1520,7 @@ export function AgentChannelSettings({
                           <SchemaFields
                             schema={selectedPlatform.credentialsSchema}
                             values={credentials}
-                            onChange={(next) => { setCredentials(next); setSlackPreview(null); setSlackPreviewError(null); }}
+                            onChange={(next) => { setCredentials(next); resetDirectoryPreviews(); }}
                             secret
                           />
                         </div>
@@ -1404,6 +1551,53 @@ export function AgentChannelSettings({
                           Connection settings
                         </div>
                         <div className="flex flex-col gap-4">
+                          {selectedPlatform.key === "discord" && (
+                            <div className="flex flex-col gap-1.5 text-sm font-medium">
+                              <div className="flex items-center justify-between gap-2">
+                                Browse server
+                                <button
+                                  type="button"
+                                  className="af-btn af-btn-sm"
+                                  aria-label="Refresh server list"
+                                  disabled={previewConnectionDirectory.isPending || !credentials.botToken}
+                                  onClick={() => fetchDirectoryPreview("servers", "discord", "guilds", undefined, true)}
+                                >
+                                  <RefreshCw
+                                    size={14}
+                                    className={
+                                      previewConnectionDirectory.isPending ? "animate-spin" : undefined
+                                    }
+                                  />{" "}
+                                  Refresh
+                                </button>
+                              </div>
+                              <Select
+                                value={discordAddGuildId}
+                                onValueChange={setDiscordAddGuildId}
+                              >
+                                <SelectTrigger className="w-full">
+                                  <SelectValue placeholder="Choose a server to browse channels, users, and roles" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectGroup>
+                                    {(previewEntries.guilds ?? []).map((guild) => (
+                                      <SelectItem key={guild.id} value={guild.id}>
+                                        {guild.label}
+                                      </SelectItem>
+                                    ))}
+                                  </SelectGroup>
+                                </SelectContent>
+                              </Select>
+                              <span
+                                className="text-xs"
+                                style={{ color: "var(--ink-4)" }}
+                              >
+                                {credentials.botToken
+                                  ? "Select a server, then choose its channels, users, or roles below. Manual IDs still work."
+                                  : "Add the bot token above, then refresh to list its servers."}
+                              </span>
+                            </div>
+                          )}
                           <SchemaFields
                             schema={selectedPlatform.settingsSchema}
                             values={settings}
@@ -1456,14 +1650,15 @@ export function AgentChannelSettings({
                   disabled={
                     !platformKey ||
                     !displayName.trim() ||
-                    createConnection.isPending
+                    createConnection.isPending ||
+                    (restartsAgent(platformKey) && !canRestart)
                   }
-                  onClick={() => void addConnection()}
+                  onClick={() => applyChange(platformKey, "Connect & Restart", addConnection)}
                 >
                   {createConnection.isPending
                     ? "Connecting…"
                     : selectedPlatform
-                      ? `Connect ${selectedPlatform.displayName}`
+                      ? `Connect ${selectedPlatform.displayName}${restartsAgent(platformKey) ? " & Restart" : ""}`
                       : "Choose a platform"}
                 </button>
               </div>
@@ -1478,19 +1673,52 @@ export function AgentChannelSettings({
           if (!open) setRetiring(null);
         }}
         title="Remove this connection?"
-        description="Pending deliveries are cancelled, credentials are scrubbed, and conversation history is preserved."
-        confirmLabel="Remove connection"
+        description={
+          restartsAgent(retiring?.platformKey)
+            ? "Pending deliveries are cancelled, credentials are scrubbed, and conversation history is preserved. The Agent restarts so it stops using this connection."
+            : "Pending deliveries are cancelled, credentials are scrubbed, and conversation history is preserved."
+        }
+        confirmLabel={restartsAgent(retiring?.platformKey) ? "Remove & Restart" : "Remove connection"}
         pendingLabel="Removing…"
         variant="destructive"
         isPending={retireConnection.isPending}
         onConfirm={async () => {
           if (!retiring) return;
-          await retireConnection.mutateAsync({
-            agentId: agent.id,
-            connectionId: retiring.id,
-            revision: retiring.revision,
-          });
+          if (restartsAgent(retiring.platformKey) && !canRestart) return;
+          const retire = () =>
+            retireConnection
+              .mutateAsync({
+                agentId: agent.id,
+                connectionId: retiring.id,
+                revision: retiring.revision,
+              })
+              .then(() => undefined);
+          await (restartsAgent(retiring.platformKey) ? applyAndRestart(retire) : retire());
           setRetiring(null);
+        }}
+      />
+
+      <ConfirmationDialog
+        open={Boolean(restartChange)}
+        onOpenChange={(open) => {
+          if (!open) setRestartChange(null);
+        }}
+        title="Apply changes and restart the Agent?"
+        description="This Agent's runtime runs this connection itself and only reads it when it starts. This saves the change, stops the Agent, and starts it again."
+        confirmLabel={restartChange?.confirmLabel ?? "Apply & Restart"}
+        pendingLabel="Applying & Restarting…"
+        isPending={isRestarting}
+        onConfirm={async () => {
+          if (!restartChange) return;
+          setIsRestarting(true);
+          try {
+            await restartChange.run();
+            setRestartChange(null);
+          } catch (error) {
+            toast.error(error instanceof Error ? error.message : "Could not restart the Agent.");
+          } finally {
+            setIsRestarting(false);
+          }
         }}
       />
     </AgentConfigurationSection>

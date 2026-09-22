@@ -12,6 +12,7 @@ const CONFIG_PATH = path.join(HOME, '.openclaw', 'openclaw.json');
 const REPLACE_PATHS = [
   ['channels'],
   ['bindings'],
+  ['agents', 'defaults', 'heartbeat'],
 ];
 
 function getPath(obj, parts) {
@@ -87,6 +88,10 @@ try { config = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8')); } catch {}
 if (config.tools && config.tools.exec) {
   delete config.tools.exec;
 }
+// OpenClaw 2026.8 rejects these at startup; deep-merge would otherwise keep them.
+if (config.agents && config.agents.defaults) delete config.agents.defaults.memorySearch;
+if (config.memory) delete config.memory.backend;
+if (config.meta) delete config.meta.lastTouchedAt;
 
 const merged = deepMerge(config, overlay);
 

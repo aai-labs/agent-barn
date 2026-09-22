@@ -16,6 +16,8 @@ check "python>=3.12" python3 -c "import sys; assert sys.version_info >= (3, 12)"
 check node           node --version
 check npm            npm --version
 check openclaw       openclaw --version
+check msteams-plugin sh -c 'test "$(jq -r .version /opt/openclaw-preinstalled/npm/node_modules/@openclaw/msteams/package.json)" = "2026.8.2"'
+check doctor-migration-interface sh -c 'openclaw doctor --help | grep -q -- "--fix" && openclaw doctor --help | grep -q -- "--non-interactive"'
 check gog            gog --version
 check git            git --version
 check bash           bash --version
@@ -35,7 +37,7 @@ check no-chromium sh -c '! command -v chromium >/dev/null 2>&1 && [ ! -d /opt/pl
 # only as types, so this asserts against the shipped declarations: enough to
 # catch a release that renames a hook or drops a correlation field.
 check telemetry-contract sh -c '
-    types="$(npm root -g)/openclaw/dist/plugin-sdk/hook-types-"*.d.ts
+    types="$(npm root -g)/openclaw/dist/hook-types-"*.d.ts
     for token in message_received agent_end before_tool_call after_tool_call \
                  session_end sessionKey runId toolCallId; do
         grep -q "$token" $types || exit 1

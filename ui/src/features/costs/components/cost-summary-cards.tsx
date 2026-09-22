@@ -9,6 +9,7 @@ import {
   formatModelLabel,
   formatSpend,
   formatTokens,
+  formatWindowLabel,
 } from "../format";
 import type { CostSummary } from "../schemas";
 
@@ -51,7 +52,13 @@ export function CostSummaryCards({
       <StatCard
         label="Total spend"
         value={formatSpend(summary.totalSpend)}
-        hint={`${summary.totalCalls.toLocaleString()} ${summary.totalCalls === 1 ? "call" : "calls"}`}
+        // Names its window: a spend allowance runs to its own renewal date, so an
+        // unlabelled total sitting beside one reads as a contradiction.
+        hint={`${summary.totalCalls.toLocaleString()} ${summary.totalCalls === 1 ? "call" : "calls"} · ${formatWindowLabel(
+          summary.period,
+          summary.fromDate,
+          summary.toDate,
+        )}`}
         testId="cost-total-spend"
       />
       {summary.totalMemoryCost > 0 && (

@@ -53,6 +53,30 @@ export class AgentDetailPage {
     return this.page.getByText(status, { exact: true });
   }
 
+  lifecycleMenu(): Locator {
+    return this.page.getByTestId("agent-lifecycle-menu");
+  }
+
+  updateButton(): Locator {
+    return this.page.getByTestId("agent-update-button");
+  }
+
+  updateReleasesLink(): Locator {
+    return this.page.getByTestId("agent-update-releases-link");
+  }
+
+  lifecycleMenuTrigger(): Locator {
+    return this.page.getByRole("button", { name: "More lifecycle actions" });
+  }
+
+  provisioningErrorBanner(): Locator {
+    return this.page.getByTestId("agent-error-banner");
+  }
+
+  provisioningErrorDetail(): Locator {
+    return this.page.getByTestId("agent-error-detail");
+  }
+
   providerErrorAlert(): Locator {
     return this.page.getByRole("alert").filter({ hasText: "Latest provider error" });
   }

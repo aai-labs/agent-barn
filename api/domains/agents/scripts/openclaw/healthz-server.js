@@ -2,7 +2,7 @@ const http = require('http');
 const { execFile } = require('child_process');
 
 
-const PROXY_PORT = 8090;
+const PROXY_PORT = Number(process.env.LLM_PROXY_PORT || 8090);
 const PORT = parseInt(process.env.HEALTHZ_PORT || '8081', 10);
 const CACHE_TTL_MS = 10_000;
 const LITELLM_PROXY_TARGET = process.env.LITELLM_PROXY_TARGET || '';
@@ -17,6 +17,77 @@ const TERMINAL_LLM_ERRORS = {
   403: 'LLM API access denied. Check your account permissions.',
 };
 
+const BUDGET_EXHAUSTED =
+  'This organization has reached its model spend limit. ' +
+  'Contact your administrator to raise it or wait for the limit to reset.';
+
+// An exhausted limit has been seen as a 400 and is documented as a 429 depending on
+// which budget was hit and which proxy version answered. Both are buffered and matched
+// on the error body, so a version difference cannot leak the upstream text. These
+// statuses also carry malformed requests, unknown models and rate limits, which must
+// keep their own errors.
+const BUDGET_STATUSES = [400, 429];
+function budgetMessage(body) {
+  try {
+    const { error } = JSON.parse(body.toString('utf8'));
+    return error && error.type === 'budget_exceeded' ? BUDGET_EXHAUSTED : null;
+  } catch {
+    return null;
+  }
+}
+
+// Native channel Connections have no supervisor session, so their health
+// transitions reach the Connection Journal from the gateway's own snapshot.
+// Content-free: provider error text (lastError) never leaves the pod.
+const NATIVE_CHANNELS = (process.env.AGENTBARN_NATIVE_CHANNELS || '').split(',').filter(Boolean);
+const lastChannelStage = {};
+
+function productPlatform(channelId) {
+  return channelId === 'msteams' ? 'teams' : channelId;
+}
+
+// The Slack and Discord providers set connected: true once their socket is up,
+// and Telegram after its first successful poll; until then a running channel is
+// still connecting.
+function channelStage(snapshot) {
+  if (!snapshot) return null;
+  if (snapshot.running) return snapshot.connected === true ? 'connection_connected' : 'connection_connecting';
+  return snapshot.restartPending ? 'connection_degraded' : 'connection_error';
+}
+
+function reportChannelHealth(channels) {
+  const { AGENT_ID, INGEST_URL, INGEST_API_KEY } = process.env;
+  if (!AGENT_ID || !INGEST_URL || !INGEST_API_KEY) return;
+  const events = [];
+  for (const platform of NATIVE_CHANNELS) {
+    const stage = channelStage(channels[platform]);
+    if (!stage || lastChannelStage[platform] === stage) continue;
+    lastChannelStage[platform] = stage;
+    events.push({
+      stage,
+      platform: productPlatform(platform),
+      occurred_at: new Date().toISOString(),
+      ...(stage === 'connection_error' ? { error_code: 'channel_stopped' } : {}),
+    });
+  }
+  if (events.length === 0) return;
+  const body = JSON.stringify({ events });
+  const req = http.request(`${INGEST_URL}/agents/${AGENT_ID}/communication-events`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${INGEST_API_KEY}`,
+      'Content-Length': Buffer.byteLength(body),
+    },
+    timeout: 10_000,
+  });
+  req.on('response', (res) => res.resume());
+  // ponytail: best-effort, a dropped transition shows on the next change; retry if health gaps show up.
+  req.on('error', (err) => console.error(`[healthz] channel health report failed: ${err.message}`));
+  req.on('timeout', () => req.destroy(new Error('timeout')));
+  req.end(body);
+}
+
 function refresh() {
   if (refreshing) return;
   refreshing = true;
@@ -27,7 +98,7 @@ function refresh() {
       return;
     }
     try {
-      JSON.parse(stdout);
+      reportChannelHealth(JSON.parse(stdout).channels || {});
       cache = { ok: true, everConnected: true };
     } catch {
       cache = { ok: false, everConnected: false, reason: 'failed to parse health output' };
@@ -110,12 +181,21 @@ if (LITELLM_PROXY_TARGET) {
     };
 
     const upstreamReq = targetModule.request(opts, (upstreamRes) => {
-      const cleanMsg = TERMINAL_LLM_ERRORS[upstreamRes.statusCode];
-      if (cleanMsg) {
-        // Consume upstream body then send clean response
+      const mapped = TERMINAL_LLM_ERRORS[upstreamRes.statusCode];
+      // Only these are buffered alongside the mapped statuses. Everything else must
+      // keep streaming, which collecting it here would break.
+      if (mapped || BUDGET_STATUSES.includes(upstreamRes.statusCode)) {
         const chunks = [];
         upstreamRes.on('data', (c) => chunks.push(c));
         upstreamRes.on('end', () => {
+          const raw = Buffer.concat(chunks);
+          const cleanMsg = mapped || budgetMessage(raw);
+          if (!cleanMsg) {
+            // A 400 we have no better words for: pass it through untouched.
+            clientRes.writeHead(upstreamRes.statusCode, upstreamRes.headers);
+            clientRes.end(raw);
+            return;
+          }
           const body = JSON.stringify({
             error: { message: cleanMsg, type: null, param: null, code: String(upstreamRes.statusCode) }
           });

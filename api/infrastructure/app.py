@@ -10,6 +10,7 @@ from api.domains.communications.plugins.slack import SlackPlatformPlugin
 from api.domains.communications.plugins.teams import TeamsPlatformPlugin
 from api.domains.communications.plugins.telegram import TelegramPlatformPlugin
 from api.domains.communications.plugins.web import WebPlatformPlugin
+from api.domains.communications.plugins.webhook import WebhookPlatformPlugin
 from api.domains.costs.repository import CostRepository
 from api.domains.costs.sync import CostSynchronizer
 from api.domains.events.constants import EVENT_DELIVERY_PROCESSING_STALE_SECONDS
@@ -19,6 +20,7 @@ from api.domains.events.reconciliation import EventDeliveryReconciler
 from api.domains.events.repository import OutboxMessageRepository
 from api.domains.events.security_audit import SecurityAuditProjection
 from api.domains.events.transport import EventDeliveryTransport
+from api.domains.organizations.event_handlers import OrganizationBudgetEmailHandler
 from api.infrastructure.clock import Clock
 from api.infrastructure.communication_signals import CommunicationSignalBus
 from api.infrastructure.email.client import EmailClient
@@ -64,6 +66,7 @@ class AppModule(Module):
                 TeamsPlatformPlugin(config),
                 TelegramPlatformPlugin(config),
                 WebPlatformPlugin(),
+                WebhookPlatformPlugin(),
             ]
         )
 
@@ -72,9 +75,12 @@ class AppModule(Module):
     def provide_event_handler_registry(
         self,
         agent_lifecycle_email_handler: AgentLifecycleEmailHandler,
+        organization_budget_email_handler: OrganizationBudgetEmailHandler,
         security_audit_projection: SecurityAuditProjection,
     ) -> EventHandlerRegistry:
-        return EventHandlerRegistry([agent_lifecycle_email_handler, security_audit_projection])
+        return EventHandlerRegistry(
+            [agent_lifecycle_email_handler, organization_budget_email_handler, security_audit_projection]
+        )
 
     @provider
     @singleton

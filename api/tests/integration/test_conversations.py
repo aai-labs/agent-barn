@@ -100,11 +100,11 @@ def _seed_message(
     return msg
 
 
-def _seed_connection(context, display_name: str) -> CommunicationConnection:
+def _seed_connection(context, display_name: str, platform_key: str = "slack") -> CommunicationConnection:
     connection = CommunicationConnection(
         organization_id=context.agent.organization_id,
         agent_id=context.agent.id,
-        platform_key="slack",
+        platform_key=platform_key,
         display_name=display_name,
         credentials_encrypted="test-credentials",
         driver_key_encrypted="test-driver-key",
@@ -237,6 +237,39 @@ def test_list_channels_excludes_the_built_in_web_chat_connection():
             )
 
         with then("only the non-Web Chat channel is returned"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            ids = {c["channel_id"] for c in response.json()}
+            assert_that(ids, equal_to({"CDB1"}))
+
+
+def test_list_channels_excludes_webhook_connections():
+    """Webhook calls are listed on the webhook's own detail view, not as a conversation."""
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        client: TestClient = context.client
+        webhook_connection = _seed_connection(context, "Jira automation", platform_key="webhook")
+
+        _seed_message(
+            context,
+            direction=MessageDirection.INBOUND,
+            channel_id="CDB1",
+            content="slack-channel",
+            channel_name="slack-known",
+        )
+        _seed_message(
+            context,
+            direction=MessageDirection.INBOUND,
+            channel_id="events",
+            content="Write release notes for PROJ-1.",
+            connection=webhook_connection,
+        )
+
+        with when("I list channels"):
+            response = client.get(
+                f"{_BASE}/{context.agent.id}/conversations/channels",
+                headers=_auth(context),
+            )
+
+        with then("only the Slack channel is returned"):
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
             ids = {c["channel_id"] for c in response.json()}
             assert_that(ids, equal_to({"CDB1"}))
@@ -510,7 +543,8 @@ def test_list_messages_running_agent_submits_sync_does_not_block():
 def test_same_provider_channel_id_is_isolated_by_connection() -> None:
     with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
         first_connection = _seed_connection(context, "First Slack")
-        second_connection = _seed_connection(context, "Second Slack")
+        # One Connection per platform: the same provider id can still recur across platforms.
+        second_connection = _seed_connection(context, "Discord", platform_key="discord")
         _seed_message(
             context,
             connection=first_connection,
@@ -544,7 +578,7 @@ def test_same_provider_channel_id_is_isolated_by_connection() -> None:
             assert_that(channels.json(), has_length(2))
             assert_that(
                 {channel["connection_name"] for channel in channels.json()},
-                equal_to({"First Slack", "Second Slack"}),
+                equal_to({"First Slack", "Discord"}),
             )
             assert_that(first_messages.json()["threads"][0]["root"]["content"], equal_to("first connection"))
             assert_that(second_messages.json()["threads"][0]["root"]["content"], equal_to("second connection"))

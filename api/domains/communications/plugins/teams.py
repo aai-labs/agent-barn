@@ -19,6 +19,9 @@ from api.domains.communications.plugins.base import (
     PlatformCredentials,
     PlatformPlugin,
     PlatformSettings,
+    ProcessingFeedbackContext,
+    WebhookRequest,
+    best_effort_failure_notice,
     provider_idempotency_key,
 )
 from api.infrastructure.msteams.client import (
@@ -66,6 +69,14 @@ class TeamsSettings(PlatformSettings):
         pattern="^(off|open|allowlist)$",
         title="Direct messages",
         description="Off ignores DMs, Open accepts DMs from anyone, Allowlist restricts to Allowed DM senders.",
+    )
+    home_channel_id: str | None = Field(
+        default=None,
+        title="Home conversation",
+        description=(
+            "Optional Teams conversation ID that scheduled results without an originating conversation are sent to "
+            "when the Agent runs Teams through its runtime-owned transport."
+        ),
     )
 
 
@@ -116,7 +127,9 @@ class TeamsPlatformPlugin(PlatformPlugin):
         "must be reachable from the public internet.\n"
         "2. Download the app package and upload it in Teams: **Apps → Manage your apps → Upload a custom app**. Add it to "
         "every team and chat this Agent should serve.\n"
-        "3. Re-upload the package after renaming the Agent to refresh how it appears in Teams."
+        "3. Files can be sent to the Agent in a one-to-one Teams chat. Teams does not support bot file uploads in channels "
+        "or group chats.\n"
+        "4. Re-upload the package after renaming the Agent to refresh how it appears in Teams."
     )
     capabilities = frozenset(
         {
@@ -125,6 +138,7 @@ class TeamsPlatformPlugin(PlatformPlugin):
             PlatformCapability.WEBHOOK_INGRESS,
             PlatformCapability.MENTIONS,
             PlatformCapability.THREADS,
+            PlatformCapability.PROCESSING_FEEDBACK,
         }
     )
     settings_model = TeamsSettings
@@ -169,18 +183,13 @@ class TeamsPlatformPlugin(PlatformPlugin):
             terms_url=self._terms_url,
         )
 
-    def verify_webhook(
-        self,
-        credentials: PlatformCredentials,
-        payload: dict[str, Any],
-        authorization: str,
-    ) -> None:
+    def verify_webhook(self, credentials: PlatformCredentials, request: WebhookRequest) -> None:
         assert isinstance(credentials, TeamsCredentials)
         try:
             verify_inbound_jwt(
-                authorization,
+                request.authorization,
                 credentials.app_id,
-                service_url=str(payload.get("serviceUrl") or ""),
+                service_url=str(request.payload.get("serviceUrl") or ""),
             )
         except TeamsAuthError as exc:
             raise PermissionError(str(exc)) from exc
@@ -194,25 +203,66 @@ class TeamsPlatformPlugin(PlatformPlugin):
         idempotency_key: str,
     ) -> str:
         assert isinstance(credentials, TeamsCredentials)
-        metadata = envelope.provider_metadata
+        return self._send_activity(
+            credentials,
+            text=envelope.text,
+            location=envelope.location,
+            provider_metadata=envelope.provider_metadata,
+            reply_to_provider_message_id=envelope.reply_to_provider_message_id,
+            provider_idempotency_key_value=provider_idempotency_key(idempotency_key),
+        )
+
+    def processing_feedback(
+        self,
+        settings: PlatformSettings,
+        credentials: PlatformCredentials,
+        context: ProcessingFeedbackContext,
+    ) -> None:
+        del settings
+        assert isinstance(credentials, TeamsCredentials)
+        best_effort_failure_notice(
+            context,
+            lambda text, idempotency_key: self._send_activity(
+                credentials,
+                text=text,
+                location=context.location,
+                provider_metadata=context.provider_metadata,
+                reply_to_provider_message_id=context.provider_message_id,
+                provider_idempotency_key_value=idempotency_key,
+            ),
+            target=f"Teams conversation {context.location.id}",
+            logger=logger,
+        )
+
+    @staticmethod
+    def _send_activity(
+        credentials: TeamsCredentials,
+        *,
+        text: str,
+        location: ConversationLocation,
+        provider_metadata: dict[str, str | int | float | bool | None],
+        reply_to_provider_message_id: str | None,
+        provider_idempotency_key_value: str | None,
+    ) -> str:
+        metadata = provider_metadata
         service_url = str(metadata.get("service_url") or "")
         if not service_url:
             raise ValueError("Teams reply is missing the serviceUrl captured from its inbound activity")
 
         # The thread lives in the conversation id, so the stored raw value is
         # sent whole rather than the stripped location id.
-        conversation_id = str(metadata.get("conversation_id") or envelope.location.id)
+        conversation_id = str(metadata.get("conversation_id") or location.id)
         activity: dict[str, Any] = {
             "type": "message",
-            "text": envelope.text,
+            "text": text,
             "conversation": {"id": conversation_id},
         }
         if metadata.get("recipient_id"):
             activity["from"] = {"id": str(metadata["recipient_id"])}
         if metadata.get("from_id"):
             activity["recipient"] = {"id": str(metadata["from_id"])}
-        if envelope.reply_to_provider_message_id:
-            activity["replyToId"] = envelope.reply_to_provider_message_id
+        if reply_to_provider_message_id:
+            activity["replyToId"] = reply_to_provider_message_id
 
         token = acquire_token(credentials.tenant_id, credentials.app_id, credentials.app_password)
         return send_activity(
@@ -220,7 +270,7 @@ class TeamsPlatformPlugin(PlatformPlugin):
             conversation_id,
             activity,
             token,
-            idempotency_key=provider_idempotency_key(idempotency_key),
+            idempotency_key=provider_idempotency_key_value,
         )
 
     def enrich_inbound(
@@ -335,6 +385,42 @@ class TeamsPlatformPlugin(PlatformPlugin):
             },
         )
         return InboundAdmissionResult(CommunicationPolicyDisposition.ACCEPTED, (envelope,))
+
+    def runtime_relay_disposition(
+        self,
+        settings: TeamsSettings,
+        payload: dict[str, Any],
+    ) -> CommunicationPolicyDisposition:
+        """Apply Connection policy before an authenticated activity reaches a runtime-owned transport.
+
+        Message activities reuse canonical normalization. Adaptive Card actions
+        are ``invoke`` activities and need the same sender/conversation gates,
+        but must stay raw so the runtime SDK can return its InvokeResponse.
+        Other authenticated Bot Framework lifecycle activities are not model
+        input and remain the runtime adapter's responsibility.
+        """
+        if payload.get("type") == "message":
+            return self.normalize_inbound(settings, payload).disposition
+        if payload.get("type") != "invoke":
+            return CommunicationPolicyDisposition.ACCEPTED
+
+        conversation = payload.get("conversation")
+        sender = payload.get("from")
+        if not isinstance(conversation, dict) or not isinstance(sender, dict):
+            return CommunicationPolicyDisposition.MALFORMED_PAYLOAD
+        sender_id = str(sender.get("aadObjectId") or sender.get("id") or "")
+        raw_conversation_id = str(conversation.get("id") or "")
+        if not sender_id or not raw_conversation_id:
+            return CommunicationPolicyDisposition.MALFORMED_PAYLOAD
+        conversation_id = raw_conversation_id.partition(_MESSAGE_ID_SEPARATOR)[0]
+        if conversation.get("conversationType") == _PERSONAL_CONVERSATION_TYPE:
+            if settings.dm_policy == "off":
+                return CommunicationPolicyDisposition.USER_DENIED
+            if settings.dm_policy == "allowlist" and sender_id not in settings.dm_user_ids:
+                return CommunicationPolicyDisposition.USER_DENIED
+        elif settings.group_policy == "allowlist" and conversation_id not in settings.channel_ids:
+            return CommunicationPolicyDisposition.CHANNEL_DENIED
+        return CommunicationPolicyDisposition.ACCEPTED
 
 
 def _occurred_at(raw: Any) -> datetime:

@@ -154,7 +154,8 @@ class CommunicationConnectionRepository:
                 )
             ).one_or_none()
 
-    def list_enabled(self) -> list[CommunicationConnection]:
+    def list_enabled(self, native_platform_keys: frozenset[str] = frozenset()) -> list[CommunicationConnection]:
+        """Enabled Connections, less those the Agent runtime's native gateway runs itself."""
         with Session(self.delegate.engine) as session:
             return list(
                 session.exec(
@@ -162,6 +163,7 @@ class CommunicationConnectionRepository:
                     .where(
                         col(CommunicationConnection.enabled).is_(True),
                         col(CommunicationConnection.retired_at).is_(None),
+                        col(CommunicationConnection.platform_key).not_in(native_platform_keys),
                     )
                     .order_by(col(CommunicationConnection.id))
                 ).all()
@@ -502,6 +504,8 @@ class CommunicationConnectionRepository:
         message = str(exc).lower()
         if "uq_communication_connection_default_target" in message:
             return "This Agent already has a default delivery target; clear it before selecting another"
+        if "uq_communication_connection_active_singleton" in message:
+            return "This Agent already has a Connection on this platform; remove it before adding another"
         if "uq_communication_connection_active_name" in message:
             return "An active Communication Connection already uses this display name"
         if "uq_communication_connection_credential" in message:

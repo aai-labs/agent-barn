@@ -1,8 +1,9 @@
 import hashlib
 import json
+import logging
 from abc import ABC, abstractmethod
-from collections.abc import Awaitable, Callable, Sequence
-from dataclasses import dataclass
+from collections.abc import Awaitable, Callable, Mapping, Sequence
+from dataclasses import dataclass, field
 from typing import Any
 from uuid import UUID
 
@@ -20,6 +21,15 @@ from api.domains.communications.models import (
     ProcessingFeedbackStage,
     ResolvedOutboundTarget,
 )
+
+_FAILURE_NOTICE_PREFIX = "⚠️ I couldn't process that message."
+_FALLBACK_FAILURE_SUMMARY = "The failure is recorded in this Connection's diagnostics."
+_FAILURE_NOTICE_IDEMPOTENCY_NAMESPACE = "failure-notice"
+
+
+def failure_notice(error_summary: str | None) -> str:
+    """Render the in-channel notice for a terminally failed Delivery."""
+    return f"{_FAILURE_NOTICE_PREFIX} {error_summary or _FALLBACK_FAILURE_SUMMARY}"
 
 
 def provider_idempotency_key(delivery_key: str) -> str:
@@ -79,6 +89,31 @@ class InboundAdmissionContext:
     thread_is_agent_owned: Callable[[ConversationLocation], bool]
 
 
+class WebhookRequestRejected(Exception):
+    """An authentic webhook request the plugin cannot use. The message goes back to the
+    caller, so it must be safe to show. Not a ValueError on purpose: pydantic's
+    ValidationError is one, and its message can quote a stored credential."""
+
+
+@dataclass(frozen=True)
+class WebhookRequest:
+    """One inbound provider webhook before anything trusts it.
+
+    Carries the raw bytes because a signature covers what was sent, and re-serializing
+    the parsed body does not reproduce them.
+    """
+
+    raw_body: bytes
+    payload: dict[str, Any]
+    authorization: str
+    headers: Mapping[str, str]
+
+    def header(self, name: str) -> str | None:
+        """Case-insensitive lookup, since HTTP header names are not case-sensitive."""
+        lowered = name.lower()
+        return next((value for key, value in self.headers.items() if key.lower() == lowered), None)
+
+
 @dataclass(frozen=True)
 class ProcessingFeedbackContext:
     """Provider-neutral lifecycle facts for best-effort user feedback."""
@@ -88,6 +123,41 @@ class ProcessingFeedbackContext:
     location: ConversationLocation
     provider_message_id: str | None = None
     source_delivery_id: UUID | None = None
+    # Provider-owned routing data is needed by webhook platforms such as Teams
+    # to address a reply. It is copied from the normalized envelope and stays
+    # inside the trusted Platform Plugin boundary.
+    provider_metadata: dict[str, str | int | float | bool | None] = field(default_factory=dict)
+    # Already normalized and redacted by normalize_communication_error, so it is
+    # safe to show a channel; raw provider text never reaches a plugin.
+    error_summary: str | None = None
+
+
+def failure_feedback_idempotency_key(context: ProcessingFeedbackContext) -> str | None:
+    if context.source_delivery_id is None:
+        return None
+    # The notice is a separate provider message from the reply. Keep it in a
+    # distinct namespace so provider-native deduplication cannot turn a retry
+    # of the reply into the already-posted failure notice.
+    return provider_idempotency_key(f"{_FAILURE_NOTICE_IDEMPOTENCY_NAMESPACE}:{context.source_delivery_id}")
+
+
+def best_effort_failure_notice(
+    context: ProcessingFeedbackContext,
+    callback: Callable[[str, str | None], Any],
+    *,
+    target: str,
+    logger: logging.Logger,
+) -> None:
+    """Render and publish one terminal failure notice without raising."""
+    if context.stage != ProcessingFeedbackStage.FAILED:
+        return
+    try:
+        callback(
+            failure_notice(context.error_summary),
+            failure_feedback_idempotency_key(context),
+        )
+    except Exception as exc:
+        logger.warning("Communication failure notice failed for %s (%s)", target, type(exc).__name__)
 
 
 @dataclass(frozen=True)
@@ -130,6 +200,8 @@ class PlatformPlugin(ABC):
     credentials_model: type[PlatformCredentials]
     credential_uniqueness_scope: CredentialUniquenessScope = CredentialUniquenessScope.NONE
     supports_progress_updates: bool = True
+    # False: one account per platform per Agent (ADR 2026-09-16). Webhook has no account.
+    allows_multiple_connections: bool = False
 
     def resolve_outbound_target(
         self,
@@ -185,6 +257,15 @@ class PlatformPlugin(ABC):
 
     def validate_stored_credentials(self, raw_credentials: dict[str, Any]) -> dict[str, Any]:
         return self.credentials_model.model_validate(raw_credentials).model_dump(mode="json")
+
+    def mint_credentials(self) -> dict[str, Any]:
+        """Credentials this platform generates itself, merged over any supplied on create."""
+        return {}
+
+    def reveal_once(self, credentials: PlatformCredentials) -> dict[str, str]:
+        """Values to show the user once, right after they are minted or rotated."""
+        del credentials
+        return {}
 
     def credential_fingerprint(self, credentials: PlatformCredentials) -> str | None:
         if self.credential_uniqueness_scope == CredentialUniquenessScope.NONE:
@@ -318,13 +399,12 @@ class PlatformPlugin(ABC):
         """
         raise NotImplementedError(f"{self.key} does not implement supervised ingress")
 
-    def verify_webhook(
-        self,
-        credentials: PlatformCredentials,
-        payload: dict[str, Any],
-        authorization: str,
-    ) -> None:
-        """Authenticate a provider webhook before normalization."""
+    def verify_webhook(self, credentials: PlatformCredentials, request: WebhookRequest) -> None:
+        """Authenticate a provider webhook before normalization.
+
+        Raise PermissionError to reject the caller, or WebhookRequestRejected to reject
+        an authentic request that cannot be used.
+        """
         raise NotImplementedError(f"{self.key} does not implement webhook ingress")
 
     def build_app_package(

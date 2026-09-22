@@ -20,6 +20,14 @@ _Avoid_: deleted Organization, disabled Membership
 The deployment-configured maximum number of non-deleted Organizations attributed to one Organization Creator. Active and Suspended Organizations both count, and Platform Privilege does not bypass the limit.
 _Avoid_: Membership limit, ownership limit, Platform Administrator quota
 
+**Model Spend Limit**:
+The amount an Organization may spend on model calls in one renewal period, set and changed only by a Platform Administrator. An Organization can neither see nor change its own. Absent means no limit; zero is a real limit of nothing. Enforced by the proxy at request time, so it binds late rather than exactly — a spend cutoff, not an invoice ceiling.
+_Avoid_: budget, allowance, quota, cap
+
+**Spend Limit Coverage**:
+Whether an Organization's Agents are actually bound by its Model Spend Limit. An Agent issued a key before the Organization had one is not covered until it is enrolled, so a limit set over uncovered Agents would silently miss them.
+_Avoid_: enrolment status, team membership
+
 **Platform Administrator**:
 A user with platform-level authority to administer Agent Barn outside any single Organization. A Platform Administrator may also have normal Memberships, but platform authority is separate from Organization Membership authority.
 _Avoid_: superuser, super admin, global role
@@ -105,8 +113,16 @@ The chat system through which an Agent interacts with people. Agent Barn support
 _Avoid_: runtime
 
 **Communication Connection**:
-An Agent-owned configured relationship to one bot, application, account, or endpoint on a Platform. An Agent may have multiple Communication Connections, including several on the same Platform.
+An Agent-owned configured relationship to one bot, application, account, or endpoint on a Platform. An Agent may have one active Communication Connection per Platform; retired Connections preserve history and may be replaced.
 _Avoid_: channel, integration, platform config
+
+**Runtime-owned Connection**:
+A Communication Connection whose provider transport, session, and delivery behavior run inside the Agent Runtime rather than the Communications Gateway. Agent Barn still owns the Connection record, credentials, policy, and operational visibility.
+_Avoid_: native Connection
+
+**Runtime Webhook Relay**:
+The product API boundary that authenticates and policy-checks a provider webhook, then forwards the accepted request to a private Agent Runtime listener and returns that listener's HTTP response to the provider.
+_Avoid_: native webhook, native service
 
 **Connection Journal**:
 The append-only, content-free operational history for one Communication Connection. Its entries are either Delivery Transitions, which belong to one durable Communication Delivery, or Connection Events, which record provider connectivity and recovery without a Delivery.

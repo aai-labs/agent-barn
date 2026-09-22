@@ -55,7 +55,7 @@ RUN uv python install 3.12 && \
 # measured 573MiB in-pod, which a 1Gi cap cannot absorb alongside V8's heap.
 # Removing it drops ~1.47GB from the image.
 
-RUN npm install -g openclaw@2026.6.11
+RUN npm install -g openclaw@2026.8.2
 
 # gog (gogcli) — Google Workspace CLI used by the google_workspace integration. Pinned:
 # the OAuth scopes the API requests mirror this version's service map, and auth-state
@@ -105,7 +105,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     fi
 
 RUN mkdir -p /opt/openclaw-preinstalled/npm && \
-    npm install --prefix /opt/openclaw-preinstalled/npm @openclaw/msteams@2026.5.27 && \
+    npm install --prefix /opt/openclaw-preinstalled/npm @openclaw/msteams@2026.8.2 && \
     chown -R node:node /opt/openclaw-preinstalled
 
 USER node
