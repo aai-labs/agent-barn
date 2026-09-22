@@ -159,9 +159,7 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
                 </div>
               </div>
               <div className="flex gap-2">
-                {canManageLifecycle && agent.updateAvailable && (
-                  <AgentUpdateButton agent={agent} />
-                )}
+                {canManageLifecycle && <AgentUpdateButton agent={agent} />}
                 {canManageLifecycle && <AgentLifecycleMenu agent={agent} />}
                 <Link
                   href={`${homeHref}/agents/${agent.id}/configuration`}

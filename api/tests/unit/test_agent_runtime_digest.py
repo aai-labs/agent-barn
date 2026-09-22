@@ -119,6 +119,13 @@ def test_closure_covers_injected_collaborators():
     assert "api.infrastructure.kubernetes.client" in modules
 
 
+def test_closure_covers_helpers_reached_only_inside_a_collaborator():
+    symbols = {symbol for _, symbol in discover_closure()}
+    assert "KubernetesClient._create_or_get" in symbols
+    assert "KubernetesClient._delete_ignoring_not_found" in symbols
+    assert "AgentSettingsLookupService.get_default_model" in symbols
+
+
 def test_closure_covers_symbols_reached_only_through_collaborators():
     symbols = {symbol for _, symbol in discover_closure()}
     assert "AgentSettingsLookupService.resolve_default_model" in symbols

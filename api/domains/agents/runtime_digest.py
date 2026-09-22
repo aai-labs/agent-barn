@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import hashlib
+from collections.abc import Iterable
 from functools import lru_cache
 from pathlib import Path
 
@@ -162,9 +163,9 @@ def _collaborator_calls(node: ast.AST, attributes: dict[str, str]) -> dict[str, 
     return calls
 
 
-def _assembly_methods(methods: dict[str, ast.stmt]) -> set[str]:
+def _reachable_methods(methods: dict[str, ast.stmt], seed: Iterable[str]) -> set[str]:
     reached: set[str] = set()
-    pending = [_ENTRY_METHOD]
+    pending = list(seed)
     while pending:
         current = pending.pop()
         if current in reached or current not in methods:
@@ -186,7 +187,7 @@ def discover_closure() -> dict[tuple[str, str], ast.stmt]:
 
     methods = _methods_of(service_class)
     attributes = _annotated_attributes(service_class)
-    assembly = _assembly_methods(methods)
+    assembly = _reachable_methods(methods, [_ENTRY_METHOD])
     if _ENTRY_METHOD not in assembly:
         raise RuntimeError(f"{_ENTRY_CLASS}.{_ENTRY_METHOD} was not found")
 
@@ -208,9 +209,9 @@ def discover_closure() -> dict[tuple[str, str], ast.stmt]:
         if resolved is None:
             continue
         owner_module, owner_class = resolved
-        for method_name, method in _methods_of(owner_class).items():
-            if method_name not in called:
-                continue
+        owner_methods = _methods_of(owner_class)
+        for method_name in _reachable_methods(owner_methods, called):
+            method = owner_methods[method_name]
             key = (owner_module, f"{annotation}.{method_name}")
             if key not in collected:
                 collected[key] = method
@@ -289,6 +290,7 @@ def _static_digest() -> str:
 
 
 _STATIC_DIGEST = _static_digest()
+_parse_cache.clear()
 
 
 @lru_cache(maxsize=8)

@@ -46,15 +46,23 @@ Resolution must follow re-export barrels and relative imports. `build_config_map
 
 Python is normalised through `ast.dump` with docstrings stripped, so comments, blank lines, `ruff format` output, and CRLF checkouts leave the digest unchanged while string literals — the policy text itself — move it. Two asset roots are hashed as bytes instead, because the builders read them from disk into module-level constants where AST analysis cannot see their content: `domains/agents/scripts/` and `domains/agents/aai_cli_skills/bundled/`. Runtime image identity comes from `Config.openclaw_image` and `Config.hermes_image`, which are environment rather than files; the API image copies only `api/`, so the base-image `VERSION` files do not exist at runtime. The digest is computed once at import and cached, because the Agent read that consumes it runs per Agent in list responses.
 
-Known limits, each of which over-reports rather than under-reports:
+Known limits fall in both directions, and which is which matters.
 
-- Deployment environment beyond the two image references is not covered. `ingest_base_url`, `communications_base_url`, and the Firecrawl settings are read at start but excluded, because a curated `Config` subset would reintroduce exactly the hand-maintained list this design exists to avoid.
-- The analysis is static, so dynamic dispatch and runtime registration are invisible. The assembly path uses neither today, and introducing one edits a call site that is itself inside the closure.
+These **under-report** — a real change that the digest does not move:
+
+- **Mutable image tags.** The digest folds in the image *reference*, not its content, so rebuilding and pushing the same tag (`:dev`, `:latest`) leaves it unchanged. Immutable or digest-pinned tags do not have this problem.
+- **Deployment environment beyond the two image references.** `ingest_base_url`, `communications_base_url`, and the Firecrawl settings are read at start but excluded, because a curated `Config` subset would reintroduce exactly the hand-maintained list this design exists to avoid.
+- **Dynamic dispatch and runtime registration** are invisible to static analysis. The assembly path uses neither today, and introducing one edits a call site that is itself inside the closure, so it registers once.
+
+These **over-report** — the digest moves without a behavioural change:
+
 - The two asset roots are compared byte for byte, so a comment-only edit to `start.sh` or `init-openclaw.js` moves the digest. Shell and JavaScript cannot be normalised the way Python can.
 - `Agent` is inside the closure, so adding any column to that table moves the digest once.
 - A Python minor-version upgrade can change `ast.dump` output, moving the digest once across the fleet.
 
-Over-reporting is the safe direction. The prompt is advisory, and a restart preserves the PVC, conversation history, Communication Connections, and Hermes `always` grants, rebuilding only the ConfigMap, Secret, and per-start credentials.
+Over-reporting is the safe direction: the prompt is advisory, and a restart preserves the PVC, conversation history, Communication Connections, and Hermes `always` grants, rebuilding only the ConfigMap, Secret, and per-start credentials. The under-reporting cases are the ones to watch, because an Agent silently keeps serving older behaviour.
+
+The collaborator walk is transitive in both dimensions: it follows `self._method()` calls *within* each injected collaborator, not only the methods the assembly path calls directly. Without that, helpers such as `KubernetesClient._create_or_get` — which decides whether a 409 reuses an existing resource — would change provisioning without moving the digest.
 
 ## Runtime-neutral communications
 

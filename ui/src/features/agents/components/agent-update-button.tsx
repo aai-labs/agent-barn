@@ -17,6 +17,10 @@ export function AgentUpdateButton({ agent }: { agent: Agent }) {
 
   const update = () => void restartAgent.restart(agent.id).catch(toastError);
 
+  if (!agent.updateAvailable && !restartAgent.isPending) {
+    return null;
+  }
+
   return (
     <>
       <Tooltip>

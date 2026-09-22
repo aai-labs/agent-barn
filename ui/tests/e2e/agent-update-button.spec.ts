@@ -133,6 +133,39 @@ test.describe("Agent update button", () => {
     await Promise.all([stopped, started]);
   });
 
+  test("stays visible showing progress while the restart is still provisioning", async ({
+    page,
+  }) => {
+    await dataSupport.agents.interceptGetAgentRequest({
+      body: { ...mockAgent, status: "RUNNING", update_available: true },
+    });
+    await dataSupport.agents.interceptStopAgentRequest({
+      body: { ...mockAgent, status: "STOPPED", running_model: "", update_available: false },
+    });
+
+    let releaseStart = () => {};
+    const startHeld = new Promise<void>((resolve) => {
+      releaseStart = resolve;
+    });
+    await page.route(`**/agents/${MOCK_AGENT_ID}/start`, async (route) => {
+      await startHeld;
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ ...mockAgent, status: "RUNNING", update_available: false }),
+      });
+    });
+
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await agentDetailPage.updateButton().click();
+
+    await expect(agentDetailPage.updateButton()).toBeVisible();
+    await expect(agentDetailPage.updateButton()).toHaveText(/updating/i);
+
+    releaseStart();
+    await expect(agentDetailPage.updateButton()).toHaveCount(0);
+  });
+
   test("a reader without lifecycle permission is never offered the update", async () => {
     await dataSupport.agents.interceptGetAgentRequest({
       body: {

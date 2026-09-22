@@ -35,6 +35,38 @@ first. Delete this log once the fleet has turned over.
 
 ## Changes
 
+### 2026-09-22 — AF-271-07
+
+- Delivered: review fixes. The closure walk is now transitive *inside* each
+  injected collaborator, not only across the methods the assembly path calls
+  directly, so helpers reached one level deeper are covered.
+- Finding: the walk previously stopped at the collaborator's entry method,
+  missing `KubernetesClient._create_or_get`,
+  `KubernetesClient._delete_ignoring_not_found` and
+  `AgentSettingsLookupService.get_default_model`. Editing any of them changed
+  what a pod starts on without moving the digest — an under-report, which
+  contradicted the documented claim that the design only over-reports.
+- Changed: `_assembly_methods` generalised to `_reachable_methods(methods, seed)`
+  and reused for both `AgentService` and each collaborator class. Measured as
+  strictly additive: +3 definitions, no new modules, nothing dropped.
+- Changed: `_parse_cache` is released once `_STATIC_DIGEST` is computed,
+  dropping retained memory after import from 19.6 MB to 1.1 MB in every API,
+  worker, communications and CronJob process. The digest is byte-identical
+  either way.
+- Changed: the Update control no longer unmounts mid-restart. Stop writes the
+  stopped Agent into the detail cache, where `update_available` is false, which
+  previously destroyed the button and its pending state while the start was
+  still provisioning. The component now owns its own visibility and stays
+  mounted, showing `Updating…` for the whole window.
+- Changed: `runtime-and-deployment.md` now splits known limits into
+  under-reporting and over-reporting, and adds mutable image tags — the digest
+  folds in the image reference, not its content, so rebuilding `:dev` does not
+  move it.
+- Follow-up, not addressed: the lifecycle menu holds a separate
+  `useRestartAgent`, so it still offers `Start` during a restart and a second
+  click fires a second start, which the lifecycle lock rejects with 409. The
+  menu's own `Restart` has the same gap.
+
 ### 2026-09-22 — AF-271-06
 
 - Delivered: the Update control now explains itself. Hovering it states that the
@@ -135,7 +167,7 @@ first. Delete this log once the fleet has turned over.
   unit test.
 - Decision: the watched set is **computed, not curated**. A hand-picked list was
   written first and measured against the real closure: it named 9 modules where
-  the closure reaches 32 modules, 45 asset files and 245 definitions, silently
+  the closure spans more than thirty, plus the asset roots, silently
   omitting `skills.models.derive_tools_pointer`,
   `agent_settings.lookup.resolve_default_model`,
   `google_workspace_scopes.required_service_scopes`, `skills.files.DEFAULT_ENTRY_PATH`,
