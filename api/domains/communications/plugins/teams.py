@@ -70,6 +70,14 @@ class TeamsSettings(PlatformSettings):
         title="Direct messages",
         description="Off ignores DMs, Open accepts DMs from anyone, Allowlist restricts to Allowed DM senders.",
     )
+    home_channel_id: str | None = Field(
+        default=None,
+        title="Home conversation",
+        description=(
+            "Optional Teams conversation ID that scheduled results without an originating conversation are sent to "
+            "when the Agent runs Teams through its runtime-owned transport."
+        ),
+    )
 
 
 class TeamsCredentials(PlatformCredentials):
@@ -119,7 +127,9 @@ class TeamsPlatformPlugin(PlatformPlugin):
         "must be reachable from the public internet.\n"
         "2. Download the app package and upload it in Teams: **Apps → Manage your apps → Upload a custom app**. Add it to "
         "every team and chat this Agent should serve.\n"
-        "3. Re-upload the package after renaming the Agent to refresh how it appears in Teams."
+        "3. Files can be sent to the Agent in a one-to-one Teams chat. Teams does not support bot file uploads in channels "
+        "or group chats.\n"
+        "4. Re-upload the package after renaming the Agent to refresh how it appears in Teams."
     )
     capabilities = frozenset(
         {
@@ -375,6 +385,42 @@ class TeamsPlatformPlugin(PlatformPlugin):
             },
         )
         return InboundAdmissionResult(CommunicationPolicyDisposition.ACCEPTED, (envelope,))
+
+    def runtime_relay_disposition(
+        self,
+        settings: TeamsSettings,
+        payload: dict[str, Any],
+    ) -> CommunicationPolicyDisposition:
+        """Apply Connection policy before an authenticated activity reaches a runtime-owned transport.
+
+        Message activities reuse canonical normalization. Adaptive Card actions
+        are ``invoke`` activities and need the same sender/conversation gates,
+        but must stay raw so the runtime SDK can return its InvokeResponse.
+        Other authenticated Bot Framework lifecycle activities are not model
+        input and remain the runtime adapter's responsibility.
+        """
+        if payload.get("type") == "message":
+            return self.normalize_inbound(settings, payload).disposition
+        if payload.get("type") != "invoke":
+            return CommunicationPolicyDisposition.ACCEPTED
+
+        conversation = payload.get("conversation")
+        sender = payload.get("from")
+        if not isinstance(conversation, dict) or not isinstance(sender, dict):
+            return CommunicationPolicyDisposition.MALFORMED_PAYLOAD
+        sender_id = str(sender.get("aadObjectId") or sender.get("id") or "")
+        raw_conversation_id = str(conversation.get("id") or "")
+        if not sender_id or not raw_conversation_id:
+            return CommunicationPolicyDisposition.MALFORMED_PAYLOAD
+        conversation_id = raw_conversation_id.partition(_MESSAGE_ID_SEPARATOR)[0]
+        if conversation.get("conversationType") == _PERSONAL_CONVERSATION_TYPE:
+            if settings.dm_policy == "off":
+                return CommunicationPolicyDisposition.USER_DENIED
+            if settings.dm_policy == "allowlist" and sender_id not in settings.dm_user_ids:
+                return CommunicationPolicyDisposition.USER_DENIED
+        elif settings.group_policy == "allowlist" and conversation_id not in settings.channel_ids:
+            return CommunicationPolicyDisposition.CHANNEL_DENIED
+        return CommunicationPolicyDisposition.ACCEPTED
 
 
 def _occurred_at(raw: Any) -> datetime:

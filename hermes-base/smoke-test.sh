@@ -145,6 +145,25 @@ if 'firecrawl' not in _PROVIDER_REGISTRY:
     raise SystemExit('firecrawl is no longer a registered browser cloud provider')
 "
 
+# Runtime-owned Teams keeps Azure pointed at Agent Barn, which relays the authenticated
+# activity to this private listener. Pin the adapter/route contract so a Hermes
+# upgrade cannot leave the relay targeting a port or path the runtime no longer owns.
+check teams-webhook-contract python3 -c "
+import inspect
+import sys
+
+sys.path.insert(0, '/opt/hermes')
+from gateway.config import Platform
+from plugins.platforms.teams import adapter
+
+if Platform('teams').value != 'teams':
+    raise SystemExit('Teams is no longer a Hermes gateway platform')
+source = inspect.getsource(adapter)
+for marker in ('TEAMS_CLIENT_ID', 'TEAMS_CLIENT_SECRET', 'TEAMS_TENANT_ID', 'TEAMS_PORT', '/api/messages'):
+    if marker not in source:
+        raise SystemExit('Teams webhook contract no longer contains ' + marker)
+"
+
 # The telemetry-push plugin resolves a reply's chat through the gateway's
 # session store. A Hermes upgrade that drops one of these has to fail here,
 # on the version bump, rather than silently mis-filing conversations.

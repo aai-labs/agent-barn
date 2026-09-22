@@ -6,7 +6,7 @@ Read before changing API composition, dependency injection, route/service/reposi
 
 ## Composition and layering
 
-The API image has three HTTP composition roots. `../../api/api_app.py` serves organization and platform product routes at `/api/v1` on port 8000. `../../api/ingest_app.py` serves runtime telemetry at `/ingest/v1` on port 8001. `../../api/communications_app.py` serves provider webhooks and the runtime-neutral delivery protocol at `/communications/v1` on port 8002; its lifespan also runs provider ingress supervision and outbound delivery. Each root attaches the shared Injector, while authentication and exposed routes remain boundary-specific.
+The API image has three HTTP composition roots. `../../api/api_app.py` serves organization and platform product routes at `/api/v1` on port 8000, plus the stable public provider webhook paths at `/communications/v1/webhooks/email/inbound` and `/communications/v1/webhooks/{connection_id}`. `../../api/ingest_app.py` serves runtime telemetry at `/ingest/v1` on port 8001. `../../api/communications_app.py` serves the runtime-neutral delivery protocol and gateway-owned provider-webhook fallback at `/communications/v1` on port 8002; its lifespan also runs provider ingress supervision and outbound delivery. Each root attaches the shared Injector, while authentication and exposed routes remain boundary-specific.
 
 The default dependency direction is:
 
@@ -42,6 +42,8 @@ Database records generally inherit UUID and timestamp fields from `../../api/inf
 
 The application lifespan ensures a bootstrap Platform Administrator, seeds built-in aai-cli skills, and seeds the global predefined template catalogue into the `platform_template` table. The system has no default Organization. Platform-owned resources are global resources, not Organization-owned rows: built-in skills use `organization_id = NULL` in the `skill` table, and predefined templates live in a dedicated `platform_template` table with no `organization_id` column. Agents pin a template via one of two mutually-exclusive FKs (`platform_template_id` or `agent_template_id`), enforced by a CHECK constraint. Platform-admin behavior must use the platform-admin seam rather than adding dependencies on an Organization. Changes to bootstrap entities can affect startup, tests, and predefined catalog behavior simultaneously.
 
+Product API startup deliberately does **not** reconcile [Organization LiteLLM budgets](../features/costs.md#organization-llm-budgets). That runs as its own CronJob alongside cost sync and event-delivery reconciliation, so the API's readiness never depends on the proxy being reachable.
+
 ## Testing
 
 - Integration tests use the real FastAPI app and migrated PostgreSQL with additive Injector overrides.
@@ -53,7 +55,7 @@ The application lifespan ensures a bootstrap Platform Administrator, seeds built
 
 | Concern | Source |
 |---|---|
-| Product API composition and router registry | `../../api/api_app.py` |
+| Product API composition, public provider-webhook adapters, and Teams runtime webhook relay | `../../api/api_app.py`, `../../api/domains/communications/runtime_webhook_routes.py`, `../../api/domains/communications/teams_runtime_webhook.py` |
 | Ingest API composition and process entry | `../../api/ingest_app.py`, `../../api/ingest_main.py`, `../../api/start.sh` |
 | Communications composition and process entry | `../../api/communications_app.py`, `../../api/communications_main.py` |
 | Injector configuration | `../../api/core/utils.py`, `../../api/infrastructure/app.py` |
@@ -69,4 +71,4 @@ The application lifespan ensures a bootstrap Platform Administrator, seeds built
 
 ## Change impact
 
-When adding or moving a product router, update `../../api/api_app.py`; telemetry routes belong to `../../api/ingest_app.py`, and gateway/provider/runtime communication routes belong to `../../api/communications_app.py`. When a schema changes, update the database model, API DTO where required, migration, integration tests, and corresponding UI Zod schema. When a workflow spans repositories, verify whether partial persistence is acceptable before relying on the default session-per-operation behavior. When a mutation produces a Domain Event, use a domain-specific transaction boundary and update the Domain Events feature guide if the envelope, delivery lifecycle, privacy rules, or excluded scope changes.
+When adding or moving a product router, update `../../api/api_app.py`; telemetry routes belong to `../../api/ingest_app.py`, public provider-webhook adapters belong to the API, and the runtime communications protocol plus gateway-owned fallback routes belong to `../../api/communications_app.py`. When a schema changes, update the database model, API DTO where required, migration, integration tests, and corresponding UI Zod schema. When a workflow spans repositories, verify whether partial persistence is acceptable before relying on the default session-per-operation behavior. When a mutation produces a Domain Event, use a domain-specific transaction boundary and update the Domain Events feature guide if the envelope, delivery lifecycle, privacy rules, or excluded scope changes.

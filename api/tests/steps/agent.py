@@ -55,6 +55,10 @@ class MockLiteLLMModule(Module):
         mock: Any = MagicMock(spec=LiteLLMClient)
         mock.generate_key.return_value = FAKE_LITELLM_KEY
         mock.delete_key.return_value = True
+        # Explicit defaults for the reads that feed response models: a bare MagicMock
+        # return value fails validation rather than behaving like "no data".
+        mock.get_team_budget_status.return_value = None
+        mock.get_key_team.return_value = None
         return mock
 
 
