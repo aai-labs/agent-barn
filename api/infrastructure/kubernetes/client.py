@@ -465,7 +465,8 @@ class KubernetesClient:
                 namespace,
                 container=container,
                 tail_lines=tail_lines,
-                timestamps=False,
+                timestamps=True,
+                _preload_content=False,
             )
             try:
                 if response.status == 404:
