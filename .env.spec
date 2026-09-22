@@ -13,6 +13,12 @@ API_PORT=8000
 ENVIRONMENT=local
 WEB_APP_URL=http://localhost:3000
 
+# The publicly reachable base URL of this API. Agent Barn builds the Agent Webhook
+# ingress URL and the Teams Connection webhook URL from it, so both are shown blank
+# in the UI while it is unset. localhost is fine when the caller runs on this machine;
+# an external caller (Jira, GitHub, Bot Framework) needs a tunnel URL here instead.
+API_EXTERNAL_URL=http://localhost:8000
+
 # Optional: Redis is only needed to run the event delivery worker/reconciler
 # locally (`make redis-up`, `make dev-worker`); defaults to localhost:6379.
 REDIS_PORT=6379
