@@ -154,3 +154,20 @@ Share-management endpoints expose locked Agent Access Roles and one canonical Ag
 ## Change impact
 
 Lifecycle, visibility, Agent Access Role, explicit Agent Access assignment, or Agent General Access changes affect Agent API contracts, authorization predicates, Membership deletion behavior, UI schemas and controls, and Agent integration tests. Runtime changes additionally affect both runtime builders, Kubernetes cleanup, logs/health, and the runtime-neutral Communications protocol. Template/Skill changes require checking creation, repinning, update validation, and integration tests. Platform changes belong to the Communications domain and must not introduce Agent lifecycle or runtime-builder branches.
+
+## Runtime diagnostics
+
+`GET /agents/{agent_id}/diagnostics` requires `activity.read` on a visible Agent.
+It returns a read-only observation of the newest non-deleting pod for a RUNNING
+Agent, including failed pods: creation time, readiness, restart count, allowlisted
+waiting/termination reason, exit code, and latest termination time. Kubernetes
+exception bodies and container status messages are never returned. Current and
+previous `agent` container logs use the existing Agent log authorization boundary,
+with timestamps, a 100-line/32 KB limit per instance, and explicit availability.
+Log access failure (400/403/404) preserves the pod evidence. Other upstream failures
+return a safe 503. STOPPED/ERROR Agents and missing pods have no current evidence;
+stored provisioning errors and retained Logs remain separate sources.
+
+This is not durable crash history. Pod replacement resets counts and can remove
+previous logs; the latest exit does not establish when a crash loop began. Reading
+diagnostics never restarts an Agent, executes a command, or mutates its workspace.

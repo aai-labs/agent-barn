@@ -22,7 +22,7 @@ import { ChatTab } from "./chat-tab";
 import { ConversationsTab } from "./conversations-tab";
 import { ToolCallsTab } from "./tool-calls-tab";
 import { LogsTab } from "./logs-tab";
-import { WorkTab } from "./work-tab";
+import { ActivityTab } from "./activity-tab";
 import { AboutTab } from "./about-tab";
 import { ShareDialog } from "./share-dialog";
 import { AgentDetailHeaderSkeleton } from "./agent-detail-header-skeleton";
@@ -31,19 +31,20 @@ interface AgentDetailPageProps {
   agentId: string;
 }
 
-type Tab = "chat" | "conversations" | "tool-calls" | "logs" | "work" | "about";
+type Tab = "chat" | "conversations" | "tool-calls" | "logs" | "activity" | "about";
 const VALID_TABS: Tab[] = [
   "chat",
   "conversations",
   "tool-calls",
   "logs",
-  "work",
+  "activity",
   "about",
 ];
 
 export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
   const { agent, isLoading, error, refetch } = useAgent(agentId);
   const canReadActivity = canAgent(agent, "activity.read");
+  const canReadCost = canAgent(agent, "cost.read");
   const { health } = useAgentHealth(
     agentId,
     canReadActivity &&
@@ -73,9 +74,11 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
           ["conversations", "Conversations"],
           ["tool-calls", "Tool calls"],
           ["logs", "Logs"],
-          ["work", "Work"],
         ] as [Tab, string][])
       : []),
+    // Activity reports what the Agent spent, so it follows cost.read rather than
+    // the activity.read group the tabs above belong to.
+    ...(canReadCost ? ([["activity", "Activity"]] as [Tab, string][]) : []),
     ["about", "About"],
   ];
   const resolvedTab = tabs.some(([key]) => key === tab) ? tab : tabs[0][0];
@@ -280,7 +283,7 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
             )}
             {resolvedTab === "tool-calls" && <ToolCallsTab agent={agent} />}
             {resolvedTab === "logs" && <LogsTab agent={agent} />}
-            {resolvedTab === "work" && <WorkTab agent={agent} />}
+            {resolvedTab === "activity" && <ActivityTab agent={agent} />}
             {resolvedTab === "about" && <AboutTab agent={agent} />}
           </>
         )}
