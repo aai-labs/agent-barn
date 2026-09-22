@@ -2,7 +2,10 @@ export const AGENT_WEBHOOK_ID = "c0ffee00-0000-4000-8000-000000000001";
 export const WEBHOOK_INVOCATION_ID = "c0ffee00-0000-4000-8000-000000000002";
 export const MOCK_SIGNING_SECRET = "whsec_test_only_not_a_real_secret";
 
-export function mockAgentWebhook(agentId: string, overrides: Record<string, unknown> = {}) {
+export function mockAgentWebhook(
+  agentId: string,
+  overrides: Record<string, unknown> = {},
+) {
   return {
     id: AGENT_WEBHOOK_ID,
     agent_id: agentId,
@@ -18,14 +21,16 @@ export function mockAgentWebhook(agentId: string, overrides: Record<string, unkn
   };
 }
 
-export const mockWebhookDeliveryPlatforms = [{ key: "slack", display_name: "Acme Slack" }];
+export const mockWebhookDeliveryPlatforms = [
+  { key: "slack", display_name: "Acme Slack" },
+];
 
 export function mockWebhookInvocation(overrides: Record<string, unknown> = {}) {
   return {
     id: WEBHOOK_INVOCATION_ID,
     webhook_id: AGENT_WEBHOOK_ID,
     external_event_id: null,
-    prompt: "Prepare a release summary.",
+    prompt: "Say Hi!",
     status: "DISPATCH_FAILED",
     dispatch_attempt_count: 3,
     dispatch_generation: 1,
