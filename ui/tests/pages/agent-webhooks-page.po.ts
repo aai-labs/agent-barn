@@ -4,13 +4,17 @@ export class AgentWebhooksPage {
   constructor(private page: Page) {}
 
   async goto(agentId: string, orgId: string) {
-    await this.page.goto(`/dashboard/${orgId}/agents/${agentId}/configuration?section=webhooks`);
+    await this.page.goto(
+      `/dashboard/${orgId}/agents/${agentId}/configuration?section=webhooks`,
+    );
   }
 
   async createWebhook(name: string) {
     await this.page.getByRole("button", { name: "Add webhook" }).click();
     await this.page.getByLabel("Webhook name").fill(name);
-    await this.page.getByRole("combobox", { name: "Deliver results to" }).click();
+    await this.page
+      .getByRole("combobox", { name: "Deliver results to" })
+      .click();
     await this.page.getByRole("option", { name: /Acme Slack/ }).click();
     await this.page.getByRole("button", { name: /create webhook/i }).click();
   }

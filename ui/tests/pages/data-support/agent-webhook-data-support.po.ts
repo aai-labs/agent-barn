@@ -20,27 +20,41 @@ export class AgentWebhookDataSupport {
 
     await this.page.route(base, async (route) => {
       if (route.request().method() === "POST") {
-        const created = mockAgentWebhook(agentId, { display_name: route.request().postDataJSON().display_name });
+        const created = mockAgentWebhook(agentId, {
+          display_name: route.request().postDataJSON().display_name,
+        });
         webhooks.push(created);
-        await route.fulfill({ status: 201, json: { ...created, signing_secret: MOCK_SIGNING_SECRET } });
+        await route.fulfill({
+          status: 201,
+          json: { ...created, signing_secret: MOCK_SIGNING_SECRET },
+        });
         return;
       }
       await route.fulfill({ json: webhooks });
     });
-    await this.page.route(`${base}/delivery-platforms`, (route) => route.fulfill({ json: mockWebhookDeliveryPlatforms }));
-    await this.page.route(`${base}/${AGENT_WEBHOOK_ID}/invocations?*`, (route) =>
-      route.fulfill({ json: { items: [invocation], total: 1, page: 1, page_size: 20 } }),
+    await this.page.route(`${base}/delivery-platforms`, (route) =>
+      route.fulfill({ json: mockWebhookDeliveryPlatforms }),
     );
-    await this.page.route(`${base}/${AGENT_WEBHOOK_ID}/invocations/${WEBHOOK_INVOCATION_ID}/retry`, async (route) => {
-      invocation = mockWebhookInvocation({
-        status: "SUBMITTED",
-        dispatch_generation: 2,
-        dispatch_attempt_count: 1,
-        native_job_id: "native-job-2",
-        last_error_code: null,
-        last_error_message: null,
-      });
-      await route.fulfill({ json: invocation });
-    });
+    await this.page.route(
+      `${base}/${AGENT_WEBHOOK_ID}/invocations?*`,
+      (route) =>
+        route.fulfill({
+          json: { items: [invocation], total: 1, page: 1, page_size: 20 },
+        }),
+    );
+    await this.page.route(
+      `${base}/${AGENT_WEBHOOK_ID}/invocations/${WEBHOOK_INVOCATION_ID}/retry`,
+      async (route) => {
+        invocation = mockWebhookInvocation({
+          status: "SUBMITTED",
+          dispatch_generation: 2,
+          dispatch_attempt_count: 1,
+          native_job_id: "native-job-2",
+          last_error_code: null,
+          last_error_message: null,
+        });
+        await route.fulfill({ json: invocation });
+      },
+    );
   }
 }

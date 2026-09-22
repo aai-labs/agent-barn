@@ -1,6 +1,11 @@
 "use client";
 
-import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  useInfiniteQuery,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import { z } from "zod";
 
 import { useOrganizationApiBase } from "@/features/organizations/hooks/use-organization-api-base";
@@ -21,18 +26,24 @@ import {
 } from "../schemas";
 
 export const agentWebhooksKey = createQueryKeyStructure("agent-webhooks");
-export const webhookInvocationsKey = createQueryKeyStructure("webhook-invocations");
+export const webhookInvocationsKey = createQueryKeyStructure(
+  "webhook-invocations",
+);
 const PAGE_SIZE = 20;
 
 export function useAgentWebhooks(agentId: string) {
   const orgApiBase = useOrganizationApiBase();
-  const organizationId = useOrganizationContext().selectedOrganization?.id ?? "";
+  const organizationId =
+    useOrganizationContext().selectedOrganization?.id ?? "";
   return useQuery({
     queryKey: agentWebhooksKey.list({ organizationId, agentId }),
     queryFn: async () => {
-      const response = await api.get<AgentWebhook[]>(`${orgApiBase}/agents/${agentId}/webhooks`, {
-        schema: z.array(AgentWebhookSchema),
-      });
+      const response = await api.get<AgentWebhook[]>(
+        `${orgApiBase}/agents/${agentId}/webhooks`,
+        {
+          schema: z.array(AgentWebhookSchema),
+        },
+      );
       return response.data;
     },
     enabled: Boolean(agentId && organizationId),
@@ -41,9 +52,12 @@ export function useAgentWebhooks(agentId: string) {
 
 export function useWebhookDeliveryPlatforms(agentId: string) {
   const orgApiBase = useOrganizationApiBase();
-  const organizationId = useOrganizationContext().selectedOrganization?.id ?? "";
+  const organizationId =
+    useOrganizationContext().selectedOrganization?.id ?? "";
   return useQuery({
-    queryKey: agentWebhooksKey.detail(`${organizationId}:${agentId}:delivery-platforms`),
+    queryKey: agentWebhooksKey.detail(
+      `${organizationId}:${agentId}:delivery-platforms`,
+    ),
     queryFn: async () => {
       const response = await api.get<WebhookDeliveryPlatformRead[]>(
         `${orgApiBase}/agents/${agentId}/webhooks/delivery-platforms`,
@@ -57,9 +71,14 @@ export function useWebhookDeliveryPlatforms(agentId: string) {
 
 export function useWebhookInvocations(agentId: string, webhookId: string) {
   const orgApiBase = useOrganizationApiBase();
-  const organizationId = useOrganizationContext().selectedOrganization?.id ?? "";
+  const organizationId =
+    useOrganizationContext().selectedOrganization?.id ?? "";
   const query = useInfiniteQuery({
-    queryKey: webhookInvocationsKey.list({ organizationId, agentId, webhookId }),
+    queryKey: webhookInvocationsKey.list({
+      organizationId,
+      agentId,
+      webhookId,
+    }),
     queryFn: async ({ pageParam }) => {
       const response = await api.get<PaginatedWebhookInvocations>(
         `${orgApiBase}/agents/${agentId}/webhooks/${webhookId}/invocations?page=${pageParam}&page_size=${PAGE_SIZE}`,
@@ -69,7 +88,9 @@ export function useWebhookInvocations(agentId: string, webhookId: string) {
     },
     initialPageParam: 1,
     getNextPageParam: (lastPage) =>
-      lastPage.page < Math.ceil(lastPage.total / lastPage.pageSize) ? lastPage.page + 1 : undefined,
+      lastPage.page < Math.ceil(lastPage.total / lastPage.pageSize)
+        ? lastPage.page + 1
+        : undefined,
     enabled: Boolean(agentId && webhookId && organizationId),
   });
   return {
@@ -81,23 +102,41 @@ export function useWebhookInvocations(agentId: string, webhookId: string) {
 
 export function useAgentWebhookActions() {
   const orgApiBase = useOrganizationApiBase();
-  const organizationId = useOrganizationContext().selectedOrganization?.id ?? "";
+  const organizationId =
+    useOrganizationContext().selectedOrganization?.id ?? "";
   const queryClient = useQueryClient();
   const invalidate = (agentId: string) =>
-    queryClient.invalidateQueries({ queryKey: agentWebhooksKey.list({ organizationId, agentId }) });
+    queryClient.invalidateQueries({
+      queryKey: agentWebhooksKey.list({ organizationId, agentId }),
+    });
 
   const createWebhook = useMutation({
-    mutationFn: async ({ agentId, ...body }: { agentId: string; displayName: string; deliveryPlatform: WebhookDeliveryPlatform }) => {
-      const response = await api.post<AgentWebhook>(`${orgApiBase}/agents/${agentId}/webhooks`, body, {
-        schema: AgentWebhookSchema,
-      });
+    mutationFn: async ({
+      agentId,
+      ...body
+    }: {
+      agentId: string;
+      displayName: string;
+      deliveryPlatform: WebhookDeliveryPlatform;
+    }) => {
+      const response = await api.post<AgentWebhook>(
+        `${orgApiBase}/agents/${agentId}/webhooks`,
+        body,
+        {
+          schema: AgentWebhookSchema,
+        },
+      );
       return response.data;
     },
     onSuccess: (webhook) => invalidate(webhook.agentId),
   });
 
   const updateWebhook = useMutation({
-    mutationFn: async ({ agentId, webhookId, ...body }: {
+    mutationFn: async ({
+      agentId,
+      webhookId,
+      ...body
+    }: {
       agentId: string;
       webhookId: string;
       revision: number;
@@ -116,15 +155,33 @@ export function useAgentWebhookActions() {
   });
 
   const retireWebhook = useMutation({
-    mutationFn: async ({ agentId, webhookId, revision }: { agentId: string; webhookId: string; revision: number }) => {
-      await api.delete(`${orgApiBase}/agents/${agentId}/webhooks/${webhookId}?revision=${revision}`);
+    mutationFn: async ({
+      agentId,
+      webhookId,
+      revision,
+    }: {
+      agentId: string;
+      webhookId: string;
+      revision: number;
+    }) => {
+      await api.delete(
+        `${orgApiBase}/agents/${agentId}/webhooks/${webhookId}?revision=${revision}`,
+      );
       return agentId;
     },
     onSuccess: invalidate,
   });
 
   const rotateSecret = useMutation({
-    mutationFn: async ({ agentId, webhookId, revision }: { agentId: string; webhookId: string; revision: number }) => {
+    mutationFn: async ({
+      agentId,
+      webhookId,
+      revision,
+    }: {
+      agentId: string;
+      webhookId: string;
+      revision: number;
+    }) => {
       const response = await api.post<AgentWebhook>(
         `${orgApiBase}/agents/${agentId}/webhooks/${webhookId}/rotate-secret?revision=${revision}`,
         undefined,
@@ -136,7 +193,15 @@ export function useAgentWebhookActions() {
   });
 
   const retryInvocation = useMutation({
-    mutationFn: async ({ agentId, webhookId, invocationId }: { agentId: string; webhookId: string; invocationId: string }) => {
+    mutationFn: async ({
+      agentId,
+      webhookId,
+      invocationId,
+    }: {
+      agentId: string;
+      webhookId: string;
+      invocationId: string;
+    }) => {
       const response = await api.post<WebhookInvocation>(
         `${orgApiBase}/agents/${agentId}/webhooks/${webhookId}/invocations/${invocationId}/retry`,
         undefined,
@@ -146,9 +211,19 @@ export function useAgentWebhookActions() {
     },
     onSuccess: (_invocation, variables) =>
       queryClient.invalidateQueries({
-        queryKey: webhookInvocationsKey.list({ organizationId, agentId: variables.agentId, webhookId: variables.webhookId }),
+        queryKey: webhookInvocationsKey.list({
+          organizationId,
+          agentId: variables.agentId,
+          webhookId: variables.webhookId,
+        }),
       }),
   });
 
-  return { createWebhook, updateWebhook, retireWebhook, rotateSecret, retryInvocation };
+  return {
+    createWebhook,
+    updateWebhook,
+    retireWebhook,
+    rotateSecret,
+    retryInvocation,
+  };
 }

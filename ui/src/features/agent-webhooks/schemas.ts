@@ -1,6 +1,11 @@
 import { z } from "zod";
 
-export const WebhookDeliveryPlatformSchema = z.enum(["slack", "discord", "telegram", "teams"]);
+export const WebhookDeliveryPlatformSchema = z.enum([
+  "slack",
+  "discord",
+  "telegram",
+  "teams",
+]);
 
 export const WebhookDeliveryPlatformReadSchema = z.object({
   key: WebhookDeliveryPlatformSchema,
@@ -44,7 +49,13 @@ export const PaginatedWebhookInvocationsSchema = z.object({
 });
 
 export type AgentWebhook = z.infer<typeof AgentWebhookSchema>;
-export type WebhookDeliveryPlatform = z.infer<typeof WebhookDeliveryPlatformSchema>;
-export type WebhookDeliveryPlatformRead = z.infer<typeof WebhookDeliveryPlatformReadSchema>;
+export type WebhookDeliveryPlatform = z.infer<
+  typeof WebhookDeliveryPlatformSchema
+>;
+export type WebhookDeliveryPlatformRead = z.infer<
+  typeof WebhookDeliveryPlatformReadSchema
+>;
 export type WebhookInvocation = z.infer<typeof WebhookInvocationSchema>;
-export type PaginatedWebhookInvocations = z.infer<typeof PaginatedWebhookInvocationsSchema>;
+export type PaginatedWebhookInvocations = z.infer<
+  typeof PaginatedWebhookInvocationsSchema
+>;

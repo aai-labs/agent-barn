@@ -38,10 +38,12 @@ export function curlExample(url: string, secret: string): string {
   return [
     `SECRET='${secret}'`,
     `BODY='${body}'`,
-    `SIGNATURE="sha256=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac "$SECRET" | sed 's/^.* //')"`,
+    "TIMESTAMP=$(date +%s)",
+    `SIGNATURE="sha256=$(printf '%s.%s' "$TIMESTAMP" "$BODY" | openssl dgst -sha256 -hmac "$SECRET" | sed 's/^.* //')"`,
     "",
     `curl -X POST '${url}' \\`,
     `  -H 'X-AgentBarn-Webhook-Version: 1' \\`,
+    `  -H "X-AgentBarn-Timestamp: $TIMESTAMP" \\`,
     `  -H "X-AgentBarn-Signature: $SIGNATURE" \\`,
     `  -H 'Content-Type: application/json' \\`,
     `  -d "$BODY"`,
@@ -80,9 +82,12 @@ type Reveal = { webhook: AgentWebhook; secret: string };
 export function AgentWebhookSettings({
   agent,
   canEdit,
+  canManageSecrets,
 }: {
   agent: Agent;
   canEdit: boolean;
+  /** Create, rotate, and remove issue or destroy a signing secret. */
+  canManageSecrets: boolean;
 }) {
   const webhooks = useAgentWebhooks(agent.id);
   const platforms = useWebhookDeliveryPlatforms(agent.id);
@@ -131,11 +136,20 @@ export function AgentWebhookSettings({
 
   async function confirmRetire() {
     if (!retiring) return;
-    await retireWebhook.mutateAsync({
-      agentId: agent.id,
-      webhookId: retiring.id,
-      revision: retiring.revision,
-    });
+    try {
+      await retireWebhook.mutateAsync({
+        agentId: agent.id,
+        webhookId: retiring.id,
+        revision: retiring.revision,
+      });
+    } catch (error) {
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Could not remove the webhook.",
+      );
+      return;
+    }
     setRetiring(null);
     if (selectedId === retiring.id) void setSelectedId(null);
   }
@@ -156,6 +170,7 @@ export function AgentWebhookSettings({
           webhook={selected}
           platforms={platforms.data ?? []}
           canEdit={canEdit}
+          canManageSecrets={canManageSecrets}
           onBack={() => void setSelectedId(null)}
           onSecretRotated={(webhook, secret) => setReveal({ webhook, secret })}
           onRetire={() => setRetiring(selected)}
@@ -165,7 +180,7 @@ export function AgentWebhookSettings({
           title="Webhooks"
           description="Signed URLs that submit one-shot jobs to this Agent. Results go to the selected native channel."
           footer={
-            canEdit && !adding ? (
+            canManageSecrets && !adding ? (
               <button
                 type="button"
                 className="af-btn af-btn-primary"
