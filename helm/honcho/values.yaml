@@ -1,6 +1,6 @@
 image:
   repository: ghcr.io/plastic-labs/honcho
-  tag: v3.1.0
+  tag: v3.2.0
   pullPolicy: IfNotPresent
 
 # Name of the k8s Secret containing:

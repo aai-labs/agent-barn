@@ -341,6 +341,20 @@ class CostSummaryRead(PydanticBaseModel):
     cost_per_call_histogram: list[CostHistogramBucket] = Field(default_factory=list)
 
 
+class GroupMemoryCostRead(PydanticBaseModel):
+    """One memory group's slice of this Organization's memory spend.
+
+    Memory is billed on Honcho's one credential (no per-Agent attribution), but the
+    per-call telemetry names the workspace, so the pool-level total is split across
+    groups by token share. The figures sum to the Organization's memory total; a
+    group with no memory activity in the window shows 0.
+    """
+
+    group_id: UUID
+    group_name: str
+    memory_cost: float = 0.0
+
+
 class OrganizationSpendRead(PydanticBaseModel):
     """One organization's slice of platform spend.
 

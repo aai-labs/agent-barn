@@ -124,6 +124,17 @@ export const AgentSpendSchema = z.object({
 
 export const AgentSpendListSchema = z.array(AgentSpendSchema);
 
+// One memory group's share of the org's memory spend. Memory has no per-agent
+// attribution (agents share pools), so the pool/group is the finest split; the
+// figures are apportioned from Honcho's total by token share and sum to it.
+export const GroupMemoryCostSchema = z.object({
+  groupId: z.string().uuid(),
+  groupName: z.string(),
+  memoryCost: z.number(),
+});
+export const GroupMemoryCostListSchema = z.array(GroupMemoryCostSchema);
+export type GroupMemoryCost = z.infer<typeof GroupMemoryCostSchema>;
+
 /** Cost totals for a single agent, used by the agent detail surface. */
 export const AgentModelBreakdownSchema = z.object({
   model: z.string(),

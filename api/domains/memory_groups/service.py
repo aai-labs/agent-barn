@@ -89,6 +89,13 @@ class MemoryGroupService:
         org_id = self._require_manager(context)
         return [MemoryGroupRead.model_validate(g) for g in self.repository.find_all_for_org(org_id)]
 
+    def names_for_org(self, org_id: UUID) -> dict[UUID, str]:
+        """Group id → name for one Organization, for another domain to label rows it
+        has already authorized (e.g. the cost breakdown, gated on `cost.read`). Not a
+        management action, so it takes an org id rather than gating on
+        `memory_group.manage` — the caller owns the access check for its own surface."""
+        return {g.id: g.name for g in self.repository.find_all_for_org(org_id)}
+
     def add_agent(self, group_id: UUID, agent_id: UUID, context: CurrentUserContext) -> None:
         """Add an Agent to a group (opt it into the group's shared memory).
 

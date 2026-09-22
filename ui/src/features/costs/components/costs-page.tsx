@@ -16,6 +16,8 @@ import { CostChartsPanel } from "./cost-charts-panel";
 import { CostFilterBar } from "./cost-filter-bar";
 import { CostList } from "./cost-list";
 import { CostSummaryCards } from "./cost-summary-cards";
+import { MemoryCostByGroup } from "./memory-cost-by-group";
+import { useMemoryCostByGroup } from "../hooks/use-memory-cost-by-group";
 
 const FILTER_DEFAULTS = {
   q: "",
@@ -65,6 +67,10 @@ export function CostsPage() {
 
   const { summary, isLoading: isLoadingSummary, refetch: refetchSummary } =
     useCostSummary(filters);
+  // Only fetch the per-group breakdown when there's memory spend to split.
+  const hasMemoryCost = (summary?.totalMemoryCost ?? 0) > 0;
+  const { groups: memoryGroups, isLoading: isLoadingMemoryGroups } =
+    useMemoryCostByGroup(filters, hasMemoryCost);
   const { agentOptions, modelOptions } = useCostFilterOptions(filters);
   const {
     records,
@@ -143,6 +149,10 @@ export function CostsPage() {
         selectedAgentId={filters.agentId}
         onSelectAgent={(agentId) => setUrlFilters({ agentId })}
       />
+
+      {hasMemoryCost && (
+        <MemoryCostByGroup groups={memoryGroups} isLoading={isLoadingMemoryGroups} />
+      )}
 
       <p className="text-[13px] mb-3" style={{ color: "var(--ink-4)" }}>
         {total.toLocaleString()} {total === 1 ? "call" : "calls"}

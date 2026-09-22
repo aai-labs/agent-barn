@@ -14,6 +14,16 @@ Related context: [`../agents.md`](../agents.md), [`../costs.md`](../costs.md), [
 
 ## Changes
 
+### 2026-09-22 — AF-280 — measure memory cost per group
+
+Added a per-group split of memory spend, so the Costs page shows which pool the memory bill comes from — the finest attribution the shared-pool model allows (memory has no per-Agent cost; agents share a pool).
+
+- **How it's measured.** LiteLLM's spend on Honcho's one credential is the exact total; the per-call telemetry names the workspace, so the total is apportioned across groups by each pool workspace's token share (`HonchoUsageService.cost_by_group`). An approximation — raw token weight, not per-model price — but it always reconciles to the authoritative total. Only pool workspaces count; legacy per-Agent workspaces are ignored. Verified live end-to-end (v3.2.0): LiteLLM billed $0.021255 on the key, and the per-group split summed back to it.
+- **Surface.** `GET /organizations/{org}/costs/memory-by-group` (gated on `cost.read`) returns each of the org's groups with its memory cost, ranked; groups with no activity show 0. The Costs page renders a "Memory cost by group" table under the agent-spend table when there's memory spend. The org-level total (the "Memory cost" card) is unchanged.
+- **Honcho bumped v3.1.0 → v3.2.0.** For the streamed-token capture fix in [#1166](https://github.com/plastic-labs/honcho/pull/1166): on v3.1.0 the `llm.call.completed` usage events under-reported output tokens for streamed calls, which would skew the per-pool token weights. (The richer `.traced` trace events from #1166 go to a separate exporter, not our usage ingest, so we still consume `.completed`; the value here is the accuracy fix.) Verified v3.2.0 boots with our config and its telemetry ingests correctly.
+- **Not addressed:** hard enforcement (a per-group budget/cap) and per-Agent attribution — deferred. Embedding calls report 0 tokens in this telemetry, so an embedding-only pool is under-weighted; negligible in practice (embeddings are a small fraction of memory spend, and recall/derivation always involve an LLM call).
+- **Coverage.** Unit tests for the apportionment (reconciliation, token-share split, legacy-workspace exclusion, empty cases) and the service scoping/labelling. `check-api`, `check-migrations`, `check-ui`, `lint-ui` clean; no new migration.
+
 ### 2026-09-21 — AF-280 — share a memory item from one group to another
 
 Added the group-level equivalent of the old explicit per-Agent share: pushing one memory item from a source pool into other pools. Within a group memory is already shared, so this is the one path that crosses the boundary between distinct pools.

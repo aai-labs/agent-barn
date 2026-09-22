@@ -257,7 +257,7 @@ services:
       retries: 20
 
   honcho:
-    image: ghcr.io/plastic-labs/honcho:v3.1.0
+    image: ghcr.io/plastic-labs/honcho:v3.2.0
     container_name: ${HONCHO_CONTAINER_NAME:-aai_honcho}
     profiles: ["k3d"]
     restart: unless-stopped
@@ -305,7 +305,7 @@ services:
       retries: 20
 
   honcho-deriver:
-    image: ghcr.io/plastic-labs/honcho:v3.1.0
+    image: ghcr.io/plastic-labs/honcho:v3.2.0
     container_name: ${HONCHO_DERIVER_CONTAINER_NAME:-aai_honcho_deriver}
     profiles: ["k3d"]
     restart: unless-stopped

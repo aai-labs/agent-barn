@@ -16,9 +16,15 @@ from injector import inject, singleton
 from api.core.config import Config
 from api.domains.costs.models import HonchoUsageEvent
 from api.domains.costs.repository import HonchoUsageRepository
+from api.infrastructure.honcho.client import pool_id_from_workspace
 from api.infrastructure.litellm.client import LiteLLMClient
 
-# Honcho emits one CloudEvent per model call. Only these two carry token counts.
+# Honcho's usage telemetry: one CloudEvent per model/embedding call, carrying the
+# workspace and token counts. Only these two types carry usage — Honcho emits
+# others (agent.iteration, dialectic.completed, ...) on the same stream, which we
+# skip. (The richer ".traced" trace events from PR #1166 go to a separate trace
+# exporter, not this usage endpoint; v3.2.0 still matters here because its capture
+# fix stops streamed calls from under-reporting output tokens in these events.)
 _HONCHO_USAGE_EVENT_TYPES = frozenset({"llm.call.completed", "embedding.call.completed"})
 
 
@@ -92,6 +98,35 @@ class HonchoUsageService:
         key_hash = hashlib.sha256(self.config.honcho_litellm_key.encode()).hexdigest()
         spend_report = self.litellm.get_global_spend_report(start_date, end_date)
         return float(spend_report.get(key_hash, {}).get("spend", 0.0))
+
+    def cost_by_group(self, start: datetime.datetime, end: datetime.datetime) -> dict[str, float]:
+        """Split the memory total across groups (pools), reconciled to that total.
+
+        Honcho bills all memory work on one credential, so LiteLLM's spend for that
+        key is the exact total (`memory_cost_total`). Per-call telemetry names the
+        workspace, so we apportion that total across groups in proportion to each
+        pool workspace's token share. The split is an approximation — raw token
+        weight, not per-model price, so an embedding-heavy pool is weighted a little
+        high — but it always sums back to the authoritative total. Only pool
+        workspaces (`af-pool-<group id>`) count; any legacy per-Agent workspace is
+        ignored (the group model has none).
+
+        Returned keys are group ids (as strings); the caller scopes them to an
+        Organization and attaches names.
+        """
+        total = self.memory_cost_total(start.date().isoformat(), end.date().isoformat())
+        if total <= 0:
+            return {}
+        tokens_by_group: dict[str, int] = {}
+        for row in self.repository.token_totals_by_workspace(start, end):
+            group_id = pool_id_from_workspace(row.workspace_name)
+            if group_id is None:
+                continue
+            tokens_by_group[group_id] = tokens_by_group.get(group_id, 0) + row.input_tokens + row.output_tokens
+        grand_total = sum(tokens_by_group.values())
+        if grand_total == 0:
+            return {}
+        return {gid: round(total * tokens / grand_total, 12) for gid, tokens in tokens_by_group.items()}
 
 
 def _as_optional_str(value: object) -> str | None:

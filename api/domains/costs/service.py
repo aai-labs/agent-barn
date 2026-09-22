@@ -22,10 +22,12 @@ from api.domains.costs.models import (
     CostRecordSource,
     CostSeriesPoint,
     CostSummaryRead,
+    GroupMemoryCostRead,
     TokenSeriesPoint,
 )
 from api.domains.costs.repository import CostRepository
 from api.domains.costs.usage_service import HonchoUsageService
+from api.domains.memory_groups.service import MemoryGroupService
 from api.domains.platform_admin.models import StatsWindow
 from api.domains.rbac.catalog import PermissionKey
 from api.domains.rbac.policy import PermissionPolicy
@@ -43,6 +45,7 @@ class CostService:
     permission_policy: PermissionPolicy
     repository: CostRepository
     honcho_usage: HonchoUsageService
+    memory_groups: MemoryGroupService
 
     def _org_id(self, context: CurrentUserContext) -> UUID:
         return context.require_current_user_organization().organization_id
@@ -88,6 +91,30 @@ class CostService:
             12,
         )
         return summary
+
+    def memory_cost_by_group(self, context: CurrentUserContext, window: StatsWindow) -> list[GroupMemoryCostRead]:
+        """This Organization's memory spend split across its memory groups.
+
+        Memory has no per-Agent attribution (Agents share pools), but the pool is a
+        group, so this is the finest split that is meaningful. The figures come from
+        apportioning Honcho's authoritative total by per-pool token share, then are
+        scoped to the groups this Organization owns and labelled with their names.
+        Groups with no memory activity in the window appear with 0, and the rows sum
+        to the summary's `total_memory_cost`.
+        """
+        org_id = self._authorized_org(context)
+        cost_by_group = self.honcho_usage.cost_by_group(window.start, window.end)
+        names = self.memory_groups.names_for_org(org_id)
+        rows = [
+            GroupMemoryCostRead(
+                group_id=group_id,
+                group_name=name,
+                memory_cost=round(cost_by_group.get(str(group_id), 0.0), 12),
+            )
+            for group_id, name in names.items()
+        ]
+        rows.sort(key=lambda r: (-r.memory_cost, r.group_name.lower()))
+        return rows
 
     def list_org_costs(
         self,
