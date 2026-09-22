@@ -54,7 +54,6 @@ _EXCLUSION_EVIDENCE = {
     _OPENCLAW: {
         "local-plugins": (_OPENCLAW_START, "/home/node/.openclaw/local-plugins/"),
         "agentbarn-messages.sqlite3": (_OPENCLAW_START, "/home/node/.openclaw/agentbarn-messages.sqlite3"),
-        "openclaw.json": (_OPENCLAW_INIT, "'openclaw.json'"),
         "workspace/skills": (_OPENCLAW_INIT, "path.join(WORKSPACE_DIR, 'skills')"),
     },
 }
@@ -247,11 +246,33 @@ def test_openclaw_capture_excludes_regenerated_state_and_the_message_spool(tmp_p
     names = _members(dest)
     for excluded in (
         "local-plugins/telemetry-push/index.js",
-        "openclaw.json",
         "workspace/skills/jira/SKILL.md",
         "agentbarn-messages.sqlite3",
     ):
         assert_that(names, is_not(has_item(excluded)))
+
+
+def test_an_installed_plugins_registration_survives_a_restore(tmp_path):
+    """openclaw.json is carried because the boot path merges it, it does not rewrite it.
+
+    A managed npm install records the plugin under plugins.entries there. init-openclaw.js
+    deep-merges the overlay into whatever the volume holds, so that entry survives a restart
+    -- but a restore wipes the volume, and an archive without the file leaves the package on
+    disk unregistered. start.sh then reads the core's version off that package and skips the
+    install that would have re-registered it, so the plugin stays missing on every boot.
+    """
+    source, backup, archive = tmp_path / "src", tmp_path / "bak", tmp_path / "arc"
+    for path in (source, backup, archive):
+        path.mkdir()
+    _openclaw_volume(source)
+    registered = '{"plugins": {"entries": {"@openclaw/firecrawl-plugin": {"enabled": true}}}}'
+    _write(source, "openclaw.json", registered)
+    capture(source, archive, _OPENCLAW)
+    _write(source, "openclaw.json", "{}")
+
+    restore(source, backup, archive, _OPENCLAW)
+
+    assert_that((source / "openclaw.json").read_text(), equal_to(registered))
 
 
 _PEER_LINK_DIR = "npm/projects/openclaw-firecrawl-plugin-69f7ab/node_modules/@openclaw/firecrawl-plugin/node_modules"
