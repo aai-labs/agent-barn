@@ -105,6 +105,8 @@ export const mockAgent = {
   // Started on what it resolves to, so the default fixture reports nothing pending.
   running_model: "litellm/gpt-5-mini",
   pending_model: "",
+  // Started on the current platform code, so the default fixture offers no update.
+  update_available: false,
   approval_mode: "auto",
   secrets: [],
   skills: [],

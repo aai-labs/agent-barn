@@ -169,7 +169,7 @@ export const INTEGRATION_PROVIDERS: IntegrationProvider[] = [
   {
     id: "firecrawl",
     label: "Firecrawl",
-    scopeNote: "Optional — agents use the platform Firecrawl by default. Provide your own API key and URL to use Firecrawl Cloud or another instance.",
+    scopeNote: "Optional — web search and scraping are built in, and agents use the platform's Firecrawl by default. Adding a key does not enable Firecrawl; it points this agent at your own instance instead, such as Firecrawl Cloud.",
     fields: [
       { key: "apiKey", label: "API key", type: "secret", required: true, placeholder: "fc-…" },
       { key: "baseUrl", label: "Base URL", type: "text", required: false, placeholder: "https://api.firecrawl.dev", hint: "Leave empty to use the platform's self-hosted Firecrawl." },
