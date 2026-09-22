@@ -40,15 +40,6 @@ Related context: [`../agents.md`](../agents.md), [`../../architecture/runtime-an
   and `plugins registry --refresh`, `plugins uninstall` and `doctor --fix` do not clear it.
   Both come back together now, so only the link is missing, and recreating it needs no npm,
   no network and no registry.
-- Fixed: archives carry `openclaw.json`. A managed npm install records the plugin under
-  `plugins.entries` there, and `init-openclaw.js` deep-merges the overlay into whatever the
-  volume already holds rather than rewriting the file, so that record survives a restart.
-  A restore wipes the volume, so an archive without the file left the restored package
-  unregistered: the start script read the core's version off the package on disk and skipped
-  the install that would have re-registered it, and every boot afterwards loaded one plugin
-  fewer. Nothing is rolled back by carrying it — the overlay replaces `channels`, `bindings`
-  and the heartbeat wholesale on every boot and wins every key it defines, so only what
-  OpenClaw itself wrote comes back.
 - Fixed (API): both restore point provisioning handlers log the exception. The reason stored
   on the row is deliberately reduced to fixed copy, so the cluster's own account of a
   rejection — which field it refused — had no surviving record anywhere.

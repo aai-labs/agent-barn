@@ -49,6 +49,7 @@ HERMES_EXCLUDED = (
 
 OPENCLAW_EXCLUDED = (
     "local-plugins",
+    "openclaw.json",
     "agentbarn-messages.sqlite3",
     "workspace/skills",
     "workspace/AGENTS.md",
