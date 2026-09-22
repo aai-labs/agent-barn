@@ -107,6 +107,12 @@ def test_no_pods_reports_nothing():
     assert _readiness() == (None, None)
 
 
+def test_pod_in_an_indeterminate_phase_reports_nothing_rather_than_crashed():
+    pod = _pod("agent-new", "Unknown", created=_NEWER)
+
+    assert _readiness(pod) == (None, None)
+
+
 def test_newest_pod_wins_when_several_are_alive():
     older = _pod("agent-older", "Running", created=_OLDER, container_statuses=[_waiting_status("CrashLoopBackOff")])
     newer = _pod("agent-newer", "Running", created=_NEWER, ready=True)

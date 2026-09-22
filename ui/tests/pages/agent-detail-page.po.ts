@@ -61,6 +61,10 @@ export class AgentDetailPage {
     return this.page.getByTestId("agent-update-button");
   }
 
+  updateReleasesLink(): Locator {
+    return this.page.getByTestId("agent-update-releases-link");
+  }
+
   lifecycleMenuTrigger(): Locator {
     return this.page.getByRole("button", { name: "More lifecycle actions" });
   }

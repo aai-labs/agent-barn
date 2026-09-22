@@ -58,6 +58,42 @@ test.describe("Agent update button", () => {
     await expect(agentDetailPage.lifecycleMenu()).toBeVisible();
   });
 
+  test("hovering explains that the Agent is running an older release", async ({ page }) => {
+    await dataSupport.agents.interceptGetAgentRequest({
+      body: { ...mockAgent, status: "RUNNING", update_available: true },
+    });
+
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await agentDetailPage.updateButton().hover();
+
+    await expect(page.getByRole("tooltip").filter({ hasText: /older release/i })).toBeVisible();
+  });
+
+  test("offers a link to the release notes beside the button", async () => {
+    await dataSupport.agents.interceptGetAgentRequest({
+      body: { ...mockAgent, status: "RUNNING", update_available: true },
+    });
+
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+
+    const link = agentDetailPage.updateReleasesLink();
+    await expect(link).toBeVisible();
+    await expect(link).toHaveAttribute("href", "https://github.com/aai-labs/agent-barn/releases");
+    await expect(link).toHaveAttribute("target", "_blank");
+    await expect(link).toHaveAttribute("rel", "noopener noreferrer");
+  });
+
+  test("the release notes link shares the button's visibility", async () => {
+    await dataSupport.agents.interceptGetAgentRequest({
+      body: { ...mockAgent, status: "RUNNING", update_available: false },
+    });
+
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+
+    await expect(agentDetailPage.agentName("Maya")).toBeVisible();
+    await expect(agentDetailPage.updateReleasesLink()).toHaveCount(0);
+  });
+
   test("stays hidden for a stopped Agent, which has no pod to update", async () => {
     await dataSupport.agents.interceptGetAgentRequest({
       body: {
@@ -113,5 +149,6 @@ test.describe("Agent update button", () => {
 
     await expect(agentDetailPage.agentName("Maya")).toBeVisible();
     await expect(agentDetailPage.updateButton()).toHaveCount(0);
+    await expect(agentDetailPage.updateReleasesLink()).toHaveCount(0);
   });
 });

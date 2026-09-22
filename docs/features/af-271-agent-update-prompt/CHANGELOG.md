@@ -13,7 +13,8 @@ Related context: [`../agents.md`](../agents.md),
   runtime image references, `Agent.running_config_digest` recording what a
   running pod started on, `AgentRead.update_available` reporting when the two
   disagree, and a black Update control on the Agent page that runs the existing
-  stop/start. Durable facts now live in [`../agents.md`](../agents.md) and
+  stop/start, explains itself on hover, and links to the release notes. Durable
+  facts now live in [`../agents.md`](../agents.md) and
   [`../../architecture/runtime-and-deployment.md`](../../architecture/runtime-and-deployment.md).
 - In transition: **on the deploy that carries this epic, every already-running
   Agent reports an available update at once.** Those pods predate the record, so
@@ -33,6 +34,21 @@ computed — a future change proposing a hand-maintained list should read it
 first. Delete this log once the fleet has turned over.
 
 ## Changes
+
+### 2026-09-22 — AF-271-06
+
+- Delivered: the Update control now explains itself. Hovering it states that the
+  Agent is running an older release and should be restarted, and a focusable
+  icon link beside it opens the project's releases page in a new tab.
+- Changed: UI only — `agent-update-button.tsx`, plus a page-object locator and
+  three Playwright cases. No API, schema or deployment surface.
+- Decision: the link is a separate control rather than an anchor inside the
+  tooltip. Radix closes a tooltip when focus moves, so a link placed inside one
+  is unreachable by keyboard; the tooltip explains and the link is a real
+  focusable element.
+- Coverage: `ui/tests/e2e/agent-update-button.spec.ts` — the hover copy, the
+  link's `href`/`target`/`rel`, and the link sharing the button's visibility
+  gate in both the no-update and no-permission cases.
 
 ### 2026-09-21 — AF-271-05
 
@@ -119,13 +135,16 @@ first. Delete this log once the fleet has turned over.
   unit test.
 - Decision: the watched set is **computed, not curated**. A hand-picked list was
   written first and measured against the real closure: it named 9 modules where
-  the closure reaches 31 modules, 45 asset files and 212 definitions, silently
+  the closure reaches 32 modules, 45 asset files and 245 definitions, silently
   omitting `skills.models.derive_tools_pointer`,
   `agent_settings.lookup.resolve_default_model`,
   `google_workspace_scopes.required_service_scopes`, `skills.files.DEFAULT_ENTRY_PATH`,
   `templates.slug.slugify`, the credential content schemas in `agents/models.py`,
   and `infrastructure.kubernetes.client`. A curated list is therefore not a
   maintainable option, and no version constant or digest is hand-maintained.
+  The digest module ends up inside its own closure, which is harmless: any
+  change to the hashing algorithm invalidates every stored digest by
+  construction, so excluding it would achieve nothing.
 - Decision: the closure is built from `AgentService._provision_and_start` by
   following `self._method()` calls, `self.<collaborator>.<method>()` through the
   class-level annotations, and every free name to its defining module. It
