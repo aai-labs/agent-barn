@@ -11,7 +11,7 @@ DB_CONNECTION_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@localhost:$
 
 API_PORT=8000
 ENVIRONMENT=local
-UI_APP_URL=http://localhost:3000
+WEB_APP_URL=http://localhost:3000
 
 # Optional: Redis is only needed to run the event delivery worker/reconciler
 # locally (`make redis-up`, `make dev-worker`); defaults to localhost:6379.
