@@ -1,9 +1,9 @@
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from injector import inject, singleton
-from sqlalchemy import func
+from sqlalchemy import and_, func, or_
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, col, select
 
@@ -19,6 +19,10 @@ from api.domains.agents.repository import agent_scope_predicates
 from api.domains.rbac.policy import AuthorizationScope
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.infrastructure.shared.models import PaginatedItems, Pagination
+
+# Longer than a whole dispatch (three 10s attempts plus backoff), so a RECEIVED row
+# this old was abandoned by a crashed or restarted API process, not still in flight.
+STALLED_DISPATCH_AFTER = timedelta(minutes=2)
 
 
 class AgentWebhookConflictError(RuntimeError):
@@ -200,13 +204,11 @@ class AgentWebhookRepository:
         now = datetime.now(UTC)
         with Session(self.delegate.engine, expire_on_commit=False) as session:
             invocation = session.exec(
-                select(WebhookInvocation)
-                .where(
-                    col(WebhookInvocation.id) == invocation_id,
-                    col(WebhookInvocation.dispatch_generation) == generation,
-                )
-                .with_for_update()
+                select(WebhookInvocation).where(col(WebhookInvocation.id) == invocation_id).with_for_update()
             ).one()
+            if invocation.dispatch_generation != generation:
+                # A retry superseded this dispatch; its own result owns the row.
+                return invocation
             invocation.dispatch_attempt_count = attempts
             invocation.native_job_id = native_job_id
             invocation.last_error_code = error_code
@@ -238,7 +240,13 @@ class AgentWebhookRepository:
                     col(WebhookInvocation.id) == invocation_id,
                     col(WebhookInvocation.webhook_id) == webhook_id,
                     col(WebhookInvocation.agent_id) == agent_id,
-                    col(WebhookInvocation.status) == WebhookInvocationStatus.DISPATCH_FAILED,
+                    or_(
+                        col(WebhookInvocation.status) == WebhookInvocationStatus.DISPATCH_FAILED,
+                        and_(
+                            col(WebhookInvocation.status) == WebhookInvocationStatus.RECEIVED,
+                            col(WebhookInvocation.updated_at) < datetime.now(UTC) - STALLED_DISPATCH_AFTER,
+                        ),
+                    ),
                     *agent_scope_predicates(authorization_scope),
                 )
                 .with_for_update()

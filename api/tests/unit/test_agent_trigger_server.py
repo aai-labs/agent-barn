@@ -1,3 +1,4 @@
+import ast
 import importlib.util
 from pathlib import Path
 
@@ -13,6 +14,10 @@ def trigger_server():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def test_listener_source_parses_for_the_oldest_runtime_image() -> None:
+    ast.parse(_SCRIPT.read_text(), filename=str(_SCRIPT), feature_version=(3, 12))
 
 
 def _payload() -> dict:
@@ -74,6 +79,38 @@ def test_a_retry_never_recreates_a_job_that_may_already_have_run(monkeypatch, tm
     with pytest.raises(trigger_server.ConflictError, match="outcome is unknown"):
         trigger_server.dispatch(key, _payload())
     assert created == []
+
+
+def test_a_create_the_runtime_refused_outright_can_be_retried_with_the_same_key(
+    monkeypatch, tmp_path, trigger_server
+) -> None:
+    trigger_server.RECEIPT_PATH = tmp_path / "receipts.sqlite3"
+    trigger_server.RUNTIME_KIND = "hermes"
+    key = f"{_payload()['invocation_id']}:1"
+
+    def refused(name, prompt, platform):
+        raise trigger_server.NotSubmittedError("connection refused")
+
+    monkeypatch.setattr(trigger_server, "_hermes_find", lambda name: None)
+    monkeypatch.setattr(trigger_server, "_hermes_create", refused)
+    with pytest.raises(trigger_server.DispatchError):
+        trigger_server.dispatch(key, _payload())
+
+    monkeypatch.setattr(trigger_server, "_hermes_create", lambda *args: "hermes-job-1")
+    assert trigger_server.dispatch(key, _payload()) == "hermes-job-1"
+
+
+def test_a_refused_runtime_connection_proves_nothing_was_submitted(monkeypatch, trigger_server) -> None:
+    import urllib.error
+
+    def refuse(*args, **kwargs):
+        raise urllib.error.URLError(ConnectionRefusedError())
+
+    trigger_server.RUNTIME_API_URL = "http://runtime"
+    monkeypatch.setattr(trigger_server.urllib.request, "urlopen", refuse)
+
+    with pytest.raises(trigger_server.NotSubmittedError):
+        trigger_server._request_json("POST", "/api/jobs", {})
 
 
 def test_hermes_creates_a_scheduler_fired_one_shot_job_with_native_delivery(monkeypatch, trigger_server) -> None:

@@ -19,7 +19,7 @@ class WebhookInvocationStatus(str, enum.Enum):
     DISPATCH_FAILED = "DISPATCH_FAILED"
 
 
-class WebhookDeliveryPlatform(str, enum.Enum):
+class WebhookDeliveryPlatform(enum.StrEnum):
     SLACK = "slack"
     DISCORD = "discord"
     TELEGRAM = "telegram"

@@ -5,6 +5,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response, status
 from fastapi_injector import Injected
 from pydantic import ValidationError
+from starlette.concurrency import run_in_threadpool
 
 from api.domains.agent_webhooks.models import (
     AgentWebhookCreate,
@@ -16,6 +17,7 @@ from api.domains.agent_webhooks.models import (
 )
 from api.domains.agent_webhooks.service import (
     SIGNATURE_HEADER,
+    TIMESTAMP_HEADER,
     VERSION_HEADER,
     AgentWebhookService,
 )
@@ -144,6 +146,7 @@ async def accept_webhook_invocation(
     service: Annotated[AgentWebhookService, Injected(AgentWebhookService)],
     signature: Annotated[str, Header(alias=SIGNATURE_HEADER)] = "",
     version: Annotated[str, Header(alias=VERSION_HEADER)] = "",
+    timestamp: Annotated[str, Header(alias=TIMESTAMP_HEADER)] = "",
 ):
     declared_length = request.headers.get("content-length", "")
     if declared_length.isdigit() and int(declared_length) > MAX_WEBHOOK_BODY_BYTES:
@@ -158,11 +161,13 @@ async def accept_webhook_invocation(
     if not isinstance(decoded, dict):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Webhook body must be a JSON object")
     try:
-        return service.accept_invocation(
+        return await run_in_threadpool(
+            service.accept_invocation,
             webhook_id,
             decoded,
             raw_body=raw_body,
             signature=signature,
+            timestamp=timestamp,
             version=version,
         )
     except PermissionError as exc:

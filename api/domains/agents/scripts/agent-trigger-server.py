@@ -13,6 +13,7 @@ import subprocess
 import threading
 import urllib.error
 import urllib.request
+from contextlib import closing
 from datetime import UTC, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -26,11 +27,21 @@ RUNTIME_API_URL = os.environ.get("RUNTIME_API_URL", "").rstrip("/")
 RECEIPT_PATH = Path(os.environ.get("AGENT_TRIGGER_RECEIPT_PATH", "/tmp/agent-trigger-receipts.sqlite3"))
 MAX_BODY_BYTES = 128 * 1024
 PLATFORMS = {"slack", "discord", "telegram", "teams"}
+# ponytail: one process-wide lock serializes every dispatch, including its runtime
+# calls (up to ~15s). Fine at webhook volume; lock per idempotency key if it queues.
 _LOCK = threading.Lock()
 
 
 class DispatchError(RuntimeError):
     pass
+
+
+class NotSubmittedError(DispatchError):
+    """The runtime certainly created no job, so the same key may safely try again."""
+
+
+class RuntimeRejectedError(ValueError):
+    """The runtime refused the job (4xx); it created nothing and will refuse again."""
 
 
 class ConflictError(ValueError):
@@ -66,7 +77,11 @@ def _request_json(method: str, path: str, body: dict | None = None) -> dict:
     except urllib.error.HTTPError as exc:
         # A 4xx (e.g. Hermes' 5,000-character prompt cap) will fail the same way on retry.
         if 400 <= exc.code < 500:
-            raise ValueError(f"Hermes rejected the trigger with HTTP {exc.code}") from exc
+            raise RuntimeRejectedError(f"Hermes rejected the trigger with HTTP {exc.code}") from exc
+        raise DispatchError("Hermes scheduler rejected the trigger") from exc
+    except urllib.error.URLError as exc:
+        if isinstance(exc.reason, ConnectionRefusedError):
+            raise NotSubmittedError("Hermes scheduler is not accepting connections") from exc
         raise DispatchError("Hermes scheduler rejected the trigger") from exc
     except (OSError, ValueError) as exc:
         raise DispatchError("Hermes scheduler rejected the trigger") from exc
@@ -124,6 +139,8 @@ def _openclaw_json(arguments: list[str]) -> object:
             timeout=15,
         )
         return json.loads(completed.stdout)
+    except FileNotFoundError as exc:
+        raise NotSubmittedError("OpenClaw CLI is not available") from exc
     except (OSError, subprocess.SubprocessError, ValueError) as exc:
         raise DispatchError("OpenClaw scheduler rejected the trigger") from exc
 
@@ -170,7 +187,8 @@ def dispatch(idempotency_key: str, payload: dict) -> str:
     A pending receipt is committed before the create call. If a retry finds it
     pending and the runtime has no job by that name, the first create may still
     have run (one-shot jobs delete themselves), so the outcome is reported as
-    unknown instead of risking a second run.
+    unknown instead of risking a second run. A failure that proves nothing was
+    created drops the receipt, so a retry of the same key submits normally.
     """
     if RUNTIME_KIND == "hermes":
         find, create = _hermes_find, _hermes_create
@@ -180,7 +198,7 @@ def dispatch(idempotency_key: str, payload: dict) -> str:
         raise DispatchError("Unsupported Agent runtime")
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
     payload_hash = hashlib.sha256(encoded).hexdigest()
-    with _LOCK, _database() as db:
+    with _LOCK, closing(_database()) as db:
         receipt = db.execute(
             "SELECT payload_hash, native_job_id FROM trigger_receipts WHERE idempotency_key = ?",
             (idempotency_key,),
@@ -201,7 +219,12 @@ def dispatch(idempotency_key: str, payload: dict) -> str:
                 (idempotency_key, payload_hash),
             )
             db.commit()
-            native_job_id = create(name, payload["prompt"], payload["delivery_platform"])
+            try:
+                native_job_id = create(name, payload["prompt"], payload["delivery_platform"])
+            except (NotSubmittedError, RuntimeRejectedError):
+                db.execute("DELETE FROM trigger_receipts WHERE idempotency_key = ?", (idempotency_key,))
+                db.commit()
+                raise
         db.execute(
             "INSERT INTO trigger_receipts (idempotency_key, payload_hash, native_job_id) VALUES (?, ?, ?) "
             "ON CONFLICT (idempotency_key) DO UPDATE SET native_job_id = excluded.native_job_id",

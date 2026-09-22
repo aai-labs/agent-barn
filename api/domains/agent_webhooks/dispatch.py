@@ -58,7 +58,7 @@ class AgentWebhookDispatcher:
                 "invocation_id": str(invocation.id),
                 "dispatch_generation": invocation.dispatch_generation,
                 "prompt": invocation.prompt,
-                "delivery_platform": getattr(webhook.delivery_platform, "value", webhook.delivery_platform),
+                "delivery_platform": webhook.delivery_platform,
             },
             separators=(",", ":"),
         ).encode()

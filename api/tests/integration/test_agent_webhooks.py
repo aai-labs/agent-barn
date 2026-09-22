@@ -1,6 +1,8 @@
 import hashlib
 import hmac
 import json
+import time
+from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 import httpx
@@ -89,14 +91,16 @@ def _create_webhook(context, name: str = "Jira automation", platform: str = "sla
     return response.json()
 
 
-def _fire(context, webhook_id: str, secret: str, body: dict) -> httpx.Response:
+def _fire(context, webhook_id: str, secret: str, body: dict, *, timestamp: int | None = None) -> httpx.Response:
     raw = json.dumps(body, separators=(",", ":")).encode()
-    signature = "sha256=" + hmac.new(secret.encode(), raw, hashlib.sha256).hexdigest()
+    signed_at = str(int(time.time()) if timestamp is None else timestamp)
+    signature = "sha256=" + hmac.new(secret.encode(), signed_at.encode() + b"." + raw, hashlib.sha256).hexdigest()
     return context.client.post(
         f"/agent-hooks/v1/{webhook_id}",
         content=raw,
         headers={
             "X-AgentBarn-Webhook-Version": "1",
+            "X-AgentBarn-Timestamp": signed_at,
             "X-AgentBarn-Signature": signature,
             "Content-Type": "application/json",
         },
@@ -247,6 +251,22 @@ def test_ingress_rejects_a_bad_signature_without_persisting_an_invocation() -> N
             assert_that(list(session.exec(select(WebhookInvocation)).all()), has_length(0))
 
 
+def test_ingress_rejects_a_correctly_signed_request_replayed_outside_the_window() -> None:
+    with given(_GIVEN) as context:
+        webhook = _create_webhook(context)
+        response = _fire(
+            context,
+            webhook["id"],
+            webhook["signing_secret"],
+            {"prompt": "Do something"},
+            timestamp=int(time.time()) - 301,
+        )
+
+        assert_that(response.status_code, equal_to(status.HTTP_401_UNAUTHORIZED))
+        with Session(context.injector.get(PostgresRepositoryDelegate).engine) as session:
+            assert_that(list(session.exec(select(WebhookInvocation)).all()), has_length(0))
+
+
 def test_active_webhook_names_are_unique_per_agent() -> None:
     with given(_GIVEN) as context:
         _create_webhook(context)
@@ -328,3 +348,69 @@ def test_failed_dispatch_can_be_retried_as_a_new_generation(monkeypatch: pytest.
         assert_that(retried.json()["dispatch_generation"], equal_to(2))
         assert_that(retried.json()["status"], equal_to("SUBMITTED"))
         assert_that(retried.json()["native_job_id"], equal_to("retry-job"))
+
+
+def _retry(context, webhook_id: str, invocation_id: str) -> httpx.Response:
+    return context.client.post(
+        f"/api/v1/organizations/{context.organization.id}/agents/{context.agent.id}/webhooks/"
+        f"{webhook_id}/invocations/{invocation_id}/retry",
+        headers=_auth(context),
+    )
+
+
+def _set_invocation(context, invocation_id: str, **values) -> None:
+    with Session(context.injector.get(PostgresRepositoryDelegate).engine) as session:
+        invocation = session.get(WebhookInvocation, UUID(invocation_id))
+        assert invocation is not None
+        for key, value in values.items():
+            setattr(invocation, key, value)
+        session.add(invocation)
+        session.commit()
+
+
+def test_an_abandoned_received_dispatch_can_be_retried_once_it_stalls(monkeypatch: pytest.MonkeyPatch) -> None:
+    with given(_GIVEN) as context:
+        webhook = _create_webhook(context)
+        _set_trigger_key(context)
+        monkeypatch.setattr(
+            "api.domains.agent_webhooks.dispatch.httpx.request",
+            lambda *args, **kwargs: httpx.Response(202, json={"native_job_id": "recovered-job"}),
+        )
+        fired = _fire(context, webhook["id"], webhook["signing_secret"], {"prompt": "Recover me"})
+        invocation_id = fired.json()["invocation_id"]
+        # As if the API process died between storing the invocation and recording the dispatch.
+        _set_invocation(context, invocation_id, status=WebhookInvocationStatus.RECEIVED, native_job_id=None)
+
+        assert_that(_retry(context, webhook["id"], invocation_id).status_code, equal_to(status.HTTP_409_CONFLICT))
+
+        _set_invocation(context, invocation_id, updated_at=datetime.now(UTC) - timedelta(minutes=5))
+        retried = _retry(context, webhook["id"], invocation_id)
+
+        assert_that(retried.status_code, equal_to(status.HTTP_200_OK))
+        assert_that(retried.json()["status"], equal_to("SUBMITTED"))
+        assert_that(retried.json()["dispatch_generation"], equal_to(2))
+
+
+def test_a_disabled_webhook_does_not_retry_its_invocations(monkeypatch: pytest.MonkeyPatch) -> None:
+    with given(_GIVEN) as context:
+        webhook = _create_webhook(context)
+        _set_trigger_key(context)
+        monkeypatch.setattr(
+            "api.domains.agent_webhooks.dispatch.httpx.request",
+            lambda *args, **kwargs: httpx.Response(400),
+        )
+        failed = _fire(context, webhook["id"], webhook["signing_secret"], {"prompt": "Not now"})
+        disabled = context.client.patch(
+            f"/api/v1/organizations/{context.organization.id}/agents/{context.agent.id}/webhooks/{webhook['id']}",
+            json={"revision": webhook["revision"], "enabled": False},
+            headers=_auth(context),
+        )
+        assert_that(disabled.status_code, equal_to(status.HTTP_200_OK))
+
+        response = _retry(context, webhook["id"], failed.json()["invocation_id"])
+
+        assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
+        assert_that(
+            _invocation(context, failed.json()["invocation_id"]).status,
+            equal_to(WebhookInvocationStatus.DISPATCH_FAILED),
+        )

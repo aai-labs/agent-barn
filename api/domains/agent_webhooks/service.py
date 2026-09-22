@@ -1,6 +1,7 @@
 import hashlib
 import hmac
 import secrets
+import time
 from dataclasses import dataclass
 from typing import Any, NoReturn
 from uuid import UUID
@@ -17,6 +18,7 @@ from api.domains.agent_webhooks.models import (
     AgentWebhookUpdate,
     WebhookDeliveryPlatform,
     WebhookDeliveryPlatformRead,
+    WebhookInvocation,
     WebhookInvocationAccepted,
     WebhookInvocationCreate,
     WebhookInvocationRead,
@@ -32,7 +34,11 @@ from api.infrastructure.shared.models import PaginatedItems, Pagination
 
 VERSION_HEADER = "X-AgentBarn-Webhook-Version"
 SIGNATURE_HEADER = "X-AgentBarn-Signature"
+TIMESTAMP_HEADER = "X-AgentBarn-Timestamp"
 WEBHOOK_CONTRACT_VERSION = "1"
+# A signed request is only accepted this close to its timestamp, which bounds replay.
+SIGNATURE_TOLERANCE_SECONDS = 300
+SUPPORTED_PLATFORM_KEYS = frozenset(item.value for item in WebhookDeliveryPlatform)
 
 
 def has_default_channel(connection: CommunicationConnection) -> bool:
@@ -62,7 +68,6 @@ class AgentWebhookService:
         webhook = self.repository.get_active_in_scope(webhook_id, agent_id, scope)
         if webhook is None:
             self._raise_not_found(webhook_id)
-        assert webhook is not None
         return self._read(webhook)
 
     def list_delivery_platforms(
@@ -72,15 +77,14 @@ class AgentWebhookService:
     ) -> list[WebhookDeliveryPlatformRead]:
         self.authorization.require_visible(context, agent_id)
         scope = self.authorization.authorization_scope(context, PermissionKey.AGENT_READ)
-        supported = {item.value: item for item in WebhookDeliveryPlatform}
         connections = self.connections.list_active_for_agent(agent_id, scope)
         return [
-            WebhookDeliveryPlatformRead(key=supported[item.platform_key], display_name=item.display_name)
+            WebhookDeliveryPlatformRead(
+                key=WebhookDeliveryPlatform(item.platform_key),
+                display_name=item.display_name,
+            )
             for item in connections
-            if item.enabled
-            and item.platform_key in supported
-            and item.platform_key in self.config.native_platform_keys
-            and has_default_channel(item)
+            if self._ineligibility(item.platform_key, item) is None
         ]
 
     def create_webhook(
@@ -179,12 +183,13 @@ class AgentWebhookService:
         *,
         raw_body: bytes,
         signature: str,
+        timestamp: str,
         version: str,
     ) -> WebhookInvocationAccepted:
         webhook = self.repository.get_enabled_for_ingress(webhook_id)
         if webhook is None:
             raise PermissionError("Agent Webhook not found")
-        self._verify_signature(webhook, raw_body, signature)
+        self._verify_signature(webhook, raw_body, signature, timestamp)
         if version != WEBHOOK_CONTRACT_VERSION:
             raise ValueError(f"Unsupported webhook contract version {version!r}. Supported: 1.")
         validated = WebhookInvocationCreate.model_validate(payload)
@@ -213,11 +218,16 @@ class AgentWebhookService:
         webhook = self.repository.get_active_in_scope(webhook_id, agent_id, scope)
         if webhook is None:
             self._raise_not_found(webhook_id)
+        if not webhook.enabled:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Enable the webhook before retrying its invocations",
+            )
         invocation = self.repository.prepare_retry_in_scope(invocation_id, webhook_id, agent_id, scope)
         if invocation is None:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail="Only a failed webhook dispatch can be retried",
+                detail="Only a failed or stalled webhook dispatch can be retried",
             )
         return WebhookInvocationRead.model_validate(self._dispatch(webhook, invocation))
 
@@ -234,17 +244,22 @@ class AgentWebhookService:
             self._raise_not_found(webhook_id)
         return self.repository.list_invocations_in_scope(webhook_id, agent_id, scope, pagination)
 
-    def _verify_signature(self, webhook: AgentWebhook, raw_body: bytes, signature: str) -> None:
+    def _verify_signature(self, webhook: AgentWebhook, raw_body: bytes, signature: str, timestamp: str) -> None:
         provided = signature.strip()
         if not provided:
             raise PermissionError(f"Missing {SIGNATURE_HEADER} header")
+        if not timestamp.isdigit():
+            raise PermissionError(f"Missing or invalid {TIMESTAMP_HEADER} header")
         secret = decrypt_token(webhook.signing_secret_encrypted, self.config.agent_token_encryption_key)
-        expected = "sha256=" + hmac.new(secret.encode(), raw_body, hashlib.sha256).hexdigest()
+        signed = timestamp.encode() + b"." + raw_body
+        expected = "sha256=" + hmac.new(secret.encode(), signed, hashlib.sha256).hexdigest()
         if not hmac.compare_digest(provided, expected):
-            raise PermissionError("Webhook signature does not match the request body")
+            raise PermissionError("Webhook signature does not match the request")
+        if abs(time.time() - int(timestamp)) > SIGNATURE_TOLERANCE_SECONDS:
+            raise PermissionError("Webhook signature timestamp is outside the accepted window")
 
-    def _dispatch(self, webhook: AgentWebhook, invocation):
-        platform_key = getattr(webhook.delivery_platform, "value", webhook.delivery_platform)
+    def _dispatch(self, webhook: AgentWebhook, invocation: WebhookInvocation) -> WebhookInvocation:
+        platform_key = webhook.delivery_platform
         if self._delivery_platform_error(invocation.agent_id, platform_key) is None:
             result = self.dispatcher.dispatch(webhook, invocation)
         else:
@@ -267,8 +282,16 @@ class AgentWebhookService:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=error)
 
     def _delivery_platform_error(self, agent_id: UUID, platform_key: str) -> str | None:
-        connection = self.connections.get_active_by_platform_key(agent_id, platform_key)
-        if platform_key not in self.config.native_platform_keys or connection is None or not connection.enabled:
+        return self._ineligibility(platform_key, self.connections.get_active_by_platform_key(agent_id, platform_key))
+
+    def _ineligibility(self, platform_key: str, connection: CommunicationConnection | None) -> str | None:
+        """Why a Connection cannot receive webhook results, or None when it can."""
+        if (
+            platform_key not in SUPPORTED_PLATFORM_KEYS
+            or platform_key not in self.config.native_platform_keys
+            or connection is None
+            or not connection.enabled
+        ):
             return f"Agent has no enabled native {platform_key} connection"
         if not has_default_channel(connection):
             return f"The {platform_key} connection has no default channel configured"
