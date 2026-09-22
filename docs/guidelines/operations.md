@@ -310,12 +310,3 @@ Documentation-only changes do not change a service image and do not require a se
   keeps its Job until the Job's TTL reaps it; the row then resolves as failed and its volume is
   reclaimed on the next read. Automatic reclamation of restore points nobody ever reads is
   tracked separately from this ticket.
-
-## Local Activity fixtures
-
-`make seed-activity` populates local Agent Activity examples using
-`api/scripts/seed_activity_fixtures.py`. It writes synthetic model usage and
-message records; use only a development database. Pass script options through
-`SEED_ACTIVITY_ARGS` (for example `--clear --days 3`); `--clear` removes records
-from prior fixture runs. These usage fixtures do not simulate Kubernetes crashes
-or previous-container logs. See `--help` for Agent selection and demo creation.

@@ -3,7 +3,7 @@ COMPOSE := docker compose -f compose.yml
 .PHONY: \
 	setup run stop stop-clean \
 	restart-ui \
-	dev-api dev-ingest dev-communications dev-ui dev-worker reconcile reconcile-llm-budgets run-llm-budget-alerts forward-teams seed-event-deliveries seed-costs seed-activity seed-agent-overrides migrate merge-heads rollback makemigrations test-api test-ui lint-ui check-ui coverage check-api check-migrations check-monitoring fix-api test check fix \
+	dev-api dev-ingest dev-communications dev-ui dev-worker reconcile reconcile-llm-budgets run-llm-budget-alerts forward-teams seed-event-deliveries seed-costs seed-agent-overrides migrate merge-heads rollback makemigrations test-api test-ui lint-ui check-ui coverage check-api check-migrations check-monitoring fix-api test check fix \
 	db-up db-down db-logs db-restart redis-up redis-down redis-logs
 
 # One-command local dev: validates .env, brings up k3d + LiteLLM, loads agent
@@ -105,13 +105,6 @@ seed-event-deliveries:
 # exercising the org and platform Cost pages. Safe to re-run.
 seed-costs:
 	api/.venv/bin/python -m api.scripts.seed_cost_fixtures --count "$${SEED_COST_COUNT:-4000}"
-
-# Local-only: give existing Agents a week of structured activity — a runaway
-# loop, a context-bloat case, a healthy Agent and a nightly cron — for manually
-# exercising the Agent Activity tab. Safe to re-run; --clear removes prior runs.
-# Pass extra flags with SEED_ACTIVITY_ARGS, e.g. "--clear --days 3".
-seed-activity:
-	api/.venv/bin/python -m api.scripts.seed_activity_fixtures $${SEED_ACTIVITY_ARGS:-}
 
 # Local-only: create stopped Telegram Agents for manually exercising Agent-owned
 # template override authoring. Set SEED_AGENT_ORGANIZATION_ID before invoking.
