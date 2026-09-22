@@ -108,6 +108,23 @@ class AgentRepository:
     delegate: PostgresRepositoryDelegate
     outbox_repository: OutboxMessageRepository
 
+    def list_llm_credentials(self, organization_id: UUID) -> list[tuple[UUID, str, str]]:
+        """System-only credential projection for one Organization's live Agents.
+
+        Soft-deleted Agents are excluded on purpose: their keys are already blocked,
+        so they cannot spend against a team budget and counting them would only make
+        an Organization look permanently under-covered.
+        """
+        with Session(self.delegate.engine) as session:
+            rows = session.exec(
+                select(Agent.id, Agent.name, Agent.litellm_key_encrypted).where(
+                    col(Agent.organization_id) == organization_id,
+                    col(Agent.deleted_at).is_(None),
+                    col(Agent.litellm_key_encrypted) != "",
+                )
+            ).all()
+            return [(row[0], row[1], row[2]) for row in rows]
+
     def get_by_id(self, agent_id: UUID) -> Agent | None:
         with Session(self.delegate.engine) as session:
             query = select(Agent).where(col(Agent.id) == agent_id).where(col(Agent.deleted_at).is_(None))

@@ -242,6 +242,39 @@ def test_list_channels_excludes_the_built_in_web_chat_connection():
             assert_that(ids, equal_to({"CDB1"}))
 
 
+def test_list_channels_excludes_webhook_connections():
+    """Webhook calls are listed on the webhook's own detail view, not as a conversation."""
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        client: TestClient = context.client
+        webhook_connection = _seed_connection(context, "Jira automation", platform_key="webhook")
+
+        _seed_message(
+            context,
+            direction=MessageDirection.INBOUND,
+            channel_id="CDB1",
+            content="slack-channel",
+            channel_name="slack-known",
+        )
+        _seed_message(
+            context,
+            direction=MessageDirection.INBOUND,
+            channel_id="events",
+            content="Write release notes for PROJ-1.",
+            connection=webhook_connection,
+        )
+
+        with when("I list channels"):
+            response = client.get(
+                f"{_BASE}/{context.agent.id}/conversations/channels",
+                headers=_auth(context),
+            )
+
+        with then("only the Slack channel is returned"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            ids = {c["channel_id"] for c in response.json()}
+            assert_that(ids, equal_to({"CDB1"}))
+
+
 # --- /conversations/connections/{connection_id}/channels/{channel_id}/messages ---
 
 

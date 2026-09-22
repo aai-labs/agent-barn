@@ -504,7 +504,7 @@ class CommunicationConnectionRepository:
         message = str(exc).lower()
         if "uq_communication_connection_default_target" in message:
             return "This Agent already has a default delivery target; clear it before selecting another"
-        if "uq_communication_connection_active_platform" in message:
+        if "uq_communication_connection_active_singleton" in message:
             return "This Agent already has a Connection on this platform; remove it before adding another"
         if "uq_communication_connection_active_name" in message:
             return "An active Communication Connection already uses this display name"

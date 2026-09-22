@@ -103,6 +103,13 @@ Related context: [`../agents.md`](../agents.md), [`../../architecture/runtime-an
   exists to protect a row whose Job has not been created yet — so every row the cron claimed
   would have been skipped as too young. The cron has already waited the longer staleness
   threshold to select the row at all.
+### 2026-09-17 — OpenClaw archive safety
+
+- Changed: OpenClaw's PVC-held npm install registry is regenerated during
+  startup and now remains outside a Restore Point. It can contain symlinks into
+  the runtime image, so OpenClaw archives omit every symlink: the restore
+  validator correctly refuses links that escape the destination. Hermes
+  archives are unchanged and still keep symlinks.
 
 ### 2026-09-14 — AF-298 — Restore points in the Agent configuration page
 

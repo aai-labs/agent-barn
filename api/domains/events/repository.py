@@ -130,6 +130,14 @@ class OutboxMessageRepository:
         with Session(self.delegate.engine) as session:
             return session.exec(select(OutboxMessage).order_by(col(OutboxMessage.created_at).desc())).first()
 
+    def delivery_ids_for_event(self, session: Session, event_id: UUID) -> list[UUID]:
+        """Ids of the deliveries just staged, read inside the caller's transaction.
+
+        Takes the session because callers need this before their commit; the SQL
+        lives here rather than in a service, per the layering rules.
+        """
+        return list(session.exec(select(EventDelivery.id).where(EventDelivery.event_id == event_id)))
+
     def list_deliveries_for_event(self, event_id: UUID) -> list[EventDelivery]:
         with Session(self.delegate.engine) as session:
             return list(session.exec(select(EventDelivery).where(EventDelivery.event_id == event_id)))

@@ -253,6 +253,20 @@ def test_outbound_is_dropped_when_session_store_was_never_captured():
             assert_that(outbound_messages(flush_and_capture(mod)), is_(empty()))
 
 
+def test_cron_outbound_without_chat_is_silent():
+    with given():
+        with patch.dict(os.environ, _ENV, clear=True):
+            mod = load_hermes_plugin()
+            hooks, _ = register_hermes_plugin(mod)
+
+        with when("a scheduled reply has no originating chat"):
+            with patch.object(mod.logger, "warning") as warning:
+                post_llm_call(hooks, "cron_bb2d5e0d12de_20260917_090007")
+
+        with then("telemetry does not report an expected missing chat"):
+            warning.assert_not_called()
+
+
 def test_thread_scoped_outbound_keeps_its_thread_suffix():
     with given():
         with patch.dict(os.environ, _ENV, clear=True):
