@@ -33,3 +33,11 @@ Related context: [`../agent-webhooks.md`](../agent-webhooks.md), [`../../archite
 - Delivery platforms now require a default channel (Slack `default_delivery_target`, otherwise `home_channel_id`). This is checked when listing platforms, on create and update, and before each dispatch (`DELIVERY_CHANNEL_UNAVAILABLE`).
 - Made listener submission at-most-once. A pending receipt is committed before the create call. On a retry where no job by that name exists, the listener returns `409` instead of recreating a job that may already have run. The listener's rejection reason is recorded on the invocation.
 - Retired the webhook Communication Platform in migration `b6d4f0a91c37`, deleting its Connections and their deliveries, journal entries, and transcript rows.
+
+### 2026-09-22 — Review hardening
+
+- Ingress now runs dispatch in the threadpool instead of blocking the API event loop for up to the full dispatch retry budget.
+- The signature now covers `X-AgentBarn-Timestamp`, and requests outside a 300-second window are rejected to bound replay. Contract version stays `1` because it has not been released.
+- `RECEIVED` invocations that have not changed for two minutes can be retried, so an API crash mid-dispatch no longer strands them. Retry requires the webhook to be enabled.
+- The listener drops its pending receipt when a create provably made no job, so the API's in-dispatch retries can succeed instead of ending in "outcome unknown".
+- The UI gates create, rotate, and remove on `agent.secret.manage`, and reports mutation failures instead of leaving unhandled rejections.
