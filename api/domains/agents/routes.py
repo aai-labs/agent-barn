@@ -8,14 +8,9 @@ from fastapi_injector import Injected
 from api.domains.agents.access_service import AgentAccessService
 from api.domains.agents.memory_sharing import (
     AgentMemoryService,
-    MemoryCarryOverCreate,
-    MemoryCarryOverResult,
     MemoryItemRead,
     MemoryItemUpdate,
     MemoryPage,
-    MemorySharingService,
-    SharedFactCreate,
-    SharedFactResult,
 )
 from api.domains.agents.models import (
     AgentAccessRoleRead,
@@ -159,16 +154,6 @@ def correct_agent_memory(
     service: Annotated[AgentMemoryService, Injected(AgentMemoryService)],
 ):
     return service.correct(agent_id, memory_id, data, context)
-
-
-@agents_router.post("/{agent_id}/memory/shared-facts", response_model=SharedFactResult, response_model_by_alias=True)
-def share_agent_memory_fact(
-    agent_id: UUID,
-    data: SharedFactCreate,
-    context: Annotated[CurrentUserContext, Depends(get_current_user())],
-    service: Annotated[MemorySharingService, Injected(MemorySharingService)],
-):
-    return service.share_fact(agent_id, data, context)
 
 
 @agents_router.get("/{agent_id}/logs/stream")
@@ -348,14 +333,3 @@ def validate_integration(
     service: Annotated[AgentService, Injected(AgentService)],
 ):
     return service.validate_integration(agent_id, provider, context)
-
-
-@agents_router.post("/{agent_id}/memory/carry-over", response_model=MemoryCarryOverResult, response_model_by_alias=True)
-def carry_over_agent_memory(
-    agent_id: UUID,
-    data: MemoryCarryOverCreate,
-    context: Annotated[CurrentUserContext, Depends(get_current_user())],
-    service: Annotated[MemorySharingService, Injected(MemorySharingService)],
-):
-    """Copy an Agent's memory into other Agents before it is deleted."""
-    return service.carry_over(agent_id, data, context)

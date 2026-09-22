@@ -2,8 +2,7 @@ from unittest.mock import Mock
 
 from hamcrest import assert_that, is_
 
-from api.core.config import Config
-from api.domains.agents.event_handlers import AgentLifecycleEmailHandler, AgentMemoryPurgeHandler
+from api.domains.agents.event_handlers import AgentLifecycleEmailHandler
 from api.domains.events.catalog import (
     AGENT_ACCESS_GRANTED,
     AGENT_ACCESS_REVOKED,
@@ -43,7 +42,6 @@ def _build_production_handler_registry() -> EventHandlerRegistry:
     return EventHandlerRegistry(
         [
             AgentLifecycleEmailHandler(repository=Mock(), email_service=Mock()),
-            AgentMemoryPurgeHandler(honcho=Mock(), config=Config()),
             SecurityAuditProjection(repository=Mock()),
         ]
     )

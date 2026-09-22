@@ -12,10 +12,6 @@ import {
   AgentMemoryItemSchema,
   AgentMemoryPage,
   AgentMemoryPageSchema,
-  MemoryCarryOverResult,
-  MemoryCarryOverResultSchema,
-  SharedFactResult,
-  SharedFactResultSchema,
 } from "../schemas";
 import { agentsKey } from "../utils";
 
@@ -84,40 +80,12 @@ export function useAgentMemory(
     onSuccess: invalidate,
   });
 
-  // Sharing writes into the *destination* agents, so this agent's own memory list
-  // is unchanged by it — nothing to invalidate here.
-  const share = useMutation({
-    mutationFn: async ({ content, targetAgentIds }: { content: string; targetAgentIds: string[] }) => {
-      const response = await api.post<SharedFactResult>(
-        `${base}/shared-facts`,
-        { content, targetAgentIds },
-        { schema: SharedFactResultSchema },
-      );
-      return response.data;
-    },
-  });
-
-  // Copies everything the agent knows into other agents. Only used by the retire
-  // flow, where deleting is about to erase it.
-  const carryOver = useMutation({
-    mutationFn: async (targetAgentIds: string[]) => {
-      const response = await api.post<MemoryCarryOverResult>(
-        `${base}/carry-over`,
-        { targetAgentIds },
-        { schema: MemoryCarryOverResultSchema },
-      );
-      return response.data;
-    },
-  });
-
   return {
     memory: query.data,
     isLoading: query.isPending,
     error: query.error,
     forget,
     correct,
-    share,
-    carryOver,
   };
 }
 

@@ -411,15 +411,10 @@ export const AgentMemoryItemSchema = z.object({
   observed: z.string(),
   level: z.string(),
   createdAt: z.string().nullable().optional(),
-  // Set only for a memory another agent shared in. It is stored on this agent's
-  // own self-model, identically to something it concluded itself, so this is the
-  // only thing that tells them apart. A null name with a set date means the
-  // source agent has been deleted.
-  sharedFrom: z.string().nullable().optional(),
-  sharedAt: z.string().nullable().optional(),
   // Set only for a memory shared in from another pool (group). The id, not the
-  // name — the client resolves the name from its groups list. Null with a set
-  // sharedAt means the source group has since been deleted.
+  // name — the client resolves the name from its groups list. `sharedAt` is when
+  // it was shared; a null group id with a set sharedAt means the source group is gone.
+  sharedAt: z.string().nullable().optional(),
   sharedFromGroupId: z.string().uuid().nullable().optional(),
 });
 
@@ -445,27 +440,3 @@ export const AgentMemoryPageSchema = z.object({
 export type AgentMemoryItem = z.infer<typeof AgentMemoryItemSchema>;
 export type AgentMemoryFacet = z.infer<typeof AgentMemoryFacetSchema>;
 export type AgentMemoryPage = z.infer<typeof AgentMemoryPageSchema>;
-
-// One result per destination: a share can succeed for some agents and fail for
-// others, and the API reports each rather than failing the whole call.
-export const SharedFactTargetResultSchema = z.object({
-  agentId: z.string().uuid(),
-  shared: z.boolean(),
-  error: z.string().nullable().optional(),
-});
-
-export const SharedFactResultSchema = z.object({
-  results: z.array(SharedFactTargetResultSchema),
-});
-
-export type SharedFactResult = z.infer<typeof SharedFactResultSchema>;
-
-export const MemoryCarryOverResultSchema = z.object({
-  copied: z.number().int(),
-  // True when the agent held more than the copy limit, so the caller learns the
-  // carry-over was partial before deleting rather than afterwards.
-  truncated: z.boolean(),
-  results: z.array(SharedFactTargetResultSchema),
-});
-
-export type MemoryCarryOverResult = z.infer<typeof MemoryCarryOverResultSchema>;

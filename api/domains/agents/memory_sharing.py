@@ -23,12 +23,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from api.core.config import Config
 from api.domains.agents.authorization import AgentAuthorization
 from api.domains.agents.models import Agent, AgentType
-from api.domains.agents.repository import (
-    PoolMemoryProvenance,
-    SharedMemoryFactRepository,
-    SharedMemoryProvenance,
-    SharedPoolMemoryFactRepository,
-)
+from api.domains.agents.repository import PoolMemoryProvenance, SharedPoolMemoryFactRepository
 from api.domains.auth.models import CurrentUserContext
 from api.domains.rbac.catalog import PermissionKey
 from api.infrastructure.honcho.client import (
@@ -38,43 +33,6 @@ from api.infrastructure.honcho.client import (
 )
 
 logger = logging.getLogger(__name__)
-
-
-class SharedFactCreate(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    content: str = Field(min_length=1, max_length=4000)
-    target_agent_ids: list[UUID] = Field(min_length=1, max_length=20, alias="targetAgentIds")
-
-
-class SharedFactTargetResult(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    agent_id: UUID = Field(alias="agentId")
-    shared: bool
-    error: str | None = None
-
-
-class SharedFactResult(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    results: list[SharedFactTargetResult]
-
-
-class MemoryCarryOverCreate(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    target_agent_ids: list[UUID] = Field(min_length=1, max_length=20, alias="targetAgentIds")
-
-
-class MemoryCarryOverResult(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    copied: int
-    # Set when the source held more than the copy limit, so the caller learns the
-    # carry-over was partial *before* deleting the Agent rather than afterwards.
-    truncated: bool = False
-    results: list[SharedFactTargetResult]
 
 
 class MemoryItemRead(BaseModel):
@@ -94,16 +52,11 @@ class MemoryItemRead(BaseModel):
     # "explicit" is something stated; "deductive" is something Honcho inferred.
     level: str
     created_at: str | None = Field(default=None, alias="createdAt")
-    # Set only for a memory another Agent shared in. Honcho stores it on this
-    # Agent's own self-model, identically to something it concluded itself, so
-    # without this the view cannot tell the two apart. `None` means self-derived;
-    # a name that is `None` while `shared_at` is set means the source Agent is gone.
-    shared_from: str | None = Field(default=None, alias="sharedFrom")
-    shared_at: str | None = Field(default=None, alias="sharedAt")
     # Set only for a memory shared in from another pool (group). The id, not the
     # name: the client resolves the name from its groups list, so the read path
-    # never crosses into the memory_groups domain. `None` here with `shared_at`
-    # set means the source group has been deleted.
+    # never crosses into the memory_groups domain. `shared_at` is when it was
+    # shared; a `None` group id with `shared_at` set means the source group is gone.
+    shared_at: str | None = Field(default=None, alias="sharedAt")
     shared_from_group_id: UUID | None = Field(default=None, alias="sharedFromGroupId")
 
 
@@ -146,14 +99,7 @@ class MemoryItemUpdate(BaseModel):
 _MAX_SEARCH_PEERS = 8
 
 
-def _to_memory_item(
-    raw: dict,
-    shared: SharedMemoryProvenance | None = None,
-    pool_shared: PoolMemoryProvenance | None = None,
-) -> MemoryItemRead:
-    # An item shared in from another pool carries a share timestamp too, so fall
-    # back to it when there is no Agent-level share on the same conclusion.
-    shared_at = (shared.shared_at if shared else None) or (pool_shared.shared_at if pool_shared else None)
+def _to_memory_item(raw: dict, pool_shared: PoolMemoryProvenance | None = None) -> MemoryItemRead:
     return MemoryItemRead(
         id=str(raw.get("id")),
         content=str(raw.get("content") or ""),
@@ -161,8 +107,7 @@ def _to_memory_item(
         observed=str(raw.get("observed_id") or ""),
         level=str(raw.get("level") or "explicit"),
         createdAt=raw.get("created_at"),
-        sharedFrom=shared.source_agent_name if shared else None,
-        sharedAt=shared_at.isoformat() if shared_at else None,
+        sharedAt=pool_shared.shared_at.isoformat() if pool_shared and pool_shared.shared_at else None,
         sharedFromGroupId=pool_shared.source_group_id if pool_shared else None,
     )
 
@@ -245,145 +190,6 @@ def memory_workspace_for_agent(agent: Agent) -> str:
 @inject
 @singleton
 @dataclass
-class MemorySharingService:
-    agent_authorization: AgentAuthorization
-    honcho: HonchoClient
-    config: Config
-    provenance: SharedMemoryFactRepository
-
-    def _record_provenance(
-        self, created: list[dict], *, target_agent_id: UUID, source_agent_id: UUID, context: CurrentUserContext
-    ) -> None:
-        """Record where each shared conclusion came from, without letting that fail
-        the share. By the time this runs the fact is already in the destination's
-        memory, so a provenance-write hiccup must not turn a successful share into a
-        500 — the memory simply shows unbadged, and that is recoverable, whereas a
-        raised error here reports failure for a change that happened."""
-        for conclusion in created:
-            try:
-                self.provenance.record(
-                    conclusion_id=str(conclusion.get("id")),
-                    target_agent_id=target_agent_id,
-                    source_agent_id=source_agent_id,
-                    shared_by_user_id=getattr(context.user, "id", None),
-                )
-            except Exception:
-                logger.warning(
-                    "Shared fact %s into agent %s but could not record its provenance",
-                    conclusion.get("id"),
-                    target_agent_id,
-                    exc_info=True,
-                )
-
-    def share_fact(
-        self, source_agent_id: UUID, payload: SharedFactCreate, context: CurrentUserContext
-    ) -> SharedFactResult:
-        if not self.config.honcho_enabled:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Memory sharing requires Honcho-backed memory to be enabled.",
-            )
-        # Read access on the source: it is audit context for the fact, not a data
-        # source, but referencing an Agent the caller cannot see is still a leak.
-        self.agent_authorization.require_action(context, source_agent_id, PermissionKey.AGENT_READ)
-
-        results: list[SharedFactTargetResult] = []
-        for target_agent_id in payload.target_agent_ids:
-            # Update, not read: this materially changes what the destination
-            # Agent knows, so it needs the same permission editing it would.
-            # Writing into a destination's memory is the same power as editing it
-            # directly, so it takes the same permission rather than agent.update.
-            target_agent = self.agent_authorization.require_action(
-                context, target_agent_id, PermissionKey.AGENT_MEMORY_MANAGE
-            )
-            if not memory_active(target_agent, honcho_enabled=self.config.honcho_enabled):
-                results.append(
-                    SharedFactTargetResult(
-                        agentId=target_agent_id, shared=False, error="Agent is not in a memory group."
-                    )
-                )
-                continue
-            try:
-                created = self.honcho.share_fact(
-                    memory_workspace_for_agent(target_agent),
-                    ai_peer_name_for_agent(target_agent),
-                    payload.content,
-                )
-                # After Honcho confirms each conclusion. Provenance is best-effort:
-                # the fact is already stored, so a failed row must not fail the share.
-                self._record_provenance(
-                    created, target_agent_id=target_agent.id, source_agent_id=source_agent_id, context=context
-                )
-                results.append(SharedFactTargetResult(agentId=target_agent_id, shared=True))
-            except HonchoError as exc:
-                results.append(SharedFactTargetResult(agentId=target_agent_id, shared=False, error=str(exc)))
-        return SharedFactResult(results=results)
-
-    # Copies a source pool's conclusions into other Agents' pools — the one path
-    # that crosses the workspace boundary between distinct pools. Deliberately
-    # bounded: a rescue-sized batch, not a migration tool.
-    MAX_CARRY_OVER = 500
-
-    def carry_over(
-        self, source_agent_id: UUID, payload: MemoryCarryOverCreate, context: CurrentUserContext
-    ) -> MemoryCarryOverResult:
-        if not self.config.honcho_enabled:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Memory sharing requires Honcho-backed memory to be enabled.",
-            )
-        # Reading the source's memory, not just naming it, so this needs the memory
-        # read grant rather than the plain agent read that sharing a typed-in fact takes.
-        source = self.agent_authorization.require_action(context, source_agent_id, PermissionKey.AGENT_MEMORY_READ)
-        if not memory_active(source, honcho_enabled=self.config.honcho_enabled):
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="This agent is not in a memory group, so it has no memory to carry over.",
-            )
-        targets = [
-            self.agent_authorization.require_action(context, target_id, PermissionKey.AGENT_MEMORY_MANAGE)
-            for target_id in payload.target_agent_ids
-        ]
-
-        try:
-            items = self.honcho.list_all_conclusions(memory_workspace_for_agent(source), limit=self.MAX_CARRY_OVER + 1)
-        except HonchoError as exc:
-            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
-        truncated = len(items) > self.MAX_CARRY_OVER
-        contents = [str(i.get("content") or "") for i in items[: self.MAX_CARRY_OVER]]
-        contents = [c for c in contents if c]
-
-        results: list[SharedFactTargetResult] = []
-        copied = 0
-        for target in targets:
-            if not memory_active(target, honcho_enabled=self.config.honcho_enabled):
-                results.append(
-                    SharedFactTargetResult(agentId=target.id, shared=False, error="Agent is not in a memory group.")
-                )
-                continue
-            workspace = memory_workspace_for_agent(target)
-            peer = ai_peer_name_for_agent(target)
-            failure: str | None = None
-            for content in contents:
-                try:
-                    created = self.honcho.share_fact(workspace, peer, content)
-                except HonchoError as exc:
-                    # Stop at the first failure for this destination: the rest would
-                    # almost certainly fail the same way, and reporting a partial
-                    # count is more useful than a long stall.
-                    failure = str(exc)
-                    break
-                self._record_provenance(
-                    created, target_agent_id=target.id, source_agent_id=source_agent_id, context=context
-                )
-                copied += 1
-            results.append(SharedFactTargetResult(agentId=target.id, shared=failure is None, error=failure))
-        return MemoryCarryOverResult(copied=copied, truncated=truncated, results=results)
-
-
-@inject
-@singleton
-@dataclass
 class AgentMemoryService:
     """Read and curate what an Agent has learned.
 
@@ -395,7 +201,6 @@ class AgentMemoryService:
     agent_authorization: AgentAuthorization
     honcho: HonchoClient
     config: Config
-    provenance: SharedMemoryFactRepository
     pool_provenance: SharedPoolMemoryFactRepository
 
     def _require(self, agent_id: UUID, permission: PermissionKey, context: CurrentUserContext) -> Agent:
@@ -484,10 +289,9 @@ class AgentMemoryService:
         except HonchoError as exc:
             raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
         ids = [str(i.get("id")) for i in items]
-        shared = self.provenance.find_for_conclusions(ids)
         pool_shared = self.pool_provenance.find_for_conclusions(ids)
         return MemoryPage(
-            items=[_to_memory_item(i, shared.get(str(i.get("id"))), pool_shared.get(str(i.get("id")))) for i in items],
+            items=[_to_memory_item(i, pool_shared.get(str(i.get("id")))) for i in items],
             total=total,
             page=page,
             size=size,
@@ -524,7 +328,6 @@ class AgentMemoryService:
             self.honcho.delete_conclusion(workspace, memory_id)
         except HonchoError as exc:
             raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
-        self.provenance.forget(memory_id)
         self.pool_provenance.forget(memory_id)
 
     def correct(
@@ -555,13 +358,8 @@ class AgentMemoryService:
         except HonchoError as exc:
             raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
         new_id = str(created.get("id"))
-        self.provenance.carry_forward(memory_id, new_id)
         self.pool_provenance.carry_forward(memory_id, new_id)
-        return _to_memory_item(
-            created,
-            self.provenance.find_for_conclusions([new_id]).get(new_id),
-            self.pool_provenance.find_for_conclusions([new_id]).get(new_id),
-        )
+        return _to_memory_item(created, self.pool_provenance.find_for_conclusions([new_id]).get(new_id))
 
     def search_memory(
         self, agent_id: UUID, query: str, context: CurrentUserContext, *, limit: int

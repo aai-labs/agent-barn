@@ -43,7 +43,6 @@ COMMUNICATION_DELIVERY_RECOVERED = "communication.delivery.recovered"
 
 SECURITY_AUDIT_HANDLER = "security_audit.projection"
 AGENT_LIFECYCLE_EMAIL_HANDLER = "agent.lifecycle_email.notification"
-AGENT_MEMORY_PURGE_HANDLER = "agent.memory.purge"
 
 
 class OrganizationRoleChangedPayload(BaseModel):
@@ -426,7 +425,7 @@ def build_default_event_registry() -> DomainEventRegistry:
             event_name=AGENT_DELETED,
             schema_version=1,
             payload_model=AgentDeletedPayload,
-            handler_names=(SECURITY_AUDIT_HANDLER, AGENT_MEMORY_PURGE_HANDLER),
+            handler_names=(SECURITY_AUDIT_HANDLER,),
             event_scope=EventScope.ORGANIZATION,
         )
     )

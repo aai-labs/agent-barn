@@ -17,12 +17,7 @@ from api.core.config import Config
 from api.domains.agents.authorization import AgentAuthorization
 from api.domains.agents.memory_sharing import AgentMemoryService, MemoryItemUpdate
 from api.domains.agents.models import Agent, AgentType
-from api.domains.agents.repository import (
-    PoolMemoryProvenance,
-    SharedMemoryFactRepository,
-    SharedMemoryProvenance,
-    SharedPoolMemoryFactRepository,
-)
+from api.domains.agents.repository import PoolMemoryProvenance, SharedPoolMemoryFactRepository
 from api.domains.auth.models import CurrentUserContext
 from api.infrastructure.honcho.client import HonchoClient, HonchoError
 
@@ -46,18 +41,15 @@ def _service(*, honcho_enabled: bool = True):
     honcho = Mock(spec=HonchoClient)
     # No peers by default, so the facet pass is a no-op unless a test sets it.
     honcho.list_peers.return_value = []
-    provenance = Mock(spec=SharedMemoryFactRepository)
-    provenance.find_for_conclusions.return_value = {}
     pool_provenance = Mock(spec=SharedPoolMemoryFactRepository)
     pool_provenance.find_for_conclusions.return_value = {}
     service = AgentMemoryService(
         agent_authorization=authorization,
         honcho=honcho,
         config=Config(honcho_enabled=honcho_enabled),
-        provenance=provenance,
         pool_provenance=pool_provenance,
     )
-    return service, authorization, honcho, provenance, pool_provenance
+    return service, authorization, honcho, pool_provenance
 
 
 def _context() -> CurrentUserContext:
@@ -65,7 +57,7 @@ def _context() -> CurrentUserContext:
 
 
 def test_lists_memory_with_the_peer_pair_intact():
-    service, _, honcho, _provenance, _pool_prov = _service()
+    service, _, honcho, _pool_prov = _service()
     honcho.list_conclusions.return_value = (
         [
             {
@@ -90,7 +82,7 @@ def test_lists_memory_with_the_peer_pair_intact():
 
 def test_an_agent_that_has_never_conversed_reads_as_empty_not_an_error():
     """The workspace is created on first conversation, so a new Agent has none."""
-    service, _, honcho, _provenance, _pool_prov = _service()
+    service, _, honcho, _pool_prov = _service()
     honcho.list_conclusions.return_value = ([], 0)
 
     page = service.list_memory(AGENT_ID, _context(), page=1, size=50)
@@ -105,7 +97,7 @@ def test_memory_uses_its_own_permissions_not_general_agent_ones():
     agent.read/agent.update, the same way secrets were."""
     from api.domains.rbac.catalog import PermissionKey
 
-    service, authorization, honcho, _provenance, _pool_prov = _service()
+    service, authorization, honcho, _pool_prov = _service()
     honcho.list_conclusions.return_value = ([], 0)
 
     service.list_memory(AGENT_ID, _context(), page=1, size=50)
@@ -122,7 +114,7 @@ def test_memory_uses_its_own_permissions_not_general_agent_ones():
 def test_correction_preserves_the_peer_pair_of_what_it_replaces():
     """A correction is delete-then-create; recreating it against the wrong pair
     would move the memory to a different person."""
-    service, _, honcho, _provenance, _pool_prov = _service()
+    service, _, honcho, _pool_prov = _service()
     honcho.find_conclusion.return_value = {
         "id": "c1",
         "content": "old",
@@ -148,7 +140,7 @@ def test_correction_preserves_the_peer_pair_of_what_it_replaces():
 
 
 def test_correcting_something_that_does_not_exist_is_a_404_not_a_silent_create():
-    service, _, honcho, _provenance, _pool_prov = _service()
+    service, _, honcho, _pool_prov = _service()
     honcho.find_conclusion.return_value = None
 
     with pytest.raises(HTTPException) as exc:
@@ -159,7 +151,7 @@ def test_correcting_something_that_does_not_exist_is_a_404_not_a_silent_create()
 
 
 def test_honcho_being_unreachable_surfaces_as_bad_gateway_not_a_500():
-    service, _, honcho, _provenance, _pool_prov = _service()
+    service, _, honcho, _pool_prov = _service()
     honcho.list_conclusions.side_effect = HonchoError("connection refused")
 
     with pytest.raises(HTTPException) as exc:
@@ -169,7 +161,7 @@ def test_honcho_being_unreachable_surfaces_as_bad_gateway_not_a_500():
 
 
 def test_memory_is_unavailable_when_honcho_is_disabled():
-    service, authorization, _, _provenance, _pool_prov = _service(honcho_enabled=False)
+    service, authorization, _, _pool_prov = _service(honcho_enabled=False)
 
     with pytest.raises(HTTPException) as exc:
         service.list_memory(AGENT_ID, _context(), page=1, size=50)
@@ -182,7 +174,7 @@ def test_search_fans_out_across_peer_pairs_and_deduplicates():
     """Honcho searches one (observer, observed) collection at a time — the vectors
     are stored per pair — so an Agent-wide search must fan out and merge. The same
     conclusion can come back from more than one pair query."""
-    service, _, honcho, _provenance, _pool_prov = _service()
+    service, _, honcho, _pool_prov = _service()
     honcho.list_peers.return_value = ["agent-main", "owner"]
     honcho.search_conclusions.return_value = [
         {"id": "dup", "content": "owner likes Rust", "observer_id": "agent-main", "observed_id": "owner"}
@@ -198,7 +190,7 @@ def test_search_fans_out_across_peer_pairs_and_deduplicates():
 def test_search_bounds_the_fan_out():
     """Peers grow with the number of people an Agent talks to, and the fan-out is
     quadratic — unbounded, a search box becomes a slow query over every pair."""
-    service, _, honcho, _provenance, _pool_prov = _service()
+    service, _, honcho, _pool_prov = _service()
     honcho.list_peers.return_value = [f"peer-{i}" for i in range(40)]
     honcho.search_conclusions.return_value = []
 
@@ -210,7 +202,7 @@ def test_search_bounds_the_fan_out():
 def test_search_needs_only_memory_read_access():
     from api.domains.rbac.catalog import PermissionKey
 
-    service, authorization, honcho, _provenance, _pool_prov = _service()
+    service, authorization, honcho, _pool_prov = _service()
     honcho.list_peers.return_value = []
 
     service.search_memory(AGENT_ID, "q", _context(), limit=10)
@@ -224,7 +216,7 @@ def test_a_deleted_agents_memory_is_still_reachable():
     """Deleting an Agent retains its Honcho workspace, so its memory must remain
     viewable and erasable — otherwise retention leaves personal data that nobody
     can see, search, or delete through the product."""
-    service, authorization, honcho, _provenance, _pool_prov = _service()
+    service, authorization, honcho, _pool_prov = _service()
     honcho.list_conclusions.return_value = ([], 0)
 
     service.list_memory(AGENT_ID, _context(), page=1, size=50)
@@ -234,49 +226,11 @@ def test_a_deleted_agents_memory_is_still_reachable():
     authorization.require_action.assert_not_called()
 
 
-def test_a_shared_in_memory_is_labelled_with_the_agent_it_came_from():
-    """It lands on the destination's own self-model, so without provenance the
-    view calls it "(about itself)" — presenting a fact the Agent was handed as one
-    it reasoned its way to."""
-    service, _authorization, honcho, provenance, _pool_prov = _service()
-    honcho.list_conclusions.return_value = ([{"id": "c1", "content": "x", "observer_id": "a", "observed_id": "a"}], 1)
-    provenance.find_for_conclusions.return_value = {
-        "c1": SharedMemoryProvenance(source_agent_id=uuid7(), source_agent_name="scout", shared_at=None)
-    }
-
-    page = service.list_memory(uuid7(), _context(), page=1, size=50)
-
-    assert_that(page.items[0].shared_from, equal_to("scout"))
-
-
-def test_forgetting_a_shared_memory_drops_its_provenance_row():
-    """Honcho ids are not reused, but a row pointing at a deleted conclusion is
-    dead weight that outlives every Agent that could explain it."""
-    service, _authorization, _honcho, provenance, _pool_prov = _service()
-
-    service.forget(uuid7(), "c1", _context())
-
-    provenance.forget.assert_called_once_with("c1")
-
-
-def test_correcting_a_shared_memory_keeps_it_marked_as_shared():
-    """A correction is a delete plus a create, so the item gets a new Honcho id.
-    Editing the wording of a shared fact does not make it self-derived, so the
-    provenance has to follow the new id or the badge silently disappears."""
-    service, _authorization, honcho, provenance, _pool_prov = _service()
-    honcho.find_conclusion.return_value = {"id": "old", "content": "x", "observer_id": "a", "observed_id": "b"}
-    honcho.create_conclusion.return_value = {"id": "new", "content": "y", "observer_id": "a", "observed_id": "b"}
-
-    service.correct(uuid7(), "old", MemoryItemUpdate(content="y"), _context())
-
-    provenance.carry_forward.assert_called_once_with("old", "new")
-
-
 def test_a_memory_shared_in_from_another_pool_carries_its_source_group_id():
     """A cross-pool share lands as an ordinary pooled conclusion, so without the
     pool provenance the view cannot say it came from another group. The id, not a
     name, is returned — the client resolves the name from its groups list."""
-    service, _authorization, honcho, _provenance, pool_prov = _service()
+    service, _authorization, honcho, pool_prov = _service()
     honcho.list_conclusions.return_value = (
         [{"id": "c1", "content": "x", "observer_id": "owner", "observed_id": "owner"}],
         1,
@@ -292,7 +246,7 @@ def test_a_memory_shared_in_from_another_pool_carries_its_source_group_id():
 
 
 def test_forgetting_a_memory_also_drops_its_pool_provenance():
-    service, _authorization, _honcho, _provenance, pool_prov = _service()
+    service, _authorization, _honcho, pool_prov = _service()
 
     service.forget(uuid7(), "c1", _context())
 
@@ -300,7 +254,7 @@ def test_forgetting_a_memory_also_drops_its_pool_provenance():
 
 
 def test_correcting_a_pool_shared_memory_carries_its_pool_provenance_forward():
-    service, _authorization, honcho, _provenance, pool_prov = _service()
+    service, _authorization, honcho, pool_prov = _service()
     honcho.find_conclusion.return_value = {"id": "old", "content": "x", "observer_id": "owner", "observed_id": "owner"}
     honcho.create_conclusion.return_value = {
         "id": "new",
@@ -319,7 +273,7 @@ def test_facets_count_each_peer_and_put_the_self_model_first():
     server-side per peer. The Agent's model of itself sorts first, then people by
     how much the Agent knows about them, so the default order leads with the
     fullest buckets."""
-    service, _, honcho, _provenance, _pool_prov = _service()
+    service, _, honcho, _pool_prov = _service()
     honcho.list_peers.return_value = ["agent-watcher", "owner", "U123"]
     # page fetch, then one count call per peer
     honcho.list_conclusions.side_effect = [
@@ -340,7 +294,7 @@ def test_facets_count_each_peer_and_put_the_self_model_first():
 def test_a_peer_the_agent_never_concluded_about_gets_no_facet():
     """A peer can exist from a single inbound message that produced nothing. A zero
     facet would be a filter that leads to an empty list."""
-    service, _, honcho, _provenance, _pool_prov = _service()
+    service, _, honcho, _pool_prov = _service()
     honcho.list_peers.return_value = ["agent-watcher", "ghost"]
     honcho.list_conclusions.side_effect = [([], 0), ([], 10), ([], 0)]
 
@@ -353,7 +307,7 @@ def test_filtering_to_a_peer_scopes_the_query_and_skips_facets():
     """Under a filter the facets are redundant — they describe the whole workspace,
     which the unfiltered view already provided — so they are not recomputed, and
     the query is scoped to that peer as observed."""
-    service, _, honcho, _provenance, _pool_prov = _service()
+    service, _, honcho, _pool_prov = _service()
     honcho.list_conclusions.return_value = ([], 0)
 
     page = service.list_memory(AGENT_ID, _context(), page=1, size=50, observed="owner")
@@ -369,7 +323,7 @@ def test_filtering_to_a_peer_scopes_the_query_and_skips_facets():
 def test_mine_scope_pins_the_query_to_this_agent():
     """scope="mine" narrows the pool view to what THIS Agent concluded — its own
     peer as observer."""
-    service, _, honcho, _provenance, _pool_prov = _service()
+    service, _, honcho, _pool_prov = _service()
     honcho.list_conclusions.return_value = ([], 0)
 
     service.list_memory(AGENT_ID, _context(), page=1, size=50, observed="owner", scope="mine")

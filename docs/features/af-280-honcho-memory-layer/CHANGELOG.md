@@ -14,6 +14,16 @@ Related context: [`../agents.md`](../agents.md), [`../costs.md`](../costs.md), [
 
 ## Changes
 
+### 2026-09-22 — AF-280 — remove the vestigial per-Agent sharing surface
+
+Cut the v1 per-Agent memory sharing that the pool model made obsolete. Within a group memory is shared automatically; across groups there's the explicit `shared-items` path — so the per-Agent copy mechanisms no longer had a place, and one of them actively contradicted v2.
+
+- **Removed the explicit per-Agent share:** `POST /agents/{id}/memory/shared-facts` + `carry-over`, the `MemorySharingService`, the `shared_memory_fact` table (+ its repository, provenance, and "Shared by <agent>" badging), and the `ShareMemoryDialog`. Migration drops the table. The low-level `HonchoClient.share_fact` stays — cross-group sharing uses it.
+- **Removed the erase-on-delete purge:** `AgentMemoryPurgeHandler` (+ its `agent.deleted` registration and test). It only ever deleted the legacy `af-<id>` workspace and refused pools, so it was a no-op for pool-based agents; and its premise (deletion erases memory) is false in v2 — deleting an agent never erases a pool.
+- **Retire dialog simplified:** dropped the "carry memory over before deletion" flow — there's nothing to save, since an agent's contributions stay in the pool after it's gone. It's now a plain confirmation with accurate copy.
+- **Read path simplified:** `MemoryItemRead` loses `sharedFrom` (the agent-share badge); `shared_at`/`sharedFromGroupId` (cross-group provenance) stay. `OriginPill` drops the "Shared by <agent>" case.
+- **Net:** a table, an endpoint pair, an event handler, a dialog, and their tests removed — the diff shrinks and there's one coherent sharing story. `check-api`, `check-migrations`, `check-ui`, `lint-ui` clean; affected unit tests pass.
+
 ### 2026-09-22 — AF-280 — manage a group's memory from the group, and hide the tab when there's none
 
 Memory belongs to the pool, not any one member, so it can now be viewed and curated from the group itself — and the per-Agent Memory tab no longer shows for agents that have no pool.

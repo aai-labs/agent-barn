@@ -24,16 +24,14 @@ import { ShareMemoryToGroupDialog } from "./share-memory-to-group-dialog";
  *  source is gone. */
 function OriginPill({ item, groupName }: { item: AgentMemoryItem; groupName?: string | null }) {
   const sharedFromGroup = Boolean(item.sharedFromGroupId);
-  const shared = Boolean(item.sharedFrom || item.sharedAt || sharedFromGroup);
+  const shared = Boolean(item.sharedAt || sharedFromGroup);
   if (!shared && item.level !== "deductive") return null;
 
   const label = sharedFromGroup
     ? `Shared from ${groupName ?? "another group"}`
-    : item.sharedFrom
-      ? `Shared by ${item.sharedFrom}`
-      : item.sharedAt
-        ? "Shared in"
-        : "Inferred";
+    : item.sharedAt
+      ? "Shared in"
+      : "Inferred";
 
   return (
     <span
@@ -72,9 +70,9 @@ function collapse(items: AgentMemoryItem[]): MemoryRow[] {
     const existing = rows.get(item.content);
     if (existing) {
       existing.ids.push(item.id);
-      const existingHasOrigin = existing.item.sharedFrom || existing.item.sharedFromGroupId;
-      const itemHasOrigin = item.sharedFrom || item.sharedFromGroupId;
-      if (!existingHasOrigin && itemHasOrigin) existing.item = item;
+      // A provenance-bearing copy wins the displayed row so the "shared" badge is
+      // never lost to a plain twin.
+      if (!existing.item.sharedFromGroupId && item.sharedFromGroupId) existing.item = item;
     } else {
       rows.set(item.content, { item, ids: [item.id] });
     }
