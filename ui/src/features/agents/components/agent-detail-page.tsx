@@ -53,7 +53,10 @@ const VALID_TABS: Tab[] = [
 export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
   const { agent, isLoading, error, refetch } = useAgent(agentId);
   const canReadActivity = canAgent(agent, "activity.read");
-  const canReadMemory = canAgent(agent, "agent.memory.read");
+  // Memory is opt-in via a memory group: an agent in no group has no shared
+  // memory, so the Memory tab would only ever show an empty, misleading state.
+  // Show it only when the agent is actually in a group.
+  const showMemoryTab = canAgent(agent, "agent.memory.read") && !!agent?.memoryGroupId;
   const { health } = useAgentHealth(
     agentId,
     canReadActivity &&
@@ -88,7 +91,7 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
           ["work", "Work"],
         ] as [Tab, string][])
       : []),
-    ...(canReadMemory ? ([["memory", "Memory"]] as [Tab, string][]) : []),
+    ...(showMemoryTab ? ([["memory", "Memory"]] as [Tab, string][]) : []),
     ["about", "About"],
   ];
   const resolvedTab = tabs.some(([key]) => key === tab) ? tab : tabs[0][0];
