@@ -1,7 +1,7 @@
 import base64
 import hashlib
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import httpx
 from injector import inject, singleton
@@ -27,14 +27,22 @@ class LiteLLMClient:
     k8s: KubernetesClient
     config: Config
 
-    _cached_master_key: str | None = None
+    # init=False keeps it out of the constructor. Annotated without it, injector
+    # treats it as a dependency and supplies "", which is not None — so the cache
+    # hit on an empty key, the Kubernetes Secret was never read, and every call
+    # went out as `Authorization: Bearer `, failing agent creation.
+    _cached_master_key: str | None = field(default=None, init=False)
 
     def _master_key(self) -> str:
         """Resolved once per process. It used to be fetched from the Kubernetes API on
         every call, which a per-Agent sweep paid for on top of each proxy call. The
         client is a singleton, so a rotated Secret needs a restart — the same as every
         other value read at startup."""
-        if self._cached_master_key is not None:
+        # Truthiness, not `is not None`: an empty string is never a usable key, so the
+        # question is whether we have one, not whether the field was ever assigned.
+        # Most values in this codebase are amounts, where falsy is meaningful and
+        # `is not None` is right — a credential is the opposite case.
+        if self._cached_master_key:
             return self._cached_master_key
         try:
             secret = self.k8s.get_secret(self.config.litellm_secret_name, self.config.k8s_namespace)

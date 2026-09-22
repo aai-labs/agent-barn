@@ -18,6 +18,7 @@ Starting an agent is an API-orchestrated deployment flow:
 8. Generate fresh Ingest and Communications protocol credentials.
 9. Build ConfigMap, Secret, PVC, Service, and Deployment resources, including the runtime-neutral communications adapter and any enabled native gateway configuration.
 10. Apply resources through the Kubernetes client and mark the Agent running.
+11. Record the runtime configuration digest the pod was built from.
 
 Runtime behaviour policies are appended to `AGENTS.md` rather than stored in a template, because both runtimes auto-load `AGENTS.md` into the startup system prompt. They are unconditional and carry no role-specific wording, so custom and forked templates inherit them and the role-scope policy defers to whatever role the agent's own template defines.
 
@@ -34,6 +35,34 @@ An `always` grant is broader than it reads. For a dangerous-pattern finding Herm
 Progress visibility (the persisted `verbose_mode` field) is Hermes-only for a different reason: it isn't a missing config mapping, it's a missing transport. Hermes's `/v1/runs` API exposes mid-turn `tool.started`/`subagent.*` events over HTTP, which `communications-runtime-adapter.py` relays to chat only when `verbose_mode` is set. OpenClaw has the same kind of signal internally (`onAgentEvent` emits `"tool"`/`"thinking"`/`"item"` streams), but neither of its external HTTP surfaces (`/v1/chat/completions`, `/v1/responses`) forwards anything but the final assistant content and a terminal lifecycle event — there is no HTTP channel for the adapter to read progress from. Reaching parity needs an in-process OpenClaw plugin (same plugin SDK the shipped `telemetry-push` plugin uses) that bridges `onAgentEvent` progress out to Communications; until that exists, the API rejects `verbose_mode=true` for an OpenClaw Agent rather than accepting a setting with no effect. Tracked as the same follow-up as OpenClaw approval parity.
 
 Hermes uses `/workspace` as its terminal and messaging working directory while its managed state remains under `/opt/data`. Agent Barn materializes assigned Skills under `/workspace/skills` and declares that directory in Hermes' `skills.external_dirs`, because the runtime's native discovery root is `/opt/data/skills`.
+
+### Runtime configuration digest
+
+Both runtimes read their configuration once, at container start, so a pod keeps serving the code and images it was assembled from until someone restarts it. Step 11 records that fact. `Agent.running_config_digest` identifies the platform code and runtime images the pod was built from, and `AgentRead.update_available` reports when a running Agent's recorded digest differs from what the API would build now. Stop clears the digest, because a stopped Agent has no pod to describe. The signal is advisory: it blocks no operation, changes no Agent behaviour, and clears on the next start. See [`../features/agents.md`](../features/agents.md) for the read contract.
+
+The watched set is computed, never curated. `runtime_digest.py` walks the static closure of `AgentService._provision_and_start` with `ast`, following three kinds of edge: `self._method()` calls within `AgentService`, `self.<collaborator>.<method>()` resolved through the class-level annotations that declare each injected collaborator, and every free name to its defining module. It collects individual definitions rather than whole files, so editing an unrelated DTO in a shared module registers nothing while editing a reachable one does. A hand-written list was measured against this closure before the design settled and covered roughly a third of it, silently omitting `skills.models.derive_tools_pointer`, `agent_settings.lookup.resolve_default_model`, `google_workspace_scopes.required_service_scopes` and the credential content schemas among others — which is why nothing here is maintained by hand and no version constant exists to bump.
+
+Resolution must follow re-export barrels and relative imports. `build_config_map` resolves to the `builders` package rather than to `builders/openclaw.py`, and that package re-exports with `from .openclaw import ...`. Skipping either step silently drops the runtime builders — the largest single source of agent configuration — out of the closure, so the unit test asserts their presence rather than trusting the walk.
+
+Python is normalised through `ast.dump` with docstrings stripped, so comments, blank lines, `ruff format` output, and CRLF checkouts leave the digest unchanged while string literals — the policy text itself — move it. Two asset roots are hashed as bytes instead, because the builders read them from disk into module-level constants where AST analysis cannot see their content: `domains/agents/scripts/` and `domains/agents/aai_cli_skills/bundled/`. Runtime image identity comes from `Config.openclaw_image` and `Config.hermes_image`, which are environment rather than files; the API image copies only `api/`, so the base-image `VERSION` files do not exist at runtime. The digest is computed once at import and cached, because the Agent read that consumes it runs per Agent in list responses.
+
+Known limits fall in both directions, and which is which matters.
+
+These **under-report** — a real change that the digest does not move:
+
+- **Mutable image tags.** The digest folds in the image *reference*, not its content, so rebuilding and pushing the same tag (`:dev`, `:latest`) leaves it unchanged. Immutable or digest-pinned tags do not have this problem.
+- **Deployment environment beyond the two image references.** `ingest_base_url`, `communications_base_url`, and the Firecrawl settings are read at start but excluded, because a curated `Config` subset would reintroduce exactly the hand-maintained list this design exists to avoid.
+- **Dynamic dispatch and runtime registration** are invisible to static analysis. The assembly path uses neither today, and introducing one edits a call site that is itself inside the closure, so it registers once.
+
+These **over-report** — the digest moves without a behavioural change:
+
+- The two asset roots are compared byte for byte, so a comment-only edit to `start.sh` or `init-openclaw.js` moves the digest. Shell and JavaScript cannot be normalised the way Python can.
+- `Agent` is inside the closure, so adding any column to that table moves the digest once.
+- A Python minor-version upgrade can change `ast.dump` output, moving the digest once across the fleet.
+
+Over-reporting is the safe direction: the prompt is advisory, and a restart preserves the PVC, conversation history, Communication Connections, and Hermes `always` grants, rebuilding only the ConfigMap, Secret, and per-start credentials. The under-reporting cases are the ones to watch, because an Agent silently keeps serving older behaviour.
+
+The collaborator walk is transitive in both dimensions: it follows `self._method()` calls *within* each injected collaborator, not only the methods the assembly path calls directly. Without that, helpers such as `KubernetesClient._create_or_get` — which decides whether a 409 reuses an existing resource — would change provisioning without moving the digest.
 
 ## Runtime-neutral communications
 
@@ -156,6 +185,7 @@ Kubernetes `stream()` and `portforward()` temporarily monkey-patch `ApiClient.re
 | Concern                         | Source                                                                          |
 | ------------------------------- | ------------------------------------------------------------------------------- |
 | Runtime orchestration           | `../../api/domains/agents/service.py`                                                 |
+| Runtime configuration digest    | `../../api/domains/agents/runtime_digest.py`                                          |
 | Ingest process and routing      | `../../api/ingest_app.py`, `../../api/ingest_main.py`, `../../api/start.sh`                       |
 | Communications process and routing | `../../api/communications_app.py`, `../../api/communications_main.py`, `../../api/domains/communications/` |
 | Domain Event delivery workers   | `../../api/worker_app.py`, `../../api/domains/events/worker.py`, `../../api/domains/events/reconciliation.py`, `../../helm/agentbarn-api/templates/event-delivery-worker-deployment.yaml`, `../../helm/agentbarn-api/templates/event-delivery-reconciliation-cronjob.yaml` |

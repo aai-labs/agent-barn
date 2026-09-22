@@ -115,6 +115,8 @@ export const AgentSchema = z.object({
   runningModel: z.string().default(""),
   /** Set only when a restart would move a running Agent onto a different model. */
   pendingModel: z.string().default(""),
+  /** True when a running Agent's pod was built from older platform code or images. */
+  updateAvailable: z.boolean().default(false),
   approvalMode: z.enum(["manual", "auto", "off"]).default("auto"),
   verboseMode: z.boolean().default(false),
   lastError: AgentProvisioningErrorSchema.nullish(),

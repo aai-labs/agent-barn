@@ -107,6 +107,7 @@ from api.domains.agents.provisioning_errors import (
     persisted_provisioning_error,
 )
 from api.domains.agents.repository import AgentRepository
+from api.domains.agents.runtime_digest import agent_runtime_config_digest
 from api.domains.agents.runtime_policy import (
     build_chat_commands_policy_md,
     build_messaging_policy_md,
@@ -519,6 +520,11 @@ class AgentService:
             # A running pod that started on something else is the only case a surface
             # must not report the resolved value as current.
             pending_model=(resolved_model if agent.running_model and agent.running_model != resolved_model else ""),
+            update_available=(
+                agent.status == AgentStatus.RUNNING
+                and agent.running_config_digest
+                != agent_runtime_config_digest(self.config.openclaw_image, self.config.hermes_image)
+            ),
             # OpenClaw ignores approval_mode; report the effective AUTO default
             # instead of a stored value from before this became enforced, so
             # reads stay truthful even for agents persisted prior to this check.
@@ -2174,6 +2180,10 @@ class AgentService:
         # is the model it serves until someone restarts it — however the Organization
         # default moves in the meantime.
         agent.running_model = effective_model
+        agent.running_config_digest = agent_runtime_config_digest(
+            self.config.openclaw_image,
+            self.config.hermes_image,
+        )
         agent.ingest_key_encrypted = encrypt_token(ingest_key, self.config.agent_token_encryption_key)
         agent.communication_key_encrypted = encrypt_token(
             communication_key,
@@ -2341,6 +2351,7 @@ class AgentService:
 
         agent.status = AgentStatus.STOPPED
         agent.running_model = ""
+        agent.running_config_digest = ""
         result = self.repository.save_with_lifecycle_event(
             agent,
             event_name=AGENT_STOPPED,
