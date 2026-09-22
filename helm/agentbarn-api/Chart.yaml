@@ -1,4 +1,4 @@
 apiVersion: v2
 name: agentbarn-api
 description: FastAPI backend for Agent Barn
-version: 0.9.2
+version: 0.10.0

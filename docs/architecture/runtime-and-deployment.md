@@ -171,6 +171,16 @@ the Job pod's logs — the manifest is written onto the restore point's PVC, whi
 mount. Distinct exit codes separate a failed safety-net capture, where the Agent volume was
 never touched, from a failed extraction, where it was.
 
+A row's status is otherwise only resolved when someone reads it, so a CronJob runs the same
+resolution on a schedule and reclaims what no row owns. It matches a Job or PVC back to its row
+through the `agentbarn.io/restore-point-id` label, falling back to the resource's own generated
+name — never through `job_name`, which is cleared when a row goes terminal. The name fallback is
+what reaches resources created before that label existed; both routes are exact, because the
+builders generate the names. Because that pass deletes storage from a list-and-compare, it skips
+resources younger than a minimum age, caps deletions per run, refuses to delete a resource
+identifiable by neither route, and fails no rows at all when the volume listing is empty or
+failed.
+
 CSI `VolumeSnapshot` is deliberately unused; see
 [`../adr/2026-09-10-restore-points-use-tar-jobs-not-csi-snapshots.md`](../adr/2026-09-10-restore-points-use-tar-jobs-not-csi-snapshots.md).
 
@@ -187,6 +197,7 @@ Kubernetes `stream()` and `portforward()` temporarily monkey-patch `ApiClient.re
 | Ingest process and routing      | `../../api/ingest_app.py`, `../../api/ingest_main.py`, `../../api/start.sh`                       |
 | Communications process and routing | `../../api/communications_app.py`, `../../api/communications_main.py`, `../../api/domains/communications/` |
 | Domain Event delivery workers   | `../../api/worker_app.py`, `../../api/domains/events/worker.py`, `../../api/domains/events/reconciliation.py`, `../../helm/agentbarn-api/templates/event-delivery-worker-deployment.yaml`, `../../helm/agentbarn-api/templates/event-delivery-reconciliation-cronjob.yaml` |
+| Agent Restore Point reconciliation | `../../api/domains/restore_points/reconciliation.py`, `../../api/domains/restore_points/constants.py`, `../../helm/agentbarn-api/templates/restore-point-reconciliation-cronjob.yaml` |
 | Shared Kubernetes builders      | `../../api/domains/agents/builders/common.py`                                         |
 | Hermes builders                 | `../../api/domains/agents/builders/hermes.py`, `../../hermes-base/`                         |
 | OpenClaw builders               | `../../api/domains/agents/builders/openclaw.py`, `../../openclaw-base/`                     |

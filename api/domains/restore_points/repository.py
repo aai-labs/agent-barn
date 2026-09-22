@@ -3,7 +3,7 @@ from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 from injector import inject, singleton
-from sqlalchemy import func, update
+from sqlalchemy import and_, func, or_, update
 from sqlmodel import Session, col, select
 
 from api.domains.agents.models import Agent, AgentRestorePoint, RestorePointOrigin, RestorePointStatus
@@ -126,6 +126,71 @@ class RestorePointRepository:
                 col(AgentRestorePoint.status) == RestorePointStatus.READY,
             )
             return list(session.exec(query).all())
+
+    def claim_reconciliation_candidates(
+        self,
+        *,
+        stale_before: datetime,
+        limit: int,
+        skip_locked: bool = True,
+        claimed_at: datetime | None = None,
+    ) -> list[AgentRestorePoint]:
+        claimed_at = claimed_at or datetime.now(UTC)
+        statement = (
+            select(AgentRestorePoint)
+            .where(
+                col(AgentRestorePoint.updated_at) <= stale_before,
+                or_(
+                    col(AgentRestorePoint.status).in_(NON_TERMINAL_STATUSES),
+                    and_(
+                        col(AgentRestorePoint.status) == RestorePointStatus.READY,
+                        col(AgentRestorePoint.reapply_configuration).is_(True),
+                    ),
+                ),
+            )
+            .order_by(col(AgentRestorePoint.updated_at))
+            .limit(limit)
+            .with_for_update(skip_locked=skip_locked)
+        )
+        with Session(self.delegate.engine, expire_on_commit=False) as session:
+            rows = list(session.exec(statement))
+            for row in rows:
+                row.updated_at = claimed_at
+                session.add(row)
+            session.commit()
+            return rows
+
+    def find_ready_rows_missing_volumes(self, live_pvc_names: set[str], limit: int) -> list[AgentRestorePoint]:
+        with Session(self.delegate.engine) as session:
+            query = (
+                select(AgentRestorePoint)
+                .where(
+                    col(AgentRestorePoint.status) == RestorePointStatus.READY,
+                    col(AgentRestorePoint.pvc_name).not_in(live_pvc_names),
+                )
+                .order_by(col(AgentRestorePoint.created_at))
+                .limit(limit)
+            )
+            return list(session.exec(query).all())
+
+    def find_existing_ids(self, restore_point_ids: set[UUID]) -> set[UUID]:
+        if not restore_point_ids:
+            return set()
+        with Session(self.delegate.engine) as session:
+            query = select(col(AgentRestorePoint.id)).where(col(AgentRestorePoint.id).in_(restore_point_ids))
+            return set(session.exec(query).all())
+
+    def mark_ready_row_failed(self, restore_point_id: UUID, reason: str) -> bool:
+        return self._conditional_update(
+            restore_point_id,
+            (RestorePointStatus.READY,),
+            {
+                "status": RestorePointStatus.FAILED,
+                "failure_reason": reason,
+                "job_name": None,
+                "reapply_configuration": False,
+            },
+        )
 
     def find_non_terminal_for_agent(self, agent_id: UUID) -> list[AgentRestorePoint]:
         with Session(self.delegate.engine) as session:
