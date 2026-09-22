@@ -47,3 +47,14 @@ def test_the_secret_is_still_read_only_once():
         client._master_key()
         client._master_key()
     assert_that(get_secret.call_count, equal_to(1))
+
+
+def test_an_empty_cached_key_is_treated_as_unset():
+    """An empty string is never a usable key, so the guard asks whether we have one
+    rather than whether the field was assigned. Without this, anything that puts a
+    falsy value in the cache silently authenticates as nobody."""
+    client = _injected_client()
+    client._cached_master_key = ""
+    with patch.object(client.k8s, "get_secret", return_value=_secret()) as get_secret:
+        assert_that(client._master_key(), equal_to("sk-master"))
+    assert_that(get_secret.called, equal_to(True))

@@ -38,7 +38,11 @@ class LiteLLMClient:
         every call, which a per-Agent sweep paid for on top of each proxy call. The
         client is a singleton, so a rotated Secret needs a restart — the same as every
         other value read at startup."""
-        if self._cached_master_key is not None:
+        # Truthiness, not `is not None`: an empty string is never a usable key, so the
+        # question is whether we have one, not whether the field was ever assigned.
+        # Most values in this codebase are amounts, where falsy is meaningful and
+        # `is not None` is right — a credential is the opposite case.
+        if self._cached_master_key:
             return self._cached_master_key
         try:
             secret = self.k8s.get_secret(self.config.litellm_secret_name, self.config.k8s_namespace)
