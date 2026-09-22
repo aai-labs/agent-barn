@@ -37,6 +37,7 @@ def _service(*, honcho_enabled: bool = True):
     honcho = MagicMock()
     agent_service = MagicMock()
     pool_memory = MagicMock()
+    memory = MagicMock()
     service = MemoryGroupService(
         repository=repository,
         permission_policy=permission_policy,
@@ -44,13 +45,14 @@ def _service(*, honcho_enabled: bool = True):
         config=Config(honcho_enabled=honcho_enabled),
         agent_service=agent_service,
         pool_memory=pool_memory,
+        memory=memory,
     )
-    return service, repository, permission_policy, honcho, agent_service, pool_memory
+    return service, repository, permission_policy, honcho, agent_service, pool_memory, memory
 
 
 def test_create_group_requires_the_manage_permission_and_persists():
     org_id = uuid7()
-    service, repository, permission_policy, _honcho, _agents, _pool = _service()
+    service, repository, permission_policy, _honcho, _agents, _pool, _mem = _service()
 
     service.create_group(MemoryGroupCreate(name="Research"), _context(org_id))
 
@@ -65,7 +67,7 @@ def test_create_group_requires_the_manage_permission_and_persists():
 
 def test_add_agent_assigns_the_group_via_agent_service():
     org_id, agent_id = uuid7(), uuid7()
-    service, repository, _pp, _honcho, agent_service, _pool = _service()
+    service, repository, _pp, _honcho, agent_service, _pool, _mem = _service()
     group = MemoryGroup(id=uuid7(), organization_id=org_id, name="Research")
     repository.get_by_id_and_org.return_value = group
 
@@ -76,7 +78,7 @@ def test_add_agent_assigns_the_group_via_agent_service():
 
 def test_remove_agent_clears_the_group():
     org_id, agent_id = uuid7(), uuid7()
-    service, repository, _pp, _honcho, agent_service, _pool = _service()
+    service, repository, _pp, _honcho, agent_service, _pool, _mem = _service()
     group = MemoryGroup(id=uuid7(), organization_id=org_id, name="Research")
     repository.get_by_id_and_org.return_value = group
 
@@ -90,7 +92,7 @@ def test_delete_group_deliberately_purges_the_shared_pool():
     members automatically; the pool workspace is purged via the deliberate method
     (the per-agent guard refuses pools)."""
     org_id = uuid7()
-    service, repository, _pp, honcho, _agents, _pool = _service(honcho_enabled=True)
+    service, repository, _pp, honcho, _agents, _pool, _mem = _service(honcho_enabled=True)
     group = MemoryGroup(id=uuid7(), organization_id=org_id, name="Research")
     repository.get_by_id_and_org.return_value = group
 
@@ -102,7 +104,7 @@ def test_delete_group_deliberately_purges_the_shared_pool():
 
 def test_delete_group_skips_pool_purge_when_memory_backend_is_off():
     org_id = uuid7()
-    service, repository, _pp, honcho, _agents, _pool = _service(honcho_enabled=False)
+    service, repository, _pp, honcho, _agents, _pool, _mem = _service(honcho_enabled=False)
     group = MemoryGroup(id=uuid7(), organization_id=org_id, name="Research")
     repository.get_by_id_and_org.return_value = group
 
@@ -113,7 +115,7 @@ def test_delete_group_skips_pool_purge_when_memory_backend_is_off():
 
 def test_rename_group_persists_the_new_name():
     org_id = uuid7()
-    service, repository, _pp, _honcho, _agents, _pool = _service()
+    service, repository, _pp, _honcho, _agents, _pool, _mem = _service()
     group = MemoryGroup(id=uuid7(), organization_id=org_id, name="Old")
     repository.get_by_id_and_org.return_value = group
 
@@ -125,7 +127,7 @@ def test_rename_group_persists_the_new_name():
 
 def test_unauthorized_caller_cannot_manage_groups():
     org_id = uuid7()
-    service, _repository, permission_policy, _honcho, _agents, _pool = _service()
+    service, _repository, permission_policy, _honcho, _agents, _pool, _mem = _service()
     permission_policy.require_organization.side_effect = PermissionError("nope")
 
     with pytest.raises(PermissionError):
@@ -144,7 +146,7 @@ def _known_groups(org_id, *groups):
 
 def test_share_item_copies_into_each_target_and_records_origin():
     org_id = uuid7()
-    service, repository, _pp, honcho, _agents, pool_memory = _service(honcho_enabled=True)
+    service, repository, _pp, honcho, _agents, pool_memory, _mem = _service(honcho_enabled=True)
     source = MemoryGroup(id=uuid7(), organization_id=org_id, name="Research")
     target_a = MemoryGroup(id=uuid7(), organization_id=org_id, name="Support")
     target_b = MemoryGroup(id=uuid7(), organization_id=org_id, name="Sales")
@@ -172,7 +174,7 @@ def test_share_item_copies_into_each_target_and_records_origin():
 
 def test_share_item_rejects_sharing_a_group_with_itself():
     org_id = uuid7()
-    service, repository, _pp, honcho, _agents, _pool = _service(honcho_enabled=True)
+    service, repository, _pp, honcho, _agents, _pool, _mem = _service(honcho_enabled=True)
     source = MemoryGroup(id=uuid7(), organization_id=org_id, name="Research")
     repository.get_by_id_and_org.side_effect = _known_groups(org_id, source)
 
@@ -186,7 +188,7 @@ def test_share_item_rejects_sharing_a_group_with_itself():
 
 def test_share_item_404_when_the_memory_is_not_in_the_source_pool():
     org_id = uuid7()
-    service, repository, _pp, honcho, _agents, _pool = _service(honcho_enabled=True)
+    service, repository, _pp, honcho, _agents, _pool, _mem = _service(honcho_enabled=True)
     source = MemoryGroup(id=uuid7(), organization_id=org_id, name="Research")
     target = MemoryGroup(id=uuid7(), organization_id=org_id, name="Support")
     repository.get_by_id_and_org.side_effect = _known_groups(org_id, source, target)
@@ -202,7 +204,7 @@ def test_share_item_404_when_the_memory_is_not_in_the_source_pool():
 
 def test_share_item_404_when_a_target_group_is_not_in_the_org():
     org_id = uuid7()
-    service, repository, _pp, honcho, _agents, _pool = _service(honcho_enabled=True)
+    service, repository, _pp, honcho, _agents, _pool, _mem = _service(honcho_enabled=True)
     source = MemoryGroup(id=uuid7(), organization_id=org_id, name="Research")
     repository.get_by_id_and_org.side_effect = _known_groups(org_id, source)  # target unknown
 
@@ -216,7 +218,7 @@ def test_share_item_404_when_a_target_group_is_not_in_the_org():
 
 def test_share_item_409_when_memory_backend_is_off():
     org_id = uuid7()
-    service, repository, _pp, honcho, _agents, _pool = _service(honcho_enabled=False)
+    service, repository, _pp, honcho, _agents, _pool, _mem = _service(honcho_enabled=False)
     source = MemoryGroup(id=uuid7(), organization_id=org_id, name="Research")
     repository.get_by_id_and_org.side_effect = _known_groups(org_id, source)
 
@@ -232,7 +234,7 @@ def test_share_item_reports_a_per_target_honcho_failure_without_failing_the_rest
     from api.infrastructure.honcho.client import HonchoError
 
     org_id = uuid7()
-    service, repository, _pp, honcho, _agents, pool_memory = _service(honcho_enabled=True)
+    service, repository, _pp, honcho, _agents, pool_memory, _mem = _service(honcho_enabled=True)
     source = MemoryGroup(id=uuid7(), organization_id=org_id, name="Research")
     good = MemoryGroup(id=uuid7(), organization_id=org_id, name="Support")
     bad = MemoryGroup(id=uuid7(), organization_id=org_id, name="Sales")
@@ -254,3 +256,51 @@ def test_share_item_reports_a_per_target_honcho_failure_without_failing_the_rest
     # Provenance is recorded only for the target that actually took the write.
     recorded = {call.kwargs["target_group_id"] for call in pool_memory.record_share.call_args_list}
     assert_that(recorded, equal_to({good.id}))
+
+
+def test_group_memory_list_resolves_the_pool_workspace_and_delegates():
+    """Group memory is the pool's memory: it resolves the workspace straight from the
+    group id and delegates to the workspace-keyed core — no member Agent involved."""
+    org_id = uuid7()
+    service, repository, _pp, _honcho, _agents, _pool, memory = _service(honcho_enabled=True)
+    group = MemoryGroup(id=uuid7(), organization_id=org_id, name="Research")
+    repository.get_by_id_and_org.return_value = group
+
+    service.list_memory(group.id, _context(org_id), page=1, size=50, observed=None)
+
+    memory.list_memory_for_workspace.assert_called_once()
+    assert_that(memory.list_memory_for_workspace.call_args.args[0], equal_to(f"af-pool-{group.id}"))
+
+
+def test_group_memory_forget_delegates_to_the_pool_workspace():
+    org_id = uuid7()
+    service, repository, _pp, _honcho, _agents, _pool, memory = _service(honcho_enabled=True)
+    group = MemoryGroup(id=uuid7(), organization_id=org_id, name="Research")
+    repository.get_by_id_and_org.return_value = group
+
+    service.forget_memory(group.id, "c1", _context(org_id))
+
+    memory.forget_in_workspace.assert_called_once_with(f"af-pool-{group.id}", "c1")
+
+
+def test_group_memory_404_for_a_group_not_in_the_org():
+    org_id = uuid7()
+    service, repository, _pp, _honcho, _agents, _pool, memory = _service(honcho_enabled=True)
+    repository.get_by_id_and_org.return_value = None
+
+    with pytest.raises(HTTPException) as exc:
+        service.list_memory(uuid7(), _context(org_id), page=1, size=50)
+
+    assert_that(exc.value.status_code, equal_to(status.HTTP_404_NOT_FOUND))
+    memory.list_memory_for_workspace.assert_not_called()
+
+
+def test_group_memory_409_when_memory_backend_is_off():
+    org_id = uuid7()
+    service, _repository, _pp, _honcho, _agents, _pool, memory = _service(honcho_enabled=False)
+
+    with pytest.raises(HTTPException) as exc:
+        service.list_memory(uuid7(), _context(org_id), page=1, size=50)
+
+    assert_that(exc.value.status_code, equal_to(status.HTTP_409_CONFLICT))
+    memory.list_memory_for_workspace.assert_not_called()

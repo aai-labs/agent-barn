@@ -167,7 +167,7 @@ def _to_memory_item(
     )
 
 
-def _facet_for_peer(peer: str, count: int, agent_name: str, ai_peer_name: str) -> MemoryFacet:
+def _facet_for_peer(peer: str, count: int, agent_name: str, ai_peer_name: str | None) -> MemoryFacet:
     """Turn a raw Honcho peer id into a facet the tab can show.
 
     The three cases mirror how memory is actually keyed. The AI peer is the
@@ -442,18 +442,45 @@ class AgentMemoryService:
         agent = self._require(agent_id, PermissionKey.AGENT_MEMORY_READ, context)
         if not memory_active(agent, honcho_enabled=self.config.honcho_enabled):
             return MemoryPage(items=[], total=0, page=page, size=size, facets=[])
-        workspace = memory_workspace_for_agent(agent)
         ai_peer = ai_peer_name_for_agent(agent)
         # "mine" scopes to this Agent as observer; "pool" leaves observer open so
         # every member's conclusions are included.
         observer = ai_peer if scope == "mine" else None
+        return self.list_memory_for_workspace(
+            memory_workspace_for_agent(agent),
+            page=page,
+            size=size,
+            observed=observed,
+            observer=observer,
+            ai_peer=ai_peer,
+            agent_name=agent.name,
+        )
+
+    def list_memory_for_workspace(
+        self,
+        workspace: str,
+        *,
+        page: int,
+        size: int,
+        observed: str | None = None,
+        observer: str | None = None,
+        ai_peer: str | None = None,
+        agent_name: str = "",
+    ) -> MemoryPage:
+        """One page of a pool workspace's memory, badged with provenance.
+
+        Workspace-keyed so the per-Agent view (Agent → its pool) and the group view
+        (group → its pool) share one implementation. `observer` scopes the query
+        (None = the whole pool); `ai_peer`/`agent_name` only affect facet labelling
+        and are omitted for the group view, which has no single self-model peer.
+        """
         try:
             items, total = self.honcho.list_conclusions(
                 workspace, page=page, size=size, observer=observer, observed=observed
             )
             # Facets describe the whole workspace, so they are computed only for the
             # unfiltered view — asking for them under a filter would be redundant work.
-            facets = self._memory_facets(workspace, observer, ai_peer, agent.name) if observed is None else []
+            facets = self._memory_facets(workspace, observer, ai_peer, agent_name) if observed is None else []
         except HonchoError as exc:
             raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
         ids = [str(i.get("id")) for i in items]
@@ -467,7 +494,9 @@ class AgentMemoryService:
             facets=facets,
         )
 
-    def _memory_facets(self, workspace: str, observer: str | None, ai_peer: str, agent_name: str) -> list[MemoryFacet]:
+    def _memory_facets(
+        self, workspace: str, observer: str | None, ai_peer: str | None, agent_name: str
+    ) -> list[MemoryFacet]:
         """The peers the pool has memory about, each with its real count.
 
         `observer` scopes the count (None = the whole pool's conclusions about the
@@ -487,7 +516,10 @@ class AgentMemoryService:
         # Not agent.update: removing what an Agent knows changes what it believes,
         # which is a different power from changing how it is configured.
         agent = self._require(agent_id, PermissionKey.AGENT_MEMORY_MANAGE, context)
-        workspace = self._require_pool(agent)
+        self.forget_in_workspace(self._require_pool(agent), memory_id)
+
+    def forget_in_workspace(self, workspace: str, memory_id: str) -> None:
+        """Delete one conclusion from a pool workspace and drop its provenance."""
         try:
             self.honcho.delete_conclusion(workspace, memory_id)
         except HonchoError as exc:
@@ -498,15 +530,17 @@ class AgentMemoryService:
     def correct(
         self, agent_id: UUID, memory_id: str, payload: MemoryItemUpdate, context: CurrentUserContext
     ) -> MemoryItemRead:
-        """Replace one memory's content.
+        agent = self._require(agent_id, PermissionKey.AGENT_MEMORY_MANAGE, context)
+        return self.correct_in_workspace(self._require_pool(agent), memory_id, payload)
+
+    def correct_in_workspace(self, workspace: str, memory_id: str, payload: MemoryItemUpdate) -> MemoryItemRead:
+        """Replace one memory's content in a pool workspace.
 
         Honcho has no update endpoint, so this deletes and recreates. Two
         consequences are deliberately visible rather than hidden: the item gets a
         new id, and the replacement is always `explicit` because create cannot set
         a level — a corrected deduction stops being labelled a deduction.
         """
-        agent = self._require(agent_id, PermissionKey.AGENT_MEMORY_MANAGE, context)
-        workspace = self._require_pool(agent)
         try:
             existing = self._find(workspace, memory_id)
             if existing is None:
@@ -543,7 +577,15 @@ class AgentMemoryService:
         agent = self._require(agent_id, PermissionKey.AGENT_MEMORY_READ, context)
         if not memory_active(agent, honcho_enabled=self.config.honcho_enabled):
             return []
-        workspace = memory_workspace_for_agent(agent)
+        return self.search_memory_for_workspace(memory_workspace_for_agent(agent), query, limit=limit)
+
+    def search_memory_for_workspace(self, workspace: str, query: str, *, limit: int) -> list[MemoryItemRead]:
+        """Semantic search across a pool workspace, fanning out over its peer pairs.
+
+        Workspace-keyed so the per-Agent and group views share it. Honcho searches
+        one (observer, observed) collection at a time, so this fans out and merges,
+        bounded by `_MAX_SEARCH_PEERS` to keep a search box a search box.
+        """
         try:
             peers = self.honcho.list_peers(workspace)
             results: list[dict] = []
