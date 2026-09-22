@@ -10,12 +10,9 @@ import { formatDate } from "@/shared/date";
 
 import { useAgentWebhookActions } from "../hooks/use-agent-webhooks";
 import type { AgentWebhook, WebhookDeliveryPlatform, WebhookDeliveryPlatformRead } from "../schemas";
+import { deliveryPlatformOptionLabel, PLATFORM_LABEL } from "../utils";
 import { CopyButton, PayloadHint } from "./agent-webhook-settings";
 import { WebhookInvocationHistory } from "./webhook-invocation-history";
-
-const PLATFORM_LABEL: Record<WebhookDeliveryPlatform, string> = {
-  slack: "Slack", discord: "Discord", telegram: "Telegram", teams: "Microsoft Teams",
-};
 
 export function WebhookDetail({ agent, webhook, platforms, canEdit, onBack, onSecretRotated, onRetire }: {
   agent: Agent;
@@ -74,7 +71,7 @@ export function WebhookDetail({ agent, webhook, platforms, canEdit, onBack, onSe
           <label htmlFor="edit-webhook-name" className="mb-1.5 block text-sm font-medium">Webhook name</label>
           <input id="edit-webhook-name" className="af-input w-full" value={displayName} onChange={(event) => setDisplayName(event.target.value)} />
           <label htmlFor="edit-webhook-platform" className="mb-1.5 mt-3 block text-sm font-medium">Deliver results to</label>
-          <Select value={deliveryPlatform} onValueChange={(value) => setDeliveryPlatform(value as WebhookDeliveryPlatform)}><SelectTrigger id="edit-webhook-platform" className="w-full"><SelectValue /></SelectTrigger><SelectContent><SelectGroup>{platforms.map((item) => <SelectItem key={item.key} value={item.key}>{PLATFORM_LABEL[item.key]} · {item.displayName}</SelectItem>)}</SelectGroup></SelectContent></Select>
+          <Select value={deliveryPlatform} onValueChange={(value) => setDeliveryPlatform(value as WebhookDeliveryPlatform)}><SelectTrigger id="edit-webhook-platform" className="w-full"><SelectValue /></SelectTrigger><SelectContent><SelectGroup>{platforms.map((item) => <SelectItem key={item.key} value={item.key}>{deliveryPlatformOptionLabel(item)}</SelectItem>)}</SelectGroup></SelectContent></Select>
           {saveError && <p className="mt-2 text-xs text-[var(--err)]" role="alert">{saveError}</p>}
           <div className="mt-3 flex justify-end gap-2"><button type="button" className="af-btn" onClick={() => setEditing(false)}>Cancel</button><button type="button" className="af-btn af-btn-primary" disabled={!displayName.trim() || updateWebhook.isPending} onClick={() => void save()}>{updateWebhook.isPending ? "Saving…" : "Save changes"}</button></div>
         </div>}

@@ -12,14 +12,8 @@ import { AgentConfigurationSection } from "@/features/agents/components/agent-co
 
 import { useAgentWebhookActions, useAgentWebhooks, useWebhookDeliveryPlatforms } from "../hooks/use-agent-webhooks";
 import type { AgentWebhook, WebhookDeliveryPlatform } from "../schemas";
+import { deliveryPlatformOptionLabel, PLATFORM_LABEL } from "../utils";
 import { WebhookDetail } from "./webhook-detail";
-
-const PLATFORM_LABEL: Record<WebhookDeliveryPlatform, string> = {
-  slack: "Slack",
-  discord: "Discord",
-  telegram: "Telegram",
-  teams: "Microsoft Teams",
-};
 
 export function curlExample(url: string, secret: string): string {
   const body = '{"prompt":"Prepare a release summary."}';
@@ -233,10 +227,25 @@ function CreateWebhookForm({ displayName, platform, platforms, platformsLoading,
       <label htmlFor="webhook-platform" className="mb-1.5 mt-3 block text-sm font-medium text-[var(--ink)]">Deliver results to</label>
       <Select value={platform} onValueChange={(value) => onPlatformChange(value as WebhookDeliveryPlatform)} disabled={platformsLoading || platforms.length === 0}>
         <SelectTrigger id="webhook-platform" className="w-full"><SelectValue placeholder={platformsLoading ? "Loading channels…" : "Choose a channel"} /></SelectTrigger>
-        <SelectContent><SelectGroup>{platforms.map((item) => <SelectItem key={item.key} value={item.key}>{PLATFORM_LABEL[item.key]} · {item.displayName}</SelectItem>)}</SelectGroup></SelectContent>
+        <SelectContent><SelectGroup>{platforms.map((item) => <SelectItem key={item.key} value={item.key}>{deliveryPlatformOptionLabel(item)}</SelectItem>)}</SelectGroup></SelectContent>
       </Select>
-      {!platformsLoading && platforms.length === 0 && <p className="mt-2 text-xs text-[var(--err)]">Configure and enable Slack, Discord, Telegram, or Teams with a default channel before adding a webhook.</p>}
-      <p className="mt-2 text-xs text-[var(--ink-4)]">For now, the runtime posts to that platform&apos;s configured default channel.</p>
+      {!platformsLoading && platforms.length === 0 && (
+        <div
+          className="mt-3 flex items-start gap-3 rounded-lg border p-3"
+          style={{
+            borderColor: "color-mix(in srgb, var(--err) 30%, transparent)",
+            background: "var(--err-soft)",
+            color: "var(--err)",
+          }}
+          role="alert"
+        >
+          <CircleAlert size={16} className="mt-0.5 flex-shrink-0" aria-hidden="true" />
+          <p className="m-0 text-xs leading-5">
+            Configure and enable Slack, Discord, Telegram, or Teams with a default channel before adding a webhook.
+          </p>
+        </div>
+      )}
+      <p className="mt-2 text-xs text-[var(--ink-4)]">A default channel is required to post webhook-triggered Agent messages.</p>
       {error && <p className="mt-2 text-xs text-[var(--err)]" role="alert">{error}</p>}
       <div className="mt-3 flex justify-end gap-2">
         <button type="button" className="af-btn" onClick={onCancel}>Cancel</button>
