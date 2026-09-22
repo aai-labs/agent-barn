@@ -1,0 +1,71 @@
+{{- if .Values.organizationLlmBudgets.alerts.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ .Release.Name }}-llm-budget-alerts
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "agentbarn-api.labels" . | nindent 4 }}
+    app.kubernetes.io/component: llm-budget-alerts
+spec:
+  # Separate from the reconciler on purpose: that job pushes configuration out, this
+  # one watches spend come back, and they want different cadences. Runs more often
+  # because its whole value is how late a human hears about a limit being reached.
+  schedule: {{ .Values.organizationLlmBudgets.alerts.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            {{- include "agentbarn-api.selectorLabels" . | nindent 12 }}
+            app.kubernetes.io/component: llm-budget-alerts
+        spec:
+          restartPolicy: OnFailure
+          # Reads the LiteLLM master key out of the `litellm` Secret, so it needs the
+          # service account, namespace and mounted kubeconfig — same as cost-sync.
+          serviceAccountName: {{ .Release.Name }}
+          imagePullSecrets:
+            {{- toYaml .Values.imagePullSecrets | nindent 12 }}
+          containers:
+            - name: llm-budget-alerts
+              image: "{{ .Values.registryPrefix }}/{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+              imagePullPolicy: {{ .Values.image.pullPolicy }}
+              # Not `python -m ...`: running the module as __main__ re-imports it
+              # under a second module name, so the classes AppModule's @provider
+              # registered bindings for no longer match and injector falls back to
+              # raw construction.
+              command:
+                - python
+                - -c
+                - "from api.domains.organizations.llm_budget_alerts import main; main()"
+              envFrom:
+                - secretRef:
+                    name: {{ .Values.secretName }}
+              env:
+                - name: K8S_NAMESPACE
+                  value: {{ .Release.Namespace }}
+                - name: K8S_KUBECONFIG_PATH
+                  value: /etc/kubeconfig/kubeconfig
+                # Team writes need the master key, which the virtual key in
+                # litellmApiKeySecretName cannot authenticate — that secret is
+                # deliberately not mounted here.
+                - name: ORGANIZATION_LLM_BUDGET_ALERT_THRESHOLDS
+                  value: {{ .Values.organizationLlmBudgets.alertThresholds | quote }}
+                - name: LITELLM_BASE_URL
+                  value: "{{ .Values.litellmBaseUrl }}"
+                - name: LITELLM_SECRET_NAME
+                  value: "{{ .Values.litellmSecretName }}"
+              volumeMounts:
+                - name: kubeconfig
+                  mountPath: /etc/kubeconfig
+                  readOnly: true
+              resources:
+                {{- toYaml .Values.worker.resources | nindent 16 }}
+          volumes:
+            - name: kubeconfig
+              secret:
+                secretName: {{ .Values.kubeconfigSecretName | default (printf "%s-kubeconfig" .Release.Name) }}
+{{- end }}

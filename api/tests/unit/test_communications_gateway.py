@@ -1,16 +1,19 @@
 import asyncio
 import json
 from types import SimpleNamespace
-from typing import cast
+from typing import Any, cast
 from unittest.mock import AsyncMock, Mock, patch
 from uuid import uuid4
 
+import httpx
 import pytest
 from hamcrest import assert_that, empty, equal_to, is_
 
 from api.core.config import Config
 from api.domains.agents.models import Agent, AgentStatus, AgentType
-from api.domains.communications.gateway_service import CommunicationsGatewayService
+from api.domains.communications.gateway_service import (
+    CommunicationsGatewayService,
+)
 from api.domains.communications.models import (
     AcceptedCommunicationRead,
     CommunicationConnection,
@@ -27,6 +30,12 @@ from api.domains.communications.models import (
 from api.domains.communications.plugins.base import InboundAdmissionResult, PlatformPlugin
 from api.domains.communications.plugins.registry import PlatformPluginRegistry
 from api.domains.communications.plugins.slack import SlackCredentials, SlackSettings
+from api.domains.communications.plugins.teams import TeamsPlatformPlugin
+from api.domains.communications.teams_runtime_webhook import (
+    RuntimeWebhookRelayResponse,
+    RuntimeWebhookUnavailable,
+    TeamsRuntimeWebhookRelay,
+)
 from api.infrastructure.communication_signals import CommunicationSignalType
 
 
@@ -90,6 +99,181 @@ def _feedback_plugin() -> Mock:
     )
     plugin.enrich_inbound.side_effect = lambda settings, credentials, envelopes: envelopes
     return plugin
+
+
+def _teams_runtime_service(
+    *, settings: dict | None = None
+) -> tuple[TeamsRuntimeWebhookRelay, TeamsPlatformPlugin, CommunicationConnection]:
+    connection = cast(
+        CommunicationConnection,
+        SimpleNamespace(
+            id=uuid4(),
+            organization_id=uuid4(),
+            agent_id=uuid4(),
+            enabled=True,
+            platform_key="teams",
+            settings=settings or {"dm_policy": "open"},
+            credentials_encrypted="ciphertext",
+        ),
+    )
+    validation_config = SimpleNamespace(
+        skip_teams_token_validation=True,
+        teams_publisher_name="Agent Barn",
+        teams_publisher_website_url="https://example.test",
+        teams_privacy_url="https://example.test/privacy",
+        teams_terms_url="https://example.test/terms",
+    )
+    plugin = TeamsPlatformPlugin(cast(Any, validation_config))
+    connections = Mock()
+    connections.get_active.return_value = connection
+    agents = Mock()
+    agents.get_by_id.return_value = SimpleNamespace(
+        id=connection.agent_id,
+        deleted_at=None,
+        status=AgentStatus.RUNNING,
+    )
+    service = TeamsRuntimeWebhookRelay(
+        config=cast(
+            Config,
+            SimpleNamespace(
+                agent_token_encryption_key="key",
+                native_platform_keys=frozenset({"teams"}),
+                k8s_namespace="agent-farm",
+                teams_runtime_webhook_url=Config.model_fields["teams_runtime_webhook_url"].default,
+            ),
+        ),
+        agent_repository=agents,
+        connection_repository=connections,
+        plugins=PlatformPluginRegistry([plugin]),
+        operations=Mock(),
+    )
+    return service, plugin, connection
+
+
+def _teams_activity() -> dict:
+    return {
+        "type": "message",
+        "id": "activity-1",
+        "timestamp": "2026-09-17T12:00:00Z",
+        "serviceUrl": "https://smba.trafficmanager.net/amer/",
+        "from": {"id": "teams-user", "aadObjectId": "aad-user"},
+        "recipient": {"id": "bot-id"},
+        "conversation": {"conversationType": "personal", "id": "conversation-1"},
+        "text": "hello",
+    }
+
+
+def test_runtime_teams_webhook_is_verified_and_relayed_to_the_private_agent_service() -> None:
+    service, plugin, connection = _teams_runtime_service()
+    upstream = SimpleNamespace(status_code=200, content=b'{"ok":true}', headers={"Content-Type": "application/json"})
+
+    with (
+        patch(
+            "api.domains.communications.teams_runtime_webhook.decrypt_token",
+            return_value=json.dumps({"app_id": "app", "app_password": "secret", "tenant_id": "tenant"}),
+        ),
+        patch.object(plugin, "verify_webhook") as verify,
+        patch("api.domains.communications.teams_runtime_webhook.resilient_request", return_value=upstream) as request,
+    ):
+        result = service.relay(connection.id, _teams_activity(), "Bearer signed-token")
+
+    assert result == RuntimeWebhookRelayResponse(200, b'{"ok":true}', "application/json")
+    verify.assert_called_once()
+    verification_request = verify.call_args.args[1]
+    assert verification_request.payload == _teams_activity()
+    assert verification_request.authorization == "Bearer signed-token"
+    assert request.call_args.args == (
+        "POST",
+        f"http://agent-{connection.agent_id}.agent-farm.svc.cluster.local:3978/api/messages",
+    )
+    assert request.call_args.kwargs["headers"]["Authorization"] == "Bearer signed-token"
+    assert json.loads(request.call_args.kwargs["content"]) == _teams_activity()
+    assert request.call_args.kwargs["max_retries"] == 0
+
+
+def test_runtime_teams_webhook_target_url_is_configurable() -> None:
+    service, plugin, connection = _teams_runtime_service()
+    service.config.teams_runtime_webhook_url = "http://host.docker.internal:3978/api/messages"
+    upstream = SimpleNamespace(status_code=200, content=b"", headers={})
+
+    with (
+        patch(
+            "api.domains.communications.teams_runtime_webhook.decrypt_token",
+            return_value=json.dumps({"app_id": "app", "app_password": "secret", "tenant_id": "tenant"}),
+        ),
+        patch.object(plugin, "verify_webhook"),
+        patch("api.domains.communications.teams_runtime_webhook.resilient_request", return_value=upstream) as request,
+    ):
+        service.relay(connection.id, _teams_activity(), "Bearer signed-token")
+
+    assert request.call_args.args[1] == "http://host.docker.internal:3978/api/messages"
+
+
+def test_runtime_teams_webhook_policy_denial_is_acknowledged_without_relay() -> None:
+    service, plugin, connection = _teams_runtime_service(settings={"dm_policy": "off"})
+
+    with (
+        patch(
+            "api.domains.communications.teams_runtime_webhook.decrypt_token",
+            return_value=json.dumps({"app_id": "app", "app_password": "secret", "tenant_id": "tenant"}),
+        ),
+        patch.object(plugin, "verify_webhook"),
+        patch("api.domains.communications.teams_runtime_webhook.resilient_request") as request,
+    ):
+        result = service.relay(connection.id, _teams_activity(), "Bearer signed-token")
+
+    assert result == RuntimeWebhookRelayResponse(200, b"")
+    request.assert_not_called()
+
+
+def test_runtime_teams_webhook_requires_a_running_agent() -> None:
+    service, plugin, connection = _teams_runtime_service()
+    cast(Mock, service.agent_repository).get_by_id.return_value.status = AgentStatus.STOPPED
+
+    with (
+        patch(
+            "api.domains.communications.teams_runtime_webhook.decrypt_token",
+            return_value=json.dumps({"app_id": "app", "app_password": "secret", "tenant_id": "tenant"}),
+        ),
+        patch.object(plugin, "verify_webhook"),
+        pytest.raises(RuntimeWebhookUnavailable, match="not running"),
+    ):
+        service.relay(connection.id, _teams_activity(), "Bearer signed-token")
+
+
+def test_runtime_teams_webhook_maps_transport_failure_to_unavailable() -> None:
+    service, plugin, connection = _teams_runtime_service()
+
+    with (
+        patch(
+            "api.domains.communications.teams_runtime_webhook.decrypt_token",
+            return_value=json.dumps({"app_id": "app", "app_password": "secret", "tenant_id": "tenant"}),
+        ),
+        patch.object(plugin, "verify_webhook"),
+        patch(
+            "api.domains.communications.teams_runtime_webhook.resilient_request",
+            side_effect=httpx.ConnectError("refused"),
+        ),
+        pytest.raises(RuntimeWebhookUnavailable, match="unavailable"),
+    ):
+        service.relay(connection.id, _teams_activity(), "Bearer signed-token")
+
+
+def test_gateway_owned_teams_webhook_is_not_handled_by_the_runtime_relay() -> None:
+    service, plugin, connection = _teams_runtime_service()
+    cast(Any, service.config).native_platform_keys = frozenset()
+
+    with (
+        patch(
+            "api.domains.communications.teams_runtime_webhook.decrypt_token",
+            return_value=json.dumps({"app_id": "app", "app_password": "secret", "tenant_id": "tenant"}),
+        ),
+        patch.object(plugin, "verify_webhook") as verify,
+    ):
+        result = service.relay(connection.id, _teams_activity(), "Bearer signed-token")
+
+    assert result is None
+    verify.assert_not_called()
 
 
 def test_gateway_feedback_is_best_effort_after_inbound_acceptance() -> None:
@@ -302,6 +486,7 @@ def test_native_platform_deliveries_are_not_reclaimed_or_claimed_by_the_gateway(
     deliveries.claim_next_inbound.assert_called_once_with(
         agent_id=agent.id,
         reclaim_expired=False,
+        runtime_protocol_version=1,
         excluded_platform_keys=excluded,
     )
 

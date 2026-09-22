@@ -3,7 +3,7 @@ COMPOSE := docker compose -f compose.yml
 .PHONY: \
 	setup run stop stop-clean \
 	restart-ui \
-	dev-api dev-ingest dev-communications dev-ui dev-worker reconcile seed-event-deliveries seed-costs seed-agent-overrides migrate merge-heads rollback makemigrations test-api test-ui lint-ui check-ui coverage check-api check-migrations check-monitoring fix-api test check fix \
+	dev-api dev-ingest dev-communications dev-ui dev-worker reconcile reconcile-llm-budgets run-llm-budget-alerts forward-teams seed-event-deliveries seed-costs seed-agent-overrides migrate merge-heads rollback makemigrations test-api test-ui lint-ui check-ui coverage check-api check-migrations check-monitoring fix-api test check fix \
 	db-up db-down db-logs db-restart redis-up redis-down redis-logs
 
 # One-command local dev: validates .env, brings up k3d + LiteLLM, loads agent
@@ -46,6 +46,9 @@ COMMUNICATIONS_PORT ?= 8002
 COMMUNICATIONS_BASE_URL ?= http://host.docker.internal:$(COMMUNICATIONS_PORT)/communications/v1
 # Overridable so a second worktree can run its own stack without port clashes.
 API_DEV_PORT ?= 8000
+# Host-run API processes relay runtime-owned Teams through the local
+# `forward-teams` port-forward. Compose uses its own host.docker.internal value.
+TEAMS_RUNTIME_WEBHOOK_URL ?= http://localhost:3978/api/messages
 
 # Runs Ingest and Communications alongside the main app so native development
 # has the same service topology as Docker and Helm. The trap kills every child
@@ -55,7 +58,7 @@ dev-api:
 	trap 'kill 0' EXIT INT TERM; \
 	uv run python -m fastapi dev ingest_main.py --host 0.0.0.0 --port $(INGEST_PORT) & \
 	uv run python -m fastapi dev communications_main.py --host 0.0.0.0 --port $(COMMUNICATIONS_PORT) & \
-	INGEST_BASE_URL=$(INGEST_BASE_URL) COMMUNICATIONS_BASE_URL=$(COMMUNICATIONS_BASE_URL) uv run python -m fastapi dev main.py --host 0.0.0.0 --port $(API_DEV_PORT)
+	INGEST_BASE_URL=$(INGEST_BASE_URL) COMMUNICATIONS_BASE_URL=$(COMMUNICATIONS_BASE_URL) TEAMS_RUNTIME_WEBHOOK_URL=$(TEAMS_RUNTIME_WEBHOOK_URL) uv run python -m fastapi dev main.py --host 0.0.0.0 --port $(API_DEV_PORT)
 
 # Ingest on its own — `make dev-api` already starts it; use this to run or
 # restart the telemetry sink independently.
@@ -67,6 +70,13 @@ dev-ingest:
 dev-communications:
 	cd api && uv run python -m fastapi dev communications_main.py --host 0.0.0.0 --port $(COMMUNICATIONS_PORT)
 
+# Local runtime-owned Teams: the API (Docker or host) cannot reach Agent Services
+# in k3d, so expose one Agent's webhook port on the host. Re-run after the pod
+# restarts. Usage: make forward-teams AGENT=<agent-uuid>
+forward-teams:
+	@test -n "$(AGENT)" || { echo "usage: make forward-teams AGENT=<agent-uuid>"; exit 1; }
+	KUBECONFIG=.k3d/kubeconfig-host.yaml kubectl -n agent-farm port-forward --address 0.0.0.0 svc/agent-$(AGENT) 3978:3978
+
 dev-ui:
 	cd ui && pnpm dev
 
@@ -76,6 +86,15 @@ dev-worker:
 # One-shot reconciliation pass; production runs this on a CronJob schedule.
 reconcile:
 	cd api && uv run python -m api.domains.events.reconciliation
+
+# Both run as CronJobs in a deployment; these are the same passes by hand. Named to
+# match `reconcile`, not `check-*`: they mutate the proxy and send notifications,
+# unlike every other check-* target, which is static verification.
+reconcile-llm-budgets:
+	cd api && uv run python -c "from api.domains.organizations.llm_budget_reconciliation import main; main()"
+
+run-llm-budget-alerts:
+	cd api && uv run python -c "from api.domains.organizations.llm_budget_alerts import main; main()"
 
 # Local-only: populate the dev database with realistic Event Deliveries for
 # manually exercising the Platform Event Delivery Monitor UI. Safe to re-run.

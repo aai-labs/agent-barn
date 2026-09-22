@@ -143,10 +143,11 @@ def build_hermes_gateway_config(
     native_discord: bool = False,
     discord_require_mention: bool = True,
     telegram_settings: dict | None = None,
+    runtime_teams: bool = False,
     verbose_mode: bool = False,
 ) -> dict:
     plugins = ["telemetry-push", "agentbarn-messaging"]
-    if native_slack or native_discord or telegram_settings is not None:
+    if native_slack or native_discord or telegram_settings is not None or runtime_teams:
         plugins.append("agentbarn-observer")
     config = _hermes_config_core(model, litellm_base_url, enabled_plugins=plugins, approval_mode=approval_mode)
     if native_slack:
@@ -190,6 +191,12 @@ def build_hermes_gateway_config(
             telegram["group_allow_from"] = []
         config["telegram"] = telegram
         config["display"]["platforms"]["telegram"] = {
+            "tool_progress": "all" if verbose_mode else "off",
+            "tool_progress_grouping": "accumulate",
+            "interim_assistant_messages": verbose_mode,
+        }
+    if runtime_teams:
+        config["display"]["platforms"]["teams"] = {
             "tool_progress": "all" if verbose_mode else "off",
             "tool_progress_grouping": "accumulate",
             "interim_assistant_messages": verbose_mode,
@@ -294,6 +301,28 @@ def native_telegram_env(settings: dict, credentials: dict) -> dict[str, str]:
         env["TELEGRAM_HOME_CHANNEL"] = str(home_channel_id)
     else:
         env["TELEGRAM_HOME_CHANNEL"] = _NO_HOME_CHANNEL
+    return env
+
+
+def runtime_teams_env(settings: dict, credentials: dict) -> dict[str, str]:
+    """Map a Teams Connection onto Hermes' runtime-owned Bot Framework adapter.
+
+    The public Agent Barn webhook verifies Bot Framework authentication and
+    applies the Connection's DM/channel policy before forwarding an activity.
+    The private runtime listener therefore admits the already-authorized event.
+    """
+    env = {
+        "TEAMS_CLIENT_ID": credentials["app_id"],
+        "TEAMS_CLIENT_SECRET": credentials["app_password"],
+        "TEAMS_TENANT_ID": credentials["tenant_id"],
+        "TEAMS_ALLOW_ALL_USERS": "true",
+        "TEAMS_PORT": "3978",
+        "AGENTBARN_SCHEDULED_DELIVERY": "0",
+    }
+    if home_channel_id := settings.get("home_channel_id"):
+        env["TEAMS_HOME_CHANNEL"] = str(home_channel_id)
+    else:
+        env["TEAMS_HOME_CHANNEL"] = _NO_HOME_CHANNEL
     return env
 
 

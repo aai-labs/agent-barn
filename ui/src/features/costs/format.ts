@@ -81,3 +81,30 @@ export function formatDuration(ms: number | null): string {
 export function formatModelLabel(model: string): string {
   return model.split("/").at(-1) ?? model;
 }
+
+const PERIOD_LABELS: Record<string, string> = {
+  SEVEN_DAYS: "last 7 days",
+  THIRTY_DAYS: "last 30 days",
+  NINETY_DAYS: "last 90 days",
+};
+
+/** Names the window a figure covers.
+ *
+ *  Cost figures are a rolling range ending now; a spend allowance runs to its own
+ *  renewal date. The two rarely line up, so both have to say which period they mean
+ *  or they read as a contradiction. */
+export function formatWindowLabel(
+  period: string | null,
+  fromDate: string,
+  toDate: string,
+): string {
+  const named = period ? PERIOD_LABELS[period] : undefined;
+  if (named) return named;
+  const short = (iso: string) => {
+    const date = new Date(iso);
+    return Number.isNaN(date.getTime())
+      ? iso
+      : date.toLocaleDateString(undefined, { day: "numeric", month: "short" });
+  };
+  return `${short(fromDate)} – ${short(toDate)}`;
+}

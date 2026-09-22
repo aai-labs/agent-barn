@@ -27,6 +27,7 @@ from api.domains.agents.restore_point_job import (
     is_excluded,
     main,
     restore,
+    validate_archive,
 )
 
 _HERMES = "hermes"
@@ -52,6 +53,7 @@ _EXCLUSION_EVIDENCE = {
     },
     _OPENCLAW: {
         "local-plugins": (_OPENCLAW_START, "/home/node/.openclaw/local-plugins/"),
+        "npm": (_OPENCLAW_START, "/home/node/.openclaw/npm/projects/"),
         "agentbarn-messages.sqlite3": (_OPENCLAW_START, "/home/node/.openclaw/agentbarn-messages.sqlite3"),
         "openclaw.json": (_OPENCLAW_INIT, "'openclaw.json'"),
         "workspace/skills": (_OPENCLAW_INIT, "path.join(WORKSPACE_DIR, 'skills')"),
@@ -83,6 +85,7 @@ def _hermes_volume(root: Path) -> None:
 
 def _openclaw_volume(root: Path) -> None:
     _write(root, "local-plugins/telemetry-push/index.js")
+    _write(root, "npm/projects/openclaw-plugin/package.json")
     _write(root, "openclaw.json")
     _write(root, "agentbarn-messages.sqlite3")
     _write(root, "workspace/skills/jira/SKILL.md")
@@ -245,6 +248,7 @@ def test_openclaw_capture_excludes_regenerated_state_and_the_message_spool(tmp_p
     names = _members(dest)
     for excluded in (
         "local-plugins/telemetry-push/index.js",
+        "npm/projects/openclaw-plugin/package.json",
         "openclaw.json",
         "workspace/skills/jira/SKILL.md",
         "agentbarn-messages.sqlite3",
@@ -560,3 +564,17 @@ def test_main_reports_a_failed_extraction_distinctly_and_keeps_the_backup(tmp_pa
     assert_that(exc_info.value.code, equal_to(EXIT_RESTORE_FAILED))
     assert_that((target / "workspace/live.md").read_text(), equal_to("live content"))
     assert_that(_members(backup), has_item("workspace/live.md"))
+
+
+def test_hermes_capture_keeps_relative_symlinks_inside_the_volume(tmp_path):
+    source, dest = tmp_path / "src", tmp_path / "dst"
+    source.mkdir()
+    dest.mkdir()
+    _hermes_volume(source)
+    (source / "workspace" / "notes-link.md").symlink_to("notes.md")
+
+    capture(source, dest, _HERMES)
+
+    with tarfile.open(dest / ARCHIVE_NAME, "r:gz") as tar:
+        assert_that([member.name for member in tar.getmembers()], has_item("workspace/notes-link.md"))
+    validate_archive(dest / ARCHIVE_NAME, source)

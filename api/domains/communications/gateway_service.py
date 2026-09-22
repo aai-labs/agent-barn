@@ -17,6 +17,7 @@ from api.domains.communications.delivery_repository import CommunicationDelivery
 from api.domains.communications.email_address_repository import AgentEmailAddressRepository
 from api.domains.communications.error_details import normalize_communication_error
 from api.domains.communications.execution_context import issue_execution_token
+from api.domains.communications.execution_policy import policy_for
 from api.domains.communications.models import (
     AcceptedCommunicationRead,
     CommunicationConnection,
@@ -39,6 +40,7 @@ from api.domains.communications.plugins.base import (
     PlatformPlugin,
     PlatformSettings,
     ProcessingFeedbackContext,
+    WebhookRequest,
 )
 from api.domains.communications.plugins.registry import PlatformPluginRegistry
 from api.domains.communications.repository import CommunicationConnectionRepository
@@ -111,7 +113,7 @@ class CommunicationsGatewayService:
             for signal in signals:
                 yield f"data: {signal.as_json()}\n\n"
 
-    def claim_runtime_delivery(self, agent: Agent) -> RuntimeDeliveryRead | None:
+    def claim_runtime_delivery(self, agent: Agent, *, runtime_protocol_version: int = 1) -> RuntimeDeliveryRead | None:
         if agent.status != AgentStatus.RUNNING:
             raise RuntimeError("Agent is not running")
         native_platform_keys = self.config.native_platform_keys
@@ -132,6 +134,7 @@ class CommunicationsGatewayService:
         delivery = self.delivery_repository.claim_next_inbound(
             agent_id=agent.id,
             reclaim_expired=False,
+            runtime_protocol_version=runtime_protocol_version,
             excluded_platform_keys=native_platform_keys,
         )
         if delivery is not None:
@@ -164,7 +167,7 @@ class CommunicationsGatewayService:
             raise RuntimeError(f"Could not prepare runtime delivery for Connection {delivery.connection_id}") from exc
         return delivery.model_copy(
             update={
-                "progress_updates": plugin.supports_progress_updates,
+                "progress_updates": plugin.supports_progress_updates and policy_for(delivery.kind).progress_updates,
                 "envelope": delivery.envelope.model_copy(update={"text": prompt}),
             }
         )
@@ -245,6 +248,10 @@ class CommunicationsGatewayService:
                     normalized_error.summary if normalized_error is not None else None,
                 )
         return completed
+
+    def release_runtime_delivery(self, agent: Agent, delivery_id: UUID) -> bool:
+        """Hand a claimed delivery back unrun, so it is retried rather than acknowledged."""
+        return self.delivery_repository.release_runtime_delivery(delivery_id, agent_id=agent.id)
 
     def renew_runtime_delivery_lease(
         self,
@@ -566,8 +573,7 @@ class CommunicationsGatewayService:
     def accept_provider_webhook(
         self,
         connection_id: UUID,
-        payload: dict[str, Any],
-        authorization: str,
+        request: WebhookRequest,
     ) -> list[AcceptedCommunicationRead]:
         connection = self.connection_repository.get_active(connection_id)
         if connection is None or not connection.enabled:
@@ -576,5 +582,5 @@ class CommunicationsGatewayService:
         credentials = plugin.credentials_model.model_validate(
             json.loads(decrypt_token(connection.credentials_encrypted, self.config.agent_token_encryption_key))
         )
-        plugin.verify_webhook(credentials, payload, authorization)
-        return self.accept_plugin_payload(connection.id, payload)
+        plugin.verify_webhook(credentials, request)
+        return self.accept_plugin_payload(connection.id, request.payload)

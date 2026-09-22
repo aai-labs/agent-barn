@@ -193,18 +193,20 @@ class KubernetesClient:
 
     def create_service(self, namespace: str, manifest: client.V1Service) -> client.V1Service:
         # Not _create_or_get: agent stop keeps the Service (stable ClusterIP),
-        # so a restart must refresh its labels here or new monitoring labels
-        # (org-name, agent-name, agentbarn.io/component) would never propagate.
+        # so a restart must refresh its labels and ports here, or new monitoring
+        # labels (org-name, agent-name, agentbarn.io/component) and the runtime
+        # Teams webhook port would never propagate. JSON Patch replaces the port
+        # list outright so a disabled Connection's port is dropped too.
         try:
             return self._core_v1.create_namespaced_service(namespace, manifest)
         except ApiException as e:
             if e.status != 409:
                 raise
-            self._core_v1.patch_namespaced_service(
-                manifest.metadata.name,
-                namespace,
-                {"metadata": {"labels": manifest.metadata.labels}},
-            )
+            patch = [{"op": "add", "path": "/metadata/labels", "value": manifest.metadata.labels or {}}]
+            if manifest.spec is not None and manifest.spec.ports:
+                ports = client.ApiClient().sanitize_for_serialization(manifest.spec.ports)
+                patch.append({"op": "replace", "path": "/spec/ports", "value": ports})
+            self._core_v1.patch_namespaced_service(manifest.metadata.name, namespace, patch)
             return self._core_v1.read_namespaced_service(manifest.metadata.name, namespace)
 
     def delete_service(self, name: str, namespace: str) -> None:

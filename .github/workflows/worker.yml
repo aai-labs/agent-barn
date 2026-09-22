@@ -1,8 +1,10 @@
 name: Email inbound Worker
 
 on:
-  # Reusable only -- called by ci.yml (PRs/branches, deploy: false) and by
-  # deploy.yml (staging/main, deploy: true) after the cluster deploy succeeds.
+  # Reusable only -- called by ci.yml (PRs/branches, deploy: false), by
+  # deploy.yml (staging only, deploy: true), and by deploy-public.yml (release
+  # tags, deploy: true). Each publish runs after its own cluster deploy, so the
+  # cluster already holds the secret the Worker is about to present.
   workflow_call:
     inputs:
       deploy:
@@ -15,6 +17,11 @@ on:
         required: false
         type: string
         default: ""
+      ref:
+        description: Commit to build the Worker from. Empty checks out the default for the event.
+        required: false
+        type: string
+        default: ""
 
 jobs:
   check:
@@ -22,6 +29,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref }}
       - uses: pnpm/action-setup@v5
         with:
           package_json_file: workers/email-inbound/package.json
@@ -51,6 +60,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref }}
       - uses: pnpm/action-setup@v5
         with:
           package_json_file: workers/email-inbound/package.json
@@ -59,18 +70,24 @@ jobs:
           node-version: "24"
           cache: pnpm
           cache-dependency-path: workers/email-inbound/pnpm-lock.yaml
-      # `A && B || C` yields C when B is an empty string, so an unset staging
-      # secret would silently publish the production one. The cluster resolves the
-      # same expression, so the two would still agree and mail would flow — staging
-      # would just be running on production's credential. Fail loudly instead.
-      - name: Require a staging-specific inbound secret
+      # Each secret is passed in separately and selected in shell, never through
+      # `A && B || C`: that yields C whenever B is empty, so a guard written as
+      # the same expression it guards would read the other environment's secret
+      # and pass. Staging would then publish holding the production secret while
+      # its cluster fell back to a third value, and every message would 401.
+      # An unknown environment is rejected rather than silently treated as public.
+      - name: Require an inbound secret for the target environment
         env:
+          ENVIRONMENT: ${{ inputs.environment }}
           STAGING_SECRET: ${{ secrets.STAGING_EMAIL_INBOUND_SECRET }}
+          PUBLIC_SECRET: ${{ secrets.PUBLIC_EMAIL_INBOUND_SECRET }}
         run: |
-          if [ "$GITHUB_REF_NAME" = "staging" ] && [ -z "$STAGING_SECRET" ]; then
-            echo "::error::STAGING_EMAIL_INBOUND_SECRET is unset; staging would fall back to the production secret."
-            exit 1
-          fi
+          case "$ENVIRONMENT" in
+            staging)    secret="$STAGING_SECRET" ;;
+            production) secret="$PUBLIC_SECRET" ;;
+            *) echo "::error::Unknown Worker environment '$ENVIRONMENT'"; exit 1 ;;
+          esac
+          [ -n "$secret" ] || { echo "::error::No inbound secret set for '$ENVIRONMENT'; every inbound email would 401."; exit 1; }
       # `secrets` uploads EMAIL_INBOUND_SECRET on every publish, so the Worker and
       # the cluster Secret are written from the same GitHub secret in one run and
       # cannot drift apart. A mismatch would 401 every inbound message.
@@ -84,4 +101,4 @@ jobs:
           secrets: |
             EMAIL_INBOUND_SECRET
         env:
-          EMAIL_INBOUND_SECRET: ${{ github.ref_name == 'staging' && secrets.STAGING_EMAIL_INBOUND_SECRET || secrets.EMAIL_INBOUND_SECRET }}
+          EMAIL_INBOUND_SECRET: ${{ inputs.environment == 'staging' && secrets.STAGING_EMAIL_INBOUND_SECRET || secrets.PUBLIC_EMAIL_INBOUND_SECRET }}

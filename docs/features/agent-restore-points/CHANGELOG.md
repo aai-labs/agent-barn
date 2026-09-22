@@ -49,6 +49,11 @@ Related context: [`../agents.md`](../agents.md), [`../../architecture/runtime-an
   application logging for the rest of its life. No log assertion could pass, and existing
   tests asserting that secrets stay out of the logs were passing against empty output.
 
+- Superseded: the 2026-09-17 entry excluded OpenClaw's `npm` registry from archives and dropped
+  every symlink an OpenClaw archive would carry. That left `state/` restored while the packages
+  it records were gone, and left Hermes exposed to the same dangling-link failure. Archives now
+  carry the tree and omit only the links that resolve outside the volume, for both runtimes.
+
 ### 2026-09-14 — AF-298 — Restore points in the Agent configuration page
 
 - Added: a "Restore points" section between "Agent-owned override" and "Danger zone" on the
