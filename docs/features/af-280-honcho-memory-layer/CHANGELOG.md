@@ -14,6 +14,16 @@ Related context: [`../agents.md`](../agents.md), [`../costs.md`](../costs.md), [
 
 ## Changes
 
+### 2026-09-22 — AF-280 — manage a group's memory from the group, and hide the tab when there's none
+
+Memory belongs to the pool, not any one member, so it can now be viewed and curated from the group itself — and the per-Agent Memory tab no longer shows for agents that have no pool.
+
+- **Group memory page.** A dedicated route (`settings/memory-groups/{groupId}`) shows the pool's memory with the full list, search, peer filters, pagination, and per-item edit/forget/share — no member Agent required. Reached via a "View memory" link on each group card.
+- **Shared implementation.** The read/curate logic was refactored to be **workspace-keyed** (`AgentMemoryService.*_workspace`): the per-Agent tab and the group page both delegate to the same core, so there's one implementation. New group routes `GET/DELETE/PUT /organizations/{org}/memory-groups/{id}/memory[...]` (+ `/search`), gated on `memory_group.manage`, resolve the pool workspace straight from the group id.
+- **UI extraction.** The memory list/controls became a reusable `MemoryView`; the agent tab and group page are thin wrappers over it. The group page has no "This agent" scope (there's no single agent) and its "share" action promotes from this group to others.
+- **Tab visibility.** The Agent Memory tab is now gated on the agent being in a group (not just the `agent.memory.read` permission). A groupless agent has no shared memory, so the tab — which only ever showed an empty, misleading state — is hidden until the agent is added to a group.
+- **Coverage.** Backend delegation + guard tests; `check-api`, `check-ui`, `lint-ui` clean; `test-ui` (279) green; group routes verified live (401 unauth) on a local stack.
+
 ### 2026-09-22 — AF-280 — measure memory cost per group
 
 Added a per-group split of memory spend, so the Costs page shows which pool the memory bill comes from — the finest attribution the shared-pool model allows (memory has no per-Agent cost; agents share a pool).

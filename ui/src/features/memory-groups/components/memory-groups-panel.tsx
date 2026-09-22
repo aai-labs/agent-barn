@@ -1,7 +1,9 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Check, ChevronDownIcon, Pencil, Plus, Trash2, Users, X } from "lucide-react";
+import Link from "next/link";
+import { useParams } from "next/navigation";
+import { Brain, Check, ChevronDownIcon, Pencil, Plus, Trash2, Users, X } from "lucide-react";
 import { toast } from "sonner";
 
 import { AppErrorState } from "@/components/app-error-state";
@@ -17,6 +19,8 @@ import { useMemoryGroups } from "../hooks/use-memory-groups";
 import { useMemoryGroupMutations } from "../hooks/use-memory-group-mutations";
 
 export function MemoryGroupsPanel() {
+  const params = useParams();
+  const orgId = typeof params?.orgId === "string" ? params.orgId : "";
   const { canManage } = useActiveOrgRole();
   const { groups, isLoading, error } = useMemoryGroups();
   const { agents } = useAgents();
@@ -153,6 +157,16 @@ export function MemoryGroupsPanel() {
                       {members.length === 1 ? "1 agent" : `${members.length} agents`}
                     </div>
                   </div>
+                )}
+
+                {!isRenaming && (
+                  <Link
+                    href={`/dashboard/${orgId}/settings/memory-groups/${group.id}`}
+                    className="af-hover-bg inline-flex items-center gap-1 rounded-md px-2 py-1 text-[0.8125rem] whitespace-nowrap"
+                    style={{ color: "var(--ink-3)" }}
+                  >
+                    <Brain size={14} aria-hidden /> View memory
+                  </Link>
                 )}
 
                 {canManage &&
