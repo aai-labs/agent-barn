@@ -164,8 +164,7 @@ tests:
         exp_alerts: []
 
   # --- AgentTargetDown: per-agent labels survive into the alert, and the
-  # Slack summary carries name + org + id. critical/2m per the ticket's
-  # alert table. ---
+  # Slack summary carries name + org + id. ---
   - interval: 1m
     input_series:
       - series: 'up{job="agent", app="agent-abc", agent_name="abby", org_name="acme"}'
@@ -183,6 +182,38 @@ tests:
             exp_annotations:
               summary: Agent abby (org acme) is not responding to scrapes.
               description: The healthz server of agent abby (agent-abc) in org acme is unreachable.
+
+  # --- AgentTargetDown: a crash-looping agent's brief healthz blips on each
+  # restart don't resolve the alert (keep_firing_for). ---
+  - interval: 1m
+    input_series:
+      - series: 'up{job="agent", app="agent-abc", agent_name="abby", org_name="acme"}'
+        values: "1 0x5 1 0x5 1 0x5 1 0x5"
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: AgentTargetDown
+        exp_alerts:
+          - exp_labels: {severity: critical, job: agent, app: agent-abc, agent_name: abby, org_name: acme}
+            exp_annotations:
+              summary: Agent abby (org acme) is not responding to scrapes.
+              description: The healthz server of agent abby (agent-abc) in org acme is unreachable.
+      - eval_time: 7m
+        alertname: AgentTargetDown
+        exp_alerts:
+          - exp_labels: {severity: critical, job: agent, app: agent-abc, agent_name: abby, org_name: acme}
+            exp_annotations:
+              summary: Agent abby (org acme) is not responding to scrapes.
+              description: The healthz server of agent abby (agent-abc) in org acme is unreachable.
+
+  # --- AgentTargetDown: a short blip (e.g. a redeploy) doesn't fire ---
+  - interval: 1m
+    input_series:
+      - series: 'up{job="agent", app="agent-abc", agent_name="abby", org_name="acme"}'
+        values: "1 0x3 1x10"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: AgentTargetDown
+        exp_alerts: []
 
   # --- AgentUnhealthy: fires only for agents that were connected before ---
   - interval: 1m

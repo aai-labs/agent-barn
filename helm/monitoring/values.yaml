@@ -266,7 +266,11 @@ prometheus:
             # --- agents running ---
             - alert: AgentTargetDown
               expr: up{job="agent"} == 0
-              for: 2m
+              for: 5m
+              # A crash-looping agent's healthz answers for a few seconds on
+              # each restart; without this, every restart resolves the alert
+              # and the next backoff re-fires it.
+              keep_firing_for: 15m
               labels:
                 severity: critical
               annotations:
