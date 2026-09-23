@@ -131,6 +131,19 @@ class AgentRepository:
             query = select(Agent).where(col(Agent.id) == agent_id).where(col(Agent.deleted_at).is_(None))
             return session.exec(query).first()
 
+    def names_by_ids(self, agent_ids: list[UUID]) -> dict[UUID, str]:
+        """Display names for the given Agent ids, soft-deleted ones included.
+
+        Used to label memory peers (`agent-<id>`) in the shared-pool memory view.
+        A pool can hold conclusions from an Agent that was since deleted, and a
+        name beats a raw peer id there, so the delete filter is omitted on purpose.
+        """
+        if not agent_ids:
+            return {}
+        with Session(self.delegate.engine) as session:
+            rows = session.exec(select(Agent.id, Agent.name).where(col(Agent.id).in_(agent_ids))).all()
+            return {row[0]: row[1] for row in rows}
+
     def get_active_in_scope(self, agent_id: UUID, authorization_scope: AuthorizationScope) -> Agent | None:
         with Session(self.delegate.engine) as session:
             query = select(Agent).where(

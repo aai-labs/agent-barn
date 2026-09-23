@@ -73,7 +73,6 @@ export function GroupMemoryPage({ groupId }: { groupId: string }) {
           correct={(memoryId, content) => correct.mutateAsync({ memoryId, content })}
           isForgetting={forget.isPending}
           isCorrecting={correct.isPending}
-          selfLabel={null}
           share={canManage ? { sourceGroupId: groupId, shareItem } : undefined}
           errorText="Could not load this group's memory. Try again in a moment."
           emptyTitle="No memory in this group yet"

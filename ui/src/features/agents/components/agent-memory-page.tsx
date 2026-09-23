@@ -61,7 +61,6 @@ export function AgentMemoryPage({
       correct={(memoryId, content) => correct.mutateAsync({ memoryId, content })}
       isForgetting={forget.isPending}
       isCorrecting={correct.isPending}
-      selfLabel={agentName}
       scope={scope}
       onScopeChange={(next) => {
         setScope(next);

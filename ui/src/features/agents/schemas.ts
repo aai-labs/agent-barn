@@ -448,6 +448,10 @@ export const AgentMemoryItemSchema = z.object({
 export const AgentMemoryFacetSchema = z.object({
   peer: z.string(),
   label: z.string(),
+  // The bare display name behind `label` ("you", an agent's name, or the raw
+  // peer). The list keys its per-row "· about X" label off this so an agent peer
+  // never shows as a raw id there either.
+  name: z.string(),
   count: z.number().int(),
   isSelf: z.boolean(),
 });

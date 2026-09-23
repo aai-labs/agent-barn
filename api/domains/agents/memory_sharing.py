@@ -24,7 +24,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from api.core.config import Config
 from api.domains.agents.authorization import AgentAuthorization
 from api.domains.agents.models import Agent
-from api.domains.agents.repository import PoolMemoryProvenance, SharedPoolMemoryFactRepository
+from api.domains.agents.repository import AgentRepository, PoolMemoryProvenance, SharedPoolMemoryFactRepository
 from api.domains.auth.models import CurrentUserContext
 from api.domains.rbac.catalog import PermissionKey
 from api.infrastructure.honcho.client import (
@@ -72,6 +72,10 @@ class MemoryFacet(BaseModel):
 
     peer: str
     label: str
+    # The bare display name behind `label` ("you" for the human, an Agent's name
+    # for an `agent-<id>` peer, else the raw peer). The tab keys its per-row "about
+    # whom" label off this so an agent peer never shows as a raw id there either.
+    name: str
     count: int
     # The Agent's model of itself, versus a person it has talked to. The tab uses
     # it to order facets and to drop the redundant per-row "about whom" label.
@@ -118,22 +122,29 @@ def _to_memory_item(raw: dict, pool_shared: PoolMemoryProvenance | None = None) 
     )
 
 
-def _facet_for_peer(peer: str, count: int, agent_name: str, ai_peer_name: str | None) -> MemoryFacet:
+def _facet_for_peer(
+    peer: str, count: int, agent_name: str, ai_peer_name: str | None, agent_peer_names: dict[str, str]
+) -> MemoryFacet:
     """Turn a raw Honcho peer id into a facet the tab can show.
 
-    The three cases mirror how memory is actually keyed. The AI peer is the
-    Agent's model of itself. `owner` is OpenClaw's id for whoever is talking to
-    the Agent through the app when no sender identity is attached — a person, not
-    headless traffic, so it reads as "you". Everything else is a named
-    correspondent (a Slack user id, say), shown as-is."""
+    The cases mirror how memory is actually keyed. The AI peer is the Agent's
+    model of itself. `owner` is OpenClaw's id for whoever is talking to the Agent
+    through the app when no sender identity is attached — a person, not headless
+    traffic, so it reads as "you". Another Agent's peer (`agent-<id>`, which a
+    shared pool is full of) is resolved to that Agent's name via
+    `agent_peer_names`. Anything left is a named correspondent (a Slack user id,
+    say), shown as-is."""
     if peer == ai_peer_name:
-        return MemoryFacet(peer=peer, label=f"What {agent_name} knows", count=count, isSelf=True)
+        return MemoryFacet(peer=peer, label=f"What {agent_name} knows", name=agent_name, count=count, isSelf=True)
     # Both are the human talking to the Agent through the app: "owner" is what both
     # runtimes use now; "operator" is the legacy Hermes name, still on pre-cutover
     # memories, so it reads as "you" too rather than showing a raw internal id.
     if peer in ("owner", "operator"):
-        return MemoryFacet(peer=peer, label="About you", count=count, isSelf=False)
-    return MemoryFacet(peer=peer, label=f"About {peer}", count=count, isSelf=False)
+        return MemoryFacet(peer=peer, label="About you", name="you", count=count, isSelf=False)
+    # Another Agent in the pool: its own `agent-<id>` peer. Show its name, never
+    # the raw id — the fallback to `peer` only bites for a peer we cannot resolve.
+    name = agent_peer_names.get(peer, peer)
+    return MemoryFacet(peer=peer, label=f"About {name}", name=name, count=count, isSelf=False)
 
 
 def openclaw_logical_agent_id(agent: Agent) -> str:
@@ -210,6 +221,7 @@ class AgentMemoryService:
     honcho: HonchoClient
     config: Config
     pool_provenance: SharedPoolMemoryFactRepository
+    agents: AgentRepository
 
     def _require(self, agent_id: UUID, permission: PermissionKey, context: CurrentUserContext) -> Agent:
         if not self.config.honcho_enabled:
@@ -316,13 +328,34 @@ class AgentMemoryService:
         always labels the Agent's own peer as its self-model, whichever scope. The
         self-model sorts first, then the rest by size.
         """
+        peers = self.honcho.list_peers(workspace)
+        agent_peer_names = self._agent_peer_names(peers)
         facets: list[MemoryFacet] = []
-        for peer in self.honcho.list_peers(workspace):
+        for peer in peers:
             _, count = self.honcho.list_conclusions(workspace, page=1, size=1, observer=observer, observed=peer)
             if count:
-                facets.append(_facet_for_peer(peer, count, agent_name, ai_peer))
+                facets.append(_facet_for_peer(peer, count, agent_name, ai_peer, agent_peer_names))
         facets.sort(key=lambda f: (not f.is_self, -f.count, f.label))
         return facets
+
+    def _agent_peer_names(self, peers: list[str]) -> dict[str, str]:
+        """Map `agent-<uuid>` peers to their Agent's display name.
+
+        A shared pool holds a peer per member Agent, all named `agent-<agent id>`.
+        Resolving them in one batch keeps the facet list free of raw ids. A peer
+        that is not an agent peer, whose id does not parse, or whose Agent is gone
+        is simply absent, so the caller falls back to the raw peer id.
+        """
+        ids_by_peer: dict[str, UUID] = {}
+        for peer in peers:
+            if not peer.startswith("agent-"):
+                continue
+            try:
+                ids_by_peer[peer] = UUID(peer[len("agent-") :])
+            except ValueError:
+                continue
+        names = self.agents.names_by_ids(list(set(ids_by_peer.values())))
+        return {peer: names[agent_id] for peer, agent_id in ids_by_peer.items() if agent_id in names}
 
     def forget(self, agent_id: UUID, memory_id: str, context: CurrentUserContext) -> None:
         # Not agent.update: removing what an Agent knows changes what it believes,

@@ -49,13 +49,18 @@ function OriginPill({ item, groupName }: { item: AgentMemoryItem; groupName?: st
 }
 
 /** Under "Everyone" a row needs to say who it is about; under a single peer filter
- *  that is redundant and omitted. `owner` reads as "you" — you talking to the agent
- *  through the app; `operator` is the legacy Hermes name for the same human, kept
- *  here so pre-cutover memories read "you" too. `selfLabel` names the self-model
- *  owner (an agent's name); the group view has no single one, so a self-model row
- *  falls back to its peer id. */
-function aboutLabel(item: AgentMemoryItem, selfLabel: string | null): string | null {
-  if (item.observed === item.observer) return selfLabel ? `${selfLabel} itself` : item.observed;
+ *  that is redundant and omitted. Names come from `peerLabels` (built from the
+ *  facets, which the backend already resolves): "you" for the human, an agent's
+ *  name for an `agent-<id>` peer. A self-model row reads "<name> itself". The raw
+ *  peer id is only ever a last resort when nothing resolved it. */
+function aboutLabel(item: AgentMemoryItem, peerLabels: Map<string, string>): string {
+  const name = peerLabels.get(item.observed);
+  if (item.observed === item.observer) {
+    const self = name ?? item.observed;
+    return self === "you" ? "you" : `${self} itself`;
+  }
+  if (name) return name;
+  // Fallbacks for a peer with no facet (owner reads as "you"; else the raw id).
   if (item.observed === "owner" || item.observed === "operator") return "you";
   return item.observed;
 }
@@ -122,8 +127,6 @@ export type MemoryViewProps = {
   isForgetting: boolean;
   isCorrecting: boolean;
 
-  /** Names the self-model owner for the "· about X" label; null in the group view. */
-  selfLabel: string | null;
   /** Whole-pool vs this-agent scope toggle; omit for the group view (always pool). */
   scope?: MemoryScope;
   onScopeChange?: (scope: MemoryScope) => void;
@@ -159,7 +162,6 @@ export function MemoryView(props: MemoryViewProps) {
     correct,
     isForgetting,
     isCorrecting,
-    selfLabel,
     scope,
     onScopeChange,
     share,
@@ -177,6 +179,9 @@ export function MemoryView(props: MemoryViewProps) {
   const groupNameById = useMemo(() => new Map(groups.map((g) => [g.id, g.name])), [groups]);
 
   const rows = useMemo(() => collapse(items), [items]);
+  // Peer id -> display name, from the facets the backend already resolves. Drives
+  // the per-row "· about X" label so an agent peer never shows as a raw id.
+  const peerLabels = useMemo(() => new Map(facets.map((f) => [f.peer, f.name])), [facets]);
   const everyoneCount = facets.reduce((sum, f) => sum + f.count, 0);
   const pageCount = Math.ceil(total / pageSize);
 
@@ -368,7 +373,7 @@ export function MemoryView(props: MemoryViewProps) {
         >
           {rows.map((row) => {
             const item = row.item;
-            const about = peer === null ? aboutLabel(item, selfLabel) : null;
+            const about = peer === null ? aboutLabel(item, peerLabels) : null;
             return (
               <div
                 key={item.id}

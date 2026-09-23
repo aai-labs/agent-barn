@@ -17,7 +17,7 @@ from api.core.config import Config
 from api.domains.agents.authorization import AgentAuthorization
 from api.domains.agents.memory_sharing import AgentMemoryService, MemoryItemUpdate
 from api.domains.agents.models import Agent, AgentType
-from api.domains.agents.repository import PoolMemoryProvenance, SharedPoolMemoryFactRepository
+from api.domains.agents.repository import AgentRepository, PoolMemoryProvenance, SharedPoolMemoryFactRepository
 from api.domains.auth.models import CurrentUserContext
 from api.infrastructure.honcho.client import HonchoClient, HonchoError
 
@@ -43,11 +43,15 @@ def _service(*, honcho_enabled: bool = True):
     honcho.list_peers.return_value = []
     pool_provenance = Mock(spec=SharedPoolMemoryFactRepository)
     pool_provenance.find_for_conclusions.return_value = {}
+    agents = Mock(spec=AgentRepository)
+    # No agent-peer names resolve unless a test says so; `in` on a bare Mock throws.
+    agents.names_by_ids.return_value = {}
     service = AgentMemoryService(
         agent_authorization=authorization,
         honcho=honcho,
         config=Config(honcho_enabled=honcho_enabled),
         pool_provenance=pool_provenance,
+        agents=agents,
     )
     return service, authorization, honcho, pool_provenance
 
@@ -289,6 +293,29 @@ def test_facets_count_each_peer_and_put_the_self_model_first():
     assert_that(labels[0], equal_to(("What watcher knows", 65, True)))
     assert_that(labels[1], equal_to(("About you", 120, False)))
     assert_that(labels[2], equal_to(("About U123", 3, False)))
+
+
+def test_another_agents_peer_is_labelled_by_name_not_its_raw_id():
+    """A shared pool holds an `agent-<id>` peer per member. The tab must show that
+    agent's name, never the raw uuid peer — resolved in one batch from the id."""
+    other_id = uuid7()
+    service, _, honcho, _pool_prov = _service()
+    service.agents.names_by_ids.return_value = {other_id: "Helper"}
+    honcho.list_peers.return_value = [f"agent-{AGENT_ID}", "owner", f"agent-{other_id}"]
+    honcho.list_conclusions.side_effect = [
+        ([], 0),  # the page itself (unfiltered)
+        ([], 65),  # observed=agent-<self>
+        ([], 120),  # observed=owner
+        ([], 3),  # observed=agent-<other>
+    ]
+
+    page = service.list_memory(AGENT_ID, _context(), page=1, size=50)
+
+    by_peer = {f.peer: f for f in page.facets}
+    assert_that(by_peer[f"agent-{AGENT_ID}"].name, equal_to("watcher"))
+    assert_that(by_peer["owner"].name, equal_to("you"))
+    assert_that(by_peer[f"agent-{other_id}"].label, equal_to("About Helper"))
+    assert_that(by_peer[f"agent-{other_id}"].name, equal_to("Helper"))
 
 
 def test_a_peer_the_agent_never_concluded_about_gets_no_facet():
