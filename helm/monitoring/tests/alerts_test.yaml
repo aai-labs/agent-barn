@@ -164,7 +164,8 @@ tests:
         exp_alerts: []
 
   # --- AgentTargetDown: per-agent labels survive into the alert, and the
-  # Slack summary carries name + org + id. ---
+  # Slack summary carries name + org + id. critical/2m per the ticket's
+  # alert table. ---
   - interval: 1m
     input_series:
       - series: 'up{job="agent", app="agent-abc", agent_name="abby", org_name="acme"}'
@@ -205,11 +206,47 @@ tests:
               summary: Agent abby (org acme) is not responding to scrapes.
               description: The healthz server of agent abby (agent-abc) in org acme is unreachable.
 
+  # --- AgentTargetDown: real CrashLoopBackOff timing (~5m20s down at the 5m
+  # backoff cap, ~10s up per restart) fires once and stays firing. ---
+  - interval: 10s
+    input_series:
+      - series: 'up{job="agent", app="agent-abc", agent_name="abby", org_name="acme"}'
+        values: "1 0x31 1 0x31 1 0x31 1 0x31"
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: AgentTargetDown
+        exp_alerts:
+          - exp_labels: {severity: critical, job: agent, app: agent-abc, agent_name: abby, org_name: acme}
+            exp_annotations:
+              summary: Agent abby (org acme) is not responding to scrapes.
+              description: The healthz server of agent abby (agent-abc) in org acme is unreachable.
+      - eval_time: 5m40s
+        alertname: AgentTargetDown
+        exp_alerts:
+          - exp_labels: {severity: critical, job: agent, app: agent-abc, agent_name: abby, org_name: acme}
+            exp_annotations:
+              summary: Agent abby (org acme) is not responding to scrapes.
+              description: The healthz server of agent abby (agent-abc) in org acme is unreachable.
+      - eval_time: 11m20s
+        alertname: AgentTargetDown
+        exp_alerts:
+          - exp_labels: {severity: critical, job: agent, app: agent-abc, agent_name: abby, org_name: acme}
+            exp_annotations:
+              summary: Agent abby (org acme) is not responding to scrapes.
+              description: The healthz server of agent abby (agent-abc) in org acme is unreachable.
+      - eval_time: 20m
+        alertname: AgentTargetDown
+        exp_alerts:
+          - exp_labels: {severity: critical, job: agent, app: agent-abc, agent_name: abby, org_name: acme}
+            exp_annotations:
+              summary: Agent abby (org acme) is not responding to scrapes.
+              description: The healthz server of agent abby (agent-abc) in org acme is unreachable.
+
   # --- AgentTargetDown: a short blip (e.g. a redeploy) doesn't fire ---
   - interval: 1m
     input_series:
       - series: 'up{job="agent", app="agent-abc", agent_name="abby", org_name="acme"}'
-        values: "1 0x3 1x10"
+        values: "1 0 1x10"
     alert_rule_test:
       - eval_time: 10m
         alertname: AgentTargetDown
