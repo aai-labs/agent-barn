@@ -73,39 +73,29 @@ class HonchoClient:
     # scoped to every rare correspondent.
     SHARE_MAX_PEOPLE = 8
 
-    def share_fact(self, workspace_id: str, ai_peer_name: str, content: str) -> list[dict]:
-        """Store a promoted fact where the destination Agent's recall will find it.
+    def share_fact(self, workspace_id: str, share_peer: str, content: str, *, subject: str) -> list[dict]:
+        """Copy a promoted fact into a pool, preserving what it is *about*.
 
-        The two runtimes recall differently, and one placement does not serve
-        both. Hermes reads the Agent's whole representation, so a conclusion on the
-        self-model — `(observer, observed)` both the AI peer — is found. OpenClaw's
-        plugin scopes every recall to the person it is talking to (`target:
-        participantPeer`), so that same conclusion, filed as "about the Agent
-        itself", is invisible there. Verified live: with the fact in its workspace,
-        an OpenClaw Agent answered that it had nothing recorded.
+        Filed as `(observer=share_peer, observed=subject)` — the subject is the
+        original conclusion's `observed` (e.g. "operator") — so the memory view and
+        recall keep it about that subject instead of turning a fact about the
+        operator into the curator's own self-model, which is what filing it as
+        `(share_peer, share_peer)` did.
 
-        So the fact is written under the self-model *and* as the Agent's view of
-        each person it knows. Only the Agent observes: writing it as a person's own
-        self-model would assert they said it about themselves. The memory view
-        collapses identical content, so an owner still sees one row.
+        One conclusion is enough: both runtimes now recall pool-wide via the
+        workspace-level dialectic (the honcho-pool-recall patch/plugin), so the old
+        self-model + per-person fan-out — which existed only for OpenClaw's former
+        per-participant recall — is no longer needed.
 
-        Posting it as a message from a synthetic peer was the first design and is
-        wrong on both runtimes: Honcho stores and reasons over the message, but no
-        runtime's recall ever surfaces it.
+        A target pool can be brand new, and Honcho auto-creates neither the
+        workspace nor peers, so the workspace and both the observer and observed
+        peers are ensured first (idempotent get-or-create) or the write 404s.
         """
-        # A target pool can be brand new — no Agent has conversed there yet — so its
-        # workspace and the peer we file under may not exist, and Honcho auto-creates
-        # neither (a conclusion on a missing peer 404s). Both calls are idempotent
-        # get-or-create, so this is safe on an established pool too.
         self._request("POST", "/workspaces", json={"id": workspace_id})
-        self._request("POST", f"/workspaces/{workspace_id}/peers", json={"id": ai_peer_name})
-        people = [p for p in self.list_peers(workspace_id) if p != ai_peer_name][: self.SHARE_MAX_PEOPLE]
-        created: list[dict] = []
-        for observed in [ai_peer_name, *people]:
-            created.append(
-                self.create_conclusion(workspace_id, content=content, observer=ai_peer_name, observed=observed)
-            )
-        return created
+        self._request("POST", f"/workspaces/{workspace_id}/peers", json={"id": share_peer})
+        if subject != share_peer:
+            self._request("POST", f"/workspaces/{workspace_id}/peers", json={"id": subject})
+        return [self.create_conclusion(workspace_id, content=content, observer=share_peer, observed=subject)]
 
     # Told to the deriver, per workspace, to keep it from recording transient
     # conversational actions ("the peer asked X") as durable facts. Honcho's base

@@ -179,12 +179,17 @@ class MemoryGroupService:
         content = str(item.get("content") or "")
         if not content:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Memory not found.")
+        # Preserve what the fact is about (its observed peer, e.g. "operator") so the
+        # copy stays "about the operator" rather than becoming the curator's self-model.
+        subject = str(item.get("observed_id") or _SHARE_PEER)
 
         shared_by = getattr(context.user, "id", None)
         results: list[ShareMemoryItemTargetResult] = []
         for target in targets:
             try:
-                created = self.honcho.share_fact(workspace_id_for_pool(target.id), _SHARE_PEER, content)
+                created = self.honcho.share_fact(
+                    workspace_id_for_pool(target.id), _SHARE_PEER, content, subject=subject
+                )
             except HonchoError as exc:
                 results.append(ShareMemoryItemTargetResult(group_id=target.id, shared=False, error=str(exc)))
                 continue

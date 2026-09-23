@@ -151,8 +151,8 @@ def test_share_item_copies_into_each_target_and_records_origin():
     target_a = MemoryGroup(id=uuid7(), organization_id=org_id, name="Support")
     target_b = MemoryGroup(id=uuid7(), organization_id=org_id, name="Sales")
     repository.get_by_id_and_org.side_effect = _known_groups(org_id, source, target_a, target_b)
-    honcho.find_conclusion.return_value = {"id": "c1", "content": "The launch is in March."}
-    honcho.share_fact.return_value = [{"id": "new1"}, {"id": "new2"}]
+    honcho.find_conclusion.return_value = {"id": "c1", "content": "The launch is in March.", "observed_id": "operator"}
+    honcho.share_fact.return_value = [{"id": "new1"}]
 
     payload = ShareMemoryItemCreate(memory_id="c1", target_group_ids=[target_a.id, target_b.id])
     result = service.share_item(source.id, payload, _context(org_id))
@@ -163,6 +163,8 @@ def test_share_item_copies_into_each_target_and_records_origin():
     assert_that(written, equal_to({f"af-pool-{target_a.id}", f"af-pool-{target_b.id}"}))
     for call in honcho.share_fact.call_args_list:
         assert_that(call.args[2], equal_to("The launch is in March."))
+        # The copy keeps what the fact is about (the source conclusion's observed peer).
+        assert_that(call.kwargs["subject"], equal_to("operator"))
     # Each target's copy is badged with the source group as its origin.
     origins = {
         call.kwargs["target_group_id"]: call.kwargs["source_group_id"]
@@ -241,7 +243,7 @@ def test_share_item_reports_a_per_target_honcho_failure_without_failing_the_rest
     repository.get_by_id_and_org.side_effect = _known_groups(org_id, source, good, bad)
     honcho.find_conclusion.return_value = {"id": "c1", "content": "A fact."}
 
-    def share(workspace, _peer, _content):
+    def share(workspace, _peer, _content, *, subject=None):
         if workspace == f"af-pool-{bad.id}":
             raise HonchoError("boom")
         return [{"id": "new1"}]
