@@ -96,6 +96,31 @@ export function AgentTemplateSelectionSettings({
     }
     return missing;
   }, [agent.skills, selectedOption]);
+  const requiredPinChanges = useMemo(() => {
+    if (!selectedOption) return [];
+    const assigned = new Map(agent.skills.map((skill) => [skill.id, skill.version]));
+    const { standalone, groups } = splitRequiredSkills(
+      selectedOption.snapshot.requiredSkills,
+    );
+    const changes: { skillId: string; name: string; from: number; version: number }[] = [];
+    for (const skill of standalone) {
+      const from = assigned.get(skill.id);
+      if (from !== undefined && from !== skill.version) {
+        changes.push({ skillId: skill.id, name: skill.name, from, version: skill.version });
+      }
+    }
+    for (const group of groups) {
+      const assignedMembers = group.members.filter((member) => assigned.has(member.id));
+      if (assignedMembers.length === 0) continue;
+      if (assignedMembers.some((member) => assigned.get(member.id) === member.version)) continue;
+      const target = assignedMembers[0];
+      const from = assigned.get(target.id);
+      if (from !== undefined) {
+        changes.push({ skillId: target.id, name: target.name, from, version: target.version });
+      }
+    }
+    return changes;
+  }, [agent.skills, selectedOption]);
   const isRunning = agent.status === "RUNNING";
   const canApply = canEdit && (!isRunning || canAgent(agent, "agent.lifecycle.manage"));
   const isPending = selectTemplate.isPending || isRestartPending;
@@ -122,6 +147,14 @@ export function AgentTemplateSelectionSettings({
           templateVersion: selectedOption.templateVersion,
           overrideVersion: selectedOption.overrideVersion,
           expectedAgentUpdatedAt: stoppedAgent.updatedAt,
+          ...(requiredPinChanges.length > 0
+            ? {
+                skillVersions: requiredPinChanges.map(({ skillId, version }) => ({
+                  skillId,
+                  version,
+                })),
+              }
+            : {}),
         });
       });
       setApplyConfirmOpen(false);
@@ -401,7 +434,28 @@ export function AgentTemplateSelectionSettings({
         onConfirm={() => void applySelection()}
         isPending={isPending}
         icon={<RefreshCw size={18} />}
-      />
+      >
+        {requiredPinChanges.length > 0 && (
+          <div className="rounded-lg border p-3">
+            <p className="mb-2 mt-0 text-xs font-semibold">
+              This will also update the skill versions required by this template:
+            </p>
+            <ul className="m-0 flex list-none flex-col gap-1 p-0">
+              {requiredPinChanges.map((change) => (
+                <li
+                  key={change.skillId}
+                  className="flex flex-wrap items-center justify-between gap-2 text-xs"
+                >
+                  <span>{change.name}</span>
+                  <span className="font-mono text-muted-foreground">
+                    v{change.from} → v{change.version}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </ConfirmationDialog>
     </AgentConfigurationSection>
   );
 }

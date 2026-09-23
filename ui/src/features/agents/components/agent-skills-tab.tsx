@@ -45,6 +45,9 @@ import type { AgentConfigurationEditHandle } from "./agent-configuration-utils";
 import { CredentialErrorAlert } from "./credential-error-alert";
 import { IntegrationFields } from "./integration-fields";
 
+const REQUIRED_SKILL_VERSION_HINT =
+  "Set by the active template. Change it in the Template section by selecting a template version that pins the version you want.";
+
 interface AgentSkillsTabProps {
   agent: Agent;
   isRunning: boolean;
@@ -707,11 +710,7 @@ function AssignedSkillCard({
             <SelectTrigger
               className="w-auto min-w-24"
               aria-label={`Version for ${skill.name}`}
-              title={
-                skill.required
-                  ? "Pinned by the active template; publish a new template version to change it."
-                  : undefined
-              }
+              title={skill.required ? REQUIRED_SKILL_VERSION_HINT : undefined}
             >
               <SelectValue placeholder="Version" />
             </SelectTrigger>

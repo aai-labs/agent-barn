@@ -66,6 +66,10 @@ For an organization fork with a newer Platform Template Version available, an ex
 
 An Agent Override may show an update only from the direct Platform or Organization lineage of its Override Source Version. The user explicitly selects the complete newer source snapshot as the Agent's shared pin; a stopped Agent changes pins immediately and a running Agent uses Apply & Restart. Source updates never mutate or merge local Override Draft edits, never publish an Override Version, and an unavailable source does not invalidate an existing self-contained Override snapshot.
 
+### Select a Template Version for an Agent
+
+The Agent configuration Template section sends the chosen version together with the required-Skill pins that version demands, so a Template Version that bumps a required Skill Version applies in one request. Standalone requirements are always pinned to the version the selected snapshot records, including when that is older than the Agent currently holds. A requirement group is left alone when an assigned member already sits at its required version; otherwise one assigned member is moved. Pins that already match are not resent, so a Template switch is never judged against provider requirements belonging to a Skill Version the Agent does not use. The resulting version changes are listed in the Apply confirmation before anything is written. The Skills section keeps a template-required Skill's version read-only and points at this flow.
+
 ### Assign and mount skills
 
 Explicit assignments are persisted after Agent visibility and provider requirements pass, each pinning the requested Skill Version or the latest published version at apply time. Agent start loads the assigned pinned snapshots, adds eligible supported aai-cli Skills, builds the runtime manifest with each Skill's isolated `aai-<integration>`/slug prefix, and appends pointers to the rendered tool context. Hermes reconstructs and explicitly discovers `/workspace/skills`; OpenClaw reconstructs `/home/node/.openclaw/workspace/skills`.

@@ -7,16 +7,38 @@ Related context: [`../templates-and-skills.md`](../templates-and-skills.md), [`.
 ## Current state
 
 - Delivered: Override authoring no longer judges a staged requirement against the
-  Agent's live pins, so a required Skill Version above the Agent's assignment can
-  be drafted and published. Exact-version enforcement remains at selection.
-- In transition: the Agent configuration Template section still sends a Template
-  selection without the required Skill pins, so a Template Version that bumps a
-  required Skill Version cannot yet be applied from the UI.
-- Next: AF-341-02, the Template section carrying required Skill pins and showing
-  the resulting version moves before applying.
+  Agent's live pins, and the Agent configuration Template section applies a
+  Template Version together with the required Skill pins it bumps, listing those
+  version moves in the Apply confirmation. The reported deadlock is resolved.
+- In transition: a Template Version that requires a Skill the Agent does not have
+  at all still blocks Apply and sends the user to the Skills section first.
+- Next: AF-341-03, the Template section adding a newly required Skill in the same
+  request, with a member picker for requirement groups.
 - Blockers: none.
 
 ## Changes
+
+### 2026-09-23 — AF-341-02
+
+- Delivered: selecting a Template Version from the Agent configuration Template
+  section carries the required Skill pins that version demands, so an Agent moves
+  from Template v1/Skill v1 to Template v2/Skill v2 in one apply. The confirmation
+  dialog lists each version move before it is written, and the Skills section's
+  read-only version control now points at the Template section instead of
+  advising a step that could not work.
+- Changed: `agent-template-selection-settings.tsx` derives the pin changes and
+  sends them as `skillVersions`; `agent-skills-tab.tsx` carries the replacement
+  hint. No API change — the endpoint already accepted these fields.
+- Decision: only *changed* pins are sent. An incoming pin is provider-checked
+  against the Skill lineage's latest requirements, so resending matching pins
+  would fail Template switches that succeed today.
+- Decision: a requirement group is left untouched when an assigned member already
+  sits at its required version; a member beyond that version is the caller's
+  business and is never pulled back. When no assigned member satisfies the group,
+  the first in snapshot order is moved and named in the confirmation.
+- Coverage: three Playwright specs in `ui/tests/e2e/agent-configuration-page.spec.ts`
+  cover the bump carrying its pin, a satisfied group being left alone, and the
+  Skills section staying locked with the new hint.
 
 ### 2026-09-23 — AF-341-01
 
