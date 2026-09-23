@@ -88,6 +88,20 @@ def is_excluded(rel_path: str, runtime: str) -> bool:
     return _matches_prefix(rel_path, excluded)
 
 
+def _escapes_root(path: Path, rel_path: str) -> bool:
+    """Whether a symlink at ``rel_path`` resolves outside the volume.
+
+    Archive extraction rejects absolute links and relative links that escape the
+    target. Drop those at capture time while keeping links that resolve inside
+    the volume.
+    """
+    target = os.readlink(path)
+    if posixpath.isabs(target) or ntpath.isabs(target):
+        return True
+    resolved = posixpath.normpath(posixpath.join(posixpath.dirname(rel_path), target))
+    return resolved == ".." or resolved.startswith("../")
+
+
 def is_preserved(rel_path: str, runtime: str) -> bool:
     preserved = HERMES_PRESERVED if runtime == RUNTIME_HERMES else OPENCLAW_PRESERVED
     return _matches_prefix(rel_path, preserved)
@@ -101,9 +115,12 @@ def _walk_included_files(root: Path, runtime: str):
         dir_names[:] = sorted(d for d in dir_names if not is_excluded(prefix + d, runtime))
         for file_name in sorted(file_names):
             rel_path = prefix + file_name
+            if is_excluded(rel_path, runtime):
+                continue
             path = current / file_name
-            if not is_excluded(rel_path, runtime) and not (runtime == RUNTIME_OPENCLAW and path.is_symlink()):
-                yield path, rel_path
+            if path.is_symlink() and _escapes_root(path, rel_path):
+                continue
+            yield path, rel_path
 
 
 def capture(source: Path, dest: Path, runtime: str) -> dict:

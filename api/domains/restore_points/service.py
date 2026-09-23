@@ -674,6 +674,9 @@ class RestorePointService:
                 ),
             )
         except Exception as exc:
+            # The reason stored on the row is sanitized down to fixed copy; the
+            # apiserver's account of what it rejected is kept only in the log.
+            logger.exception("Could not provision the restore of restore point %s onto agent %s", target.id, agent.id)
             reason = friendly_k8s_error(exc, operation=AgentProvisioningOperation.RESTORE)
             self.repository.mark_failed(backup.id, reason[:_MAX_FAILURE_REASON])
             self.repository.mark_restored(target.id, cancel_replay=True)
@@ -802,6 +805,11 @@ class RestorePointService:
                 ),
             )
         except Exception as exc:
+            # friendly_k8s_error drops the cluster's own text, and RESOURCE_REJECTED
+            # carries no detail, so which field the apiserver refused survives only here.
+            logger.exception(
+                "Could not provision the capture for restore point %s on agent %s", restore_point.id, agent.id
+            )
             restore_point.status = RestorePointStatus.FAILED
             restore_point.failure_reason = friendly_k8s_error(exc, operation=AgentProvisioningOperation.BACKUP)
             self.repository.save(restore_point)
