@@ -38,6 +38,12 @@ from api.domains.events.catalog import (
 )
 from api.domains.events.dispatch import EventDeliveryDispatcher
 from api.domains.events.models import ActorIdentity, ActorIdentityType, EventScope, OutboxMessage
+from api.domains.restore_points.constants import (
+    RESTORE_POINT_RECONCILIATION_BATCH_SIZE,
+    RESTORE_POINT_RECONCILIATION_MISSING_VOLUME_LIMIT,
+    RESTORE_POINT_RECONCILIATION_STALE_SECONDS,
+)
+from api.domains.restore_points.reconciliation import RestorePointReconciler
 from api.domains.restore_points.repository import RestorePointRepository
 from api.domains.restore_points.service import RestorePointService
 from api.domains.templates.models import AgentTemplate
@@ -1407,3 +1413,217 @@ def test_pending_replay_blocks_lifecycle_operations_while_the_lock_is_held():
             assert_that(blocked, equal_to(True))
             service.reconcile_agent(context.agent.id)
             assert_that(service.has_blocking_operation(context.agent.id), equal_to(False))
+
+
+def _claim(context, limit=RESTORE_POINT_RECONCILIATION_BATCH_SIZE):
+    repository: RestorePointRepository = context.injector.get(RestorePointRepository)
+    return repository.claim_reconciliation_candidates(
+        stale_before=datetime.now(UTC) - timedelta(seconds=RESTORE_POINT_RECONCILIATION_STALE_SECONDS),
+        limit=limit,
+    )
+
+
+def _stale_restoring(context, job_name):
+    repository: RestorePointRepository = context.injector.get(RestorePointRepository)
+    row = _seed(context, status_value=RestorePointStatus.RESTORING)
+    row.job_name = job_name
+    repository.save(row)
+    _backdate(context, row.id)
+    return row
+
+
+def test_the_claim_selects_only_rows_that_have_been_stale_long_enough():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        _reconcilable(context, job_name="rp-cap-fresh")
+        stale = _stale_restoring(context, "rp-res-stale")
+
+        with when("the reconciler claims candidates"):
+            claimed = _claim(context)
+
+        with then("only the stale row is claimed"):
+            assert_that([row.id for row in claimed], equal_to([stale.id]))
+
+
+def test_the_claim_includes_a_ready_row_that_still_owes_a_configuration_replay():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        repository: RestorePointRepository = context.injector.get(RestorePointRepository)
+        owing = _seed(context, status_value=RestorePointStatus.READY)
+        owing.reapply_configuration = True
+        repository.save(owing)
+        settled = _seed(context, status_value=RestorePointStatus.READY)
+        _backdate(context, owing.id)
+        _backdate(context, settled.id)
+
+        with when("the reconciler claims candidates"):
+            claimed = _claim(context)
+
+        with then("the owed replay is claimed and the settled row is left alone"):
+            assert_that([row.id for row in claimed], equal_to([owing.id]))
+
+
+def test_claiming_a_row_excludes_it_from_the_next_claim():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        stale = _reconcilable(context, job_name="rp-cap-stale")
+        _backdate(context, stale.id)
+
+        with when("two runs claim in succession"):
+            first = _claim(context)
+            second = _claim(context)
+
+        with then("the second run sees nothing, because the first bumped the row out of the window"):
+            assert_that([row.id for row in first], equal_to([stale.id]))
+            assert_that(second, equal_to([]))
+
+
+def test_the_claim_is_bounded_by_its_batch_size():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        for index in range(3):
+            _stale_restoring(context, f"rp-res-{index}")
+
+        with when("the reconciler claims with a smaller batch size"):
+            claimed = _claim(context, limit=2)
+
+        with then("only that many rows are claimed"):
+            assert_that(claimed, has_length(2))
+
+
+def test_ready_rows_whose_volume_is_gone_are_reported_and_live_ones_are_not():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        repository: RestorePointRepository = context.injector.get(RestorePointRepository)
+        present = _seed(context, status_value=RestorePointStatus.READY)
+        missing = _seed(context, status_value=RestorePointStatus.READY)
+        capturing = _seed(context, status_value=RestorePointStatus.CAPTURING)
+
+        with when("the live volumes are compared against the rows"):
+            found = repository.find_ready_rows_missing_volumes(
+                {present.pvc_name, capturing.pvc_name},
+                limit=RESTORE_POINT_RECONCILIATION_MISSING_VOLUME_LIMIT,
+            )
+
+        with then("only the ready row without a volume is reported"):
+            assert_that([row.id for row in found], equal_to([missing.id]))
+
+
+def test_the_read_path_still_leaves_a_freshly_committed_row_alone():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        seeded = _reconcilable(context, job_name="rp-cap-not-created-yet")
+        context.injector.get(KubernetesClient).get_job.return_value = None
+        service = context.injector.get(RestorePointService)
+
+        with when("a read reconciles the row inside the grace window"):
+            service.reconcile_row(seeded)
+
+        with then("it is left non-terminal for the next read"):
+            body = context.client.get(f"{_url(context)}/{seeded.id}", headers=_auth(context)).json()
+            assert_that(body["status"], equal_to(RestorePointStatus.PENDING.value))
+
+
+def test_the_reconciler_resolves_a_claimed_row_without_waiting_out_the_grace_window():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        seeded = _reconcilable(context, job_name="rp-cap-vanished")
+        context.injector.get(KubernetesClient).get_job.return_value = None
+        service = context.injector.get(RestorePointService)
+
+        with when("the reconciler resolves a row whose claim has just bumped updated_at"):
+            service.reconcile_row(seeded, respect_grace=False)
+
+        with then("the row is failed rather than skipped as fresh"):
+            body = context.client.get(f"{_url(context)}/{seeded.id}", headers=_auth(context)).json()
+            assert_that(body["status"], equal_to(RestorePointStatus.FAILED.value))
+
+
+def test_apply_owed_replay_writes_the_recorded_configuration():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        there_is_a_template(template_key="recorded-template", name="Recorded")(context)
+        repository = context.injector.get(RestorePointRepository)
+        row = _seed_with_manifest(context, _manifest_for(context, template_key="recorded-template"))
+        row.reapply_configuration = True
+        repository.save(row)
+        service = context.injector.get(RestorePointService)
+
+        with when("the reconciler applies the owed replay directly"):
+            service.apply_owed_replay(row)
+
+        with then("the configuration lands and nothing is still owed"):
+            assert_that(repository.find_owing_replay_for_agent(context.agent.id), equal_to([]))
+            agent = context.injector.get(AgentRepository).get_by_id(context.agent.id)
+            assert agent is not None
+            template = context.injector.get(TemplateRepository).get_pinned_template(agent)
+            assert template is not None
+            assert_that(template.template_key, equal_to("recorded-template"))
+
+
+def test_failing_a_ready_row_whose_volume_is_gone_writes_through():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        repository: RestorePointRepository = context.injector.get(RestorePointRepository)
+        row = _seed(context, status_value=RestorePointStatus.READY)
+
+        with when("the reconciler fails a terminal row whose archive volume has gone"):
+            written = repository.mark_ready_row_failed(row.id, "The archive volume is no longer in the cluster.")
+
+        with then("the write lands, which mark_failed could not do from a terminal status"):
+            assert_that(written, equal_to(True))
+            assert_that(repository.mark_failed(row.id, "second attempt"), equal_to(False))
+            body = context.client.get(f"{_url(context)}/{row.id}", headers=_auth(context)).json()
+            assert_that(body["status"], equal_to(RestorePointStatus.FAILED.value))
+            assert_that(body["failure_reason"], contains_string("no longer in the cluster"))
+
+
+def test_only_restore_points_that_still_exist_are_reported_as_known():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        repository: RestorePointRepository = context.injector.get(RestorePointRepository)
+        live = _seed(context, status_value=RestorePointStatus.READY)
+        deleted = uuid.uuid4()
+
+        with when("the sweep matches cluster labels against rows"):
+            known = repository.find_existing_ids({live.id, deleted})
+
+        with then("only the surviving row is known, and an empty query is not run"):
+            assert_that(known, equal_to({live.id}))
+            assert_that(repository.find_existing_ids(set()), equal_to(set()))
+
+
+def test_a_ready_row_owing_a_replay_keeps_its_archive_when_the_reconciler_resolves_it():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        there_is_a_template(template_key="recorded-template", name="Recorded")(context)
+        repository = context.injector.get(RestorePointRepository)
+        row = _seed_with_manifest(context, _manifest_for(context, template_key="recorded-template"))
+        row.reapply_configuration = True
+        row.job_name = None
+        repository.save(row)
+        k8s = context.injector.get(KubernetesClient)
+        k8s.delete_pvc.reset_mock()
+
+        with when("the reconciler resolves it the way the claim hands it over"):
+            context.injector.get(RestorePointService).reconcile_row(row, respect_grace=False)
+
+        with then("the archive it still owes a replay for is left intact"):
+            assert_that(k8s.delete_pvc.called, equal_to(False))
+            body = context.client.get(f"{_url(context)}/{row.id}", headers=_auth(context)).json()
+            assert_that(body["status"], equal_to(RestorePointStatus.READY.value))
+
+
+def test_a_full_reconciler_run_applies_an_owed_replay_without_touching_the_archive():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        there_is_a_template(template_key="recorded-template", name="Recorded")(context)
+        repository = context.injector.get(RestorePointRepository)
+        row = _seed_with_manifest(context, _manifest_for(context, template_key="recorded-template"))
+        row.reapply_configuration = True
+        row.job_name = None
+        repository.save(row)
+        _backdate(context, row.id)
+        k8s = context.injector.get(KubernetesClient)
+        k8s.delete_pvc.reset_mock()
+        k8s.list_pvcs.return_value = []
+        k8s.list_jobs.return_value = []
+
+        with when("the reconciler runs the way the CronJob runs it"):
+            result = context.injector.get(RestorePointReconciler).run_once()
+
+        with then("the replay lands and the archive survives"):
+            assert_that(result.claimed, equal_to(1))
+            assert_that(result.replays_attempted, equal_to(1))
+            assert_that(k8s.delete_pvc.called, equal_to(False))
+            assert_that(repository.find_owing_replay_for_agent(context.agent.id), equal_to([]))
+            body = context.client.get(f"{_url(context)}/{row.id}", headers=_auth(context)).json()
+            assert_that(body["status"], equal_to(RestorePointStatus.READY.value))

@@ -18,6 +18,7 @@ Starting an agent is an API-orchestrated deployment flow:
 8. Generate fresh Ingest and Communications protocol credentials.
 9. Build ConfigMap, Secret, PVC, Service, and Deployment resources, including the runtime-neutral communications adapter and any enabled native gateway configuration.
 10. Apply resources through the Kubernetes client and mark the Agent running.
+11. Record the runtime configuration digest the pod was built from.
 
 Runtime behaviour policies are appended to `AGENTS.md` rather than stored in a template, because both runtimes auto-load `AGENTS.md` into the startup system prompt. They are unconditional and carry no role-specific wording, so custom and forked templates inherit them and the role-scope policy defers to whatever role the agent's own template defines.
 
@@ -35,9 +36,39 @@ Progress visibility (the persisted `verbose_mode` field) is Hermes-only for a di
 
 Hermes uses `/workspace` as its terminal and messaging working directory while its managed state remains under `/opt/data`. Agent Barn materializes assigned Skills under `/workspace/skills` and declares that directory in Hermes' `skills.external_dirs`, because the runtime's native discovery root is `/opt/data/skills`.
 
+### Runtime configuration digest
+
+Both runtimes read their configuration once, at container start, so a pod keeps serving the code and images it was assembled from until someone restarts it. Step 11 records that fact. `Agent.running_config_digest` identifies the platform code and runtime images the pod was built from, and `AgentRead.update_available` reports when a running Agent's recorded digest differs from what the API would build now. Stop clears the digest, because a stopped Agent has no pod to describe. The signal is advisory: it blocks no operation, changes no Agent behaviour, and clears on the next start. See [`../features/agents.md`](../features/agents.md) for the read contract.
+
+The watched set is computed, never curated. `runtime_digest.py` walks the static closure of `AgentService._provision_and_start` with `ast`, following three kinds of edge: `self._method()` calls within `AgentService`, `self.<collaborator>.<method>()` resolved through the class-level annotations that declare each injected collaborator, and every free name to its defining module. It collects individual definitions rather than whole files, so editing an unrelated DTO in a shared module registers nothing while editing a reachable one does. A hand-written list was measured against this closure before the design settled and covered roughly a third of it, silently omitting `skills.models.derive_tools_pointer`, `agent_settings.lookup.resolve_default_model`, `google_workspace_scopes.required_service_scopes` and the credential content schemas among others — which is why nothing here is maintained by hand and no version constant exists to bump.
+
+Resolution must follow re-export barrels and relative imports. `build_config_map` resolves to the `builders` package rather than to `builders/openclaw.py`, and that package re-exports with `from .openclaw import ...`. Skipping either step silently drops the runtime builders — the largest single source of agent configuration — out of the closure, so the unit test asserts their presence rather than trusting the walk.
+
+Python is normalised through `ast.dump` with docstrings stripped, so comments, blank lines, `ruff format` output, and CRLF checkouts leave the digest unchanged while string literals — the policy text itself — move it. Two asset roots are hashed as bytes instead, because the builders read them from disk into module-level constants where AST analysis cannot see their content: `domains/agents/scripts/` and `domains/agents/aai_cli_skills/bundled/`. Runtime image identity comes from `Config.openclaw_image` and `Config.hermes_image`, which are environment rather than files; the API image copies only `api/`, so the base-image `VERSION` files do not exist at runtime. The digest is computed once at import and cached, because the Agent read that consumes it runs per Agent in list responses.
+
+Known limits fall in both directions, and which is which matters.
+
+These **under-report** — a real change that the digest does not move:
+
+- **Mutable image tags.** The digest folds in the image *reference*, not its content, so rebuilding and pushing the same tag (`:dev`, `:latest`) leaves it unchanged. Immutable or digest-pinned tags do not have this problem.
+- **Deployment environment beyond the two image references.** `ingest_base_url`, `communications_base_url`, and the Firecrawl settings are read at start but excluded, because a curated `Config` subset would reintroduce exactly the hand-maintained list this design exists to avoid.
+- **Dynamic dispatch and runtime registration** are invisible to static analysis. The assembly path uses neither today, and introducing one edits a call site that is itself inside the closure, so it registers once.
+
+These **over-report** — the digest moves without a behavioural change:
+
+- The two asset roots are compared byte for byte, so a comment-only edit to `start.sh` or `init-openclaw.js` moves the digest. Shell and JavaScript cannot be normalised the way Python can.
+- `Agent` is inside the closure, so adding any column to that table moves the digest once.
+- A Python minor-version upgrade can change `ast.dump` output, moving the digest once across the fleet.
+
+Over-reporting is the safe direction: the prompt is advisory, and a restart preserves the PVC, conversation history, Communication Connections, and Hermes `always` grants, rebuilding only the ConfigMap, Secret, and per-start credentials. The under-reporting cases are the ones to watch, because an Agent silently keeps serving older behaviour.
+
+The collaborator walk is transitive in both dimensions: it follows `self._method()` calls *within* each injected collaborator, not only the methods the assembly path calls directly. Without that, helpers such as `KubernetesClient._create_or_get` — which decides whether a 409 reuses an existing resource — would change provisioning without moving the digest.
+
 ## Runtime-neutral communications
 
 Both Hermes and OpenClaw consume the same versioned Communications protocol for gateway-owned Connections. A sidecar-style runtime adapter opens an authenticated, outbound Server-Sent Events control stream to Communications. A `delivery_available` wakeup makes the adapter claim durable inbound Communication Deliveries and invoke the runtime's local API with a Connection-scoped session key, submit the reply against the source delivery, and complete the delivery. OpenClaw uses its chat-completions endpoint; Hermes uses `/v1/runs` so command approvals and progress remain available. Inbound and outbound claim paths exclude Platforms configured as native, including stale Deliveries created before cutover. Native Connections receive provider credentials and transport configuration at Agent start on both runtimes. Because the shared adapter is copied into the Python 3.12 OpenClaw image and the Python 3.13 Hermes image, Ruff targets its source to Python 3.12 and a source-parse test guards the oldest image grammar.
+
+Agent Webhook triggers use a separate immediate path. The product API calls an authenticated private listener on port 8082 of the target Agent Service; it does not create a Communication Delivery or wait for a runtime claim. The listener durably deduplicates the dispatch generation on the Agent volume, creates or recovers a deterministic one-shot job in the native Hermes/OpenClaw scheduler, and returns `202` only after the scheduler accepts the run. Hermes/OpenClaw then owns execution and final delivery through the selected native Slack, Discord, Telegram, or Teams configuration. Agent Barn records submission success or failure only and receives no execution callback.
 
 Agent-initiated delivery uses the same Communications boundary. Interactive sends carry a server-issued token for the active inbound claim and are resolved only on that claim's Communication Connection; an interactive request cannot select the Agent's default or name a Connection. Scheduled final responses are captured into a durable SQLite spool and retried under one run identity until acknowledged, refused with a permanent 4xx, or about a day old; settled rows are pruned after seven days. On Hermes, a job created from a conversation retains its Connection/channel/thread origin, while startup-created work uses the Agent's one configured default. OpenClaw uses the default only when the completion has no recorded origin; its pinned cron hook exposes a delivery-channel label instead of the creating conversation, so unmappable completions are refused rather than diverted. The shared runtime client owns silence-marker filtering and destination parsing so Hermes and OpenClaw apply the same policy. Communications resolves and persists the destination before acknowledging acceptance, then the Platform Plugin revalidates current outbound policy before provider delivery. Only Slack currently advertises this capability.
 
@@ -142,6 +173,16 @@ the Job pod's logs — the manifest is written onto the restore point's PVC, whi
 mount. Distinct exit codes separate a failed safety-net capture, where the Agent volume was
 never touched, from a failed extraction, where it was.
 
+A row's status is otherwise only resolved when someone reads it, so a CronJob runs the same
+resolution on a schedule and reclaims what no row owns. It matches a Job or PVC back to its row
+through the `agentbarn.io/restore-point-id` label, falling back to the resource's own generated
+name — never through `job_name`, which is cleared when a row goes terminal. The name fallback is
+what reaches resources created before that label existed; both routes are exact, because the
+builders generate the names. Because that pass deletes storage from a list-and-compare, it skips
+resources younger than a minimum age, caps deletions per run, refuses to delete a resource
+identifiable by neither route, and fails no rows at all when the volume listing is empty or
+failed.
+
 CSI `VolumeSnapshot` is deliberately unused; see
 [`../adr/2026-09-10-restore-points-use-tar-jobs-not-csi-snapshots.md`](../adr/2026-09-10-restore-points-use-tar-jobs-not-csi-snapshots.md).
 
@@ -154,12 +195,15 @@ Kubernetes `stream()` and `portforward()` temporarily monkey-patch `ApiClient.re
 | Concern                         | Source                                                                          |
 | ------------------------------- | ------------------------------------------------------------------------------- |
 | Runtime orchestration           | `../../api/domains/agents/service.py`                                                 |
+| Runtime configuration digest    | `../../api/domains/agents/runtime_digest.py`                                          |
 | Ingest process and routing      | `../../api/ingest_app.py`, `../../api/ingest_main.py`, `../../api/start.sh`                       |
 | Communications process and routing | `../../api/communications_app.py`, `../../api/communications_main.py`, `../../api/domains/communications/` |
 | Domain Event delivery workers   | `../../api/worker_app.py`, `../../api/domains/events/worker.py`, `../../api/domains/events/reconciliation.py`, `../../helm/agentbarn-api/templates/event-delivery-worker-deployment.yaml`, `../../helm/agentbarn-api/templates/event-delivery-reconciliation-cronjob.yaml` |
+| Agent Restore Point reconciliation | `../../api/domains/restore_points/reconciliation.py`, `../../api/domains/restore_points/constants.py`, `../../helm/agentbarn-api/templates/restore-point-reconciliation-cronjob.yaml` |
 | Shared Kubernetes builders      | `../../api/domains/agents/builders/common.py`                                         |
 | Hermes builders                 | `../../api/domains/agents/builders/hermes.py`, `../../hermes-base/`                         |
 | OpenClaw builders               | `../../api/domains/agents/builders/openclaw.py`, `../../openclaw-base/`                     |
+| Private Agent trigger admission | `../../api/domains/agents/scripts/agent-trigger-server.py`, `../../api/domains/agent_webhooks/dispatch.py` |
 | Skill and integration artifacts | `../../api/domains/agents/aai_cli_artifacts.py`, `../../api/domains/agents/aai_cli_skills/bundled/skills/`, `../../api/domains/agents/gog_artifacts.py` |
 | Provider clients                | `../../api/infrastructure/slack/`, `../../api/infrastructure/telegram/`, `../../api/infrastructure/discord/` |
 | Kubernetes client               | `../../api/infrastructure/kubernetes/`                                                |

@@ -97,18 +97,18 @@ cp .env.spec .env
 Now fill in these values. Every option in `.env.spec` is commented, and
 anything not listed here has a working local default:
 
-| Variable                                                             | What to put in it                                                                                                       |
-| -------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`                  | local credentials and a database name; the database is created on first run                                             |
-| `POSTGRES_PORT`                                                     | a free host port; keep the default `5432` when available                                                                |
-| `SECRET_SIGNING_KEY`                                                 | any random string                                                                                                       |
-| `PLATFORM_ADMIN_CREDENTIALS`                                         | `email:password` for the admin account created at startup — the password needs 8+ characters, upper, lower, and a digit |
-| `ENVIRONMENT`, `UI_APP_URL`, `API_PORT`                              | leave the `.env.spec` defaults                                                                                          |
-| `AGENT_TOKEN_ENCRYPTION_KEY`                                         | a Fernet key — generate it below                                                                                        |
-| `OPENROUTER_API_KEY`                                                 | your OpenRouter key; passed to LiteLLM and used for the model picker                                                    |
-| `LITELLM_MASTER_KEY`                                                 | a **stable** admin key — generate it below                                                                              |
-| `AGENT_LITELLM_BASE_URL`                                             | `http://host.docker.internal:7070` so agent pods can reach LiteLLM through the host                                    |
-| `OPENCLAW_IMAGE`, `HERMES_IMAGE`                                     | full `name:tag`; each tag must equal the matching `openclaw-base/VERSION` / `hermes-base/VERSION`                       |
+| Variable                                            | What to put in it                                                                                                       |
+| --------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB` | local credentials and a database name; the database is created on first run                                             |
+| `POSTGRES_PORT`                                     | a free host port; keep the default `5432` when available                                                                |
+| `SECRET_SIGNING_KEY`                                | any random string                                                                                                       |
+| `PLATFORM_ADMIN_CREDENTIALS`                        | `email:password` for the admin account created at startup — the password needs 8+ characters, upper, lower, and a digit |
+| `ENVIRONMENT`, `WEB_APP_URL`, `API_PORT`            | leave the `.env.spec` defaults                                                                                          |
+| `AGENT_TOKEN_ENCRYPTION_KEY`                        | a Fernet key — generate it below                                                                                        |
+| `OPENROUTER_API_KEY`                                | your OpenRouter key; passed to LiteLLM and used for the model picker                                                    |
+| `LITELLM_MASTER_KEY`                                | a **stable** admin key — generate it below                                                                              |
+| `AGENT_LITELLM_BASE_URL`                            | `http://host.docker.internal:7070` so agent pods can reach LiteLLM through the host                                     |
+| `OPENCLAW_IMAGE`, `HERMES_IMAGE`                    | full `name:tag`; each tag must equal the matching `openclaw-base/VERSION` / `hermes-base/VERSION`                       |
 
 Generate the two keys:
 

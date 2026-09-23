@@ -89,12 +89,6 @@ class InboundAdmissionContext:
     thread_is_agent_owned: Callable[[ConversationLocation], bool]
 
 
-class WebhookRequestRejected(Exception):
-    """An authentic webhook request the plugin cannot use. The message goes back to the
-    caller, so it must be safe to show. Not a ValueError on purpose: pydantic's
-    ValidationError is one, and its message can quote a stored credential."""
-
-
 @dataclass(frozen=True)
 class WebhookRequest:
     """One inbound provider webhook before anything trusts it.
@@ -200,8 +194,6 @@ class PlatformPlugin(ABC):
     credentials_model: type[PlatformCredentials]
     credential_uniqueness_scope: CredentialUniquenessScope = CredentialUniquenessScope.NONE
     supports_progress_updates: bool = True
-    # False: one account per platform per Agent (ADR 2026-09-16). Webhook has no account.
-    allows_multiple_connections: bool = False
 
     def resolve_outbound_target(
         self,
@@ -257,15 +249,6 @@ class PlatformPlugin(ABC):
 
     def validate_stored_credentials(self, raw_credentials: dict[str, Any]) -> dict[str, Any]:
         return self.credentials_model.model_validate(raw_credentials).model_dump(mode="json")
-
-    def mint_credentials(self) -> dict[str, Any]:
-        """Credentials this platform generates itself, merged over any supplied on create."""
-        return {}
-
-    def reveal_once(self, credentials: PlatformCredentials) -> dict[str, str]:
-        """Values to show the user once, right after they are minted or rotated."""
-        del credentials
-        return {}
 
     def credential_fingerprint(self, credentials: PlatformCredentials) -> str | None:
         if self.credential_uniqueness_scope == CredentialUniquenessScope.NONE:
@@ -400,11 +383,7 @@ class PlatformPlugin(ABC):
         raise NotImplementedError(f"{self.key} does not implement supervised ingress")
 
     def verify_webhook(self, credentials: PlatformCredentials, request: WebhookRequest) -> None:
-        """Authenticate a provider webhook before normalization.
-
-        Raise PermissionError to reject the caller, or WebhookRequestRejected to reject
-        an authentic request that cannot be used.
-        """
+        """Authenticate a provider webhook before normalization; raise PermissionError to reject it."""
         raise NotImplementedError(f"{self.key} does not implement webhook ingress")
 
     def build_app_package(

@@ -8,6 +8,7 @@ export PATH="/tmp/agentbarn-bin:$PATH"
 
 node /app/config/healthz-server.js &
 python3 /app/config/communications-runtime-adapter.py &
+python3 /app/config/agent-trigger-server.py &
 node /app/config/init-openclaw.js
 
 PLUGIN_DIR="/home/node/.openclaw/local-plugins/telemetry-push"

@@ -13,7 +13,7 @@ from hamcrest import assert_that, equal_to, has_length
 from sqlmodel import Session, col, select
 
 from api.domains.agents.models import AgentStatus
-from api.domains.communications.models import CommunicationDelivery, CommunicationDirection, DeliveryKind
+from api.domains.communications.models import CommunicationDelivery, CommunicationDirection
 from api.infrastructure.msteams.client import TeamsAuthError
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.tests.core.givenpy import given, then, when
@@ -131,7 +131,6 @@ def test_a_teams_activity_with_a_valid_token_is_accepted() -> None:
             assert_that(response.status_code, equal_to(status.HTTP_202_ACCEPTED))
             assert_that(response.json()["accepted"], has_length(1))
             [delivery] = _inbound(context)
-            assert_that(delivery.kind, equal_to(DeliveryKind.CONVERSATION))
             assert_that(str(delivery.id), equal_to(response.json()["accepted"][0]["delivery_id"]))
 
 

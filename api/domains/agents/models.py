@@ -337,6 +337,10 @@ class Agent(BaseModel, table=True):
         default="",
         sa_column=Column(sa.String(), nullable=False, server_default=""),
     )
+    running_config_digest: str = SqlField(
+        default="",
+        sa_column=Column(sa.String(64), nullable=False, server_default=""),
+    )
     agent_type: AgentType = SqlField(
         default=AgentType.OPENCLAW,
         sa_column=Column(sa.String(20), nullable=False, server_default="openclaw"),
@@ -1248,6 +1252,7 @@ class AgentRead(PydanticBaseModel):
     #: Set only when a running Agent's resolved model has moved since it started, so a
     #: surface can say what a restart would switch it to without recomputing the rule.
     pending_model: str
+    update_available: bool = False
     secrets: list[AgentSecretRead] = Field(default_factory=list)
     skills: list[AgentAssignedSkillRead] = Field(default_factory=list)
     configured_platform_keys: list[str] = Field(default_factory=list)

@@ -80,6 +80,7 @@ def build_service(
     ports = [
         client.V1ServicePort(port=80, target_port=8080, name="gateway"),
         client.V1ServicePort(port=8081, target_port=8081, name="healthz"),
+        client.V1ServicePort(port=8082, target_port=8082, name="triggers"),
     ]
     if include_webhook_port:
         ports.append(client.V1ServicePort(port=3978, target_port=3978, name="webhook"))
