@@ -63,7 +63,9 @@ class FakeHonchoUsage:
         return self._memory_cost
 
 
-def _summary(*, spend="300.00", calls=100, credits=OpenRouterCredits(status=CreditsStatus.UNAVAILABLE), memory_cost=0.0):
+def _summary(
+    *, spend="300.00", calls=100, credits=OpenRouterCredits(status=CreditsStatus.UNAVAILABLE), memory_cost=0.0
+):
     # cast: the service takes concrete types because injector resolves it from
     # annotations. These stand in for the reads the arithmetic below depends on.
     service = PlatformCostService(
