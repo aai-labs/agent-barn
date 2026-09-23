@@ -163,10 +163,23 @@ three — the Agent volume writable, the new Pre-Restore destination, and the ch
 read-only — and performs the safety-net capture and the extraction in one process, so the
 backup is on disk before anything is wiped.
 
+The wipe is not total. A short per-runtime list of paths survives it — Hermes' `config.yaml`,
+OpenClaw's `openclaw.json` and `npm/` — because each runtime *merges into* its configuration
+rather than rewriting it, and OpenClaw's plugin store holds install records and a host link into
+the runtime image that only a network install recreates. Destroying them leaves the runtime
+unable to boot with no way back: `gateway.mode` disappears from a regenerated `openclaw.json`,
+and the plugin reinstall fails on the missing host peer link. That list is a strict subset of the
+archive exclusions and is deliberately much smaller than it, because for the remaining excluded
+paths the wipe is the only thing that prunes them — the aai-cli store and the skills directory
+are both written additively at boot, so sparing them would leave a revoked credential or a
+removed skill in place.
+
 The Job runs as root. Extraction then applies the ownership the target volume already had,
 read before the wipe, because the two runtimes differ: Hermes' init container chowns `/opt/data`
 recursively, while OpenClaw's chowns only the mount point, so a restore cannot rely on the next
-start to repair ownership.
+start to repair ownership. Ownership is re-applied with `lchown` and skips the preserved paths:
+the preserved npm store links to a path inside the *agent* image, which the Job's own image does
+not have, so following it would abort a restore whose target is already wiped.
 
 The API learns each Job's outcome by reading its status, and its archive manifest by reading
 the Job pod's logs — the manifest is written onto the restore point's PVC, which the API cannot

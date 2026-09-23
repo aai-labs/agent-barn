@@ -23,6 +23,27 @@ Related context: [`../agents.md`](../agents.md), [`../../architecture/runtime-an
 
 ## Changes
 
+### 2026-09-23 — AF-292 — Restore no longer destroys unrecoverable runtime state
+
+- Fixed: restoring an OpenClaw Agent bricked it. The wipe deleted everything on the volume while
+  the exclusion sets kept the same paths out of the archive, so `openclaw.json` and `npm/` were
+  destroyed with nothing to put back. `init-openclaw.js` merges into the existing config rather
+  than writing a whole one, so a regenerated file lost `gateway.mode` and the gateway refused to
+  start; the plugin store lost its install records and the host link into the runtime image, and
+  the reinstall failed on every boot, leaving empty project directories behind. Observed on
+  staging, and it would have happened to every OpenClaw restore.
+- Changed: the wipe now spares a short per-runtime list — Hermes `config.yaml`, OpenClaw
+  `openclaw.json` and `npm` — of state the runtime owns and cannot rebuild. Deliberately a strict
+  subset of the archive exclusions, and much smaller: for the rest, the wipe is the only thing
+  that prunes them, so sparing `.config/aai-cli` would leave a revoked credential on the volume
+  and sparing `workspace/skills` would leave a removed skill. Tests pin both of those as still
+  cleared.
+- Changed: ownership is re-applied with `lchown` and skips the preserved paths. The npm store
+  links to a path inside the *agent* image, which the restore Job's own image does not have, so
+  following it would raise and abort a restore whose target had already been wiped.
+- Note: a restore no longer repairs a corrupted runtime configuration or plugin store. That is
+  the trade — those are what bricked the Agent — and the recovery is `openclaw doctor --fix`.
+
 ### 2026-09-20 — AF-297 — Reclaim stranded restore points and orphaned volumes
 
 - Changed: restore point PVCs and Jobs carry `agentbarn.io/restore-point-id`. Reclamation has to
