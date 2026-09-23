@@ -320,7 +320,7 @@ export function MemoryView(props: MemoryViewProps) {
         )}
       </p>
 
-      {isLoading ? (
+      {isLoading || (isSearching && searchPending) ? (
         <div
           className="divide-y overflow-hidden rounded-lg"
           style={{ background: "var(--bg-elev)", border: "1px solid var(--line)" }}
