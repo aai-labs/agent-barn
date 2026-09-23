@@ -32,7 +32,10 @@ if grep -q '"openclaw-honcho"' /app/config/openclaw-config-overlay.json 2>/dev/n
       console.log("[start] could not strip honcho refs before install: " + e.message);
     }
   ' || true
-  install_out=$(openclaw plugins install @honcho-ai/openclaw-honcho@1.5.5 2>&1) || true
+  # --force + --accept-capabilities are required from OpenClaw 0.7.x: an npm plugin
+  # outside ClawHub review is otherwise cancelled ("rerun with --force"), which
+  # silently drops the Agent to file-backed memory-core instead of the shared pool.
+  install_out=$(openclaw plugins install @honcho-ai/openclaw-honcho@1.5.5 --accept-capabilities --force 2>&1) || true
   # The plugin lives on the PVC, so every restart after the first re-reports it as
   # already present. That is the healthy steady state, not a failure.
   if echo "$install_out" | grep -q "plugin already exists"; then
