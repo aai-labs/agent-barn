@@ -167,7 +167,9 @@ def test_gateway_config_keeps_file_backed_memory_when_honcho_is_not_configured()
     plugins = config["plugins"]
     assert plugins["slots"]["memory"] == "memory-core"
     assert "openclaw-honcho" not in plugins["allow"]
-    assert config["memory"]["backend"] == "builtin"
+    # The slot decides the store; the memory object carries no `backend` key
+    # (OpenClaw 0.7.1 rejects backend + search together).
+    assert config["memory"] == {"search": {"provider": "none"}}
 
 
 def test_gateway_config_stays_the_default_agent_when_memory_is_off() -> None:
@@ -266,11 +268,10 @@ def test_gateway_config_moves_the_memory_slot_to_honcho_when_configured() -> Non
     # start.sh can fall back to it when the plugin turns out to be missing.
     assert "memory-core" not in plugins["entries"]
     assert "memory-core" in plugins["allow"]
-    # The runtime accepts only "builtin" (file-backed) or "qmd" (plugin-backed) here.
-    # The slot is what actually decides, so an Agent runs on Honcho either way — but
-    # a config that says "builtin" while Honcho holds the data sends anyone
-    # debugging memory to the wrong place first.
-    assert config["memory"]["backend"] == "qmd"
+    # The slot (above) is what routes memory to Honcho; the memory object itself is
+    # the same either way and carries no `backend` key, which OpenClaw 0.7.1 rejects
+    # alongside `search`.
+    assert config["memory"] == {"search": {"provider": "none"}}
 
     entry = plugins["entries"]["openclaw-honcho"]
     assert entry["enabled"] is True

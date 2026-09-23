@@ -2214,7 +2214,7 @@ def test_start_agent_configmap_and_headless_gateway_overlay_are_correct():
 
         with then("tools, memory, and the core/active-memory plugins are enabled"):
             assert_that(overlay["tools"]["profile"], equal_to("full"))
-            assert_that(overlay["memory"], equal_to({"backend": "builtin", "search": {"provider": "none"}}))
+            assert_that(overlay["memory"], equal_to({"search": {"provider": "none"}}))
             assert_that(overlay["plugins"]["slots"]["memory"], equal_to("memory-core"))
             assert_that(overlay["plugins"]["entries"]["memory-core"]["enabled"], equal_to(True))
             assert_that(
