@@ -13,6 +13,7 @@ pools or seeding memory, and are gated on the target being in a group.
 """
 
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from uuid import UUID
 
@@ -97,6 +98,11 @@ class MemoryItemUpdate(BaseModel):
 # Peers grow with the number of people an Agent talks to. Searching every pair is
 # quadratic, so the fan-out is capped: a search box must stay a search box.
 _MAX_SEARCH_PEERS = 8
+
+# The pair searches are independent, so they run concurrently rather than serially
+# (serial made a search tens of seconds). Bounded so a wide pool does not open a
+# burst of embedding calls at the model backend all at once.
+_SEARCH_CONCURRENCY = 8
 
 
 def _to_memory_item(raw: dict, pool_shared: PoolMemoryProvenance | None = None) -> MemoryItemRead:
@@ -380,25 +386,38 @@ class AgentMemoryService:
         """Semantic search across a pool workspace, fanning out over its peer pairs.
 
         Workspace-keyed so the per-Agent and group views share it. Honcho searches
-        one (observer, observed) collection at a time, so this fans out and merges,
-        bounded by `_MAX_SEARCH_PEERS` to keep a search box a search box.
+        one (observer, observed) collection at a time — the vectors are stored per
+        pair — so this fans out over the pairs and merges. The pairs are independent
+        (each is a round-trip plus a vector query), so they run concurrently rather
+        than serially, which is what made search take tens of seconds. Bounded by
+        `_MAX_SEARCH_PEERS` (how many pairs) and `_SEARCH_CONCURRENCY` (how many at
+        once). Results keep pair order, then dedupe, so output is deterministic.
         """
+        peers = self.honcho.list_peers(workspace)[:_MAX_SEARCH_PEERS]
+        pairs = [(observer, observed) for observer in peers for observed in peers]
+        if not pairs:
+            return []
         try:
-            peers = self.honcho.list_peers(workspace)
-            results: list[dict] = []
-            seen: set[str] = set()
-            for observer in peers[:_MAX_SEARCH_PEERS]:
-                for observed in peers[:_MAX_SEARCH_PEERS]:
-                    for item in self.honcho.search_conclusions(
-                        workspace, query=query, observer=observer, observed=observed, top_k=limit
-                    ):
-                        item_id = str(item.get("id"))
-                        if item_id not in seen:
-                            seen.add(item_id)
-                            results.append(item)
+            with ThreadPoolExecutor(max_workers=_SEARCH_CONCURRENCY) as pool:
+                pages = list(
+                    pool.map(
+                        lambda pair: self.honcho.search_conclusions(
+                            workspace, query=query, observer=pair[0], observed=pair[1], top_k=limit
+                        ),
+                        pairs,
+                    )
+                )
         except HonchoError as exc:
             raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
 
+        results: list[dict] = []
+        seen: set[str] = set()
+        for page in pages:
+            for item in page:
+                item_id = str(item.get("id"))
+                if item_id not in seen:
+                    seen.add(item_id)
+                    results.append(item)
         return [_to_memory_item(i) for i in results[:limit]]
 
     def _find(self, workspace: str, memory_id: str) -> dict | None:
