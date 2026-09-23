@@ -13,6 +13,7 @@ pools or seeding memory, and are gated on the target being in a group.
 """
 
 import logging
+import re
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from uuid import UUID
@@ -109,10 +110,30 @@ _MAX_SEARCH_PEERS = 8
 _SEARCH_CONCURRENCY = 8
 
 
-def _to_memory_item(raw: dict, pool_shared: PoolMemoryProvenance | None = None) -> MemoryItemRead:
+# An `agent-<uuid>` peer id, as it appears verbatim inside a conclusion's text.
+# Recall answers and shared facts sometimes bake a peer id into the content itself
+# (e.g. "agent-<uuid> knows that owner likes oranges"), so the id has to be
+# resolved in the text too, not only in the peer labels around it.
+_AGENT_PEER_RE = re.compile(r"agent-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
+
+
+def _humanize_agent_ids(text: str, name_by_peer: dict[str, str]) -> str:
+    """Replace `agent-<uuid>` peer ids in free text with their agent's name.
+
+    Unresolved ids are left as-is (better a raw id than a wrong name). The pattern
+    is specific enough — the `agent-` prefix plus a full uuid — that it never
+    touches ordinary prose."""
+    if not name_by_peer:
+        return text
+    return _AGENT_PEER_RE.sub(lambda m: name_by_peer.get(m.group(0), m.group(0)), text)
+
+
+def _to_memory_item(
+    raw: dict, pool_shared: PoolMemoryProvenance | None = None, name_by_peer: dict[str, str] | None = None
+) -> MemoryItemRead:
     return MemoryItemRead(
         id=str(raw.get("id")),
-        content=str(raw.get("content") or ""),
+        content=_humanize_agent_ids(str(raw.get("content") or ""), name_by_peer or {}),
         observer=str(raw.get("observer_id") or ""),
         observed=str(raw.get("observed_id") or ""),
         level=str(raw.get("level") or "explicit"),
@@ -310,8 +331,9 @@ class AgentMemoryService:
             raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
         ids = [str(i.get("id")) for i in items]
         pool_shared = self.pool_provenance.find_for_conclusions(ids)
+        name_by_peer = self._agent_names_in(items)
         return MemoryPage(
-            items=[_to_memory_item(i, pool_shared.get(str(i.get("id")))) for i in items],
+            items=[_to_memory_item(i, pool_shared.get(str(i.get("id"))), name_by_peer) for i in items],
             total=total,
             page=page,
             size=size,
@@ -337,6 +359,19 @@ class AgentMemoryService:
                 facets.append(_facet_for_peer(peer, count, agent_name, ai_peer, agent_peer_names))
         facets.sort(key=lambda f: (not f.is_self, -f.count, f.label))
         return facets
+
+    def _agent_names_in(self, raws: list[dict]) -> dict[str, str]:
+        """`agent-<uuid>` peer -> agent name for every agent id these conclusions
+        mention — in their content text as well as their observer/observed pair —
+        resolved in one batch so the read path can humanize the displayed text."""
+        tokens: set[str] = set()
+        for raw in raws:
+            tokens.update(_AGENT_PEER_RE.findall(str(raw.get("content") or "")))
+            for key in ("observer_id", "observed_id"):
+                value = str(raw.get(key) or "")
+                if value.startswith("agent-"):
+                    tokens.add(value)
+        return self._agent_peer_names(list(tokens))
 
     def _agent_peer_names(self, peers: list[str]) -> dict[str, str]:
         """Map `agent-<uuid>` peers to their Agent's display name.
@@ -400,7 +435,11 @@ class AgentMemoryService:
             raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
         new_id = str(created.get("id"))
         self.pool_provenance.carry_forward(memory_id, new_id)
-        return _to_memory_item(created, self.pool_provenance.find_for_conclusions([new_id]).get(new_id))
+        return _to_memory_item(
+            created,
+            self.pool_provenance.find_for_conclusions([new_id]).get(new_id),
+            self._agent_names_in([created]),
+        )
 
     def search_memory(
         self, agent_id: UUID, query: str, context: CurrentUserContext, *, limit: int
@@ -454,7 +493,9 @@ class AgentMemoryService:
                 if item_id not in seen:
                     seen.add(item_id)
                     results.append(item)
-        return [_to_memory_item(i) for i in results[:limit]]
+        top = results[:limit]
+        name_by_peer = self._agent_names_in(top)
+        return [_to_memory_item(i, name_by_peer=name_by_peer) for i in top]
 
     def _find(self, workspace: str, memory_id: str) -> dict | None:
         """Locate one memory so a correction can preserve its peer pair."""

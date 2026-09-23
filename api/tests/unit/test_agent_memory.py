@@ -318,6 +318,30 @@ def test_another_agents_peer_is_labelled_by_name_not_its_raw_id():
     assert_that(by_peer[f"agent-{other_id}"].name, equal_to("Helper"))
 
 
+def test_an_agent_id_baked_into_the_memory_text_is_replaced_with_the_agent_name():
+    """Recall answers and shared facts sometimes carry a raw `agent-<uuid>` inside
+    the conclusion text itself. The list must show the agent's name there too, not
+    just in the surrounding labels."""
+    other_id = uuid7()
+    service, _, honcho, _pool_prov = _service()
+    service.agents.names_by_ids.return_value = {other_id: "Helper"}
+    honcho.list_conclusions.return_value = (
+        [
+            {
+                "id": "c1",
+                "content": f"agent-{other_id} knows that owner is a fan of oranges",
+                "observer_id": f"agent-{other_id}",
+                "observed_id": "owner",
+            }
+        ],
+        1,
+    )
+
+    page = service.list_memory(AGENT_ID, _context(), page=1, size=50)
+
+    assert_that(page.items[0].content, equal_to("Helper knows that owner is a fan of oranges"))
+
+
 def test_a_peer_the_agent_never_concluded_about_gets_no_facet():
     """A peer can exist from a single inbound message that produced nothing. A zero
     facet would be a filter that leads to an empty list."""
