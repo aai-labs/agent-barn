@@ -3,7 +3,7 @@ COMPOSE := docker compose -f compose.yml
 .PHONY: \
 	setup run stop stop-clean \
 	restart-ui \
-	dev-api dev-ingest dev-communications dev-ui dev-worker reconcile reconcile-llm-budgets run-llm-budget-alerts forward-teams forward-triggers seed-event-deliveries seed-costs seed-agent-overrides migrate merge-heads rollback makemigrations test-api test-ui lint-ui check-ui coverage check-api check-migrations check-monitoring fix-api test check fix \
+	dev-api dev-ingest dev-communications dev-ui dev-worker reconcile reconcile-restore-points reconcile-llm-budgets run-llm-budget-alerts forward-teams forward-triggers seed-event-deliveries seed-costs seed-agent-overrides migrate merge-heads rollback makemigrations test-api test-ui lint-ui check-ui coverage check-api check-migrations check-monitoring fix-api test check fix \
 	db-up db-down db-logs db-restart redis-up redis-down redis-logs
 
 # One-command local dev: validates .env, brings up k3d + LiteLLM, loads agent
@@ -94,6 +94,13 @@ dev-worker:
 # One-shot reconciliation pass; production runs this on a CronJob schedule.
 reconcile:
 	cd api && uv run python -m api.domains.events.reconciliation
+
+# One-shot restore point reconciliation; production runs this on a CronJob schedule.
+# Deletes restore point Jobs and PVCs that no row owns, against whatever cluster
+# K8S_KUBECONFIG_PATH and K8S_NAMESPACE point at. Invoked the same way the CronJob
+# does it: `python -m` would re-import the module and break the injector bindings.
+reconcile-restore-points:
+	cd api && uv run python -c "from api.domains.restore_points.reconciliation import main; main()"
 
 # Both run as CronJobs in a deployment; these are the same passes by hand. Named to
 # match `reconcile`, not `check-*`: they mutate the proxy and send notifications,
