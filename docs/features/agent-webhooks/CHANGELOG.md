@@ -41,3 +41,7 @@ Related context: [`../agent-webhooks.md`](../agent-webhooks.md), [`../../archite
 - `RECEIVED` invocations that have not changed for two minutes can be retried, so an API crash mid-dispatch no longer strands them. Retry requires the webhook to be enabled.
 - The listener drops its pending receipt when a create provably made no job, so the API's in-dispatch retries can succeed instead of ending in "outcome unknown".
 - The UI gates create, rotate, and remove on `agent.secret.manage`, and reports mutation failures instead of leaving unhandled rejections.
+
+### 2026-09-23 — Public ingress route
+
+- The API ingress now routes `/agent-hooks/v1` to the API. It previously exposed only `/api` and `/communications/v1/webhooks`, so external callers got Traefik's `404 page not found`.

@@ -48,7 +48,11 @@ HERMES_EXCLUDED = (
 )
 
 OPENCLAW_EXCLUDED = (
+    # aai-cli's encrypted secret store and its key live here (Hermes keeps them under
+    # .config/aai-cli); the boot script rewrites both from the agent's credentials.
+    "aai-cli",
     "local-plugins",
+    "npm",
     "openclaw.json",
     "agentbarn-messages.sqlite3",
     "workspace/skills",
@@ -60,6 +64,11 @@ OPENCLAW_EXCLUDED = (
     "workspace/SOUL.md",
     "workspace/TOOLS.md",
 )
+
+
+HERMES_PRESERVED = ("config.yaml",)
+
+OPENCLAW_PRESERVED = ("openclaw.json", "npm")
 
 
 class ArchiveValidationError(Exception):
@@ -82,19 +91,20 @@ def is_excluded(rel_path: str, runtime: str) -> bool:
 def _escapes_root(path: Path, rel_path: str) -> bool:
     """Whether a symlink at ``rel_path`` resolves outside the volume.
 
-    OpenClaw links the core into each npm plugin project from /usr/local, and the
-    capture Job runs the API image where that path is absent. os.walk classifies
-    entries by following them, so a dangling link fails is_dir, arrives among the
-    files, and tarfile records it with its absolute target -- which the extract
-    filter then rejects, failing the whole restore. Such a link carries nothing
-    the archive can hold, and the start script recreates it, so it is dropped
-    here. A link that stays inside the volume is kept and extracts normally.
+    Archive extraction rejects absolute links and relative links that escape the
+    target. Drop those at capture time while keeping links that resolve inside
+    the volume.
     """
     target = os.readlink(path)
     if posixpath.isabs(target) or ntpath.isabs(target):
         return True
     resolved = posixpath.normpath(posixpath.join(posixpath.dirname(rel_path), target))
     return resolved == ".." or resolved.startswith("../")
+
+
+def is_preserved(rel_path: str, runtime: str) -> bool:
+    preserved = HERMES_PRESERVED if runtime == RUNTIME_HERMES else OPENCLAW_PRESERVED
+    return _matches_prefix(rel_path, preserved)
 
 
 def _walk_included_files(root: Path, runtime: str):
@@ -159,39 +169,47 @@ def validate_archive(archive_path: Path, target: Path) -> None:
         raise ArchiveValidationError(f"The archive could not be read: {exc}") from exc
 
 
-def _wipe_contents(target: Path) -> None:
+def _wipe_contents(target: Path, runtime: str) -> None:
     for entry in target.iterdir():
+        if is_preserved(entry.name, runtime):
+            continue
         if entry.is_dir() and not entry.is_symlink():
             shutil.rmtree(entry)
         else:
             entry.unlink()
 
 
-def _apply_ownership(target: Path, uid: int, gid: int) -> None:
-    if not hasattr(os, "chown"):
+def _apply_ownership(target: Path, uid: int, gid: int, runtime: str) -> None:
+    if not hasattr(os, "lchown"):
         return
-    os.chown(target, uid, gid)
+    os.lchown(target, uid, gid)
     for dir_path, dir_names, file_names in os.walk(target, followlinks=False):
+        current = Path(dir_path)
+        rel_dir = current.relative_to(target).as_posix()
+        prefix = "" if rel_dir == "." else rel_dir + "/"
+        dir_names[:] = [d for d in dir_names if not is_preserved(prefix + d, runtime)]
         for name in list(dir_names) + list(file_names):
-            os.chown(Path(dir_path) / name, uid, gid)
+            if is_preserved(prefix + name, runtime):
+                continue
+            os.lchown(current / name, uid, gid)
 
 
-def apply_archive(target: Path, archive_dir: Path) -> None:
+def apply_archive(target: Path, archive_dir: Path, runtime: str) -> None:
     archive_path = archive_dir / ARCHIVE_NAME
     validate_archive(archive_path, target)
 
     target_stat = target.stat()
-    _wipe_contents(target)
+    _wipe_contents(target, runtime)
 
     with tarfile.open(archive_path, "r:gz") as tar:
         tar.extractall(target, filter="data")
 
-    _apply_ownership(target, target_stat.st_uid, target_stat.st_gid)
+    _apply_ownership(target, target_stat.st_uid, target_stat.st_gid, runtime)
 
 
 def restore(target: Path, backup: Path, archive_dir: Path, runtime: str) -> None:
     capture(target, backup, runtime)
-    apply_archive(target, archive_dir)
+    apply_archive(target, archive_dir, runtime)
 
 
 def emit_result(manifest: dict) -> None:
@@ -235,7 +253,7 @@ def main() -> None:
         raise SystemExit(EXIT_BACKUP_FAILED) from exc
 
     try:
-        apply_archive(target, archive_dir)
+        apply_archive(target, archive_dir, runtime)
     except Exception as exc:
         emit_failure(f"restore failed: {exc}")
         raise SystemExit(EXIT_RESTORE_FAILED) from exc

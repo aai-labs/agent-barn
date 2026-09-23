@@ -23,7 +23,35 @@ Related context: [`../agents.md`](../agents.md), [`../../architecture/runtime-an
 
 ## Changes
 
+### 2026-09-23 — AF-292 — Restore no longer destroys unrecoverable runtime state
+
+- Fixed: restoring an OpenClaw Agent bricked it. The wipe deleted everything on the volume while
+  the exclusion sets kept the same paths out of the archive, so `openclaw.json` and `npm/` were
+  destroyed with nothing to put back. `init-openclaw.js` merges into the existing config rather
+  than writing a whole one, so a regenerated file lost `gateway.mode` and the gateway refused to
+  start; the plugin store lost its install records and the host link into the runtime image, and
+  the reinstall failed on every boot, leaving empty project directories behind. Observed on
+  staging, and it would have happened to every OpenClaw restore.
+- Changed: the wipe now spares a short per-runtime list — Hermes `config.yaml`, OpenClaw
+  `openclaw.json` and `npm` — of state the runtime owns and cannot rebuild. Deliberately a strict
+  subset of the archive exclusions, and much smaller: for the rest, the wipe is the only thing
+  that prunes them, so sparing `.config/aai-cli` would leave a revoked credential on the volume
+  and sparing `workspace/skills` would leave a removed skill. Tests pin both of those as still
+  cleared.
+- Changed: ownership is re-applied with `lchown` and skips the preserved paths. The npm store
+  links to a path inside the *agent* image, which the restore Job's own image does not have, so
+  following it would raise and abort a restore whose target had already been wiped.
+- Note: a restore no longer repairs a corrupted runtime configuration or plugin store. That is
+  the trade — those are what bricked the Agent — and the recovery is `openclaw doctor --fix`.
+
 ### 2026-09-21 — AF-298 — OpenClaw volumes with npm plugins could not be restored
+
+- Fixed: capture drops symlinks whose targets are absolute or resolve outside the volume, while
+  retaining relative links that resolve inside it. This prevents captured archives from
+  containing links the extraction filter would reject.
+- Updated by AF-292: OpenClaw's `npm/` store is now excluded from archives and preserved in place
+  during restore. The symlink filter remains for captured paths outside that runtime-owned store.
+
 ### 2026-09-20 — AF-297 — Reclaim stranded restore points and orphaned volumes
 
 - Changed: restore point PVCs and Jobs carry `agentbarn.io/restore-point-id`. Reclamation has to
@@ -116,13 +144,9 @@ Related context: [`../agents.md`](../agents.md), [`../../architecture/runtime-an
   wipe — but the restore point is unusable. Capture now drops a link whose target leaves the
   volume and keeps everything else, including links that stay inside it, such as npm's own
   `.bin` shims. Hermes was never affected: nothing on its volume is a symlink.
-- Fixed: the start script recreates the dropped link rather than reinstalling the plugin.
-  `npm/` and `state/` have to be captured together — OpenClaw records an install in
-  `state/openclaw.sqlite`, and restoring that record beside a missing tree leaves an install
-  that cannot be repaired: it refuses the package with "no authoritative runtime child list",
-  and `plugins registry --refresh`, `plugins uninstall` and `doctor --fix` do not clear it.
-  Both come back together now, so only the link is missing, and recreating it needs no npm,
-  no network and no registry.
+- Changed at the time: AF-298 captured `npm/` and `state/` together — OpenClaw records an install
+  in `state/openclaw.sqlite`, and restoring that record beside a missing tree leaves an install
+  that cannot be repaired. External links were omitted and the start script recreated them.
 - Fixed (API): both restore point provisioning handlers log the exception. The reason stored
   on the row is deliberately reduced to fixed copy, so the cluster's own account of a
   rejection — which field it refused — had no surviving record anywhere.
@@ -132,10 +156,11 @@ Related context: [`../agents.md`](../agents.md), [`../../architecture/runtime-an
   application logging for the rest of its life. No log assertion could pass, and existing
   tests asserting that secrets stay out of the logs were passing against empty output.
 
-- Superseded: the 2026-09-17 entry excluded OpenClaw's `npm` registry from archives and dropped
-  every symlink an OpenClaw archive would carry. That left `state/` restored while the packages
-  it records were gone, and left Hermes exposed to the same dangling-link failure. Archives now
-  carry the tree and omit only the links that resolve outside the volume, for both runtimes.
+- Superseded: AF-298 replaced the earlier policy of excluding `npm/` and dropping all OpenClaw
+  symlinks with capture of `npm/` and `state/`, omitting only links that resolve outside the
+  volume. AF-292 later made `npm/` runtime-owned again: it is excluded from archives and left
+  intact during restore. The symlink filter still applies to other captured paths and to both
+  runtimes.
 
 ### 2026-09-14 — AF-298 — Restore points in the Agent configuration page
 

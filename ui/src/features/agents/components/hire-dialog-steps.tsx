@@ -20,6 +20,7 @@ import type { TemplateRequiredSkill } from "../schemas";
 import type { RequiredSkillGroup } from "../utils";
 import { CredentialErrorAlert } from "./credential-error-alert";
 import { IntegrationFields } from "./integration-fields";
+import { SharePointSignIn } from "./sharepoint-sign-in";
 import { Pagination } from "./pagination";
 
 const HIRE_DIALOG_PAGE_SIZE = 6;
@@ -465,7 +466,15 @@ export function SkillsStep({
                   <CredentialErrorAlert message={credentialError} />
                 )}
 
-                {!useShared && (
+                {providerSpec.authMethod === "microsoft_sign_in" && (
+                  <p className="text-[0.75rem] leading-[1.5]" style={{ color: "var(--ink-3)" }}>
+                    {providerSpec.label} is connected by signing in on the agent&apos;s Microsoft Teams app,
+                    which needs the agent to exist first, so this template can&apos;t be hired yet. Choose a
+                    template without {providerSpec.label}, then add it from the agent&apos;s settings.
+                  </p>
+                )}
+
+                {!useShared && providerSpec.authMethod !== "microsoft_sign_in" && (
                   <IntegrationFields
                     provider={providerSpec}
                     draft={draft}
@@ -510,10 +519,14 @@ export function IntegrationsStep({
   integrations,
   onChange,
   credentialError,
+  agentId,
 }: {
   integrations: IntegrationDraft[];
   onChange: (next: IntegrationDraft[]) => void;
   credentialError?: string | null;
+  // The existing agent, when editing one. Providers that sign in on one of the agent's
+  // connections can only be connected once it exists.
+  agentId?: string;
 }) {
   const { switchToShared, switchToManual, handlePickShared } =
     useSharedManualSwitch(integrations, onChange);
@@ -625,7 +638,23 @@ export function IntegrationsStep({
               />
             )}
 
-            {!useShared && (
+            {provider.authMethod === "microsoft_sign_in" &&
+              (agentId ? (
+                <SharePointSignIn
+                  agentId={agentId}
+                  provider={provider}
+                  draft={draft}
+                  onFieldChange={(key, value) => setField(draft.provider, key, value)}
+                  onSignedIn={(patch) => setFields(draft.provider, patch)}
+                />
+              ) : (
+                <p className="text-[0.75rem] leading-[1.5]" style={{ color: "var(--ink-3)" }}>
+                  {provider.label} is connected by signing in on the agent&apos;s Microsoft Teams app, which
+                  needs the agent to exist first. Add it from the agent&apos;s settings once it&apos;s hired.
+                </p>
+              ))}
+
+            {!useShared && provider.authMethod !== "microsoft_sign_in" && (
               <IntegrationFields
                 provider={provider}
                 draft={draft}

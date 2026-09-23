@@ -1,5 +1,6 @@
 import gzip
 import io
+import os
 import re
 import tarfile
 from pathlib import Path
@@ -19,9 +20,11 @@ from api.domains.agents.restore_point_job import (
     EXIT_BACKUP_FAILED,
     EXIT_RESTORE_FAILED,
     HERMES_EXCLUDED,
+    HERMES_PRESERVED,
     MANIFEST_NAME,
     MODE_RESTORE,
     OPENCLAW_EXCLUDED,
+    OPENCLAW_PRESERVED,
     ArchiveValidationError,
     capture,
     is_excluded,
@@ -38,6 +41,7 @@ _HERMES_START = _AGENTS_DIR / "scripts" / "hermes" / "start.sh"
 _OPENCLAW_START = _AGENTS_DIR / "scripts" / "openclaw" / "start.sh"
 _OPENCLAW_INIT = _AGENTS_DIR / "scripts" / "openclaw" / "init-openclaw.js"
 _AAI_CLI_ARTIFACTS = _AGENTS_DIR / "aai_cli_artifacts.py"
+_AGENT_SERVICE = _AGENTS_DIR / "service.py"
 
 _HERMES_WORKSPACE_COPY_LOOP = re.compile(r"^for f in (?P<files>[^;]+); do$", re.MULTILINE)
 
@@ -52,12 +56,18 @@ _EXCLUSION_EVIDENCE = {
         "workspace/skills": (_HERMES_START, "rm -rf /workspace/skills"),
     },
     _OPENCLAW: {
+        "aai-cli": (_AGENT_SERVICE, '"/home/node/.openclaw/aai-cli"'),
         "local-plugins": (_OPENCLAW_START, "/home/node/.openclaw/local-plugins/"),
+        "npm": (_OPENCLAW_START, "/home/node/.openclaw/npm/projects/"),
         "agentbarn-messages.sqlite3": (_OPENCLAW_START, "/home/node/.openclaw/agentbarn-messages.sqlite3"),
         "openclaw.json": (_OPENCLAW_INIT, "'openclaw.json'"),
         "workspace/skills": (_OPENCLAW_INIT, "path.join(WORKSPACE_DIR, 'skills')"),
     },
 }
+
+
+def _preserved_for(runtime: str) -> tuple[str, ...]:
+    return HERMES_PRESERVED if runtime == _HERMES else OPENCLAW_PRESERVED
 
 
 def _write(root: Path, rel: str, content: str = "x") -> None:
@@ -83,6 +93,9 @@ def _hermes_volume(root: Path) -> None:
 
 
 def _openclaw_volume(root: Path) -> None:
+    _write(root, "aai-cli/aai-secrets.enc.json", "SECRET")
+    _write(root, "aai-cli/key", "KEY")
+    _write(root, "aai-cli/microsoft.sharepoint_refresh_token.sign-in")
     _write(root, "local-plugins/telemetry-push/index.js")
     _write(root, "npm/projects/openclaw-plugin/package.json")
     _write(root, "openclaw.json")
@@ -108,6 +121,20 @@ def test_hermes_capture_excludes_the_aai_cli_credential_store(tmp_path):
 
     names = _members(dest)
     assert_that([n for n in names if n.startswith(".config/aai-cli")], empty())
+
+
+def test_openclaw_capture_excludes_the_aai_cli_credential_store(tmp_path):
+    # OpenClaw keeps its aai-cli store on the volume (Hermes keeps its own under .config),
+    # so an archive would otherwise hold every integration token and the key to read them.
+    source, dest = tmp_path / "src", tmp_path / "dst"
+    source.mkdir()
+    dest.mkdir()
+    _openclaw_volume(source)
+
+    capture(source, dest, _OPENCLAW)
+
+    names = _members(dest)
+    assert_that([n for n in names if n.startswith("aai-cli")], empty())
 
 
 def test_hermes_capture_excludes_state_the_start_script_regenerates(tmp_path):
@@ -246,7 +273,9 @@ def test_openclaw_capture_excludes_regenerated_state_and_the_message_spool(tmp_p
 
     names = _members(dest)
     for excluded in (
+        "aai-cli/aai-secrets.enc.json",
         "local-plugins/telemetry-push/index.js",
+        "npm/projects/openclaw-plugin/package.json",
         "openclaw.json",
         "workspace/skills/jira/SKILL.md",
         "agentbarn-messages.sqlite3",
@@ -254,77 +283,33 @@ def test_openclaw_capture_excludes_regenerated_state_and_the_message_spool(tmp_p
         assert_that(names, is_not(has_item(excluded)))
 
 
-_PEER_LINK_DIR = "npm/projects/openclaw-firecrawl-plugin-69f7ab/node_modules/@openclaw/firecrawl-plugin/node_modules"
-
-
-def _with_peer_link(root: Path) -> Path:
-    """The link OpenClaw writes into every npm plugin project, pointing at /usr/local."""
-    peer = root / _PEER_LINK_DIR
-    peer.mkdir(parents=True)
-    link = peer / "openclaw"
-    link.symlink_to("/usr/local/lib/node_modules/openclaw")
-    return link
-
-
-def test_a_link_leaving_the_volume_is_dropped_but_the_tree_around_it_is_kept(tmp_path):
-    """The npm tree is captured; only the link the archive cannot carry is left out.
-
-    The capture Job runs the API image, where the link's target does not exist, so
-    it is dangling: os.walk classifies entries by following them, a dangling one
-    fails is_dir and arrives among the files, and tarfile would record it with its
-    absolute target -- which the extract filter rejects, failing the whole restore.
-    """
-    source, dest = tmp_path / "src", tmp_path / "dst"
-    source.mkdir()
-    dest.mkdir()
-    _openclaw_volume(source)
-    _with_peer_link(source)
-    _write(source, "npm/projects/openclaw-firecrawl-plugin-69f7ab/package.json", "{}")
-
-    capture(source, dest, _OPENCLAW)
-
-    with tarfile.open(dest / ARCHIVE_NAME, "r:gz") as tar:
-        members = tar.getmembers()
-    assert_that([m.name for m in members if m.issym() or m.islnk()], equal_to([]))
-    assert_that(_members(dest), has_item("npm/projects/openclaw-firecrawl-plugin-69f7ab/package.json"))
-    assert_that(_members(dest), has_item("workspace/notes.md"))
-
-
-def test_a_link_that_stays_inside_the_volume_is_captured_and_restored(tmp_path):
-    """npm's own .bin shims are relative and extract safely, so they are preserved."""
+@pytest.mark.parametrize("runtime", [_HERMES, _OPENCLAW])
+def test_restore_keeps_only_symlinks_that_resolve_inside_the_volume(tmp_path, runtime):
     source, backup, archive = tmp_path / "src", tmp_path / "bak", tmp_path / "arc"
     for path in (source, backup, archive):
         path.mkdir()
-    _openclaw_volume(source)
-    _write(source, "npm/pkg/semver/bin/semver.js", "#!/usr/bin/env node")
-    shim_dir = source / "npm/pkg/.bin"
-    shim_dir.mkdir(parents=True)
-    (shim_dir / "semver").symlink_to("../semver/bin/semver.js")
+    if runtime == _HERMES:
+        _hermes_volume(source)
+    else:
+        _openclaw_volume(source)
 
-    capture(source, archive, _OPENCLAW)
-    restore(source, backup, archive, _OPENCLAW)
+    workspace = source / "workspace"
+    (workspace / "notes-link.md").symlink_to("notes.md")
+    (workspace / "external-link.md").symlink_to("/usr/local/lib/node_modules/openclaw")
 
-    shim = source / "npm/pkg/.bin/semver"
-    assert_that(shim.is_symlink(), equal_to(True))
-    assert_that(shim.resolve().read_text(), equal_to("#!/usr/bin/env node"))
+    capture(source, archive, runtime)
+    with tarfile.open(archive / ARCHIVE_NAME, "r:gz") as tar:
+        names = [member.name for member in tar.getmembers()]
+    assert_that(names, has_item("workspace/notes-link.md"))
+    assert_that(names, is_not(has_item("workspace/external-link.md")))
+    validate_archive(archive / ARCHIVE_NAME, source)
 
+    restore(source, backup, archive, runtime)
 
-def test_an_openclaw_capture_carrying_the_peer_link_still_restores(tmp_path):
-    source, backup, archive = tmp_path / "src", tmp_path / "bak", tmp_path / "arc"
-    for path in (source, backup, archive):
-        path.mkdir()
-    _openclaw_volume(source)
-    _with_peer_link(source)
-    _write(source, "npm/projects/openclaw-firecrawl-plugin-69f7ab/package.json", "{}")
-    capture(source, archive, _OPENCLAW)
-
-    restore(source, backup, archive, _OPENCLAW)
-
-    assert_that((source / "workspace/notes.md").read_text(), equal_to("agent work"))
-    # The tree comes back so it stays consistent with OpenClaw's records in state/;
-    # only the link is absent, and the start script recreates it.
-    assert_that((source / "npm/projects/openclaw-firecrawl-plugin-69f7ab/package.json").exists(), equal_to(True))
-    assert_that((source / _PEER_LINK_DIR / "openclaw").exists(), equal_to(False))
+    notes_link = workspace / "notes-link.md"
+    assert_that(notes_link.is_symlink(), equal_to(True))
+    assert_that(notes_link.resolve().read_text(), equal_to("agent work"))
+    assert_that((workspace / "external-link.md").exists(), equal_to(False))
 
 
 def test_capture_writes_a_manifest_with_byte_size_and_file_count(tmp_path):
@@ -564,15 +549,107 @@ def test_main_reports_a_failed_extraction_distinctly_and_keeps_the_backup(tmp_pa
     assert_that(_members(backup), has_item("workspace/live.md"))
 
 
-def test_hermes_capture_keeps_relative_symlinks_inside_the_volume(tmp_path):
-    source, dest = tmp_path / "src", tmp_path / "dst"
+@pytest.mark.parametrize(
+    ("runtime", "preserved"),
+    [(_HERMES, "config.yaml"), (_OPENCLAW, "openclaw.json"), (_OPENCLAW, "npm/projects/p/package.json")],
+)
+def test_restore_keeps_runtime_state_it_never_captured(tmp_path, runtime, preserved):
+    source, archive_dir = tmp_path / "src", tmp_path / "arc"
     source.mkdir()
-    dest.mkdir()
-    _hermes_volume(source)
-    (source / "workspace" / "notes-link.md").symlink_to("notes.md")
+    archive_dir.mkdir()
+    _write(source, "memories/USER.md", "captured profile")
+    capture(source, archive_dir, runtime)
 
-    capture(source, dest, _HERMES)
+    target, backup = tmp_path / "tgt", tmp_path / "bak"
+    target.mkdir()
+    backup.mkdir()
+    _write(target, preserved, "runtime-owned")
+    _write(target, "workspace/stale.md", "should be gone")
 
-    with tarfile.open(dest / ARCHIVE_NAME, "r:gz") as tar:
-        assert_that([member.name for member in tar.getmembers()], has_item("workspace/notes-link.md"))
-    validate_archive(dest / ARCHIVE_NAME, source)
+    restore(target, backup, archive_dir, runtime)
+
+    assert_that((target / preserved).read_text(), equal_to("runtime-owned"))
+    assert_that((target / "workspace/stale.md").exists(), equal_to(False))
+    assert_that((target / "memories/USER.md").read_text(), equal_to("captured profile"))
+
+
+@pytest.mark.parametrize(
+    ("runtime", "cleaned"),
+    [
+        (_HERMES, ".config/aai-cli/aai-secrets.enc.json"),
+        (_HERMES, "workspace/skills/old/SKILL.md"),
+        (_OPENCLAW, "workspace/skills/old/SKILL.md"),
+        (_OPENCLAW, "local-plugins/stale/index.js"),
+        (_OPENCLAW, "agentbarn-messages.sqlite3"),
+    ],
+)
+def test_restore_still_clears_state_the_runtime_rebuilds(tmp_path, runtime, cleaned):
+    source, archive_dir = tmp_path / "src", tmp_path / "arc"
+    source.mkdir()
+    archive_dir.mkdir()
+    _write(source, "memories/USER.md", "captured profile")
+    capture(source, archive_dir, runtime)
+
+    target, backup = tmp_path / "tgt", tmp_path / "bak"
+    target.mkdir()
+    backup.mkdir()
+    _write(target, cleaned, "revoked")
+
+    restore(target, backup, archive_dir, runtime)
+
+    assert_that((target / cleaned).exists(), equal_to(False))
+
+
+@pytest.mark.parametrize("runtime", [_HERMES, _OPENCLAW])
+def test_preserved_paths_are_never_captured(runtime):
+    for path in _preserved_for(runtime):
+        assert_that(is_excluded(path, runtime), equal_to(True))
+
+
+@pytest.mark.parametrize("runtime", [_HERMES, _OPENCLAW])
+def test_preserved_paths_stay_top_level(runtime):
+    for path in _preserved_for(runtime):
+        assert_that("/" in path, equal_to(False))
+
+
+def test_restore_does_not_follow_a_preserved_symlink_out_of_the_volume(tmp_path):
+    source, archive_dir = tmp_path / "src", tmp_path / "arc"
+    source.mkdir()
+    archive_dir.mkdir()
+    _write(source, "memories/USER.md", "captured profile")
+    capture(source, archive_dir, _OPENCLAW)
+
+    target, backup = tmp_path / "tgt", tmp_path / "bak"
+    target.mkdir()
+    backup.mkdir()
+    link_parent = target / "npm" / "projects" / "p" / "node_modules"
+    link_parent.mkdir(parents=True)
+    (link_parent / "openclaw").symlink_to("/usr/local/lib/node_modules/openclaw")
+
+    restore(target, backup, archive_dir, _OPENCLAW)
+
+    assert_that((link_parent / "openclaw").is_symlink(), equal_to(True))
+
+
+def test_restore_reapplies_ownership_without_touching_preserved_state(tmp_path, monkeypatch):
+    source, archive_dir = tmp_path / "src", tmp_path / "arc"
+    source.mkdir()
+    archive_dir.mkdir()
+    _write(source, "memories/USER.md", "captured profile")
+    capture(source, archive_dir, _OPENCLAW)
+
+    target, backup = tmp_path / "tgt", tmp_path / "bak"
+    target.mkdir()
+    backup.mkdir()
+    _write(target, "npm/projects/p/package.json", "runtime-owned")
+    _write(target, "openclaw.json", "{}")
+
+    owned: list[str] = []
+    monkeypatch.setattr(
+        os, "lchown", lambda path, uid, gid: owned.append(Path(path).relative_to(target).as_posix()), raising=False
+    )
+
+    restore(target, backup, archive_dir, _OPENCLAW)
+
+    assert_that(owned, has_item("memories/USER.md"))
+    assert_that([path for path in owned if path.startswith(("npm", "openclaw.json"))], empty())
