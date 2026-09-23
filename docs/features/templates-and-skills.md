@@ -68,7 +68,14 @@ An Agent Override may show an update only from the direct Platform or Organizati
 
 ### Select a Template Version for an Agent
 
-The Agent configuration Template section sends the chosen version together with the required-Skill pins that version demands, so a Template Version that bumps a required Skill Version applies in one request. Standalone requirements are always pinned to the version the selected snapshot records, including when that is older than the Agent currently holds. A requirement group is left alone when an assigned member already sits at its required version; otherwise one assigned member is moved. Pins that already match are not resent, so a Template switch is never judged against provider requirements belonging to a Skill Version the Agent does not use. The resulting version changes are listed in the Apply confirmation before anything is written. The Skills section keeps a template-required Skill's version read-only and points at this flow.
+The Agent configuration Template section sends the chosen version together with the required-Skill assignments and pins that version demands, so a Template Version that bumps a required Skill Version, or adds a requirement the Agent does not yet hold, applies in one request.
+
+- Standalone requirements are pinned to the version the selected snapshot records, including when that is older than the Agent currently holds. A standalone requirement the Agent does not have is added at that version.
+- A requirement group is left alone when an assigned member already sits at its required version; a member beyond that version is the caller's choice and is never pulled back. When no assigned member satisfies the group, one assigned member is moved. When no member is assigned at all, the author picks one and Apply stays disabled until they do.
+- Pins that already match are not resent, so a Template switch is never judged against provider requirements belonging to a Skill Version the Agent does not use.
+- Apply is disabled while a Skill being added declares a provider the Agent has no Secret for, because that assignment would be refused.
+
+Every resulting version move and addition is listed in the Apply confirmation before anything is written. The Skills section keeps a template-required Skill's version read-only and points at this flow.
 
 ### Assign and mount skills
 

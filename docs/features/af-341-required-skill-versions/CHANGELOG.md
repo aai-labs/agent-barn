@@ -1,22 +1,46 @@
 # AF-341 Required Skill Versions — change log
 
-Status: Active
+Status: Completed
 Epic: AF-341
 Related context: [`../templates-and-skills.md`](../templates-and-skills.md), [`../af-253-agent-config-tuning/CHANGELOG.md`](../af-253-agent-config-tuning/CHANGELOG.md), [`../../guidelines/epics.md`](../../guidelines/epics.md)
 
 ## Current state
 
-- Delivered: Override authoring no longer judges a staged requirement against the
-  Agent's live pins, and the Agent configuration Template section applies a
-  Template Version together with the required Skill pins it bumps, listing those
-  version moves in the Apply confirmation. The reported deadlock is resolved.
-- In transition: a Template Version that requires a Skill the Agent does not have
-  at all still blocks Apply and sends the user to the Skills section first.
-- Next: AF-341-03, the Template section adding a newly required Skill in the same
-  request, with a member picker for requirement groups.
+- Delivered: a Template Version applies together with every required-Skill change
+  it implies — version moves, additions, and a group member the author picks —
+  from the Agent configuration Template section, and Override authoring records a
+  staged requirement without being judged against the Agent's live pins. Both
+  deadlocks are resolved and the durable rules now live in
+  [`../templates-and-skills.md`](../templates-and-skills.md).
+- In transition: none.
+- Next: none.
 - Blockers: none.
+- Deferred to the tracker: an Override author cannot choose *which* Skill Version
+  to require (`_resolve_override_skill_map` takes the previous one, or latest on
+  re-add); `required_providers` is lineage-latest rather than per-version, so a
+  pin is judged against a Skill Version the Agent may not use; and `ty check`
+  cannot run on Windows because `api/pyproject.toml` points at `.venv/bin/python`.
 
 ## Changes
+
+### 2026-09-23 — AF-341-03
+
+- Delivered: the Template section also assigns required Skills the Agent does not
+  hold. A standalone requirement is added at the version the snapshot records; a
+  group with no assigned member offers its members and keeps Apply disabled until
+  one is chosen. Additions appear in the Apply confirmation beside version moves.
+- Changed: `agent-template-selection-settings.tsx` sends `skillIds` alongside
+  `skillVersions` and replaces the missing-requirement blocker with the picker.
+  No API change.
+- Decision: Apply is disabled while an added Skill declares a provider the Agent
+  has no Secret for. The server checks incoming assignments against the same
+  lineage-latest provider data, so blocking here refuses exactly what the server
+  would refuse rather than guessing.
+- Coverage: two further Playwright specs cover a standalone addition riding along
+  in one request, and Apply staying disabled until a group member is picked. The
+  two existing `agent-detail-page` specs asserting Apply is disabled when required
+  skills are missing pass unmodified — the credential gate now blocks the same
+  scenario the assignment gate used to.
 
 ### 2026-09-23 — AF-341-02
 

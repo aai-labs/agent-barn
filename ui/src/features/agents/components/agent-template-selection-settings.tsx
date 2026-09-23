@@ -28,12 +28,15 @@ import {
 import { ConfigurationArtifactSurface } from "./configuration-artifact-surface";
 import { ConfigurationRequiredSkills } from "./configuration-required-skills";
 import { ConfigurationSnapshotMeta } from "./configuration-snapshot-meta";
-import { canAgent, splitRequiredSkills } from "../utils";
+import { canAgent, splitRequiredSkills, type RequiredSkillGroup } from "../utils";
 import {
   templateSelectionValue,
   type TemplateSelectionOption,
 } from "./agent-configuration-utils";
 import type { Agent, AgentConfiguration } from "../schemas";
+
+type RequiredPinChange = { skillId: string; name: string; from: number; version: number };
+type RequiredAddition = { skillId: string; name: string; version: number };
 
 function optionKey(option: TemplateSelectionOption): string {
   return option.templateKey ?? "Agent-owned override";
@@ -51,6 +54,7 @@ export function AgentTemplateSelectionSettings({
   const [open, setOpen] = useState(false);
   const [applyConfirmOpen, setApplyConfirmOpen] = useState(false);
   const [selectedValue, setSelectedValue] = useState<string | null>(null);
+  const [groupChoices, setGroupChoices] = useState<Record<string, string>>({});
   const selectTemplate = useSelectAgentTemplate();
   const { applyAndRestart, isPending: isRestartPending } = useAgentApplyAndRestart(agent);
   const {
@@ -80,47 +84,64 @@ export function AgentTemplateSelectionSettings({
     options.find((option) => option.value === activeValue) ??
     options[0];
   const isNoop = selectedOption?.value === activeValue;
-  const missingRequirements = useMemo(() => {
-    if (!selectedOption) return [];
-    const assignedIds = new Set(agent.skills.map((skill) => skill.id));
-    const { standalone, groups } = splitRequiredSkills(
-      selectedOption.snapshot.requiredSkills,
-    );
-    const missing = standalone
-      .filter((skill) => !assignedIds.has(skill.id))
-      .map((skill) => skill.name);
-    for (const group of groups) {
-      if (!group.members.some((skill) => assignedIds.has(skill.id))) {
-        missing.push(`one of ${group.members.map((skill) => skill.name).join(" / ")}`);
-      }
-    }
-    return missing;
-  }, [agent.skills, selectedOption]);
-  const requiredPinChanges = useMemo(() => {
-    if (!selectedOption) return [];
+  const requirements = useMemo(() => {
+    const pinChanges: RequiredPinChange[] = [];
+    const additions: RequiredAddition[] = [];
+    const pendingGroups: RequiredSkillGroup[] = [];
+    if (!selectedOption) return { pinChanges, additions, pendingGroups };
     const assigned = new Map(agent.skills.map((skill) => [skill.id, skill.version]));
     const { standalone, groups } = splitRequiredSkills(
       selectedOption.snapshot.requiredSkills,
     );
-    const changes: { skillId: string; name: string; from: number; version: number }[] = [];
     for (const skill of standalone) {
       const from = assigned.get(skill.id);
-      if (from !== undefined && from !== skill.version) {
-        changes.push({ skillId: skill.id, name: skill.name, from, version: skill.version });
+      if (from === undefined) {
+        additions.push({ skillId: skill.id, name: skill.name, version: skill.version });
+      } else if (from !== skill.version) {
+        pinChanges.push({ skillId: skill.id, name: skill.name, from, version: skill.version });
       }
     }
     for (const group of groups) {
       const assignedMembers = group.members.filter((member) => assigned.has(member.id));
-      if (assignedMembers.length === 0) continue;
+      if (assignedMembers.length === 0) {
+        pendingGroups.push(group);
+        continue;
+      }
       if (assignedMembers.some((member) => assigned.get(member.id) === member.version)) continue;
       const target = assignedMembers[0];
       const from = assigned.get(target.id);
       if (from !== undefined) {
-        changes.push({ skillId: target.id, name: target.name, from, version: target.version });
+        pinChanges.push({ skillId: target.id, name: target.name, from, version: target.version });
       }
     }
-    return changes;
+    return { pinChanges, additions, pendingGroups };
   }, [agent.skills, selectedOption]);
+  const chosenGroupMembers = requirements.pendingGroups.flatMap((group) => {
+    const member = group.members.find((candidate) => candidate.id === groupChoices[group.key]);
+    return member
+      ? [{ skillId: member.id, name: member.name, version: member.version }]
+      : [];
+  });
+  const awaitingGroupChoice =
+    chosenGroupMembers.length < requirements.pendingGroups.length;
+  const requiredAdditions = [...requirements.additions, ...chosenGroupMembers];
+  const requiredPinChanges = requirements.pinChanges;
+  const configuredProviders = new Set(
+    (agent.secrets ?? []).map((secret) => secret.provider),
+  );
+  const requiredSkillsById = new Map(
+    (selectedOption?.snapshot.requiredSkills ?? []).map((skill) => [skill.id, skill]),
+  );
+  const missingProviders = [
+    ...new Set(
+      requiredAdditions.flatMap(
+        (addition) =>
+          requiredSkillsById
+            .get(addition.skillId)
+            ?.requiredProviders.filter((provider) => !configuredProviders.has(provider)) ?? [],
+      ),
+    ),
+  ];
   const isRunning = agent.status === "RUNNING";
   const canApply = canEdit && (!isRunning || canAgent(agent, "agent.lifecycle.manage"));
   const isPending = selectTemplate.isPending || isRestartPending;
@@ -132,7 +153,8 @@ export function AgentTemplateSelectionSettings({
       !selectedOption ||
       !canApply ||
       isNoop ||
-      missingRequirements.length > 0 ||
+      awaitingGroupChoice ||
+      missingProviders.length > 0 ||
       isPending
     ) {
       return;
@@ -147,12 +169,14 @@ export function AgentTemplateSelectionSettings({
           templateVersion: selectedOption.templateVersion,
           overrideVersion: selectedOption.overrideVersion,
           expectedAgentUpdatedAt: stoppedAgent.updatedAt,
-          ...(requiredPinChanges.length > 0
+          ...(requiredAdditions.length > 0
+            ? { skillIds: requiredAdditions.map(({ skillId }) => skillId) }
+            : {}),
+          ...(requiredPinChanges.length > 0 || requiredAdditions.length > 0
             ? {
-                skillVersions: requiredPinChanges.map(({ skillId, version }) => ({
-                  skillId,
-                  version,
-                })),
+                skillVersions: [...requiredPinChanges, ...requiredAdditions].map(
+                  ({ skillId, version }) => ({ skillId, version }),
+                ),
               }
             : {}),
         });
@@ -168,7 +192,8 @@ export function AgentTemplateSelectionSettings({
       !selectedOption ||
       !canApply ||
       isNoop ||
-      missingRequirements.length > 0 ||
+      awaitingGroupChoice ||
+      missingProviders.length > 0 ||
       isPending
     ) {
       return;
@@ -192,7 +217,8 @@ export function AgentTemplateSelectionSettings({
             !selectedOption ||
             !canApply ||
             isNoop ||
-            missingRequirements.length > 0 ||
+            awaitingGroupChoice ||
+            missingProviders.length > 0 ||
             catalogLoading ||
             isPending
           }
@@ -408,9 +434,51 @@ export function AgentTemplateSelectionSettings({
             </div>
             <ConfigurationArtifactSurface snapshot={selectedOption.snapshot} />
             <ConfigurationRequiredSkills snapshot={selectedOption.snapshot} />
-            {missingRequirements.length > 0 && (
-              <p className="mb-0 mt-4 text-xs text-destructive">
-                Apply requires these Agent skill assignments: {missingRequirements.join(", ")}.
+            {requirements.pendingGroups.map((group) => (
+              <div key={group.key} className="mt-4">
+                <div
+                  className="mb-2 text-[0.75rem] font-semibold uppercase tracking-[0.08em]"
+                  style={{ color: "var(--ink-4)" }}
+                >
+                  Choose one of {group.key}
+                </div>
+                <div className="flex flex-wrap gap-2" role="radiogroup" aria-label={`Choose one of ${group.key}`}>
+                  {group.members.map((member) => {
+                    const chosen = groupChoices[group.key] === member.id;
+                    return (
+                      <button
+                        key={member.id}
+                        type="button"
+                        role="radio"
+                        aria-checked={chosen}
+                        className={cn("af-btn af-btn-sm", chosen ? "af-btn-primary" : "af-btn-ghost")}
+                        onClick={() =>
+                          setGroupChoices((previous) => ({
+                            ...previous,
+                            [group.key]: member.id,
+                          }))
+                        }
+                      >
+                        {member.name} v{member.version}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
+            {requiredAdditions.length > 0 && (
+              <p className="mb-0 mt-4 text-xs text-muted-foreground">
+                Applying adds{" "}
+                {requiredAdditions
+                  .map((addition) => `${addition.name} v${addition.version}`)
+                  .join(", ")}{" "}
+                to this Agent.
+              </p>
+            )}
+            {missingProviders.length > 0 && (
+              <p className="mb-0 mt-2 text-xs text-destructive">
+                These skills need credentials that are not configured:{" "}
+                {missingProviders.join(", ")}. Add them in the Keys section first.
               </p>
             )}
           </div>
@@ -435,10 +503,10 @@ export function AgentTemplateSelectionSettings({
         isPending={isPending}
         icon={<RefreshCw size={18} />}
       >
-        {requiredPinChanges.length > 0 && (
+        {(requiredPinChanges.length > 0 || requiredAdditions.length > 0) && (
           <div className="rounded-lg border p-3">
             <p className="mb-2 mt-0 text-xs font-semibold">
-              This will also update the skill versions required by this template:
+              This will also update the skills required by this template:
             </p>
             <ul className="m-0 flex list-none flex-col gap-1 p-0">
               {requiredPinChanges.map((change) => (
@@ -449,6 +517,17 @@ export function AgentTemplateSelectionSettings({
                   <span>{change.name}</span>
                   <span className="font-mono text-muted-foreground">
                     v{change.from} → v{change.version}
+                  </span>
+                </li>
+              ))}
+              {requiredAdditions.map((addition) => (
+                <li
+                  key={addition.skillId}
+                  className="flex flex-wrap items-center justify-between gap-2 text-xs"
+                >
+                  <span>{addition.name}</span>
+                  <span className="font-mono text-muted-foreground">
+                    added at v{addition.version}
                   </span>
                 </li>
               ))}
