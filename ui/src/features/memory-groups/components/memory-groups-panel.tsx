@@ -240,10 +240,13 @@ export function MemoryGroupsPanel() {
                         <ChevronDownIcon size={13} className="opacity-50" />
                       </button>
                     </DropdownMenuTrigger>
-                    <DropdownMenuContent className="max-h-72 overflow-y-auto">
+                    {/* Joining is a cold start: an Agent's existing memory is not copied into
+                        the pool, so operators are told before they add one. */}
+                    <DropdownMenuContent className="max-h-72 w-80 overflow-y-auto">
                       {available.map((agent) => (
                         <DropdownMenuItem
                           key={agent.id}
+                          className="flex items-center justify-between gap-3"
                           onSelect={async () => {
                             try {
                               await addAgent.mutateAsync({ groupId: group.id, agentId: agent.id });
@@ -254,7 +257,10 @@ export function MemoryGroupsPanel() {
                         >
                           <span className="truncate">{agent.name}</span>
                           {agent.memoryGroupId && (
-                            <span className="ml-2 text-[11px]" style={{ color: "var(--ink-4)" }}>
+                            <span
+                              className="shrink-0 whitespace-nowrap text-[11px]"
+                              style={{ color: "var(--ink-4)" }}
+                            >
                               moves from another group
                             </span>
                           )}
@@ -262,6 +268,10 @@ export function MemoryGroupsPanel() {
                       ))}
                     </DropdownMenuContent>
                   </DropdownMenu>
+                  <p className="mt-2 text-[11px] leading-snug" style={{ color: "var(--ink-4)" }}>
+                    Added agents start fresh in this group&rsquo;s shared memory — what they already
+                    know isn&rsquo;t shared with the group.
+                  </p>
                 </div>
               )}
             </div>
