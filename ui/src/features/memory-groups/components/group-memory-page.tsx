@@ -37,7 +37,7 @@ export function GroupMemoryPage({ groupId }: { groupId: string }) {
     <div style={{ background: "var(--bg)" }}>
       <main className="af-page">
         <Link
-          href={`/dashboard/${orgId}/settings?tab=memory-groups`}
+          href={`/dashboard/${orgId}/memory-groups`}
           className="mb-4 inline-flex items-center gap-1.5 text-[0.8125rem]"
           style={{ color: "var(--ink-3)" }}
         >

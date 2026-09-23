@@ -2,8 +2,7 @@ export type OrganizationSettingsSectionKey =
   | "agents"
   | "templates"
   | "skills"
-  | "shared-credentials"
-  | "memory-groups";
+  | "shared-credentials";
 
 export type OrganizationSettingsSection = {
   key: OrganizationSettingsSectionKey;
@@ -38,12 +37,6 @@ export const ORGANIZATION_SETTINGS_SECTIONS: OrganizationSettingsSection[] = [
     key: "shared-credentials",
     label: "Shared Credentials",
     description: "Organization-wide integration keys reusable across Agents.",
-    adminOnly: true,
-  },
-  {
-    key: "memory-groups",
-    label: "Memory Groups",
-    description: "Groups of Agents that share what they learn, so each can draw on the others' memory.",
     adminOnly: true,
   },
 ];

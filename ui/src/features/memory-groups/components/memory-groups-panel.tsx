@@ -161,7 +161,7 @@ export function MemoryGroupsPanel() {
 
                 {!isRenaming && (
                   <Link
-                    href={`/dashboard/${orgId}/settings/memory-groups/${group.id}`}
+                    href={`/dashboard/${orgId}/memory-groups/${group.id}`}
                     className="af-hover-bg inline-flex items-center gap-1 rounded-md px-2 py-1 text-[0.8125rem] whitespace-nowrap"
                     style={{ color: "var(--ink-3)" }}
                   >
