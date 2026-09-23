@@ -8,6 +8,7 @@ export PATH="/tmp/agentbarn-bin:$PATH"
 
 python3 /app/config/healthz-server.py &
 python3 /app/config/communications-runtime-adapter.py &
+python3 /app/config/agent-trigger-server.py &
 
 mkdir -p /opt/data/plugins/telemetry-push /opt/data/memories /workspace
 

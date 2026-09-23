@@ -117,6 +117,14 @@ restorePoints:
   maxPerAgent: 5
   captureTimeoutSeconds: 900
   restoreTimeoutSeconds: 1800
+  reconciliation:
+    enabled: true
+    # Every 10 minutes. A row's status is otherwise only resolved when someone reads
+    # it, so a capture nobody watches holds its volume indefinitely. The staleness
+    # threshold (RESTORE_POINT_RECONCILIATION_STALE_SECONDS) is longer than the
+    # capture timeout above, so a row is only swept once its Job has genuinely had
+    # time to finish.
+    schedule: "*/10 * * * *"
 
 registry:
   server: ""

@@ -1,8 +1,9 @@
 from functools import lru_cache
 from pathlib import Path
+from typing import Self
 
 from dotenv import load_dotenv
-from pydantic import Field, PostgresDsn, field_validator
+from pydantic import Field, PostgresDsn, field_validator, model_validator
 from pydantic_settings import BaseSettings
 
 ROOT_ENV_PATH = Path(__file__).resolve().parents[2] / ".env"
@@ -75,7 +76,12 @@ class Config(BaseSettings):
     # Percentages of an Organization's limit at which it is notified. Empty falls back
     # to the default; 100 is always meaningful because it is the enforcement boundary.
     organization_llm_budget_alert_thresholds: str = "80,100"
+    # The API's own public base URL, used to show callers where to reach an Agent
+    # Webhook or a Teams Connection. Deployments set it from API_HOST; locally it is
+    # derived below, because the host port is the only thing that makes it up.
     api_external_url: str = ""
+    # Host-side port the API is published on (compose maps it to 8000 in-container).
+    api_port: int = 8000
     # Agent workloads and the API run in the same namespace, so the short Service
     # name is portable between staging and production.
     ingest_base_url: str = "http://agentbarn-api:8001/ingest/v1"
@@ -85,6 +91,7 @@ class Config(BaseSettings):
     # Where the API relays runtime-owned Teams activities. Local Docker/k3d
     # cannot resolve cluster DNS, so compose overrides this with a port-forward.
     teams_runtime_webhook_url: str = "http://agent-{agent_id}.{namespace}.svc.cluster.local:3978/api/messages"
+    agent_trigger_url: str = "http://agent-{agent_id}.{namespace}.svc.cluster.local:8082/agent-triggers/v1/invocations"
     skip_slack_token_validation: bool = False
     skip_telegram_token_validation: bool = False
     skip_discord_token_validation: bool = False
@@ -138,6 +145,17 @@ class Config(BaseSettings):
 
     agent_firecrawl_base_url: str = ""
     agent_firecrawl_api_key: str = ""
+
+    @model_validator(mode="after")
+    def local_api_external_url(self) -> Self:
+        """Fill the API's public URL for local runs, where it is always this host.
+
+        Left empty elsewhere on purpose: a deployment that forgot to set it should
+        show no URL rather than hand a caller a localhost one that silently fails.
+        """
+        if not self.api_external_url and self.environment == "local":
+            self.api_external_url = f"http://localhost:{self.api_port}"
+        return self
 
     @field_validator("organization_llm_budget_alert_thresholds", mode="before")
     @classmethod

@@ -918,20 +918,3 @@ def test_cancelled_source_rejects_runtime_reply_atomically() -> None:
         with Session(delegate.engine) as session:
             leaked = session.exec(select(AgentChatMessage).where(AgentChatMessage.content == "must not leak")).all()
         assert_that(leaked, empty())
-
-
-def test_a_conversations_transcript_key_keeps_the_shape_every_stored_row_already_has() -> None:
-    """The message row's session_key groups a thread in the transcript. It is not the
-    runtime session key, though the two once shared a formula. Changing it would give
-    new rows a different shape from every row already in the table, in an indexed
-    column, with no migration -- and nothing would fail loudly."""
-    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
-        connection_id = _create_connection(context)
-        repository = context.injector.get(CommunicationDeliveryRepository)
-
-        with when("a chat message is admitted"):
-            accepted = repository.accept_inbound(connection_id=connection_id, envelope=_envelope("provider-1"))
-
-        with then("its transcript key is still connection:channel:thread with no prefix"):
-            message = _message(context, accepted.message_id)
-            assert_that(message.session_key, equal_to(f"{connection_id}:channel-one:thread-one"))

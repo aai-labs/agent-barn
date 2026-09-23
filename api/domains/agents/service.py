@@ -2084,7 +2084,9 @@ class AgentService:
                 "INGEST_API_KEY": ingest_key,
                 "COMMUNICATIONS_URL": self.config.communications_base_url,
                 "COMMUNICATIONS_API_KEY": communication_key,
-                "COMMUNICATIONS_PROTOCOL_VERSION": "3",
+                "COMMUNICATIONS_PROTOCOL_VERSION": "2",
+                "AGENT_TRIGGER_KEY": communication_key,
+                "AGENT_TRIGGER_PORT": "8082",
                 "LITELLM_PROXY_TARGET": self.config.agent_litellm_base_url,
                 "LLM_PROXY_PORT": str(AGENT_LLM_PROXY_PORT),
             }

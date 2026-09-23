@@ -43,6 +43,7 @@ OBSERVER_INDEX_JS: str = (_OBSERVER / "index.js").read_text()
 OBSERVER_PACKAGE_JSON: str = (_OBSERVER / "package.json").read_text()
 OBSERVER_PLUGIN_JSON: str = (_OBSERVER / "openclaw.plugin.json").read_text()
 COMMUNICATIONS_RUNTIME_ADAPTER_PY: str = (_COMMON_SCRIPTS / "communications-runtime-adapter.py").read_text()
+AGENT_TRIGGER_SERVER_PY: str = (_COMMON_SCRIPTS / "agent-trigger-server.py").read_text()
 
 _MESSAGE_SCRIPTS = _COMMON_SCRIPTS / "messaging"
 AGENTBARN_MESSAGE_PY: str = (_MESSAGE_SCRIPTS / "agentbarn_message.py").read_text()
@@ -494,6 +495,7 @@ def build_config_map(
         data["agentbarn-observer-package.json"] = OBSERVER_PACKAGE_JSON
         data["agentbarn-observer-plugin.json"] = OBSERVER_PLUGIN_JSON
         data["communications-runtime-adapter.py"] = COMMUNICATIONS_RUNTIME_ADAPTER_PY
+        data["agent-trigger-server.py"] = AGENT_TRIGGER_SERVER_PY
         data["agentbarn_message.py"] = AGENTBARN_MESSAGE_PY
         data["openclaw-messaging.js"] = OPENCLAW_MESSAGING_JS
     if aai_cli_config_toml is not None:
@@ -535,6 +537,7 @@ def build_secret_runtime(
             "RUNTIME_API_URL": f"http://127.0.0.1:{OPENCLAW_GATEWAY_PORT}",
             "RUNTIME_MODEL": "openclaw/default",
             "RUNTIME_KIND": "openclaw",
+            "AGENT_TRIGGER_RECEIPT_PATH": "/home/node/.openclaw/agent-trigger-receipts.sqlite3",
             "LITELLM_API_KEY": litellm_api_key,
             "LITELLM_BASE_URL": litellm_base_url,
         },

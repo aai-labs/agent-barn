@@ -68,6 +68,8 @@ The collaborator walk is transitive in both dimensions: it follows `self._method
 
 Both Hermes and OpenClaw consume the same versioned Communications protocol for gateway-owned Connections. A sidecar-style runtime adapter opens an authenticated, outbound Server-Sent Events control stream to Communications. A `delivery_available` wakeup makes the adapter claim durable inbound Communication Deliveries and invoke the runtime's local API with a Connection-scoped session key, submit the reply against the source delivery, and complete the delivery. OpenClaw uses its chat-completions endpoint; Hermes uses `/v1/runs` so command approvals and progress remain available. Inbound and outbound claim paths exclude Platforms configured as native, including stale Deliveries created before cutover. Native Connections receive provider credentials and transport configuration at Agent start on both runtimes. Because the shared adapter is copied into the Python 3.12 OpenClaw image and the Python 3.13 Hermes image, Ruff targets its source to Python 3.12 and a source-parse test guards the oldest image grammar.
 
+Agent Webhook triggers use a separate immediate path. The product API calls an authenticated private listener on port 8082 of the target Agent Service; it does not create a Communication Delivery or wait for a runtime claim. The listener durably deduplicates the dispatch generation on the Agent volume, creates or recovers a deterministic one-shot job in the native Hermes/OpenClaw scheduler, and returns `202` only after the scheduler accepts the run. Hermes/OpenClaw then owns execution and final delivery through the selected native Slack, Discord, Telegram, or Teams configuration. Agent Barn records submission success or failure only and receives no execution callback.
+
 Agent-initiated delivery uses the same Communications boundary. Interactive sends carry a server-issued token for the active inbound claim and are resolved only on that claim's Communication Connection; an interactive request cannot select the Agent's default or name a Connection. Scheduled final responses are captured into a durable SQLite spool and retried under one run identity until acknowledged, refused with a permanent 4xx, or about a day old; settled rows are pruned after seven days. On Hermes, a job created from a conversation retains its Connection/channel/thread origin, while startup-created work uses the Agent's one configured default. OpenClaw uses the default only when the completion has no recorded origin; its pinned cron hook exposes a delivery-channel label instead of the creating conversation, so unmappable completions are refused rather than diverted. The shared runtime client owns silence-marker filtering and destination parsing so Hermes and OpenClaw apply the same policy. Communications resolves and persists the destination before acknowledging acceptance, then the Platform Plugin revalidates current outbound policy before provider delivery. Only Slack currently advertises this capability.
 
 For gateway-owned Hermes Agents, scheduled results are captured at a fenced scheduler side-effect boundary and native provider delivery is suppressed. For Hermes with a native Connection, `AGENTBARN_SCHEDULED_DELIVERY=0` disables that capture and the old spool drain for the whole runtime, so Hermes owns cron delivery on every Platform. OpenClaw captures scheduled results from its in-process `agent_end` hook; with a native Connection the same `AGENTBARN_SCHEDULED_DELIVERY=0` skips that capture and the spool drain, and OpenClaw delivers cron results to their origin or the Connection's `defaultTo`. Hermes also submits a non-empty `BOOT.md` through `/v1/runs` after the gateway becomes ready.
@@ -183,6 +185,16 @@ the Job pod's logs — the manifest is written onto the restore point's PVC, whi
 mount. Distinct exit codes separate a failed safety-net capture, where the Agent volume was
 never touched, from a failed extraction, where it was.
 
+A row's status is otherwise only resolved when someone reads it, so a CronJob runs the same
+resolution on a schedule and reclaims what no row owns. It matches a Job or PVC back to its row
+through the `agentbarn.io/restore-point-id` label, falling back to the resource's own generated
+name — never through `job_name`, which is cleared when a row goes terminal. The name fallback is
+what reaches resources created before that label existed; both routes are exact, because the
+builders generate the names. Because that pass deletes storage from a list-and-compare, it skips
+resources younger than a minimum age, caps deletions per run, refuses to delete a resource
+identifiable by neither route, and fails no rows at all when the volume listing is empty or
+failed.
+
 CSI `VolumeSnapshot` is deliberately unused; see
 [`../adr/2026-09-10-restore-points-use-tar-jobs-not-csi-snapshots.md`](../adr/2026-09-10-restore-points-use-tar-jobs-not-csi-snapshots.md).
 
@@ -199,9 +211,11 @@ Kubernetes `stream()` and `portforward()` temporarily monkey-patch `ApiClient.re
 | Ingest process and routing      | `../../api/ingest_app.py`, `../../api/ingest_main.py`, `../../api/start.sh`                       |
 | Communications process and routing | `../../api/communications_app.py`, `../../api/communications_main.py`, `../../api/domains/communications/` |
 | Domain Event delivery workers   | `../../api/worker_app.py`, `../../api/domains/events/worker.py`, `../../api/domains/events/reconciliation.py`, `../../helm/agentbarn-api/templates/event-delivery-worker-deployment.yaml`, `../../helm/agentbarn-api/templates/event-delivery-reconciliation-cronjob.yaml` |
+| Agent Restore Point reconciliation | `../../api/domains/restore_points/reconciliation.py`, `../../api/domains/restore_points/constants.py`, `../../helm/agentbarn-api/templates/restore-point-reconciliation-cronjob.yaml` |
 | Shared Kubernetes builders      | `../../api/domains/agents/builders/common.py`                                         |
 | Hermes builders                 | `../../api/domains/agents/builders/hermes.py`, `../../hermes-base/`                         |
 | OpenClaw builders               | `../../api/domains/agents/builders/openclaw.py`, `../../openclaw-base/`                     |
+| Private Agent trigger admission | `../../api/domains/agents/scripts/agent-trigger-server.py`, `../../api/domains/agent_webhooks/dispatch.py` |
 | Skill and integration artifacts | `../../api/domains/agents/aai_cli_artifacts.py`, `../../api/domains/agents/aai_cli_skills/bundled/skills/`, `../../api/domains/agents/gog_artifacts.py` |
 | Provider clients                | `../../api/infrastructure/slack/`, `../../api/infrastructure/telegram/`, `../../api/infrastructure/discord/` |
 | Kubernetes client               | `../../api/infrastructure/kubernetes/`                                                |

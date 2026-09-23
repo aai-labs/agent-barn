@@ -8,6 +8,8 @@ export PATH="/tmp/agentbarn-bin:$PATH"
 
 node /app/config/healthz-server.js &
 python3 /app/config/communications-runtime-adapter.py &
+python3 /app/config/agent-trigger-server.py &
+
 # Honcho's plugin has to be installed before any config names it. `openclaw
 # plugins install` refuses to run against an invalid config, and a config whose
 # memory slot points at a not-yet-installed plugin is invalid — which also takes

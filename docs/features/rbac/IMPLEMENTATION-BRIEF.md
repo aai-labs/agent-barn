@@ -75,6 +75,8 @@ Visibility belongs in repository queries rather than post-fetch filtering. Membe
 
 Subordinate repositories must join or use an accessible-Agent query so alternate endpoints cannot reveal conversations, tool calls, costs, logs, Skills, configuration, or credential metadata.
 
+Scheduled background work is the one exception, and it is narrow. A CronJob has no `CurrentUserContext` and therefore no Active Organization to scope against, so `ToolCallService.platform_daily_active_agent_ids` and the restore point reconciler's repository methods run unscoped. The exception holds only while all three of these do: the method is never reachable from a router, the request paths over the same table keep their `AgentAuthorization` checks unchanged, and the work is driven by a schedule rather than by anything a user can trigger. A background method that acquires a user-facing caller stops qualifying and needs the accessible-Agent join like any other.
+
 HTTP semantics remain deliberate:
 
 - Return `404` when an Agent or subordinate resource is absent, cross-Organization, or inaccessible and therefore concealed.
