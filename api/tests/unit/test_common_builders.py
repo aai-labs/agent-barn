@@ -50,10 +50,11 @@ def test_service_exposes_the_private_teams_webhook_only_when_requested():
     ordinary = build_service(_AGENT_ID, _ORG_ID, _NS)
     teams = build_service(_AGENT_ID, _ORG_ID, _NS, include_webhook_port=True)
 
-    assert [port.name for port in ordinary.spec.ports] == ["gateway", "healthz"]
+    assert [port.name for port in ordinary.spec.ports] == ["gateway", "healthz", "triggers"]
     assert [(port.name, port.port, port.target_port) for port in teams.spec.ports] == [
         ("gateway", 80, 8080),
         ("healthz", 8081, 8081),
+        ("triggers", 8082, 8082),
         ("webhook", 3978, 3978),
     ]
 

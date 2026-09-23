@@ -85,7 +85,7 @@ The user who originally created an Agent, retained as immutable provenance. Crea
 _Avoid_: Organization Owner, permanent Agent authority
 
 **Agent**:
-An organization-owned AI worker configured from one active shared Template Version or Agent Template Override Version, executed by one Runtime, and reachable through zero or more Communication Connections.
+An organization-owned AI worker configured from one active shared Template Version or Agent Template Override Version, executed by one Runtime, and reachable through zero or more Communication Connections or Agent Webhooks.
 _Avoid_: bot, pod
 
 **Configured Model**:
@@ -115,6 +115,18 @@ _Avoid_: runtime
 **Communication Connection**:
 An Agent-owned configured relationship to one bot, application, account, or endpoint on a Platform. An Agent may have one active Communication Connection per Platform; retired Connections preserve history and may be replaced.
 _Avoid_: channel, integration, platform config
+
+**Agent Webhook**:
+An Agent-owned HTTP endpoint through which an authenticated external system submits discrete work to that Agent. It is not a Platform or Communication Connection.
+_Avoid_: webhook Connection, webhook Platform
+
+**Webhook Invocation**:
+A durable request accepted through one Agent Webhook, identified idempotently by the external system's optional event identifier when one is supplied. It records submission to an Agent Trigger Job, not the job's execution, output, or native delivery lifecycle.
+_Avoid_: webhook message, Communication Delivery
+
+**Agent Trigger Job**:
+A one-shot job accepted and owned by an Agent Runtime after a Webhook Invocation. Its result is delivered through the Agent Webhook's selected runtime-owned Communication Connection.
+_Avoid_: Communication Delivery, webhook reply
 
 **Runtime-owned Connection**:
 A Communication Connection whose provider transport, session, and delivery behavior run inside the Agent Runtime rather than the Communications Gateway. Agent Barn still owns the Connection record, credentials, policy, and operational visibility.
@@ -304,9 +316,11 @@ _Avoid_: webhook
 - A **Membership** links one user to one **Organization** with one **Organization Role**.
 - An **Organization Role** grants **Permissions** for Organization capabilities.
 - An **Agent Access Role** grants **Permissions** for one Agent aggregate.
-- An **Agent** belongs to one **Organization**, has one original **Agent Creator**, pins one active shared **Template Version** or **Agent Template Override Version**, uses one **Runtime**, and owns zero or more **Communication Connections**.
+- An **Agent** belongs to one **Organization**, has one original **Agent Creator**, pins one active shared **Template Version** or **Agent Template Override Version**, uses one **Runtime**, and owns zero or more **Communication Connections** and **Agent Webhooks**.
 - Each **Communication Connection** belongs to one **Agent**, targets one **Platform**, and is interpreted by that Platform's **Platform Plugin**.
 - A **Communication Connection** on a mailbox-addressed **Platform** holds at most one active **Agent Email Address**.
+- Each **Agent Webhook** belongs to one **Agent** and owns zero or more **Webhook Invocations**.
+- Each **Webhook Invocation** may submit one **Agent Trigger Job** per dispatch generation.
 - An **Agent** has one current **Configured Model** and may have **Observed Model Usage** for multiple models over time.
 - A **Membership** may have **Agent Access** to many Agents, and each relationship carries one **Agent Access Role**; creating an Agent grants its creator explicit Agent Owner access without transferring Organization ownership.
 - An **Agent** has one **Agent General Access** setting whose Permissions combine with (never subtract from) explicit Agent Access grants.

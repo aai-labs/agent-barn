@@ -10,7 +10,6 @@ from api.domains.communications.plugins.slack import SlackPlatformPlugin
 from api.domains.communications.plugins.teams import TeamsPlatformPlugin
 from api.domains.communications.plugins.telegram import TelegramPlatformPlugin
 from api.domains.communications.plugins.web import WebPlatformPlugin
-from api.domains.communications.plugins.webhook import WebhookPlatformPlugin
 from api.domains.costs.repository import CostRepository
 from api.domains.costs.sync import CostSynchronizer
 from api.domains.events.constants import EVENT_DELIVERY_PROCESSING_STALE_SECONDS
@@ -69,7 +68,6 @@ class AppModule(Module):
                 TeamsPlatformPlugin(config),
                 TelegramPlatformPlugin(config),
                 WebPlatformPlugin(),
-                WebhookPlatformPlugin(),
             ]
         )
 

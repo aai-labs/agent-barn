@@ -11,7 +11,12 @@ DB_CONNECTION_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@localhost:$
 
 API_PORT=8000
 ENVIRONMENT=local
-UI_APP_URL=http://localhost:3000
+WEB_APP_URL=http://localhost:3000
+
+# Optional: the base URL callers use to reach this API, shown as the Agent Webhook
+# and Teams Connection webhook URLs. Local runs derive http://localhost:${API_PORT},
+# so set this only when an outside caller needs a reachable address — a tunnel, say.
+# API_EXTERNAL_URL=https://your-tunnel.example.com
 
 # Optional: Redis is only needed to run the event delivery worker/reconciler
 # locally (`make redis-up`, `make dev-worker`); defaults to localhost:6379.

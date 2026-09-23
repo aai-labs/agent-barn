@@ -87,13 +87,10 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
   const canManageAccess = canAgent(agent, "agent.access.manage");
   const canManageConnections = canAgent(agent, "agent.update");
   const connections = useCommunicationConnections(agent?.id ?? "");
-  // The built-in Chat tab lazily provisions a "web" Connection on first send
-  // so people can try the Agent without setting anything up, and a webhook is a
-  // machine trigger rather than a way for a person to reach this Agent — neither
-  // should count as a real messaging platform for this nudge.
-  const externalConnections = connections.data?.filter(
-    (connection) => connection.platformKey !== "web" && connection.platformKey !== "webhook",
-  );
+  // The built-in Chat tab lazily provisions a "web" Connection on first send so people
+  // can try the Agent without setting anything up; it is not a real messaging platform
+  // for this nudge.
+  const externalConnections = connections.data?.filter((connection) => connection.platformKey !== "web");
   const needsMessagingSetup =
     !connections.isPending && externalConnections?.length === 0;
   const [shareOpen, setShareOpen] = useState(false);

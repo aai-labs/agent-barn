@@ -36,6 +36,7 @@ TELEMETRY_PUSH_PLUGIN_INIT: str = (_TELEMETRY_PUSH / "__init__.py").read_text()
 OBSERVER_PLUGIN_YAML: str = (_OBSERVER / "plugin.yaml").read_text()
 OBSERVER_PLUGIN_INIT: str = (_OBSERVER / "__init__.py").read_text()
 COMMUNICATIONS_RUNTIME_ADAPTER_PY: str = (_COMMON_SCRIPTS / "communications-runtime-adapter.py").read_text()
+AGENT_TRIGGER_SERVER_PY: str = (_COMMON_SCRIPTS / "agent-trigger-server.py").read_text()
 
 
 _HERMES_APPROVAL_MODE = {"manual": "manual", "auto": "smart", "off": "off"}
@@ -360,6 +361,7 @@ def build_hermes_config_map(
         "config-merge.py": HERMES_CONFIG_MERGE_PY,
         "start.sh": HERMES_START_SH,
         "communications-runtime-adapter.py": COMMUNICATIONS_RUNTIME_ADAPTER_PY,
+        "agent-trigger-server.py": AGENT_TRIGGER_SERVER_PY,
         "agentbarn_message.py": (_MESSAGE_SCRIPTS / "agentbarn_message.py").read_text(),
         "hermes-messaging.py": (_MESSAGE_SCRIPTS / "hermes-messaging.py").read_text(),
         "boot-run.py": HERMES_BOOT_RUN_PY,
@@ -416,6 +418,7 @@ def build_secret_hermes_runtime(
             "RUNTIME_API_URL": "http://127.0.0.1:8642",
             "RUNTIME_MODEL": agent_name,
             "RUNTIME_KIND": "hermes",
+            "AGENT_TRIGGER_RECEIPT_PATH": "/opt/data/agent-trigger-receipts.sqlite3",
             "VERBOSE_MODE": "true" if verbose_mode else "false",
             "APPROVAL_MODE": approval_mode,
         },

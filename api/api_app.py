@@ -22,6 +22,7 @@ from api.core.metrics import (
 )
 from api.core.utils import create_injector
 from api.domains.agent_settings.routes import agent_settings_router
+from api.domains.agent_webhooks.routes import agent_webhook_ingress_router, agent_webhooks_router
 from api.domains.agents.routes import agents_router
 from api.domains.agents.service import AgentService
 from api.domains.auth.routes import auth_router
@@ -106,6 +107,7 @@ def create_app(injector: Injector | None = None):
     app_v1.mount("/api/v1", subapi)
 
     subapi.include_router(agents_router)
+    subapi.include_router(agent_webhooks_router)
     subapi.include_router(agent_settings_router)
     subapi.include_router(auth_router)
     subapi.include_router(conversations_router)
@@ -132,6 +134,7 @@ def create_app(injector: Injector | None = None):
     # This remains outside /api/v1 because Azure has the historical public
     # Connection webhook URL registered at /communications/v1/webhooks/{id}.
     app_v1.include_router(runtime_provider_webhook_router)
+    app_v1.include_router(agent_webhook_ingress_router)
 
     http_registry = setup_http_metrics(subapi)
 
