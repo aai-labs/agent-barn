@@ -98,18 +98,28 @@ def _walk_included_files(root: Path, runtime: str):
         dir_names[:] = sorted(d for d in dir_names if not is_excluded(prefix + d, runtime))
         for file_name in sorted(file_names):
             rel_path = prefix + file_name
-            path = current / file_name
-            if not is_excluded(rel_path, runtime) and not (runtime == RUNTIME_OPENCLAW and path.is_symlink()):
-                yield path, rel_path
+            if not is_excluded(rel_path, runtime):
+                yield current / file_name, rel_path
 
 
 def capture(source: Path, dest: Path, runtime: str) -> dict:
     archive_path = dest / ARCHIVE_NAME
     file_count = 0
+    skipped = 0
     try:
         with tarfile.open(archive_path, "w:gz") as tar:
             for path, rel_path in _walk_included_files(source, runtime):
-                tar.add(path, arcname=rel_path, recursive=False)
+                info = tar.gettarinfo(path, arcname=rel_path)
+                try:
+                    tarfile.data_filter(info, "")
+                except tarfile.FilterError:
+                    skipped += 1
+                    continue
+                if info.isreg():
+                    with path.open("rb") as stream:
+                        tar.addfile(info, stream)
+                else:
+                    tar.addfile(info)
                 file_count += 1
     except OSError as exc:
         if exc.errno == errno.ENOSPC:
@@ -119,7 +129,7 @@ def capture(source: Path, dest: Path, runtime: str) -> dict:
             ) from exc
         raise
 
-    manifest = {"bytes": archive_path.stat().st_size, "file_count": file_count}
+    manifest = {"bytes": archive_path.stat().st_size, "file_count": file_count, "skipped": skipped}
     (dest / MANIFEST_NAME).write_text(json.dumps(manifest))
     return manifest
 

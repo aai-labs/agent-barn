@@ -23,6 +23,26 @@ Related context: [`../agents.md`](../agents.md), [`../../architecture/runtime-an
 
 ## Changes
 
+### 2026-09-23 — AF-292 — Capture cannot produce an archive restore would reject
+
+- Fixed: a Hermes Agent whose volume held a uv wheel cache could not be restored at all. uv links
+  its wheels to absolute paths under `/opt/data`; the restore mounts the volume at `/target`, so
+  those links resolve outside the destination and the extraction filter refused the archive —
+  failing the whole restore over one cache link. Reproduced against the real module on Linux.
+- Changed: capture offers every member to the same `tarfile.data_filter` the extraction applies,
+  and drops what it refuses, reporting the count as `skipped` beside the archive size. The
+  destination passed is neutral rather than the live volume path: the filter is
+  destination-sensitive, and filtering against `/opt/data` accepts exactly the link that `/target`
+  rejects. A neutral destination is strictly the harshest, so it can over-drop but never
+  under-drop.
+- Changed: OpenClaw no longer drops every symlink at capture. That rule existed to keep the plugin
+  store's link into the runtime image out of the archive; the filter now removes that link on its
+  own evidence, and relative links that stay inside the volume — npm's `.bin` entries among them —
+  survive a restore instead of being destroyed.
+- Decision: hand-written rules about which links are safe kept drifting from what extraction
+  actually accepts, and each divergence cost a whole restore. Deferring to the filter closes the
+  class rather than the case, so a future pathological member cannot reintroduce it.
+
 ### 2026-09-23 — AF-292 — Restore no longer destroys unrecoverable runtime state
 
 - Fixed: restoring an OpenClaw Agent bricked it. The wipe deleted everything on the volume while

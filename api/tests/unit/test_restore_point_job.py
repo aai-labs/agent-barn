@@ -101,6 +101,11 @@ def _openclaw_volume(root: Path) -> None:
     _write(root, "workspace/notes.md", "agent work")
 
 
+def _all_member_names(dest: Path) -> list[str]:
+    with tarfile.open(dest / ARCHIVE_NAME, "r:gz") as tar:
+        return tar.getnames()
+
+
 def _members(dest: Path) -> list[str]:
     with tarfile.open(dest / ARCHIVE_NAME, "r:gz") as tar:
         return [m.name for m in tar.getmembers() if m.isfile()]
@@ -632,3 +637,61 @@ def test_restore_reapplies_ownership_without_touching_preserved_state(tmp_path, 
 
     assert_that(owned, has_item("memories/USER.md"))
     assert_that([path for path in owned if path.startswith(("npm", "openclaw.json"))], empty())
+
+
+@pytest.mark.parametrize("runtime", [_HERMES, _OPENCLAW])
+def test_every_archived_member_survives_the_extraction_filter(tmp_path, runtime):
+    source, dest = tmp_path / "src", tmp_path / "dst"
+    source.mkdir()
+    dest.mkdir()
+    _write(source, "memories/USER.md", "profile")
+    _write(source, "workspace/notes.md", "work")
+    _write(source, ".cache/uv/archive-v0/JrQCC7", "wheel")
+    (source / ".cache/uv/wheels-v6").mkdir(parents=True)
+    (source / ".cache/uv/wheels-v6/2.6.1-py3-none-any").symlink_to(source / ".cache/uv/archive-v0/JrQCC7")
+    (source / "workspace/escape").symlink_to("../../../etc/passwd")
+    (source / "workspace/inside.md").symlink_to("notes.md")
+
+    capture(source, dest, runtime)
+
+    with tarfile.open(dest / ARCHIVE_NAME, "r:gz") as tar:
+        for member in tar:
+            tarfile.data_filter(member, "/target")
+
+
+def test_capture_drops_links_that_could_never_be_extracted_and_reports_them(tmp_path):
+    source, dest = tmp_path / "src", tmp_path / "dst"
+    source.mkdir()
+    dest.mkdir()
+    _write(source, "memories/USER.md", "profile")
+    _write(source, ".cache/uv/archive-v0/JrQCC7", "wheel")
+    (source / ".cache/uv/wheels-v6").mkdir(parents=True)
+    (source / ".cache/uv/wheels-v6/2.6.1-py3-none-any").symlink_to(source / ".cache/uv/archive-v0/JrQCC7")
+
+    manifest = capture(source, dest, _HERMES)
+
+    assert_that(manifest["skipped"], equal_to(1))
+    assert_that(_all_member_names(dest), is_not(has_item(".cache/uv/wheels-v6/2.6.1-py3-none-any")))
+    validate_archive(dest / ARCHIVE_NAME, tmp_path / "anywhere")
+
+
+def test_openclaw_keeps_a_relative_symlink_that_stays_inside_the_volume(tmp_path):
+    source, dest = tmp_path / "src", tmp_path / "dst"
+    source.mkdir()
+    dest.mkdir()
+    _write(source, "workspace/notes.md", "work")
+    (source / "workspace/inside.md").symlink_to("notes.md")
+
+    capture(source, dest, _OPENCLAW)
+
+    assert_that(_all_member_names(dest), has_item("workspace/inside.md"))
+
+
+def test_capture_reports_nothing_skipped_for_an_ordinary_volume(tmp_path):
+    source, dest = tmp_path / "src", tmp_path / "dst"
+    source.mkdir()
+    dest.mkdir()
+    _write(source, "memories/USER.md", "profile")
+    _write(source, "workspace/notes.md", "work")
+
+    assert_that(capture(source, dest, _HERMES)["skipped"], equal_to(0))

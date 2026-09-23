@@ -174,6 +174,15 @@ paths the wipe is the only thing that prunes them — the aai-cli store and the 
 are both written additively at boot, so sparing them would leave a revoked credential or a
 removed skill in place.
 
+Capture and restore share one rule about what an archive may hold: every member is offered to the
+same `tarfile.data_filter` the extraction applies, against a neutral destination, and anything it
+refuses is dropped at capture with a count reported alongside the archive size. The neutral
+destination matters — the filter is destination-sensitive, so a link resolving inside the volume's
+live mount point still escapes the restore target, and filtering against the live path would let it
+through. Hand-written rules about which links to keep drifted from what extraction actually
+accepts, and each divergence failed a whole restore; deferring to the filter removes the class
+rather than the case.
+
 The Job runs as root. Extraction then applies the ownership the target volume already had,
 read before the wipe, because the two runtimes differ: Hermes' init container chowns `/opt/data`
 recursively, while OpenClaw's chowns only the mount point, so a restore cannot rely on the next
