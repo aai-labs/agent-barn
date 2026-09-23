@@ -12,14 +12,20 @@ Related context: [`../templates-and-skills.md`](../templates-and-skills.md), [`.
   staged requirement without being judged against the Agent's live pins. Both
   deadlocks are resolved and the durable rules now live in
   [`../templates-and-skills.md`](../templates-and-skills.md).
-- In transition: none.
+- In transition: a Template Version that adds a required Skill declaring a
+  provider the Agent holds no Secret for keeps Apply disabled until that
+  credential is added in the Keys section. The Agent assignment would be refused
+  by `validate_incoming_skill_providers`, so this blocks exactly what the server
+  blocks; the Hire dialog collects such credentials inline, while Template
+  selection does not.
 - Next: none.
 - Blockers: none.
 - Deferred to the tracker: an Override author cannot choose *which* Skill Version
   to require (`_resolve_override_skill_map` takes the previous one, or latest on
   re-add); `required_providers` is lineage-latest rather than per-version, so a
-  pin is judged against a Skill Version the Agent may not use; and `ty check`
-  cannot run on Windows because `api/pyproject.toml` points at `.venv/bin/python`.
+  pin is judged against a Skill Version the Agent may not use; and inline
+  credential capture on Template selection, which needs a Secrets field on
+  `AgentTemplateSelection`.
 
 ## Changes
 
