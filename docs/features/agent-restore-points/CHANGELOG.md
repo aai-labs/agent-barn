@@ -23,6 +23,25 @@ Related context: [`../agents.md`](../agents.md), [`../../architecture/runtime-an
 
 ## Changes
 
+### 2026-09-23 — AF-292 — The plugin store travels with the archive
+
+- Changed: OpenClaw's `npm` plugin store is captured instead of excluded, and the wipe is total
+  again. Excluding it while wiping it destroyed the store with nothing to put back; sparing it from
+  the wipe — the previous attempt — left current packages beside capture-time records in
+  `state/openclaw.sqlite`, which is the same disagreement by another route. Capturing it makes the
+  packages and their records roll back together.
+- Reverted: the per-runtime preserved-path list. Restoring by sparing paths could not be made
+  correct: the wipe is the only thing that prunes a revoked credential from the aai-cli store or a
+  skill the Agent no longer has, so anything spared there is a leak, and anything not spared is the
+  original bug.
+- Changed: `start.sh` recreates the plugin store's link into the runtime image after a restore, and
+  resolves the package directory before reading its version. The old version-check read a path that
+  a half-finished install does not create, so it never passed `--force` and every later boot failed
+  the same way — the state the staging Agent was stuck in.
+- Changed: Hermes excludes `.cache`. Regenerable tool cache, and the largest thing on the volume.
+- Note: a restore still does not repair a plugin store that is already broken. Recovery for an
+  Agent in that state is `openclaw doctor --fix` or recreating it.
+
 ### 2026-09-23 — AF-292 — Capture cannot produce an archive restore would reject
 
 - Fixed: a Hermes Agent whose volume held a uv wheel cache could not be restored at all. uv links

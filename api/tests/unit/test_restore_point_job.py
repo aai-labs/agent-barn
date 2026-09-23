@@ -1,6 +1,5 @@
 import gzip
 import io
-import os
 import re
 import tarfile
 from pathlib import Path
@@ -20,11 +19,9 @@ from api.domains.agents.restore_point_job import (
     EXIT_BACKUP_FAILED,
     EXIT_RESTORE_FAILED,
     HERMES_EXCLUDED,
-    HERMES_PRESERVED,
     MANIFEST_NAME,
     MODE_RESTORE,
     OPENCLAW_EXCLUDED,
-    OPENCLAW_PRESERVED,
     ArchiveValidationError,
     capture,
     is_excluded,
@@ -46,6 +43,7 @@ _HERMES_WORKSPACE_COPY_LOOP = re.compile(r"^for f in (?P<files>[^;]+); do$", re.
 
 _EXCLUSION_EVIDENCE = {
     _HERMES: {
+        ".cache": (_AAI_CLI_ARTIFACTS, "export HOME="),
         ".config/aai-cli": (_AAI_CLI_ARTIFACTS, "/.config/aai-cli"),
         ".env": (_HERMES_START, "rm -f /opt/data/.env"),
         "SOUL.md": (_HERMES_START, "cp /app/config/SOUL.md /opt/data/SOUL.md"),
@@ -56,16 +54,11 @@ _EXCLUSION_EVIDENCE = {
     },
     _OPENCLAW: {
         "local-plugins": (_OPENCLAW_START, "/home/node/.openclaw/local-plugins/"),
-        "npm": (_OPENCLAW_START, "/home/node/.openclaw/npm/projects/"),
         "agentbarn-messages.sqlite3": (_OPENCLAW_START, "/home/node/.openclaw/agentbarn-messages.sqlite3"),
         "openclaw.json": (_OPENCLAW_INIT, "'openclaw.json'"),
         "workspace/skills": (_OPENCLAW_INIT, "path.join(WORKSPACE_DIR, 'skills')"),
     },
 }
-
-
-def _preserved_for(runtime: str) -> tuple[str, ...]:
-    return HERMES_PRESERVED if runtime == _HERMES else OPENCLAW_PRESERVED
 
 
 def _write(root: Path, rel: str, content: str = "x") -> None:
@@ -143,6 +136,18 @@ def test_hermes_capture_excludes_state_the_start_script_regenerates(tmp_path):
         "agentbarn-messages.sqlite3",
     ):
         assert_that(names, is_not(has_item(excluded)))
+
+
+def test_hermes_capture_excludes_the_regenerable_tool_cache(tmp_path):
+    source, dest = tmp_path / "src", tmp_path / "dst"
+    source.mkdir()
+    dest.mkdir()
+    _hermes_volume(source)
+    _write(source, ".cache/uv/archive-v0/JrQCC7", "wheel")
+
+    capture(source, dest, _HERMES)
+
+    assert_that(_all_member_names(dest), is_not(has_item(".cache/uv/archive-v0/JrQCC7")))
 
 
 def test_hermes_capture_retains_agent_owned_memories_and_work(tmp_path):
@@ -260,7 +265,6 @@ def test_openclaw_capture_excludes_regenerated_state_and_the_message_spool(tmp_p
     names = _members(dest)
     for excluded in (
         "local-plugins/telemetry-push/index.js",
-        "npm/projects/openclaw-plugin/package.json",
         "openclaw.json",
         "workspace/skills/jira/SKILL.md",
         "agentbarn-messages.sqlite3",
@@ -533,28 +537,34 @@ def test_main_reports_a_failed_extraction_distinctly_and_keeps_the_backup(tmp_pa
     assert_that(_members(backup), has_item("workspace/live.md"))
 
 
-@pytest.mark.parametrize(
-    ("runtime", "preserved"),
-    [(_HERMES, "config.yaml"), (_OPENCLAW, "openclaw.json"), (_OPENCLAW, "npm/projects/p/package.json")],
-)
-def test_restore_keeps_runtime_state_it_never_captured(tmp_path, runtime, preserved):
+def test_the_openclaw_plugin_store_round_trips_through_a_restore(tmp_path):
     source, archive_dir = tmp_path / "src", tmp_path / "arc"
     source.mkdir()
     archive_dir.mkdir()
+    _write(source, "npm/projects/p/node_modules/@openclaw/slack/package.json", '{"version":"2026.8.2"}')
+    (source / "npm/projects/p/node_modules/@openclaw/slack/node_modules").mkdir()
+    (source / "npm/projects/p/node_modules/@openclaw/slack/node_modules/openclaw").symlink_to(
+        "/usr/local/lib/node_modules/openclaw"
+    )
     _write(source, "memories/USER.md", "captured profile")
-    capture(source, archive_dir, runtime)
+    manifest = capture(source, archive_dir, _OPENCLAW)
 
     target, backup = tmp_path / "tgt", tmp_path / "bak"
     target.mkdir()
     backup.mkdir()
-    _write(target, preserved, "runtime-owned")
-    _write(target, "workspace/stale.md", "should be gone")
+    _write(target, "stale/junk.txt", "should be gone")
 
-    restore(target, backup, archive_dir, runtime)
+    restore(target, backup, archive_dir, _OPENCLAW)
 
-    assert_that((target / preserved).read_text(), equal_to("runtime-owned"))
-    assert_that((target / "workspace/stale.md").exists(), equal_to(False))
-    assert_that((target / "memories/USER.md").read_text(), equal_to("captured profile"))
+    assert_that(manifest["skipped"], equal_to(1))
+    assert_that(
+        (target / "npm/projects/p/node_modules/@openclaw/slack/package.json").read_text(),
+        equal_to('{"version":"2026.8.2"}'),
+    )
+    assert_that(
+        (target / "npm/projects/p/node_modules/@openclaw/slack/node_modules/openclaw").exists(), equal_to(False)
+    )
+    assert_that((target / "stale").exists(), equal_to(False))
 
 
 @pytest.mark.parametrize(
@@ -585,70 +595,14 @@ def test_restore_still_clears_state_the_runtime_rebuilds(tmp_path, runtime, clea
 
 
 @pytest.mark.parametrize("runtime", [_HERMES, _OPENCLAW])
-def test_preserved_paths_are_never_captured(runtime):
-    for path in _preserved_for(runtime):
-        assert_that(is_excluded(path, runtime), equal_to(True))
-
-
-@pytest.mark.parametrize("runtime", [_HERMES, _OPENCLAW])
-def test_preserved_paths_stay_top_level(runtime):
-    for path in _preserved_for(runtime):
-        assert_that("/" in path, equal_to(False))
-
-
-def test_restore_does_not_follow_a_preserved_symlink_out_of_the_volume(tmp_path):
-    source, archive_dir = tmp_path / "src", tmp_path / "arc"
-    source.mkdir()
-    archive_dir.mkdir()
-    _write(source, "memories/USER.md", "captured profile")
-    capture(source, archive_dir, _OPENCLAW)
-
-    target, backup = tmp_path / "tgt", tmp_path / "bak"
-    target.mkdir()
-    backup.mkdir()
-    link_parent = target / "npm" / "projects" / "p" / "node_modules"
-    link_parent.mkdir(parents=True)
-    (link_parent / "openclaw").symlink_to("/usr/local/lib/node_modules/openclaw")
-
-    restore(target, backup, archive_dir, _OPENCLAW)
-
-    assert_that((link_parent / "openclaw").is_symlink(), equal_to(True))
-
-
-def test_restore_reapplies_ownership_without_touching_preserved_state(tmp_path, monkeypatch):
-    source, archive_dir = tmp_path / "src", tmp_path / "arc"
-    source.mkdir()
-    archive_dir.mkdir()
-    _write(source, "memories/USER.md", "captured profile")
-    capture(source, archive_dir, _OPENCLAW)
-
-    target, backup = tmp_path / "tgt", tmp_path / "bak"
-    target.mkdir()
-    backup.mkdir()
-    _write(target, "npm/projects/p/package.json", "runtime-owned")
-    _write(target, "openclaw.json", "{}")
-
-    owned: list[str] = []
-    monkeypatch.setattr(
-        os, "lchown", lambda path, uid, gid: owned.append(Path(path).relative_to(target).as_posix()), raising=False
-    )
-
-    restore(target, backup, archive_dir, _OPENCLAW)
-
-    assert_that(owned, has_item("memories/USER.md"))
-    assert_that([path for path in owned if path.startswith(("npm", "openclaw.json"))], empty())
-
-
-@pytest.mark.parametrize("runtime", [_HERMES, _OPENCLAW])
 def test_every_archived_member_survives_the_extraction_filter(tmp_path, runtime):
     source, dest = tmp_path / "src", tmp_path / "dst"
     source.mkdir()
     dest.mkdir()
     _write(source, "memories/USER.md", "profile")
     _write(source, "workspace/notes.md", "work")
-    _write(source, ".cache/uv/archive-v0/JrQCC7", "wheel")
-    (source / ".cache/uv/wheels-v6").mkdir(parents=True)
-    (source / ".cache/uv/wheels-v6/2.6.1-py3-none-any").symlink_to(source / ".cache/uv/archive-v0/JrQCC7")
+    _write(source, "memories/wheel", "wheel")
+    (source / "memories/absolute-link").symlink_to(source / "memories/wheel")
     (source / "workspace/escape").symlink_to("../../../etc/passwd")
     (source / "workspace/inside.md").symlink_to("notes.md")
 
@@ -664,14 +618,13 @@ def test_capture_drops_links_that_could_never_be_extracted_and_reports_them(tmp_
     source.mkdir()
     dest.mkdir()
     _write(source, "memories/USER.md", "profile")
-    _write(source, ".cache/uv/archive-v0/JrQCC7", "wheel")
-    (source / ".cache/uv/wheels-v6").mkdir(parents=True)
-    (source / ".cache/uv/wheels-v6/2.6.1-py3-none-any").symlink_to(source / ".cache/uv/archive-v0/JrQCC7")
+    _write(source, "memories/wheel", "wheel")
+    (source / "memories/absolute-link").symlink_to(source / "memories/wheel")
 
     manifest = capture(source, dest, _HERMES)
 
     assert_that(manifest["skipped"], equal_to(1))
-    assert_that(_all_member_names(dest), is_not(has_item(".cache/uv/wheels-v6/2.6.1-py3-none-any")))
+    assert_that(_all_member_names(dest), is_not(has_item("memories/absolute-link")))
     validate_archive(dest / ARCHIVE_NAME, tmp_path / "anywhere")
 
 

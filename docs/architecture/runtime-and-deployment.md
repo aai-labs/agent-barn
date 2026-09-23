@@ -183,6 +183,14 @@ through. Hand-written rules about which links to keep drifted from what extracti
 accepts, and each divergence failed a whole restore; deferring to the filter removes the class
 rather than the case.
 
+The wipe is total, and the archive is what puts state back. OpenClaw's npm plugin store is
+captured rather than excluded, so the packages and the records of them in `state/openclaw.sqlite`
+roll back together instead of disagreeing; the one thing an archive cannot carry is the store's
+link into the runtime image, which the capture filter removes and `start.sh` recreates on the next
+boot. Hermes' `.cache` is excluded as regenerable bulk. Sparing paths from the wipe was tried and
+reverted: it left current packages beside capture-time records, and the wipe is the only thing
+that prunes a revoked credential from the aai-cli store or a skill the Agent no longer has.
+
 The Job runs as root. Extraction then applies the ownership the target volume already had,
 read before the wipe, because the two runtimes differ: Hermes' init container chowns `/opt/data`
 recursively, while OpenClaw's chowns only the mount point, so a restore cannot rely on the next

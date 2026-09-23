@@ -33,6 +33,7 @@ EXIT_RESTORE_FAILED = 3
 _READ_CHUNK_BYTES = 1024 * 1024
 
 HERMES_EXCLUDED = (
+    ".cache",
     ".config/aai-cli",
     ".env",
     "SOUL.md",
@@ -49,7 +50,6 @@ HERMES_EXCLUDED = (
 
 OPENCLAW_EXCLUDED = (
     "local-plugins",
-    "npm",
     "openclaw.json",
     "agentbarn-messages.sqlite3",
     "workspace/skills",
@@ -61,11 +61,6 @@ OPENCLAW_EXCLUDED = (
     "workspace/SOUL.md",
     "workspace/TOOLS.md",
 )
-
-
-HERMES_PRESERVED = ("config.yaml",)
-
-OPENCLAW_PRESERVED = ("openclaw.json", "npm")
 
 
 class ArchiveValidationError(Exception):
@@ -83,11 +78,6 @@ def _matches_prefix(rel_path: str, prefixes: tuple[str, ...]) -> bool:
 def is_excluded(rel_path: str, runtime: str) -> bool:
     excluded = HERMES_EXCLUDED if runtime == RUNTIME_HERMES else OPENCLAW_EXCLUDED
     return _matches_prefix(rel_path, excluded)
-
-
-def is_preserved(rel_path: str, runtime: str) -> bool:
-    preserved = HERMES_PRESERVED if runtime == RUNTIME_HERMES else OPENCLAW_PRESERVED
-    return _matches_prefix(rel_path, preserved)
 
 
 def _walk_included_files(root: Path, runtime: str):
@@ -159,47 +149,39 @@ def validate_archive(archive_path: Path, target: Path) -> None:
         raise ArchiveValidationError(f"The archive could not be read: {exc}") from exc
 
 
-def _wipe_contents(target: Path, runtime: str) -> None:
+def _wipe_contents(target: Path) -> None:
     for entry in target.iterdir():
-        if is_preserved(entry.name, runtime):
-            continue
         if entry.is_dir() and not entry.is_symlink():
             shutil.rmtree(entry)
         else:
             entry.unlink()
 
 
-def _apply_ownership(target: Path, uid: int, gid: int, runtime: str) -> None:
+def _apply_ownership(target: Path, uid: int, gid: int) -> None:
     if not hasattr(os, "lchown"):
         return
     os.lchown(target, uid, gid)
     for dir_path, dir_names, file_names in os.walk(target, followlinks=False):
-        current = Path(dir_path)
-        rel_dir = current.relative_to(target).as_posix()
-        prefix = "" if rel_dir == "." else rel_dir + "/"
-        dir_names[:] = [d for d in dir_names if not is_preserved(prefix + d, runtime)]
         for name in list(dir_names) + list(file_names):
-            if is_preserved(prefix + name, runtime):
-                continue
-            os.lchown(current / name, uid, gid)
+            os.lchown(Path(dir_path) / name, uid, gid)
 
 
-def apply_archive(target: Path, archive_dir: Path, runtime: str) -> None:
+def apply_archive(target: Path, archive_dir: Path) -> None:
     archive_path = archive_dir / ARCHIVE_NAME
     validate_archive(archive_path, target)
 
     target_stat = target.stat()
-    _wipe_contents(target, runtime)
+    _wipe_contents(target)
 
     with tarfile.open(archive_path, "r:gz") as tar:
         tar.extractall(target, filter="data")
 
-    _apply_ownership(target, target_stat.st_uid, target_stat.st_gid, runtime)
+    _apply_ownership(target, target_stat.st_uid, target_stat.st_gid)
 
 
 def restore(target: Path, backup: Path, archive_dir: Path, runtime: str) -> None:
     capture(target, backup, runtime)
-    apply_archive(target, archive_dir, runtime)
+    apply_archive(target, archive_dir)
 
 
 def emit_result(manifest: dict) -> None:
@@ -243,7 +225,7 @@ def main() -> None:
         raise SystemExit(EXIT_BACKUP_FAILED) from exc
 
     try:
-        apply_archive(target, archive_dir, runtime)
+        apply_archive(target, archive_dir)
     except Exception as exc:
         emit_failure(f"restore failed: {exc}")
         raise SystemExit(EXIT_RESTORE_FAILED) from exc
