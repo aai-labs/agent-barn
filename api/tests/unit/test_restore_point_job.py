@@ -1,5 +1,6 @@
 import gzip
 import io
+import os
 import re
 import tarfile
 from pathlib import Path
@@ -19,9 +20,11 @@ from api.domains.agents.restore_point_job import (
     EXIT_BACKUP_FAILED,
     EXIT_RESTORE_FAILED,
     HERMES_EXCLUDED,
+    HERMES_PRESERVED,
     MANIFEST_NAME,
     MODE_RESTORE,
     OPENCLAW_EXCLUDED,
+    OPENCLAW_PRESERVED,
     ArchiveValidationError,
     capture,
     is_excluded,
@@ -59,6 +62,10 @@ _EXCLUSION_EVIDENCE = {
         "workspace/skills": (_OPENCLAW_INIT, "path.join(WORKSPACE_DIR, 'skills')"),
     },
 }
+
+
+def _preserved_for(runtime: str) -> tuple[str, ...]:
+    return HERMES_PRESERVED if runtime == _HERMES else OPENCLAW_PRESERVED
 
 
 def _write(root: Path, rel: str, content: str = "x") -> None:
@@ -519,3 +526,109 @@ def test_main_reports_a_failed_extraction_distinctly_and_keeps_the_backup(tmp_pa
     assert_that(exc_info.value.code, equal_to(EXIT_RESTORE_FAILED))
     assert_that((target / "workspace/live.md").read_text(), equal_to("live content"))
     assert_that(_members(backup), has_item("workspace/live.md"))
+
+
+@pytest.mark.parametrize(
+    ("runtime", "preserved"),
+    [(_HERMES, "config.yaml"), (_OPENCLAW, "openclaw.json"), (_OPENCLAW, "npm/projects/p/package.json")],
+)
+def test_restore_keeps_runtime_state_it_never_captured(tmp_path, runtime, preserved):
+    source, archive_dir = tmp_path / "src", tmp_path / "arc"
+    source.mkdir()
+    archive_dir.mkdir()
+    _write(source, "memories/USER.md", "captured profile")
+    capture(source, archive_dir, runtime)
+
+    target, backup = tmp_path / "tgt", tmp_path / "bak"
+    target.mkdir()
+    backup.mkdir()
+    _write(target, preserved, "runtime-owned")
+    _write(target, "workspace/stale.md", "should be gone")
+
+    restore(target, backup, archive_dir, runtime)
+
+    assert_that((target / preserved).read_text(), equal_to("runtime-owned"))
+    assert_that((target / "workspace/stale.md").exists(), equal_to(False))
+    assert_that((target / "memories/USER.md").read_text(), equal_to("captured profile"))
+
+
+@pytest.mark.parametrize(
+    ("runtime", "cleaned"),
+    [
+        (_HERMES, ".config/aai-cli/aai-secrets.enc.json"),
+        (_HERMES, "workspace/skills/old/SKILL.md"),
+        (_OPENCLAW, "workspace/skills/old/SKILL.md"),
+        (_OPENCLAW, "local-plugins/stale/index.js"),
+        (_OPENCLAW, "agentbarn-messages.sqlite3"),
+    ],
+)
+def test_restore_still_clears_state_the_runtime_rebuilds(tmp_path, runtime, cleaned):
+    source, archive_dir = tmp_path / "src", tmp_path / "arc"
+    source.mkdir()
+    archive_dir.mkdir()
+    _write(source, "memories/USER.md", "captured profile")
+    capture(source, archive_dir, runtime)
+
+    target, backup = tmp_path / "tgt", tmp_path / "bak"
+    target.mkdir()
+    backup.mkdir()
+    _write(target, cleaned, "revoked")
+
+    restore(target, backup, archive_dir, runtime)
+
+    assert_that((target / cleaned).exists(), equal_to(False))
+
+
+@pytest.mark.parametrize("runtime", [_HERMES, _OPENCLAW])
+def test_preserved_paths_are_never_captured(runtime):
+    for path in _preserved_for(runtime):
+        assert_that(is_excluded(path, runtime), equal_to(True))
+
+
+@pytest.mark.parametrize("runtime", [_HERMES, _OPENCLAW])
+def test_preserved_paths_stay_top_level(runtime):
+    for path in _preserved_for(runtime):
+        assert_that("/" in path, equal_to(False))
+
+
+def test_restore_does_not_follow_a_preserved_symlink_out_of_the_volume(tmp_path):
+    source, archive_dir = tmp_path / "src", tmp_path / "arc"
+    source.mkdir()
+    archive_dir.mkdir()
+    _write(source, "memories/USER.md", "captured profile")
+    capture(source, archive_dir, _OPENCLAW)
+
+    target, backup = tmp_path / "tgt", tmp_path / "bak"
+    target.mkdir()
+    backup.mkdir()
+    link_parent = target / "npm" / "projects" / "p" / "node_modules"
+    link_parent.mkdir(parents=True)
+    (link_parent / "openclaw").symlink_to("/usr/local/lib/node_modules/openclaw")
+
+    restore(target, backup, archive_dir, _OPENCLAW)
+
+    assert_that((link_parent / "openclaw").is_symlink(), equal_to(True))
+
+
+def test_restore_reapplies_ownership_without_touching_preserved_state(tmp_path, monkeypatch):
+    source, archive_dir = tmp_path / "src", tmp_path / "arc"
+    source.mkdir()
+    archive_dir.mkdir()
+    _write(source, "memories/USER.md", "captured profile")
+    capture(source, archive_dir, _OPENCLAW)
+
+    target, backup = tmp_path / "tgt", tmp_path / "bak"
+    target.mkdir()
+    backup.mkdir()
+    _write(target, "npm/projects/p/package.json", "runtime-owned")
+    _write(target, "openclaw.json", "{}")
+
+    owned: list[str] = []
+    monkeypatch.setattr(
+        os, "lchown", lambda path, uid, gid: owned.append(Path(path).relative_to(target).as_posix()), raising=False
+    )
+
+    restore(target, backup, archive_dir, _OPENCLAW)
+
+    assert_that(owned, has_item("memories/USER.md"))
+    assert_that([path for path in owned if path.startswith(("npm", "openclaw.json"))], empty())
