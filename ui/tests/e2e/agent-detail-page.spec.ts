@@ -2124,9 +2124,15 @@ test.describe("Agent Detail Page — About tab", () => {
   }) => {
     // /configuration returns every shared and override version with its full
     // content. About only needs the pinned version's name and description.
+    // The API read only. A production build prefetches the Configuration *page*
+    // (`/dashboard/.../configuration?_rsc=...`) for every link to it, and that
+    // path ends the same way.
+    const configurationApi = new RegExp(
+      `/api/v1/organizations/[^/]+/agents/${MOCK_AGENT_ID}/configuration$`,
+    );
     const configurationReads: string[] = [];
     page.on("request", (request) => {
-      if (new URL(request.url()).pathname.endsWith(`/agents/${MOCK_AGENT_ID}/configuration`)) {
+      if (configurationApi.test(new URL(request.url()).pathname)) {
         configurationReads.push(request.url());
       }
     });
