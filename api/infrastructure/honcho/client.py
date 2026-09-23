@@ -93,6 +93,12 @@ class HonchoClient:
         wrong on both runtimes: Honcho stores and reasons over the message, but no
         runtime's recall ever surfaces it.
         """
+        # A target pool can be brand new — no Agent has conversed there yet — so its
+        # workspace and the peer we file under may not exist, and Honcho auto-creates
+        # neither (a conclusion on a missing peer 404s). Both calls are idempotent
+        # get-or-create, so this is safe on an established pool too.
+        self._request("POST", "/workspaces", json={"id": workspace_id})
+        self._request("POST", f"/workspaces/{workspace_id}/peers", json={"id": ai_peer_name})
         people = [p for p in self.list_peers(workspace_id) if p != ai_peer_name][: self.SHARE_MAX_PEOPLE]
         created: list[dict] = []
         for observed in [ai_peer_name, *people]:
