@@ -22,7 +22,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from api.core.config import Config
 from api.domains.agents.authorization import AgentAuthorization
-from api.domains.agents.models import Agent, AgentType
+from api.domains.agents.models import Agent
 from api.domains.agents.repository import PoolMemoryProvenance, SharedPoolMemoryFactRepository
 from api.domains.auth.models import CurrentUserContext
 from api.domains.rbac.catalog import PermissionKey
@@ -144,14 +144,13 @@ def openclaw_logical_agent_id(agent: Agent) -> str:
 def ai_peer_name_for_agent(agent: Agent) -> str:
     """The Honcho peer that represents an Agent's own runtime, not its users.
 
-    Hermes: set by us in `build_honcho_config` (`builders/hermes.py`), one peer
-    name per Agent. OpenClaw: fixed by the plugin as `agent-{logical id}`
-    (Honcho's own integration docs), where the logical id is
-    `openclaw_logical_agent_id`. Neither convention is ours to invent; both are
-    read from what the builders emit or what Honcho's docs specify.
+    Both runtimes name it `agent-<agent id>`. The id is stable and URL-safe, so a
+    rename never orphans the Agent's memory and Honcho never renormalizes the peer
+    — a name like "Ada the Assistant" would be stored as `agent-Ada-the-Assistant`,
+    which a name-based read filter would then miss. OpenClaw's plugin already
+    derives this from `openclaw_logical_agent_id`; Hermes gets the same value
+    written into honcho.json by `build_honcho_config`, so read and write agree.
     """
-    if agent.agent_type == AgentType.HERMES:
-        return f"agent-{agent.name}"
     return f"agent-{openclaw_logical_agent_id(agent)}"
 
 

@@ -433,7 +433,7 @@ def test_config_map_carries_the_honcho_provider_config_when_configured() -> None
     config = build_honcho_config(
         base_url="http://honcho:8000",
         workspace_id="af-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
-        agent_name="watcher",
+        ai_peer="agent-watcher",
     )
     honcho_json = json.loads(_config_map(config).data["honcho.json"])
 
@@ -441,7 +441,7 @@ def test_config_map_carries_the_honcho_provider_config_when_configured() -> None
     host = honcho_json["hosts"]["hermes"]
     assert host["enabled"] is True
     assert host["workspace"] == "af-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
-    assert host["aiPeer"]
+    assert host["aiPeer"] == "agent-watcher"
 
 
 def test_deployment_points_hermes_at_the_state_dir_it_actually_uses() -> None:

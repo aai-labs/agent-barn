@@ -51,6 +51,7 @@ from api.domains.agents.error_messages import friendly_pod_reason
 from api.domains.agents.exceptions import AgentProvisioningPrecondition
 from api.domains.agents.gog_artifacts import build_gog_env, build_gog_policy_md, build_gog_setup_sh
 from api.domains.agents.memory_sharing import (
+    ai_peer_name_for_agent,
     memory_active,
     memory_workspace_for_agent,
     openclaw_logical_agent_id,
@@ -2162,7 +2163,7 @@ class AgentService:
                     build_honcho_config(
                         base_url=self.config.agent_honcho_base_url,
                         workspace_id=memory_workspace,
-                        agent_name=agent.name,
+                        ai_peer=ai_peer_name_for_agent(agent),
                     )
                     if memory_on and memory_workspace is not None
                     else None

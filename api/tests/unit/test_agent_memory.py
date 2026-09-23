@@ -274,11 +274,11 @@ def test_facets_count_each_peer_and_put_the_self_model_first():
     how much the Agent knows about them, so the default order leads with the
     fullest buckets."""
     service, _, honcho, _pool_prov = _service()
-    honcho.list_peers.return_value = ["agent-watcher", "owner", "U123"]
+    honcho.list_peers.return_value = [f"agent-{AGENT_ID}", "owner", "U123"]
     # page fetch, then one count call per peer
     honcho.list_conclusions.side_effect = [
         ([], 0),  # the page itself (unfiltered)
-        ([], 65),  # observed=agent-watcher (self)
+        ([], 65),  # observed=agent-<id> (self)
         ([], 120),  # observed=owner
         ([], 3),  # observed=U123
     ]
@@ -295,12 +295,12 @@ def test_a_peer_the_agent_never_concluded_about_gets_no_facet():
     """A peer can exist from a single inbound message that produced nothing. A zero
     facet would be a filter that leads to an empty list."""
     service, _, honcho, _pool_prov = _service()
-    honcho.list_peers.return_value = ["agent-watcher", "ghost"]
+    honcho.list_peers.return_value = [f"agent-{AGENT_ID}", "ghost"]
     honcho.list_conclusions.side_effect = [([], 0), ([], 10), ([], 0)]
 
     page = service.list_memory(AGENT_ID, _context(), page=1, size=50)
 
-    assert_that([f.peer for f in page.facets], equal_to(["agent-watcher"]))
+    assert_that([f.peer for f in page.facets], equal_to([f"agent-{AGENT_ID}"]))
 
 
 def test_filtering_to_a_peer_scopes_the_query_and_skips_facets():
@@ -328,4 +328,6 @@ def test_mine_scope_pins_the_query_to_this_agent():
 
     service.list_memory(AGENT_ID, _context(), page=1, size=50, observed="owner", scope="mine")
 
-    assert_that(honcho.list_conclusions.call_args.kwargs["observer"], equal_to("agent-watcher"))
+    # Peer identity is the stable agent id (not the name), so a rename never
+    # orphans memory and Honcho never renormalizes the peer.
+    assert_that(honcho.list_conclusions.call_args.kwargs["observer"], equal_to(f"agent-{AGENT_ID}"))

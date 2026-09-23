@@ -75,12 +75,16 @@ HERMES_BOOT_RUN_PY: str = (_SCRIPTS / "boot-run.py").read_text()
 HERMES_STATE_DIR = "/opt/data"
 
 
-def build_honcho_config(*, base_url: str, workspace_id: str, agent_name: str) -> dict:
+def build_honcho_config(*, base_url: str, workspace_id: str, ai_peer: str) -> dict:
     """Honcho as a Hermes memory provider.
 
     Unlike OpenClaw, where Honcho takes the runtime's single memory slot, Hermes
     runs it alongside MEMORY.md and USER.md: the files stay the operator-editable
     baseline and Honcho holds what is learned in conversation.
+
+    ``ai_peer`` is the Agent's stable peer id (``ai_peer_name_for_agent``), the id
+    rather than the name so a rename never orphans memory and Honcho never
+    renormalizes it. The read side computes the same value, so both always agree.
     """
     return {
         "baseUrl": base_url,
@@ -90,7 +94,7 @@ def build_honcho_config(*, base_url: str, workspace_id: str, agent_name: str) ->
                 "workspace": workspace_id,
                 # Both sides are modelled: the AI peer is what Honcho learns about
                 # the Agent, separate from what it learns about each participant.
-                "aiPeer": f"agent-{agent_name}",
+                "aiPeer": ai_peer,
                 "peerName": "operator",
             }
         },
