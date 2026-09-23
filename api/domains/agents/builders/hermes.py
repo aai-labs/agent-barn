@@ -96,7 +96,10 @@ def build_honcho_config(*, base_url: str, workspace_id: str, ai_peer: str) -> di
                 # Both sides are modelled: the AI peer is what Honcho learns about
                 # the Agent, separate from what it learns about each participant.
                 "aiPeer": ai_peer,
-                "peerName": "operator",
+                # Match OpenClaw's plugin, which hardcodes the human peer as "owner"
+                # (OWNER_ID). Using the same name means a person is one peer in a mixed
+                # pool, and the UI's owner -> "you" label works for both runtimes.
+                "peerName": "owner",
             }
         },
     }

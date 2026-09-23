@@ -128,7 +128,10 @@ def _facet_for_peer(peer: str, count: int, agent_name: str, ai_peer_name: str | 
     correspondent (a Slack user id, say), shown as-is."""
     if peer == ai_peer_name:
         return MemoryFacet(peer=peer, label=f"What {agent_name} knows", count=count, isSelf=True)
-    if peer == "owner":
+    # Both are the human talking to the Agent through the app: "owner" is what both
+    # runtimes use now; "operator" is the legacy Hermes name, still on pre-cutover
+    # memories, so it reads as "you" too rather than showing a raw internal id.
+    if peer in ("owner", "operator"):
         return MemoryFacet(peer=peer, label="About you", count=count, isSelf=False)
     return MemoryFacet(peer=peer, label=f"About {peer}", count=count, isSelf=False)
 

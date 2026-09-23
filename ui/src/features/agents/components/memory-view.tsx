@@ -50,11 +50,13 @@ function OriginPill({ item, groupName }: { item: AgentMemoryItem; groupName?: st
 
 /** Under "Everyone" a row needs to say who it is about; under a single peer filter
  *  that is redundant and omitted. `owner` reads as "you" — you talking to the agent
- *  through the app. `selfLabel` names the self-model owner (an agent's name); the
- *  group view has no single one, so a self-model row falls back to its peer id. */
+ *  through the app; `operator` is the legacy Hermes name for the same human, kept
+ *  here so pre-cutover memories read "you" too. `selfLabel` names the self-model
+ *  owner (an agent's name); the group view has no single one, so a self-model row
+ *  falls back to its peer id. */
 function aboutLabel(item: AgentMemoryItem, selfLabel: string | null): string | null {
   if (item.observed === item.observer) return selfLabel ? `${selfLabel} itself` : item.observed;
-  if (item.observed === "owner") return "you";
+  if (item.observed === "owner" || item.observed === "operator") return "you";
   return item.observed;
 }
 
