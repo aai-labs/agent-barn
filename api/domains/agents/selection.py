@@ -251,9 +251,8 @@ class SelectionValidator:
                     detail=f"At least one of these template skills must be assigned to the Agent: {names}",
                 )
 
-        # The same group-aware validator `update_agent` uses, so both write paths
-        # accept the same configurations.
-        self.validate_required_skill_versions(required_map, assigned_versions)
+        if prospective_pins is not None:
+            self.validate_required_skill_versions(required_map, assigned_versions)
 
         if not check_providers:
             return

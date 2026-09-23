@@ -4938,6 +4938,110 @@ def test_agent_configuration_publish_rejects_unassigned_required_skill():
             assert_that(publish.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
 
 
+def _override_requiring_latest_skill(context) -> dict:
+    client: TestClient = context.client
+    skill_repository: SkillRepository = context.injector.get(SkillRepository)
+    skill_repository.publish_version(context.skill.id, [("SKILL.md", "# Calendar v2")])
+    configuration_url = f"{_BASE}/{context.agent.id}/configuration"
+    draft = client.post(f"{configuration_url}/draft", headers=_auth(context)).json()
+    marked = client.patch(
+        f"{configuration_url}/draft",
+        json={
+            "expected_updated_at": draft["updated_at"],
+            "required_skill_ids": [str(context.skill.id)],
+        },
+        headers=_auth(context),
+    )
+    assert_that(marked.status_code, equal_to(status.HTTP_200_OK))
+    return marked.json()
+
+
+def test_override_draft_and_publish_accept_a_requirement_newer_than_the_agent_pin():
+    with given(
+        [
+            *_GIVEN,
+            there_is_an_agent(),
+            there_is_a_skill(name="Calendar"),
+            skill_is_assigned_to_agent(),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        configuration_url = f"{_BASE}/{context.agent.id}/configuration"
+
+        with when("I require the Skill while the Agent is still pinned to v1"):
+            marked_body = _override_requiring_latest_skill(context)
+
+        with then("the draft records the newer requirement"):
+            assert_that(marked_body["required_skills"], has_length(1))
+            assert_that(marked_body["required_skills"][0]["version"], equal_to(2))
+
+        with when("I publish that draft"):
+            publish = client.post(
+                f"{configuration_url}/draft/publish",
+                json={"expected_updated_at": marked_body["updated_at"]},
+                headers=_auth(context),
+            )
+
+        with then("the Override Version is created and the Agent's pin is untouched"):
+            assert_that(publish.status_code, equal_to(status.HTTP_201_CREATED))
+            assert_that(publish.json()["required_skills"][0]["version"], equal_to(2))
+            agent = client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context)).json()
+            assert_that(agent["skills"][0]["version"], equal_to(1))
+
+
+def test_selecting_an_override_applies_its_newer_required_skill_pin():
+    with given(
+        [
+            *_GIVEN,
+            there_is_an_agent(),
+            there_is_a_skill(name="Calendar"),
+            skill_is_assigned_to_agent(),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        configuration_url = f"{_BASE}/{context.agent.id}/configuration"
+        marked_body = _override_requiring_latest_skill(context)
+        published = client.post(
+            f"{configuration_url}/draft/publish",
+            json={"expected_updated_at": marked_body["updated_at"]},
+            headers=_auth(context),
+        ).json()
+        agent = client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context)).json()
+
+        with when("I select the Override without its skill pin"):
+            refused = client.post(
+                f"{configuration_url}/select",
+                json={
+                    "selection_type": "override",
+                    "override_version": published["version"],
+                    "expected_agent_updated_at": agent["updated_at"],
+                },
+                headers=_auth(context),
+            )
+
+        with then("it is refused against the Agent's current assignments"):
+            assert_that(refused.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+            assert_that(refused.json()["detail"], contains_string("must be pinned to version 2"))
+
+        with when("I select the Override and its skill pin together"):
+            accepted = client.post(
+                f"{configuration_url}/select",
+                json={
+                    "selection_type": "override",
+                    "override_version": published["version"],
+                    "expected_agent_updated_at": agent["updated_at"],
+                    "skill_versions": [{"skill_id": str(context.skill.id), "version": 2}],
+                },
+                headers=_auth(context),
+            )
+
+        with then("both land"):
+            assert_that(accepted.status_code, equal_to(status.HTTP_200_OK))
+            body = accepted.json()
+            assert_that(body["template_pin_type"], equal_to("override"))
+            assert_that(body["skills"][0]["version"], equal_to(2))
+
+
 def test_agent_configuration_override_history_retained_after_soft_delete():
     with given([*_GIVEN, there_is_an_agent(name="Retention Agent")]) as context:
         client: TestClient = context.client
