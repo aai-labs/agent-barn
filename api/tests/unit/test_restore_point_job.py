@@ -41,6 +41,7 @@ _HERMES_START = _AGENTS_DIR / "scripts" / "hermes" / "start.sh"
 _OPENCLAW_START = _AGENTS_DIR / "scripts" / "openclaw" / "start.sh"
 _OPENCLAW_INIT = _AGENTS_DIR / "scripts" / "openclaw" / "init-openclaw.js"
 _AAI_CLI_ARTIFACTS = _AGENTS_DIR / "aai_cli_artifacts.py"
+_AGENT_SERVICE = _AGENTS_DIR / "service.py"
 
 _HERMES_WORKSPACE_COPY_LOOP = re.compile(r"^for f in (?P<files>[^;]+); do$", re.MULTILINE)
 
@@ -55,6 +56,7 @@ _EXCLUSION_EVIDENCE = {
         "workspace/skills": (_HERMES_START, "rm -rf /workspace/skills"),
     },
     _OPENCLAW: {
+        "aai-cli": (_AGENT_SERVICE, '"/home/node/.openclaw/aai-cli"'),
         "local-plugins": (_OPENCLAW_START, "/home/node/.openclaw/local-plugins/"),
         "npm": (_OPENCLAW_START, "/home/node/.openclaw/npm/projects/"),
         "agentbarn-messages.sqlite3": (_OPENCLAW_START, "/home/node/.openclaw/agentbarn-messages.sqlite3"),
@@ -91,6 +93,9 @@ def _hermes_volume(root: Path) -> None:
 
 
 def _openclaw_volume(root: Path) -> None:
+    _write(root, "aai-cli/aai-secrets.enc.json", "SECRET")
+    _write(root, "aai-cli/key", "KEY")
+    _write(root, "aai-cli/microsoft.sharepoint_refresh_token.sign-in")
     _write(root, "local-plugins/telemetry-push/index.js")
     _write(root, "npm/projects/openclaw-plugin/package.json")
     _write(root, "openclaw.json")
@@ -116,6 +121,20 @@ def test_hermes_capture_excludes_the_aai_cli_credential_store(tmp_path):
 
     names = _members(dest)
     assert_that([n for n in names if n.startswith(".config/aai-cli")], empty())
+
+
+def test_openclaw_capture_excludes_the_aai_cli_credential_store(tmp_path):
+    # OpenClaw keeps its aai-cli store on the volume (Hermes keeps its own under .config),
+    # so an archive would otherwise hold every integration token and the key to read them.
+    source, dest = tmp_path / "src", tmp_path / "dst"
+    source.mkdir()
+    dest.mkdir()
+    _openclaw_volume(source)
+
+    capture(source, dest, _OPENCLAW)
+
+    names = _members(dest)
+    assert_that([n for n in names if n.startswith("aai-cli")], empty())
 
 
 def test_hermes_capture_excludes_state_the_start_script_regenerates(tmp_path):
