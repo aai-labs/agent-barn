@@ -23,6 +23,26 @@ Related context: [`../agents.md`](../agents.md), [`../../architecture/runtime-an
 
 ## Changes
 
+### 2026-09-23 — AF-292 — Restore no longer races the Agent it is replacing
+
+- Fixed: capture and restore could run while the Agent's pod was still terminating. Stopping
+  deletes the Deployment and returns, so the Agent reads as STOPPED for the length of its grace
+  period — 30 seconds by default — while the pod keeps writing. ReadWriteOnce does not prevent
+  this: it is enforced per node for attachable volumes, and the default `local-path` provisioner
+  is a bind mount with nothing to attach, so a Job pod and a dying Agent pod can hold the same
+  directory. A concurrent writer during the wipe reproduces `[Errno 39] Directory not empty`
+  exactly, which is what a failed staging restore reported; the quieter outcome is a Pre-Restore
+  backup captured mid-write.
+- Changed: both flows now wait for the pod to be gone before creating any Job, and refuse with a
+  409 saying to try again if it outlives the wait. The wait is taken outside the Agent's lifecycle
+  lock, so start and stop stay responsive.
+- Added: `has_pods_for_deployment` on the Kubernetes client. `get_pod_name_for_deployment` could
+  not serve — it skips pods carrying a deletion timestamp, which is precisely the state that
+  matters here.
+- Note: the shared Kubernetes test double now answers `False` for that call by default. Every
+  attribute of a `MagicMock` is otherwise truthy, which would read as a pod still terminating and
+  refuse every restore point operation in the suite.
+
 ### 2026-09-23 — AF-292 — The plugin store travels with the archive
 
 - Changed: OpenClaw's `npm` plugin store is captured instead of excluded, and the wipe is total

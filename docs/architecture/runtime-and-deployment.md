@@ -156,8 +156,7 @@ API's own image so the archive logic and its exclusion sets are always the same 
 API that scheduled them — `API_IMAGE` is rendered from the same chart expression as the API
 container's `image`. Nothing new is built or published.
 
-Both mount the Agent's `agent-<uuid>` PVC, which is why they require a stopped Agent: the
-volume is ReadWriteOnce and cannot be held by the Agent pod and a Job pod at once. Capture
+Both mount the Agent's `agent-<uuid>` PVC, which is why they require a stopped Agent. ReadWriteOnce is not the guarantee it looks like here: it is enforced per node for attachable volumes, and the default `local-path` provisioner is a bind mount with nothing to attach, so two pods on one node can hold the same directory. The API therefore waits for the Agent's pod to disappear before creating either Job, rather than trusting the Agent's stored status — stopping deletes the Deployment and returns immediately while the pod lives out its termination grace period. Capture
 mounts the Agent volume read-only alongside a fresh per-restore-point PVC. Restore mounts
 three — the Agent volume writable, the new Pre-Restore destination, and the chosen archive
 read-only — and performs the safety-net capture and the extraction in one process, so the

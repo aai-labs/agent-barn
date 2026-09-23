@@ -45,6 +45,9 @@ class MockK8sModule(Module):
     @singleton
     def provide_k8s(self) -> KubernetesClient:
         mock: Any = MagicMock(spec=KubernetesClient)
+        # Every attribute is truthy by default, which would read as "a pod is still
+        # terminating" and block every restore point operation in the suite.
+        mock.has_pods_for_deployment.return_value = False
         return mock
 
 
