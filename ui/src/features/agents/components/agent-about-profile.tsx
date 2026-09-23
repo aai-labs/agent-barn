@@ -9,16 +9,19 @@ import { KeyRound, Plug, Sparkles } from "lucide-react";
 import { Badge } from "@/components/badge";
 import { platformIcon } from "@/components/brand-icons";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useCommunicationConnections } from "@/features/communication-connections/hooks/use-communication-connections";
+import {
+  useCommunicationConnections,
+  useCommunicationPlatforms,
+} from "@/features/communication-connections/hooks/use-communication-connections";
 import type { CommunicationConnection } from "@/features/communication-connections/schemas";
 import { SkillScopeBadge } from "@/features/skills/components/skill-scope-badge";
 import { SkillSourceBadge } from "@/features/skills/components/skill-source-badge";
 import { skillDetailHref } from "@/features/skills/scope";
 import { SKILL_PROVIDER_LABELS } from "@/features/skills/utils";
 
-import { useAgentConfiguration } from "../hooks/use-agent-configuration";
+import { useAgentTemplate } from "../hooks/use-agent-template";
 import type { Agent, AgentAssignedSkill, AgentSecretRead, CommandApprovalMode } from "../schemas";
-import { currentModelOf, formatModelName } from "../utils";
+import { canAgent, currentModelOf, formatModelName } from "../utils";
 import { ModelSourceBadge } from "./model-source-badge";
 
 const RUNTIME_LABELS = { hermes: "Hermes", openclaw: "OpenClaw" } as const;
@@ -71,8 +74,11 @@ function OverviewSection({
   agent: Agent;
   configurationHref: SectionHrefs;
 }) {
-  const { configuration } = useAgentConfiguration(agent.id);
-  const active = configuration?.active;
+  // One pinned version, not the configuration history: the Agent already
+  // carries the pinned version number, so only the display name and
+  // description need a read, and this one does not grow with every published
+  // version the way /configuration does.
+  const { template } = useAgentTemplate(agent.id, agent.templateVersion);
   const isHermes = agent.agentType === "hermes";
   const hiredAgo = formatAgo(agent.createdAt);
 
@@ -87,9 +93,9 @@ function OverviewSection({
       }
       testId="agent-about-overview"
     >
-      {active?.description && (
+      {template?.description && (
         <p className="m-0 mb-4 max-w-[70ch] text-[13px] leading-relaxed" style={{ color: "var(--ink-2)" }}>
-          {active.description}
+          {template.description}
         </p>
       )}
 
@@ -102,9 +108,9 @@ function OverviewSection({
           <ModelSourceBadge source={agent.modelSource} />
         </Fact>
         <Fact label="Blueprint">
-          <span className="truncate">{active?.templateName || agent.templateKey}</span>
+          <span className="truncate">{template?.templateName || agent.templateKey}</span>
           <span className="text-[0.78rem] tabular-nums" style={{ color: "var(--ink-4)" }}>
-            v{active?.version ?? agent.templateVersion}
+            v{agent.templateVersion}
           </span>
           {agent.templatePinType === "override" && <Badge variant="accent">Customised</Badge>}
         </Fact>
@@ -144,7 +150,7 @@ function SkillsSection({
       description={`Configured skills for ${agent.name}`}
       action={
         <Link href={configurationHref("skills")} className="af-btn af-btn-sm">
-          Manage skills
+          {canAgent(agent, "agent.update") ? "Manage skills" : "View skills"}
         </Link>
       }
       testId="agent-about-skills"
@@ -219,6 +225,12 @@ function MessagingSection({
   configurationHref: SectionHrefs;
 }) {
   const connections = useCommunicationConnections(agent.id);
+  const platforms = useCommunicationPlatforms();
+  // The server's names, not the key: `teams` is "Microsoft Teams" and `web` is
+  // "Web Chat". The capitalised key only stands in until the list arrives.
+  const platformName = (platformKey: string) =>
+    platforms.data?.find((platform) => platform.key === platformKey)?.displayName ??
+    platformLabel(platformKey);
 
   return (
     <Section
@@ -226,7 +238,7 @@ function MessagingSection({
       description={`Where your team can reach ${agent.name}.`}
       action={
         <Link href={configurationHref("channels")} className="af-btn af-btn-sm">
-          Manage
+          {canAgent(agent, "agent.update") ? "Manage" : "View"}
         </Link>
       }
       testId="agent-about-messaging"
@@ -237,7 +249,11 @@ function MessagingSection({
         ) : (
           <ul className="m-0 flex list-none flex-col gap-2 p-0">
             {connections.data.map((connection) => (
-              <ConnectionTile key={connection.id} connection={connection} />
+              <ConnectionTile
+                key={connection.id}
+                connection={connection}
+                platformName={platformName(connection.platformKey)}
+              />
             ))}
           </ul>
         )
@@ -248,7 +264,7 @@ function MessagingSection({
         // which platforms it is configured for.
         <div className="flex flex-wrap gap-1.5">
           {agent.configuredPlatformKeys.map((platformKey) => (
-            <Chip key={platformKey}>{platformLabel(platformKey)}</Chip>
+            <Chip key={platformKey}>{platformName(platformKey)}</Chip>
           ))}
         </div>
       ) : (
@@ -258,7 +274,13 @@ function MessagingSection({
   );
 }
 
-function ConnectionTile({ connection }: { connection: CommunicationConnection }) {
+function ConnectionTile({
+  connection,
+  platformName,
+}: {
+  connection: CommunicationConnection;
+  platformName: string;
+}) {
   const status = connectionStatus(connection);
 
   return (
@@ -274,7 +296,7 @@ function ConnectionTile({ connection }: { connection: CommunicationConnection })
           <span className="block truncate text-[11.5px]" style={{ color: "var(--ink-4)" }}>
             {connection.externalIdentity
               ? `Connected as ${connection.externalIdentity}`
-              : platformLabel(connection.platformKey)}
+              : platformName}
           </span>
         </span>
         <span className="flex shrink-0 items-center gap-1.5 text-[11.5px]" style={{ color: status.color }}>
@@ -300,8 +322,9 @@ function IntegrationsSection({
       title="Integrations"
       description={`The accounts ${agent.name} can act through.`}
       action={
+        // Keys are governed separately from the rest of the configuration.
         <Link href={configurationHref("keys")} className="af-btn af-btn-sm">
-          Manage
+          {canAgent(agent, "agent.secret.manage") ? "Manage" : "View"}
         </Link>
       }
       testId="agent-about-integrations"
