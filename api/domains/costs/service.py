@@ -81,13 +81,17 @@ class CostService:
         window: StatsWindow,
         filters: CostFilter,
     ) -> CostSummaryRead:
-        scoped = self._scoped(self._authorized_org(context), filters)
+        org_id = self._authorized_org(context)
+        scoped = self._scoped(org_id, filters)
         summary = build_cost_summary(self.repository, window, scoped)
-        # Memory spend is billed on Honcho's separate credential, so it is added
-        # here rather than coming from the cost_record table the summary reads.
-        # It is one pool-level figure (Agents share memory pools), not per-Agent.
+        # Memory spend is billed on Honcho's separate credential, so it is added here
+        # rather than coming from the cost_record table the summary reads. It is this
+        # Organization's share of the pools — the sum of its groups' apportioned costs,
+        # NOT Honcho's platform-wide total (one credential bills every org) — so it
+        # reconciles with the per-group rows in memory_cost_by_group.
+        cost_by_group = self.honcho_usage.cost_by_group(window.start, window.end)
         summary.total_memory_cost = round(
-            self.honcho_usage.memory_cost_total(window.start.date().isoformat(), window.end.date().isoformat()),
+            sum(cost_by_group.get(str(gid), 0.0) for gid in self.memory_groups.names_for_org(org_id)),
             12,
         )
         return summary
