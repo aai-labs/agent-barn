@@ -1672,6 +1672,7 @@ def test_seed_predefined_templates_creates_three_lineages():
                 "email-reminder",
                 "jira-task-helper",
                 "documentation-agent",
+                "task-reviewer",
             ):
                 template = repository.get_latest_platform_template(template_key)
                 assert_that(template, is_not(none()))
@@ -1680,7 +1681,7 @@ def test_seed_predefined_templates_creates_three_lineages():
                 # platform_template rows are inherently pre-defined (no source column)
 
         with then("the registry and DB agree on the count"):
-            assert_that(len(PREDEFINED_TEMPLATES), equal_to(6))
+            assert_that(len(PREDEFINED_TEMPLATES), equal_to(7))
 
 
 def test_seed_predefined_templates_is_idempotent():
@@ -1695,7 +1696,7 @@ def test_seed_predefined_templates_is_idempotent():
         with then("each lineage still has exactly one version"):
             response = client.get(f"{_BASE}?source=pre-defined", headers=_auth(context))
             body = response.json()
-            assert_that(body["total"], equal_to(6))
+            assert_that(body["total"], equal_to(7))
             for item in body["items"]:
                 assert_that(item["version"], equal_to(1))
 

@@ -1,0 +1,5 @@
+name: Task Reviewer
+description: Turns a Jira ticket and its linked docs into a source-cited review brief and hands it to the code reviewer through a comment on the ticket.
+required_skills:
+- Jira
+- Confluence

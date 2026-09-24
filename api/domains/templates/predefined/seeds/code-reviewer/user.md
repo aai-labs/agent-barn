@@ -18,6 +18,8 @@ The person who deployed me, summons me from DMs, and tunes my behaviour. They ge
 ### Optional
 
 - **Jira project key(s) (e.g. `AUTH`, `PLAT`):**
+- **Agent account (shared Atlassian user both agents write as):** `agents@aai-labs.com`, display name `Agents`, accountId `712020:4231a204-5df1-474f-b87c-f9b3c7fe8e13` (match briefs on the accountId)
+- **Report comment (post a `Code review report` comment on the ticket after each review; `off` to disable):** on
 - **Confluence space key(s) (e.g. `ENG`, `TEAM`):**
 - **Pronouns:**
 - **Timezone:**
