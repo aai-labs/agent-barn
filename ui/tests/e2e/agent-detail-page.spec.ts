@@ -1966,6 +1966,61 @@ test.describe("Agent Detail Page — Costs tab", () => {
     expect(callRequests.at(-1)?.get("page")).toBe("1");
   });
 
+  test("does not leave the previous filter's calls on screen while the new ones load", async ({
+    page,
+  }) => {
+    // Held rows are right across a page change and wrong across a filter change:
+    // they would show the old selection's calls, and its total, under the new one.
+    await dataSupportPage.costs.interceptAgentCosts(MOCK_AGENT_ID, {
+      calls: {
+        items: Array.from({ length: 9 }, (_, i) =>
+          costRecord({ request_id: `gen-unfiltered-${i}` }),
+        ),
+        total: 9,
+      },
+    });
+
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await agentDetailPage.openCostsTab();
+    await expect(page.getByTestId("agent-calls-range")).toHaveText("Showing 1–9 of 9 calls");
+
+    // The filtered response is held until the assertions below have run, so the
+    // gap where stale rows used to show is the window under test.
+    let release = () => {};
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await page.route(`**/costs/agents/${MOCK_AGENT_ID}/calls*`, async (route) => {
+      const url = new URL(route.request().url());
+      if (!url.searchParams.get("model")) return route.fallback();
+      await held;
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          page: 1,
+          page_size: 10,
+          total: 2,
+          items: [
+            costRecord({ request_id: "gen-filtered-1" }),
+            costRecord({ request_id: "gen-filtered-2" }),
+          ],
+        }),
+      });
+    });
+
+    await page.getByTestId("cost-model-filter").click();
+    await page.getByRole("option", { name: "glm-5.2" }).click();
+
+    // While the filtered page is in flight the table falls back to its skeleton
+    // rather than the unfiltered rows and their total.
+    await expect(page.getByTestId("agent-calls").getByTestId("cost-row")).toHaveCount(0);
+    await expect(page.getByTestId("agent-calls-range")).not.toContainText("of 9 calls");
+
+    release();
+    await expect(page.getByTestId("agent-calls-range")).toHaveText("Showing 1–2 of 2 calls");
+  });
+
   test("shows whole months, newest first, comparing the month in progress on its projection", async ({
     page,
   }) => {

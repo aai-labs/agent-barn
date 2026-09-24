@@ -166,8 +166,11 @@ class AgentCostRead(PydanticBaseModel):
     prompt_tokens: int
     completion_tokens: int
     total_calls: int = 0
-    # Calls LiteLLM recorded as anything but a success. They bill nothing, so they
-    # are counted here rather than folded into the averages below.
+    # Calls LiteLLM recorded as anything but a success. They bill nothing, and they
+    # are still part of `total_calls` and of the averages below, which divide by
+    # every call in the window — the same basis the Organization summary uses, so a
+    # per-Agent average and an Organization one can be read against each other.
+    # Reported separately because a run of failures is worth seeing on its own.
     failed_calls: int = 0
     # Calls whose figure was recovered from OpenRouter, which is why a historical
     # total can rise after the fact.
@@ -254,12 +257,20 @@ class MonthlyWindow(PydanticBaseModel):
     months: int
 
 
+def month_start(moment: datetime, offset: int = 0) -> datetime:
+    """The first instant of `moment`'s calendar month, shifted by `offset` months.
+
+    Counted in months since year 0, so stepping across a year boundary in either
+    direction is plain arithmetic rather than a branch per direction. Every month
+    on these surfaces is a UTC month, and the callers only ever pass UTC moments.
+    """
+    index = moment.year * 12 + (moment.month - 1) + offset
+    return datetime(index // 12, index % 12 + 1, 1, tzinfo=UTC)
+
+
 def resolve_monthly_window(months: int = DEFAULT_MONTHS, now: datetime | None = None) -> MonthlyWindow:
     now = now or datetime.now(UTC)
-    # Months since year 0, so stepping back across a year boundary is plain arithmetic.
-    index = now.year * 12 + (now.month - 1) - (months - 1)
-    start = datetime(index // 12, index % 12 + 1, 1, tzinfo=UTC)
-    return MonthlyWindow(start=start, end=now, months=months)
+    return MonthlyWindow(start=month_start(now, -(months - 1)), end=now, months=months)
 
 
 def get_monthly_window(

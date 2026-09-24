@@ -86,6 +86,9 @@ test.describe("Organization costs", () => {
     await expect(page.getByTestId("monthly-average")).toContainText("no full month yet");
     await expect(page.getByTestId("monthly-total")).toContainText("1 month");
     await expect(page.getByTestId("monthly-costs-table").locator("tbody tr")).toHaveCount(1);
+    // There was no last month to speak of, so it is not reported as a $0 one.
+    await expect(page.getByTestId("monthly-previous")).toContainText("—");
+    await expect(page.getByTestId("monthly-previous")).not.toContainText("$0.00");
   });
 
   test("a quiet month after the first call still counts toward the average", async ({ page }) => {
@@ -108,6 +111,9 @@ test.describe("Organization costs", () => {
     await expect(page.getByTestId("monthly-costs-table").locator("tbody tr")).toHaveCount(3);
     await expect(page.getByTestId("monthly-average")).toContainText("$5.00");
     await expect(page.getByTestId("monthly-average")).toContainText("over 2 full months");
+    // August is inside the history, so a $0 last month is the real figure.
+    await expect(page.getByTestId("monthly-previous")).toContainText("$0.00");
+    await expect(page.getByTestId("monthly-previous")).toContainText("Aug 2026");
   });
 
   test("an error in the monthly totals stays inside its section", async ({ page }) => {

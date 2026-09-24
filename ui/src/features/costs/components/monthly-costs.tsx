@@ -99,24 +99,42 @@ export const MonthlyCosts = memo(function MonthlyCosts({
           <Skeleton className="h-[160px] w-full" />
         </div>
       ) : (
-        <>
-          <MonthlyHeadline months={months} />
-          <MonthlySpendChart months={monthsWithHistory(months)} />
-          <MonthlyTable months={monthsWithHistory(months)} showAgents={showAgents} />
-        </>
+        // Sliced once here rather than in each section below, so the headline,
+        // the chart and the table cannot disagree about where history starts.
+        <MonthlySections
+          months={monthsWithHistory(months)}
+          showAgents={showAgents}
+        />
       )}
     </section>
   );
 });
 
+function MonthlySections({
+  months,
+  showAgents,
+}: {
+  months: MonthlyCost[];
+  showAgents: boolean;
+}) {
+  return (
+    <>
+      <MonthlyHeadline months={months} />
+      <MonthlySpendChart months={months} />
+      <MonthlyTable months={months} showAgents={showAgents} />
+    </>
+  );
+}
+
 function MonthlyHeadline({ months }: { months: MonthlyCost[] }) {
   const current = months.find((month) => month.isCurrent) ?? null;
   const currentIndex = current ? months.indexOf(current) : months.length;
+  // Read from the history slice, so "Last month" is only offered when there was
+  // a last month: for an Agent whose first call is this month, the month before
+  // it is not $0, it is nothing at all. A $0 month inside the slice is real and
+  // still shown, because activity had already begun by then.
   const previous = currentIndex > 0 ? months[currentIndex - 1] : null;
-  // "Last month" reads the full list: a $0 August is still what August cost.
-  // The average and total only count months since activity began.
-  const history = monthsWithHistory(months);
-  const closed = history.filter((month) => !month.isCurrent);
+  const closed = months.filter((month) => !month.isCurrent);
   const average =
     closed.length > 0
       ? closed.reduce((sum, month) => sum + month.spend, 0) / closed.length
@@ -155,8 +173,8 @@ function MonthlyHeadline({ months }: { months: MonthlyCost[] }) {
       />
       <Headline
         label="Total"
-        value={formatSpend(history.reduce((sum, month) => sum + month.spend, 0))}
-        hint={`${history.length} ${history.length === 1 ? "month" : "months"}`}
+        value={formatSpend(months.reduce((sum, month) => sum + month.spend, 0))}
+        hint={`${months.length} ${months.length === 1 ? "month" : "months"}`}
         testId="monthly-total"
       />
     </div>

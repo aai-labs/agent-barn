@@ -26,6 +26,7 @@ from api.domains.costs.models import (
     MonthlyCostRead,
     MonthlyWindow,
     TokenSeriesPoint,
+    month_start,
 )
 from api.domains.costs.repository import CostRepository
 from api.domains.platform_admin.models import StatsWindow
@@ -36,6 +37,10 @@ from api.infrastructure.shared.models import PaginatedItems, Pagination
 logger = logging.getLogger(__name__)
 
 _SECONDS_PER_DAY = 86400
+
+# How much of the month in progress must be behind it before its spend is worth
+# extrapolating. See `_projected_month_spend`.
+MIN_ELAPSED_FOR_PROJECTION_SECONDS = _SECONDS_PER_DAY
 
 
 @inject
@@ -391,7 +396,7 @@ def build_monthly_costs(
     `build_cost_summary` is: one predicate, three scopes.
     """
     months = repository.monthly_totals(window, scoped)
-    current_month = _month_start(window.end)
+    current_month = month_start(window.end)
     result = []
     for totals in months:
         spend = float(totals.spend)
@@ -412,22 +417,21 @@ def build_monthly_costs(
     return result
 
 
-def _month_start(moment: datetime) -> datetime:
-    return moment.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-
-
-def _next_month_start(month: datetime) -> datetime:
-    return month.replace(year=month.year + 1, month=1) if month.month == 12 else month.replace(month=month.month + 1)
-
-
-def _projected_month_spend(spend: float, month: datetime, now: datetime) -> float:
-    """Month-to-date spend extrapolated at the pace so far.
+def _projected_month_spend(spend: float, month: datetime, now: datetime) -> float | None:
+    """Month-to-date spend extrapolated at the pace so far, or None too early to say.
 
     A straight line, not a forecast: it says where the month lands if nothing
     changes, which is the question a reader of a month-to-date figure is asking.
+
+    It needs a day of the month behind it before it means anything. Half an hour
+    into the 1st, the elapsed divisor is about 1/1500th of the month, so five
+    cents of spend extrapolates to seventy dollars — and that figure would drive
+    "on pace for", the Agent's "This month" card, and the month-over-month change,
+    which compares the projection against last month. Below the floor the month
+    reports what it has actually spent and no projection at all.
     """
     elapsed = (now - month).total_seconds()
-    if elapsed <= 0:
-        return spend
-    length = (_next_month_start(month) - month).total_seconds()
+    if elapsed < MIN_ELAPSED_FOR_PROJECTION_SECONDS:
+        return None
+    length = (month_start(month, 1) - month).total_seconds()
     return spend * length / elapsed

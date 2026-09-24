@@ -1,6 +1,6 @@
 "use client";
 
-import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { z } from "zod";
 
 import { useOrganizationApiBase } from "@/features/organizations/hooks/use-organization-api-base";
@@ -88,11 +88,12 @@ export function useAgentCostCalls(
   page: number,
 ) {
   const orgApiBase = useOrganizationApiBase();
+  const queryKey = costKey.list({
+    scope: { view: "agent-calls", agentId, page },
+    filters,
+  });
   const query = useQuery({
-    queryKey: costKey.list({
-      scope: { view: "agent-calls", agentId, page },
-      filters,
-    }),
+    queryKey,
     queryFn: async () => {
       const params = costFilterParams(filters);
       params.set("page", String(page));
@@ -105,7 +106,16 @@ export function useAgentCostCalls(
     },
     // Keeps the current page on screen while the next one loads, so the table
     // holds its height instead of collapsing to a skeleton on every click.
-    placeholderData: keepPreviousData,
+    //
+    // Only across a page change, though — `keepPreviousData` would do this for
+    // any key change, so switching Agent or filter would show the previous
+    // selection's calls, and its total, under the new one until the request
+    // landed. A page change is the one case where the old rows describe the
+    // same list.
+    placeholderData: (previous, previousQuery) =>
+      previous && previousQuery && isSameCallList(previousQuery.queryKey, queryKey)
+        ? previous
+        : undefined,
   });
 
   return {
@@ -116,6 +126,19 @@ export function useAgentCostCalls(
     error: query.error,
     refetch: query.refetch,
   };
+}
+
+/** Whether two call-list query keys address the same list, one page apart.
+ *
+ *  Same Agent and same filters; only the page may differ. */
+function isSameCallList(a: readonly unknown[], b: readonly unknown[]): boolean {
+  const withoutPage = (key: readonly unknown[]) => {
+    const [base, kind, scope, filters] = key;
+    const rest = { ...(scope as Record<string, unknown> | undefined) };
+    delete rest.page;
+    return JSON.stringify([base, kind, rest, filters]);
+  };
+  return withoutPage(a) === withoutPage(b);
 }
 
 /**

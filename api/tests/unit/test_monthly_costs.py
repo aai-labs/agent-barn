@@ -69,6 +69,37 @@ def test_only_the_month_in_progress_is_projected():
     assert_that(months[1], has_properties(projected_spend=close_to(30.0, 0.0001)))
 
 
+def test_the_first_hours_of_a_month_are_not_projected():
+    """Half an hour in, the elapsed divisor is a fifteen-hundredth of the month, so a
+    few cents of spend would extrapolate into tens of dollars — and that figure drives
+    "on pace for" and the month-over-month change."""
+    now = datetime(2026, 9, 1, 0, 30, tzinfo=UTC)
+    repository = FakeRepository([_month(datetime(2026, 9, 1, tzinfo=UTC), "0.05")])
+
+    months = build_monthly_costs(
+        cast(CostRepository, repository),
+        resolve_monthly_window(1, now=now),
+        CostFilter(),
+    )
+
+    assert_that(months[0], has_properties(is_current=True, spend=close_to(0.05, 0.0001)))
+    assert_that(months[0].projected_spend, none())
+
+
+def test_a_projection_appears_once_a_day_of_the_month_has_passed():
+    now = datetime(2026, 9, 2, tzinfo=UTC)
+    repository = FakeRepository([_month(datetime(2026, 9, 1, tzinfo=UTC), "2.00")])
+
+    months = build_monthly_costs(
+        cast(CostRepository, repository),
+        resolve_monthly_window(1, now=now),
+        CostFilter(),
+    )
+
+    # One day elapsed of thirty.
+    assert_that(months[0], has_properties(projected_spend=close_to(60.0, 0.0001)))
+
+
 def test_december_projects_against_a_thirty_one_day_month():
     now = datetime(2026, 12, 2, 12, tzinfo=UTC)
     repository = FakeRepository([_month(datetime(2026, 12, 1, tzinfo=UTC), "3.00")])
