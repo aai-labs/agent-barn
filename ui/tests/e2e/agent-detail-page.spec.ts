@@ -1803,6 +1803,9 @@ test.describe("Agent Detail Page — Costs tab", () => {
     await dataSupportPage.agents.interceptGetTemplatesRequest();
     await dataSupportPage.agents.interceptGetAgentConfigurationRequest();
     await dataSupportPage.agents.interceptGetModelsRequest();
+    await dataSupportPage.organizations.interceptGetOrganizationLlmBudget({
+      organizationId: TEST_ORG_ID,
+    });
   });
 
   test("renders the agent's totals, averages and failures", async ({ page }) => {

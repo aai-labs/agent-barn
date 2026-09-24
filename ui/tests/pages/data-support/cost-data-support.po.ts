@@ -318,7 +318,7 @@ export class CostDataSupport {
       summaryStatus,
     );
     await this.interceptJson(
-      `**/costs/agents/${agentId}/filters/models?*`,
+      `**/costs/agents/${agentId}/filters/models*`,
       models ?? [
         { value: "litellm/openrouter/z-ai/glm-5.2", label: "glm-5.2" },
         { value: "litellm/openrouter/openai/gpt-5-mini", label: "gpt-5-mini" },
