@@ -449,9 +449,7 @@ def test_config_map_carries_the_honcho_provider_config_when_configured() -> None
 
 
 def test_honcho_config_omits_api_key_when_auth_is_off() -> None:
-    config = build_honcho_config(
-        base_url="http://honcho:8000", workspace_id="af-x", ai_peer="agent-x"
-    )
+    config = build_honcho_config(base_url="http://honcho:8000", workspace_id="af-x", ai_peer="agent-x")
     assert "apiKey" not in config
 
 
