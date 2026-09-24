@@ -19,7 +19,7 @@ import { CostOptionCombobox } from "./cost-option-combobox";
 
 export interface CostFilterBarValues {
   q: string;
-  agentId: string;
+  agentId?: string;
   model: string;
   /** ISO datetime bounds, or "" for "let the server pick the window". */
   from: string;
@@ -29,7 +29,8 @@ export interface CostFilterBarValues {
 
 interface CostFilterBarProps {
   values: CostFilterBarValues;
-  agentOptions: CostFilterOption[];
+  /** Omit to drop the agent picker, on a surface that is already one Agent's. */
+  agentOptions?: CostFilterOption[];
   modelOptions: CostFilterOption[];
   onChange: (key: keyof CostFilterBarValues, value: string | null) => void;
   /** Both bounds move together: two single-key updates would race, because each
@@ -39,6 +40,11 @@ interface CostFilterBarProps {
   onClear: () => void;
   /** Slot for the organization picker, which only the platform surface has. */
   organizationFilter?: ReactNode;
+  searchPlaceholder?: string;
+  /** What the date picker says while no range is picked. */
+  datePlaceholder?: string;
+  /** Drop the sort control where the list it orders carries its own. */
+  showSort?: boolean;
 }
 
 /** Memoised: the pages above re-render whenever Next's router context changes,
@@ -53,26 +59,31 @@ export const CostFilterBar = memo(function CostFilterBar({
   hasActiveFilters,
   onClear,
   organizationFilter,
+  searchPlaceholder = "Search by model, agent, or request ID",
+  datePlaceholder = "All dates",
+  showSort = true,
 }: CostFilterBarProps) {
   return (
     <div className="flex flex-wrap items-center gap-2.5 mb-4">
       <SearchInput
         initialValue={values.q}
         onSearch={(value) => onChange("q", value)}
-        placeholder="Search by model, agent, or request ID"
+        placeholder={searchPlaceholder}
         className="min-w-64 flex-1"
       />
 
       {organizationFilter}
 
-      <CostOptionCombobox
-        options={agentOptions}
-        value={values.agentId || null}
-        onChange={(option) => onChange("agentId", option?.value ?? null)}
-        placeholder="All agents"
-        emptyLabel="No agents with spend"
-        testId="cost-agent-filter"
-      />
+      {agentOptions && (
+        <CostOptionCombobox
+          options={agentOptions}
+          value={values.agentId || null}
+          onChange={(option) => onChange("agentId", option?.value ?? null)}
+          placeholder="All agents"
+          emptyLabel="No agents with spend"
+          testId="cost-agent-filter"
+        />
+      )}
 
       <CostOptionCombobox
         options={modelOptions}
@@ -88,33 +99,17 @@ export const CostFilterBar = memo(function CostFilterBar({
         from={values.from}
         to={values.to}
         onChange={onDateRangeChange}
-        placeholder="All dates"
+        placeholder={datePlaceholder}
         width="16rem"
         ariaLabel="Date range"
       />
 
-      <Select
-        value={values.sort}
-        onValueChange={(value) => onChange("sort", value)}
-      >
-        <SelectTrigger
-          className="af-input !h-auto"
-          style={{ width: "10rem" }}
-          aria-label="Sort"
-          data-testid="cost-sort-filter"
-        >
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectGroup>
-            {CostSortDirectionSchema.options.map((sort) => (
-              <SelectItem key={sort} value={sort}>
-                {COST_SORT_LABELS[sort]}
-              </SelectItem>
-            ))}
-          </SelectGroup>
-        </SelectContent>
-      </Select>
+      {showSort && (
+        <CostSortSelect
+          value={values.sort}
+          onChange={(value) => onChange("sort", value)}
+        />
+      )}
 
       {hasActiveFilters && (
         <button type="button" className="af-btn" onClick={onClear}>
@@ -124,3 +119,33 @@ export const CostFilterBar = memo(function CostFilterBar({
     </div>
   );
 });
+
+export function CostSortSelect({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <Select value={value} onValueChange={onChange}>
+      <SelectTrigger
+        className="af-input !h-auto"
+        style={{ width: "10rem" }}
+        aria-label="Sort"
+        data-testid="cost-sort-filter"
+      >
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        <SelectGroup>
+          {CostSortDirectionSchema.options.map((sort) => (
+            <SelectItem key={sort} value={sort}>
+              {COST_SORT_LABELS[sort]}
+            </SelectItem>
+          ))}
+        </SelectGroup>
+      </SelectContent>
+    </Select>
+  );
+}

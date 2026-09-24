@@ -12,9 +12,15 @@ interface CostRowProps {
   record: CostRecord | PlatformCostRecord;
   grid: string;
   showOrganization: boolean;
+  showAgent?: boolean;
 }
 
-export function CostRow({ record, grid, showOrganization }: CostRowProps) {
+export function CostRow({
+  record,
+  grid,
+  showOrganization,
+  showAgent = true,
+}: CostRowProps) {
   const organizationName =
     "organizationName" in record ? record.organizationName : null;
   const failed = record.status !== "success";
@@ -38,13 +44,15 @@ export function CostRow({ record, grid, showOrganization }: CostRowProps) {
         {formatModelLabel(record.model)}
       </span>
 
-      <span
-        className="truncate"
-        style={{ color: record.agentName ? "var(--ink-2)" : "var(--ink-4)" }}
-        title={record.agentName ?? "Unattributed"}
-      >
-        {record.agentName ?? "Unattributed"}
-      </span>
+      {showAgent && (
+        <span
+          className="truncate"
+          style={{ color: record.agentName ? "var(--ink-2)" : "var(--ink-4)" }}
+          title={record.agentName ?? "Unattributed"}
+        >
+          {record.agentName ?? "Unattributed"}
+        </span>
+      )}
 
       {showOrganization && (
         <span

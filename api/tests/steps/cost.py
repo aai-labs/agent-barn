@@ -35,6 +35,7 @@ def there_are_cost_records(
     organization_name: str | None = None,
     unattributed: bool = False,
     minutes_ago: int = 5,
+    occurred_at: datetime | None = None,
 ):
     """Write cost rows directly.
 
@@ -46,6 +47,9 @@ def there_are_cost_records(
     org-scoped endpoints under test. Passing None cannot express "no agent", since
     that is also what "not specified" looks like — use ``unattributed=True``, which
     is the state the platform page's unattributed bucket reports on.
+
+    ``occurred_at`` pins the calls to an exact instant instead of ``minutes_ago``,
+    for tests that care which calendar month a row lands in.
     """
 
     def step(context):
@@ -61,13 +65,13 @@ def there_are_cost_records(
             resolved_org_name = (
                 organization_name if organization_name is not None else getattr(context.organization, "name", None)
             )
-        occurred_at = datetime.now(UTC) - timedelta(minutes=minutes_ago)
+        latest = occurred_at or datetime.now(UTC) - timedelta(minutes=minutes_ago)
 
         records = [
             CostRecord(
                 request_id=f"gen-test-{uuid4().hex}",
                 litellm_key_hash="0" * 64,
-                occurred_at=occurred_at - timedelta(seconds=index),
+                occurred_at=latest - timedelta(seconds=index),
                 spend=Decimal(spend),
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,

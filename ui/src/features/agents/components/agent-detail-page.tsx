@@ -13,6 +13,7 @@ import { useAgentHealth } from "../hooks/use-agent-health";
 import { useCommunicationConnections } from "@/features/communication-connections/hooks/use-communication-connections";
 import { ChevLeftIcon, CogIcon, ShareIcon } from "@/components/icons";
 import { AppErrorState } from "@/components/app-error-state";
+import { AgentCostsPanel } from "@/features/costs/components/agent-costs-panel";
 import { AgentAvatar } from "./agent-avatar";
 import { AgentErrorBanner, AgentHealthErrorBanner } from "./agent-error-banner";
 import { AgentLifecycleMenu } from "./agent-lifecycle-menu";
@@ -32,19 +33,28 @@ interface AgentDetailPageProps {
   agentId: string;
 }
 
-type Tab = "chat" | "conversations" | "tool-calls" | "logs" | "work" | "about";
+type Tab =
+  | "chat"
+  | "conversations"
+  | "tool-calls"
+  | "logs"
+  | "work"
+  | "costs"
+  | "about";
 const VALID_TABS: Tab[] = [
   "chat",
   "conversations",
   "tool-calls",
   "logs",
   "work",
+  "costs",
   "about",
 ];
 
 export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
   const { agent, isLoading, error, refetch } = useAgent(agentId);
   const canReadActivity = canAgent(agent, "activity.read");
+  const canReadCosts = canAgent(agent, "cost.read");
   const { health } = useAgentHealth(
     agentId,
     canReadActivity &&
@@ -77,6 +87,7 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
           ["work", "Work"],
         ] as [Tab, string][])
       : []),
+    ...(canReadCosts ? ([["costs", "Costs"]] as [Tab, string][]) : []),
     ["about", "About"],
   ];
   const resolvedTab = tabs.some(([key]) => key === tab) ? tab : tabs[0][0];
@@ -281,6 +292,7 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
             {resolvedTab === "tool-calls" && <ToolCallsTab agent={agent} />}
             {resolvedTab === "logs" && <LogsTab agent={agent} />}
             {resolvedTab === "work" && <WorkTab agent={agent} />}
+            {resolvedTab === "costs" && <AgentCostsPanel agentId={agent.id} />}
             {resolvedTab === "about" && <AboutTab agent={agent} />}
           </>
         )}

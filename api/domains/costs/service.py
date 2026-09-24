@@ -1,5 +1,6 @@
 import logging
 from dataclasses import dataclass
+from datetime import datetime
 from uuid import UUID
 
 from fastapi import HTTPException, status
@@ -22,6 +23,8 @@ from api.domains.costs.models import (
     CostRecordSource,
     CostSeriesPoint,
     CostSummaryRead,
+    MonthlyCostRead,
+    MonthlyWindow,
     TokenSeriesPoint,
 )
 from api.domains.costs.repository import CostRepository
@@ -31,6 +34,8 @@ from api.domains.rbac.policy import PermissionPolicy
 from api.infrastructure.shared.models import PaginatedItems, Pagination
 
 logger = logging.getLogger(__name__)
+
+_SECONDS_PER_DAY = 86400
 
 
 @inject
@@ -148,21 +153,24 @@ class CostService:
             )
         ]
 
-    def get_agent_cost(
+    def get_org_monthly(
         self,
-        agent_id: UUID,
         context: CurrentUserContext,
-        window: StatsWindow,
-    ) -> AgentCostRead:
-        """Spend for one agent over the requested window.
+        window: MonthlyWindow,
+        filters: CostFilter,
+    ) -> list[MonthlyCostRead]:
+        scoped = self._scoped(self._authorized_org(context), filters)
+        return build_monthly_costs(self.repository, window, scoped)
 
-        Previously read LiteLLM's /key/info, which reports a key's lifetime spend and
-        ignores the date range entirely — so this endpoint answered a different
-        question from the one it was asked. Reading our own table fixes that, and
-        keeps working after the agent's key has been deleted.
-        """
+    # --- Agent cost surface ------------------------------------------------
+    #
+    # Authorized through the effective Agent Access Role rather than the
+    # Organization-wide `cost.read`, so an Agent Viewer can read the Agent they were
+    # given. Every read pins the filter to that Agent and its Organization.
+
+    def _authorized_agent(self, agent_id: UUID, context: CurrentUserContext) -> Agent:
         try:
-            agent = self.agent_authorization.require_action(context, agent_id, PermissionKey.COST_READ)
+            return self.agent_authorization.require_action(context, agent_id, PermissionKey.COST_READ)
         except HTTPException as exc:
             if exc.status_code != status.HTTP_404_NOT_FOUND:
                 raise
@@ -175,13 +183,34 @@ class CostService:
             agent = self.agent_repository.get_deleted_in_scope(agent_id, cost_scope)
             if agent is None:
                 raise
+            return agent
 
-        filters = CostFilter(organization_id=agent.organization_id, agent_id=agent.id)
-        totals = self.repository.totals(window, filters)
-        breakdown = self.repository.model_breakdown(window, filters)
-        # Same series builder the organization summary uses; the filter above pins it
-        # to this agent, so the trend and the totals beside it describe one set of calls.
-        series = self.repository.spend_series(window, filters)
+    def _agent_scoped(self, agent: Agent, filters: CostFilter) -> CostFilter:
+        return filters.model_copy(update={"organization_id": agent.organization_id, "agent_id": agent.id})
+
+    def get_agent_cost(
+        self,
+        agent_id: UUID,
+        context: CurrentUserContext,
+        window: StatsWindow,
+        filters: CostFilter | None = None,
+    ) -> AgentCostRead:
+        """Spend for one agent over the requested window.
+
+        Previously read LiteLLM's /key/info, which reports a key's lifetime spend and
+        ignores the date range entirely — so this endpoint answered a different
+        question from the one it was asked. Reading our own table fixes that, and
+        keeps working after the agent's key has been deleted.
+        """
+        agent = self._authorized_agent(agent_id, context)
+        scoped = self._agent_scoped(agent, filters or CostFilter())
+        totals = self.repository.totals(window, scoped)
+        breakdown = self.repository.model_breakdown(window, scoped)
+        # Same series builders the organization summary uses; the filter above pins
+        # them to this agent, so the trends and the totals beside them describe one
+        # set of calls.
+        series = self.repository.spend_series(window, scoped)
+        spend = float(totals.spend)
 
         return AgentCostRead(
             agent_id=agent.id,
@@ -192,23 +221,81 @@ class CostService:
             from_date=window.start,
             to_date=window.end,
             granularity=window.granularity,
-            total_cost=float(totals.spend),
+            total_cost=spend,
             total_tokens=totals.prompt_tokens + totals.completion_tokens,
             prompt_tokens=totals.prompt_tokens,
             completion_tokens=totals.completion_tokens,
+            total_calls=totals.calls,
+            failed_calls=totals.failed_calls,
+            healed_calls=totals.healed_calls,
+            avg_cost_per_call=spend / totals.calls if totals.calls else 0.0,
+            avg_prompt_tokens=totals.avg_prompt_tokens,
+            avg_duration_ms=totals.avg_duration_ms,
+            daily_burn_rate=daily_burn_rate(spend, window.start, window.end),
+            first_call_at=totals.first_call_at,
+            last_call_at=totals.last_call_at,
             models_breakdown=[
                 AgentModelBreakdown(
                     model=model,
-                    total_cost=float(spend),
+                    total_cost=float(model_spend),
                     prompt_tokens=prompt_tokens,
                     completion_tokens=completion_tokens,
+                    calls=calls,
                 )
-                for model, spend, prompt_tokens, completion_tokens in breakdown
+                for model, model_spend, prompt_tokens, completion_tokens, calls in breakdown
             ],
             spend_over_time=[
-                CostSeriesPoint(bucket=bucket, spend=float(spend), calls=calls) for bucket, spend, calls in series
+                CostSeriesPoint(bucket=bucket, spend=float(bucket_spend), calls=calls)
+                for bucket, bucket_spend, calls in series
             ],
+            avg_prompt_tokens_over_time=[
+                TokenSeriesPoint(bucket=bucket, avg_prompt_tokens=value)
+                for bucket, value in self.repository.avg_prompt_tokens_series(window, scoped)
+            ],
+            cost_per_call_histogram=_histogram(self.repository, window, scoped),
         )
+
+    def list_agent_costs(
+        self,
+        agent_id: UUID,
+        context: CurrentUserContext,
+        window: StatsWindow,
+        filters: CostFilter,
+        *,
+        page: int,
+        page_size: int,
+    ) -> PaginatedItems[CostRecordRead]:
+        scoped = self._agent_scoped(self._authorized_agent(agent_id, context), filters)
+        found = self.repository.find_paginated(window, scoped, Pagination(page=page, size=page_size))
+        return PaginatedItems(
+            page=found.page,
+            page_size=found.page_size,
+            total=found.total,
+            items=[_to_cost_record_read(record) for record in found.items],
+        )
+
+    def list_agent_model_options(
+        self,
+        agent_id: UUID,
+        context: CurrentUserContext,
+        window: StatsWindow,
+        filters: CostFilter,
+    ) -> list[CostFilterOption]:
+        scoped = self._agent_scoped(self._authorized_agent(agent_id, context), filters)
+        return [
+            CostFilterOption(value=model, label=model.split("/")[-1])
+            for model in self.repository.distinct_models(window, scoped)
+        ]
+
+    def get_agent_monthly(
+        self,
+        agent_id: UUID,
+        context: CurrentUserContext,
+        window: MonthlyWindow,
+        filters: CostFilter,
+    ) -> list[MonthlyCostRead]:
+        scoped = self._agent_scoped(self._authorized_agent(agent_id, context), filters)
+        return build_monthly_costs(self.repository, window, scoped)
 
 
 def _display_status(agent: Agent) -> str:
@@ -272,12 +359,75 @@ def build_cost_summary(
             AgentSpendSeriesPoint(bucket=bucket, agent_id=agent_id, agent_name=name, spend=float(spend))
             for bucket, agent_id, name, spend in repository.spend_by_agent_series(window, scoped)
         ],
-        cost_per_call_histogram=[
-            CostHistogramBucket(
-                lower=float(lower),
-                upper=float(upper) if upper is not None else None,
-                calls=calls,
-            )
-            for lower, upper, calls in repository.cost_per_call_histogram(window, scoped)
-        ],
+        cost_per_call_histogram=_histogram(repository, window, scoped),
     )
+
+
+def _histogram(repository: CostRepository, window: StatsWindow, scoped: CostFilter) -> list[CostHistogramBucket]:
+    return [
+        CostHistogramBucket(
+            lower=float(lower),
+            upper=float(upper) if upper is not None else None,
+            calls=calls,
+        )
+        for lower, upper, calls in repository.cost_per_call_histogram(window, scoped)
+    ]
+
+
+def daily_burn_rate(spend: float, start: datetime, end: datetime) -> float:
+    """Spend over a span divided by its length in days."""
+    days = (end - start).total_seconds() / _SECONDS_PER_DAY
+    return spend / days if days > 0 else 0.0
+
+
+def build_monthly_costs(
+    repository: CostRepository,
+    window: MonthlyWindow,
+    scoped: CostFilter,
+) -> list[MonthlyCostRead]:
+    """Calendar-month totals, with the month in progress projected to its end.
+
+    Shared by the Agent, Organization and platform surfaces for the same reason
+    `build_cost_summary` is: one predicate, three scopes.
+    """
+    months = repository.monthly_totals(window, scoped)
+    current_month = _month_start(window.end)
+    result = []
+    for totals in months:
+        spend = float(totals.spend)
+        is_current = totals.month == current_month
+        result.append(
+            MonthlyCostRead(
+                month=totals.month,
+                spend=spend,
+                calls=totals.calls,
+                failed_calls=totals.failed_calls,
+                prompt_tokens=totals.prompt_tokens,
+                completion_tokens=totals.completion_tokens,
+                active_agents=totals.agents,
+                is_current=is_current,
+                projected_spend=_projected_month_spend(spend, totals.month, window.end) if is_current else None,
+            )
+        )
+    return result
+
+
+def _month_start(moment: datetime) -> datetime:
+    return moment.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+
+def _next_month_start(month: datetime) -> datetime:
+    return month.replace(year=month.year + 1, month=1) if month.month == 12 else month.replace(month=month.month + 1)
+
+
+def _projected_month_spend(spend: float, month: datetime, now: datetime) -> float:
+    """Month-to-date spend extrapolated at the pace so far.
+
+    A straight line, not a forecast: it says where the month lands if nothing
+    changes, which is the question a reader of a month-to-date figure is asking.
+    """
+    elapsed = (now - month).total_seconds()
+    if elapsed <= 0:
+        return spend
+    length = (_next_month_start(month) - month).total_seconds()
+    return spend * length / elapsed
