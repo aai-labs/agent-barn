@@ -70,6 +70,36 @@ def test_add_agent_assigns_the_group_via_agent_service():
     service, repository, _pp, _honcho, agent_service, _pool, _mem = _service()
     group = MemoryGroup(id=uuid7(), organization_id=org_id, name="Research")
     repository.get_by_id_and_org.return_value = group
+    agent_service.agent_memory_group_id.return_value = None
+    agent_service.count_memory_group_members.return_value = 0
+
+    service.add_agent(group.id, agent_id, _context(org_id))
+
+    agent_service.set_memory_group.assert_called_once_with(agent_id, group.id, org_id)
+
+
+def test_add_agent_rejects_when_the_group_is_full():
+    org_id, agent_id = uuid7(), uuid7()
+    service, repository, _pp, _honcho, agent_service, _pool, _mem = _service()
+    group = MemoryGroup(id=uuid7(), organization_id=org_id, name="Research")
+    repository.get_by_id_and_org.return_value = group
+    agent_service.agent_memory_group_id.return_value = None  # not already a member
+    agent_service.count_memory_group_members.return_value = 25  # at the default cap
+
+    with pytest.raises(HTTPException) as exc:
+        service.add_agent(group.id, agent_id, _context(org_id))
+
+    assert_that(exc.value.status_code, equal_to(status.HTTP_409_CONFLICT))
+    agent_service.set_memory_group.assert_not_called()
+
+
+def test_re_adding_an_existing_member_is_allowed_even_at_the_cap():
+    org_id, agent_id = uuid7(), uuid7()
+    service, repository, _pp, _honcho, agent_service, _pool, _mem = _service()
+    group = MemoryGroup(id=uuid7(), organization_id=org_id, name="Research")
+    repository.get_by_id_and_org.return_value = group
+    agent_service.agent_memory_group_id.return_value = group.id  # already in this group
+    agent_service.count_memory_group_members.return_value = 25
 
     service.add_agent(group.id, agent_id, _context(org_id))
 
@@ -81,10 +111,25 @@ def test_remove_agent_clears_the_group():
     service, repository, _pp, _honcho, agent_service, _pool, _mem = _service()
     group = MemoryGroup(id=uuid7(), organization_id=org_id, name="Research")
     repository.get_by_id_and_org.return_value = group
+    agent_service.agent_memory_group_id.return_value = group.id
 
     service.remove_agent(group.id, agent_id, _context(org_id))
 
     agent_service.set_memory_group.assert_called_once_with(agent_id, None, org_id)
+
+
+def test_remove_agent_404s_when_the_agent_is_not_in_this_group():
+    org_id, agent_id = uuid7(), uuid7()
+    service, repository, _pp, _honcho, agent_service, _pool, _mem = _service()
+    group = MemoryGroup(id=uuid7(), organization_id=org_id, name="Research")
+    repository.get_by_id_and_org.return_value = group
+    agent_service.agent_memory_group_id.return_value = uuid7()  # a different group
+
+    with pytest.raises(HTTPException) as exc:
+        service.remove_agent(group.id, agent_id, _context(org_id))
+
+    assert_that(exc.value.status_code, equal_to(status.HTTP_404_NOT_FOUND))
+    agent_service.set_memory_group.assert_not_called()
 
 
 def test_delete_group_deliberately_purges_the_shared_pool():

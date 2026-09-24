@@ -113,6 +113,16 @@ class MemoryGroupService:
         """
         org_id = self._require_manager(context)
         group = self._get_or_404(group_id, org_id)
+        # Pool operations fan out per member, so a group is capped. Re-adding an
+        # Agent that is already a member is idempotent and never trips the cap.
+        already_member = self.agent_service.agent_memory_group_id(agent_id, org_id) == group.id
+        if not already_member and self.agent_service.count_memory_group_members(group.id) >= (
+            self.config.max_memory_group_size
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"This memory group is full (limit is {self.config.max_memory_group_size} agents).",
+            )
         self.agent_service.set_memory_group(agent_id, group.id, org_id)
 
     def remove_agent(self, group_id: UUID, agent_id: UUID, context: CurrentUserContext) -> None:
@@ -120,6 +130,10 @@ class MemoryGroupService:
         its next start, while its past contributions stay in the pool."""
         org_id = self._require_manager(context)
         self._get_or_404(group_id, org_id)
+        # Only remove it from the group it is actually in — clearing membership via
+        # the wrong group's endpoint would silently opt the Agent out of another group.
+        if self.agent_service.agent_memory_group_id(agent_id, org_id) != group_id:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="This agent is not in this memory group.")
         self.agent_service.set_memory_group(agent_id, None, org_id)
 
     def delete_group(self, group_id: UUID, context: CurrentUserContext) -> None:
@@ -183,7 +197,7 @@ class MemoryGroupService:
         # copy stays "about the operator" rather than becoming the curator's self-model.
         subject = str(item.get("observed_id") or _SHARE_PEER)
 
-        shared_by = getattr(context.user, "id", None)
+        shared_by = context.user.id
         results: list[ShareMemoryItemTargetResult] = []
         for target in targets:
             try:

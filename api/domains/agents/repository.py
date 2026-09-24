@@ -131,6 +131,21 @@ class AgentRepository:
             query = select(Agent).where(col(Agent.id) == agent_id).where(col(Agent.deleted_at).is_(None))
             return session.exec(query).first()
 
+    def count_in_memory_group(self, group_id: UUID) -> int:
+        """How many live Agents belong to a memory group.
+
+        Soft-deleted Agents are excluded: they no longer run, so they do not
+        contribute to the pool's fan-out and should not count against its cap.
+        """
+        with Session(self.delegate.engine) as session:
+            rows = session.exec(
+                select(Agent.id).where(
+                    col(Agent.memory_group_id) == group_id,
+                    col(Agent.deleted_at).is_(None),
+                )
+            ).all()
+            return len(rows)
+
     def names_by_ids(self, agent_ids: list[UUID]) -> dict[UUID, str]:
         """Display names for the given Agent ids, soft-deleted ones included.
 

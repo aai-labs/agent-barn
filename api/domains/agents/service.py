@@ -2445,6 +2445,23 @@ class AgentService:
         deletion) to decide whether an org can be safely torn down."""
         return self.repository.count_active_by_org(organization_id)
 
+    def count_memory_group_members(self, group_id: UUID) -> int:
+        """Live Agents currently in a memory group — for the group-size cap.
+
+        Internal: the memory-groups service authorizes and validates the group is in
+        the caller's org before calling this."""
+        return self.repository.count_in_memory_group(group_id)
+
+    def agent_memory_group_id(self, agent_id: UUID, org_id: UUID) -> UUID | None:
+        """The Agent's current memory group, scoped to the org (404 otherwise).
+
+        Internal: lets the memory-groups service check membership (e.g. that an
+        Agent is actually in the group it is being removed from) before writing."""
+        agent = self.repository.get_by_id(agent_id)
+        if agent is None or agent.organization_id != org_id or agent.deleted_at is not None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent {agent_id} not found")
+        return agent.memory_group_id
+
     def set_memory_group(self, agent_id: UUID, group_id: UUID | None, org_id: UUID) -> None:
         """Assign an Agent to a memory group, or clear it (group_id=None).
 

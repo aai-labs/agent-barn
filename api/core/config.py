@@ -72,6 +72,10 @@ class Config(BaseSettings):
     # Honcho's own LiteLLM virtual key. The API needs it to read the spend that
     # Honcho's token telemetry is divided against; it is never used to call a model.
     honcho_litellm_key: str = ""
+    # Max Agents in one memory group. Pool operations (search, recall, facets) fan
+    # out per member, so the cap keeps them bounded and search complete rather than
+    # silently truncated. A config value so it can be tuned per env without a deploy.
+    max_memory_group_size: int = 25
     organization_creation_limit: int = 5
     # Percentages of an Organization's limit at which it is notified. Empty falls back
     # to the default; 100 is always meaningful because it is the enforcement boundary.
