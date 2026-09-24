@@ -22,11 +22,43 @@ The whole memory mechanism now keys off a pool id rather than an Agent id: an Ag
 
 - **Model.** A `memory_group` table (org-scoped, unique name per org); `agent.memory_group_id` is a nullable FK (`SET NULL` on group delete). `memory_active` = Honcho deployed **and** the Agent is in a group. The workspace is `af-pool-<group id>`.
 - **Opt-in / opt-out.** Adding an Agent to a group turns its shared memory on; removing it turns it off on the Agent's next start. Opt-out only revokes access — the Agent's past contributions stay in the pool.
-- **Distinct identities.** Each Agent keeps a distinct Honcho peer so contributions stay attributable. OpenClaw needed an explicit agent entry to stop every Agent being `agent-main` (`agents.list`, workspace/agentDir pinned to today's defaults so opting in never relocates files); Hermes already had `agent-<name>`.
-- **Recall is pool-wide, per runtime.** OpenClaw runs a first-party `honcho-pool-recall` plugin that queries the workspace-level dialectic (the stock plugin still handles capture); Hermes's baked-in `_chat_once` is patched to the same workspace-level query. Both verified live: an Agent surfaces a fact a *different* Agent in its pool learned.
+- **Distinct identities.** Each Agent keeps a distinct Honcho peer so contributions stay attributable. OpenClaw needed an explicit agent entry to stop every Agent being `agent-main` (`agents.list`, workspace/agentDir pinned to today's defaults so opting in never relocates files); Hermes already had `agent-<name>`. Both runtimes now use `agent-<agent id>` (the stable id, not the name) so a rename never orphans memory and Honcho never renormalizes the peer.
+- **One human peer per pool (`owner`).** Both runtimes represent the person as a single `owner` peer (OpenClaw hardcodes `OWNER_ID`; Hermes was unified from `operator` to match). This is deliberate: memory is pool-scoped, not per-end-user (see *Per-user memory (deferred)*).
+- **Recall is pool-wide, per runtime.** OpenClaw runs a first-party `honcho-pool-recall` plugin that queries the workspace-level dialectic; Hermes's baked-in `_chat_once` is patched to the same workspace-level query. Both verified live: an Agent surfaces a fact a *different* Agent in its pool learned. The stock OpenClaw plugin keeps **capture** but its **own recall is disabled**, so there is one dialectic call per turn rather than two. The recall query is a recent-conversation window, not just the last message.
 - **Cost is pool-level, measured per group.** Honcho holds one credential for all memory work, so LiteLLM's figure for that key is the memory total. AF-280-v2 apportions that total across pools by each workspace's token share (reconciling to the total) and reports a per-group figure — not split per Agent. Enforcing that cost against a budget is a separate, deferred decision recorded in *Enforcing per-pool cost* below.
-- **Delete safety.** `delete_workspace` refuses a pool workspace, so deleting one Agent can never erase a pool shared by others. Deleting a *group* is the one sanctioned path to erase a pool (a deliberate `delete_pool_workspace`); it also drops members via the FK.
-- **Permissions.** Managing groups (create/rename/delete, assign Agents) takes a new org-scoped `memory_group.manage`, granted to org owners and admins.
+- **Delete safety.** A per-Agent purge never touches a pool workspace, so deleting one Agent can never erase a pool shared by others. Deleting a *group* is the one sanctioned path to erase a pool (`delete_pool_workspace`), and it runs under a **retried domain-event delivery**, not a single best-effort pass: Honcho 409s a workspace delete while its async session deletes are still landing (the common case), so a one-shot delete would leave the pool's conclusions orphaned and unreachable. The retry drives it to completion; group membership drops via the FK.
+- **Permissions.** Managing groups (create/rename/delete, assign Agents) takes a new org-scoped `memory_group.manage`, granted to org owners and admins. The same permission gates the **pool-wide** memory surface (see *Access control for the memory surface*).
+
+## Tenant isolation (workspace-scoped tokens)
+
+One Honcho instance holds every org's pool workspaces, and Agent pods reach Honcho directly (recall + capture). Left unauthenticated — as the first cut was — any pod (or a prompt-injected one running `exec`) could `POST /v3/workspaces/list` and read/write/delete **every org's** pool, breaking tenant isolation. A NetworkPolicy does not fix this: Agents legitimately need Honcho access, so once any Agent can reach an unauthenticated Honcho it can reach any workspace.
+
+The fix is **auth on, with per-workspace-scoped tokens**. Honcho `POST /v3/keys` mints a key scoped to a `workspace_id` (confirmed in v3). The API holds the admin key; at provisioning each Agent is issued a token scoped to *its* pool workspace, injected into its Honcho config and sent as a bearer on recall/capture, and re-minted when the Agent changes pools (its workspace changes). Workspace-scope is the right boundary — an Agent needs every peer in its own pool (for pool-wide recall) and nothing outside it. Network reachability no longer implies data access.
+
+## Access control for the memory surface
+
+Pool memory is derived from **several** Agents' conversations, so exposing it through a single Agent's access would reveal (and let an Editor rewrite) memory derived from Agents the caller cannot see — contradicting the RBAC brief (no subordinate resource of an inaccessible Agent may be revealed). Resolution:
+
+- **Pool-wide** view *and* curation (`scope=pool`, forget, correct) require `memory_group.manage` — the same bar the group memory page already enforced.
+- Plain agent access (`agent.memory.read`/`agent.memory.manage`) is limited to **`scope=mine`**: only what *this* Agent contributed. The "Whole group" toggle is shown only to managers.
+
+This keeps runtime sharing between Agents unchanged (that is the feature); it only aligns who can view/curate the pool through the management UI. The `require_action_allowing_deleted` path is dropped — its rationale (per-Agent workspace retained on delete) was v1; memory now lives in the pool, reachable via the group.
+
+## Group size is bounded
+
+Several pool operations are per-peer and therefore scale with the number of Agents in a pool: search fans out over `(observer, human)` collections (Honcho semantic search requires naming both peers — there is no search-all), recall retrieval likewise, and the facet counts. To keep these bounded and guarantee **complete** results (no silent truncation), group membership is capped at `MAX_MEMORY_GROUP_SIZE` (config, default **25**), enforced on add. If a pool ever genuinely needs to be larger, the escape hatch is a single shared-observer peer (pool reads become O(1)) at the cost of per-Agent `scope=mine` and attribution — deferred until a real need appears.
+
+## Recall and search: shape, cost, and API limits
+
+Honcho's memory API shaped several choices, verified live against 3.2.0 (the public docs are wrong on the first point):
+
+- **Semantic search requires both `observer` and `observed`** (`conclusions/query` 422s otherwise); there is no search-across-everything. Facts are keyed `(observer, observed)`, and in these pools `observed` is always the human peer, so an Agent-wide search is `(each observer, human)` — linear in pool size, bounded by the group cap. The earlier silent `[:8]` peer cap is removed; a defensive ceiling reports *partial results* rather than ever truncating silently.
+- **Pool-wide recall is only the workspace dialectic** (`POST /v3/workspaces/{ws}/chat`), which has **no observer/target** — it aggregates every peer and cannot be scoped to one person. This is why per-user recall isolation is not possible without replacing the dialectic (see *Per-user memory (deferred)*).
+- **Cost.** The dialectic runs an LLM tool loop (~25s per call, measured); it dominates memory spend over the deriver. Recall is one such call per turn (after disabling OpenClaw's redundant stock recall).
+
+## Per-user memory (deferred)
+
+Every human collapses onto the single `owner` peer, so on a multi-sender surface (open Slack, Agent General Access) a fact one person shares can surface when another person talks — cross-user leakage within a pool. True per-user isolation is deferred: it needs per-sender peers **and** sender-scoped recall (which the workspace dialectic cannot do, so it means replacing the dialectic) **and** a cross-platform identity layer (the same human is a different id per platform, and none unifies them). The intended envelope for shared pools is therefore operator-run or trusted-shared-audience Agents; per-user memory is a follow-up if mutually-untrusted multi-user Agents become a target.
 
 ## Enforcing per-pool cost (deferred)
 
