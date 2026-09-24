@@ -59,6 +59,7 @@ Reading the proxy at request time — the earlier arrangement — meant a failed
 - Per-Agent detail requires `cost.read` through the effective Agent Access Role. Agent Viewer, Editor and Owner can read accessible active-Agent costs; Organization Owner/Admin may also read deleted-Agent history.
 - Per-Agent detail respects the requested window. It previously read `/key/info`, which is lifetime spend and ignores the date range.
 - Every Agent-surface read, including its calls, monthly totals and model options, authorizes through `_authorized_agent` with the same Agent Access and deleted-Agent rules as the detail read. None of them requires the Organization-wide `cost.read`.
+- The Agent's Costs tab is gated on `cost.read` alone and does not require `activity.read`, unlike the Activity tab (see [`agent-activity.md`](agent-activity.md)). A custom Agent Access Role can grant one Permission without the other, and Costs is the only surface that makes a Permission-`cost.read`-but-not-`activity.read` reader's access reachable.
 - Per-Agent detail carries its own spend trend, prompt-size trend and cost-per-call histogram, plus call, failure, recovered-call, latency and burn-rate figures. They are built from the same queries the Organization summary uses under an Agent-pinned filter. It is not read from the summary: that surface requires the Organization-wide `cost.read` an Agent Access Role never grants, so an Agent Viewer or Editor could not load it. The response echoes the resolved window and granularity, because a chart cannot label a bucket without knowing the resolution it was grouped at.
 - Cost-facing status is mapped to `active`, `stopped`, `error` or `deleted`; it is not the persisted AgentStatus enum.
 - Every platform route requires `require_platform_admin`. Nothing re-scopes by membership, because a platform admin deliberately has none.
@@ -136,7 +137,7 @@ that must keep their own errors.
 
 ## Boundaries
 
-Agents own LiteLLM key creation, encryption, deletion blocking, and lifecycle status. The LiteLLM and OpenRouter infrastructure clients own remote API behavior. Costs owns the persisted record, attribution, healing, and aggregation. Conversation and Tool Call data do not feed cost calculation.
+Agents own LiteLLM key creation, encryption, deletion blocking, and lifecycle status. The LiteLLM and OpenRouter infrastructure clients own remote API behavior. Costs owns the persisted record, attribution, healing, and aggregation. Conversation and Tool Call data do not feed cost calculation. Agent Activity reads `cost_record` for its own per-Agent surface and annotates it with message timing; it owns no table and changes no figure here (see [`agent-activity.md`](agent-activity.md)).
 
 ## Source map
 

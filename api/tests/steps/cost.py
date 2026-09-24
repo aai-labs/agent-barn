@@ -36,6 +36,7 @@ def there_are_cost_records(
     unattributed: bool = False,
     minutes_ago: int = 5,
     occurred_at: datetime | None = None,
+    spacing_seconds: int = 1,
 ):
     """Write cost rows directly.
 
@@ -65,13 +66,15 @@ def there_are_cost_records(
             resolved_org_name = (
                 organization_name if organization_name is not None else getattr(context.organization, "name", None)
             )
-        latest = occurred_at or datetime.now(UTC) - timedelta(minutes=minutes_ago)
+        # Rows walk backwards from the base time, so `count` rows land inside one
+        # burst at the default spacing and in separate ones at a wide spacing.
+        base = occurred_at if occurred_at is not None else datetime.now(UTC) - timedelta(minutes=minutes_ago)
 
         records = [
             CostRecord(
                 request_id=f"gen-test-{uuid4().hex}",
                 litellm_key_hash="0" * 64,
-                occurred_at=latest - timedelta(seconds=index),
+                occurred_at=base - timedelta(seconds=index * spacing_seconds),
                 spend=Decimal(spend),
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,

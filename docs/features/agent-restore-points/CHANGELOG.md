@@ -23,6 +23,65 @@ Related context: [`../agents.md`](../agents.md), [`../../architecture/runtime-an
 
 ## Changes
 
+### 2026-09-23 — AF-292 — Restore no longer races the Agent it is replacing
+
+- Fixed: capture and restore could run while the Agent's pod was still terminating. Stopping
+  deletes the Deployment and returns, so the Agent reads as STOPPED for the length of its grace
+  period — 30 seconds by default — while the pod keeps writing. ReadWriteOnce does not prevent
+  this: it is enforced per node for attachable volumes, and the default `local-path` provisioner
+  is a bind mount with nothing to attach, so a Job pod and a dying Agent pod can hold the same
+  directory. A concurrent writer during the wipe reproduces `[Errno 39] Directory not empty`
+  exactly, which is what a failed staging restore reported; the quieter outcome is a Pre-Restore
+  backup captured mid-write.
+- Changed: both flows now wait for the pod to be gone before creating any Job, and refuse with a
+  409 saying to try again if it outlives the wait. The wait is taken outside the Agent's lifecycle
+  lock, so start and stop stay responsive.
+- Added: `has_pods_for_deployment` on the Kubernetes client. `get_pod_name_for_deployment` could
+  not serve — it skips pods carrying a deletion timestamp, which is precisely the state that
+  matters here.
+- Note: the shared Kubernetes test double now answers `False` for that call by default. Every
+  attribute of a `MagicMock` is otherwise truthy, which would read as a pod still terminating and
+  refuse every restore point operation in the suite.
+
+### 2026-09-23 — AF-292 — The plugin store travels with the archive
+
+- Changed: OpenClaw's `npm` plugin store is captured instead of excluded, and the wipe is total
+  again. Excluding it while wiping it destroyed the store with nothing to put back; sparing it from
+  the wipe — the previous attempt — left current packages beside capture-time records in
+  `state/openclaw.sqlite`, which is the same disagreement by another route. Capturing it makes the
+  packages and their records roll back together.
+- Reverted: the per-runtime preserved-path list. Restoring by sparing paths could not be made
+  correct: the wipe is the only thing that prunes a revoked credential from the aai-cli store or a
+  skill the Agent no longer has, so anything spared there is a leak, and anything not spared is the
+  original bug.
+- Changed: `start.sh` recreates the plugin store's link into the runtime image after a restore, and
+  resolves the package directory before reading its version. The old version-check read a path that
+  a half-finished install does not create, so it never passed `--force` and every later boot failed
+  the same way — the state the staging Agent was stuck in.
+- Changed: Hermes excludes `.cache`. Regenerable tool cache, and the largest thing on the volume.
+- Note: a restore still does not repair a plugin store that is already broken. Recovery for an
+  Agent in that state is `openclaw doctor --fix` or recreating it.
+
+### 2026-09-23 — AF-292 — Capture cannot produce an archive restore would reject
+
+- Fixed: a Hermes Agent whose volume held a uv wheel cache could not be restored at all. uv links
+  its wheels to absolute paths under `/opt/data`; the restore mounts the volume at `/target`, so
+  those links resolve outside the destination and the extraction filter refused the archive —
+  failing the whole restore over one cache link. Reproduced against the real module on Linux.
+- Changed: capture offers every member to the same `tarfile.data_filter` the extraction applies,
+  and drops what it refuses, reporting the count as `skipped` beside the archive size. The
+  destination passed is neutral rather than the live volume path: the filter is
+  destination-sensitive, and filtering against `/opt/data` accepts exactly the link that `/target`
+  rejects. A neutral destination is strictly the harshest, so it can over-drop but never
+  under-drop.
+- Changed: OpenClaw no longer drops every symlink at capture. That rule existed to keep the plugin
+  store's link into the runtime image out of the archive; the filter now removes that link on its
+  own evidence, and relative links that stay inside the volume — npm's `.bin` entries among them —
+  survive a restore instead of being destroyed.
+- Decision: hand-written rules about which links are safe kept drifting from what extraction
+  actually accepts, and each divergence cost a whole restore. Deferring to the filter closes the
+  class rather than the case, so a future pathological member cannot reintroduce it.
+
 ### 2026-09-23 — AF-292 — Restore no longer destroys unrecoverable runtime state
 
 - Fixed: restoring an OpenClaw Agent bricked it. The wipe deleted everything on the volume while

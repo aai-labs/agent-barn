@@ -24,7 +24,7 @@ import { ChatTab } from "./chat-tab";
 import { ConversationsTab } from "./conversations-tab";
 import { ToolCallsTab } from "./tool-calls-tab";
 import { LogsTab } from "./logs-tab";
-import { WorkTab } from "./work-tab";
+import { ActivityTab } from "./activity-tab";
 import { AboutTab } from "./about-tab";
 import { ShareDialog } from "./share-dialog";
 import { AgentDetailHeaderSkeleton } from "./agent-detail-header-skeleton";
@@ -38,7 +38,7 @@ type Tab =
   | "conversations"
   | "tool-calls"
   | "logs"
-  | "work"
+  | "activity"
   | "costs"
   | "about";
 const VALID_TABS: Tab[] = [
@@ -46,7 +46,7 @@ const VALID_TABS: Tab[] = [
   "conversations",
   "tool-calls",
   "logs",
-  "work",
+  "activity",
   "costs",
   "about",
 ];
@@ -84,9 +84,16 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
           ["conversations", "Conversations"],
           ["tool-calls", "Tool calls"],
           ["logs", "Logs"],
-          ["work", "Work"],
         ] as [Tab, string][])
       : []),
+    // Every part of Activity needs activity.read: the runtime diagnostics on
+    // their own, the usage sections together with cost.read. The tab itself
+    // decides what to show a reader who has only the first.
+    ...(canReadActivity ? ([["activity", "Activity"]] as [Tab, string][]) : []),
+    // Costs is gated on cost.read alone, independent of activity.read: a custom
+    // Agent Access Role can grant one Permission without the other, and this is
+    // the only tab that surfaces cost.read on its own — Activity's usage section
+    // needs activity.read too.
     ...(canReadCosts ? ([["costs", "Costs"]] as [Tab, string][]) : []),
     ["about", "About"],
   ];
@@ -291,7 +298,7 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
             )}
             {resolvedTab === "tool-calls" && <ToolCallsTab agent={agent} />}
             {resolvedTab === "logs" && <LogsTab agent={agent} />}
-            {resolvedTab === "work" && <WorkTab agent={agent} />}
+            {resolvedTab === "activity" && <ActivityTab agent={agent} />}
             {resolvedTab === "costs" && <AgentCostsPanel agentId={agent.id} />}
             {resolvedTab === "about" && <AboutTab agent={agent} />}
           </>
