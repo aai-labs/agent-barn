@@ -418,6 +418,7 @@ def build_default_event_registry() -> DomainEventRegistry:
         (AGENT_ACCESS_REVOKED, AgentAccessRevokedPayload),
         (AGENT_GENERAL_ACCESS_CHANGED, AgentGeneralAccessChangedPayload),
         (AGENT_UPDATED, AgentUpdatedPayload),
+        (AGENT_DELETED, AgentDeletedPayload),
         (TEMPLATE_CREATED, TemplateCreatedPayload),
         (TEMPLATE_UPDATED, TemplateUpdatedPayload),
         (TEMPLATE_DELETED, TemplateDeletedPayload),
@@ -434,19 +435,6 @@ def build_default_event_registry() -> DomainEventRegistry:
                 event_scope=EventScope.ORGANIZATION,
             )
         )
-    # Deleting an Agent erases what it learned. Honcho refuses a workspace delete
-    # while any session remains and processes both deletes asynchronously, so the
-    # purge can lose that race — it runs here, under retry, rather than inline in
-    # `delete_agent` where a lost race would leave memory behind silently.
-    registry.register(
-        DomainEventDefinition(
-            event_name=AGENT_DELETED,
-            schema_version=1,
-            payload_model=AgentDeletedPayload,
-            handler_names=(SECURITY_AUDIT_HANDLER,),
-            event_scope=EventScope.ORGANIZATION,
-        )
-    )
     for event_name in (AGENT_SECRET_ADDED, AGENT_SECRET_UPDATED, AGENT_SECRET_REMOVED):
         registry.register(
             DomainEventDefinition(

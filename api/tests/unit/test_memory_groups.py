@@ -6,7 +6,7 @@ deleting a group drops every member (FK SET NULL) and deliberately erases the
 shared pool.
 """
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 from uuid import uuid7
 
 import pytest
@@ -22,6 +22,7 @@ from api.domains.memory_groups.models import (
 )
 from api.domains.memory_groups.service import MemoryGroupService
 from api.domains.rbac.catalog import PermissionKey
+from api.infrastructure.honcho.client import HonchoError
 
 
 def _context(org_id):
@@ -156,6 +157,24 @@ def test_delete_group_skips_pool_purge_when_memory_backend_is_off():
     service.delete_group(group.id, _context(org_id))
 
     honcho.delete_pool_workspace.assert_not_called()
+
+
+def test_delete_group_keeps_the_group_when_the_pool_purge_fails():
+    """Purge-first: if the shared pool cannot be erased (Honcho's async session
+    delete keeps 409ing), the group is left in place for the caller to retry rather
+    than deleting the row and orphaning the pool's memory."""
+    org_id = uuid7()
+    service, repository, _pp, honcho, _agents, _pool, _mem = _service(honcho_enabled=True)
+    group = MemoryGroup(id=uuid7(), organization_id=org_id, name="Research")
+    repository.get_by_id_and_org.return_value = group
+    honcho.delete_pool_workspace.side_effect = HonchoError("409 while sessions remain")
+
+    with patch("api.domains.memory_groups.service.time.sleep"):
+        with pytest.raises(HTTPException) as exc:
+            service.delete_group(group.id, _context(org_id))
+
+    assert_that(exc.value.status_code, equal_to(status.HTTP_502_BAD_GATEWAY))
+    repository.delete.assert_not_called()
 
 
 def test_rename_group_persists_the_new_name():

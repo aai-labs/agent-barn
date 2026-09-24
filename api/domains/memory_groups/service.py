@@ -1,4 +1,5 @@
 import logging
+import time
 from dataclasses import dataclass
 from uuid import UUID
 
@@ -38,6 +39,12 @@ _MANAGE_DETAIL = "You don't have permission to manage memory groups."
 # particular Agent concluded. Pool-wide recall aggregates every peer, so placement
 # does not change what is recalled; it only keeps attribution honest.
 _SHARE_PEER = "owner"
+
+# Erasing a pool races Honcho's async session deletes, so the workspace delete is
+# retried a few times with a short pause between — enough for the sessions to drain
+# without blocking the request for long.
+_PURGE_ATTEMPTS = 5
+_PURGE_BACKOFF_SECONDS = 1.0
 
 
 @inject
@@ -139,19 +146,39 @@ class MemoryGroupService:
     def delete_group(self, group_id: UUID, context: CurrentUserContext) -> None:
         org_id = self._require_manager(context)
         group = self._get_or_404(group_id, org_id)
-        # The FK is SET NULL, so deleting the row drops every member's membership
-        # (they lose shared memory on their next start). Purge the shared pool
-        # workspace too — a deliberate deletion, since the group and its shared
-        # memory are the same thing. This is the one sanctioned path to erase a
-        # pool; the per-Agent purge refuses pool workspaces.
-        self.repository.delete(group)
+        # Purge the shared pool BEFORE dropping the row. Honcho deletes sessions
+        # asynchronously and 409s the workspace delete while any remain, so a single
+        # pass usually fails — and deleting the row first (as this once did) then
+        # left the pool's conclusions about real people orphaned and unreachable.
+        # Purging first means a failure leaves the group in place for the caller to
+        # retry rather than orphaning memory; only once the pool is gone do we drop
+        # the row (its FK is SET NULL, so every member's membership clears with it).
         if self.config.honcho_enabled:
+            self._purge_pool_with_retry(group_id, workspace_id_for_pool(group.id))
+        self.repository.delete(group)
+
+    def _purge_pool_with_retry(self, group_id: UUID, workspace: str) -> None:
+        """Erase a pool workspace, retrying past Honcho's async session-delete race.
+
+        `delete_pool_workspace` deletes the sessions (accepted as async 202s) then
+        the workspace, which 409s while any session lingers. Re-running it re-drains
+        the sessions and retries the workspace delete until it takes; a workspace
+        that never existed 404s and counts as already gone. If it still fails after
+        the bounded retries, the caller is told the group was not deleted."""
+        last_error: HonchoError | None = None
+        for attempt in range(_PURGE_ATTEMPTS):
             try:
-                self.honcho.delete_pool_workspace(workspace_id_for_pool(group.id))
+                self.honcho.delete_pool_workspace(workspace)
+                return
             except HonchoError as exc:
-                # Best-effort: the group is gone from the product either way. A
-                # left-behind workspace is recoverable; failing the delete is not.
-                logger.warning("Could not purge memory pool for deleted group %s: %s", group_id, exc)
+                last_error = exc
+                if attempt < _PURGE_ATTEMPTS - 1:
+                    time.sleep(_PURGE_BACKOFF_SECONDS)
+        logger.warning("Could not purge memory pool for group %s after retries: %s", group_id, last_error)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Could not erase this group's shared memory, so it was not deleted. Please try again.",
+        ) from last_error
 
     def share_item(
         self, source_group_id: UUID, payload: ShareMemoryItemCreate, context: CurrentUserContext
