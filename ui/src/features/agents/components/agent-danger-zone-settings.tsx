@@ -32,8 +32,8 @@ export function AgentDangerZoneSettings({ agent, canDelete, homeHref }: { agent:
         <div className="rounded-xl p-4" style={{ border: "1px solid color-mix(in srgb, var(--err) 35%, var(--line))", background: "color-mix(in srgb, var(--err) 5%, transparent)" }}>
           <div className="font-medium text-[0.9rem]" style={{ color: "var(--err)" }}>Retire this Agent</div>
           <p className="mb-4 mt-1 text-[0.82rem]" style={{ color: "var(--ink-3)" }}>
-            Permanently remove the Agent, its managed runtime resources, and everything it has learned. You
-            can copy its memory to another Agent first.
+            Permanently remove the Agent and its managed runtime resources. If it belongs to a memory group,
+            what it contributed stays in the group's shared memory for the other agents.
           </p>
           {canDelete ? (
             <button type="button" className="af-btn af-btn-sm" style={{ borderColor: "var(--err)", color: "var(--err)" }} onClick={() => setRetireOpen(true)}>

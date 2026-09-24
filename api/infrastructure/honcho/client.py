@@ -9,19 +9,6 @@ from api.core.config import Config
 logger = logging.getLogger(__name__)
 
 
-def workspace_id_for_agent(agent_id: object) -> str:
-    """Derive a Honcho workspace name from the Agent id.
-
-    Deriving it rather than storing it means workspace ownership needs no
-    mapping row: any code that has the Agent id can name its workspace.
-
-    This is the legacy one-workspace-per-Agent name. Opted-in Agents now share a
-    pool workspace instead (see `workspace_id_for_pool`); this remains only for
-    reading/cleaning up workspaces created under the old scheme.
-    """
-    return f"af-{agent_id}"
-
-
 POOL_WORKSPACE_PREFIX = "af-pool-"
 
 
@@ -55,10 +42,11 @@ class HonchoError(Exception):
 @dataclass
 @singleton
 class HonchoClient:
-    """Writes promoted facts into another Agent's Honcho workspace.
+    """The API's client for a memory pool's Honcho workspace.
 
-    Deliberately narrow: this is not a general Honcho client. It exists to
-    support explicit cross-Agent memory sharing, not to read or manage memory.
+    Reads and curates pooled memory (list/search/find/correct/forget), ensures the
+    workspace and its peers, sets deriver instructions, copies shared facts across
+    pools, and erases a pool when its group is deleted.
     """
 
     config: Config
@@ -66,12 +54,6 @@ class HonchoClient:
     @property
     def _base(self) -> str:
         return f"{self.config.honcho_base_url.rstrip('/')}/v3"
-
-    # How many people a shared fact is filed under, beyond the Agent itself. A
-    # Slack Agent accumulates a peer per sender; past this many the fact still
-    # lands on the self-model and the most established peers, and is simply not
-    # scoped to every rare correspondent.
-    SHARE_MAX_PEOPLE = 8
 
     def share_fact(self, workspace_id: str, share_peer: str, content: str, *, subject: str) -> list[dict]:
         """Copy a promoted fact into a pool, preserving what it is *about*.
@@ -134,38 +116,16 @@ class HonchoClient:
     def delete_session(self, workspace_id: str, session_id: str) -> None:
         self._request("DELETE", f"/workspaces/{workspace_id}/sessions/{session_id}")
 
-    def delete_workspace(self, workspace_id: str) -> None:
-        """Erase an Agent's memory permanently.
-
-        Sessions must go first: Honcho refuses a workspace delete with 409 while
-        any session remains, which is the normal state for an Agent that did any
-        work — verified against a live workspace. Both deletes are accepted
-        asynchronously (202), so the session removals may not have landed by the
-        time the workspace delete is attempted and it can still 409. That race is
-        why this runs under the retrying delivery framework rather than inline in
-        the request: a raised error here is retried until the purge actually takes,
-        instead of leaving memory behind with nothing to report it.
-
-        A workspace that was never created returns 404, which `_request` maps to
-        None; erasing nothing is the intended outcome there, not an error.
-
-        Refuses a shared pool workspace outright: a pool is shared by every
-        opted-in Agent in it, so erasing it on one Agent's deletion would wipe
-        everyone's memory. Deleting a pool is a deliberate, separate operation,
-        never a side effect of the per-Agent purge — this is a structural guard,
-        not a promise the caller passes the right name.
-        """
-        if pool_id_from_workspace(workspace_id) is not None:
-            raise HonchoError(f"Refusing to delete shared memory pool workspace '{workspace_id}'")
-        self._delete_workspace_unchecked(workspace_id)
-
     def delete_pool_workspace(self, workspace_id: str) -> None:
         """Delete a memory pool's workspace, deliberately.
 
-        This is the one sanctioned path to erase shared memory — used when a
-        memory group is deleted, where erasing the pool is the intent. It skips
-        the guard in `delete_workspace` (which refuses pools so a per-Agent purge
-        can never wipe a group's shared memory by accident).
+        The one sanctioned path to erase shared memory, used when a memory group is
+        deleted. Sessions go first: Honcho refuses a workspace delete with 409 while
+        any session remains (the normal state for a pool that did any work), and both
+        deletes are async 202s, so the workspace delete can still 409 until the
+        session removals land — the caller (`delete_group`) retries past that race. A
+        workspace that never existed 404s, which `_request` maps to None: erasing
+        nothing is the intended outcome, not an error.
         """
         self._delete_workspace_unchecked(workspace_id)
 
@@ -175,25 +135,6 @@ class HonchoClient:
         for session_id in self.list_sessions(workspace_id):
             self.delete_session(workspace_id, session_id)
         self._request("DELETE", f"/workspaces/{workspace_id}")
-
-    def list_all_conclusions(self, workspace_id: str, *, limit: int) -> list[dict]:
-        """Every conclusion in a workspace, up to `limit`.
-
-        Only for carrying memory over to another Agent before erasing this one.
-        Bounded because an Agent's memory is unbounded and this is held in memory
-        while it is copied.
-        """
-        collected: list[dict] = []
-        page = 1
-        while len(collected) < limit:
-            items, total = self.list_conclusions(workspace_id, page=page, size=min(100, limit - len(collected)))
-            if not items:
-                break
-            collected.extend(items)
-            if len(collected) >= total:
-                break
-            page += 1
-        return collected[:limit]
 
     def list_conclusions(
         self,

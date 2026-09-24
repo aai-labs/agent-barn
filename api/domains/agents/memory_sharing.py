@@ -1,15 +1,12 @@
-"""Agent memory: pool-shared, plus explicit cross-Agent sharing.
+"""Agent memory: the read/manage surface over a group's shared Honcho pool.
 
 Agents in the same memory group share one Honcho workspace, so within a group
 memory is shared automatically (that's the point of a pool). This module holds
 the read/manage surface over that shared memory (list/search/forget/correct,
-scoped to the pool) and the resolvers that map an Agent to its pool workspace and
-peer identity.
-
-It also keeps the older explicit-sharing paths (share_fact, carry_over): writing
-a specific fact into named Agents' pools. In the pool model within-group sharing
-is automatic, so these are largely superseded — they remain for writing across
-pools or seeding memory, and are gated on the target being in a group.
+scoped to the pool and access-gated), the resolvers that map an Agent to its pool
+workspace and peer identity, and the provenance record for facts shared in from
+another pool (`SharedPoolMemoryService`). The cross-pool copy itself is driven by
+the memory_groups domain, which owns the group authorization.
 """
 
 import logging

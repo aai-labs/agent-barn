@@ -7,11 +7,7 @@ from uuid import UUID
 from injector import inject
 
 from api.domains.agents.repository import AgentRepository
-from api.domains.events.catalog import (
-    AGENT_LIFECYCLE_EMAIL_HANDLER,
-    AGENT_STARTED,
-    AGENT_STOPPED,
-)
+from api.domains.events.catalog import AGENT_LIFECYCLE_EMAIL_HANDLER, AGENT_STARTED, AGENT_STOPPED
 from api.domains.events.handlers import (
     EventDeliveryContext,
     RetryableEventHandlerError,
