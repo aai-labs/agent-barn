@@ -7,6 +7,7 @@ from sqlalchemy import engine_from_config, pool
 from sqlmodel import SQLModel
 
 import api.domains.agent_settings.models
+import api.domains.agent_webhooks.models
 import api.domains.agents.models
 import api.domains.auth.models
 import api.domains.communications.models
@@ -34,7 +35,11 @@ if db_url_override and db_url_override != "":
 config.set_main_option("sqlalchemy.url", connection_url)
 
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # The model imports above create every api.* logger before this runs, and
+    # fileConfig disables existing loggers unless told otherwise. In-process
+    # callers -- the test harness runs migrations against a live app -- would
+    # otherwise silence application logging for the rest of the process.
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 target_metadata = SQLModel.metadata
 

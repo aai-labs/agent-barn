@@ -1,8 +1,11 @@
+import json
 import uuid
 from datetime import UTC, datetime, timedelta
+from typing import cast
 from unittest.mock import patch
 
-from fastapi import status
+import pytest
+from fastapi import HTTPException, status
 from hamcrest import (
     assert_that,
     calling,
@@ -20,18 +23,31 @@ from sqlalchemy import update
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, col
 
+from api.domains.agents.authorization import AgentAuthorization
 from api.domains.agents.models import AgentRestorePoint, AgentStatus, RestorePointOrigin, RestorePointStatus
+from api.domains.agents.repository import AgentRepository
 from api.domains.agents.restore_point_job import EXIT_BACKUP_FAILED, EXIT_RESTORE_FAILED
+from api.domains.agents.service import AgentService
 from api.domains.events.catalog import (
     AGENT_RESTORE_POINT_CREATED,
     AGENT_RESTORE_POINT_DELETED,
     AGENT_RESTORE_POINT_RESTORED,
+    AGENT_TEMPLATE_OVERRIDE_SELECTED,
     EVENT_REGISTRY,
     SECURITY_AUDIT_HANDLER,
 )
 from api.domains.events.dispatch import EventDeliveryDispatcher
 from api.domains.events.models import ActorIdentity, ActorIdentityType, EventScope, OutboxMessage
+from api.domains.restore_points.constants import (
+    RESTORE_POINT_RECONCILIATION_BATCH_SIZE,
+    RESTORE_POINT_RECONCILIATION_MISSING_VOLUME_LIMIT,
+    RESTORE_POINT_RECONCILIATION_STALE_SECONDS,
+)
+from api.domains.restore_points.reconciliation import RestorePointReconciler
 from api.domains.restore_points.repository import RestorePointRepository
+from api.domains.restore_points.service import RestorePointService
+from api.domains.templates.models import AgentTemplate
+from api.domains.templates.repository import TemplateRepository
 from api.infrastructure.kubernetes import KubernetesClient
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.tests.core.givenpy import given, then, when
@@ -42,9 +58,12 @@ from api.tests.core.modules import (
     set_env_variable,
 )
 from api.tests.steps.agent import (
+    FAKE_LITELLM_KEY,
     TEST_ENCRYPTION_KEY,
     MockK8sModule,
     MockLiteLLMModule,
+    skill_is_assigned_to_agent,
+    there_is_a_skill,
     there_is_an_agent,
     use_org_for_auth,
 )
@@ -52,8 +71,12 @@ from api.tests.steps.database import database_is_clean, database_repo_is_ready
 from api.tests.steps.organization import (
     there_is_an_organization_with_user_and_access_token,
 )
+from api.tests.steps.template import there_is_a_template
 
 _BASE = "/api/v1/organizations/{organization_id}/agents"
+
+_TERMINATION_TIMEOUT = "api.domains.restore_points.service.RESTORE_POINT_POD_TERMINATION_TIMEOUT_SECONDS"
+_TERMINATION_POLL = "api.domains.restore_points.service.RESTORE_POINT_POD_TERMINATION_POLL_SECONDS"
 
 _GIVEN = [
     set_env_variable(
@@ -204,6 +227,69 @@ def test_list_restore_points_returns_newest_first():
             body = response.json()
             assert_that(body["items"], has_length(2))
             assert_that(body["items"][0]["id"], equal_to(str(newer.id)))
+
+
+def test_list_restore_points_reports_the_cap_and_the_manual_count():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        _seed(context)
+        _seed(context, origin=RestorePointOrigin.PRE_RESTORE)
+        _seed(context, status_value=RestorePointStatus.FAILED)
+
+        with when("I list restore points"):
+            response = context.client.get(_url(context), headers=_auth(context))
+
+        with then("the count excludes what the cap excludes, unlike the page total"):
+            body = response.json()
+            assert_that(body["total"], equal_to(3))
+            assert_that(body["cap"], equal_to(2))
+            assert_that(body["manual_count"], equal_to(1))
+
+
+def test_capture_records_the_template_pin_in_the_config_manifest():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        pinned = context.injector.get(TemplateRepository).get_pinned_template(context.agent)
+
+        with when("I capture a restore point"):
+            response = context.client.post(_url(context), json={}, headers=_auth(context))
+
+        with then("the manifest names the version the Agent was pinned to"):
+            manifest = response.json()["config_manifest"]
+            assert_that(manifest["template_key"], equal_to(pinned.template_key))
+            assert_that(manifest["template_version"], equal_to(1))
+            assert_that(manifest["template_selection_type"], equal_to("organization"))
+            assert_that(manifest["override_version"], none())
+
+
+def test_capture_records_skill_pins_in_the_config_manifest():
+    with given(
+        [
+            *_GIVEN,
+            there_is_an_agent(status=AgentStatus.STOPPED),
+            there_is_a_skill(name="Calendar"),
+            skill_is_assigned_to_agent(),
+        ]
+    ) as context:
+        with when("I capture a restore point"):
+            response = context.client.post(_url(context), json={}, headers=_auth(context))
+
+        with then("each assigned skill is recorded with the version it was pinned to"):
+            skills = response.json()["config_manifest"]["skills"]
+            assert_that(skills, has_length(1))
+            assert_that(skills[0]["skill_id"], equal_to(str(context.skill.id)))
+            assert_that(skills[0]["name"], equal_to("Calendar"))
+            assert_that(skills[0]["pinned_version"], equal_to(1))
+
+
+def test_config_manifest_holds_no_credentials():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        with when("I capture a restore point"):
+            response = context.client.post(_url(context), json={}, headers=_auth(context))
+
+        with then("nothing secret rides along in the display record"):
+            manifest = response.json()["config_manifest"]
+            serialized = json.dumps(manifest)
+            assert_that(serialized, is_not(contains_string(FAKE_LITELLM_KEY)))
+            assert_that(serialized, is_not(contains_string(TEST_ENCRYPTION_KEY)))
 
 
 def test_list_restore_points_for_an_unknown_agent_returns_404():
@@ -809,16 +895,20 @@ def test_capturing_a_restore_point_stages_an_organization_scoped_event():
             assert_that("config_manifest" not in message.payload, equal_to(True))
 
 
-def test_a_capture_that_cannot_be_provisioned_fails_the_row_and_releases_the_volume():
+def test_a_capture_that_cannot_be_provisioned_fails_the_row_and_releases_the_volume(caplog):
     with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
         k8s = context.injector.get(KubernetesClient)
         k8s.create_job.side_effect = RuntimeError("cluster rejected the job")
 
         with when("the job cannot be created"):
-            response = context.client.post(_url(context), json={}, headers=_auth(context))
+            with caplog.at_level("ERROR"):
+                response = context.client.post(_url(context), json={}, headers=_auth(context))
 
         with then("the row is failed and its volume is reclaimed"):
             assert_that(response.status_code, equal_to(status.HTTP_500_INTERNAL_SERVER_ERROR))
+            # The stored reason is fixed copy, so the cluster's account of the
+            # rejection is only ever recoverable from the log.
+            assert_that(caplog.text, contains_string("cluster rejected the job"))
             repository: RestorePointRepository = context.injector.get(RestorePointRepository)
             rows = repository.find_non_terminal_for_agent(context.agent.id)
             assert_that(rows, equal_to([]))
@@ -894,3 +984,694 @@ def test_the_read_dto_never_exposes_internal_resource_names():
             assert_that(body.get("pvc_name"), none())
             assert_that(body.get("job_name"), none())
             assert_that(body.get("id"), not_none())
+
+
+def _manifest_for(context, *, template_key: str, template_version: int = 1) -> dict:
+    return {
+        "version": 2,
+        "agent_type": context.agent.agent_type,
+        "template_key": template_key,
+        "template_version": template_version,
+        "template_selection_type": "organization",
+        "override_version": None,
+        "model": "",
+        "effective_model": "",
+        "approval_mode": "auto",
+        "verbose_mode": False,
+        "skills": [],
+    }
+
+
+def _seed_with_manifest(context, manifest: dict):
+    repository: RestorePointRepository = context.injector.get(RestorePointRepository)
+    return repository.save(
+        AgentRestorePoint(
+            agent_id=context.agent.id,
+            label="recorded",
+            status=RestorePointStatus.READY,
+            origin=RestorePointOrigin.MANUAL,
+            agent_type=context.agent.agent_type,
+            pvc_name=f"restore-point-{uuid.uuid4()}",
+            config_manifest=manifest,
+        )
+    )
+
+
+def test_a_replayable_restore_starts_the_job():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        pinned = cast(AgentTemplate, context.injector.get(TemplateRepository).get_pinned_template(context.agent))
+        row = _seed_with_manifest(context, _manifest_for(context, template_key=pinned.template_key))
+
+        with when("I restore and ask for the recorded configuration back"):
+            response = context.client.post(
+                f"{_url(context)}/{row.id}/restore",
+                json={"reapply_configuration": True},
+                headers=_auth(context),
+            )
+
+        with then("it is accepted and the Job is created"):
+            assert_that(response.status_code, equal_to(status.HTTP_202_ACCEPTED))
+            assert_that(context.injector.get(KubernetesClient).create_job.called, equal_to(True))
+
+
+def test_a_configuration_that_cannot_be_applied_refuses_before_the_job_starts():
+    """The files must not be replaced to discover the configuration will not apply."""
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        row = _seed_with_manifest(context, _manifest_for(context, template_key="a-template-that-was-deleted"))
+        k8s = context.injector.get(KubernetesClient)
+        k8s.create_job.reset_mock()
+
+        with when("I restore and ask for a configuration that no longer resolves"):
+            response = context.client.post(
+                f"{_url(context)}/{row.id}/restore",
+                json={"reapply_configuration": True},
+                headers=_auth(context),
+            )
+
+        with then("it is refused and nothing was started"):
+            assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
+            assert_that(k8s.create_job.called, equal_to(False))
+            after = context.client.get(f"{_url(context)}/{row.id}", headers=_auth(context)).json()
+            assert_that(after["status"], equal_to(RestorePointStatus.READY.value))
+
+
+def test_a_v1_manifest_cannot_be_replayed_and_says_so():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        row = _seed_with_manifest(context, {"version": 1, "agent_type": context.agent.agent_type})
+        k8s = context.injector.get(KubernetesClient)
+        k8s.create_job.reset_mock()
+
+        with when("I ask to replay a manifest that predates the recorded pins"):
+            response = context.client.post(
+                f"{_url(context)}/{row.id}/restore",
+                json={"reapply_configuration": True},
+                headers=_auth(context),
+            )
+
+        with then("it is refused without starting anything"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+            assert_that(response.json()["detail"], contains_string("nothing to re-apply"))
+            assert_that(k8s.create_job.called, equal_to(False))
+
+
+def test_restoring_without_asking_for_the_configuration_skips_the_check():
+    """An unreplayable manifest must not block a plain volume restore."""
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        row = _seed_with_manifest(context, {"version": 1, "agent_type": context.agent.agent_type})
+
+        with when("I restore the volume alone"):
+            response = context.client.post(f"{_url(context)}/{row.id}/restore", json={}, headers=_auth(context))
+
+        with then("it is accepted"):
+            assert_that(response.status_code, equal_to(status.HTTP_202_ACCEPTED))
+
+
+def test_applying_the_recorded_configuration_repins_the_agent():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        template_repository: TemplateRepository = context.injector.get(TemplateRepository)
+        pinned = cast(AgentTemplate, template_repository.get_pinned_template(context.agent))
+        row = _seed_with_manifest(context, _manifest_for(context, template_key=pinned.template_key))
+
+        with when("I apply the configuration the restore point recorded"):
+            response = context.client.post(f"{_url(context)}/{row.id}/configuration", headers=_auth(context))
+
+        with then("it is applied"):
+            assert_that(response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
+            agent = context.client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context)).json()
+            assert_that(agent["template_key"], equal_to(pinned.template_key))
+
+
+def test_applying_a_configuration_that_no_longer_resolves_is_refused():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        row = _seed_with_manifest(context, _manifest_for(context, template_key="gone"))
+
+        with when("I apply a configuration whose template no longer exists"):
+            response = context.client.post(f"{_url(context)}/{row.id}/configuration", headers=_auth(context))
+
+        with then("it is refused"):
+            assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
+
+
+def test_applying_the_configuration_while_the_agent_runs_is_refused():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        pinned = cast(AgentTemplate, context.injector.get(TemplateRepository).get_pinned_template(context.agent))
+        row = _seed_with_manifest(context, _manifest_for(context, template_key=pinned.template_key))
+
+        with when("I apply the configuration on a running Agent"):
+            response = context.client.post(f"{_url(context)}/{row.id}/configuration", headers=_auth(context))
+
+        with then("it is refused"):
+            assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
+
+
+def _restoring_with_replay(context, manifest: dict, job_name="rp-res-test"):
+    """A restore that has been accepted and is waiting on its Job."""
+    repository: RestorePointRepository = context.injector.get(RestorePointRepository)
+    row = _seed_with_manifest(context, manifest)
+    row.status = RestorePointStatus.RESTORING
+    row.job_name = job_name
+    row.reapply_configuration = True
+    return repository.save(row)
+
+
+def test_the_recorded_configuration_lands_only_after_the_job_succeeds():
+    """The browser is not involved: reconciliation applies it on the next read."""
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        pinned = cast(AgentTemplate, context.injector.get(TemplateRepository).get_pinned_template(context.agent))
+        there_is_a_template(template_key="recorded-template", name="Recorded")(context)
+        row = _restoring_with_replay(context, _manifest_for(context, template_key="recorded-template"))
+        assert pinned.template_key != "recorded-template"
+
+        k8s = context.injector.get(KubernetesClient)
+        k8s.get_job.return_value = _job_with({"succeeded": 1})
+
+        with when("someone reads the list, which is what advances the restore"):
+            body = context.client.get(_url(context), headers=_auth(context)).json()
+
+        with then("the row is ready and the recorded configuration has been written"):
+            entry = next(item for item in body["items"] if item["id"] == str(row.id))
+            assert_that(entry["status"], equal_to(RestorePointStatus.READY.value))
+            assert_that(entry["reapply_configuration"], equal_to(False))
+            assert_that(entry["configuration_error"], none())
+            agent = context.client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context)).json()
+            assert_that(agent["template_key"], equal_to("recorded-template"))
+
+
+def test_a_failed_restore_job_leaves_the_configuration_alone():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        pinned = cast(AgentTemplate, context.injector.get(TemplateRepository).get_pinned_template(context.agent))
+        there_is_a_template(template_key="recorded-template", name="Recorded")(context)
+        _restoring_with_replay(context, _manifest_for(context, template_key="recorded-template"))
+
+        k8s = context.injector.get(KubernetesClient)
+        k8s.get_job.return_value = _job_with({"failed": 1})
+        k8s.read_job_logs.return_value = "restore failed: boom"
+
+        with when("the Job failed and somebody reads the list"):
+            context.client.get(_url(context), headers=_auth(context))
+
+        with then("the Agent is still on the template it had"):
+            agent = context.client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context)).json()
+            assert_that(agent["template_key"], equal_to(pinned.template_key))
+
+
+def test_a_configuration_that_stops_being_applicable_is_reported_on_the_row():
+    """The volume is already back, so this cannot fail the restore — it is recorded."""
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        row = _restoring_with_replay(context, _manifest_for(context, template_key="deleted-between"))
+
+        k8s = context.injector.get(KubernetesClient)
+        k8s.get_job.return_value = _job_with({"succeeded": 1})
+
+        with when("the Job succeeded but the recorded template is gone"):
+            body = context.client.get(_url(context), headers=_auth(context)).json()
+
+        with then("the restore stands and the row says the configuration did not"):
+            entry = next(item for item in body["items"] if item["id"] == str(row.id))
+            assert_that(entry["status"], equal_to(RestorePointStatus.READY.value))
+            assert_that(entry["reapply_configuration"], equal_to(False))
+            assert_that(entry["configuration_error"], not_none())
+
+
+def test_asking_to_replay_without_configuration_permission_is_refused():
+    with given(
+        [
+            *_GIVEN,
+            there_is_an_agent(status=AgentStatus.STOPPED),
+        ]
+    ) as context:
+        pinned = cast(AgentTemplate, context.injector.get(TemplateRepository).get_pinned_template(context.agent))
+        row = _seed_with_manifest(context, _manifest_for(context, template_key=pinned.template_key))
+        k8s = context.injector.get(KubernetesClient)
+        k8s.create_job.reset_mock()
+
+        with when("a Member without agent.update asks for the configuration back"):
+            with patch.object(
+                AgentAuthorization,
+                "require_action_for_visible",
+                side_effect=HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found"),
+            ):
+                response = context.client.post(
+                    f"{_url(context)}/{row.id}/restore",
+                    json={"reapply_configuration": True},
+                    headers=_auth(context),
+                )
+
+        with then("nothing is started"):
+            assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
+            assert_that(k8s.create_job.called, equal_to(False))
+
+
+def test_a_replay_interrupted_before_it_was_written_is_picked_up_later():
+    """The process stopped after the restore was marked done, before the write.
+
+    The row is terminal by then, so nothing in the non-terminal sweep would find it
+    again; the stored intent is what keeps the work discoverable.
+    """
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        there_is_a_template(template_key="recorded-template", name="Recorded")(context)
+        repository: RestorePointRepository = context.injector.get(RestorePointRepository)
+        row = _seed_with_manifest(context, _manifest_for(context, template_key="recorded-template"))
+        row.status = RestorePointStatus.READY
+        row.job_name = None
+        row.reapply_configuration = True
+        row.restored_by_user_id = context.user.id
+        repository.save(row)
+
+        with when("someone reads the list well after the restore finished"):
+            context.client.get(_url(context), headers=_auth(context))
+
+        with then("the configuration is written and the intent is cleared"):
+            agent = context.client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context)).json()
+            assert_that(agent["template_key"], equal_to("recorded-template"))
+            after = context.client.get(f"{_url(context)}/{row.id}", headers=_auth(context)).json()
+            assert_that(after["reapply_configuration"], equal_to(False))
+
+
+def test_two_readers_cannot_both_apply_the_same_replay():
+    """A stale sweep result must not replay an already committed selection."""
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        there_is_a_template(template_key="recorded-template", name="Recorded")(context)
+        repository: RestorePointRepository = context.injector.get(RestorePointRepository)
+        row = _seed_with_manifest(context, _manifest_for(context, template_key="recorded-template"))
+        row.status = RestorePointStatus.READY
+        row.job_name = None
+        row.reapply_configuration = True
+        repository.save(row)
+
+        service = context.injector.get(RestorePointService)
+        before = len(_outbox(context, AGENT_TEMPLATE_OVERRIDE_SELECTED))
+        with when("two readers act on the same stale sweep result"):
+            service._apply_recorded_configuration_after_restore(row)
+            service._apply_recorded_configuration_after_restore(row)
+
+        with then("only one selection is committed"):
+            assert_that(_outbox(context, AGENT_TEMPLATE_OVERRIDE_SELECTED), has_length(before + 1))
+            assert_that(repository.find_owing_replay_for_agent(context.agent.id), equal_to([]))
+
+
+def test_a_replay_waits_while_the_agent_is_running():
+    """The lock is what keeps a deferred write out of a lifecycle operation."""
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        there_is_a_template(template_key="recorded-template", name="Recorded")(context)
+        repository: RestorePointRepository = context.injector.get(RestorePointRepository)
+        row = _seed_with_manifest(context, _manifest_for(context, template_key="recorded-template"))
+        row.status = RestorePointStatus.READY
+        row.job_name = None
+        row.reapply_configuration = True
+        repository.save(row)
+        before = context.client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context)).json()
+
+        with when("the list is read while the Agent runs"):
+            context.client.get(_url(context), headers=_auth(context))
+
+        with then("the configuration is left for later rather than written underneath it"):
+            after = context.client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context)).json()
+            assert_that(after["template_key"], equal_to(before["template_key"]))
+            still = context.client.get(f"{_url(context)}/{row.id}", headers=_auth(context)).json()
+            assert_that(still["reapply_configuration"], equal_to(True))
+
+
+def test_the_replay_is_attributed_to_whoever_asked_for_the_restore():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        pinned = cast(AgentTemplate, context.injector.get(TemplateRepository).get_pinned_template(context.agent))
+        row = _seed_with_manifest(context, _manifest_for(context, template_key=pinned.template_key))
+
+        with when("I ask for the restore with the configuration"):
+            context.client.post(
+                f"{_url(context)}/{row.id}/restore",
+                json={"reapply_configuration": True},
+                headers=_auth(context),
+            )
+
+        with then("the restoring Member is recorded, not the one who captured it"):
+            delegate: PostgresRepositoryDelegate = context.injector.get(PostgresRepositoryDelegate)
+            with Session(delegate.engine) as session:
+                stored = session.get(AgentRestorePoint, row.id)
+                assert stored is not None
+                assert_that(stored.restored_by_user_id, equal_to(context.user.id))
+                assert_that(stored.restored_by_display, not_none())
+
+        with when("the Job completes and the recorded configuration is applied"):
+            context.injector.get(KubernetesClient).get_job.return_value = _job_with({"succeeded": 1})
+            context.client.get(_url(context), headers=_auth(context))
+
+        with then("the selection event identifies the restorer even without a capture author"):
+            event = _outbox(context, AGENT_TEMPLATE_OVERRIDE_SELECTED)[-1]
+            assert_that(event.actor["type"], equal_to(ActorIdentityType.USER.value))
+            assert_that(event.actor["id"], equal_to(str(context.user.id)))
+            assert_that(event.payload["actor_display"], equal_to(context.user.full_name or context.user.email))
+
+
+def test_replay_completion_rolls_back_with_an_interrupted_configuration_transaction():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        there_is_a_template(template_key="recorded-template", name="Recorded")(context)
+        repository = context.injector.get(RestorePointRepository)
+        service = context.injector.get(RestorePointService)
+        row = _seed_with_manifest(context, _manifest_for(context, template_key="recorded-template"))
+        row.reapply_configuration = True
+        repository.save(row)
+        agent_repository = context.injector.get(AgentRepository)
+        before = agent_repository.get_by_id(context.agent.id)
+        assert before is not None
+        events_before = len(_outbox(context, AGENT_TEMPLATE_OVERRIDE_SELECTED))
+        with when("the process is interrupted while staging the replay audit event"):
+            with (
+                patch.object(service.override_repository.outbox_repository, "stage", side_effect=KeyboardInterrupt),
+                pytest.raises(KeyboardInterrupt),
+            ):
+                service._apply_recorded_configuration_after_restore(row)
+
+        with then("both configuration and completion roll back, leaving retryable work"):
+            after = agent_repository.get_by_id(context.agent.id)
+            assert after is not None
+            assert_that(after.agent_template_id, equal_to(before.agent_template_id))
+            assert_that(after.updated_at, equal_to(before.updated_at))
+            assert_that(repository.find_owing_replay_for_agent(context.agent.id), has_length(1))
+            assert_that(_outbox(context, AGENT_TEMPLATE_OVERRIDE_SELECTED), has_length(events_before))
+            service.reconcile_agent(context.agent.id)
+            assert_that(repository.find_owing_replay_for_agent(context.agent.id), equal_to([]))
+            assert_that(_outbox(context, AGENT_TEMPLATE_OVERRIDE_SELECTED), has_length(events_before + 1))
+
+
+def test_restore_provisioning_failure_cancels_configuration_replay(caplog):
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        there_is_a_template(template_key="recorded-template", name="Recorded")(context)
+        row = _seed_with_manifest(context, _manifest_for(context, template_key="recorded-template"))
+        k8s = context.injector.get(KubernetesClient)
+        k8s.create_job.side_effect = RuntimeError("cluster rejected the job")
+        before = len(_outbox(context, AGENT_TEMPLATE_OVERRIDE_SELECTED))
+
+        with when("provisioning fails and someone reads the list afterwards"):
+            with caplog.at_level("ERROR"):
+                response = context.client.post(
+                    f"{_url(context)}/{row.id}/restore", json={"reapply_configuration": True}, headers=_auth(context)
+                )
+            body = context.client.get(_url(context), headers=_auth(context)).json()
+
+        with then("the archive remains ready but its configuration is never replayed"):
+            assert_that(response.status_code, equal_to(status.HTTP_500_INTERNAL_SERVER_ERROR))
+            entry = next(item for item in body["items"] if item["id"] == str(row.id))
+            assert_that(entry["status"], equal_to("READY"))
+            assert_that(entry["reapply_configuration"], equal_to(False))
+            assert_that(_outbox(context, AGENT_TEMPLATE_OVERRIDE_SELECTED), has_length(before))
+            assert_that(caplog.text, contains_string("cluster rejected the job"))
+
+
+def test_start_reconciles_replay_before_loading_the_configuration_to_run():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        there_is_a_template(template_key="recorded-template", name="Recorded")(context)
+        _restoring_with_replay(context, _manifest_for(context, template_key="recorded-template"))
+        context.injector.get(KubernetesClient).get_job.return_value = _job_with({"succeeded": 1})
+        service = context.injector.get(AgentService)
+
+        with when("start is the first request after the Job succeeds"):
+            with patch.object(service, "_start_agent_unchecked", side_effect=lambda agent, actor: agent) as start:
+                response = context.client.post(
+                    f"{_BASE}/{context.agent.id}/start".replace("{organization_id}", str(context.organization.id)),
+                    headers=_auth(context),
+                )
+
+        with then("start receives the replayed configuration"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            start.assert_called_once()
+            template = context.injector.get(TemplateRepository).get_pinned_template(start.call_args.args[0])
+            assert template is not None
+            assert_that(template.template_key, equal_to("recorded-template"))
+
+
+def test_pending_replay_blocks_lifecycle_operations_while_the_lock_is_held():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        there_is_a_template(template_key="recorded-template", name="Recorded")(context)
+        _restoring_with_replay(context, _manifest_for(context, template_key="recorded-template"))
+        context.injector.get(KubernetesClient).get_job.return_value = _job_with({"succeeded": 1})
+        service = context.injector.get(RestorePointService)
+
+        with when("the Job finishes while a lifecycle caller already holds the lock"):
+            with context.injector.get(AgentRepository).lifecycle_lock(context.agent.id) as acquired:
+                assert acquired
+                blocked = service.has_blocking_operation(context.agent.id)
+
+        with then("READY with outstanding replay still blocks the caller"):
+            assert_that(blocked, equal_to(True))
+            service.reconcile_agent(context.agent.id)
+            assert_that(service.has_blocking_operation(context.agent.id), equal_to(False))
+
+
+def _claim(context, limit=RESTORE_POINT_RECONCILIATION_BATCH_SIZE):
+    repository: RestorePointRepository = context.injector.get(RestorePointRepository)
+    return repository.claim_reconciliation_candidates(
+        stale_before=datetime.now(UTC) - timedelta(seconds=RESTORE_POINT_RECONCILIATION_STALE_SECONDS),
+        limit=limit,
+    )
+
+
+def _stale_restoring(context, job_name):
+    repository: RestorePointRepository = context.injector.get(RestorePointRepository)
+    row = _seed(context, status_value=RestorePointStatus.RESTORING)
+    row.job_name = job_name
+    repository.save(row)
+    _backdate(context, row.id)
+    return row
+
+
+def test_the_claim_selects_only_rows_that_have_been_stale_long_enough():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        _reconcilable(context, job_name="rp-cap-fresh")
+        stale = _stale_restoring(context, "rp-res-stale")
+
+        with when("the reconciler claims candidates"):
+            claimed = _claim(context)
+
+        with then("only the stale row is claimed"):
+            assert_that([row.id for row in claimed], equal_to([stale.id]))
+
+
+def test_the_claim_includes_a_ready_row_that_still_owes_a_configuration_replay():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        repository: RestorePointRepository = context.injector.get(RestorePointRepository)
+        owing = _seed(context, status_value=RestorePointStatus.READY)
+        owing.reapply_configuration = True
+        repository.save(owing)
+        settled = _seed(context, status_value=RestorePointStatus.READY)
+        _backdate(context, owing.id)
+        _backdate(context, settled.id)
+
+        with when("the reconciler claims candidates"):
+            claimed = _claim(context)
+
+        with then("the owed replay is claimed and the settled row is left alone"):
+            assert_that([row.id for row in claimed], equal_to([owing.id]))
+
+
+def test_claiming_a_row_excludes_it_from_the_next_claim():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        stale = _reconcilable(context, job_name="rp-cap-stale")
+        _backdate(context, stale.id)
+
+        with when("two runs claim in succession"):
+            first = _claim(context)
+            second = _claim(context)
+
+        with then("the second run sees nothing, because the first bumped the row out of the window"):
+            assert_that([row.id for row in first], equal_to([stale.id]))
+            assert_that(second, equal_to([]))
+
+
+def test_the_claim_is_bounded_by_its_batch_size():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        for index in range(3):
+            _stale_restoring(context, f"rp-res-{index}")
+
+        with when("the reconciler claims with a smaller batch size"):
+            claimed = _claim(context, limit=2)
+
+        with then("only that many rows are claimed"):
+            assert_that(claimed, has_length(2))
+
+
+def test_ready_rows_whose_volume_is_gone_are_reported_and_live_ones_are_not():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        repository: RestorePointRepository = context.injector.get(RestorePointRepository)
+        present = _seed(context, status_value=RestorePointStatus.READY)
+        missing = _seed(context, status_value=RestorePointStatus.READY)
+        capturing = _seed(context, status_value=RestorePointStatus.CAPTURING)
+
+        with when("the live volumes are compared against the rows"):
+            found = repository.find_ready_rows_missing_volumes(
+                {present.pvc_name, capturing.pvc_name},
+                limit=RESTORE_POINT_RECONCILIATION_MISSING_VOLUME_LIMIT,
+            )
+
+        with then("only the ready row without a volume is reported"):
+            assert_that([row.id for row in found], equal_to([missing.id]))
+
+
+def test_the_read_path_still_leaves_a_freshly_committed_row_alone():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        seeded = _reconcilable(context, job_name="rp-cap-not-created-yet")
+        context.injector.get(KubernetesClient).get_job.return_value = None
+        service = context.injector.get(RestorePointService)
+
+        with when("a read reconciles the row inside the grace window"):
+            service.reconcile_row(seeded)
+
+        with then("it is left non-terminal for the next read"):
+            body = context.client.get(f"{_url(context)}/{seeded.id}", headers=_auth(context)).json()
+            assert_that(body["status"], equal_to(RestorePointStatus.PENDING.value))
+
+
+def test_the_reconciler_resolves_a_claimed_row_without_waiting_out_the_grace_window():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        seeded = _reconcilable(context, job_name="rp-cap-vanished")
+        context.injector.get(KubernetesClient).get_job.return_value = None
+        service = context.injector.get(RestorePointService)
+
+        with when("the reconciler resolves a row whose claim has just bumped updated_at"):
+            service.reconcile_row(seeded, respect_grace=False)
+
+        with then("the row is failed rather than skipped as fresh"):
+            body = context.client.get(f"{_url(context)}/{seeded.id}", headers=_auth(context)).json()
+            assert_that(body["status"], equal_to(RestorePointStatus.FAILED.value))
+
+
+def test_apply_owed_replay_writes_the_recorded_configuration():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        there_is_a_template(template_key="recorded-template", name="Recorded")(context)
+        repository = context.injector.get(RestorePointRepository)
+        row = _seed_with_manifest(context, _manifest_for(context, template_key="recorded-template"))
+        row.reapply_configuration = True
+        repository.save(row)
+        service = context.injector.get(RestorePointService)
+
+        with when("the reconciler applies the owed replay directly"):
+            service.apply_owed_replay(row)
+
+        with then("the configuration lands and nothing is still owed"):
+            assert_that(repository.find_owing_replay_for_agent(context.agent.id), equal_to([]))
+            agent = context.injector.get(AgentRepository).get_by_id(context.agent.id)
+            assert agent is not None
+            template = context.injector.get(TemplateRepository).get_pinned_template(agent)
+            assert template is not None
+            assert_that(template.template_key, equal_to("recorded-template"))
+
+
+def test_failing_a_ready_row_whose_volume_is_gone_writes_through():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        repository: RestorePointRepository = context.injector.get(RestorePointRepository)
+        row = _seed(context, status_value=RestorePointStatus.READY)
+
+        with when("the reconciler fails a terminal row whose archive volume has gone"):
+            written = repository.mark_ready_row_failed(row.id, "The archive volume is no longer in the cluster.")
+
+        with then("the write lands, which mark_failed could not do from a terminal status"):
+            assert_that(written, equal_to(True))
+            assert_that(repository.mark_failed(row.id, "second attempt"), equal_to(False))
+            body = context.client.get(f"{_url(context)}/{row.id}", headers=_auth(context)).json()
+            assert_that(body["status"], equal_to(RestorePointStatus.FAILED.value))
+            assert_that(body["failure_reason"], contains_string("no longer in the cluster"))
+
+
+def test_only_restore_points_that_still_exist_are_reported_as_known():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        repository: RestorePointRepository = context.injector.get(RestorePointRepository)
+        live = _seed(context, status_value=RestorePointStatus.READY)
+        deleted = uuid.uuid4()
+
+        with when("the sweep matches cluster labels against rows"):
+            known = repository.find_existing_ids({live.id, deleted})
+
+        with then("only the surviving row is known, and an empty query is not run"):
+            assert_that(known, equal_to({live.id}))
+            assert_that(repository.find_existing_ids(set()), equal_to(set()))
+
+
+def test_a_ready_row_owing_a_replay_keeps_its_archive_when_the_reconciler_resolves_it():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        there_is_a_template(template_key="recorded-template", name="Recorded")(context)
+        repository = context.injector.get(RestorePointRepository)
+        row = _seed_with_manifest(context, _manifest_for(context, template_key="recorded-template"))
+        row.reapply_configuration = True
+        row.job_name = None
+        repository.save(row)
+        k8s = context.injector.get(KubernetesClient)
+        k8s.delete_pvc.reset_mock()
+
+        with when("the reconciler resolves it the way the claim hands it over"):
+            context.injector.get(RestorePointService).reconcile_row(row, respect_grace=False)
+
+        with then("the archive it still owes a replay for is left intact"):
+            assert_that(k8s.delete_pvc.called, equal_to(False))
+            body = context.client.get(f"{_url(context)}/{row.id}", headers=_auth(context)).json()
+            assert_that(body["status"], equal_to(RestorePointStatus.READY.value))
+
+
+def test_a_full_reconciler_run_applies_an_owed_replay_without_touching_the_archive():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        there_is_a_template(template_key="recorded-template", name="Recorded")(context)
+        repository = context.injector.get(RestorePointRepository)
+        row = _seed_with_manifest(context, _manifest_for(context, template_key="recorded-template"))
+        row.reapply_configuration = True
+        row.job_name = None
+        repository.save(row)
+        _backdate(context, row.id)
+        k8s = context.injector.get(KubernetesClient)
+        k8s.delete_pvc.reset_mock()
+        k8s.list_pvcs.return_value = []
+        k8s.list_jobs.return_value = []
+
+        with when("the reconciler runs the way the CronJob runs it"):
+            result = context.injector.get(RestorePointReconciler).run_once()
+
+        with then("the replay lands and the archive survives"):
+            assert_that(result.claimed, equal_to(1))
+            assert_that(result.replays_attempted, equal_to(1))
+            assert_that(k8s.delete_pvc.called, equal_to(False))
+            assert_that(repository.find_owing_replay_for_agent(context.agent.id), equal_to([]))
+            body = context.client.get(f"{_url(context)}/{row.id}", headers=_auth(context)).json()
+            assert_that(body["status"], equal_to(RestorePointStatus.READY.value))
+
+
+def test_capture_is_refused_while_the_agent_pod_is_still_terminating():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        k8s = context.injector.get(KubernetesClient)
+        k8s.has_pods_for_deployment.return_value = True
+
+        with when("I capture while the pod still holds the volume"):
+            with patch(_TERMINATION_TIMEOUT, 0):
+                response = context.client.post(_url(context), json={}, headers=_auth(context))
+
+        with then("it is refused rather than racing the dying pod"):
+            assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
+            assert_that(response.json()["detail"], contains_string("still shutting down"))
+            assert_that(k8s.create_job.called, equal_to(False))
+
+
+def test_restore_is_refused_while_the_agent_pod_is_still_terminating():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        seeded = _seed(context)
+        k8s = context.injector.get(KubernetesClient)
+        k8s.has_pods_for_deployment.return_value = True
+
+        with when("I restore while the pod still holds the volume"):
+            with patch(_TERMINATION_TIMEOUT, 0):
+                response = context.client.post(f"{_url(context)}/{seeded.id}/restore", json={}, headers=_auth(context))
+
+        with then("it is refused and nothing is provisioned"):
+            assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
+            assert_that(response.json()["detail"], contains_string("still shutting down"))
+            assert_that(k8s.create_job.called, equal_to(False))
+
+
+def test_capture_proceeds_once_the_pod_has_gone():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        k8s = context.injector.get(KubernetesClient)
+        k8s.has_pods_for_deployment.side_effect = [True, False]
+
+        with when("the pod disappears while we wait"):
+            with patch(_TERMINATION_POLL, 0):
+                response = context.client.post(_url(context), json={}, headers=_auth(context))
+
+        with then("the capture is accepted rather than refused"):
+            assert_that(response.status_code, equal_to(status.HTTP_202_ACCEPTED))
+            assert_that(k8s.create_job.called, equal_to(True))

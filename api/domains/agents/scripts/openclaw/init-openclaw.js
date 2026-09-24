@@ -12,6 +12,7 @@ const CONFIG_PATH = path.join(HOME, '.openclaw', 'openclaw.json');
 const REPLACE_PATHS = [
   ['channels'],
   ['bindings'],
+  ['agents', 'defaults', 'heartbeat'],
 ];
 
 function getPath(obj, parts) {

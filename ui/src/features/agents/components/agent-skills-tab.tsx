@@ -36,6 +36,8 @@ import {
   expandGithubContent,
   getIntegrationProvider,
   hasIncompleteIntegration,
+  isOAuthConnected,
+  isSignInOnlyProvider,
   type IntegrationDraft,
 } from "../integrations";
 import type { GoogleOAuthResult } from "../hooks/use-google-oauth";
@@ -44,6 +46,7 @@ import type { Agent, AgentAssignedSkill } from "../schemas";
 import type { AgentConfigurationEditHandle } from "./agent-configuration-utils";
 import { CredentialErrorAlert } from "./credential-error-alert";
 import { IntegrationFields } from "./integration-fields";
+import { SharePointSignIn } from "./sharepoint-sign-in";
 
 interface AgentSkillsTabProps {
   agent: Agent;
@@ -221,7 +224,10 @@ export const AgentSkillsTab = forwardRef<
       ),
     ];
 
-    const manualDrafts = newSecretDrafts.filter((d) => !d.sharedCredentialId);
+    // Sign-in providers already saved their credential when the sign-in completed.
+    const manualDrafts = newSecretDrafts.filter(
+      (d) => !d.sharedCredentialId && !isSignInOnlyProvider(d.provider),
+    );
     const sharedDrafts = newSecretDrafts.filter((d) => !!d.sharedCredentialId);
 
     await updateAgent.mutateAsync({
@@ -378,7 +384,11 @@ export const AgentSkillsTab = forwardRef<
 
             {pendingAddSkills.map((skill) => {
               const credentialProviders = skill.requiredProviders.filter(
-                (provider) => !existingSecretProviders.has(provider),
+                (provider) =>
+                  !existingSecretProviders.has(provider) ||
+                  // A sign-in saves its credential straight away; keep its panel so the
+                  // confirmation stays in view once the refetched agent includes it.
+                  newSecretDrafts.some((d) => d.provider === provider && isOAuthConnected(d)),
               );
               const card = (
                 <SkillCard
@@ -393,6 +403,7 @@ export const AgentSkillsTab = forwardRef<
                   details={
                     credentialProviders.length > 0 ? (
                       <CredentialSetup
+                        agentId={agent.id}
                         providerIds={credentialProviders}
                         drafts={newSecretDrafts}
                         credentialError={credentialError}
@@ -402,6 +413,7 @@ export const AgentSkillsTab = forwardRef<
                         onPickShared={handlePickShared}
                         onFieldChange={setField}
                         onListChange={setRepos}
+                        onSignedIn={setFields}
                         onOAuthConnected={(provider, result) =>
                           setFields(provider, {
                             refreshToken: result.refreshToken,
@@ -575,6 +587,7 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
 }
 
 function CredentialSetup({
+  agentId,
   providerIds,
   drafts,
   credentialError,
@@ -585,7 +598,9 @@ function CredentialSetup({
   onFieldChange,
   onListChange,
   onOAuthConnected,
+  onSignedIn,
 }: {
+  agentId: string;
   providerIds: string[];
   drafts: IntegrationDraft[];
   credentialError: string | null;
@@ -596,6 +611,7 @@ function CredentialSetup({
   onFieldChange: (provider: string, key: string, value: string) => void;
   onListChange: (provider: string, key: string, values: string[]) => void;
   onOAuthConnected: (provider: string, result: GoogleOAuthResult) => void;
+  onSignedIn: (provider: string, patch: Record<string, string>) => void;
 }) {
   return (
     <div className="flex flex-col gap-4">
@@ -646,7 +662,17 @@ function CredentialSetup({
               <CredentialErrorAlert title="Could not save credentials" message={credentialError} />
             )}
 
-            {!useShared && (
+            {providerSpec.authMethod === "microsoft_sign_in" && (
+              <SharePointSignIn
+                agentId={agentId}
+                provider={providerSpec}
+                draft={draft}
+                onFieldChange={(key, value) => onFieldChange(providerId, key, value)}
+                onSignedIn={(patch) => onSignedIn(providerId, patch)}
+              />
+            )}
+
+            {!useShared && providerSpec.authMethod !== "microsoft_sign_in" && (
               <IntegrationFields
                 provider={providerSpec}
                 draft={draft}

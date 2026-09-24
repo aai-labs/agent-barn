@@ -3,7 +3,7 @@ import fnmatch
 import json
 import logging
 import secrets
-from collections.abc import Iterator, Mapping
+from collections.abc import Collection, Iterator, Mapping
 from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
@@ -41,8 +41,13 @@ from api.domains.agents.builders import (
     native_discord_env,
     native_slack_channel,
     native_slack_env,
+    native_telegram_channel,
+    native_telegram_env,
+    runtime_teams_channel,
+    runtime_teams_env,
 )
-from api.domains.agents.error_messages import friendly_k8s_error, friendly_pod_reason
+from api.domains.agents.error_messages import friendly_pod_reason
+from api.domains.agents.exceptions import AgentProvisioningPrecondition
 from api.domains.agents.gog_artifacts import build_gog_env, build_gog_policy_md, build_gog_setup_sh
 from api.domains.agents.models import (
     PROVIDER_DISPLAY_NAMES,
@@ -58,6 +63,7 @@ from api.domains.agents.models import (
     AgentLogsRead,
     AgentNameSuggestionRead,
     AgentOverrideAuthorRead,
+    AgentProvisioningErrorRead,
     AgentRead,
     AgentSecret,
     AgentSecretCreate,
@@ -94,11 +100,24 @@ from api.domains.agents.override_repository import (
     AgentOverrideRepository,
     AgentOverrideSnapshot,
 )
+from api.domains.agents.provisioning_errors import (
+    AgentProvisioningErrorCategory,
+    NormalizedAgentProvisioningError,
+    normalize_agent_provisioning_error,
+    persisted_provisioning_error,
+)
 from api.domains.agents.repository import AgentRepository
+from api.domains.agents.runtime_digest import agent_runtime_config_digest
 from api.domains.agents.runtime_policy import (
     build_chat_commands_policy_md,
     build_messaging_policy_md,
     build_role_scope_policy_md,
+)
+from api.domains.agents.selection import (
+    SelectionValidator,
+    ensure_approval_mode_supported,
+    ensure_verbose_mode_supported,
+    is_model_allowed,
 )
 from api.domains.auth.models import CurrentUserContext
 from api.domains.communications.models import ConversationLocation, OutboundTargetRequest
@@ -137,6 +156,10 @@ from api.infrastructure.shared.models import PaginatedItems, Pagination
 
 logger = logging.getLogger(__name__)
 
+# Port of the in-pod LLM proxy. Shared by the URL the runtime dials and the
+# LLM_PROXY_PORT the healthz servers listen on — see the runtime scripts.
+AGENT_LLM_PROXY_PORT = 8090
+
 _CREDENTIAL_FIELDS = frozenset(
     {
         "secrets",
@@ -152,7 +175,35 @@ RESTORE_POINT_IN_FLIGHT_DETAIL = (
     "A restore point capture or restore is still running for this Agent. Wait for it to finish."
 )
 
-_OPENROUTER_MODEL_PREFIX = "litellm/openrouter/"
+_PROVISIONING_FAILURE_STATUS: dict[AgentProvisioningErrorCategory, int] = {
+    AgentProvisioningErrorCategory.QUOTA_EXHAUSTED: status.HTTP_503_SERVICE_UNAVAILABLE,
+    AgentProvisioningErrorCategory.CLUSTER_PERMISSION_DENIED: status.HTTP_503_SERVICE_UNAVAILABLE,
+    AgentProvisioningErrorCategory.CLUSTER_UNAVAILABLE: status.HTTP_503_SERVICE_UNAVAILABLE,
+    AgentProvisioningErrorCategory.RESOURCE_REJECTED: status.HTTP_500_INTERNAL_SERVER_ERROR,
+    AgentProvisioningErrorCategory.UNKNOWN: status.HTTP_500_INTERNAL_SERVER_ERROR,
+}
+
+
+def _provisioning_error_dto(normalized: NormalizedAgentProvisioningError) -> AgentProvisioningErrorRead:
+    return AgentProvisioningErrorRead(
+        code=normalized.code,
+        category=normalized.category,
+        summary=normalized.summary,
+        detail=normalized.detail,
+    )
+
+
+def _stored_provisioning_error(agent: Agent) -> NormalizedAgentProvisioningError | None:
+    return persisted_provisioning_error(
+        code=agent.last_error_code,
+        detail=agent.last_error_detail,
+        legacy_message=agent.last_error,
+    )
+
+
+def _provisioning_error_read(agent: Agent) -> AgentProvisioningErrorRead | None:
+    normalized = _stored_provisioning_error(agent)
+    return _provisioning_error_dto(normalized) if normalized is not None else None
 
 
 @dataclass(frozen=True)
@@ -195,20 +246,6 @@ def filter_models_by_allowlist(catalog: list[dict], allowlist: list[str]) -> lis
     return [model for model in catalog if any(fnmatch.fnmatch(model["id"].lower(), pattern) for pattern in patterns)]
 
 
-def is_model_allowed(model: str, allowlist: list[str]) -> bool:
-    """Whether a stored model string (litellm/openrouter/<slug>) is permitted by
-    the allowlist globs. An empty allowlist blocks everything. The litellm/
-    gateway prefix is stripped so patterns match the OpenRouter slug.
-    """
-    if not allowlist:
-        return False
-    patterns = [p.strip().lower() for p in allowlist if p.strip()]
-    if not patterns:
-        return False
-    slug = model.removeprefix(_OPENROUTER_MODEL_PREFIX).lower()
-    return any(fnmatch.fnmatch(slug, pattern) for pattern in patterns)
-
-
 @inject
 @singleton
 @dataclass
@@ -227,6 +264,7 @@ class AgentService:
     organization_lookup: OrganizationLookupService
     restore_points: RestorePointService
     agent_settings_lookup: AgentSettingsLookupService
+    selection: SelectionValidator
     connection_repository: CommunicationConnectionRepository
     plugins: PlatformPluginRegistry
 
@@ -260,54 +298,15 @@ class AgentService:
         return self.repository.agent_inventory_since(window_start, window_end, **kwargs)
 
     def _ensure_model_allowed(self, model: str | None, org_id: UUID) -> None:
-        """Rejects models outside the allowlist. litellm is cluster-internal, so
-        create/update are the only paths that can set an agent's model; enforcing
-        here is sufficient. An empty/None model defers to the resolved default.
-
-        The resolved default is admitted whatever the allowlist says. When the
-        Organization set its own default that is already true by invariant; the case
-        this covers is an Organization following a platform default its allowlist
-        does not cover, where the model picker offers that default and rejecting it
-        would make the one pre-selected option unsavable.
-        """
-        if model:
-            allowed_models = self.organization_lookup.get_allowed_models(org_id)
-            if allowed_models is None:
-                raise HTTPException(status_code=404, detail="Organization not found")
-            if is_model_allowed(model, allowed_models):
-                return
-            if model == self.agent_settings_lookup.resolve_default_model(org_id):
-                return
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Model '{model}' is not in the allowed model list",
-            )
+        self.selection.ensure_model_allowed(model, org_id)
 
     @staticmethod
     def _ensure_approval_mode_supported(agent_type: AgentType, approval_mode: CommandApprovalMode | None) -> None:
-        """OpenClaw has no user-configurable command-approval control; only Hermes
-        maps approval_mode onto a runtime policy (see builders/hermes.py). An
-        omitted value defers to the AgentCreate/AgentUpdate default of AUTO, which
-        is a no-op for OpenClaw, but an explicit non-AUTO value would silently
-        have no effect, so it is rejected rather than accepted and ignored.
-        """
-        if agent_type == AgentType.OPENCLAW and approval_mode is not None and approval_mode != CommandApprovalMode.AUTO:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="OpenClaw does not support command approval; approval_mode is Hermes-only.",
-            )
+        ensure_approval_mode_supported(agent_type, approval_mode)
 
     @staticmethod
     def _ensure_verbose_mode_supported(agent_type: AgentType, verbose_mode: bool | None) -> None:
-        """OpenClaw has no progress-message channel wired up yet; only Hermes
-        reads verbose_mode (see builders/hermes.py). An explicit True would
-        silently have no effect, so it is rejected rather than accepted and ignored.
-        """
-        if agent_type == AgentType.OPENCLAW and verbose_mode:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="OpenClaw does not support verbose progress messages; verbose_mode is Hermes-only.",
-            )
+        ensure_verbose_mode_supported(agent_type, verbose_mode)
 
     @staticmethod
     def _build_skill_pointers(skills: list[Skill]) -> str:
@@ -382,110 +381,23 @@ class AgentService:
 
     def _resolve_skill_pins(
         self,
-        skill_ids: list[UUID],
+        added_skill_ids: list[UUID],
         pins: list[SkillVersionPin],
         current_skill_ids: set[UUID],
         removed_skill_ids: list[UUID],
         org_id: UUID,
         agent_id: UUID | None = None,
     ) -> list[SkillVersionPin]:
-        """Resolve every agent assignment to an explicit pinned version.
-
-        Added skills pin to a requested version when given, else to the skill's
-        latest at apply time. Existing skills can be re-pinned through the same
-        ``pins`` list. Every pin must reference a skill the agent ends up with,
-        and the requested version must exist (it can later be deleted only after
-        no agent pins it, so a valid pin never dangles from version deletion).
-        """
-        overlap = set(skill_ids) & set(removed_skill_ids)
-        if overlap:
-            ids = ", ".join(str(skill_id) for skill_id in sorted(overlap, key=str))
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Skill ID(s) cannot be both added and removed: {ids}",
-            )
-
-        pin_map: dict[UUID, SkillVersionPin] = {}
-        for pin in pins:
-            if pin.skill_id in pin_map:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Duplicate skill version pin for skill {pin.skill_id}",
-                )
-            pin_map[pin.skill_id] = pin
-        remaining_ids = current_skill_ids - set(removed_skill_ids)
-        allowed_ids = remaining_ids | set(skill_ids)
-        extras = set(pin_map) - allowed_ids
-        if extras:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Skill version pins must reference a skill the agent ends up with",
-            )
-
-        requested_ids = set(skill_ids) | set(pin_map)
-        if requested_ids:
-            visible_skills = (
-                self.skill_repository.find_visible_for_agent(agent_id, org_id)
-                if agent_id is not None
-                else self.skill_repository.find_accessible_for_org(org_id)
-            )
-            accessible_ids = {skill.id for skill in visible_skills}
-            inaccessible_ids = requested_ids - accessible_ids
-            if inaccessible_ids:
-                skill_id = min(inaccessible_ids, key=str)
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"Skill {skill_id} not found",
-                )
-
-        resolved: list[SkillVersionPin] = []
-        resolved_ids: set[UUID] = set()
-        for skill_id in dict.fromkeys(skill_ids):
-            pin = pin_map.get(skill_id)
-            if pin is None:
-                latest = self.skill_repository.get_latest_version(skill_id)
-                pin = SkillVersionPin(skill_id=skill_id, version=latest.version if latest else 1)
-            else:
-                if self.skill_repository.get_version(skill_id, pin.version) is None:
-                    raise HTTPException(
-                        status_code=status.HTTP_404_NOT_FOUND,
-                        detail=f"Version {pin.version} not found for skill {skill_id}",
-                    )
-            resolved.append(pin)
-            resolved_ids.add(skill_id)
-        for pin in pins:
-            if pin.skill_id in current_skill_ids and pin.skill_id not in resolved_ids:
-                if self.skill_repository.get_version(pin.skill_id, pin.version) is None:
-                    raise HTTPException(
-                        status_code=status.HTTP_404_NOT_FOUND,
-                        detail=f"Version {pin.version} not found for skill {pin.skill_id}",
-                    )
-                resolved.append(pin)
-                resolved_ids.add(pin.skill_id)
-        return resolved
+        return self.selection.resolve_skill_pins(
+            added_skill_ids, pins, current_skill_ids, removed_skill_ids, org_id, agent_id
+        )
 
     def _validate_required_skill_versions(
         self,
         required_map: Mapping[UUID, tuple[int, str | None]],
         pinned_versions: Mapping[UUID, int],
     ) -> None:
-        """Require Template Skills to be present at the Template's exact pin."""
-        standalone_ids, required_groups = split_requirements(required_map)
-        for skill_id in standalone_ids:
-            required_version, _ = required_map[skill_id]
-            if pinned_versions.get(skill_id) != required_version:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Required template Skill {skill_id} must be pinned to version {required_version}",
-                )
-        for member_ids in required_groups.values():
-            if any(pinned_versions.get(skill_id) == required_map[skill_id][0] for skill_id in member_ids):
-                continue
-            names = sorted(s.name for s in self.skill_repository.get_many_by_ids(list(member_ids)))
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"One of these template Skills must be pinned to its required version: {', '.join(names)}",
-            )
+        self.selection.validate_required_skill_versions(required_map, pinned_versions)
 
     def _validate_skill_update(
         self,
@@ -608,6 +520,11 @@ class AgentService:
             # A running pod that started on something else is the only case a surface
             # must not report the resolved value as current.
             pending_model=(resolved_model if agent.running_model and agent.running_model != resolved_model else ""),
+            update_available=(
+                agent.status == AgentStatus.RUNNING
+                and agent.running_config_digest
+                != agent_runtime_config_digest(self.config.openclaw_image, self.config.hermes_image)
+            ),
             # OpenClaw ignores approval_mode; report the effective AUTO default
             # instead of a stored value from before this became enforced, so
             # reads stay truthful even for agents persisted prior to this check.
@@ -615,6 +532,7 @@ class AgentService:
             # OpenClaw ignores verbose_mode for the same reason; report the
             # effective no-op default rather than a stored value.
             verbose_mode=agent.verbose_mode if agent.agent_type == AgentType.HERMES else False,
+            last_error=_provisioning_error_read(agent),
             secrets=secrets_read,
             skills=skills_read,
             configured_platform_keys=configured_platform_keys or [],
@@ -777,7 +695,9 @@ class AgentService:
         )
 
         # Prepare Agent Secrets in memory without persisting them yet.
-        # Integration credentials are separate from Communication Connections.
+        # Integration credentials are separate from Communication Connections. SharePoint only
+        # borrows the Teams app's public id and tenant (CommunicationsService.get_teams_app_identity)
+        # to sign in on that app; the app's secret is never read for it.
         prepared_secrets: list[AgentSecret] = []
         live_validation_contents: list[tuple[SecretProvider, Any]] = []
         for item in data.secrets:
@@ -1219,66 +1139,22 @@ class AgentService:
                 detail=f"Agent {agent_id} must be stopped before selecting a Template Version",
             )
 
-        selected_id: UUID
-        selected_template_key: str | None
-        selected_version: int | None
-        required_map: Mapping[UUID, tuple[int, str | None]]
-        if data.selection_type == "platform":
-            assert data.template_key is not None and data.template_version is not None
-            selected = self.template_repository.get_platform_template_by_key_version(
-                data.template_key,
-                data.template_version,
-            )
-            if selected is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Platform Template Version not found")
-            selected_id = selected.id
-            selected_template_key = selected.template_key
-            selected_version = selected.version
-            required_map = self.template_repository.get_required_skill_map_for(selected)
-        elif data.selection_type == "organization":
-            assert data.template_key is not None and data.template_version is not None
-            selected = self.template_repository.get_org_template_by_key_version(
-                org_id,
-                data.template_key,
-                data.template_version,
-            )
-            if selected is None:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail="Organization Template Version not found",
-                )
-            selected_id = selected.id
-            selected_template_key = selected.template_key
-            selected_version = selected.version
-            required_map = self.template_repository.get_required_skill_map_for(selected)
-        else:
-            assert data.override_version is not None
-            selected_override = self.override_repository.get_version(
-                agent.id,
-                org_id,
-                data.override_version,
-            )
-            if selected_override is None:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail="Agent Template Override Version not found",
-                )
-            selected_id = selected_override.id
-            selected_template_key = None
-            selected_version = selected_override.version
-            required_map = self.override_repository.get_version_skill_map(selected_override.id)
-        self._validate_override_requirements(agent, required_map, org_id)
+        resolved = self.selection.resolve(agent, data, org_id)
+
         try:
             selected_agent = self.override_repository.select_pin(
                 agent.id,
                 org_id,
                 selection_type=data.selection_type,
-                selected_id=selected_id,
+                selected_id=resolved.selected_id,
                 expected_agent_updated_at=data.expected_agent_updated_at,
                 actor=resolve_actor_identity(context, org_id),
                 actor_display=context.user.full_name or context.user.email,
-                template_key=selected_template_key,
-                selected_version=selected_version,
+                template_key=resolved.template_key,
+                selected_version=resolved.version,
+                skill_pins=[(pin.skill_id, pin.version) for pin in resolved.skill_pins],
+                removed_skill_ids=resolved.removed_skill_ids,
+                scalar_updates=resolved.scalar_updates,
             )
         except AgentOverrideConcurrencyError as exc:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
@@ -1286,58 +1162,21 @@ class AgentService:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
         return self._get_agent_read(selected_agent, context)
 
+    def _validate_incoming_skill_providers(
+        self,
+        agent: Agent,
+        incoming_skill_ids: Collection[UUID],
+    ) -> None:
+        self.selection.validate_incoming_skill_providers(agent, incoming_skill_ids)
+
     def _validate_override_requirements(
         self,
         agent: Agent,
         required_map: Mapping[UUID, tuple[int, str | None]],
         org_id: UUID,
+        prospective_pins: Mapping[UUID, int] | None = None,
     ) -> None:
-        if not required_map:
-            return
-        accessible = {skill.id: skill for skill in self.skill_repository.find_visible_for_agent(agent.id, org_id)}
-        missing_ids = set(required_map) - accessible.keys()
-        if missing_ids:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Override requires a Skill that is no longer available to this Organization",
-            )
-        assigned_rows = self.skill_repository.get_agent_skills_with_details(agent.id)
-        assigned_versions = {skill.id: row.pinned_version for row, skill in assigned_rows}
-        assigned_ids = set(assigned_versions)
-        wrong_versions = {
-            skill_id
-            for skill_id, (required_version, _) in required_map.items()
-            if assigned_versions.get(skill_id) != required_version
-        }
-        if wrong_versions:
-            names = ", ".join(sorted(accessible[skill_id].name for skill_id in wrong_versions))
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Required template skills must use the pinned versions: {names}",
-            )
-        standalone_ids, groups = split_requirements(required_map)
-        if standalone_ids - assigned_ids:
-            missing = ", ".join(sorted(accessible[skill_id].name for skill_id in standalone_ids - assigned_ids))
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Required template skills must be assigned to the Agent: {missing}",
-            )
-        for group_key, member_ids in sorted(groups.items()):
-            if not member_ids & assigned_ids:
-                names = ", ".join(sorted(accessible[skill_id].name for skill_id in member_ids))
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"At least one of these template skills must be assigned to the Agent: {names}",
-                )
-        providers = {secret.provider for secret in self.repository.get_secrets_for_agent(agent.id)}
-        for skill_id in required_map:
-            missing_providers = set(accessible[skill_id].required_providers) - providers
-            if missing_providers:
-                names = ", ".join(sorted(provider.value for provider in missing_providers))
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Required Skill '{accessible[skill_id].name}' needs configured providers: {names}",
-                )
+        self.selection.validate_override_requirements(agent, required_map, org_id, prospective_pins)
 
     def _resolve_override_skill_map(
         self,
@@ -1879,6 +1718,9 @@ class AgentService:
     def start_agent(self, agent_id: UUID, context: CurrentUserContext) -> AgentRead:
         agent = self.authorization.require_action(context, agent_id, PermissionKey.AGENT_LIFECYCLE_MANAGE)
         actor = resolve_actor_identity(context, agent.organization_id)
+        # Complete deferred replay before taking the lock it also needs. The
+        # check under the lock still catches any newly started restore.
+        self.restore_points.reconcile_agent(agent.id)
         with self.repository.lifecycle_lock(agent.id) as acquired:
             if not acquired:
                 raise HTTPException(
@@ -1937,13 +1779,49 @@ class AgentService:
 
     def _start_agent_unchecked(self, agent: Agent, actor: ActorIdentity) -> Agent:
         """Start a known Agent after its caller has established authority."""
+        try:
+            previous_status = self._provision_and_start(agent)
+        except AgentProvisioningPrecondition:
+            raise
+        except Exception as exc:
+            logger.exception("Failed to start agent %s", agent.id)
+            raise self._record_provisioning_failure(agent, exc) from exc
+        return self._persist_started(agent, actor, previous_status)
+
+    def _record_provisioning_failure(self, agent: Agent, exc: Exception) -> HTTPException:
+        """Persist a sanitized failure on the Agent and build the error to raise.
+
+        The full exception is already in the logs; only the normalized form is
+        persisted or returned, so no cluster text reaches a client.
+        """
+        normalized = normalize_agent_provisioning_error(exc)
+        agent.status = AgentStatus.ERROR
+        agent.last_error = normalized.display_message
+        agent.last_error_code = normalized.code
+        agent.last_error_detail = normalized.detail
+        try:
+            self.repository.save(agent)
+        except Exception:
+            # A database fault is one of the things that lands here, and it would
+            # raise again on this write. The caller still gets the classified cause.
+            logger.exception("Could not record the provisioning failure for agent %s", agent.id)
+        return HTTPException(
+            status_code=_PROVISIONING_FAILURE_STATUS.get(
+                normalized.category,
+                status.HTTP_500_INTERNAL_SERVER_ERROR,
+            ),
+            detail=_provisioning_error_dto(normalized).model_dump(mode="json"),
+        )
+
+    def _provision_and_start(self, agent: Agent) -> str:
+        """Build and create the Agent's Kubernetes resources. Returns its previous status."""
         agent_id = agent.id
         org_id = agent.organization_id
         # Stamped as Service labels for monitoring; resolved here (not in the
         # route) so every start path labels agents consistently.
         org_name = self.organization_lookup.get_name(org_id)
         if agent.status == AgentStatus.RUNNING:
-            raise HTTPException(
+            raise AgentProvisioningPrecondition(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=f"Agent {agent_id} is already running",
             )
@@ -1951,7 +1829,7 @@ class AgentService:
         previous_status = agent.status.value
         template = self.template_repository.get_pinned_template(agent)
         if template is None:
-            raise HTTPException(
+            raise AgentProvisioningPrecondition(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Agent {agent_id} has no pinned template",
             )
@@ -1966,7 +1844,10 @@ class AgentService:
             else ""
         )
         effective_model = agent.model or self.agent_settings_lookup.resolve_default_model(org_id)
-        llm_proxy_url = "http://localhost:8090"
+        # The runtime dials this and the in-pod proxy listens on it. Both come from
+        # AGENT_LLM_PROXY_PORT below so they cannot drift apart: setting the port
+        # without moving the URL would fail every model call with connection refused.
+        llm_proxy_url = f"http://localhost:{AGENT_LLM_PROXY_PORT}"
 
         # Re-check the allowlist at start time, not just create/update: the org's
         # allowlist can change after the agent was created, and a model that was
@@ -1981,17 +1862,26 @@ class AgentService:
         if agent.model:
             allowed_models = self.organization_lookup.get_allowed_models(org_id)
             if allowed_models is None or not is_model_allowed(agent.model, allowed_models):
-                raise HTTPException(
+                raise AgentProvisioningPrecondition(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail=f"Model '{agent.model}' is no longer in the organization's allowed model list",
                 )
 
         runtime_api_key = secrets.token_urlsafe(32)
-        service = build_service(agent.id, org_id, ns, org_name=org_name, agent_name=agent.name)
+        runtime_teams = self._native_connection_configuration(agent.id, "teams")
+        service = build_service(
+            agent.id,
+            org_id,
+            ns,
+            include_webhook_port=runtime_teams is not None,
+            org_name=org_name,
+            agent_name=agent.name,
+        )
         if agent.agent_type == AgentType.HERMES:
             overlay = None
             native_slack = self._native_slack_connection(agent.id)
             native_discord = self._native_connection_configuration(agent.id, "discord")
+            native_telegram = self._native_connection_configuration(agent.id, "telegram")
             hermes_cfg = build_hermes_gateway_config(
                 effective_model,
                 llm_proxy_url,
@@ -2001,6 +1891,8 @@ class AgentService:
                 discord_require_mention=(
                     native_discord.settings.get("require_mention", True) if native_discord else True
                 ),
+                telegram_settings=native_telegram.settings if native_telegram else None,
+                runtime_teams=runtime_teams is not None,
                 verbose_mode=agent.verbose_mode,
             )
             secret = build_secret_hermes_runtime(
@@ -2018,6 +1910,10 @@ class AgentService:
                 secret.string_data.update(native_slack_env(*native_slack))
             if native_discord is not None:
                 secret.string_data.update(native_discord_env(native_discord.settings, native_discord.credentials))
+            if native_telegram is not None:
+                secret.string_data.update(native_telegram_env(native_telegram.settings, native_telegram.credentials))
+            if runtime_teams is not None:
+                secret.string_data.update(runtime_teams_env(runtime_teams.settings, runtime_teams.credentials))
             deployment = build_hermes_deployment(
                 agent.id,
                 org_id,
@@ -2034,6 +1930,12 @@ class AgentService:
             if native_discord := self._native_connection_configuration(agent.id, "discord"):
                 native_credentials["discord"] = native_discord.credentials
                 native_channels["discord"] = native_discord_channel(native_discord.settings)
+            if native_telegram := self._native_connection_configuration(agent.id, "telegram"):
+                native_credentials["telegram"] = native_telegram.credentials
+                native_channels["telegram"] = native_telegram_channel(native_telegram.settings)
+            if runtime_teams is not None:
+                native_credentials["msteams"] = runtime_teams.credentials
+                native_channels["msteams"] = runtime_teams_channel(runtime_teams.settings)
             overlay = build_openclaw_gateway_config(effective_model, llm_proxy_url, native_channels)
             hermes_cfg = None
             secret = build_secret_runtime(
@@ -2079,7 +1981,7 @@ class AgentService:
         if isinstance(gws_content, GoogleWorkspaceContent) and (
             not gws_content.client_id or not gws_content.client_secret
         ):
-            raise HTTPException(
+            raise AgentProvisioningPrecondition(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=(
                     f"{PROVIDER_DISPLAY_NAMES[SecretProvider.GOOGLE_WORKSPACE]} is missing a client id/secret "
@@ -2087,14 +1989,25 @@ class AgentService:
                     "Authenticate with Google, or configure google_cloud_client_id/secret."
                 ),
             )
-        store = {p: c for p, c in decrypted.items() if p.value in provider_secrets_map}
+        # SharePoint's refresh token goes through the store too, written only for a new sign-in.
+        store = {
+            p: c for p, c in decrypted.items() if p.value in provider_secrets_map or p == SecretProvider.SHAREPOINT
+        }
         aai_home = "/opt/data" if agent.agent_type == AgentType.HERMES else "/home/node"
+        # The store must survive restarts: aai-cli rotates delegated Microsoft tokens in it.
+        # Hermes' home is its volume; OpenClaw's volume is only ~/.openclaw.
+        aai_store_dir = None if agent.agent_type == AgentType.HERMES else "/home/node/.openclaw/aai-cli"
         # Gated on providers that actually get an aai-cli profile: an agent whose only
         # integrations are profile-less (google_workspace, firecrawl) would otherwise get
         # a config.toml holding nothing but the store header.
         has_aai_profiles = bool(decrypted.keys() & set(PROFILE_SLUGS))
-        aai_config_toml = build_config_toml(decrypted, home_dir=aai_home) if has_aai_profiles else None
-        aai_setup_sh = build_setup_sh(list(store), home_dir=aai_home) if has_aai_profiles else None
+        aai_config_toml = (
+            build_config_toml(decrypted, home_dir=aai_home, store_dir=aai_store_dir) if has_aai_profiles else None
+        )
+        # Always mounted, even without profiles, so a removed SharePoint sign-in is cleaned up.
+        aai_setup_sh = build_setup_sh(
+            list(store), home_dir=aai_home, store_dir=aai_store_dir, install_config=has_aai_profiles
+        )
         if store:
             secret.string_data.update(build_env(store))
 
@@ -2158,7 +2071,10 @@ class AgentService:
                 "COMMUNICATIONS_URL": self.config.communications_base_url,
                 "COMMUNICATIONS_API_KEY": communication_key,
                 "COMMUNICATIONS_PROTOCOL_VERSION": "2",
+                "AGENT_TRIGGER_KEY": communication_key,
+                "AGENT_TRIGGER_PORT": "8082",
                 "LITELLM_PROXY_TARGET": self.config.agent_litellm_base_url,
+                "LLM_PROXY_PORT": str(AGENT_LLM_PROXY_PORT),
             }
         )
 
@@ -2256,38 +2172,45 @@ class AgentService:
                 skills_json=skills_json,
             )
 
-        try:
-            self.k8s.delete_config_map(name, ns)
-            self.k8s.delete_secret(name, ns)
-            self.k8s.create_config_map(ns, config_map)
-            self.k8s.create_secret(ns, secret)
-            self.k8s.create_pvc(
-                ns,
-                build_pvc(agent.id, org_id, ns, self.config.storage_class or None),
-            )
-            self.k8s.create_service(ns, service)
-            self.k8s.create_deployment(ns, deployment)
-        except Exception as exc:
-            logger.exception("Failed to start agent %s", agent_id)
-            agent.status = AgentStatus.ERROR
-            agent.last_error = friendly_k8s_error(exc)
-            self.repository.save(agent)
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Failed to start agent {agent_id}",
-            )
+        # Failures here are recorded and normalized by _start_agent_unchecked, which
+        # wraps this whole method rather than only the cluster calls.
+        self.k8s.delete_config_map(name, ns)
+        self.k8s.delete_secret(name, ns)
+        self.k8s.create_config_map(ns, config_map)
+        self.k8s.create_secret(ns, secret)
+        self.k8s.create_pvc(
+            ns,
+            build_pvc(agent.id, org_id, ns, self.config.storage_class or None),
+        )
+        self.k8s.create_service(ns, service)
+        self.k8s.create_deployment(ns, deployment)
 
         agent.status = AgentStatus.RUNNING
         agent.last_error = None
+        agent.last_error_code = None
+        agent.last_error_detail = None
         # Pin what this pod was started on. The runtime reads its config once, so this
         # is the model it serves until someone restarts it — however the Organization
         # default moves in the meantime.
         agent.running_model = effective_model
+        agent.running_config_digest = agent_runtime_config_digest(
+            self.config.openclaw_image,
+            self.config.hermes_image,
+        )
         agent.ingest_key_encrypted = encrypt_token(ingest_key, self.config.agent_token_encryption_key)
         agent.communication_key_encrypted = encrypt_token(
             communication_key,
             self.config.agent_token_encryption_key,
         )
+        return previous_status
+
+    def _persist_started(self, agent: Agent, actor: ActorIdentity, previous_status: str) -> Agent:
+        """Record a start whose Kubernetes resources already exist.
+
+        Deliberately outside the failure handler. The workload is running by now, so
+        marking the Agent ERROR because this write failed would describe a state the
+        cluster is not in.
+        """
         result = self.repository.save_with_lifecycle_event(
             agent,
             event_name=AGENT_STARTED,
@@ -2441,6 +2364,7 @@ class AgentService:
 
         agent.status = AgentStatus.STOPPED
         agent.running_model = ""
+        agent.running_config_digest = ""
         result = self.repository.save_with_lifecycle_event(
             agent,
             event_name=AGENT_STOPPED,
@@ -2494,6 +2418,7 @@ class AgentService:
         ns = self.config.k8s_namespace
         name = f"agent-{agent.id}"
 
+        self.restore_points.reconcile_agent(agent.id)
         with self.repository.lifecycle_lock(agent.id) as acquired:
             if not acquired:
                 raise HTTPException(
@@ -2673,7 +2598,8 @@ class AgentService:
         agent = self.authorization.require_action(context, agent_id, PermissionKey.ACTIVITY_READ)
 
         if agent.status == AgentStatus.ERROR:
-            return AgentHealthRead(status="error", reason=agent.last_error)
+            stored = _stored_provisioning_error(agent)
+            return AgentHealthRead(status="error", reason=stored.display_message if stored else None)
 
         if agent.status != AgentStatus.RUNNING:
             raise HTTPException(

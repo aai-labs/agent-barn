@@ -11,7 +11,12 @@ DB_CONNECTION_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@localhost:$
 
 API_PORT=8000
 ENVIRONMENT=local
-UI_APP_URL=http://localhost:3000
+WEB_APP_URL=http://localhost:3000
+
+# Optional: the base URL callers use to reach this API, shown as the Agent Webhook
+# and Teams Connection webhook URLs. Local runs derive http://localhost:${API_PORT},
+# so set this only when an outside caller needs a reachable address — a tunnel, say.
+# API_EXTERNAL_URL=https://your-tunnel.example.com
 
 # Optional: Redis is only needed to run the event delivery worker/reconciler
 # locally (`make redis-up`, `make dev-worker`); defaults to localhost:6379.
@@ -98,6 +103,9 @@ LITELLM_BASE_URL=
 AGENT_LITELLM_BASE_URL=
 # Name of the k8s Secret containing LITELLM_MASTER_KEY. Defaults to "litellm".
 LITELLM_SECRET_NAME=litellm
+# Percentages of an Organization's LLM limit at which its Owners and Admins are
+# notified. Comma separated, 1-100. Empty uses the default.
+ORGANIZATION_LLM_BUDGET_ALERT_THRESHOLDS=80,100
 # Default model for openclaw agents when agent.model is not set. Format: litellm/openrouter/<slug>
 AGENT_DEFAULT_MODEL=litellm/openrouter/z-ai/glm-5.2
 # OpenRouter API key used to fetch the model catalogue for the picker. Optional —

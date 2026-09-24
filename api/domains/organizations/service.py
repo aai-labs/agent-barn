@@ -6,21 +6,24 @@ from uuid import UUID, uuid4
 
 from fastapi import HTTPException, status
 from injector import inject, singleton
-from sqlmodel import Session, select
+from sqlmodel import Session
 
 from api.core.config import get_config
 from api.domains.agent_settings.lookup import AgentSettingsLookupService
 from api.domains.agents.repository import AgentRepository
-from api.domains.agents.service import _OPENROUTER_MODEL_PREFIX, AgentService, is_model_allowed
+from api.domains.agents.selection import _OPENROUTER_MODEL_PREFIX, is_model_allowed
+from api.domains.agents.service import AgentService
 from api.domains.auth.models import CurrentUserContext
 from api.domains.events import (
-    EventDelivery,
     EventDeliveryDispatcher,
     SubjectIdentity,
     SubjectIdentityType,
     resolve_actor_identity,
 )
-from api.domains.events.catalog import EVENT_REGISTRY, ORGANIZATION_MODEL_ALLOWLIST_CHANGED
+from api.domains.events.catalog import (
+    EVENT_REGISTRY,
+    ORGANIZATION_MODEL_ALLOWLIST_CHANGED,
+)
 from api.domains.organizations.exceptions import OrganizationCreationLimitReached
 from api.domains.organizations.models import (
     Organization,
@@ -33,6 +36,7 @@ from api.domains.organizations.models import (
 from api.domains.organizations.repository import OrganizationRepository
 from api.domains.rbac.catalog import ORG_OWNER_ONLY_ROLES, PermissionKey
 from api.domains.rbac.policy import PermissionPolicy
+from api.infrastructure.litellm.client import LiteLLMClient
 from api.infrastructure.shared.models import PaginatedItems, Pagination
 
 logger = logging.getLogger(__name__)
@@ -50,6 +54,7 @@ def _and_list(items: list[str]) -> str:
 @dataclass
 class OrganizationService:
     organization_repository: OrganizationRepository
+    litellm: LiteLLMClient
     agent_service: AgentService
     permission_policy: PermissionPolicy
     event_delivery_dispatcher: EventDeliveryDispatcher
@@ -198,6 +203,15 @@ class OrganizationService:
                 detail=f"You can create up to {error.limit} organizations",
             ) from error
 
+        if config.litellm_base_url and config.litellm_secret_name:
+            try:
+                self.litellm.ensure_team_exists(str(organization.id))
+            except Exception as exc:
+                # Creation already committed; key generation retries provisioning
+                # and refuses to issue a key without its team.
+                logger.error(
+                    "LiteLLM team provisioning deferred for Organization %s (%s)", organization.id, type(exc).__name__
+                )
         organization_read = self.organization_repository.get_read(organization.id)
         if not organization_read:
             raise HTTPException(
@@ -326,8 +340,8 @@ class OrganizationService:
                 self.organization_repository.outbox_repository.stage(
                     session=session, registry=EVENT_REGISTRY, event=event
                 )
-                delivery_ids = list(
-                    session.exec(select(EventDelivery.id).where(EventDelivery.event_id == event.event_id))
+                delivery_ids = self.organization_repository.outbox_repository.delivery_ids_for_event(
+                    session, event.event_id
                 )
 
             session.commit()

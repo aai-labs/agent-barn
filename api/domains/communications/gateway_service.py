@@ -39,6 +39,7 @@ from api.domains.communications.plugins.base import (
     PlatformPlugin,
     PlatformSettings,
     ProcessingFeedbackContext,
+    WebhookRequest,
 )
 from api.domains.communications.plugins.registry import PlatformPluginRegistry
 from api.domains.communications.repository import CommunicationConnectionRepository
@@ -566,8 +567,7 @@ class CommunicationsGatewayService:
     def accept_provider_webhook(
         self,
         connection_id: UUID,
-        payload: dict[str, Any],
-        authorization: str,
+        request: WebhookRequest,
     ) -> list[AcceptedCommunicationRead]:
         connection = self.connection_repository.get_active(connection_id)
         if connection is None or not connection.enabled:
@@ -576,5 +576,5 @@ class CommunicationsGatewayService:
         credentials = plugin.credentials_model.model_validate(
             json.loads(decrypt_token(connection.credentials_encrypted, self.config.agent_token_encryption_key))
         )
-        plugin.verify_webhook(credentials, payload, authorization)
-        return self.accept_plugin_payload(connection.id, payload)
+        plugin.verify_webhook(credentials, request)
+        return self.accept_plugin_payload(connection.id, request.payload)

@@ -59,6 +59,9 @@ export const CommunicationConnectionSchema = z.object({
   lastErrorDetails: CommunicationErrorDetailsSchema.nullable().optional(),
   webhookUrl: z.string().url().nullable(),
   managedAddress: z.string().nullable(),
+  // Only present right after create or a credential rotation -- the one moment a
+  // generated secret's plaintext exists to show. Never present on a list or a plain
+  // read; there is no path back to a stored secret.
   revision: z.number().int().positive(),
   createdAt: z.string(),
   updatedAt: z.string(),
@@ -250,4 +253,10 @@ export type UpdateCommunicationConnection = {
   enabled?: boolean;
   settings?: Record<string, unknown>;
   credentials?: Record<string, unknown>;
+};
+
+export type RotateCommunicationConnectionCredentials = {
+  agentId: string;
+  connectionId: string;
+  revision: number;
 };

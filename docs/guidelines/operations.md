@@ -39,6 +39,50 @@ The deployable services have independent Helm charts. `../../helmfile.yaml.gotmp
 
 LiteLLM uses a non-overlapping rolling update (`maxSurge: 0`, `maxUnavailable: 1`): the namespace quota cannot accommodate its old and replacement 2Gi pods at once. Upgrades briefly interrupt the proxy while Kubernetes replaces the pod; do not restore the default surge behavior unless the quota is increased first.
 
+## Organization LLM budgets
+
+Each Organization has its own LLM spend ceiling, set by a Platform Administrator
+through `PUT /platform/organizations/{id}/llm-budget`. There is no deployment-wide
+budget and no environment variable: an amount belongs to one Organization, and an
+Organization cannot raise its own. The behaviour contract is in
+[Costs](../features/costs.md#organization-llm-budgets).
+
+Budgets are off until set. With LiteLLM configured, teams are still provisioned and
+new keys assigned even when no amount is set anywhere. No Agent restart is required,
+and a change takes effect as soon as it is saved — there is nothing to redeploy.
+
+`budget_usd` is a non-negative finite number, where `0` is a limit of nothing and
+omitting it removes the cap. `budget_duration` is a positive integer followed by
+`s`, `m`, `h` or `d`, defaulting to `30d` — a 30-day interval, not a calendar month.
+Clearing the amount also clears the renewal schedule. Changing only the amount
+preserves spend and the renewal date; changing the duration moves the next renewal
+without resetting spend.
+
+Saving a budget writes the Organization row first and then pushes it to LiteLLM. A
+proxy failure returns `502` with the amount already stored, because losing an
+administrator's setting because the proxy blinked is worse than a delayed push. The
+`<release>-llm-budget-reconciler` CronJob pushes stored budgets onto their teams every
+15 minutes to repair exactly that kind of drift, logging
+`Organization LiteLLM budgets reconciled`. Like the other reconcilers it runs under
+`concurrencyPolicy: Forbid`, so one runner regardless of API replica count, and the
+API itself never contacts the proxy at startup. A budget saved while the proxy was
+unreachable is therefore applied within one interval rather than at the next restart.
+Run either pass by hand with `make reconcile-llm-budgets` or `make run-llm-budget-alerts`.
+
+`ORGANIZATION_LLM_BUDGET_ALERT_THRESHOLDS` sets the percentages at which an
+Organization's Owners and Admins are notified — comma separated, each between 1 and
+100, defaulting to `80,100`. A malformed list refuses to boot rather than quietly
+alerting nobody. The value is read by the API and by the
+`<release>-llm-budget-alerts` CronJob, which runs every 5 minutes over Organizations
+that have a limit set. Alerting is informational: the limit is enforced in the
+request path, so the interval only bounds how late someone is told.
+
+Agents created before an Organization had a limit carry no team on their key, so a
+limit does not bind them until they are enrolled. A Platform Administrator does that
+from the Organization's page — the spend limit controls stay hidden until every Agent
+is covered, and the button reports anything it could not enroll by name. Historical
+pre-enrollment spend stays in reports but is not added to the new team counter.
+
 ## Transactional email
 
 Invites, password resets, and agent lifecycle notifications send through
@@ -73,7 +117,10 @@ Agents reachable by email get their own address on a dedicated subdomain, receiv
 - **Subaddressing must be switched on explicitly** at **Email Routing → Settings**. It is **off by default**, and until it is enabled `agent+<slug>-<token>@…` matches no rule at all: the sender gets `550 5.1.1 Address does not exist` and **nothing is written to the Email Routing activity log**, because no rule ever matched. A bounce with an empty activity log is the signature of this being off.
 - **One routing rule serves every agent.** With subaddressing enabled, a single custom-address rule for `agent@agents.agentbarn.dev` → Worker matches `agent+<slug>-<token>@agents.agentbarn.dev` and preserves the `+tag` in `message.to`. The local part must equal `AGENT_EMAIL_MAILBOX` (default `agent`). No Cloudflare API call happens when an Agent is created. Catch-all is zone-apex only and cannot be used on a subdomain; making the subdomain its own zone is Enterprise-only.
 - The Worker must exist before the rule can point at it, so deploy it first — the destination picker only lists deployed Workers.
-- **The Worker deploys through CI**, not by hand. `deploy.yml`'s `deploy-worker` job publishes it on merges to `staging`/`main`, but only when `workers/**` changed, and only after the cluster deploy succeeds — the Worker posts into the Communications service, so the cluster must already hold the matching secret. Pull requests run `wrangler deploy --dry-run` through `ci.yml`, which needs no Cloudflare credentials. This requires **`CLOUDFLARE_WORKERS_TOKEN`** (account-owned, scoped to `Workers Scripts: Edit`), deliberately separate from the `Email Sending: Edit` token so one leak cannot both send mail as the domain and replace the Worker receiving it.
+- **The Worker deploys through CI**, not by hand, and **each environment's Worker is published by the workflow that deploys the cluster it posts into**. `deploy.yml`'s `deploy-worker` publishes the staging Worker on merges to `staging`, only when `workers/**` changed. `deploy-public.yml`'s `deploy-worker` publishes the production Worker on a release tag, gated on `PUBLIC_AGENT_EMAIL_DOMAIN` being set so an environment without agent email is unaffected. Both run only after their cluster deploy succeeds — the Worker posts into the product API, so the cluster must already hold the matching secret. Pull requests run `wrangler deploy --dry-run` through `ci.yml`, which needs no Cloudflare credentials. This requires **`CLOUDFLARE_WORKERS_TOKEN`** (account-owned, scoped to `Workers Scripts: Edit`), deliberately separate from the `Email Sending: Edit` token so one leak cannot both send mail as the domain and replace the Worker receiving it.
+- **Never publish a Worker from a workflow that does not deploy its `INBOUND_URL` host.** `deploy.yml` on `main` deploys the k3s `agent-farm` namespace, but the production Worker points at `api.agentbarn.dev` on the Talos cluster. Publishing it there handed it one cluster's secret while it posted into another's, and every production message was rejected `401`. `worker.yml` therefore selects its secret from the `environment` input rather than `github.ref_name`, which is a release tag on the public deploy and cannot identify the target cluster.
+- **Each environment has its own pair, and the three environments' pairs must all differ**: `STAGING_AGENT_EMAIL_DOMAIN`/`STAGING_EMAIL_INBOUND_SECRET` for staging, `AGENT_EMAIL_DOMAIN`/`EMAIL_INBOUND_SECRET` for the k3s `main` namespace, and `PUBLIC_AGENT_EMAIL_DOMAIN`/`PUBLIC_EMAIL_INBOUND_SECRET` for the hosted public cluster. Both the cluster deploy and the Worker publish fail when the environment's domain is configured but its secret is empty: the API rejects a blank configured secret outright, so an unset value would bounce every inbound message with `401` rather than degrading. Each guard selects its secret in shell rather than through `A && B || C`, which yields `C` whenever `B` is empty and would otherwise validate the wrong environment's value.
+- **The Worker is built from the commit being deployed.** `deploy-public.yml` passes the resolved release sha to `worker.yml`, so a `workflow_dispatch` of an older tag republishes that tag's Worker rather than whatever the dispatch ref points at.
 - **`EMAIL_INBOUND_SECRET` is written to the Worker and the cluster by the same run**, from one GitHub secret, so the two cannot drift. **Rotating it has a brief window**: the two are updated by consecutive steps, so mail arriving between them bounces `401`. To rotate without that, set the Worker's copy first with `wrangler secret put EMAIL_INBOUND_SECRET --env <env>`, then update the GitHub secret and deploy.
 - **Break-glass manual deploy** (a broken pipeline, or first-time bring-up before the token exists): `cd workers/email-inbound && pnpm install && pnpm exec wrangler deploy --env production`. Prefer CI — a hand-deployed Worker can drift from the committed source with nothing detecting it.
 - **A routing rule names one specific Worker, and CI cannot repoint it.** When an environment's rule was created against a differently-named Worker — a `--env local` one used for tunnel testing, say — publishing through CI creates the correctly-named Worker but leaves the rule pointing at the old one, so mail keeps going to the stale Worker. Cut over in this order: **let CI publish first, then repoint the rule's destination, and only then delete the old Worker.** Deleting first leaves the rule aimed at nothing and bounces every message for that domain.
@@ -150,6 +197,7 @@ git push origin "$RELEASE_TAG"
 | `PUBLIC_WEB_APP_URL` | `https://cloud.agentbarn.dev` |
 | `PUBLIC_GRAFANA_HOST` | `grafana-app.agentbarn.dev` |
 | `PUBLIC_SENDER_EMAIL` | `noreply@mail.agentbarn.dev` |
+| `PUBLIC_AGENT_EMAIL_DOMAIN` | `agents.agentbarn.dev`. Unset leaves agent email inert and skips the Worker publish |
 | `PUBLIC_STORAGE_CLASS` | `rook-ceph-block-main` (or `local-path` until Ceph OSDs exist) |
 
 ### Public GitHub secrets
@@ -174,9 +222,11 @@ kubeconfig portably with
 | `PUBLIC_FIRECRAWL_API_KEY` | New (this cluster's Firecrawl) |
 | `PUBLIC_OPENROUTER_API_KEY` | Prefer a dedicated key so public traffic is not the testing quota |
 | `PUBLIC_SLACK_ALERTS_WEBHOOK_URL` | `#alerts` or a public-specific channel |
+| `PUBLIC_EMAIL_INBOUND_SECRET` | New (`openssl rand -hex 32`). Required once `PUBLIC_AGENT_EMAIL_DOMAIN` is set, and must differ from the staging and k3s values |
 
 Shared with k3s (already present): `CLOUDFLARE_ACCOUNT_ID`,
-`CLOUDFLARE_API_TOKEN`, and `GOOGLE_CLOUD_CLIENT_SECRET`.
+`CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_WORKERS_TOKEN`, and
+`GOOGLE_CLOUD_CLIENT_SECRET`.
 
 ## Versioning and releases
 
@@ -256,7 +306,32 @@ Documentation-only changes do not change a service image and do not require a se
   its own PVC sized by `RESTORE_POINT_SIZE`, provisioned on the node holding the Agent's
   volume. They do not survive loss of that node, and they consume real node disk — the only
   bound is `RESTORE_POINT_MAX_PER_AGENT`, which is per Agent and not per Organization.
-- Restore point rows resolve from live Job status when they are read. A capture nobody reads
-  keeps its Job until the Job's TTL reaps it; the row then resolves as failed and its volume is
-  reclaimed on the next read. Automatic reclamation of restore points nobody ever reads is
-  tracked separately from this ticket.
+- Restore point rows resolve from live Job status when they are read, and a
+  `<release>-restore-point-reconciliation` CronJob resolves the ones nobody reads. It runs every
+  10 minutes (`restorePoints.reconciliation.schedule`, disable with
+  `restorePoints.reconciliation.enabled=false`) under `concurrencyPolicy: Forbid`, and needs the
+  same `batch/jobs` and PVC permissions as the API pod because it authenticates with the same
+  mounted kubeconfig. Run one pass by hand with `make reconcile-restore-points`, which targets
+  whatever `K8S_KUBECONFIG_PATH` and `K8S_NAMESPACE` point at — check both before invoking it
+  against a shared cluster.
+- **The reconciler deletes storage**, so watch its first few runs in staging before trusting the
+  schedule. Each run logs a one-line summary: `claimed`, `resolved`, `replays_attempted`,
+  `volumes_missing`, `orphans_deleted`, `orphans_unidentified`, `failed`. A non-zero
+  `orphans_unidentified` means resources carrying the component label that match neither route
+  below, which the sweep refuses to touch — investigate rather than ignore, because nothing will
+  ever reclaim them. A climbing `failed` means rows are being claimed and not resolved, which is
+  where to look first if volumes stop being reclaimed.
+- **Reclamation identifies a resource by its `agentbarn.io/restore-point-id` label, falling back
+  to its name.** The label is not enough on its own: resources created before chart `0.10.0` do
+  not carry it. The names are generated by `builders/restore_point.py`
+  (`restore-point-<uuid>`, `rp-cap-<uuid>`, `rp-res-<uuid>-<suffix>`), so parsing one back is
+  exact rather than a guess. Before deploying `0.10.0` to a cluster that already has restore
+  points, `kubectl get pvc,job -l agentbarn.io/component=restore-point -L
+  agentbarn.io/restore-point-id` shows what the first sweep will newly be able to act on —
+  anything with an empty last column was previously inert and is now reclaimable if no row owns
+  it.
+- The sweep is deliberately conservative in three further ways, so a stale database or a bad
+  listing cannot empty the namespace: a resource younger than
+  `RESTORE_POINT_ORPHAN_MIN_AGE_SECONDS` is left alone, deletions are capped at
+  `RESTORE_POINT_ORPHAN_DELETE_LIMIT` per run, and a failed or empty PVC listing fails no rows at
+  all. A large backlog therefore drains over several runs rather than one.

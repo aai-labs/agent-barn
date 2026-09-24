@@ -19,6 +19,10 @@ from api.domains.events.reconciliation import EventDeliveryReconciler
 from api.domains.events.repository import OutboxMessageRepository
 from api.domains.events.security_audit import SecurityAuditProjection
 from api.domains.events.transport import EventDeliveryTransport
+from api.domains.organizations.event_handlers import OrganizationBudgetEmailHandler
+from api.domains.restore_points.reconciliation import RestorePointReconciler
+from api.domains.restore_points.repository import RestorePointRepository
+from api.domains.restore_points.service import RestorePointService
 from api.infrastructure.clock import Clock
 from api.infrastructure.communication_signals import CommunicationSignalBus
 from api.infrastructure.email.client import EmailClient
@@ -72,9 +76,12 @@ class AppModule(Module):
     def provide_event_handler_registry(
         self,
         agent_lifecycle_email_handler: AgentLifecycleEmailHandler,
+        organization_budget_email_handler: OrganizationBudgetEmailHandler,
         security_audit_projection: SecurityAuditProjection,
     ) -> EventHandlerRegistry:
-        return EventHandlerRegistry([agent_lifecycle_email_handler, security_audit_projection])
+        return EventHandlerRegistry(
+            [agent_lifecycle_email_handler, organization_budget_email_handler, security_audit_projection]
+        )
 
     @provider
     @singleton
@@ -88,6 +95,21 @@ class AppModule(Module):
         transport: EventDeliveryTransport,
     ) -> EventDeliveryReconciler:
         return EventDeliveryReconciler(repository=repository, transport=transport)
+
+    @provider
+    def provide_restore_point_reconciler(
+        self,
+        config: Config,
+        repository: RestorePointRepository,
+        service: RestorePointService,
+        k8s: KubernetesClient,
+    ) -> RestorePointReconciler:
+        return RestorePointReconciler(
+            repository=repository,
+            service=service,
+            k8s=k8s,
+            namespace=config.k8s_namespace,
+        )
 
     @provider
     def provide_cost_synchronizer(

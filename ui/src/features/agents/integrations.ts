@@ -28,8 +28,10 @@ export interface IntegrationProvider {
   // When set, the provider is configured via an OAuth flow (an "Authenticate with
   // <provider>" button) instead of manual field entry. "google_oauth" captures a
   // refresh token via the popup flow and writes it to content.refreshToken; the
-  // provider id selects which scopes Google is asked for.
-  authMethod?: "google_oauth";
+  // provider id selects which scopes Google is asked for. "microsoft_sign_in" signs in
+  // on the agent's Microsoft Teams app; the credential is stored when the sign-in
+  // completes, so it never travels with the rest of the form.
+  authMethod?: "google_oauth" | "microsoft_sign_in";
   // Fallback shown next to the ✓ when an OAuth provider connects without an identity.
   oauthConnectedNote?: string;
 }
@@ -155,6 +157,26 @@ export const INTEGRATION_PROVIDERS: IntegrationProvider[] = [
     ],
   },
   {
+    id: "sharepoint",
+    label: "SharePoint",
+    authMethod: "microsoft_sign_in",
+    scopeNote:
+      "Signs in with Microsoft on the agent's Microsoft Teams app. The agent can open the sites and files the signed-in account can open.",
+    fields: [
+      {
+        key: "readOnly",
+        label: "Access level",
+        type: "radio",
+        required: true,
+        options: [
+          { label: "Read and write", value: "false" },
+          { label: "Read-only", value: "true" },
+        ],
+        hint: "Choose before signing in. To change it later, pick the new level and sign in again.",
+      },
+    ],
+  },
+  {
     id: "zoho_mail",
     label: "Zoho Mail",
     scopeNote: "OAuth 2.0 client credentials with ZohoMail.messages.READ scope",
@@ -169,7 +191,7 @@ export const INTEGRATION_PROVIDERS: IntegrationProvider[] = [
   {
     id: "firecrawl",
     label: "Firecrawl",
-    scopeNote: "Optional — agents use the platform Firecrawl by default. Provide your own API key and URL to use Firecrawl Cloud or another instance.",
+    scopeNote: "Optional — web search and scraping are built in, and agents use the platform's Firecrawl by default. Adding a key does not enable Firecrawl; it points this agent at your own instance instead, such as Firecrawl Cloud.",
     fields: [
       { key: "apiKey", label: "API key", type: "secret", required: true, placeholder: "fc-…" },
       { key: "baseUrl", label: "Base URL", type: "text", required: false, placeholder: "https://api.firecrawl.dev", hint: "Leave empty to use the platform's self-hosted Firecrawl." },
@@ -229,10 +251,17 @@ export function coerceBooleanFields(
   return coerced;
 }
 
-// True if the OAuth-based provider hasn't captured its refresh token yet.
+// True once the OAuth-based provider is connected: a Google refresh token has been
+// captured, or a Microsoft sign-in has been stored.
 export function isOAuthConnected(draft: IntegrationDraft): boolean {
+  if (draft.content.signedIn === "true") return true;
   const token = draft.content.refreshToken;
   return typeof token === "string" && token.trim().length > 0;
+}
+
+// Providers whose credential is saved by their sign-in, not by submitting the form.
+export function isSignInOnlyProvider(providerId: string): boolean {
+  return getIntegrationProvider(providerId)?.authMethod === "microsoft_sign_in";
 }
 
 // True if any added integration is missing a required field — used to gate "Hire".
@@ -244,7 +273,7 @@ export function hasIncompleteIntegration(integrations: IntegrationDraft[]): bool
     if (!provider) return true;
     // An OAuth provider must be connected, and — for those that also collect fields
     // (google_workspace picks services before consent) — still have them filled in.
-    if (provider.authMethod === "google_oauth" && !isOAuthConnected(draft)) return true;
+    if (provider.authMethod && !isOAuthConnected(draft)) return true;
     return provider.fields.some((f) => {
       if (!f.required) return false;
 

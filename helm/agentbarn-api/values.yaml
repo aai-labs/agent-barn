@@ -105,6 +105,14 @@ restorePoints:
   maxPerAgent: 5
   captureTimeoutSeconds: 900
   restoreTimeoutSeconds: 1800
+  reconciliation:
+    enabled: true
+    # Every 10 minutes. A row's status is otherwise only resolved when someone reads
+    # it, so a capture nobody watches holds its volume indefinitely. The staleness
+    # threshold (RESTORE_POINT_RECONCILIATION_STALE_SECONDS) is longer than the
+    # capture timeout above, so a row is only swept once its Job has genuinely had
+    # time to finish.
+    schedule: "*/10 * * * *"
 
 registry:
   server: ""
@@ -161,6 +169,22 @@ costs:
     # COST_SYNC_MAX_RUNTIME_SECONDS (api/domains/costs/constants.py) — the job runs
     # under concurrencyPolicy: Forbid, so an overrunning pass costs the next tick.
     schedule: "*/15 * * * *"
+
+organizationLlmBudgets:
+  # Percentages at which an Organization is notified. Empty uses 80,100.
+  alertThresholds: "80,100"
+  reconciliation:
+    enabled: true
+    # Every 15 minutes. Budgets are applied when an administrator saves them; this
+    # pass only repairs drift (a push that failed while the proxy was down, or a
+    # team edited by hand). Runs under Forbid like the other reconcilers.
+    schedule: "*/15 * * * *"
+  alerts:
+    enabled: true
+    # Every 5 minutes. Only Organizations with a limit set are read, and the pass is
+    # informational — the proxy enforces the limit in the request path, so this only
+    # bounds how late someone is told, never how much is spent.
+    schedule: "*/5 * * * *"
 
 worker:
   enabled: true

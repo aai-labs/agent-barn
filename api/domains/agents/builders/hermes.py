@@ -6,7 +6,7 @@ from kubernetes import client
 
 from api.domains.communications.models import ConversationLocation
 
-from .common import _labels, _resource_name
+from .common import _labels, _resource_name, _setting_ids
 
 # Matches OpenClaw, so limits.memory (100Gi quota) never binds before
 # requests.memory (20Gi). Note the asymmetry in what the limit *does*: OpenClaw
@@ -36,17 +36,17 @@ TELEMETRY_PUSH_PLUGIN_INIT: str = (_TELEMETRY_PUSH / "__init__.py").read_text()
 OBSERVER_PLUGIN_YAML: str = (_OBSERVER / "plugin.yaml").read_text()
 OBSERVER_PLUGIN_INIT: str = (_OBSERVER / "__init__.py").read_text()
 COMMUNICATIONS_RUNTIME_ADAPTER_PY: str = (_COMMON_SCRIPTS / "communications-runtime-adapter.py").read_text()
+AGENT_TRIGGER_SERVER_PY: str = (_COMMON_SCRIPTS / "agent-trigger-server.py").read_text()
 
 
 _HERMES_APPROVAL_MODE = {"manual": "manual", "auto": "smart", "off": "off"}
 _HERMES_APPROVAL_TIMEOUT_SECONDS = 300
 _HERMES_HEADLESS_APPROVAL_MODE = "deny"
 # Hermes shows a first-message onboarding notice whenever this variable is
-# absent. This deliberately cannot be a Slack channel ID: it suppresses that
-# notice without accidentally making an arbitrary real channel the destination
-# for proactive messages.
-_SLACK_NO_HOME_CHANNEL = "__agentbarn_no_home_channel__"
-_DISCORD_NO_HOME_CHANNEL = "__agentbarn_no_home_channel__"
+# absent. This deliberately cannot be a real channel or chat ID: it suppresses
+# that notice without accidentally making an arbitrary real channel the
+# destination for proactive messages.
+_NO_HOME_CHANNEL = "__agentbarn_no_home_channel__"
 # Every auxiliary.<task> block v2026.8.19 reads, minus the moa_* slots (MoA only).
 _HERMES_AUXILIARY_TASKS = (
     "vision",
@@ -143,10 +143,12 @@ def build_hermes_gateway_config(
     native_slack: bool = False,
     native_discord: bool = False,
     discord_require_mention: bool = True,
+    telegram_settings: dict | None = None,
+    runtime_teams: bool = False,
     verbose_mode: bool = False,
 ) -> dict:
     plugins = ["telemetry-push", "agentbarn-messaging"]
-    if native_slack or native_discord:
+    if native_slack or native_discord or telegram_settings is not None or runtime_teams:
         plugins.append("agentbarn-observer")
     config = _hermes_config_core(model, litellm_base_url, enabled_plugins=plugins, approval_mode=approval_mode)
     if native_slack:
@@ -175,6 +177,27 @@ def build_hermes_gateway_config(
             "thread_require_mention": discord_require_mention,
         }
         config["display"]["platforms"]["discord"] = {
+            "tool_progress": "all" if verbose_mode else "off",
+            "tool_progress_grouping": "accumulate",
+            "interim_assistant_messages": verbose_mode,
+        }
+    if telegram_settings is not None:
+        # Unknown DM senders would otherwise receive a pairing code.
+        telegram: dict = {"unauthorized_dm_behavior": "ignore"}
+        if telegram_settings.get("group_policy", "allowlist") != "open" and not _setting_ids(
+            telegram_settings, "allowed_chat_ids"
+        ):
+            # An empty chat allowlist means "any group" to Hermes; an empty group
+            # sender allowlist is the only gate that turns groups off entirely.
+            telegram["group_allow_from"] = []
+        config["telegram"] = telegram
+        config["display"]["platforms"]["telegram"] = {
+            "tool_progress": "all" if verbose_mode else "off",
+            "tool_progress_grouping": "accumulate",
+            "interim_assistant_messages": verbose_mode,
+        }
+    if runtime_teams:
+        config["display"]["platforms"]["teams"] = {
             "tool_progress": "all" if verbose_mode else "off",
             "tool_progress_grouping": "accumulate",
             "interim_assistant_messages": verbose_mode,
@@ -224,7 +247,7 @@ def native_slack_env(
         # show its home-channel onboarding message. A sentinel keeps an
         # intentionally-unconfigured Connection quiet; an originless native
         # cron delivery still fails safely rather than landing in a real channel.
-        env["SLACK_HOME_CHANNEL"] = _SLACK_NO_HOME_CHANNEL
+        env["SLACK_HOME_CHANNEL"] = _NO_HOME_CHANNEL
     return env
 
 
@@ -241,13 +264,66 @@ def native_discord_env(settings: dict, credentials: dict) -> dict[str, str]:
         ("allowed_user_ids", "DISCORD_ALLOWED_USERS"),
         ("allowed_role_ids", "DISCORD_ALLOWED_ROLES"),
     ):
-        values = [str(value) for value in settings.get(settings_key, []) if str(value)]
-        if values:
+        if values := _setting_ids(settings, settings_key):
             env[env_key] = ",".join(values)
     if home_channel_id := settings.get("home_channel_id"):
         env["DISCORD_HOME_CHANNEL"] = str(home_channel_id)
     else:
-        env["DISCORD_HOME_CHANNEL"] = _DISCORD_NO_HOME_CHANNEL
+        env["DISCORD_HOME_CHANNEL"] = _NO_HOME_CHANNEL
+    return env
+
+
+def native_telegram_env(settings: dict, credentials: dict) -> dict[str, str]:
+    """Map a Telegram Connection onto the native Hermes Telegram adapter.
+
+    Groups always require a mention (or a reply to the bot); DMs never do. Hermes
+    authorizes a sender if any gate admits them, so a DM allowlist also admits
+    those users in groups; the adapter's chat allowlist still confines groups.
+    ``build_hermes_gateway_config(telegram_settings=...)`` closes groups when the
+    allowlist is empty.
+    """
+    env = {
+        "TELEGRAM_BOT_TOKEN": credentials["bot_token"],
+        "TELEGRAM_REQUIRE_MENTION": "true",
+        # Native Hermes delivers scheduled results to their origin.
+        "AGENTBARN_SCHEDULED_DELIVERY": "0",
+    }
+    if settings.get("group_policy", "allowlist") == "open":
+        env["TELEGRAM_GROUP_ALLOWED_CHATS"] = "*"
+    elif chat_ids := _setting_ids(settings, "allowed_chat_ids"):
+        # The adapter drops other groups; the gateway admits any member of these.
+        env["TELEGRAM_ALLOWED_CHATS"] = env["TELEGRAM_GROUP_ALLOWED_CHATS"] = ",".join(chat_ids)
+    dm_policy = settings.get("dm_policy", "off")
+    if dm_policy == "open":
+        env["TELEGRAM_ALLOW_ALL_USERS"] = "true"
+    elif dm_policy == "allowlist" and (user_ids := _setting_ids(settings, "allowed_user_ids")):
+        env["TELEGRAM_ALLOWED_USERS"] = ",".join(user_ids)
+    if home_channel_id := settings.get("home_channel_id"):
+        env["TELEGRAM_HOME_CHANNEL"] = str(home_channel_id)
+    else:
+        env["TELEGRAM_HOME_CHANNEL"] = _NO_HOME_CHANNEL
+    return env
+
+
+def runtime_teams_env(settings: dict, credentials: dict) -> dict[str, str]:
+    """Map a Teams Connection onto Hermes' runtime-owned Bot Framework adapter.
+
+    The public Agent Barn webhook verifies Bot Framework authentication and
+    applies the Connection's DM/channel policy before forwarding an activity.
+    The private runtime listener therefore admits the already-authorized event.
+    """
+    env = {
+        "TEAMS_CLIENT_ID": credentials["app_id"],
+        "TEAMS_CLIENT_SECRET": credentials["app_password"],
+        "TEAMS_TENANT_ID": credentials["tenant_id"],
+        "TEAMS_ALLOW_ALL_USERS": "true",
+        "TEAMS_PORT": "3978",
+        "AGENTBARN_SCHEDULED_DELIVERY": "0",
+    }
+    if home_channel_id := settings.get("home_channel_id"):
+        env["TEAMS_HOME_CHANNEL"] = str(home_channel_id)
+    else:
+        env["TEAMS_HOME_CHANNEL"] = _NO_HOME_CHANNEL
     return env
 
 
@@ -285,6 +361,7 @@ def build_hermes_config_map(
         "config-merge.py": HERMES_CONFIG_MERGE_PY,
         "start.sh": HERMES_START_SH,
         "communications-runtime-adapter.py": COMMUNICATIONS_RUNTIME_ADAPTER_PY,
+        "agent-trigger-server.py": AGENT_TRIGGER_SERVER_PY,
         "agentbarn_message.py": (_MESSAGE_SCRIPTS / "agentbarn_message.py").read_text(),
         "hermes-messaging.py": (_MESSAGE_SCRIPTS / "hermes-messaging.py").read_text(),
         "boot-run.py": HERMES_BOOT_RUN_PY,
@@ -341,6 +418,7 @@ def build_secret_hermes_runtime(
             "RUNTIME_API_URL": "http://127.0.0.1:8642",
             "RUNTIME_MODEL": agent_name,
             "RUNTIME_KIND": "hermes",
+            "AGENT_TRIGGER_RECEIPT_PATH": "/opt/data/agent-trigger-receipts.sqlite3",
             "VERBOSE_MODE": "true" if verbose_mode else "false",
             "APPROVAL_MODE": approval_mode,
         },

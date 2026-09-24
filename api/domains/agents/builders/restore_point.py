@@ -1,3 +1,4 @@
+import secrets
 from uuid import UUID
 
 from kubernetes import client
@@ -15,6 +16,14 @@ from api.domains.agents.restore_point_job import (
 )
 
 COMPONENT_LABEL = "restore-point"
+COMPONENT_LABEL_KEY = "agentbarn.io/component"
+AGENT_ID_LABEL_KEY = "agentbarn.io/agent-id"
+RESTORE_POINT_ID_LABEL_KEY = "agentbarn.io/restore-point-id"
+
+PVC_NAME_PREFIX = "restore-point-"
+CAPTURE_JOB_NAME_PREFIX = "rp-cap-"
+RESTORE_JOB_NAME_PREFIX = "rp-res-"
+_UUID_LENGTH = 36
 
 SOURCE_MOUNT_PATH = "/source"
 DEST_MOUNT_PATH = "/dest"
@@ -35,14 +44,41 @@ _JOB_RESOURCES = client.V1ResourceRequirements(
 
 
 def restore_point_resource_name(restore_point_id: UUID) -> str:
-    return f"restore-point-{restore_point_id}"
+    return f"{PVC_NAME_PREFIX}{restore_point_id}"
 
 
-def _labels(agent_id: UUID, org_id: UUID) -> dict[str, str]:
+def capture_job_name(restore_point_id: UUID) -> str:
+    return f"{CAPTURE_JOB_NAME_PREFIX}{restore_point_id}"
+
+
+def restore_job_name(restore_point_id: UUID) -> str:
+    return f"{RESTORE_JOB_NAME_PREFIX}{restore_point_id}-{secrets.token_hex(3)}"
+
+
+def restore_point_id_from_name(name: str) -> UUID | None:
+    """The restore point a resource belongs to, read back out of its own name.
+
+    Reclamation prefers the id label, but resources created before that label
+    existed carry only a name. These names are generated here, so parsing one is
+    a second exact identifier rather than a guess; anything that does not match
+    a prefix this module produces still resolves to None and is left alone.
+    """
+    for prefix in (PVC_NAME_PREFIX, CAPTURE_JOB_NAME_PREFIX, RESTORE_JOB_NAME_PREFIX):
+        if not name.startswith(prefix):
+            continue
+        try:
+            return UUID(name[len(prefix) :][:_UUID_LENGTH])
+        except ValueError:
+            return None
+    return None
+
+
+def _labels(restore_point_id: UUID, agent_id: UUID, org_id: UUID) -> dict[str, str]:
     return {
         "org-id": str(org_id),
-        "agentbarn.io/component": COMPONENT_LABEL,
-        "agentbarn.io/agent-id": str(agent_id),
+        COMPONENT_LABEL_KEY: COMPONENT_LABEL,
+        AGENT_ID_LABEL_KEY: str(agent_id),
+        RESTORE_POINT_ID_LABEL_KEY: str(restore_point_id),
     }
 
 
@@ -58,7 +94,7 @@ def build_restore_point_pvc(
         metadata=client.V1ObjectMeta(
             name=restore_point_resource_name(restore_point_id),
             namespace=namespace,
-            labels=_labels(agent_id, org_id),
+            labels=_labels(restore_point_id, agent_id, org_id),
         ),
         spec=client.V1PersistentVolumeClaimSpec(
             access_modes=["ReadWriteOnce"],
@@ -78,6 +114,7 @@ def _volume(name: str, claim_name: str) -> client.V1Volume:
 def _build_job(
     *,
     job_name: str,
+    restore_point_id: UUID,
     agent_id: UUID,
     org_id: UUID,
     namespace: str,
@@ -88,7 +125,7 @@ def _build_job(
     backoff_limit: int,
     image_pull_secret: str | None,
 ) -> client.V1Job:
-    labels = _labels(agent_id, org_id)
+    labels = _labels(restore_point_id, agent_id, org_id)
     return client.V1Job(
         metadata=client.V1ObjectMeta(name=job_name, namespace=namespace, labels=labels),
         spec=client.V1JobSpec(
@@ -126,6 +163,7 @@ def _build_job(
 def build_capture_job(
     *,
     job_name: str,
+    restore_point_id: UUID,
     agent_id: UUID,
     org_id: UUID,
     namespace: str,
@@ -138,6 +176,7 @@ def build_capture_job(
 ) -> client.V1Job:
     return _build_job(
         job_name=job_name,
+        restore_point_id=restore_point_id,
         agent_id=agent_id,
         org_id=org_id,
         namespace=namespace,
@@ -161,6 +200,7 @@ def build_capture_job(
 def build_restore_job(
     *,
     job_name: str,
+    restore_point_id: UUID,
     agent_id: UUID,
     org_id: UUID,
     namespace: str,
@@ -174,6 +214,7 @@ def build_restore_job(
 ) -> client.V1Job:
     return _build_job(
         job_name=job_name,
+        restore_point_id=restore_point_id,
         agent_id=agent_id,
         org_id=org_id,
         namespace=namespace,

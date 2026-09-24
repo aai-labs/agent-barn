@@ -291,7 +291,9 @@ function ChartLegendContent({
   return (
     <div
       className={cn(
-        "flex items-center justify-center gap-4",
+        // Wraps: a legend entry is as long as its series name, and a handful of
+        // long names on one line runs off both edges of the card.
+        "flex flex-wrap items-center justify-center gap-x-4 gap-y-1.5",
         verticalAlign === "top" ? "pb-3" : "pt-3",
         className
       )}

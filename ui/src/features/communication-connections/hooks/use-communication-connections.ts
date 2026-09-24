@@ -363,5 +363,12 @@ export function useCommunicationConnectionActions() {
     onSuccess: (_data, variables) => invalidateDiagnostics(variables.agentId),
   });
 
-  return { previewConnectionDirectory, createConnection, updateConnection, retireConnection, reconnectConnection, retryDelivery };
+  return {
+    previewConnectionDirectory,
+    createConnection,
+    updateConnection,
+    retireConnection,
+    reconnectConnection,
+    retryDelivery,
+  };
 }

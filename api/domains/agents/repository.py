@@ -108,6 +108,23 @@ class AgentRepository:
     delegate: PostgresRepositoryDelegate
     outbox_repository: OutboxMessageRepository
 
+    def list_llm_credentials(self, organization_id: UUID) -> list[tuple[UUID, str, str]]:
+        """System-only credential projection for one Organization's live Agents.
+
+        Soft-deleted Agents are excluded on purpose: their keys are already blocked,
+        so they cannot spend against a team budget and counting them would only make
+        an Organization look permanently under-covered.
+        """
+        with Session(self.delegate.engine) as session:
+            rows = session.exec(
+                select(Agent.id, Agent.name, Agent.litellm_key_encrypted).where(
+                    col(Agent.organization_id) == organization_id,
+                    col(Agent.deleted_at).is_(None),
+                    col(Agent.litellm_key_encrypted) != "",
+                )
+            ).all()
+            return [(row[0], row[1], row[2]) for row in rows]
+
     def get_by_id(self, agent_id: UUID) -> Agent | None:
         with Session(self.delegate.engine) as session:
             query = select(Agent).where(col(Agent.id) == agent_id).where(col(Agent.deleted_at).is_(None))
@@ -841,8 +858,11 @@ class AgentRepository:
             # Anything start/stop writes has to be listed here or it is silently dropped.
             persisted.status = agent.status
             persisted.last_error = agent.last_error
+            persisted.last_error_code = agent.last_error_code
+            persisted.last_error_detail = agent.last_error_detail
             persisted.ingest_key_encrypted = agent.ingest_key_encrypted
             persisted.running_model = agent.running_model
+            persisted.running_config_digest = agent.running_config_digest
             persisted.communication_key_encrypted = agent.communication_key_encrypted
             session.add(persisted)
             session.flush()

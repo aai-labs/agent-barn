@@ -2,7 +2,7 @@ import hashlib
 import json
 import logging
 from abc import ABC, abstractmethod
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 from uuid import UUID
@@ -87,6 +87,25 @@ class InboundAdmissionContext:
 
     connection_id: UUID
     thread_is_agent_owned: Callable[[ConversationLocation], bool]
+
+
+@dataclass(frozen=True)
+class WebhookRequest:
+    """One inbound provider webhook before anything trusts it.
+
+    Carries the raw bytes because a signature covers what was sent, and re-serializing
+    the parsed body does not reproduce them.
+    """
+
+    raw_body: bytes
+    payload: dict[str, Any]
+    authorization: str
+    headers: Mapping[str, str]
+
+    def header(self, name: str) -> str | None:
+        """Case-insensitive lookup, since HTTP header names are not case-sensitive."""
+        lowered = name.lower()
+        return next((value for key, value in self.headers.items() if key.lower() == lowered), None)
 
 
 @dataclass(frozen=True)
@@ -363,13 +382,8 @@ class PlatformPlugin(ABC):
         """
         raise NotImplementedError(f"{self.key} does not implement supervised ingress")
 
-    def verify_webhook(
-        self,
-        credentials: PlatformCredentials,
-        payload: dict[str, Any],
-        authorization: str,
-    ) -> None:
-        """Authenticate a provider webhook before normalization."""
+    def verify_webhook(self, credentials: PlatformCredentials, request: WebhookRequest) -> None:
+        """Authenticate a provider webhook before normalization; raise PermissionError to reject it."""
         raise NotImplementedError(f"{self.key} does not implement webhook ingress")
 
     def build_app_package(

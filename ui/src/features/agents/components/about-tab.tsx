@@ -15,6 +15,7 @@ import {
 import { useAgentCost } from "@/features/costs/hooks/use-agent-cost";
 import { useCostUrlFilters } from "@/features/costs/hooks/use-cost-url-filters";
 import type { Agent } from "../schemas";
+import { AgentAboutProfile } from "./agent-about-profile";
 
 const DATE_FILTER_DEFAULTS = { from: "", to: "" };
 
@@ -34,6 +35,8 @@ export function AboutTab({ agent }: { agent: Agent }) {
 
   return (
     <div className="flex flex-col gap-4">
+      <AgentAboutProfile agent={agent} />
+
       <div className="af-card p-4">
         <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
           <div>

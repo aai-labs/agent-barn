@@ -33,6 +33,7 @@ from api.domains.communications.plugins.base import (
     InboundAdmissionContext,
     PlatformPlugin,
     ProcessingFeedbackContext,
+    WebhookRequest,
     failure_feedback_idempotency_key,
     failure_notice,
     provider_idempotency_key,
@@ -40,7 +41,7 @@ from api.domains.communications.plugins.base import (
 from api.domains.communications.plugins.discord import DiscordPlatformPlugin
 from api.domains.communications.plugins.registry import PlatformPluginRegistry
 from api.domains.communications.plugins.slack import SlackPlatformPlugin
-from api.domains.communications.plugins.teams import TeamsPlatformPlugin
+from api.domains.communications.plugins.teams import TeamsPlatformPlugin, TeamsSettings
 from api.domains.communications.plugins.telegram import TelegramPlatformPlugin
 from api.domains.communications.plugins.web import WebPlatformPlugin
 from api.infrastructure.msteams.client import TeamsAuthError
@@ -1565,6 +1566,26 @@ def test_teams_group_allowlist_matches_the_stripped_channel_id() -> None:
     assert_that(result, empty())
 
 
+def test_teams_runtime_relay_applies_dm_policy_to_approval_invokes() -> None:
+    plugin = _teams_plugin()
+    allowed = TeamsSettings.model_validate({"dm_policy": "allowlist", "dm_user_ids": [_TEAMS_AAD_ID]})
+    blocked = TeamsSettings.model_validate({"dm_policy": "allowlist", "dm_user_ids": ["someone-else"]})
+    invoke = _teams_activity(type="invoke")
+
+    assert plugin.runtime_relay_disposition(allowed, invoke) == CommunicationPolicyDisposition.ACCEPTED
+    assert plugin.runtime_relay_disposition(blocked, invoke) == CommunicationPolicyDisposition.USER_DENIED
+
+
+def test_teams_runtime_relay_forwards_authenticated_lifecycle_activities() -> None:
+    plugin = _teams_plugin()
+    settings = TeamsSettings.model_validate({})
+
+    assert (
+        plugin.runtime_relay_disposition(settings, _teams_activity(type="conversationUpdate"))
+        == CommunicationPolicyDisposition.ACCEPTED
+    )
+
+
 def test_teams_captures_addressable_ids_for_replies() -> None:
     plugin = _teams_plugin()
     settings = plugin.settings_model.model_validate({"dm_policy": "open"})
@@ -1889,6 +1910,7 @@ def test_teams_app_package_contains_a_valid_manifest_and_icons() -> None:
     assert manifest["manifestVersion"] == "1.17"
     assert manifest["bots"][0]["botId"] == "app-1"
     assert manifest["bots"][0]["scopes"] == ["personal", "team", "groupChat"]
+    assert manifest["bots"][0]["supportsFiles"] is True
     assert manifest["developer"]["websiteUrl"] == "https://example.test"
 
 
@@ -1973,6 +1995,16 @@ def test_teams_manifest_uses_only_fields_its_declared_schema_allows() -> None:
     assert set(manifest["bots"][0]["scopes"]) <= {"team", "personal", "groupChat"}
 
 
+def _webhook_request(payload: dict, *, authorization: str = "", headers: dict | None = None) -> WebhookRequest:
+    """Build the request a plugin sees, with raw bytes that really are this payload."""
+    return WebhookRequest(
+        raw_body=json.dumps(payload).encode(),
+        payload=payload,
+        authorization=authorization,
+        headers=headers or {},
+    )
+
+
 def test_teams_rejected_webhook_token_raises_the_gateways_permission_error() -> None:
     plugin = _teams_plugin()
 
@@ -1981,7 +2013,10 @@ def test_teams_rejected_webhook_token_raises_the_gateways_permission_error() -> 
         side_effect=TeamsAuthError("Bot Framework token verification failed"),
     ):
         with pytest.raises(PermissionError):
-            plugin.verify_webhook(_teams_credentials(plugin), {"type": "message"}, "Bearer nope")
+            plugin.verify_webhook(
+                _teams_credentials(plugin),
+                _webhook_request({"type": "message"}, authorization="Bearer nope"),
+            )
 
 
 def test_teams_rejected_credentials_raise_value_error_like_every_other_plugin() -> None:

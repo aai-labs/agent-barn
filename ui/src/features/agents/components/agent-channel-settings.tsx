@@ -72,6 +72,54 @@ function StatusDot({ color, label }: { color: string; label: string }) {
   );
 }
 
+function WebhookUrlField({ connectionId, url }: { connectionId: string; url: string }) {
+  const [copied, setCopied] = useState(false);
+  const inputId = `webhook-url-${connectionId}`;
+
+  async function copyWebhookUrl() {
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopied(true);
+      toast.success("Webhook URL copied to clipboard");
+    } catch {
+      toast.error("Could not copy the webhook URL. Select the address and copy it manually.");
+    }
+  }
+
+  return (
+    <div
+      className="mt-3 rounded-lg p-3"
+      style={{ border: "1px solid var(--line)", background: "var(--bg-soft)" }}
+    >
+      <label htmlFor={inputId} className="mb-1.5 block text-xs font-medium" style={{ color: "var(--ink)" }}>
+        Webhook URL
+      </label>
+      <div className="flex gap-2">
+        <input
+          id={inputId}
+          readOnly
+          value={url}
+          className="af-input min-w-0 flex-1 font-mono text-xs"
+          onFocus={(event) => event.currentTarget.select()}
+        />
+        <button
+          type="button"
+          className="af-btn af-btn-sm flex-shrink-0"
+          aria-label="Copy webhook URL"
+          title={copied ? "Webhook URL copied" : "Copy webhook URL"}
+          onClick={() => void copyWebhookUrl()}
+        >
+          {copied ? <Check size={14} aria-hidden="true" /> : <Copy size={14} aria-hidden="true" />}
+          <span className="sr-only">{copied ? "Copied" : "Copy"}</span>
+        </button>
+      </div>
+      <p className="mt-1.5 text-xs" style={{ color: "var(--ink-3)" }}>
+        Paste this address into the provider&apos;s webhook settings.
+      </p>
+    </div>
+  );
+}
+
 function connectionStatus(connection: CommunicationConnection): {
   color: string;
   label: string;
@@ -571,7 +619,8 @@ export function AgentChannelSettings({
     () => {
       const connected = new Set(connections.data?.map((connection) => connection.platformKey));
       return platforms.data?.filter(
-        (platform) => platform.key !== WEB_PLATFORM_KEY && !connected.has(platform.key),
+        (platform) =>
+          platform.key !== WEB_PLATFORM_KEY && !connected.has(platform.key),
       );
     },
     [connections.data, platforms.data],
@@ -966,17 +1015,7 @@ export function AgentChannelSettings({
                     </div>
                   )}
                   {connection.webhookUrl && (
-                    <div
-                      className="mt-2 text-xs"
-                      style={{ color: "var(--ink-3)" }}
-                    >
-                      Paste this URL into{" "}
-                      {platforms.data?.find(
-                        (p) => p.key === connection.platformKey,
-                      )?.displayName ?? "the platform"}
-                      &apos;s webhook settings:{" "}
-                      <code className="break-all">{connection.webhookUrl}</code>
-                    </div>
+                    <WebhookUrlField connectionId={connection.id} url={connection.webhookUrl} />
                   )}
                   {connection.managedAddress && (
                     <div className="mt-2 flex flex-wrap items-center gap-2 text-xs" style={{ color: "var(--ink-3)" }}>
@@ -1313,7 +1352,7 @@ export function AgentChannelSettings({
           </div>
         ))}
         {!connections.isPending &&
-          connections.data?.length === 0 &&
+          (connections.data?.length ?? 0) === 0 &&
           !adding && (
             <div
               className="flex flex-col items-center gap-2 rounded-xl p-6 text-center"

@@ -1,9 +1,11 @@
+import json
 from typing import Annotated, Any
 from uuid import UUID
 
-from fastapi import APIRouter, Header, HTTPException, Response, status
+from fastapi import APIRouter, Header, HTTPException, Request, Response, status
 from fastapi.responses import StreamingResponse
 from fastapi_injector import Injected
+from starlette.concurrency import run_in_threadpool
 
 from api.domains.communications.agent_message_service import AgentMessageService
 from api.domains.communications.delivery_repository import CommunicationDeliveryCancelledError
@@ -16,8 +18,12 @@ from api.domains.communications.models import (
     RuntimeDeliveryResult,
     RuntimeReplyCreate,
 )
+from api.domains.communications.plugins.base import WebhookRequest
 
-SUPPORTED_RUNTIME_PROTOCOL_VERSIONS = frozenset({"1", "2"})
+# 3 was only ever shipped to staging by the retired webhook Platform. Its adapter falls
+# back to version 2 behaviour, so those pods stay accepted until the Agent restarts.
+SUPPORTED_RUNTIME_PROTOCOL_VERSIONS = frozenset({"1", "2", "3"})
+_CONTROL_STREAM_PROTOCOL_VERSIONS = frozenset({"2", "3"})
 
 runtime_communications_router = APIRouter(prefix="/agents", tags=["runtime-communications"])
 driver_communications_router = APIRouter(prefix="/connections", tags=["platform-driver-communications"])
@@ -49,10 +55,10 @@ def stream_runtime_control(
     authorization: Annotated[str, Header()],
     protocol_version: Annotated[str, Header(alias="X-AgentBarn-Communications-Version")],
 ) -> StreamingResponse:
-    if protocol_version != "2":
+    if protocol_version not in _CONTROL_STREAM_PROTOCOL_VERSIONS:
         raise HTTPException(
             status_code=status.HTTP_426_UPGRADE_REQUIRED,
-            detail="The persistent runtime control stream requires Communications protocol version 2",
+            detail="The persistent runtime control stream requires Communications protocol version 2 or later",
         )
     agent = _authenticate(service, agent_id, authorization, protocol_version)
     return StreamingResponse(
@@ -183,15 +189,49 @@ def accept_email_inbound(
     return {"accepted": accepted}
 
 
+# The endpoint is public until a plugin has verified the request. A declared Content-Length
+# over this is refused without reading; a body with no declared length (chunked) is read in
+# full and then checked, so a limit that holds against that belongs at the ingress.
+MAX_WEBHOOK_BODY_BYTES = 256 * 1024
+
+
 @provider_webhook_router.post("/{connection_id}", status_code=status.HTTP_202_ACCEPTED)
-def accept_provider_webhook(
+async def accept_provider_webhook(
     connection_id: UUID,
-    payload: dict[str, Any],
+    request: Request,
     service: Annotated[CommunicationsGatewayService, Injected(CommunicationsGatewayService)],
-    authorization: Annotated[str, Header()],
+    # Optional: a signature-based caller sends no Authorization header at all.
+    authorization: Annotated[str, Header()] = "",
 ) -> dict[str, list[AcceptedCommunicationRead]]:
+    declared_length = request.headers.get("content-length", "")
+    if declared_length.isdigit() and int(declared_length) > MAX_WEBHOOK_BODY_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+            detail="Webhook body is too large",
+        )
+    # Raw bytes, not a parsed dict: a signature covers what was sent.
+    raw_body = await request.body()
+    if len(raw_body) > MAX_WEBHOOK_BODY_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+            detail="Webhook body is too large",
+        )
     try:
-        accepted = service.accept_provider_webhook(connection_id, payload, authorization)
+        payload = json.loads(raw_body)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Webhook body is not valid JSON") from exc
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Webhook body must be a JSON object")
+
+    webhook_request = WebhookRequest(
+        raw_body=raw_body,
+        payload=payload,
+        authorization=authorization,
+        headers=dict(request.headers),
+    )
+    try:
+        # The service does blocking database and decryption work; keep it off the event loop.
+        accepted = await run_in_threadpool(service.accept_provider_webhook, connection_id, webhook_request)
     except (PermissionError, NotImplementedError) as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Webhook authentication failed") from exc
     return {"accepted": accepted}

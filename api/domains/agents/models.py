@@ -13,6 +13,7 @@ from sqlmodel import Column, Enum, Index
 from sqlmodel import Field as SqlField
 
 from api.domains.agents.google_workspace_scopes import required_service_scopes
+from api.domains.agents.provisioning_errors import AgentProvisioningErrorCategory
 from api.domains.rbac.catalog import PermissionKey
 from api.domains.users.organization_users.models import OrganizationRole
 from api.infrastructure.crypto import decrypt_token, encrypt_token
@@ -78,6 +79,7 @@ class SecretProvider(str, enum.Enum):
     SLACK = "slack"
     PIPEDRIVE = "pipedrive"
     GOOGLE_WORKSPACE = "google_workspace"
+    SHAREPOINT = "sharepoint"
 
 
 # Google services a google_workspace credential may cover, as named by the gog CLI.
@@ -97,6 +99,7 @@ PROVIDER_DISPLAY_NAMES: dict[SecretProvider, str] = {
     SecretProvider.SLACK: "Slack credential",
     SecretProvider.PIPEDRIVE: "Pipedrive credential",
     SecretProvider.GOOGLE_WORKSPACE: "Google Workspace credential",
+    SecretProvider.SHAREPOINT: "SharePoint credential",
 }
 
 
@@ -200,6 +203,34 @@ class GoogleWorkspaceContent(SecretContent):
         return self
 
 
+class SharePointContent(SecretContent):
+    """A SharePoint sign-in made on the agent's Microsoft Teams app.
+
+    The sign-in is a public client (PKCE, no secret), so the refresh token here refreshes
+    without the Teams app's secret; aai-cli's ``microsoft_delegated`` profile does exactly
+    that and stores each rotated token itself. The Teams app's secret is never read for
+    SharePoint and cannot be stored here (``extra="forbid"`` on SecretContent).
+    """
+
+    # Strings rather than UUIDs: encrypt_content JSON-serialises model_dump(), which a UUID
+    # object would break. Validated and normalised below.
+    connection_id: str
+    tenant_id: str = Field(min_length=1)
+    client_id: str = Field(min_length=1)
+    email: str = Field(min_length=1)
+    scopes: list[str] = Field(default_factory=list)
+    read_only: bool = False
+    refresh_token: str = Field(min_length=1)
+    # New for every sign-in. The pod writes the refresh token into aai-cli's store only when
+    # this changes, so a restart keeps aai-cli's rotated token and a reconnect replaces it.
+    sign_in_id: str
+
+    @field_validator("connection_id", "sign_in_id")
+    @classmethod
+    def _validate_uuid(cls, value: str) -> str:
+        return str(UUID(value))
+
+
 class ZohoMailContent(SecretContent):
     email: str
     account_id: str
@@ -243,7 +274,14 @@ PROVIDER_CONTENT_MODELS: dict[SecretProvider, type[SecretContent]] = {
     SecretProvider.SLACK: SlackContent,
     SecretProvider.PIPEDRIVE: PipedriveContent,
     SecretProvider.GOOGLE_WORKSPACE: GoogleWorkspaceContent,
+    SecretProvider.SHAREPOINT: SharePointContent,
 }
+
+
+# Providers whose credential only their sign-in writes: the refresh token must come from a
+# sign-in on the named app, checked for tenant and permissions. Saving content directly would
+# skip those checks or point a sign-in at another app.
+SIGN_IN_ONLY_PROVIDERS: frozenset[SecretProvider] = frozenset({SecretProvider.SHAREPOINT})
 
 
 def validate_content(provider: SecretProvider, raw: dict) -> SecretContent:
@@ -336,15 +374,25 @@ class Agent(BaseModel, table=True):
         default="",
         sa_column=Column(sa.String(), nullable=False, server_default=""),
     )
+    running_config_digest: str = SqlField(
+        default="",
+        sa_column=Column(sa.String(64), nullable=False, server_default=""),
+    )
     agent_type: AgentType = SqlField(
         default=AgentType.OPENCLAW,
         sa_column=Column(sa.String(20), nullable=False, server_default="openclaw"),
     )
+    # Provisioning failure, as normalized by provisioning_errors.py. `last_error` is
+    # the one-line display rendering (summary + detail); `last_error_code` names the
+    # category the read boundary rebuilds the rest from, and its absence on a row
+    # that has `last_error` marks pre-normalization text that was never sanitized.
     last_error: str | None = SqlField(
         default=None,
         nullable=True,
         sa_type=sa.Text,
     )
+    last_error_code: str | None = SqlField(default=None, nullable=True, max_length=100)
+    last_error_detail: str | None = SqlField(default=None, nullable=True, max_length=500)
 
     ingest_key_encrypted: str | None = SqlField(default=None, nullable=True)
     communication_key_encrypted: str | None = SqlField(default=None, nullable=True)
@@ -513,6 +561,21 @@ class AgentRestorePoint(BaseModel, table=True):
         sa_column=Column(JSONB, nullable=False),
     )
     failure_reason: str | None = SqlField(default=None, nullable=True, max_length=500)
+    # Set when a restore is asked to bring the recorded configuration back with it.
+    # The configuration is written only after the Job confirms the volume is back,
+    # so the intent has to outlive the request that made it.
+    reapply_configuration: bool = SqlField(default=False, nullable=False, sa_column_kwargs={"server_default": "false"})
+    # Why the recorded configuration did not land, once the volume already has.
+    configuration_error: str | None = SqlField(default=None, nullable=True, max_length=500)
+    # Who asked for the restore, which is who authorized the configuration write that
+    # follows it. Not the same person as the one who captured the restore point.
+    restored_by_user_id: UUID | None = SqlField(
+        default=None,
+        foreign_key="user.id",
+        nullable=True,
+        ondelete="SET NULL",
+    )
+    restored_by_display: str | None = SqlField(default=None, nullable=True, max_length=255)
     captured_at: datetime | None = SqlField(
         default=None,
         nullable=True,
@@ -794,6 +857,10 @@ class AgentSecretCreate(PydanticBaseModel):  # no secret_name — backend stamps
 
     @model_validator(mode="after")
     def validate_provider_content(self) -> AgentSecretCreate:
+        if self.provider in SIGN_IN_ONLY_PROVIDERS:
+            raise ValueError(
+                f"{PROVIDER_DISPLAY_NAMES[self.provider]} is connected by signing in, not by saving content"
+            )
         validate_content(self.provider, self.content)
         return self
 
@@ -1004,11 +1071,43 @@ class AgentTemplateOverridePublish(PydanticBaseModel):
 
 
 class AgentTemplateSelection(PydanticBaseModel):
+    """A configuration selection: the template pin, and optionally the skill pins
+    and runtime settings that must hold with it.
+
+    Required skill pins are validated against the assignments the Agent *will* have,
+    so a template and its own skills have to arrive in one request.
+    """
+
     selection_type: Literal["platform", "organization", "override"]
     template_key: str | None = Field(default=None, min_length=1, max_length=255)
     template_version: int | None = Field(default=None, ge=1)
     override_version: int | None = Field(default=None, ge=1)
     expected_agent_updated_at: datetime
+
+    # Same vocabulary as AgentUpdate: additive assignment plus explicit removal.
+    skill_ids: list[UUID] = Field(default_factory=list)
+    removed_skill_ids: list[UUID] = Field(default_factory=list)
+    skill_versions: list[SkillVersionPin] = Field(default_factory=list)
+
+    # Unset means "leave as it is"; a null model clears the override, as in AgentUpdate.
+    model: str | None = None
+    approval_mode: CommandApprovalMode | None = None
+    verbose_mode: bool | None = None
+
+    # These columns are not nullable; only `model` gives null a meaning.
+    @model_validator(mode="before")
+    @classmethod
+    def reject_null_approval_mode(cls, values: object) -> object:
+        if isinstance(values, dict) and values.get("approval_mode", ...) is None:
+            raise ValueError("approval_mode must be omitted rather than null")
+        return values
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_null_verbose_mode(cls, values: object) -> object:
+        if isinstance(values, dict) and values.get("verbose_mode", ...) is None:
+            raise ValueError("verbose_mode must be omitted rather than null")
+        return values
 
     @model_validator(mode="after")
     def validate_target(self) -> AgentTemplateSelection:
@@ -1019,6 +1118,9 @@ class AgentTemplateSelection(PydanticBaseModel):
                 )
         elif self.override_version is None or self.template_key is not None or self.template_version is not None:
             raise ValueError("Override selection requires override_version, and no template_key or template_version")
+        overlap = set(self.skill_ids) & set(self.removed_skill_ids)
+        if overlap:
+            raise ValueError("A Skill cannot be both assigned and removed in the same selection")
         return self
 
 
@@ -1152,6 +1254,21 @@ class AgentAssignedSkillRead(PydanticBaseModel):
 AgentModelSource = Literal["default", "override"]
 
 
+class AgentProvisioningErrorRead(PydanticBaseModel):
+    """A failed start, as shown to anyone who can read the Agent.
+
+    Every field is derived from the stored category or rebuilt from validated
+    fragments; no cluster text reaches this DTO. See `provisioning_errors.py`.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    code: str
+    category: AgentProvisioningErrorCategory
+    summary: str
+    detail: str | None = None
+
+
 class AgentRead(PydanticBaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -1176,6 +1293,7 @@ class AgentRead(PydanticBaseModel):
     #: Set only when a running Agent's resolved model has moved since it started, so a
     #: surface can say what a restart would switch it to without recomputing the rule.
     pending_model: str
+    update_available: bool = False
     secrets: list[AgentSecretRead] = Field(default_factory=list)
     skills: list[AgentAssignedSkillRead] = Field(default_factory=list)
     configured_platform_keys: list[str] = Field(default_factory=list)
@@ -1184,6 +1302,7 @@ class AgentRead(PydanticBaseModel):
     native_platform_keys: list[str] = Field(default_factory=list)
     approval_mode: CommandApprovalMode
     verbose_mode: bool
+    last_error: AgentProvisioningErrorRead | None = None
     allowed_actions: list[PermissionKey] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime

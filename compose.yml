@@ -10,7 +10,7 @@ x-api-env: &api-env
   SECRET_SIGNING_KEY: ${SECRET_SIGNING_KEY:?SECRET_SIGNING_KEY is required}
   PLATFORM_ADMIN_CREDENTIALS: ${PLATFORM_ADMIN_CREDENTIALS:?PLATFORM_ADMIN_CREDENTIALS is required}
   ENVIRONMENT: ${ENVIRONMENT:?ENVIRONMENT is required}
-  UI_APP_URL: ${UI_APP_URL:?UI_APP_URL is required}
+  WEB_APP_URL: ${WEB_APP_URL:?WEB_APP_URL is required}
 
 services:
   db:
@@ -67,6 +67,11 @@ services:
       # Agent pods run in k3d, outside this Compose network, so they reach the
       # Communications gateway through the same host hop as Ingest and LiteLLM.
       COMMUNICATIONS_BASE_URL: ${COMMUNICATIONS_BASE_URL:-http://host.docker.internal:${COMMUNICATIONS_PORT:-8002}/communications/v1}
+      # The API container cannot resolve k3d cluster DNS, so runtime-owned Teams
+      # relays through `make forward-teams` on the host instead.
+      TEAMS_RUNTIME_WEBHOOK_URL: ${TEAMS_RUNTIME_WEBHOOK_URL:-http://host.docker.internal:3978/api/messages}
+      # Agent Webhook dispatch likewise goes through `make forward-triggers`.
+      AGENT_TRIGGER_URL: ${AGENT_TRIGGER_URL:-http://host.docker.internal:8082/agent-triggers/v1/invocations}
       # The rest of the agent config (AGENT_*, LITELLM_SECRET_NAME, OPENCLAW_IMAGE,
       # ...) arrives via env_file above. Only the values that must differ inside
       # the container are overridden here.
