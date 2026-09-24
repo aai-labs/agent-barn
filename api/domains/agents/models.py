@@ -1332,6 +1332,22 @@ class AgentFilter(PydanticBaseModel):
     status: AgentStatus | None = None
 
 
+class AgentRuntimeDiagnosticsRead(PydanticBaseModel):
+    observed_at: datetime
+    available: bool = False
+    pod_created_at: datetime | None = None
+    restart_count: int = 0
+    ready: bool = False
+    waiting_reason: str | None = None
+    termination_reason: str | None = None
+    exit_code: int | None = None
+    finished_at: datetime | None = None
+    current_logs: list[str] = Field(default_factory=list)
+    previous_logs: list[str] = Field(default_factory=list)
+    current_logs_available: bool = False
+    previous_logs_available: bool = False
+
+
 class AgentHealthRead(PydanticBaseModel):
     status: str
     reason: str | None = None

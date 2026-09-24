@@ -175,7 +175,7 @@ Slack, Telegram, Discord and Teams. The message is the same whichever limit ran 
 
 ## Boundaries
 
-Agents own LiteLLM key creation, encryption, deletion blocking, and lifecycle status. The LiteLLM and OpenRouter infrastructure clients own remote API behavior. Costs owns the persisted record, attribution, healing, and aggregation. Conversation and Tool Call data do not feed cost calculation.
+Agents own LiteLLM key creation, encryption, deletion blocking, and lifecycle status. The LiteLLM and OpenRouter infrastructure clients own remote API behavior. Costs owns the persisted record, attribution, healing, and aggregation. Conversation and Tool Call data do not feed cost calculation. Agent Activity reads `cost_record` for its own per-Agent surface and annotates it with message timing; it owns no table and changes no figure here (see [`agent-activity.md`](agent-activity.md)).
 
 ## Source map
 

@@ -22,6 +22,7 @@ from api.domains.agents.models import (
     AgentLogsRead,
     AgentNameSuggestionRead,
     AgentRead,
+    AgentRuntimeDiagnosticsRead,
     AgentTemplateOverrideDraftRead,
     AgentTemplateOverrideDraftUpdate,
     AgentTemplateOverridePublish,
@@ -298,6 +299,15 @@ def stop_agent(
     service: Annotated[AgentService, Injected(AgentService)],
 ):
     return service.stop_agent(agent_id, context)
+
+
+@agents_router.get("/{agent_id}/diagnostics", response_model=AgentRuntimeDiagnosticsRead)
+def get_runtime_diagnostics(
+    agent_id: UUID,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[AgentService, Injected(AgentService)],
+):
+    return service.get_runtime_diagnostics(agent_id, context)
 
 
 @agents_router.get("/{agent_id}/healthz", response_model=AgentHealthRead)

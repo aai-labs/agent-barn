@@ -66,6 +66,7 @@ from api.domains.agents.models import (
     AgentOverrideAuthorRead,
     AgentProvisioningErrorRead,
     AgentRead,
+    AgentRuntimeDiagnosticsRead,
     AgentSecret,
     AgentSecretCreate,
     AgentSecretRead,
@@ -2603,6 +2604,18 @@ class AgentService:
         self._backfill_google_client_credentials({provider: content})
         result = validator(content)  # type: ignore[arg-type]
         return format_validation_result(result)
+
+    def get_runtime_diagnostics(self, agent_id: UUID, context: CurrentUserContext) -> AgentRuntimeDiagnosticsRead:
+        agent = self.authorization.require_action(context, agent_id, PermissionKey.ACTIVITY_READ)
+        if agent.status != AgentStatus.RUNNING:
+            return AgentRuntimeDiagnosticsRead(observed_at=dt.datetime.now(dt.UTC))
+        try:
+            return AgentRuntimeDiagnosticsRead.model_validate(
+                self.k8s.get_runtime_diagnostics(f"agent-{agent.id}", self.config.k8s_namespace)
+            )
+        except Exception:
+            logger.exception("Runtime diagnostics unavailable for agent %s", agent.id)
+            raise HTTPException(status_code=503, detail="Runtime diagnostics are temporarily unavailable") from None
 
     def get_agent_health(self, agent_id: UUID, context: CurrentUserContext) -> AgentHealthRead:
         agent = self.authorization.require_action(context, agent_id, PermissionKey.ACTIVITY_READ)

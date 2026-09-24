@@ -150,6 +150,97 @@ export const mockAgentLlmBudgetRows = [
   },
 ];
 
+// --- Activity ---------------------------------------------------------------
+//
+// Modelled on the case the tab exists to catch: a heartbeat waking every half
+// hour, resending a huge context, with nobody in the conversation.
+
+export const mockActivityBackgroundTrigger = {
+  trigger: "background",
+  wakes: 8,
+  calls: 32,
+  spend: 51.55,
+  prompt_tokens: 3_700_000,
+};
+
+export const mockActivityUserTrigger = {
+  trigger: "user",
+  wakes: 0,
+  calls: 0,
+  spend: 0,
+  prompt_tokens: 0,
+};
+
+export const mockAgentActivitySummary = {
+  agent_id: MOCK_AGENT_ID,
+  period: null,
+  from_date: "2026-09-10T00:00:00Z",
+  to_date: "2026-09-17T00:00:00Z",
+  granularity: "day",
+  totals: {
+    calls: 32,
+    wakes: 8,
+    spend: 51.55,
+    prompt_tokens: 3_700_000,
+    completion_tokens: 82_000,
+  },
+  prompt_tokens_per_call: { avg: 77_000, median: 81_600, p95: 121_400, max: 128_900 },
+  by_trigger: [mockActivityUserTrigger, mockActivityBackgroundTrigger],
+  by_bucket: [
+    {
+      bucket: "2026-09-10T00:00:00Z",
+      calls: 12,
+      prompt_tokens: 1_400_000,
+      completion_tokens: 32_000,
+      spend: 20.1,
+    },
+    { bucket: "2026-09-11T00:00:00Z", calls: 0, prompt_tokens: 0, completion_tokens: 0, spend: 0 },
+    {
+      bucket: "2026-09-12T00:00:00Z",
+      calls: 20,
+      prompt_tokens: 2_300_000,
+      completion_tokens: 50_000,
+      spend: 31.45,
+    },
+  ],
+  wake_cadence_seconds: 1800,
+};
+
+export const mockAgentWake = {
+  started_at: "2026-09-12T11:29:00Z",
+  ended_at: "2026-09-12T11:29:42Z",
+  trigger: "background",
+  calls: 4,
+  spend: 6.32,
+  prompt_tokens: 468_000,
+  completion_tokens: 3_100,
+  min_prompt_tokens: 116_900,
+  max_prompt_tokens: 117_100,
+  models: ["litellm/openrouter/z-ai/glm-5.3"],
+};
+
+export const mockUserAgentWake = {
+  ...mockAgentWake,
+  started_at: "2026-09-12T09:02:00Z",
+  ended_at: "2026-09-12T09:02:11Z",
+  trigger: "user",
+  calls: 2,
+  spend: 0.42,
+  min_prompt_tokens: 8_200,
+  max_prompt_tokens: 8_200,
+};
+
+export const mockAgentActivityCall = {
+  request_id: "gen-abc-123",
+  occurred_at: "2026-09-12T11:29:00Z",
+  model: "litellm/openrouter/z-ai/glm-5.3",
+  status: "success",
+  spend: 1.58,
+  prompt_tokens: 117_000,
+  completion_tokens: 780,
+  request_duration_ms: 4120,
+};
+
 export const MOCK_RESTORE_POINT_ID = "55555555-5555-4555-8555-555555555555";
 export const MOCK_PRE_RESTORE_POINT_ID = "66666666-6666-4666-8666-666666666666";
 
@@ -752,6 +843,18 @@ export class AgentDataSupport {
         });
       },
     );
+  }
+
+  async interceptGetAgentDiagnosticsRequest({ status = 200, body = {} }: { status?: number; body?: object } = {}) {
+    await this.page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}/diagnostics`, async (route) => {
+      await route.fulfill({ status, contentType: "application/json", body: JSON.stringify({
+        observed_at: "2026-09-17T12:30:00Z", available: true, pod_created_at: "2026-09-17T11:59:00Z",
+        restart_count: 21, ready: false, waiting_reason: "CrashLoopBackOff", termination_reason: "Error",
+        exit_code: 1, finished_at: "2026-09-17T12:28:00Z", current_logs: ["Starting gateway"],
+        previous_logs: ["Legacy workspace setup state requires migration"],
+        current_logs_available: true, previous_logs_available: true, ...body,
+      }) });
+    });
   }
 
   async interceptGetAgentHealthRequest({
@@ -1513,5 +1616,89 @@ export class AgentDataSupport {
         });
       },
     );
+  }
+
+  // Matched by RegExp rather than glob: the summary route differs from its two
+  // children only by what follows "activity", and a glob cannot say "or nothing".
+  async interceptGetAgentActivityRequest({
+    agentId = MOCK_AGENT_ID,
+    status = 200,
+    detail = "Unable to load activity",
+    body,
+  }: {
+    agentId?: string;
+    status?: number;
+    detail?: string;
+    body?: unknown;
+  } = {}) {
+    await this.page.route(
+      new RegExp(`/agents/${agentId}/activity(\\?|$)`),
+      async (route) => {
+        if (route.request().method() !== "GET") {
+          await route.fallback();
+          return;
+        }
+        await route.fulfill({
+          status,
+          contentType: "application/json",
+          body: JSON.stringify(status >= 400 ? { detail } : (body ?? mockAgentActivitySummary)),
+        });
+      },
+    );
+  }
+
+  async interceptGetAgentWakesRequest({
+    agentId = MOCK_AGENT_ID,
+    status = 200,
+    items = [mockAgentWake],
+    onRequest,
+  }: {
+    agentId?: string;
+    status?: number;
+    items?: unknown[];
+    onRequest?: (url: URL) => void;
+  } = {}) {
+    await this.page.route(new RegExp(`/agents/${agentId}/activity/wakes`), async (route) => {
+      if (route.request().method() !== "GET") {
+        await route.fallback();
+        return;
+      }
+      const url = new URL(route.request().url());
+      onRequest?.(url);
+      const trigger = url.searchParams.get("trigger");
+      const matching = trigger
+        ? items.filter((item) => (item as { trigger: string }).trigger === trigger)
+        : items;
+      await route.fulfill({
+        status,
+        contentType: "application/json",
+        body: JSON.stringify({ page: 1, page_size: 25, total: matching.length, items: matching }),
+      });
+    });
+  }
+
+  async interceptGetAgentActivityCallsRequest({
+    agentId = MOCK_AGENT_ID,
+    status = 200,
+    items = [mockAgentActivityCall],
+    onRequest,
+  }: {
+    agentId?: string;
+    status?: number;
+    items?: unknown[];
+    onRequest?: (url: URL) => void;
+  } = {}) {
+    await this.page.route(new RegExp(`/agents/${agentId}/activity/calls`), async (route) => {
+      if (route.request().method() !== "GET") {
+        await route.fallback();
+        return;
+      }
+      onRequest?.(new URL(route.request().url()));
+      await route.fulfill({
+        status,
+        contentType: "application/json",
+        body: JSON.stringify({ page: 1, page_size: 50, total: items.length, items }),
+      });
+    });
   }
 }
