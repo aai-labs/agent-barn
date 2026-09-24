@@ -156,8 +156,7 @@ API's own image so the archive logic and its exclusion sets are always the same 
 API that scheduled them — `API_IMAGE` is rendered from the same chart expression as the API
 container's `image`. Nothing new is built or published.
 
-Both mount the Agent's `agent-<uuid>` PVC, which is why they require a stopped Agent: the
-volume is ReadWriteOnce and cannot be held by the Agent pod and a Job pod at once. Capture
+Both mount the Agent's `agent-<uuid>` PVC, which is why they require a stopped Agent. ReadWriteOnce is not the guarantee it looks like here: it is enforced per node for attachable volumes, and the default `local-path` provisioner is a bind mount with nothing to attach, so two pods on one node can hold the same directory. The API therefore waits for the Agent's pod to disappear before creating either Job, rather than trusting the Agent's stored status — stopping deletes the Deployment and returns immediately while the pod lives out its termination grace period. Capture
 mounts the Agent volume read-only alongside a fresh per-restore-point PVC. Restore mounts
 three — the Agent volume writable, the new Pre-Restore destination, and the chosen archive
 read-only — and performs the safety-net capture and the extraction in one process, so the
@@ -173,6 +172,23 @@ archive exclusions and is deliberately much smaller than it, because for the rem
 paths the wipe is the only thing that prunes them — the aai-cli store and the skills directory
 are both written additively at boot, so sparing them would leave a revoked credential or a
 removed skill in place.
+
+Capture and restore share one rule about what an archive may hold: every member is offered to the
+same `tarfile.data_filter` the extraction applies, against a neutral destination, and anything it
+refuses is dropped at capture with a count reported alongside the archive size. The neutral
+destination matters — the filter is destination-sensitive, so a link resolving inside the volume's
+live mount point still escapes the restore target, and filtering against the live path would let it
+through. Hand-written rules about which links to keep drifted from what extraction actually
+accepts, and each divergence failed a whole restore; deferring to the filter removes the class
+rather than the case.
+
+The wipe is total, and the archive is what puts state back. OpenClaw's npm plugin store is
+captured rather than excluded, so the packages and the records of them in `state/openclaw.sqlite`
+roll back together instead of disagreeing; the one thing an archive cannot carry is the store's
+link into the runtime image, which the capture filter removes and `start.sh` recreates on the next
+boot. Hermes' `.cache` is excluded as regenerable bulk. Sparing paths from the wipe was tried and
+reverted: it left current packages beside capture-time records, and the wipe is the only thing
+that prunes a revoked credential from the aai-cli store or a skill the Agent no longer has.
 
 The Job runs as root. Extraction then applies the ownership the target volume already had,
 read before the wipe, because the two runtimes differ: Hermes' init container chowns `/opt/data`

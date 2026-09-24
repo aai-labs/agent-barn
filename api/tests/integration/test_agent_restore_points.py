@@ -75,6 +75,9 @@ from api.tests.steps.template import there_is_a_template
 
 _BASE = "/api/v1/organizations/{organization_id}/agents"
 
+_TERMINATION_TIMEOUT = "api.domains.restore_points.service.RESTORE_POINT_POD_TERMINATION_TIMEOUT_SECONDS"
+_TERMINATION_POLL = "api.domains.restore_points.service.RESTORE_POINT_POD_TERMINATION_POLL_SECONDS"
+
 _GIVEN = [
     set_env_variable(
         {
@@ -1627,3 +1630,48 @@ def test_a_full_reconciler_run_applies_an_owed_replay_without_touching_the_archi
             assert_that(repository.find_owing_replay_for_agent(context.agent.id), equal_to([]))
             body = context.client.get(f"{_url(context)}/{row.id}", headers=_auth(context)).json()
             assert_that(body["status"], equal_to(RestorePointStatus.READY.value))
+
+
+def test_capture_is_refused_while_the_agent_pod_is_still_terminating():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        k8s = context.injector.get(KubernetesClient)
+        k8s.has_pods_for_deployment.return_value = True
+
+        with when("I capture while the pod still holds the volume"):
+            with patch(_TERMINATION_TIMEOUT, 0):
+                response = context.client.post(_url(context), json={}, headers=_auth(context))
+
+        with then("it is refused rather than racing the dying pod"):
+            assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
+            assert_that(response.json()["detail"], contains_string("still shutting down"))
+            assert_that(k8s.create_job.called, equal_to(False))
+
+
+def test_restore_is_refused_while_the_agent_pod_is_still_terminating():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        seeded = _seed(context)
+        k8s = context.injector.get(KubernetesClient)
+        k8s.has_pods_for_deployment.return_value = True
+
+        with when("I restore while the pod still holds the volume"):
+            with patch(_TERMINATION_TIMEOUT, 0):
+                response = context.client.post(f"{_url(context)}/{seeded.id}/restore", json={}, headers=_auth(context))
+
+        with then("it is refused and nothing is provisioned"):
+            assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
+            assert_that(response.json()["detail"], contains_string("still shutting down"))
+            assert_that(k8s.create_job.called, equal_to(False))
+
+
+def test_capture_proceeds_once_the_pod_has_gone():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        k8s = context.injector.get(KubernetesClient)
+        k8s.has_pods_for_deployment.side_effect = [True, False]
+
+        with when("the pod disappears while we wait"):
+            with patch(_TERMINATION_POLL, 0):
+                response = context.client.post(_url(context), json={}, headers=_auth(context))
+
+        with then("the capture is accepted rather than refused"):
+            assert_that(response.status_code, equal_to(status.HTTP_202_ACCEPTED))
+            assert_that(k8s.create_job.called, equal_to(True))

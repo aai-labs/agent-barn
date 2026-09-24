@@ -334,6 +334,16 @@ class KubernetesClient:
             raise
         return response.data.decode("utf-8", errors="replace")
 
+    def has_pods_for_deployment(self, deployment_name: str, namespace: str) -> bool:
+        """Whether any pod still exists, including one that is terminating.
+
+        Deliberately not ``get_pod_name_for_deployment``, which skips pods carrying a
+        deletion timestamp: a pod on its way out still holds the volume, and that is
+        exactly the state a caller needs to see.
+        """
+        pods = self._core_v1.list_namespaced_pod(namespace, label_selector=f"app={deployment_name}")
+        return bool(pods.items)
+
     def get_pod_name_for_deployment(self, deployment_name: str, namespace: str) -> str | None:
         pods = self._core_v1.list_namespaced_pod(namespace, label_selector=f"app={deployment_name}")
         for pod in pods.items:
