@@ -116,15 +116,18 @@ def _memory_entry(honcho_base_url: str | None, honcho_workspace_id: str | None) 
                 "noisePatterns": _MEMORY_NOISE_PATTERNS,
             },
             "hooks": {
-                # Without this the runtime blocks the plugin's `agent_end` hook, so
-                # no conversation is ever captured and memory stays silently empty.
-                # The plugin writes the flag itself and asks for a restart, which
-                # means a first run captures nothing unless it is set here up front.
+                # Capture (the plugin's `agent_end` hook) needs conversation access;
+                # without this the runtime blocks it and memory stays silently empty.
                 "allowConversationAccess": True,
-                # Recall runs a dialectic query on `before_prompt_build`, which is
-                # an LLM call with its own tool loop — measured at ~25s against a
-                # real workspace. The runtime's 15s default kills it every turn, so
-                # capture works while recall silently never lands.
+                # Turn off the stock plugin's OWN recall: its `before_prompt_build`
+                # hook injects a "## User Memory Context" block (a per-participant,
+                # own-view read via session.context), which our `honcho-pool-recall`
+                # plugin supersedes with pool-wide recall. OpenClaw's
+                # `allowPromptInjection: false` blocks that injection while leaving
+                # capture intact — so there is one recall path, not two (avoiding the
+                # redundant per-turn memory fetch the review flagged).
+                "allowPromptInjection": False,
+                # Bounds the capture hook; the runtime's interactive default is tight.
                 "timeoutMs": HONCHO_RECALL_TIMEOUT_MS,
             },
         }

@@ -32,12 +32,22 @@ PATTERN = re.compile(
 
 REPLACEMENT = (
     "        def _chat_once() -> str:\n"
-    "            # AF-280: pool-wide recall. Upstream queries only this agent's\n"
-    "            # own view (observer = its own peer); in a shared memory pool\n"
-    "            # every agent should see what the whole pool knows, so query the\n"
-    "            # workspace-level dialectic, which aggregates across all peers.\n"
-    "            # Reuses the SDK client's transport (base URL + auth).\n"
-    '            body: dict = {"query": query, "stream": False, "target": target_peer_id}\n'
+    "            # AF-280: pool-wide recall from a recent-conversation window.\n"
+    "            # Upstream queries only this agent's own view (observer = its own\n"
+    "            # peer); in a shared memory pool every agent should see what the\n"
+    "            # whole pool knows, so query the workspace-level dialectic, which\n"
+    "            # aggregates across all peers. The last message alone is a weak\n"
+    "            # retrieval prompt, so build the query from the last few turns and\n"
+    "            # fall back to the passed query if history is unavailable. Reuses\n"
+    "            # the SDK client's transport (base URL + auth).\n"
+    "            recent = session.get_history(6)\n"
+    "            windowed = \"\\n\".join(\n"
+    "                f\"{m['role']}: {m['content']}\" for m in recent if m.get(\"content\")\n"
+    "            ).strip()\n"
+    "            recall_query = windowed or query\n"
+    "            if len(recall_query) > self._dialectic_max_input_chars:\n"
+    "                recall_query = recall_query[: self._dialectic_max_input_chars].rsplit(\" \", 1)[0]\n"
+    '            body: dict = {"query": recall_query, "stream": False, "target": target_peer_id}\n'
     "            if level:\n"
     '                body["reasoning_level"] = level\n'
     "            self.honcho._ensure_workspace()\n"
@@ -61,7 +71,10 @@ def main() -> None:
             f"Hermes _chat_once source changed (found {len(matches)} matches); "
             "review the pool-wide recall patch"
         )
-    patched = PATTERN.sub(REPLACEMENT, source, count=1)
+    # Replace with a function, not the string form: re.sub treats backslashes in a
+    # string replacement as escapes (so `"\n"` in the code would become a newline),
+    # while a function replacement is inserted verbatim.
+    patched = PATTERN.sub(lambda _match: REPLACEMENT, source, count=1)
     compile(patched, str(target), "exec")
     target.write_text(patched)
 

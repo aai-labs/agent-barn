@@ -278,6 +278,11 @@ def test_gateway_config_moves_the_memory_slot_to_honcho_when_configured() -> Non
     assert entry["enabled"] is True
     assert entry["config"]["baseUrl"] == "http://honcho:8000"
     assert entry["config"]["workspaceId"] == "af-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+    # The stock plugin keeps capture (conversation access) but its own recall
+    # injection is turned off — our honcho-pool-recall plugin owns recall, so there
+    # is one recall path per turn, not two.
+    assert entry["hooks"]["allowConversationAccess"] is True
+    assert entry["hooks"]["allowPromptInjection"] is False
 
 
 def test_deployment_keeps_the_honcho_peer_map_on_the_persistent_volume() -> None:
