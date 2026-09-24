@@ -142,6 +142,11 @@ releases:
         value: {{ env "GIT_SHA" | default "" | quote }}
       - name: organizationLlmBudgets.alertThresholds
         value: {{ env "ORGANIZATION_LLM_BUDGET_ALERT_THRESHOLDS" | default "80,100" | quote }}
+      # No defaults on purpose: the chart refuses to render without both.
+      - name: organizationLlmBudgets.defaultOrganizationUsd
+        value: {{ env "ORGANIZATION_DEFAULT_LLM_BUDGET_USD" | quote }}
+      - name: organizationLlmBudgets.defaultAgentUsd
+        value: {{ env "AGENT_DEFAULT_LLM_BUDGET_USD" | quote }}
       - name: litellmKeyServiceAccountName
         value: {{ env "LITELLM_KEY_SERVICE_ACCOUNT" | default "agent-farm-user" | quote }}
       - name: openclawImage.repository

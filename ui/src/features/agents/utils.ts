@@ -26,6 +26,8 @@ export const agentsKey = {
     [..._agentsKeyBase.all, "name-suggestion", orgApiBase, openingId] as const,
   health: (id: string) => [..._agentsKeyBase.detail(id), "health"] as const,
   configuration: (id: string) => [..._agentsKeyBase.detail(id), "configuration"] as const,
+  llmBudget: (id: string) => [..._agentsKeyBase.detail(id), "llm-budget"] as const,
+  llmBudgets: (organizationId: string) => [..._agentsKeyBase.all, "llm-budgets", organizationId] as const,
   shareSettings: (id: string) => [..._agentsKeyBase.detail(id), "share"] as const,
   shareRoles: () => [..._agentsKeyBase.all, "share-roles"] as const,
   conversationChannels: (agentId: string) =>

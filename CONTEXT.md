@@ -21,8 +21,12 @@ The deployment-configured maximum number of non-deleted Organizations attributed
 _Avoid_: Membership limit, ownership limit, Platform Administrator quota
 
 **Model Spend Limit**:
-The amount an Organization may spend on model calls in one renewal period, set and changed only by a Platform Administrator. An Organization can neither see nor change its own. Absent means no limit; zero is a real limit of nothing. Enforced by the proxy at request time, so it binds late rather than exactly — a spend cutoff, not an invoice ceiling.
+The amount an Organization or one of its Agents may spend on model calls in one renewal period. An Organization's limit in force is its own limit when it has set one, otherwise its Spend Ceiling; an Agent's is its own limit when it has one, otherwise the Organization's default Agent limit, and never more than the Organization's. Zero is a real limit of nothing. The Organization and all its Agents share one renewal period and renew together. Enforced by the proxy at request time, so it binds late rather than exactly — a spend cutoff, not an invoice ceiling.
 _Avoid_: budget, allowance, quota, cap
+
+**Spend Ceiling**:
+The most an Organization may spend on model calls in one renewal period, set by a Platform Administrator. Every Organization has one, starting at the deployment default. The Organization may set a lower Model Spend Limit of its own, never a higher one, and lowering the ceiling beneath that limit pulls it down.
+_Avoid_: allowance, plan limit, platform budget
 
 **Spend Limit Coverage**:
 Whether an Organization's Agents are actually bound by its Model Spend Limit. An Agent issued a key before the Organization had one is not covered until it is enrolled, so a limit set over uncovered Agents would silently miss them.

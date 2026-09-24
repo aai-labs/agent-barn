@@ -35,6 +35,22 @@ BUDGET_BODY = {
         "code": "400",
     }
 }
+# An Agent's own limit: same error type, but the upstream text names the key instead.
+KEY_BUDGET_BODY = {
+    "error": {
+        "message": "Budget has been exceeded! Key=88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b "
+        "Spend=20.01, Max budget=20.0",
+        "type": "budget_exceeded",
+        "param": None,
+        "code": "429",
+    }
+}
+# Neutral on purpose: the same rejection comes back whether the Agent's own limit or
+# its Organization's ran out, and nothing in-pod can tell them apart reliably.
+SPEND_LIMIT_MESSAGE = (
+    "This agent has reached its model spend limit. "
+    "Contact your administrator to raise it or wait for the limit to reset."
+)
 UNKNOWN_MODEL_BODY = {"error": {"message": "model 'nope' not found", "type": "invalid_request_error"}}
 
 
@@ -117,19 +133,41 @@ def _post(base: str) -> tuple[int, dict]:
 
 
 @pytest.mark.parametrize("runtime", ["hermes", "openclaw"])
-@pytest.mark.parametrize("upstream_status", [400, 429])
+@pytest.mark.parametrize("upstream_status", [400, 422, 429])
 def test_a_budget_rejection_is_rewritten_for_the_user(runtime, upstream_status):
-    """Observed as a 400 on v1.96.2 and documented as a 429; both must be caught, or a
-    proxy upgrade silently starts leaking the team id again."""
+    """Observed as a 400, documented as a 429, and 422 by default on LiteLLM releases
+    after the pinned one; all must be caught, or a proxy upgrade silently starts
+    leaking the team id again."""
     with _upstream(upstream_status, BUDGET_BODY) as target, _proxy(runtime, target) as proxy:
         status, body = _post(proxy)
-    assert_that(status, equal_to(upstream_status))
+    # Always 402, whatever the proxy answered: both runtimes retry a 429 as a rate
+    # limit, indefinitely, so the person chatting would never hear back at all.
+    assert_that(status, equal_to(402))
     message = body["error"]["message"]
-    assert_that(message, contains_string("reached its model spend limit"))
+    assert_that(message, equal_to(SPEND_LIMIT_MESSAGE))
     # The upstream text names the Organization's internal team id; it must not reach
     # whoever is talking to the Agent.
     assert_that(message, not_(contains_string("01a0a4cc")))
     assert_that(message, not_(contains_string("Team=")))
+
+
+@pytest.mark.parametrize("runtime", ["hermes", "openclaw"])
+def test_an_agents_own_limit_running_out_is_rewritten_too(runtime):
+    """The key-level rejection names the key's hash; it must not reach the user either."""
+    with _upstream(429, KEY_BUDGET_BODY) as target, _proxy(runtime, target) as proxy:
+        status, body = _post(proxy)
+    assert_that(status, equal_to(402))
+    assert_that(body["error"]["message"], equal_to(SPEND_LIMIT_MESSAGE))
+
+
+@pytest.mark.parametrize("runtime", ["hermes", "openclaw"])
+def test_an_ordinary_rate_limit_is_still_a_429(runtime):
+    """Only a spent limit becomes terminal; a real rate limit must stay retryable."""
+    rate_limited = {"error": {"message": "Rate limit reached", "type": "rate_limit_error"}}
+    with _upstream(429, rate_limited) as target, _proxy(runtime, target) as proxy:
+        status, body = _post(proxy)
+    assert_that(status, equal_to(429))
+    assert_that(body["error"]["message"], equal_to("Rate limit reached"))
 
 
 @pytest.mark.parametrize("runtime", ["hermes", "openclaw"])

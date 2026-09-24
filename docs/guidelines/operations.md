@@ -41,28 +41,46 @@ LiteLLM uses a non-overlapping rolling update (`maxSurge: 0`, `maxUnavailable: 1
 
 ## Organization LLM budgets
 
-Each Organization has its own LLM spend ceiling, set by a Platform Administrator
-through `PUT /platform/organizations/{id}/llm-budget`. There is no deployment-wide
-budget and no environment variable: an amount belongs to one Organization, and an
-Organization cannot raise its own. The behaviour contract is in
+Every Organization has a Spend Ceiling, set by a Platform Administrator through
+`PUT /platform/organizations/{id}/llm-budget`; beneath it the Organization's Owners and
+Admins set a lower limit of their own, a default for their Agents, and a limit per
+Agent. The behaviour contract is in
 [Costs](../features/costs.md#organization-llm-budgets).
 
-Budgets are off until set. With LiteLLM configured, teams are still provisioned and
-new keys assigned even when no amount is set anywhere. No Agent restart is required,
-and a change takes effect as soon as it is saved — there is nothing to redeploy.
+Two deployment settings are **required** — the API, its worker, every CronJob and the
+migration job all refuse to start without them:
 
-`budget_usd` is a non-negative finite number, where `0` is a limit of nothing and
-omitting it removes the cap. `budget_duration` is a positive integer followed by
-`s`, `m`, `h` or `d`, defaulting to `30d` — a 30-day interval, not a calendar month.
-Clearing the amount also clears the renewal schedule. Changing only the amount
-preserves spend and the renewal date; changing the duration moves the next renewal
-without resetting spend.
+| Setting | Meaning |
+| --- | --- |
+| `ORGANIZATION_DEFAULT_LLM_BUDGET_USD` | The ceiling a new Organization starts with. The migration that introduced it also gave it to every existing Organization that had none. |
+| `AGENT_DEFAULT_LLM_BUDGET_USD` | The limit an Agent is held to until its Organization sets a default or the Agent its own. Must not exceed the Organization default. |
 
-Saving a budget writes the Organization row first and then pushes it to LiteLLM. A
+Deploys read both from GitHub Variables of the same names, through `helmfile.yaml.gotmpl`
+into the chart's `organizationLlmBudgets.defaultOrganizationUsd` / `defaultAgentUsd`,
+which render into the shared API Secret; the chart refuses to render without them.
+Local runs read them from `.env`, and the API test suite sets its own in
+`api/tests/conftest.py`.
+
+No Agent restart is required: a change takes effect as soon as it is saved.
+`budget_usd` is a non-negative finite number and is required on the ceiling — it can
+be changed but not cleared, so "no practical limit" is a very large amount.
+`budget_duration` is one of `1d`, `7d` or `30d`, defaulting to `30d`; LiteLLM renews
+these on calendar boundaries (next midnight, next Monday, the 1st of the month), which
+is what keeps the Organization and its Agents renewing together. Changing only an
+amount preserves spend and the renewal date; changing the window moves the next
+renewal without resetting spend.
+
+**Before the first deploy of this change,** compare each Organization's current spend
+with the default: an Organization that had no ceiling and has already spent more than
+`ORGANIZATION_DEFAULT_LLM_BUDGET_USD` in the current window is cut off as soon as the
+reconciler pushes the new limit, and every existing Agent is held to
+`AGENT_DEFAULT_LLM_BUDGET_USD` the same way.
+
+Saving a limit writes the row first and then pushes it to LiteLLM. A
 proxy failure returns `502` with the amount already stored, because losing an
 administrator's setting because the proxy blinked is worse than a delayed push. The
-`<release>-llm-budget-reconciler` CronJob pushes stored budgets onto their teams every
-15 minutes to repair exactly that kind of drift, logging
+`<release>-llm-budget-reconciler` CronJob pushes stored limits onto every team and
+Agent key every 15 minutes to repair exactly that kind of drift, logging
 `Organization LiteLLM budgets reconciled`. Like the other reconcilers it runs under
 `concurrencyPolicy: Forbid`, so one runner regardless of API replica count, and the
 API itself never contacts the proxy at startup. A budget saved while the proxy was
@@ -73,15 +91,17 @@ Run either pass by hand with `make reconcile-llm-budgets` or `make run-llm-budge
 Organization's Owners and Admins are notified — comma separated, each between 1 and
 100, defaulting to `80,100`. A malformed list refuses to boot rather than quietly
 alerting nobody. The value is read by the API and by the
-`<release>-llm-budget-alerts` CronJob, which runs every 5 minutes over Organizations
-that have a limit set. Alerting is informational: the limit is enforced in the
-request path, so the interval only bounds how late someone is told.
+`<release>-llm-budget-alerts` CronJob, which runs every 5 minutes over every
+Organization and every Agent key. The same thresholds apply to an Agent's own limit,
+whose alerts go to its creator and Owners. Alerting is informational: the limit is
+enforced in the request path, so the interval only bounds how late someone is told.
 
-Agents created before an Organization had a limit carry no team on their key, so a
-limit does not bind them until they are enrolled. A Platform Administrator does that
-from the Organization's page — the spend limit controls stay hidden until every Agent
-is covered, and the button reports anything it could not enroll by name. Historical
-pre-enrollment spend stays in reports but is not added to the new team counter.
+Agents created before an Organization had a team carry none on their key, so the
+Organization's limit does not bind them until they are enrolled. A Platform
+Administrator does that from the Organization's page, where uncovered Agents are
+named beside the limit controls and the button reports anything it could not enroll.
+Historical pre-enrollment spend stays in reports but is not added to the new team
+counter.
 
 ## Transactional email
 

@@ -66,6 +66,15 @@ _SUMMARY_BY_PROVIDER_CODE = {
         "in the Discord Developer Portal, then reconnect"
     ),
 }
+# Codes the Agent's own pod reports when it knows exactly why a turn stopped, and the
+# notice shown for each. They are read by the person chatting, so they are said
+# plainly: no "(HTTP ...)" qualifiers, and nothing about how it is enforced.
+_RUNTIME_CODES = {
+    "SPEND_LIMIT_REACHED": (
+        "This agent has reached its model spend limit. "
+        "Contact your administrator to raise it or wait for the limit to renew."
+    ),
+}
 _SUMMARY_BY_HTTP_STATUS = {
     402: "The provider reports exhausted credits or billing; add credits to the provider account, then retry",
 }
@@ -122,6 +131,19 @@ def normalize_communication_error(
             code=_REDACTED_ERROR_CODE,
             summary=_REDACTED_ERROR_SUMMARY,
             details=None,
+        )
+
+    if error_code in _RUNTIME_CODES:
+        # The pod already knows the reason; the runtime's free text (which may name
+        # a billing account the person chatting cannot see) is never consulted.
+        details = CommunicationErrorDetails(
+            category=CommunicationErrorCategory.PROVIDER_REJECTED,
+            operation=_safe_operation(operation),
+            provider_code=error_code,
+            retryable=False,
+        )
+        return NormalizedCommunicationError(
+            code=error_code, summary=error_summary_from_details(details), details=details
         )
 
     raw_code = error_code or (type(error).__name__ if error is not None else None)
@@ -186,6 +208,8 @@ def error_summary_from_details(details: CommunicationErrorDetails | Mapping[str,
     safe_details = safe_error_details(details)
     if safe_details is None:
         return _REDACTED_ERROR_SUMMARY
+    if safe_details.provider_code in _RUNTIME_CODES:
+        return _RUNTIME_CODES[safe_details.provider_code]
     summary = _SUMMARY_BY_PROVIDER_CODE.get(
         safe_details.provider_code or "",
         _SUMMARY_BY_HTTP_STATUS.get(
