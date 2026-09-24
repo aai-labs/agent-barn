@@ -102,19 +102,26 @@ def _memory_plugin(honcho_workspace_id: str | None) -> str:
     return _MEMORY_HONCHO if honcho_workspace_id else _MEMORY_CORE
 
 
-def _memory_entry(honcho_base_url: str | None, honcho_workspace_id: str | None) -> dict:
+def _memory_entry(
+    honcho_base_url: str | None, honcho_workspace_id: str | None, honcho_api_key: str | None = None
+) -> dict:
     if not honcho_workspace_id:
         return {_MEMORY_CORE: {"enabled": True}}
+    honcho_config: dict = {
+        "baseUrl": honcho_base_url,
+        "workspaceId": honcho_workspace_id,
+        # Merged with the plugin's own defaults; drops the memory-search
+        # sub-agent's turns before they are ever stored (see above).
+        "noisePatterns": _MEMORY_NOISE_PATTERNS,
+    }
+    if honcho_api_key:
+        # The workspace-scoped Honcho token; the stock plugin's SDK sends it as a
+        # bearer. Our honcho-pool-recall plugin reads the same field for its fetch.
+        honcho_config["apiKey"] = honcho_api_key
     return {
         _MEMORY_HONCHO: {
             "enabled": True,
-            "config": {
-                "baseUrl": honcho_base_url,
-                "workspaceId": honcho_workspace_id,
-                # Merged with the plugin's own defaults; drops the memory-search
-                # sub-agent's turns before they are ever stored (see above).
-                "noisePatterns": _MEMORY_NOISE_PATTERNS,
-            },
+            "config": honcho_config,
             "hooks": {
                 # Capture (the plugin's `agent_end` hook) needs conversation access;
                 # without this the runtime blocks it and memory stays silently empty.
@@ -142,6 +149,7 @@ def _openclaw_config_core(
     honcho_base_url: str | None = None,
     honcho_workspace_id: str | None = None,
     honcho_agent_id: str | None = None,
+    honcho_api_key: str | None = None,
 ) -> dict:
     provider, _, model_name = model.partition("/")
     # When memory is on, `honcho_agent_id` is this Agent's distinct logical id;
@@ -233,7 +241,7 @@ def _openclaw_config_core(
                 # `_memory_entry` gives memory-core an entry only when Honcho is off;
                 # when Honcho holds the slot, memory-core stays entry-less (fallback
                 # only) so there are never two active memory writers.
-                **_memory_entry(honcho_base_url, honcho_workspace_id),
+                **_memory_entry(honcho_base_url, honcho_workspace_id, honcho_api_key),
                 # Pool-wide recall runs beside the stock plugin (which keeps
                 # capture); allowConversationAccess lets its before_prompt_build
                 # hook read the turn so it can query relevant memories.
@@ -282,6 +290,7 @@ def build_openclaw_gateway_config(
     honcho_base_url: str | None = None,
     honcho_workspace_id: str | None = None,
     honcho_agent_id: str | None = None,
+    honcho_api_key: str | None = None,
 ) -> dict:
     """``native_channels`` maps a Platform key to its OpenClaw ``channels.<key>`` block."""
     channels = native_channels or {}
@@ -293,6 +302,7 @@ def build_openclaw_gateway_config(
         honcho_base_url=honcho_base_url,
         honcho_workspace_id=honcho_workspace_id,
         honcho_agent_id=honcho_agent_id,
+        honcho_api_key=honcho_api_key,
     )
     if channels:
         plugins = config["plugins"]

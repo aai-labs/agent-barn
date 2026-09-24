@@ -11,8 +11,11 @@ data:
   # a dict field that does not express reliably as environment variables.
   CACHE_URL: {{ .Values.cache.url | quote }}
   CACHE_ENABLED: "true"
-  # ClusterIP only; the service is never exposed through ingress.
-  AUTH_USE_AUTH: "false"
+  # ClusterIP keeps Honcho off the ingress, but Agent pods can still reach it, so
+  # network isolation alone does not enforce tenant boundaries. Auth is turned on
+  # whenever a JWT secret is provided: the API then holds an admin token and each
+  # Agent a token scoped to its own pool workspace (see the AF-280 ADR).
+  AUTH_USE_AUTH: {{ if .Values.auth.jwtSecret }}"true"{{ else }}"false"{{ end }}
   VECTOR_STORE_TYPE: pgvector
   DREAM_ENABLED: {{ .Values.dream.enabled | quote }}
   DERIVER_WORKERS: {{ .Values.deriver.workers | quote }}

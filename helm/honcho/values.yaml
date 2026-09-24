@@ -47,6 +47,14 @@ telemetry:
   # posting unauthenticated.
   key: ""
 
+# JWT auth for Honcho's HTTP API. When jwtSecret is set, Honcho requires a bearer
+# token: the API signs an admin token for its own calls and mints a per-Agent token
+# scoped to that Agent's pool workspace, so a pod can reach only its own pool. The
+# API deployment must be given the SAME secret as HONCHO_JWT_SECRET. Empty leaves
+# auth off (dev only) — do not run a shared/multi-tenant cluster with it empty.
+auth:
+  jwtSecret: ""
+
 service:
   port: 8000
 

@@ -283,6 +283,21 @@ def test_gateway_config_moves_the_memory_slot_to_honcho_when_configured() -> Non
     # is one recall path per turn, not two.
     assert entry["hooks"]["allowConversationAccess"] is True
     assert entry["hooks"]["allowPromptInjection"] is False
+    # No apiKey when auth is off (dev).
+    assert "apiKey" not in entry["config"]
+
+
+def test_honcho_workspace_token_is_injected_when_auth_is_on() -> None:
+    """The workspace-scoped Honcho token lands on the stock plugin's config, which
+    the SDK sends as a bearer; our pool-recall plugin reads the same field."""
+    config = build_openclaw_gateway_config(
+        "litellm/gpt-5",
+        "http://litellm:4000",
+        honcho_base_url="http://honcho:8000",
+        honcho_workspace_id="af-pool-org-1",
+        honcho_api_key="ws-scoped-token",
+    )
+    assert config["plugins"]["entries"]["openclaw-honcho"]["config"]["apiKey"] == "ws-scoped-token"
 
 
 def test_deployment_keeps_the_honcho_peer_map_on_the_persistent_volume() -> None:

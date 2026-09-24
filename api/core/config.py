@@ -72,6 +72,12 @@ class Config(BaseSettings):
     # Honcho's own LiteLLM virtual key. The API needs it to read the spend that
     # Honcho's token telemetry is divided against; it is never used to call a model.
     honcho_litellm_key: str = ""
+    # Shared secret Honcho signs/verifies its JWT access keys with (its
+    # AUTH_JWT_SECRET). Empty means Honcho auth is off (dev only): the API sends no
+    # bearer and Agents get no token. When set, the API signs an admin token for its
+    # own calls and mints a per-Agent token scoped to that Agent's pool workspace, so
+    # a pod can only reach its own pool. Never used to call a model.
+    honcho_jwt_secret: str = ""
     # Max Agents in one memory group. Pool operations (search, recall, facets) fan
     # out per member, so the cap keeps them bounded and search complete rather than
     # silently truncated. A config value so it can be tuned per env without a deploy.

@@ -76,7 +76,7 @@ HERMES_BOOT_RUN_PY: str = (_SCRIPTS / "boot-run.py").read_text()
 HERMES_STATE_DIR = "/opt/data"
 
 
-def build_honcho_config(*, base_url: str, workspace_id: str, ai_peer: str) -> dict:
+def build_honcho_config(*, base_url: str, workspace_id: str, ai_peer: str, api_key: str | None = None) -> dict:
     """Honcho as a Hermes memory provider.
 
     Unlike OpenClaw, where Honcho takes the runtime's single memory slot, Hermes
@@ -86,8 +86,12 @@ def build_honcho_config(*, base_url: str, workspace_id: str, ai_peer: str) -> di
     ``ai_peer`` is the Agent's stable peer id (``ai_peer_name_for_agent``), the id
     rather than the name so a rename never orphans memory and Honcho never
     renormalizes it. The read side computes the same value, so both always agree.
+
+    ``api_key`` is the workspace-scoped Honcho token (when Honcho auth is on); the
+    SDK sends it as a bearer, so the pool-recall patch inherits auth for free since
+    it reuses the SDK client's transport. Omitted when auth is off (dev).
     """
-    return {
+    config: dict = {
         "baseUrl": base_url,
         "hosts": {
             "hermes": {
@@ -103,6 +107,10 @@ def build_honcho_config(*, base_url: str, workspace_id: str, ai_peer: str) -> di
             }
         },
     }
+    if api_key:
+        # Top-level key the Hermes honcho provider reads for the SDK's bearer.
+        config["apiKey"] = api_key
+    return config
 
 
 def _hermes_config_core(

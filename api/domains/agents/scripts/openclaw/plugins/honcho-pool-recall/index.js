@@ -34,7 +34,12 @@ function honchoTarget() {
     const c = cfg && cfg.plugins && cfg.plugins.entries && cfg.plugins.entries["openclaw-honcho"];
     const conf = c && c.config;
     if (conf && conf.baseUrl && conf.workspaceId) {
-      return { baseUrl: String(conf.baseUrl).replace(/\/+$/, ""), workspaceId: conf.workspaceId };
+      // apiKey is the workspace-scoped Honcho token when auth is on; absent in dev.
+      return {
+        baseUrl: String(conf.baseUrl).replace(/\/+$/, ""),
+        workspaceId: conf.workspaceId,
+        apiKey: conf.apiKey || null,
+      };
     }
   } catch {
     // No stock honcho config → memory is off for this agent; stay a no-op.
@@ -78,7 +83,11 @@ export default {
           `${target.baseUrl}/v3/workspaces/${encodeURIComponent(target.workspaceId)}/chat`,
           {
             method: "POST",
-            headers: { "content-type": "application/json" },
+            headers: {
+              "content-type": "application/json",
+              // Bearer the workspace-scoped token when Honcho auth is on.
+              ...(target.apiKey ? { authorization: `Bearer ${target.apiKey}` } : {}),
+            },
             body: JSON.stringify({ query, target: TARGET_PEER }),
             signal: controller.signal,
           },

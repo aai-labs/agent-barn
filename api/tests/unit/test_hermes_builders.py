@@ -435,6 +435,7 @@ def test_config_map_carries_the_honcho_provider_config_when_configured() -> None
         base_url="http://honcho:8000",
         workspace_id="af-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
         ai_peer="agent-watcher",
+        api_key="ws-scoped-token",
     )
     honcho_json = json.loads(_config_map(config).data["honcho.json"])
 
@@ -443,6 +444,15 @@ def test_config_map_carries_the_honcho_provider_config_when_configured() -> None
     assert host["enabled"] is True
     assert host["workspace"] == "af-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
     assert host["aiPeer"] == "agent-watcher"
+    # The workspace-scoped token, which the Hermes SDK sends as a bearer.
+    assert honcho_json["apiKey"] == "ws-scoped-token"
+
+
+def test_honcho_config_omits_api_key_when_auth_is_off() -> None:
+    config = build_honcho_config(
+        base_url="http://honcho:8000", workspace_id="af-x", ai_peer="agent-x"
+    )
+    assert "apiKey" not in config
 
 
 def test_deployment_points_hermes_at_the_state_dir_it_actually_uses() -> None:

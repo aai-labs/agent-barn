@@ -1,12 +1,41 @@
+import datetime
 import logging
 from dataclasses import dataclass
 
 import httpx
+import jwt
 from injector import inject, singleton
 
 from api.core.config import Config
 
 logger = logging.getLogger(__name__)
+
+
+def mint_admin_token(jwt_secret: str) -> str:
+    """Sign a Honcho admin JWT (full access) for the API's cross-pool calls.
+
+    Mirrors Honcho's own `create_admin_jwt` — claims `{"t": "", "ad": true}`,
+    HS256 over the shared `AUTH_JWT_SECRET`. The API manages every pool (list,
+    search, curate, share across pools, delete a pool), so it needs the admin key,
+    not a workspace-scoped one.
+    """
+    return jwt.encode({"t": "", "ad": True}, jwt_secret.encode("utf-8"), algorithm="HS256")
+
+
+def mint_workspace_token(jwt_secret: str, workspace_id: str) -> str:
+    """Sign a Honcho JWT scoped to one workspace, for an Agent pod.
+
+    Mirrors Honcho's `create_jwt`/`JWTParams` — claims `{"t": <iso>, "w": <ws>}`,
+    HS256 over the shared secret. A workspace-scoped token reaches every peer and
+    session in that pool and nothing outside it, so a pod (even a prompt-injected
+    one) can only touch its own pool. No `exp`: the token is re-minted on every
+    (re)provision, and changing pools reprovisions with a new one.
+    """
+    return jwt.encode(
+        {"t": datetime.datetime.now(datetime.UTC).isoformat(), "w": workspace_id},
+        jwt_secret.encode("utf-8"),
+        algorithm="HS256",
+    )
 
 
 POOL_WORKSPACE_PREFIX = "af-pool-"
@@ -211,10 +240,20 @@ class HonchoClient:
             raise HonchoError("Honcho accepted the conclusion but returned nothing usable")
         return created[0]
 
+    @property
+    def _auth_headers(self) -> dict[str, str]:
+        """Admin bearer for the API's calls when Honcho auth is on; empty otherwise.
+
+        Empty secret means auth is disabled (dev), so no header is sent and Honcho
+        serves unauthenticated — keeping the layer usable without auth locally."""
+        secret = self.config.honcho_jwt_secret
+        return {"Authorization": f"Bearer {mint_admin_token(secret)}"} if secret else {}
+
     def _request(self, method: str, path: str, **kwargs) -> object:
+        headers = {**self._auth_headers, **kwargs.pop("headers", {})}
         try:
             with httpx.Client(timeout=30.0) as client:
-                response = client.request(method, f"{self._base}{path}", **kwargs)
+                response = client.request(method, f"{self._base}{path}", headers=headers, **kwargs)
                 if response.status_code == 404:
                     return None
                 response.raise_for_status()

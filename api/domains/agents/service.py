@@ -149,7 +149,7 @@ from api.domains.templates.repository import TemplateRepository
 from api.domains.templates.requirements import effective_required_ids, split_requirements
 from api.domains.users.models import User
 from api.infrastructure.crypto import decrypt_token, encrypt_token
-from api.infrastructure.honcho.client import HonchoClient, HonchoError
+from api.infrastructure.honcho.client import HonchoClient, HonchoError, mint_workspace_token
 from api.infrastructure.integration_validators import (
     PROVIDER_VALIDATORS,
     format_validation_result,
@@ -1890,6 +1890,13 @@ class AgentService:
         # workspace so it can see the other opted-in Agents' memory.
         memory_on = memory_active(agent, honcho_enabled=self.config.honcho_enabled)
         memory_workspace = memory_workspace_for_agent(agent) if memory_on else None
+        # A Honcho token scoped to this Agent's pool workspace, so the pod can reach
+        # only its own pool. None when memory is off or Honcho auth is disabled (dev).
+        memory_token = (
+            mint_workspace_token(self.config.honcho_jwt_secret, memory_workspace)
+            if memory_on and memory_workspace and self.config.honcho_jwt_secret
+            else None
+        )
         if agent.agent_type == AgentType.HERMES:
             overlay = None
             native_slack = self._native_slack_connection(agent.id)
@@ -1961,6 +1968,7 @@ class AgentService:
                 # Distinct logical id so pooled Agents get distinct Honcho peers
                 # (agent-<id>) rather than colliding on the default agent-main.
                 honcho_agent_id=openclaw_logical_agent_id(agent) if memory_on else None,
+                honcho_api_key=memory_token,
             )
             hermes_cfg = None
             secret = build_secret_runtime(
@@ -2166,6 +2174,7 @@ class AgentService:
                         base_url=self.config.agent_honcho_base_url,
                         workspace_id=memory_workspace,
                         ai_peer=ai_peer_name_for_agent(agent),
+                        api_key=memory_token,
                     )
                     if memory_on and memory_workspace is not None
                     else None
