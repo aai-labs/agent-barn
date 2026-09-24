@@ -107,6 +107,101 @@ export function platformCostRecord(overrides: Record<string, unknown> = {}) {
   };
 }
 
+/** Three months, oldest first, the last one in progress — the wire shape the
+ *  monthly endpoints return. */
+export function monthlyCosts() {
+  return [
+    {
+      month: "2026-07-01T00:00:00Z",
+      spend: 10,
+      calls: 100,
+      failed_calls: 2,
+      prompt_tokens: 50000,
+      completion_tokens: 10000,
+      active_agents: 2,
+      is_current: false,
+      projected_spend: null,
+    },
+    {
+      month: "2026-08-01T00:00:00Z",
+      spend: 20,
+      calls: 400,
+      failed_calls: 5,
+      prompt_tokens: 150000,
+      completion_tokens: 30000,
+      active_agents: 3,
+      is_current: false,
+      projected_spend: null,
+    },
+    {
+      month: "2026-09-01T00:00:00Z",
+      spend: 9,
+      calls: 120,
+      failed_calls: 1,
+      prompt_tokens: 60000,
+      completion_tokens: 12000,
+      active_agents: 3,
+      is_current: true,
+      projected_spend: 30,
+    },
+  ];
+}
+
+export function agentCost(overrides: Record<string, unknown> = {}) {
+  return {
+    agent_id: AGENT_A_ID,
+    agent_name: "Maya",
+    model: "openrouter/z-ai/glm-5.2",
+    status: "active",
+    period: "THIRTY_DAYS",
+    from_date: "2026-08-01T00:00:00Z",
+    to_date: "2026-08-31T00:00:00Z",
+    granularity: "day",
+    total_cost: 12.5,
+    total_tokens: 3000,
+    prompt_tokens: 2000,
+    completion_tokens: 1000,
+    total_calls: 8,
+    failed_calls: 2,
+    healed_calls: 0,
+    avg_cost_per_call: 1.5625,
+    avg_prompt_tokens: 250,
+    avg_duration_ms: 1840,
+    daily_burn_rate: 0.42,
+    first_call_at: "2026-08-01T09:00:00Z",
+    last_call_at: "2026-08-02T17:00:00Z",
+    models_breakdown: [
+      {
+        model: "litellm/openrouter/z-ai/glm-5.2",
+        total_cost: 9.0,
+        prompt_tokens: 1500,
+        completion_tokens: 700,
+        calls: 6,
+      },
+      {
+        model: "litellm/openrouter/openai/gpt-5-mini",
+        total_cost: 3.5,
+        prompt_tokens: 500,
+        completion_tokens: 300,
+        calls: 2,
+      },
+    ],
+    spend_over_time: [
+      { bucket: "2026-08-01T00:00:00Z", spend: 4.5, calls: 3 },
+      { bucket: "2026-08-02T00:00:00Z", spend: 8.0, calls: 5 },
+    ],
+    avg_prompt_tokens_over_time: [
+      { bucket: "2026-08-01T00:00:00Z", avg_prompt_tokens: 240 },
+      { bucket: "2026-08-02T00:00:00Z", avg_prompt_tokens: 260 },
+    ],
+    cost_per_call_histogram: [
+      { lower: 0, upper: 0.0001, calls: 2 },
+      { lower: 1, upper: null, calls: 6 },
+    ],
+    ...overrides,
+  };
+}
+
 type ListOptions = {
   items?: unknown[];
   pages?: unknown[][];
@@ -173,6 +268,75 @@ export class CostDataSupport {
 
   async interceptOrgList(options: ListOptions = {}) {
     await this.interceptList("**/organizations/*/costs?*", options, costRecord());
+  }
+
+  async interceptOrgMonthly({ months, status = 200 }: { months?: unknown[]; status?: number } = {}) {
+    await this.interceptJson("**/organizations/*/costs/monthly?*", months ?? monthlyCosts(), status);
+  }
+
+  async interceptPlatformMonthly({ months, status = 200 }: { months?: unknown[]; status?: number } = {}) {
+    await this.interceptJson("**/api/v1/platform/costs/monthly?*", months ?? monthlyCosts(), status);
+  }
+
+  /**
+   * Every read the Agent's Costs tab makes. Each piece can be overridden, and the
+   * handlers record the query string of every summary request so a test can
+   * assert what the tab asked for.
+   */
+  async interceptAgentCosts(
+    agentId: string,
+    {
+      summary,
+      summaryStatus = 200,
+      calls = {},
+      months,
+      models,
+    }: {
+      summary?: unknown;
+      summaryStatus?: number;
+      calls?: ListOptions;
+      months?: unknown[];
+      models?: unknown[];
+    } = {},
+  ): Promise<URLSearchParams[]> {
+    const summaryRequests: URLSearchParams[] = [];
+    await this.page.route(`**/costs/agents/${agentId}*`, async (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      summaryRequests.push(new URL(route.request().url()).searchParams);
+      await route.fulfill({
+        status: summaryStatus,
+        contentType: "application/json",
+        body: JSON.stringify(
+          summaryStatus >= 400 ? { detail: "Unable to load costs" } : (summary ?? agentCost()),
+        ),
+      });
+    });
+    await this.interceptList(`**/costs/agents/${agentId}/calls?*`, calls, costRecord());
+    await this.interceptJson(
+      `**/costs/agents/${agentId}/monthly?*`,
+      months ?? monthlyCosts(),
+      summaryStatus,
+    );
+    await this.interceptJson(
+      `**/costs/agents/${agentId}/filters/models*`,
+      models ?? [
+        { value: "litellm/openrouter/z-ai/glm-5.2", label: "glm-5.2" },
+        { value: "litellm/openrouter/openai/gpt-5-mini", label: "gpt-5-mini" },
+      ],
+      summaryStatus,
+    );
+    return summaryRequests;
+  }
+
+  private async interceptJson(pattern: string, body: unknown, status: number) {
+    await this.page.route(pattern, async (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      await route.fulfill({
+        status,
+        contentType: "application/json",
+        body: JSON.stringify(status >= 400 ? { detail: "Unable to load costs" } : body),
+      });
+    });
   }
 
   async interceptPlatformSummary({

@@ -130,6 +130,7 @@ export const AgentModelBreakdownSchema = z.object({
   totalCost: z.number(),
   promptTokens: z.number().int(),
   completionTokens: z.number().int(),
+  calls: z.number().int().default(0),
 });
 
 export const AgentCostSchema = z.object({
@@ -145,9 +146,37 @@ export const AgentCostSchema = z.object({
   totalTokens: z.number().int(),
   promptTokens: z.number().int(),
   completionTokens: z.number().int(),
+  totalCalls: z.number().int().default(0),
+  failedCalls: z.number().int().default(0),
+  /** Calls whose cost was recovered from OpenRouter after the proxy dropped it. */
+  healedCalls: z.number().int().default(0),
+  avgCostPerCall: z.number().default(0),
+  avgPromptTokens: z.number().default(0),
+  avgDurationMs: z.number().nullable().default(null),
+  dailyBurnRate: z.number().default(0),
+  firstCallAt: z.string().nullable().default(null),
+  lastCallAt: z.string().nullable().default(null),
   modelsBreakdown: z.array(AgentModelBreakdownSchema).default([]),
   spendOverTime: z.array(CostSeriesPointSchema).default([]),
+  avgPromptTokensOverTime: z.array(TokenSeriesPointSchema).default([]),
+  costPerCallHistogram: z.array(CostHistogramBucketSchema).default([]),
 });
+
+/** One calendar month of spend. Quiet months arrive as zero rather than being
+ *  omitted; the month in progress is month-to-date and carries a projection. */
+export const MonthlyCostSchema = z.object({
+  month: z.string(),
+  spend: z.number(),
+  calls: z.number().int(),
+  failedCalls: z.number().int(),
+  promptTokens: z.number().int(),
+  completionTokens: z.number().int(),
+  activeAgents: z.number().int(),
+  isCurrent: z.boolean().default(false),
+  projectedSpend: z.number().nullable().default(null),
+});
+
+export const MonthlyCostListSchema = z.array(MonthlyCostSchema);
 
 export type CostSortDirection = z.infer<typeof CostSortDirectionSchema>;
 export type Granularity = z.infer<typeof GranularitySchema>;
@@ -167,3 +196,5 @@ export type OrganizationSpend = z.infer<typeof OrganizationSpendSchema>;
 export type PlatformCostSummary = z.infer<typeof PlatformCostSummarySchema>;
 export type AgentCost = z.infer<typeof AgentCostSchema>;
 export type AgentSpend = z.infer<typeof AgentSpendSchema>;
+export type AgentModelBreakdown = z.infer<typeof AgentModelBreakdownSchema>;
+export type MonthlyCost = z.infer<typeof MonthlyCostSchema>;

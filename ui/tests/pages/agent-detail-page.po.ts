@@ -44,6 +44,14 @@ export class AgentDetailPage {
     return this.page.getByRole("button", { name: /hire agent/i });
   }
 
+  costsTab(): Locator {
+    return this.page.getByRole("button", { name: "Costs", exact: true });
+  }
+
+  async openCostsTab() {
+    await this.costsTab().click();
+  }
+
   toolCallsTab(): Locator {
     return this.page.getByRole("button", { name: /tool calls/i });
   }

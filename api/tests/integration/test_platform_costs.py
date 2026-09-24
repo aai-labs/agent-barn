@@ -114,11 +114,13 @@ def test_platform_costs_reject_a_regular_user():
             summary = context.client.get(f"{_BASE}/summary", headers=_auth(context.access_token))
             rows = context.client.get(_BASE, headers=_auth(context.access_token))
             orgs = context.client.get(f"{_BASE}/organizations", headers=_auth(context.access_token))
+            monthly = context.client.get(f"{_BASE}/monthly", headers=_auth(context.access_token))
 
         with then("every route on the surface is refused"):
             assert_that(summary.status_code, equal_to(status.HTTP_403_FORBIDDEN))
             assert_that(rows.status_code, equal_to(status.HTTP_403_FORBIDDEN))
             assert_that(orgs.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+            assert_that(monthly.status_code, equal_to(status.HTTP_403_FORBIDDEN))
 
 
 def test_platform_costs_require_authentication():
@@ -352,3 +354,51 @@ def test_platform_rows_carry_the_organization_the_org_surface_must_not_expose():
             assert_that(row["organization_name"], equal_to(context.organization.name))
             assert_that(row["organization_id"], not_none())
             assert_that(row["healed"], equal_to(True))
+
+
+# --- monthly aggregates --------------------------------------------------
+
+
+def _second_organization_spends(spend: str):
+    def step(context):
+        there_are_cost_records(
+            count=1,
+            spend=spend,
+            agent_id=context.second_agent.id,
+            agent_name=context.second_agent.name,
+            organization_id=context.second_organization.id,
+            organization_name=context.second_organization.name,
+        )(context)
+
+    return step
+
+
+def test_monthly_costs_count_every_organization_and_narrow_by_one():
+    with given(
+        [
+            *_BASE_GIVEN,
+            there_is_an_organization_with_user_and_access_token(email="owner-m@example.com"),
+            there_is_a_template(),
+            there_is_an_agent(name="Agent M"),
+            _second_organization("owner-n@example.com", "Agent N"),
+            there_are_cost_records(count=1, spend="2.00"),
+            _second_organization_spends("3.00"),
+            there_are_cost_records(count=1, spend="0.50", unattributed=True),
+            *_platform_admin("admin-monthly@example.com"),
+        ]
+    ) as context:
+        with when("the platform admin asks for this month, then for one organization's"):
+            everyone = context.client.get(f"{_BASE}/monthly", params={"months": 1}, headers=_auth(context.access_token))
+            one = context.client.get(
+                f"{_BASE}/monthly",
+                params={"months": 1, "organization_id": str(context.second_organization.id)},
+                headers=_auth(context.access_token),
+            )
+
+        with then("the platform month includes every organization and the unattributed spend"):
+            assert_that(everyone.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(everyone.json()[0]["spend"], close_to(5.5, 0.0001))
+            assert_that(everyone.json()[0]["calls"], equal_to(3))
+
+        with then("the organization filter narrows it"):
+            assert_that(one.json()[0]["spend"], close_to(3.0, 0.0001))

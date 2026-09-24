@@ -14,6 +14,9 @@ const ORG_GRID =
   "grid-cols-[150px_minmax(140px,1.2fr)_minmax(120px,1fr)_90px_90px_90px]";
 const PLATFORM_GRID =
   "grid-cols-[150px_minmax(140px,1fr)_minmax(120px,1fr)_minmax(120px,1fr)_90px_90px_90px]";
+// One Agent's paged calls table: the agent column would repeat the page's own
+// subject.
+export const AGENT_GRID = "grid-cols-[150px_minmax(140px,1fr)_90px_90px_90px]";
 
 interface CostListProps {
   records: (CostRecord | PlatformCostRecord)[];
@@ -165,12 +168,14 @@ export function CostList({
   );
 }
 
-function ListHeader({
+export function ListHeader({
   grid,
   showOrganization,
+  showAgent = true,
 }: {
   grid: string;
   showOrganization: boolean;
+  showAgent?: boolean;
 }) {
   return (
     <div
@@ -179,7 +184,7 @@ function ListHeader({
     >
       <span>When</span>
       <span>Model</span>
-      <span>Agent</span>
+      {showAgent && <span>Agent</span>}
       {showOrganization && <span>Organization</span>}
       <span className="text-right">Tokens</span>
       <span className="text-right">Duration</span>

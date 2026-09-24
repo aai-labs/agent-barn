@@ -48,6 +48,9 @@ def there_are_cost_records(
     org-scoped endpoints under test. Passing None cannot express "no agent", since
     that is also what "not specified" looks like — use ``unattributed=True``, which
     is the state the platform page's unattributed bucket reports on.
+
+    ``occurred_at`` pins the calls to an exact instant instead of ``minutes_ago``,
+    for tests that care which calendar month a row lands in.
     """
 
     def step(context):
