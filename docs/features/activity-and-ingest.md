@@ -39,7 +39,7 @@ Conversation reads list channels and return cursor-paginated messages or grouped
 
 ## Boundaries
 
-Platform Plugins own translation from provider payloads into the normalized communication envelope. Communications owns durable message/reply orchestration. Ingest owns Tool Call telemetry authentication and writes. Conversation and Tool Call domains own read models and query behavior. Costs do not derive from these activity records.
+Platform Plugins own translation from provider payloads into the normalized communication envelope. Communications owns durable message/reply orchestration. Ingest owns Tool Call telemetry authentication and writes. Conversation and Tool Call domains own read models and query behavior. Costs do not derive from these activity records; the Agent Activity tab reads Conversation Message direction and occurrence time to say whether a person triggered a piece of billed work, and never its content (see [`agent-activity.md`](agent-activity.md)).
 
 ## Source map
 

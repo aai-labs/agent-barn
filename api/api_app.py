@@ -21,6 +21,7 @@ from api.core.metrics import (
     setup_http_metrics,
 )
 from api.core.utils import create_injector
+from api.domains.activity.routes import activity_router
 from api.domains.agent_settings.routes import agent_settings_router
 from api.domains.agent_webhooks.routes import agent_webhook_ingress_router, agent_webhooks_router
 from api.domains.agents.routes import agents_router
@@ -132,6 +133,7 @@ def create_app(injector: Injector | None = None):
     subapi.include_router(templates_router)
     subapi.include_router(platform_templates_router)
     subapi.include_router(tool_calls_router)
+    subapi.include_router(activity_router)
     subapi.include_router(restore_points_router)
     subapi.include_router(users_router)
     # This remains outside /api/v1 because Azure has the historical public
