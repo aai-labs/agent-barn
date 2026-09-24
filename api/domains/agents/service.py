@@ -108,6 +108,7 @@ from api.domains.agents.provisioning_errors import (
     persisted_provisioning_error,
 )
 from api.domains.agents.repository import AgentRepository
+from api.domains.agents.runtime_digest import agent_runtime_config_digest
 from api.domains.agents.runtime_policy import (
     build_chat_commands_policy_md,
     build_messaging_policy_md,
@@ -520,6 +521,11 @@ class AgentService:
             # A running pod that started on something else is the only case a surface
             # must not report the resolved value as current.
             pending_model=(resolved_model if agent.running_model and agent.running_model != resolved_model else ""),
+            update_available=(
+                agent.status == AgentStatus.RUNNING
+                and agent.running_config_digest
+                != agent_runtime_config_digest(self.config.openclaw_image, self.config.hermes_image)
+            ),
             # OpenClaw ignores approval_mode; report the effective AUTO default
             # instead of a stored value from before this became enforced, so
             # reads stay truthful even for agents persisted prior to this check.
@@ -690,7 +696,9 @@ class AgentService:
         )
 
         # Prepare Agent Secrets in memory without persisting them yet.
-        # Integration credentials are separate from Communication Connections.
+        # Integration credentials are separate from Communication Connections. SharePoint only
+        # borrows the Teams app's public id and tenant (CommunicationsService.get_teams_app_identity)
+        # to sign in on that app; the app's secret is never read for it.
         prepared_secrets: list[AgentSecret] = []
         live_validation_contents: list[tuple[SecretProvider, Any]] = []
         for item in data.secrets:
@@ -1982,14 +1990,25 @@ class AgentService:
                     "Authenticate with Google, or configure google_cloud_client_id/secret."
                 ),
             )
-        store = {p: c for p, c in decrypted.items() if p.value in provider_secrets_map}
+        # SharePoint's refresh token goes through the store too, written only for a new sign-in.
+        store = {
+            p: c for p, c in decrypted.items() if p.value in provider_secrets_map or p == SecretProvider.SHAREPOINT
+        }
         aai_home = "/opt/data" if agent.agent_type == AgentType.HERMES else "/home/node"
+        # The store must survive restarts: aai-cli rotates delegated Microsoft tokens in it.
+        # Hermes' home is its volume; OpenClaw's volume is only ~/.openclaw.
+        aai_store_dir = None if agent.agent_type == AgentType.HERMES else "/home/node/.openclaw/aai-cli"
         # Gated on providers that actually get an aai-cli profile: an agent whose only
         # integrations are profile-less (google_workspace, firecrawl) would otherwise get
         # a config.toml holding nothing but the store header.
         has_aai_profiles = bool(decrypted.keys() & set(PROFILE_SLUGS))
-        aai_config_toml = build_config_toml(decrypted, home_dir=aai_home) if has_aai_profiles else None
-        aai_setup_sh = build_setup_sh(list(store), home_dir=aai_home) if has_aai_profiles else None
+        aai_config_toml = (
+            build_config_toml(decrypted, home_dir=aai_home, store_dir=aai_store_dir) if has_aai_profiles else None
+        )
+        # Always mounted, even without profiles, so a removed SharePoint sign-in is cleaned up.
+        aai_setup_sh = build_setup_sh(
+            list(store), home_dir=aai_home, store_dir=aai_store_dir, install_config=has_aai_profiles
+        )
         if store:
             secret.string_data.update(build_env(store))
 
@@ -2052,7 +2071,9 @@ class AgentService:
                 "INGEST_API_KEY": ingest_key,
                 "COMMUNICATIONS_URL": self.config.communications_base_url,
                 "COMMUNICATIONS_API_KEY": communication_key,
-                "COMMUNICATIONS_PROTOCOL_VERSION": "3",
+                "COMMUNICATIONS_PROTOCOL_VERSION": "2",
+                "AGENT_TRIGGER_KEY": communication_key,
+                "AGENT_TRIGGER_PORT": "8082",
                 "LITELLM_PROXY_TARGET": self.config.agent_litellm_base_url,
                 "LLM_PROXY_PORT": str(AGENT_LLM_PROXY_PORT),
             }
@@ -2173,6 +2194,10 @@ class AgentService:
         # is the model it serves until someone restarts it — however the Organization
         # default moves in the meantime.
         agent.running_model = effective_model
+        agent.running_config_digest = agent_runtime_config_digest(
+            self.config.openclaw_image,
+            self.config.hermes_image,
+        )
         agent.ingest_key_encrypted = encrypt_token(ingest_key, self.config.agent_token_encryption_key)
         agent.communication_key_encrypted = encrypt_token(
             communication_key,
@@ -2340,6 +2365,7 @@ class AgentService:
 
         agent.status = AgentStatus.STOPPED
         agent.running_model = ""
+        agent.running_config_digest = ""
         result = self.repository.save_with_lifecycle_event(
             agent,
             event_name=AGENT_STOPPED,

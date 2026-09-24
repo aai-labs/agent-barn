@@ -6,7 +6,7 @@ Read before changing API composition, dependency injection, route/service/reposi
 
 ## Composition and layering
 
-The API image has three HTTP composition roots. `../../api/api_app.py` serves organization and platform product routes at `/api/v1` on port 8000, plus the stable public provider webhook paths at `/communications/v1/webhooks/email/inbound` and `/communications/v1/webhooks/{connection_id}`. `../../api/ingest_app.py` serves runtime telemetry at `/ingest/v1` on port 8001. `../../api/communications_app.py` serves the runtime-neutral delivery protocol and gateway-owned provider-webhook fallback at `/communications/v1` on port 8002; its lifespan also runs provider ingress supervision and outbound delivery. Each root attaches the shared Injector, while authentication and exposed routes remain boundary-specific.
+The API image has three HTTP composition roots. `../../api/api_app.py` serves organization and platform product routes at `/api/v1` on port 8000, the Agent Webhook ingress at `/agent-hooks/v1`, and the stable public provider webhook paths at `/communications/v1/webhooks/email/inbound` and `/communications/v1/webhooks/{connection_id}`. `../../api/ingest_app.py` serves runtime telemetry at `/ingest/v1` on port 8001. `../../api/communications_app.py` serves the runtime-neutral delivery protocol and gateway-owned provider-webhook fallback at `/communications/v1` on port 8002; its lifespan also runs provider ingress supervision and outbound delivery. Each root attaches the shared Injector, while authentication and exposed routes remain boundary-specific.
 
 The default dependency direction is:
 
@@ -56,6 +56,8 @@ Product API startup deliberately does **not** reconcile [Organization LiteLLM bu
 | Concern | Source |
 |---|---|
 | Product API composition, public provider-webhook adapters, and Teams runtime webhook relay | `../../api/api_app.py`, `../../api/domains/communications/runtime_webhook_routes.py`, `../../api/domains/communications/teams_runtime_webhook.py` |
+| Agent Webhook management and signed ingress | `../../api/domains/agent_webhooks/`, `../features/agent-webhooks.md` |
+| Immediate Agent Webhook dispatch and native scheduler admission | `../../api/domains/agent_webhooks/dispatch.py`, `../../api/domains/agents/scripts/agent-trigger-server.py` |
 | Ingest API composition and process entry | `../../api/ingest_app.py`, `../../api/ingest_main.py`, `../../api/start.sh` |
 | Communications composition and process entry | `../../api/communications_app.py`, `../../api/communications_main.py` |
 | Injector configuration | `../../api/core/utils.py`, `../../api/infrastructure/app.py` |

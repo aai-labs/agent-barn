@@ -8,6 +8,7 @@ export PATH="/tmp/agentbarn-bin:$PATH"
 
 node /app/config/healthz-server.js &
 python3 /app/config/communications-runtime-adapter.py &
+python3 /app/config/agent-trigger-server.py &
 node /app/config/init-openclaw.js
 
 PLUGIN_DIR="/home/node/.openclaw/local-plugins/telemetry-push"
@@ -33,13 +34,34 @@ sh /app/config/legacy-workspace-migration.sh || echo "[start] legacy workspace m
 # Official plugins install from npm at the core's version: OpenClaw only grants plugin
 # state to npm installs it recorded, and those records live on the PVC. A reinstall
 # fails once present, so skip plugins already at the core's version.
+#
+# Each install also links the core into the plugin from /usr/local, outside the
+# volume, so restore points cannot carry that link and a restored tree arrives
+# without it. Recreating it is enough: the package and OpenClaw's record of it
+# both came back with the volume, and reinstalling over them fails anyway --
+# OpenClaw rejects a package whose record it already holds.
 OPENCLAW_VERSION="$(openclaw --version | cut -d' ' -f2)"
+# The bin entry resolves to openclaw.mjs at the installed package root.
+CORE_DIR="$(dirname "$(readlink -f "$(command -v openclaw)")")"
+repair_peer_link() {
+  # -d follows the link, so this is false when the peer is missing or dangling.
+  [ -n "$1" ] && [ ! -d "$1/node_modules/openclaw" ] || return 0
+  mkdir -p "$1/node_modules"
+  rm -f "$1/node_modules/openclaw"
+  ln -s "$CORE_DIR" "$1/node_modules/openclaw"
+  echo "[start] recreated the openclaw peer link for $1"
+}
 install_plugin() {
-  installed="$(cat /home/node/.openclaw/npm/projects/openclaw-*/node_modules/"$1"/package.json 2>/dev/null | jq -r .version | head -n 1)"
-  [ "$installed" = "$OPENCLAW_VERSION" ] && return 0
+  pkg_dir="$(ls -d /home/node/.openclaw/npm/projects/openclaw-*/node_modules/"$1" 2>/dev/null | head -n 1)"
+  installed="$(cat "$pkg_dir/package.json" 2>/dev/null | jq -r .version | head -n 1)"
+  if [ "$installed" = "$OPENCLAW_VERSION" ]; then
+    repair_peer_link "$pkg_dir"
+    return 0
+  fi
   flag=""
   [ -n "$installed" ] && flag="--force"
-  openclaw plugins install "$1@$OPENCLAW_VERSION" --accept-capabilities $flag 2>&1 || echo "[start] $1 plugin install failed"
+  openclaw plugins install "$1@$OPENCLAW_VERSION" --accept-capabilities $flag 2>&1 \
+    || echo "[start] $1 plugin install failed"
 }
 install_plugin @openclaw/firecrawl-plugin
 for channel in $(echo "${AGENTBARN_NATIVE_CHANNELS:-}" | tr ',' ' '); do

@@ -323,8 +323,44 @@ def test_create_service_refreshes_labels_on_conflict():
     name, namespace, body = core.patched_service
     assert_that(name, equal_to("agent-x"))
     assert_that(namespace, equal_to("agent-farm"))
-    assert_that(body["metadata"]["labels"], equal_to(desired_labels))
+    assert_that(body, equal_to([{"op": "add", "path": "/metadata/labels", "value": desired_labels}]))
     assert_that(result, equal_to(existing))
+
+
+def test_create_service_replaces_ports_on_conflict():
+    """A Service created before Teams became runtime-owned must gain the
+    webhook port on restart, and lose it when the Connection is disabled."""
+    from kubernetes.client import V1Service, V1ServicePort, V1ServiceSpec
+
+    existing = V1Service(metadata=V1ObjectMeta(name="agent-x", labels={"app": "agent-x"}))
+    core = _FakeCoreApi(resource=existing, raises_on={"create": ApiException(status=409)})
+    k8s = _make_client(core_api=core)
+    manifest = V1Service(
+        metadata=V1ObjectMeta(name="agent-x", labels={"app": "agent-x"}),
+        spec=V1ServiceSpec(
+            ports=[
+                V1ServicePort(port=80, target_port=8080, name="gateway"),
+                V1ServicePort(port=3978, target_port=3978, name="webhook"),
+            ]
+        ),
+    )
+
+    k8s.create_service("agent-farm", manifest)
+
+    _, _, body = core.patched_service
+    assert_that(
+        body[1],
+        equal_to(
+            {
+                "op": "replace",
+                "path": "/spec/ports",
+                "value": [
+                    {"name": "gateway", "port": 80, "targetPort": 8080},
+                    {"name": "webhook", "port": 3978, "targetPort": 3978},
+                ],
+            }
+        ),
+    )
 
 
 def test_create_service_propagates_non_conflict_errors():

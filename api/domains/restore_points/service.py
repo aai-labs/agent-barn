@@ -1,7 +1,7 @@
 import enum
 import json
 import logging
-import secrets
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid7
@@ -16,6 +16,8 @@ from api.domains.agents.builders.restore_point import (
     build_capture_job,
     build_restore_job,
     build_restore_point_pvc,
+    capture_job_name,
+    restore_job_name,
     restore_point_resource_name,
 )
 from api.domains.agents.error_messages import friendly_k8s_error
@@ -34,8 +36,14 @@ from api.domains.events.catalog import (
 )
 from api.domains.events.dispatch import EventDeliveryDispatcher, resolve_actor_identity
 from api.domains.rbac.catalog import PermissionKey
+from api.domains.restore_points.constants import (
+    RESTORE_POINT_POD_TERMINATION_POLL_SECONDS,
+    RESTORE_POINT_POD_TERMINATION_TIMEOUT_SECONDS,
+    RESTORE_POINT_RECONCILIATION_PENDING_GRACE_SECONDS,
+)
 from api.domains.restore_points.models import (
     NON_TERMINAL_STATUSES,
+    TERMINAL_STATUSES,
     AgentRestorePointCreate,
     AgentRestorePointList,
     AgentRestorePointRead,
@@ -54,8 +62,6 @@ logger = logging.getLogger(__name__)
 
 _MAX_FAILURE_REASON = 500
 
-RESTORE_POINT_RECONCILIATION_PENDING_GRACE_SECONDS = 60
-
 CAPTURE_TIMEOUT_SETTING = "RESTORE_POINT_CAPTURE_TIMEOUT_SECONDS"
 RESTORE_TIMEOUT_SETTING = "RESTORE_POINT_RESTORE_TIMEOUT_SECONDS"
 
@@ -67,6 +73,7 @@ NOT_READY_DETAIL = "Only a ready restore point can be restored."
 DELETE_IN_FLIGHT_DETAIL = "This restore point is still being worked on. Wait for it to finish, then delete it."
 PRE_RESTORE_LABEL = "Automatic backup before restore"
 NOT_REPLAYABLE_DETAIL = "This restore point predates the recorded configuration, so there is nothing to re-apply."
+STILL_SHUTTING_DOWN_DETAIL = "The Agent is still shutting down. Try again in a moment."
 
 
 def _selection_type(agent: Agent) -> str:
@@ -82,14 +89,6 @@ def _selection_type(agent: Agent) -> str:
     if agent.agent_template_override_version_id is not None:
         return "override"
     return ""
-
-
-def _capture_job_name(restore_point_id: UUID) -> str:
-    return f"rp-cap-{restore_point_id}"
-
-
-def _restore_job_name(restore_point_id: UUID) -> str:
-    return f"rp-res-{restore_point_id}-{secrets.token_hex(3)}"
 
 
 class _RestoreOutcome(str, enum.Enum):
@@ -205,15 +204,30 @@ class RestorePointService:
             except Exception:
                 logger.warning("Could not re-apply the recorded configuration for %s", row.id, exc_info=True)
 
-    def _reconcile_row(self, row: AgentRestorePoint) -> None:
+    def reconcile_row(self, row: AgentRestorePoint, *, respect_grace: bool = True) -> None:
+        self._reconcile_row(row, respect_grace=respect_grace)
+
+    def apply_owed_replay(self, row: AgentRestorePoint) -> None:
+        self._apply_recorded_configuration_after_restore(row)
+
+    def _reconcile_row(self, row: AgentRestorePoint, *, respect_grace: bool = True) -> None:
         namespace = self.config.k8s_namespace
+        if row.status in TERMINAL_STATUSES:
+            # The reconciler also claims terminal rows that still owe a configuration
+            # replay. There is no Job left to read — mark_ready and mark_restored clear
+            # job_name — so resolving one would fail a healthy row and release the
+            # archive it is still holding.
+            return
+
         if not row.job_name:
-            self._resolve_untracked(row, "The restore point has no job to track.")
+            self._resolve_untracked(row, "The restore point has no job to track.", respect_grace)
             return
 
         job = self.k8s.get_job(row.job_name, namespace)
         if job is None:
-            self._resolve_untracked(row, "The job that was running this operation is no longer available.")
+            self._resolve_untracked(
+                row, "The job that was running this operation is no longer available.", respect_grace
+            )
             return
 
         status_block = job.status
@@ -238,7 +252,7 @@ class RestorePointService:
                 row.id, RestorePointStatus.CAPTURING, from_statuses=(RestorePointStatus.PENDING,)
             )
 
-    def _resolve_untracked(self, row: AgentRestorePoint, reason: str) -> None:
+    def _resolve_untracked(self, row: AgentRestorePoint, reason: str, respect_grace: bool = True) -> None:
         """Resolve a row with no Job to read — but only once it has had time to get one.
 
         A row is committed before its Job is created, so a read landing in that
@@ -247,7 +261,7 @@ class RestorePointService:
         releases the one it never finished writing.
         """
         grace = timedelta(seconds=RESTORE_POINT_RECONCILIATION_PENDING_GRACE_SECONDS)
-        if row.updated_at > datetime.now(UTC) - grace:
+        if respect_grace and row.updated_at > datetime.now(UTC) - grace:
             return
         if row.status == RestorePointStatus.RESTORING:
             self._fail(row, reason)
@@ -321,8 +335,8 @@ class RestorePointService:
             file_count=manifest.get("file_count"),
         )
 
-    def _fail(self, row: AgentRestorePoint, reason: str) -> None:
-        self.repository.mark_failed(row.id, reason[:_MAX_FAILURE_REASON])
+    def _fail(self, row: AgentRestorePoint, reason: str) -> bool:
+        return self.repository.mark_failed(row.id, reason[:_MAX_FAILURE_REASON])
 
     def _fail_capture(self, row: AgentRestorePoint, reason: str) -> None:
         """Fail a capture and release the volume it was writing into.
@@ -330,9 +344,13 @@ class RestorePointService:
         A capture that never finished leaves no usable archive, so its destination
         volume is dead weight. A row failing as a *restore target* keeps its
         volume: that archive is intact and is what the retry reads from.
+
+        The volume goes only when this call is the one that failed the row. A
+        conditional update that matched nothing means the row was never ours to
+        fail, and releasing storage on that basis destroys an archive something
+        else still owns.
         """
-        self._fail(row, reason)
-        if row.pvc_name:
+        if self._fail(row, reason) and row.pvc_name:
             self.k8s.delete_pvc(row.pvc_name, self.config.k8s_namespace)
 
     def _read_manifest(self, row: AgentRestorePoint) -> dict:
@@ -373,6 +391,8 @@ class RestorePointService:
     ) -> AgentRestorePointRead:
         agent = self.agent_authorization.require_action(context, agent_id, PermissionKey.AGENT_LIFECYCLE_MANAGE)
 
+        self._await_agent_volume_release(agent.id)
+
         with self.agent_repository.lifecycle_lock(agent.id) as acquired:
             if not acquired:
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=CAPTURE_IN_FLIGHT_DETAIL)
@@ -395,7 +415,7 @@ class RestorePointService:
                 origin=RestorePointOrigin.MANUAL,
                 agent_type=current.agent_type,
                 pvc_name=restore_point_resource_name(restore_point_id),
-                job_name=_capture_job_name(restore_point_id),
+                job_name=capture_job_name(restore_point_id),
                 config_manifest=self._build_config_manifest(current).model_dump(mode="json"),
             )
             result = self.repository.save_with_event(
@@ -419,6 +439,8 @@ class RestorePointService:
     ) -> AgentRestorePointRead:
         agent = self.agent_authorization.require_action(context, agent_id, PermissionKey.AGENT_LIFECYCLE_MANAGE)
         scope = self.agent_authorization.authorization_scope(context, PermissionKey.ACTIVITY_READ)
+
+        self._await_agent_volume_release(agent.id)
 
         with self.agent_repository.lifecycle_lock(agent.id) as acquired:
             if not acquired:
@@ -452,7 +474,7 @@ class RestorePointService:
                 # must not cost the Agent its files first.
                 self._validate_recorded_configuration(current, target)
 
-            job_name = _restore_job_name(target.id)
+            job_name = restore_job_name(target.id)
             backup = self._create_pre_restore_row(current, job_name)
             result = self.repository.update_status_with_event(
                 target.id,
@@ -648,6 +670,7 @@ class RestorePointService:
                 namespace,
                 build_restore_job(
                     job_name=job_name,
+                    restore_point_id=target.id,
                     agent_id=agent.id,
                     org_id=agent.organization_id,
                     namespace=namespace,
@@ -661,6 +684,9 @@ class RestorePointService:
                 ),
             )
         except Exception as exc:
+            # The reason stored on the row is sanitized down to fixed copy; the
+            # apiserver's account of what it rejected is kept only in the log.
+            logger.exception("Could not provision the restore of restore point %s onto agent %s", target.id, agent.id)
             reason = friendly_k8s_error(exc, operation=AgentProvisioningOperation.RESTORE)
             self.repository.mark_failed(backup.id, reason[:_MAX_FAILURE_REASON])
             self.repository.mark_restored(target.id, cancel_replay=True)
@@ -738,6 +764,21 @@ class RestorePointService:
             self.k8s.delete_pvc(pvc.metadata.name, namespace)
         self.repository.delete_for_agent(agent_id)
 
+    def _await_agent_volume_release(self, agent_id: UUID) -> None:
+        """Block until no Agent pod holds the volume, or refuse.
+
+        Stopping deletes the Deployment and returns; the pod lingers for its grace
+        period while the Agent already reads as STOPPED. The volume is ReadWriteOnce
+        but local-path is a bind mount, so nothing stops a Job pod mounting it
+        alongside a dying Agent and archiving or wiping a directory still being
+        written. Waiting outside the lifecycle lock keeps start and stop responsive.
+        """
+        deadline = time.monotonic() + RESTORE_POINT_POD_TERMINATION_TIMEOUT_SECONDS
+        while self.k8s.has_pods_for_deployment(f"agent-{agent_id}", self.config.k8s_namespace):
+            if time.monotonic() >= deadline:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=STILL_SHUTTING_DOWN_DETAIL)
+            time.sleep(RESTORE_POINT_POD_TERMINATION_POLL_SECONDS)
+
     def _assert_capturable(self, agent: Agent) -> None:
         if agent.status == AgentStatus.RUNNING:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=AGENT_RUNNING_DETAIL)
@@ -775,7 +816,8 @@ class RestorePointService:
             self.k8s.create_job(
                 namespace,
                 build_capture_job(
-                    job_name=restore_point.job_name or _capture_job_name(restore_point.id),
+                    job_name=restore_point.job_name or capture_job_name(restore_point.id),
+                    restore_point_id=restore_point.id,
                     agent_id=agent.id,
                     org_id=agent.organization_id,
                     namespace=namespace,
@@ -788,6 +830,11 @@ class RestorePointService:
                 ),
             )
         except Exception as exc:
+            # friendly_k8s_error drops the cluster's own text, and RESOURCE_REJECTED
+            # carries no detail, so which field the apiserver refused survives only here.
+            logger.exception(
+                "Could not provision the capture for restore point %s on agent %s", restore_point.id, agent.id
+            )
             restore_point.status = RestorePointStatus.FAILED
             restore_point.failure_reason = friendly_k8s_error(exc, operation=AgentProvisioningOperation.BACKUP)
             self.repository.save(restore_point)

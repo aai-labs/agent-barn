@@ -7,6 +7,7 @@ import { ArrowLeft, CircleAlert } from "lucide-react";
 
 import { AppErrorState } from "@/components/app-error-state";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { AgentWebhookSettings } from "@/features/agent-webhooks/components/agent-webhook-settings";
 
 import { useAgent } from "../hooks/use-agent";
 import { useAgentConfiguration } from "../hooks/use-agent-configuration";
@@ -15,7 +16,6 @@ import { canAgent } from "../utils";
 import { AgentAvatar } from "./agent-avatar";
 import { AgentChannelSettings } from "./agent-channel-settings";
 import { AgentConfigurationSidebar } from "./agent-configuration-sidebar";
-import { AgentWebhookSettings } from "./agent-webhook-settings";
 import {
   AGENT_CONFIGURATION_SECTIONS,
   configurationSectionLabel,
@@ -229,6 +229,7 @@ export function AgentConfigurationPage({ agentId }: { agentId: string }) {
               <AgentWebhookSettings
                 agent={agent}
                 canEdit={canEdit}
+                canManageSecrets={canManageSecrets}
               />
             )}
             {activeSection === "skills" && (

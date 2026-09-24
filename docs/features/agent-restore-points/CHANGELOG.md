@@ -9,25 +9,217 @@ Related context: [`../agents.md`](../agents.md), [`../../architecture/runtime-an
 - Delivered: server-side capture, list, read, restore, and delete of an Agent Restore Point, with
   reconcile-on-read resolving rows from live Job status, lifecycle guards on start and delete,
   and `agent.restore_point.*` Domain Events.
-- In transition: nothing. The API surface is complete for Ticket 1 and safe to depend on.
-- Next: Ticket 2 (reclaim stranded restore points and orphaned volumes). Ticket 3 — the Agent
-  configuration page section and the opt-in replay of the captured configuration — is delivered
-  on AF-298, which branches from this work and merges after it.
-- Blockers: **Ticket 2 must ship in the same release as Ticket 1.** Ticket 1 resolves a row's
-  status when someone reads it; a capture nobody ever reads keeps its row non-terminal until a
-  read reclaims it, so restore points created and abandoned can hold a PVC indefinitely. The
-  guards reconcile before evaluating, so this cannot make an Agent permanently undeletable, but
-  it is a storage leak shipped alongside a storage feature.
+- Delivered: reconciliation on a schedule (AF-297), so a row's status no longer depends on
+  somebody reading it and restore point volumes no row owns are reclaimed.
+- In transition: nothing. Tickets 1, 2 and 3 are complete.
+- Next: nothing planned. Storage remains unmetered per Organization — the only bound is
+  `RESTORE_POINT_MAX_PER_AGENT`, which is per Agent.
+- Blockers: **no capture or restore has yet run end to end in a cluster with a rebuilt API
+  image.** Every check so far is unit tests, mocked services, and the Kubernetes client against
+  k3d. The `pods/log` grant is also unverified on staging and prod; without it a capture still
+  runs but records no archive measurements and a generic failure reason. Watch the reconciler's
+  first runs in staging before trusting the schedule — it is the one path here that deletes
+  storage.
 
 ## Changes
 
+### 2026-09-23 — AF-292 — Restore no longer races the Agent it is replacing
+
+- Fixed: capture and restore could run while the Agent's pod was still terminating. Stopping
+  deletes the Deployment and returns, so the Agent reads as STOPPED for the length of its grace
+  period — 30 seconds by default — while the pod keeps writing. ReadWriteOnce does not prevent
+  this: it is enforced per node for attachable volumes, and the default `local-path` provisioner
+  is a bind mount with nothing to attach, so a Job pod and a dying Agent pod can hold the same
+  directory. A concurrent writer during the wipe reproduces `[Errno 39] Directory not empty`
+  exactly, which is what a failed staging restore reported; the quieter outcome is a Pre-Restore
+  backup captured mid-write.
+- Changed: both flows now wait for the pod to be gone before creating any Job, and refuse with a
+  409 saying to try again if it outlives the wait. The wait is taken outside the Agent's lifecycle
+  lock, so start and stop stay responsive.
+- Added: `has_pods_for_deployment` on the Kubernetes client. `get_pod_name_for_deployment` could
+  not serve — it skips pods carrying a deletion timestamp, which is precisely the state that
+  matters here.
+- Note: the shared Kubernetes test double now answers `False` for that call by default. Every
+  attribute of a `MagicMock` is otherwise truthy, which would read as a pod still terminating and
+  refuse every restore point operation in the suite.
+
+### 2026-09-23 — AF-292 — The plugin store travels with the archive
+
+- Changed: OpenClaw's `npm` plugin store is captured instead of excluded, and the wipe is total
+  again. Excluding it while wiping it destroyed the store with nothing to put back; sparing it from
+  the wipe — the previous attempt — left current packages beside capture-time records in
+  `state/openclaw.sqlite`, which is the same disagreement by another route. Capturing it makes the
+  packages and their records roll back together.
+- Reverted: the per-runtime preserved-path list. Restoring by sparing paths could not be made
+  correct: the wipe is the only thing that prunes a revoked credential from the aai-cli store or a
+  skill the Agent no longer has, so anything spared there is a leak, and anything not spared is the
+  original bug.
+- Changed: `start.sh` recreates the plugin store's link into the runtime image after a restore, and
+  resolves the package directory before reading its version. The old version-check read a path that
+  a half-finished install does not create, so it never passed `--force` and every later boot failed
+  the same way — the state the staging Agent was stuck in.
+- Changed: Hermes excludes `.cache`. Regenerable tool cache, and the largest thing on the volume.
+- Note: a restore still does not repair a plugin store that is already broken. Recovery for an
+  Agent in that state is `openclaw doctor --fix` or recreating it.
+
+### 2026-09-23 — AF-292 — Capture cannot produce an archive restore would reject
+
+- Fixed: a Hermes Agent whose volume held a uv wheel cache could not be restored at all. uv links
+  its wheels to absolute paths under `/opt/data`; the restore mounts the volume at `/target`, so
+  those links resolve outside the destination and the extraction filter refused the archive —
+  failing the whole restore over one cache link. Reproduced against the real module on Linux.
+- Changed: capture offers every member to the same `tarfile.data_filter` the extraction applies,
+  and drops what it refuses, reporting the count as `skipped` beside the archive size. The
+  destination passed is neutral rather than the live volume path: the filter is
+  destination-sensitive, and filtering against `/opt/data` accepts exactly the link that `/target`
+  rejects. A neutral destination is strictly the harshest, so it can over-drop but never
+  under-drop.
+- Changed: OpenClaw no longer drops every symlink at capture. That rule existed to keep the plugin
+  store's link into the runtime image out of the archive; the filter now removes that link on its
+  own evidence, and relative links that stay inside the volume — npm's `.bin` entries among them —
+  survive a restore instead of being destroyed.
+- Decision: hand-written rules about which links are safe kept drifting from what extraction
+  actually accepts, and each divergence cost a whole restore. Deferring to the filter closes the
+  class rather than the case, so a future pathological member cannot reintroduce it.
+
+### 2026-09-23 — AF-292 — Restore no longer destroys unrecoverable runtime state
+
+- Fixed: restoring an OpenClaw Agent bricked it. The wipe deleted everything on the volume while
+  the exclusion sets kept the same paths out of the archive, so `openclaw.json` and `npm/` were
+  destroyed with nothing to put back. `init-openclaw.js` merges into the existing config rather
+  than writing a whole one, so a regenerated file lost `gateway.mode` and the gateway refused to
+  start; the plugin store lost its install records and the host link into the runtime image, and
+  the reinstall failed on every boot, leaving empty project directories behind. Observed on
+  staging, and it would have happened to every OpenClaw restore.
+- Changed: the wipe now spares a short per-runtime list — Hermes `config.yaml`, OpenClaw
+  `openclaw.json` and `npm` — of state the runtime owns and cannot rebuild. Deliberately a strict
+  subset of the archive exclusions, and much smaller: for the rest, the wipe is the only thing
+  that prunes them, so sparing `.config/aai-cli` would leave a revoked credential on the volume
+  and sparing `workspace/skills` would leave a removed skill. Tests pin both of those as still
+  cleared.
+- Changed: ownership is re-applied with `lchown` and skips the preserved paths. The npm store
+  links to a path inside the *agent* image, which the restore Job's own image does not have, so
+  following it would raise and abort a restore whose target had already been wiped.
+- Note: a restore no longer repairs a corrupted runtime configuration or plugin store. That is
+  the trade — those are what bricked the Agent — and the recovery is `openclaw doctor --fix`.
+
+### 2026-09-21 — AF-298 — OpenClaw volumes with npm plugins could not be restored
+
+- Fixed: capture drops symlinks whose targets are absolute or resolve outside the volume, while
+  retaining relative links that resolve inside it. This prevents captured archives from
+  containing links the extraction filter would reject.
+- Updated by AF-292: OpenClaw's `npm/` store is now excluded from archives and preserved in place
+  during restore. The symlink filter remains for captured paths outside that runtime-owned store.
+
+### 2026-09-20 — AF-297 — Reclaim stranded restore points and orphaned volumes
+
+- Changed: restore point PVCs and Jobs carry `agentbarn.io/restore-point-id`. Reclamation has to
+  resolve a Kubernetes object back to the row that owns it, and `job_name` cannot serve: it is
+  cleared when a row goes terminal, so every finished Job would look unowned. A restore Job is
+  labelled with the restore point it restores *from*, matching the id its name already embeds,
+  because one Job serves both that row and the Pre-Restore backup taken beside it.
+- Changed (review): reclamation falls back to the resource's own name when the id label is
+  absent. Label-only matching could never reach anything created before the label shipped — the
+  exact leak this ticket targets — and re-warned about each one every ten minutes with nothing
+  able to clear it. The names are generated by the same module that parses them
+  (`restore-point-<uuid>`, `rp-cap-<uuid>`, `rp-res-<uuid>-<suffix>`), so the fallback is a second
+  exact identifier, not a guess, and a resource matching neither route is still never deleted.
+  The manual cleanup this previously required is no longer needed.
+- Added: a `<release>-restore-point-reconciliation` CronJob on a 10-minute schedule, gated on
+  `restorePoints.reconciliation.enabled` and modelled on the cost-sync template rather than the
+  event reconciler's — this job talks to the Kubernetes API, so it needs the service account, the
+  namespace and the mounted kubeconfig that the event reconciler does without. `agentbarn-api`
+  chart `0.9.1` → `0.10.0`; `make reconcile-restore-points` runs one pass locally.
+- Documented: the CronJob, its summary log line, the pre-`0.10.0` manual cleanup, and the three
+  limits that keep the sweep conservative, in `operations.md`; the reconciliation pass and its
+  label matching in `runtime-and-deployment.md`; and, in the RBAC brief, the narrow exception
+  that lets scheduled background work query Agent-subordinate tables without an accessible-Agent
+  join, with the three conditions it depends on.
+- Added: `restore_points/constants.py`, and the claim the reconciler runs on. A restore point has
+  no status to flip on claim, so the claim is `SELECT … FOR UPDATE SKIP LOCKED` over stale rows
+  that bumps `updated_at` in the same transaction — which is what stops a concurrent run's
+  staleness filter matching them. One claim covers both non-terminal rows and READY rows that
+  still owe a configuration replay, because a second claim in the same run would find nothing the
+  first had left.
+- Added: `find_ready_rows_missing_volumes`, for the terminal rows the claim cannot reach — a READY
+  row whose archive volume is gone is still offered for restore until something says otherwise.
+  Its caller must establish that the volume listing succeeded, since an empty set matches
+  everything.
+- Moved: the 60-second pending grace from `service.py` to the new constants module, so the read
+  path and the reconciler read one definition.
+- Added: `reconcile_row(row, respect_grace=...)` and `apply_owed_replay(row)` on
+  `RestorePointService`, the two seams the reconciler drives rather than restating what the read
+  path already does. The read path keeps the grace window unchanged.
+- Added: `restore_points/reconciliation.py` — a bounded pass that claims stale rows and resolves
+  them from live Job status, applies any configuration replay they still owe, fails READY rows
+  whose archive volume has gone, and deletes restore point Jobs and volumes no row owns. Bound by
+  a batch size, a wall-clock budget, and a per-run deletion cap; wired through `@provider` and run
+  as `python -c "… import main; main()"`, since `-m` re-imports the module under a second name and
+  breaks the injector's Protocol bindings.
+- Decision: the sweep destroys storage from a list-and-compare, so three things constrain it. An
+  object younger than the minimum age is left alone, because it may belong to a row being
+  provisioned right now. An object with no `restore-point-id` label is logged and never deleted,
+  because it cannot be positively identified and guessing is worse than leaking. And an empty or
+  failed volume listing fails no rows at all — an empty set matches every READY row, which is
+  exactly the catastrophic case.
+- Fixed (review): `resolved` counted a terminal row claimed only for the replay it owes. Such a
+  row returns straight back out of resolution, so the summary reported work that did not happen;
+  the reconciler now branches before calling rather than after.
+- Changed (review): `startingDeadlineSeconds` on the CronJob. Left unset, the controller counts
+  every missed window since the last run and stops scheduling permanently past 100 of them —
+  about 17 hours of controller downtime at a 10-minute schedule, after which nothing is reclaimed
+  until somebody notices. The other two CronJobs in the chart share this gap and are left for a
+  separate change.
+- Fixed: the reconciler deleted the archive of a healthy restore point. A READY row that still
+  owed a configuration replay is claimed on purpose — that is how an owed replay is found, since
+  it lives on a terminal row — but it was then put through the same resolution as a stranded
+  operation. `job_name` is cleared when a restore completes, so that resolution saw a row with no
+  Job, treated it as a capture that never produced one, and released its volume. The status write
+  was correctly refused as terminal; the volume deletion ran anyway, so the row went on reporting
+  READY with its archive gone until the missing-volume pass failed it. Resolution now skips
+  terminal rows, and a capture releases its volume only when it is the caller that actually
+  failed the row — either alone prevents it.
+- Coverage: the defect survived because the reconciler's unit tests drive a fake service and the
+  service's tests never run from a real claim, so nothing executed the claim and the real
+  resolution together. There is now an integration test that runs `run_once` against the real
+  service and repository.
+- Added: `mark_ready_row_failed`, because `mark_failed` only transitions from non-terminal
+  statuses and a READY row whose volume has gone is terminal — the existing method would have
+  written nothing and the pass would have reported success while changing no row.
+- Fixed: without `respect_grace`, the reconciliation pass would have resolved nothing. Claiming a
+  row bumps its `updated_at`, which makes it look freshly committed to the 60-second grace that
+  exists to protect a row whose Job has not been created yet — so every row the cron claimed
+  would have been skipped as too young. The cron has already waited the longer staleness
+  threshold to select the row at all.
 ### 2026-09-17 — OpenClaw archive safety
 
-- Changed: OpenClaw's PVC-held npm install registry is regenerated during
-  startup and now remains outside a Restore Point. It can contain symlinks into
-  the runtime image, so OpenClaw archives omit every symlink: the restore
-  validator correctly refuses links that escape the destination. Hermes
-  archives are unchanged and still keep symlinks.
+- Fixed: an OpenClaw Agent that had ever installed an npm plugin produced an archive that
+  could never be restored. Every managed npm install links the core into the plugin project
+  from `/usr/local`, outside the volume. The capture Job runs the API image, where that path
+  does not exist, so the link is dangling; `os.walk` classifies entries by following them, a
+  dangling link fails `is_dir` and arrives among the files, and `tarfile` records it with its
+  absolute target. `data_filter` then rejects that member and the restore fails after the
+  safety-net capture has already run. The Agent volume is untouched — validation precedes the
+  wipe — but the restore point is unusable. Capture now drops a link whose target leaves the
+  volume and keeps everything else, including links that stay inside it, such as npm's own
+  `.bin` shims. Hermes was never affected: nothing on its volume is a symlink.
+- Changed at the time: AF-298 captured `npm/` and `state/` together — OpenClaw records an install
+  in `state/openclaw.sqlite`, and restoring that record beside a missing tree leaves an install
+  that cannot be repaired. External links were omitted and the start script recreated them.
+- Fixed (API): both restore point provisioning handlers log the exception. The reason stored
+  on the row is deliberately reduced to fixed copy, so the cluster's own account of a
+  rejection — which field it refused — had no surviving record anywhere.
+- Fixed: `migrations/env.py` passes `disable_existing_loggers=False`. The model imports at the
+  top of that file create every `api.*` logger before `fileConfig` runs, so a process that
+  applies migrations in-process — the test harness runs them against a live app — silenced
+  application logging for the rest of its life. No log assertion could pass, and existing
+  tests asserting that secrets stay out of the logs were passing against empty output.
+
+- Superseded: AF-298 replaced the earlier policy of excluding `npm/` and dropping all OpenClaw
+  symlinks with capture of `npm/` and `state/`, omitting only links that resolve outside the
+  volume. AF-292 later made `npm/` runtime-owned again: it is excluded from archives and left
+  intact during restore. The symlink filter still applies to other captured paths and to both
+  runtimes.
 
 ### 2026-09-14 — AF-298 — Restore points in the Agent configuration page
 

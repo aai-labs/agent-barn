@@ -486,7 +486,6 @@ def test_native_platform_deliveries_are_not_reclaimed_or_claimed_by_the_gateway(
     deliveries.claim_next_inbound.assert_called_once_with(
         agent_id=agent.id,
         reclaim_expired=False,
-        runtime_protocol_version=1,
         excluded_platform_keys=excluded,
     )
 

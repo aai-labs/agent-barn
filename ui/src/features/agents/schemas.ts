@@ -115,6 +115,8 @@ export const AgentSchema = z.object({
   runningModel: z.string().default(""),
   /** Set only when a restart would move a running Agent onto a different model. */
   pendingModel: z.string().default(""),
+  /** True when a running Agent's pod was built from older platform code or images. */
+  updateAvailable: z.boolean().default(false),
   approvalMode: z.enum(["manual", "auto", "off"]).default("auto"),
   verboseMode: z.boolean().default(false),
   lastError: AgentProvisioningErrorSchema.nullish(),
@@ -214,8 +216,7 @@ export const ConversationChannelSchema = z.object({
   platformKey: z.string(),
   channelId: z.string(),
   channelName: z.string().nullable(),
-  // EVENT is a machine trigger, not a place a person talks. Grouped separately.
-  conversationType: z.enum(["CHANNEL", "DM", "EVENT"]),
+  conversationType: z.enum(["CHANNEL", "DM"]),
 });
 
 export const WebChatApprovalSchema = z.object({

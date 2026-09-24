@@ -10,7 +10,6 @@ from api.domains.communications.plugins.slack import SlackPlatformPlugin
 from api.domains.communications.plugins.teams import TeamsPlatformPlugin
 from api.domains.communications.plugins.telegram import TelegramPlatformPlugin
 from api.domains.communications.plugins.web import WebPlatformPlugin
-from api.domains.communications.plugins.webhook import WebhookPlatformPlugin
 from api.domains.costs.repository import CostRepository
 from api.domains.costs.sync import CostSynchronizer
 from api.domains.events.constants import EVENT_DELIVERY_PROCESSING_STALE_SECONDS
@@ -21,6 +20,9 @@ from api.domains.events.repository import OutboxMessageRepository
 from api.domains.events.security_audit import SecurityAuditProjection
 from api.domains.events.transport import EventDeliveryTransport
 from api.domains.organizations.event_handlers import OrganizationBudgetEmailHandler
+from api.domains.restore_points.reconciliation import RestorePointReconciler
+from api.domains.restore_points.repository import RestorePointRepository
+from api.domains.restore_points.service import RestorePointService
 from api.infrastructure.clock import Clock
 from api.infrastructure.communication_signals import CommunicationSignalBus
 from api.infrastructure.email.client import EmailClient
@@ -66,7 +68,6 @@ class AppModule(Module):
                 TeamsPlatformPlugin(config),
                 TelegramPlatformPlugin(config),
                 WebPlatformPlugin(),
-                WebhookPlatformPlugin(),
             ]
         )
 
@@ -94,6 +95,21 @@ class AppModule(Module):
         transport: EventDeliveryTransport,
     ) -> EventDeliveryReconciler:
         return EventDeliveryReconciler(repository=repository, transport=transport)
+
+    @provider
+    def provide_restore_point_reconciler(
+        self,
+        config: Config,
+        repository: RestorePointRepository,
+        service: RestorePointService,
+        k8s: KubernetesClient,
+    ) -> RestorePointReconciler:
+        return RestorePointReconciler(
+            repository=repository,
+            service=service,
+            k8s=k8s,
+            namespace=config.k8s_namespace,
+        )
 
     @provider
     def provide_cost_synchronizer(

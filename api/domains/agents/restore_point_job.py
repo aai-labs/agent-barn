@@ -33,6 +33,7 @@ EXIT_RESTORE_FAILED = 3
 _READ_CHUNK_BYTES = 1024 * 1024
 
 HERMES_EXCLUDED = (
+    ".cache",
     ".config/aai-cli",
     ".env",
     "SOUL.md",
@@ -48,8 +49,10 @@ HERMES_EXCLUDED = (
 )
 
 OPENCLAW_EXCLUDED = (
+    # aai-cli's encrypted secret store and its key live here (Hermes keeps them under
+    # .config/aai-cli); the boot script rewrites both from the agent's credentials.
+    "aai-cli",
     "local-plugins",
-    "npm",
     "openclaw.json",
     "agentbarn-messages.sqlite3",
     "workspace/skills",
@@ -88,18 +91,28 @@ def _walk_included_files(root: Path, runtime: str):
         dir_names[:] = sorted(d for d in dir_names if not is_excluded(prefix + d, runtime))
         for file_name in sorted(file_names):
             rel_path = prefix + file_name
-            path = current / file_name
-            if not is_excluded(rel_path, runtime) and not (runtime == RUNTIME_OPENCLAW and path.is_symlink()):
-                yield path, rel_path
+            if not is_excluded(rel_path, runtime):
+                yield current / file_name, rel_path
 
 
 def capture(source: Path, dest: Path, runtime: str) -> dict:
     archive_path = dest / ARCHIVE_NAME
     file_count = 0
+    skipped = 0
     try:
         with tarfile.open(archive_path, "w:gz") as tar:
             for path, rel_path in _walk_included_files(source, runtime):
-                tar.add(path, arcname=rel_path, recursive=False)
+                info = tar.gettarinfo(path, arcname=rel_path)
+                try:
+                    tarfile.data_filter(info, "")
+                except tarfile.FilterError:
+                    skipped += 1
+                    continue
+                if info.isreg():
+                    with path.open("rb") as stream:
+                        tar.addfile(info, stream)
+                else:
+                    tar.addfile(info)
                 file_count += 1
     except OSError as exc:
         if exc.errno == errno.ENOSPC:
@@ -109,7 +122,7 @@ def capture(source: Path, dest: Path, runtime: str) -> dict:
             ) from exc
         raise
 
-    manifest = {"bytes": archive_path.stat().st_size, "file_count": file_count}
+    manifest = {"bytes": archive_path.stat().st_size, "file_count": file_count, "skipped": skipped}
     (dest / MANIFEST_NAME).write_text(json.dumps(manifest))
     return manifest
 
@@ -148,12 +161,12 @@ def _wipe_contents(target: Path) -> None:
 
 
 def _apply_ownership(target: Path, uid: int, gid: int) -> None:
-    if not hasattr(os, "chown"):
+    if not hasattr(os, "lchown"):
         return
-    os.chown(target, uid, gid)
+    os.lchown(target, uid, gid)
     for dir_path, dir_names, file_names in os.walk(target, followlinks=False):
         for name in list(dir_names) + list(file_names):
-            os.chown(Path(dir_path) / name, uid, gid)
+            os.lchown(Path(dir_path) / name, uid, gid)
 
 
 def apply_archive(target: Path, archive_dir: Path) -> None:
