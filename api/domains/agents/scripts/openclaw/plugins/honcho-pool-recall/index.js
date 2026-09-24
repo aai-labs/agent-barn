@@ -23,6 +23,10 @@ const TARGET_PEER = process.env.HONCHO_POOL_TARGET_PEER || "owner";
 // being too low; a slower turn is the cost of being too high.
 const TIMEOUT_MS = Number(process.env.HONCHO_POOL_TIMEOUT_MS || "60000");
 const MAX_CHARS = 1500;
+// How many recent turns to use as the recall query. The last message alone is a
+// poor retrieval prompt ("yes, do that" carries no signal), so a small window of
+// recent turns gives the dialectic enough context to retrieve against.
+const RECALL_WINDOW_TURNS = Number(process.env.HONCHO_POOL_WINDOW_TURNS || "6");
 
 function honchoTarget() {
   try {
@@ -38,16 +42,23 @@ function honchoTarget() {
   return null;
 }
 
-function latestUserText(event) {
-  if (event && typeof event.prompt === "string" && event.prompt.trim()) return event.prompt.trim();
+function recallQuery(event) {
+  // Build the query from the last few user/assistant turns, newest last, so a
+  // terse latest message still carries enough context to retrieve against.
   const msgs = event && Array.isArray(event.messages) ? event.messages : [];
-  for (let i = msgs.length - 1; i >= 0; i--) {
+  const window = [];
+  for (let i = msgs.length - 1; i >= 0 && window.length < RECALL_WINDOW_TURNS; i--) {
     const m = msgs[i];
-    if (m && m.role === "user" && typeof m.content === "string" && m.content.trim()) {
-      return m.content.trim();
+    if (m && (m.role === "user" || m.role === "assistant") && typeof m.content === "string" && m.content.trim()) {
+      window.unshift(`${m.role}: ${m.content.trim()}`);
     }
   }
-  return "";
+  // event.prompt is the current turn, which may not be in messages yet.
+  const prompt = event && typeof event.prompt === "string" ? event.prompt.trim() : "";
+  if (prompt && !(window.length && window[window.length - 1].endsWith(prompt))) {
+    window.push(`user: ${prompt}`);
+  }
+  return window.join("\n").trim();
 }
 
 export default {
@@ -57,7 +68,7 @@ export default {
     api.on("before_prompt_build", async (event) => {
       const target = honchoTarget();
       if (!target) return;
-      const query = latestUserText(event);
+      const query = recallQuery(event);
       if (query.length < 3) return;
 
       const controller = new AbortController();
