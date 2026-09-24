@@ -231,15 +231,20 @@ class HonchoClient:
     def delete_conclusion(self, workspace_id: str, conclusion_id: str) -> None:
         self._request("DELETE", f"/workspaces/{workspace_id}/conclusions/{conclusion_id}")
 
-    def find_conclusion(self, workspace_id: str, conclusion_id: str) -> dict | None:
+    def find_conclusion(
+        self, workspace_id: str, conclusion_id: str, *, observer: str | None = None, observed: str | None = None
+    ) -> dict | None:
         """Locate one conclusion by id, or None if it is not in the workspace.
 
-        Honcho exposes no get-by-id for conclusions, so this walks pages. Bounded
-        rather than unbounded: callers act on something the user just saw in the
-        list, not on an arbitrary scan of an unbounded workspace.
+        Honcho exposes no get-by-id for conclusions, so this walks pages. Passing
+        the `(observer, observed)` the caller already has scopes the walk to that
+        one collection instead of the whole pool, so the page cap is reached far
+        later — an old item in a large pool is still found rather than missed.
         """
         for page in range(1, 21):
-            items, total = self.list_conclusions(workspace_id, page=page, size=100)
+            items, total = self.list_conclusions(
+                workspace_id, page=page, size=100, observer=observer, observed=observed
+            )
             for item in items:
                 if str(item.get("id")) == conclusion_id:
                     return item

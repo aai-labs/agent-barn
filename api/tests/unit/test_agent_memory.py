@@ -19,6 +19,7 @@ from api.domains.agents.memory_sharing import AgentMemoryService, MemoryItemUpda
 from api.domains.agents.models import Agent, AgentType
 from api.domains.agents.repository import AgentRepository, PoolMemoryProvenance, SharedPoolMemoryFactRepository
 from api.domains.auth.models import CurrentUserContext
+from api.domains.rbac.policy import PermissionPolicy
 from api.infrastructure.honcho.client import HonchoClient, HonchoError
 
 AGENT_ID = uuid7()
@@ -46,13 +47,18 @@ def _service(*, honcho_enabled: bool = True):
     agents = Mock(spec=AgentRepository)
     # No agent-peer names resolve unless a test says so; `in` on a bare Mock throws.
     agents.names_by_ids.return_value = {}
+    # Manager check is a no-op by default; a test sets side_effect to deny it.
+    permission_policy = Mock(spec=PermissionPolicy)
+    permission_policy.require_organization.return_value = None
     service = AgentMemoryService(
         agent_authorization=authorization,
         honcho=honcho,
         config=Config(honcho_enabled=honcho_enabled),
         pool_provenance=pool_provenance,
         agents=agents,
+        permission_policy=permission_policy,
     )
+    # permission_policy is reachable as service.permission_policy where a test needs it.
     return service, authorization, honcho, pool_provenance
 
 
@@ -103,16 +109,13 @@ def test_memory_uses_its_own_permissions_not_general_agent_ones():
 
     service, authorization, honcho, _pool_prov = _service()
     honcho.list_conclusions.return_value = ([], 0)
+    honcho.find_conclusion.return_value = {"id": "c1", "observer_id": "agent-x", "observed_id": "owner"}
 
     service.list_memory(AGENT_ID, _context(), page=1, size=50)
-    assert_that(
-        authorization.require_action_allowing_deleted.call_args.args[2], equal_to(PermissionKey.AGENT_MEMORY_READ)
-    )
+    assert_that(authorization.require_action.call_args.args[2], equal_to(PermissionKey.AGENT_MEMORY_READ))
 
     service.forget(AGENT_ID, "c1", _context())
-    assert_that(
-        authorization.require_action_allowing_deleted.call_args.args[2], equal_to(PermissionKey.AGENT_MEMORY_MANAGE)
-    )
+    assert_that(authorization.require_action.call_args.args[2], equal_to(PermissionKey.AGENT_MEMORY_MANAGE))
 
 
 def test_correction_preserves_the_peer_pair_of_what_it_replaces():
@@ -174,10 +177,11 @@ def test_memory_is_unavailable_when_honcho_is_disabled():
     authorization.require_action.assert_not_called()
 
 
-def test_search_fans_out_across_peer_pairs_and_deduplicates():
-    """Honcho searches one (observer, observed) collection at a time — the vectors
-    are stored per pair — so an Agent-wide search must fan out and merge. The same
-    conclusion can come back from more than one pair query."""
+def test_search_pins_observed_to_the_human_and_dedupes():
+    """Facts about the person are keyed observed=the human peer, so search pins the
+    observed side there and fans out over observers — not every peer × every peer.
+    With two peers that is (agent, owner) and (owner, owner): 2 queries, not 4. The
+    same conclusion coming back from more than one pair is deduped."""
     service, _, honcho, _pool_prov = _service()
     honcho.list_peers.return_value = ["agent-main", "owner"]
     honcho.search_conclusions.return_value = [
@@ -186,21 +190,93 @@ def test_search_fans_out_across_peer_pairs_and_deduplicates():
 
     results = service.search_memory(AGENT_ID, "languages", _context(), limit=10)
 
-    assert_that(honcho.search_conclusions.call_count, equal_to(4))  # 2 peers squared
+    assert_that(honcho.search_conclusions.call_count, equal_to(2))
+    # Every query pins observed to the human peer.
+    assert all(call.kwargs["observed"] == "owner" for call in honcho.search_conclusions.call_args_list)
     assert_that(results, has_length(1))
     assert_that(results[0].content, equal_to("owner likes Rust"))
 
 
-def test_search_bounds_the_fan_out():
-    """Peers grow with the number of people an Agent talks to, and the fan-out is
-    quadratic — unbounded, a search box becomes a slow query over every pair."""
+def test_search_is_complete_over_all_observers_no_silent_cap():
+    """The old code sliced the first 8 peers and silently dropped the rest, so a
+    pool's search could miss a member's memory with no signal. Now search covers
+    every observer against the human peer — linear in pool size, complete."""
     service, _, honcho, _pool_prov = _service()
-    honcho.list_peers.return_value = [f"peer-{i}" for i in range(40)]
+    honcho.list_peers.return_value = [f"agent-{i}" for i in range(30)] + ["owner"]
     honcho.search_conclusions.return_value = []
 
     service.search_memory(AGENT_ID, "anything", _context(), limit=10)
 
-    assert_that(honcho.search_conclusions.call_count, equal_to(64))  # capped at 8 peers
+    # 31 observers × 1 human observed = 31 — every member searched, none dropped.
+    assert_that(honcho.search_conclusions.call_count, equal_to(31))
+
+
+def test_pool_scope_requires_group_manage_but_mine_does_not():
+    """Pool-wide view is manager-only; scope=mine is fine with plain read."""
+    service, _, honcho, _pool_prov = _service()
+    honcho.list_conclusions.return_value = ([], 0)
+    service.permission_policy.require_organization.side_effect = HTTPException(status_code=403)
+
+    with pytest.raises(HTTPException) as exc:
+        service.list_memory(AGENT_ID, _context(), page=1, size=50)  # default scope=pool
+    assert_that(exc.value.status_code, equal_to(403))
+
+    service.permission_policy.require_organization.reset_mock(side_effect=True)
+    service.list_memory(AGENT_ID, _context(), page=1, size=50, scope="mine")
+    service.permission_policy.require_organization.assert_not_called()
+
+
+def test_curating_another_agents_memory_requires_group_manage():
+    """A plain agent.memory.manage holder may curate only this Agent's own
+    contributions; forgetting a fact a DIFFERENT agent observed needs manage."""
+    service, _, honcho, _pool_prov = _service()
+    honcho.find_conclusion.return_value = {"id": "c1", "observer_id": "agent-other", "observed_id": "owner"}
+    service.permission_policy.require_organization.side_effect = HTTPException(status_code=403)
+
+    with pytest.raises(HTTPException) as exc:
+        service.forget(AGENT_ID, "c1", _context())
+
+    assert_that(exc.value.status_code, equal_to(403))
+    honcho.delete_conclusion.assert_not_called()
+
+
+def test_curating_this_agents_own_memory_needs_no_group_manage():
+    service, _, honcho, _pool_prov = _service()
+    honcho.find_conclusion.return_value = {"id": "c1", "observer_id": f"agent-{AGENT_ID}", "observed_id": "owner"}
+    # Would raise if the manager check were consulted for an own-contribution edit.
+    service.permission_policy.require_organization.side_effect = HTTPException(status_code=403)
+
+    service.forget(AGENT_ID, "c1", _context())
+
+    service.permission_policy.require_organization.assert_not_called()
+    honcho.delete_conclusion.assert_called_once()
+
+
+def test_curate_authorizes_on_the_stored_observer_not_a_client_hint():
+    """The client-supplied observer only scopes the lookup; authorization uses the
+    stored conclusion's real observer, so a forged hint cannot bypass manage."""
+    service, _, honcho, _pool_prov = _service()
+    honcho.find_conclusion.return_value = {"id": "c1", "observer_id": "agent-other", "observed_id": "owner"}
+    service.permission_policy.require_organization.side_effect = HTTPException(status_code=403)
+
+    with pytest.raises(HTTPException):
+        # Hint claims it's this agent's own; the stored observer says otherwise.
+        service.forget(AGENT_ID, "c1", _context(), observer=f"agent-{AGENT_ID}", observed="owner")
+
+
+def test_search_mine_scope_limits_to_this_agent():
+    """scope="mine" searches only this Agent's own contributions: one pair,
+    (this agent, human)."""
+    service, _, honcho, _pool_prov = _service()
+    honcho.list_peers.return_value = [f"agent-{AGENT_ID}", "agent-other", "owner"]
+    honcho.search_conclusions.return_value = []
+
+    service.search_memory(AGENT_ID, "anything", _context(), limit=10, scope="mine")
+
+    assert_that(honcho.search_conclusions.call_count, equal_to(1))
+    only = honcho.search_conclusions.call_args
+    assert_that(only.kwargs["observer"], equal_to(f"agent-{AGENT_ID}"))
+    assert_that(only.kwargs["observed"], equal_to("owner"))
 
 
 def test_search_needs_only_memory_read_access():
@@ -211,23 +287,20 @@ def test_search_needs_only_memory_read_access():
 
     service.search_memory(AGENT_ID, "q", _context(), limit=10)
 
-    assert_that(
-        authorization.require_action_allowing_deleted.call_args.args[2], equal_to(PermissionKey.AGENT_MEMORY_READ)
-    )
+    assert_that(authorization.require_action.call_args.args[2], equal_to(PermissionKey.AGENT_MEMORY_READ))
 
 
-def test_a_deleted_agents_memory_is_still_reachable():
-    """Deleting an Agent retains its Honcho workspace, so its memory must remain
-    viewable and erasable — otherwise retention leaves personal data that nobody
-    can see, search, or delete through the product."""
+def test_agent_memory_uses_the_active_only_authorization_seam():
+    """A shared pool's memory is reachable through the group memory page (gated on
+    memory_group.manage), so the per-Agent tab no longer needs the deleted-tolerant
+    seam — a deleted Agent's contributions live on in the pool, viewed via the group."""
     service, authorization, honcho, _pool_prov = _service()
     honcho.list_conclusions.return_value = ([], 0)
 
     service.list_memory(AGENT_ID, _context(), page=1, size=50)
 
-    # The deleted-tolerant seam is used, not the active-only one.
-    authorization.require_action_allowing_deleted.assert_called_once()
-    authorization.require_action.assert_not_called()
+    authorization.require_action.assert_called_once()
+    authorization.require_action_allowing_deleted.assert_not_called()
 
 
 def test_a_memory_shared_in_from_another_pool_carries_its_source_group_id():

@@ -28,6 +28,7 @@ from api.domains.agents.models import Agent
 from api.domains.agents.repository import AgentRepository, PoolMemoryProvenance, SharedPoolMemoryFactRepository
 from api.domains.auth.models import CurrentUserContext
 from api.domains.rbac.catalog import PermissionKey
+from api.domains.rbac.policy import PermissionPolicy
 from api.infrastructure.honcho.client import (
     HonchoClient,
     HonchoError,
@@ -35,6 +36,14 @@ from api.infrastructure.honcho.client import (
 )
 
 logger = logging.getLogger(__name__)
+
+# The human talking to an Agent is one peer per pool. Both runtimes now use
+# "owner"; "operator" is the legacy Hermes name still present on pre-cutover
+# memories. Facts about the person are keyed `observed = <one of these>`, which is
+# what lets an Agent-wide search pin the observed side instead of crossing every
+# peer with every peer.
+_HUMAN_PEER = "owner"
+_HUMAN_PEERS = ("owner", "operator")
 
 
 class MemoryItemRead(BaseModel):
@@ -100,9 +109,12 @@ class MemoryItemUpdate(BaseModel):
     content: str = Field(min_length=1, max_length=4000)
 
 
-# Peers grow with the number of people an Agent talks to. Searching every pair is
-# quadratic, so the fan-out is capped: a search box must stay a search box.
-_MAX_SEARCH_PEERS = 8
+# Defensive ceiling on the number of (observer, observed) pairs a single search
+# fans out over. Search pins the observed side to the human peer and iterates
+# observers, so under the group-size cap this is ~pool size and never near the
+# ceiling. If the ceiling is somehow hit, search reports partial results rather
+# than silently dropping members (the previous behaviour, a hard [:8] truncation).
+_MAX_SEARCH_PAIRS = 200
 
 # The pair searches are independent, so they run concurrently rather than serially
 # (serial made a search tens of seconds). Bounded so a wide pool does not open a
@@ -160,7 +172,7 @@ def _facet_for_peer(
     # Both are the human talking to the Agent through the app: "owner" is what both
     # runtimes use now; "operator" is the legacy Hermes name, still on pre-cutover
     # memories, so it reads as "you" too rather than showing a raw internal id.
-    if peer in ("owner", "operator"):
+    if peer in _HUMAN_PEERS:
         return MemoryFacet(peer=peer, label="About you", name="you", count=count, isSelf=False)
     # Another Agent in the pool: its own `agent-<id>` peer. Show its name, never
     # the raw id — the fallback to `peer` only bites for a peer we cannot resolve.
@@ -243,6 +255,7 @@ class AgentMemoryService:
     config: Config
     pool_provenance: SharedPoolMemoryFactRepository
     agents: AgentRepository
+    permission_policy: PermissionPolicy
 
     def _require(self, agent_id: UUID, permission: PermissionKey, context: CurrentUserContext) -> Agent:
         if not self.config.honcho_enabled:
@@ -250,10 +263,22 @@ class AgentMemoryService:
                 status_code=status.HTTP_409_CONFLICT,
                 detail="Agent memory requires Honcho-backed memory to be enabled.",
             )
-        # Deleting an Agent retains its Honcho workspace, so its memory has to stay
-        # reachable — otherwise it is personal data nobody can view, search, or
-        # erase. Reaching a deleted Agent needs organization-wide visibility.
-        return self.agent_authorization.require_action_allowing_deleted(context, agent_id, permission)
+        # A shared pool's memory is reachable through the group (the group memory
+        # page, gated on memory_group.manage), so a deleted Agent's tab no longer
+        # needs the deleted-tolerant seam — its contributions live on in the pool.
+        return self.agent_authorization.require_action(context, agent_id, permission)
+
+    def _require_group_manage(self, agent: Agent, context: CurrentUserContext) -> None:
+        """Pool-wide memory (every member's conclusions) is only for someone who
+        manages the group. Plain agent access sees just this Agent's own
+        contributions (scope="mine"); the whole pool needs memory_group.manage,
+        the same bar the group memory page enforces."""
+        self.permission_policy.require_organization(
+            context,
+            agent.organization_id,
+            PermissionKey.MEMORY_GROUP_MANAGE,
+            detail="Viewing or curating the whole group's memory needs the memory-group manage permission.",
+        )
 
     def _require_pool(self, agent: Agent) -> str:
         """The Agent's pool workspace, or a 409 if it has no shared memory.
@@ -286,6 +311,10 @@ class AgentMemoryService:
         with no group has no shared memory, so the page is empty.
         """
         agent = self._require(agent_id, PermissionKey.AGENT_MEMORY_READ, context)
+        # The whole pool (every member's conclusions) is manager-only; plain agent
+        # access is limited to this Agent's own contributions.
+        if scope != "mine":
+            self._require_group_manage(agent, context)
         if not memory_active(agent, honcho_enabled=self.config.honcho_enabled):
             return MemoryPage(items=[], total=0, page=page, size=size, facets=[])
         ai_peer = ai_peer_name_for_agent(agent)
@@ -392,11 +421,50 @@ class AgentMemoryService:
         names = self.agents.names_by_ids(list(set(ids_by_peer.values())))
         return {peer: names[agent_id] for peer, agent_id in ids_by_peer.items() if agent_id in names}
 
-    def forget(self, agent_id: UUID, memory_id: str, context: CurrentUserContext) -> None:
+    def _require_curate(
+        self,
+        agent: Agent,
+        workspace: str,
+        memory_id: str,
+        context: CurrentUserContext,
+        *,
+        observer: str | None,
+        observed: str | None,
+    ) -> dict:
+        """Locate the memory being curated and authorize the write.
+
+        Plain `agent.memory.manage` may curate only this Agent's own contributions
+        (the conclusion's observer is this Agent's peer); changing any other
+        member's memory — which affects Agents the caller may not even see — needs
+        `memory_group.manage`. The client-supplied `(observer, observed)` only
+        scopes the lookup; authorization is checked against the stored conclusion's
+        real observer, never the hint.
+        """
+        try:
+            item = self._find(workspace, memory_id, observer=observer, observed=observed)
+        except HonchoError as exc:
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+        if item is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Memory not found.")
+        if str(item.get("observer_id") or "") != ai_peer_name_for_agent(agent):
+            self._require_group_manage(agent, context)
+        return item
+
+    def forget(
+        self,
+        agent_id: UUID,
+        memory_id: str,
+        context: CurrentUserContext,
+        *,
+        observer: str | None = None,
+        observed: str | None = None,
+    ) -> None:
         # Not agent.update: removing what an Agent knows changes what it believes,
         # which is a different power from changing how it is configured.
         agent = self._require(agent_id, PermissionKey.AGENT_MEMORY_MANAGE, context)
-        self.forget_in_workspace(self._require_pool(agent), memory_id)
+        workspace = self._require_pool(agent)
+        self._require_curate(agent, workspace, memory_id, context, observer=observer, observed=observed)
+        self.forget_in_workspace(workspace, memory_id)
 
     def forget_in_workspace(self, workspace: str, memory_id: str) -> None:
         """Delete one conclusion from a pool workspace and drop its provenance."""
@@ -407,13 +475,35 @@ class AgentMemoryService:
         self.pool_provenance.forget(memory_id)
 
     def correct(
-        self, agent_id: UUID, memory_id: str, payload: MemoryItemUpdate, context: CurrentUserContext
+        self,
+        agent_id: UUID,
+        memory_id: str,
+        payload: MemoryItemUpdate,
+        context: CurrentUserContext,
+        *,
+        observer: str | None = None,
+        observed: str | None = None,
     ) -> MemoryItemRead:
         agent = self._require(agent_id, PermissionKey.AGENT_MEMORY_MANAGE, context)
-        return self.correct_in_workspace(self._require_pool(agent), memory_id, payload)
+        workspace = self._require_pool(agent)
+        existing = self._require_curate(agent, workspace, memory_id, context, observer=observer, observed=observed)
+        return self._apply_correction(workspace, memory_id, existing, payload)
 
     def correct_in_workspace(self, workspace: str, memory_id: str, payload: MemoryItemUpdate) -> MemoryItemRead:
-        """Replace one memory's content in a pool workspace.
+        """Replace one memory's content in a pool workspace (group-page path,
+        already gated on `memory_group.manage`, so it curates any member's memory)."""
+        try:
+            existing = self._find(workspace, memory_id)
+        except HonchoError as exc:
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+        if existing is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Memory not found.")
+        return self._apply_correction(workspace, memory_id, existing, payload)
+
+    def _apply_correction(
+        self, workspace: str, memory_id: str, existing: dict, payload: MemoryItemUpdate
+    ) -> MemoryItemRead:
+        """Replace `existing`'s content, preserving its peer pair.
 
         Honcho has no update endpoint, so this deletes and recreates. Two
         consequences are deliberately visible rather than hidden: the item gets a
@@ -421,9 +511,6 @@ class AgentMemoryService:
         a level — a corrected deduction stops being labelled a deduction.
         """
         try:
-            existing = self._find(workspace, memory_id)
-            if existing is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Memory not found.")
             self.honcho.delete_conclusion(workspace, memory_id)
             created = self.honcho.create_conclusion(
                 workspace,
@@ -442,34 +529,57 @@ class AgentMemoryService:
         )
 
     def search_memory(
-        self, agent_id: UUID, query: str, context: CurrentUserContext, *, limit: int
+        self, agent_id: UUID, query: str, context: CurrentUserContext, *, limit: int, scope: str = "pool"
     ) -> list[MemoryItemRead]:
-        """Search across everything an Agent has concluded.
+        """Search the Agent's pool memory.
 
-        Honcho searches one (observer, observed) collection at a time — the
-        vectors are stored per pair — so this fans out across the Agent's peers
-        and merges. The fan-out is bounded: peers grow with the number of people
-        an Agent talks to, and an unbounded one would turn a search box into a
-        slow query against every pair that has ever existed.
+        Same access rule as `list_memory`: `scope="mine"` searches only this
+        Agent's own contributions (plain `agent.memory.read`); the whole pool
+        (`scope="pool"`) needs `memory_group.manage`, so a single-Agent viewer
+        cannot search other members' memory.
         """
         agent = self._require(agent_id, PermissionKey.AGENT_MEMORY_READ, context)
+        if scope != "mine":
+            self._require_group_manage(agent, context)
         if not memory_active(agent, honcho_enabled=self.config.honcho_enabled):
             return []
-        return self.search_memory_for_workspace(memory_workspace_for_agent(agent), query, limit=limit)
+        observer = ai_peer_name_for_agent(agent) if scope == "mine" else None
+        return self.search_memory_for_workspace(
+            memory_workspace_for_agent(agent), query, limit=limit, observer=observer
+        )
 
-    def search_memory_for_workspace(self, workspace: str, query: str, *, limit: int) -> list[MemoryItemRead]:
-        """Semantic search across a pool workspace, fanning out over its peer pairs.
+    def search_memory_for_workspace(
+        self, workspace: str, query: str, *, limit: int, observer: str | None = None
+    ) -> list[MemoryItemRead]:
+        """Semantic search across a pool workspace.
 
-        Workspace-keyed so the per-Agent and group views share it. Honcho searches
-        one (observer, observed) collection at a time — the vectors are stored per
-        pair — so this fans out over the pairs and merges. The pairs are independent
-        (each is a round-trip plus a vector query), so they run concurrently rather
-        than serially, which is what made search take tens of seconds. Bounded by
-        `_MAX_SEARCH_PEERS` (how many pairs) and `_SEARCH_CONCURRENCY` (how many at
-        once). Results keep pair order, then dedupe, so output is deterministic.
+        Honcho searches one (observer, observed) collection at a time — the vectors
+        are stored per pair, and it rejects a search that names neither. Facts about
+        the person are keyed `observed = the human peer`, so we pin the observed side
+        to the pool's human peer(s) and fan out over observers, instead of crossing
+        every peer with every peer (which burned most queries on empty or irrelevant
+        pairs). `observer` limits it to one member (scope="mine"); None searches
+        every member (pool-wide). Complete by default — the whole observer set is
+        searched, never a silent first-N slice. The group-size cap keeps the fan-out
+        small; the defensive ceiling only trips if that cap is bypassed, and then it
+        reports partial results rather than lying. Pairs run concurrently, then
+        dedupe, so output is deterministic.
         """
-        peers = self.honcho.list_peers(workspace)[:_MAX_SEARCH_PEERS]
-        pairs = [(observer, observed) for observer in peers for observed in peers]
+        peers = self.honcho.list_peers(workspace)
+        # Facts about the person live under the human peer; fall back to every peer
+        # only in the unusual case where a pool has no human peer yet.
+        observed_targets = [p for p in peers if p in _HUMAN_PEERS] or peers
+        observers = [observer] if observer is not None else peers
+        pairs = [(o, d) for o in observers for d in observed_targets]
+        if len(pairs) > _MAX_SEARCH_PAIRS:
+            logger.warning(
+                "Memory search over %s hit the pair ceiling (%d > %d); results are partial. "
+                "This should not happen under the group-size cap.",
+                workspace,
+                len(pairs),
+                _MAX_SEARCH_PAIRS,
+            )
+            pairs = pairs[:_MAX_SEARCH_PAIRS]
         if not pairs:
             return []
         try:
@@ -497,9 +607,17 @@ class AgentMemoryService:
         name_by_peer = self._agent_names_in(top)
         return [_to_memory_item(i, name_by_peer=name_by_peer) for i in top]
 
-    def _find(self, workspace: str, memory_id: str) -> dict | None:
-        """Locate one memory so a correction can preserve its peer pair."""
-        return self.honcho.find_conclusion(workspace, memory_id)
+    def _find(
+        self, workspace: str, memory_id: str, *, observer: str | None = None, observed: str | None = None
+    ) -> dict | None:
+        """Locate one memory so a write can preserve its peer pair.
+
+        Honcho has no get-by-id, so this pages the conclusions. The optional
+        `(observer, observed)` — the pair the client already displayed — scopes the
+        walk to that one collection instead of scanning the whole pool, so an old
+        item in a large pool is still found rather than falling off the page cap.
+        """
+        return self.honcho.find_conclusion(workspace, memory_id, observer=observer, observed=observed)
 
 
 @inject
