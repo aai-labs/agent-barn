@@ -895,16 +895,20 @@ def test_capturing_a_restore_point_stages_an_organization_scoped_event():
             assert_that("config_manifest" not in message.payload, equal_to(True))
 
 
-def test_a_capture_that_cannot_be_provisioned_fails_the_row_and_releases_the_volume():
+def test_a_capture_that_cannot_be_provisioned_fails_the_row_and_releases_the_volume(caplog):
     with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
         k8s = context.injector.get(KubernetesClient)
         k8s.create_job.side_effect = RuntimeError("cluster rejected the job")
 
         with when("the job cannot be created"):
-            response = context.client.post(_url(context), json={}, headers=_auth(context))
+            with caplog.at_level("ERROR"):
+                response = context.client.post(_url(context), json={}, headers=_auth(context))
 
         with then("the row is failed and its volume is reclaimed"):
             assert_that(response.status_code, equal_to(status.HTTP_500_INTERNAL_SERVER_ERROR))
+            # The stored reason is fixed copy, so the cluster's account of the
+            # rejection is only ever recoverable from the log.
+            assert_that(caplog.text, contains_string("cluster rejected the job"))
             repository: RestorePointRepository = context.injector.get(RestorePointRepository)
             rows = repository.find_non_terminal_for_agent(context.agent.id)
             assert_that(rows, equal_to([]))
@@ -1350,7 +1354,7 @@ def test_replay_completion_rolls_back_with_an_interrupted_configuration_transact
             assert_that(_outbox(context, AGENT_TEMPLATE_OVERRIDE_SELECTED), has_length(events_before + 1))
 
 
-def test_restore_provisioning_failure_cancels_configuration_replay():
+def test_restore_provisioning_failure_cancels_configuration_replay(caplog):
     with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
         there_is_a_template(template_key="recorded-template", name="Recorded")(context)
         row = _seed_with_manifest(context, _manifest_for(context, template_key="recorded-template"))
@@ -1359,9 +1363,10 @@ def test_restore_provisioning_failure_cancels_configuration_replay():
         before = len(_outbox(context, AGENT_TEMPLATE_OVERRIDE_SELECTED))
 
         with when("provisioning fails and someone reads the list afterwards"):
-            response = context.client.post(
-                f"{_url(context)}/{row.id}/restore", json={"reapply_configuration": True}, headers=_auth(context)
-            )
+            with caplog.at_level("ERROR"):
+                response = context.client.post(
+                    f"{_url(context)}/{row.id}/restore", json={"reapply_configuration": True}, headers=_auth(context)
+                )
             body = context.client.get(_url(context), headers=_auth(context)).json()
 
         with then("the archive remains ready but its configuration is never replayed"):
@@ -1370,6 +1375,7 @@ def test_restore_provisioning_failure_cancels_configuration_replay():
             assert_that(entry["status"], equal_to("READY"))
             assert_that(entry["reapply_configuration"], equal_to(False))
             assert_that(_outbox(context, AGENT_TEMPLATE_OVERRIDE_SELECTED), has_length(before))
+            assert_that(caplog.text, contains_string("cluster rejected the job"))
 
 
 def test_start_reconciles_replay_before_loading_the_configuration_to_run():

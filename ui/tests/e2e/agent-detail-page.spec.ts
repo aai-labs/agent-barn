@@ -5,6 +5,7 @@ import {
   COMMUNICATION_CONNECTION_ID,
   COMMUNICATION_DELIVERY_ID,
   mockCommunicationConnection,
+  mockCommunicationPlatforms,
   SAFE_ERROR_DETAILS,
   SAFE_PROVIDER_ERROR,
 } from "../fixtures/communication-connections";
@@ -14,6 +15,7 @@ import {
   mockAgent,
   mockAgentAllowedActions,
   mockAgentConfiguration,
+  mockAgentTemplate,
   mockAssignedSkill,
   mockSecret,
   mockTemplates,
@@ -1834,6 +1836,13 @@ test.describe("Agent Detail Page — About tab", () => {
     await dataSupportPage.agents.interceptGetTemplatesRequest();
     await dataSupportPage.agents.interceptGetAgentConfigurationRequest();
     await dataSupportPage.agents.interceptGetModelsRequest();
+    await page.route(`**/costs/agents/${MOCK_AGENT_ID}*`, async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(agentCost()),
+      });
+    });
   });
 
   test("renders the agent's spend trend and totals", async ({ page }) => {
@@ -1996,5 +2005,259 @@ test.describe("Agent Detail Page — About tab", () => {
     await expect(
       page.getByText("We couldn't load this agent's spend."),
     ).toBeVisible();
+  });
+
+  test("summarises how the agent is set up", async ({ page }) => {
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await page.getByRole("button", { name: "About", exact: true }).click();
+
+    const overview = page.getByTestId("agent-about-overview");
+    await expect(overview).toContainText("OpenClaw");
+    await expect(overview).toContainText("gpt-5-mini");
+    // The blueprint reads off the active configuration, not the raw template key.
+    await expect(overview).toContainText("Maya");
+    await expect(overview).toContainText("v1");
+    await expect(overview).toContainText("Full access — no approval prompts");
+    await expect(overview).toContainText("Mar 14, 2026");
+  });
+
+  test("names a Hermes agent's approval mode instead of full access", async ({
+    page,
+  }) => {
+    await dataSupportPage.agents.interceptGetAgentRequest({
+      body: { ...mockAgent, agent_type: "hermes", approval_mode: "manual", verbose_mode: true },
+    });
+
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await page.getByRole("button", { name: "About", exact: true }).click();
+
+    const overview = page.getByTestId("agent-about-overview");
+    await expect(overview).toContainText("Hermes");
+    await expect(overview).toContainText("Manual — every command waits for approval");
+    await expect(overview).toContainText("Shows progress while working");
+  });
+
+  test("lists the agent's skills without opening configuration", async ({
+    page,
+  }) => {
+    await dataSupportPage.agents.interceptGetAgentRequest({
+      body: {
+        ...mockAgent,
+        skills: [
+          {
+            ...mockAssignedSkill,
+            version: 3,
+            scope: "organization",
+            required: true,
+          },
+          {
+            ...mockAssignedSkill,
+            id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+            name: "jira",
+            scope: "agent",
+            required_providers: ["jira"],
+            update_available: true,
+          },
+        ],
+      },
+    });
+
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await page.getByRole("button", { name: "About", exact: true }).click();
+
+    const skills = page.getByTestId("agent-about-skills");
+    await expect(skills.getByRole("heading", { name: "Skills (2)" })).toBeVisible();
+    await expect(skills).toContainText("Required");
+    await expect(skills).toContainText("Update available");
+    // Provider requirements are named the way the skills catalogue names them.
+    await expect(skills).toContainText("GitHub");
+    await expect(skills).toContainText("Jira");
+    await expect(skills.getByRole("link", { name: /github/i })).toHaveAttribute(
+      "href",
+      `/dashboard/${TEST_ORG_ID}/agents/${MOCK_AGENT_ID}/skills/${mockAssignedSkill.id}`,
+    );
+  });
+
+  test("says so plainly when the agent has no skills", async ({ page }) => {
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await page.getByRole("button", { name: "About", exact: true }).click();
+
+    await expect(page.getByTestId("agent-about-skills")).toContainText(
+      "No skills assigned yet",
+    );
+  });
+
+  test("shows where the agent can be reached", async ({ page }) => {
+    await dataSupportPage.communicationConnections.interceptChannelsRequests({
+      agentId: MOCK_AGENT_ID,
+    });
+
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await page.getByRole("button", { name: "About", exact: true }).click();
+
+    const messaging = page.getByTestId("agent-about-messaging");
+    await expect(messaging).toContainText(mockCommunicationConnection.display_name);
+    await expect(messaging).toContainText(
+      `Connected as ${mockCommunicationConnection.external_identity}`,
+    );
+    await expect(messaging).toContainText("Connected");
+  });
+
+  test("falls back to the agent's own platform list when connections fail", async ({
+    page,
+  }) => {
+    await page.route(
+      `**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}/connections`,
+      async (route) => {
+        await route.fulfill({
+          status: 500,
+          contentType: "application/json",
+          body: JSON.stringify({ detail: "Connections unavailable" }),
+        });
+      },
+    );
+
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await page.getByRole("button", { name: "About", exact: true }).click();
+
+    const messaging = page.getByTestId("agent-about-messaging");
+    await expect(messaging).toContainText("Slack");
+    await expect(messaging).toContainText("Discord");
+  });
+
+  test("names the accounts the agent can act through", async ({ page }) => {
+    await dataSupportPage.agents.interceptGetAgentRequest({
+      body: {
+        ...mockAgent,
+        secrets: [
+          mockSecret,
+          {
+            provider: "jira",
+            secret_name: "jira-secret",
+            shared_credential_id: "77777777-7777-4777-8777-777777777777",
+            shared_credential_name: "Team Jira",
+          },
+        ],
+      },
+    });
+
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await page.getByRole("button", { name: "About", exact: true }).click();
+
+    const integrations = page.getByTestId("agent-about-integrations");
+    await expect(integrations).toContainText("GitHub");
+    await expect(integrations).toContainText("Agent-owned");
+    await expect(integrations).toContainText("Shared · Team Jira");
+  });
+
+  test("reads the pinned blueprint without loading the configuration history", async ({
+    page,
+  }) => {
+    // /configuration returns every shared and override version with its full
+    // content. About only needs the pinned version's name and description.
+    // The API read only. A production build prefetches the Configuration *page*
+    // (`/dashboard/.../configuration?_rsc=...`) for every link to it, and that
+    // path ends the same way.
+    const configurationApi = new RegExp(
+      `/api/v1/organizations/[^/]+/agents/${MOCK_AGENT_ID}/configuration$`,
+    );
+    const configurationReads: string[] = [];
+    page.on("request", (request) => {
+      if (configurationApi.test(new URL(request.url()).pathname)) {
+        configurationReads.push(request.url());
+      }
+    });
+    await dataSupportPage.agents.interceptGetAgentTemplateRequest({
+      body: { ...mockAgentTemplate, description: "Answers the support queue." },
+    });
+
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await page.getByRole("button", { name: "About", exact: true }).click();
+
+    const overview = page.getByTestId("agent-about-overview");
+    // Precondition: the blueprint has resolved from its key to its display
+    // name, so whatever the Overview reads has been requested and answered.
+    const blueprint = overview.locator("dt", { hasText: "Blueprint" }).locator("xpath=..");
+    await expect(blueprint).toContainText("Maya");
+    expect(configurationReads).toEqual([]);
+    await expect(overview).toContainText("Answers the support queue.");
+  });
+
+  test("offers to view rather than manage when the viewer cannot edit", async ({
+    page,
+  }) => {
+    await dataSupportPage.agents.interceptGetAgentRequest({
+      body: { ...mockAgent, allowed_actions: ["agent.read", "activity.read", "cost.read"] },
+    });
+
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await page.getByRole("button", { name: "About", exact: true }).click();
+
+    await expect(
+      page.getByTestId("agent-about-skills").getByRole("link", { name: "View skills" }),
+    ).toBeVisible();
+    await expect(
+      page.getByTestId("agent-about-messaging").getByRole("link", { name: "View", exact: true }),
+    ).toBeVisible();
+    await expect(
+      page.getByTestId("agent-about-integrations").getByRole("link", { name: "View", exact: true }),
+    ).toBeVisible();
+  });
+
+  test("gates integrations on secret management, not on general edit access", async ({
+    page,
+  }) => {
+    await dataSupportPage.agents.interceptGetAgentRequest({
+      body: {
+        ...mockAgent,
+        allowed_actions: mockAgentAllowedActions.filter((action) => action !== "agent.secret.manage"),
+      },
+    });
+
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await page.getByRole("button", { name: "About", exact: true }).click();
+
+    await expect(
+      page.getByTestId("agent-about-skills").getByRole("link", { name: "Manage skills" }),
+    ).toBeVisible();
+    await expect(
+      page.getByTestId("agent-about-messaging").getByRole("link", { name: "Manage", exact: true }),
+    ).toBeVisible();
+    await expect(
+      page.getByTestId("agent-about-integrations").getByRole("link", { name: "View", exact: true }),
+    ).toBeVisible();
+  });
+
+  test("names platforms the way the server does", async ({ page }) => {
+    await dataSupportPage.agents.interceptGetAgentRequest({
+      body: { ...mockAgent, configured_platform_keys: ["teams", "web"] },
+    });
+    await page.route("**/api/v1/organizations/*/communication-platforms", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify([
+          { ...mockCommunicationPlatforms[0], key: "teams", display_name: "Microsoft Teams" },
+          { ...mockCommunicationPlatforms[0], key: "web", display_name: "Web Chat" },
+        ]),
+      });
+    });
+    await page.route(
+      `**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}/connections`,
+      async (route) => {
+        await route.fulfill({
+          status: 500,
+          contentType: "application/json",
+          body: JSON.stringify({ detail: "Connections unavailable" }),
+        });
+      },
+    );
+
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await page.getByRole("button", { name: "About", exact: true }).click();
+
+    const messaging = page.getByTestId("agent-about-messaging");
+    await expect(messaging).toContainText("Microsoft Teams");
+    await expect(messaging).toContainText("Web Chat");
   });
 });

@@ -14,6 +14,7 @@ from api.domains.agents.models import (
     JiraContent,
     PipedriveContent,
     SecretProvider,
+    SharePointContent,
     SlackContent,
     ZohoMailContent,
     decrypt_content,
@@ -78,6 +79,54 @@ def test_zoho_mail_content_validates_oauth_fields():
     assert content.email == "u@z.com"
     assert content.account_id == "56218000000008002"
     assert content.client_id == "1000.CLIENTID"
+
+
+_SHAREPOINT = {
+    "connection_id": "0199c2a4-7b1e-7c3d-9f00-1234567890ab",
+    "tenant_id": "b6f28f4f-97fe-41e6-903a-ff6cc7633ae3",
+    "client_id": "5ff671c1-57c7-44ef-a7b5-8fe4f81227f9",
+    "email": "alice@contoso.com",
+    "scopes": ["Sites.ReadWrite.All"],
+    "refresh_token": "rt-from-sign-in",
+    "sign_in_id": "0199c2a4-7b1e-7c3d-9f00-000000000001",
+}
+
+
+def test_sharepoint_content_round_trips():
+    content = validate_content(SecretProvider.SHAREPOINT, _SHAREPOINT)
+    assert isinstance(content, SharePointContent)
+    assert content.connection_id == "0199c2a4-7b1e-7c3d-9f00-1234567890ab"
+    assert content.client_id == "5ff671c1-57c7-44ef-a7b5-8fe4f81227f9"
+    assert content.refresh_token == "rt-from-sign-in"
+    assert content.read_only is False
+
+
+def test_sharepoint_content_survives_encryption():
+    # encrypt_content JSON-serialises model_dump(), so every field must be JSON-native.
+    original = validate_content(SecretProvider.SHAREPOINT, _SHAREPOINT)
+    blob = encrypt_content(original, _KEY)
+    assert decrypt_content(SecretProvider.SHAREPOINT, blob, _KEY) == original
+
+
+def test_sharepoint_content_never_holds_the_teams_app_secret():
+    # The sign-in is a public client (PKCE); the Teams app's secret has no business here,
+    # where it would reach the agent's pod and let it act as its bot.
+    for field in ("client_secret", "app_password", "access_token"):
+        with pytest.raises(ValidationError):
+            validate_content(SecretProvider.SHAREPOINT, {**_SHAREPOINT, field: "x"})
+
+
+@pytest.mark.parametrize("field", ["connection_id", "sign_in_id"])
+def test_sharepoint_content_requires_valid_uuids(field):
+    with pytest.raises(ValidationError):
+        validate_content(SecretProvider.SHAREPOINT, {**_SHAREPOINT, field: "not-a-uuid"})
+
+
+@pytest.mark.parametrize("field", ["connection_id", "tenant_id", "client_id", "email", "refresh_token", "sign_in_id"])
+def test_sharepoint_content_requires_its_fields(field):
+    payload = {k: v for k, v in _SHAREPOINT.items() if k != field}
+    with pytest.raises(ValidationError):
+        validate_content(SecretProvider.SHAREPOINT, payload)
 
 
 def test_display_names_cover_every_provider():

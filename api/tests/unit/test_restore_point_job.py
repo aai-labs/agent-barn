@@ -38,6 +38,7 @@ _HERMES_START = _AGENTS_DIR / "scripts" / "hermes" / "start.sh"
 _OPENCLAW_START = _AGENTS_DIR / "scripts" / "openclaw" / "start.sh"
 _OPENCLAW_INIT = _AGENTS_DIR / "scripts" / "openclaw" / "init-openclaw.js"
 _AAI_CLI_ARTIFACTS = _AGENTS_DIR / "aai_cli_artifacts.py"
+_AGENT_SERVICE = _AGENTS_DIR / "service.py"
 
 _HERMES_WORKSPACE_COPY_LOOP = re.compile(r"^for f in (?P<files>[^;]+); do$", re.MULTILINE)
 
@@ -53,6 +54,7 @@ _EXCLUSION_EVIDENCE = {
         "workspace/skills": (_HERMES_START, "rm -rf /workspace/skills"),
     },
     _OPENCLAW: {
+        "aai-cli": (_AGENT_SERVICE, '"/home/node/.openclaw/aai-cli"'),
         "local-plugins": (_OPENCLAW_START, "/home/node/.openclaw/local-plugins/"),
         "agentbarn-messages.sqlite3": (_OPENCLAW_START, "/home/node/.openclaw/agentbarn-messages.sqlite3"),
         "openclaw.json": (_OPENCLAW_INIT, "'openclaw.json'"),
@@ -84,6 +86,9 @@ def _hermes_volume(root: Path) -> None:
 
 
 def _openclaw_volume(root: Path) -> None:
+    _write(root, "aai-cli/aai-secrets.enc.json", "SECRET")
+    _write(root, "aai-cli/key", "KEY")
+    _write(root, "aai-cli/microsoft.sharepoint_refresh_token.sign-in")
     _write(root, "local-plugins/telemetry-push/index.js")
     _write(root, "npm/projects/openclaw-plugin/package.json")
     _write(root, "openclaw.json")
@@ -114,6 +119,20 @@ def test_hermes_capture_excludes_the_aai_cli_credential_store(tmp_path):
 
     names = _members(dest)
     assert_that([n for n in names if n.startswith(".config/aai-cli")], empty())
+
+
+def test_openclaw_capture_excludes_the_aai_cli_credential_store(tmp_path):
+    # OpenClaw keeps its aai-cli store on the volume (Hermes keeps its own under .config),
+    # so an archive would otherwise hold every integration token and the key to read them.
+    source, dest = tmp_path / "src", tmp_path / "dst"
+    source.mkdir()
+    dest.mkdir()
+    _openclaw_volume(source)
+
+    capture(source, dest, _OPENCLAW)
+
+    names = _members(dest)
+    assert_that([n for n in names if n.startswith("aai-cli")], empty())
 
 
 def test_hermes_capture_excludes_state_the_start_script_regenerates(tmp_path):
@@ -264,6 +283,7 @@ def test_openclaw_capture_excludes_regenerated_state_and_the_message_spool(tmp_p
 
     names = _members(dest)
     for excluded in (
+        "aai-cli/aai-secrets.enc.json",
         "local-plugins/telemetry-push/index.js",
         "openclaw.json",
         "workspace/skills/jira/SKILL.md",
@@ -272,32 +292,33 @@ def test_openclaw_capture_excludes_regenerated_state_and_the_message_spool(tmp_p
         assert_that(names, is_not(has_item(excluded)))
 
 
-def test_openclaw_capture_excludes_symlinks_that_cannot_be_safely_restored(tmp_path):
-    source, dest = tmp_path / "src", tmp_path / "dst"
-    source.mkdir()
-    dest.mkdir()
-    _openclaw_volume(source)
-    (source / "workspace" / "runtime-link").symlink_to("/usr/local/lib/node_modules/openclaw")
+@pytest.mark.parametrize("runtime", [_HERMES, _OPENCLAW])
+def test_restore_keeps_only_symlinks_that_resolve_inside_the_volume(tmp_path, runtime):
+    source, backup, archive = tmp_path / "src", tmp_path / "bak", tmp_path / "arc"
+    for path in (source, backup, archive):
+        path.mkdir()
+    if runtime == _HERMES:
+        _hermes_volume(source)
+    else:
+        _openclaw_volume(source)
 
-    capture(source, dest, _OPENCLAW)
+    workspace = source / "workspace"
+    (workspace / "notes-link.md").symlink_to("notes.md")
+    (workspace / "external-link.md").symlink_to("/usr/local/lib/node_modules/openclaw")
 
-    with tarfile.open(dest / ARCHIVE_NAME, "r:gz") as tar:
-        assert_that([member.name for member in tar.getmembers()], is_not(has_item("workspace/runtime-link")))
-    validate_archive(dest / ARCHIVE_NAME, source)
+    capture(source, archive, runtime)
+    with tarfile.open(archive / ARCHIVE_NAME, "r:gz") as tar:
+        names = [member.name for member in tar.getmembers()]
+    assert_that(names, has_item("workspace/notes-link.md"))
+    assert_that(names, is_not(has_item("workspace/external-link.md")))
+    validate_archive(archive / ARCHIVE_NAME, source)
 
+    restore(source, backup, archive, runtime)
 
-def test_hermes_capture_keeps_relative_symlinks_inside_the_volume(tmp_path):
-    source, dest = tmp_path / "src", tmp_path / "dst"
-    source.mkdir()
-    dest.mkdir()
-    _hermes_volume(source)
-    (source / "workspace" / "notes-link.md").symlink_to("notes.md")
-
-    capture(source, dest, _HERMES)
-
-    with tarfile.open(dest / ARCHIVE_NAME, "r:gz") as tar:
-        assert_that([member.name for member in tar.getmembers()], has_item("workspace/notes-link.md"))
-    validate_archive(dest / ARCHIVE_NAME, source)
+    notes_link = workspace / "notes-link.md"
+    assert_that(notes_link.is_symlink(), equal_to(True))
+    assert_that(notes_link.resolve().read_text(), equal_to("agent work"))
+    assert_that((workspace / "external-link.md").exists(), equal_to(False))
 
 
 def test_capture_writes_a_manifest_with_byte_size_and_file_count(tmp_path):

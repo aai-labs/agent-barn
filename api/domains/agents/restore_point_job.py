@@ -49,6 +49,9 @@ HERMES_EXCLUDED = (
 )
 
 OPENCLAW_EXCLUDED = (
+    # aai-cli's encrypted secret store and its key live here (Hermes keeps them under
+    # .config/aai-cli); the boot script rewrites both from the agent's credentials.
+    "aai-cli",
     "local-plugins",
     "openclaw.json",
     "agentbarn-messages.sqlite3",
