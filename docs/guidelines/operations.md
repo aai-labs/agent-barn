@@ -55,9 +55,15 @@ migration job all refuse to start without them:
 | `ORGANIZATION_DEFAULT_LLM_BUDGET_USD` | The ceiling a new Organization starts with. The migration that introduced it also gave it to every existing Organization that had none. |
 | `AGENT_DEFAULT_LLM_BUDGET_USD` | The limit an Agent is held to until its Organization sets a default or the Agent its own. Must not exceed the Organization default. |
 
-Deploys read both from GitHub Variables of the same names, through `helmfile.yaml.gotmpl`
-into the chart's `organizationLlmBudgets.defaultOrganizationUsd` / `defaultAgentUsd`,
-which render into the shared API Secret; the chart refuses to render without them.
+Deploys read them from repository variables, following the usual prefixes:
+production uses the names above, staging `STAGING_ORGANIZATION_DEFAULT_LLM_BUDGET_USD` /
+`STAGING_AGENT_DEFAULT_LLM_BUDGET_USD` (falling back to the production ones when unset),
+and the public deployment `PUBLIC_ORGANIZATION_DEFAULT_LLM_BUDGET_USD` /
+`PUBLIC_AGENT_DEFAULT_LLM_BUDGET_USD`. They reach the chart's
+`organizationLlmBudgets.defaultOrganizationUsd` / `defaultAgentUsd` through
+`helmfile.yaml.gotmpl` and render into the shared API Secret; the chart refuses to
+render without them, so a deploy with either variable unset fails before anything
+changes.
 Local runs read them from `.env`, and the API test suite sets its own in
 `api/tests/conftest.py`.
 
