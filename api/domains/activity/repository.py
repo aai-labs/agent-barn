@@ -13,7 +13,7 @@ from api.domains.activity.models import (
     ActivityFilter,
     ActivityTrigger,
 )
-from api.domains.conversations.models import AgentChatMessage, ConversationType, MessageDirection
+from api.domains.conversations.models import AgentChatMessage, MessageDirection
 from api.domains.costs.models import CostRecord
 from api.domains.platform_admin.models import StatsWindow
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
@@ -136,10 +136,6 @@ class ActivityRepository:
             .where(
                 col(AgentChatMessage.agent_id) == agent_id,
                 col(AgentChatMessage.direction) == MessageDirection.INBOUND,
-                # An EVENT row is a machine event (a webhook trigger) sharing the
-                # inbox, not a person talking. Counting it would label automated
-                # work as asked-for and understate what ran on its own.
-                col(AgentChatMessage.conversation_type) != ConversationType.EVENT,
                 col(AgentChatMessage.occurred_at) >= grouped.c.started_at - _USER_LEAD,
                 col(AgentChatMessage.occurred_at) <= grouped.c.ended_at,
             )
