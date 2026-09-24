@@ -89,15 +89,15 @@ export function useAgentMemory(
   };
 }
 
-export function useAgentMemorySearch(agentId: string | undefined, query: string) {
+export function useAgentMemorySearch(agentId: string | undefined, query: string, scope: MemoryScope = "pool") {
   const orgApiBase = useOrganizationApiBase();
   const trimmed = query.trim();
 
   return useQuery({
-    queryKey: [...agentsKey.detail(agentId ?? ""), "memory-search", trimmed],
+    queryKey: [...agentsKey.detail(agentId ?? ""), "memory-search", scope, trimmed],
     queryFn: async () => {
       const response = await api.get<AgentMemoryItem[]>(
-        `${orgApiBase}/agents/${agentId}/memory/search?q=${encodeURIComponent(trimmed)}&limit=20`,
+        `${orgApiBase}/agents/${agentId}/memory/search?q=${encodeURIComponent(trimmed)}&limit=20&scope=${scope}`,
         { schema: z.array(AgentMemoryItemSchema) },
       );
       return response.data;

@@ -132,6 +132,10 @@ export type MemoryViewProps = {
   onScopeChange?: (scope: MemoryScope) => void;
   /** Enables the per-item "Share to group" action. */
   share?: ShareConfig;
+  /** Whether to fetch group names for the "Shared from <group>" badge. False for a
+   *  non-manager (the groups endpoint is manager-only), so the badge falls back to
+   *  "another group" instead of 403ing. Defaults true. */
+  canManageGroups?: boolean;
 
   errorText: string;
   emptyTitle: string;
@@ -165,6 +169,7 @@ export function MemoryView(props: MemoryViewProps) {
     scope,
     onScopeChange,
     share,
+    canManageGroups,
     errorText,
     emptyTitle,
     emptyBody,
@@ -175,7 +180,7 @@ export function MemoryView(props: MemoryViewProps) {
   const [draft, setDraft] = useState("");
 
   // Names for the "Shared from <group>" badge: reads carry only the id.
-  const { groups } = useMemoryGroups();
+  const { groups } = useMemoryGroups({ enabled: canManageGroups ?? true });
   const groupNameById = useMemo(() => new Map(groups.map((g) => [g.id, g.name])), [groups]);
 
   const rows = useMemo(() => collapse(items), [items]);

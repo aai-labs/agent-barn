@@ -26,16 +26,20 @@ export function AgentMemoryPage({
 }) {
   const [page, setPage] = useState(1);
   const [peer, setPeer] = useState<string | null>(null);
-  const [scope, setScope] = useState<MemoryScope>("pool");
+  const [managerScope, setManagerScope] = useState<MemoryScope>("pool");
   const [search, setSearch] = useState("");
-
-  const { memory, isLoading, error, forget, correct } = useAgentMemory(agentId, page, PAGE_SIZE, peer, scope);
-  const facets = useAgentMemoryFacets(agentId, scope);
-  const searchQuery = useAgentMemorySearch(agentId, search);
-  const isSearching = search.trim().length > 2;
 
   const { canManage } = useActiveOrgRole();
   const { shareItem } = useMemoryGroupMutations();
+
+  // The whole pool is manager-only; a plain viewer sees just this agent's own
+  // contributions and gets no scope toggle.
+  const scope: MemoryScope = canManage ? managerScope : "mine";
+
+  const { memory, isLoading, error, forget, correct } = useAgentMemory(agentId, page, PAGE_SIZE, peer, scope);
+  const facets = useAgentMemoryFacets(agentId, scope);
+  const searchQuery = useAgentMemorySearch(agentId, search, scope);
+  const isSearching = search.trim().length > 2;
 
   return (
     <MemoryView
@@ -61,14 +65,19 @@ export function AgentMemoryPage({
       correct={(memoryId, content) => correct.mutateAsync({ memoryId, content })}
       isForgetting={forget.isPending}
       isCorrecting={correct.isPending}
-      scope={scope}
-      onScopeChange={(next) => {
-        setScope(next);
-        // Switching scope changes which facets exist, so reset the peer + page.
-        setPeer(null);
-        setPage(1);
-      }}
+      scope={canManage ? scope : undefined}
+      onScopeChange={
+        canManage
+          ? (next) => {
+              setManagerScope(next);
+              // Switching scope changes which facets exist, so reset the peer + page.
+              setPeer(null);
+              setPage(1);
+            }
+          : undefined
+      }
       share={canManage && sourceGroupId ? { sourceGroupId, shareItem } : undefined}
+      canManageGroups={canManage}
       errorText="Could not load this agent's memory. Try again in a moment."
       emptyTitle="Nothing learned yet"
       emptyBody={`Memories appear here after ${agentName} has held a conversation. You can then correct, forget, or share any of them.`}
