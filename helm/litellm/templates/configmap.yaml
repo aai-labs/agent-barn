@@ -25,6 +25,3 @@ data:
     litellm_settings:
       # Expose /metrics in Prometheus format (scraped by the monitoring stack).
       callbacks: ["prometheus"]
-      # Prometheus scrapes /metrics without credentials; LiteLLM requires the
-      # master key there by default, which fails every scrape with a 401.
-      require_auth_for_metrics_endpoint: false

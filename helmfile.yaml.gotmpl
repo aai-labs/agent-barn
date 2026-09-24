@@ -263,6 +263,8 @@ releases:
         value: {{ printf "%s-user" (env "NAMESPACE" | default "agent-farm") | quote }}
       - name: prometheus.kube-state-metrics.serviceAccount.name
         value: {{ printf "%s-user" (env "NAMESPACE" | default "agent-farm") | quote }}
+      - name: litellmMetricsKey.serviceAccountName
+        value: {{ printf "%s-user" (env "NAMESPACE" | default "agent-farm") | quote }}
       # Stamped on every alert so a shared Slack channel can tell staging
       # and production incidents apart.
       - name: prometheus.server.global.external_labels.environment
