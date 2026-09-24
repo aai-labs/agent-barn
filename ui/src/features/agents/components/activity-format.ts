@@ -6,8 +6,9 @@ export const TRIGGER_LABEL: Record<ActivityTrigger, string> = {
 };
 
 export const TRIGGER_HINT: Record<ActivityTrigger, string> = {
-  user: "A message arrived just before this work started.",
-  background: "No nearby inbound message was recorded. Heartbeats, crons, follow-ups, and missing telemetry cannot be distinguished.",
+  user: "A message from a person arrived just before this work started.",
+  background:
+    "No message from a person was recorded nearby. Heartbeats, crons, webhook events, follow-ups, and missing telemetry cannot be distinguished.",
 };
 
 /** How often the agent wakes, as a sentence fragment. */

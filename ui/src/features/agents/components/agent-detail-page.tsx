@@ -44,7 +44,6 @@ const VALID_TABS: Tab[] = [
 export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
   const { agent, isLoading, error, refetch } = useAgent(agentId);
   const canReadActivity = canAgent(agent, "activity.read");
-  const canReadCost = canAgent(agent, "cost.read");
   const { health } = useAgentHealth(
     agentId,
     canReadActivity &&
@@ -76,9 +75,10 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
           ["logs", "Logs"],
         ] as [Tab, string][])
       : []),
-    // Activity reports what the Agent spent, so it follows cost.read rather than
-    // the activity.read group the tabs above belong to.
-    ...(canReadCost ? ([["activity", "Activity"]] as [Tab, string][]) : []),
+    // Every part of Activity needs activity.read: the runtime diagnostics on
+    // their own, the usage sections together with cost.read. The tab itself
+    // decides what to show a reader who has only the first.
+    ...(canReadActivity ? ([["activity", "Activity"]] as [Tab, string][]) : []),
     ["about", "About"],
   ];
   const resolvedTab = tabs.some(([key]) => key === tab) ? tab : tabs[0][0];

@@ -165,7 +165,7 @@ test.describe("Agent Detail Page — Activity tab", () => {
 
     await page
       .getByTestId("agent-activity-by-period")
-      .getByRole("button", { name: "20", exact: true })
+      .getByRole("button", { name: /^Show the 20 calls from .*Sep 12/ })
       .click();
 
     await expect(page.getByTestId("agent-activity-calls")).toContainText("Narrowed to");
@@ -186,7 +186,7 @@ test.describe("Agent Detail Page — Activity tab", () => {
 
     await page
       .getByTestId("agent-activity-wakes")
-      .getByRole("button", { name: "4", exact: true })
+      .getByRole("button", { name: /^Show the 4 calls in the wake at / })
       .click();
 
     await expect
@@ -194,6 +194,36 @@ test.describe("Agent Detail Page — Activity tab", () => {
       .toBe("2026-09-12T11:29:00.000Z");
     // The window is half-open, so the burst's last call needs room inside it.
     expect(requested.at(-1)?.get("to_date")).toBe("2026-09-12T11:29:43.000Z");
+  });
+
+  test("cuts a partial first or last period to the summary's window", async ({ page }) => {
+    // The default window runs from a moment 30 days ago to now, so it usually
+    // starts and ends partway through a bucket.
+    await dataSupportPage.agents.interceptGetAgentActivityRequest({
+      body: {
+        ...mockAgentActivitySummary,
+        from_date: "2026-09-10T06:00:00Z",
+        to_date: "2026-09-12T18:00:00Z",
+      },
+    });
+    const requested: URLSearchParams[] = [];
+    await dataSupportPage.agents.interceptGetAgentActivityCallsRequest({
+      onRequest: (url) => requested.push(url.searchParams),
+    });
+    await openActivity(page);
+    const byPeriod = page.getByTestId("agent-activity-by-period");
+
+    await byPeriod.getByRole("button", { name: /^Show the 12 calls from .*Sep 10/ }).click();
+    await expect
+      .poll(() => requested.at(-1)?.get("from_date"))
+      .toBe("2026-09-10T06:00:00.000Z");
+    expect(requested.at(-1)?.get("to_date")).toBe("2026-09-11T00:00:00.000Z");
+
+    await byPeriod.getByRole("button", { name: /^Show the 20 calls from .*Sep 12/ }).click();
+    await expect
+      .poll(() => requested.at(-1)?.get("from_date"))
+      .toBe("2026-09-12T00:00:00.000Z");
+    expect(requested.at(-1)?.get("to_date")).toBe("2026-09-12T18:00:00.000Z");
   });
 
   test("can narrow to the work nobody asked for", async ({ page }) => {
@@ -256,16 +286,64 @@ test.describe("Agent Detail Page — Activity tab", () => {
     ).toBeVisible();
   });
 
-  test("hides the tab from a reader who cannot see spend", async ({ page }) => {
+  test("gives a reader who cannot see spend the runtime evidence alone", async ({ page }) => {
     await dataSupportPage.agents.interceptGetAgentRequest({
       body: {
         ...mockAgent,
         allowed_actions: mockAgentAllowedActions.filter((action) => action !== "cost.read"),
       },
     });
+    const usageReads: string[] = [];
+    page.on("request", (request) => {
+      if (/\/agents\/[^/]+\/activity(\/|\?|$)/.test(new URL(request.url()).pathname)) {
+        usageReads.push(request.url());
+      }
+    });
+    await openActivity(page);
+
+    await expect(agentDetailPage.runtimeDiagnostics()).toContainText("CrashLoopBackOff");
+    await expect(page.getByTestId("agent-activity-usage-restricted")).toBeVisible();
+    await expect(page.getByTestId("agent-activity-summary")).toBeHidden();
+    // No usage read is made, so there is nothing to 403.
+    expect(usageReads).toEqual([]);
+  });
+
+  test("hides the tab from a reader without activity access", async ({ page }) => {
+    await dataSupportPage.agents.interceptGetAgentRequest({
+      body: {
+        ...mockAgent,
+        allowed_actions: mockAgentAllowedActions.filter((action) => action !== "activity.read"),
+      },
+    });
     await agentDetailPage.goto(MOCK_AGENT_ID);
 
-    await expect(page.getByRole("button", { name: "Logs", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "About", exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "Activity", exact: true })).toBeHidden();
+  });
+
+  test("offers a retry when wakes fail to load", async ({ page }) => {
+    await dataSupportPage.agents.interceptGetAgentWakesRequest({ status: 503 });
+    await openActivity(page);
+    const wakes = page.getByTestId("agent-activity-wakes");
+    await expect(wakes).toContainText("We couldn't load this agent's wakes");
+
+    await dataSupportPage.agents.interceptGetAgentWakesRequest();
+    await wakes.getByRole("button", { name: "Retry wakes" }).click();
+
+    await expect(
+      wakes.getByRole("button", { name: /^Show the 4 calls in the wake at / }),
+    ).toBeVisible();
+  });
+
+  test("offers a retry when calls fail to load", async ({ page }) => {
+    await dataSupportPage.agents.interceptGetAgentActivityCallsRequest({ status: 503 });
+    await openActivity(page);
+    const calls = page.getByTestId("agent-activity-calls");
+    await expect(calls).toContainText("We couldn't load this agent's calls");
+
+    await dataSupportPage.agents.interceptGetAgentActivityCallsRequest();
+    await calls.getByRole("button", { name: "Retry calls" }).click();
+
+    await expect(calls.getByRole("table")).toBeVisible();
   });
 });

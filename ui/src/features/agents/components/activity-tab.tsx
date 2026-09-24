@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { AlertTriangle } from "lucide-react";
 
+import { AppErrorState } from "@/components/app-error-state";
 import { DateRangePicker } from "@/components/date-range-picker";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatSpend, formatTokens } from "@/features/costs/format";
@@ -28,6 +29,7 @@ import type {
   AgentActivitySummary,
   AgentWake,
 } from "../schemas";
+import { canAgent } from "../utils";
 import { TRIGGER_LABEL, formatCadence, formatClock } from "./activity-format";
 import { ByPeriodTable, CallsTable, TableSkeleton, WakesTable } from "./activity-tables";
 import { Pagination } from "./pagination";
@@ -55,6 +57,32 @@ const CALLS_ANCHOR = "agent-activity-calls";
 const MOSTLY_BACKGROUND = 0.8;
 
 export function ActivityTab({ agent }: { agent: Agent }) {
+  // The tab is gated on activity.read, which the runtime diagnostics need on
+  // their own. The usage sections also need cost.read, so a reader without it
+  // still gets the runtime evidence instead of a page of 403s.
+  if (!canAgent(agent, "cost.read")) return <RuntimeOnly agent={agent} />;
+  return <ActivityUsage agent={agent} />;
+}
+
+function RuntimeOnly({ agent }: { agent: Agent }) {
+  const params = useParams();
+  const orgId = typeof params?.orgId === "string" ? params.orgId : null;
+
+  return (
+    <div className="flex flex-col gap-4">
+      <div
+        className="af-card p-4 text-[13px]"
+        style={{ color: "var(--ink-4)" }}
+        data-testid="agent-activity-usage-restricted"
+      >
+        Usage and spend for this agent need cost access, which you don&apos;t have.
+      </div>
+      <RuntimeDiagnostics agent={agent} orgId={orgId} lastCallAt={null} usageAvailable={false} />
+    </div>
+  );
+}
+
+function ActivityUsage({ agent }: { agent: Agent }) {
   const [filters, setFilters] = useCostUrlFilters(ACTIVITY_FILTER_DEFAULTS);
   const [wakesPage, setWakesPage] = useState(1);
   const [callsPage, setCallsPage] = useState(1);
@@ -76,16 +104,23 @@ export function ActivityTab({ agent }: { agent: Agent }) {
   const calls = useAgentActivityCalls(agent.id, focus, trigger, callsPage);
 
   function selectPeriod(bucket: ActivityBucket, granularity: Granularity) {
-    const start = new Date(bucket.bucket);
-    setFocus(start.toISOString(), new Date(start.getTime() + BUCKET_MS[granularity]).toISOString());
+    const start = new Date(bucket.bucket).getTime();
+    focusWithin(start, start + BUCKET_MS[granularity]);
   }
 
   function selectWake(wake: AgentWake) {
     // The window is half-open, so the last call needs a moment of room.
-    setFocus(
-      new Date(wake.startedAt).toISOString(),
-      new Date(new Date(wake.endedAt).getTime() + 1000).toISOString(),
-    );
+    focusWithin(new Date(wake.startedAt).getTime(), new Date(wake.endedAt).getTime() + 1000);
+  }
+
+  // A drill-down narrows, never widens. The summary covers [fromDate, toDate),
+  // and the first and last buckets usually start before or end after it: their
+  // counts above only include what falls inside, so the slice is cut to match.
+  function focusWithin(start: number, end: number) {
+    const summaryWindow = summary.data;
+    const from = summaryWindow ? Math.max(start, Date.parse(summaryWindow.fromDate)) : start;
+    const to = summaryWindow ? Math.min(end, Date.parse(summaryWindow.toDate)) : end;
+    setFocus(new Date(from).toISOString(), new Date(to).toISOString());
   }
 
   function setFocus(from: string, to: string) {
@@ -231,9 +266,13 @@ export function ActivityTab({ agent }: { agent: Agent }) {
             </div>
           </>
         ) : (
-          <p className="m-0 text-[12.5px]" style={{ color: "var(--ink-4)" }}>
-            We couldn&apos;t load this agent&apos;s wakes.
-          </p>
+          <AppErrorState
+            error={wakes.error}
+            title="We couldn't load this agent's wakes"
+            onRetry={() => void wakes.refetch()}
+            retryLabel="Retry wakes"
+            className="min-h-0 p-0"
+          />
         )}
       </Section>
 
@@ -259,9 +298,13 @@ export function ActivityTab({ agent }: { agent: Agent }) {
               </div>
             </>
           ) : (
-            <p className="m-0 text-[12.5px]" style={{ color: "var(--ink-4)" }}>
-              We couldn&apos;t load this agent&apos;s calls.
-            </p>
+            <AppErrorState
+              error={calls.error}
+              title="We couldn't load this agent's calls"
+              onRetry={() => void calls.refetch()}
+              retryLabel="Retry calls"
+              className="min-h-0 p-0"
+            />
           )}
         </Section>
       </div>

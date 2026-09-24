@@ -16,14 +16,14 @@ Three reads nest, all driven by the same window, so drilling in is only ever a n
 
 - Every usage figure comes from `cost_record`. Activity owns no table and writes nothing; runtime evidence is read separately through Agents.
 - A wake is a maximal run of one Agent's calls where no two consecutive calls are more than `WAKE_GAP_SECONDS` apart. The grouping is a Postgres window function over `occurred_at`, not application code, so the wake list, the per-trigger totals and the cadence all describe the same bursts.
-- A wake is `USER` when an inbound `agent_chat_message` for that Agent falls within `[started_at - USER_LEAD_SECONDS, ended_at]`, and `BACKGROUND` otherwise. Only direction and occurrence time are read; message content never is.
-- The trigger is inferred, not reported. The runtime does not tell us what started a turn, so `BACKGROUND` means "no inbound message was recorded for this Agent around then" — a cron, a heartbeat, or the Agent's own follow-up are indistinguishable from each other here.
+- A wake is `USER` when an inbound `agent_chat_message` for that Agent, other than an `EVENT` conversation, falls within `[started_at - USER_LEAD_SECONDS, ended_at]`, and `BACKGROUND` otherwise. `EVENT` rows are machine events such as webhook triggers that share the inbox; counting them would label automated work as asked-for. Only direction, conversation type and occurrence time are read; message content never is.
+- The trigger is inferred, not reported. The runtime does not tell us what started a turn, so `BACKGROUND` means "no inbound message from a person was recorded for this Agent around then" — a cron, a heartbeat, a webhook event, or the Agent's own follow-up are indistinguishable from each other here.
 - A call's trigger is its wake's trigger. The calls list filters through the same wake grouping rather than re-deriving a per-call answer, so the two views cannot disagree about which calls ran without a person.
 - The summary always reports both triggers, including at zero. An Agent whose user-triggered count is zero is the case the tab exists to surface, and a missing row would hide it.
 - `wake_cadence_seconds` is the median gap between consecutive wake starts, and is null below two wakes. The median is a signal, not proof of periodicity or a claim about which schedule.
 - Bucket timestamps are returned as UTC-aware instants. `date_trunc` over a naive timestamp yields a naive one, which a client would render in local time and slide off the boundary the server grouped on.
 - Quiet buckets are returned at zero rather than omitted, so a gap in activity reads as a gap.
-- Reads require **both** `cost.read` and `activity.read` through the effective Agent Access Role, because the response mixes billed-call figures with message-derived attribution. Every system Agent Access Role grants both, so the pair costs no reader access it would otherwise have.
+- Reads require **both** `cost.read` and `activity.read` through the effective Agent Access Role, because the response mixes billed-call figures with message-derived attribution. Every system Agent Access Role grants both, so the pair costs no reader access it would otherwise have. The UI shows the Activity tab to `activity.read` holders and renders its usage sections only when `cost.read` is also held; a reader with `activity.read` alone sees the runtime diagnostics.
 - Organization Owners and Admins hold implicit Agent Owner authority, so a permission this surface requires can only be withheld from someone whose authority comes from an Agent Access Role. Denial tests must be written that way.
 
 ## Boundaries
@@ -73,4 +73,6 @@ between cost, prompt size, termination, or workspace migration.
 Trigger labels describe nearby *recorded* messages. Missing telemetry can look
 like background work, and median wake spacing does not prove periodicity or name
 a cron/heartbeat. Prompt distributions suggest context repetition but do not
-identify its contents. Changing the date range clears the previous drill-down.
+identify its contents. Changing the date range clears the previous drill-down, and a
+drill-down is always cut to the summary window, so a partial first or last bucket
+never lists calls outside it.

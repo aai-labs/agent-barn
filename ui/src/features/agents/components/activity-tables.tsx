@@ -43,7 +43,11 @@ export function ByPeriodTable({
         <tr key={bucket.bucket} style={{ borderTop: "1px solid var(--line)" }}>
           <Td>{formatBucketLong(bucket.bucket, granularity)}</Td>
           <Td align="right">
-            <DrillButton onClick={() => onSelect(bucket)} label={`${bucket.calls}`} />
+            <DrillButton
+              onClick={() => onSelect(bucket)}
+              label={`${bucket.calls}`}
+              ariaLabel={`Show the ${callCount(bucket.calls)} from ${formatBucketLong(bucket.bucket, granularity)}`}
+            />
           </Td>
           <Td align="right" muted>
             {formatTokens(bucket.promptTokens)}
@@ -98,7 +102,11 @@ export function WakesTable({
               </span>
             </Td>
             <Td align="right">
-              <DrillButton onClick={() => onSelect(wake)} label={`${wake.calls}`} />
+              <DrillButton
+                onClick={() => onSelect(wake)}
+                label={`${wake.calls}`}
+                ariaLabel={`Show the ${callCount(wake.calls)} in the wake at ${formatClock(wake.startedAt)}`}
+              />
             </Td>
             <Td align="right" muted>
               {formatTokenRange(wake.minPromptTokens, wake.maxPromptTokens, formatTokens)}
@@ -211,11 +219,24 @@ function Td({
   );
 }
 
-/** The count is the way in: pressing it narrows everything below to that slice. */
-function DrillButton({ onClick, label }: { onClick: () => void; label: string }) {
+/**
+ * The count is the way in: pressing it narrows everything below to that slice.
+ * Counts repeat down a column, so the accessible name says which slice and what
+ * pressing it does, not just the number.
+ */
+function DrillButton({
+  onClick,
+  label,
+  ariaLabel,
+}: {
+  onClick: () => void;
+  label: string;
+  ariaLabel: string;
+}) {
   return (
     <button
       type="button"
+      aria-label={ariaLabel}
       onClick={onClick}
       className="rounded-md px-1.5 py-0.5 tabular-nums underline underline-offset-2 hover:bg-[var(--bg-soft)]"
       style={{ color: "var(--accent-ink)" }}
@@ -223,6 +244,10 @@ function DrillButton({ onClick, label }: { onClick: () => void; label: string })
       {label}
     </button>
   );
+}
+
+function callCount(calls: number): string {
+  return `${calls.toLocaleString("en-US")} ${calls === 1 ? "call" : "calls"}`;
 }
 
 function Empty({ children }: { children: ReactNode }) {

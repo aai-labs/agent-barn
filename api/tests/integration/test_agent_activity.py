@@ -7,7 +7,7 @@ from starlette.testclient import TestClient
 
 from api.domains.agents.repository import AgentRepository
 from api.domains.communications.models import CommunicationConnection
-from api.domains.conversations.models import AgentChatMessage, MessageDirection
+from api.domains.conversations.models import AgentChatMessage, ConversationType, MessageDirection
 from api.domains.conversations.repository import ConversationRepository
 from api.domains.rbac.catalog import AGENT_VIEWER_ROLE_ID, PERMISSION_ID_BY_KEY, PermissionKey
 from api.domains.rbac.models import AgentAccessRole, AgentAccessRolePermission
@@ -82,7 +82,12 @@ def _window() -> dict:
     }
 
 
-def _there_is_an_inbound_message(context, *, occurred_at: datetime) -> AgentChatMessage:
+def _there_is_an_inbound_message(
+    context,
+    *,
+    occurred_at: datetime,
+    conversation_type: ConversationType = ConversationType.CHANNEL,
+) -> AgentChatMessage:
     delegate: PostgresRepositoryDelegate = context.injector.get(PostgresRepositoryDelegate)
     if not hasattr(context, "communication_connection"):
         context.communication_connection = CommunicationConnection(
@@ -101,6 +106,7 @@ def _there_is_an_inbound_message(context, *, occurred_at: datetime) -> AgentChat
         session_key="agent:main:slack:channel:c1",
         channel_id="C1",
         direction=MessageDirection.INBOUND,
+        conversation_type=conversation_type,
         sender_id="U1",
         content="can you look at this?",
         occurred_at=occurred_at,
@@ -307,6 +313,23 @@ def test_a_message_long_before_a_burst_does_not_claim_it():
             by_trigger = {entry["trigger"]: entry for entry in response.json()["by_trigger"]}
             assert_that(by_trigger["user"]["calls"], equal_to(0))
             assert_that(by_trigger["background"]["calls"], equal_to(2))
+
+
+def test_a_machine_event_just_before_a_burst_does_not_claim_it():
+    with given([*_GIVEN, there_are_cost_records(count=3, occurred_at=_ANCHOR)]) as context:
+        # Inside the lead window, but a webhook trigger rather than a person.
+        _there_is_an_inbound_message(
+            context,
+            occurred_at=_ANCHOR - timedelta(seconds=30),
+            conversation_type=ConversationType.EVENT,
+        )
+        client: TestClient = context.client
+        with when("I read the activity summary"):
+            response = client.get(_url(context), params=_window(), headers=_auth(context))
+        with then("the burst is background work"):
+            by_trigger = {entry["trigger"]: entry for entry in response.json()["by_trigger"]}
+            assert_that(by_trigger["user"]["calls"], equal_to(0))
+            assert_that(by_trigger["background"]["calls"], equal_to(3))
 
 
 # --- wakes -----------------------------------------------------------------
