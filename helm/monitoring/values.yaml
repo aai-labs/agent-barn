@@ -13,6 +13,19 @@
 # Alertmanager (slack_api_url_file) so it never lands in a ConfigMap.
 slackWebhookUrl: ""
 
+# LiteLLM serves /metrics only to proxy admins (its metrics carry every
+# Organization's key aliases and spend, so it must stay authenticated).
+# A pre-install/pre-upgrade Job (templates/litellm-metrics-key-job.yaml)
+# provisions a read-only proxy_admin_viewer key into secretName, which the
+# Prometheus server mounts for the litellm scrape job.
+litellmMetricsKey:
+  image: python:3.12-alpine
+  # Holds LITELLM_MASTER_KEY; created by the litellm release.
+  litellmSecretName: litellm
+  secretName: litellm-metrics-key
+  # Tenant SA with namespaced Secret write (helmfile sets <ns>-user).
+  serviceAccountName: agent-farm-user
+
 prometheus:
   # No Role/RoleBinding/ClusterRole rendered anywhere (tenant SA can't create
   # them); see serviceAccounts below.
@@ -65,6 +78,16 @@ prometheus:
       limits:
         memory: 1Gi
 
+    # Read-only LiteLLM key for the litellm scrape job (see litellmMetricsKey).
+    # optional: a missing Secret fails the scrape (LiteLLMDown) instead of
+    # blocking the Prometheus pod from starting.
+    extraSecretMounts:
+      - name: litellm-metrics-key
+        mountPath: /etc/prometheus-secrets/litellm
+        secretName: litellm-metrics-key
+        readOnly: true
+        optional: true
+
   # The chart's default jobs (kubelet/cAdvisor/apiserver/annotation-based
   # discovery) need node- and cluster-level read we don't have on a shared
   # cluster; consequence: no container CPU/memory metrics, dashboards stick
@@ -115,6 +138,9 @@ prometheus:
               target_label: endpoint
 
         - job_name: litellm
+          authorization:
+            type: Bearer
+            credentials_file: /etc/prometheus-secrets/litellm/LITELLM_METRICS_KEY
           kubernetes_sd_configs:
             - role: endpoints
               namespaces:
@@ -267,6 +293,10 @@ prometheus:
             - alert: AgentTargetDown
               expr: up{job="agent"} == 0
               for: 2m
+              # A crash-looping agent's healthz answers for a few seconds on
+              # each restart; without this, every restart resolves the alert
+              # and the next backoff re-fires it.
+              keep_firing_for: 15m
               labels:
                 severity: critical
               annotations:
