@@ -1,8 +1,9 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 
 import { TEST_ORG_ID } from "../constants";
 import {
   MOCK_CUSTOM_SKILL_ID,
+  MOCK_JIRA_SKILL_ID,
   MOCK_SHAREPOINT_SKILL_ID,
   mockCustomSkill,
   mockSharePointSkill,
@@ -15,6 +16,7 @@ import {
   mockAgentConfiguration,
   mockAgentOverrideDraft,
   mockAgentOverrideVersion,
+  mockAgentTemplate,
 } from "../pages/data-support/agent-data-support.po";
 import { DataSupport } from "../pages/data-support/data-support.po";
 
@@ -623,6 +625,309 @@ test.describe("Agent configuration page", () => {
 
     expect(sentBody?.skill_versions).toEqual([{ skill_id: MOCK_CUSTOM_SKILL_ID, version: 2 }]);
     await expect(page.getByRole("combobox", { name: "Version for my-tool" })).toHaveText("Version v2");
+  });
+
+  const requiredSkill = ({
+    id,
+    name,
+    version,
+    groupKey = null,
+  }: {
+    id: string;
+    name: string;
+    version: number;
+    groupKey?: string | null;
+  }) => ({
+    id,
+    name,
+    source: "custom",
+    required_providers: [],
+    tools_pointer: null,
+    version,
+    group_key: groupKey,
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-01T00:00:00Z",
+  });
+
+  const agentSkill = ({ id, name, version }: { id: string; name: string; version: number }) => ({
+    id,
+    name,
+    source: "custom",
+    required_providers: [],
+    tools_pointer: null,
+    required: true,
+    version,
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-01T00:00:00Z",
+  });
+
+  const templateVersionsWith = (v1: unknown[], v2: unknown[]) => [
+    {
+      ...mockAgentTemplate,
+      id: "66666666-6666-4666-8666-666666666602",
+      version: 2,
+      required_skills: v2,
+    },
+    {
+      ...mockAgentTemplate,
+      id: "66666666-6666-4666-8666-666666666601",
+      version: 1,
+      required_skills: v1,
+    },
+  ];
+
+  async function setUpTemplateSelection(
+    page: Page,
+    { skills, versions }: { skills: unknown[]; versions: unknown[] },
+  ) {
+    const dataSupport = new DataSupport(page);
+    await dataSupport.auth.interceptRefreshRequest();
+    await dataSupport.users.interceptGetUserContextRequest();
+    await dataSupport.users.interceptGetOrganizationsRequest();
+    await dataSupport.agents.interceptGetAgentRequest({
+      body: { ...mockAgent, status: "STOPPED", skills },
+    });
+    await dataSupport.agents.interceptGetAgentConfigurationRequest();
+    await dataSupport.skills.interceptGetAgentSkillsRequest();
+    await dataSupport.agents.interceptGetTemplatesRequest({
+      body: { page: 1, page_size: 50, total: 1, items: [mockAgentTemplate] },
+    });
+    await dataSupport.agents.interceptGetTemplateVersionsRequest({ body: versions });
+    await page.route(
+      `**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}/configuration/select`,
+      async (route) => {
+        if (route.request().method() !== "POST") {
+          await route.fallback();
+          return;
+        }
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ ...mockAgent, status: "STOPPED", skills }),
+        });
+      },
+    );
+  }
+
+  test("carries the required skill pin when the selected template version bumps it", async ({
+    page,
+  }) => {
+    const configurationPage = new AgentConfigurationPage(page);
+    const skill = { id: MOCK_CUSTOM_SKILL_ID, name: "my-tool" };
+
+    await setUpTemplateSelection(page, {
+      skills: [agentSkill({ ...skill, version: 1 })],
+      versions: templateVersionsWith(
+        [requiredSkill({ ...skill, version: 1 })],
+        [requiredSkill({ ...skill, version: 2 })],
+      ),
+    });
+
+    await configurationPage.goto(MOCK_AGENT_ID, TEST_ORG_ID);
+    await configurationPage.sectionButton("Template selection").click();
+    await configurationPage.versionSelect().click();
+    await page.getByRole("option", { name: /v2/ }).click();
+    await configurationPage.applyButton().click();
+
+    const dialog = page.getByRole("dialog");
+    await expect(dialog).toContainText("also update the skills");
+    await expect(dialog).toContainText("my-tool");
+    await expect(dialog).toContainText("v1 → v2");
+
+    const selectRequest = page.waitForRequest(
+      (request) =>
+        request.url().includes("/configuration/select") && request.method() === "POST",
+    );
+    await configurationPage.applyConfirmationButton().click();
+    const body = (await selectRequest).postDataJSON() as Record<string, unknown>;
+
+    expect(body.template_version).toEqual(2);
+    expect(body.skill_versions).toEqual([{ skill_id: MOCK_CUSTOM_SKILL_ID, version: 2 }]);
+  });
+
+  test("leaves a satisfied requirement group untouched", async ({ page }) => {
+    const configurationPage = new AgentConfigurationPage(page);
+    const chosen = { id: MOCK_CUSTOM_SKILL_ID, name: "my-tool" };
+    const alternative = { id: MOCK_JIRA_SKILL_ID, name: "jira" };
+    const group = [
+      requiredSkill({ ...chosen, version: 1, groupKey: "vcs" }),
+      requiredSkill({ ...alternative, version: 1, groupKey: "vcs" }),
+    ];
+
+    await setUpTemplateSelection(page, {
+      skills: [
+        agentSkill({ ...chosen, version: 1 }),
+        agentSkill({ ...alternative, version: 2 }),
+      ],
+      versions: templateVersionsWith(group, group),
+    });
+
+    await configurationPage.goto(MOCK_AGENT_ID, TEST_ORG_ID);
+    await configurationPage.sectionButton("Template selection").click();
+    await configurationPage.versionSelect().click();
+    await page.getByRole("option", { name: /v2/ }).click();
+    await configurationPage.applyButton().click();
+
+    await expect(page.getByRole("dialog")).not.toContainText("also update the skills");
+
+    const selectRequest = page.waitForRequest(
+      (request) =>
+        request.url().includes("/configuration/select") && request.method() === "POST",
+    );
+    await configurationPage.applyConfirmationButton().click();
+    const body = (await selectRequest).postDataJSON() as Record<string, unknown>;
+
+    expect(body.skill_versions).toBeUndefined();
+  });
+
+  test("adds a newly required standalone skill in the same request", async ({ page }) => {
+    const configurationPage = new AgentConfigurationPage(page);
+    const held = { id: MOCK_CUSTOM_SKILL_ID, name: "my-tool" };
+    const added = { id: MOCK_JIRA_SKILL_ID, name: "jira" };
+
+    await setUpTemplateSelection(page, {
+      skills: [agentSkill({ ...held, version: 1 })],
+      versions: templateVersionsWith(
+        [requiredSkill({ ...held, version: 1 })],
+        [requiredSkill({ ...held, version: 1 }), requiredSkill({ ...added, version: 3 })],
+      ),
+    });
+
+    await configurationPage.goto(MOCK_AGENT_ID, TEST_ORG_ID);
+    await configurationPage.sectionButton("Template selection").click();
+    await configurationPage.versionSelect().click();
+    await page.getByRole("option", { name: /v2/ }).click();
+
+    await expect(page.getByText("Applying adds jira v3 to this Agent.")).toBeVisible();
+    await expect(configurationPage.applyButton()).toBeEnabled();
+    await configurationPage.applyButton().click();
+    await expect(page.getByRole("dialog")).toContainText("added at v3");
+
+    const selectRequest = page.waitForRequest(
+      (request) =>
+        request.url().includes("/configuration/select") && request.method() === "POST",
+    );
+    await configurationPage.applyConfirmationButton().click();
+    const body = (await selectRequest).postDataJSON() as Record<string, unknown>;
+
+    expect(body.skill_ids).toEqual([MOCK_JIRA_SKILL_ID]);
+    expect(body.skill_versions).toEqual([{ skill_id: MOCK_JIRA_SKILL_ID, version: 3 }]);
+  });
+
+  test("blocks Apply until a requirement group member is chosen", async ({ page }) => {
+    const configurationPage = new AgentConfigurationPage(page);
+    const first = { id: MOCK_CUSTOM_SKILL_ID, name: "my-tool" };
+    const second = { id: MOCK_JIRA_SKILL_ID, name: "jira" };
+    const group = [
+      requiredSkill({ ...first, version: 1, groupKey: "vcs" }),
+      requiredSkill({ ...second, version: 2, groupKey: "vcs" }),
+    ];
+
+    await setUpTemplateSelection(page, {
+      skills: [],
+      versions: templateVersionsWith([], group),
+    });
+
+    await configurationPage.goto(MOCK_AGENT_ID, TEST_ORG_ID);
+    await configurationPage.sectionButton("Template selection").click();
+    await configurationPage.versionSelect().click();
+    await page.getByRole("option", { name: /v2/ }).click();
+
+    await expect(configurationPage.applyButton()).toBeDisabled();
+    await page.getByRole("radio", { name: "jira v2" }).click();
+    await expect(configurationPage.applyButton()).toBeEnabled();
+
+    await configurationPage.applyButton().click();
+    const selectRequest = page.waitForRequest(
+      (request) =>
+        request.url().includes("/configuration/select") && request.method() === "POST",
+    );
+    await configurationPage.applyConfirmationButton().click();
+    const body = (await selectRequest).postDataJSON() as Record<string, unknown>;
+
+    expect(body.skill_ids).toEqual([MOCK_JIRA_SKILL_ID]);
+    expect(body.skill_versions).toEqual([{ skill_id: MOCK_JIRA_SKILL_ID, version: 2 }]);
+  });
+
+  test("blocks Apply when a required skill needs an unconfigured credential", async ({
+    page,
+  }) => {
+    const configurationPage = new AgentConfigurationPage(page);
+    const held = { id: MOCK_CUSTOM_SKILL_ID, name: "my-tool" };
+    const gated = {
+      ...requiredSkill({ id: MOCK_JIRA_SKILL_ID, name: "jira", version: 3 }),
+      required_providers: ["jira"],
+    };
+
+    await setUpTemplateSelection(page, {
+      skills: [agentSkill({ ...held, version: 1 })],
+      versions: templateVersionsWith(
+        [requiredSkill({ ...held, version: 1 })],
+        [requiredSkill({ ...held, version: 1 }), gated],
+      ),
+    });
+
+    await configurationPage.goto(MOCK_AGENT_ID, TEST_ORG_ID);
+    await configurationPage.sectionButton("Template selection").click();
+    await configurationPage.versionSelect().click();
+    await page.getByRole("option", { name: /v2/ }).click();
+
+    await expect(page.getByText("need credentials that are not configured")).toContainText(
+      "jira",
+    );
+    await expect(configurationPage.applyButton()).toBeDisabled();
+  });
+
+  test("blocks Apply when a version move needs an unconfigured credential", async ({
+    page,
+  }) => {
+    const configurationPage = new AgentConfigurationPage(page);
+    const bumped = { id: MOCK_CUSTOM_SKILL_ID, name: "my-tool" };
+
+    await setUpTemplateSelection(page, {
+      skills: [agentSkill({ ...bumped, version: 1 })],
+      versions: templateVersionsWith(
+        [requiredSkill({ ...bumped, version: 1 })],
+        [
+          {
+            ...requiredSkill({ ...bumped, version: 2 }),
+            required_providers: ["jira"],
+          },
+        ],
+      ),
+    });
+
+    await configurationPage.goto(MOCK_AGENT_ID, TEST_ORG_ID);
+    await configurationPage.sectionButton("Template selection").click();
+    await configurationPage.versionSelect().click();
+    await page.getByRole("option", { name: /v2/ }).click();
+
+    await expect(page.getByText("need credentials that are not configured")).toContainText(
+      "jira",
+    );
+    await expect(configurationPage.applyButton()).toBeDisabled();
+  });
+
+  test("keeps a template-required skill version locked in the Skills section", async ({
+    page,
+  }) => {
+    const configurationPage = new AgentConfigurationPage(page);
+    const skill = { id: MOCK_CUSTOM_SKILL_ID, name: "my-tool" };
+
+    await setUpTemplateSelection(page, {
+      skills: [agentSkill({ ...skill, version: 1 })],
+      versions: templateVersionsWith(
+        [requiredSkill({ ...skill, version: 1 })],
+        [requiredSkill({ ...skill, version: 2 })],
+      ),
+    });
+
+    await configurationPage.goto(MOCK_AGENT_ID, TEST_ORG_ID);
+    await configurationPage.sectionButton("Skills").click();
+
+    const versionSelect = page.getByRole("combobox", { name: "Version for my-tool" });
+    await expect(versionSelect).toBeDisabled();
+    await expect(versionSelect).toHaveAttribute("title", /Change it in the Template section/);
   });
 
   test.describe("SharePoint", () => {
