@@ -1,0 +1,23 @@
+# Mirrors what helmfile.yaml.gotmpl passes the monitoring release for web
+# auth (derived from MONITORING_WEB_PASSWORD), so web_auth_test.py checks the
+# chart against the same inputs a deploy renders with.
+webAuth:
+  password: s3cretPassw0rd
+prometheus:
+  server:
+    probeHeaders:
+      - name: Authorization
+        value: Basic bW9uaXRvcmluZzpzM2NyZXRQYXNzdzByZA==
+  configmapReload:
+    reloadUrl: http://monitoring:s3cretPassw0rd@127.0.0.1:9090/-/reload
+  alertmanager:
+    livenessProbe:
+      httpGet:
+        httpHeaders:
+          - name: Authorization
+            value: Basic bW9uaXRvcmluZzpzM2NyZXRQYXNzdzByZA==
+    readinessProbe:
+      httpGet:
+        httpHeaders:
+          - name: Authorization
+            value: Basic bW9uaXRvcmluZzpzM2NyZXRQYXNzdzByZA==

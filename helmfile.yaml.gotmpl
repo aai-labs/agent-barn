@@ -273,6 +273,25 @@ releases:
         value: {{ env "SLACK_ALERTS_WEBHOOK_URL" | required "SLACK_ALERTS_WEBHOOK_URL is required" | quote }}
       - name: grafana.adminPassword
         value: {{ env "GRAFANA_ADMIN_PASSWORD" | required "GRAFANA_ADMIN_PASSWORD is required" | quote }}
+      # Basic auth on Prometheus/Alertmanager (agents share the namespace).
+      # The probes and Prometheus's config reloader only take literal values,
+      # so derive them here; the chart checks they match webAuth.password.
+      {{- $webPassword := env "MONITORING_WEB_PASSWORD" | required "MONITORING_WEB_PASSWORD is required" }}
+      {{- $webBasic := printf "Basic %s" (printf "monitoring:%s" $webPassword | b64enc) }}
+      - name: webAuth.password
+        value: {{ $webPassword | quote }}
+      - name: prometheus.server.probeHeaders[0].name
+        value: Authorization
+      - name: prometheus.server.probeHeaders[0].value
+        value: {{ $webBasic | quote }}
+      - name: prometheus.configmapReload.reloadUrl
+        value: {{ printf "http://monitoring:%s@127.0.0.1:9090/-/reload" $webPassword | quote }}
+{{- range $probe := list "livenessProbe" "readinessProbe" }}
+      - name: prometheus.alertmanager.{{ $probe }}.httpGet.httpHeaders[0].name
+        value: Authorization
+      - name: prometheus.alertmanager.{{ $probe }}.httpGet.httpHeaders[0].value
+        value: {{ $webBasic | quote }}
+{{- end }}
       - name: grafana.ingress.hosts[0]
         value: {{ env "GRAFANA_HOST" | required "GRAFANA_HOST is required" | quote }}
       - name: grafana.ingress.tls[0].secretName

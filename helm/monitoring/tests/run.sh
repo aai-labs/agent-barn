@@ -15,7 +15,9 @@ PROMTOOL_IMAGE="${PROMTOOL_IMAGE:-prom/prometheus:v3.5.0}"
 # The alert rules live in the Prometheus server ConfigMap
 # (serverFiles."alerting_rules.yml"); extract.py pulls them back out of the
 # full render.
-helm template helm/monitoring \
+# The chart requires webAuth values (helmfile derives them per deploy); use
+# the test fixture that mirrors them.
+helm template helm/monitoring -f helm/monitoring/tests/web-auth-values.yaml \
   | uv run --no-project --with pyyaml python helm/monitoring/tests/extract.py rules \
   > "$GEN/rules.yaml"
 
@@ -29,5 +31,8 @@ docker run --rm -v "$PWD/helm/monitoring/tests:/tests:ro" \
 docker run --rm -v "$PWD/helm/monitoring/tests:/tests:ro" \
   --entrypoint promtool "$PROMTOOL_IMAGE" \
   test rules /tests/alerts_test.yaml
+
+# Web auth wiring (Prometheus/Alertmanager basic auth and every client).
+uv run --no-project --with pyyaml --with bcrypt python helm/monitoring/tests/web_auth_test.py helm/monitoring
 
 echo "monitoring checks passed"
