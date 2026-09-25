@@ -13,6 +13,13 @@ Related context: [implementation brief](IMPLEMENTATION-BRIEF.md), [current role 
 
 ## Changes
 
+### 2026-09-23 — [AF-337](https://aai-labs.atlassian.net/browse/AF-337) — PR pending — spend limit management Permission
+
+- Delivered: `llm_budget.manage`, an Organization-scoped Permission granted to Owners and Admins, gating the Organization's own spend limit, its default Agent spend limit and each Agent's own limit. Reading an Agent's limit uses the Agent's `cost.read`.
+- Changed: the Permission catalogue gains one row, inserted by the AF-337 migration with the immutability trigger lifted for that statement only; no Agent Access Role carries the Permission, so an Agent's own Owner cannot set its limit.
+- Verified: migration tests (catalogue row present, catalogue locked again, downgrade), the exact Organization Role matrix, and integration tests for Owner, Admin, Member, Agent Owner and Agent Viewer.
+- Follow-up: none.
+
 ### 2026-07-21 — [AF-231](https://aai-labs.atlassian.net/browse/AF-231) — PR pending — Agent General Access backend
 
 - Delivered: nullable Agent General Access role persistence (`NULL` = Restricted), database role-scope validation and referenced-role deletion protection, access-management endpoints for reading/setting/changing/removing Agent General Access, service validation that selected roles are same-Organization/system roles granting `agent.read`, and request-time union of Agent General Access and explicit Agent Access Permissions.

@@ -42,10 +42,15 @@ COMMUNICATION_DELIVERY_RETRY_REQUESTED = "communication.delivery.retry.requested
 COMMUNICATION_DELIVERY_RECOVERED = "communication.delivery.recovered"
 ORGANIZATION_LLM_BUDGET_THRESHOLD_REACHED = "organization.llm_budget.threshold_reached"
 ORGANIZATION_LLM_BUDGET_EXHAUSTED = "organization.llm_budget.exhausted"
+ORGANIZATION_LLM_BUDGET_CHANGED = "organization.llm_budget.changed"
+AGENT_LLM_BUDGET_CHANGED = "agent.llm_budget.changed"
+AGENT_LLM_BUDGET_THRESHOLD_REACHED = "agent.llm_budget.threshold_reached"
+AGENT_LLM_BUDGET_EXHAUSTED = "agent.llm_budget.exhausted"
 
 SECURITY_AUDIT_HANDLER = "security_audit.projection"
 AGENT_LIFECYCLE_EMAIL_HANDLER = "agent.lifecycle_email.notification"
 ORGANIZATION_LLM_BUDGET_EMAIL_HANDLER = "organization.llm_budget_email.notification"
+AGENT_LLM_BUDGET_EMAIL_HANDLER = "agent.llm_budget_email.notification"
 
 
 class OrganizationRoleChangedPayload(BaseModel):
@@ -263,6 +268,60 @@ class OrganizationLlmBudgetPayload(BaseModel):
     subject_display: str
 
 
+class AgentLlmBudgetPayload(BaseModel):
+    """Spend against one Agent's own limit when a threshold was first crossed. Same
+    snapshot semantics as the Organization's: informational, never gating."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    organization_id: UUID
+    agent_id: UUID
+    threshold_percent: int
+    spend_usd: float
+    limit_usd: float
+    renews_at: str | None = None
+    subject_display: str
+
+
+class OrganizationLlmBudgetChangedPayload(BaseModel):
+    """The platform ceiling and the Organization's own limit, before and after.
+
+    Both travel together because one can move the other: lowering the ceiling below
+    the Organization's own limit pulls it down, and `reason` says so. `reason` is None
+    for a change someone asked for directly.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    organization_id: UUID
+    ceiling_usd: float
+    previous_ceiling_usd: float
+    own_limit_usd: float | None
+    previous_own_limit_usd: float | None
+    window: str
+    reason: str | None = None
+    actor_display: str
+    subject_display: str
+
+
+class AgentLlmBudgetChangedPayload(BaseModel):
+    """An Agent's own limit before and after; None follows the Organization default.
+
+    `reason` is set when the change was a consequence of a lower Organization limit
+    rather than something anyone asked of this Agent.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    organization_id: UUID
+    agent_id: UUID
+    limit_usd: float | None
+    previous_limit_usd: float | None
+    reason: str | None = None
+    actor_display: str
+    subject_display: str
+
+
 class OrganizationModelAllowlistChangedPayload(BaseModel):
     """Carries the diff (added/removed), not the full before/after lists — the
     allowlist is validated against the OpenRouter catalog (400+ models) with no
@@ -291,9 +350,13 @@ class OrganizationAgentSettingsChangedPayload(BaseModel):
 
     organization_id: UUID
     setting: str
-    previous: str | None
-    current: str | None
+    # A model slug, or an amount for the default Agent spend limit.
+    previous: str | float | None
+    current: str | float | None
     inheriting_agent_count: int
+    # Set when the change followed from another one (a lower Organization limit
+    # pulling the default Agent limit down) rather than being asked for directly.
+    reason: str | None = None
     actor_display: str
     subject_display: str
 
@@ -425,6 +488,8 @@ def build_default_event_registry() -> DomainEventRegistry:
         (ORGANIZATION_MODEL_ALLOWLIST_CHANGED, OrganizationModelAllowlistChangedPayload),
         (ORGANIZATION_AGENT_SETTINGS_CHANGED, OrganizationAgentSettingsChangedPayload),
         (ORGANIZATION_OWNERSHIP_TRANSFERRED, OrganizationOwnershipTransferredPayload),
+        (ORGANIZATION_LLM_BUDGET_CHANGED, OrganizationLlmBudgetChangedPayload),
+        (AGENT_LLM_BUDGET_CHANGED, AgentLlmBudgetChangedPayload),
     ):
         registry.register(
             DomainEventDefinition(
@@ -470,6 +535,16 @@ def build_default_event_registry() -> DomainEventRegistry:
                 schema_version=1,
                 payload_model=OrganizationLlmBudgetPayload,
                 handler_names=(ORGANIZATION_LLM_BUDGET_EMAIL_HANDLER,),
+                event_scope=EventScope.ORGANIZATION,
+            )
+        )
+    for event_name in (AGENT_LLM_BUDGET_THRESHOLD_REACHED, AGENT_LLM_BUDGET_EXHAUSTED):
+        registry.register(
+            DomainEventDefinition(
+                event_name=event_name,
+                schema_version=1,
+                payload_model=AgentLlmBudgetPayload,
+                handler_names=(AGENT_LLM_BUDGET_EMAIL_HANDLER,),
                 event_scope=EventScope.ORGANIZATION,
             )
         )

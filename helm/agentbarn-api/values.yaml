@@ -173,11 +173,16 @@ costs:
 organizationLlmBudgets:
   # Percentages at which an Organization is notified. Empty uses 80,100.
   alertThresholds: "80,100"
+  # Required. Model spend limits (USD) a new Organization and a new Agent start with;
+  # the API refuses to start without them, so nobody is ever uncapped by omission.
+  # The Agent default must not exceed the Organization default.
+  defaultOrganizationUsd: ""
+  defaultAgentUsd: ""
   reconciliation:
     enabled: true
-    # Every 15 minutes. Budgets are applied when an administrator saves them; this
-    # pass only repairs drift (a push that failed while the proxy was down, or a
-    # team edited by hand). Runs under Forbid like the other reconcilers.
+    # Every 15 minutes. Limits are applied when someone saves them; this pass only
+    # repairs drift (a push that failed while the proxy was down, or a team or Agent
+    # key edited by hand). Runs under Forbid like the other reconcilers.
     schedule: "*/15 * * * *"
   alerts:
     enabled: true

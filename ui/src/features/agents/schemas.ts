@@ -494,6 +494,26 @@ export type RestorePointConfigManifest = z.infer<typeof RestorePointConfigManife
 export type RestorePoint = z.infer<typeof RestorePointSchema>;
 export type PaginatedRestorePoints = z.infer<typeof PaginatedRestorePointsSchema>;
 
+export const AgentLlmBudgetSchema = z.object({
+  // The limit in force on this Agent.
+  limitUsd: z.number(),
+  // The Agent's own limit. Null follows the organization's default.
+  ownLimitUsd: z.number().nullable().optional(),
+  // Where the limit in force comes from; "organization" means a higher own limit or
+  // default is being held to the organization's limit instead.
+  source: z.enum(["agent", "default", "organization"]),
+  defaultLimitUsd: z.number(),
+  organizationLimitUsd: z.number(),
+  window: z.string(),
+  state: z.enum(["ok", "warning", "exhausted", "unknown"]),
+  // Null means not yet observed. Never coalesce it to 0.
+  spendUsd: z.number().nullable().optional(),
+  renewsAt: z.string().nullable().optional(),
+  canManage: z.boolean(),
+});
+
+export type AgentLlmBudget = z.infer<typeof AgentLlmBudgetSchema>;
+
 // --- Activity ---------------------------------------------------------------
 //
 // What the Agent has been doing, read off its billed model calls. A *wake* is a

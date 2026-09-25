@@ -79,7 +79,7 @@ class LiteLLMClient:
             raise ValueError("Unexpected team identity")
         return info
 
-    def _create_team(self, org_id: str, headers: dict[str, str], policy: dict) -> None:
+    def _create_team(self, org_id: str, headers: dict[str, str], policy: dict) -> dict:
         created = httpx.post(
             f"{self.config.litellm_base_url}/team/new",
             json={"team_id": org_id, "team_alias": f"agentbarn-{org_id}", **policy},
@@ -90,27 +90,39 @@ class LiteLLMClient:
         # an arbitrary 400 response is not evidence of success.
         if created.status_code not in (400, 409):
             created.raise_for_status()
-        if self._team_info(org_id, headers) is None:
+        info = self._team_info(org_id, headers)
+        if info is None:
             raise ValueError("Team absent after creation")
+        return info
 
-    def ensure_team_exists(self, org_id: str) -> None:
-        """Provision the Organization's team if it is missing, leaving policy alone.
+    def ensure_team_exists(
+        self, org_id: str, max_budget: float | None = None, budget_duration: str | None = None
+    ) -> None:
+        """Provision the Organization's team if it is missing, leaving an existing
+        team's policy alone.
 
-        Deliberately never writes budget fields: this runs on the key-generation path,
-        whose caller has no business re-asserting a spend policy it was not given.
+        An existing team is never written: this runs on the key-generation path, whose
+        caller has no business re-asserting a spend policy over the stored one. A
+        missing team is created with the policy passed in, so it is never uncapped
+        between its creation and the next reconciliation.
         """
+        policy = {"max_budget": max_budget, "budget_duration": budget_duration} if max_budget is not None else {}
         try:
             headers = self._headers(self._master_key())
             if self._team_info(org_id, headers) is None:
-                self._create_team(org_id, headers, {})
+                self._create_team(org_id, headers, policy)
         except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
             raise LiteLLMError("Failed to provision Organization LiteLLM team") from exc
 
-    def apply_team_budget(self, org_id: str, max_budget: float | None, budget_duration: str | None) -> None:
+    def apply_team_budget(self, org_id: str, max_budget: float | None, budget_duration: str | None) -> str | None:
         """Reconcile the team's spend policy, without disturbing spend or reset dates.
 
         Only changed fields are written: an update reschedules the renewal date, so
         re-sending an unchanged policy would silently move every Organization's window.
+
+        Returns when the team's window renews (ISO-8601, or None if LiteLLM has not
+        scheduled one), read from the team as it stands afterwards — the team is read
+        here anyway, so callers get the date without waiting for the next refresh.
         """
         desired = {
             "max_budget": max_budget,
@@ -120,25 +132,26 @@ class LiteLLMClient:
             headers = self._headers(self._master_key())
             current = self._team_info(org_id, headers)
             if current is None:
-                self._create_team(org_id, headers, desired)
-                return
+                return self._create_team(org_id, headers, desired).get("budget_reset_at")
             changed = {name: value for name, value in desired.items() if current.get(name) != value}
-            if changed:
-                response = httpx.post(
-                    f"{self.config.litellm_base_url}/team/update",
-                    json={"team_id": org_id, **changed},
-                    headers=headers,
-                    timeout=self._TIMEOUT,
-                )
-                response.raise_for_status()
-                # Verified by re-reading, like team creation and key enrollment: some
-                # versions accept an update and drop fields they do not recognise, and
-                # a silently ignored clear would leave the cap enforced while the row
-                # and the UI both report no limit.
-                applied = self._team_info(org_id, headers) or {}
-                unapplied = [name for name, value in changed.items() if applied.get(name) != value]
-                if unapplied:
-                    raise ValueError(f"LiteLLM did not apply {', '.join(sorted(unapplied))}")
+            if not changed:
+                return current.get("budget_reset_at")
+            response = httpx.post(
+                f"{self.config.litellm_base_url}/team/update",
+                json={"team_id": org_id, **changed},
+                headers=headers,
+                timeout=self._TIMEOUT,
+            )
+            response.raise_for_status()
+            # Verified by re-reading, like team creation and key enrollment: some
+            # versions accept an update and drop fields they do not recognise, and
+            # a silently ignored clear would leave the cap enforced while the row
+            # and the UI both report no limit.
+            applied = self._team_info(org_id, headers) or {}
+            unapplied = [name for name, value in changed.items() if applied.get(name) != value]
+            if unapplied:
+                raise ValueError(f"LiteLLM did not apply {', '.join(sorted(unapplied))}")
+            return applied.get("budget_reset_at")
         except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
             raise LiteLLMError("Failed to reconcile Organization LiteLLM team budget") from exc
 
@@ -156,8 +169,8 @@ class LiteLLMClient:
             return None
         return {"spend": info.get("spend"), "renews_at": info.get("budget_reset_at")}
 
-    def get_key_team(self, key: str) -> str | None:
-        """The team this key belongs to, or None when it belongs to none.
+    def _key_info(self, key: str, failure: str) -> dict:
+        """The key's /key/info record.
 
         Every failure path here deliberately drops the exception chain: the key
         travels in /key/info's query string, so an httpx error would carry it into
@@ -175,11 +188,54 @@ class LiteLLMClient:
             if response.status_code == 404:
                 raise LiteLLMKeyNotFound("LiteLLM does not recognise this Agent key")
             response.raise_for_status()
-            return response.json()["info"].get("team_id") or None
+            info = response.json()["info"]
+            if not isinstance(info, dict):
+                raise TypeError("Unexpected key info shape")
+            return info
         except LiteLLMKeyNotFound:
             raise
         except httpx.HTTPError, ValueError, KeyError, TypeError:
-            raise LiteLLMError("Failed to read Agent key team membership") from None
+            raise LiteLLMError(failure) from None
+
+    def get_key_team(self, key: str) -> str | None:
+        """The team this key belongs to, or None when it belongs to none."""
+        return self._key_info(key, "Failed to read Agent key team membership").get("team_id") or None
+
+    def apply_key_budget(self, key: str, max_budget: float, budget_duration: str) -> None:
+        """Reconcile an Agent key's own spend policy, alongside its team's.
+
+        Same rules as apply_team_budget: only changed fields are written, because
+        re-sending budget_duration reschedules the key's renewal date, and the write
+        is verified by re-reading. The key shares its Organization's window, and
+        LiteLLM snaps 1d/7d/30d windows to calendar boundaries, so the key renews at
+        the same moment as the team.
+        """
+        failure = "Failed to reconcile Agent key budget"
+        desired = {"max_budget": max_budget, "budget_duration": budget_duration}
+        current = self._key_info(key, failure)
+        changed = {name: value for name, value in desired.items() if current.get(name) != value}
+        if not changed:
+            return
+        try:
+            response = httpx.post(
+                f"{self.config.litellm_base_url}/key/update",
+                json={"key": key, **changed},
+                headers=self._headers(self._master_key()),
+                timeout=self._TIMEOUT,
+            )
+            response.raise_for_status()
+        except httpx.HTTPError, ValueError, KeyError, TypeError:
+            # The request body carries the plaintext key; keep it out of any chain.
+            raise LiteLLMError(failure) from None
+        applied = self._key_info(key, failure)
+        unapplied = [name for name, value in changed.items() if applied.get(name) != value]
+        if unapplied:
+            raise LiteLLMError(f"LiteLLM did not apply {', '.join(sorted(unapplied))}")
+
+    def get_key_budget_status(self, key: str) -> dict:
+        """Spend accrued against the key's own limit in its current window."""
+        info = self._key_info(key, "Failed to read Agent key spend")
+        return {"spend": info.get("spend"), "renews_at": info.get("budget_reset_at")}
 
     _UNREAD = object()
 
@@ -216,11 +272,25 @@ class LiteLLMClient:
         if self.get_key_team(key) != org_id:
             raise LiteLLMError("LiteLLM did not apply the team assignment")
 
-    def generate_key(self, agent_id: str, agent_name: str, org_id: str) -> str:
-        """Returns a new plaintext LiteLLM key for the agent."""
-        self.ensure_team_exists(org_id)
+    def generate_key(
+        self,
+        agent_id: str,
+        agent_name: str,
+        org_id: str,
+        max_budget: float | None = None,
+        budget_duration: str | None = None,
+        team_budget: float | None = None,
+    ) -> str:
+        """Returns a new plaintext LiteLLM key for the agent.
+
+        `max_budget` is the Agent's own limit, so it binds from the first call rather
+        than from the next reconciliation pass. `team_budget` is used only if the
+        Organization's team has to be created here.
+        """
+        self.ensure_team_exists(org_id, team_budget, budget_duration)
         master_key = self._master_key()
         url = f"{self.config.litellm_base_url}/key/generate"
+        policy = {"max_budget": max_budget, "budget_duration": budget_duration} if max_budget is not None else {}
         try:
             resp = httpx.post(
                 url,
@@ -231,6 +301,7 @@ class LiteLLMClient:
                         "agent_id": agent_id,
                         "organization_id": org_id,
                     },
+                    **policy,
                 },
                 headers=self._headers(master_key),
                 timeout=10,

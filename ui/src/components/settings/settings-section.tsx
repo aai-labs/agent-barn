@@ -10,6 +10,11 @@ import { toastError } from "@/shared/toast";
 export type SettingsSectionConfirmCopy = {
   title: string;
   description: ReactNode;
+  /** The confirm button's label when it should say more than the Apply button did,
+   *  e.g. naming a consequence the dialog has just revealed. */
+  confirmLabel?: string;
+  /** Styles the confirmation as destructive: the change stops something working. */
+  destructive?: boolean;
 };
 
 const DEFAULT_CONFIRM: SettingsSectionConfirmCopy = {
@@ -156,8 +161,9 @@ export function SettingsSection({
         onOpenChange={setApplyConfirmationOpen}
         title={confirm.title}
         description={confirm.description}
-        confirmLabel={applyLabel}
+        confirmLabel={confirm.confirmLabel ?? applyLabel}
         pendingLabel={applyPendingLabel}
+        variant={confirm.destructive ? "destructive" : "default"}
         onConfirm={() => void confirmApply()}
         isPending={isApplying}
       />

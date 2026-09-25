@@ -4,6 +4,7 @@ import { useCallback, useMemo } from "react";
 import { RefreshCw } from "lucide-react";
 
 import { LlmBudgetBanner } from "@/features/organizations/components/llm-budget-banner";
+import { SpendLimitStatus } from "@/features/organizations/components/spend-limit-status";
 import { useRequireOrgManager } from "@/features/organizations/hooks/use-require-org-manager";
 
 import { useCostFilterOptions } from "../hooks/use-cost-filter-options";
@@ -132,6 +133,8 @@ export function CostsPage() {
       <div className="mb-6">
         <LlmBudgetBanner show="warning" />
       </div>
+
+      <SpendLimitStatus />
 
       <CostSummaryCards summary={summary} isLoading={isLoadingSummary} />
 

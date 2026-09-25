@@ -49,6 +49,7 @@ from api.domains.agents.builders import (
 from api.domains.agents.error_messages import friendly_pod_reason
 from api.domains.agents.exceptions import AgentProvisioningPrecondition
 from api.domains.agents.gog_artifacts import build_gog_env, build_gog_policy_md, build_gog_setup_sh
+from api.domains.agents.llm_budget import AgentLlmBudgetService
 from api.domains.agents.models import (
     PROVIDER_DISPLAY_NAMES,
     Agent,
@@ -265,6 +266,7 @@ class AgentService:
     organization_lookup: OrganizationLookupService
     restore_points: RestorePointService
     agent_settings_lookup: AgentSettingsLookupService
+    agent_budgets: AgentLlmBudgetService
     selection: SelectionValidator
     connection_repository: CommunicationConnectionRepository
     plugins: PlatformPluginRegistry
@@ -791,9 +793,17 @@ class AgentService:
         allocated_litellm_key: str | None = None
         try:
             if self.config.litellm_base_url and self.config.litellm_secret_name:
+                # A new Agent follows the default, so its key is capped from the first
+                # call — and a team created here carries the Organization's limit.
+                key_budget = self.agent_budgets.key_budget_for_new_agent(agent.organization_id)
                 try:
                     allocated_litellm_key = self.litellm.generate_key(
-                        str(agent.id), agent.name, str(agent.organization_id)
+                        str(agent.id),
+                        agent.name,
+                        str(agent.organization_id),
+                        max_budget=key_budget.agent_limit_usd,
+                        budget_duration=key_budget.window,
+                        team_budget=key_budget.organization_limit_usd,
                     )
                 except LiteLLMError as exc:
                     raise HTTPException(
