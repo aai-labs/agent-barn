@@ -9,6 +9,21 @@ export class AgentDetailPage {
     await this.page.goto(`/dashboard/${TEST_ORG_ID}/agents/${agentId}`);
   }
 
+  async openFocusedActivity(agentId: string) {
+    await this.page.goto(`/dashboard/${TEST_ORG_ID}/agents/${agentId}?tab=activity` +
+      "&from=2026-09-10T00:00:00Z&to=2026-09-13T00:00:00Z" +
+      "&focusFrom=2026-09-12T11:29:00Z&focusTo=2026-09-12T11:30:00Z");
+  }
+
+  async clearActivityDates() {
+    await this.page.getByRole("button", { name: "Date range", exact: true }).click();
+    await this.page.getByRole("button", { name: "Clear dates", exact: true }).click();
+  }
+
+  runtimeDiagnostics(): Locator {
+    return this.page.getByTestId("agent-runtime-diagnostics");
+  }
+
   agentName(name: string): Locator {
     return this.page.getByRole("heading", { name });
   }
@@ -27,6 +42,14 @@ export class AgentDetailPage {
 
   hireButton(): Locator {
     return this.page.getByRole("button", { name: /hire agent/i });
+  }
+
+  costsTab(): Locator {
+    return this.page.getByRole("button", { name: "Costs", exact: true });
+  }
+
+  async openCostsTab() {
+    await this.costsTab().click();
   }
 
   toolCallsTab(): Locator {

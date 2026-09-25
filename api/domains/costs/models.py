@@ -1,5 +1,5 @@
 import enum
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 from uuid import UUID
 
@@ -153,11 +153,29 @@ class CostSeriesPoint(PydanticBaseModel):
     calls: int
 
 
+class TokenSeriesPoint(PydanticBaseModel):
+    bucket: datetime
+    avg_prompt_tokens: float
+
+
+class CostHistogramBucket(PydanticBaseModel):
+    """One bar of the cost-per-call distribution.
+
+    `upper` is None for the final open-ended bucket — a handful of very expensive
+    calls is exactly what this chart exists to show, and clamping them would hide it.
+    """
+
+    lower: float
+    upper: float | None
+    calls: int
+
+
 class AgentModelBreakdown(PydanticBaseModel):
     model: str
     total_cost: float
     prompt_tokens: int
     completion_tokens: int
+    calls: int = 0
 
 
 class AgentCostRead(PydanticBaseModel):
@@ -179,12 +197,30 @@ class AgentCostRead(PydanticBaseModel):
     total_tokens: int
     prompt_tokens: int
     completion_tokens: int
+    total_calls: int = 0
+    # Calls LiteLLM recorded as anything but a success. They bill nothing, and they
+    # are still part of `total_calls` and of the averages below, which divide by
+    # every call in the window — the same basis the Organization summary uses, so a
+    # per-Agent average and an Organization one can be read against each other.
+    # Reported separately because a run of failures is worth seeing on its own.
+    failed_calls: int = 0
+    # Calls whose figure was recovered from OpenRouter, which is why a historical
+    # total can rise after the fact.
+    healed_calls: int = 0
+    avg_cost_per_call: float = 0.0
+    avg_prompt_tokens: float = 0.0
+    avg_duration_ms: float | None = None
+    daily_burn_rate: float = 0.0
+    first_call_at: datetime | None = None
+    last_call_at: datetime | None = None
     # This Agent's share of Honcho's spend. Not on the Agent's own LiteLLM key —
     # Honcho bills one fleet-wide credential — so it is reported separately rather
     # than folded into total_cost, and is 0 when memory is off.
     memory_cost: float = 0.0
     models_breakdown: list[AgentModelBreakdown] = Field(default_factory=list)
     spend_over_time: list[CostSeriesPoint] = Field(default_factory=list)
+    avg_prompt_tokens_over_time: list[TokenSeriesPoint] = Field(default_factory=list)
+    cost_per_call_histogram: list[CostHistogramBucket] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -223,6 +259,60 @@ def get_cost_filter(
     sort: CostSortDirection = Query(default=CostSortDirection.NEWEST_FIRST),
 ) -> CostFilter:
     return CostFilter(agent_id=agent_id, model=model, search=search, sort=sort)
+
+
+def get_agent_cost_filter(
+    model: str | None = Query(default=None),
+    search: str | None = Query(default=None),
+    sort: CostSortDirection = Query(default=CostSortDirection.NEWEST_FIRST),
+) -> CostFilter:
+    """The filter for one Agent's surface.
+
+    It has no agent or organization dimension: both are pinned by the service from
+    the authorized Agent, so a caller cannot point an Agent-scoped read elsewhere.
+    """
+    return CostFilter(model=model, search=search, sort=sort)
+
+
+# Two years of calendar months. The monthly table exists to compare months, and a
+# bound keeps generate_series from being asked for an arbitrary number of rows.
+MAX_MONTHS = 24
+DEFAULT_MONTHS = 12
+
+
+class MonthlyWindow(PydanticBaseModel):
+    """Whole calendar months, oldest first, ending with the month in progress.
+
+    Deliberately not a `StatsWindow`: the monthly view compares months, so its span
+    is set in months rather than by the page's date range. It still runs through the
+    same filter predicate as every other read.
+    """
+
+    start: datetime
+    end: datetime
+    months: int
+
+
+def month_start(moment: datetime, offset: int = 0) -> datetime:
+    """The first instant of `moment`'s calendar month, shifted by `offset` months.
+
+    Counted in months since year 0, so stepping across a year boundary in either
+    direction is plain arithmetic rather than a branch per direction. Every month
+    on these surfaces is a UTC month, and the callers only ever pass UTC moments.
+    """
+    index = moment.year * 12 + (moment.month - 1) + offset
+    return datetime(index // 12, index % 12 + 1, 1, tzinfo=UTC)
+
+
+def resolve_monthly_window(months: int = DEFAULT_MONTHS, now: datetime | None = None) -> MonthlyWindow:
+    now = now or datetime.now(UTC)
+    return MonthlyWindow(start=month_start(now, -(months - 1)), end=now, months=months)
+
+
+def get_monthly_window(
+    months: int = Query(default=DEFAULT_MONTHS, ge=1, le=MAX_MONTHS),
+) -> MonthlyWindow:
+    return resolve_monthly_window(months)
 
 
 def get_platform_cost_filter(
@@ -291,21 +381,25 @@ class AgentSpendSeriesPoint(PydanticBaseModel):
     spend: float
 
 
-class TokenSeriesPoint(PydanticBaseModel):
-    bucket: datetime
-    avg_prompt_tokens: float
+class MonthlyCostRead(PydanticBaseModel):
+    """One calendar month of spend.
 
-
-class CostHistogramBucket(PydanticBaseModel):
-    """One bar of the cost-per-call distribution.
-
-    `upper` is None for the final open-ended bucket — a handful of very expensive
-    calls is exactly what this chart exists to show, and clamping them would hide it.
+    Months with no calls are returned as zero rather than omitted, so a quiet month
+    reads as a quiet month instead of silently closing the gap between its
+    neighbours. `month` is the first instant of the month in UTC.
     """
 
-    lower: float
-    upper: float | None
+    month: datetime
+    spend: float
     calls: int
+    failed_calls: int
+    prompt_tokens: int
+    completion_tokens: int
+    active_agents: int
+    # True only for the month in progress, whose figures are month-to-date.
+    is_current: bool = False
+    # The month in progress extrapolated at its pace so far. None for closed months.
+    projected_spend: float | None = None
 
 
 class CostFilterOption(PydanticBaseModel):

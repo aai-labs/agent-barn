@@ -2,11 +2,11 @@
 
 ## Read when
 
-Read before changing spend attribution, the cost sync job, cost healing, cost summaries, deleted-agent handling, cost status labels, or either Costs UI.
+Read before changing spend attribution, the cost sync job, cost healing, cost summaries, monthly aggregates, deleted-agent handling, cost status labels, or any Costs UI: the Organization and platform Costs pages or an Agent's Costs tab.
 
 ## Role in the system
 
-Costs owns a persistent record of every billed LLM call. A CronJob pulls LiteLLM's spend log into the `cost_record` table, attributes each row to an agent and organization, and recovers costs LiteLLM failed to record by asking OpenRouter what it actually charged. The org and platform read surfaces query that table, never LiteLLM.
+Costs owns a persistent record of every billed LLM call. A CronJob pulls LiteLLM's spend log into the `cost_record` table, attributes each row to an agent and organization, and recovers costs LiteLLM failed to record by asking OpenRouter what it actually charged. The Agent, org and platform read surfaces query that table, never LiteLLM.
 
 Reading the proxy at request time — the earlier arrangement — meant a failed query rendered as a confident $0.00, corrected figures had nowhere to live, and server-side filtering and pagination were impossible.
 
@@ -43,6 +43,11 @@ Reading the proxy at request time — the earlier arrangement — meant a failed
 - Every aggregate and the row list run through the same predicate, so a stat card and the table beneath it cannot describe different sets of calls.
 - The ranked Agent table is not capped, unlike the per-Agent series behind the chart: a line per Agent stops being readable after a handful, but a table has to account for every Agent that spent anything. It keeps the unattributed bucket for the same reason the Organization ranking does.
 - On the org surface `organization_id` is pinned by the route and never read from the query string.
+- On the Agent surface (`/costs/agents/{agent_id}`, `/calls`, `/monthly`, `/filters/models`) both `organization_id` and `agent_id` are pinned from the authorized Agent. Its filter dependency has no agent dimension, so a query-string `agent_id` cannot re-point the read. The summary, the call list and the model options share one filter (model, search), so the Agent's cards and its call table count the same calls.
+- Monthly aggregates are whole UTC calendar months, oldest first, ending with the month in progress. Their span is a month count (`months`, 1–24, default 12), not the page's date range: a range picked for the charts would cut through the first and last month. Every other filter dimension still applies. Quiet months are returned as zero, like empty series buckets. The UI drops the months before the first one with any calls: those mean "no history yet", not "spent nothing", and averaging them would divide a new Agent's spend by months it did not exist for. Quiet months after the first call stay in the table and the average.
+- Only the month in progress carries `projected_spend`: month-to-date spend extrapolated linearly over the whole month. The UI compares that month with the previous one on its projection, because month-to-date against a whole month would read as a fall every month until its last day.
+- A projection needs a day of the month behind it (`MIN_ELAPSED_FOR_PROJECTION_SECONDS`) and is `null` before that. The extrapolation divides by elapsed time, so half an hour into the 1st a few cents reads as tens of dollars — and that figure would drive "on pace for" and the month-over-month change. Below the floor the month reports its spend so far and no projection.
+- The UI's "last month" figure is read from the same history slice as the average, so an Agent whose first call is this month is offered no previous month rather than a $0 one. A $0 month inside the slice is real and still shown.
 - The platform surface has its own routes, service and read model. The org surface must have no code path that can return another organization's name or spend.
 - The unattributed bucket stays inside platform totals and is also reported separately. Excluding it would make the platform total exceed the sum of the organizations listed beneath it.
 - The OpenRouter balance is reported as one of three states, never as a bare number: `ok` carries the key's remaining credit and its limit, `no_limit` means the key spends without a ceiling, and `unavailable` means the poll failed. The last two used to collapse into a single null, which let "we cannot read it" render the same as "there is nothing to worry about".
@@ -55,7 +60,10 @@ Reading the proxy at request time — the earlier arrangement — meant a failed
 - Organization cost summaries require the Organization Permission `cost.read`; fixed Organization Owner/Admin roles receive it. An Agent Access Role never authorizes an Organization-wide summary.
 - Per-Agent detail requires `cost.read` through the effective Agent Access Role. Agent Viewer, Editor and Owner can read accessible active-Agent costs; Organization Owner/Admin may also read deleted-Agent history.
 - Per-Agent detail respects the requested window. It previously read `/key/info`, which is lifetime spend and ignores the date range.
-- Per-Agent detail carries its own spend trend, built from the same series query the Organization summary uses under an Agent-pinned filter. It is not read from the summary: that surface requires the Organization-wide `cost.read` an Agent Access Role never grants, so an Agent Viewer or Editor could not load it. The response echoes the resolved window and granularity, because a chart cannot label a bucket without knowing the resolution it was grouped at.
+- Every Agent-surface read, including its calls, monthly totals and model options, authorizes through `_authorized_agent` with the same Agent Access and deleted-Agent rules as the detail read. None of them requires the Organization-wide `cost.read`.
+- The Agent's Costs tab is gated on `cost.read` alone and does not require `activity.read`, unlike the Activity tab (see [`agent-activity.md`](agent-activity.md)). A custom Agent Access Role can grant one Permission without the other, and Costs is the only surface that makes a Permission-`cost.read`-but-not-`activity.read` reader's access reachable.
+- Per-Agent detail carries its own spend trend, prompt-size trend and cost-per-call histogram, plus call, failure, recovered-call, latency and burn-rate figures. They are built from the same queries the Organization summary uses under an Agent-pinned filter. It is not read from the summary: that surface requires the Organization-wide `cost.read` an Agent Access Role never grants, so an Agent Viewer or Editor could not load it. The response echoes the resolved window and granularity, because a chart cannot label a bucket without knowing the resolution it was grouped at.
+- Failed calls are counted in `total_calls` and in every average that divides by it, including `avg_cost_per_call` and `avg_prompt_tokens`. That is the basis the Organization summary already uses, so a per-Agent average and an Organization one describe the same thing and can be read against each other. `failed_calls` is reported alongside them because a run of failures is worth seeing on its own, not because it is excluded.
 - Cost-facing status is mapped to `active`, `stopped`, `error` or `deleted`; it is not the persisted AgentStatus enum.
 - Every platform route requires `require_platform_admin`. Nothing re-scopes by membership, because a platform admin deliberately has none.
 
@@ -132,7 +140,7 @@ that must keep their own errors.
 
 ## Boundaries
 
-Agents own LiteLLM key creation, encryption, deletion blocking, and lifecycle status. The LiteLLM and OpenRouter infrastructure clients own remote API behavior. Costs owns the persisted record, attribution, healing, and aggregation. Conversation and Tool Call data do not feed cost calculation.
+Agents own LiteLLM key creation, encryption, deletion blocking, and lifecycle status. The LiteLLM and OpenRouter infrastructure clients own remote API behavior. Costs owns the persisted record, attribution, healing, and aggregation. Conversation and Tool Call data do not feed cost calculation. Agent Activity reads `cost_record` for its own per-Agent surface and annotates it with message timing; it owns no table and changes no figure here (see [`agent-activity.md`](agent-activity.md)).
 
 ## Source map
 
@@ -156,10 +164,11 @@ Agents own LiteLLM key creation, encryption, deletion blocking, and lifecycle st
 | Budget notification email     | `../../api/domains/organizations/event_handlers.py`, `../../api/infrastructure/email/templates/organization-budget-template.mjml` |
 | Agent-facing rejection        | `../../api/domains/agents/scripts/hermes/healthz-server.py`, `../../api/domains/agents/scripts/openclaw/healthz-server.js` |
 | UI schemas, hooks, and charts | `../../ui/src/features/costs/`              |
+| Agent Costs tab               | `../../ui/src/features/costs/components/agent-costs-panel.tsx`, composed by `../../ui/src/features/agents/components/agent-detail-page.tsx` |
 | Local fixtures                | `../../api/scripts/seed_cost_fixtures.py` (`make seed-costs`) |
 | Investigation and evidence    | `../plans/AF-281-cost-tracking-findings.md` |
-| Tests                         | `../../api/tests/unit/test_cost_sync.py`, `../../api/tests/integration/test_costs.py`, `../../api/tests/integration/test_platform_costs.py`, `../../ui/tests/e2e/costs.spec.ts`, `../../ui/tests/e2e/platform-costs.spec.ts`, `../../api/tests/unit/test_organization_llm.py`, `../../api/tests/integration/test_organization_llm.py`, `../../ui/tests/e2e/organization-llm-budget.spec.ts` |
+| Tests                         | `../../api/tests/unit/test_cost_sync.py`, `../../api/tests/unit/test_monthly_costs.py`, `../../api/tests/integration/test_costs.py`, `../../api/tests/integration/test_platform_costs.py`, `../../ui/tests/e2e/costs.spec.ts`, `../../ui/tests/e2e/platform-costs.spec.ts`, `../../ui/tests/e2e/agent-detail-page.spec.ts` (Costs tab), `../../api/tests/unit/test_organization_llm.py`, `../../api/tests/integration/test_organization_llm.py`, `../../ui/tests/e2e/organization-llm-budget.spec.ts` |
 
 ## Change impact
 
-Changing the sync or heal predicates changes what is recorded as money, so cover them in unit tests before touching the job. Changing attribution affects agent key lifecycle, deleted-agent behavior, and the unattributed bucket. Changing the schedule requires rechecking `COST_SYNC_MAX_RUNTIME_SECONDS`. Status changes require checking both persisted AgentStatus and the cost-facing mapped labels.
+Changing the sync or heal predicates changes what is recorded as money, so cover them in unit tests before touching the job. Changing attribution affects agent key lifecycle, deleted-agent behavior, and the unattributed bucket. Changing the schedule requires rechecking `COST_SYNC_MAX_RUNTIME_SECONDS`. Status changes require checking both persisted AgentStatus and the cost-facing mapped labels. A new Agent-surface route must go through `_authorized_agent` and be added to the assigned/hidden bypass test in `../../api/tests/integration/test_agent_rbac.py`.

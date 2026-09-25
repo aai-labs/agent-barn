@@ -18,6 +18,7 @@ from api.domains.costs.models import (
     CostRecordSource,
     CostSortDirection,
     HonchoUsageEvent,
+    MonthlyWindow,
 )
 from api.domains.organizations.models import Organization
 from api.domains.platform_admin.models import StatsWindow
@@ -35,6 +36,22 @@ class CostTotals:
     avg_prompt_tokens: float
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    failed_calls: int = 0
+    healed_calls: int = 0
+    avg_duration_ms: float | None = None
+    first_call_at: datetime | None = None
+    last_call_at: datetime | None = None
+
+
+@dataclass(frozen=True)
+class MonthlyTotals:
+    month: datetime
+    spend: Decimal
+    calls: int
+    failed_calls: int
+    prompt_tokens: int
+    completion_tokens: int
+    agents: int
 
 
 # The Core table behind the model. Both writes below are Core statements: the upsert
@@ -221,7 +238,7 @@ class CostRepository:
     # Every read below is filtered through `_predicates`, so a stat card and the
     # table beneath it can never disagree about what is being counted.
 
-    def _predicates(self, window: StatsWindow, filters: CostFilter) -> list:
+    def _predicates(self, window: StatsWindow | MonthlyWindow, filters: CostFilter) -> list:
         predicates = [
             col(CostRecord.occurred_at) >= window.start,
             col(CostRecord.occurred_at) < window.end,
@@ -287,6 +304,11 @@ class CostRepository:
             sa.func.coalesce(sa.func.avg(col(CostRecord.prompt_tokens)), 0),
             sa.func.coalesce(sa.func.sum(col(CostRecord.prompt_tokens)), 0),
             sa.func.coalesce(sa.func.sum(col(CostRecord.completion_tokens)), 0),
+            sa.func.count().filter(col(CostRecord.status) != COST_RECORD_STATUS_SUCCESS),
+            sa.func.count().filter(col(CostRecord.source) == CostRecordSource.OPENROUTER_BACKFILL.value),
+            sa.func.avg(col(CostRecord.request_duration_ms)),
+            sa.func.min(col(CostRecord.occurred_at)),
+            sa.func.max(col(CostRecord.occurred_at)),
         ).where(*predicates)
         # A plain connection, not a Session: this is a pure aggregate read with no ORM
         # objects involved, and SQLModel deprecates Session.execute.
@@ -299,27 +321,35 @@ class CostRepository:
             avg_prompt_tokens=float(row[3]),
             prompt_tokens=int(row[4]),
             completion_tokens=int(row[5]),
+            failed_calls=int(row[6]),
+            healed_calls=int(row[7]),
+            avg_duration_ms=float(row[8]) if row[8] is not None else None,
+            first_call_at=row[9],
+            last_call_at=row[10],
         )
 
     def model_breakdown(
         self,
         window: StatsWindow,
         filters: CostFilter,
-    ) -> list[tuple[str, Decimal, int, int]]:
-        """Per-model spend and tokens, biggest spender first."""
-        with Session(self.delegate.engine) as session:
-            rows = session.exec(
-                select(
-                    col(CostRecord.model),
-                    sa.func.coalesce(sa.func.sum(col(CostRecord.spend)), 0).label("spend"),
-                    sa.func.coalesce(sa.func.sum(col(CostRecord.prompt_tokens)), 0),
-                    sa.func.coalesce(sa.func.sum(col(CostRecord.completion_tokens)), 0),
-                )
-                .where(*self._predicates(window, filters))
-                .group_by(col(CostRecord.model))
-                .order_by(sa.desc("spend"))
-            ).all()
-        return [(row[0], Decimal(str(row[1])), int(row[2]), int(row[3])) for row in rows]
+    ) -> list[tuple[str, Decimal, int, int, int]]:
+        """Per-model spend, tokens and calls, biggest spender first."""
+        # sa.select: sqlmodel's typed overloads stop short of five columns.
+        query = (
+            sa.select(
+                col(CostRecord.model),
+                sa.func.coalesce(sa.func.sum(col(CostRecord.spend)), 0).label("spend"),
+                sa.func.coalesce(sa.func.sum(col(CostRecord.prompt_tokens)), 0),
+                sa.func.coalesce(sa.func.sum(col(CostRecord.completion_tokens)), 0),
+                sa.func.count(),
+            )
+            .where(*self._predicates(window, filters))
+            .group_by(col(CostRecord.model))
+            .order_by(sa.desc("spend"))
+        )
+        with self.delegate.engine.connect() as connection:
+            rows = connection.execute(query).all()
+        return [(row[0], Decimal(str(row[1])), int(row[2]), int(row[3]), int(row[4])) for row in rows]
 
     def top_model(self, window: StatsWindow, filters: CostFilter) -> tuple[str, Decimal] | None:
         predicates = self._predicates(window, filters)
@@ -456,6 +486,64 @@ class CostRepository:
             upper = bounds[index] if index < len(bounds) else None
             histogram.append((lower, upper, counts.get(index, 0)))
         return histogram
+
+    def monthly_totals(self, window: MonthlyWindow, filters: CostFilter) -> list[MonthlyTotals]:
+        """Totals per calendar month, oldest first, with empty months filled as zero.
+
+        Grouped on the UTC month, like every other bucket on these surfaces, and
+        left-joined onto generate_series for the same reason `spend_series` is: a
+        month with no calls has to read as zero rather than vanish.
+        """
+        buckets = select(
+            sa.func.generate_series(
+                sa.func.date_trunc("month", sa.func.timezone("UTC", sa.literal(window.start))),
+                sa.func.date_trunc("month", sa.func.timezone("UTC", sa.literal(window.end))),
+                sa.text("interval '1 month'"),
+            ).label("bucket")
+        ).subquery()
+        totals = (
+            sa.select(
+                sa.func.date_trunc("month", sa.func.timezone("UTC", col(CostRecord.occurred_at))).label("bucket"),
+                sa.func.sum(col(CostRecord.spend)).label("spend"),
+                sa.func.count().label("calls"),
+                sa.func.count().filter(col(CostRecord.status) != COST_RECORD_STATUS_SUCCESS).label("failed"),
+                sa.func.sum(col(CostRecord.prompt_tokens)).label("prompt_tokens"),
+                sa.func.sum(col(CostRecord.completion_tokens)).label("completion_tokens"),
+                sa.func.count(sa.distinct(col(CostRecord.agent_id))).label("agents"),
+            )
+            .where(*self._predicates(window, filters))
+            .group_by(sa.text("1"))
+            .subquery()
+        )
+        query = (
+            sa.select(
+                buckets.c.bucket,
+                sa.func.coalesce(totals.c.spend, 0),
+                sa.func.coalesce(totals.c.calls, 0),
+                sa.func.coalesce(totals.c.failed, 0),
+                sa.func.coalesce(totals.c.prompt_tokens, 0),
+                sa.func.coalesce(totals.c.completion_tokens, 0),
+                sa.func.coalesce(totals.c.agents, 0),
+            )
+            .select_from(buckets.outerjoin(totals, buckets.c.bucket == totals.c.bucket))
+            .order_by(buckets.c.bucket)
+        )
+        with self.delegate.engine.connect() as connection:
+            rows = connection.execute(query).all()
+        return [
+            MonthlyTotals(
+                # The bucket is a naive UTC timestamp; say so, or it serialises
+                # without an offset and a browser reads it as local time.
+                month=row[0].replace(tzinfo=UTC),
+                spend=Decimal(str(row[1])),
+                calls=int(row[2]),
+                failed_calls=int(row[3]),
+                prompt_tokens=int(row[4]),
+                completion_tokens=int(row[5]),
+                agents=int(row[6]),
+            )
+            for row in rows
+        ]
 
     def distinct_models(self, window: StatsWindow, filters: CostFilter) -> list[str]:
         with Session(self.delegate.engine) as session:

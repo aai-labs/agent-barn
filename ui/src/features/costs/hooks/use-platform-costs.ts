@@ -7,10 +7,12 @@ import { api } from "@/shared/api";
 
 import {
   CostFilterOptionSchema,
+  MonthlyCostListSchema,
   OrganizationSpendSchema,
   PaginatedPlatformCostRecordsSchema,
   PlatformCostSummarySchema,
   type CostFilterOption,
+  type MonthlyCost,
   type OrganizationSpend,
   type PaginatedPlatformCostRecords,
   type PlatformCostSummary,
@@ -19,6 +21,7 @@ import {
   COSTS_PAGE_SIZE,
   costFilterParams,
   mergePlatformCostPages,
+  monthlyCostParams,
   platformCostKey,
   type CostFilters,
 } from "../utils";
@@ -143,5 +146,31 @@ export function usePlatformCostFilterOptions(filters: CostFilters) {
     agentOptions: agents.data ?? [],
     modelOptions: models.data ?? [],
     isLoading: agents.isPending || models.isPending,
+  };
+}
+
+/** Calendar-month totals across the platform, under the page's filters but not
+ *  its date range. */
+export function usePlatformMonthlyCosts(filters: CostFilters) {
+  const params = monthlyCostParams(filters);
+  const query = useQuery({
+    queryKey: platformCostKey.list({
+      scope: { view: "monthly" },
+      filters: { params: params.toString() },
+    }),
+    queryFn: async () => {
+      const response = await api.get<MonthlyCost[]>(
+        `${BASE}/monthly?${params.toString()}`,
+        { schema: MonthlyCostListSchema },
+      );
+      return response.data;
+    },
+  });
+
+  return {
+    months: query.data ?? null,
+    isLoading: query.isPending,
+    error: query.error,
+    refetch: query.refetch,
   };
 }

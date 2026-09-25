@@ -5,6 +5,7 @@ import {
   COMMUNICATION_CONNECTION_ID,
   COMMUNICATION_DELIVERY_ID,
   mockCommunicationConnection,
+  mockCommunicationPlatforms,
   SAFE_ERROR_DETAILS,
   SAFE_PROVIDER_ERROR,
 } from "../fixtures/communication-connections";
@@ -14,6 +15,7 @@ import {
   mockAgent,
   mockAgentAllowedActions,
   mockAgentConfiguration,
+  mockAgentTemplate,
   mockAssignedSkill,
   mockSecret,
   mockTemplates,
@@ -22,6 +24,7 @@ import {
   mockVersionsForKey,
 } from "../pages/data-support/agent-data-support.po";
 import { mockCustomSkill, mockPlatformSkill, MOCK_PLATFORM_SKILL_ID } from "../pages/data-support/skill-data-support.po";
+import { agentCost, costRecord } from "../pages/data-support/cost-data-support.po";
 import { DataSupport } from "../pages/data-support/data-support.po";
 import { AgentDetailPage } from "../pages/agent-detail-page.po";
 import { CommunicationConnectionDetailPage } from "../pages/communication-connection-detail-page.po";
@@ -1780,45 +1783,354 @@ test.describe("Agent Detail Page — Personality tab (approval mode, OpenClaw)",
   });
 });
 
-test.describe("Agent Detail Page — About tab", () => {
+test.describe("Agent Detail Page — Costs tab", () => {
   let agentDetailPage: AgentDetailPage;
   let dataSupportPage: DataSupport;
 
   test.use({ storageState: { cookies: [], origins: [] } });
 
-  const agentCost = (overrides: Record<string, unknown> = {}) => ({
-    agent_id: MOCK_AGENT_ID,
-    agent_name: "Maya",
-    model: "openrouter/z-ai/glm-5.2",
-    status: "active",
-    period: "THIRTY_DAYS",
-    from_date: "2026-08-01T00:00:00Z",
-    to_date: "2026-08-31T00:00:00Z",
-    granularity: "day",
-    total_cost: 12.5,
-    total_tokens: 3000,
-    prompt_tokens: 2000,
-    completion_tokens: 1000,
-    models_breakdown: [
-      {
-        model: "litellm/openrouter/z-ai/glm-5.2",
-        total_cost: 9.0,
-        prompt_tokens: 1500,
-        completion_tokens: 700,
-      },
-      {
-        model: "litellm/openrouter/openai/gpt-5-mini",
-        total_cost: 3.5,
-        prompt_tokens: 500,
-        completion_tokens: 300,
-      },
-    ],
-    spend_over_time: [
-      { bucket: "2026-08-01T00:00:00Z", spend: 4.5, calls: 3 },
-      { bucket: "2026-08-02T00:00:00Z", spend: 8.0, calls: 5 },
-    ],
-    ...overrides,
+  test.beforeEach(async ({ page }) => {
+    agentDetailPage = new AgentDetailPage(page);
+    dataSupportPage = new DataSupport(page);
+
+    await dataSupportPage.auth.interceptRefreshRequest();
+    await dataSupportPage.users.interceptGetUserContextRequest();
+    await dataSupportPage.users.interceptGetOrganizationsRequest();
+    await dataSupportPage.agents.interceptGetAgentRequest();
+    await dataSupportPage.agents.interceptGetAgentTemplateRequest();
+    await dataSupportPage.agents.interceptGetAgentHealthRequest();
+    await dataSupportPage.agents.interceptGetConversationChannelsRequest();
+    await dataSupportPage.agents.interceptGetTemplatesRequest();
+    await dataSupportPage.agents.interceptGetAgentConfigurationRequest();
+    await dataSupportPage.agents.interceptGetModelsRequest();
+    await dataSupportPage.organizations.interceptGetOrganizationLlmBudget({
+      organizationId: TEST_ORG_ID,
+    });
   });
+
+  test("renders the agent's totals, averages and failures", async ({ page }) => {
+    await dataSupportPage.costs.interceptAgentCosts(MOCK_AGENT_ID);
+
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await agentDetailPage.openCostsTab();
+
+    await expect(page.getByTestId("agent-cost-total-spend")).toContainText("$12.50");
+    await expect(page.getByTestId("agent-cost-total-spend")).toContainText("8 calls");
+    await expect(page.getByTestId("agent-cost-burn-rate")).toContainText("$0.42/day");
+    await expect(page.getByTestId("agent-cost-per-call")).toContainText("$1.56");
+    await expect(page.getByTestId("agent-cost-tokens")).toContainText("2.0k in · 1.0k out");
+    await expect(page.getByTestId("agent-cost-failed-calls")).toContainText("2");
+    await expect(page.getByTestId("agent-cost-failed-calls")).toContainText("25% of calls");
+    await expect(page.getByTestId("agent-cost-latency")).toContainText("1.8s");
+    await expect(page).toHaveURL(/tab=costs/);
+  });
+
+  test("carries the month in progress and its projection onto the cards", async ({ page }) => {
+    await dataSupportPage.costs.interceptAgentCosts(MOCK_AGENT_ID);
+
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await agentDetailPage.openCostsTab();
+
+    const thisMonth = page.getByTestId("agent-cost-this-month");
+    await expect(thisMonth).toContainText("$9.00");
+    await expect(thisMonth).toContainText("on pace for $30.00");
+  });
+
+  test("draws spend, calls, prompt size and the per-call distribution", async ({ page }) => {
+    await dataSupportPage.costs.interceptAgentCosts(MOCK_AGENT_ID);
+
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await agentDetailPage.openCostsTab();
+
+    for (const name of ["Spend over time", "Calls over time", "Average prompt tokens", "Cost per call"]) {
+      await expect(page.getByRole("heading", { name, exact: true })).toBeVisible();
+    }
+  });
+
+  test("breaks the spend down by model, biggest first", async ({ page }) => {
+    await dataSupportPage.costs.interceptAgentCosts(MOCK_AGENT_ID);
+
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await agentDetailPage.openCostsTab();
+
+    const table = page.getByTestId("agent-cost-by-model");
+    await expect(table).toBeVisible();
+
+    // The routing prefix is stripped for display; the server already ranks by spend.
+    const models = await table.locator("tbody tr td:first-child").allInnerTexts();
+    expect(models).toEqual(["glm-5.2", "gpt-5-mini"]);
+    const top = table.locator("tbody tr").first();
+    await expect(top).toContainText("$9.00");
+    await expect(top).toContainText("72%");
+    // $9.00 over 6 calls.
+    await expect(top).toContainText("$1.50");
+  });
+
+  test("hides the model breakdown when there is nothing to break down", async ({ page }) => {
+    await dataSupportPage.costs.interceptAgentCosts(MOCK_AGENT_ID, {
+      summary: agentCost({ models_breakdown: [] }),
+    });
+
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await agentDetailPage.openCostsTab();
+
+    await expect(page.getByRole("heading", { name: "Spend over time" })).toBeVisible();
+    await expect(page.getByTestId("agent-cost-by-model")).toBeHidden();
+  });
+
+  test("lists the agent's calls without repeating the agent on every row", async ({ page }) => {
+    await dataSupportPage.costs.interceptAgentCosts(MOCK_AGENT_ID, {
+      calls: { items: [costRecord({ agent_name: "Maya" })], total: 1 },
+    });
+
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await agentDetailPage.openCostsTab();
+
+    const calls = page.getByTestId("agent-calls");
+    await expect(calls.getByTestId("cost-row")).toHaveCount(1);
+    await expect(calls.getByText("Agent", { exact: true })).toHaveCount(0);
+    await expect(page.getByTestId("agent-calls-range")).toHaveText("Showing 1–1 of 1 call");
+    // A single page needs no pager.
+    await expect(calls.getByRole("button", { name: "Next" })).toHaveCount(0);
+  });
+
+  test("pages through calls instead of loading more as the page scrolls", async ({ page }) => {
+    const callPages = [10, 10, 3].map((count, pageIndex) =>
+      Array.from({ length: count }, (_, i) =>
+        costRecord({ request_id: `gen-page${pageIndex + 1}-${i}` }),
+      ),
+    );
+    await dataSupportPage.costs.interceptAgentCosts(MOCK_AGENT_ID, {
+      calls: { pages: callPages, total: 23 },
+    });
+    const requestedPages: string[] = [];
+    page.on("request", (request) => {
+      if (request.url().includes(`/costs/agents/${MOCK_AGENT_ID}/calls`)) {
+        requestedPages.push(new URL(request.url()).searchParams.get("page") ?? "");
+      }
+    });
+
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await agentDetailPage.openCostsTab();
+
+    const calls = page.getByTestId("agent-calls");
+    await expect(calls.getByTestId("cost-row")).toHaveCount(10);
+    await expect(page.getByTestId("agent-calls-range")).toHaveText("Showing 1–10 of 23 calls");
+
+    // Reaching the bottom of the page must not fetch another page.
+    await page.mouse.wheel(0, 10_000);
+    await calls.getByRole("button", { name: "Next" }).scrollIntoViewIfNeeded();
+    await expect(calls.getByTestId("cost-row")).toHaveCount(10);
+    expect(requestedPages.every((requested) => requested === "1")).toBe(true);
+
+    await calls.getByRole("button", { name: "Next" }).click();
+    await expect(page.getByTestId("agent-calls-range")).toHaveText("Showing 11–20 of 23 calls");
+    await expect(calls.getByTestId("cost-row")).toHaveCount(10);
+
+    await calls.getByRole("button", { name: "Next" }).click();
+    await expect(page.getByTestId("agent-calls-range")).toHaveText("Showing 21–23 of 23 calls");
+    await expect(calls.getByTestId("cost-row")).toHaveCount(3);
+    await expect(calls.getByRole("button", { name: "Next" })).toBeDisabled();
+  });
+
+  test("sorts the calls from the table and starts again at page one", async ({ page }) => {
+    const callPages = [10, 10].map((count, pageIndex) =>
+      Array.from({ length: count }, (_, i) =>
+        costRecord({ request_id: `gen-page${pageIndex + 1}-${i}` }),
+      ),
+    );
+    await dataSupportPage.costs.interceptAgentCosts(MOCK_AGENT_ID, {
+      calls: { pages: callPages, total: 20 },
+    });
+    const callRequests: URLSearchParams[] = [];
+    page.on("request", (request) => {
+      if (request.url().includes(`/costs/agents/${MOCK_AGENT_ID}/calls`)) {
+        callRequests.push(new URL(request.url()).searchParams);
+      }
+    });
+
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await agentDetailPage.openCostsTab();
+
+    const calls = page.getByTestId("agent-calls");
+    // Sort orders only this table, so it lives here rather than in the filter bar.
+    await expect(page.getByTestId("cost-sort-filter")).toHaveCount(1);
+    await calls.getByRole("button", { name: "Next" }).click();
+    await expect(page.getByTestId("agent-calls-range")).toHaveText("Showing 11–20 of 20 calls");
+
+    await calls.getByTestId("cost-sort-filter").click();
+    await page.getByRole("option", { name: "Most expensive" }).click();
+
+    await expect(page.getByTestId("agent-calls-range")).toHaveText("Showing 1–10 of 20 calls");
+    await expect.poll(() => callRequests.at(-1)?.get("sort")).toBe("most_expensive");
+    expect(callRequests.at(-1)?.get("page")).toBe("1");
+  });
+
+  test("does not leave the previous filter's calls on screen while the new ones load", async ({
+    page,
+  }) => {
+    // Held rows are right across a page change and wrong across a filter change:
+    // they would show the old selection's calls, and its total, under the new one.
+    await dataSupportPage.costs.interceptAgentCosts(MOCK_AGENT_ID, {
+      calls: {
+        items: Array.from({ length: 9 }, (_, i) =>
+          costRecord({ request_id: `gen-unfiltered-${i}` }),
+        ),
+        total: 9,
+      },
+    });
+
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await agentDetailPage.openCostsTab();
+    await expect(page.getByTestId("agent-calls-range")).toHaveText("Showing 1–9 of 9 calls");
+
+    // The filtered response is held until the assertions below have run, so the
+    // gap where stale rows used to show is the window under test.
+    let release = () => {};
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await page.route(`**/costs/agents/${MOCK_AGENT_ID}/calls*`, async (route) => {
+      const url = new URL(route.request().url());
+      if (!url.searchParams.get("model")) return route.fallback();
+      await held;
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          page: 1,
+          page_size: 10,
+          total: 2,
+          items: [
+            costRecord({ request_id: "gen-filtered-1" }),
+            costRecord({ request_id: "gen-filtered-2" }),
+          ],
+        }),
+      });
+    });
+
+    await page.getByTestId("cost-model-filter").click();
+    await page.getByRole("option", { name: "glm-5.2" }).click();
+
+    // While the filtered page is in flight the table falls back to its skeleton
+    // rather than the unfiltered rows and their total.
+    await expect(page.getByTestId("agent-calls").getByTestId("cost-row")).toHaveCount(0);
+    await expect(page.getByTestId("agent-calls-range")).not.toContainText("of 9 calls");
+
+    release();
+    await expect(page.getByTestId("agent-calls-range")).toHaveText("Showing 1–2 of 2 calls");
+  });
+
+  test("shows whole months, newest first, comparing the month in progress on its projection", async ({
+    page,
+  }) => {
+    await dataSupportPage.costs.interceptAgentCosts(MOCK_AGENT_ID);
+
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await agentDetailPage.openCostsTab();
+
+    const rows = page.getByTestId("monthly-costs-table").locator("tbody tr");
+    await expect(rows).toHaveCount(3);
+    await expect(rows.nth(0)).toContainText("Sep 2026");
+    await expect(rows.nth(0)).toContainText("so far");
+    await expect(rows.nth(0)).toContainText("~$30.00 projected");
+    // $30 projected against August's $20.
+    await expect(rows.nth(0)).toContainText("↑ 50%");
+    await expect(rows.nth(1)).toContainText("Aug 2026");
+    await expect(rows.nth(1)).toContainText("↑ 100%");
+    await expect(page.getByTestId("monthly-previous")).toContainText("$20.00");
+    await expect(page.getByTestId("monthly-average")).toContainText("$15.00");
+  });
+
+  test("reads its window and filters from the URL", async ({ page }) => {
+    // The page must not be sourced from the organization summary: that endpoint
+    // needs an Organization-wide permission an Agent Access Role never grants.
+    const requested = await dataSupportPage.costs.interceptAgentCosts(MOCK_AGENT_ID);
+    const monthlyRequests: URLSearchParams[] = [];
+    page.on("request", (request) => {
+      if (request.url().includes(`/costs/agents/${MOCK_AGENT_ID}/monthly`)) {
+        monthlyRequests.push(new URL(request.url()).searchParams);
+      }
+    });
+
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await agentDetailPage.openCostsTab();
+    await expect(page.getByRole("heading", { name: "Spend over time" })).toBeVisible();
+
+    // No range picked: the server chooses the window. Sort orders only the call
+    // list, so the summary does not send it.
+    expect(requested[0].get("from_date")).toBeNull();
+    expect(requested[0].get("to_date")).toBeNull();
+    expect(requested[0].get("sort")).toBeNull();
+
+    await page.goto(
+      `/dashboard/${TEST_ORG_ID}/agents/${MOCK_AGENT_ID}?tab=costs&from=2026-08-01T00:00:00.000Z&to=2026-08-31T00:00:00.000Z&model=litellm/openrouter/z-ai/glm-5.2`,
+    );
+    await expect(page.getByRole("heading", { name: "Spend over time" })).toBeVisible();
+
+    await expect.poll(() => requested.at(-1)?.get("from_date")).toBe("2026-08-01T00:00:00.000Z");
+    expect(requested.at(-1)?.get("to_date")).toBe("2026-08-31T00:00:00.000Z");
+    expect(requested.at(-1)?.get("model")).toBe("litellm/openrouter/z-ai/glm-5.2");
+
+    // The monthly table takes the model but never the date range.
+    await expect.poll(() => monthlyRequests.at(-1)?.get("model")).toBe("litellm/openrouter/z-ai/glm-5.2");
+    expect(monthlyRequests.at(-1)?.get("from_date")).toBeNull();
+    expect(monthlyRequests.at(-1)?.get("months")).toBe("12");
+  });
+
+  test("labels the picker with the window the server actually used", async ({ page }) => {
+    // With no range picked the server applies its own default window, so a static
+    // "All dates" would describe the totals beside it as lifetime when they are not.
+    await dataSupportPage.costs.interceptAgentCosts(MOCK_AGENT_ID);
+
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await agentDetailPage.openCostsTab();
+
+    const picker = page.getByRole("button", { name: "Date range" });
+    await expect(picker).toBeVisible();
+    // from_date / to_date in the fixture are 2026-08-01 and 2026-08-31.
+    await expect(picker).toContainText("Aug 1, 2026");
+    await expect(picker).toContainText("Aug 31, 2026");
+    await expect(picker).not.toContainText("All dates");
+  });
+
+  test("says so plainly when the reader has no cost access to this agent", async ({ page }) => {
+    // A reader without cost access is not looking at a failure, so it must not be
+    // reported as one.
+    await dataSupportPage.costs.interceptAgentCosts(MOCK_AGENT_ID, { summaryStatus: 403 });
+
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await agentDetailPage.openCostsTab();
+
+    await expect(page.getByText("You don't have access to this agent's costs.")).toBeVisible();
+  });
+
+  test("surfaces an error instead of an empty chart when spend fails to load", async ({ page }) => {
+    await dataSupportPage.costs.interceptAgentCosts(MOCK_AGENT_ID, { summaryStatus: 500 });
+
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await agentDetailPage.openCostsTab();
+
+    await expect(page.getByText("We couldn't load this agent's spend.")).toBeVisible();
+  });
+
+  test("is not offered to a reader without cost access", async () => {
+    await dataSupportPage.agents.interceptGetAgentRequest({
+      body: { ...mockAgent, allowed_actions: ["agent.read", "activity.read"] },
+    });
+
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+
+    await expect(agentDetailPage.agentName("Maya")).toBeVisible();
+    await expect(agentDetailPage.costsTab()).toHaveCount(0);
+  });
+});
+
+test.describe("Agent Detail Page — About tab", () => {
+  let agentDetailPage: AgentDetailPage;
+  let dataSupportPage: DataSupport;
+
+  test.use({ storageState: { cookies: [], origins: [] } });
 
   test.beforeEach(async ({ page }) => {
     agentDetailPage = new AgentDetailPage(page);
@@ -1836,165 +2148,265 @@ test.describe("Agent Detail Page — About tab", () => {
     await dataSupportPage.agents.interceptGetModelsRequest();
   });
 
-  test("renders the agent's spend trend and totals", async ({ page }) => {
-    await page.route(`**/costs/agents/${MOCK_AGENT_ID}*`, async (route) => {
-      await route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify(agentCost()),
-      });
-    });
-
+  test("leaves spend to the Costs tab", async ({ page }) => {
     await agentDetailPage.goto(MOCK_AGENT_ID);
     await page.getByRole("button", { name: "About", exact: true }).click();
 
-    await expect(
-      page.getByRole("heading", { name: "Spend over time" }),
-    ).toBeVisible();
-    await expect(page.getByText("$12.50")).toBeVisible();
+    await expect(page.getByTestId("agent-about-overview")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Spend over time" })).toHaveCount(0);
   });
 
-  test("breaks the spend down by model, biggest first", async ({ page }) => {
-    await page.route(`**/costs/agents/${MOCK_AGENT_ID}*`, async (route) => {
-      await route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify(agentCost()),
-      });
-    });
-
+  test("summarises how the agent is set up", async ({ page }) => {
     await agentDetailPage.goto(MOCK_AGENT_ID);
     await page.getByRole("button", { name: "About", exact: true }).click();
 
-    const table = page.getByTestId("agent-cost-by-model");
-    await expect(table).toBeVisible();
-
-    // The routing prefix is stripped for display; the server already ranks by spend.
-    const models = await table.locator("tbody tr td:first-child").allInnerTexts();
-    expect(models).toEqual(["glm-5.2", "gpt-5-mini"]);
-    await expect(table.getByText("$9.00")).toBeVisible();
+    const overview = page.getByTestId("agent-about-overview");
+    await expect(overview).toContainText("OpenClaw");
+    await expect(overview).toContainText("gpt-5-mini");
+    // The blueprint reads off the active configuration, not the raw template key.
+    await expect(overview).toContainText("Maya");
+    await expect(overview).toContainText("v1");
+    await expect(overview).toContainText("Full access — no approval prompts");
+    await expect(overview).toContainText("Mar 14, 2026");
   });
 
-  test("hides the model breakdown when there is nothing to break down", async ({
+  test("names a Hermes agent's approval mode instead of full access", async ({
     page,
   }) => {
-    await page.route(`**/costs/agents/${MOCK_AGENT_ID}*`, async (route) => {
-      await route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify(agentCost({ models_breakdown: [] })),
-      });
+    await dataSupportPage.agents.interceptGetAgentRequest({
+      body: { ...mockAgent, agent_type: "hermes", approval_mode: "manual", verbose_mode: true },
     });
 
     await agentDetailPage.goto(MOCK_AGENT_ID);
     await page.getByRole("button", { name: "About", exact: true }).click();
 
-    await expect(
-      page.getByRole("heading", { name: "Spend over time" }),
-    ).toBeVisible();
-    await expect(page.getByTestId("agent-cost-by-model")).toBeHidden();
+    const overview = page.getByTestId("agent-about-overview");
+    await expect(overview).toContainText("Hermes");
+    await expect(overview).toContainText("Manual — every command waits for approval");
+    await expect(overview).toContainText("Shows progress while working");
   });
 
-  test("reads its window from the date range in the URL", async ({ page }) => {
-    // The chart must not be sourced from the organization summary: that endpoint
-    // needs an Organization-wide permission an Agent Access Role never grants. It
-    // sends only the window, because this route takes no filter.
-    const requested: URLSearchParams[] = [];
-    await page.route(`**/costs/agents/${MOCK_AGENT_ID}*`, async (route) => {
-      requested.push(new URL(route.request().url()).searchParams);
-      await route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify(agentCost()),
-      });
+  test("lists the agent's skills without opening configuration", async ({
+    page,
+  }) => {
+    await dataSupportPage.agents.interceptGetAgentRequest({
+      body: {
+        ...mockAgent,
+        skills: [
+          {
+            ...mockAssignedSkill,
+            version: 3,
+            scope: "organization",
+            required: true,
+          },
+          {
+            ...mockAssignedSkill,
+            id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+            name: "jira",
+            scope: "agent",
+            required_providers: ["jira"],
+            update_available: true,
+          },
+        ],
+      },
     });
 
     await agentDetailPage.goto(MOCK_AGENT_ID);
     await page.getByRole("button", { name: "About", exact: true }).click();
-    await expect(
-      page.getByRole("heading", { name: "Spend over time" }),
-    ).toBeVisible();
 
-    // No range picked: the server chooses the window, as "All dates" does on the
-    // costs page.
-    expect(requested[0].get("from_date")).toBeNull();
-    expect(requested[0].get("to_date")).toBeNull();
-    expect(requested[0].get("sort")).toBeNull();
-
-    await page.goto(
-      `/dashboard/${TEST_ORG_ID}/agents/${MOCK_AGENT_ID}?tab=about&from=2026-08-01T00:00:00.000Z&to=2026-08-31T00:00:00.000Z`,
+    const skills = page.getByTestId("agent-about-skills");
+    await expect(skills.getByRole("heading", { name: "Skills (2)" })).toBeVisible();
+    await expect(skills).toContainText("Required");
+    await expect(skills).toContainText("Update available");
+    // Provider requirements are named the way the skills catalogue names them.
+    await expect(skills).toContainText("GitHub");
+    await expect(skills).toContainText("Jira");
+    await expect(skills.getByRole("link", { name: /github/i })).toHaveAttribute(
+      "href",
+      `/dashboard/${TEST_ORG_ID}/agents/${MOCK_AGENT_ID}/skills/${mockAssignedSkill.id}`,
     );
-    await expect(
-      page.getByRole("heading", { name: "Spend over time" }),
-    ).toBeVisible();
-
-    await expect
-      .poll(() => requested.at(-1)?.get("from_date"))
-      .toBe("2026-08-01T00:00:00.000Z");
-    expect(requested.at(-1)?.get("to_date")).toBe("2026-08-31T00:00:00.000Z");
   });
 
-  test("labels the picker with the window the server actually used", async ({
+  test("says so plainly when the agent has no skills", async ({ page }) => {
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await page.getByRole("button", { name: "About", exact: true }).click();
+
+    await expect(page.getByTestId("agent-about-skills")).toContainText(
+      "No skills assigned yet",
+    );
+  });
+
+  test("shows where the agent can be reached", async ({ page }) => {
+    await dataSupportPage.communicationConnections.interceptChannelsRequests({
+      agentId: MOCK_AGENT_ID,
+    });
+
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await page.getByRole("button", { name: "About", exact: true }).click();
+
+    const messaging = page.getByTestId("agent-about-messaging");
+    await expect(messaging).toContainText(mockCommunicationConnection.display_name);
+    await expect(messaging).toContainText(
+      `Connected as ${mockCommunicationConnection.external_identity}`,
+    );
+    await expect(messaging).toContainText("Connected");
+  });
+
+  test("falls back to the agent's own platform list when connections fail", async ({
     page,
   }) => {
-    // With no range picked the server applies its own default window, so a static
-    // "All dates" would describe the totals beside it as lifetime when they are not.
-    await page.route(`**/costs/agents/${MOCK_AGENT_ID}*`, async (route) => {
+    await page.route(
+      `**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}/connections`,
+      async (route) => {
+        await route.fulfill({
+          status: 500,
+          contentType: "application/json",
+          body: JSON.stringify({ detail: "Connections unavailable" }),
+        });
+      },
+    );
+
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await page.getByRole("button", { name: "About", exact: true }).click();
+
+    const messaging = page.getByTestId("agent-about-messaging");
+    await expect(messaging).toContainText("Slack");
+    await expect(messaging).toContainText("Discord");
+  });
+
+  test("names the accounts the agent can act through", async ({ page }) => {
+    await dataSupportPage.agents.interceptGetAgentRequest({
+      body: {
+        ...mockAgent,
+        secrets: [
+          mockSecret,
+          {
+            provider: "jira",
+            secret_name: "jira-secret",
+            shared_credential_id: "77777777-7777-4777-8777-777777777777",
+            shared_credential_name: "Team Jira",
+          },
+        ],
+      },
+    });
+
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await page.getByRole("button", { name: "About", exact: true }).click();
+
+    const integrations = page.getByTestId("agent-about-integrations");
+    await expect(integrations).toContainText("GitHub");
+    await expect(integrations).toContainText("Agent-owned");
+    await expect(integrations).toContainText("Shared · Team Jira");
+  });
+
+  test("reads the pinned blueprint without loading the configuration history", async ({
+    page,
+  }) => {
+    // /configuration returns every shared and override version with its full
+    // content. About only needs the pinned version's name and description.
+    // The API read only. A production build prefetches the Configuration *page*
+    // (`/dashboard/.../configuration?_rsc=...`) for every link to it, and that
+    // path ends the same way.
+    const configurationApi = new RegExp(
+      `/api/v1/organizations/[^/]+/agents/${MOCK_AGENT_ID}/configuration$`,
+    );
+    const configurationReads: string[] = [];
+    page.on("request", (request) => {
+      if (configurationApi.test(new URL(request.url()).pathname)) {
+        configurationReads.push(request.url());
+      }
+    });
+    await dataSupportPage.agents.interceptGetAgentTemplateRequest({
+      body: { ...mockAgentTemplate, description: "Answers the support queue." },
+    });
+
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await page.getByRole("button", { name: "About", exact: true }).click();
+
+    const overview = page.getByTestId("agent-about-overview");
+    // Precondition: the blueprint has resolved from its key to its display
+    // name, so whatever the Overview reads has been requested and answered.
+    const blueprint = overview.locator("dt", { hasText: "Blueprint" }).locator("xpath=..");
+    await expect(blueprint).toContainText("Maya");
+    expect(configurationReads).toEqual([]);
+    await expect(overview).toContainText("Answers the support queue.");
+  });
+
+  test("offers to view rather than manage when the viewer cannot edit", async ({
+    page,
+  }) => {
+    await dataSupportPage.agents.interceptGetAgentRequest({
+      body: { ...mockAgent, allowed_actions: ["agent.read", "activity.read", "cost.read"] },
+    });
+
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await page.getByRole("button", { name: "About", exact: true }).click();
+
+    await expect(
+      page.getByTestId("agent-about-skills").getByRole("link", { name: "View skills" }),
+    ).toBeVisible();
+    await expect(
+      page.getByTestId("agent-about-messaging").getByRole("link", { name: "View", exact: true }),
+    ).toBeVisible();
+    await expect(
+      page.getByTestId("agent-about-integrations").getByRole("link", { name: "View", exact: true }),
+    ).toBeVisible();
+  });
+
+  test("gates integrations on secret management, not on general edit access", async ({
+    page,
+  }) => {
+    await dataSupportPage.agents.interceptGetAgentRequest({
+      body: {
+        ...mockAgent,
+        allowed_actions: mockAgentAllowedActions.filter((action) => action !== "agent.secret.manage"),
+      },
+    });
+
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await page.getByRole("button", { name: "About", exact: true }).click();
+
+    await expect(
+      page.getByTestId("agent-about-skills").getByRole("link", { name: "Manage skills" }),
+    ).toBeVisible();
+    await expect(
+      page.getByTestId("agent-about-messaging").getByRole("link", { name: "Manage", exact: true }),
+    ).toBeVisible();
+    await expect(
+      page.getByTestId("agent-about-integrations").getByRole("link", { name: "View", exact: true }),
+    ).toBeVisible();
+  });
+
+  test("names platforms the way the server does", async ({ page }) => {
+    await dataSupportPage.agents.interceptGetAgentRequest({
+      body: { ...mockAgent, configured_platform_keys: ["teams", "web"] },
+    });
+    await page.route("**/api/v1/organizations/*/communication-platforms", async (route) => {
       await route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify(agentCost()),
+        body: JSON.stringify([
+          { ...mockCommunicationPlatforms[0], key: "teams", display_name: "Microsoft Teams" },
+          { ...mockCommunicationPlatforms[0], key: "web", display_name: "Web Chat" },
+        ]),
       });
     });
+    await page.route(
+      `**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}/connections`,
+      async (route) => {
+        await route.fulfill({
+          status: 500,
+          contentType: "application/json",
+          body: JSON.stringify({ detail: "Connections unavailable" }),
+        });
+      },
+    );
 
     await agentDetailPage.goto(MOCK_AGENT_ID);
     await page.getByRole("button", { name: "About", exact: true }).click();
 
-    const picker = page.getByRole("button", { name: "Date range" });
-    await expect(picker).toBeVisible();
-    // from_date / to_date in the fixture are 2026-08-01 and 2026-08-31.
-    await expect(picker).toContainText("Aug 1, 2026");
-    await expect(picker).toContainText("Aug 31, 2026");
-    await expect(picker).not.toContainText("All dates");
-  });
-
-  test("says so plainly when the reader has no cost access to this agent", async ({
-    page,
-  }) => {
-    // A reader without cost access is not looking at a failure, so it must not be
-    // reported as one.
-    await page.route(`**/costs/agents/${MOCK_AGENT_ID}*`, async (route) => {
-      await route.fulfill({
-        status: 403,
-        contentType: "application/json",
-        body: JSON.stringify({ detail: "Forbidden" }),
-      });
-    });
-
-    await agentDetailPage.goto(MOCK_AGENT_ID);
-    await page.getByRole("button", { name: "About", exact: true }).click();
-
-    await expect(
-      page.getByText("You don't have access to this agent's costs."),
-    ).toBeVisible();
-  });
-
-  test("surfaces an error instead of an empty chart when spend fails to load", async ({
-    page,
-  }) => {
-    await page.route(`**/costs/agents/${MOCK_AGENT_ID}*`, async (route) => {
-      await route.fulfill({
-        status: 500,
-        contentType: "application/json",
-        body: JSON.stringify({ detail: "Cost service unavailable" }),
-      });
-    });
-
-    await agentDetailPage.goto(MOCK_AGENT_ID);
-    await page.getByRole("button", { name: "About", exact: true }).click();
-
-    await expect(
-      page.getByText("We couldn't load this agent's spend."),
-    ).toBeVisible();
+    const messaging = page.getByTestId("agent-about-messaging");
+    await expect(messaging).toContainText("Microsoft Teams");
+    await expect(messaging).toContainText("Web Chat");
   });
 });

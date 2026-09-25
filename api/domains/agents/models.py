@@ -79,6 +79,7 @@ class SecretProvider(str, enum.Enum):
     SLACK = "slack"
     PIPEDRIVE = "pipedrive"
     GOOGLE_WORKSPACE = "google_workspace"
+    SHAREPOINT = "sharepoint"
 
 
 # Google services a google_workspace credential may cover, as named by the gog CLI.
@@ -98,6 +99,7 @@ PROVIDER_DISPLAY_NAMES: dict[SecretProvider, str] = {
     SecretProvider.SLACK: "Slack credential",
     SecretProvider.PIPEDRIVE: "Pipedrive credential",
     SecretProvider.GOOGLE_WORKSPACE: "Google Workspace credential",
+    SecretProvider.SHAREPOINT: "SharePoint credential",
 }
 
 
@@ -201,6 +203,34 @@ class GoogleWorkspaceContent(SecretContent):
         return self
 
 
+class SharePointContent(SecretContent):
+    """A SharePoint sign-in made on the agent's Microsoft Teams app.
+
+    The sign-in is a public client (PKCE, no secret), so the refresh token here refreshes
+    without the Teams app's secret; aai-cli's ``microsoft_delegated`` profile does exactly
+    that and stores each rotated token itself. The Teams app's secret is never read for
+    SharePoint and cannot be stored here (``extra="forbid"`` on SecretContent).
+    """
+
+    # Strings rather than UUIDs: encrypt_content JSON-serialises model_dump(), which a UUID
+    # object would break. Validated and normalised below.
+    connection_id: str
+    tenant_id: str = Field(min_length=1)
+    client_id: str = Field(min_length=1)
+    email: str = Field(min_length=1)
+    scopes: list[str] = Field(default_factory=list)
+    read_only: bool = False
+    refresh_token: str = Field(min_length=1)
+    # New for every sign-in. The pod writes the refresh token into aai-cli's store only when
+    # this changes, so a restart keeps aai-cli's rotated token and a reconnect replaces it.
+    sign_in_id: str
+
+    @field_validator("connection_id", "sign_in_id")
+    @classmethod
+    def _validate_uuid(cls, value: str) -> str:
+        return str(UUID(value))
+
+
 class ZohoMailContent(SecretContent):
     email: str
     account_id: str
@@ -244,7 +274,14 @@ PROVIDER_CONTENT_MODELS: dict[SecretProvider, type[SecretContent]] = {
     SecretProvider.SLACK: SlackContent,
     SecretProvider.PIPEDRIVE: PipedriveContent,
     SecretProvider.GOOGLE_WORKSPACE: GoogleWorkspaceContent,
+    SecretProvider.SHAREPOINT: SharePointContent,
 }
+
+
+# Providers whose credential only their sign-in writes: the refresh token must come from a
+# sign-in on the named app, checked for tenant and permissions. Saving content directly would
+# skip those checks or point a sign-in at another app.
+SIGN_IN_ONLY_PROVIDERS: frozenset[SecretProvider] = frozenset({SecretProvider.SHAREPOINT})
 
 
 def validate_content(provider: SecretProvider, raw: dict) -> SecretContent:
@@ -864,6 +901,10 @@ class AgentSecretCreate(PydanticBaseModel):  # no secret_name — backend stamps
 
     @model_validator(mode="after")
     def validate_provider_content(self) -> AgentSecretCreate:
+        if self.provider in SIGN_IN_ONLY_PROVIDERS:
+            raise ValueError(
+                f"{PROVIDER_DISPLAY_NAMES[self.provider]} is connected by signing in, not by saving content"
+            )
         validate_content(self.provider, self.content)
         return self
 
@@ -1316,6 +1357,22 @@ class AgentRead(PydanticBaseModel):
 
 class AgentFilter(PydanticBaseModel):
     status: AgentStatus | None = None
+
+
+class AgentRuntimeDiagnosticsRead(PydanticBaseModel):
+    observed_at: datetime
+    available: bool = False
+    pod_created_at: datetime | None = None
+    restart_count: int = 0
+    ready: bool = False
+    waiting_reason: str | None = None
+    termination_reason: str | None = None
+    exit_code: int | None = None
+    finished_at: datetime | None = None
+    current_logs: list[str] = Field(default_factory=list)
+    previous_logs: list[str] = Field(default_factory=list)
+    current_logs_available: bool = False
+    previous_logs_available: bool = False
 
 
 class AgentHealthRead(PydanticBaseModel):

@@ -1,6 +1,7 @@
 import enum
 import json
 import logging
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid7
@@ -35,7 +36,11 @@ from api.domains.events.catalog import (
 )
 from api.domains.events.dispatch import EventDeliveryDispatcher, resolve_actor_identity
 from api.domains.rbac.catalog import PermissionKey
-from api.domains.restore_points.constants import RESTORE_POINT_RECONCILIATION_PENDING_GRACE_SECONDS
+from api.domains.restore_points.constants import (
+    RESTORE_POINT_POD_TERMINATION_POLL_SECONDS,
+    RESTORE_POINT_POD_TERMINATION_TIMEOUT_SECONDS,
+    RESTORE_POINT_RECONCILIATION_PENDING_GRACE_SECONDS,
+)
 from api.domains.restore_points.models import (
     NON_TERMINAL_STATUSES,
     TERMINAL_STATUSES,
@@ -68,6 +73,7 @@ NOT_READY_DETAIL = "Only a ready restore point can be restored."
 DELETE_IN_FLIGHT_DETAIL = "This restore point is still being worked on. Wait for it to finish, then delete it."
 PRE_RESTORE_LABEL = "Automatic backup before restore"
 NOT_REPLAYABLE_DETAIL = "This restore point predates the recorded configuration, so there is nothing to re-apply."
+STILL_SHUTTING_DOWN_DETAIL = "The Agent is still shutting down. Try again in a moment."
 
 
 def _selection_type(agent: Agent) -> str:
@@ -385,6 +391,8 @@ class RestorePointService:
     ) -> AgentRestorePointRead:
         agent = self.agent_authorization.require_action(context, agent_id, PermissionKey.AGENT_LIFECYCLE_MANAGE)
 
+        self._await_agent_volume_release(agent.id)
+
         with self.agent_repository.lifecycle_lock(agent.id) as acquired:
             if not acquired:
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=CAPTURE_IN_FLIGHT_DETAIL)
@@ -431,6 +439,8 @@ class RestorePointService:
     ) -> AgentRestorePointRead:
         agent = self.agent_authorization.require_action(context, agent_id, PermissionKey.AGENT_LIFECYCLE_MANAGE)
         scope = self.agent_authorization.authorization_scope(context, PermissionKey.ACTIVITY_READ)
+
+        self._await_agent_volume_release(agent.id)
 
         with self.agent_repository.lifecycle_lock(agent.id) as acquired:
             if not acquired:
@@ -674,6 +684,9 @@ class RestorePointService:
                 ),
             )
         except Exception as exc:
+            # The reason stored on the row is sanitized down to fixed copy; the
+            # apiserver's account of what it rejected is kept only in the log.
+            logger.exception("Could not provision the restore of restore point %s onto agent %s", target.id, agent.id)
             reason = friendly_k8s_error(exc, operation=AgentProvisioningOperation.RESTORE)
             self.repository.mark_failed(backup.id, reason[:_MAX_FAILURE_REASON])
             self.repository.mark_restored(target.id, cancel_replay=True)
@@ -751,6 +764,21 @@ class RestorePointService:
             self.k8s.delete_pvc(pvc.metadata.name, namespace)
         self.repository.delete_for_agent(agent_id)
 
+    def _await_agent_volume_release(self, agent_id: UUID) -> None:
+        """Block until no Agent pod holds the volume, or refuse.
+
+        Stopping deletes the Deployment and returns; the pod lingers for its grace
+        period while the Agent already reads as STOPPED. The volume is ReadWriteOnce
+        but local-path is a bind mount, so nothing stops a Job pod mounting it
+        alongside a dying Agent and archiving or wiping a directory still being
+        written. Waiting outside the lifecycle lock keeps start and stop responsive.
+        """
+        deadline = time.monotonic() + RESTORE_POINT_POD_TERMINATION_TIMEOUT_SECONDS
+        while self.k8s.has_pods_for_deployment(f"agent-{agent_id}", self.config.k8s_namespace):
+            if time.monotonic() >= deadline:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=STILL_SHUTTING_DOWN_DETAIL)
+            time.sleep(RESTORE_POINT_POD_TERMINATION_POLL_SECONDS)
+
     def _assert_capturable(self, agent: Agent) -> None:
         if agent.status == AgentStatus.RUNNING:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=AGENT_RUNNING_DETAIL)
@@ -802,6 +830,11 @@ class RestorePointService:
                 ),
             )
         except Exception as exc:
+            # friendly_k8s_error drops the cluster's own text, and RESOURCE_REJECTED
+            # carries no detail, so which field the apiserver refused survives only here.
+            logger.exception(
+                "Could not provision the capture for restore point %s on agent %s", restore_point.id, agent.id
+            )
             restore_point.status = RestorePointStatus.FAILED
             restore_point.failure_reason = friendly_k8s_error(exc, operation=AgentProvisioningOperation.BACKUP)
             self.repository.save(restore_point)

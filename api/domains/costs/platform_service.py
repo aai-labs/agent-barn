@@ -8,20 +8,20 @@ from api.domains.costs.models import (
     CostFilterOption,
     CostRecord,
     CostRecordSource,
+    MonthlyCostRead,
+    MonthlyWindow,
     OrganizationSpendRead,
     PlatformCostRecordRead,
     PlatformCostSummaryRead,
 )
 from api.domains.costs.repository import CostRepository
-from api.domains.costs.service import build_cost_summary
+from api.domains.costs.service import build_cost_summary, build_monthly_costs, daily_burn_rate
 from api.domains.costs.usage_service import HonchoUsageService
 from api.domains.platform_admin.models import StatsWindow
 from api.infrastructure.openrouter.client import OpenRouterClient
 from api.infrastructure.shared.models import PaginatedItems, Pagination
 
 logger = logging.getLogger(__name__)
-
-_SECONDS_PER_DAY = 86400
 
 
 @inject
@@ -53,8 +53,7 @@ class PlatformCostService:
         unattributed_spend, unattributed_calls = self.repository.unattributed_totals(window, filters)
         organizations = self.repository.spend_by_organization(window, filters)
 
-        window_days = (window.end - window.start).total_seconds() / _SECONDS_PER_DAY
-        daily_burn = base.total_spend / window_days if window_days > 0 else 0.0
+        daily_burn = daily_burn_rate(base.total_spend, window.start, window.end)
         credits = self.openrouter.get_credits()
 
         return PlatformCostSummaryRead(
@@ -92,6 +91,9 @@ class PlatformCostService:
             total=found.total,
             items=[_to_platform_read(record) for record in found.items],
         )
+
+    def get_monthly(self, window: MonthlyWindow, filters: CostFilter) -> list[MonthlyCostRead]:
+        return build_monthly_costs(self.repository, window, filters)
 
     def list_organizations(self, window: StatsWindow, filters: CostFilter) -> list[OrganizationSpendRead]:
         return [

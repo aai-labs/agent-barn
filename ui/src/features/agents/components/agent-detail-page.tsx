@@ -13,6 +13,7 @@ import { useAgentHealth } from "../hooks/use-agent-health";
 import { useCommunicationConnections } from "@/features/communication-connections/hooks/use-communication-connections";
 import { ChevLeftIcon, CogIcon, ShareIcon } from "@/components/icons";
 import { AppErrorState } from "@/components/app-error-state";
+import { AgentCostsPanel } from "@/features/costs/components/agent-costs-panel";
 import { AgentAvatar } from "./agent-avatar";
 import { AgentErrorBanner, AgentHealthErrorBanner } from "./agent-error-banner";
 import { AgentLifecycleMenu } from "./agent-lifecycle-menu";
@@ -24,7 +25,7 @@ import { ConversationsTab } from "./conversations-tab";
 import { ToolCallsTab } from "./tool-calls-tab";
 import { AgentMemoryPage } from "./agent-memory-page";
 import { LogsTab } from "./logs-tab";
-import { WorkTab } from "./work-tab";
+import { ActivityTab } from "./activity-tab";
 import { AboutTab } from "./about-tab";
 import { ShareDialog } from "./share-dialog";
 import { AgentDetailHeaderSkeleton } from "./agent-detail-header-skeleton";
@@ -33,13 +34,22 @@ interface AgentDetailPageProps {
   agentId: string;
 }
 
-type Tab = "chat" | "conversations" | "tool-calls" | "logs" | "work" | "memory" | "about";
+type Tab =
+  | "chat"
+  | "conversations"
+  | "tool-calls"
+  | "logs"
+  | "activity"
+  | "costs"
+  | "memory"
+  | "about";
 const VALID_TABS: Tab[] = [
   "chat",
   "conversations",
   "tool-calls",
   "logs",
-  "work",
+  "activity",
+  "costs",
   "memory",
   "about",
 ];
@@ -47,6 +57,7 @@ const VALID_TABS: Tab[] = [
 export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
   const { agent, isLoading, error, refetch } = useAgent(agentId);
   const canReadActivity = canAgent(agent, "activity.read");
+  const canReadCosts = canAgent(agent, "cost.read");
   // Memory is opt-in via a memory group: an agent in no group has no shared
   // memory, so the Memory tab would only ever show an empty, misleading state.
   // Show it only when the agent is actually in a group.
@@ -80,9 +91,17 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
           ["conversations", "Conversations"],
           ["tool-calls", "Tool calls"],
           ["logs", "Logs"],
-          ["work", "Work"],
         ] as [Tab, string][])
       : []),
+    // Every part of Activity needs activity.read: the runtime diagnostics on
+    // their own, the usage sections together with cost.read. The tab itself
+    // decides what to show a reader who has only the first.
+    ...(canReadActivity ? ([["activity", "Activity"]] as [Tab, string][]) : []),
+    // Costs is gated on cost.read alone, independent of activity.read: a custom
+    // Agent Access Role can grant one Permission without the other, and this is
+    // the only tab that surfaces cost.read on its own — Activity's usage section
+    // needs activity.read too.
+    ...(canReadCosts ? ([["costs", "Costs"]] as [Tab, string][]) : []),
     ...(showMemoryTab ? ([["memory", "Memory"]] as [Tab, string][]) : []),
     ["about", "About"],
   ];
@@ -287,7 +306,8 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
             )}
             {resolvedTab === "tool-calls" && <ToolCallsTab agent={agent} />}
             {resolvedTab === "logs" && <LogsTab agent={agent} />}
-            {resolvedTab === "work" && <WorkTab agent={agent} />}
+            {resolvedTab === "activity" && <ActivityTab agent={agent} />}
+            {resolvedTab === "costs" && <AgentCostsPanel agentId={agent.id} />}
             {resolvedTab === "memory" && (
               <AgentMemoryPage agentId={agent.id} agentName={agent.name} sourceGroupId={agent.memoryGroupId} />
             )}

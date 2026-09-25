@@ -108,3 +108,40 @@ export function formatWindowLabel(
   };
   return `${short(fromDate)} – ${short(toDate)}`;
 }
+
+/** A calendar month, read in UTC: the server groups on the UTC month, and a
+ *  local reading would slide the first of the month back into the previous one
+ *  anywhere west of Greenwich. */
+export function formatMonth(iso: string): string {
+  return new Date(iso).toLocaleDateString("en-US", {
+    month: "short",
+    year: "numeric",
+    timeZone: "UTC",
+  });
+}
+
+/** Short month label for a chart axis. */
+export function formatMonthShort(iso: string): string {
+  return new Date(iso).toLocaleDateString("en-US", {
+    month: "short",
+    timeZone: "UTC",
+  });
+}
+
+/** Month-over-month change. Null when there is nothing to compare against. */
+export function spendChange(current: number, previous: number): number | null {
+  if (previous === 0) return null;
+  return (current - previous) / previous;
+}
+
+export function formatChange(change: number | null): string {
+  if (change === null) return "—";
+  const percent = Math.round(change * 100);
+  if (percent === 0) return "0%";
+  return `${percent > 0 ? "↑" : "↓"} ${Math.abs(percent)}%`;
+}
+
+export function formatPercent(fraction: number): string {
+  if (fraction > 0 && fraction < 0.01) return "<1%";
+  return `${Math.round(fraction * 100)}%`;
+}

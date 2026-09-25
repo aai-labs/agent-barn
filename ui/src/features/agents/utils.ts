@@ -24,6 +24,7 @@ export const agentsKey = {
   ..._agentsKeyBase,
   nameSuggestion: (orgApiBase: string, openingId: string) =>
     [..._agentsKeyBase.all, "name-suggestion", orgApiBase, openingId] as const,
+  diagnostics: (org: string, id: string) => [..._agentsKeyBase.detail(id), "diagnostics", org] as const,
   health: (id: string) => [..._agentsKeyBase.detail(id), "health"] as const,
   configuration: (id: string) => [..._agentsKeyBase.detail(id), "configuration"] as const,
   shareSettings: (id: string) => [..._agentsKeyBase.detail(id), "share"] as const,
@@ -56,6 +57,8 @@ export const agentsKey = {
   slackChannels: (id: string) => [..._agentsKeyBase.detail(id), "slack-channels"] as const,
   slackUsers: (id: string) => [..._agentsKeyBase.detail(id), "slack-users"] as const,
   models: () => [..._agentsKeyBase.all, "models"] as const,
+  activity: (id: string, part: string, params: Record<string, unknown>) =>
+    [..._agentsKeyBase.detail(id), "activity", part, params] as const,
 };
 
 export const toolCallsKey = createQueryKeyStructure("tool-calls");
