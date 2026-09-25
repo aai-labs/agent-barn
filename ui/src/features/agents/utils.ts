@@ -133,6 +133,57 @@ export function splitRequiredSkills(skills: TemplateRequiredSkill[]): {
   return { standalone, groups };
 }
 
+export type RequiredPinChange = {
+  skillId: string;
+  name: string;
+  from: number;
+  version: number;
+};
+
+export type RequiredAddition = { skillId: string; name: string; version: number };
+
+export type TemplateRequirementDelta = {
+  pinChanges: RequiredPinChange[];
+  additions: RequiredAddition[];
+  pendingGroups: RequiredSkillGroup[];
+};
+
+export function templateRequirementDelta(
+  requiredSkills: TemplateRequiredSkill[],
+  assignedSkills: { id: string; version: number }[],
+): TemplateRequirementDelta {
+  const pinChanges: RequiredPinChange[] = [];
+  const additions: RequiredAddition[] = [];
+  const pendingGroups: RequiredSkillGroup[] = [];
+  const assigned = new Map(assignedSkills.map((skill) => [skill.id, skill.version]));
+  const { standalone, groups } = splitRequiredSkills(requiredSkills);
+
+  for (const skill of standalone) {
+    const from = assigned.get(skill.id);
+    if (from === undefined) {
+      additions.push({ skillId: skill.id, name: skill.name, version: skill.version });
+    } else if (from !== skill.version) {
+      pinChanges.push({ skillId: skill.id, name: skill.name, from, version: skill.version });
+    }
+  }
+
+  for (const group of groups) {
+    const assignedMembers = group.members.flatMap((member) => {
+      const from = assigned.get(member.id);
+      return from === undefined ? [] : [{ member, from }];
+    });
+    if (assignedMembers.length === 0) {
+      pendingGroups.push(group);
+      continue;
+    }
+    if (assignedMembers.some(({ member, from }) => from === member.version)) continue;
+    const { member, from } = assignedMembers[0];
+    pinChanges.push({ skillId: member.id, name: member.name, from, version: member.version });
+  }
+
+  return { pinChanges, additions, pendingGroups };
+}
+
 // Derives a stable, human-legible group_key from member names for a
 // newly-authored OR-group — there's no separate "group label" field, so the
 // key itself is what's persisted and re-displayed as "One of: X, Y" via name

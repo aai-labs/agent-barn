@@ -28,15 +28,12 @@ import {
 import { ConfigurationArtifactSurface } from "./configuration-artifact-surface";
 import { ConfigurationRequiredSkills } from "./configuration-required-skills";
 import { ConfigurationSnapshotMeta } from "./configuration-snapshot-meta";
-import { canAgent, splitRequiredSkills, type RequiredSkillGroup } from "../utils";
+import { canAgent, templateRequirementDelta } from "../utils";
 import {
   templateSelectionValue,
   type TemplateSelectionOption,
 } from "./agent-configuration-utils";
 import type { Agent, AgentConfiguration } from "../schemas";
-
-type RequiredPinChange = { skillId: string; name: string; from: number; version: number };
-type RequiredAddition = { skillId: string; name: string; version: number };
 
 function optionKey(option: TemplateSelectionOption): string {
   return option.templateKey ?? "Agent-owned override";
@@ -84,38 +81,14 @@ export function AgentTemplateSelectionSettings({
     options.find((option) => option.value === activeValue) ??
     options[0];
   const isNoop = selectedOption?.value === activeValue;
-  const requirements = useMemo(() => {
-    const pinChanges: RequiredPinChange[] = [];
-    const additions: RequiredAddition[] = [];
-    const pendingGroups: RequiredSkillGroup[] = [];
-    if (!selectedOption) return { pinChanges, additions, pendingGroups };
-    const assigned = new Map(agent.skills.map((skill) => [skill.id, skill.version]));
-    const { standalone, groups } = splitRequiredSkills(
-      selectedOption.snapshot.requiredSkills,
-    );
-    for (const skill of standalone) {
-      const from = assigned.get(skill.id);
-      if (from === undefined) {
-        additions.push({ skillId: skill.id, name: skill.name, version: skill.version });
-      } else if (from !== skill.version) {
-        pinChanges.push({ skillId: skill.id, name: skill.name, from, version: skill.version });
-      }
-    }
-    for (const group of groups) {
-      const assignedMembers = group.members.filter((member) => assigned.has(member.id));
-      if (assignedMembers.length === 0) {
-        pendingGroups.push(group);
-        continue;
-      }
-      if (assignedMembers.some((member) => assigned.get(member.id) === member.version)) continue;
-      const target = assignedMembers[0];
-      const from = assigned.get(target.id);
-      if (from !== undefined) {
-        pinChanges.push({ skillId: target.id, name: target.name, from, version: target.version });
-      }
-    }
-    return { pinChanges, additions, pendingGroups };
-  }, [agent.skills, selectedOption]);
+  const requirements = useMemo(
+    () =>
+      templateRequirementDelta(
+        selectedOption?.snapshot.requiredSkills ?? [],
+        agent.skills,
+      ),
+    [agent.skills, selectedOption],
+  );
   const chosenGroupMembers = requirements.pendingGroups.flatMap((group) => {
     const member = group.members.find((candidate) => candidate.id === groupChoices[group.key]);
     return member
@@ -126,6 +99,18 @@ export function AgentTemplateSelectionSettings({
     chosenGroupMembers.length < requirements.pendingGroups.length;
   const requiredAdditions = [...requirements.additions, ...chosenGroupMembers];
   const requiredPinChanges = requirements.pinChanges;
+  const confirmedChanges = [
+    ...requiredPinChanges.map(({ skillId, name, from, version }) => ({
+      skillId,
+      name,
+      detail: `v${from} → v${version}`,
+    })),
+    ...requiredAdditions.map(({ skillId, name, version }) => ({
+      skillId,
+      name,
+      detail: `added at v${version}`,
+    })),
+  ];
   const configuredProviders = new Set(
     (agent.secrets ?? []).map((secret) => secret.provider),
   );
@@ -134,10 +119,10 @@ export function AgentTemplateSelectionSettings({
   );
   const missingProviders = [
     ...new Set(
-      requiredAdditions.flatMap(
-        (addition) =>
+      [...requiredPinChanges, ...requiredAdditions].flatMap(
+        (pin) =>
           requiredSkillsById
-            .get(addition.skillId)
+            .get(pin.skillId)
             ?.requiredProviders.filter((provider) => !configuredProviders.has(provider)) ?? [],
       ),
     ),
@@ -304,6 +289,7 @@ export function AgentTemplateSelectionSettings({
                             value={option.searchText}
                             onSelect={() => {
                               setSelectedValue(option.value);
+                              setGroupChoices({});
                               setOpen(false);
                             }}
                             className="items-start py-2.5"
@@ -503,32 +489,19 @@ export function AgentTemplateSelectionSettings({
         isPending={isPending}
         icon={<RefreshCw size={18} />}
       >
-        {(requiredPinChanges.length > 0 || requiredAdditions.length > 0) && (
+        {confirmedChanges.length > 0 && (
           <div className="rounded-lg border p-3">
             <p className="mb-2 mt-0 text-xs font-semibold">
               This will also update the skills required by this template:
             </p>
             <ul className="m-0 flex list-none flex-col gap-1 p-0">
-              {requiredPinChanges.map((change) => (
+              {confirmedChanges.map((change) => (
                 <li
                   key={change.skillId}
                   className="flex flex-wrap items-center justify-between gap-2 text-xs"
                 >
                   <span>{change.name}</span>
-                  <span className="font-mono text-muted-foreground">
-                    v{change.from} → v{change.version}
-                  </span>
-                </li>
-              ))}
-              {requiredAdditions.map((addition) => (
-                <li
-                  key={addition.skillId}
-                  className="flex flex-wrap items-center justify-between gap-2 text-xs"
-                >
-                  <span>{addition.name}</span>
-                  <span className="font-mono text-muted-foreground">
-                    added at v{addition.version}
-                  </span>
+                  <span className="font-mono text-muted-foreground">{change.detail}</span>
                 </li>
               ))}
             </ul>

@@ -1070,7 +1070,7 @@ class AgentService:
                 data.required_skill_groups,
                 org_id,
             )
-            self._validate_override_requirements(agent, skill_map, org_id)
+            self._validate_override_requirements(agent, skill_map, org_id, check_versions=False)
         try:
             saved = self.override_repository.update_draft(
                 agent.id,
@@ -1106,6 +1106,7 @@ class AgentService:
             agent,
             self.override_repository.get_draft_skill_map(draft.id),
             org_id,
+            check_versions=False,
         )
         try:
             published = self.override_repository.publish_draft(
@@ -1176,8 +1177,15 @@ class AgentService:
         required_map: Mapping[UUID, tuple[int, str | None]],
         org_id: UUID,
         prospective_pins: Mapping[UUID, int] | None = None,
+        check_versions: bool = True,
     ) -> None:
-        self.selection.validate_override_requirements(agent, required_map, org_id, prospective_pins)
+        self.selection.validate_override_requirements(
+            agent,
+            required_map,
+            org_id,
+            prospective_pins,
+            check_versions=check_versions,
+        )
 
     def _resolve_override_skill_map(
         self,

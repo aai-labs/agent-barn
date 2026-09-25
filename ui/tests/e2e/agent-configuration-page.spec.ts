@@ -849,6 +849,65 @@ test.describe("Agent configuration page", () => {
     expect(body.skill_versions).toEqual([{ skill_id: MOCK_JIRA_SKILL_ID, version: 2 }]);
   });
 
+  test("blocks Apply when a required skill needs an unconfigured credential", async ({
+    page,
+  }) => {
+    const configurationPage = new AgentConfigurationPage(page);
+    const held = { id: MOCK_CUSTOM_SKILL_ID, name: "my-tool" };
+    const gated = {
+      ...requiredSkill({ id: MOCK_JIRA_SKILL_ID, name: "jira", version: 3 }),
+      required_providers: ["jira"],
+    };
+
+    await setUpTemplateSelection(page, {
+      skills: [agentSkill({ ...held, version: 1 })],
+      versions: templateVersionsWith(
+        [requiredSkill({ ...held, version: 1 })],
+        [requiredSkill({ ...held, version: 1 }), gated],
+      ),
+    });
+
+    await configurationPage.goto(MOCK_AGENT_ID, TEST_ORG_ID);
+    await configurationPage.sectionButton("Template selection").click();
+    await configurationPage.versionSelect().click();
+    await page.getByRole("option", { name: /v2/ }).click();
+
+    await expect(page.getByText("need credentials that are not configured")).toContainText(
+      "jira",
+    );
+    await expect(configurationPage.applyButton()).toBeDisabled();
+  });
+
+  test("blocks Apply when a version move needs an unconfigured credential", async ({
+    page,
+  }) => {
+    const configurationPage = new AgentConfigurationPage(page);
+    const bumped = { id: MOCK_CUSTOM_SKILL_ID, name: "my-tool" };
+
+    await setUpTemplateSelection(page, {
+      skills: [agentSkill({ ...bumped, version: 1 })],
+      versions: templateVersionsWith(
+        [requiredSkill({ ...bumped, version: 1 })],
+        [
+          {
+            ...requiredSkill({ ...bumped, version: 2 }),
+            required_providers: ["jira"],
+          },
+        ],
+      ),
+    });
+
+    await configurationPage.goto(MOCK_AGENT_ID, TEST_ORG_ID);
+    await configurationPage.sectionButton("Template selection").click();
+    await configurationPage.versionSelect().click();
+    await page.getByRole("option", { name: /v2/ }).click();
+
+    await expect(page.getByText("need credentials that are not configured")).toContainText(
+      "jira",
+    );
+    await expect(configurationPage.applyButton()).toBeDisabled();
+  });
+
   test("keeps a template-required skill version locked in the Skills section", async ({
     page,
   }) => {

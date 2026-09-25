@@ -29,6 +29,27 @@ Related context: [`../templates-and-skills.md`](../templates-and-skills.md), [`.
 
 ## Changes
 
+### 2026-09-25 — AF-341-04
+
+- Fixed: the Template section's credential gate judged only Skills being added,
+  while the server provider-checks every pin the request sends. A Template Version
+  bumping a required Skill whose lineage latest declares an unconfigured provider
+  left Apply enabled and then failed with a 400. The gate now covers the same set
+  the request sends, so the parity claimed for AF-341-03 holds.
+- Changed: `validate_override_requirements` takes an explicit
+  `check_versions: bool = True` beside `check_providers` instead of inferring the
+  decision from `prospective_pins`, and both Override authoring call sites opt out
+  by name. Defaulting to `True` means a caller that says nothing gets enforcement.
+- Changed: the pin-change, addition and pending-group derivation moved out of the
+  component into `templateRequirementDelta` in `ui/src/features/agents/utils.ts`,
+  beside `splitRequiredSkills`. An unreachable guard on a group's target and the
+  duplicated confirmation lists are gone, and choosing a different Template Version
+  now clears any pending group choice.
+- Coverage: two Playwright specs for the credential gate — one for an added Skill,
+  one for a version move. The version-move spec was confirmed to fail against the
+  pre-fix gate. The API change needed no test edits; the existing refuse-then-accept
+  selection tests pass unmodified.
+
 ### 2026-09-23 — AF-341-03
 
 - Delivered: the Template section also assigns required Skills the Agent does not
