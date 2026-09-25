@@ -21,3 +21,6 @@ prometheus:
         httpHeaders:
           - name: Authorization
             value: Basic bW9uaXRvcmluZzpzM2NyZXRQYXNzdzByZA==
+grafana:
+  podAnnotations:
+    checksum/web-auth: fb6284f8d64891b86a06c8b339ea9aa51b2ee2f4e8ab174592466e4d01182061

@@ -286,6 +286,9 @@ releases:
         value: {{ $webBasic | quote }}
       - name: prometheus.configmapReload.reloadUrl
         value: {{ printf "http://monitoring:%s@127.0.0.1:9090/-/reload" $webPassword | quote }}
+      # Grafana reads the password only at startup; roll it when it changes.
+      - name: grafana.podAnnotations.checksum/web-auth
+        value: {{ $webPassword | sha256sum | quote }}
 {{- range $probe := list "livenessProbe" "readinessProbe" }}
       - name: prometheus.alertmanager.{{ $probe }}.httpGet.httpHeaders[0].name
         value: Authorization

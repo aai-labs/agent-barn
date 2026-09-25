@@ -10,6 +10,7 @@ Usage: python web_auth_test.py <chart dir>
 """
 
 import base64
+import hashlib
 import subprocess
 import sys
 
@@ -156,6 +157,13 @@ if grafana:
     env = {e["name"]: e for c in grafana["spec"]["template"]["spec"]["containers"] for e in c.get("env", [])}
     ref = env.get("MONITORING_WEB_PASSWORD", {}).get("valueFrom", {}).get("secretKeyRef", {})
     check(ref == {"name": SECRET, "key": "password"}, f"Grafana gets MONITORING_WEB_PASSWORD from {SECRET}")
+    # Grafana reads the password only at startup: the pod template must change
+    # with it so a rotation restarts Grafana.
+    annotations = grafana["spec"]["template"]["metadata"].get("annotations", {})
+    check(
+        annotations.get("checksum/web-auth") == hashlib.sha256(PASSWORD.encode()).hexdigest(),
+        "Grafana pod template carries a checksum of the password",
+    )
 
 # --- The chart refuses input that would lock out a client ---
 missing = render()
@@ -173,6 +181,7 @@ for args, needle, what in [
     (["--set", "prometheus.configmapReload.reloadUrl=http://127.0.0.1:9090/-/reload"], "reloadUrl", "an unauthenticated reloader URL"),
     (["--set", "prometheus.alertmanager.readinessProbe.httpGet.httpHeaders[0].value=Basic d3Jvbmc="], "readinessProbe", "a wrong Alertmanager probe header"),
     (["--set", "webAuth.password=not-alnum:@/"], "alphanumeric", "a password that can't go in a URL"),
+    (["--set", "grafana.podAnnotations.checksum/web-auth=stale"], "checksum/web-auth", "a stale Grafana checksum"),
 ]:
     bad = render("-f", VALUES, *args)
     check(bad.returncode != 0 and needle in bad.stderr, f"{what} fails the render")

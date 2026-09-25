@@ -468,6 +468,8 @@ grafana:
   # adminPassword is injected by helmfile from GRAFANA_ADMIN_PASSWORD.
   adminPassword: ""
   # Prometheus requires basic auth (webAuth); the datasource reads it from here.
+  # Read only at startup, so helmfile also sets podAnnotations
+  # checksum/web-auth (sha256 of the password) to roll Grafana on rotation.
   envValueFrom:
     MONITORING_WEB_PASSWORD:
       secretKeyRef:

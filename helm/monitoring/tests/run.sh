@@ -35,4 +35,8 @@ docker run --rm -v "$PWD/helm/monitoring/tests:/tests:ro" \
 # Web auth wiring (Prometheus/Alertmanager basic auth and every client).
 uv run --no-project --with pyyaml --with bcrypt python helm/monitoring/tests/web_auth_test.py helm/monitoring
 
+# The hook Job's SA grants on clusters where k8s/agent-farm-user*.yaml is all
+# it gets.
+uv run --no-project --with pyyaml python helm/monitoring/tests/sa_permissions_test.py .
+
 echo "monitoring checks passed"
