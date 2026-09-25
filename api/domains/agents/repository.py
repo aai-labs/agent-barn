@@ -21,6 +21,7 @@ from api.domains.agents.models import (
     AgentSkill,
     AgentStatus,
     SecretProvider,
+    SharedPoolMemoryFact,
 )
 from api.domains.communications.email_address_repository import release_agent_email_addresses
 from api.domains.communications.models import (
@@ -129,6 +130,41 @@ class AgentRepository:
         with Session(self.delegate.engine) as session:
             query = select(Agent).where(col(Agent.id) == agent_id).where(col(Agent.deleted_at).is_(None))
             return session.exec(query).first()
+
+    def count_in_memory_group(self, group_id: UUID) -> int:
+        """How many live Agents belong to a memory group.
+
+        Soft-deleted Agents are excluded: they no longer run, so they do not
+        contribute to the pool's fan-out and should not count against its cap.
+        """
+        with Session(self.delegate.engine) as session:
+            rows = session.exec(
+                select(Agent.id).where(
+                    col(Agent.memory_group_id) == group_id,
+                    col(Agent.deleted_at).is_(None),
+                )
+            ).all()
+            return len(rows)
+
+    def names_by_ids(self, agent_ids: list[UUID], organization_id: UUID) -> dict[UUID, str]:
+        """Display names for the given Agent ids, scoped to one Organization.
+
+        Used to label memory peers (`agent-<id>`) in the shared-pool memory view.
+        Constrained to the caller's org so an id that leaked into memory text can
+        never resolve another org's Agent name — a pool is org-scoped, so a real
+        member always matches. Soft-deleted Agents are included: a pool can hold
+        conclusions from an Agent since deleted, and a name beats a raw peer id.
+        """
+        if not agent_ids:
+            return {}
+        with Session(self.delegate.engine) as session:
+            rows = session.exec(
+                select(Agent.id, Agent.name).where(
+                    col(Agent.id).in_(agent_ids),
+                    col(Agent.organization_id) == organization_id,
+                )
+            ).all()
+            return {row[0]: row[1] for row in rows}
 
     def get_active_in_scope(self, agent_id: UUID, authorization_scope: AuthorizationScope) -> Agent | None:
         with Session(self.delegate.engine) as session:
@@ -1421,3 +1457,78 @@ class AgentRepository:
 
     def hard_delete(self, agent_id: UUID) -> None:
         self.delegate.delete_one(Agent, agent_id)
+
+
+@dataclass(frozen=True)
+class PoolMemoryProvenance:
+    """Where a pooled memory came from, for one conclusion.
+
+    Only the source group's id — the name is resolved client-side, so this never
+    reaches into the `memory_groups` domain from here. `source_group_id` is None
+    when the source group has since been deleted (the FK is SET NULL).
+    """
+
+    source_group_id: UUID | None
+    shared_at: datetime | None
+
+
+@inject
+@singleton
+@dataclass
+class SharedPoolMemoryFactRepository:
+    """Tracks which pooled memories were shared in from another pool (group).
+
+    The read path joins it to badge cross-group-shared items "Shared from <group>";
+    the memory read/curate service is its only caller.
+    """
+
+    delegate: PostgresRepositoryDelegate
+
+    def record(
+        self,
+        *,
+        conclusion_id: str,
+        target_group_id: UUID,
+        source_group_id: UUID,
+        shared_by_user_id: UUID | None,
+    ) -> None:
+        self.delegate.save(
+            SharedPoolMemoryFact(
+                conclusion_id=conclusion_id,
+                target_group_id=target_group_id,
+                source_group_id=source_group_id,
+                shared_by_user_id=shared_by_user_id,
+            )
+        )
+
+    def find_for_conclusions(self, conclusion_ids: list[str]) -> dict[str, PoolMemoryProvenance]:
+        """Provenance for the conclusions on one page, keyed by conclusion id."""
+        if not conclusion_ids:
+            return {}
+        with Session(self.delegate.engine) as session:
+            query = select(SharedPoolMemoryFact).where(col(SharedPoolMemoryFact.conclusion_id).in_(conclusion_ids))
+            return {
+                fact.conclusion_id: PoolMemoryProvenance(
+                    source_group_id=fact.source_group_id,
+                    shared_at=fact.created_at,
+                )
+                for fact in session.exec(query).all()
+            }
+
+    def forget(self, conclusion_id: str) -> None:
+        with Session(self.delegate.engine) as session:
+            for fact in session.exec(
+                select(SharedPoolMemoryFact).where(col(SharedPoolMemoryFact.conclusion_id) == conclusion_id)
+            ).all():
+                session.delete(fact)
+            session.commit()
+
+    def carry_forward(self, old_conclusion_id: str, new_conclusion_id: str) -> None:
+        """Follow a corrected memory to its replacement (see the Agent-level twin)."""
+        with Session(self.delegate.engine) as session:
+            for fact in session.exec(
+                select(SharedPoolMemoryFact).where(col(SharedPoolMemoryFact.conclusion_id) == old_conclusion_id)
+            ).all():
+                fact.conclusion_id = new_conclusion_id
+                session.add(fact)
+            session.commit()

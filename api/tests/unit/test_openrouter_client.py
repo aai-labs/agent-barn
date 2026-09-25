@@ -158,6 +158,7 @@ def _service(openrouter, allowlist=None, default_model=""):
         event_delivery_dispatcher=MagicMock(),
         organization_lookup=org_lookup,
         agent_settings_lookup=agent_settings_lookup,
+        honcho=MagicMock(),
         restore_points=MagicMock(),
         selection=MagicMock(),
     )

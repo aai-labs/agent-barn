@@ -32,6 +32,11 @@ RUN python3 /tmp/patch-agent-message-completions.py && rm /tmp/patch-agent-messa
 COPY patch-run-session-history.py /tmp/patch-run-session-history.py
 RUN python3 /tmp/patch-run-session-history.py && rm /tmp/patch-run-session-history.py
 
+# Make Honcho recall pool-wide so agents sharing a memory pool see each other's
+# memory, instead of each recalling only its own view (AF-280).
+COPY patch-honcho-pool-recall.py /tmp/patch-honcho-pool-recall.py
+RUN python3 /tmp/patch-honcho-pool-recall.py && rm /tmp/patch-honcho-pool-recall.py
+
 COPY --from=rust-build /out/bin/ /usr/local/bin/
 
 RUN set -eu; \

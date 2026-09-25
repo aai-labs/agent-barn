@@ -21,6 +21,7 @@ AGENT_RESOURCES = client.V1ResourceRequirements(
 _SCRIPTS = Path(__file__).parent.parent / "scripts" / "openclaw"
 _COMMON_SCRIPTS = _SCRIPTS.parent
 _TELEMETRY_PUSH = _SCRIPTS / "plugins" / "telemetry-push"
+_HONCHO_POOL_RECALL = _SCRIPTS / "plugins" / "honcho-pool-recall"
 _OBSERVER = _SCRIPTS / "plugins" / "agentbarn-observer"
 
 # OpenClaw's gateway binds this port and its own `openclaw health` CLI resolves
@@ -35,6 +36,9 @@ LEGACY_WORKSPACE_MIGRATION_SH: str = (_SCRIPTS / "legacy-workspace-migration.sh"
 TELEMETRY_PUSH_INDEX_JS: str = (_TELEMETRY_PUSH / "index.js").read_text()
 TELEMETRY_PUSH_PACKAGE_JSON: str = (_TELEMETRY_PUSH / "package.json").read_text()
 TELEMETRY_PUSH_PLUGIN_JSON: str = (_TELEMETRY_PUSH / "openclaw.plugin.json").read_text()
+HONCHO_POOL_RECALL_INDEX_JS: str = (_HONCHO_POOL_RECALL / "index.js").read_text()
+HONCHO_POOL_RECALL_PACKAGE_JSON: str = (_HONCHO_POOL_RECALL / "package.json").read_text()
+HONCHO_POOL_RECALL_PLUGIN_JSON: str = (_HONCHO_POOL_RECALL / "openclaw.plugin.json").read_text()
 OBSERVER_INDEX_JS: str = (_OBSERVER / "index.js").read_text()
 OBSERVER_PACKAGE_JSON: str = (_OBSERVER / "package.json").read_text()
 OBSERVER_PLUGIN_JSON: str = (_OBSERVER / "openclaw.plugin.json").read_text()
@@ -45,14 +49,114 @@ _MESSAGE_SCRIPTS = _COMMON_SCRIPTS / "messaging"
 AGENTBARN_MESSAGE_PY: str = (_MESSAGE_SCRIPTS / "agentbarn_message.py").read_text()
 OPENCLAW_MESSAGING_JS: str = (_MESSAGE_SCRIPTS / "openclaw-messaging.js").read_text()
 
+# The Honcho plugin defaults its sender-to-peer map to ~/.honcho, which is not
+# the mounted volume. Held there it is lost on every pod recreation and each
+# participant silently becomes a new peer with an empty representation.
+OPENCLAW_HONCHO_PEERS_FILE: str = "/home/node/.openclaw/honcho/openclaw-peers.json"
+
+# Generous relative to the ~25s a dialectic recall was measured at, because the
+# cost of being too low is silent — recall just never arrives — while the cost of
+# being high is only a slower turn when Honcho is genuinely struggling.
+HONCHO_RECALL_TIMEOUT_MS: int = 60000
+
+
+_MEMORY_CORE = "memory-core"
+_MEMORY_HONCHO = "openclaw-honcho"
+# Our first-party pool-wide recall plugin. The stock openclaw-honcho plugin only
+# recalls an Agent's own view; this one asks the whole pool (see the plugin's
+# index.js). Loaded only when memory is on, alongside the stock plugin.
+_MEMORY_POOL_RECALL = "honcho-pool-recall"
+_HONCHO_POOL_RECALL_PATH = "/home/node/.openclaw/local-plugins/honcho-pool-recall"
+
+# OpenClaw's implicit default paths for its single default agent, captured from a
+# live pod: workspace holds the rendered persona files (AGENTS.md, SOUL.md, the
+# memory-core store), agentDir holds auth + sessions. When memory is on we declare
+# an explicit agent entry to give the Agent a distinct logical id (so its Honcho
+# peer is `agent-<id>`, not the shared `agent-main`) — and pin these paths to the
+# defaults so opting in changes only the peer name, never where files live. Each
+# Agent runs in its own pod, so the paths need not be unique across Agents.
+_OPENCLAW_WORKSPACE_DIR = "~/.openclaw/workspace"
+_OPENCLAW_AGENT_DIR = "~/.openclaw/agents/main"
+
+# The Honcho plugin runs an internal memory-search sub-agent, and its turns — the
+# sub-agent's own instruction prompt and its bounded "NONE" replies — are captured
+# and derived into conclusions as if the user had said them ("owner instructs the
+# agent to return NONE…"). On a fresh Agent that scaffolding outnumbers real memory
+# before a single genuine message. These patterns drop those turns at capture: the
+# plugin merges them with its defaults and `shouldSkipMessage` treats a `/…/`
+# entry as a regex tested anywhere in the message. Every phrase is one no human
+# types into a chat, so they target the sub-agent without touching real content.
+_MEMORY_NOISE_PATTERNS = [
+    "/memory search agent/i",
+    "/return exactly one of two forms/i",
+    "/compact plain-text summary/i",
+    "/reply with (?:the word )?NONE/i",
+    "/^NONE\\.?$/i",
+]
+
+
+def _memory_plugin(honcho_workspace_id: str | None) -> str:
+    """Honcho occupies the single memory slot rather than running beside
+    memory-core; two writers over the same semantic state is what the memory
+    backend decision exists to remove."""
+    return _MEMORY_HONCHO if honcho_workspace_id else _MEMORY_CORE
+
+
+def _memory_entry(
+    honcho_base_url: str | None, honcho_workspace_id: str | None, honcho_api_key: str | None = None
+) -> dict:
+    if not honcho_workspace_id:
+        return {_MEMORY_CORE: {"enabled": True}}
+    honcho_config: dict = {
+        "baseUrl": honcho_base_url,
+        "workspaceId": honcho_workspace_id,
+        # Merged with the plugin's own defaults; drops the memory-search
+        # sub-agent's turns before they are ever stored (see above).
+        "noisePatterns": _MEMORY_NOISE_PATTERNS,
+    }
+    if honcho_api_key:
+        # The workspace-scoped Honcho token; the stock plugin's SDK sends it as a
+        # bearer. Our honcho-pool-recall plugin reads the same field for its fetch.
+        honcho_config["apiKey"] = honcho_api_key
+    return {
+        _MEMORY_HONCHO: {
+            "enabled": True,
+            "config": honcho_config,
+            "hooks": {
+                # Capture (the plugin's `agent_end` hook) needs conversation access;
+                # without this the runtime blocks it and memory stays silently empty.
+                "allowConversationAccess": True,
+                # Turn off the stock plugin's OWN recall: its `before_prompt_build`
+                # hook injects a "## User Memory Context" block (a per-participant,
+                # own-view read via session.context), which our `honcho-pool-recall`
+                # plugin supersedes with pool-wide recall. OpenClaw's
+                # `allowPromptInjection: false` blocks that injection while leaving
+                # capture intact — so there is one recall path, not two (avoiding the
+                # redundant per-turn memory fetch the review flagged).
+                "allowPromptInjection": False,
+                # Bounds the capture hook; the runtime's interactive default is tight.
+                "timeoutMs": HONCHO_RECALL_TIMEOUT_MS,
+            },
+        }
+    }
+
 
 def _openclaw_config_core(
     model: str,
     litellm_base_url: str,
     binding_channel: str | None,
     channels: dict,
+    honcho_base_url: str | None = None,
+    honcho_workspace_id: str | None = None,
+    honcho_agent_id: str | None = None,
+    honcho_api_key: str | None = None,
 ) -> dict:
     provider, _, model_name = model.partition("/")
+    # When memory is on, `honcho_agent_id` is this Agent's distinct logical id;
+    # otherwise the runtime's implicit default "main". It names the routing
+    # target (bindings), the active-memory scope, and — via an explicit agent
+    # entry below — the Honcho peer.
+    logical_agent_id = honcho_agent_id or "main"
     return {
         "models": {
             "providers": {
@@ -67,34 +171,90 @@ def _openclaw_config_core(
                 "model": {
                     "primary": model,
                 },
+                "memorySearch": {
+                    "provider": "none",
+                },
                 "heartbeat": {"every": "0m", "target": "none"},
-            }
+            },
+            # Only when memory is on: an explicit agent entry with the distinct
+            # logical id, so the Honcho peer becomes `agent-<id>` instead of the
+            # shared `agent-main`. The runtime schema is `agents.list` (an array
+            # of {id, default, workspace, agentDir, ...}), verified against the
+            # runtime's own config type — not `agents.entries`. workspace/agentDir
+            # are pinned to today's defaults so opting in never relocates files.
+            **(
+                {
+                    "list": [
+                        {
+                            "id": logical_agent_id,
+                            "default": True,
+                            "workspace": _OPENCLAW_WORKSPACE_DIR,
+                            "agentDir": _OPENCLAW_AGENT_DIR,
+                        }
+                    ]
+                }
+                if honcho_agent_id
+                else {}
+            ),
         },
         "channels": channels,
         "bindings": (
-            [{"type": "route", "agentId": "main", "match": {"channel": binding_channel}}] if binding_channel else []
+            [{"type": "route", "agentId": logical_agent_id, "match": {"channel": binding_channel}}]
+            if binding_channel
+            else []
         ),
         "tools": {
             "profile": "full",
             "exec": {"mode": "full"},
         },
+        # Which store is active is decided by the plugin slot below (memory-core vs
+        # the Honcho plugin), not by a `backend` key here — OpenClaw 0.7.1 rejects a
+        # `memory` object carrying both `backend` and `search` ("memory: Invalid
+        # input"), so only `search` is set, matching the runtime's own schema.
         "memory": {"search": {"provider": "none"}},
         "plugins": {
-            "allow": ["memory-core", "active-memory", "telemetry-push", "agentbarn-messaging"],
+            # memory-core stays in `allow` even when Honcho holds the slot: it is
+            # not active without an entry, but start.sh needs it permitted to fall
+            # back to when the plugin is missing, rather than leaving the Agent
+            # with no memory backend at all. agentbarn-messaging is staging's
+            # agent-initiated delivery plugin, allowed and loaded regardless.
+            "allow": [
+                _memory_plugin(honcho_workspace_id),
+                _MEMORY_POOL_RECALL,
+                _MEMORY_CORE,
+                "active-memory",
+                "telemetry-push",
+                "agentbarn-messaging",
+            ]
+            if honcho_workspace_id
+            else [_MEMORY_CORE, "active-memory", "telemetry-push", "agentbarn-messaging"],
             "load": {
                 "paths": [
                     "/home/node/.openclaw/local-plugins/telemetry-push",
                     "/home/node/.openclaw/local-plugins/agentbarn-messaging",
+                    # Pool-wide recall loads only when memory is on.
+                    *([_HONCHO_POOL_RECALL_PATH] if honcho_workspace_id else []),
                 ]
             },
-            "slots": {"memory": "memory-core"},
+            "slots": {"memory": _memory_plugin(honcho_workspace_id)},
             "entries": {
-                "memory-core": {"enabled": True},
+                # `_memory_entry` gives memory-core an entry only when Honcho is off;
+                # when Honcho holds the slot, memory-core stays entry-less (fallback
+                # only) so there are never two active memory writers.
+                **_memory_entry(honcho_base_url, honcho_workspace_id, honcho_api_key),
+                # Pool-wide recall runs beside the stock plugin (which keeps
+                # capture); allowConversationAccess lets its before_prompt_build
+                # hook read the turn so it can query relevant memories.
+                **(
+                    {_MEMORY_POOL_RECALL: {"enabled": True, "hooks": {"allowConversationAccess": True}}}
+                    if honcho_workspace_id
+                    else {}
+                ),
                 "agentbarn-messaging": {"enabled": True},
                 "active-memory": {
                     "enabled": True,
                     "config": {
-                        "agents": ["main"],
+                        "agents": [logical_agent_id],
                         "allowedChatTypes": ["direct", "group", "channel"],
                         "modelFallbackPolicy": "default-remote",
                         "queryMode": "recent",
@@ -126,10 +286,24 @@ def build_openclaw_gateway_config(
     model: str,
     litellm_base_url: str,
     native_channels: dict[str, dict] | None = None,
+    *,
+    honcho_base_url: str | None = None,
+    honcho_workspace_id: str | None = None,
+    honcho_agent_id: str | None = None,
+    honcho_api_key: str | None = None,
 ) -> dict:
     """``native_channels`` maps a Platform key to its OpenClaw ``channels.<key>`` block."""
     channels = native_channels or {}
-    config = _openclaw_config_core(model, litellm_base_url, binding_channel=None, channels=channels)
+    config = _openclaw_config_core(
+        model,
+        litellm_base_url,
+        binding_channel=None,
+        channels=channels,
+        honcho_base_url=honcho_base_url,
+        honcho_workspace_id=honcho_workspace_id,
+        honcho_agent_id=honcho_agent_id,
+        honcho_api_key=honcho_api_key,
+    )
     if channels:
         plugins = config["plugins"]
         plugins["allow"] += [*channels, "agentbarn-observer"]
@@ -327,6 +501,9 @@ def build_config_map(
         data["telemetry-push-index.js"] = TELEMETRY_PUSH_INDEX_JS
         data["telemetry-push-package.json"] = TELEMETRY_PUSH_PACKAGE_JSON
         data["telemetry-push-plugin.json"] = TELEMETRY_PUSH_PLUGIN_JSON
+        data["honcho-pool-recall-index.js"] = HONCHO_POOL_RECALL_INDEX_JS
+        data["honcho-pool-recall-package.json"] = HONCHO_POOL_RECALL_PACKAGE_JSON
+        data["honcho-pool-recall-plugin.json"] = HONCHO_POOL_RECALL_PLUGIN_JSON
         data["agentbarn-observer-index.js"] = OBSERVER_INDEX_JS
         data["agentbarn-observer-package.json"] = OBSERVER_PACKAGE_JSON
         data["agentbarn-observer-plugin.json"] = OBSERVER_PLUGIN_JSON
@@ -440,6 +617,12 @@ def build_deployment(
                                 period_seconds=15,
                                 failure_threshold=6,
                             ),
+                            env=[
+                                client.V1EnvVar(
+                                    name="OPENCLAW_HONCHO_PEERS_FILE",
+                                    value=OPENCLAW_HONCHO_PEERS_FILE,
+                                ),
+                            ],
                             env_from=[client.V1EnvFromSource(secret_ref=client.V1SecretEnvSource(name=name))],
                             volume_mounts=[
                                 client.V1VolumeMount(

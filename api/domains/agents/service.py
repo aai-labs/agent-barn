@@ -31,6 +31,7 @@ from api.domains.agents.builders import (
     build_hermes_config_map,
     build_hermes_deployment,
     build_hermes_gateway_config,
+    build_honcho_config,
     build_openclaw_gateway_config,
     build_pvc,
     build_secret_hermes_runtime,
@@ -49,6 +50,12 @@ from api.domains.agents.builders import (
 from api.domains.agents.error_messages import friendly_pod_reason
 from api.domains.agents.exceptions import AgentProvisioningPrecondition
 from api.domains.agents.gog_artifacts import build_gog_env, build_gog_policy_md, build_gog_setup_sh
+from api.domains.agents.memory_sharing import (
+    ai_peer_name_for_agent,
+    memory_active,
+    memory_workspace_for_agent,
+    openclaw_logical_agent_id,
+)
 from api.domains.agents.models import (
     PROVIDER_DISPLAY_NAMES,
     Agent,
@@ -143,6 +150,7 @@ from api.domains.templates.repository import TemplateRepository
 from api.domains.templates.requirements import effective_required_ids, split_requirements
 from api.domains.users.models import User
 from api.infrastructure.crypto import decrypt_token, encrypt_token
+from api.infrastructure.honcho.client import HonchoClient, HonchoError, mint_workspace_token
 from api.infrastructure.integration_validators import (
     PROVIDER_VALIDATORS,
     format_validation_result,
@@ -265,6 +273,7 @@ class AgentService:
     organization_lookup: OrganizationLookupService
     restore_points: RestorePointService
     agent_settings_lookup: AgentSettingsLookupService
+    honcho: HonchoClient
     selection: SelectionValidator
     connection_repository: CommunicationConnectionRepository
     plugins: PlatformPluginRegistry
@@ -533,6 +542,7 @@ class AgentService:
             # OpenClaw ignores verbose_mode for the same reason; report the
             # effective no-op default rather than a stored value.
             verbose_mode=agent.verbose_mode if agent.agent_type == AgentType.HERMES else False,
+            memory_group_id=agent.memory_group_id,
             last_error=_provisioning_error_read(agent),
             secrets=secrets_read,
             skills=skills_read,
@@ -1878,6 +1888,18 @@ class AgentService:
             org_name=org_name,
             agent_name=agent.name,
         )
+        # Memory is per-Agent opt-in on top of the infra flag (is Honcho deployed
+        # at all). When on, the Agent reads and writes its pool's shared
+        # workspace so it can see the other opted-in Agents' memory.
+        memory_on = memory_active(agent, honcho_enabled=self.config.honcho_enabled)
+        memory_workspace = memory_workspace_for_agent(agent) if memory_on else None
+        # A Honcho token scoped to this Agent's pool workspace, so the pod can reach
+        # only its own pool. None when memory is off or Honcho auth is disabled (dev).
+        memory_token = (
+            mint_workspace_token(self.config.honcho_jwt_secret, memory_workspace)
+            if memory_on and memory_workspace and self.config.honcho_jwt_secret
+            else None
+        )
         if agent.agent_type == AgentType.HERMES:
             overlay = None
             native_slack = self._native_slack_connection(agent.id)
@@ -1887,6 +1909,7 @@ class AgentService:
                 effective_model,
                 llm_proxy_url,
                 approval_mode=CommandApprovalMode(agent.approval_mode).value,
+                honcho_enabled=memory_on,
                 native_slack=native_slack is not None,
                 native_discord=native_discord is not None,
                 discord_require_mention=(
@@ -1937,7 +1960,19 @@ class AgentService:
             if runtime_teams is not None:
                 native_credentials["msteams"] = runtime_teams.credentials
                 native_channels["msteams"] = runtime_teams_channel(runtime_teams.settings)
-            overlay = build_openclaw_gateway_config(effective_model, llm_proxy_url, native_channels)
+            overlay = build_openclaw_gateway_config(
+                effective_model,
+                llm_proxy_url,
+                native_channels,
+                honcho_base_url=self.config.agent_honcho_base_url if memory_on else None,
+                # The Agent's shared pool workspace, or None when memory is off
+                # for this Agent — see memory_workspace_for_agent.
+                honcho_workspace_id=memory_workspace,
+                # Distinct logical id so pooled Agents get distinct Honcho peers
+                # (agent-<id>) rather than colliding on the default agent-main.
+                honcho_agent_id=openclaw_logical_agent_id(agent) if memory_on else None,
+                honcho_api_key=memory_token,
+            )
             hermes_cfg = None
             secret = build_secret_runtime(
                 agent.id,
@@ -2148,6 +2183,16 @@ class AgentService:
                 boot_md=rendered.boot_md,
                 heartbeat_md=rendered.heartbeat_md,
                 hermes_config=hermes_cfg,
+                honcho_config=(
+                    build_honcho_config(
+                        base_url=self.config.agent_honcho_base_url,
+                        workspace_id=memory_workspace,
+                        ai_peer=ai_peer_name_for_agent(agent),
+                        api_key=memory_token,
+                    )
+                    if memory_on and memory_workspace is not None
+                    else None
+                ),
                 aai_cli_config_toml=aai_config_toml,
                 aai_cli_setup_sh=aai_setup_sh,
                 gog_setup_sh=gog_setup_sh,
@@ -2190,6 +2235,15 @@ class AgentService:
         agent.last_error = None
         agent.last_error_code = None
         agent.last_error_detail = None
+        # Tell this Agent's memory deriver to keep transient conversational actions
+        # ("the peer asked X") out of stored memory. Done on every start so it also
+        # backfills Agents that predate it, and best-effort: memory is opt-in and
+        # its store may be unreachable, neither of which should fail an Agent start.
+        if memory_on and memory_workspace is not None:
+            try:
+                self.honcho.ensure_deriver_instructions(memory_workspace, self.honcho.DERIVER_INSTRUCTIONS)
+            except HonchoError:
+                logger.warning("Could not set memory deriver instructions for agent %s", agent_id, exc_info=True)
         # Pin what this pod was started on. The runtime reads its config once, so this
         # is the model it serves until someone restarts it — however the Organization
         # default moves in the meantime.
@@ -2413,6 +2467,38 @@ class AgentService:
         """Number of non-deleted agents in an org. Used by other domains (e.g. org
         deletion) to decide whether an org can be safely torn down."""
         return self.repository.count_active_by_org(organization_id)
+
+    def count_memory_group_members(self, group_id: UUID) -> int:
+        """Live Agents currently in a memory group — for the group-size cap.
+
+        Internal: the memory-groups service authorizes and validates the group is in
+        the caller's org before calling this."""
+        return self.repository.count_in_memory_group(group_id)
+
+    def agent_memory_group_id(self, agent_id: UUID, org_id: UUID) -> UUID | None:
+        """The Agent's current memory group, scoped to the org (404 otherwise).
+
+        Internal: lets the memory-groups service check membership (e.g. that an
+        Agent is actually in the group it is being removed from) before writing."""
+        agent = self.repository.get_by_id(agent_id)
+        if agent is None or agent.organization_id != org_id or agent.deleted_at is not None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent {agent_id} not found")
+        return agent.memory_group_id
+
+    def set_memory_group(self, agent_id: UUID, group_id: UUID | None, org_id: UUID) -> None:
+        """Assign an Agent to a memory group, or clear it (group_id=None).
+
+        Internal: the memory-groups service authorizes (MEMORY_GROUP_MANAGE) and
+        validates that the group exists in the org before calling this, so here we
+        only scope the Agent to the org and write the field. Takes effect on the
+        Agent's next start (like other config), which points it at the group's
+        shared workspace — or, when cleared, at no memory.
+        """
+        agent = self.repository.get_by_id(agent_id)
+        if agent is None or agent.organization_id != org_id or agent.deleted_at is not None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent {agent_id} not found")
+        agent.memory_group_id = group_id
+        self.repository.save(agent)
 
     def delete_agent(self, agent_id: UUID, context: CurrentUserContext) -> None:
         agent = self.authorization.require_action(context, agent_id, PermissionKey.AGENT_DELETE)

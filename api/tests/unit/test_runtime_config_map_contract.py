@@ -28,7 +28,8 @@ _ORG_ID = uuid4()
 _NS = "agent-farm"
 
 # Supplied only for some Agents; start.sh guards each with `[ -f ... ]`.
-_OPTIONAL = {"aai-cli-setup.sh", "aai-cli-config.toml", "gog-setup.sh", "skills.json"}
+# honcho.json ships only when Honcho memory is enabled and is guarded the same way.
+_OPTIONAL = {"aai-cli-setup.sh", "aai-cli-config.toml", "gog-setup.sh", "skills.json", "honcho.json"}
 
 
 def _referenced_files(start_script: Path) -> set[str]:

@@ -139,3 +139,36 @@ def test_unassigned_agent_is_concealed_and_visible_missing_action_is_forbidden()
     with pytest.raises(HTTPException) as forbidden:
         authorization.require_action(context, agent.id, PermissionKey.AGENT_UPDATE)
     assert_that(forbidden.value.status_code, equal_to(403))
+
+
+def test_deleted_agent_is_reachable_for_an_organization_admin():
+    """Deleting an Agent retains its Honcho workspace, so its memory must stay
+    viewable and erasable — otherwise retention leaves personal data nobody can
+    see or delete through the product."""
+    context, membership = _context(OrganizationRole.ADMIN)
+    deleted = _agent(membership.organization_id)
+    repository = Mock()
+    repository.get_active_in_scope.return_value = None
+    repository.get_deleted_in_scope.return_value = deleted
+    authorization = AgentAuthorization(policy=Mock(), repository=repository)
+
+    resolved = authorization.require_action_allowing_deleted(context, deleted.id, PermissionKey.AGENT_MEMORY_READ)
+
+    assert_that(resolved.id, equal_to(deleted.id))
+
+
+def test_deleted_agent_stays_hidden_from_a_plain_member():
+    """A deleted Agent has no live access assignments, so per-agent grants cannot
+    be evaluated. Organization-wide visibility is the bar instead, which a plain
+    Member does not have — a higher bar than the per-agent permission, not lower."""
+    context, _ = _context(OrganizationRole.MEMBER)
+    repository = Mock()
+    repository.get_active_in_scope.return_value = None
+    # Mirrors get_deleted_in_scope returning None without organization visibility.
+    repository.get_deleted_in_scope.return_value = None
+    authorization = AgentAuthorization(policy=Mock(), repository=repository)
+
+    with pytest.raises(HTTPException) as exc:
+        authorization.require_action_allowing_deleted(context, uuid4(), PermissionKey.AGENT_MEMORY_READ)
+
+    assert_that(exc.value.status_code, equal_to(404))
