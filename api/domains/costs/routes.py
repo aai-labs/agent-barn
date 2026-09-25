@@ -13,7 +13,11 @@ from api.domains.costs.models import (
     CostFilterOption,
     CostRecordRead,
     CostSummaryRead,
+    MonthlyCostRead,
+    MonthlyWindow,
+    get_agent_cost_filter,
     get_cost_filter,
+    get_monthly_window,
 )
 from api.domains.costs.service import CostService
 from api.domains.platform_admin.models import StatsWindow, get_stats_window
@@ -86,11 +90,69 @@ def list_agent_spend(
     return service.list_org_agent_spend(context, window, filters)
 
 
+@costs_router.get("/monthly", response_model=list[MonthlyCostRead])
+def get_monthly_costs(
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[CostService, Injected(CostService)],
+    window: Annotated[MonthlyWindow, Depends(get_monthly_window)],
+    filters: Annotated[CostFilter, Depends(get_cost_filter)],
+):
+    """Calendar-month totals under the page's filters.
+
+    Takes a number of months rather than the date range: the table compares whole
+    months, which a range picked for the charts would cut through.
+    """
+    return service.get_org_monthly(context, window, filters)
+
+
+# --- One Agent -------------------------------------------------------------
+#
+# Authorized per Agent through its effective Agent Access Role, not the
+# Organization-wide `cost.read` the routes above take. The Agent's own filter has no
+# agent or organization dimension; the service pins both from the authorized Agent.
+
+
 @costs_router.get("/agents/{agent_id}", response_model=AgentCostRead)
 def get_agent_cost(
     agent_id: UUID,
     context: Annotated[CurrentUserContext, Depends(get_current_user())],
     service: Annotated[CostService, Injected(CostService)],
     window: Annotated[StatsWindow, Depends(get_stats_window)],
+    filters: Annotated[CostFilter, Depends(get_agent_cost_filter)],
 ):
-    return service.get_agent_cost(agent_id, context, window)
+    return service.get_agent_cost(agent_id, context, window, filters)
+
+
+@costs_router.get("/agents/{agent_id}/calls", response_model=PaginatedItems[CostRecordRead])
+def list_agent_costs(
+    agent_id: UUID,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[CostService, Injected(CostService)],
+    window: Annotated[StatsWindow, Depends(get_stats_window)],
+    filters: Annotated[CostFilter, Depends(get_agent_cost_filter)],
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=100)] = 50,
+):
+    return service.list_agent_costs(agent_id, context, window, filters, page=page, page_size=page_size)
+
+
+@costs_router.get("/agents/{agent_id}/filters/models", response_model=list[CostFilterOption])
+def list_agent_model_filter_options(
+    agent_id: UUID,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[CostService, Injected(CostService)],
+    window: Annotated[StatsWindow, Depends(get_stats_window)],
+    filters: Annotated[CostFilter, Depends(get_agent_cost_filter)],
+):
+    return service.list_agent_model_options(agent_id, context, window, filters)
+
+
+@costs_router.get("/agents/{agent_id}/monthly", response_model=list[MonthlyCostRead])
+def get_agent_monthly_costs(
+    agent_id: UUID,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[CostService, Injected(CostService)],
+    window: Annotated[MonthlyWindow, Depends(get_monthly_window)],
+    filters: Annotated[CostFilter, Depends(get_agent_cost_filter)],
+):
+    return service.get_agent_monthly(agent_id, context, window, filters)

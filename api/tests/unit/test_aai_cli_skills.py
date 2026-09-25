@@ -21,6 +21,7 @@ _EXPECTED_PROVIDER_NAMES = {
     "Zoho Mail",
     "Pipedrive",
     "PostHog",
+    "SharePoint",
 }
 
 # Excel intentionally needs no credential. The other four entries currently have

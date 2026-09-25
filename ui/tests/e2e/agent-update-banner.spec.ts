@@ -1,7 +1,7 @@
 /**
- * The advisory Update control. It appears only when the server says a running
- * Agent's pod was built from older platform code, and it runs the same stop/start
- * the Restart menu item does.
+ * The advisory Update banner. It appears only when the server says a running
+ * Agent's pod was built from older platform code, and its Update button runs
+ * the same stop/start the Restart menu item does.
  */
 
 import { expect, test } from "@playwright/test";
@@ -14,7 +14,7 @@ import {
 import { DataSupport } from "../pages/data-support/data-support.po";
 import { AgentDetailPage } from "../pages/agent-detail-page.po";
 
-test.describe("Agent update button", () => {
+test.describe("Agent update banner", () => {
   let agentDetailPage: AgentDetailPage;
   let dataSupport: DataSupport;
 
@@ -46,27 +46,27 @@ test.describe("Agent update button", () => {
     await expect(agentDetailPage.updateButton()).toHaveCount(0);
   });
 
-  test("appears beside the lifecycle control when an update is available", async () => {
+  test("appears in the update banner when an update is available", async () => {
     await dataSupport.agents.interceptGetAgentRequest({
       body: { ...mockAgent, status: "RUNNING", update_available: true },
     });
 
     await agentDetailPage.goto(MOCK_AGENT_ID);
 
+    await expect(agentDetailPage.updateBanner()).toBeVisible();
     await expect(agentDetailPage.updateButton()).toBeVisible();
     await expect(agentDetailPage.updateButton()).toHaveText(/update/i);
     await expect(agentDetailPage.lifecycleMenu()).toBeVisible();
   });
 
-  test("hovering explains that the Agent is running an older release", async ({ page }) => {
+  test("explains that a new version is available", async () => {
     await dataSupport.agents.interceptGetAgentRequest({
       body: { ...mockAgent, status: "RUNNING", update_available: true },
     });
 
     await agentDetailPage.goto(MOCK_AGENT_ID);
-    await agentDetailPage.updateButton().hover();
 
-    await expect(page.getByRole("tooltip").filter({ hasText: /older release/i })).toBeVisible();
+    await expect(agentDetailPage.updateBanner()).toContainText(/new version.*is available/i);
   });
 
   test("offers a link to the release notes beside the button", async () => {

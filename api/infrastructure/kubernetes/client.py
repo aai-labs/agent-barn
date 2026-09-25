@@ -325,7 +325,6 @@ class KubernetesClient:
                 namespace,
                 container=container,
                 tail_lines=tail_lines,
-                timestamps=False,
                 _preload_content=False,
             )
         except ApiException as e:
@@ -333,6 +332,16 @@ class KubernetesClient:
                 return None
             raise
         return response.data.decode("utf-8", errors="replace")
+
+    def has_pods_for_deployment(self, deployment_name: str, namespace: str) -> bool:
+        """Whether any pod still exists, including one that is terminating.
+
+        Deliberately not ``get_pod_name_for_deployment``, which skips pods carrying a
+        deletion timestamp: a pod on its way out still holds the volume, and that is
+        exactly the state a caller needs to see.
+        """
+        pods = self._core_v1.list_namespaced_pod(namespace, label_selector=f"app={deployment_name}")
+        return bool(pods.items)
 
     def get_pod_name_for_deployment(self, deployment_name: str, namespace: str) -> str | None:
         pods = self._core_v1.list_namespaced_pod(namespace, label_selector=f"app={deployment_name}")
@@ -375,6 +384,83 @@ class KubernetesClient:
             return "initializing", None
         return None, None
 
+    def get_runtime_diagnostics(self, deployment_name: str, namespace: str) -> dict[str, object]:
+        """Bounded evidence from the newest non-deleting pod, including failed pods.
+
+        Container messages and cluster exception bodies are deliberately excluded.
+        Log text follows the existing activity-authorized Agent log boundary.
+        """
+        result: dict[str, object] = {"observed_at": datetime.now(UTC), "available": False}
+        pods = self._core_v1.list_namespaced_pod(
+            namespace,
+            label_selector=f"app={deployment_name}",
+            _request_timeout=10,
+        )
+        candidates = [p for p in pods.items if p.metadata.deletion_timestamp is None]
+        if not candidates:
+            return result
+        pod = max(candidates, key=lambda p: p.metadata.creation_timestamp)
+        result.update(available=True, pod_created_at=pod.metadata.creation_timestamp)
+        container = next((c for c in pod.status.container_statuses or [] if c.name == "agent"), None)
+        if container is None:
+            return result
+        result.update(restart_count=container.restart_count, ready=container.ready)
+        waiting = container.state.waiting if container.state else None
+        if waiting:
+            result["waiting_reason"] = (
+                waiting.reason
+                if waiting.reason in self._TERMINAL_WAITING_REASONS | {"ContainerCreating", "PodInitializing"}
+                else "Unknown"
+            )
+        terminated = container.state.terminated if container.state else None
+        if terminated is None and container.last_state:
+            terminated = container.last_state.terminated
+        if terminated:
+            result.update(
+                termination_reason=terminated.reason
+                if terminated.reason in {"OOMKilled", "Error", "Completed", "ContainerCannotRun"}
+                else "Unknown",
+                exit_code=terminated.exit_code,
+                finished_at=terminated.finished_at,
+            )
+        for previous, key in ((False, "current"), (True, "previous")):
+            if previous and not container.restart_count:
+                continue
+            try:
+                # `_preload_content=False` and an explicit decode, as stream_pod_logs
+                # does: preloaded content comes back as the *repr* of the response
+                # bytes, so every line would arrive inside one `b"...\\n..."` string
+                # and splitlines() would find a single line.
+                response = self._core_v1.read_namespaced_pod_log(
+                    pod.metadata.name,
+                    namespace,
+                    container="agent",
+                    previous=previous,
+                    tail_lines=100,
+                    limit_bytes=32000,
+                    timestamps=True,
+                    _preload_content=False,
+                    _request_timeout=10,
+                )
+                try:
+                    # Nothing raises when the content is not preloaded, so the
+                    # status has to be read rather than caught.
+                    if response.status in (400, 403, 404):
+                        continue
+                    if response.status >= 400:
+                        raise ApiException(http_resp=response)
+                    logs = response.data.decode("utf-8", errors="replace")
+                finally:
+                    response.close()
+                result[f"{key}_logs"] = logs.splitlines()
+                result[f"{key}_logs_available"] = True
+            except ApiException as error:
+                if error.status not in (400, 403, 404):
+                    raise
+                # A container may disappear or not have started yet. Missing
+                # evidence is distinct from a successful read of an empty log.
+        return result
+
     def read_pod_logs(
         self,
         deployment_name: str,
@@ -386,13 +472,25 @@ class KubernetesClient:
         if pod_name is None:
             return None
         try:
-            return self._core_v1.read_namespaced_pod_log(
+            # Not preloaded, then decoded: preloading hands back the repr of the
+            # response bytes (`b"line\\nline"`), which reads as a single escaped
+            # line everywhere it is split. See stream_pod_logs for the same idiom.
+            response = self._core_v1.read_namespaced_pod_log(
                 pod_name,
                 namespace,
                 container=container,
                 tail_lines=tail_lines,
-                timestamps=False,
+                timestamps=True,
+                _preload_content=False,
             )
+            try:
+                if response.status == 404:
+                    return None
+                if response.status >= 400:
+                    raise ApiException(http_resp=response)
+                return response.data.decode("utf-8", errors="replace")
+            finally:
+                response.close()
         except ApiException as e:
             if e.status == 404:
                 return None
@@ -414,6 +512,7 @@ class KubernetesClient:
             container=container,
             tail_lines=tail_lines,
             follow=True,
+            timestamps=True,
             _preload_content=False,
         )
         try:

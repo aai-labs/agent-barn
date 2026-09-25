@@ -18,10 +18,10 @@ from api.domains.communications.models import (
     RuntimeDeliveryResult,
     RuntimeReplyCreate,
 )
-from api.domains.communications.plugins.base import WebhookRequest, WebhookRequestRejected
+from api.domains.communications.plugins.base import WebhookRequest
 
-# 3 added the delivery execution contract (kind, session key, event policy). Older pods
-# keep speaking their own version until the Agent is restarted, so they stay accepted.
+# 3 was only ever shipped to staging by the retired webhook Platform. Its adapter falls
+# back to version 2 behaviour, so those pods stay accepted until the Agent restarts.
 SUPPORTED_RUNTIME_PROTOCOL_VERSIONS = frozenset({"1", "2", "3"})
 _CONTROL_STREAM_PROTOCOL_VERSIONS = frozenset({"2", "3"})
 
@@ -85,7 +85,7 @@ def claim_runtime_delivery(
 ):
     agent = _authenticate(service, agent_id, authorization, protocol_version)
     try:
-        delivery = service.claim_runtime_delivery(agent, runtime_protocol_version=int(protocol_version))
+        delivery = service.claim_runtime_delivery(agent)
     except RuntimeError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     if delivery is None:
@@ -107,24 +107,6 @@ def complete_runtime_delivery(
 ) -> Response:
     agent = _authenticate(service, agent_id, authorization, protocol_version)
     if not service.complete_runtime_delivery(agent, delivery_id, result):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Communication Delivery not found")
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
-
-
-@runtime_communications_router.post(
-    "/{agent_id}/deliveries/{delivery_id}/release",
-    status_code=status.HTTP_204_NO_CONTENT,
-)
-def release_runtime_delivery(
-    agent_id: UUID,
-    delivery_id: UUID,
-    service: Annotated[CommunicationsGatewayService, Injected(CommunicationsGatewayService)],
-    authorization: Annotated[str, Header()],
-    protocol_version: Annotated[str, Header(alias="X-AgentBarn-Communications-Version")],
-) -> Response:
-    """Return a claimed delivery to the queue because the Agent could not start it."""
-    agent = _authenticate(service, agent_id, authorization, protocol_version)
-    if not service.release_runtime_delivery(agent, delivery_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Communication Delivery not found")
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
@@ -252,8 +234,6 @@ async def accept_provider_webhook(
         accepted = await run_in_threadpool(service.accept_provider_webhook, connection_id, webhook_request)
     except (PermissionError, NotImplementedError) as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Webhook authentication failed") from exc
-    except WebhookRequestRejected as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     return {"accepted": accepted}
 
 

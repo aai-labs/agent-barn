@@ -38,11 +38,13 @@ _HERMES_START = _AGENTS_DIR / "scripts" / "hermes" / "start.sh"
 _OPENCLAW_START = _AGENTS_DIR / "scripts" / "openclaw" / "start.sh"
 _OPENCLAW_INIT = _AGENTS_DIR / "scripts" / "openclaw" / "init-openclaw.js"
 _AAI_CLI_ARTIFACTS = _AGENTS_DIR / "aai_cli_artifacts.py"
+_AGENT_SERVICE = _AGENTS_DIR / "service.py"
 
 _HERMES_WORKSPACE_COPY_LOOP = re.compile(r"^for f in (?P<files>[^;]+); do$", re.MULTILINE)
 
 _EXCLUSION_EVIDENCE = {
     _HERMES: {
+        ".cache": (_AAI_CLI_ARTIFACTS, "export HOME="),
         ".config/aai-cli": (_AAI_CLI_ARTIFACTS, "/.config/aai-cli"),
         ".env": (_HERMES_START, "rm -f /opt/data/.env"),
         "SOUL.md": (_HERMES_START, "cp /app/config/SOUL.md /opt/data/SOUL.md"),
@@ -52,8 +54,8 @@ _EXCLUSION_EVIDENCE = {
         "workspace/skills": (_HERMES_START, "rm -rf /workspace/skills"),
     },
     _OPENCLAW: {
+        "aai-cli": (_AGENT_SERVICE, '"/home/node/.openclaw/aai-cli"'),
         "local-plugins": (_OPENCLAW_START, "/home/node/.openclaw/local-plugins/"),
-        "npm": (_OPENCLAW_START, "/home/node/.openclaw/npm/projects/"),
         "agentbarn-messages.sqlite3": (_OPENCLAW_START, "/home/node/.openclaw/agentbarn-messages.sqlite3"),
         "openclaw.json": (_OPENCLAW_INIT, "'openclaw.json'"),
         "workspace/skills": (_OPENCLAW_INIT, "path.join(WORKSPACE_DIR, 'skills')"),
@@ -84,6 +86,9 @@ def _hermes_volume(root: Path) -> None:
 
 
 def _openclaw_volume(root: Path) -> None:
+    _write(root, "aai-cli/aai-secrets.enc.json", "SECRET")
+    _write(root, "aai-cli/key", "KEY")
+    _write(root, "aai-cli/microsoft.sharepoint_refresh_token.sign-in")
     _write(root, "local-plugins/telemetry-push/index.js")
     _write(root, "npm/projects/openclaw-plugin/package.json")
     _write(root, "openclaw.json")
@@ -92,6 +97,11 @@ def _openclaw_volume(root: Path) -> None:
     _write(root, "workspace/AGENTS.md")
     _write(root, "workspace/USER.md", "learned profile")
     _write(root, "workspace/notes.md", "agent work")
+
+
+def _all_member_names(dest: Path) -> list[str]:
+    with tarfile.open(dest / ARCHIVE_NAME, "r:gz") as tar:
+        return tar.getnames()
 
 
 def _members(dest: Path) -> list[str]:
@@ -109,6 +119,20 @@ def test_hermes_capture_excludes_the_aai_cli_credential_store(tmp_path):
 
     names = _members(dest)
     assert_that([n for n in names if n.startswith(".config/aai-cli")], empty())
+
+
+def test_openclaw_capture_excludes_the_aai_cli_credential_store(tmp_path):
+    # OpenClaw keeps its aai-cli store on the volume (Hermes keeps its own under .config),
+    # so an archive would otherwise hold every integration token and the key to read them.
+    source, dest = tmp_path / "src", tmp_path / "dst"
+    source.mkdir()
+    dest.mkdir()
+    _openclaw_volume(source)
+
+    capture(source, dest, _OPENCLAW)
+
+    names = _members(dest)
+    assert_that([n for n in names if n.startswith("aai-cli")], empty())
 
 
 def test_hermes_capture_excludes_state_the_start_script_regenerates(tmp_path):
@@ -131,6 +155,18 @@ def test_hermes_capture_excludes_state_the_start_script_regenerates(tmp_path):
         "agentbarn-messages.sqlite3",
     ):
         assert_that(names, is_not(has_item(excluded)))
+
+
+def test_hermes_capture_excludes_the_regenerable_tool_cache(tmp_path):
+    source, dest = tmp_path / "src", tmp_path / "dst"
+    source.mkdir()
+    dest.mkdir()
+    _hermes_volume(source)
+    _write(source, ".cache/uv/archive-v0/JrQCC7", "wheel")
+
+    capture(source, dest, _HERMES)
+
+    assert_that(_all_member_names(dest), is_not(has_item(".cache/uv/archive-v0/JrQCC7")))
 
 
 def test_hermes_capture_retains_agent_owned_memories_and_work(tmp_path):
@@ -247,8 +283,8 @@ def test_openclaw_capture_excludes_regenerated_state_and_the_message_spool(tmp_p
 
     names = _members(dest)
     for excluded in (
+        "aai-cli/aai-secrets.enc.json",
         "local-plugins/telemetry-push/index.js",
-        "npm/projects/openclaw-plugin/package.json",
         "openclaw.json",
         "workspace/skills/jira/SKILL.md",
         "agentbarn-messages.sqlite3",
@@ -256,32 +292,33 @@ def test_openclaw_capture_excludes_regenerated_state_and_the_message_spool(tmp_p
         assert_that(names, is_not(has_item(excluded)))
 
 
-def test_openclaw_capture_excludes_symlinks_that_cannot_be_safely_restored(tmp_path):
-    source, dest = tmp_path / "src", tmp_path / "dst"
-    source.mkdir()
-    dest.mkdir()
-    _openclaw_volume(source)
-    (source / "workspace" / "runtime-link").symlink_to("/usr/local/lib/node_modules/openclaw")
+@pytest.mark.parametrize("runtime", [_HERMES, _OPENCLAW])
+def test_restore_keeps_only_symlinks_that_resolve_inside_the_volume(tmp_path, runtime):
+    source, backup, archive = tmp_path / "src", tmp_path / "bak", tmp_path / "arc"
+    for path in (source, backup, archive):
+        path.mkdir()
+    if runtime == _HERMES:
+        _hermes_volume(source)
+    else:
+        _openclaw_volume(source)
 
-    capture(source, dest, _OPENCLAW)
+    workspace = source / "workspace"
+    (workspace / "notes-link.md").symlink_to("notes.md")
+    (workspace / "external-link.md").symlink_to("/usr/local/lib/node_modules/openclaw")
 
-    with tarfile.open(dest / ARCHIVE_NAME, "r:gz") as tar:
-        assert_that([member.name for member in tar.getmembers()], is_not(has_item("workspace/runtime-link")))
-    validate_archive(dest / ARCHIVE_NAME, source)
+    capture(source, archive, runtime)
+    with tarfile.open(archive / ARCHIVE_NAME, "r:gz") as tar:
+        names = [member.name for member in tar.getmembers()]
+    assert_that(names, has_item("workspace/notes-link.md"))
+    assert_that(names, is_not(has_item("workspace/external-link.md")))
+    validate_archive(archive / ARCHIVE_NAME, source)
 
+    restore(source, backup, archive, runtime)
 
-def test_hermes_capture_keeps_relative_symlinks_inside_the_volume(tmp_path):
-    source, dest = tmp_path / "src", tmp_path / "dst"
-    source.mkdir()
-    dest.mkdir()
-    _hermes_volume(source)
-    (source / "workspace" / "notes-link.md").symlink_to("notes.md")
-
-    capture(source, dest, _HERMES)
-
-    with tarfile.open(dest / ARCHIVE_NAME, "r:gz") as tar:
-        assert_that([member.name for member in tar.getmembers()], has_item("workspace/notes-link.md"))
-    validate_archive(dest / ARCHIVE_NAME, source)
+    notes_link = workspace / "notes-link.md"
+    assert_that(notes_link.is_symlink(), equal_to(True))
+    assert_that(notes_link.resolve().read_text(), equal_to("agent work"))
+    assert_that((workspace / "external-link.md").exists(), equal_to(False))
 
 
 def test_capture_writes_a_manifest_with_byte_size_and_file_count(tmp_path):
@@ -519,3 +556,116 @@ def test_main_reports_a_failed_extraction_distinctly_and_keeps_the_backup(tmp_pa
     assert_that(exc_info.value.code, equal_to(EXIT_RESTORE_FAILED))
     assert_that((target / "workspace/live.md").read_text(), equal_to("live content"))
     assert_that(_members(backup), has_item("workspace/live.md"))
+
+
+def test_the_openclaw_plugin_store_round_trips_through_a_restore(tmp_path):
+    source, archive_dir = tmp_path / "src", tmp_path / "arc"
+    source.mkdir()
+    archive_dir.mkdir()
+    _write(source, "npm/projects/p/node_modules/@openclaw/slack/package.json", '{"version":"2026.8.2"}')
+    (source / "npm/projects/p/node_modules/@openclaw/slack/node_modules").mkdir()
+    (source / "npm/projects/p/node_modules/@openclaw/slack/node_modules/openclaw").symlink_to(
+        "/usr/local/lib/node_modules/openclaw"
+    )
+    _write(source, "memories/USER.md", "captured profile")
+    manifest = capture(source, archive_dir, _OPENCLAW)
+
+    target, backup = tmp_path / "tgt", tmp_path / "bak"
+    target.mkdir()
+    backup.mkdir()
+    _write(target, "stale/junk.txt", "should be gone")
+
+    restore(target, backup, archive_dir, _OPENCLAW)
+
+    assert_that(manifest["skipped"], equal_to(1))
+    assert_that(
+        (target / "npm/projects/p/node_modules/@openclaw/slack/package.json").read_text(),
+        equal_to('{"version":"2026.8.2"}'),
+    )
+    assert_that(
+        (target / "npm/projects/p/node_modules/@openclaw/slack/node_modules/openclaw").exists(), equal_to(False)
+    )
+    assert_that((target / "stale").exists(), equal_to(False))
+
+
+@pytest.mark.parametrize(
+    ("runtime", "cleaned"),
+    [
+        (_HERMES, ".config/aai-cli/aai-secrets.enc.json"),
+        (_HERMES, "workspace/skills/old/SKILL.md"),
+        (_OPENCLAW, "workspace/skills/old/SKILL.md"),
+        (_OPENCLAW, "local-plugins/stale/index.js"),
+        (_OPENCLAW, "agentbarn-messages.sqlite3"),
+    ],
+)
+def test_restore_still_clears_state_the_runtime_rebuilds(tmp_path, runtime, cleaned):
+    source, archive_dir = tmp_path / "src", tmp_path / "arc"
+    source.mkdir()
+    archive_dir.mkdir()
+    _write(source, "memories/USER.md", "captured profile")
+    capture(source, archive_dir, runtime)
+
+    target, backup = tmp_path / "tgt", tmp_path / "bak"
+    target.mkdir()
+    backup.mkdir()
+    _write(target, cleaned, "revoked")
+
+    restore(target, backup, archive_dir, runtime)
+
+    assert_that((target / cleaned).exists(), equal_to(False))
+
+
+@pytest.mark.parametrize("runtime", [_HERMES, _OPENCLAW])
+def test_every_archived_member_survives_the_extraction_filter(tmp_path, runtime):
+    source, dest = tmp_path / "src", tmp_path / "dst"
+    source.mkdir()
+    dest.mkdir()
+    _write(source, "memories/USER.md", "profile")
+    _write(source, "workspace/notes.md", "work")
+    _write(source, "memories/wheel", "wheel")
+    (source / "memories/absolute-link").symlink_to(source / "memories/wheel")
+    (source / "workspace/escape").symlink_to("../../../etc/passwd")
+    (source / "workspace/inside.md").symlink_to("notes.md")
+
+    capture(source, dest, runtime)
+
+    with tarfile.open(dest / ARCHIVE_NAME, "r:gz") as tar:
+        for member in tar:
+            tarfile.data_filter(member, "/target")
+
+
+def test_capture_drops_links_that_could_never_be_extracted_and_reports_them(tmp_path):
+    source, dest = tmp_path / "src", tmp_path / "dst"
+    source.mkdir()
+    dest.mkdir()
+    _write(source, "memories/USER.md", "profile")
+    _write(source, "memories/wheel", "wheel")
+    (source / "memories/absolute-link").symlink_to(source / "memories/wheel")
+
+    manifest = capture(source, dest, _HERMES)
+
+    assert_that(manifest["skipped"], equal_to(1))
+    assert_that(_all_member_names(dest), is_not(has_item("memories/absolute-link")))
+    validate_archive(dest / ARCHIVE_NAME, tmp_path / "anywhere")
+
+
+def test_openclaw_keeps_a_relative_symlink_that_stays_inside_the_volume(tmp_path):
+    source, dest = tmp_path / "src", tmp_path / "dst"
+    source.mkdir()
+    dest.mkdir()
+    _write(source, "workspace/notes.md", "work")
+    (source / "workspace/inside.md").symlink_to("notes.md")
+
+    capture(source, dest, _OPENCLAW)
+
+    assert_that(_all_member_names(dest), has_item("workspace/inside.md"))
+
+
+def test_capture_reports_nothing_skipped_for_an_ordinary_volume(tmp_path):
+    source, dest = tmp_path / "src", tmp_path / "dst"
+    source.mkdir()
+    dest.mkdir()
+    _write(source, "memories/USER.md", "profile")
+    _write(source, "workspace/notes.md", "work")
+
+    assert_that(capture(source, dest, _HERMES)["skipped"], equal_to(0))

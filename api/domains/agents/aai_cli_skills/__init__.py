@@ -32,6 +32,7 @@ _DISPLAY_NAMES = {
     "aai-openpanel": "OpenPanel",
     "aai-pipedrive": "Pipedrive",
     "aai-posthog": "PostHog",
+    "aai-microsoft": "SharePoint",
     "aai-zoho-mail": "Zoho Mail",
 }
 
@@ -46,6 +47,7 @@ _COMMANDS = {
     "aai-openpanel": "openpanel",
     "aai-pipedrive": "pipedrive",
     "aai-posthog": "posthog",
+    "aai-microsoft": "microsoft",
     "aai-zoho-mail": "email",
 }
 
@@ -63,6 +65,7 @@ _REQUIRED_PROVIDERS = {
     "aai-openpanel": [],
     "aai-pipedrive": [SecretProvider.PIPEDRIVE],
     "aai-posthog": [],
+    "aai-microsoft": [SecretProvider.SHAREPOINT],
     "aai-zoho-mail": [SecretProvider.ZOHO_MAIL],
 }
 

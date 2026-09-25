@@ -216,8 +216,7 @@ export const ConversationChannelSchema = z.object({
   platformKey: z.string(),
   channelId: z.string(),
   channelName: z.string().nullable(),
-  // EVENT is a machine trigger, not a place a person talks. Grouped separately.
-  conversationType: z.enum(["CHANNEL", "DM", "EVENT"]),
+  conversationType: z.enum(["CHANNEL", "DM"]),
 });
 
 export const WebChatApprovalSchema = z.object({
@@ -494,3 +493,121 @@ export type RestorePointSkill = z.infer<typeof RestorePointSkillSchema>;
 export type RestorePointConfigManifest = z.infer<typeof RestorePointConfigManifestSchema>;
 export type RestorePoint = z.infer<typeof RestorePointSchema>;
 export type PaginatedRestorePoints = z.infer<typeof PaginatedRestorePointsSchema>;
+
+// --- Activity ---------------------------------------------------------------
+//
+// What the Agent has been doing, read off its billed model calls. A *wake* is a
+// burst of calls close together — the unit of work a person recognises — and its
+// trigger says whether anybody asked for it.
+
+export const ActivityTriggerSchema = z.enum(["user", "background"]);
+export const ActivityGranularitySchema = z.enum(["minute", "hour", "day", "week"]);
+
+export const ActivityTotalsSchema = z.object({
+  calls: z.number().int().default(0),
+  wakes: z.number().int().default(0),
+  spend: z.number().default(0),
+  promptTokens: z.number().int().default(0),
+  completionTokens: z.number().int().default(0),
+});
+
+export const PromptTokenDistributionSchema = z.object({
+  avg: z.number().default(0),
+  median: z.number().int().default(0),
+  p95: z.number().int().default(0),
+  max: z.number().int().default(0),
+});
+
+export const ActivityTriggerBreakdownSchema = z.object({
+  trigger: ActivityTriggerSchema,
+  wakes: z.number().int().default(0),
+  calls: z.number().int().default(0),
+  spend: z.number().default(0),
+  promptTokens: z.number().int().default(0),
+});
+
+export const ActivityBucketSchema = z.object({
+  bucket: z.string(),
+  calls: z.number().int().default(0),
+  promptTokens: z.number().int().default(0),
+  completionTokens: z.number().int().default(0),
+  spend: z.number().default(0),
+});
+
+export const AgentActivitySummarySchema = z.object({
+  agentId: z.string().uuid(),
+  period: z.string().nullable().default(null),
+  fromDate: z.string(),
+  toDate: z.string(),
+  granularity: ActivityGranularitySchema,
+  lastCallAt: z.string().nullable().default(null),
+  totals: ActivityTotalsSchema,
+  promptTokensPerCall: PromptTokenDistributionSchema,
+  byTrigger: z.array(ActivityTriggerBreakdownSchema).default([]),
+  byBucket: z.array(ActivityBucketSchema).default([]),
+  wakeCadenceSeconds: z.number().int().nullable().default(null),
+});
+
+export const AgentWakeSchema = z.object({
+  startedAt: z.string(),
+  endedAt: z.string(),
+  trigger: ActivityTriggerSchema,
+  calls: z.number().int(),
+  spend: z.number(),
+  promptTokens: z.number().int(),
+  completionTokens: z.number().int(),
+  minPromptTokens: z.number().int(),
+  maxPromptTokens: z.number().int(),
+  models: z.array(z.string()).default([]),
+});
+
+export const AgentActivityCallSchema = z.object({
+  requestId: z.string(),
+  occurredAt: z.string(),
+  model: z.string(),
+  status: z.string(),
+  spend: z.number(),
+  promptTokens: z.number().int(),
+  completionTokens: z.number().int(),
+  requestDurationMs: z.number().int().nullable().default(null),
+});
+
+export const PaginatedAgentWakesSchema = z.object({
+  page: z.number().int().min(1),
+  pageSize: z.number().int().min(1),
+  total: z.number().int().min(0),
+  items: z.array(AgentWakeSchema),
+});
+
+export const PaginatedAgentActivityCallsSchema = z.object({
+  page: z.number().int().min(1),
+  pageSize: z.number().int().min(1),
+  total: z.number().int().min(0),
+  items: z.array(AgentActivityCallSchema),
+});
+
+export type ActivityTrigger = z.infer<typeof ActivityTriggerSchema>;
+export type ActivityTriggerBreakdown = z.infer<typeof ActivityTriggerBreakdownSchema>;
+export type ActivityBucket = z.infer<typeof ActivityBucketSchema>;
+export type AgentActivitySummary = z.infer<typeof AgentActivitySummarySchema>;
+export type AgentWake = z.infer<typeof AgentWakeSchema>;
+export type AgentActivityCall = z.infer<typeof AgentActivityCallSchema>;
+export type PaginatedAgentWakes = z.infer<typeof PaginatedAgentWakesSchema>;
+export type PaginatedAgentActivityCalls = z.infer<typeof PaginatedAgentActivityCallsSchema>;
+
+export const AgentRuntimeDiagnosticsSchema = z.object({
+  observedAt: z.string(),
+  available: z.boolean(),
+  podCreatedAt: z.string().nullable(),
+  restartCount: z.number().int(),
+  ready: z.boolean(),
+  waitingReason: z.string().nullable(),
+  terminationReason: z.string().nullable(),
+  exitCode: z.number().int().nullable(),
+  finishedAt: z.string().nullable(),
+  currentLogs: z.array(z.string()),
+  previousLogs: z.array(z.string()),
+  currentLogsAvailable: z.boolean(),
+  previousLogsAvailable: z.boolean(),
+});
+export type AgentRuntimeDiagnostics = z.infer<typeof AgentRuntimeDiagnosticsSchema>;

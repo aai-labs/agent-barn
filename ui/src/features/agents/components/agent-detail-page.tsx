@@ -13,17 +13,18 @@ import { useAgentHealth } from "../hooks/use-agent-health";
 import { useCommunicationConnections } from "@/features/communication-connections/hooks/use-communication-connections";
 import { ChevLeftIcon, CogIcon, ShareIcon } from "@/components/icons";
 import { AppErrorState } from "@/components/app-error-state";
+import { AgentCostsPanel } from "@/features/costs/components/agent-costs-panel";
 import { AgentAvatar } from "./agent-avatar";
 import { AgentErrorBanner, AgentHealthErrorBanner } from "./agent-error-banner";
 import { AgentLifecycleMenu } from "./agent-lifecycle-menu";
 import { AgentMetaBadges } from "./agent-meta-badges";
-import { AgentUpdateButton } from "./agent-update-button";
+import { AgentUpdateBanner } from "./agent-update-banner";
 import { StatusLine } from "./status-line";
 import { ChatTab } from "./chat-tab";
 import { ConversationsTab } from "./conversations-tab";
 import { ToolCallsTab } from "./tool-calls-tab";
 import { LogsTab } from "./logs-tab";
-import { WorkTab } from "./work-tab";
+import { ActivityTab } from "./activity-tab";
 import { AboutTab } from "./about-tab";
 import { ShareDialog } from "./share-dialog";
 import { AgentDetailHeaderSkeleton } from "./agent-detail-header-skeleton";
@@ -32,19 +33,28 @@ interface AgentDetailPageProps {
   agentId: string;
 }
 
-type Tab = "chat" | "conversations" | "tool-calls" | "logs" | "work" | "about";
+type Tab =
+  | "chat"
+  | "conversations"
+  | "tool-calls"
+  | "logs"
+  | "activity"
+  | "costs"
+  | "about";
 const VALID_TABS: Tab[] = [
   "chat",
   "conversations",
   "tool-calls",
   "logs",
-  "work",
+  "activity",
+  "costs",
   "about",
 ];
 
 export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
   const { agent, isLoading, error, refetch } = useAgent(agentId);
   const canReadActivity = canAgent(agent, "activity.read");
+  const canReadCosts = canAgent(agent, "cost.read");
   const { health } = useAgentHealth(
     agentId,
     canReadActivity &&
@@ -74,9 +84,17 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
           ["conversations", "Conversations"],
           ["tool-calls", "Tool calls"],
           ["logs", "Logs"],
-          ["work", "Work"],
         ] as [Tab, string][])
       : []),
+    // Every part of Activity needs activity.read: the runtime diagnostics on
+    // their own, the usage sections together with cost.read. The tab itself
+    // decides what to show a reader who has only the first.
+    ...(canReadActivity ? ([["activity", "Activity"]] as [Tab, string][]) : []),
+    // Costs is gated on cost.read alone, independent of activity.read: a custom
+    // Agent Access Role can grant one Permission without the other, and this is
+    // the only tab that surfaces cost.read on its own — Activity's usage section
+    // needs activity.read too.
+    ...(canReadCosts ? ([["costs", "Costs"]] as [Tab, string][]) : []),
     ["about", "About"],
   ];
   const resolvedTab = tabs.some(([key]) => key === tab) ? tab : tabs[0][0];
@@ -87,13 +105,10 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
   const canManageAccess = canAgent(agent, "agent.access.manage");
   const canManageConnections = canAgent(agent, "agent.update");
   const connections = useCommunicationConnections(agent?.id ?? "");
-  // The built-in Chat tab lazily provisions a "web" Connection on first send
-  // so people can try the Agent without setting anything up, and a webhook is a
-  // machine trigger rather than a way for a person to reach this Agent — neither
-  // should count as a real messaging platform for this nudge.
-  const externalConnections = connections.data?.filter(
-    (connection) => connection.platformKey !== "web" && connection.platformKey !== "webhook",
-  );
+  // The built-in Chat tab lazily provisions a "web" Connection on first send so people
+  // can try the Agent without setting anything up; it is not a real messaging platform
+  // for this nudge.
+  const externalConnections = connections.data?.filter((connection) => connection.platformKey !== "web");
   const needsMessagingSetup =
     !connections.isPending && externalConnections?.length === 0;
   const [shareOpen, setShareOpen] = useState(false);
@@ -159,7 +174,6 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
                 </div>
               </div>
               <div className="flex gap-2">
-                {canManageLifecycle && <AgentUpdateButton agent={agent} />}
                 {canManageLifecycle && <AgentLifecycleMenu agent={agent} />}
                 <Link
                   href={`${homeHref}/agents/${agent.id}/configuration`}
@@ -174,6 +188,8 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
                 )}
               </div>
             </div>
+
+            {canManageLifecycle && <AgentUpdateBanner agent={agent} />}
 
             {/* The classified provisioning failure comes off the Agent itself, so
                 it renders on first paint and does not depend on health polling —
@@ -282,7 +298,8 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
             )}
             {resolvedTab === "tool-calls" && <ToolCallsTab agent={agent} />}
             {resolvedTab === "logs" && <LogsTab agent={agent} />}
-            {resolvedTab === "work" && <WorkTab agent={agent} />}
+            {resolvedTab === "activity" && <ActivityTab agent={agent} />}
+            {resolvedTab === "costs" && <AgentCostsPanel agentId={agent.id} />}
             {resolvedTab === "about" && <AboutTab agent={agent} />}
           </>
         )}

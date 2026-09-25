@@ -7,6 +7,7 @@ export const MOCK_CUSTOM_SKILL_ID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 export const MOCK_JIRA_SKILL_ID = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
 export const MOCK_GOOGLE_WORKSPACE_SKILL_ID = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
 export const MOCK_BITBUCKET_SKILL_ID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+export const MOCK_SHAREPOINT_SKILL_ID = "ffffffff-ffff-4fff-8fff-ffffffffffff";
 
 export const mockPlatformSkill = {
   id: MOCK_PLATFORM_SKILL_ID,
@@ -82,6 +83,15 @@ export const mockGoogleWorkspaceSkill = {
   isAssignedToAgent: false,
   createdAt: "2026-01-01T00:00:00Z",
   updatedAt: "2026-01-01T00:00:00Z",
+};
+
+export const mockSharePointSkill = {
+  ...mockGoogleWorkspaceSkill,
+  id: MOCK_SHAREPOINT_SKILL_ID,
+  name: "SharePoint",
+  slug: "aai-microsoft",
+  rootDir: "aai-microsoft",
+  requiredProviders: ["sharepoint"],
 };
 
 export const mockBitbucketSkill = {

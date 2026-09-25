@@ -235,9 +235,8 @@ class ConversationRepository:
 
         Provider channel identifiers are unique only within one Connection. Picks
         the latest non-null channel name for each (Connection, channel) pair.
-        Excludes Connections that have their own view: Web Chat (its Chat tab) and webhook
-        (the calls list on its detail view). Their transcript rows are still written, since
-        a delivery needs one and platform stats read the table; they are just not shown here.
+        Excludes the built-in Web Chat Connection: it already has its own live
+        Chat tab, so surfacing it again here would just duplicate that view.
         """
         with Session(self.delegate.engine) as session:
             query = (
@@ -249,9 +248,7 @@ class ConversationRepository:
                 )
                 .where(
                     col(AgentChatMessage.agent_id) == agent_id,
-                    col(CommunicationConnection.platform_key).not_in(
-                        (CommunicationPlatform.WEB.value, CommunicationPlatform.WEBHOOK.value)
-                    ),
+                    col(CommunicationConnection.platform_key) != CommunicationPlatform.WEB.value,
                     *agent_scope_predicates(authorization_scope),
                 )
                 .order_by(

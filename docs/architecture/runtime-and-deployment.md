@@ -68,6 +68,8 @@ The collaborator walk is transitive in both dimensions: it follows `self._method
 
 Both Hermes and OpenClaw consume the same versioned Communications protocol for gateway-owned Connections. A sidecar-style runtime adapter opens an authenticated, outbound Server-Sent Events control stream to Communications. A `delivery_available` wakeup makes the adapter claim durable inbound Communication Deliveries and invoke the runtime's local API with a Connection-scoped session key, submit the reply against the source delivery, and complete the delivery. OpenClaw uses its chat-completions endpoint; Hermes uses `/v1/runs` so command approvals and progress remain available. Inbound and outbound claim paths exclude Platforms configured as native, including stale Deliveries created before cutover. Native Connections receive provider credentials and transport configuration at Agent start on both runtimes. Because the shared adapter is copied into the Python 3.12 OpenClaw image and the Python 3.13 Hermes image, Ruff targets its source to Python 3.12 and a source-parse test guards the oldest image grammar.
 
+Agent Webhook triggers use a separate immediate path. The product API calls an authenticated private listener on port 8082 of the target Agent Service; it does not create a Communication Delivery or wait for a runtime claim. The listener durably deduplicates the dispatch generation on the Agent volume, creates or recovers a deterministic one-shot job in the native Hermes/OpenClaw scheduler, and returns `202` only after the scheduler accepts the run. Hermes/OpenClaw then owns execution and final delivery through the selected native Slack, Discord, Telegram, or Teams configuration. Agent Barn records submission success or failure only and receives no execution callback.
+
 Agent-initiated delivery uses the same Communications boundary. Interactive sends carry a server-issued token for the active inbound claim and are resolved only on that claim's Communication Connection; an interactive request cannot select the Agent's default or name a Connection. Scheduled final responses are captured into a durable SQLite spool and retried under one run identity until acknowledged, refused with a permanent 4xx, or about a day old; settled rows are pruned after seven days. On Hermes, a job created from a conversation retains its Connection/channel/thread origin, while startup-created work uses the Agent's one configured default. OpenClaw uses the default only when the completion has no recorded origin; its pinned cron hook exposes a delivery-channel label instead of the creating conversation, so unmappable completions are refused rather than diverted. The shared runtime client owns silence-marker filtering and destination parsing so Hermes and OpenClaw apply the same policy. Communications resolves and persists the destination before acknowledging acceptance, then the Platform Plugin revalidates current outbound policy before provider delivery. Only Slack currently advertises this capability.
 
 For gateway-owned Hermes Agents, scheduled results are captured at a fenced scheduler side-effect boundary and native provider delivery is suppressed. For Hermes with a native Connection, `AGENTBARN_SCHEDULED_DELIVERY=0` disables that capture and the old spool drain for the whole runtime, so Hermes owns cron delivery on every Platform. OpenClaw captures scheduled results from its in-process `agent_end` hook; with a native Connection the same `AGENTBARN_SCHEDULED_DELIVERY=0` skips that capture and the spool drain, and OpenClaw delivers cron results to their origin or the Connection's `defaultTo`. Hermes also submits a non-empty `BOOT.md` through `/v1/runs` after the gateway becomes ready.
@@ -154,17 +156,46 @@ API's own image so the archive logic and its exclusion sets are always the same 
 API that scheduled them — `API_IMAGE` is rendered from the same chart expression as the API
 container's `image`. Nothing new is built or published.
 
-Both mount the Agent's `agent-<uuid>` PVC, which is why they require a stopped Agent: the
-volume is ReadWriteOnce and cannot be held by the Agent pod and a Job pod at once. Capture
+Both mount the Agent's `agent-<uuid>` PVC, which is why they require a stopped Agent. ReadWriteOnce is not the guarantee it looks like here: it is enforced per node for attachable volumes, and the default `local-path` provisioner is a bind mount with nothing to attach, so two pods on one node can hold the same directory. The API therefore waits for the Agent's pod to disappear before creating either Job, rather than trusting the Agent's stored status — stopping deletes the Deployment and returns immediately while the pod lives out its termination grace period. Capture
 mounts the Agent volume read-only alongside a fresh per-restore-point PVC. Restore mounts
 three — the Agent volume writable, the new Pre-Restore destination, and the chosen archive
 read-only — and performs the safety-net capture and the extraction in one process, so the
 backup is on disk before anything is wiped.
 
+The wipe is not total. A short per-runtime list of paths survives it — Hermes' `config.yaml`,
+OpenClaw's `openclaw.json` and `npm/` — because each runtime *merges into* its configuration
+rather than rewriting it, and OpenClaw's plugin store holds install records and a host link into
+the runtime image that only a network install recreates. Destroying them leaves the runtime
+unable to boot with no way back: `gateway.mode` disappears from a regenerated `openclaw.json`,
+and the plugin reinstall fails on the missing host peer link. That list is a strict subset of the
+archive exclusions and is deliberately much smaller than it, because for the remaining excluded
+paths the wipe is the only thing that prunes them — the aai-cli store and the skills directory
+are both written additively at boot, so sparing them would leave a revoked credential or a
+removed skill in place.
+
+Capture and restore share one rule about what an archive may hold: every member is offered to the
+same `tarfile.data_filter` the extraction applies, against a neutral destination, and anything it
+refuses is dropped at capture with a count reported alongside the archive size. The neutral
+destination matters — the filter is destination-sensitive, so a link resolving inside the volume's
+live mount point still escapes the restore target, and filtering against the live path would let it
+through. Hand-written rules about which links to keep drifted from what extraction actually
+accepts, and each divergence failed a whole restore; deferring to the filter removes the class
+rather than the case.
+
+The wipe is total, and the archive is what puts state back. OpenClaw's npm plugin store is
+captured rather than excluded, so the packages and the records of them in `state/openclaw.sqlite`
+roll back together instead of disagreeing; the one thing an archive cannot carry is the store's
+link into the runtime image, which the capture filter removes and `start.sh` recreates on the next
+boot. Hermes' `.cache` is excluded as regenerable bulk. Sparing paths from the wipe was tried and
+reverted: it left current packages beside capture-time records, and the wipe is the only thing
+that prunes a revoked credential from the aai-cli store or a skill the Agent no longer has.
+
 The Job runs as root. Extraction then applies the ownership the target volume already had,
 read before the wipe, because the two runtimes differ: Hermes' init container chowns `/opt/data`
 recursively, while OpenClaw's chowns only the mount point, so a restore cannot rely on the next
-start to repair ownership.
+start to repair ownership. Ownership is re-applied with `lchown` and skips the preserved paths:
+the preserved npm store links to a path inside the *agent* image, which the Job's own image does
+not have, so following it would abort a restore whose target is already wiped.
 
 The API learns each Job's outcome by reading its status, and its archive manifest by reading
 the Job pod's logs — the manifest is written onto the restore point's PVC, which the API cannot
@@ -201,6 +232,7 @@ Kubernetes `stream()` and `portforward()` temporarily monkey-patch `ApiClient.re
 | Shared Kubernetes builders      | `../../api/domains/agents/builders/common.py`                                         |
 | Hermes builders                 | `../../api/domains/agents/builders/hermes.py`, `../../hermes-base/`                         |
 | OpenClaw builders               | `../../api/domains/agents/builders/openclaw.py`, `../../openclaw-base/`                     |
+| Private Agent trigger admission | `../../api/domains/agents/scripts/agent-trigger-server.py`, `../../api/domains/agent_webhooks/dispatch.py` |
 | Skill and integration artifacts | `../../api/domains/agents/aai_cli_artifacts.py`, `../../api/domains/agents/aai_cli_skills/bundled/skills/`, `../../api/domains/agents/gog_artifacts.py` |
 | Provider clients                | `../../api/infrastructure/slack/`, `../../api/infrastructure/telegram/`, `../../api/infrastructure/discord/` |
 | Kubernetes client               | `../../api/infrastructure/kubernetes/`                                                |

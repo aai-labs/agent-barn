@@ -30,13 +30,14 @@ Organization
     ├── Agent Secrets ── Integrations
     ├── Communication Connections ── Platform Plugins
     │   └── Communication Deliveries ── Communications Gateway
+    ├── Agent Webhooks ── Webhook Invocations
     ├── Runtime resources ── Kubernetes
     ├── Conversation Messages ← Communications Gateway
     ├── Tool Calls ← Ingest
     └── LiteLLM key ── Costs
 ```
 
-The Agent domain owns lifecycle, templates, skills, runtime builders, Kubernetes resources, LiteLLM keys, and runtime credentials. The Communications domain independently owns provider credentials, Platform Plugins, Communication Connections, provider sessions, canonical messages, and durable delivery. Cross-domain orchestration belongs in services rather than routes or repositories.
+The Agent domain owns lifecycle, templates, skills, runtime builders, Kubernetes resources, LiteLLM keys, and runtime credentials. The Communications domain independently owns provider credentials, Platform Plugins, Communication Connections, provider sessions, canonical messages, and durable delivery. The Agent Webhooks domain owns signed machine ingress and durable Webhook Invocations; an Agent Webhook is not a Platform or Communication Connection. Cross-domain orchestration belongs in services rather than routes or repositories.
 
 ## Dependency direction
 
@@ -46,6 +47,7 @@ The Agent domain owns lifecycle, templates, skills, runtime builders, Kubernetes
 - Agent startup renders a pinned template, combines skills and integration context, builds runtime resources, and applies them through the Kubernetes client.
 - Runtime telemetry flows through Ingest into Tool Call persistence.
 - Platform ingress flows through a Connection's shipped Platform Plugin into durable inbound delivery; runtime replies return through the same Connection and plugin.
+- Signed Agent Webhook ingress creates a Webhook Invocation and immediately submits a native one-shot Agent Trigger Job. The runtime delivers its result through the selected runtime-owned Connection without creating a Communication Delivery or passing through the Communications Gateway.
 - Domain-specific repository operations that produce Domain Events own one explicit SQLModel transaction for business state, the event Outbox Message, and intended Event Deliveries.
 - Costs are queried from LiteLLM and joined to agents by LiteLLM key identity; they are not derived from conversation or tool-call records.
 

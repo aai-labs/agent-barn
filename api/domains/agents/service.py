@@ -65,6 +65,7 @@ from api.domains.agents.models import (
     AgentOverrideAuthorRead,
     AgentProvisioningErrorRead,
     AgentRead,
+    AgentRuntimeDiagnosticsRead,
     AgentSecret,
     AgentSecretCreate,
     AgentSecretRead,
@@ -695,7 +696,9 @@ class AgentService:
         )
 
         # Prepare Agent Secrets in memory without persisting them yet.
-        # Integration credentials are separate from Communication Connections.
+        # Integration credentials are separate from Communication Connections. SharePoint only
+        # borrows the Teams app's public id and tenant (CommunicationsService.get_teams_app_identity)
+        # to sign in on that app; the app's secret is never read for it.
         prepared_secrets: list[AgentSecret] = []
         live_validation_contents: list[tuple[SecretProvider, Any]] = []
         for item in data.secrets:
@@ -1987,14 +1990,25 @@ class AgentService:
                     "Authenticate with Google, or configure google_cloud_client_id/secret."
                 ),
             )
-        store = {p: c for p, c in decrypted.items() if p.value in provider_secrets_map}
+        # SharePoint's refresh token goes through the store too, written only for a new sign-in.
+        store = {
+            p: c for p, c in decrypted.items() if p.value in provider_secrets_map or p == SecretProvider.SHAREPOINT
+        }
         aai_home = "/opt/data" if agent.agent_type == AgentType.HERMES else "/home/node"
+        # The store must survive restarts: aai-cli rotates delegated Microsoft tokens in it.
+        # Hermes' home is its volume; OpenClaw's volume is only ~/.openclaw.
+        aai_store_dir = None if agent.agent_type == AgentType.HERMES else "/home/node/.openclaw/aai-cli"
         # Gated on providers that actually get an aai-cli profile: an agent whose only
         # integrations are profile-less (google_workspace, firecrawl) would otherwise get
         # a config.toml holding nothing but the store header.
         has_aai_profiles = bool(decrypted.keys() & set(PROFILE_SLUGS))
-        aai_config_toml = build_config_toml(decrypted, home_dir=aai_home) if has_aai_profiles else None
-        aai_setup_sh = build_setup_sh(list(store), home_dir=aai_home) if has_aai_profiles else None
+        aai_config_toml = (
+            build_config_toml(decrypted, home_dir=aai_home, store_dir=aai_store_dir) if has_aai_profiles else None
+        )
+        # Always mounted, even without profiles, so a removed SharePoint sign-in is cleaned up.
+        aai_setup_sh = build_setup_sh(
+            list(store), home_dir=aai_home, store_dir=aai_store_dir, install_config=has_aai_profiles
+        )
         if store:
             secret.string_data.update(build_env(store))
 
@@ -2057,7 +2071,9 @@ class AgentService:
                 "INGEST_API_KEY": ingest_key,
                 "COMMUNICATIONS_URL": self.config.communications_base_url,
                 "COMMUNICATIONS_API_KEY": communication_key,
-                "COMMUNICATIONS_PROTOCOL_VERSION": "3",
+                "COMMUNICATIONS_PROTOCOL_VERSION": "2",
+                "AGENT_TRIGGER_KEY": communication_key,
+                "AGENT_TRIGGER_PORT": "8082",
                 "LITELLM_PROXY_TARGET": self.config.agent_litellm_base_url,
                 "LLM_PROXY_PORT": str(AGENT_LLM_PROXY_PORT),
             }
@@ -2578,6 +2594,18 @@ class AgentService:
         self._backfill_google_client_credentials({provider: content})
         result = validator(content)  # type: ignore[arg-type]
         return format_validation_result(result)
+
+    def get_runtime_diagnostics(self, agent_id: UUID, context: CurrentUserContext) -> AgentRuntimeDiagnosticsRead:
+        agent = self.authorization.require_action(context, agent_id, PermissionKey.ACTIVITY_READ)
+        if agent.status != AgentStatus.RUNNING:
+            return AgentRuntimeDiagnosticsRead(observed_at=dt.datetime.now(dt.UTC))
+        try:
+            return AgentRuntimeDiagnosticsRead.model_validate(
+                self.k8s.get_runtime_diagnostics(f"agent-{agent.id}", self.config.k8s_namespace)
+            )
+        except Exception:
+            logger.exception("Runtime diagnostics unavailable for agent %s", agent.id)
+            raise HTTPException(status_code=503, detail="Runtime diagnostics are temporarily unavailable") from None
 
     def get_agent_health(self, agent_id: UUID, context: CurrentUserContext) -> AgentHealthRead:
         agent = self.authorization.require_action(context, agent_id, PermissionKey.ACTIVITY_READ)
