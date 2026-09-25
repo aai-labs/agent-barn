@@ -21,6 +21,14 @@ rules:
   - apiGroups: [""]
     resources: ["secrets"]
     verbs: ["create", "update"]
+  # The monitoring chart's litellm-metrics-key hook Job reads its Secret to
+  # keep a still-valid key instead of rotating it on every upgrade. On the
+  # shared cluster the tenant chart already grants get; this is what reaches
+  # clusters where this file is the only grant.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["litellm-metrics-key"]
+    verbs: ["get"]
   # Agent Restore Points run capture/restore as batch Jobs and read the Job
   # pod's logs to recover the archive manifest and any failure reason.
   - apiGroups: ["batch"]
