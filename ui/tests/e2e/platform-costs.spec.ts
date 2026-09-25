@@ -20,6 +20,7 @@ test.describe("Platform costs (platform_admin)", () => {
     await data.users.interceptGetUserContextRequest();
     await data.costs.interceptPlatformFilterOptions();
     await data.costs.interceptPlatformOrganizations();
+    await data.costs.interceptPlatformMonthly();
     await data.organizations.interceptListOrganizations({
       items: [
         {
@@ -43,6 +44,25 @@ test.describe("Platform costs (platform_admin)", () => {
     await expect(page.getByTestId("cost-burn-rate")).toContainText("$4.77/day");
     await expect(page.getByTestId("cost-unattributed")).toContainText("$1.97");
     await expect(page.getByTestId("cost-unattributed")).toContainText("49 calls");
+  });
+
+  test("shows monthly spend across the platform, narrowed by the organization", async ({
+    page,
+  }) => {
+    await data.costs.interceptPlatformSummary();
+    await data.costs.interceptPlatformList({ items: [platformCostRecord()], total: 1 });
+    const monthlyRequests: URLSearchParams[] = [];
+    page.on("request", (request) => {
+      if (request.url().includes("/platform/costs/monthly")) {
+        monthlyRequests.push(new URL(request.url()).searchParams);
+      }
+    });
+
+    await page.goto(`${PLATFORM_COSTS_URL}?orgId=${ORG_A_ID}&orgName=AAI%20Labs`);
+
+    await expect(page.getByTestId("monthly-costs-table").locator("tbody tr")).toHaveCount(3);
+    await expect(page.getByTestId("monthly-previous")).toContainText("$20.00");
+    await expect.poll(() => monthlyRequests.at(-1)?.get("organization_id")).toBe(ORG_A_ID);
   });
 
   test("credits show what is left of the key's limit", async ({ page }) => {

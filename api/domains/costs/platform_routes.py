@@ -8,9 +8,12 @@ from api.domains.auth.utils import require_platform_admin
 from api.domains.costs.models import (
     CostFilter,
     CostFilterOption,
+    MonthlyCostRead,
+    MonthlyWindow,
     OrganizationSpendRead,
     PlatformCostRecordRead,
     PlatformCostSummaryRead,
+    get_monthly_window,
     get_platform_cost_filter,
 )
 from api.domains.costs.platform_service import PlatformCostService
@@ -45,6 +48,16 @@ def list_platform_costs(
     page_size: Annotated[int, Query(ge=1, le=100)] = 50,
 ):
     return service.list_costs(window, filters, page=page, page_size=page_size)
+
+
+@platform_costs_router.get("/monthly", response_model=list[MonthlyCostRead])
+def get_platform_monthly_costs(
+    context: Annotated[CurrentUserContext, Depends(require_platform_admin())],
+    service: Annotated[PlatformCostService, Injected(PlatformCostService)],
+    window: Annotated[MonthlyWindow, Depends(get_monthly_window)],
+    filters: Annotated[CostFilter, Depends(get_platform_cost_filter)],
+):
+    return service.get_monthly(window, filters)
 
 
 @platform_costs_router.get("/organizations", response_model=list[OrganizationSpendRead])

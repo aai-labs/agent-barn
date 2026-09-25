@@ -12,12 +12,14 @@ import { useCostSummary } from "../hooks/use-cost-summary";
 import { useCosts } from "../hooks/use-costs";
 import { useAgentSpend } from "../hooks/use-agent-spend";
 import { useCostUrlFilters } from "../hooks/use-cost-url-filters";
+import { useMonthlyCosts } from "../hooks/use-monthly-costs";
 import type { CostFilters } from "../utils";
 import { AgentsBySpend } from "./agents-by-spend";
 import { CostChartsPanel } from "./cost-charts-panel";
 import { CostFilterBar } from "./cost-filter-bar";
 import { CostList } from "./cost-list";
 import { CostSummaryCards } from "./cost-summary-cards";
+import { MonthlyCosts } from "./monthly-costs";
 
 const FILTER_DEFAULTS = {
   q: "",
@@ -68,6 +70,8 @@ export function CostsPage() {
   const { summary, isLoading: isLoadingSummary, refetch: refetchSummary } =
     useCostSummary(filters);
   const { agentOptions, modelOptions } = useCostFilterOptions(filters);
+  const monthly = useMonthlyCosts(filters);
+  const { refetch: refetchMonthly } = monthly;
   const {
     records,
     total,
@@ -100,9 +104,10 @@ export function CostsPage() {
 
   const handleRefresh = useCallback(() => {
     void refetchSummary();
+    void refetchMonthly();
     void refetch();
     window.scrollTo({ top: 0 });
-  }, [refetchSummary, refetch]);
+  }, [refetchSummary, refetchMonthly, refetch]);
 
   if (!canManage) return null;
 
@@ -144,6 +149,13 @@ export function CostsPage() {
       />
 
       <CostChartsPanel summary={summary} isLoading={isLoadingSummary} />
+
+      <MonthlyCosts
+        months={monthly.months}
+        isLoading={monthly.isLoading}
+        error={monthly.error}
+        onRetry={() => void refetchMonthly()}
+      />
 
       <AgentsBySpend
         agents={agents}
