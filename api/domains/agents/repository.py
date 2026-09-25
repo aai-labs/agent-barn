@@ -146,17 +146,24 @@ class AgentRepository:
             ).all()
             return len(rows)
 
-    def names_by_ids(self, agent_ids: list[UUID]) -> dict[UUID, str]:
-        """Display names for the given Agent ids, soft-deleted ones included.
+    def names_by_ids(self, agent_ids: list[UUID], organization_id: UUID) -> dict[UUID, str]:
+        """Display names for the given Agent ids, scoped to one Organization.
 
         Used to label memory peers (`agent-<id>`) in the shared-pool memory view.
-        A pool can hold conclusions from an Agent that was since deleted, and a
-        name beats a raw peer id there, so the delete filter is omitted on purpose.
+        Constrained to the caller's org so an id that leaked into memory text can
+        never resolve another org's Agent name — a pool is org-scoped, so a real
+        member always matches. Soft-deleted Agents are included: a pool can hold
+        conclusions from an Agent since deleted, and a name beats a raw peer id.
         """
         if not agent_ids:
             return {}
         with Session(self.delegate.engine) as session:
-            rows = session.exec(select(Agent.id, Agent.name).where(col(Agent.id).in_(agent_ids))).all()
+            rows = session.exec(
+                select(Agent.id, Agent.name).where(
+                    col(Agent.id).in_(agent_ids),
+                    col(Agent.organization_id) == organization_id,
+                )
+            ).all()
             return {row[0]: row[1] for row in rows}
 
     def get_active_in_scope(self, agent_id: UUID, authorization_scope: AuthorizationScope) -> Agent | None:

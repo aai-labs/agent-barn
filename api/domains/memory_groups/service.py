@@ -247,7 +247,8 @@ class MemoryGroupService:
     # pool workspace straight from the group id and delegates to the agents-domain
     # core, gated on `memory_group.manage` like the rest of this surface.
 
-    def _require_pool_workspace(self, group_id: UUID, context: CurrentUserContext) -> str:
+    def _require_pool_workspace(self, group_id: UUID, context: CurrentUserContext) -> tuple[str, UUID]:
+        """The pool workspace and its org (for peer-name scoping), manager-gated."""
         org_id = self._require_manager(context)
         if not self.config.honcho_enabled:
             raise HTTPException(
@@ -255,28 +256,30 @@ class MemoryGroupService:
                 detail="Memory requires Honcho-backed memory to be enabled.",
             )
         group = self._get_or_404(group_id, org_id)
-        return workspace_id_for_pool(group.id)
+        return workspace_id_for_pool(group.id), org_id
 
     def list_memory(
         self, group_id: UUID, context: CurrentUserContext, *, page: int, size: int, observed: str | None = None
     ) -> MemoryPage:
         """One page of the group's pooled memory (whole pool; there is no per-Agent
         scope at the group level)."""
-        workspace = self._require_pool_workspace(group_id, context)
-        return self.memory.list_memory_for_workspace(workspace, page=page, size=size, observed=observed)
+        workspace, org_id = self._require_pool_workspace(group_id, context)
+        return self.memory.list_memory_for_workspace(
+            workspace, organization_id=org_id, page=page, size=size, observed=observed
+        )
 
     def search_memory(
         self, group_id: UUID, query: str, context: CurrentUserContext, *, limit: int
     ) -> list[MemoryItemRead]:
-        workspace = self._require_pool_workspace(group_id, context)
-        return self.memory.search_memory_for_workspace(workspace, query, limit=limit)
+        workspace, org_id = self._require_pool_workspace(group_id, context)
+        return self.memory.search_memory_for_workspace(workspace, query, limit=limit, organization_id=org_id)
 
     def forget_memory(self, group_id: UUID, memory_id: str, context: CurrentUserContext) -> None:
-        workspace = self._require_pool_workspace(group_id, context)
+        workspace, _org_id = self._require_pool_workspace(group_id, context)
         self.memory.forget_in_workspace(workspace, memory_id)
 
     def correct_memory(
         self, group_id: UUID, memory_id: str, payload: MemoryItemUpdate, context: CurrentUserContext
     ) -> MemoryItemRead:
-        workspace = self._require_pool_workspace(group_id, context)
-        return self.memory.correct_in_workspace(workspace, memory_id, payload)
+        workspace, org_id = self._require_pool_workspace(group_id, context)
+        return self.memory.correct_in_workspace(workspace, memory_id, payload, org_id)

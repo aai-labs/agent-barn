@@ -31,9 +31,11 @@ VIEWER_ROLE_ID = UUID("c7da77aa-bf9c-5626-8bad-5e0ca5159b5d")
 EDITOR_ROLE_ID = UUID("30e5e846-5e24-548f-a068-2505f774ce35")
 OWNER_ROLE_ID = UUID("8f2a47ff-7caf-5ded-9027-4a16b85620b3")
 
-# Viewer reads memory because it already reads the conversations memory is derived
-# from. Editor manages it because it already holds agent.secret.manage, so this is
-# no widening of trust. Owner inherits Editor's grants.
+# Viewer gets agent.memory.read; with shared pools that shows only THIS agent's own
+# contributions (scope="mine") — which it already reads via the agent's own
+# conversations — while the whole pool is gated separately on memory_group.manage.
+# Editor manages memory because it already holds agent.secret.manage, so this is no
+# widening of trust. Owner inherits Editor's grants.
 _GRANTS: list[tuple[UUID, UUID]] = [
     (VIEWER_ROLE_ID, MEMORY_READ_ID),
     (EDITOR_ROLE_ID, MEMORY_READ_ID),

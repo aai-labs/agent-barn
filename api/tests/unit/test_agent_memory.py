@@ -23,6 +23,7 @@ from api.domains.rbac.policy import PermissionPolicy
 from api.infrastructure.honcho.client import HonchoClient, HonchoError
 
 AGENT_ID = uuid7()
+ORG_ID = uuid7()
 
 
 def _agent() -> Agent:
@@ -30,6 +31,7 @@ def _agent() -> Agent:
     agent.id = AGENT_ID
     agent.name = "watcher"
     agent.agent_type = AgentType.HERMES
+    agent.organization_id = ORG_ID
     # In a group, so it has shared memory (memory_active is true).
     agent.memory_group_id = AGENT_ID
     return agent
@@ -389,6 +391,9 @@ def test_another_agents_peer_is_labelled_by_name_not_its_raw_id():
     assert_that(by_peer["owner"].name, equal_to("you"))
     assert_that(by_peer[f"agent-{other_id}"].label, equal_to("About Helper"))
     assert_that(by_peer[f"agent-{other_id}"].name, equal_to("Helper"))
+    # Name resolution is scoped to the caller's org, so a leaked id can't resolve
+    # another org's Agent name.
+    assert_that(service.agents.names_by_ids.call_args.args[1], equal_to(ORG_ID))
 
 
 def test_an_agent_id_baked_into_the_memory_text_is_replaced_with_the_agent_name():
