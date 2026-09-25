@@ -618,7 +618,7 @@ def test_integrations_policy_md_never_leaks_tokens():
 def test_local_tools_block_names_credential_free_capabilities():
     """A tool with no provider can never reach the integrations block, which is built from
     configured secrets — so without this the agent never learns Excel exists."""
-    md = build_local_tools_policy_md(["Jira", "Excel"])
+    md = build_local_tools_policy_md(["Jira", "Excel"], "/workspace")
     assert "aai-cli excel" in md
     assert ".csv" in md
     # The integrations block tells the agent to always pass --profile; this must say the
@@ -630,42 +630,26 @@ def test_local_tools_block_names_credential_free_capabilities():
 def test_local_tools_block_is_empty_when_the_skill_is_not_mounted():
     """It is opt-in: advertising a skill the agent has not been given would send it after
     a file reference that was never mounted."""
-    assert build_local_tools_policy_md(["Slack", "Jira"]) == ""
-    assert build_local_tools_policy_md([]) == ""
+    assert build_local_tools_policy_md(["Slack", "Jira"], "/workspace") == ""
+    assert build_local_tools_policy_md([], "/workspace") == ""
 
 
-def test_local_tools_block_tells_hermes_agents_how_to_attach_a_file():
-    """Producing a file is only half the job: Hermes attaches on an explicit MEDIA: token,
-    so naming the file in prose silently sends text and no attachment."""
-    md = build_local_tools_policy_md(["Excel"])
-    assert "MEDIA:<absolute path>" in md
+def test_local_tools_block_points_produced_files_at_the_workspace():
+    md = build_local_tools_policy_md(["Excel"], "/workspace")
     assert "/workspace" in md
-    # The failure mode is silent, so the instruction has to be explicit about it.
-    assert "does **not** attach" in md
 
 
-def test_attaching_a_produced_file_is_the_default_not_a_request():
-    """Explaining the mechanism was not enough — agents described where they saved the file
-    and waited to be asked for it. Attaching has to read as standing behaviour."""
-    md = build_local_tools_policy_md(["Excel"])
-    assert "Always send back a file you produced" in md
-    assert "do not wait to be asked" in md
-
-
-def test_attach_token_is_documented_on_its_own_line_for_both_runtimes():
-    """Both runtimes parse MEDIA:, but OpenClaw also has a line-start-only extractor, so a
-    token buried mid-sentence would be dropped there while working on Hermes."""
-    md = build_local_tools_policy_md(["Excel"])
-    assert "on its own line" in md
-    # The worked example must itself put the token at the start of a line.
-    assert "\nMEDIA:/workspace/q1-report.xlsx\n" in md
+def test_local_tools_block_leaves_attaching_files_to_the_delivery_block():
+    """Whether a file can be attached depends on the agent's Connections, not on which
+    tool produced it, so the attach instructions live in the file-delivery block."""
+    assert "MEDIA:" not in build_local_tools_policy_md(["Excel"], "/workspace")
 
 
 def test_local_tools_block_forbids_the_python_fallback():
     """Describing the tool was not enough — agents reached for openpyxl anyway and
     hand-rolled a zip. The integrations block works because it names the wrong path and
     forbids it; do the same here."""
-    md = build_local_tools_policy_md(["Excel"])
+    md = build_local_tools_policy_md(["Excel"], "/workspace")
     assert "openpyxl" in md
     assert "Do not write Python" in md
     assert "only supported way" in md

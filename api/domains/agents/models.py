@@ -1,5 +1,6 @@
 import enum
 import json
+import re
 from datetime import datetime
 from typing import Any, Literal, Self
 from uuid import UUID
@@ -255,12 +256,27 @@ class SlackContent(SecretContent):
     token: str
 
 
+_PIPEDRIVE_DOMAIN_LABEL = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
+
+
 class PipedriveContent(SecretContent):
     api_token: str
     # Bare subdomain, e.g. "aai-labs" (-> https://aai-labs.pipedrive.com). Optional: a
     # Pipedrive personal API token is self-identifying, so the global
     # https://api.pipedrive.com endpoint works for any account without this.
     domain: str = ""
+
+    @field_validator("domain")
+    @classmethod
+    def _validate_domain(cls, value: str) -> str:
+        # The API server and the agent's aai-cli both build https://{domain}.pipedrive.com,
+        # so anything beyond one DNS label ("evil.example#") would move the request, and
+        # the token, to another host. A pasted company URL is reduced to its label first.
+        label = value.strip().lower().removeprefix("https://").removeprefix("http://").rstrip("/")
+        label = label.removesuffix(".pipedrive.com")
+        if label and not _PIPEDRIVE_DOMAIN_LABEL.fullmatch(label):
+            raise ValueError('domain must be the company subdomain only, e.g. "aai-labs"')
+        return label
 
 
 PROVIDER_CONTENT_MODELS: dict[SecretProvider, type[SecretContent]] = {

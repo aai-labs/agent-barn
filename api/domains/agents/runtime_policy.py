@@ -2,8 +2,8 @@
 
 Both Hermes and OpenClaw auto-load AGENTS.md into the startup system prompt, so this
 is where cross-cutting "how to behave in chat" rules belong. Unlike
-``build_integrations_policy_md``, these blocks are unconditional — they don't depend on
-which integrations an agent has.
+``build_integrations_policy_md``, these blocks don't depend on which integrations an
+agent has; all but the file-delivery block are unconditional.
 """
 
 # Both runtimes expose gateway-level chat commands (Hermes: /help, /whoami, /new,
@@ -117,3 +117,41 @@ Never substitute another destination.
 def build_messaging_policy_md() -> str:
     """Append the shared Communications policy to every assembled template."""
     return _MESSAGING_POLICY_MD
+
+
+# Naming a file in prose attaches nothing, and the failure is silent: agents saved a
+# report, replied with its path, and left the user holding a location they cannot open.
+# Both runtimes' native chat adapters attach on a MEDIA:<path> token -- Hermes matches it
+# anywhere, OpenClaw also has a line-start-only extractor, so the token must sit on its
+# own line. Gateway-owned Connections send text only, so the block is emitted only when
+# a native Slack, Discord or Telegram Connection will carry the reply.
+_FILE_DELIVERY_POLICY_MD = """
+## Sending Files
+
+**Always send back a file you produced.** When you create or update a file the user
+asked for, attach it in that same reply -- do not wait to be asked, and do not just
+tell them where you saved it. A path they cannot open is not an answer. Write it under
+`{workspace}` first.
+
+Attach it by putting `MEDIA:<absolute path>` **on its own line** at the end of the
+reply:
+
+```
+Here's the Q1 report.
+MEDIA:{workspace}/q1-report.xlsx
+```
+
+Naming the file in prose does **not** attach it -- delivery only happens when that
+token is present. Keep it on its own line and keep the path absolute: one runtime only
+scans line starts, so a token buried mid-sentence is silently ignored. Do not look for
+another way to share the file; this is the supported one.
+"""
+
+
+def build_file_delivery_policy_md(workspace_dir: str | None) -> str:
+    """Render the block that tells the agent how to attach a file to its reply.
+
+    ``workspace_dir`` is the runtime's workspace, where the agent can both write and
+    attach files; ``None`` when no native chat Connection carries the agent's replies.
+    """
+    return _FILE_DELIVERY_POLICY_MD.format(workspace=workspace_dir) if workspace_dir else ""

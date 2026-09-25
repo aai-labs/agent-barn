@@ -71,6 +71,10 @@ _MESSAGE_SCRIPTS = _COMMON_SCRIPTS / "messaging"
 HERMES_BOOT_RUN_PY: str = (_SCRIPTS / "boot-run.py").read_text()
 
 
+# Persistent working directory for the agent's terminal and messaging layer.
+HERMES_WORKSPACE_DIR = "/workspace"
+
+
 def _hermes_config_core(
     model: str,
     litellm_base_url: str,

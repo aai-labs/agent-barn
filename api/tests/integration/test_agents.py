@@ -2696,6 +2696,43 @@ def test_start_openclaw_agent_runs_chat_platforms_in_the_native_gateway() -> Non
 
 
 @pytest.mark.parametrize(
+    "agent_type,workspace",
+    [(AgentType.OPENCLAW, "/home/node/.openclaw/workspace"), (AgentType.HERMES, "/workspace")],
+)
+def test_start_agent_with_native_chat_connection_tells_it_how_to_send_files(agent_type, workspace) -> None:
+    with given([*_GIVEN_WITH_NATIVE_PLATFORMS, there_is_an_agent(agent_type=agent_type), _native_slack_connection]) as (
+        context
+    ):
+        client: TestClient = context.client
+        k8s: MagicMock = context.injector.get(KubernetesClient)
+
+        with when("an Agent with a native Slack Connection and no file-producing skill starts"):
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("AGENTS.md explains how to attach a file, since any reply can carry one"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            agents_md = k8s.create_config_map.call_args.args[1].data["AGENTS.md"]
+            assert_that(agents_md, contains_string("MEDIA:<absolute path>"))
+
+        with then("the example path is inside that runtime's workspace, where it can read files"):
+            assert_that(agents_md, contains_string(f"\nMEDIA:{workspace}/q1-report.xlsx\n"))
+
+
+def test_start_agent_without_native_chat_connection_does_not_promise_file_delivery() -> None:
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        k8s: MagicMock = context.injector.get(KubernetesClient)
+
+        with when("an Agent reachable only through gateway-owned Connections starts"):
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("AGENTS.md does not tell it to attach files the gateway would drop"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            agents_md = k8s.create_config_map.call_args.args[1].data["AGENTS.md"]
+            assert_that(agents_md, is_not(contains_string("MEDIA:")))
+
+
+@pytest.mark.parametrize(
     "approval_mode,runtime_mode",
     [
         (CommandApprovalMode.MANUAL, "manual"),

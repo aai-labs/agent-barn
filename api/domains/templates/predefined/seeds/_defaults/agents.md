@@ -40,7 +40,8 @@ Capture what matters. Decisions, context, things to remember. Skip the secrets u
 - **Memory is limited** — if you want to remember something, WRITE IT TO A FILE
 - "Mental notes" don't survive session restarts. Files do.
 - When someone says "remember this" → update `memory/YYYY-MM-DD.md` or relevant file
-- When you learn a lesson → update AGENTS.md, TOOLS.md, or the relevant skill
+- When you learn a lesson → write it to `MEMORY.md` or today's daily note. AGENTS.md, TOOLS.md, and
+  skills are rebuilt from your configuration on every restart, so edits there are lost.
 - **Text > Brain**
 
 ## Red Lines

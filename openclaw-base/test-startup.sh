@@ -61,6 +61,7 @@ for (const dir of cfg.plugins.load.paths) require(\"fs\").mkdirSync(dir, {recurs
 "
 openclaw config validate >/dev/null
 [ "$(openclaw config get agents.defaults.heartbeat.prompt 2>/dev/null)" = "" ] || { echo "stale heartbeat keys survived init"; exit 1; }
+[ "$(openclaw config get session.dmScope 2>/dev/null)" = "per-channel-peer" ] || { echo "direct messages are not isolated per sender"; exit 1; }
 openclaw doctor --fix --non-interactive >/dev/null 2>&1
 enabled="$(node --no-warnings -e "
 const {DatabaseSync} = require(\"node:sqlite\");

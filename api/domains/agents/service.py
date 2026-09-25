@@ -26,6 +26,8 @@ from api.domains.agents.aai_cli_artifacts import (
 from api.domains.agents.aai_cli_skills import build_skills_manifest
 from api.domains.agents.authorization import AgentAuthorization
 from api.domains.agents.builders import (
+    HERMES_WORKSPACE_DIR,
+    OPENCLAW_WORKSPACE_DIR,
     build_config_map,
     build_deployment,
     build_hermes_config_map,
@@ -111,6 +113,7 @@ from api.domains.agents.repository import AgentRepository
 from api.domains.agents.runtime_digest import agent_runtime_config_digest
 from api.domains.agents.runtime_policy import (
     build_chat_commands_policy_md,
+    build_file_delivery_policy_md,
     build_messaging_policy_md,
     build_role_scope_policy_md,
 )
@@ -2132,11 +2135,16 @@ class AgentService:
         # in the auto-loaded prompt no matter that its skill is mounted.
         # gog gets its own block: the aai-cli one insists on --profile and on aai-cli
         # being the only route to its integrations, neither of which is true of gog.
+        workspace_dir = HERMES_WORKSPACE_DIR if agent.agent_type == AgentType.HERMES else OPENCLAW_WORKSPACE_DIR
         agents_md = (
             rendered.agents_md
             + build_integrations_policy_md(decrypted)
             + build_gog_policy_md(gws_content if isinstance(gws_content, GoogleWorkspaceContent) else None)
-            + build_local_tools_policy_md(s.name for s in mounted_skills)
+            + build_local_tools_policy_md((s.name for s in mounted_skills), workspace_dir)
+            + build_file_delivery_policy_md(
+                # Native adapters attach MEDIA: files; gateway-owned Connections send text only.
+                workspace_dir if any(c is not None for c in (native_slack, native_discord, native_telegram)) else None
+            )
             + build_chat_commands_policy_md()
             + build_role_scope_policy_md()
             + build_messaging_policy_md()

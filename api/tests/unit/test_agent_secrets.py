@@ -324,6 +324,35 @@ def test_pipedrive_encrypt_decrypt_round_trip_with_domain():
     assert decrypted.domain == "aai-labs"
 
 
+@pytest.mark.parametrize(
+    "domain",
+    [
+        # Each would otherwise move the host out of *.pipedrive.com, sending the API
+        # server's validation request (and the token) wherever the caller points it.
+        "evil.example#",
+        "10.0.0.5/x?",
+        "user@evil.example/",
+        "evil.example:443/",
+        "aai labs",
+        "-aai-labs",
+        "a" * 64,
+    ],
+)
+def test_pipedrive_content_rejects_domain_that_is_not_a_subdomain_label(domain):
+    with pytest.raises(ValidationError):
+        validate_content(SecretProvider.PIPEDRIVE, {**_PIPEDRIVE_BASE, "domain": domain})
+
+
+@pytest.mark.parametrize(
+    "domain",
+    ["AAI-Labs", " aai-labs ", "aai-labs.pipedrive.com", "https://aai-labs.pipedrive.com/"],
+)
+def test_pipedrive_content_normalizes_domain_to_its_subdomain_label(domain):
+    content = validate_content(SecretProvider.PIPEDRIVE, {**_PIPEDRIVE_BASE, "domain": domain})
+    assert isinstance(content, PipedriveContent)
+    assert content.domain == "aai-labs"
+
+
 def test_retired_google_providers_are_gone():
     """The per-service Google providers were removed outright, rows and all (their
     secrets are deleted by migration). Nothing may resurrect them as a provider value:

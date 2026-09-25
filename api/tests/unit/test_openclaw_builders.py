@@ -34,6 +34,14 @@ def test_gateway_config_disables_ambient_model_backed_heartbeats() -> None:
     assert config["agents"]["defaults"]["heartbeat"] == {"every": "0m", "target": "none"}
 
 
+def test_gateway_config_isolates_each_persons_direct_messages() -> None:
+    """OpenClaw's default dmScope ("main") puts every sender's DMs in one session, so a
+    multi-user Agent would show one person's private conversation to the next."""
+    config = build_openclaw_gateway_config("litellm/gpt-5", "http://litellm:4000")
+
+    assert config["session"]["dmScope"] == "per-channel-peer"
+
+
 def test_startup_migrates_legacy_state_after_config_and_plugin_dirs_exist() -> None:
     migration = START_SH.index("legacy-workspace-migration.sh")
 
@@ -196,6 +204,8 @@ def test_native_slack_channel_maps_connection_policy() -> None:
 
     unset = native_slack_channel({})
     assert unset["dmPolicy"] == "disabled"
+    # Meeting recordings run well past OpenClaw's 20 MB default; an hour of MP3 is ~60-90 MB.
+    assert unset["mediaMaxMb"] == 100
     assert unset["defaultTo"] == "channel:__agentbarn_no_home_channel__"
 
 

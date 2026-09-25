@@ -46,6 +46,10 @@ AGENTBARN_MESSAGE_PY: str = (_MESSAGE_SCRIPTS / "agentbarn_message.py").read_tex
 OPENCLAW_MESSAGING_JS: str = (_MESSAGE_SCRIPTS / "openclaw-messaging.js").read_text()
 
 
+# The agent workspace on the persistent volume; OpenClaw attaches local files from here.
+OPENCLAW_WORKSPACE_DIR = "/home/node/.openclaw/workspace"
+
+
 def _openclaw_config_core(
     model: str,
     litellm_base_url: str,
@@ -79,6 +83,9 @@ def _openclaw_config_core(
             "exec": {"mode": "full"},
         },
         "memory": {"search": {"provider": "none"}},
+        # OpenClaw's default ("main") shares one session across every sender's DMs, so a
+        # multi-user Agent would carry one person's private conversation into the next.
+        "session": {"dmScope": "per-channel-peer"},
         "plugins": {
             "allow": ["memory-core", "active-memory", "telemetry-push", "agentbarn-messaging"],
             "load": {
@@ -161,6 +168,9 @@ def native_slack_channel(settings: dict, home_channel: ConversationLocation | No
         # start_only accepts unmentioned replies in threads the Agent already joined.
         "implicitMentions": {"threadParticipation": settings.get("thread_mention_policy") == "start_only"},
         "dmPolicy": {"off": "disabled"}.get(dm_policy, dm_policy),
+        # OpenClaw drops inbound files over 20 MB by default, which rules out meeting
+        # recordings (an hour of MP3 is ~60-90 MB). The pod's 1 GiB limit covers 100 MB.
+        "mediaMaxMb": 100,
     }
     if channel["groupPolicy"] == "allowlist":
         channel["channels"] = {channel_id: {"enabled": True} for channel_id in settings.get("channel_ids") or []}

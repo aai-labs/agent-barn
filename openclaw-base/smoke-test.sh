@@ -25,6 +25,10 @@ check jq             jq --version
 check rg             rg --version
 check curl           curl --version
 check tini           tini -h
+# Agents read PDF attachments (meeting transcripts, proposals) as text.
+check pdftotext      pdftotext -v
+# Long recordings are downsampled and split before transcription.
+check ffmpeg         ffmpeg -version
 
 # Chromium is deliberately absent -- web access goes through the shared firecrawl
 # service. Assert the absence so a future change cannot quietly reintroduce a
