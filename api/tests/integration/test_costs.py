@@ -3,12 +3,22 @@ from unittest.mock import MagicMock
 from uuid import uuid7
 
 from fastapi import status
-from hamcrest import assert_that, close_to, equal_to, greater_than, has_length, not_none
+from hamcrest import (
+    assert_that,
+    close_to,
+    contains_exactly,
+    equal_to,
+    greater_than,
+    has_entries,
+    has_length,
+    none,
+    not_none,
+)
 from sqlalchemy import text
 from starlette.testclient import TestClient
 
-from api.domains.costs.models import CostRecordSource
-from api.domains.rbac.catalog import PermissionKey
+from api.domains.costs.models import CostRecordSource, resolve_monthly_window
+from api.domains.rbac.catalog import AGENT_VIEWER_ROLE_ID, PermissionKey
 from api.domains.users.organization_users.models import OrganizationRole
 from api.infrastructure.litellm.client import LiteLLMClient
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
@@ -24,6 +34,7 @@ from api.tests.steps.agent import (
     TEST_ENCRYPTION_KEY,
     MockK8sModule,
     MockLiteLLMModule,
+    there_is_agent_access,
     there_is_an_agent,
     use_org_for_auth,
 )
@@ -488,3 +499,300 @@ def test_get_agent_cost_not_found_returns_404():
 
         with then("it returns 404 Not Found"):
             assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
+
+
+# --- The Agent's own cost page ------------------------------------------------
+
+
+def _a_second_agent_with_spend(spend: str):
+    """Another Agent in the same Organization, with calls of its own.
+
+    Leaves ``context.agent`` on the first Agent, so the scenario still reads the
+    Agent it set up and the second one is only there to be excluded.
+    """
+
+    def step(context):
+        first_agent = context.agent
+        there_is_an_agent(name="Other Agent")(context)
+        context.other_agent = context.agent
+        there_are_cost_records(count=1, spend=spend)(context)
+        context.agent = first_agent
+
+    return step
+
+
+def _there_is_an_agent_viewer(member_id):
+    """A plain Member who holds only Agent Viewer on the scenario's Agent."""
+
+    def step(context):
+        _there_is_a_member_actor(member_id)(context)
+        there_is_agent_access(access_role_id=AGENT_VIEWER_ROLE_ID)(context)
+
+    return step
+
+
+def test_agent_cost_reports_calls_failures_and_averages():
+    with given(
+        [
+            *_GIVEN,
+            there_are_cost_records(count=3, spend="2.00", prompt_tokens=400),
+            there_are_cost_records(count=1, spend="0", status="failure", prompt_tokens=0, completion_tokens=0),
+            there_are_cost_records(count=1, spend="4.00", source=CostRecordSource.OPENROUTER_BACKFILL),
+        ]
+    ) as context:
+        agent_id = str(context.agent.id)
+
+        with when("I request the individual agent cost"):
+            response = context.client.get(f"{_BASE}/agents/{agent_id}", headers=_auth(context))
+
+        with then("it counts every call and separates failed and recovered ones"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(
+                response.json(),
+                has_entries(
+                    total_calls=5,
+                    failed_calls=1,
+                    healed_calls=1,
+                    avg_cost_per_call=close_to(2.0, 0.0001),
+                    avg_duration_ms=close_to(1234, 0.01),
+                    first_call_at=not_none(),
+                    last_call_at=not_none(),
+                ),
+            )
+
+        with then("the per-model breakdown carries its call count"):
+            assert_that(response.json()["models_breakdown"][0]["calls"], equal_to(5))
+
+        with then("the page's charts come with it"):
+            assert_that(response.json()["avg_prompt_tokens_over_time"], not_none())
+            histogram = response.json()["cost_per_call_histogram"]
+            assert_that(sum(band["calls"] for band in histogram), equal_to(5))
+
+
+def test_agent_cost_narrows_by_model():
+    with given(
+        [
+            *_GIVEN,
+            there_are_cost_records(count=2, spend="1.00", model="openrouter/z-ai/glm-5.2"),
+            there_are_cost_records(count=1, spend="5.00", model="openrouter/anthropic/claude-opus-5"),
+        ]
+    ) as context:
+        agent_id = str(context.agent.id)
+
+        with when("I filter the agent's cost to one model"):
+            response = context.client.get(
+                f"{_BASE}/agents/{agent_id}",
+                params={"model": "openrouter/anthropic/claude-opus-5"},
+                headers=_auth(context),
+            )
+
+        with then("only that model's calls are counted"):
+            assert_that(response.json(), has_entries(total_cost=5.0, total_calls=1))
+
+
+def test_agent_calls_list_only_that_agents_calls():
+    with given(
+        [
+            *_GIVEN,
+            there_are_cost_records(count=3, spend="1.00"),
+            _a_second_agent_with_spend("7.00"),
+        ]
+    ) as context:
+        agent_id = str(context.agent.id)
+
+        with when("I list the agent's calls"):
+            response = context.client.get(f"{_BASE}/agents/{agent_id}/calls", headers=_auth(context))
+
+        with then("the other agent's call is not among them"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(response.json()["total"], equal_to(3))
+            assert_that({row["agent_id"] for row in response.json()["items"]}, equal_to({agent_id}))
+
+
+def test_agent_calls_ignore_an_agent_id_param():
+    """The Agent is pinned from the path; the query string cannot re-point the read."""
+    with given([*_GIVEN, there_are_cost_records(count=1, spend="1.00"), _a_second_agent_with_spend("7.00")]) as context:
+        agent_id = str(context.agent.id)
+
+        with when("I pass another agent's id alongside the path"):
+            response = context.client.get(
+                f"{_BASE}/agents/{agent_id}/calls",
+                params={"agent_id": str(context.other_agent.id)},
+                headers=_auth(context),
+            )
+
+        with then("the path's agent is still the one read"):
+            assert_that(response.json()["total"], equal_to(1))
+            assert_that(response.json()["items"][0]["agent_id"], equal_to(agent_id))
+
+
+def test_agent_summary_and_calls_agree_under_the_same_filter():
+    with given(
+        [
+            *_GIVEN,
+            there_are_cost_records(count=2, spend="1.00", model="openrouter/z-ai/glm-5.2"),
+            there_are_cost_records(count=3, spend="4.00", model="openrouter/anthropic/claude-opus-5"),
+        ]
+    ) as context:
+        agent_id = str(context.agent.id)
+        params = {"model": "openrouter/z-ai/glm-5.2"}
+
+        with when("I filter both the agent's summary and its calls by one model"):
+            summary = context.client.get(f"{_BASE}/agents/{agent_id}", params=params, headers=_auth(context))
+            calls = context.client.get(f"{_BASE}/agents/{agent_id}/calls", params=params, headers=_auth(context))
+
+        with then("both describe the same two calls"):
+            assert_that(summary.json()["total_calls"], equal_to(2))
+            assert_that(calls.json()["total"], equal_to(2))
+
+
+def test_agent_model_options_list_only_that_agents_models():
+    with given(
+        [
+            *_GIVEN,
+            there_are_cost_records(count=1, spend="1.00", model="openrouter/z-ai/glm-5.2"),
+            _a_second_agent_with_spend("7.00"),
+        ]
+    ) as context:
+        agent_id = str(context.agent.id)
+
+        with when("I request the agent's model options"):
+            response = context.client.get(f"{_BASE}/agents/{agent_id}/filters/models", headers=_auth(context))
+
+        with then("only the models this agent used are offered"):
+            assert_that([option["value"] for option in response.json()], equal_to(["openrouter/z-ai/glm-5.2"]))
+
+
+def test_agent_viewer_can_read_the_agents_calls_and_months():
+    """Agent Viewer grants the Agent's costs, not the Organization's."""
+    member_id = uuid7()
+    with given(
+        [*_GIVEN, there_are_cost_records(count=2, spend="1.00"), _there_is_an_agent_viewer(member_id)]
+    ) as context:
+        agent_id = str(context.agent.id)
+
+        with when("the viewer reads the agent's calls, months and the organization's months"):
+            calls = context.client.get(f"{_BASE}/agents/{agent_id}/calls", headers=_auth(context))
+            monthly = context.client.get(f"{_BASE}/agents/{agent_id}/monthly", headers=_auth(context))
+            options = context.client.get(f"{_BASE}/agents/{agent_id}/filters/models", headers=_auth(context))
+            org_monthly = context.client.get(f"{_BASE}/monthly", headers=_auth(context))
+
+        with then("the agent's reads succeed and the organization's is refused"):
+            assert_that(calls.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(calls.json()["total"], equal_to(2))
+            assert_that(monthly.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(options.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(org_monthly.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+
+
+def test_unassigned_member_cannot_read_the_agents_calls_or_months():
+    member_id = uuid7()
+    with given([*_GIVEN, _there_is_a_member_actor(member_id)]) as context:
+        agent_id = str(context.agent.id)
+
+        for path in ("calls", "monthly", "filters/models"):
+            response = context.client.get(f"{_BASE}/agents/{agent_id}/{path}", headers=_auth(context))
+            assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND), path)
+
+
+# --- Monthly aggregates -------------------------------------------------------
+
+
+def _month_start(months_back: int) -> datetime:
+    return resolve_monthly_window(months_back + 1).start
+
+
+def test_monthly_costs_group_by_calendar_month_and_fill_quiet_months():
+    this_month = _month_start(0)
+    two_months_ago = _month_start(2)
+    with given(
+        [
+            *_GIVEN,
+            there_are_cost_records(count=2, spend="3.00", occurred_at=this_month + timedelta(minutes=1)),
+            there_are_cost_records(count=1, spend="5.00", occurred_at=two_months_ago + timedelta(days=3)),
+        ]
+    ) as context:
+        with when("I request three months of the organization's spend"):
+            response = context.client.get(f"{_BASE}/monthly", params={"months": 3}, headers=_auth(context))
+
+        with then("every month is present, oldest first, the quiet one at zero"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            months = response.json()
+            assert_that([month["spend"] for month in months], contains_exactly(5.0, 0.0, 6.0))
+            assert_that([month["calls"] for month in months], contains_exactly(1, 0, 2))
+            assert_that(months[0]["month"], equal_to(two_months_ago.isoformat().replace("+00:00", "Z")))
+
+        with then("only the month in progress is marked current and projected"):
+            assert_that(months[0], has_entries(is_current=False, projected_spend=none()))
+            assert_that(months[2], has_entries(is_current=True, projected_spend=greater_than(0)))
+
+
+def test_monthly_costs_are_not_cut_by_the_date_range():
+    """The table compares whole months, so a date range picked for the charts must
+    not reach it — a range mid-month would otherwise report a partial month."""
+    with given(
+        [
+            *_GIVEN,
+            there_are_cost_records(count=1, spend="2.00", occurred_at=_month_start(1) + timedelta(days=1)),
+        ]
+    ) as context:
+        with when("I pass a seven-day period alongside the months"):
+            response = context.client.get(
+                f"{_BASE}/monthly", params={"months": 2, "period": "SEVEN_DAYS"}, headers=_auth(context)
+            )
+
+        with then("last month's spend is still counted"):
+            assert_that(response.json()[0]["spend"], equal_to(2.0))
+
+
+def test_monthly_costs_respect_the_agent_filter():
+    with given(
+        [
+            *_GIVEN,
+            there_are_cost_records(count=1, spend="1.00", occurred_at=_month_start(0) + timedelta(minutes=1)),
+            _a_second_agent_with_spend("7.00"),
+        ]
+    ) as context:
+        with when("I filter the organization's months to one agent"):
+            response = context.client.get(
+                f"{_BASE}/monthly",
+                params={"months": 1, "agent_id": str(context.agent.id)},
+                headers=_auth(context),
+            )
+
+        with then("only that agent's spend is counted"):
+            assert_that(response.json()[0], has_entries(spend=1.0, active_agents=1))
+
+
+def test_agent_monthly_costs_count_only_that_agent():
+    with given(
+        [
+            *_GIVEN,
+            there_are_cost_records(count=2, spend="1.50", occurred_at=_month_start(0) + timedelta(minutes=1)),
+            _a_second_agent_with_spend("7.00"),
+        ]
+    ) as context:
+        agent_id = str(context.agent.id)
+
+        with when("I request the agent's months"):
+            response = context.client.get(
+                f"{_BASE}/agents/{agent_id}/monthly", params={"months": 1}, headers=_auth(context)
+            )
+
+        with then("the other agent's spend is left out"):
+            assert_that(response.json(), has_length(1))
+            assert_that(response.json()[0], has_entries(spend=3.0, calls=2))
+
+
+def test_monthly_costs_bound_the_number_of_months():
+    with given(_GIVEN) as context:
+        for months in (0, 25):
+            response = context.client.get(f"{_BASE}/monthly", params={"months": months}, headers=_auth(context))
+            assert_that(response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_ENTITY), str(months))
+
+
+def test_member_cannot_view_monthly_costs():
+    member_id = uuid7()
+    with given([*_GIVEN, _there_is_a_member_actor(member_id)]) as context:
+        response = context.client.get(f"{_BASE}/monthly", headers=_auth(context))
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))

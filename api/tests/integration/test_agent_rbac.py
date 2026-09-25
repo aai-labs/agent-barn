@@ -383,15 +383,29 @@ def test_assigned_activity_and_cost_endpoints_cannot_be_bypassed():
 
         assigned_urls = (
             f"{_BASE}/{assigned_agent.id}/logs",
+            f"{_BASE}/{assigned_agent.id}/diagnostics",
             f"{_BASE}/{assigned_agent.id}/conversations/channels",
             f"{_BASE}/{assigned_agent.id}/tool-calls",
+            f"{_BASE}/{assigned_agent.id}/activity",
+            f"{_BASE}/{assigned_agent.id}/activity/wakes",
+            f"{_BASE}/{assigned_agent.id}/activity/calls",
             f"/api/v1/organizations/{{organization_id}}/costs/agents/{assigned_agent.id}",
+            f"/api/v1/organizations/{{organization_id}}/costs/agents/{assigned_agent.id}/calls",
+            f"/api/v1/organizations/{{organization_id}}/costs/agents/{assigned_agent.id}/monthly",
+            f"/api/v1/organizations/{{organization_id}}/costs/agents/{assigned_agent.id}/filters/models",
         )
         hidden_urls = (
             f"{_BASE}/{hidden_agent.id}/logs",
+            f"{_BASE}/{hidden_agent.id}/diagnostics",
             f"{_BASE}/{hidden_agent.id}/conversations/channels",
             f"{_BASE}/{hidden_agent.id}/tool-calls",
+            f"{_BASE}/{hidden_agent.id}/activity",
+            f"{_BASE}/{hidden_agent.id}/activity/wakes",
+            f"{_BASE}/{hidden_agent.id}/activity/calls",
             f"/api/v1/organizations/{{organization_id}}/costs/agents/{hidden_agent.id}",
+            f"/api/v1/organizations/{{organization_id}}/costs/agents/{hidden_agent.id}/calls",
+            f"/api/v1/organizations/{{organization_id}}/costs/agents/{hidden_agent.id}/monthly",
+            f"/api/v1/organizations/{{organization_id}}/costs/agents/{hidden_agent.id}/filters/models",
         )
 
         for url in assigned_urls:

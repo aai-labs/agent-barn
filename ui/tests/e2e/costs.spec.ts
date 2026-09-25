@@ -5,6 +5,7 @@ import {
   AGENT_A_ID,
   costRecord,
   costSummary,
+  monthlyCosts,
 } from "../pages/data-support/cost-data-support.po";
 import { DataSupport } from "../pages/data-support/data-support.po";
 
@@ -19,6 +20,111 @@ test.describe("Organization costs", () => {
     await data.auth.interceptRefreshRequest();
     await data.users.interceptGetUserContextRequest();
     await data.costs.interceptOrgFilterOptions();
+    await data.costs.interceptOrgMonthly();
+  });
+
+  test("shows monthly spend under the page's filters but not its date range", async ({
+    page,
+  }) => {
+    await data.costs.interceptOrgSummary();
+    await data.costs.interceptOrgList({ items: [costRecord()], total: 1 });
+    const monthlyRequests: URLSearchParams[] = [];
+    page.on("request", (request) => {
+      if (request.url().includes("/costs/monthly")) {
+        monthlyRequests.push(new URL(request.url()).searchParams);
+      }
+    });
+
+    await page.goto(
+      `${COSTS_URL}?agentId=${AGENT_A_ID}&from=2026-08-01T00:00:00.000Z&to=2026-08-31T00:00:00.000Z`,
+    );
+
+    const monthly = page.getByTestId("monthly-costs");
+    await expect(monthly.getByRole("heading", { name: "Monthly spend" })).toBeVisible();
+    await expect(page.getByTestId("monthly-current")).toContainText("$9.00");
+    await expect(page.getByTestId("monthly-current")).toContainText("on pace for $30.00");
+    const rows = page.getByTestId("monthly-costs-table").locator("tbody tr");
+    await expect(rows).toHaveCount(3);
+    await expect(rows.first()).toContainText("Sep 2026");
+    // The organization table keeps its active-agents column.
+    await expect(page.getByTestId("monthly-costs-table").getByRole("columnheader", { name: "Agents" })).toBeVisible();
+
+    await expect.poll(() => monthlyRequests.at(-1)?.get("agent_id")).toBe(AGENT_A_ID);
+    expect(monthlyRequests.at(-1)?.get("from_date")).toBeNull();
+    expect(monthlyRequests.at(-1)?.get("to_date")).toBeNull();
+  });
+
+  test("months before the first call are left out rather than averaged as $0", async ({
+    page,
+  }) => {
+    // Eleven empty months and then spend: the case that used to report a $0.00
+    // average "over 11 full months" beside a busy current month.
+    const [, , current] = monthlyCosts();
+    const empty = Array.from({ length: 11 }, (_, i) => ({
+      ...current,
+      // October 2025 through August 2026.
+      month: new Date(Date.UTC(2025, 9 + i, 1)).toISOString(),
+      spend: 0,
+      calls: 0,
+      failed_calls: 0,
+      prompt_tokens: 0,
+      completion_tokens: 0,
+      active_agents: 0,
+      is_current: false,
+      projected_spend: null,
+    }));
+    await data.costs.interceptOrgSummary();
+    await data.costs.interceptOrgList({ items: [costRecord()], total: 1 });
+    await data.costs.interceptOrgMonthly({
+      months: [...empty, { ...current, spend: 76.81, projected_spend: 100 }],
+    });
+
+    await page.goto(COSTS_URL);
+
+    await expect(page.getByTestId("monthly-current")).toContainText("$76.81");
+    await expect(page.getByTestId("monthly-average")).toContainText("—");
+    await expect(page.getByTestId("monthly-average")).toContainText("no full month yet");
+    await expect(page.getByTestId("monthly-total")).toContainText("1 month");
+    await expect(page.getByTestId("monthly-costs-table").locator("tbody tr")).toHaveCount(1);
+    // There was no last month to speak of, so it is not reported as a $0 one.
+    await expect(page.getByTestId("monthly-previous")).toContainText("—");
+    await expect(page.getByTestId("monthly-previous")).not.toContainText("$0.00");
+  });
+
+  test("a quiet month after the first call still counts toward the average", async ({ page }) => {
+    const [july, august, september] = monthlyCosts();
+    const quiet = { spend: 0, calls: 0, failed_calls: 0, prompt_tokens: 0, completion_tokens: 0 };
+    await data.costs.interceptOrgSummary();
+    await data.costs.interceptOrgList({ items: [costRecord()], total: 1 });
+    await data.costs.interceptOrgMonthly({
+      months: [
+        { ...july, month: "2026-06-01T00:00:00Z", ...quiet },
+        july,
+        { ...august, ...quiet },
+        september,
+      ],
+    });
+
+    await page.goto(COSTS_URL);
+
+    // June is before the first call and drops out; August is a real quiet month.
+    await expect(page.getByTestId("monthly-costs-table").locator("tbody tr")).toHaveCount(3);
+    await expect(page.getByTestId("monthly-average")).toContainText("$5.00");
+    await expect(page.getByTestId("monthly-average")).toContainText("over 2 full months");
+    // August is inside the history, so a $0 last month is the real figure.
+    await expect(page.getByTestId("monthly-previous")).toContainText("$0.00");
+    await expect(page.getByTestId("monthly-previous")).toContainText("Aug 2026");
+  });
+
+  test("an error in the monthly totals stays inside its section", async ({ page }) => {
+    await data.costs.interceptOrgSummary();
+    await data.costs.interceptOrgList({ items: [costRecord()], total: 1 });
+    await data.costs.interceptOrgMonthly({ status: 500 });
+
+    await page.goto(COSTS_URL);
+
+    await expect(page.getByText("Unable to load monthly spend")).toBeVisible();
+    await expect(page.getByTestId("cost-total-spend")).toContainText("$143.03");
   });
 
   test("renders the summary cards and the calls table", async ({ page }) => {

@@ -11,6 +11,7 @@ import {
   usePlatformCostOrganizations,
   usePlatformCostSummary,
   usePlatformCosts,
+  usePlatformMonthlyCosts,
 } from "../hooks/use-platform-costs";
 import { useCostUrlFilters } from "../hooks/use-cost-url-filters";
 import type { CostFilters } from "../utils";
@@ -18,6 +19,7 @@ import { CostChartsPanel } from "./cost-charts-panel";
 import { CostFilterBar } from "./cost-filter-bar";
 import { CostList } from "./cost-list";
 import { CostSummaryCards, StatCard } from "./cost-summary-cards";
+import { MonthlyCosts } from "./monthly-costs";
 import { OpenRouterCreditsCard, OpenRouterCreditsWarning } from "./openrouter-credits";
 import { OrganizationsBySpend } from "./organizations-by-spend";
 
@@ -61,6 +63,8 @@ export function PlatformCostsPage() {
     usePlatformCostSummary(filters);
   const { agentOptions, modelOptions } = usePlatformCostFilterOptions(filters);
   const { organizations } = usePlatformCostOrganizations(filters);
+  const monthly = usePlatformMonthlyCosts(filters);
+  const { refetch: refetchMonthly } = monthly;
   const {
     records,
     total,
@@ -129,9 +133,10 @@ export function PlatformCostsPage() {
 
   const handleRefresh = useCallback(() => {
     void refetchSummary();
+    void refetchMonthly();
     void refetch();
     window.scrollTo({ top: 0 });
-  }, [refetchSummary, refetch]);
+  }, [refetchSummary, refetchMonthly, refetch]);
 
   return (
     <div className="max-w-[1200px] mx-auto px-10 pt-9 pb-24">
@@ -198,6 +203,13 @@ export function PlatformCostsPage() {
       />
 
       <CostChartsPanel summary={summary} isLoading={isLoadingSummary} />
+
+      <MonthlyCosts
+        months={monthly.months}
+        isLoading={monthly.isLoading}
+        error={monthly.error}
+        onRetry={() => void refetchMonthly()}
+      />
 
       <p className="text-[13px] mb-3" style={{ color: "var(--ink-4)" }}>
         {total.toLocaleString()} {total === 1 ? "call" : "calls"}

@@ -53,6 +53,25 @@ export function costFilterParams(filters: CostFilters): URLSearchParams {
   return params;
 }
 
+/** How many calendar months the monthly table shows by default. */
+export const DEFAULT_MONTHS = 12;
+
+/** The query string for a monthly read: the same filter dimensions as every other
+ *  cost read, but no date window. The table compares whole months, and a range
+ *  picked for the charts would cut through them. */
+export function monthlyCostParams(
+  filters: CostFilters,
+  months: number = DEFAULT_MONTHS,
+): URLSearchParams {
+  const params = costFilterParams(filters);
+  params.delete("from_date");
+  params.delete("to_date");
+  params.delete("period");
+  params.delete("sort");
+  params.set("months", String(months));
+  return params;
+}
+
 /**
  * Offset pagination can overlap when the sync job writes rows between page
  * reads. Keep the most recently read representation of a request, but expose

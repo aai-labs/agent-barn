@@ -73,7 +73,7 @@ export const CostChartsPanel = memo(function CostChartsPanel({
   );
 });
 
-function ChartCard({
+export function ChartCard({
   title,
   subtitle,
   testId,
