@@ -6,12 +6,29 @@ Related context: [Activity and Ingest](../activity-and-ingest.md), [Agent Activi
 
 ## Current state
 
-- Delivered: pre-flight evidence for classifying aai-cli Tool Calls into Business Actions, and real Hermes and OpenClaw result fixtures.
-- In transition: nothing yet. Business Actions are not captured until the catalogue, classifier, table, Ingest recording, and backfill slices land.
-- Next: AF-344 catalogue and drift tests, then classifier, table and repository, Ingest recording and metric, and backfill.
+- Delivered: pre-flight evidence and real Hermes and OpenClaw result fixtures. Also delivered: the code-owned aai-cli command catalogue in `api/domains/business_value/catalogue.py`, with a drift test against the bundled references.
+- In transition: nothing is captured yet. Business Actions are not recorded until the classifier, table, Ingest recording, and backfill slices land.
+- Next: AF-344 classifier, then table and repository, Ingest recording and metric, and backfill.
 - Blockers: the product owner has not signed off the default minutes per Outcome Type. They are placeholders until then.
 
 ## Slice history
+
+### 2026-09-27 — AF-344 — Command catalogue
+
+Delivered:
+- The catalogue marks every command path in the 12 bundled `command-reference.md` files as read, write, passthrough (`request`), or ignored.
+  - It covers 411 reference lines. The only lines skipped are the three generic `<resource> <action>` placeholders in excel, drive, and email.
+  - Every catalogue path appears in a reference.
+- Each of the 90 write paths maps to one of 10 Outcome Types. Deletes always map to `RECORD_DELETED`, and edits to an existing comment map to `RECORD_UPDATED`.
+- Housekeeping commands (`microsoft auth`, `hubspot health`, `hubspot events custom send`, `hubspot conversations visitor-identification tokens create`) are ignored. So are the aai-cli tooling groups `config`, `skills`, `secrets`, and `help`.
+- The catalogue lives outside `aai_cli_skills/bundled/`, so it does not change the runtime digest.
+
+Coverage:
+- `api/tests/unit/test_business_action_catalogue.py` checks four things:
+  - the catalogue's integration set equals the bundled command groups
+  - every bundled path is covered
+  - every write has an Outcome Type
+  - every Outcome Type has default minutes
 
 ### 2026-09-27 — AF-344 — Pre-flight evidence
 
