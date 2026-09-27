@@ -2,17 +2,45 @@
 
 Status: Active
 Epic: Business value measurement
-Related context: [Activity and Ingest](../activity-and-ingest.md), [Agent Activity](../agent-activity.md), [RBAC implementation brief](../rbac/IMPLEMENTATION-BRIEF.md), [epic guideline](../../guidelines/epics.md)
+Related context: [Activity and Ingest](../activity-and-ingest.md), [Agent Activity](../agent-activity.md), [RBAC implementation brief](../rbac/IMPLEMENTATION-BRIEF.md), [classification ADR](../../adr/2026-09-25-classify-business-actions-at-ingest.md), [epic guideline](../../guidelines/epics.md)
 
 ## Current state
 
 - Delivered: pre-flight evidence and real Hermes and OpenClaw result fixtures. Also delivered: the code-owned aai-cli command catalogue in `api/domains/business_value/catalogue.py`, with a drift test against the bundled references.
 - Also delivered: the pure classifier `classify(tool_call)` in `api/domains/business_value/classifier.py`.
-- In transition: nothing is captured yet. Business Actions are not recorded until the table, Ingest recording, and backfill slices land.
-- Next: AF-344 table and repository, then Ingest recording and metric, and backfill.
+- Also delivered: the `business_action` table (migration `39ea6a8e2fe4`) and `BusinessActionRepository.record_in_session`.
+- In transition: nothing is captured yet. Ingest does not call the repository until the Ingest recording slice lands.
+- Next: AF-344 Ingest recording and metric, then backfill.
 - Blockers: the product owner has not signed off the default minutes per Outcome Type. They are placeholders until then.
 
 ## Slice history
+
+### 2026-09-27 — AF-344 — Table and repository
+
+Delivered:
+- Migration `39ea6a8e2fe4` adds `business_action`, with these columns:
+  - `organization_id`, `agent_id`, and `tool_call_id`, each a foreign key with `ON DELETE CASCADE`
+  - `ordinal`, `integration`, `resource`, and `verb`
+  - `outcome_type`, a nullable `VARCHAR(64)`
+  - `is_write`, nullable, where `NULL` means the path is not in the catalogue
+  - `status`, the `businessactionstatus` enum
+  - `occurred_at` and `completed_at`
+- It also adds a unique `(tool_call_id, ordinal)` constraint and indexes on `(organization_id, occurred_at)` and `(agent_id, occurred_at)`. There are no argument or result columns.
+- `BusinessActionRepository.record_in_session(session, tool_call)` classifies the Tool Call and inserts inside a savepoint of the caller's session, with `ON CONFLICT (tool_call_id, ordinal) DO NOTHING`. It returns only the rows it inserted.
+  - A database error rolls back only that savepoint.
+  - A classification error is logged with the Tool Call id and skipped.
+- ADR [`2026-09-25-classify-business-actions-at-ingest`](../../adr/2026-09-25-classify-business-actions-at-ingest.md) records why the rows live in PostgreSQL rather than PostHog or OpenPanel.
+- `CONTEXT.md` defines Business Action and Outcome Type.
+
+Coverage:
+- `api/tests/integration/test_business_action_repository.py` covers:
+  - persisted rows, tenancy, and timing
+  - a non-aai-cli command
+  - a duplicate result
+  - a foreign-key violation leaving the Tool Call batch committed
+  - a classifier failure
+  - cascade on Tool Call deletion
+- Checked by hand, not in CI: Alembic `compare_metadata` against a fresh database at head shows no drift for `business_action`, and downgrading to `73e85ce78653` then upgrading again succeeds.
 
 ### 2026-09-27 — AF-344 — Classifier
 
