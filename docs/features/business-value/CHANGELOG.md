@@ -7,11 +7,40 @@ Related context: [Activity and Ingest](../activity-and-ingest.md), [Agent Activi
 ## Current state
 
 - Delivered: pre-flight evidence and real Hermes and OpenClaw result fixtures. Also delivered: the code-owned aai-cli command catalogue in `api/domains/business_value/catalogue.py`, with a drift test against the bundled references.
-- In transition: nothing is captured yet. Business Actions are not recorded until the classifier, table, Ingest recording, and backfill slices land.
-- Next: AF-344 classifier, then table and repository, Ingest recording and metric, and backfill.
+- Also delivered: the pure classifier `classify(tool_call)` in `api/domains/business_value/classifier.py`.
+- In transition: nothing is captured yet. Business Actions are not recorded until the table, Ingest recording, and backfill slices land.
+- Next: AF-344 table and repository, then Ingest recording and metric, and backfill.
 - Blockers: the product owner has not signed off the default minutes per Outcome Type. They are placeholders until then.
 
 ## Slice history
+
+### 2026-09-27 — AF-344 — Classifier
+
+Delivered:
+- `classify(tool_call)` turns a `terminal`/`exec` Tool Call into content-free Business Actions. It stores no arguments and no results.
+- It finds each aai-cli invocation by executable basename, after any `VAR=value` assignments.
+- It unwraps the `AGENTBARN_TOOL_SESSION=… AGENTBARN_TOOL_INVOCATION=… sh -c '…'` wrapper.
+- It splits commands on `&&`, `||`, `|`, `;`, `&`, newlines, and subshell parentheses.
+- It strips the four global flags in both forms, in any position.
+- It ignores `--help`, `-h`, `help` subcommands, and invocations with no command path.
+
+Status rules (the same for both runtimes):
+- Exit evidence comes from Hermes `exit_code` or OpenClaw `details.exitCode` with `details.status: completed`.
+- The aai-cli error envelope overrides a zero exit.
+- SUCCESS needs a zero exit that covers the action: an `&&`-only chain, or the last segment.
+- With several actions, a failure is attributed only when exactly one action matches the envelope's `service`. Every other action is UNKNOWN.
+- Background runs and missing evidence are UNKNOWN.
+
+Decisions:
+- `--version` is not treated as a help flag. It is a real `confluence pages update` option (`[--version N]`), and aai-cli has no global `--version`. A bare `aai-cli --version` has no command path, so it is still ignored.
+- The ordinal counts every aai-cli invocation in the command, ignored ones included. A later catalogue change that starts ignoring a path therefore does not shift the ordinals of stored rows.
+- Invocations inside `$(…)`, `(…)`, or after `&` are recorded but never SUCCESS, because the command's exit code does not cover them.
+
+Coverage:
+- `api/tests/unit/test_business_action_classifier.py` covers:
+  - command parsing, ignored invocations, and the wrapper in both quoting styles
+  - chain operators, envelope attribution, and per-runtime evidence
+  - all 35 recorded pre-flight Tool Calls
 
 ### 2026-09-27 — AF-344 — Command catalogue
 

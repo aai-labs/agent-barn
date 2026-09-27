@@ -42,7 +42,7 @@ DEFAULT_MINUTES = {
 }
 
 GLOBAL_FLAGS = frozenset({"--profile", "--config", "--secrets-file", "--key-file"})
-HELP_FLAGS = frozenset({"--help", "-h", "--version"})
+HELP_FLAGS = frozenset({"--help", "-h"})
 HELP_TOKEN = "help"
 IGNORED_GROUPS = frozenset({"config", "skills", "secrets", HELP_TOKEN})
 PASSTHROUGH_READ_METHODS = frozenset({"get", "head"})
