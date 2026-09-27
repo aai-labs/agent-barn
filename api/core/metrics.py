@@ -5,8 +5,9 @@ The two uvicorn processes (main :8000, ingest :8001) each expose their own
 meaningful on the endpoint of the process that writes it.
 
 Registry layout:
-- default REGISTRY: process/platform collectors and TOOL_CALLS. Exposed by
-  both apps; the counter is only ever incremented in the ingest process.
+- default REGISTRY: process/platform collectors, TOOL_CALLS, and
+  BUSINESS_ACTIONS. Exposed by both apps; the counters are only ever
+  incremented in the ingest process.
 - PROBE_REGISTRY: gauges refreshed on scrape of the main app only. Kept out
   of the default registry so the ingest endpoint never exports stale zeros
   (e.g. agentbarn_database_up 0) that would trip alerts.
@@ -43,6 +44,12 @@ TOOL_CALLS = Counter(
     "agentbarn_tool_calls",
     "Completed tool calls by tool name and outcome",
     ["tool_name", "status"],
+)
+
+BUSINESS_ACTIONS = Counter(
+    "agentbarn_business_actions",
+    "Recorded Business Actions by aai-cli command group, write flag, and inferred status",
+    ["integration", "is_write", "status"],
 )
 
 DATABASE_UP = Gauge(

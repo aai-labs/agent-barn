@@ -1,11 +1,17 @@
+import json
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from typing import Any
 
+import pytest
 from fastapi import status
 from hamcrest import assert_that, equal_to
 from sqlmodel import Session, col, select
 from starlette.testclient import TestClient
 
+from api.domains.agents.models import AgentType
 from api.domains.agents.repository import AgentRepository
+from api.domains.business_value.models import BusinessAction
 from api.domains.communications.models import (
     CommunicationConnection,
     CommunicationJournalEntry,
@@ -170,6 +176,178 @@ def test_ingest_empty_batch_returns_204():
 
         with then("it returns 204"):
             assert_that(response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
+
+
+# --- business actions ---
+
+_FIXTURES_DIR = Path(__file__).resolve().parents[1] / "fixtures" / "business_actions"
+_HERMES_OK = json.dumps({"output": "{}", "exit_code": 0, "error": None})
+_ENVELOPE = (
+    '{"code":"config_error","details":null,"message":"m","operation":"prs.create","service":"github","status":null}'
+)
+_WORKBOOK_CREATED = (0, "excel", "workbook", "create", True, "DOCUMENT_AUTHORED", "SUCCESS")
+
+
+def _shell_payload(
+    external_id: str,
+    arguments: dict[str, Any],
+    result: Any,
+    *,
+    tool_name: str = "terminal",
+    is_error: bool = False,
+    include_call: bool = True,
+) -> dict[str, Any]:
+    now = datetime.now(UTC).isoformat()
+    call = {
+        "external_id": external_id,
+        "session_id": "session-abc",
+        "tool_name": tool_name,
+        "arguments": arguments,
+        "occurred_at": now,
+    }
+    return {
+        "tool_calls": [call] if include_call else [],
+        "tool_results": [{"external_id": external_id, "result": result, "is_error": is_error, "completed_at": now}],
+    }
+
+
+def _post(context, payload: dict[str, Any]) -> None:
+    response = context.ingest_client.post(_url(context), json=payload, headers=_auth(context))
+    assert_that(response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
+
+
+def _business_actions(context) -> list[tuple[Any, ...]]:
+    delegate: PostgresRepositoryDelegate = context.injector.get(PostgresRepositoryDelegate)
+    with Session(delegate.engine) as session:
+        rows = session.exec(
+            select(BusinessAction)
+            .where(col(BusinessAction.agent_id) == context.agent.id)
+            .order_by(col(BusinessAction.occurred_at), col(BusinessAction.ordinal))
+        ).all()
+        return [
+            (row.ordinal, row.integration, row.resource, row.verb, row.is_write, row.outcome_type, row.status.value)
+            for row in rows
+        ]
+
+
+def test_ingest_records_a_successful_write():
+    with given([*_GIVEN, there_is_an_agent(), _set_ingest_key(), _create_ingest_client()]) as context:
+        with when("a Tool Call running an aai-cli write completes with exit 0"):
+            _post(context, _shell_payload("tc-1", {"command": "aai-cli excel workbook create f.xlsx"}, _HERMES_OK))
+
+        with then("one SUCCESS Business Action is stored"):
+            assert_that(_business_actions(context), equal_to([_WORKBOOK_CREATED]))
+
+
+def test_ingest_records_a_failed_write_from_the_error_envelope():
+    with given([*_GIVEN, there_is_an_agent(), _set_ingest_key(), _create_ingest_client()]) as context:
+        with when("an aai-cli write fails with the error envelope"):
+            result = json.dumps({"output": _ENVELOPE, "exit_code": 3, "error": None})
+            _post(context, _shell_payload("tc-1", {"command": "aai-cli github prs create --title t"}, result))
+
+        with then("the Business Action is an ERROR"):
+            assert_that(
+                _business_actions(context),
+                equal_to([(0, "github", "prs", "create", True, "PULL_REQUEST_OPENED", "ERROR")]),
+            )
+
+
+def test_ingest_records_a_read():
+    with given([*_GIVEN, there_is_an_agent(), _set_ingest_key(), _create_ingest_client()]) as context:
+        with when("an aai-cli read completes"):
+            _post(context, _shell_payload("tc-1", {"command": "aai-cli jira issues get A-1"}, _HERMES_OK))
+
+        with then("it is stored as a read without an Outcome Type"):
+            assert_that(_business_actions(context), equal_to([(0, "jira", "issues", "get", False, None, "SUCCESS")]))
+
+
+def test_ingest_records_nothing_for_a_non_aai_cli_command():
+    with given([*_GIVEN, there_is_an_agent(), _set_ingest_key(), _create_ingest_client()]) as context:
+        with when("a shell command without aai-cli completes"):
+            _post(context, _shell_payload("tc-1", {"command": "ls -la"}, _HERMES_OK))
+
+        with then("no Business Action is stored"):
+            assert_that(_business_actions(context), equal_to([]))
+
+
+def test_ingest_records_every_action_of_an_and_chain():
+    with given([*_GIVEN, there_is_an_agent(), _set_ingest_key(), _create_ingest_client()]) as context:
+        with when("an && chain of two aai-cli commands exits 0"):
+            command = "aai-cli excel workbook create f.xlsx && aai-cli excel sheets add f.xlsx Extra"
+            _post(context, _shell_payload("tc-1", {"command": command}, _HERMES_OK))
+
+        with then("both actions are SUCCESS"):
+            assert_that(
+                _business_actions(context),
+                equal_to(
+                    [
+                        _WORKBOOK_CREATED,
+                        (1, "excel", "sheets", "add", True, "SPREADSHEET_UPDATED", "SUCCESS"),
+                    ]
+                ),
+            )
+
+
+def test_ingest_does_not_duplicate_actions_for_a_repeated_batch():
+    with given([*_GIVEN, there_is_an_agent(), _set_ingest_key(), _create_ingest_client()]) as context:
+        payload = _shell_payload("tc-1", {"command": "aai-cli excel workbook create f.xlsx"}, _HERMES_OK)
+
+        with when("the runtime retries the same batch"):
+            _post(context, payload)
+            _post(context, payload)
+
+        with then("the action is stored once"):
+            assert_that(_business_actions(context), equal_to([_WORKBOOK_CREATED]))
+
+
+def test_ingest_records_nothing_for_an_orphaned_result():
+    with given([*_GIVEN, there_is_an_agent(), _set_ingest_key(), _create_ingest_client()]) as context:
+        with when("a result arrives without its call"):
+            command = {"command": "aai-cli excel workbook create f.xlsx"}
+            _post(context, _shell_payload("tc-orphan", command, _HERMES_OK, include_call=False))
+
+        with then("no Business Action is stored"):
+            assert_that(_business_actions(context), equal_to([]))
+
+
+def _runtime_fixtures() -> list[tuple[str, AgentType, dict[str, Any]]]:
+    cases = []
+    for runtime in (AgentType.HERMES, AgentType.OPENCLAW):
+        path = _FIXTURES_DIR / f"{runtime.value}.json"
+        for fixture in json.loads(path.read_text(encoding="utf-8")):
+            cases.append((f"{runtime.value}:{fixture['name']}", runtime, fixture))
+    return cases
+
+
+@pytest.mark.parametrize(
+    ("name", "runtime", "fixture"), _runtime_fixtures(), ids=[name for name, _, _ in _runtime_fixtures()]
+)
+def test_ingest_records_recorded_runtime_tool_calls(name, runtime, fixture):
+    with given([*_GIVEN, there_is_an_agent(agent_type=runtime), _set_ingest_key(), _create_ingest_client()]) as context:
+        with when("the recorded runtime Tool Call is ingested"):
+            payload = _shell_payload(
+                "tc-1",
+                fixture["arguments"],
+                fixture["result"],
+                tool_name=fixture["tool_name"],
+                is_error=fixture["stored_status"] == "ERROR",
+            )
+            _post(context, payload)
+
+        with then("the stored Business Actions match the expected actions"):
+            expected = [
+                (
+                    action["ordinal"],
+                    action["integration"],
+                    action["resource"],
+                    action["verb"],
+                    action["is_write"],
+                    action["outcome_type"],
+                    action["status"],
+                )
+                for action in fixture["expected_actions"]
+            ]
+            assert_that(_business_actions(context), equal_to(expected), name)
 
 
 # --- native gateway communication events ---

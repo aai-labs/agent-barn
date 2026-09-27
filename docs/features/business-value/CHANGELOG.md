@@ -9,11 +9,34 @@ Related context: [Activity and Ingest](../activity-and-ingest.md), [Agent Activi
 - Delivered: pre-flight evidence and real Hermes and OpenClaw result fixtures. Also delivered: the code-owned aai-cli command catalogue in `api/domains/business_value/catalogue.py`, with a drift test against the bundled references.
 - Also delivered: the pure classifier `classify(tool_call)` in `api/domains/business_value/classifier.py`.
 - Also delivered: the `business_action` table (migration `39ea6a8e2fe4`) and `BusinessActionRepository.record_in_session`.
-- In transition: nothing is captured yet. Ingest does not call the repository until the Ingest recording slice lands.
-- Next: AF-344 Ingest recording and metric, then backfill.
+- Also delivered: Ingest records Business Actions for every completed shell Tool Call and exports `agentbarn_business_actions_total`. The feature doc is [`../business-value.md`](../business-value.md).
+- In transition: Tool Calls completed before this slice have no Business Actions until the backfill slice lands.
+- Next: AF-344 backfill.
 - Blockers: the product owner has not signed off the default minutes per Outcome Type. They are placeholders until then.
 
 ## Slice history
+
+### 2026-09-27 — AF-344 — Ingest recording and metric
+
+Delivered:
+- `IngestService._process_tool_calls` calls `BusinessActionRepository.record_in_session(session, tool_call)` right after `complete()` returns a row, inside the batch's single transaction.
+- `agentbarn_business_actions` counter, next to `agentbarn_tool_calls` in `api/core/metrics.py`. It is scraped from the Ingest process's `/metrics` (port 8001).
+  - Labels: `integration`, clamped to the bundled command groups and otherwise `other`; `is_write` (`true`/`false`/`unknown`); and `status`.
+  - It counts only rows actually inserted, so retried batches do not double-count.
+- The feature doc [`business-value.md`](../business-value.md) covers classification, status inference, the Outcome Type table and its sign-off, and every known undercount. It also states that this is not the Agent Activity tab.
+- `activity-and-ingest.md` now says Ingest also writes Business Actions.
+
+Coverage:
+- `api/tests/integration/test_ingest.py` covers:
+  - a successful write, a failed write (envelope), and a read
+  - a non-aai-cli command and an `&&` chain producing two SUCCESS actions
+  - a repeated batch producing no duplicates, and an orphaned result creating nothing
+  - all 35 recorded Hermes and OpenClaw Tool Calls, posted through the Ingest endpoint
+- `api/tests/unit/test_ingest_service.py` and `api/tests/unit/test_metrics.py` cover the wiring and the counter labels.
+
+Local test note:
+- On Windows with Docker Desktop, testcontainers reached Postgres over `localhost` (`::1`), and that connection started failing mid-session.
+- `TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1` fixed it for the local run. No repository change was made.
 
 ### 2026-09-27 — AF-344 — Table and repository
 

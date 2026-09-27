@@ -347,6 +347,7 @@ _COMMAND_PATHS = {
 CATALOGUE: dict[tuple[str, ...], CatalogueEntry] = {
     tuple(path.split()): entry for path, entry in _COMMAND_PATHS.items()
 }
+INTEGRATIONS = frozenset(path[0] for path in CATALOGUE)
 _NODES = frozenset(path[:depth] for path in CATALOGUE for depth in range(1, len(path) + 1))
 _MAX_DEPTH = max(len(path) for path in CATALOGUE)
 

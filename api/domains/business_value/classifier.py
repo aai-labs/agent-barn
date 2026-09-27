@@ -7,11 +7,11 @@ from enum import StrEnum
 from typing import Any
 
 from api.domains.business_value.catalogue import (
-    CATALOGUE,
     GLOBAL_FLAGS,
     HELP_FLAGS,
     HELP_TOKEN,
     IGNORED_GROUPS,
+    INTEGRATIONS,
     PASSTHROUGH_READ_METHODS,
     CommandKind,
     OutcomeType,
@@ -33,7 +33,6 @@ HERMES_FAILURE_STATUSES = frozenset({"blocked", "pending_approval"})
 OPENCLAW_COMPLETED = "completed"
 ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 COMMAND_TOKEN = re.compile(r"^[a-z][a-z0-9-]{0,63}$")
-KNOWN_GROUPS = frozenset(path[0] for path in CATALOGUE)
 
 
 class BusinessActionStatus(StrEnum):
@@ -193,7 +192,7 @@ def _invocation(ordinal: int, segment_index: int, arguments: list[str]) -> _Invo
     group = arguments[0]
     if group in IGNORED_GROUPS or not COMMAND_TOKEN.match(group):
         return None
-    if group not in KNOWN_GROUPS:
+    if group not in INTEGRATIONS:
         return _Invocation(ordinal, segment_index, group, "", "", None, None)
 
     match = longest_match(arguments)
