@@ -10,11 +10,32 @@ Related context: [Activity and Ingest](../activity-and-ingest.md), [Agent Activi
 - Also delivered: the pure classifier `classify(tool_call)` in `api/domains/business_value/classifier.py`.
 - Also delivered: the `business_action` table (migration `39ea6a8e2fe4`) and `BusinessActionRepository.record_in_session`.
 - Also delivered: Ingest records Business Actions for every completed shell Tool Call and exports `agentbarn_business_actions_total`. The feature doc is [`../business-value.md`](../business-value.md).
-- In transition: Tool Calls completed before this slice have no Business Actions until the backfill slice lands.
-- Next: AF-344 backfill.
+- Also delivered: the operator backfill (`make backfill-business-actions`) for Tool Calls stored before Ingest recorded Business Actions.
+- In transition: a live end-to-end check on a deployed cluster has not been run yet. It needs the API redeployed, the migration applied, prompts re-sent, and the backfill run twice.
+- Next: that end-to-end check, then the reporting ticket that reads Business Actions and reports `UNKNOWN` as unverified.
 - Blockers: the product owner has not signed off the default minutes per Outcome Type. They are placeholders until then.
 
 ## Slice history
+
+### 2026-09-27 — AF-344 — Backfill
+
+Delivered:
+- `api/domains/business_value/backfill.py:main` walks completed `terminal`/`exec` Tool Calls in id-keyset batches (`BACKFILL_BATCH_SIZE = 500`). It classifies each one from its stored content, never from its stored status.
+- It upserts on `(tool_call_id, ordinal)`, updating `integration`, `resource`, `verb`, `is_write`, and `outcome_type` and leaving `status` alone, so a re-run after a catalogue change re-maps history. It never deletes.
+- It logs one summary line: `scanned`, `recorded`, `failed`.
+- `make backfill-business-actions` uses the `python -c` form of the `reconcile-*` targets and is listed in `.PHONY`.
+- `docs/guidelines/operations.md` documents the backfill with the `kubectl -n <namespace> exec deploy/<release> -c api -- python -c …` command.
+  - Checked on the local k3d API pod: the container is named `api`, the working directory is `/app`, and `api.*` imports from `python`.
+
+Decision:
+- The RBAC brief's background-work exception now covers operator-run one-shot commands as well as schedules, and names the backfill's two unscoped repository methods. It previously required "a schedule". The other two conditions are unchanged: not reachable from a router, and request paths keep their `AgentAuthorization` checks.
+
+Coverage:
+- `api/tests/integration/test_business_action_backfill.py` covers:
+  - classification across several batches, skipping non-shell and incomplete Tool Calls
+  - a Hermes Tool Call stored as SUCCESS with exit 3 becoming ERROR
+  - a re-run producing no duplicates
+  - a re-map after a catalogue change leaving the stored status unchanged
 
 ### 2026-09-27 — AF-344 — Ingest recording and metric
 

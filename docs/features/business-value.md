@@ -97,6 +97,17 @@ Each of these is an **undercount**, not a verdict on the Agent. The last one is 
   - With a single action, any failure in the command marks it `ERROR`, even when the failing segment was not aai-cli.
 - **Inbound requests may be overcounted.** The pinned Hermes gateway fires `pre_gateway_dispatch` before its allowlist check, so the observer can mirror an inbound message the allowlist then rejects. Any report that counts inbound requests from mirrored messages may include them.
 
+## Backfill
+
+`api/domains/business_value/backfill.py` classifies Tool Calls stored before Ingest recorded Business Actions, and re-maps stored rows after a catalogue change.
+
+- It walks completed `terminal`/`exec` Tool Calls in id-keyset batches and infers status from content.
+- It upserts on `(tool_call_id, ordinal)`, updating `integration`, `resource`, `verb`, `is_write`, and `outcome_type` and never `status`.
+- It never deletes rows.
+- It is operator-run only (`make backfill-business-actions` locally, or `kubectl exec` in a deployment) and runs unscoped under the RBAC brief's background-work exception.
+
+How to run it is in [`../guidelines/operations.md`](../guidelines/operations.md#business-action-backfill).
+
 ## Data flow
 
 ```text
@@ -118,9 +129,10 @@ Ingest owns authentication and the transaction. The Business Value domain owns t
 | Command catalogue and Outcome Types | `../../api/domains/business_value/catalogue.py` |
 | Classifier and status inference | `../../api/domains/business_value/classifier.py` |
 | Table and persistence | `../../api/domains/business_value/models.py`, `../../api/domains/business_value/repository.py`, migration `39ea6a8e2fe4` |
+| Operator backfill | `../../api/domains/business_value/backfill.py`, `make backfill-business-actions` |
 | Ingest wiring and metric | `../../api/domains/ingest/service.py`, `../../api/core/metrics.py` (`agentbarn_business_actions`) |
 | Recorded runtime fixtures | `../../api/tests/fixtures/business_actions/` |
-| Tests | `../../api/tests/unit/test_business_action_catalogue.py`, `../../api/tests/unit/test_business_action_classifier.py`, `../../api/tests/integration/test_business_action_repository.py`, `../../api/tests/integration/test_ingest.py` |
+| Tests | `../../api/tests/unit/test_business_action_catalogue.py`, `../../api/tests/unit/test_business_action_classifier.py`, `../../api/tests/integration/test_business_action_repository.py`, `../../api/tests/integration/test_ingest.py`, `../../api/tests/integration/test_business_action_backfill.py` |
 
 ## Related decisions
 
@@ -129,6 +141,8 @@ Ingest owns authentication and the transaction. The Business Value domain owns t
 
 ## Change impact
 
-- **A catalogue change** needs the drift test to pass. A catalogue that no longer matches the bundled references fails CI. The change applies only to Tool Calls completed after the deploy; rows already stored keep their earlier mapping.
+- **A catalogue change** needs the drift test to pass. A catalogue that no longer matches the bundled references fails CI.
+  - It applies to Tool Calls completed after the deploy.
+  - To re-map rows already stored, run the operator backfill (see [Backfill](#backfill)).
 - **A change to the Tool Call telemetry shape** (result format, exit code location, `is_error` semantics) must update the classifier's evidence rules and the recorded fixtures together.
 - **A new read surface** over `business_action` must apply the RBAC brief and report `UNKNOWN` as unverified, never as value.

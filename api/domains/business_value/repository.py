@@ -3,18 +3,21 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
+from uuid import UUID
 
 from injector import inject, singleton
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import SQLAlchemyError
-from sqlmodel import Session
+from sqlmodel import Session, col, select
 
-from api.domains.business_value.classifier import ClassifiedAction, classify
+from api.domains.business_value.classifier import SHELL_TOOL_NAMES, ClassifiedAction, classify
 from api.domains.business_value.models import TOOL_CALL_ORDINAL_CONSTRAINT, BusinessAction
 from api.domains.tool_calls.models import ToolCall
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 
 logger = logging.getLogger(__name__)
+
+REMAPPED_COLUMNS = ("integration", "resource", "verb", "is_write", "outcome_type", "updated_at")
 
 
 @inject
@@ -53,6 +56,39 @@ class BusinessActionRepository:
             return []
         savepoint.commit()
         return inserted
+
+    def find_backfill_batch(self, after_id: UUID | None, limit: int) -> list[ToolCall]:
+        """Completed shell Tool Calls after ``after_id``, in id order.
+
+        Unscoped: only the operator-run backfill calls this, and no router reaches it.
+        """
+        query = select(ToolCall).where(
+            col(ToolCall.tool_name).in_(SHELL_TOOL_NAMES),
+            col(ToolCall.completed_at).is_not(None),
+        )
+        if after_id is not None:
+            query = query.where(col(ToolCall.id) > after_id)
+        with Session(self.delegate.engine) as session:
+            return list(session.exec(query.order_by(col(ToolCall.id)).limit(limit)).all())
+
+    def upsert_classified(self, classified: list[tuple[ToolCall, list[ClassifiedAction]]]) -> int:
+        """Insert or re-map Business Actions, leaving the stored status untouched.
+
+        Unscoped: only the operator-run backfill calls this, and no router reaches it.
+        """
+        now = datetime.now(UTC)
+        values = [self._values(tool_call, action, now) for tool_call, actions in classified for action in actions]
+        if not values:
+            return 0
+        statement = pg_insert(BusinessAction).values(values)
+        statement = statement.on_conflict_do_update(
+            constraint=TOOL_CALL_ORDINAL_CONSTRAINT,
+            set_={column: statement.excluded[column] for column in REMAPPED_COLUMNS},
+        ).returning(col(BusinessAction.id))
+        with Session(self.delegate.engine) as session:
+            upserted = len(session.exec(statement).all())  # type: ignore[call-overload]
+            session.commit()
+        return upserted
 
     @staticmethod
     def _values(tool_call: ToolCall, action: ClassifiedAction, now: datetime) -> dict[str, Any]:
