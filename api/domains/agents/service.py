@@ -2500,6 +2500,38 @@ class AgentService:
         agent.memory_group_id = group_id
         self.repository.save(agent)
 
+    def release_memory_group_members(self, group_id: UUID, org_id: UUID) -> None:
+        """Detach every Agent in a memory group and restart the running ones.
+
+        Called when the group (and its shared pool) is being deleted. Clearing
+        membership alone only takes effect on the Agent's next start, so a running
+        member would keep its pool token and could write back into the workspace we
+        are about to erase — recreating it and orphaning fresh conclusions. Restarting
+        a running member re-renders its config without the pool, closing that
+        write-back window; a stopped member simply comes back without the pool on its
+        next start. Best-effort per Agent: one member's restart failure is logged and
+        does not block releasing the rest or deleting the group.
+
+        Internal: the memory-groups service authorizes (MEMORY_GROUP_MANAGE) and
+        validates the group is in the org before calling this.
+        """
+        actor = ActorIdentity(type=ActorIdentityType.SYSTEM, id="memory-group-release")
+        for member in self.repository.find_in_memory_group(group_id, org_id):
+            self.set_memory_group(member.id, None, org_id)
+            if member.status != AgentStatus.RUNNING:
+                continue
+            try:
+                with self.repository.lifecycle_lock(member.id) as acquired:
+                    if not acquired:
+                        raise RuntimeError(f"Agent {member.id} has a lifecycle operation already in progress")
+                    current = self.repository.get_by_id(member.id)
+                    if current is None or current.status != AgentStatus.RUNNING:
+                        continue
+                    stopped = self._stop_agent_unchecked(current, actor)
+                    self._start_agent_unchecked(stopped, actor)
+            except Exception:
+                logger.exception("Could not restart agent %s while releasing memory group %s", member.id, group_id)
+
     def delete_agent(self, agent_id: UUID, context: CurrentUserContext) -> None:
         agent = self.authorization.require_action(context, agent_id, PermissionKey.AGENT_DELETE)
         ns = self.config.k8s_namespace

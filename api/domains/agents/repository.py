@@ -146,6 +146,23 @@ class AgentRepository:
             ).all()
             return len(rows)
 
+    def find_in_memory_group(self, group_id: UUID, org_id: UUID) -> list[Agent]:
+        """The live Agents currently in a memory group, scoped to the org.
+
+        Used when the group is deleted to detach and restart its members so no
+        running Agent keeps a token for the pool that is about to be erased.
+        Soft-deleted Agents are excluded: they no longer run and hold no live token.
+        """
+        with Session(self.delegate.engine, expire_on_commit=False) as session:
+            rows = session.exec(
+                select(Agent).where(
+                    col(Agent.memory_group_id) == group_id,
+                    col(Agent.organization_id) == org_id,
+                    col(Agent.deleted_at).is_(None),
+                )
+            ).all()
+            return list(rows)
+
     def names_by_ids(self, agent_ids: list[UUID], authorization_scope: AuthorizationScope) -> dict[UUID, str]:
         """Display names for the given Agent ids, limited to what the caller can see.
 

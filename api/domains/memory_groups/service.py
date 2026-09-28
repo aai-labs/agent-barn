@@ -1,5 +1,4 @@
 import logging
-import time
 from dataclasses import dataclass
 from uuid import UUID
 
@@ -16,6 +15,7 @@ from api.domains.agents.memory_sharing import (
 )
 from api.domains.agents.service import AgentService
 from api.domains.auth.models import CurrentUserContext
+from api.domains.events.dispatch import EventDeliveryDispatcher, resolve_actor_identity
 from api.domains.memory_groups.models import (
     MemoryGroup,
     MemoryGroupCreate,
@@ -40,12 +40,6 @@ _MANAGE_DETAIL = "You don't have permission to manage memory groups."
 # does not change what is recalled; it only keeps attribution honest.
 _SHARE_PEER = "owner"
 
-# Erasing a pool races Honcho's async session deletes, so the workspace delete is
-# retried a few times with a short pause between — enough for the sessions to drain
-# without blocking the request for long.
-_PURGE_ATTEMPTS = 5
-_PURGE_BACKOFF_SECONDS = 1.0
-
 
 @inject
 @singleton
@@ -67,6 +61,8 @@ class MemoryGroupService:
     # The workspace-keyed read/curate core lives in the agents domain; group memory
     # (view/search/forget/correct) delegates to it, keyed by the pool workspace.
     memory: AgentMemoryService
+    # Deleting a group durably erases its pool via a retried domain-event delivery.
+    event_delivery_dispatcher: EventDeliveryDispatcher
 
     def _org_id(self, context: CurrentUserContext) -> UUID:
         return context.require_current_user_organization().organization_id
@@ -146,39 +142,26 @@ class MemoryGroupService:
     def delete_group(self, group_id: UUID, context: CurrentUserContext) -> None:
         org_id = self._require_manager(context)
         group = self._get_or_404(group_id, org_id)
-        # Purge the shared pool BEFORE dropping the row. Honcho deletes sessions
-        # asynchronously and 409s the workspace delete while any remain, so a single
-        # pass usually fails — and deleting the row first (as this once did) then
-        # left the pool's conclusions about real people orphaned and unreachable.
-        # Purging first means a failure leaves the group in place for the caller to
-        # retry rather than orphaning memory; only once the pool is gone do we drop
-        # the row (its FK is SET NULL, so every member's membership clears with it).
-        if self.config.honcho_enabled:
-            self._purge_pool_with_retry(group_id, workspace_id_for_pool(group.id))
-        self.repository.delete(group)
-
-    def _purge_pool_with_retry(self, group_id: UUID, workspace: str) -> None:
-        """Erase a pool workspace, retrying past Honcho's async session-delete race.
-
-        `delete_pool_workspace` deletes the sessions (accepted as async 202s) then
-        the workspace, which 409s while any session lingers. Re-running it re-drains
-        the sessions and retries the workspace delete until it takes; a workspace
-        that never existed 404s and counts as already gone. If it still fails after
-        the bounded retries, the caller is told the group was not deleted."""
-        last_error: HonchoError | None = None
-        for attempt in range(_PURGE_ATTEMPTS):
-            try:
-                self.honcho.delete_pool_workspace(workspace)
-                return
-            except HonchoError as exc:
-                last_error = exc
-                if attempt < _PURGE_ATTEMPTS - 1:
-                    time.sleep(_PURGE_BACKOFF_SECONDS)
-        logger.warning("Could not purge memory pool for group %s after retries: %s", group_id, last_error)
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Could not erase this group's shared memory, so it was not deleted. Please try again.",
-        ) from last_error
+        if not self.config.honcho_enabled:
+            # No pool exists to erase, so nothing to release or purge.
+            self.repository.delete(group)
+            return
+        # Release the members first: detach every Agent and restart the running ones
+        # so no live Agent keeps a token for the pool we are about to erase and writes
+        # back into it (which would recreate the workspace and orphan fresh memory).
+        self.agent_service.release_memory_group_members(group.id, org_id)
+        # Drop the row and stage the pool purge atomically, then hand the delivery to
+        # the retried event machinery. Erasing a workspace 409s while Honcho's async
+        # session deletes are still landing, so the retried delivery — not a single
+        # best-effort pass — is what drives the erase to completion. Deleting the row
+        # up front is safe now: the purge is guaranteed to run rather than orphaning
+        # the pool, and members' membership clears via the FK (SET NULL).
+        delivery_ids = self.repository.delete_with_purge_event(
+            group,
+            workspace_id=workspace_id_for_pool(group.id),
+            actor=resolve_actor_identity(context, org_id),
+        )
+        self.event_delivery_dispatcher.enqueue_immediate(delivery_ids)
 
     def share_item(
         self, source_group_id: UUID, payload: ShareMemoryItemCreate, context: CurrentUserContext
