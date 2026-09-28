@@ -11,11 +11,36 @@ Related context: [Activity and Ingest](../activity-and-ingest.md), [Agent Activi
 - Also delivered: the `business_action` table (migration `39ea6a8e2fe4`) and `BusinessActionRepository.record_in_session`.
 - Also delivered: Ingest records Business Actions for every completed shell Tool Call and exports `agentbarn_business_actions_total`. The feature doc is [`../business-value.md`](../business-value.md).
 - Also delivered: the operator backfill (`make backfill-business-actions`) for Tool Calls stored before Ingest recorded Business Actions.
-- In transition: a live end-to-end check on a deployed cluster has not been run yet. It needs the API redeployed, the migration applied, prompts re-sent, and the backfill run twice.
-- Next: that end-to-end check, then the reporting ticket that reads Business Actions and reports `UNKNOWN` as unverified.
+- In transition: nothing. The live end-to-end check passed on local k3d on 2026-09-28.
+- Next: the reporting ticket that reads Business Actions and reports `UNKNOWN` as unverified.
 - Blockers: the product owner has not signed off the default minutes per Outcome Type. They are placeholders until then.
 
 ## Slice history
+
+### 2026-09-28 — AF-344 — Live end-to-end check (local k3d)
+
+Setup:
+- The API image was deployed and migration `39ea6a8e2fe4` applied, on a fresh database.
+- One Hermes and one OpenClaw Agent each ran six prompts through Web Chat, with no integrations connected.
+
+Results:
+- All 13 completed shell Tool Calls were classified as expected, producing 12 Business Actions:
+  - `excel workbook create`: `DOCUMENT_AUTHORED`, SUCCESS
+  - `jira issues get` with no profile: ERROR
+  - an `&&` chain: two SUCCESS actions
+  - `…; echo done`: UNKNOWN
+  - `github prs create` with no profile: `PULL_REQUEST_OPENED`, ERROR
+  - `ls -la` and Hermes's own `mkdir …` housekeeping: no rows
+- There were no duplicate `(tool_call_id, ordinal)` rows and no shell Tool Calls left `PENDING`.
+- `agentbarn_business_actions_total` on the Ingest `/metrics` (port 8001) summed to the same 12:
+  - excel/true/success 6
+  - jira/false/error 2
+  - excel/false/unknown 2
+  - github/true/error 2
+- The backfill ran twice through `kubectl exec deploy/agentbarn-api -c api -- python -c "…backfill import main; main()"`. Both runs logged `scanned=13 recorded=12 failed=0`.
+  - Rows were identical before and after in id, mapping, status, and `created_at`.
+  - Only `updated_at` moved, because the upsert always sets it.
+- Not exercised live: backfilling Tool Calls that pre-date the release, because the database was fresh. That path is covered by `test_business_action_backfill.py`.
 
 ### 2026-09-27 — AF-344 — Backfill
 
