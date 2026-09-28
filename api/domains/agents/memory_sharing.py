@@ -113,10 +113,11 @@ class MemoryItemUpdate(BaseModel):
 # than silently dropping members (the previous behaviour, a hard [:8] truncation).
 _MAX_SEARCH_PAIRS = 200
 
-# The pair searches are independent, so they run concurrently rather than serially
-# (serial made a search tens of seconds). Bounded so a wide pool does not open a
-# burst of embedding calls at the model backend all at once.
-_SEARCH_CONCURRENCY = 8
+# Pool reads fan out one Honcho request per (observer, observed) pair (search) or
+# per peer (facet counts). Those requests are independent, so they run concurrently
+# rather than serially (serial made a wide-pool read tens of seconds). Bounded so a
+# wide pool does not open a burst of calls at the model backend all at once.
+_POOL_FANOUT_CONCURRENCY = 8
 
 
 # An `agent-<uuid>` peer id, as it appears verbatim inside a conclusion's text.
@@ -382,11 +383,24 @@ class AgentMemoryService:
         """
         peers = self.honcho.list_peers(workspace)
         agent_peer_names = self._agent_peer_names(peers, scope)
-        facets: list[MemoryFacet] = []
-        for peer in peers:
-            _, count = self.honcho.list_conclusions(workspace, page=1, size=1, observer=observer, observed=peer)
-            if count:
-                facets.append(_facet_for_peer(peer, count, agent_name, ai_peer, agent_peer_names))
+        if not peers:
+            return []
+        # One count query per peer; independent, so run them with the same bounded
+        # concurrency as search rather than serially (a wide pool made this slow).
+        with ThreadPoolExecutor(max_workers=_POOL_FANOUT_CONCURRENCY) as pool:
+            counts = list(
+                pool.map(
+                    lambda peer: self.honcho.list_conclusions(
+                        workspace, page=1, size=1, observer=observer, observed=peer
+                    )[1],
+                    peers,
+                )
+            )
+        facets = [
+            _facet_for_peer(peer, count, agent_name, ai_peer, agent_peer_names)
+            for peer, count in zip(peers, counts, strict=True)
+            if count
+        ]
         facets.sort(key=lambda f: (not f.is_self, -f.count, f.label))
         return facets
 
@@ -610,7 +624,7 @@ class AgentMemoryService:
         if not pairs:
             return []
         try:
-            with ThreadPoolExecutor(max_workers=_SEARCH_CONCURRENCY) as pool:
+            with ThreadPoolExecutor(max_workers=_POOL_FANOUT_CONCURRENCY) as pool:
                 pages = list(
                     pool.map(
                         lambda pair: self.honcho.search_conclusions(

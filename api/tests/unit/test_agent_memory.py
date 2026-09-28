@@ -352,13 +352,10 @@ def test_facets_count_each_peer_and_put_the_self_model_first():
     fullest buckets."""
     service, _, honcho, _pool_prov = _service()
     honcho.list_peers.return_value = [f"agent-{AGENT_ID}", "owner", "U123"]
-    # page fetch, then one count call per peer
-    honcho.list_conclusions.side_effect = [
-        ([], 0),  # the page itself (unfiltered)
-        ([], 65),  # observed=agent-<id> (self)
-        ([], 120),  # observed=owner
-        ([], 3),  # observed=U123
-    ]
+    # The per-peer count calls run concurrently, so key the count by the requested
+    # `observed` peer rather than call order. observed=None is the unfiltered page fetch.
+    counts = {None: 0, f"agent-{AGENT_ID}": 65, "owner": 120, "U123": 3}
+    honcho.list_conclusions.side_effect = lambda *a, observed=None, **k: ([], counts[observed])
 
     page = service.list_memory(AGENT_ID, _context(), page=1, size=50)
 
@@ -375,12 +372,9 @@ def test_another_agents_peer_is_labelled_by_name_not_its_raw_id():
     service, _, honcho, _pool_prov = _service()
     service.agents.names_by_ids.return_value = {other_id: "Helper"}
     honcho.list_peers.return_value = [f"agent-{AGENT_ID}", "owner", f"agent-{other_id}"]
-    honcho.list_conclusions.side_effect = [
-        ([], 0),  # the page itself (unfiltered)
-        ([], 65),  # observed=agent-<self>
-        ([], 120),  # observed=owner
-        ([], 3),  # observed=agent-<other>
-    ]
+    # Concurrent per-peer counts: key by the requested `observed`, not call order.
+    counts = {None: 0, f"agent-{AGENT_ID}": 65, "owner": 120, f"agent-{other_id}": 3}
+    honcho.list_conclusions.side_effect = lambda *a, observed=None, **k: ([], counts[observed])
 
     page = service.list_memory(AGENT_ID, _context(), page=1, size=50)
 
