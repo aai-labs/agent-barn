@@ -61,8 +61,8 @@ export function AgentMemoryPage({
       isSearching={isSearching}
       searchPending={searchQuery.isPending}
       searchPlaceholder="Search this agent's memory…"
-      forget={(memoryId) => forget.mutateAsync(memoryId)}
-      correct={(memoryId, content) => correct.mutateAsync({ memoryId, content })}
+      forget={(memoryId, peer) => forget.mutateAsync({ memoryId, ...peer })}
+      correct={(memoryId, content, peer) => correct.mutateAsync({ memoryId, content, ...peer })}
       isForgetting={forget.isPending}
       isCorrecting={correct.isPending}
       scope={canManage ? scope : undefined}

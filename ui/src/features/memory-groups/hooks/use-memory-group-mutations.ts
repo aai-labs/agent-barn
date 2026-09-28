@@ -72,10 +72,10 @@ export function useMemoryGroupMutations() {
   // It writes into the *destination* pools, so nothing the caller is currently
   // viewing changes — there is nothing to invalidate here.
   const shareItem = useMutation({
-    mutationFn: async ({ sourceGroupId, memoryId, targetGroupIds }: ShareMemoryItemData) => {
+    mutationFn: async ({ sourceGroupId, memoryId, targetGroupIds, observer, observed }: ShareMemoryItemData) => {
       const response = await api.post<ShareMemoryItemResult>(
         `${base}/${sourceGroupId}/shared-items`,
-        { memoryId, targetGroupIds },
+        { memoryId, targetGroupIds, observer, observed },
         { schema: ShareMemoryItemResultSchema },
       );
       return response.data;

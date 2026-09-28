@@ -59,6 +59,11 @@ class ShareMemoryItemCreate(PydanticBaseModel):
     # The Honcho conclusion id, as the memory list returns it.
     memory_id: str = Field(min_length=1, max_length=255, alias="memoryId")
     target_group_ids: list[UUID] = Field(min_length=1, max_length=20, alias="targetGroupIds")
+    # The displayed item's peer pair, used to scope the source lookup to that one
+    # (observer, observed) collection instead of scanning the whole pool (so an old
+    # item past the scan cap is still found). Optional; falls back to a full scan.
+    observer: str | None = Field(default=None)
+    observed: str | None = Field(default=None)
 
 
 class ShareMemoryItemTargetResult(PydanticBaseModel):

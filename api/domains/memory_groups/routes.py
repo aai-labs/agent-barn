@@ -108,8 +108,10 @@ def correct_group_memory(
     data: MemoryItemUpdate,
     context: Annotated[CurrentUserContext, Depends(get_current_user())],
     service: Annotated[MemoryGroupService, Injected(MemoryGroupService)],
+    observer: str | None = Query(default=None),
+    observed: str | None = Query(default=None),
 ):
-    return service.correct_memory(group_id, memory_id, data, context)
+    return service.correct_memory(group_id, memory_id, data, context, observer=observer, observed=observed)
 
 
 @memory_groups_router.post("/{source_group_id}/shared-items", response_model=ShareMemoryItemResult)

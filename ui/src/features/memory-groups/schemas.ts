@@ -33,4 +33,7 @@ export type ShareMemoryItemData = {
   sourceGroupId: string;
   memoryId: string;
   targetGroupIds: string[];
+  // The displayed item's peer pair, so the server scopes the source lookup.
+  observer?: string;
+  observed?: string;
 };

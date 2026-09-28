@@ -69,19 +69,24 @@ function aboutLabel(item: AgentMemoryItem, peerLabels: Map<string, string>): str
  *  one fact can appear several times on a page. Collapse by content into a single
  *  row whose actions apply to every copy; a provenance-bearing copy wins the
  *  displayed row so the "shared" badge is never lost to a plain twin. */
-type MemoryRow = { item: AgentMemoryItem; ids: string[] };
+/** Each copy carries its own peer pair: collapsed copies of one fact can live under
+ *  different (observer, observed) pairs (e.g. a derived copy and a shared-in one), so
+ *  a forget/correct must scope each copy's lookup to its own pair. */
+type MemoryEntry = { id: string; observer: string; observed: string };
+type MemoryRow = { item: AgentMemoryItem; entries: MemoryEntry[] };
 
 function collapse(items: AgentMemoryItem[]): MemoryRow[] {
   const rows = new Map<string, MemoryRow>();
   for (const item of items) {
+    const entry: MemoryEntry = { id: item.id, observer: item.observer, observed: item.observed };
     const existing = rows.get(item.content);
     if (existing) {
-      existing.ids.push(item.id);
+      existing.entries.push(entry);
       // A provenance-bearing copy wins the displayed row so the "shared" badge is
       // never lost to a plain twin.
       if (!existing.item.sharedFromGroupId && item.sharedFromGroupId) existing.item = item;
     } else {
-      rows.set(item.content, { item, ids: [item.id] });
+      rows.set(item.content, { item, entries: [entry] });
     }
   }
   return [...rows.values()];
@@ -122,8 +127,8 @@ export type MemoryViewProps = {
   searchPlaceholder: string;
 
   /** Single-id operations; the view loops these over a collapsed row's copies. */
-  forget: (memoryId: string) => Promise<unknown>;
-  correct: (memoryId: string, content: string) => Promise<unknown>;
+  forget: (memoryId: string, peer: { observer: string; observed: string }) => Promise<unknown>;
+  correct: (memoryId: string, content: string, peer: { observer: string; observed: string }) => Promise<unknown>;
   isForgetting: boolean;
   isCorrecting: boolean;
 
@@ -192,7 +197,7 @@ export function MemoryView(props: MemoryViewProps) {
 
   const onSaveCorrection = async (row: MemoryRow) => {
     try {
-      for (const id of row.ids) await correct(id, draft);
+      for (const e of row.entries) await correct(e.id, draft, { observer: e.observer, observed: e.observed });
       setEditingId(null);
       toast.success("Memory updated.");
     } catch (err) {
@@ -202,7 +207,7 @@ export function MemoryView(props: MemoryViewProps) {
 
   const onForget = async (row: MemoryRow) => {
     try {
-      for (const id of row.ids) await forget(id);
+      for (const e of row.entries) await forget(e.id, { observer: e.observer, observed: e.observed });
       toast.success("Memory forgotten.");
     } catch (err) {
       toastError(err, "Could not forget this memory.");
@@ -514,6 +519,8 @@ export function MemoryView(props: MemoryViewProps) {
           sourceGroupId={share.sourceGroupId}
           memoryId={sharing.id}
           content={sharing.content}
+          observer={sharing.observer}
+          observed={sharing.observed}
           shareItem={share.shareItem}
         />
       )}

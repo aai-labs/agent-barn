@@ -212,7 +212,12 @@ class MemoryGroupService:
             targets.append(self._get_or_404(target_id, org_id))
 
         try:
-            item = self.honcho.find_conclusion(workspace_id_for_pool(source.id), payload.memory_id)
+            item = self.honcho.find_conclusion(
+                workspace_id_for_pool(source.id),
+                payload.memory_id,
+                observer=payload.observer,
+                observed=payload.observed,
+            )
         except HonchoError as exc:
             raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
         if item is None:
@@ -263,23 +268,39 @@ class MemoryGroupService:
     ) -> MemoryPage:
         """One page of the group's pooled memory (whole pool; there is no per-Agent
         scope at the group level)."""
-        workspace, org_id = self._require_pool_workspace(group_id, context)
+        workspace, _org_id = self._require_pool_workspace(group_id, context)
         return self.memory.list_memory_for_workspace(
-            workspace, organization_id=org_id, page=page, size=size, observed=observed
+            workspace, scope=self.memory.name_resolution_scope(context), page=page, size=size, observed=observed
         )
 
     def search_memory(
         self, group_id: UUID, query: str, context: CurrentUserContext, *, limit: int
     ) -> list[MemoryItemRead]:
-        workspace, org_id = self._require_pool_workspace(group_id, context)
-        return self.memory.search_memory_for_workspace(workspace, query, limit=limit, organization_id=org_id)
+        workspace, _org_id = self._require_pool_workspace(group_id, context)
+        return self.memory.search_memory_for_workspace(
+            workspace, query, limit=limit, scope=self.memory.name_resolution_scope(context)
+        )
 
     def forget_memory(self, group_id: UUID, memory_id: str, context: CurrentUserContext) -> None:
         workspace, _org_id = self._require_pool_workspace(group_id, context)
         self.memory.forget_in_workspace(workspace, memory_id)
 
     def correct_memory(
-        self, group_id: UUID, memory_id: str, payload: MemoryItemUpdate, context: CurrentUserContext
+        self,
+        group_id: UUID,
+        memory_id: str,
+        payload: MemoryItemUpdate,
+        context: CurrentUserContext,
+        *,
+        observer: str | None = None,
+        observed: str | None = None,
     ) -> MemoryItemRead:
-        workspace, org_id = self._require_pool_workspace(group_id, context)
-        return self.memory.correct_in_workspace(workspace, memory_id, payload, org_id)
+        workspace, _org_id = self._require_pool_workspace(group_id, context)
+        return self.memory.correct_in_workspace(
+            workspace,
+            memory_id,
+            payload,
+            self.memory.name_resolution_scope(context),
+            observer=observer,
+            observed=observed,
+        )

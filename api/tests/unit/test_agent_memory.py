@@ -40,7 +40,6 @@ def _agent() -> Agent:
 def _service(*, honcho_enabled: bool = True):
     authorization = Mock(spec=AgentAuthorization)
     authorization.require_action.return_value = _agent()
-    authorization.require_action_allowing_deleted.return_value = _agent()
     honcho = Mock(spec=HonchoClient)
     # No peers by default, so the facet pass is a no-op unless a test sets it.
     honcho.list_peers.return_value = []
@@ -302,7 +301,6 @@ def test_agent_memory_uses_the_active_only_authorization_seam():
     service.list_memory(AGENT_ID, _context(), page=1, size=50)
 
     authorization.require_action.assert_called_once()
-    authorization.require_action_allowing_deleted.assert_not_called()
 
 
 def test_a_memory_shared_in_from_another_pool_carries_its_source_group_id():
@@ -391,9 +389,12 @@ def test_another_agents_peer_is_labelled_by_name_not_its_raw_id():
     assert_that(by_peer["owner"].name, equal_to("you"))
     assert_that(by_peer[f"agent-{other_id}"].label, equal_to("About Helper"))
     assert_that(by_peer[f"agent-{other_id}"].name, equal_to("Helper"))
-    # Name resolution is scoped to the caller's org, so a leaked id can't resolve
-    # another org's Agent name.
-    assert_that(service.agents.names_by_ids.call_args.args[1], equal_to(ORG_ID))
+    # Name resolution is scoped to the caller's Agent visibility, so a leaked id
+    # can't resolve the name of an Agent the caller can't access: names_by_ids is
+    # given the caller's authorization scope, not a raw org id.
+    service.agent_authorization.authorization_scope.assert_called()
+    scope = service.agent_authorization.authorization_scope.return_value
+    assert_that(service.agents.names_by_ids.call_args.args[1], equal_to(scope))
 
 
 def test_an_agent_id_baked_into_the_memory_text_is_replaced_with_the_agent_name():

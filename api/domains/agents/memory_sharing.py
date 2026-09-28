@@ -25,7 +25,7 @@ from api.domains.agents.models import Agent
 from api.domains.agents.repository import AgentRepository, PoolMemoryProvenance, SharedPoolMemoryFactRepository
 from api.domains.auth.models import CurrentUserContext
 from api.domains.rbac.catalog import PermissionKey
-from api.domains.rbac.policy import PermissionPolicy
+from api.domains.rbac.policy import AuthorizationScope, PermissionPolicy
 from api.infrastructure.honcho.client import (
     HonchoClient,
     HonchoError,
@@ -320,7 +320,7 @@ class AgentMemoryService:
         observer = ai_peer if scope == "mine" else None
         return self.list_memory_for_workspace(
             memory_workspace_for_agent(agent),
-            organization_id=agent.organization_id,
+            scope=self.name_resolution_scope(context),
             page=page,
             size=size,
             observed=observed,
@@ -333,7 +333,7 @@ class AgentMemoryService:
         self,
         workspace: str,
         *,
-        organization_id: UUID,
+        scope: AuthorizationScope,
         page: int,
         size: int,
         observed: str | None = None,
@@ -347,8 +347,8 @@ class AgentMemoryService:
         (group → its pool) share one implementation. `observer` scopes the query
         (None = the whole pool); `ai_peer`/`agent_name` only affect facet labelling
         and are omitted for the group view, which has no single self-model peer.
-        `organization_id` scopes peer-name resolution so a leaked id can't resolve
-        another org's Agent name.
+        `scope` limits peer-name resolution to Agents the caller can see, so a leaked
+        id never resolves a name the caller shouldn't have.
         """
         try:
             items, total = self.honcho.list_conclusions(
@@ -356,16 +356,12 @@ class AgentMemoryService:
             )
             # Facets describe the whole workspace, so they are computed only for the
             # unfiltered view — asking for them under a filter would be redundant work.
-            facets = (
-                self._memory_facets(workspace, observer, ai_peer, agent_name, organization_id)
-                if observed is None
-                else []
-            )
+            facets = self._memory_facets(workspace, observer, ai_peer, agent_name, scope) if observed is None else []
         except HonchoError as exc:
             raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
         ids = [str(i.get("id")) for i in items]
         pool_shared = self.pool_provenance.find_for_conclusions(ids)
-        name_by_peer = self._agent_names_in(items, organization_id)
+        name_by_peer = self._agent_names_in(items, scope)
         return MemoryPage(
             items=[_to_memory_item(i, pool_shared.get(str(i.get("id"))), name_by_peer) for i in items],
             total=total,
@@ -375,7 +371,7 @@ class AgentMemoryService:
         )
 
     def _memory_facets(
-        self, workspace: str, observer: str | None, ai_peer: str | None, agent_name: str, organization_id: UUID
+        self, workspace: str, observer: str | None, ai_peer: str | None, agent_name: str, scope: AuthorizationScope
     ) -> list[MemoryFacet]:
         """The peers the pool has memory about, each with its real count.
 
@@ -385,7 +381,7 @@ class AgentMemoryService:
         self-model sorts first, then the rest by size.
         """
         peers = self.honcho.list_peers(workspace)
-        agent_peer_names = self._agent_peer_names(peers, organization_id)
+        agent_peer_names = self._agent_peer_names(peers, scope)
         facets: list[MemoryFacet] = []
         for peer in peers:
             _, count = self.honcho.list_conclusions(workspace, page=1, size=1, observer=observer, observed=peer)
@@ -394,7 +390,14 @@ class AgentMemoryService:
         facets.sort(key=lambda f: (not f.is_self, -f.count, f.label))
         return facets
 
-    def _agent_names_in(self, raws: list[dict], organization_id: UUID) -> dict[str, str]:
+    def name_resolution_scope(self, context: CurrentUserContext) -> AuthorizationScope:
+        """The caller's Agent-visibility scope for resolving peer names. Keyed on
+        AGENT_READ: a name is shown only for an Agent the caller could see, so a
+        leaked id from an inaccessible Agent stays a raw id. Exposed for the group
+        surface (which delegates here) to build the same scope."""
+        return self.agent_authorization.authorization_scope(context, PermissionKey.AGENT_READ)
+
+    def _agent_names_in(self, raws: list[dict], scope: AuthorizationScope) -> dict[str, str]:
         """`agent-<uuid>` peer -> agent name for every agent id these conclusions
         mention — in their content text as well as their observer/observed pair —
         resolved in one batch so the read path can humanize the displayed text."""
@@ -405,17 +408,18 @@ class AgentMemoryService:
                 value = str(raw.get(key) or "")
                 if value.startswith("agent-"):
                     tokens.add(value)
-        return self._agent_peer_names(list(tokens), organization_id)
+        return self._agent_peer_names(list(tokens), scope)
 
-    def _agent_peer_names(self, peers: list[str], organization_id: UUID) -> dict[str, str]:
-        """Map `agent-<uuid>` peers to their Agent's display name, within one org.
+    def _agent_peer_names(self, peers: list[str], scope: AuthorizationScope) -> dict[str, str]:
+        """Map `agent-<uuid>` peers to their Agent's display name, within the caller's
+        visibility.
 
         A shared pool holds a peer per member Agent, all named `agent-<agent id>`.
         Resolving them in one batch keeps the facet list free of raw ids. Scoped to
-        the org so an id that leaked into memory text can't resolve another org's
-        name. A peer that is not an agent peer, whose id does not parse, or whose
-        Agent is not in this org is simply absent — the caller falls back to the
-        raw peer id.
+        what the caller can access so an id that leaked into memory text can't resolve
+        the name of an Agent hidden from the caller. A peer that is not an agent peer,
+        whose id does not parse, or whose Agent the caller cannot see is simply absent
+        — the caller falls back to the raw peer id.
         """
         ids_by_peer: dict[str, UUID] = {}
         for peer in peers:
@@ -425,7 +429,7 @@ class AgentMemoryService:
                 ids_by_peer[peer] = UUID(peer[len("agent-") :])
             except ValueError:
                 continue
-        names = self.agents.names_by_ids(list(set(ids_by_peer.values())), organization_id)
+        names = self.agents.names_by_ids(list(set(ids_by_peer.values())), scope)
         return {peer: names[agent_id] for peer, agent_id in ids_by_peer.items() if agent_id in names}
 
     def _require_curate(
@@ -494,23 +498,33 @@ class AgentMemoryService:
         agent = self._require(agent_id, PermissionKey.AGENT_MEMORY_MANAGE, context)
         workspace = self._require_pool(agent)
         existing = self._require_curate(agent, workspace, memory_id, context, observer=observer, observed=observed)
-        return self._apply_correction(workspace, memory_id, existing, payload, agent.organization_id)
+        return self._apply_correction(workspace, memory_id, existing, payload, self.name_resolution_scope(context))
 
     def correct_in_workspace(
-        self, workspace: str, memory_id: str, payload: MemoryItemUpdate, organization_id: UUID
+        self,
+        workspace: str,
+        memory_id: str,
+        payload: MemoryItemUpdate,
+        scope: AuthorizationScope,
+        *,
+        observer: str | None = None,
+        observed: str | None = None,
     ) -> MemoryItemRead:
         """Replace one memory's content in a pool workspace (group-page path,
-        already gated on `memory_group.manage`, so it curates any member's memory)."""
+        already gated on `memory_group.manage`, so it curates any member's memory).
+
+        The displayed `(observer, observed)` scopes the lookup to that one collection
+        so an old item past the page-scan cap is still found rather than 404ing."""
         try:
-            existing = self._find(workspace, memory_id)
+            existing = self._find(workspace, memory_id, observer=observer, observed=observed)
         except HonchoError as exc:
             raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
         if existing is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Memory not found.")
-        return self._apply_correction(workspace, memory_id, existing, payload, organization_id)
+        return self._apply_correction(workspace, memory_id, existing, payload, scope)
 
     def _apply_correction(
-        self, workspace: str, memory_id: str, existing: dict, payload: MemoryItemUpdate, organization_id: UUID
+        self, workspace: str, memory_id: str, existing: dict, payload: MemoryItemUpdate, scope: AuthorizationScope
     ) -> MemoryItemRead:
         """Replace `existing`'s content, preserving its peer pair.
 
@@ -534,7 +548,7 @@ class AgentMemoryService:
         return _to_memory_item(
             created,
             self.pool_provenance.find_for_conclusions([new_id]).get(new_id),
-            self._agent_names_in([created], organization_id),
+            self._agent_names_in([created], scope),
         )
 
     def search_memory(
@@ -558,11 +572,11 @@ class AgentMemoryService:
             query,
             limit=limit,
             observer=observer,
-            organization_id=agent.organization_id,
+            scope=self.name_resolution_scope(context),
         )
 
     def search_memory_for_workspace(
-        self, workspace: str, query: str, *, limit: int, organization_id: UUID, observer: str | None = None
+        self, workspace: str, query: str, *, limit: int, scope: AuthorizationScope, observer: str | None = None
     ) -> list[MemoryItemRead]:
         """Semantic search across a pool workspace.
 
@@ -617,7 +631,7 @@ class AgentMemoryService:
                     seen.add(item_id)
                     results.append(item)
         top = results[:limit]
-        name_by_peer = self._agent_names_in(top, organization_id)
+        name_by_peer = self._agent_names_in(top, scope)
         return [_to_memory_item(i, name_by_peer=name_by_peer) for i in top]
 
     def _find(

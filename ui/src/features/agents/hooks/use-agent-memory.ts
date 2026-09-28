@@ -17,6 +17,17 @@ import { agentsKey } from "../utils";
 
 export type MemoryScope = "pool" | "mine";
 
+/** Query string carrying the displayed item's peer pair, so the server scopes its
+ *  find_conclusion lookup to that one collection (an old item past the scan cap is
+ *  still found). Empty when the pair is unknown — the server falls back to a scan. */
+export function peerParams(observer?: string, observed?: string): string {
+  const p = new URLSearchParams();
+  if (observer) p.set("observer", observer);
+  if (observed) p.set("observed", observed);
+  const s = p.toString();
+  return s ? `?${s}` : "";
+}
+
 export function useAgentMemory(
   agentId: string | undefined,
   page = 1,
@@ -59,8 +70,8 @@ export function useAgentMemory(
     });
 
   const forget = useMutation({
-    mutationFn: async (memoryId: string) => {
-      await api.delete(`${base}/${memoryId}`);
+    mutationFn: async ({ memoryId, observer, observed }: { memoryId: string; observer?: string; observed?: string }) => {
+      await api.delete(`${base}/${memoryId}${peerParams(observer, observed)}`);
     },
     onSuccess: invalidate,
   });
@@ -69,9 +80,19 @@ export function useAgentMemory(
   // comes back with a new id and always as "explicit", because a level cannot be
   // set on create. Refetching rather than patching in place keeps the list honest.
   const correct = useMutation({
-    mutationFn: async ({ memoryId, content }: { memoryId: string; content: string }) => {
+    mutationFn: async ({
+      memoryId,
+      content,
+      observer,
+      observed,
+    }: {
+      memoryId: string;
+      content: string;
+      observer?: string;
+      observed?: string;
+    }) => {
       const response = await api.put<AgentMemoryItem>(
-        `${base}/${memoryId}`,
+        `${base}/${memoryId}${peerParams(observer, observed)}`,
         { content },
         { schema: AgentMemoryItemSchema },
       );

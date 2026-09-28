@@ -11,6 +11,7 @@ import {
   type AgentMemoryPage,
   AgentMemoryPageSchema,
 } from "@/features/agents/schemas";
+import { peerParams } from "@/features/agents/hooks/use-agent-memory";
 
 import { memoryGroupsKey } from "../utils";
 
@@ -53,16 +54,26 @@ export function useGroupMemory(groupId: string, page = 1, size = 50, observed: s
     });
 
   const forget = useMutation({
-    mutationFn: async (memoryId: string) => {
-      await api.delete(`${base}/${memoryId}`);
+    mutationFn: async ({ memoryId, observer, observed }: { memoryId: string; observer?: string; observed?: string }) => {
+      await api.delete(`${base}/${memoryId}${peerParams(observer, observed)}`);
     },
     onSuccess: invalidate,
   });
 
   const correct = useMutation({
-    mutationFn: async ({ memoryId, content }: { memoryId: string; content: string }) => {
+    mutationFn: async ({
+      memoryId,
+      content,
+      observer,
+      observed,
+    }: {
+      memoryId: string;
+      content: string;
+      observer?: string;
+      observed?: string;
+    }) => {
       const response = await api.put<AgentMemoryItem>(
-        `${base}/${memoryId}`,
+        `${base}/${memoryId}${peerParams(observer, observed)}`,
         { content },
         { schema: AgentMemoryItemSchema },
       );

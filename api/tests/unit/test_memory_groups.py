@@ -218,11 +218,16 @@ def test_share_item_copies_into_each_target_and_records_origin():
     honcho.find_conclusion.return_value = {"id": "c1", "content": "The launch is in March.", "observed_id": "operator"}
     honcho.share_fact.return_value = [{"id": "new1"}]
 
-    payload = ShareMemoryItemCreate(memory_id="c1", target_group_ids=[target_a.id, target_b.id])
+    payload = ShareMemoryItemCreate(
+        memory_id="c1", target_group_ids=[target_a.id, target_b.id], observer="agent-x", observed="operator"
+    )
     result = service.share_item(source.id, payload, _context(org_id))
 
-    # Read from the SOURCE pool, written into each TARGET pool with the fact's content.
-    honcho.find_conclusion.assert_called_once_with(f"af-pool-{source.id}", "c1")
+    # Read from the SOURCE pool (scoped to the displayed peer pair so an old item is
+    # still found), written into each TARGET pool with the fact's content.
+    honcho.find_conclusion.assert_called_once_with(
+        f"af-pool-{source.id}", "c1", observer="agent-x", observed="operator"
+    )
     written = {call.args[0] for call in honcho.share_fact.call_args_list}
     assert_that(written, equal_to({f"af-pool-{target_a.id}", f"af-pool-{target_b.id}"}))
     for call in honcho.share_fact.call_args_list:

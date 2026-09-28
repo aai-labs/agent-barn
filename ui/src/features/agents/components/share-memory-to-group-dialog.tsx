@@ -35,6 +35,8 @@ export function ShareMemoryToGroupDialog({
   sourceGroupId,
   memoryId,
   content,
+  observer,
+  observed,
   shareItem,
 }: {
   open: boolean;
@@ -42,6 +44,8 @@ export function ShareMemoryToGroupDialog({
   sourceGroupId: string;
   memoryId: string;
   content: string;
+  observer?: string;
+  observed?: string;
   shareItem: ShareItemMutation;
 }) {
   const { groups, isLoading } = useMemoryGroups();
@@ -56,7 +60,13 @@ export function ShareMemoryToGroupDialog({
 
   const onShare = async () => {
     try {
-      const result = await shareItem.mutateAsync({ sourceGroupId, memoryId, targetGroupIds: selected });
+      const result = await shareItem.mutateAsync({
+        sourceGroupId,
+        memoryId,
+        targetGroupIds: selected,
+        observer,
+        observed,
+      });
       // Per-destination results: one group failing does not mean the others did.
       const shared = result.results.filter((r) => r.shared);
       const failed = result.results.filter((r) => !r.shared);

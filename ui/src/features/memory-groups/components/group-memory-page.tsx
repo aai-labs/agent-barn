@@ -69,8 +69,8 @@ export function GroupMemoryPage({ groupId }: { groupId: string }) {
           isSearching={isSearching}
           searchPending={searchQuery.isPending}
           searchPlaceholder="Search this group's memory…"
-          forget={(memoryId) => forget.mutateAsync(memoryId)}
-          correct={(memoryId, content) => correct.mutateAsync({ memoryId, content })}
+          forget={(memoryId, peer) => forget.mutateAsync({ memoryId, ...peer })}
+          correct={(memoryId, content, peer) => correct.mutateAsync({ memoryId, content, ...peer })}
           isForgetting={forget.isPending}
           isCorrecting={correct.isPending}
           share={canManage ? { sourceGroupId: groupId, shareItem } : undefined}
