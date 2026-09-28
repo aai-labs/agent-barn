@@ -38,7 +38,7 @@ RUN set -eu; \
 
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     apt-get update && \
-    apt-get install -y --no-install-recommends git curl jq ripgrep ca-certificates tini poppler-utils ffmpeg
+    apt-get install -y --no-install-recommends git curl jq ripgrep ca-certificates tini poppler-utils
 
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
