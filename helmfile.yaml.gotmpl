@@ -173,6 +173,11 @@ releases:
         value: {{ env "HONCHO_EMBEDDING_MODEL" | required "HONCHO_EMBEDDING_MODEL is required" | quote }}
       - name: telemetry.key
         value: {{ env "HONCHO_TELEMETRY_KEY" | default "" | quote }}
+      # Required when Honcho is enabled — without it Honcho serves unauthenticated
+      # and any Agent pod could reach any org's pool. The same value is handed to
+      # the API below so its admin/agent tokens validate here.
+      - name: auth.jwtSecret
+        value: {{ env "HONCHO_JWT_SECRET" | required "HONCHO_JWT_SECRET is required when HONCHO_ENABLED=true" | quote }}
     needs:
       - {{ env "NAMESPACE" | default "agent-farm" }}/postgres-honcho
       - {{ env "NAMESPACE" | default "agent-farm" }}/redis
@@ -261,6 +266,11 @@ releases:
         value: {{ env "HONCHO_TELEMETRY_KEY" | default "" | quote }}
       - name: honchoLitellmKey
         value: {{ env "HONCHO_LITELLM_KEY" | default "" | quote }}
+      # Same secret as the honcho release's auth.jwtSecret: the API signs an admin
+      # token and mints per-Agent workspace-scoped tokens with it. Empty when Honcho
+      # is disabled (the honcho release above requires it when enabled).
+      - name: honchoJwtSecret
+        value: {{ env "HONCHO_JWT_SECRET" | default "" | quote }}
       - name: agentModelAllowlist
         value: {{ env "AGENT_MODEL_ALLOWLIST" | default "" | quote }}
       - name: communicationsNativePlatforms

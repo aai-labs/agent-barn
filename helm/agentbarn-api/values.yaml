@@ -97,6 +97,10 @@ agentHonchoBaseUrl: ""
 honchoTelemetryKey: ""
 # Honcho's LiteLLM key, read-only here: it is what memory spend is looked up on.
 honchoLitellmKey: ""
+# Same shared secret as the honcho release's auth.jwtSecret. The API signs an admin
+# token and mints per-Agent workspace-scoped tokens with it. Empty = auth off (dev);
+# the helmfile requires it whenever Honcho is enabled.
+honchoJwtSecret: ""
 
 kubeconfigB64: ""
 # Name of the registry pull Secret this chart creates (registry-secret.yaml) and
