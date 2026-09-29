@@ -16,11 +16,40 @@ Related context: [Activity and Ingest](../activity-and-ingest.md), [Agent Activi
 - Also delivered: the pure valuation rules in `api/domains/business_value/service.py` (effective minutes, value, the value-to-spend ratio, and write categories). Nothing calls them yet.
 - Also delivered: `ValueSettingsRepository`, which saves value settings and stages `organization.value_settings.changed` in one transaction.
 - Also delivered: `GET` and `PUT /organizations/{organization_id}/value-settings`. The feature doc's [Value settings](../business-value.md#value-settings) section is the contract.
-- In transition: AF-345 is landing in slices. Value settings are complete; the Organization value KPI is not yet built.
-- Next: the Business Action aggregate reads the KPI needs.
+- Also delivered: the scoped Business Action aggregate reads the value KPI needs. No route calls them yet.
+- In transition: AF-345 is landing in slices. Value settings are complete, and the KPI's aggregates exist, but the KPI endpoint is not yet built.
+- Next: `GET /organizations/{organization_id}/value`, the Organization value KPI.
 - Blockers: the product owner has not signed off the default minutes per Outcome Type. They are placeholders until then.
 
 ## Slice history
+
+### 2026-09-29 — AF-345 — Value aggregates
+
+Delivered: three read methods on `BusinessActionRepository`. They return raw counts grouped by Outcome Type; valuation happens in the service.
+
+Every method filters on:
+- `business_action.organization_id`, which uses the existing `(organization_id, occurred_at)` index
+- the half-open window `[start, end)` on `occurred_at`
+- a join to `agent` with `agent_scope_predicates(scope, include_deleted=True)`, so a soft-deleted Agent's work still counts
+
+The methods:
+- `category_counts(window, scope)` returns `(is_write, outcome_type, status, count)` for every action, so the service can categorise it.
+- `successful_counts_by_bucket(window, scope)` returns `(bucket, outcome_type, count)` for SUCCESS writes that have an Outcome Type.
+  - The rows are left-joined onto the same UTC `generate_series(date_trunc(...))` spine as `CostRepository.spend_series`, so empty buckets are present and the two series merge by key.
+- `successful_counts_by_agent(window, scope)` returns `(agent_id, outcome_type, count)` for the same successful writes.
+
+Test support:
+- `api/tests/steps/business_action.py:there_are_business_actions(...)` inserts one Tool Call and its Business Actions directly for `context.agent`. It sets the Outcome Type, `is_write`, status, count, and `occurred_at`.
+
+Coverage: `api/tests/integration/test_organization_value.py`, 6 repository tests:
+- grouping by `(is_write, outcome_type, status)`
+- the half-open window: the start is included and the end is excluded
+- a soft-deleted Agent is included
+- another Organization's actions are excluded from all three reads
+- per-Agent counts include only successful classified writes
+- the bucket spine equals `spend_series`'s buckets for the same window, empty buckets included, and each write lands in its UTC day
+
+All 6 failed first against `NotImplementedError` stubs. `test_business_action_repository.py` and `test_business_action_backfill.py` still pass, and the app entrypoints import cleanly with the new `agents` import.
 
 ### 2026-09-29 — AF-345 — Value settings API
 

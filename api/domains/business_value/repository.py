@@ -12,7 +12,9 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import SQLAlchemyError
 from sqlmodel import Session, col, select
 
-from api.domains.business_value.classifier import SHELL_TOOL_NAMES, ClassifiedAction, classify
+from api.domains.agents.models import Agent
+from api.domains.agents.repository import agent_scope_predicates
+from api.domains.business_value.classifier import SHELL_TOOL_NAMES, BusinessActionStatus, ClassifiedAction, classify
 from api.domains.business_value.models import (
     OUTCOME_MINUTES_ORGANIZATION_TYPE_CONSTRAINT,
     TOOL_CALL_ORDINAL_CONSTRAINT,
@@ -23,6 +25,8 @@ from api.domains.business_value.models import (
 from api.domains.events import ActorIdentity, EventDelivery, SubjectIdentity, SubjectIdentityType
 from api.domains.events.catalog import EVENT_REGISTRY, ORGANIZATION_VALUE_SETTINGS_CHANGED
 from api.domains.events.repository import OutboxMessageRepository
+from api.domains.platform_admin.models import StatsWindow
+from api.domains.rbac.policy import AuthorizationScope
 from api.domains.tool_calls.models import ToolCall
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 
@@ -100,6 +104,94 @@ class BusinessActionRepository:
             upserted = len(session.exec(statement).all())  # type: ignore[call-overload]
             session.commit()
         return upserted
+
+    def category_counts(
+        self,
+        window: StatsWindow,
+        scope: AuthorizationScope,
+    ) -> list[tuple[bool | None, str | None, BusinessActionStatus, int]]:
+        query = (
+            sa.select(
+                col(BusinessAction.is_write),
+                col(BusinessAction.outcome_type),
+                col(BusinessAction.status),
+                sa.func.count(),
+            )
+            .select_from(BusinessAction)
+            .join(Agent, col(Agent.id) == col(BusinessAction.agent_id))
+            .where(*self._visible(window, scope))
+            .group_by(col(BusinessAction.is_write), col(BusinessAction.outcome_type), col(BusinessAction.status))
+        )
+        with self.delegate.engine.connect() as connection:
+            rows = connection.execute(query).all()
+        return [(row[0], row[1], row[2], int(row[3])) for row in rows]
+
+    def successful_counts_by_bucket(
+        self,
+        window: StatsWindow,
+        scope: AuthorizationScope,
+    ) -> list[tuple[datetime, str | None, int]]:
+        unit = window.granularity.value
+        buckets = sa.select(
+            sa.func.generate_series(
+                sa.func.date_trunc(unit, sa.func.timezone("UTC", sa.literal(window.start))),
+                sa.func.date_trunc(unit, sa.func.timezone("UTC", sa.literal(window.end))),
+                sa.text(f"interval '{window.granularity.interval}'"),
+            ).label("bucket")
+        ).subquery()
+        counts = (
+            sa.select(
+                sa.func.date_trunc(unit, sa.func.timezone("UTC", col(BusinessAction.occurred_at))).label("bucket"),
+                col(BusinessAction.outcome_type).label("outcome_type"),
+                sa.func.count().label("actions"),
+            )
+            .select_from(BusinessAction)
+            .join(Agent, col(Agent.id) == col(BusinessAction.agent_id))
+            .where(*self._visible(window, scope), *self._successful())
+            .group_by(sa.text("1"), col(BusinessAction.outcome_type))
+            .subquery()
+        )
+        query = (
+            sa.select(buckets.c.bucket, counts.c.outcome_type, sa.func.coalesce(counts.c.actions, 0))
+            .select_from(buckets.outerjoin(counts, buckets.c.bucket == counts.c.bucket))
+            .order_by(buckets.c.bucket, counts.c.outcome_type)
+        )
+        with self.delegate.engine.connect() as connection:
+            rows = connection.execute(query).all()
+        return [(row[0], row[1], int(row[2])) for row in rows]
+
+    def successful_counts_by_agent(
+        self,
+        window: StatsWindow,
+        scope: AuthorizationScope,
+    ) -> list[tuple[UUID, str, int]]:
+        query = (
+            sa.select(col(BusinessAction.agent_id), col(BusinessAction.outcome_type), sa.func.count())
+            .select_from(BusinessAction)
+            .join(Agent, col(Agent.id) == col(BusinessAction.agent_id))
+            .where(*self._visible(window, scope), *self._successful())
+            .group_by(col(BusinessAction.agent_id), col(BusinessAction.outcome_type))
+        )
+        with self.delegate.engine.connect() as connection:
+            rows = connection.execute(query).all()
+        return [(row[0], row[1], int(row[2])) for row in rows]
+
+    @staticmethod
+    def _visible(window: StatsWindow, scope: AuthorizationScope) -> tuple:
+        return (
+            col(BusinessAction.organization_id) == scope.organization_id,
+            col(BusinessAction.occurred_at) >= window.start,
+            col(BusinessAction.occurred_at) < window.end,
+            *agent_scope_predicates(scope, include_deleted=True),
+        )
+
+    @staticmethod
+    def _successful() -> tuple:
+        return (
+            col(BusinessAction.is_write).is_(True),
+            col(BusinessAction.outcome_type).is_not(None),
+            col(BusinessAction.status) == BusinessActionStatus.SUCCESS,
+        )
 
     @staticmethod
     def _values(tool_call: ToolCall, action: ClassifiedAction, now: datetime) -> dict[str, Any]:
