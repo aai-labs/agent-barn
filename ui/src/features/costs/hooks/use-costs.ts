@@ -11,6 +11,7 @@ import {
 } from "../schemas";
 import {
   COSTS_PAGE_SIZE,
+  COSTS_REFRESH_INTERVAL_MS,
   costFilterParams,
   costKey,
   mergeCostPages,
@@ -38,6 +39,7 @@ export function useCosts(filters: CostFilters) {
         ? nextPage
         : undefined;
     },
+    refetchInterval: COSTS_REFRESH_INTERVAL_MS,
   });
 
   return {

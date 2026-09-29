@@ -6,7 +6,7 @@ import { useOrganizationApiBase } from "@/features/organizations/hooks/use-organ
 import { api } from "@/shared/api";
 
 import { CostSummarySchema, type CostSummary } from "../schemas";
-import { costFilterParams, costKey, type CostFilters } from "../utils";
+import { COSTS_REFRESH_INTERVAL_MS, costFilterParams, costKey, type CostFilters } from "../utils";
 
 export function useCostSummary(filters: CostFilters) {
   const orgApiBase = useOrganizationApiBase();
@@ -19,6 +19,7 @@ export function useCostSummary(filters: CostFilters) {
       );
       return response.data;
     },
+    refetchInterval: COSTS_REFRESH_INTERVAL_MS,
   });
 
   return {

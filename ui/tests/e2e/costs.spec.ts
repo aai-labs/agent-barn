@@ -8,6 +8,7 @@ import {
   monthlyCosts,
 } from "../pages/data-support/cost-data-support.po";
 import { DataSupport } from "../pages/data-support/data-support.po";
+import { COSTS_REFRESH_INTERVAL_MS } from "@/features/costs/utils";
 
 const COSTS_URL = `/dashboard/${TEST_ORG_ID}/costs`;
 
@@ -421,5 +422,44 @@ test.describe("Organization costs — agents by spend", () => {
     // The table drops the agent dimension, so it must still list every agent —
     // otherwise picking a row would collapse it to the row just picked.
     expect(await agentColumn(page)).toEqual(["Alpha", "Zeta"]);
+  });
+});
+
+test.describe("Organization costs auto-refresh", () => {
+  let data: DataSupport;
+  test.use({ storageState: { cookies: [], origins: [] } });
+
+  test.beforeEach(async ({ page }) => {
+    data = new DataSupport(page);
+    await data.auth.interceptRefreshRequest();
+    await data.users.interceptGetUserContextRequest();
+    await data.costs.interceptOrgFilterOptions();
+    await data.costs.interceptOrgMonthly();
+    await data.costs.interceptOrgList({ items: [costRecord()], total: 1 });
+  });
+
+  test("picks up new spend a minute later without the reader touching anything", async ({
+    page,
+  }) => {
+    // Held to the moment the page loads, so the poll fires on command rather
+    // than on a real minute passing.
+    await page.clock.install();
+    let calls = 0;
+    await page.route("**/organizations/*/costs/summary?*", async (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      calls += 1;
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(costSummary({ total_spend: calls === 1 ? 143.03 : 999.99 })),
+      });
+    });
+
+    await page.goto(COSTS_URL);
+    await expect(page.getByTestId("cost-total-spend")).toContainText("$143.03");
+
+    await page.clock.runFor(COSTS_REFRESH_INTERVAL_MS);
+
+    await expect(page.getByTestId("cost-total-spend")).toContainText("$999.99");
   });
 });

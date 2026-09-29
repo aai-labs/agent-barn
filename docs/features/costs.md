@@ -52,6 +52,7 @@ Reading the proxy at request time — the earlier arrangement — meant a failed
 - The unattributed bucket stays inside platform totals and is also reported separately. Excluding it would make the platform total exceed the sum of the organizations listed beneath it.
 - The OpenRouter balance is reported as one of three states, never as a bare number: `ok` carries the key's remaining credit and its limit, `no_limit` means the key spends without a ceiling, and `unavailable` means the poll failed. The last two used to collapse into a single null, which let "we cannot read it" render the same as "there is nothing to worry about".
 - The platform surface warns when a healthy read falls below $5, the threshold the `OpenRouterCreditsLow` alert uses, so the page and the pager cannot disagree. An `unavailable` read warns separately, matching `OpenRouterCreditsUnknown`.
+- Both Costs pages refetch on a one-minute timer (`COSTS_REFRESH_INTERVAL_MS`), so spend and the OpenRouter balance stay current on a page left open. The filter dropdown options are left out: their contents only change when a new Agent or model appears, and a stale list costs the reader nothing. Polling stops while the tab is hidden and resumes on return, so a forgotten tab is not a standing load on the API. The Refresh button stays, for a reader who does not want to wait out the interval.
 
 ### Authorization and status
 

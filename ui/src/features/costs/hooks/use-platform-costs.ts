@@ -19,6 +19,7 @@ import {
 } from "../schemas";
 import {
   COSTS_PAGE_SIZE,
+  COSTS_REFRESH_INTERVAL_MS,
   costFilterParams,
   mergePlatformCostPages,
   monthlyCostParams,
@@ -40,6 +41,7 @@ export function usePlatformCostSummary(filters: CostFilters) {
       );
       return response.data;
     },
+    refetchInterval: COSTS_REFRESH_INTERVAL_MS,
   });
 
   return {
@@ -70,6 +72,7 @@ export function usePlatformCosts(filters: CostFilters) {
         ? nextPage
         : undefined;
     },
+    refetchInterval: COSTS_REFRESH_INTERVAL_MS,
   });
 
   return {
@@ -105,6 +108,7 @@ export function usePlatformCostOrganizations(filters: CostFilters) {
       );
       return response.data;
     },
+    refetchInterval: COSTS_REFRESH_INTERVAL_MS,
   });
 
   return { organizations: query.data ?? [], isLoading: query.isPending };
@@ -165,6 +169,7 @@ export function usePlatformMonthlyCosts(filters: CostFilters) {
       );
       return response.data;
     },
+    refetchInterval: COSTS_REFRESH_INTERVAL_MS,
   });
 
   return {
