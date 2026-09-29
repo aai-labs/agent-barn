@@ -1,11 +1,15 @@
 from datetime import datetime
 from decimal import Decimal
+from typing import Annotated, Literal
 from uuid import UUID
 
 import sqlalchemy as sa
+from pydantic import BaseModel as PydanticBaseModel
+from pydantic import ConfigDict, Field
 from sqlmodel import CheckConstraint, Column, Enum, Index, UniqueConstraint
 from sqlmodel import Field as SqlField
 
+from api.domains.business_value.catalogue import OutcomeType
 from api.domains.business_value.classifier import BusinessActionStatus
 from api.infrastructure.postgres.models import BaseModel
 
@@ -17,6 +21,10 @@ VALUE_SETTINGS_ORGANIZATION_CONSTRAINT = "uq_organization_value_settings_organiz
 VALUE_SETTINGS_HOURLY_RATE_CONSTRAINT = "ck_organization_value_settings_hourly_rate_usd"
 OUTCOME_MINUTES_ORGANIZATION_TYPE_CONSTRAINT = "uq_organization_outcome_minutes_organization_id_outcome_type"
 OUTCOME_MINUTES_POSITIVE_CONSTRAINT = "ck_organization_outcome_minutes_minutes_saved"
+
+HourlyRateUsd = Annotated[Decimal, Field(ge=0, le=MAX_HOURLY_RATE_USD, max_digits=12, decimal_places=2)]
+OutcomeMinutes = Annotated[int, Field(strict=True, gt=0, le=MAX_OUTCOME_MINUTES)]
+OutcomeMinutesSource = Literal["default", "override"]
 
 
 class BusinessAction(BaseModel, table=True):
@@ -83,3 +91,23 @@ class OrganizationOutcomeMinutes(BaseModel, table=True):
         sa_type=sa.String(OUTCOME_TYPE_MAX_LENGTH),  # type: ignore
     )
     minutes_saved: int = SqlField(nullable=False)
+
+
+class OutcomeMinutesRead(PydanticBaseModel):
+    outcome_type: OutcomeType
+    default_minutes: int
+    override_minutes: int | None
+    effective_minutes: int
+    source: OutcomeMinutesSource
+
+
+class ValueSettingsRead(PydanticBaseModel):
+    hourly_rate_usd: float | None
+    outcome_minutes: list[OutcomeMinutesRead]
+
+
+class ValueSettingsUpdate(PydanticBaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    hourly_rate_usd: HourlyRateUsd | None = None
+    outcome_minutes: dict[OutcomeType, OutcomeMinutes | None] = Field(default_factory=dict)

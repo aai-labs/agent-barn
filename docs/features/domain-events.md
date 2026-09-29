@@ -75,7 +75,7 @@ AF-167 broadens Security Audit Record coverage to additional mutations:
 - `organization.value_settings.changed` — emitted when an Organization's value settings change: its hourly rate, or the minutes saved for an Outcome Type.
   - Carries a `field_changes` diff keyed `hourly_rate_usd` or `outcome_minutes.<OUTCOME_TYPE>`. Each entry holds `previous` and `current` as strings, where `null` means unset or the default.
   - Not emitted when a save changes nothing.
-  - Registered and projected to the security audit, but no request path emits it yet (AF-345).
+  - Emitted by `PUT /organizations/{organization_id}/value-settings` (see [`business-value.md`](business-value.md#value-settings)).
 - `organization.member.added` / `organization.member.removed` — emitted on Organization membership add/remove.
 - `organization.ownership_transferred` — emitted when Organization ownership transfers between Memberships.
 

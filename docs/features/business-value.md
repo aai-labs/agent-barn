@@ -28,7 +28,7 @@ This is not the per-Agent Activity tab ([`agent-activity.md`](agent-activity.md)
   - A database error rolls back only that savepoint, so the Tool Call batch still commits.
   - A classifier error is logged with the Tool Call id and skipped.
   - Neither path logs command text.
-- Ingest writes Business Actions under the same Agent identity and ingest-key authentication as Tool Calls. There is no product read endpoint yet. Any future read must follow [`rbac/IMPLEMENTATION-BRIEF.md`](rbac/IMPLEMENTATION-BRIEF.md).
+- Ingest writes Business Actions under the same Agent identity and ingest-key authentication as Tool Calls. Every product read follows [`rbac/IMPLEMENTATION-BRIEF.md`](rbac/IMPLEMENTATION-BRIEF.md); see [Value settings](#value-settings) for the Organization-authorized surface.
 - The catalogue lives in `api/domains/business_value/catalogue.py`, outside `aai_cli_skills/bundled/`, so catalogue changes do not move the runtime digest. `outcome_type` is a plain `VARCHAR(64)`, so catalogue changes need no migration.
 
 ## Classification
@@ -83,6 +83,33 @@ Every write path in the catalogue maps to exactly one Outcome Type; there are 90
 
 Deletes always map to `RECORD_DELETED`, including sheets, tables, and comments. Housekeeping commands are ignored and not stored: `microsoft auth login`/`status`, `hubspot health`, `hubspot events custom send`, and `hubspot conversations visitor-identification tokens create`.
 
+## Value settings
+
+An Organization turns Business Actions into time and money through its value settings.
+
+- **Rate.** An hourly rate in USD, with no platform default. Until it is set, value is not reported.
+- **Minutes.** The minutes saved per Outcome Type. Each defaults to the catalogue value above. An Organization may override any Outcome Type; an explicit `null` reverts it to the default.
+
+`GET` and `PUT /organizations/{organization_id}/value-settings`:
+
+- **Read (`ValueSettingsRead`).**
+  - `hourly_rate_usd` is a float, or `null` while unset.
+  - One row per catalogue Outcome Type, in catalogue order, with `default_minutes`, `override_minutes`, `effective_minutes`, and `source` (`default` or `override`).
+  - A stored override for an Outcome Type that is no longer in the catalogue is ignored.
+- **Update (`ValueSettingsUpdate`, `extra="forbid"`).**
+  - `hourly_rate_usd`: omitting it leaves the rate unchanged; `null` clears it. The rate is a decimal with at most two places, from 0 to `MAX_HOURLY_RATE_USD` (10,000.00). It is stored as `NUMERIC(12,2)`.
+  - `outcome_minutes`: a map from Outcome Type to minutes. A missing key is unchanged; `null` reverts to the default.
+  - Minutes must be JSON integers from 1 to `MAX_OUTCOME_MINUTES` (1,440). Strings, floats, and booleans are rejected.
+  - An unknown Outcome Type returns 422, as does any other validation failure.
+- **Authorization.**
+  - Reads require both `cost.read` and `activity.read`, because value mixes spend with Agent activity. This is the pairing Agent Activity uses.
+  - Writes require `organization.update`.
+  - Both go through `PermissionPolicy.require_organization`, so Owners and Admins pass, and a Member gets 403.
+  - A non-member gets 403 from the Organization path check, like every Organization-scoped route. So does a Platform Administrator without a Membership.
+- **Audit.** A save that changes anything emits `organization.value_settings.changed` through the outbox, in the same transaction as the settings rows. After commit it is enqueued for the security-audit projection.
+  - `field_changes` is keyed `hourly_rate_usd` or `outcome_minutes.<OUTCOME_TYPE>`. Each entry holds `previous` and `current` as strings: the rate to two places, minutes as an integer, and `null` for unset or default.
+  - A save that changes nothing, including the same rate spelled differently, emits nothing.
+
 ## Known gaps
 
 Each of these is an **undercount**, not a verdict on the Agent. The last one is a possible overcount.
@@ -120,7 +147,7 @@ Agent runtime ──→ Ingest API ──→ Tool Call repository (upsert pendin
 
 ## Boundaries
 
-Ingest owns authentication and the transaction. The Business Value domain owns the catalogue, the classifier, and `business_action` persistence. Tool Calls remain the audit record, and Business Actions are derived from them and cascade with them.
+Ingest owns authentication and the transaction. The Business Value domain owns the catalogue, the classifier, `business_action` persistence, and the Organization's value settings. Tool Calls remain the audit record, and Business Actions are derived from them and cascade with them. Value settings cascade with their Organization.
 
 ## Source map
 
@@ -132,7 +159,11 @@ Ingest owns authentication and the transaction. The Business Value domain owns t
 | Operator backfill | `../../api/domains/business_value/backfill.py`, `make backfill-business-actions` |
 | Ingest wiring and metric | `../../api/domains/ingest/service.py`, `../../api/core/metrics.py` (`agentbarn_business_actions`) |
 | Recorded runtime fixtures | `../../api/tests/fixtures/business_actions/` |
-| Tests | `../../api/tests/unit/test_business_action_catalogue.py`, `../../api/tests/unit/test_business_action_classifier.py`, `../../api/tests/integration/test_business_action_repository.py`, `../../api/tests/integration/test_ingest.py`, `../../api/tests/integration/test_business_action_backfill.py` |
+| Value settings tables, DTOs, and bounds | `../../api/domains/business_value/models.py`, migration `1045836844da` |
+| Value settings persistence and audit event | `../../api/domains/business_value/repository.py` (`ValueSettingsRepository`), `../../api/domains/events/catalog.py` |
+| Valuation rules and value settings service | `../../api/domains/business_value/service.py` |
+| HTTP routes | `../../api/domains/business_value/routes.py` |
+| Tests | `../../api/tests/unit/test_business_action_catalogue.py`, `../../api/tests/unit/test_business_action_classifier.py`, `../../api/tests/unit/test_business_value_valuation.py`, `../../api/tests/integration/test_business_action_repository.py`, `../../api/tests/integration/test_ingest.py`, `../../api/tests/integration/test_business_action_backfill.py`, `../../api/tests/integration/test_value_settings.py`, `../../api/tests/integration/test_cross_org_isolation.py` |
 
 ## Related decisions
 
@@ -146,3 +177,5 @@ Ingest owns authentication and the transaction. The Business Value domain owns t
   - To re-map rows already stored, run the operator backfill (see [Backfill](#backfill)).
 - **A change to the Tool Call telemetry shape** (result format, exit code location, `is_error` semantics) must update the classifier's evidence rules and the recorded fixtures together.
 - **A new read surface** over `business_action` must apply the RBAC brief and report `UNKNOWN` as unverified, never as value.
+- **A new Outcome Type** needs a `DEFAULT_MINUTES` entry and appears in value settings automatically. **Removing one** leaves any stored overrides in place; they are ignored on read.
+- **A change to the value settings bounds or authorization** must update this document, `test_value_settings.py`, and the audit event's documentation in [`domain-events.md`](domain-events.md) together.

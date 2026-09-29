@@ -415,6 +415,22 @@ def test_cannot_remove_member_from_another_org():
         assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
 
 
+def test_cannot_read_value_settings_of_another_org():
+    with given(_owner_a_and_bare_org_b()) as context:
+        response = context.client.get(f"/api/v1/organizations/{ORG_B}/value-settings", headers=_headers(context))
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+
+
+def test_cannot_change_value_settings_of_another_org():
+    with given(_owner_a_and_bare_org_b()) as context:
+        response = context.client.put(
+            f"/api/v1/organizations/{ORG_B}/value-settings",
+            json={"hourly_rate_usd": 30},
+            headers=_headers(context),
+        )
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+
+
 def test_cannot_transfer_ownership_of_another_org():
     with given(_owner_a_and_bare_org_b()) as context:
         response = context.client.post(

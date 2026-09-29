@@ -14,12 +14,47 @@ Related context: [Activity and Ingest](../activity-and-ingest.md), [Agent Activi
 - Also delivered: the `organization_value_settings` and `organization_outcome_minutes` tables (migration `1045836844da`). Nothing reads or writes them yet.
 - Also delivered: the `organization.value_settings.changed` Domain Event, registered and projected to the security audit. Nothing emits it yet.
 - Also delivered: the pure valuation rules in `api/domains/business_value/service.py` (effective minutes, value, the value-to-spend ratio, and write categories). Nothing calls them yet.
-- Also delivered: `ValueSettingsRepository`, which saves value settings and stages `organization.value_settings.changed` in one transaction. No service or route calls it yet.
-- In transition: AF-345 (value settings and the Organization value KPI) is landing in slices. Persistence exists, but there are no endpoints yet.
-- Next: `GET` and `PUT /organizations/{organization_id}/value-settings`.
+- Also delivered: `ValueSettingsRepository`, which saves value settings and stages `organization.value_settings.changed` in one transaction.
+- Also delivered: `GET` and `PUT /organizations/{organization_id}/value-settings`. The feature doc's [Value settings](../business-value.md#value-settings) section is the contract.
+- In transition: AF-345 is landing in slices. Value settings are complete; the Organization value KPI is not yet built.
+- Next: the Business Action aggregate reads the KPI needs.
 - Blockers: the product owner has not signed off the default minutes per Outcome Type. They are placeholders until then.
 
 ## Slice history
+
+### 2026-09-29 — AF-345 — Value settings API
+
+Delivered:
+- `GET` and `PUT /organizations/{organization_id}/value-settings`, in `api/domains/business_value/routes.py`, registered in `api/api_app.py`.
+- `BusinessValueService` authorizes through `PermissionPolicy.require_organization`:
+  - reads require `cost.read`, then `activity.read`
+  - writes require `organization.update`
+- The service compares each field the request addresses with what is stored.
+  - A rate is compared as a Decimal, so `42.5` and `"42.50"` count as the same.
+  - An unchanged save writes nothing and emits no event.
+  - Otherwise it saves through `save_with_event` and calls `EventDeliveryDispatcher.enqueue_immediate` after commit.
+- `ValueSettingsUpdate` validation (confirmed with pydantic 2.13.4 before the build):
+  - The rate is a `Decimal` from 0 to 10,000.00, with at most two decimal places.
+  - Minutes are strict JSON integers from 1 to 1,440.
+  - Keys must be catalogue Outcome Types. Anything else returns 422.
+- Responses report the rate as a float, following the Costs convention.
+- Docs: `business-value.md` gains a Value settings section (it replaces "There is no product read endpoint yet") plus its source map and change impact. `docs/INDEX.md` routes value settings and the value KPI here, and `domain-events.md` names the emitting route.
+
+Test fixture finding:
+- `there_is_an_organization_with_user_and_access_token(role=...)` always makes the user Owner (`api/tests/steps/organization.py:44-49`); its `role` never reaches the membership.
+- The new tests add Admin and Member actors with `there_is_a_user(role=...)`, as `test_costs.py` does. The helper itself is unchanged.
+
+Coverage:
+- `api/tests/integration/test_value_settings.py`, 27 new tests:
+  - Owner and Admin get 200; Member, non-member, and a Platform Administrator without a Membership get 403; an unauthenticated caller gets 401.
+  - Defaults on a new Organization; setting a rate and an override.
+  - Exactly one event with string `field_changes`; no event for an unchanged or empty save.
+  - An omitted rate is kept; a null rate clears it; a null override reverts to the default.
+  - A stored override outside the catalogue is ignored.
+  - Twelve 422 cases, each storing nothing.
+  - Projection to a durable `security_audit_record`.
+- `api/tests/integration/test_cross_org_isolation.py`: an Owner of Org A gets 403 on `GET` and `PUT` for Org B.
+- Every new test failed first, on 404s or missing response fields, before the routes existed.
 
 ### 2026-09-29 — AF-345 — Value settings persistence
 
