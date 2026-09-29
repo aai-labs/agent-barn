@@ -1,4 +1,5 @@
 const http = require('http');
+const fs = require('fs');
 const { execFile } = require('child_process');
 
 
@@ -17,16 +18,37 @@ const TERMINAL_LLM_ERRORS = {
   403: 'LLM API access denied. Check your account permissions.',
 };
 
+// Neutral about whose limit ran out: the Agent's own and its Organization's come back
+// as the same error type, and telling them apart would mean parsing upstream text.
 const BUDGET_EXHAUSTED =
-  'This organization has reached its model spend limit. ' +
+  'This agent has reached its model spend limit. ' +
   'Contact your administrator to raise it or wait for the limit to reset.';
 
-// An exhausted limit has been seen as a 400 and is documented as a 429 depending on
-// which budget was hit and which proxy version answered. Both are buffered and matched
-// on the error body, so a version difference cannot leak the upstream text. These
-// statuses also carry malformed requests, unknown models and rate limits, which must
-// keep their own errors.
-const BUDGET_STATUSES = [400, 429];
+// An exhausted limit has been seen as a 400, is documented as a 429, and is a 422 by
+// default on LiteLLM releases after the pinned one, depending on which budget was hit
+// and which proxy version answered. All are buffered and matched on the error body, so
+// a version difference cannot leak the upstream text. These statuses also carry
+// malformed requests, unknown models and rate limits, which must keep their own errors.
+const BUDGET_STATUSES = [400, 422, 429];
+// Terminal for both runtimes, like the credits-exhausted 402 above.
+const BUDGET_EXHAUSTED_STATUS = 402;
+
+// Where the Communications adapter in this container learns why a turn failed. The
+// runtime does not carry the reason out reliably (OpenClaw replaces this proxy's
+// message with its own billing text), so the refusal is recorded here and read there.
+const LLM_ERROR_MARKER = process.env.AGENTBARN_LLM_ERROR_MARKER || '/tmp/agentbarn-llm-terminal-error.json';
+
+// Best effort: a failed write costs the person chatting a precise reason, never the
+// response itself.
+function recordTerminalLlmError(code) {
+  try {
+    const tmp = `${LLM_ERROR_MARKER}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify({ code, at: Date.now() / 1000 }));
+    fs.renameSync(tmp, LLM_ERROR_MARKER);
+  } catch {
+    // Ignored on purpose; see above.
+  }
+}
 function budgetMessage(body) {
   try {
     const { error } = JSON.parse(body.toString('utf8'));
@@ -189,17 +211,23 @@ if (LITELLM_PROXY_TARGET) {
         upstreamRes.on('data', (c) => chunks.push(c));
         upstreamRes.on('end', () => {
           const raw = Buffer.concat(chunks);
-          const cleanMsg = mapped || budgetMessage(raw);
+          const budget = mapped ? null : budgetMessage(raw);
+          const cleanMsg = mapped || budget;
           if (!cleanMsg) {
             // A 400 we have no better words for: pass it through untouched.
             clientRes.writeHead(upstreamRes.statusCode, upstreamRes.headers);
             clientRes.end(raw);
             return;
           }
+          // A spent limit is answered as 402 whatever the proxy said: it usually says
+          // 429, which the runtime retries as a rate limit indefinitely, so the person
+          // chatting would never hear back at all.
+          const status = budget ? BUDGET_EXHAUSTED_STATUS : upstreamRes.statusCode;
+          if (budget) recordTerminalLlmError('SPEND_LIMIT_REACHED');
           const body = JSON.stringify({
-            error: { message: cleanMsg, type: null, param: null, code: String(upstreamRes.statusCode) }
+            error: { message: cleanMsg, type: null, param: null, code: String(status) }
           });
-          clientRes.writeHead(upstreamRes.statusCode, {
+          clientRes.writeHead(status, {
             'Content-Type': 'application/json',
             'Content-Length': Buffer.byteLength(body),
           });

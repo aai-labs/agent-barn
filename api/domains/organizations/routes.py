@@ -13,6 +13,7 @@ from api.domains.organizations.models import (
     OrganizationLlmBudgetRead,
     OrganizationLlmBudgetUpdate,
     OrganizationLlmCoverageRead,
+    OrganizationOwnLlmBudgetUpdate,
     OrganizationRead,
     OrganizationUpdate,
     PlatformOrganizationRead,
@@ -95,15 +96,15 @@ def delete_organization(
 def set_organization_llm_budget(
     organization_id: UUID,
     budget: OrganizationLlmBudgetUpdate,
-    _: Annotated[CurrentUserContext, Depends(require_platform_admin())],
+    context: Annotated[CurrentUserContext, Depends(require_platform_admin())],
     budget_service: Annotated[OrganizationLlmBudgetService, Injected(OrganizationLlmBudgetService)],
 ):
-    """Set or clear an Organization's LLM spend ceiling.
+    """Set an Organization's LLM spend ceiling.
 
     Platform-administered: an Organization cannot raise its own cap, which is the
-    whole point of it as a cost control.
+    whole point of it as a cost control. It can only set a lower limit of its own.
     """
-    return budget_service.set_llm_budget(organization_id, budget.budget_usd, budget.budget_duration)
+    return budget_service.set_llm_budget(organization_id, budget.budget_usd, budget.budget_duration, context)
 
 
 @platform_org_router.get("/{organization_id}/llm-budget/coverage", response_model=OrganizationLlmCoverageRead)
@@ -140,9 +141,17 @@ def get_organization_llm_budget(
     context: Annotated[CurrentUserContext, Depends(get_current_user())],
     budget_service: Annotated[OrganizationLlmBudgetService, Injected(OrganizationLlmBudgetService)],
 ):
-    """The Organization's own view of its spend limit.
-
-    Read-only: an Organization can see what it is allowed to spend and what it has
-    spent, and can change neither.
-    """
+    """The Organization's own view of its spend limit: the ceiling, its own limit
+    beneath it, and what it has spent."""
     return budget_service.get_organization_llm_budget(organization_id, context)
+
+
+@org_router.put("/{organization_id}/llm-budget", response_model=OrganizationLlmBudgetRead)
+def set_organization_own_llm_budget(
+    organization_id: UUID,
+    budget: OrganizationOwnLlmBudgetUpdate,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    budget_service: Annotated[OrganizationLlmBudgetService, Injected(OrganizationLlmBudgetService)],
+):
+    """Set or clear the Organization's own spend limit, at or below its ceiling."""
+    return budget_service.set_own_llm_budget(organization_id, budget.budget_usd, context)

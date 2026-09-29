@@ -1,5 +1,6 @@
 from dataclasses import dataclass
-from uuid import UUID
+from datetime import UTC, datetime
+from uuid import UUID, uuid4
 
 from injector import inject, singleton
 from sqlalchemy import and_, func
@@ -7,6 +8,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import aliased
 from sqlmodel import Session, col, or_, select
 
+from api.domains.events import ActorIdentity, EventDelivery, SubjectIdentity, SubjectIdentityType
+from api.domains.events.catalog import EVENT_REGISTRY, ORGANIZATION_LLM_BUDGET_CHANGED
 from api.domains.events.repository import OutboxMessageRepository
 from api.domains.organizations.exceptions import OrganizationCreationLimitReached
 from api.domains.organizations.models import (
@@ -90,6 +93,7 @@ class OrganizationRepository:
                 col(creator.full_name).label("creator_name"),
                 col(Organization.llm_budget_usd).label("llm_budget_usd"),
                 col(Organization.llm_budget_duration).label("llm_budget_duration"),
+                col(Organization.llm_own_budget_usd).label("llm_own_budget_usd"),
             )
             .select_from(Organization)
             .outerjoin(
@@ -178,18 +182,97 @@ class OrganizationRepository:
                 session.rollback()
 
     def list_capped_organizations(self) -> list[Organization]:
-        """Organizations with a spend limit set. Uncapped ones have nothing to
-        threshold against, so they are never read from the proxy at all."""
+        """Organizations with a spend limit set — since AF-337 every Organization has
+        one, so this is all of them; the filter only guards rows mid-migration."""
         with Session(self.delegate.engine) as session:
             return list(session.exec(select(Organization).where(col(Organization.llm_budget_usd).is_not(None))).all())
 
-    def list_budget_policies(self) -> list[tuple[UUID, float | None, str | None]]:
-        """System-only inventory of LLM spend policy; never exposed through a route."""
+    def list_budget_policies(self) -> list[tuple[UUID, float, str]]:
+        """System-only inventory of the limit each team should carry: the
+        Organization's own where it set one, else the ceiling. Never exposed through
+        a route."""
         with Session(self.delegate.engine) as session:
             rows = session.exec(
-                select(Organization.id, Organization.llm_budget_usd, Organization.llm_budget_duration)
+                select(
+                    Organization.id,
+                    func.coalesce(col(Organization.llm_own_budget_usd), col(Organization.llm_budget_usd)),
+                    Organization.llm_budget_duration,
+                )
             ).all()
-            return [(row[0], row[1], row[2]) for row in rows]
+            return [(row[0], float(row[1]), row[2]) for row in rows]
+
+    def set_llm_budget_renews_at(self, organization_id: UUID, renews_at: datetime) -> None:
+        """When the Organization's window renews, as the proxy reported it. Written on
+        its own so it never races a concurrent limit change."""
+        with Session(self.delegate.engine) as session:
+            organization = session.get(Organization, organization_id)
+            if organization is None:
+                return
+            organization.llm_budget_renews_at = renews_at
+            session.add(organization)
+            session.commit()
+
+    def set_llm_budgets_with_event(
+        self,
+        organization_id: UUID,
+        *,
+        ceiling_usd: float,
+        window: str,
+        own_limit_usd: float | None,
+        actor: ActorIdentity,
+        actor_display: str,
+        reason: str | None = None,
+    ) -> tuple[Organization, list[UUID]] | None:
+        """Persist the ceiling and the Organization's own limit, and stage their change
+        Event atomically, so a limit can never move without its audit record.
+
+        None when the Organization does not exist. The previous values are read under
+        the same row lock the write takes, so two concurrent changes cannot both
+        report the same "before".
+        """
+        with Session(self.delegate.engine, expire_on_commit=False) as session:
+            organization = session.exec(
+                select(Organization).where(col(Organization.id) == organization_id).with_for_update()
+            ).first()
+            if organization is None:
+                return None
+            previous_ceiling = organization.llm_budget_usd
+            previous_own = organization.llm_own_budget_usd
+            organization.llm_budget_usd = ceiling_usd
+            organization.llm_budget_duration = window
+            organization.llm_own_budget_usd = own_limit_usd
+            organization.updated_at = datetime.now(UTC)
+            session.add(organization)
+            session.flush()
+
+            event = EVENT_REGISTRY.build_event(
+                event_name=ORGANIZATION_LLM_BUDGET_CHANGED,
+                schema_version=1,
+                occurred_at=datetime.now(UTC),
+                organization_id=organization_id,
+                actor=actor,
+                subject=SubjectIdentity(
+                    type=SubjectIdentityType.ORGANIZATION,
+                    id=organization_id,
+                    organization_id=organization_id,
+                ),
+                correlation_id=uuid4(),
+                payload={
+                    "organization_id": organization_id,
+                    "ceiling_usd": ceiling_usd,
+                    "previous_ceiling_usd": previous_ceiling,
+                    "own_limit_usd": own_limit_usd,
+                    "previous_own_limit_usd": previous_own,
+                    "window": window,
+                    "reason": reason,
+                    "actor_display": actor_display,
+                    "subject_display": organization.name,
+                },
+            )
+            self.outbox_repository.stage(session=session, registry=EVENT_REGISTRY, event=event)
+            delivery_ids = list(session.exec(select(EventDelivery.id).where(EventDelivery.event_id == event.event_id)))
+            session.commit()
+            return organization, delivery_ids
 
     def get(self, organization_id: UUID) -> Organization | None:
         return self.delegate.find_by_id(Organization, organization_id)

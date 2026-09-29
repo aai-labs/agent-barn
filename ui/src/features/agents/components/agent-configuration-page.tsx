@@ -29,6 +29,7 @@ import { AgentOverrideSettings } from "./agent-override-settings";
 import { AgentProfileSettings } from "./agent-profile-settings";
 import { AgentRestorePointsSettings } from "./agent-restore-points-settings";
 import { AgentSkillsSettings } from "./agent-skills-settings";
+import { AgentSpendLimitSettings } from "./agent-spend-limit-settings";
 import { AgentTemplateSelectionSettings } from "./agent-template-selection-settings";
 
 export function AgentConfigurationPage({ agentId }: { agentId: string }) {
@@ -49,17 +50,23 @@ export function AgentConfigurationPage({ agentId }: { agentId: string }) {
     agentId,
     canReadActivity && agent?.status === "ERROR",
   );
-  // Restore points read from the activity surface, so an Agent the viewer can see
-  // but has no activity access to does not offer the section at all.
-  const sections = canReadActivity
-    ? AGENT_CONFIGURATION_SECTIONS
-    : AGENT_CONFIGURATION_SECTIONS.filter((item) => item.key !== "restore");
-  const [activeSection, setActiveSection] = useQueryState(
+  // Restore points read from the activity surface and the spend limit from the cost
+  // surface, so an Agent the viewer can see without that access does not offer them.
+  const canReadCosts = canAgent(agent, "cost.read");
+  const sections = AGENT_CONFIGURATION_SECTIONS.filter(
+    (item) =>
+      (item.key !== "restore" || canReadActivity) && (item.key !== "spend" || canReadCosts),
+  );
+  // Parsed against every section, and narrowed to the visible ones below: the visible
+  // list depends on the Agent, which has not loaded on first render, and parsing
+  // against it then would discard a deep link like ?section=spend.
+  const [requestedSection, setActiveSection] = useQueryState(
     "section",
-    parseAsStringEnum<AgentConfigurationSectionKey>(sections.map((item) => item.key))
+    parseAsStringEnum<AgentConfigurationSectionKey>(AGENT_CONFIGURATION_SECTIONS.map((item) => item.key))
       .withDefault("profile")
       .withOptions({ scroll: false, history: "replace" }),
   );
+  const activeSection = sections.some((item) => item.key === requestedSection) ? requestedSection : "profile";
   const [connect] = useQueryState("connect", parseAsBoolean.withDefault(false));
   const [editingSection, setEditingSection] = useState<AgentConfigurationSectionKey | null>(null);
 
@@ -254,6 +261,14 @@ export function AgentConfigurationPage({ agentId }: { agentId: string }) {
                 editing={editingSection === "override"}
                 onEdit={() => toggleEditing("override")}
                 onPublished={handleOverridePublished}
+              />
+            )}
+            {activeSection === "spend" && canReadCosts && (
+              <AgentSpendLimitSettings
+                agentId={agent.id}
+                organizationId={agent.organizationId}
+                editing={editingSection === "spend"}
+                onEdit={() => toggleEditing("spend")}
               />
             )}
             {activeSection === "restore" && canReadActivity && (

@@ -23,16 +23,38 @@ _TERMINAL_LLM_ERRORS: dict[int, str] = {
     403: "LLM API access denied. Check your account permissions.",
 }
 
+# Neutral about whose limit ran out: the Agent's own and its Organization's come back
+# as the same error type, and telling them apart would mean parsing upstream text.
 _BUDGET_EXHAUSTED = (
-    "This organization has reached its model spend limit. "
+    "This agent has reached its model spend limit. "
     "Contact your administrator to raise it or wait for the limit to reset."
 )
 
 
-# An exhausted limit has been seen as a 400 and is documented as a 429 depending on
-# which budget was hit and which proxy version answered. Both are buffered and matched
-# on the error body, so a version difference cannot leak the upstream text.
-_BUDGET_STATUSES = (400, 429)
+# An exhausted limit has been seen as a 400, is documented as a 429, and is a 422 by
+# default on LiteLLM releases after the pinned one, depending on which budget was hit
+# and which proxy version answered. All are buffered and matched on the error body, so
+# a version difference cannot leak the upstream text.
+_BUDGET_STATUSES = (400, 422, 429)
+# Terminal for both runtimes, like the credits-exhausted 402 above.
+_BUDGET_EXHAUSTED_STATUS = 402
+
+# Where the Communications adapter in this container learns why a turn failed. The
+# runtime does not carry the reason out reliably (it can replace this proxy's
+# message with its own), so the refusal is recorded here and read there.
+_LLM_ERROR_MARKER = os.environ.get("AGENTBARN_LLM_ERROR_MARKER", "/tmp/agentbarn-llm-terminal-error.json")
+
+
+def _record_terminal_llm_error(code: str) -> None:
+    """Best effort: a failed write costs the person chatting a precise reason, never
+    the response itself."""
+    try:
+        tmp = f"{_LLM_ERROR_MARKER}.tmp"
+        with open(tmp, "w") as handle:
+            json.dump({"code": code, "at": time.time()}, handle)
+        os.replace(tmp, _LLM_ERROR_MARKER)
+    except OSError:
+        pass
 
 
 def _budget_message(body: bytes) -> str | None:
@@ -197,20 +219,27 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             upstream = conn.getresponse()
 
             clean_msg = _TERMINAL_LLM_ERRORS.get(upstream.status)
+            status = upstream.status
             buffered: bytes | None = None
             if clean_msg is None and upstream.status in _BUDGET_STATUSES:
                 # Only these are buffered. Everything else is either already mapped or
                 # must keep streaming, which reading it here would break.
                 buffered = upstream.read()
                 clean_msg = _budget_message(buffered)
+                if clean_msg:
+                    # A spent limit is answered as 402 whatever the proxy said: it
+                    # usually says 429, which the runtime retries as a rate limit
+                    # indefinitely, so the person chatting would never hear back.
+                    status = _BUDGET_EXHAUSTED_STATUS
+                    _record_terminal_llm_error("SPEND_LIMIT_REACHED")
 
             if clean_msg:
                 if buffered is None:
                     upstream.read()
                 clean_body = json.dumps(
-                    {"error": {"message": clean_msg, "type": None, "param": None, "code": str(upstream.status)}}
+                    {"error": {"message": clean_msg, "type": None, "param": None, "code": str(status)}}
                 ).encode()
-                self.send_response(upstream.status)
+                self.send_response(status)
                 for key, val in upstream.getheaders():
                     if key.lower() in ("content-type",):
                         self.send_header(key, val)

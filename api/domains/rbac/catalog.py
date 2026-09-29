@@ -42,6 +42,7 @@ class PermissionKey(str, Enum):
     # Manage memory groups (create/rename/delete, assign Agents). Org-scoped
     # management, like the membership.* keys — not an agent-access permission.
     MEMORY_GROUP_MANAGE = "memory_group.manage"
+    LLM_BUDGET_MANAGE = "llm_budget.manage"
 
 
 @dataclass(frozen=True)
@@ -99,6 +100,7 @@ PERMISSIONS: tuple[PermissionSeed, ...] = (
     PermissionSeed(UUID("3f24e385-7c5e-56f0-828c-502985376af9"), PermissionKey.ACTIVITY_READ),
     PermissionSeed(UUID("b6557147-248a-5d34-8bb2-7c51944d9ee7"), PermissionKey.COST_READ),
     PermissionSeed(UUID("cefd77e7-0e67-500e-8fe4-37879667c6e6"), PermissionKey.MEMORY_GROUP_MANAGE),
+    PermissionSeed(UUID("5d0c2b7e-8f41-5a6c-9e3d-1b7f4a2c6e90"), PermissionKey.LLM_BUDGET_MANAGE),
 )
 PERMISSION_ID_BY_KEY = {permission.key: permission.id for permission in PERMISSIONS}
 
@@ -120,6 +122,9 @@ _OWNER_ORGANIZATION_KEYS = frozenset(
         PermissionKey.ACTIVITY_READ,
         PermissionKey.COST_READ,
         PermissionKey.MEMORY_GROUP_MANAGE,
+        # Organization-scoped only: an Agent's own Owner cannot set its limit, since
+        # dividing the allowance is the Organization's decision.
+        PermissionKey.LLM_BUDGET_MANAGE,
     }
 )
 _ADMIN_ORGANIZATION_KEYS = _OWNER_ORGANIZATION_KEYS - {

@@ -1,20 +1,15 @@
 "use client";
 
+import Link from "next/link";
 import { AlertTriangle, Ban } from "lucide-react";
 
+import { useActiveOrgRole } from "../hooks/use-active-org-role";
 import { useOrganizationLlmBudget } from "../hooks/use-organization-llm-budget";
+import { formatRenewal, formatUsage, periodLabel } from "../spend-limit";
 
-function formatUsd(value: number, limit: number) {
-  const digits = limit > 0 && limit < 1 ? 4 : 2;
-  return `$${value.toLocaleString(undefined, { minimumFractionDigits: digits, maximumFractionDigits: digits })}`;
-}
 
 function renewalSuffix(renewsAt: string | null | undefined) {
-  if (!renewsAt) return "";
-  const date = new Date(renewsAt);
-  if (Number.isNaN(date.getTime())) return "";
-  const when = date.toLocaleDateString(undefined, { day: "numeric", month: "short" });
-  return ` It resets on ${when}.`;
+  return renewsAt ? ` It renews on ${formatRenewal(renewsAt)}.` : "";
 }
 
 /**
@@ -27,19 +22,20 @@ function renewalSuffix(renewsAt: string | null | undefined) {
  */
 export function LlmBudgetBanner({ show }: { show: "warning" | "exhausted" }) {
   const { budget } = useOrganizationLlmBudget();
+  const { selectedOrganization } = useActiveOrgRole();
 
   if (!budget || budget.state !== show) return null;
-  if (budget.spendUsd == null || budget.limitUsd == null) return null;
+  if (budget.spendUsd == null) return null;
 
   const exhausted = show === "exhausted";
-  const used = `${formatUsd(budget.spendUsd, budget.limitUsd)} of ${formatUsd(budget.limitUsd, budget.limitUsd)}`;
+  const used = formatUsage(budget.spendUsd, budget.limitUsd);
 
   return (
     <div
       role="status"
       className="flex items-start gap-2 px-4 py-2.5 text-[13px]"
       style={{
-        background: exhausted ? "var(--err-soft, #fdeaea)" : "var(--bg-soft)",
+        background: exhausted ? "var(--err-soft)" : "var(--bg-soft)",
         borderBottom: "1px solid var(--line)",
         color: exhausted ? "var(--err)" : "var(--ink-2)",
       }}
@@ -51,9 +47,17 @@ export function LlmBudgetBanner({ show }: { show: "warning" | "exhausted" }) {
       )}
       <span>
         {exhausted
-          ? `This organization has used its entire model spend limit (${used}). Agents can't make model calls until it resets or is raised.${renewalSuffix(budget.renewsAt)}`
-          : `This organization has used ${used} of its model spend limit this period.${renewalSuffix(budget.renewsAt)}`}
+          ? `This organization has reached its model spend limit (${used}). Agents can't make model calls until it renews or is raised.${renewalSuffix(budget.renewsAt)}`
+          : `This organization has used ${used} of its model spend limit ${periodLabel(budget.window)}.${renewalSuffix(budget.renewsAt)}`}
       </span>
+      {exhausted && budget.canManage && selectedOrganization && (
+        <Link
+          href={`/dashboard/${selectedOrganization.id}/settings?tab=spend-limits`}
+          className="ml-auto flex-shrink-0 font-medium underline underline-offset-2"
+        >
+          Raise limit
+        </Link>
+      )}
     </div>
   );
 }
