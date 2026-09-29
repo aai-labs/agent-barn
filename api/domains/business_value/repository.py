@@ -2,16 +2,27 @@ import logging
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
+import sqlalchemy as sa
 from injector import inject, singleton
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import SQLAlchemyError
 from sqlmodel import Session, col, select
 
 from api.domains.business_value.classifier import SHELL_TOOL_NAMES, ClassifiedAction, classify
-from api.domains.business_value.models import TOOL_CALL_ORDINAL_CONSTRAINT, BusinessAction
+from api.domains.business_value.models import (
+    OUTCOME_MINUTES_ORGANIZATION_TYPE_CONSTRAINT,
+    TOOL_CALL_ORDINAL_CONSTRAINT,
+    BusinessAction,
+    OrganizationOutcomeMinutes,
+    OrganizationValueSettings,
+)
+from api.domains.events import ActorIdentity, EventDelivery, SubjectIdentity, SubjectIdentityType
+from api.domains.events.catalog import EVENT_REGISTRY, ORGANIZATION_VALUE_SETTINGS_CHANGED
+from api.domains.events.repository import OutboxMessageRepository
 from api.domains.tool_calls.models import ToolCall
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 
@@ -109,3 +120,110 @@ class BusinessActionRepository:
             "occurred_at": tool_call.occurred_at,
             "completed_at": tool_call.completed_at,
         }
+
+
+@dataclass(frozen=True)
+class ValueSettingsChangeResult:
+    delivery_ids: list[UUID]
+
+
+@inject
+@singleton
+@dataclass
+class ValueSettingsRepository:
+    delegate: PostgresRepositoryDelegate
+    outbox_repository: OutboxMessageRepository
+
+    def get_hourly_rate(self, organization_id: UUID) -> Decimal | None:
+        with Session(self.delegate.engine) as session:
+            return session.exec(
+                select(col(OrganizationValueSettings.hourly_rate_usd)).where(
+                    col(OrganizationValueSettings.organization_id) == organization_id
+                )
+            ).first()
+
+    def get_minute_overrides(self, organization_id: UUID) -> dict[str, int]:
+        with Session(self.delegate.engine) as session:
+            rows = session.exec(
+                select(OrganizationOutcomeMinutes.outcome_type, OrganizationOutcomeMinutes.minutes_saved).where(
+                    col(OrganizationOutcomeMinutes.organization_id) == organization_id
+                )
+            ).all()
+        return {outcome_type: minutes_saved for outcome_type, minutes_saved in rows}
+
+    def save_with_event(
+        self,
+        organization_id: UUID,
+        *,
+        hourly_rate: Decimal | None,
+        rate_changed: bool,
+        minute_changes: dict[str, int | None],
+        field_changes: dict[str, dict[str, str | None]],
+        actor: ActorIdentity,
+        actor_display: str,
+        subject_display: str,
+    ) -> ValueSettingsChangeResult:
+        now = datetime.now(UTC)
+        with Session(self.delegate.engine, expire_on_commit=False) as session:
+            if rate_changed:
+                settings = session.exec(
+                    select(OrganizationValueSettings).where(
+                        col(OrganizationValueSettings.organization_id) == organization_id
+                    )
+                ).first()
+                if settings is None:
+                    settings = OrganizationValueSettings(organization_id=organization_id)
+                settings.hourly_rate_usd = hourly_rate
+                settings.updated_at = now
+                session.add(settings)
+
+            for outcome_type, minutes in minute_changes.items():
+                session.exec(self._minute_change_statement(organization_id, outcome_type, minutes, now))  # type: ignore[call-overload]
+            session.flush()
+
+            event = EVENT_REGISTRY.build_event(
+                event_name=ORGANIZATION_VALUE_SETTINGS_CHANGED,
+                schema_version=1,
+                occurred_at=now,
+                organization_id=organization_id,
+                actor=actor,
+                subject=SubjectIdentity(
+                    type=SubjectIdentityType.ORGANIZATION,
+                    id=organization_id,
+                    organization_id=organization_id,
+                ),
+                correlation_id=uuid4(),
+                payload={
+                    "organization_id": organization_id,
+                    "field_changes": field_changes,
+                    "actor_display": actor_display,
+                    "subject_display": subject_display,
+                },
+            )
+            self.outbox_repository.stage(session=session, registry=EVENT_REGISTRY, event=event)
+            delivery_ids = list(session.exec(select(EventDelivery.id).where(EventDelivery.event_id == event.event_id)))
+            session.commit()
+        return ValueSettingsChangeResult(delivery_ids=delivery_ids)
+
+    @staticmethod
+    def _minute_change_statement(organization_id: UUID, outcome_type: str, minutes: int | None, now: datetime):
+        if minutes is None:
+            return sa.delete(OrganizationOutcomeMinutes).where(
+                col(OrganizationOutcomeMinutes.organization_id) == organization_id,
+                col(OrganizationOutcomeMinutes.outcome_type) == outcome_type,
+            )
+        statement = pg_insert(OrganizationOutcomeMinutes).values(
+            id=uuid.uuid7(),
+            created_at=now,
+            updated_at=now,
+            organization_id=organization_id,
+            outcome_type=outcome_type,
+            minutes_saved=minutes,
+        )
+        return statement.on_conflict_do_update(
+            constraint=OUTCOME_MINUTES_ORGANIZATION_TYPE_CONSTRAINT,
+            set_={
+                "minutes_saved": statement.excluded.minutes_saved,
+                "updated_at": statement.excluded.updated_at,
+            },
+        )

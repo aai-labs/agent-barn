@@ -3,9 +3,14 @@ from decimal import Decimal
 from uuid import UUID, uuid7
 
 import sqlalchemy as sa
-from hamcrest import assert_that, calling, equal_to, has_items, raises
+from hamcrest import assert_that, calling, contains_inanyorder, empty, equal_to, has_items, has_length, none, raises
 from sqlalchemy.exc import IntegrityError
+from sqlmodel import Session, col, select
 
+from api.domains.business_value.repository import ValueSettingsChangeResult, ValueSettingsRepository
+from api.domains.events.catalog import ORGANIZATION_VALUE_SETTINGS_CHANGED
+from api.domains.events.models import ActorIdentity, ActorIdentityType, EventDelivery, OutboxMessage
+from api.domains.events.registry import DomainEventValidationError
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.tests.core.givenpy import given, then, when
 from api.tests.core.modules import prepare_injector
@@ -14,6 +19,8 @@ from api.tests.steps.organization import there_is_an_organization_with_user_and_
 
 VALUE_SETTINGS_TABLE = "organization_value_settings"
 OUTCOME_MINUTES_TABLE = "organization_outcome_minutes"
+ACTOR_DISPLAY = "Owner Person"
+SUBJECT_DISPLAY = "Test Organization"
 
 _GIVEN = [
     prepare_injector(),
@@ -152,3 +159,186 @@ def test_value_settings_are_deleted_with_their_organization():
         with then("its value settings and overrides are gone"):
             assert_that(_count(context, VALUE_SETTINGS_TABLE, organization_id), equal_to(0))
             assert_that(_count(context, OUTCOME_MINUTES_TABLE, organization_id), equal_to(0))
+
+
+# --- persistence ------------------------------------------------------------------
+
+
+def _repository(context) -> ValueSettingsRepository:
+    return context.injector.get(ValueSettingsRepository)
+
+
+def _actor(context) -> ActorIdentity:
+    return ActorIdentity(
+        type=ActorIdentityType.MEMBERSHIP,
+        id=context.organization_user.id,
+        organization_id=context.organization.id,
+    )
+
+
+def _save(
+    context,
+    *,
+    hourly_rate: Decimal | None = None,
+    rate_changed: bool = False,
+    minute_changes: dict[str, int | None] | None = None,
+    field_changes: dict[str, dict[str, str | None]] | None = None,
+) -> ValueSettingsChangeResult:
+    return _repository(context).save_with_event(
+        context.organization.id,
+        hourly_rate=hourly_rate,
+        rate_changed=rate_changed,
+        minute_changes=minute_changes or {},
+        field_changes=field_changes or {"hourly_rate_usd": {"previous": None, "current": "1.00"}},
+        actor=_actor(context),
+        actor_display=ACTOR_DISPLAY,
+        subject_display=SUBJECT_DISPLAY,
+    )
+
+
+def _change_events(context) -> list[OutboxMessage]:
+    with Session(_engine(context)) as session:
+        return list(
+            session.exec(
+                select(OutboxMessage).where(col(OutboxMessage.event_name) == ORGANIZATION_VALUE_SETTINGS_CHANGED)
+            ).all()
+        )
+
+
+def _delivery_ids(context, event_id: UUID) -> list[UUID]:
+    with Session(_engine(context)) as session:
+        return list(session.exec(select(EventDelivery.id).where(col(EventDelivery.event_id) == event_id)).all())
+
+
+def test_saving_value_settings_persists_the_rate_and_overrides():
+    with given(_GIVEN) as context:
+        with when("a rate and an override are saved"):
+            _save(
+                context,
+                hourly_rate=Decimal("42.50"),
+                rate_changed=True,
+                minute_changes={"RECORD_CREATED": 12},
+            )
+
+        with then("both read back"):
+            assert_that(_repository(context).get_hourly_rate(context.organization.id), equal_to(Decimal("42.50")))
+            assert_that(
+                _repository(context).get_minute_overrides(context.organization.id),
+                equal_to({"RECORD_CREATED": 12}),
+            )
+
+
+def test_saving_value_settings_stages_one_change_event_with_its_deliveries():
+    field_changes = {
+        "hourly_rate_usd": {"previous": None, "current": "42.50"},
+        "outcome_minutes.RECORD_CREATED": {"previous": None, "current": "12"},
+    }
+    with given(_GIVEN) as context:
+        with when("a change is saved"):
+            result = _save(
+                context,
+                hourly_rate=Decimal("42.50"),
+                rate_changed=True,
+                minute_changes={"RECORD_CREATED": 12},
+                field_changes=field_changes,
+            )
+
+        with then("exactly one change event is staged, carrying the diff"):
+            events = _change_events(context)
+            assert_that(events, has_length(1))
+            assert_that(events[0].organization_id, equal_to(context.organization.id))
+            assert_that(
+                events[0].payload,
+                equal_to(
+                    {
+                        "organization_id": str(context.organization.id),
+                        "field_changes": field_changes,
+                        "actor_display": ACTOR_DISPLAY,
+                        "subject_display": SUBJECT_DISPLAY,
+                    }
+                ),
+            )
+            assert_that(events[0].subject["type"], equal_to("ORGANIZATION"))
+
+        with then("the returned delivery ids are the event's committed deliveries"):
+            assert_that(result.delivery_ids, has_length(1))
+            assert_that(result.delivery_ids, contains_inanyorder(*_delivery_ids(context, events[0].event_id)))
+
+
+def test_saving_an_existing_override_replaces_its_minutes():
+    with given(_GIVEN) as context:
+        _save(context, minute_changes={"RECORD_CREATED": 12})
+
+        with when("the same Outcome Type is saved again"):
+            _save(context, minute_changes={"RECORD_CREATED": 30})
+
+        with then("the override holds the new minutes and is still a single row"):
+            assert_that(
+                _repository(context).get_minute_overrides(context.organization.id),
+                equal_to({"RECORD_CREATED": 30}),
+            )
+            assert_that(_count(context, OUTCOME_MINUTES_TABLE, context.organization.id), equal_to(1))
+
+
+def test_saving_a_null_override_deletes_it():
+    with given(_GIVEN) as context:
+        _save(context, minute_changes={"RECORD_CREATED": 12, "COMMENT_POSTED": 9})
+
+        with when("one override is saved as null"):
+            _save(context, minute_changes={"RECORD_CREATED": None})
+
+        with then("only the other override remains"):
+            assert_that(
+                _repository(context).get_minute_overrides(context.organization.id),
+                equal_to({"COMMENT_POSTED": 9}),
+            )
+
+
+def test_saving_only_minutes_creates_no_settings_row():
+    with given(_GIVEN) as context:
+        with when("only an override is saved"):
+            _save(context, minute_changes={"RECORD_CREATED": 12})
+
+        with then("no rate row exists and the rate reads as unset"):
+            assert_that(_count(context, VALUE_SETTINGS_TABLE, context.organization.id), equal_to(0))
+            assert_that(_repository(context).get_hourly_rate(context.organization.id), none())
+
+
+def test_saving_a_null_rate_clears_it():
+    with given(_GIVEN) as context:
+        _save(context, hourly_rate=Decimal("42.50"), rate_changed=True)
+
+        with when("the rate is saved as null"):
+            _save(context, hourly_rate=None, rate_changed=True)
+
+        with then("the rate reads as unset"):
+            assert_that(_repository(context).get_hourly_rate(context.organization.id), none())
+
+
+def test_an_unset_organization_has_no_rate_and_no_overrides():
+    with given(_GIVEN) as context:
+        with then("both reads are empty"):
+            assert_that(_repository(context).get_hourly_rate(context.organization.id), none())
+            assert_that(_repository(context).get_minute_overrides(context.organization.id), equal_to({}))
+
+
+def test_a_rejected_change_event_leaves_the_settings_unchanged():
+    with given(_GIVEN) as context:
+        with when("a save carries a change event the registry rejects"):
+
+            def _save_with_invalid_event():
+                _save(
+                    context,
+                    hourly_rate=Decimal("42.50"),
+                    rate_changed=True,
+                    minute_changes={"RECORD_CREATED": 12},
+                    field_changes={"api_token": {"previous": None, "current": "x"}},
+                )
+
+        with then("the save fails"):
+            assert_that(calling(_save_with_invalid_event), raises(DomainEventValidationError))
+
+        with then("neither the settings nor the event were written"):
+            assert_that(_count(context, VALUE_SETTINGS_TABLE, context.organization.id), equal_to(0))
+            assert_that(_count(context, OUTCOME_MINUTES_TABLE, context.organization.id), equal_to(0))
+            assert_that(_change_events(context), empty())

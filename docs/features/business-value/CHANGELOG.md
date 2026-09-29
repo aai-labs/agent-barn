@@ -14,11 +14,31 @@ Related context: [Activity and Ingest](../activity-and-ingest.md), [Agent Activi
 - Also delivered: the `organization_value_settings` and `organization_outcome_minutes` tables (migration `1045836844da`). Nothing reads or writes them yet.
 - Also delivered: the `organization.value_settings.changed` Domain Event, registered and projected to the security audit. Nothing emits it yet.
 - Also delivered: the pure valuation rules in `api/domains/business_value/service.py` (effective minutes, value, the value-to-spend ratio, and write categories). Nothing calls them yet.
-- In transition: AF-345 (value settings and the Organization value KPI) is landing in slices. The tables, the event, and the valuation rules exist, but there are no endpoints yet.
-- Next: `ValueSettingsRepository`, which saves settings and stages the audit event in one transaction.
+- Also delivered: `ValueSettingsRepository`, which saves value settings and stages `organization.value_settings.changed` in one transaction. No service or route calls it yet.
+- In transition: AF-345 (value settings and the Organization value KPI) is landing in slices. Persistence exists, but there are no endpoints yet.
+- Next: `GET` and `PUT /organizations/{organization_id}/value-settings`.
 - Blockers: the product owner has not signed off the default minutes per Outcome Type. They are placeholders until then.
 
 ## Slice history
+
+### 2026-09-29 — AF-345 — Value settings persistence
+
+Delivered: `ValueSettingsRepository` in `api/domains/business_value/repository.py`.
+- `get_hourly_rate(organization_id)` returns `None` when no rate is set.
+- `get_minute_overrides(organization_id)` returns the stored overrides keyed by Outcome Type. They are returned raw; the service ignores any Outcome Type outside the catalogue.
+- `save_with_event(...)` copies the `AgentSettingsRepository.set_default_model_with_event` pattern. It opens one session and commits once, so a settings change is never visible without its audit record.
+  - **Rate:** written only when `rate_changed` is set. The settings row is created lazily, so a save that changes only minutes creates none.
+  - **Minutes:** a `None` minute change deletes the override. An integer upserts it on `(organization_id, outcome_type)`.
+  - **Event:** built through `EVENT_REGISTRY` with an Organization subject, then staged through the outbox with its Event Deliveries. The delivery ids are returned for post-commit enqueue.
+- The caller decides what changed and supplies `field_changes`, so the repository never decides whether an event is warranted.
+
+Coverage: `api/tests/integration/test_value_settings.py` covers:
+- a rate and an override that read back after saving
+- exactly one staged event carrying the diff, with an Organization subject and its committed delivery ids
+- an upsert of an existing override, deletion by `None`, a minutes-only save that creates no settings row, clearing the rate, and an Organization with nothing set
+- atomicity: an event the registry rejects leaves no settings rows and no event
+- All 8 new tests failed first, against `NotImplementedError` stubs.
+- `test_business_action_repository.py` still passes, and `api.ingest_app` and `api.api_app` import cleanly with the new events import.
 
 ### 2026-09-29 — AF-345 — Valuation rules
 
