@@ -189,17 +189,18 @@ class OrganizationRepository:
 
     def list_budget_policies(self) -> list[tuple[UUID, float, str]]:
         """System-only inventory of the limit each team should carry: the
-        Organization's own where it set one, else the ceiling. Never exposed through
-        a route."""
+        Organization's limit less the memory it has spent this window. Never exposed
+        through a route.
+
+        Computed from the rows rather than in SQL so the reconciler can never push a
+        different ceiling from the one an administrator's change just pushed — both
+        read `enforced_llm_budget_usd`."""
         with Session(self.delegate.engine) as session:
-            rows = session.exec(
-                select(
-                    Organization.id,
-                    func.coalesce(col(Organization.llm_own_budget_usd), col(Organization.llm_budget_usd)),
-                    Organization.llm_budget_duration,
-                )
-            ).all()
-            return [(row[0], float(row[1]), row[2]) for row in rows]
+            organizations = session.exec(select(Organization)).all()
+            return [
+                (organization.id, organization.enforced_llm_budget_usd, organization.llm_budget_duration)
+                for organization in organizations
+            ]
 
     def set_llm_budget_renews_at(self, organization_id: UUID, renews_at: datetime) -> None:
         """When the Organization's window renews, as the proxy reported it. Written on
@@ -211,6 +212,30 @@ class OrganizationRepository:
             organization.llm_budget_renews_at = renews_at
             session.add(organization)
             session.commit()
+
+    def record_memory_budget(
+        self,
+        organization_id: UUID,
+        *,
+        memory_spend_usd: float,
+        observed_at: datetime,
+        renews_at: datetime,
+        suspended_key: str | None,
+    ) -> Organization | None:
+        """The enforcement pass's findings. Touches only the fields it owns, so a
+        limit an administrator changes mid-pass is never overwritten. Returns the
+        fresh row, whose ceiling reflects both."""
+        with Session(self.delegate.engine, expire_on_commit=False) as session:
+            organization = session.get(Organization, organization_id)
+            if organization is None:
+                return None
+            organization.llm_memory_spend_usd = memory_spend_usd
+            organization.llm_memory_spend_observed_at = observed_at
+            organization.llm_budget_renews_at = renews_at
+            organization.llm_memory_suspended_key = suspended_key
+            session.add(organization)
+            session.commit()
+            return organization
 
     def set_llm_budgets_with_event(
         self,

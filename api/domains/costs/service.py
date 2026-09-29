@@ -130,6 +130,21 @@ class CostService:
         rows.sort(key=lambda r: (-r.memory_cost, r.group_name.lower()))
         return rows
 
+    def memory_cost_by_organization(self, start: datetime, end: datetime) -> dict[UUID, float]:
+        """Each Organization's memory spend in the window, summed over its groups.
+
+        System-only, for budget enforcement: it spans every Organization. A pool
+        whose group has since been deleted can no longer be traced to anyone, so its
+        spend is dropped rather than attributed to the wrong Organization.
+        """
+        organization_by_group = self.memory_groups.organization_by_group()
+        by_organization: dict[UUID, float] = {}
+        for group_id, cost in self.honcho_usage.cost_by_group(start, end).items():
+            organization_id = organization_by_group.get(UUID(group_id))
+            if organization_id is not None:
+                by_organization[organization_id] = by_organization.get(organization_id, 0.0) + cost
+        return by_organization
+
     def list_org_costs(
         self,
         context: CurrentUserContext,

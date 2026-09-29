@@ -1,0 +1,80 @@
+{{- if .Values.organizationLlmBudgets.enforcement.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ .Release.Name }}-llm-budget-enforcement
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "agentbarn-api.labels" . | nindent 4 }}
+    app.kubernetes.io/component: llm-budget-enforcement
+spec:
+  # Its own job rather than a step of the reconciler or the alerts pass: both of
+  # those are single-purpose (repair drift; tell a human), and this one changes
+  # enforcement from measured spend. Memory keeps spending between runs, so the
+  # schedule is what bounds the overshoot.
+  schedule: {{ .Values.organizationLlmBudgets.enforcement.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            {{- include "agentbarn-api.selectorLabels" . | nindent 12 }}
+            app.kubernetes.io/component: llm-budget-enforcement
+        spec:
+          restartPolicy: OnFailure
+          # Reads the LiteLLM master key out of the `litellm` Secret, so it needs the
+          # service account, namespace and mounted kubeconfig — same as cost-sync.
+          serviceAccountName: {{ .Release.Name }}
+          imagePullSecrets:
+            {{- toYaml .Values.imagePullSecrets | nindent 12 }}
+          containers:
+            - name: llm-budget-enforcement
+              image: "{{ .Values.registryPrefix }}/{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+              imagePullPolicy: {{ .Values.image.pullPolicy }}
+              # Not `python -m ...`: running the module as __main__ re-imports it
+              # under a second module name, so the classes AppModule's @provider
+              # registered bindings for no longer match and injector falls back to
+              # raw construction.
+              command:
+                - python
+                - -c
+                - "from api.domains.organizations.llm_budget_enforcement import main; main()"
+              envFrom:
+                - secretRef:
+                    name: {{ .Values.secretName }}
+{{- if not .Values.honchoLitellmKey }}
+                # HONCHO_LITELLM_KEY, published by the honcho release: memory spend is
+                # looked up by it. Optional, as on the API — without Honcho there is no
+                # memory spend and the pass only keeps each ceiling at the limit.
+                - secretRef:
+                    name: {{ .Values.honchoLitellmKeySecretName }}
+                    optional: true
+{{- end }}
+              env:
+                - name: K8S_NAMESPACE
+                  value: {{ .Release.Namespace }}
+                - name: K8S_KUBECONFIG_PATH
+                  value: /etc/kubeconfig/kubeconfig
+                # Team writes need the master key, which the virtual key in
+                # litellmApiKeySecretName cannot authenticate — that secret is
+                # deliberately not mounted here.
+                - name: LLM_MEMORY_SUSPEND_PERCENT
+                  value: {{ .Values.organizationLlmBudgets.enforcement.suspendPercent | quote }}
+                - name: LITELLM_BASE_URL
+                  value: "{{ .Values.litellmBaseUrl }}"
+                - name: LITELLM_SECRET_NAME
+                  value: "{{ .Values.litellmSecretName }}"
+              volumeMounts:
+                - name: kubeconfig
+                  mountPath: /etc/kubeconfig
+                  readOnly: true
+              resources:
+                {{- toYaml .Values.worker.resources | nindent 16 }}
+          volumes:
+            - name: kubeconfig
+              secret:
+                secretName: {{ .Values.kubeconfigSecretName | default (printf "%s-kubeconfig" .Release.Name) }}
+{{- end }}

@@ -48,6 +48,13 @@ class OrganizationLookupService:
         organization = self.repository.get(organization_id)
         return organization.allowed_models if organization else None
 
+    def memory_suspended(self, organization_id: UUID) -> bool:
+        """Whether the Organization's memory is off for having reached its spend
+        limit this window. A missing Organization is not suspended — there is
+        nothing for it to spend."""
+        organization = self.repository.get(organization_id)
+        return organization.llm_memory_suspended if organization else False
+
     def get_llm_limit(self, organization_id: UUID) -> OrganizationLlmLimit | None:
         """None when the Organization does not exist."""
         organization = self.repository.get(organization_id)

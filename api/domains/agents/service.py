@@ -1909,7 +1909,11 @@ class AgentService:
         # Memory is per-Agent opt-in on top of the infra flag (is Honcho deployed
         # at all). When on, the Agent reads and writes its pool's shared
         # workspace so it can see the other opted-in Agents' memory.
-        memory_on = memory_active(agent, honcho_enabled=self.config.honcho_enabled)
+        memory_on = memory_active(
+            agent,
+            honcho_enabled=self.config.honcho_enabled,
+            organization_memory_suspended=self.organization_lookup.memory_suspended(org_id),
+        )
         memory_workspace = memory_workspace_for_agent(agent) if memory_on else None
         # A Honcho token scoped to this Agent's pool workspace, so the pod can reach
         # only its own pool. None when memory is off or Honcho auth is disabled (dev).

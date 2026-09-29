@@ -86,6 +86,10 @@ class Config(BaseSettings):
     # Percentages of an Organization's limit at which it is notified. Empty falls back
     # to the default; 100 is always meaningful because it is the enforcement boundary.
     organization_llm_budget_alert_thresholds: str = "80,100"
+    # Share of an Organization's limit at which the enforcement pass suspends its
+    # memory. Memory keeps spending until the next pass sees it, so a deployment
+    # can trip early to absorb that overshoot; the default trips at the limit.
+    llm_memory_suspend_percent: int = Field(default=100, ge=1, le=100)
     # Model spend limits (USD) a new Organization and a new Agent start with. Required:
     # nobody should be uncapped just because an administrator has not got to them yet.
     # A platform administrator changes an Organization's afterwards; the Organization

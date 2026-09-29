@@ -1,5 +1,6 @@
+import calendar
 import enum
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Literal
 from uuid import UUID
 
@@ -21,6 +22,21 @@ from api.infrastructure.postgres.models import BaseModel
 # it was set and would drift apart.
 LlmBudgetWindow = Literal["1d", "7d", "30d"]
 DEFAULT_LLM_BUDGET_WINDOW: LlmBudgetWindow = "30d"
+
+
+def budget_window_start(renews_at: datetime, window: str) -> datetime:
+    """When the budget window that renews at `renews_at` began.
+
+    LiteLLM snaps a 30d window to the 1st of the month, so it spans a calendar
+    month rather than 30 days: stepping back a month keeps memory spend aligned
+    with the window the team's own spend accrues in. A day that does not exist in
+    the earlier month (31 March back to February) clamps to its last day.
+    """
+    if window == "30d":
+        year, month = (renews_at.year, renews_at.month - 1) if renews_at.month > 1 else (renews_at.year - 1, 12)
+        last_day = calendar.monthrange(year, month)[1]
+        return renews_at.replace(year=year, month=month, day=min(renews_at.day, last_day))
+    return renews_at - timedelta(days=int(window.removesuffix("d")))
 
 
 def _default_llm_ceiling() -> float:
@@ -74,6 +90,22 @@ class Organization(BaseModel, table=True):
     llm_alerted_threshold: int | None = Field(default=None, nullable=True)
     llm_alert_key: str | None = Field(default=None, nullable=True, max_length=128)
 
+    # Memory spend this window, measured by the enforcement pass. Memory runs on
+    # Honcho's own LiteLLM key, which is in no team, so the team's spend never
+    # includes it; the pass apportions Honcho's total to the Organization's pools.
+    # NULL means "not yet measured", never zero.
+    llm_memory_spend_usd: float | None = Field(default=None, nullable=True)
+    llm_memory_spend_observed_at: datetime | None = SqlField(
+        default=None,
+        sa_type=sa.DateTime(timezone=True),  # type: ignore
+        nullable=True,
+    )
+    # Set to `llm_budget_window_key` when agents and memory together reached the
+    # limit. The Organization's memory stays off while it matches, so a memory
+    # figure that dips (apportionment shifts as other pools grow) cannot flap it
+    # back on; a renewal or a new limit changes the key and lifts it.
+    llm_memory_suspended_key: str | None = Field(default=None, nullable=True, max_length=128)
+
     __table_args__ = (
         sa.Index("ix_organization_name", "name"),
         CheckConstraint("length(name) >= 3", name="check_name_length_min"),
@@ -87,8 +119,43 @@ class Organization(BaseModel, table=True):
 
     @property
     def effective_llm_budget_usd(self) -> float:
-        """The limit the proxy enforces on the Organization's team."""
+        """The Organization's limit: its own where it set one, else the ceiling."""
         return self.llm_own_budget_usd if self.llm_own_budget_usd is not None else self.llm_budget_usd
+
+    @property
+    def memory_spend_this_window_usd(self) -> float:
+        """Memory spend measured in the current window, else 0.
+
+        A figure measured before the window renewed belongs to the last window; it
+        must not hold the new one down until the next pass replaces it.
+        """
+        if self.llm_memory_spend_usd is None or self.llm_memory_spend_observed_at is None:
+            return 0.0
+        if self.llm_budget_renews_at is None:
+            return 0.0
+        if self.llm_memory_spend_observed_at < budget_window_start(self.llm_budget_renews_at, self.llm_budget_duration):
+            return 0.0
+        return self.llm_memory_spend_usd
+
+    @property
+    def enforced_llm_budget_usd(self) -> float:
+        """The limit the proxy enforces on the Organization's team.
+
+        The team only sees agent spend, so the memory already spent comes off the
+        limit instead: the proxy then refuses agents once agents + memory reach it.
+        Never shown to anyone — surfaces show the real limit and combined spend.
+        """
+        return max(0.0, self.effective_llm_budget_usd - self.memory_spend_this_window_usd)
+
+    @property
+    def llm_budget_window_key(self) -> str:
+        """Identifies the current window and limit, like `llm_alert_key`."""
+        renews_at = self.llm_budget_renews_at.isoformat() if self.llm_budget_renews_at else ""
+        return f"{renews_at}|{self.effective_llm_budget_usd}"
+
+    @property
+    def llm_memory_suspended(self) -> bool:
+        return self.llm_memory_suspended_key is not None and self.llm_memory_suspended_key == self.llm_budget_window_key
 
 
 class OrganizationRead(PydanticBaseModel):
@@ -169,7 +236,11 @@ class OrganizationLlmBudgetRead(PydanticBaseModel):
     # The Organization's own limit, or None when it follows the ceiling.
     own_limit_usd: float | None = None
     window: str
+    # Agents and memory together this window — what the limit is measured against.
     spend_usd: float | None = None
+    # The memory share of `spend_usd`. Memory runs on its own credential, so the
+    # proxy's team figure never includes it; it is added here.
+    memory_spend_usd: float | None = None
     renews_at: datetime | None = None
     # Whether the caller may change the Organization's own limit, so the UI shows a
     # control only to the people the API would accept it from.

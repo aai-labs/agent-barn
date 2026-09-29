@@ -398,3 +398,13 @@ def test_group_memory_409_when_memory_backend_is_off():
 
     assert_that(exc.value.status_code, equal_to(status.HTTP_409_CONFLICT))
     memory.list_memory_for_workspace.assert_not_called()
+
+
+def test_every_group_maps_to_its_organization_for_system_callers() -> None:
+    org_a, org_b = uuid7(), uuid7()
+    g1 = MemoryGroup(organization_id=org_a, name="One")
+    g2 = MemoryGroup(organization_id=org_b, name="Two")
+    service, repository, *_ = _service()
+    repository.find_all.return_value = [g1, g2]
+
+    assert_that(service.organization_by_group(), equal_to({g1.id: org_a, g2.id: org_b}))

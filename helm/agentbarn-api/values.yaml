@@ -209,6 +209,16 @@ organizationLlmBudgets:
     # informational — the proxy enforces the limit in the request path, so this only
     # bounds how late someone is told, never how much is spent.
     schedule: "*/5 * * * *"
+  enforcement:
+    enabled: true
+    # Every 5 minutes. Counts each Organization's memory spend against its limit:
+    # lowers the team's ceiling by it and suspends memory once agents and memory
+    # together reach the limit. Memory keeps spending between runs, so this interval
+    # bounds the overshoot.
+    schedule: "*/5 * * * *"
+    # Share of the limit (1-100) at which memory is suspended. Below 100 trips early
+    # to absorb the spend that lands between runs.
+    suspendPercent: 100
 
 worker:
   enabled: true
