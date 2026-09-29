@@ -110,6 +110,70 @@ An Organization turns Business Actions into time and money through its value set
   - `field_changes` is keyed `hourly_rate_usd` or `outcome_minutes.<OUTCOME_TYPE>`. Each entry holds `previous` and `current` as strings: the rate to two places, minutes as an integer, and `null` for unset or default.
   - A save that changes nothing, including the same rate spelled differently, emits nothing.
 
+## Organization value
+
+`GET /organizations/{organization_id}/value` sets an Organization's Business Actions against its LLM spend.
+
+### Window and authorization
+
+- The window comes from `get_stats_window` (`period`, `from_date`, `to_date`, `granularity`). It is half-open, `[start, end)`, on `business_action.occurred_at` and `cost_record.occurred_at`, and the response echoes it.
+- Authorization is the same as reading value settings:
+  - It requires both `cost.read` and `activity.read`.
+  - The Organization-level scope from that check feeds `agent_scope_predicates(scope, include_deleted=True)`, so a soft-deleted Agent's work still counts.
+
+### Valuation at read time
+
+Figures are computed when read. Changing the rate or an override therefore changes past figures too.
+
+- The repository returns counts grouped by Outcome Type.
+- The service applies the effective minutes and the rate in `Decimal`: `value = minutes × rate ÷ 60`.
+- Values are emitted as floats, following the Costs convention.
+
+### Write categories
+
+Each Business Action falls in exactly one category. A write is **classified** when its Outcome Type is in the current catalogue.
+
+| Category | Rule | Valued |
+|---|---|---|
+| Successful | classified, `SUCCESS` | yes |
+| Unverified | classified, `UNKNOWN` | no |
+| Failed | classified, `ERROR` | no |
+| Unclassified | any status: `is_write IS NULL`, a write with no Outcome Type, or an Outcome Type no longer in the catalogue | no |
+
+- Reads are not counted.
+- Hermes never reports errors, so many of its writes are `UNKNOWN`. The unverified count exists so a low value can be explained rather than shown as a silent $0.
+
+### Spend
+
+- Spend is read through `CostRepository` with an Organization-only `CostFilter`. It has no Agent join, so the total matches the Costs page.
+  - Spend from a soft- or hard-deleted Agent stays in the total, because `cost_record` has no foreign keys.
+- Spend with no Organization attribution is never in any Organization's total.
+  - The cost sync attributes all-or-nothing (`costs/sync.py`), so a row carries both `agent_id` and `organization_id`, or neither.
+  - The per-Agent `"Unattributed"` row therefore appears only for a cost row that has an Organization but no Agent. The sync does not write such rows today.
+
+### Response
+
+- **`totals`:**
+  - `successful_writes`, `minutes_saved`, `value`, `spend`, and `value_to_spend_ratio`
+  - `unverified_writes`, `failed_writes`, and `unclassified_actions`
+  - `hourly_rate_usd`, the rate used
+- **`series`:** one point per UTC bucket, with `bucket`, `minutes_saved`, `value`, and `spend`.
+  - The Business Action counts and `CostRepository.spend_series` are built on the same `generate_series(date_trunc(...))` spine, so every bucket is present and the two merge by key.
+  - Buckets are emitted as UTC instants.
+- **`agents`:** a full outer merge of the per-Agent Business Action counts with `CostRepository.spend_by_agent`.
+  - Each row carries `agent_id`, `agent_name`, `agent_deleted`, `successful_writes`, `minutes_saved`, `value`, `spend`, and `value_to_spend_ratio`.
+  - Names come from `AgentRepository.find_all_for_org`, which includes deleted Agents. A hard-deleted Agent falls back to the cost record's name, with `agent_deleted` true.
+  - A null `agent_id` is labelled `"Unattributed"`.
+  - Rows are ordered by minutes saved, then spend, both descending.
+- **`top_outcome_types`:** each catalogue Outcome Type with at least one successful write.
+  - Each entry carries `successful_writes`, `effective_minutes`, `minutes_saved`, and `value`.
+  - Entries are ordered by minutes saved, then count, both descending.
+
+### Nulls
+
+- With no rate set, every `value` and ratio is `null`, while minutes and spend are still reported.
+- A ratio is also `null` when its spend is zero.
+
 ## Known gaps
 
 Each of these is an **undercount**, not a verdict on the Agent. The last one is a possible overcount.
@@ -161,9 +225,11 @@ Ingest owns authentication and the transaction. The Business Value domain owns t
 | Recorded runtime fixtures | `../../api/tests/fixtures/business_actions/` |
 | Value settings tables, DTOs, and bounds | `../../api/domains/business_value/models.py`, migration `1045836844da` |
 | Value settings persistence and audit event | `../../api/domains/business_value/repository.py` (`ValueSettingsRepository`), `../../api/domains/events/catalog.py` |
-| Valuation rules and value settings service | `../../api/domains/business_value/service.py` |
+| Valuation rules, value settings, and the Organization value service | `../../api/domains/business_value/service.py` |
+| Organization value aggregates | `../../api/domains/business_value/repository.py` (`BusinessActionRepository.category_counts`, `successful_counts_by_bucket`, `successful_counts_by_agent`) |
 | HTTP routes | `../../api/domains/business_value/routes.py` |
-| Tests | `../../api/tests/unit/test_business_action_catalogue.py`, `../../api/tests/unit/test_business_action_classifier.py`, `../../api/tests/unit/test_business_value_valuation.py`, `../../api/tests/integration/test_business_action_repository.py`, `../../api/tests/integration/test_ingest.py`, `../../api/tests/integration/test_business_action_backfill.py`, `../../api/tests/integration/test_value_settings.py`, `../../api/tests/integration/test_cross_org_isolation.py` |
+| Test seeding | `../../api/tests/steps/business_action.py`, `../../api/tests/steps/cost.py` (`without_agent`) |
+| Tests | `../../api/tests/unit/test_business_action_catalogue.py`, `../../api/tests/unit/test_business_action_classifier.py`, `../../api/tests/unit/test_business_value_valuation.py`, `../../api/tests/integration/test_business_action_repository.py`, `../../api/tests/integration/test_ingest.py`, `../../api/tests/integration/test_business_action_backfill.py`, `../../api/tests/integration/test_value_settings.py`, `../../api/tests/integration/test_organization_value.py`, `../../api/tests/integration/test_cross_org_isolation.py` |
 
 ## Related decisions
 
@@ -179,3 +245,5 @@ Ingest owns authentication and the transaction. The Business Value domain owns t
 - **A new read surface** over `business_action` must apply the RBAC brief and report `UNKNOWN` as unverified, never as value.
 - **A new Outcome Type** needs a `DEFAULT_MINUTES` entry and appears in value settings automatically. **Removing one** leaves any stored overrides in place; they are ignored on read.
 - **A change to the value settings bounds or authorization** must update this document, `test_value_settings.py`, and the audit event's documentation in [`domain-events.md`](domain-events.md) together.
+- **A change to the Costs read predicates** (`CostRepository._predicates`, `spend_series` buckets, or `spend_by_agent`) changes the Organization value's spend and series. Re-run `test_organization_value.py`.
+- **A change to the Business Action status rules** moves actions between the successful, unverified, and failed categories, and so changes reported value.

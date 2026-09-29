@@ -269,7 +269,7 @@ A content-free record of one aai-cli command an Agent ran, derived from a Tool C
 _Avoid_: event, activity, tool call
 
 **Outcome Type**:
-The kind of business result a write Business Action produces, such as `PULL_REQUEST_OPENED` or `RECORD_UPDATED`, with default minutes of value. A write without an Outcome Type is unclassified and never valued.
+The kind of business result a write Business Action produces, such as `PULL_REQUEST_OPENED` or `RECORD_UPDATED`, with default minutes of value that an Organization may override. A write without an Outcome Type, or with one no longer in the catalogue, is unclassified and never valued. A classified write is valued only when it succeeded. With `UNKNOWN` status it is unverified, and with `ERROR` status it is failed.
 _Avoid_: action type, category
 
 **Domain Event**:

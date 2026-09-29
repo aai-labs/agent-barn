@@ -11,6 +11,7 @@ from sqlmodel import Field as SqlField
 
 from api.domains.business_value.catalogue import OutcomeType
 from api.domains.business_value.classifier import BusinessActionStatus
+from api.domains.platform_admin.models import StatsGranularity, StatsPeriod
 from api.infrastructure.postgres.models import BaseModel
 
 OUTCOME_TYPE_MAX_LENGTH = 64
@@ -111,3 +112,52 @@ class ValueSettingsUpdate(PydanticBaseModel):
 
     hourly_rate_usd: HourlyRateUsd | None = None
     outcome_minutes: dict[OutcomeType, OutcomeMinutes | None] = Field(default_factory=dict)
+
+
+class ValueTotalsRead(PydanticBaseModel):
+    successful_writes: int
+    minutes_saved: int
+    value: float | None
+    spend: float
+    value_to_spend_ratio: float | None
+    unverified_writes: int
+    failed_writes: int
+    unclassified_actions: int
+    hourly_rate_usd: float | None
+
+
+class ValueSeriesPoint(PydanticBaseModel):
+    bucket: datetime
+    minutes_saved: int
+    value: float | None
+    spend: float
+
+
+class AgentValueRead(PydanticBaseModel):
+    agent_id: UUID | None
+    agent_name: str | None
+    agent_deleted: bool
+    successful_writes: int
+    minutes_saved: int
+    value: float | None
+    spend: float
+    value_to_spend_ratio: float | None
+
+
+class OutcomeTypeValueRead(PydanticBaseModel):
+    outcome_type: OutcomeType
+    successful_writes: int
+    effective_minutes: int
+    minutes_saved: int
+    value: float | None
+
+
+class OrganizationValueRead(PydanticBaseModel):
+    period: StatsPeriod | None
+    from_date: datetime
+    to_date: datetime
+    granularity: StatsGranularity
+    totals: ValueTotalsRead
+    series: list[ValueSeriesPoint]
+    agents: list[AgentValueRead]
+    top_outcome_types: list[OutcomeTypeValueRead]

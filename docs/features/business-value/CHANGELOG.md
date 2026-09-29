@@ -16,12 +16,57 @@ Related context: [Activity and Ingest](../activity-and-ingest.md), [Agent Activi
 - Also delivered: the pure valuation rules in `api/domains/business_value/service.py` (effective minutes, value, the value-to-spend ratio, and write categories). Nothing calls them yet.
 - Also delivered: `ValueSettingsRepository`, which saves value settings and stages `organization.value_settings.changed` in one transaction.
 - Also delivered: `GET` and `PUT /organizations/{organization_id}/value-settings`. The feature doc's [Value settings](../business-value.md#value-settings) section is the contract.
-- Also delivered: the scoped Business Action aggregate reads the value KPI needs. No route calls them yet.
-- In transition: AF-345 is landing in slices. Value settings are complete, and the KPI's aggregates exist, but the KPI endpoint is not yet built.
-- Next: `GET /organizations/{organization_id}/value`, the Organization value KPI.
-- Blockers: the product owner has not signed off the default minutes per Outcome Type. They are placeholders until then.
+- Also delivered: the scoped Business Action aggregate reads the value KPI needs.
+- Also delivered: `GET /organizations/{organization_id}/value`, the Organization value KPI. The feature doc's [Organization value](../business-value.md#organization-value) section is the contract. The AF-345 backend is complete.
+- In transition: nothing.
+- Next: the Stage 3 UI that renders value settings and the Organization value.
+- Blockers: the product owner has not signed off the default minutes per Outcome Type. They are placeholders until then, and every value figure inherits them.
 
 ## Slice history
+
+### 2026-09-29 — AF-345 — Organization value API
+
+Delivered: `GET /organizations/{organization_id}/value` with `Depends(get_stats_window)`. The response echoes the resolved window and returns four parts.
+- **`totals`:**
+  - successful writes, minutes saved, value, spend, and the value-to-spend ratio
+  - unverified, failed, and unclassified counts
+  - the hourly rate used
+- **`series`:** `bucket`, `minutes_saved`, `value`, and `spend` per UTC bucket, emitted with an explicit UTC offset.
+- **`agents`:** a full outer merge of the Business Action counts with `CostRepository.spend_by_agent`.
+  - Names come from `AgentRepository.find_all_for_org`, which includes deleted Agents. A hard-deleted Agent falls back to the cost record's name.
+  - A null id is labelled `"Unattributed"`.
+  - Rows are ordered by minutes saved, then spend.
+- **`top_outcome_types`:** ordered by minutes saved, then count.
+
+Value is computed at read time in `Decimal` and emitted as a float. It is null, as is every ratio, until a rate is set. A ratio is also null when spend is zero.
+
+Spend comes from `CostRepository` with an Organization-only `CostFilter`, with no Agent join. `costs.md` Boundaries now names Business Value as a reader.
+
+Ticket correction:
+- Cost sync attributes all-or-nothing (`costs/sync.py:295-296`), so spend with no Organization is never in any Organization's total.
+- The org-scoped "Unattributed" row appears only for a cost row with an Organization but no Agent, which the sync does not write today.
+- The row is kept, mirroring Costs, and tested with a synthetic row (`there_are_cost_records(without_agent=True)`).
+
+Docs:
+- `business-value.md` gains the Organization value section, the category table, source map entries, and change-impact rules.
+- `CONTEXT.md`'s Outcome Type entry now defines unclassified (including Outcome Types no longer in the catalogue), unverified, and failed writes.
+
+Coverage:
+- `api/tests/integration/test_organization_value.py` adds 17 API tests:
+  - totals and the echoed window, and the half-open period for both actions and spend
+  - the per-Agent split, including a soft-deleted Agent, the Unattributed row, and a hard-deleted Agent
+  - an Agent with work but no spend
+  - top Outcome Types and their tie-break
+  - the series with its full UTC bucket spine
+  - overrides applied, a null rate, and zero spend
+  - the unverified, failed, and unclassified counts
+  - an empty period
+  - Admin 200, Member 403, non-member 403, and unauthenticated 401
+- `api/tests/integration/test_cross_org_isolation.py`:
+  - an Owner of Org A gets 403 on Org B's `/value`
+  - Org B's Business Actions and spend never appear in Org A's figures
+- All 17 API tests failed first, on 404 before the route existed.
+- `test_value_settings.py` (43) and the relevant subset of `test_costs.py` (11) still pass.
 
 ### 2026-09-29 — AF-345 — Value aggregates
 
