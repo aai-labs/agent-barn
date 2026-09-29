@@ -12,11 +12,27 @@ Related context: [Activity and Ingest](../activity-and-ingest.md), [Agent Activi
 - Also delivered: Ingest records Business Actions for every completed shell Tool Call and exports `agentbarn_business_actions_total`. The feature doc is [`../business-value.md`](../business-value.md).
 - Also delivered: the operator backfill (`make backfill-business-actions`) for Tool Calls stored before Ingest recorded Business Actions.
 - Also delivered: the `organization_value_settings` and `organization_outcome_minutes` tables (migration `1045836844da`). Nothing reads or writes them yet.
-- In transition: AF-345 (value settings and the Organization value KPI) is landing in slices. The tables exist, but there are no endpoints yet.
-- Next: the `organization.value_settings.changed` audit event.
+- Also delivered: the `organization.value_settings.changed` Domain Event, registered and projected to the security audit. Nothing emits it yet.
+- In transition: AF-345 (value settings and the Organization value KPI) is landing in slices. The tables and the event exist, but there are no endpoints yet.
+- Next: the pure valuation rules (effective minutes, value, ratio, and write categories).
 - Blockers: the product owner has not signed off the default minutes per Outcome Type. They are placeholders until then.
 
 ## Slice history
+
+### 2026-09-29 — AF-345 — Value settings audit event
+
+Delivered:
+- `organization.value_settings.changed`, schema v1, is registered in `build_default_event_registry` with Organization scope. It is routed to `security_audit.projection`, and `SecurityAuditProjection.supported_events` lists it.
+- `OrganizationValueSettingsChangedPayload` uses `extra="forbid"` and carries:
+  - `organization_id`
+  - `field_changes: dict[str, dict[str, str | None]]`, keyed `hourly_rate_usd` or `outcome_minutes.<OUTCOME_TYPE>`, each holding `previous` and `current`
+  - `actor_display` and `subject_display`
+- Every value in `field_changes` is a string or `null`. The later settings service renders the rate to two places and minutes as integers.
+- `docs/features/domain-events.md` lists the event.
+
+Coverage:
+- `api/tests/unit/test_event_handler_registry_wiring.py` includes the event. It failed with `supports(...) is False` before the projection registration and passes after.
+- `api/tests/unit/test_domain_events.py` passes unchanged.
 
 ### 2026-09-29 — AF-345 — Value settings tables
 
