@@ -11,11 +11,37 @@ Related context: [Activity and Ingest](../activity-and-ingest.md), [Agent Activi
 - Also delivered: the `business_action` table (migration `39ea6a8e2fe4`) and `BusinessActionRepository.record_in_session`.
 - Also delivered: Ingest records Business Actions for every completed shell Tool Call and exports `agentbarn_business_actions_total`. The feature doc is [`../business-value.md`](../business-value.md).
 - Also delivered: the operator backfill (`make backfill-business-actions`) for Tool Calls stored before Ingest recorded Business Actions.
-- In transition: nothing. The live end-to-end check passed on local k3d on 2026-09-28.
-- Next: the reporting ticket that reads Business Actions and reports `UNKNOWN` as unverified.
+- Also delivered: the `organization_value_settings` and `organization_outcome_minutes` tables (migration `1045836844da`). Nothing reads or writes them yet.
+- In transition: AF-345 (value settings and the Organization value KPI) is landing in slices. The tables exist, but there are no endpoints yet.
+- Next: the `organization.value_settings.changed` audit event.
 - Blockers: the product owner has not signed off the default minutes per Outcome Type. They are placeholders until then.
 
 ## Slice history
+
+### 2026-09-29 — AF-345 — Value settings tables
+
+Delivered:
+- Migration `1045836844da` (revises `39ea6a8e2fe4`) adds two tables.
+- `organization_value_settings`: one row per Organization.
+  - `organization_id` is unique, with a foreign key using `ON DELETE CASCADE`.
+  - `hourly_rate_usd` is a nullable `NUMERIC(12,2)`, checked to be `NULL` or `>= 0`.
+- `organization_outcome_minutes`:
+  - `organization_id` is a foreign key with `ON DELETE CASCADE`.
+  - `outcome_type` is a `VARCHAR(64)`, matching `business_action.outcome_type`.
+  - `minutes_saved` is an integer checked to be `> 0`.
+  - `(organization_id, outcome_type)` is unique.
+- The bounds the API will enforce are constants in `api/domains/business_value/models.py`: `MAX_HOURLY_RATE_USD = 10000.00` and `MAX_OUTCOME_MINUTES = 1440`.
+
+Coverage:
+- `api/tests/integration/test_value_settings.py` covers the migrated schema:
+  - both tables exist, and a rate reads back as an exact two-place decimal
+  - the rate and minutes check constraints, and both uniqueness constraints
+  - deleting an Organization cascades both tables
+- `test_rbac_schema.py::test_downgrade_to_rbac_revision_removes_general_access_column` downgrades through the new migration.
+- Checked by hand, not in CI, on a fresh Postgres container:
+  - upgrading to head, downgrading to `39ea6a8e2fe4`, and upgrading again succeeds
+  - `compare_metadata` scoped to the two tables shows no drift
+  - The only other difference reported is an existing mismatch in the `agent_chat_message.conversation_type` enum variants, unrelated to this change.
 
 ### 2026-09-28 — AF-344 — Live end-to-end check (local k3d)
 
