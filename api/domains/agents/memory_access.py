@@ -28,10 +28,14 @@ class MemoryAccessDenied(Exception):
     """A genuine Agent whose memory is off right now."""
 
 
-def memory_endpoint_for_agent(config: Config, agent_id: UUID) -> str:
-    """The base URL an Agent's runtime is given for memory. The runtimes send only a
-    bearer, so the Agent's id travels in the path; both SDKs append `/v3/...`."""
-    return f"{config.agent_memory_proxy_base_url.rstrip('/')}/agents/{agent_id}"
+def new_memory_key(agent_id: UUID) -> str:
+    """A fresh key for one Agent, as `<agent id>.<secret>`.
+
+    The runtimes send only a bearer to one base URL, and OpenClaw's SDK drops any
+    path on that URL, so the key itself says which Agent is calling. The id only
+    selects the row the whole key is then compared against.
+    """
+    return f"{agent_id}.{secrets.token_urlsafe(32)}"
 
 
 @inject
@@ -42,9 +46,15 @@ class AgentMemoryAccessService:
     organization_lookup: OrganizationLookupService
     config: Config
 
-    def authorize(self, agent_id: UUID, provided_key: str) -> str:
-        """The pool workspace this Agent may use, or an exception saying why not."""
-        agent = self.agents.get_by_id(agent_id)
+    def authorize(self, provided_key: str) -> str:
+        """The pool workspace the key's Agent may use, or an exception saying why not."""
+        agent_id, _, secret = provided_key.partition(".")
+        if not secret:
+            raise MemoryKeyRejected
+        try:
+            agent = self.agents.get_by_id(UUID(agent_id))
+        except ValueError:
+            raise MemoryKeyRejected from None
         if agent is None or not agent.memory_key_encrypted:
             raise MemoryKeyRejected
         stored = decrypt_token(agent.memory_key_encrypted, self.config.agent_token_encryption_key)

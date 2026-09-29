@@ -14,10 +14,9 @@ from api.domains.agents.memory_access import MemoryAccessDenied, MemoryKeyReject
 from api.domains.memory_proxy.proxy import MemoryProxy
 from api.memory_proxy_app import create_memory_proxy_app
 
-AGENT = uuid.uuid4()
 WS = "af-pool-0199"
 SECRET = "a-test-jwt-secret-at-least-32-bytes-long"
-KEY = "memory-key"
+KEY = f"{uuid.uuid4()}.memory-key-secret"
 
 
 def config(**values):
@@ -62,7 +61,7 @@ class Upstream:
 
 def proxy_client(upstream: Upstream, *, authorize=None, **config_values) -> TestClient:
     access = MagicMock()
-    access.authorize.side_effect = authorize or (lambda agent_id, key: WS if key == KEY else _reject())
+    access.authorize.side_effect = authorize or (lambda key: WS if key == KEY else _reject())
     proxy = MemoryProxy(
         access=access,
         config=config(**config_values),
@@ -83,7 +82,7 @@ def test_an_agents_own_pool_request_is_forwarded_with_a_pool_scoped_token():
     upstream = Upstream()
     client = proxy_client(upstream)
 
-    response = client.post(f"/agents/{AGENT}/v3/workspaces/{WS}/chat?x=1", json={"query": "hi"}, headers=bearer())
+    response = client.post(f"/v3/workspaces/{WS}/chat?x=1", json={"query": "hi"}, headers=bearer())
 
     assert_that(response.status_code, equal_to(200))
     assert_that(response.json(), equal_to({"content": "remembered"}))
@@ -96,52 +95,50 @@ def test_an_agents_own_pool_request_is_forwarded_with_a_pool_scoped_token():
 
 def test_the_agents_own_key_never_reaches_honcho():
     upstream = Upstream()
-    proxy_client(upstream).get(f"/agents/{AGENT}/v3/workspaces/{WS}", headers=bearer())
+    proxy_client(upstream).get(f"/v3/workspaces/{WS}", headers=bearer())
     assert_that(KEY in upstream.requests[0].headers["authorization"], equal_to(False))
 
 
 def test_with_honcho_auth_off_nothing_is_signed():
     """Local development runs Honcho without auth; there is no secret to sign with."""
     upstream = Upstream()
-    proxy_client(upstream, honcho_jwt_secret="").get(f"/agents/{AGENT}/v3/workspaces/{WS}", headers=bearer())
+    proxy_client(upstream, honcho_jwt_secret="").get(f"/v3/workspaces/{WS}", headers=bearer())
     assert_that("authorization" in upstream.requests[0].headers, equal_to(False))
 
 
 def test_a_streamed_answer_is_passed_through():
     upstream = Upstream(headers={"content-type": "text/event-stream"}, chunks=(b"data: a\n\n", b"data: b\n\n"))
-    response = proxy_client(upstream).post(f"/agents/{AGENT}/v3/workspaces/{WS}/chat", json={}, headers=bearer())
+    response = proxy_client(upstream).post(f"/v3/workspaces/{WS}/chat", json={}, headers=bearer())
     assert_that(response.headers["content-type"], equal_to("text/event-stream"))
     assert_that(response.content, equal_to(b"data: a\n\ndata: b\n\n"))
 
 
 def test_honchos_own_errors_reach_the_runtime_unchanged():
     upstream = Upstream(404, chunks=(b'{"detail":"Peer not found"}',))
-    response = proxy_client(upstream).get(f"/agents/{AGENT}/v3/workspaces/{WS}/peers/x", headers=bearer())
+    response = proxy_client(upstream).get(f"/v3/workspaces/{WS}/peers/x", headers=bearer())
     assert_that((response.status_code, response.json()), equal_to((404, {"detail": "Peer not found"})))
 
 
 @pytest.mark.parametrize("headers", [{}, {"Authorization": "Bearer wrong"}, {"Authorization": "Basic x"}])
 def test_a_caller_without_the_agents_key_is_turned_away_before_honcho(headers):
     upstream = Upstream()
-    response = proxy_client(upstream).get(f"/agents/{AGENT}/v3/workspaces/{WS}", headers=headers)
+    response = proxy_client(upstream).get(f"/v3/workspaces/{WS}", headers=headers)
     assert_that((response.status_code, upstream.requests), equal_to((401, [])))
 
 
 def test_an_agent_whose_memory_is_off_is_refused_before_honcho():
     upstream = Upstream()
 
-    def denied(agent_id, key):
+    def denied(key):
         raise MemoryAccessDenied
 
-    response = proxy_client(upstream, authorize=denied).get(f"/agents/{AGENT}/v3/workspaces/{WS}", headers=bearer())
+    response = proxy_client(upstream, authorize=denied).get(f"/v3/workspaces/{WS}", headers=bearer())
     assert_that((response.status_code, upstream.requests), equal_to((403, [])))
 
 
 def test_a_request_outside_the_agents_rights_is_refused_before_honcho():
     upstream = Upstream()
-    response = proxy_client(upstream).put(
-        f"/agents/{AGENT}/v3/workspaces/{WS}", json={"configuration": {}}, headers=bearer()
-    )
+    response = proxy_client(upstream).put(f"/v3/workspaces/{WS}", json={"configuration": {}}, headers=bearer())
     assert_that((response.status_code, upstream.requests), equal_to((403, [])))
 
 
@@ -152,15 +149,8 @@ def test_an_unreachable_honcho_is_a_bad_gateway():
     access = MagicMock()
     access.authorize.return_value = WS
     proxy = MemoryProxy(access=access, config=config(), transport=httpx.MockTransport(down))
-    response = TestClient(create_memory_proxy_app(proxy=proxy)).get(
-        f"/agents/{AGENT}/v3/workspaces/{WS}", headers=bearer()
-    )
+    response = TestClient(create_memory_proxy_app(proxy=proxy)).get(f"/v3/workspaces/{WS}", headers=bearer())
     assert_that(response.status_code, equal_to(502))
-
-
-def test_a_malformed_agent_id_is_not_found():
-    response = proxy_client(Upstream()).get("/agents/not-a-uuid/v3/workspaces", headers=bearer())
-    assert_that(response.status_code, equal_to(404))
 
 
 def test_the_proxy_reports_its_own_health_without_a_key():

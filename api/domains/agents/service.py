@@ -51,7 +51,7 @@ from api.domains.agents.error_messages import friendly_pod_reason
 from api.domains.agents.exceptions import AgentProvisioningPrecondition
 from api.domains.agents.gog_artifacts import build_gog_env, build_gog_policy_md, build_gog_setup_sh
 from api.domains.agents.llm_budget import AgentLlmBudgetService
-from api.domains.agents.memory_access import memory_endpoint_for_agent
+from api.domains.agents.memory_access import new_memory_key
 from api.domains.agents.memory_sharing import (
     ai_peer_name_for_agent,
     memory_active,
@@ -1920,8 +1920,8 @@ class AgentService:
         # Honcho token cannot be revoked, and a copied one would outlive a stop, a
         # group change or a budget suspension. The proxy checks this key against the
         # Agent on every request. None when memory is off.
-        memory_key = secrets.token_urlsafe(32) if memory_on else None
-        memory_endpoint = memory_endpoint_for_agent(self.config, agent.id)
+        memory_key = new_memory_key(agent.id) if memory_on else None
+        memory_endpoint = self.config.agent_memory_proxy_base_url
         if agent.agent_type == AgentType.HERMES:
             overlay = None
             native_slack = self._native_slack_connection(agent.id)

@@ -83,6 +83,13 @@ def test_memory_with_no_known_window_does_not_lower_the_ceiling():
     assert_that(organization(limit=100.0, memory=30.0, renews=None).enforced_llm_budget_usd, equal_to(100.0))
 
 
+def test_the_ceiling_is_rounded_so_an_unchanged_one_is_never_rewritten():
+    """1.0 - 0.540028792916 is 0.45997120708399997 in floating point, while LiteLLM
+    stores 0.459971207084: an unrounded ceiling never matches what the proxy read
+    back, so every pass would rewrite it and fail its own verification."""
+    assert_that(organization(limit=1.0, memory=0.540028792916).enforced_llm_budget_usd, equal_to(0.459971))
+
+
 def test_memory_alone_past_the_limit_takes_the_ceiling_to_zero_not_below():
     assert_that(organization(limit=100.0, memory=130.0).enforced_llm_budget_usd, equal_to(0.0))
 
@@ -401,3 +408,28 @@ def test_a_missing_organization_is_not_suspended():
     repository = MagicMock()
     repository.get.return_value = None
     assert_that(OrganizationLookupService(repository=repository).memory_suspended(MagicMock()), equal_to(False))
+
+
+def test_the_budget_cronjobs_can_save_an_agent_in_a_process_of_their_own():
+    """Each CronJob is its own process with only the models its imports reach.
+    `agent.memory_group_id` references `memory_group`, and the per-Agent alert pass
+    saves Agents, so without that table registered the save fails outright."""
+    import subprocess
+    import sys
+
+    probe = (
+        "import api.domains.organizations.llm_budget_cron\n"
+        "from sqlmodel import SQLModel\n"
+        "assert 'memory_group' in SQLModel.metadata.tables, 'memory_group is not registered'\n"
+    )
+    import os
+    from pathlib import Path
+
+    import api
+
+    root = str(Path(api.__file__).resolve().parents[1])
+    env = {**os.environ, "PYTHONPATH": root}
+    result = subprocess.run(
+        [sys.executable, "-c", probe], capture_output=True, text=True, env=env, cwd=root, check=False
+    )
+    assert_that((result.returncode, result.stderr[-300:]), equal_to((0, "")))

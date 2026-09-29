@@ -176,6 +176,10 @@ services:
       - .env
     environment:
       <<: *api-env
+      # The same memory switch and Honcho address as the API: the proxy refuses
+      # every Agent while memory is off, and forwards over the Compose network.
+      HONCHO_ENABLED: ${HONCHO_ENABLED:-false}
+      HONCHO_BASE_URL: ${API_HONCHO_BASE_URL:-http://honcho:8000}
     volumes:
       - ./api:/app/api
     ports:

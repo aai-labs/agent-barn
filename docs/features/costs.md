@@ -204,6 +204,11 @@ Soft by construction: the ceiling and the suspension are only as fresh as the la
 pass (every 5 minutes by default), and Honcho finishes memory work already queued when
 a suspension lands.
 
+The lowered ceiling binds only Agent keys enrolled in the Organization's team, like
+the limit itself: a key outside the team (see *enroll_llm_keys* above) is capped by
+neither. Suspension does not depend on enrollment — the memory proxy refuses every
+Agent of a suspended Organization.
+
 ## Operational
 
 - The CronJob runs every 15 minutes under `concurrencyPolicy: Forbid`. `COST_SYNC_MAX_RUNTIME_SECONDS` must stay below the schedule interval: an overrunning pass does not overlap, it silently costs the next tick.
