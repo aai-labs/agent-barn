@@ -13,11 +13,31 @@ Related context: [Activity and Ingest](../activity-and-ingest.md), [Agent Activi
 - Also delivered: the operator backfill (`make backfill-business-actions`) for Tool Calls stored before Ingest recorded Business Actions.
 - Also delivered: the `organization_value_settings` and `organization_outcome_minutes` tables (migration `1045836844da`). Nothing reads or writes them yet.
 - Also delivered: the `organization.value_settings.changed` Domain Event, registered and projected to the security audit. Nothing emits it yet.
-- In transition: AF-345 (value settings and the Organization value KPI) is landing in slices. The tables and the event exist, but there are no endpoints yet.
-- Next: the pure valuation rules (effective minutes, value, ratio, and write categories).
+- Also delivered: the pure valuation rules in `api/domains/business_value/service.py` (effective minutes, value, the value-to-spend ratio, and write categories). Nothing calls them yet.
+- In transition: AF-345 (value settings and the Organization value KPI) is landing in slices. The tables, the event, and the valuation rules exist, but there are no endpoints yet.
+- Next: `ValueSettingsRepository`, which saves settings and stages the audit event in one transaction.
 - Blockers: the product owner has not signed off the default minutes per Outcome Type. They are placeholders until then.
 
 ## Slice history
+
+### 2026-09-29 — AF-345 — Valuation rules
+
+Delivered: module-level functions in `api/domains/business_value/service.py`. They are pure; valuation happens when figures are read.
+- `effective_minutes(overrides)` returns `DEFAULT_MINUTES` with an Organization's overrides applied. An override for an Outcome Type that is no longer in the catalogue is ignored.
+- `value_usd(minutes, rate)` computes `Decimal(minutes) * rate / 60`, unrounded, so the value stays exact until it is emitted as a float. It is `None` when no rate is set.
+- `value_to_spend_ratio(value, spend)` is `None` when there is no value or the spend is zero.
+- `categorise(rows)` takes counts grouped by `(is_write, outcome_type, status)` and puts each action in exactly one category. An action is classified when it is a write whose Outcome Type is in the current catalogue.
+  - Successful: a classified SUCCESS, counted per Outcome Type. This is the only valued category.
+  - Unverified: a classified UNKNOWN.
+  - Failed: a classified ERROR.
+  - Unclassified, at any status: a path outside the catalogue, a write with no Outcome Type, or a write whose Outcome Type is no longer in the catalogue.
+  - Reads are not counted in any category.
+
+Coverage:
+- `api/tests/unit/test_business_value_valuation.py` has 22 tests.
+  - They cover overrides, stale override keys and stale action types, and every category.
+  - They also cover summing counts across rows, empty input, a null rate, a zero rate, zero spend, and Decimal exactness.
+  - Before the implementation they failed inside `NotImplementedError` stubs. They pass now.
 
 ### 2026-09-29 — AF-345 — Value settings audit event
 
