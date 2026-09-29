@@ -144,8 +144,13 @@ class Organization(BaseModel, table=True):
         The team only sees agent spend, so the memory already spent comes off the
         limit instead: the proxy then refuses agents once agents + memory reach it.
         Never shown to anyone — surfaces show the real limit and combined spend.
+
+        Rounded to a millionth of a dollar: the subtraction leaves float noise
+        (0.45997120708399997) that never equals what LiteLLM stores and reads back
+        (0.459971207084), so an unchanged ceiling would be rewritten on every pass
+        and fail the client's verification each time.
         """
-        return max(0.0, self.effective_llm_budget_usd - self.memory_spend_this_window_usd)
+        return round(max(0.0, self.effective_llm_budget_usd - self.memory_spend_this_window_usd), 6)
 
     @property
     def llm_budget_window_key(self) -> str:

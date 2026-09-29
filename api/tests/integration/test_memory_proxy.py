@@ -96,17 +96,17 @@ def test_a_started_agent_reaches_its_pool_through_the_proxy_until_it_stops(agent
 
         with then("its runtime is given the proxy and a memory key, never a Honcho token"):
             assert_that(started.status_code, equal_to(200))
-            assert_that(base_url, equal_to(f"{_PROXY}/agents/{ctx.agent.id}"))
+            assert_that(base_url, equal_to(_PROXY))
             assert_that(key, is_not(none()))
-            assert_that(key.count("."), equal_to(0))  # not a JWT
-            assert_that(access.authorize(ctx.agent.id, key), equal_to(f"af-pool-{ctx.group.id}"))
+            assert_that(key.split(".", 1)[0], equal_to(str(ctx.agent.id)))  # names its Agent; not a JWT
+            assert_that(access.authorize(key), equal_to(f"af-pool-{ctx.group.id}"))
 
         with when("the agent stops"):
             client.post(f"{_AGENTS}/{ctx.agent.id}/stop", headers=_auth(ctx))
 
         with then("the same key no longer reaches memory"):
             with pytest.raises(MemoryAccessDenied):
-                access.authorize(ctx.agent.id, key)
+                access.authorize(key)
 
 
 def test_a_restart_replaces_the_key():
@@ -122,6 +122,6 @@ def test_a_restart_replaces_the_key():
         _, second = _memory_config(k8s, AgentType.OPENCLAW)
 
         assert_that(second, is_not(equal_to(first)))
-        assert_that(access.authorize(ctx.agent.id, second), starts_with("af-pool-"))
+        assert_that(access.authorize(second), starts_with("af-pool-"))
         with pytest.raises(MemoryKeyRejected):
-            access.authorize(ctx.agent.id, first)
+            access.authorize(first)

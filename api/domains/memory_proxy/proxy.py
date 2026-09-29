@@ -12,7 +12,6 @@ import asyncio
 import json
 import logging
 from typing import Any
-from uuid import UUID
 
 import httpx
 from fastapi import Request, Response
@@ -60,16 +59,12 @@ class MemoryProxy:
             self._client_loop = loop
         return self._client
 
-    async def forward(self, request: Request, agent_id: str, path: str) -> Response:
-        try:
-            agent_uuid = UUID(agent_id)
-        except ValueError:
-            return _error(404, "Not found")
+    async def forward(self, request: Request, path: str) -> Response:
         key = _bearer(request.headers.get("authorization"))
         if key is None:
             return _error(401, "Missing memory key")
         try:
-            workspace = await run_in_threadpool(self.access.authorize, agent_uuid, key)
+            workspace = await run_in_threadpool(self.access.authorize, key)
         except MemoryKeyRejected:
             return _error(401, "Invalid memory key")
         except MemoryAccessDenied:
@@ -94,7 +89,7 @@ class MemoryProxy:
                 client.build_request(request.method, url, content=body, headers=headers), stream=True
             )
         except httpx.HTTPError:
-            logger.warning("Memory proxy could not reach Honcho for Agent %s", agent_uuid)
+            logger.warning("Memory proxy could not reach Honcho for workspace %s", workspace)
             return _error(502, "Memory is unavailable right now")
         return StreamingResponse(
             upstream.aiter_raw(),

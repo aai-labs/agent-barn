@@ -63,8 +63,10 @@ same key's LiteLLM spend is the pool-level memory cost the Costs page reports.
 
 Agent pods never talk to Honcho or hold a Honcho token (AF-338). With
 `HONCHO_ENABLED=true` the API chart also deploys `<release>-memory-proxy`
-(port 8003), and each Agent is given `<proxy>/agents/<agent id>` as its memory
-base URL and a per-Agent memory key, replaced on every start. The proxy checks
+(port 8003), and each Agent is given the proxy as its memory base URL and a
+per-Agent memory key of the form `<agent id>.<secret>`, replaced on every start.
+The key names the Agent because OpenClaw's Honcho SDK drops any path on the base
+URL, so the Agent cannot be identified by its address. The proxy checks
 every request against the Agent as it is now — running, in a group, its
 Organization's memory not suspended for spend — and forwards it to Honcho with a
 token scoped to the Agent's pool, signed with the same `honchoJwtSecret` the API

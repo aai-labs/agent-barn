@@ -3,6 +3,10 @@ import logging
 from collections.abc import Callable
 from typing import Any
 
+# Registered for the Agent rows these jobs save: `agent.memory_group_id` references
+# `memory_group`, and a CronJob is its own process that would otherwise never import
+# it (the API does, through its routes), so an Agent save fails to resolve the key.
+import api.domains.memory_groups.models  # noqa: F401
 from api.domains.organizations.llm_budget_service import OrganizationLlmBudgetService
 
 logger = logging.getLogger(__name__)
