@@ -265,7 +265,7 @@ An ingested record of one external tool execution by an agent, with pending, suc
 _Avoid_: integration call
 
 **Business Action**:
-A content-free record of one aai-cli command an Agent ran, derived from a Tool Call at Ingest. It carries the command's integration (the aai-cli command group, such as `jira` or `microsoft`, distinct from an **Integration**), its resource and verb, whether it writes, its **Outcome Type**, and a SUCCESS, ERROR, or UNKNOWN status inferred from the command's result. It stores no arguments and no results.
+A content-free record of one aai-cli or gog command an Agent ran, derived from a Tool Call at Ingest. It carries the command's integration (the aai-cli command group, such as `jira` or `microsoft`, or `google-<service>` for gog, such as `google-gmail`, distinct from an **Integration**), its resource and verb, whether it writes, its **Outcome Type**, and a SUCCESS, ERROR, or UNKNOWN status inferred from the command's result. It stores no arguments and no results.
 _Avoid_: event, activity, tool call
 
 **Outcome Type**:

@@ -315,3 +315,133 @@ def test_classifies_recorded_runtime_tool_calls(name, fixture):
     ]
 
     assert actual == fixture["expected_actions"], name
+
+
+# --- gog (Google Workspace) ---------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("command", "expected"),
+    [
+        (
+            "gog gmail send --to a@example.com --subject s",
+            [("google-gmail", "", "send", True, OutcomeType.MESSAGE_SENT)],
+        ),
+        ("gog mail labels ls", [("google-gmail", "labels", "list", False, None)]),
+        (
+            "gog email drafts new --to a@example.com",
+            [("google-gmail", "drafts", "create", True, OutcomeType.RECORD_CREATED)],
+        ),
+        (
+            "gog calendar create primary --summary x",
+            [("google-calendar", "", "create", True, OutcomeType.MEETING_SCHEDULED)],
+        ),
+        ("gog cal add primary --summary x", [("google-calendar", "", "create", True, OutcomeType.MEETING_SCHEDULED)]),
+        ("gog drive upload f.txt", [("google-drive", "", "upload", True, OutcomeType.FILE_UPLOADED)]),
+        ("gog drv rm file-id", [("google-drive", "", "delete", True, OutcomeType.RECORD_DELETED)]),
+        ("gog sheets append sheet-id 'A1' x", [("google-sheets", "", "append", True, OutcomeType.SPREADSHEET_UPDATED)]),
+        ("gog sheets create 'Budget'", [("google-sheets", "", "create", True, OutcomeType.DOCUMENT_AUTHORED)]),
+        ("gog gmail settings filters ls", [("google-gmail", "settings filters", "list", False, None)]),
+        ("gog send --to a@example.com", [("google-gmail", "", "send", True, OutcomeType.MESSAGE_SENT)]),
+        ("gog up f.txt", [("google-drive", "", "upload", True, OutcomeType.FILE_UPLOADED)]),
+        ("gog list", [("google-drive", "", "ls", False, None)]),
+        (
+            "gog --json -a me@example.com gmail send --to x",
+            [("google-gmail", "", "send", True, OutcomeType.MESSAGE_SENT)],
+        ),
+        ("gog --account=me@example.com --json drive ls", [("google-drive", "", "ls", False, None)]),
+        ("gog -j --results-only calendar calendars", [("google-calendar", "", "calendars", False, None)]),
+        ("/usr/local/bin/gog drive mkdir probe", [("google-drive", "", "mkdir", True, OutcomeType.RECORD_CREATED)]),
+        ("GOG_ACCOUNT=me@example.com gog drive ls", [("google-drive", "", "ls", False, None)]),
+        ("gog drive mkdir probe --dry-run=false", [("google-drive", "", "mkdir", True, OutcomeType.RECORD_CREATED)]),
+        ("gog gmail frobnicate", [("google-gmail", "", "frobnicate", None, None)]),
+        ("gog gmail labels frobnicate", [("google-gmail", "labels", "frobnicate", None, None)]),
+        ("gog docs export doc-id", [("google-docs", "", "", None, None)]),
+        ("gog doc export doc-id", [("google-docs", "", "", None, None)]),
+    ],
+)
+def test_classifies_gog_command_paths(command, expected):
+    assert _paths(classify(_hermes(command))) == expected
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "gog drive mkdir probe --dry-run",
+        "gog drive mkdir probe -n",
+        "gog -n gmail send --to a@example.com",
+        "gog drive mkdir probe --dry-run=true",
+        "gog gmail send --help",
+        "gog gmail send -h",
+        "gog --help",
+        "gog help gmail send",
+        "gog",
+        "gog --json",
+        "gog gmail",
+        "gog gmail labels",
+        "gog auth status",
+        "gog version",
+        "gog schema --json",
+        "gog status",
+        "gog whoami",
+        "gog gmail settings watch start",
+        "gog calendar alias set work primary",
+        "echo gog gmail send",
+    ],
+)
+def test_ignores_gog_commands_that_are_not_business_actions(command):
+    assert classify(_hermes(command)) == []
+
+
+def test_gog_ordinals_follow_the_aai_cli_ordinals():
+    actions = classify(_hermes("gog sheets append sheet-id A1 x && aai-cli jira issues create --project P"))
+
+    assert [(a.ordinal, a.integration, a.status) for a in actions] == [
+        (0, "jira", _SUCCESS),
+        (1, "google-sheets", _SUCCESS),
+    ]
+
+
+def test_gog_leaves_stored_aai_cli_ordinals_unchanged():
+    command = "gog drive ls && aai-cli hubspot health && aai-cli jira issues get A-1 && gog gmail send --to x"
+
+    actions = classify(_hermes(command))
+
+    assert [(a.ordinal, a.integration) for a in actions] == [(1, "jira"), (2, "google-drive"), (3, "google-gmail")]
+
+
+def test_ignored_gog_invocations_still_take_an_ordinal():
+    actions = classify(_hermes("gog drive mkdir a --dry-run && gog drive mkdir b"))
+
+    assert [(a.ordinal, a.verb) for a in actions] == [(1, "mkdir")]
+
+
+@pytest.mark.parametrize("build", [_hermes, _openclaw])
+def test_a_failed_gog_command_is_an_error(build):
+    actions = classify(build("gog drive mkdir probe", exit_code=1, output="Error: boom"))
+
+    assert _statuses(actions) == [_ERROR]
+
+
+def test_gog_empty_results_exit_is_a_success_for_a_single_gog_command():
+    actions = classify(_hermes("gog gmail search 'x' --fail-empty", exit_code=3, output=""))
+
+    assert _statuses(actions) == [_SUCCESS]
+
+
+def test_gog_empty_results_exit_in_a_chain_is_not_a_success():
+    command = "gog gmail search 'x' --fail-empty && aai-cli jira issues get A-1"
+
+    actions = classify(_hermes(command, exit_code=3, output=""))
+
+    assert _statuses(actions) == [_UNKNOWN, _UNKNOWN]
+
+
+def test_exit_three_from_aai_cli_is_still_a_failure():
+    assert _statuses(classify(_hermes("aai-cli jira issues get A-1", exit_code=3, output=""))) == [_ERROR]
+
+
+def test_a_gog_command_masked_by_an_appended_echo_is_unknown():
+    actions = classify(_openclaw('gog drive mkdir probe; echo "EXIT_CODE:$?"', exit_code=0, output="EXIT_CODE:1"))
+
+    assert _statuses(actions) == [_UNKNOWN]

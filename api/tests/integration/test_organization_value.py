@@ -1,3 +1,4 @@
+import json
 from datetime import UTC, datetime, timedelta
 from uuid import uuid7
 
@@ -22,6 +23,7 @@ from api.domains.organizations.models import Organization
 from api.domains.organizations.repository import OrganizationRepository
 from api.domains.platform_admin.models import StatsGranularity, StatsWindow
 from api.domains.rbac.policy import AuthorizationScope
+from api.domains.tool_calls.repository import ToolCallRepository
 from api.domains.users.organization_users.models import OrganizationRole
 from api.tests.core.givenpy import given, then, when
 from api.tests.core.modules import create_test_client, prepare_api_server, prepare_injector, set_env_variable
@@ -318,6 +320,31 @@ def _there_is_an_actor_in_the_organization(role: OrganizationRole, email: str):
     def step(context):
         there_is_a_user(email=email, role=role)(context)
         there_is_an_access_token_for_user()(context)
+
+    return step
+
+
+def _a_shell_tool_call_is_recorded(command: str, exit_code: int):
+    def step(context):
+        tool_calls: ToolCallRepository = context.injector.get(ToolCallRepository)
+        business_actions: BusinessActionRepository = context.injector.get(BusinessActionRepository)
+        result = json.dumps({"output": "{}", "exit_code": exit_code, "error": None})
+        external_id = f"call-{uuid7()}"
+        with tool_calls.get_session() as session:
+            tool_calls.upsert_pending(
+                session,
+                context.organization.id,
+                context.agent.id,
+                "session",
+                external_id,
+                "terminal",
+                {"command": command},
+                INSIDE,
+            )
+            completed = tool_calls.complete(session, context.agent.id, external_id, result, False, INSIDE)
+            assert completed is not None
+            business_actions.record_in_session(session, completed)
+            session.commit()
 
     return step
 
@@ -753,3 +780,31 @@ def test_value_requires_authentication():
 
         with then("it is rejected"):
             assert_that(response.status_code, equal_to(status.HTTP_401_UNAUTHORIZED))
+
+
+def test_recorded_gog_writes_are_valued_like_any_other_business_action():
+    with given(
+        [
+            *_API_GIVEN,
+            _the_value_settings_are({"hourly_rate_usd": 60}),
+            there_is_an_agent(name="Workspace Agent"),
+            _a_shell_tool_call_is_recorded("gog drive mkdir probe --json --no-input", exit_code=0),
+            _a_shell_tool_call_is_recorded("gog gmail send --to a@example.com --subject s", exit_code=1),
+        ]
+    ) as context:
+        with when("the Owner reads the Organization's value"):
+            body = _get_value(context).json()
+
+        with then("the successful gog write is valued and the failed one is reported, not valued"):
+            minutes = DEFAULT_MINUTES[OutcomeType.RECORD_CREATED]
+            assert_that(
+                body["totals"],
+                has_entries(successful_writes=1, minutes_saved=minutes, value=float(minutes), failed_writes=1),
+            )
+            assert_that(
+                body["top_outcome_types"],
+                contains_exactly(has_entries(outcome_type=OutcomeType.RECORD_CREATED.value, successful_writes=1)),
+            )
+            assert_that(
+                body["agents"], contains_exactly(has_entries(agent_name="Workspace Agent", minutes_saved=minutes))
+            )

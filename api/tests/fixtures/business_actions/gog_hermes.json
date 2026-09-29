@@ -1,0 +1,62 @@
+[
+  {
+    "name": "read_failure_without_account",
+    "tool_name": "terminal",
+    "stored_status": "SUCCESS",
+    "arguments": {
+      "command": "gog gmail labels list --json --no-input"
+    },
+    "result": "{\"output\": \"missing --account (or set GOG_ACCOUNT, set default via `gog auth manage`, or store exactly one token)\", \"exit_code\": 2, \"error\": null}",
+    "expected_actions": [
+      {
+        "integration": "google-gmail",
+        "resource": "labels",
+        "verb": "list",
+        "is_write": false,
+        "outcome_type": null,
+        "status": "ERROR",
+        "ordinal": 0
+      }
+    ]
+  },
+  {
+    "name": "read_success",
+    "tool_name": "terminal",
+    "stored_status": "SUCCESS",
+    "arguments": {
+      "command": "gog calendar calendars --json --no-input"
+    },
+    "result": "{\"output\": \"{\\n  \\\"calendars\\\": [\\n    {\\n      \\\"accessRole\\\": \\\"REDACTED\\\",\\n      \\\"backgroundColor\\\": \\\"REDACTED\\\",\\n      \\\"colorId\\\": \\\"REDACTED\\\",\\n      \\\"conferenceProperties\\\": {\\n        \\\"allowedConferenceSolutionTypes\\\": [\\n          \\\"REDACTED\\\"\\n        ]\\n      },\\n      \\\"etag\\\": \\\"REDACTED\\\",\\n      \\\"foregroundColor\\\": \\\"REDACTED\\\",\\n      \\\"id\\\": \\\"REDACTED\\\",\\n      \\\"kind\\\": \\\"REDACTED\\\",\\n      \\\"summary\\\": \\\"REDACTED\\\",\\n      \\\"timeZone\\\": \\\"REDACTED\\\"\\n    }\\n  ],\\n  \\\"nextPageToken\\\": \\\"REDACTED\\\"\\n}\", \"exit_code\": 0, \"error\": null}",
+    "expected_actions": [
+      {
+        "integration": "google-calendar",
+        "resource": "",
+        "verb": "calendars",
+        "is_write": false,
+        "outcome_type": null,
+        "status": "SUCCESS",
+        "ordinal": 0
+      }
+    ]
+  },
+  {
+    "name": "write_success",
+    "tool_name": "terminal",
+    "stored_status": "SUCCESS",
+    "arguments": {
+      "command": "gog drive mkdir agentbarn-gog-probe --json --no-input"
+    },
+    "result": "{\"output\": \"{\\n  \\\"folder\\\": {\\n    \\\"id\\\": \\\"REDACTED\\\",\\n    \\\"name\\\": \\\"REDACTED\\\",\\n    \\\"webViewLink\\\": \\\"REDACTED\\\"\\n  }\\n}\", \"exit_code\": 0, \"error\": null}",
+    "expected_actions": [
+      {
+        "integration": "google-drive",
+        "resource": "",
+        "verb": "mkdir",
+        "is_write": true,
+        "outcome_type": "RECORD_CREATED",
+        "status": "SUCCESS",
+        "ordinal": 0
+      }
+    ]
+  }
+]

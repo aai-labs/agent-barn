@@ -11,18 +11,80 @@ Related context: [Activity and Ingest](../activity-and-ingest.md), [Agent Activi
 - Also delivered: the `business_action` table (migration `39ea6a8e2fe4`) and `BusinessActionRepository.record_in_session`.
 - Also delivered: Ingest records Business Actions for every completed shell Tool Call and exports `agentbarn_business_actions_total`. The feature doc is [`../business-value.md`](../business-value.md).
 - Also delivered: the operator backfill (`make backfill-business-actions`) for Tool Calls stored before Ingest recorded Business Actions.
-- Also delivered: the `organization_value_settings` and `organization_outcome_minutes` tables (migration `1045836844da`). Nothing reads or writes them yet.
-- Also delivered: the `organization.value_settings.changed` Domain Event, registered and projected to the security audit. Nothing emits it yet.
-- Also delivered: the pure valuation rules in `api/domains/business_value/service.py` (effective minutes, value, the value-to-spend ratio, and write categories). Nothing calls them yet.
+- Also delivered: the `organization_value_settings` and `organization_outcome_minutes` tables (migration `1045836844da`).
+- Also delivered: the `organization.value_settings.changed` Domain Event, registered and projected to the security audit and emitted by the value settings API.
+- Also delivered: the pure valuation rules in `api/domains/business_value/service.py` (effective minutes, value, the value-to-spend ratio, and write categories).
 - Also delivered: `ValueSettingsRepository`, which saves value settings and stages `organization.value_settings.changed` in one transaction.
 - Also delivered: `GET` and `PUT /organizations/{organization_id}/value-settings`. The feature doc's [Value settings](../business-value.md#value-settings) section is the contract.
 - Also delivered: the scoped Business Action aggregate reads the value KPI needs.
-- Also delivered: `GET /organizations/{organization_id}/value`, the Organization value KPI. The feature doc's [Organization value](../business-value.md#organization-value) section is the contract. The AF-345 backend is complete.
-- In transition: nothing.
+- Also delivered: `GET /organizations/{organization_id}/value`, the Organization value KPI. The feature doc's [Organization value](../business-value.md#organization-value) section is the contract.
+- Also delivered: gog (Google Workspace) commands are classified as Business Actions and valued like aai-cli ones. See the feature doc's [gog commands](../business-value.md#gog-commands) section.
+- In transition:
+  - gog classification has not been deployed to local k3d. The API pod there still runs the previous image.
+  - After deploying, run the operator backfill once, so the gog Tool Calls already stored are counted.
 - Next: the Stage 3 UI that renders value settings and the Organization value.
 - Blockers: the product owner has not signed off the default minutes per Outcome Type. They are placeholders until then, and every value figure inherits them.
 
 ## Slice history
+
+### 2026-09-29 — AF-345 — gog (Google Workspace) classification
+
+Scope: added to AF-345 at the user's request, and noted on the PR.
+
+Why:
+- Google Workspace Integrations reach Google only through gog (`integrations.md`). The classifier matched only `aai-cli`, so all of an Agent's Gmail, Calendar, Drive, and Sheets work produced no Business Action.
+- aai-cli's own `drive` group has no credential in Agent Barn, so it did not cover this work either.
+
+Evidence (local k3d, gog `v0.37.0 (45b5d766)`, identical binary sha256 `ba1a5b40…36e0c` in both runtime images):
+- `gog schema --json` has 586 leaf commands, and 209 of them belong to the four services a Google Workspace credential can grant. No node marks commands as reads or writes.
+- Errors are plain text on stderr, with no JSON envelope even with `--json`. A missing account and a usage error both exit `2`.
+- Empty results exit `0`. Exit `3` happens only with the opt-in `--fail-empty`.
+- `--dry-run` exits `0` and prints `{"dry_run": true, …}`. A search afterwards confirmed nothing was created.
+- Live Web Chat Tool Calls:
+  - Hermes, a failed read: `exit_code` 2.
+  - Hermes, a successful read: `exit_code` 0.
+  - Hermes, a successful write: `drive mkdir`, `exit_code` 0. The user ran it against their own workspace; it left one empty folder, `agentbarn-gog-probe`.
+  - OpenClaw: the Agent appended `; echo "EXIT_CODE:$?"`, which hid gog's exit code.
+  - None of them produced a Business Action before this change.
+
+Delivered:
+- `api/domains/business_value/gog_catalogue.py`:
+  - all 209 command paths, classified by hand under the same rules as aai-cli: 84 reads, 16 ignored, and 109 writes over the existing 10 Outcome Types;
+  - alias tables, top-level shortcuts, value-taking global flags, and ignored tooling commands, generated from the recorded command tree.
+- The classifier recognises `gog` alongside `aai-cli`:
+  - `integration` is `google-<service>`, keeping it apart from aai-cli's `drive` and `email` groups.
+  - Dry runs, help, tooling, and ignored entries are dropped.
+  - Other Google services are stored as unclassified.
+  - gog ordinals follow the aai-cli ordinals, so no stored ordinal moves.
+  - Status comes from the exit code only. Exit `3` counts as success only for a single gog command.
+- The `agentbarn_business_actions` metric labels the four `google-*` integrations by name; any other value is still `other`.
+- The runtime config digest is unchanged: `4827db07…f9d47` before and after, for fixed image names. No `business_value` module is in the Agent start closure.
+
+Coverage:
+- Fixtures:
+  - `api/tests/fixtures/business_actions/gog_hermes.json` (3) and `gog_openclaw.json` (1) hold the real Tool Calls. Every string inside gog's JSON output is redacted.
+  - `api/tests/fixtures/gog/command-tree.json` is the pruned command tree: names, aliases, one-line help, and global flags. It contains no account data.
+- `api/tests/unit/test_gog_catalogue.py` (19) checks the catalogue against that tree in both directions: paths, aliases, shortcuts, and value flags.
+  - It checks that both Dockerfiles still pin the recorded version, so a gog upgrade fails CI until the tree is re-recorded.
+  - It checks the Outcome Type rules.
+- `test_business_action_classifier.py` gains 37 gog tests:
+  - command paths and aliases, including flags in any position
+  - ignored invocations, ordinals in mixed commands, and exit-code statuses
+  - the four fixtures
+- `test_metrics.py`: the label for a granted gog service versus an ungranted one.
+- `test_ingest.py` posts the gog fixtures through the Ingest endpoint.
+- `test_business_action_backfill.py`:
+  - classifies stored gog history;
+  - adds gog actions after an aai-cli action that was stored before gog support, without renumbering it.
+- `test_organization_value.py`: a gog write recorded through the repository is valued in `GET /value`, and a failed one is reported as failed.
+- Test-first:
+  - Every new classifier, catalogue, and metric test failed first.
+  - The Ingest, backfill, and valuation tests were added once the classifier existed; the same fixtures had failed at the classifier.
+- Running the new classifier over the four unredacted gog Tool Calls stored on local k3d gave exactly the fixtures' expected actions.
+
+Not verified:
+- The exit code when Google refuses a write under a read-only credential. It would need a read-only credential and a write attempt.
+- The in-cluster Ingest metric and backfill runs. They wait for a local deploy.
 
 ### 2026-09-29 — AF-345 — Organization value API
 

@@ -2,7 +2,7 @@ import json
 import logging
 import re
 import shlex
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from typing import Any
 
@@ -17,6 +17,21 @@ from api.domains.business_value.catalogue import (
     OutcomeType,
     deepest_node,
     longest_match,
+)
+from api.domains.business_value.gog_catalogue import (
+    GOG_CATALOGUE,
+    GOG_DRY_RUN_FLAGS,
+    GOG_DRY_RUN_OFF_VALUES,
+    GOG_EMPTY_RESULTS_EXIT_CODE,
+    GOG_EXECUTABLE,
+    GOG_HELP_FLAGS,
+    GOG_HELP_TOKEN,
+    GOG_IGNORED_COMMANDS,
+    GOG_INTEGRATION_PREFIX,
+    GOG_SERVICES,
+    GOG_VALUE_FLAGS,
+    gog_command_path,
+    gog_deepest_node,
 )
 from api.domains.tool_calls.models import ToolCall, ToolCallStatus
 
@@ -161,16 +176,29 @@ def _invocations(segments: list[_Segment]) -> list[_Invocation]:
         ordinal += 1
         if invocation is not None:
             invocations.append(invocation)
+    for index, segment in enumerate(segments):
+        arguments = _executable_arguments(segment.tokens, GOG_EXECUTABLE)
+        if arguments is None:
+            continue
+        invocation = _gog_invocation(ordinal, index, arguments)
+        ordinal += 1
+        if invocation is not None:
+            invocations.append(invocation)
     return invocations
 
 
-def _aai_cli_arguments(tokens: list[str]) -> list[str] | None:
+def _executable_arguments(tokens: list[str], executable: str) -> list[str] | None:
     position = 0
     while position < len(tokens) and ASSIGNMENT.match(tokens[position]):
         position += 1
-    if position >= len(tokens) or tokens[position].rsplit("/", 1)[-1] != EXECUTABLE:
+    if position >= len(tokens) or tokens[position].rsplit("/", 1)[-1] != executable:
         return None
-    return _strip_global_flags(tokens[position + 1 :])
+    return tokens[position + 1 :]
+
+
+def _aai_cli_arguments(tokens: list[str]) -> list[str] | None:
+    arguments = _executable_arguments(tokens, EXECUTABLE)
+    return None if arguments is None else _strip_global_flags(arguments)
 
 
 def _strip_global_flags(tokens: list[str]) -> list[str]:
@@ -220,6 +248,58 @@ def _unknown_path(ordinal: int, segment_index: int, arguments: list[str]) -> _In
     return _Invocation(ordinal, segment_index, arguments[0], " ".join(node[1:]), verb, None, None)
 
 
+def _gog_invocation(ordinal: int, segment_index: int, arguments: list[str]) -> _Invocation | None:
+    if any(token in GOG_HELP_FLAGS for token in arguments) or _is_gog_dry_run(arguments):
+        return None
+    path = gog_command_path(_gog_positionals(arguments))
+    if not path:
+        return None
+    head = path[0]
+    if head == GOG_HELP_TOKEN or head in GOG_IGNORED_COMMANDS or not COMMAND_TOKEN.match(head):
+        return None
+    if head not in GOG_SERVICES:
+        return _Invocation(ordinal, segment_index, f"{GOG_INTEGRATION_PREFIX}{head}", "", "", None, None)
+
+    integration = GOG_SERVICES[head]
+    node = gog_deepest_node(path)
+    entry = GOG_CATALOGUE.get(node)
+    if entry is None:
+        if len(path) <= len(node):
+            return None
+        candidate = path[len(node)]
+        verb = candidate if COMMAND_TOKEN.match(candidate) else ""
+        return _Invocation(ordinal, segment_index, integration, " ".join(node[1:]), verb, None, None)
+    if entry.kind is CommandKind.IGNORED:
+        return None
+    is_write = entry.kind is CommandKind.WRITE
+    return _Invocation(
+        ordinal, segment_index, integration, " ".join(node[1:-1]), node[-1], is_write, entry.outcome_type
+    )
+
+
+def _gog_positionals(arguments: list[str]) -> list[str]:
+    positionals: list[str] = []
+    skip_value = False
+    for token in arguments:
+        if skip_value:
+            skip_value = False
+        elif token in GOG_VALUE_FLAGS:
+            skip_value = True
+        elif not token.startswith("-"):
+            positionals.append(token)
+    return positionals
+
+
+def _is_gog_dry_run(arguments: list[str]) -> bool:
+    for token in arguments:
+        if token in GOG_DRY_RUN_FLAGS:
+            return True
+        name, separator, value = token.partition("=")
+        if separator and name in GOG_DRY_RUN_FLAGS:
+            return value.lower() not in GOG_DRY_RUN_OFF_VALUES
+    return False
+
+
 def _statuses(
     tool_call: ToolCall, segments: list[_Segment], invocations: list[_Invocation]
 ) -> list[BusinessActionStatus]:
@@ -227,6 +307,12 @@ def _statuses(
         return [BusinessActionStatus.UNKNOWN] * len(invocations)
 
     evidence = _evidence(tool_call)
+    if (
+        evidence.exit_code == GOG_EMPTY_RESULTS_EXIT_CODE
+        and len(segments) == 1
+        and _executable_arguments(segments[0].tokens, GOG_EXECUTABLE) is not None
+    ):
+        evidence = replace(evidence, exit_code=0)
     failed = evidence.reported_failure or bool(evidence.envelope_services) or evidence.exit_code not in (None, 0)
     if failed:
         return _failure_statuses(invocations, evidence.envelope_services)
