@@ -135,7 +135,7 @@ Agent runtimes report messages and tool-call state to the separate Ingest API us
 
 ## Service deployment
 
-`../../helmfile.yaml.gotmpl` orders PostgreSQL releases, LiteLLM, API, UI, and the monitoring stack. The API chart deploys separate product, Ingest, and Communications processes; the Communications Service is reachable internally by runtimes and exposes only the provider-webhook prefix through ingress. API deployment mounts Kubernetes access so the product service can manage Agent resources. An API Helm hook runs Alembic before installation or upgrade.
+`../../helmfile.yaml.gotmpl` orders PostgreSQL releases, LiteLLM, Honcho, API, UI, and the monitoring stack. The API chart deploys separate product, Ingest, and Communications processes; the Communications Service is reachable internally by runtimes and exposes only the provider-webhook prefix through ingress. API deployment mounts Kubernetes access so the product service can manage Agent resources. An API Helm hook runs Alembic before installation or upgrade.
 
 The API image also runs Domain Event delivery workloads with different commands: a Dramatiq worker deployment processes committed Event Delivery IDs from Redis, and a CronJob runs the one-shot Event Delivery reconciler. Communications uses PostgreSQL-backed leases and durable Communication Deliveries, distinct from Domain Event delivery.
 
@@ -144,6 +144,18 @@ The k3s deploy workflow builds API and UI images under moving environment tags, 
 Hosted public production is a separate workflow (`.github/workflows/deploy-public.yml`) that runs only on `vX.Y.Z` tags, pushes those tags to `registry.agentbarn.dev`, and helmfile-syncs the Talos cluster. k3s remains the AAI Labs testing ground. See [`../guidelines/operations.md`](../guidelines/operations.md#public-cluster-talos) and [`../adr/2026-08-27-public-cluster-release-tags.md`](../adr/2026-08-27-public-cluster-release-tags.md).
 
 Every release's namespace and `needs:` entries are templated on a `NAMESPACE` env var (default `agent-farm`), which is how the `staging` branch deploys a fully separate stack into `agent-farm-staging` instead of prod's `agent-farm`. See [`../guidelines/operations.md`](../guidelines/operations.md#staging-environment) for the operator runbook and [`../adr/2026-07-13-staging-environment-namespace-isolation.md`](../adr/2026-07-13-staging-environment-namespace-isolation.md) for why namespace isolation was chosen over GitHub Environments or a second cluster. The public cluster also uses `NAMESPACE=agent-farm`; isolation from k3s is the cluster boundary, not a third namespace name.
+
+## Honcho memory service
+
+Honcho is an optional memory backend for Agents, deployed by `../../helm/honcho/` as a ClusterIP service with no ingress. It runs two workloads from one upstream image: `honcho-api`, whose entrypoint provisions the database before serving, and `honcho-deriver`, which polls for enqueued work and does not provision. Because provisioning runs on every API start, the API stays at a single replica; a second would race the first.
+
+Its state is a dedicated `postgres-honcho` release, which reuses the generic PostgreSQL chart with a `pgvector/pgvector` image because representations are stored as vectors, and the shared Redis release on database index 1, since Firecrawl already occupies index 0.
+
+Every model-calling module — deriver, summary, embedding, all five dialectic reasoning levels, and both dream models — is pinned to LiteLLM through a mounted `config.toml`. Honcho's built-in defaults target each provider's own endpoint, so a module left unset would send this deployment's LiteLLM key to the wrong host. Model configuration lives in that file rather than in environment variables because the dialectic levels are a dict field that does not express reliably as environment settings; flat settings and secrets are still supplied as environment.
+
+An Agent opts into memory by joining a memory **group**, whose id names one shared Honcho workspace (`af-pool-<group id>`) that every member reads and writes — so distinct Agents in a group see what the others have learned. Both runtimes are wired: OpenClaw swaps its single memory slot to the Honcho plugin, while Hermes reads a generated `honcho.json` from its state directory and runs Honcho alongside `MEMORY.md` and `USER.md` rather than replacing them. Deleting an Agent does not touch the shared pool — its past contributions stay for the other members; deleting the *group* is the one sanctioned path that erases the pool. Joining or leaving a group takes effect when the Agent is next started, because runtime configuration is built during start and never rewritten in place. Reaching Honcho is authenticated: each Agent carries a token scoped to its own pool workspace, minted at provisioning.
+
+Honcho resolves model credentials per module rather than per workspace and sends no workspace identifier on model calls, so all Agents' memory work shares one LiteLLM key; memory spend is therefore apportioned across pools by each workspace's token share rather than read directly per Agent. See [`../adr/2026-09-21-shared-memory-pools-via-groups.md`](../adr/2026-09-21-shared-memory-pools-via-groups.md). Background dreaming is disabled by default because it performs model work on an idle timer, spending against that shared key with no user action.
 
 ## Observability
 

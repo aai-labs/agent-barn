@@ -42,10 +42,12 @@ COMMUNICATION_DELIVERY_RETRY_REQUESTED = "communication.delivery.retry.requested
 COMMUNICATION_DELIVERY_RECOVERED = "communication.delivery.recovered"
 ORGANIZATION_LLM_BUDGET_THRESHOLD_REACHED = "organization.llm_budget.threshold_reached"
 ORGANIZATION_LLM_BUDGET_EXHAUSTED = "organization.llm_budget.exhausted"
+MEMORY_GROUP_DELETED = "memory_group.deleted"
 
 SECURITY_AUDIT_HANDLER = "security_audit.projection"
 AGENT_LIFECYCLE_EMAIL_HANDLER = "agent.lifecycle_email.notification"
 ORGANIZATION_LLM_BUDGET_EMAIL_HANDLER = "organization.llm_budget_email.notification"
+MEMORY_POOL_PURGE_HANDLER = "memory_group.pool_purge"
 
 
 class OrganizationRoleChangedPayload(BaseModel):
@@ -172,6 +174,21 @@ class AgentDeletedPayload(BaseModel):
     runtime: str
     actor_display: str
     subject_display: str
+
+
+class MemoryGroupDeletedPayload(BaseModel):
+    """Emitted when a memory group is deleted, to durably erase its shared pool.
+
+    Carries the pool `workspace_id` explicitly so the purge handler never has to
+    reach back for the group row — which is deleted in the same transaction that
+    stages this event. The retried delivery is what drives the workspace delete
+    past Honcho's async session-delete 409s to completion."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    organization_id: UUID
+    group_id: UUID
+    workspace_id: str
 
 
 class AgentRestorePointChangedPayload(BaseModel):
@@ -460,6 +477,15 @@ def build_default_event_registry() -> DomainEventRegistry:
             event_name=AGENT_CREATED,
             schema_version=1,
             payload_model=AgentCreatedPayload,
+            event_scope=EventScope.ORGANIZATION,
+        )
+    )
+    registry.register(
+        DomainEventDefinition(
+            event_name=MEMORY_GROUP_DELETED,
+            schema_version=1,
+            payload_model=MemoryGroupDeletedPayload,
+            handler_names=(MEMORY_POOL_PURGE_HANDLER,),
             event_scope=EventScope.ORGANIZATION,
         )
     )

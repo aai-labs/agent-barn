@@ -28,6 +28,10 @@ export const agentsKey = {
   health: (id: string) => [..._agentsKeyBase.detail(id), "health"] as const,
   configuration: (id: string) => [..._agentsKeyBase.detail(id), "configuration"] as const,
   shareSettings: (id: string) => [..._agentsKeyBase.detail(id), "share"] as const,
+  memory: (id: string, page: number, observed: string | null, scope: string) =>
+    [..._agentsKeyBase.detail(id), "memory", scope, observed ?? "everyone", page] as const,
+  memoryFacets: (id: string, scope: string) =>
+    [..._agentsKeyBase.detail(id), "memory-facets", scope] as const,
   shareRoles: () => [..._agentsKeyBase.all, "share-roles"] as const,
   conversationChannels: (agentId: string) =>
     [..._agentsKeyBase.detail(agentId), "conversation-channels"] as const,

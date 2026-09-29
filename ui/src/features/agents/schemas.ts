@@ -55,6 +55,8 @@ export const AgentPermissionKeySchema = z.enum([
   "agent.lifecycle.manage",
   "agent.access.manage",
   "agent.secret.manage",
+  "agent.memory.read",
+  "agent.memory.manage",
   "activity.read",
   "cost.read",
 ]);
@@ -119,6 +121,9 @@ export const AgentSchema = z.object({
   updateAvailable: z.boolean().default(false),
   approvalMode: z.enum(["manual", "auto", "off"]).default("auto"),
   verboseMode: z.boolean().default(false),
+  /** The memory group this Agent belongs to, or null for none. Managed via the
+   *  memory-groups API; membership is the opt-in to shared memory. */
+  memoryGroupId: z.string().uuid().nullable().default(null),
   lastError: AgentProvisioningErrorSchema.nullish(),
   secrets: z.array(AgentSecretReadSchema).optional(),
   skills: z.array(AgentAssignedSkillSchema).default([]),
@@ -419,6 +424,51 @@ export type AgentAccessSettingsAssignmentUpdate = z.infer<
   typeof AgentAccessSettingsAssignmentUpdateSchema
 >;
 export type AgentAccessSettingsUpdate = z.infer<typeof AgentAccessSettingsUpdateSchema>;
+
+// Memory is stored per (observer, observed) peer pair: the same Agent holds a
+// separate view of each person it talks to, plus a model of itself. The pair is
+// surfaced rather than flattened, because collapsing it would misrepresent whose
+// memory an item actually is.
+export const AgentMemoryItemSchema = z.object({
+  id: z.string(),
+  content: z.string(),
+  observer: z.string(),
+  observed: z.string(),
+  level: z.string(),
+  createdAt: z.string().nullable().optional(),
+  // Set only for a memory shared in from another pool (group). The id, not the
+  // name — the client resolves the name from its groups list. `sharedAt` is when
+  // it was shared; a null group id with a set sharedAt means the source group is gone.
+  sharedAt: z.string().nullable().optional(),
+  sharedFromGroupId: z.string().uuid().nullable().optional(),
+});
+
+// One peer the memory can be filtered to, with its real count. `peer` is the id
+// sent back to filter; `label` is what the chip shows.
+export const AgentMemoryFacetSchema = z.object({
+  peer: z.string(),
+  label: z.string(),
+  // The bare display name behind `label` ("you", an agent's name, or the raw
+  // peer). The list keys its per-row "· about X" label off this so an agent peer
+  // never shows as a raw id there either.
+  name: z.string(),
+  count: z.number().int(),
+  isSelf: z.boolean(),
+});
+
+export const AgentMemoryPageSchema = z.object({
+  items: z.array(AgentMemoryItemSchema),
+  total: z.number().int(),
+  page: z.number().int(),
+  size: z.number().int(),
+  // Present only on the unfiltered view; the chips it drives describe the whole
+  // workspace. Undeclared fields are stripped by zod, so this must be listed.
+  facets: z.array(AgentMemoryFacetSchema).default([]),
+});
+
+export type AgentMemoryItem = z.infer<typeof AgentMemoryItemSchema>;
+export type AgentMemoryFacet = z.infer<typeof AgentMemoryFacetSchema>;
+export type AgentMemoryPage = z.infer<typeof AgentMemoryPageSchema>;
 
 export const RestorePointStatusSchema = z.enum([
   "PENDING",

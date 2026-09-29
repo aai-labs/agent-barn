@@ -1,0 +1,7 @@
+{
+  "id": "honcho-pool-recall",
+  "name": "Honcho Pool Recall",
+  "description": "Pool-wide memory recall across the agents sharing a memory pool",
+  "activation": { "onStartup": true },
+  "configSchema": { "type": "object", "additionalProperties": false }
+}

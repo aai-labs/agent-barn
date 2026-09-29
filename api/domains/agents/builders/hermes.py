@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 from uuid import UUID
 
@@ -71,11 +72,53 @@ _MESSAGE_SCRIPTS = _COMMON_SCRIPTS / "messaging"
 HERMES_BOOT_RUN_PY: str = (_SCRIPTS / "boot-run.py").read_text()
 
 
+# Hermes resolves this from $HERMES_HOME first, then ~/.hermes, then ~/.honcho.
+HERMES_STATE_DIR = "/opt/data"
+
+
+def build_honcho_config(*, base_url: str, workspace_id: str, ai_peer: str, api_key: str | None = None) -> dict:
+    """Honcho as a Hermes memory provider.
+
+    Unlike OpenClaw, where Honcho takes the runtime's single memory slot, Hermes
+    runs it alongside MEMORY.md and USER.md: the files stay the operator-editable
+    baseline and Honcho holds what is learned in conversation.
+
+    ``ai_peer`` is the Agent's stable peer id (``ai_peer_name_for_agent``), the id
+    rather than the name so a rename never orphans memory and Honcho never
+    renormalizes it. The read side computes the same value, so both always agree.
+
+    ``api_key`` is the workspace-scoped Honcho token (when Honcho auth is on); the
+    SDK sends it as a bearer, so the pool-recall patch inherits auth for free since
+    it reuses the SDK client's transport. Omitted when auth is off (dev).
+    """
+    config: dict = {
+        "baseUrl": base_url,
+        "hosts": {
+            "hermes": {
+                "enabled": True,
+                "workspace": workspace_id,
+                # Both sides are modelled: the AI peer is what Honcho learns about
+                # the Agent, separate from what it learns about each participant.
+                "aiPeer": ai_peer,
+                # Match OpenClaw's plugin, which hardcodes the human peer as "owner"
+                # (OWNER_ID). Using the same name means a person is one peer in a mixed
+                # pool, and the UI's owner -> "you" label works for both runtimes.
+                "peerName": "owner",
+            }
+        },
+    }
+    if api_key:
+        # Top-level key the Hermes honcho provider reads for the SDK's bearer.
+        config["apiKey"] = api_key
+    return config
+
+
 def _hermes_config_core(
     model: str,
     litellm_base_url: str,
     enabled_plugins: list[str],
     approval_mode: str = "auto",
+    honcho_enabled: bool = False,
 ) -> dict:
     _, sep, model_name = model.partition("/")
     if not sep:
@@ -97,6 +140,10 @@ def _hermes_config_core(
         "memory": {
             "memory_enabled": True,
             "user_profile_enabled": True,
+            # Writing honcho.json alone does not activate the provider: Hermes
+            # selects it with this key and otherwise runs built-in memory only,
+            # reporting "Provider: (none — built-in only)" while looking healthy.
+            **({"provider": "honcho"} if honcho_enabled else {}),
         },
         "compression": {
             "enabled": False,
@@ -140,6 +187,8 @@ def build_hermes_gateway_config(
     model: str,
     litellm_base_url: str,
     approval_mode: str = "auto",
+    *,
+    honcho_enabled: bool = False,
     native_slack: bool = False,
     native_discord: bool = False,
     discord_require_mention: bool = True,
@@ -150,7 +199,9 @@ def build_hermes_gateway_config(
     plugins = ["telemetry-push", "agentbarn-messaging"]
     if native_slack or native_discord or telegram_settings is not None or runtime_teams:
         plugins.append("agentbarn-observer")
-    config = _hermes_config_core(model, litellm_base_url, enabled_plugins=plugins, approval_mode=approval_mode)
+    config = _hermes_config_core(
+        model, litellm_base_url, enabled_plugins=plugins, approval_mode=approval_mode, honcho_enabled=honcho_enabled
+    )
     if native_slack:
         config["slack"] = {
             "reply_in_thread": True,
@@ -339,6 +390,7 @@ def build_hermes_config_map(
     boot_md: str,
     heartbeat_md: str,
     hermes_config: dict,
+    honcho_config: dict | None = None,
     aai_cli_config_toml: str | None = None,
     aai_cli_setup_sh: str | None = None,
     gog_setup_sh: str | None = None,
@@ -366,6 +418,8 @@ def build_hermes_config_map(
         "hermes-messaging.py": (_MESSAGE_SCRIPTS / "hermes-messaging.py").read_text(),
         "boot-run.py": HERMES_BOOT_RUN_PY,
     }
+    if honcho_config is not None:
+        data["honcho.json"] = json.dumps(honcho_config)
     if aai_cli_config_toml is not None:
         data["aai-cli-config.toml"] = aai_cli_config_toml
     if aai_cli_setup_sh is not None:
@@ -500,6 +554,7 @@ def build_hermes_deployment(
                                 # agent's shell is anchored in the wrong place and
                                 # relative writes miss the persistent /workspace.
                                 # ocbw sets both alongside terminal.cwd — mirror it.
+                                client.V1EnvVar(name="HERMES_HOME", value=HERMES_STATE_DIR),
                                 client.V1EnvVar(name="TERMINAL_CWD", value="/workspace"),
                                 client.V1EnvVar(name="MESSAGING_CWD", value="/workspace"),
                             ],

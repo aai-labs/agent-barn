@@ -1,0 +1,48 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-deriver
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "honcho.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.deriver.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "honcho.deriverSelectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/env: {{ include (print $.Template.BasePath "/configmap-env.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+      labels:
+        {{- include "honcho.deriverSelectorLabels" . | nindent 8 }}
+    spec:
+      containers:
+        - name: honcho-deriver
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          # The deriver does not provision the database; it polls for work the
+          # API has already enqueued.
+          command: ["/app/.venv/bin/python", "-m", "src.deriver"]
+          envFrom:
+            - configMapRef:
+                name: {{ .Release.Name }}-env
+            - secretRef:
+                name: {{ .Values.secretName }}
+{{- if not .Values.litellmKey }}
+            # Minted by the pre-install Job; carries LLM_OPENAI_API_KEY only.
+            - secretRef:
+                name: {{ .Values.keyJob.secretName }}
+{{- end }}
+          resources:
+            {{- toYaml .Values.deriver.resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /app/config.toml
+              subPath: config.toml
+      volumes:
+        - name: config
+          configMap:
+            name: {{ .Release.Name }}-config
