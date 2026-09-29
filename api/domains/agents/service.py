@@ -54,6 +54,7 @@ from api.domains.agents.error_messages import friendly_pod_reason
 from api.domains.agents.exceptions import AgentProvisioningPrecondition
 from api.domains.agents.gog_artifacts import build_gog_env, build_gog_policy_md, build_gog_setup_sh
 from api.domains.agents.llm_budget import AgentLlmBudgetService
+from api.domains.agents.memory_access import memory_endpoint_for_agent
 from api.domains.agents.memory_sharing import (
     ai_peer_name_for_agent,
     memory_active,
@@ -155,7 +156,7 @@ from api.domains.templates.repository import TemplateRepository
 from api.domains.templates.requirements import effective_required_ids, split_requirements
 from api.domains.users.models import User
 from api.infrastructure.crypto import decrypt_token, encrypt_token
-from api.infrastructure.honcho.client import HonchoClient, HonchoError, mint_workspace_token
+from api.infrastructure.honcho.client import HonchoClient, HonchoError
 from api.infrastructure.integration_validators import (
     PROVIDER_VALIDATORS,
     format_validation_result,
@@ -1934,13 +1935,12 @@ class AgentService:
             organization_memory_suspended=self.organization_lookup.memory_suspended(org_id),
         )
         memory_workspace = memory_workspace_for_agent(agent) if memory_on else None
-        # A Honcho token scoped to this Agent's pool workspace, so the pod can reach
-        # only its own pool. None when memory is off or Honcho auth is disabled (dev).
-        memory_token = (
-            mint_workspace_token(self.config.honcho_jwt_secret, memory_workspace)
-            if memory_on and memory_workspace and self.config.honcho_jwt_secret
-            else None
-        )
+        # The pod reaches memory through the memory proxy, never Honcho directly: a
+        # Honcho token cannot be revoked, and a copied one would outlive a stop, a
+        # group change or a budget suspension. The proxy checks this key against the
+        # Agent on every request. None when memory is off.
+        memory_key = secrets.token_urlsafe(32) if memory_on else None
+        memory_endpoint = memory_endpoint_for_agent(self.config, agent.id)
         if agent.agent_type == AgentType.HERMES:
             overlay = None
             native_slack = self._native_slack_connection(agent.id)
@@ -2005,14 +2005,14 @@ class AgentService:
                 effective_model,
                 llm_proxy_url,
                 native_channels,
-                honcho_base_url=self.config.agent_honcho_base_url if memory_on else None,
+                honcho_base_url=memory_endpoint if memory_on else None,
                 # The Agent's shared pool workspace, or None when memory is off
                 # for this Agent — see memory_workspace_for_agent.
                 honcho_workspace_id=memory_workspace,
                 # Distinct logical id so pooled Agents get distinct Honcho peers
                 # (agent-<id>) rather than colliding on the default agent-main.
                 honcho_agent_id=openclaw_logical_agent_id(agent) if memory_on else None,
-                honcho_api_key=memory_token,
+                honcho_api_key=memory_key,
             )
             hermes_cfg = None
             secret = build_secret_runtime(
@@ -2244,10 +2244,10 @@ class AgentService:
                 hermes_config=hermes_cfg,
                 honcho_config=(
                     build_honcho_config(
-                        base_url=self.config.agent_honcho_base_url,
+                        base_url=memory_endpoint,
                         workspace_id=memory_workspace,
                         ai_peer=ai_peer_name_for_agent(agent),
-                        api_key=memory_token,
+                        api_key=memory_key,
                     )
                     if memory_on and memory_workspace is not None
                     else None
@@ -2312,6 +2312,9 @@ class AgentService:
             self.config.hermes_image,
         )
         agent.ingest_key_encrypted = encrypt_token(ingest_key, self.config.agent_token_encryption_key)
+        agent.memory_key_encrypted = (
+            encrypt_token(memory_key, self.config.agent_token_encryption_key) if memory_key else None
+        )
         agent.communication_key_encrypted = encrypt_token(
             communication_key,
             self.config.agent_token_encryption_key,

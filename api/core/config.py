@@ -61,10 +61,10 @@ class Config(BaseSettings):
     honcho_enabled: bool = False
     # What the API itself calls to purge a deleted Agent's workspace.
     honcho_base_url: str = "http://honcho:8000"
-    # What an Agent pod calls. Same value in-cluster, but locally the API runs in
-    # Compose while Agents run in k3d, so they reach Honcho by different names —
-    # the same split `agent_litellm_base_url` exists for.
-    agent_honcho_base_url: str = "http://honcho:8000"
+    # The memory proxy Agent pods call instead of Honcho (AF-338): they never hold a
+    # Honcho token. Locally the proxy runs in Compose while Agents run in k3d, so
+    # they reach it by a different name — the split `agent_litellm_base_url` has.
+    agent_memory_proxy_base_url: str = "http://agentbarn-api-memory-proxy:8003"
     # Shared secret Honcho presents when posting its usage telemetry. Empty
     # rejects every post, so usage is simply not recorded rather than accepted
     # from anyone who can reach the Ingest service.

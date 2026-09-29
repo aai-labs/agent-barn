@@ -59,6 +59,19 @@ key in a pre-install hook and publishes it for both Honcho and the API to read.
 Set the env only to pin a specific key, which also skips the minting job. This
 same key's LiteLLM spend is the pool-level memory cost the Costs page reports.
 
+## The memory proxy
+
+Agent pods never talk to Honcho or hold a Honcho token (AF-338). With
+`HONCHO_ENABLED=true` the API chart also deploys `<release>-memory-proxy`
+(port 8003), and each Agent is given `<proxy>/agents/<agent id>` as its memory
+base URL and a per-Agent memory key, replaced on every start. The proxy checks
+every request against the Agent as it is now — running, in a group, its
+Organization's memory not suspended for spend — and forwards it to Honcho with a
+token scoped to the Agent's pool, signed with the same `honchoJwtSecret` the API
+already holds. Nothing new to configure: no Variable or Secret is added, and
+`agentMemoryProxyBaseUrl` is only for local runs where Agents reach the proxy by
+another name (Compose sets it to the host-published port).
+
 ## Runtime image requirement
 
 Pool-wide recall on Hermes comes from a patch baked into our `hermes-base` image

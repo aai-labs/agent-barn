@@ -104,8 +104,9 @@ spec:
               value: "true"
             - name: HONCHO_BASE_URL
               value: "{{ .Values.honchoBaseUrl }}"
-            - name: AGENT_HONCHO_BASE_URL
-              value: "{{ .Values.agentHonchoBaseUrl | default .Values.honchoBaseUrl }}"
+            # Agent pods reach memory through the memory proxy, never Honcho.
+            - name: AGENT_MEMORY_PROXY_BASE_URL
+              value: "{{ .Values.agentMemoryProxyBaseUrl | default (printf "http://%s-memory-proxy:%v" .Release.Name .Values.memoryProxy.service.port) }}"
             {{- end }}
             {{- if .Values.storageClass }}
             - name: STORAGE_CLASS

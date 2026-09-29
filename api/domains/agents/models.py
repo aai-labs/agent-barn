@@ -413,6 +413,10 @@ class Agent(BaseModel, table=True):
 
     ingest_key_encrypted: str | None = SqlField(default=None, nullable=True)
     communication_key_encrypted: str | None = SqlField(default=None, nullable=True)
+    # The Agent's key to the memory proxy, replaced on every start. Checked per
+    # request against the Agent as it is now, so it is useless once the Agent
+    # stops, leaves its group, or its Organization's memory is suspended.
+    memory_key_encrypted: str | None = SqlField(default=None, nullable=True)
     approval_mode: CommandApprovalMode = SqlField(
         default=CommandApprovalMode.AUTO,
         sa_column=Column(sa.String(10), nullable=False, server_default="auto"),
