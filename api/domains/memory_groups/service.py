@@ -108,6 +108,12 @@ class MemoryGroupService:
         `memory_group.manage` — the caller owns the access check for its own surface."""
         return {g.id: g.name for g in self.repository.find_all_for_org(org_id)}
 
+    def organization_by_group(self) -> dict[UUID, UUID]:
+        """Group id → owning Organization, deployment-wide, for the budget
+        enforcement pass. System-only: it spans every Organization, so it must never
+        back a route."""
+        return {g.id: g.organization_id for g in self.repository.find_all()}
+
     def add_agent(self, group_id: UUID, agent_id: UUID, context: CurrentUserContext) -> None:
         """Add an Agent to a group (opt it into the group's shared memory).
 

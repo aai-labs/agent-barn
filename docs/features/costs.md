@@ -74,7 +74,7 @@ Three limits, each enforced by LiteLLM, all sharing the Organization's renewal w
 | Limit | Set by | Stored on | Enforced on |
 | --- | --- | --- | --- |
 | Spend Ceiling | Platform Administrator | `organization.llm_budget_usd` (never NULL) | — |
-| The Organization's own limit | Owners and Admins (`llm_budget.manage`) | `organization.llm_own_budget_usd` (NULL follows the ceiling) | The Organization's team: `own ?? ceiling` |
+| The Organization's own limit | Owners and Admins (`llm_budget.manage`) | `organization.llm_own_budget_usd` (NULL follows the ceiling) | The Organization's team: `own ?? ceiling`, less memory spent this window (see *Memory spend*) |
 | Default Agent limit | Owners and Admins | `organization_agent_settings.default_agent_llm_budget_usd` (NULL follows `AGENT_DEFAULT_LLM_BUDGET_USD`) | — |
 | An Agent's own limit | Owners and Admins | `agent.llm_budget_usd` (NULL follows the default) | The Agent's key: `min(own ?? default, Organization limit)` |
 
@@ -175,6 +175,44 @@ failure notice on Slack, Telegram, Discord and Teams. The wording deliberately d
 say whose limit it was: the rejection is the same whether the Agent's or its
 Organization's ran out.
 
+### Memory spend
+
+Memory model calls run on Honcho's single LiteLLM key, which belongs to no team, so
+the team budget neither sees nor caps them, and LiteLLM has no way to add spend to a
+team. The enforcement pass (`../../api/domains/organizations/memory_budget.py`) works
+on the limit instead. It measures each Organization's memory spend for the current
+window — Honcho's total apportioned to the Organization's pools, the same figure the
+Costs page shows — and stores it on `organization.llm_memory_spend_usd`. Every write
+of the team's limit (setting it, provisioning the team, reconciliation, this pass)
+pushes `enforced_llm_budget_usd`: the Organization's limit less that figure, never
+below 0. LiteLLM then refuses the Organization's Agents once agents + memory reach
+the limit. Agent limits stay beneath the Organization's real limit, not the lowered
+one.
+
+The Honcho key keeps spending whatever the team's ceiling, so the pass also suspends
+the Organization's memory once agents + memory reach `LLM_MEMORY_SUSPEND_PERCENT` of
+the limit (100 by default; lower trips early to absorb the spend between runs). The
+suspension is keyed to the window and the limit (`llm_memory_suspended_key`), so it
+holds even if the apportioned figure later dips, and lifts when the window renews or
+the limit changes. A suspended Organization's Agents start with memory off.
+
+A memory figure only counts in the window it was measured in, so a renewal is never
+held down by last window's memory. The window is `[previous renewal, now]`, and a
+`30d` window is a calendar month to match LiteLLM. Memory spend is read from LiteLLM's
+daily report, so the first partial day of a window can over-count slightly — the safe
+direction for a limit. Spend on a pool whose group has since been deleted can no
+longer be traced to an Organization and counts against none.
+
+Surfaces show the real limit and agents + memory: the Organization's budget view (with
+the memory share as `memory_spend_usd`), the Platform Administrator's coverage view,
+and threshold alerts. The agent-spend snapshot (`llm_spend_usd`) stays the proxy's team
+figure; each pass owns one number and the surfaces add them. The lowered ceiling is
+never shown.
+
+Soft by construction: the ceiling and the suspension are only as fresh as the last
+pass (every 5 minutes by default), and Honcho finishes memory work already queued when
+a suspension lands.
+
 ## Operational
 
 - The CronJob runs every 15 minutes under `concurrencyPolicy: Forbid`. `COST_SYNC_MAX_RUNTIME_SECONDS` must stay below the schedule interval: an overrunning pass does not overlap, it silently costs the next tick.
@@ -213,6 +251,7 @@ Agents own LiteLLM key creation, encryption, deletion blocking, and lifecycle st
 | Agent spend limits            | `../../api/domains/agents/llm_budget.py`, `../../api/domains/agents/routes.py`, `../../api/domains/agent_settings/service.py` (default Agent limit) |
 | Org budget reconciler         | `../../api/domains/organizations/llm_budget_reconciliation.py` (`make reconcile-llm-budgets`), `../../helm/agentbarn-api/templates/llm-budget-reconciliation-cronjob.yaml` |
 | Spend limit UI                | `../../ui/src/features/spend-limits/` (Settings → Spend limits: organization limit, default Agent limit, Agent limits table), `../../ui/src/features/agents/components/agent-spend-limit-settings.tsx`, `../../ui/src/features/organizations/components/llm-budget-card.tsx` (ceiling), `../../ui/src/features/organizations/components/spend-limit-status.tsx` and `llm-budget-banner.tsx` (Costs page) |
+| Memory spend enforcement      | `../../api/domains/organizations/memory_budget.py`, `../../api/domains/organizations/llm_budget_enforcement.py` (`make enforce-llm-memory-budgets`), `../../helm/agentbarn-api/templates/llm-budget-enforcement-cronjob.yaml` |
 | Threshold alerts              | `../../api/domains/organizations/llm_budget_alerts.py` (`make run-llm-budget-alerts`), `../../helm/agentbarn-api/templates/llm-budget-alerts-cronjob.yaml` |
 | Budget notification email     | `../../api/domains/organizations/event_handlers.py`, `../../api/domains/agents/event_handlers.py` (Agent limits), `../../api/infrastructure/email/templates/organization-budget-template.mjml` |
 | Agent-facing rejection        | `../../api/domains/agents/scripts/hermes/healthz-server.py`, `../../api/domains/agents/scripts/openclaw/healthz-server.js` |
@@ -220,7 +259,7 @@ Agents own LiteLLM key creation, encryption, deletion blocking, and lifecycle st
 | Agent Costs tab               | `../../ui/src/features/costs/components/agent-costs-panel.tsx`, composed by `../../ui/src/features/agents/components/agent-detail-page.tsx` |
 | Local fixtures                | `../../api/scripts/seed_cost_fixtures.py` (`make seed-costs`) |
 | Investigation and evidence    | `../plans/AF-281-cost-tracking-findings.md` |
-| Tests                         | `../../api/tests/unit/test_cost_sync.py`, `../../api/tests/unit/test_monthly_costs.py`, `../../api/tests/integration/test_costs.py`, `../../api/tests/integration/test_platform_costs.py`, `../../ui/tests/e2e/costs.spec.ts`, `../../ui/tests/e2e/platform-costs.spec.ts`, `../../ui/tests/e2e/agent-detail-page.spec.ts` (Costs tab), `../../api/tests/unit/test_organization_llm.py`, `../../api/tests/integration/test_organization_llm.py`, `../../api/tests/unit/test_spend_limits.py`, `../../api/tests/integration/test_spend_limits.py`, `../../api/tests/integration/test_spend_limits_migration.py`, `../../ui/tests/e2e/organization-llm-budget.spec.ts`, `../../ui/tests/e2e/spend-limits.spec.ts` |
+| Tests                         | `../../api/tests/unit/test_cost_sync.py`, `../../api/tests/unit/test_monthly_costs.py`, `../../api/tests/integration/test_costs.py`, `../../api/tests/integration/test_platform_costs.py`, `../../ui/tests/e2e/costs.spec.ts`, `../../ui/tests/e2e/platform-costs.spec.ts`, `../../ui/tests/e2e/agent-detail-page.spec.ts` (Costs tab), `../../api/tests/unit/test_organization_llm.py`, `../../api/tests/integration/test_organization_llm.py`, `../../api/tests/unit/test_memory_budget.py`, `../../api/tests/integration/test_memory_budget.py`, `../../api/tests/unit/test_spend_limits.py`, `../../api/tests/integration/test_spend_limits.py`, `../../api/tests/integration/test_spend_limits_migration.py`, `../../ui/tests/e2e/organization-llm-budget.spec.ts`, `../../ui/tests/e2e/spend-limits.spec.ts` |
 
 ## Change impact
 

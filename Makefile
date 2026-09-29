@@ -3,7 +3,7 @@ COMPOSE := docker compose -f compose.yml
 .PHONY: \
 	setup run stop stop-clean \
 	restart-ui \
-	dev-api dev-ingest dev-communications dev-ui dev-worker reconcile reconcile-restore-points reconcile-llm-budgets run-llm-budget-alerts backfill-business-actions forward-teams forward-triggers seed-event-deliveries seed-costs seed-agent-overrides migrate merge-heads rollback makemigrations test-api test-ui lint-ui check-ui coverage check-api check-migrations check-monitoring fix-api test check fix \
+	dev-api dev-ingest dev-communications dev-ui dev-worker reconcile reconcile-restore-points reconcile-llm-budgets run-llm-budget-alerts enforce-llm-memory-budgets backfill-business-actions forward-teams forward-triggers seed-event-deliveries seed-costs seed-agent-overrides migrate merge-heads rollback makemigrations test-api test-ui lint-ui check-ui coverage check-api check-migrations check-monitoring fix-api test check fix \
 	db-up db-down db-logs db-restart redis-up redis-down redis-logs
 
 # One-command local dev: validates .env, brings up k3d + LiteLLM, loads agent
@@ -116,6 +116,9 @@ run-llm-budget-alerts:
 # rows and removes rows the catalogue no longer produces, and never changes their status.
 backfill-business-actions:
 	cd api && uv run python -c "from api.domains.business_value.backfill import main; main()"
+
+enforce-llm-memory-budgets:
+	cd api && uv run python -c "from api.domains.organizations.llm_budget_enforcement import main; main()"
 
 # Local-only: populate the dev database with realistic Event Deliveries for
 # manually exercising the Platform Event Delivery Monitor UI. Safe to re-run.

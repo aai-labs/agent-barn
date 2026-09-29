@@ -209,7 +209,7 @@ class OrganizationLlmBudgetService:
             return
         try:
             renews_at = self.litellm.apply_team_budget(
-                str(organization_id), organization.effective_llm_budget_usd, organization.llm_budget_duration
+                str(organization_id), organization.enforced_llm_budget_usd, organization.llm_budget_duration
             )
         except Exception as exc:
             logger.error(
@@ -249,7 +249,7 @@ class OrganizationLlmBudgetService:
         if self._litellm_configured():
             try:
                 renews_at = self.litellm.apply_team_budget(
-                    str(organization_id), stored.effective_llm_budget_usd, stored.llm_budget_duration
+                    str(organization_id), stored.enforced_llm_budget_usd, stored.llm_budget_duration
                 )
             except Exception as exc:
                 logger.exception("Failed to apply LLM budget for Organization %s", organization_id)
@@ -304,8 +304,9 @@ class OrganizationLlmBudgetService:
         )
         organization = self._organization_or_404(organization_id)
         limit = organization.effective_llm_budget_usd
-        spend = organization.llm_spend_usd
-        observed = spend is not None and organization.llm_spend_observed_at is not None
+        memory = organization.memory_spend_this_window_usd
+        observed = organization.llm_spend_usd is not None and organization.llm_spend_observed_at is not None
+        spend = (organization.llm_spend_usd or 0.0) + memory
         if not observed:
             state = OrganizationLlmBudgetState.UNKNOWN
         elif spend >= limit:
@@ -321,6 +322,7 @@ class OrganizationLlmBudgetService:
             own_limit_usd=organization.llm_own_budget_usd,
             window=organization.llm_budget_duration,
             spend_usd=spend if observed else None,
+            memory_spend_usd=memory if observed else None,
             renews_at=organization.llm_budget_renews_at,
             can_manage=self.permission_policy.resolve(context, organization_id, PermissionKey.LLM_BUDGET_MANAGE)
             is not None,
@@ -413,11 +415,14 @@ class OrganizationLlmBudgetService:
             # as "nothing has been spent", and overwriting would assert the latter.
             return []
 
-        spend = float(status_["spend"])
+        agent_spend = float(status_["spend"])
         renews_at = status_.get("renews_at")
-        organization.llm_spend_usd = spend
+        # The snapshot stays the proxy's team figure; memory has its own column, and
+        # the threshold is measured against both, as the Organization sees it.
+        organization.llm_spend_usd = agent_spend
         organization.llm_spend_observed_at = datetime.now(UTC)
         organization.llm_budget_renews_at = _parse_timestamp(renews_at)
+        spend = agent_spend + organization.memory_spend_this_window_usd
 
         # The key spans the window and the limit, so both a renewal and a limit change
         # re-arm the thresholds rather than leaving the Organization permanently quiet.
@@ -478,7 +483,8 @@ class OrganizationLlmBudgetService:
         return self._coverage(organization_id, enroll=True)
 
     def _coverage(self, organization_id: UUID, *, enroll: bool) -> OrganizationLlmCoverageRead:
-        if not self.organization_repository.get(organization_id):
+        organization = self.organization_repository.get(organization_id)
+        if not organization:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Organization {organization_id} not found",
@@ -499,12 +505,14 @@ class OrganizationLlmBudgetService:
             else:
                 uncovered.append(AgentLlmCoverageRead(agent_id=agent_id, agent_name=agent_name, status=status_))
         budget_status = self._team_budget_status(team_id)
+        team_spend = budget_status.get("spend")
         return OrganizationLlmCoverageRead(
             total_agents=len(credentials),
             enrolled_agents=enrolled,
             uncovered=uncovered,
             newly_enrolled=newly_enrolled,
-            spend_usd=budget_status.get("spend"),
+            # Memory is on Honcho's key, outside the team, so it is added here.
+            spend_usd=None if team_spend is None else team_spend + organization.memory_spend_this_window_usd,
             renews_at=budget_status.get("renews_at"),
         )
 

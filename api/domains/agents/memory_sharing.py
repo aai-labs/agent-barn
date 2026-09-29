@@ -205,16 +205,17 @@ def ai_peer_name_for_agent(agent: Agent) -> str:
     return f"agent-{openclaw_logical_agent_id(agent)}"
 
 
-def memory_active(agent: Agent, *, honcho_enabled: bool) -> bool:
+def memory_active(agent: Agent, *, honcho_enabled: bool, organization_memory_suspended: bool = False) -> bool:
     """Whether the shared memory layer is on for this Agent right now.
 
-    Two gates: the infra flag (is Honcho deployed at all) and the Agent's
-    membership in a memory group. Membership is the opt-in — removing the Agent
-    from its group flips this to False, so the next start gives it no pool config:
-    it loses read/write access while its past contributions stay in the pool.
-    Nothing here deletes memory.
+    Three gates: the infra flag (is Honcho deployed at all), the Agent's
+    membership in a memory group, and its Organization's memory not being
+    suspended for reaching its spend limit (AF-338). Membership is the opt-in —
+    removing the Agent from its group flips this to False, so the next start gives
+    it no pool config: it loses read/write access while its past contributions
+    stay in the pool. Nothing here deletes memory.
     """
-    return honcho_enabled and agent.memory_group_id is not None
+    return honcho_enabled and agent.memory_group_id is not None and not organization_memory_suspended
 
 
 def memory_pool_id_for_agent(agent: Agent) -> str:

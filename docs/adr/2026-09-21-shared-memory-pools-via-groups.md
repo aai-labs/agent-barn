@@ -31,6 +31,8 @@ The whole memory mechanism now keys off a pool id rather than an Agent id: an Ag
 
 ## Tenant isolation (workspace-scoped tokens)
 
+> Superseded by [2026-09-29 — Memory spend counts against the Organization's limit, and Agents reach memory through a proxy](2026-09-29-memory-spend-and-access-through-a-proxy.md) (AF-338).
+
 One Honcho instance holds every org's pool workspaces, and Agent pods reach Honcho directly (recall + capture). Left unauthenticated — as the first cut was — any pod (or a prompt-injected one running `exec`) could `POST /v3/workspaces/list` and read/write/delete **every org's** pool, breaking tenant isolation. A NetworkPolicy does not fix this: Agents legitimately need Honcho access, so once any Agent can reach an unauthenticated Honcho it can reach any workspace.
 
 The fix is **auth on, with per-workspace-scoped tokens**. Honcho `POST /v3/keys` mints a key scoped to a `workspace_id` (confirmed in v3). The API holds the admin key; at provisioning each Agent is issued a token scoped to *its* pool workspace, injected into its Honcho config and sent as a bearer on recall/capture, and re-minted when the Agent changes pools (its workspace changes). Workspace-scope is the right boundary — an Agent needs every peer in its own pool (for pool-wide recall) and nothing outside it. Network reachability no longer implies data access.
@@ -61,6 +63,8 @@ Honcho's memory API shaped several choices, verified live against 3.2.0 (the pub
 Every human collapses onto the single `owner` peer, so on a multi-sender surface (open Slack, Agent General Access) a fact one person shares can surface when another person talks — cross-user leakage within a pool. True per-user isolation is deferred: it needs per-sender peers **and** sender-scoped recall (which the workspace dialectic cannot do, so it means replacing the dialectic) **and** a cross-platform identity layer (the same human is a different id per platform, and none unifies them). The intended envelope for shared pools is therefore operator-run or trusted-shared-audience Agents; per-user memory is a follow-up if mutually-untrusted multi-user Agents become a target.
 
 ## Enforcing per-pool cost (deferred)
+
+> Superseded by [2026-09-29 — Memory spend counts against the Organization's limit, and Agents reach memory through a proxy](2026-09-29-memory-spend-and-access-through-a-proxy.md) (AF-338).
 
 AF-280-v2 ships **measurement only**. Enforcement is deferred to [AF-338](https://aai-labs.atlassian.net/browse/AF-338); this section records the constraints and candidate design so they need not be re-derived.
 
