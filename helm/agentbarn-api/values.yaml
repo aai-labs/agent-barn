@@ -90,9 +90,10 @@ agentDefaultModel: ""
 # up only when it is stopped and started again.
 honchoEnabled: false
 honchoBaseUrl: "http://honcho:8000"
-# What Agent pods call. In-cluster this is the same Service; it exists because
-# locally the API and Agents reach Honcho by different names.
-agentHonchoBaseUrl: ""
+# What Agent pods call for memory: the memory proxy, never Honcho itself. Empty uses
+# this release's memory-proxy Service; set it only where Agents reach the proxy by a
+# different name (local k3d).
+agentMemoryProxyBaseUrl: ""
 # Shared secret the Ingest service checks on Honcho usage posts.
 honchoTelemetryKey: ""
 # Honcho's LiteLLM key, read-only here: it is what memory spend is looked up on.
@@ -230,6 +231,21 @@ worker:
     limits:
       memory: 512Mi
       cpu: 1000m
+
+# Agents' only route to memory (deployed whenever honchoEnabled). Checks each
+# request against the Agent's current state and forwards it to Honcho with a token
+# scoped to the Agent's pool, so an Agent never holds a Honcho credential.
+memoryProxy:
+  replicaCount: 1
+  service:
+    port: 8003
+  resources:
+    requests:
+      memory: 128Mi
+      cpu: 50m
+    limits:
+      memory: 256Mi
+      cpu: 500m
 
 communications:
   enabled: true

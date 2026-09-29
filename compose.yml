@@ -102,7 +102,8 @@ services:
       # Same split as LITELLM: the API reaches Honcho on the Compose network,
       # while Agent pods in k3d reach it through the host.
       HONCHO_BASE_URL: ${API_HONCHO_BASE_URL:-http://honcho:8000}
-      AGENT_HONCHO_BASE_URL: ${AGENT_HONCHO_BASE_URL:-http://host.docker.internal:${HONCHO_PORT:-7071}}
+      # Agent pods in k3d reach memory through the memory proxy, via the host.
+      AGENT_MEMORY_PROXY_BASE_URL: ${AGENT_MEMORY_PROXY_BASE_URL:-http://host.docker.internal:${MEMORY_PROXY_PORT:-8003}}
       HONCHO_TELEMETRY_KEY: ${HONCHO_TELEMETRY_KEY:-}
       HONCHO_LITELLM_KEY: ${HONCHO_LITELLM_KEY:-}
     extra_hosts:
@@ -160,6 +161,25 @@ services:
       - ./api:/app/api
     ports:
       - "${COMMUNICATIONS_PORT:-8002}:8002"
+
+  memory-proxy:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    container_name: aai_memory_proxy
+    restart: unless-stopped
+    command: ["uvicorn", "api.memory_proxy_main:app", "--host", "0.0.0.0", "--port", "8003", "--reload"]
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      <<: *api-env
+    volumes:
+      - ./api:/app/api
+    ports:
+      - "${MEMORY_PROXY_PORT:-8003}:8003"
 
   ui:
     build:

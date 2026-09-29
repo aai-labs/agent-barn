@@ -14,6 +14,12 @@ Related context: [`../agents.md`](../agents.md), [`../costs.md`](../costs.md), [
 
 ## Changes
 
+### 2026-09-29 — AF-338 — memory spend counts against the Organization's limit, and Agents reach memory through a proxy
+
+- **Budget.** Each Organization's memory spend this window comes off its team's ceiling, so its Agents are refused once agents + memory reach the limit, and its memory is suspended at that point. The budget surfaces and alerts show agents + memory. Details in [`../costs.md`](../costs.md#memory-spend).
+- **Access.** Agents no longer hold Honcho tokens: a copied token could never be revoked, and outlived a stop, leaving a group, or a budget suspension. They get a per-Agent memory key for the new memory proxy, checked on every request, which forwards to Honcho with a pool-scoped token and refuses pool configuration changes, pool deletion and dream scheduling. See [`DEPLOYMENT.md`](DEPLOYMENT.md#the-memory-proxy).
+- Decision record: [`../../adr/2026-09-29-memory-spend-and-access-through-a-proxy.md`](../../adr/2026-09-29-memory-spend-and-access-through-a-proxy.md), which supersedes the pooled-memory ADR's *Tenant isolation* and *Enforcing per-pool cost* sections.
+
 ### 2026-09-22 — AF-280 — remove the vestigial per-Agent sharing surface
 
 Cut the v1 per-Agent memory sharing that the pool model made obsolete. Within a group memory is shared automatically; across groups there's the explicit `shared-items` path — so the per-Agent copy mechanisms no longer had a place, and one of them actively contradicted v2.

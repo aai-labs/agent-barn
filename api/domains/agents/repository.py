@@ -1046,6 +1046,7 @@ class AgentRepository:
             persisted.running_model = agent.running_model
             persisted.running_config_digest = agent.running_config_digest
             persisted.communication_key_encrypted = agent.communication_key_encrypted
+            persisted.memory_key_encrypted = agent.memory_key_encrypted
             session.add(persisted)
             session.flush()
             payload: dict[str, Any] = {
