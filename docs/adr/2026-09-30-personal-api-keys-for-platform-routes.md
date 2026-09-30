@@ -11,6 +11,10 @@ The existing identity contract allowed Platform Administrator routes only from u
 
 A Personal API Key identifies its owning User and can exercise that User's current Platform Administrator privilege. Full-access keys can make permitted writes; read-only keys cannot. Service and runtime credentials do not gain platform authority. Organization routes still require real Membership.
 
+## Alternative considered
+
+Keeping Platform Administrator routes session-only would preserve the previous boundary, but would leave those existing user-authenticated endpoints unreachable through the requested User keys. The key therefore uses current User authority for platform routes as it does for Organization routes.
+
 ## Consequences
 
 A Platform Administrator must treat a full-access Personal API Key as a powerful credential. Revocation, optional expiry, and password-change invalidation apply. Platform privilege removal takes effect on the next authenticated request.

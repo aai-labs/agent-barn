@@ -17,4 +17,5 @@ Related context: [Public API](../public-api.md), [Identity](../identity-and-orga
 
 - Delivered: Personal keys with read-only/full mode, optional expiry, revocation, and current User permissions.
 - Changed: Authentication dependencies, platform authority, database migration, account UI, public documentation and discovery.
+- Verification: [API transcript and Account screenshot](PR-EVIDENCE.md).
 - Follow-up: None.

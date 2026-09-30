@@ -5,6 +5,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { ConfirmationDialog } from "@/components/confirmation-dialog";
 import { api } from "@/shared/api";
+import { ApiError } from "@/shared/api/error/errors";
 import { apiKeysKey } from "@/shared/query-keys";
 import { ApiKeyCreatedSchema, ApiKeyListSchema, type ApiKeyCreated, type ApiKeyRead } from "../api-key-schemas";
 
@@ -12,9 +13,10 @@ const url = "/api/v1/auth/me/api-keys";
 
 export function ApiKeysSection() {
   const queryClient = useQueryClient();
-  const { data: keys = [], isPending, error } = useQuery({
+  const { data: keys = [], isPending, error, refetch } = useQuery({
     queryKey: apiKeysKey.lists(),
     queryFn: async () => (await api.get<ApiKeyRead[]>(url, { schema: ApiKeyListSchema })).data,
+    retry: false,
   });
   const [name, setName] = useState("");
   const [mode, setMode] = useState<"READ_ONLY" | "FULL">("READ_ONLY");
@@ -92,8 +94,13 @@ export function ApiKeysSection() {
       </div>
       {mode === "FULL" && <p className="text-xs mb-4" style={{ color: "var(--ink-3)" }}>Full access can change resources and create more keys wherever your account has permission.</p>}
       {message && <p role="alert" className="text-sm mb-3" style={{ color: "var(--err)" }}>{message}</p>}
-      {error && <p role="alert" className="text-sm mb-3">Could not load API keys.</p>}
-      {isPending ? <p className="text-sm">Loading keys…</p> : keys.length === 0 ? <p className="text-sm">No API keys yet.</p> : (
+      {error && <div role="alert" className="text-sm mb-3">
+        {error instanceof ApiError && error.status === 403
+          ? "You don't have permission to view API keys."
+          : <>Could not load API keys. <button type="button" className="af-btn af-btn-sm" onClick={() => void refetch()}>Retry</button></>}
+      </div>}
+      {isPending && !error && <p className="text-sm">Loading keys…</p>}
+      {!isPending && !error && (keys.length === 0 ? <p className="text-sm">No API keys yet.</p> : (
         <ul className="divide-y" style={{ borderColor: "var(--line)" }}>
           {keys.map((key) => <li key={key.id} className="py-3 flex flex-wrap gap-3 items-center justify-between">
             <div><div className="font-medium text-sm">{key.name} <code className="font-normal ml-2">{key.tokenPrefix}…</code></div>
@@ -102,7 +109,7 @@ export function ApiKeysSection() {
             {key.status === "ACTIVE" && <button type="button" className="af-btn af-btn-sm" onClick={() => setRevoke(key)}>Revoke</button>}
           </li>)}
         </ul>
-      )}
+      ))}
       <ConfirmationDialog open={!!revoke} onOpenChange={(open) => { if (!open) setRevoke(null); }} title="Revoke API key" description={`Revoke ${revoke?.name ?? "this key"}? Requests using it will fail immediately.`} confirmLabel="Revoke key" onConfirm={revokeKey} isPending={busy} variant="destructive" />
     </section>
   );
