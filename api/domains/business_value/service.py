@@ -63,6 +63,25 @@ def value_to_spend_ratio(value: Decimal | None, spend: Decimal) -> float | None:
     return float(value / spend)
 
 
+def per_request(amount: Decimal | int, requests: int) -> float | None:
+    if requests == 0:
+        return None
+    return float(Decimal(amount) / requests)
+
+
+def handled_rate(succeeded: int, failed: int) -> float | None:
+    handled = succeeded + failed
+    if handled == 0:
+        return None
+    return succeeded / handled
+
+
+def utc_bucket(bucket: datetime) -> datetime:
+    if bucket.tzinfo is None:
+        return bucket.replace(tzinfo=UTC)
+    return bucket.astimezone(UTC)
+
+
 def categorise(rows: Sequence[tuple[bool | None, str | None, BusinessActionStatus, int]]) -> WriteCategories:
     successful: dict[OutcomeType, int] = {}
     unverified = failed = unclassified = 0

@@ -28,6 +28,35 @@ Related context: [Activity and Ingest](../activity-and-ingest.md), [Agent Activi
 
 ## Slice history
 
+### 2026-09-30 — AF-346 — Activity rules and DTOs
+
+Delivered: pure module-level functions in `api/domains/business_value/service.py`, with nothing calling them yet:
+- `per_request(amount, requests)`: `float(Decimal(amount) / requests)`, used for cost per request (on `Decimal` spend) and tool calls per request (on an integer count).
+  - It is `None` when there are no requests.
+  - Zero spend over some requests is `0.0`, not `None`.
+- `handled_rate(succeeded, failed)`: successes over every handled outcome, `None` when there were none.
+- `utc_bucket(bucket)`: a naive bucket is read as UTC, and an aware one is converted to UTC.
+  - `CostRepository.spend_series` and `ValueActivityRepository.webhook_invocations_by_bucket` return naive buckets.
+  - `ConversationRepository.daily_direction_counts_since` returns aware ones (`timezone('UTC', bucket)`).
+  - This gives both forms of one instant the same merge key.
+
+The response DTOs in `api/domains/business_value/models.py`:
+- `ActivityTotalsRead`:
+  - `requests`
+  - `handled_without_failure_rate` and `handled_coverage`
+  - `median_response_seconds` and `response_time_coverage`
+  - `cost_per_request` and `tool_calls_per_request`
+- `ActivitySeriesPoint`: `bucket` and `requests`.
+- `AgentActivityRead`: the totals fields, plus `agent_id`, `agent_name`, `agent_deleted`, and `spend`.
+- `OrganizationActivityRead`: the echoed window, plus `totals`, `requests_series`, and `agents`.
+
+Coverage:
+- `api/tests/unit/test_business_value_valuation.py` gains 10 tests:
+  - division for spend and for counts, zero spend, and no requests
+  - the handled rate, including its zero and null cases
+  - a naive bucket, an aware non-UTC bucket, and naive and aware forms of one instant sharing a dictionary key
+- All 10 failed first on `NotImplementedError` stubs, while the existing 22 still passed. All 32 pass.
+
 ### 2026-09-30 — AF-346 — Activity indexes
 
 Delivered:

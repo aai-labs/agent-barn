@@ -152,6 +152,38 @@ class OutcomeTypeValueRead(PydanticBaseModel):
     value: float | None
 
 
+class ActivityTotalsRead(PydanticBaseModel):
+    requests: int
+    handled_without_failure_rate: float | None
+    handled_coverage: int
+    median_response_seconds: float | None
+    response_time_coverage: int
+    cost_per_request: float | None
+    tool_calls_per_request: float | None
+
+
+class ActivitySeriesPoint(PydanticBaseModel):
+    bucket: datetime
+    requests: int
+
+
+class AgentActivityRead(ActivityTotalsRead):
+    agent_id: UUID | None
+    agent_name: str | None
+    agent_deleted: bool
+    spend: float
+
+
+class OrganizationActivityRead(PydanticBaseModel):
+    period: StatsPeriod | None
+    from_date: datetime
+    to_date: datetime
+    granularity: StatsGranularity
+    totals: ActivityTotalsRead
+    requests_series: list[ActivitySeriesPoint]
+    agents: list[AgentActivityRead]
+
+
 class OrganizationValueRead(PydanticBaseModel):
     period: StatsPeriod | None
     from_date: datetime
