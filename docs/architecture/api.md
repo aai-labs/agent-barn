@@ -68,3 +68,7 @@ The application lifespan ensures a bootstrap Platform Administrator, seeds built
 ## Change impact
 
 When adding or moving a product router, update `../../api/api_app.py`; ingest routes are registered through `../../api/ingest_app.py`. When a schema changes, update the database model, API DTO where required, migration, integration tests, and corresponding UI Zod schema. When a workflow spans repositories, verify whether partial persistence is acceptable before relying on the default session-per-operation behavior. When a mutation produces a Domain Event, use a domain-specific transaction boundary and update the Domain Events feature guide if the envelope, delivery lifecycle, privacy rules, or excluded scope changes.
+
+## Supported external API
+
+The `/api/v1` product API accepts User session JWTs and User-owned Personal API Keys through the shared authentication dependencies. Keys are resolved to the same `CurrentUserContext`, then current Organization Membership, Agent Access, and Platform Administrator checks apply. Read-only key mode is enforced before write handlers execute. The separate Ingest app and Teams webhook keep their protocol-specific credentials. The public schema, discovery endpoint, and developer guides are described in [`../features/public-api.md`](../features/public-api.md).

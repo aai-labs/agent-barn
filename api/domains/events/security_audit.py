@@ -21,6 +21,8 @@ from api.domains.events.catalog import (
     AGENT_TEMPLATE_OVERRIDE_PUBLISHED,
     AGENT_TEMPLATE_OVERRIDE_SELECTED,
     AGENT_UPDATED,
+    API_KEY_CREATED,
+    API_KEY_REVOKED,
     ORGANIZATION_MEMBER_ADDED,
     ORGANIZATION_MEMBER_REMOVED,
     ORGANIZATION_MODEL_ALLOWLIST_CHANGED,
@@ -96,6 +98,8 @@ class SecurityAuditProjection:
 
     name: ClassVar[str] = SECURITY_AUDIT_HANDLER
     supported_events: ClassVar[Sequence[SupportedEvent]] = (
+        SupportedEvent(API_KEY_CREATED, 1),
+        SupportedEvent(API_KEY_REVOKED, 1),
         SupportedEvent(ORGANIZATION_ROLE_CHANGED, 1),
         SupportedEvent(AGENT_ACCESS_GRANTED, 1),
         SupportedEvent(AGENT_ACCESS_REVOKED, 1),

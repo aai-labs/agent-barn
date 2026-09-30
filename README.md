@@ -56,6 +56,11 @@ The UI comes up on `http://localhost:3000` and the API on
 `http://localhost:8000`, with routes under `/api/v1`. Sign in with the
 `PLATFORM_ADMIN_CREDENTIALS` you set in `.env`.
 
+For programmatic access, create a Personal API Key in Account settings. The
+complete endpoint reference is at `/api/v1/docs`, the OpenAPI schema at
+`/api/v1/openapi.json`, and agent-friendly guidance at `/llms.txt`. See the
+[API quickstart](api/developer_docs/quickstart.md) for a Bearer-token example.
+
 Prefer to run services on the host? `make dev-api`, `make dev-ui`, and
 `make dev-worker` each watch their own source. See
 [CONTRIBUTING.md](CONTRIBUTING.md#development-setup) for the full set.

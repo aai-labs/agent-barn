@@ -25,9 +25,11 @@ from api.domains.agents.routes import agents_router
 from api.domains.agents.service import AgentService
 from api.domains.agents.slack_routes import slack_router
 from api.domains.agents.webhook_routes import webhook_router
+from api.domains.api_keys.routes import router as api_keys_router
 from api.domains.auth.routes import auth_router
 from api.domains.conversations.routes import conversations_router
 from api.domains.costs.routes import costs_router
+from api.domains.discovery.routes import router as discovery_router
 from api.domains.events.routes import event_delivery_monitor_router
 from api.domains.integrations.google_oauth.routes import integrations_router
 from api.domains.organizations.routes import org_router, platform_org_router
@@ -81,7 +83,16 @@ def create_app(injector: Injector | None = None):
         injector = create_injector()
 
     app_v1 = FastAPI(lifespan=lifespan)
-    subapi = FastAPI()
+    subapi = FastAPI(
+        title="AgentBarn Product API",
+        version="1.0.0",
+        description=(
+            "Supported v1 API for Organizations, Agents, Templates, Skills, activity, costs, "
+            "account settings, and Platform administration. User-owned Personal API Keys "
+            "use the Authorization: Bearer header and current User permissions. "
+            "Start with /auth/context, /developer, or /discovery."
+        ),
+    )
 
     @subapi.get("/health")
     async def health_v1(
@@ -102,8 +113,10 @@ def create_app(injector: Injector | None = None):
     subapi.include_router(agents_router)
     subapi.include_router(webhook_router)
     subapi.include_router(auth_router)
+    subapi.include_router(api_keys_router)
     subapi.include_router(conversations_router)
     subapi.include_router(costs_router)
+    subapi.include_router(discovery_router)
     subapi.include_router(event_delivery_monitor_router)
     subapi.include_router(platform_stats_router)
     subapi.include_router(org_router)

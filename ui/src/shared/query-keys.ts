@@ -18,3 +18,4 @@ export const createQueryKeyStructure = (baseKey: string) => ({
 });
 
 export const slackConfigTokenKey = createQueryKeyStructure("slack-config-token");
+export const apiKeysKey = createQueryKeyStructure("personal-api-keys");

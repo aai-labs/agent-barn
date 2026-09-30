@@ -52,6 +52,10 @@ _Avoid_: default Organization, primary Organization
 The relationship between a user and an organization, carrying exactly one organization role.
 _Avoid_: organization user, user organization
 
+**Personal API Key**:
+A revocable, User-owned Bearer credential that accesses the product API using the User's current Organization Memberships and Agent Permissions. It may be read-only or full access.
+_Avoid_: Agent Secret, runtime ingest token, Organization-owned key
+
 **Organization Role**:
 A Membership's fixed organization-scoped authority. The roles are Organization Owner, Organization Admin, and Organization Member; an Organization can have at most one Organization Owner.
 _Avoid_: Agent Access Role, user role, global role, superuser

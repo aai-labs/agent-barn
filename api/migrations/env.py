@@ -7,6 +7,7 @@ from sqlalchemy import engine_from_config, pool
 from sqlmodel import SQLModel
 
 import api.domains.agents.models
+import api.domains.api_keys.models
 import api.domains.auth.models
 import api.domains.conversations.models
 import api.domains.costs.models
