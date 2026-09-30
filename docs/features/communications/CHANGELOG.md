@@ -15,7 +15,7 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
 
 ### 2026-09-30 — Use Agent identity in the Slack manifest — PR pending
 
-- Changed: the copied Slack manifest uses the active Agent configuration's description for `display_information.description` and the Agent's name for `display_information.name`, bounded to Slack's 140- and 35-character limits. The bot-user display name is a lowercase Slack-compatible form of the Agent name, capped at 80 characters.
+- Changed: the copied Slack manifest uses the active Agent configuration's description for `display_information.description` and the Agent's name for `display_information.name`, bounded to Slack's 140- and 35-character limits. The bot-user display name is a lowercase `a-z0-9._-` form of the Agent name, capped at 80 characters; names with no ASCII form fall back to `agent-` plus the name's hex code points. Names and descriptions are trimmed.
 
 ### 2026-09-22 — Retire the webhook Platform — PR pending
 

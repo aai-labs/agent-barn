@@ -176,20 +176,14 @@ function SetupMarkdown({ markdown }: { markdown: string }) {
 
 function PlatformSetupHint({
   hint,
-  platformKey,
-  agentName,
-  agentDescription,
+  manifest,
   title = "Setup requirements",
 }: {
   hint?: string | null;
-  platformKey?: string;
-  agentName?: string;
-  agentDescription?: string | null;
+  /** Copyable Slack app manifest; shown as a copy button when present. */
+  manifest?: object | null;
   title?: string;
 }) {
-  const manifest = platformKey === "slack" && agentName
-    ? createSlackAppManifest(agentName, agentDescription)
-    : null;
   if (!hint && !manifest) return null;
   return (
     <div
@@ -622,6 +616,8 @@ export function AgentChannelSettings({
 }) {
   const connections = useCommunicationConnections(agent.id);
   const platforms = useCommunicationPlatforms();
+  const setupManifest = (platformKey: string) =>
+    platformKey === "slack" ? createSlackAppManifest(agent.name, agentDescription) : null;
   // Web Chat is lazily provisioned on first send and can't be added by hand.
   const addablePlatforms = useMemo(
     () => {
@@ -1232,9 +1228,7 @@ export function AgentChannelSettings({
                       <>
                         <PlatformSetupHint
                           hint={platform.setupHint}
-                          platformKey={platform.key}
-                          agentName={agent.name}
-                          agentDescription={agentDescription}
+                          manifest={setupManifest(platform.key)}
                         />
                         <div className="flex flex-col gap-4">
                           {connection.platformKey === "discord" && (
@@ -1509,9 +1503,7 @@ export function AgentChannelSettings({
                   <div className="mt-5 flex flex-col gap-4">
                     <PlatformSetupHint
                       hint={selectedPlatform.setupHint}
-                      platformKey={selectedPlatform.key}
-                      agentName={agent.name}
-                      agentDescription={agentDescription}
+                      manifest={setupManifest(selectedPlatform.key)}
                     />
                     {schemaProperties(selectedPlatform.credentialsSchema).length > 0 && (
                       <div className="rounded-xl p-4" style={{ border: "1px solid var(--line)", background: "var(--bg-soft)" }}>

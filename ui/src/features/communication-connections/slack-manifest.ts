@@ -82,18 +82,26 @@ const MAX_SLACK_APP_DESCRIPTION_LENGTH = 140;
 /** Slack limits features.bot_user.display_name to 80 characters. */
 const MAX_SLACK_BOT_DISPLAY_NAME_LENGTH = 80;
 
-export function createSlackAppManifest(agentName: string, agentDescription?: string | null) {
-  const appName = Array.from(agentName).slice(0, MAX_SLACK_APP_NAME_LENGTH).join("");
+export function createSlackAppManifest(rawAgentName: string, agentDescription?: string | null) {
+  const agentName = rawAgentName.trim();
+  const agentNameCharacters = Array.from(agentName);
+  const appName = agentNameCharacters.slice(0, MAX_SLACK_APP_NAME_LENGTH).join("").trim();
   const description = Array.from(
     agentDescription?.trim() || SLACK_APP_MANIFEST_TEMPLATE.display_information.description,
-  ).slice(0, MAX_SLACK_APP_DESCRIPTION_LENGTH).join("");
-  const botDisplayName = agentName
+  ).slice(0, MAX_SLACK_APP_DESCRIPTION_LENGTH).join("").trim();
+  const normalizedBotName = agentName
     .normalize("NFKD")
     .replace(/\p{M}/gu, "")
     .toLowerCase()
     .replace(/[^a-z0-9._-]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, MAX_SLACK_BOT_DISPLAY_NAME_LENGTH) || "agent";
+    .replace(/^-+|-+$/g, "");
+  // Give names without an ASCII slug a stable, Slack-safe label.
+  const encodedAgentName = agentNameCharacters
+    .map((character) => character.codePointAt(0)!.toString(16))
+    .join("-");
+  const botDisplayName = (
+    normalizedBotName || (encodedAgentName ? `agent-${encodedAgentName}` : "agent")
+  ).slice(0, MAX_SLACK_BOT_DISPLAY_NAME_LENGTH);
 
   return {
     ...SLACK_APP_MANIFEST_TEMPLATE,
