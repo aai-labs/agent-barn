@@ -1,0 +1,920 @@
+from datetime import UTC, datetime, timedelta
+from unittest.mock import patch
+from uuid import UUID
+
+import pytest
+from hamcrest import (
+    assert_that,
+    contains_inanyorder,
+    contains_string,
+    empty,
+    equal_to,
+    greater_than,
+    has_entries,
+    has_length,
+    is_,
+    none,
+    not_,
+)
+from sqlmodel import Session, col, select
+from starlette.testclient import TestClient
+
+from api.domains.agents.models import AgentStatus, AgentType
+from api.domains.communications.delivery_repository import (
+    CommunicationDeliveryCancelledError,
+    CommunicationDeliveryRepository,
+)
+from api.domains.communications.error_details import normalize_communication_error
+from api.domains.communications.gateway_service import CommunicationsGatewayService
+from api.domains.communications.models import (
+    CommunicationConnection,
+    CommunicationDelivery,
+    CommunicationDeliveryStatus,
+    CommunicationJournalEntry,
+    CommunicationJournalStage,
+    CommunicationPolicyDisposition,
+    CommunicationSender,
+    ConnectionObservedStatus,
+    ConversationLocation,
+    NormalizedCommunicationEnvelope,
+    RuntimeReplyCreate,
+)
+from api.domains.communications.repository import CommunicationConnectionRepository
+from api.domains.conversations.models import AgentChatMessage
+from api.domains.events.models import ActorIdentity, ActorIdentityType
+from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
+from api.tests.core.givenpy import given, then, when
+from api.tests.core.modules import (
+    create_test_client,
+    prepare_api_server,
+    prepare_injector,
+    set_env_variable,
+)
+from api.tests.steps.agent import (
+    TEST_ENCRYPTION_KEY,
+    MockK8sModule,
+    MockLiteLLMModule,
+    there_is_an_agent,
+    use_org_for_auth,
+)
+from api.tests.steps.database import database_is_clean, database_repo_is_ready
+from api.tests.steps.organization import there_is_an_organization_with_user_and_access_token
+
+_GIVEN = [
+    set_env_variable(
+        {
+            "AGENT_TOKEN_ENCRYPTION_KEY": TEST_ENCRYPTION_KEY,
+            "LITELLM_BASE_URL": "http://litellm:4000",
+            "LITELLM_SECRET_NAME": "litellm",
+            "AGENT_DEFAULT_MODEL": "litellm/gpt-5-mini",
+            "AGENT_LITELLM_BASE_URL": "http://litellm:4000",
+            "SKIP_DISCORD_TOKEN_VALIDATION": "true",
+        }
+    ),
+    prepare_injector(modules=[MockK8sModule(), MockLiteLLMModule()]),
+    prepare_api_server(),
+    create_test_client(),
+    database_repo_is_ready(),
+    database_is_clean(),
+    there_is_an_organization_with_user_and_access_token(),
+    use_org_for_auth(),
+]
+
+
+def _auth(context) -> dict[str, str]:
+    return {"Authorization": f"Bearer {context.access_token}"}
+
+
+def _create_connection(
+    context,
+    bot_token: str = "gateway-token",
+    display_name: str = "Gateway Discord",
+) -> UUID:
+    client: TestClient = context.client
+    response = client.post(
+        f"/api/v1/organizations/{context.organization.id}/agents/{context.agent.id}/connections",
+        json={
+            "platform_key": "discord",
+            "display_name": display_name,
+            "settings": {"allowed_channel_ids": ["channel-one"]},
+            "credentials": {"bot_token": bot_token},
+        },
+        headers=_auth(context),
+    )
+    assert_that(response.status_code, equal_to(201))
+    return UUID(response.json()["id"])
+
+
+def _envelope(message_id: str) -> NormalizedCommunicationEnvelope:
+    return NormalizedCommunicationEnvelope(
+        provider_message_id=message_id,
+        occurred_at=datetime.now(UTC),
+        location=ConversationLocation(id="channel-one", type="CHANNEL", thread_id="thread-one"),
+        sender=CommunicationSender(id="person-one", display_name="Person One"),
+        text=f"message {message_id}",
+    )
+
+
+def _message(context, message_id: UUID) -> AgentChatMessage:
+    delegate = context.injector.get(PostgresRepositoryDelegate)
+    with Session(delegate.engine) as session:
+        message = session.get(AgentChatMessage, message_id)
+    if message is None:
+        raise AssertionError(f"Message {message_id} was not persisted")
+    return message
+
+
+def _delivery(context, delivery_id: UUID) -> CommunicationDelivery:
+    delegate = context.injector.get(PostgresRepositoryDelegate)
+    with Session(delegate.engine) as session:
+        delivery = session.get(CommunicationDelivery, delivery_id)
+    if delivery is None:
+        raise AssertionError(f"Delivery {delivery_id} was not persisted")
+    return delivery
+
+
+def test_inbound_acceptance_is_idempotent() -> None:
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        connection_id = _create_connection(context)
+        repository = context.injector.get(CommunicationDeliveryRepository)
+
+        with when("the provider retries one inbound message"):
+            first = repository.accept_inbound(connection_id=connection_id, envelope=_envelope("provider-1"))
+            duplicate = repository.accept_inbound(connection_id=connection_id, envelope=_envelope("provider-1"))
+
+        with then("one canonical message and delivery identity are returned"):
+            assert_that(first.status, equal_to(CommunicationDeliveryStatus.PENDING))
+            assert_that(duplicate.message_id, equal_to(first.message_id))
+            assert_that(duplicate.delivery_id, equal_to(first.delivery_id))
+            assert_that(duplicate.duplicate, is_(True))
+
+
+def test_runtime_claim_serializes_one_conversation() -> None:
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        connection_id = _create_connection(context)
+        repository = context.injector.get(CommunicationDeliveryRepository)
+        repository.accept_inbound(connection_id=connection_id, envelope=_envelope("provider-1"))
+        repository.accept_inbound(connection_id=connection_id, envelope=_envelope("provider-2"))
+
+        with when("the runtime claims work for the same conversation"):
+            first = repository.claim_next_inbound(agent_id=context.agent.id)
+            blocked = repository.claim_next_inbound(agent_id=context.agent.id)
+            completed = repository.complete_runtime_delivery(
+                first.delivery_id if first is not None else UUID(int=0),
+                agent_id=context.agent.id,
+                succeeded=True,
+            )
+            second = repository.claim_next_inbound(agent_id=context.agent.id)
+
+        with then("the second message waits for the first delivery"):
+            assert_that(first, is_(not_(none())))
+            assert_that(blocked, none())
+            assert_that(completed, is_(True))
+            assert_that(second, is_(not_(none())))
+            assert_that(
+                second.envelope.provider_message_id if second is not None else None,
+                equal_to("provider-2"),
+            )
+
+
+def test_runtime_claim_skips_native_platform_deliveries() -> None:
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        delegate = context.injector.get(PostgresRepositoryDelegate)
+        native_connection = CommunicationConnection(
+            organization_id=context.agent.organization_id,
+            agent_id=context.agent.id,
+            platform_key="slack",
+            display_name="Native Slack",
+            credentials_encrypted="unused",
+            driver_key_encrypted="unused",
+        )
+        delegate.save(native_connection)
+        gateway_connection_id = _create_connection(context)
+        repository = context.injector.get(CommunicationDeliveryRepository)
+        native = repository.accept_inbound(
+            connection_id=native_connection.id,
+            envelope=_envelope("native-first"),
+        )
+        gateway = repository.accept_inbound(
+            connection_id=gateway_connection_id,
+            envelope=_envelope("gateway-second"),
+        )
+
+        claimed = repository.claim_next_inbound(
+            agent_id=context.agent.id,
+            excluded_platform_keys=frozenset({"slack"}),
+        )
+
+        assert_that(claimed.delivery_id if claimed else None, equal_to(gateway.delivery_id))
+        assert_that(_delivery(context, native.delivery_id).status, equal_to(CommunicationDeliveryStatus.PENDING))
+
+
+def test_outbound_claim_skips_native_platform_deliveries() -> None:
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING, agent_type=AgentType.HERMES)]) as context:
+        delegate = context.injector.get(PostgresRepositoryDelegate)
+        native_connection = CommunicationConnection(
+            organization_id=context.agent.organization_id,
+            agent_id=context.agent.id,
+            platform_key="slack",
+            display_name="Native Slack",
+            credentials_encrypted="unused",
+            driver_key_encrypted="unused",
+        )
+        delegate.save(native_connection)
+        gateway_connection_id = _create_connection(context)
+        repository = context.injector.get(CommunicationDeliveryRepository)
+
+        native_source = repository.accept_inbound(
+            connection_id=native_connection.id,
+            envelope=_envelope("native-source"),
+        )
+        gateway_source = repository.accept_inbound(
+            connection_id=gateway_connection_id,
+            envelope=_envelope("gateway-source"),
+        )
+        repository.claim_next_inbound(agent_id=context.agent.id)
+        repository.claim_next_inbound(
+            agent_id=context.agent.id,
+            excluded_platform_keys=frozenset({"slack"}),
+        )
+        native_reply_id = repository.enqueue_runtime_reply(
+            agent_id=context.agent.id,
+            source_delivery_id=native_source.delivery_id,
+            reply=RuntimeReplyCreate(idempotency_key="native-reply", text="native reply"),
+        )
+        gateway_reply_id = repository.enqueue_runtime_reply(
+            agent_id=context.agent.id,
+            source_delivery_id=gateway_source.delivery_id,
+            reply=RuntimeReplyCreate(idempotency_key="gateway-reply", text="gateway reply"),
+        )
+
+        claimed = repository.claim_next_outbound(native_platform_keys=frozenset({"slack"}))
+
+        assert_that(claimed.id if claimed else None, equal_to(gateway_reply_id))
+        assert_that(_delivery(context, native_reply_id).status, equal_to(CommunicationDeliveryStatus.PENDING))
+
+
+def test_non_retryable_runtime_failure_dead_letters_without_a_retry() -> None:
+    error_message = "Error code: 402 - provider credits exhausted"
+    normalized_error = normalize_communication_error(
+        error_code="RuntimeError",
+        error_message=error_message,
+        operation="runtime_processing",
+    )
+    assert_that(normalized_error.details, is_(not_(none())))
+
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        connection_id = _create_connection(context)
+        repository = context.injector.get(CommunicationDeliveryRepository)
+        accepted = repository.accept_inbound(connection_id=connection_id, envelope=_envelope("provider-1"))
+        claimed = repository.claim_next_inbound(agent_id=context.agent.id)
+
+        with when("the runtime reports the provider's non-retryable HTTP 402 failure"):
+            completed = repository.complete_runtime_delivery(
+                accepted.delivery_id,
+                agent_id=context.agent.id,
+                succeeded=False,
+                error_code="RuntimeError",
+                error_message=error_message,
+                error_details=normalized_error.details,
+            )
+
+        with then("the delivery is terminal immediately instead of being requeued"):
+            assert_that(claimed, is_(not_(none())))
+            assert_that(completed, is_(True))
+            delivery = _delivery(context, accepted.delivery_id)
+            assert_that(delivery.status, equal_to(CommunicationDeliveryStatus.DEAD_LETTERED))
+            assert_that(delivery.last_error_message, equal_to(normalized_error.summary))
+
+
+def test_runtime_claim_releases_one_answer_to_a_run_awaiting_input() -> None:
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        connection_id = _create_connection(context)
+        repository = context.injector.get(CommunicationDeliveryRepository)
+        repository.accept_inbound(connection_id=connection_id, envelope=_envelope("provider-1"))
+        repository.accept_inbound(connection_id=connection_id, envelope=_envelope("provider-2"))
+        repository.accept_inbound(connection_id=connection_id, envelope=_envelope("provider-3"))
+
+        with when("the claimed run parks awaiting a human answer it can only receive on this thread"):
+            parked = repository.claim_next_inbound(agent_id=context.agent.id)
+            assert parked is not None
+            blocked_while_running = repository.claim_next_inbound(agent_id=context.agent.id)
+            repository.renew_runtime_delivery_lease(
+                parked.delivery_id,
+                agent_id=context.agent.id,
+                awaiting_input=True,
+            )
+            answer = repository.claim_next_inbound(agent_id=context.agent.id)
+            blocked_behind_answer = repository.claim_next_inbound(agent_id=context.agent.id)
+
+        with then("only the next message is released, and claiming it re-blocks the queue"):
+            assert_that(blocked_while_running, none())
+            assert_that(answer, is_(not_(none())))
+            assert_that(
+                answer.envelope.provider_message_id if answer is not None else None,
+                equal_to("provider-2"),
+            )
+            assert_that(blocked_behind_answer, none())
+
+
+def test_runtime_claim_reblocks_a_conversation_once_its_run_resumes() -> None:
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        connection_id = _create_connection(context)
+        repository = context.injector.get(CommunicationDeliveryRepository)
+        repository.accept_inbound(connection_id=connection_id, envelope=_envelope("provider-1"))
+        repository.accept_inbound(connection_id=connection_id, envelope=_envelope("provider-2"))
+
+        with when("the run parks, then reports itself running again"):
+            parked = repository.claim_next_inbound(agent_id=context.agent.id)
+            assert parked is not None
+            repository.renew_runtime_delivery_lease(
+                parked.delivery_id,
+                agent_id=context.agent.id,
+                awaiting_input=True,
+            )
+            repository.renew_runtime_delivery_lease(
+                parked.delivery_id,
+                agent_id=context.agent.id,
+                awaiting_input=False,
+            )
+            blocked = repository.claim_next_inbound(agent_id=context.agent.id)
+
+        with then("the conversation serializes again"):
+            assert_that(blocked, none())
+
+
+def test_runtime_claim_reclaims_an_inbound_delivery_whose_lease_expired() -> None:
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        connection_id = _create_connection(context)
+        repository = context.injector.get(CommunicationDeliveryRepository)
+        accepted = repository.accept_inbound(connection_id=connection_id, envelope=_envelope("provider-1"))
+        delegate = context.injector.get(PostgresRepositoryDelegate)
+
+        with when("the runtime claims it but its lease expires without a /complete call"):
+            claimed = repository.claim_next_inbound(agent_id=context.agent.id)
+            with Session(delegate.engine) as session:
+                stuck = session.get(CommunicationDelivery, accepted.delivery_id)
+                assert stuck is not None
+                stuck.lease_expires_at = datetime.now(UTC) - timedelta(seconds=1)
+                session.add(stuck)
+                session.commit()
+            # The reclaim applies a short backoff before the row is claimable
+            # again (same as an explicit failed completion would), so this
+            # call flips it back to PENDING but won't hand it out yet.
+            immediately_reclaimed = repository.claim_next_inbound(agent_id=context.agent.id)
+            with Session(delegate.engine) as session:
+                backed_off = session.get(CommunicationDelivery, accepted.delivery_id)
+                assert backed_off is not None
+                assert_that(backed_off.status, equal_to(CommunicationDeliveryStatus.PENDING))
+                backed_off.available_at = datetime.now(UTC) - timedelta(seconds=1)
+                session.add(backed_off)
+                session.commit()
+            reclaimed = repository.claim_next_inbound(agent_id=context.agent.id)
+
+        with then("the stale claim is handed out again instead of staying stuck forever"):
+            assert_that(claimed, is_(not_(none())))
+            assert_that(immediately_reclaimed, none())
+            assert_that(reclaimed, is_(not_(none())))
+            assert_that(
+                reclaimed.delivery_id if reclaimed is not None else None,
+                equal_to(claimed.delivery_id if claimed is not None else None),
+            )
+            assert_that(reclaimed.attempt_count if reclaimed is not None else None, equal_to(2))
+
+
+def _expire_lease(delegate: PostgresRepositoryDelegate, delivery_id: UUID) -> None:
+    with Session(delegate.engine) as session:
+        row = session.get(CommunicationDelivery, delivery_id)
+        assert row is not None
+        row.lease_expires_at = datetime.now(UTC) - timedelta(seconds=1)
+        session.add(row)
+        session.commit()
+
+
+def _clear_backoff(delegate: PostgresRepositoryDelegate, delivery_id: UUID) -> None:
+    with Session(delegate.engine) as session:
+        row = session.get(CommunicationDelivery, delivery_id)
+        assert row is not None
+        row.available_at = datetime.now(UTC) - timedelta(seconds=1)
+        session.add(row)
+        session.commit()
+
+
+def test_runtime_claim_dead_letters_an_inbound_delivery_after_repeated_lease_expiry() -> None:
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        connection_id = _create_connection(context)
+        repository = context.injector.get(CommunicationDeliveryRepository)
+        accepted = repository.accept_inbound(connection_id=connection_id, envelope=_envelope("provider-1"))
+        delegate = context.injector.get(PostgresRepositoryDelegate)
+
+        claimed = repository.claim_next_inbound(agent_id=context.agent.id, max_attempts=5)
+        assert_that(claimed, is_(not_(none())))
+        for _ in range(4):
+            _expire_lease(delegate, accepted.delivery_id)
+            # This call performs the reclaim (PROCESSING -> PENDING with a
+            # backoff window) internally but can't claim in the same pass,
+            # since the backoff pushes available_at into the future.
+            assert_that(repository.claim_next_inbound(agent_id=context.agent.id, max_attempts=5), none())
+            _clear_backoff(delegate, accepted.delivery_id)
+            claimed = repository.claim_next_inbound(agent_id=context.agent.id, max_attempts=5)
+            assert_that(claimed, is_(not_(none())))
+
+        with when("the delivery's lease expires a fifth time"):
+            _expire_lease(delegate, accepted.delivery_id)
+            final_claim = repository.claim_next_inbound(agent_id=context.agent.id, max_attempts=5)
+
+        with then("it dead-letters instead of retrying forever"):
+            assert_that(claimed.attempt_count, equal_to(5))
+            assert_that(final_claim, none())
+            final = _delivery(context, accepted.delivery_id)
+            assert_that(final.status, equal_to(CommunicationDeliveryStatus.DEAD_LETTERED))
+            assert_that(final.last_error_code, equal_to("LEASE_EXPIRED"))
+
+
+def test_runtime_can_renew_its_live_inbound_delivery_lease() -> None:
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        connection_id = _create_connection(context)
+        repository = context.injector.get(CommunicationDeliveryRepository)
+        accepted = repository.accept_inbound(connection_id=connection_id, envelope=_envelope("provider-1"))
+        claimed = repository.claim_next_inbound(agent_id=context.agent.id)
+        assert_that(claimed, is_(not_(none())))
+
+        with when("the runtime renews its active delivery claim"):
+            renewed = repository.renew_runtime_delivery_lease(accepted.delivery_id, agent_id=context.agent.id)
+
+        with then("the lease remains active and is extended"):
+            assert_that(renewed, is_(True))
+            delivery = _delivery(context, accepted.delivery_id)
+            assert_that(delivery.status, equal_to(CommunicationDeliveryStatus.PROCESSING))
+            assert_that(delivery.lease_expires_at, greater_than(datetime.now(UTC) + timedelta(seconds=100)))
+
+
+def test_thread_state_is_durable_and_connection_scoped() -> None:
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        connection_id = _create_connection(context, bot_token="gateway-token-one")
+        second_connection = CommunicationConnection(
+            organization_id=context.agent.organization_id,
+            agent_id=context.agent.id,
+            platform_key="telegram",
+            display_name="Gateway Telegram",
+            credentials_encrypted="unused",
+            driver_key_encrypted="unused",
+        )
+        context.injector.get(PostgresRepositoryDelegate).save(second_connection)
+        second_connection_id = second_connection.id
+        repository = context.injector.get(CommunicationDeliveryRepository)
+        envelope = _envelope("provider-owned")
+
+        repository.accept_inbound(connection_id=connection_id, envelope=envelope)
+
+        with then("only the accepted Connection owns the persisted thread"):
+            assert_that(
+                repository.thread_has_agent_state(connection_id=connection_id, location=envelope.location), is_(True)
+            )
+            assert_that(
+                repository.thread_has_agent_state(connection_id=second_connection_id, location=envelope.location),
+                is_(False),
+            )
+            assert_that(
+                repository.thread_has_agent_state(
+                    connection_id=connection_id,
+                    location=ConversationLocation(id="other-channel", type="CHANNEL", thread_id="thread-one"),
+                ),
+                is_(False),
+            )
+
+
+def test_message_for_intentionally_stopped_agent_is_terminally_unavailable() -> None:
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        connection_id = _create_connection(context)
+        repository = context.injector.get(CommunicationDeliveryRepository)
+
+        with when("a message arrives while the Agent is deliberately stopped"):
+            accepted = repository.accept_inbound(
+                connection_id=connection_id,
+                envelope=_envelope("provider-stopped"),
+            )
+
+        with then("it is recorded but never queued for later execution"):
+            assert_that(accepted.status, equal_to(CommunicationDeliveryStatus.UNAVAILABLE))
+            assert_that(repository.claim_next_inbound(agent_id=context.agent.id), none())
+
+
+def test_duplicate_delivery_backfills_a_previously_missing_name() -> None:
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        connection_id = _create_connection(context)
+        repository = context.injector.get(CommunicationDeliveryRepository)
+        nameless = _envelope("provider-1").model_copy(
+            update={"sender": CommunicationSender(id="person-one", display_name=None)}
+        )
+
+        with when("the first delivery arrives before the sender name could be resolved"):
+            first = repository.accept_inbound(connection_id=connection_id, envelope=nameless)
+
+        with then("the message is stored without a sender name"):
+            assert_that(_message(context, first.message_id).sender_name, none())
+
+        resolved = _envelope("provider-1").model_copy(
+            update={
+                "location": ConversationLocation(
+                    id="channel-one",
+                    type="CHANNEL",
+                    thread_id="thread-one",
+                    display_name="general",
+                )
+            }
+        )
+
+        with when("the provider retries the same message and names are now available"):
+            retried = repository.accept_inbound(connection_id=connection_id, envelope=resolved)
+
+        with then("the message and runtime envelope are backfilled without a duplicate"):
+            assert_that(retried.duplicate, is_(True))
+            assert_that(retried.message_id, equal_to(first.message_id))
+            assert_that(_message(context, first.message_id).sender_name, equal_to("Person One"))
+            stored_envelope = _delivery(context, first.delivery_id).envelope
+            assert_that(stored_envelope["sender"]["display_name"], equal_to("Person One"))
+            assert_that(stored_envelope["location"]["display_name"], equal_to("general"))
+
+
+def test_duplicate_delivery_does_not_erase_a_known_name_with_null() -> None:
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        connection_id = _create_connection(context)
+        repository = context.injector.get(CommunicationDeliveryRepository)
+
+        with when("the first delivery arrives with a resolved sender name"):
+            first = repository.accept_inbound(connection_id=connection_id, envelope=_envelope("provider-1"))
+
+        nameless_retry = _envelope("provider-1").model_copy(
+            update={"sender": CommunicationSender(id="person-one", display_name=None)}
+        )
+
+        with when("a later retry arrives without a resolved name"):
+            retried = repository.accept_inbound(connection_id=connection_id, envelope=nameless_retry)
+
+        with then("the already-known name is preserved rather than cleared"):
+            assert_that(retried.duplicate, is_(True))
+            assert_that(_message(context, first.message_id).sender_name, equal_to("Person One"))
+
+
+def test_outbound_reply_inherits_channel_name_from_source_inbound_location() -> None:
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        connection_id = _create_connection(context)
+        repository = context.injector.get(CommunicationDeliveryRepository)
+        envelope = _envelope("provider-1").model_copy(
+            update={
+                "location": ConversationLocation(
+                    id="channel-one", type="CHANNEL", thread_id="thread-one", display_name="general"
+                )
+            }
+        )
+        accepted = repository.accept_inbound(connection_id=connection_id, envelope=envelope)
+
+        with when("the runtime replies to that inbound delivery"):
+            outbound_delivery_id = repository.enqueue_runtime_reply(
+                agent_id=context.agent.id,
+                source_delivery_id=accepted.delivery_id,
+                reply=RuntimeReplyCreate(idempotency_key="reply-1", text="hello back"),
+            )
+
+        with then("the outbound message carries the source channel's name"):
+            outbound_message_id = _delivery(context, outbound_delivery_id).message_id
+            assert_that(_message(context, outbound_message_id).channel_name, equal_to("general"))
+
+
+def test_diagnostics_reports_pipeline_transitions_without_message_content() -> None:
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        connection_id = _create_connection(context)
+        repository = context.injector.get(CommunicationDeliveryRepository)
+        connections = context.injector.get(CommunicationConnectionRepository)
+        connections.record_health(connection_id, ConnectionObservedStatus.CONNECTED)
+
+        accepted = repository.accept_inbound(connection_id=connection_id, envelope=_envelope("provider-1"))
+        claimed = repository.claim_next_inbound(agent_id=context.agent.id)
+        assert_that(claimed, is_(not_(none())))
+        assert_that(
+            repository.complete_runtime_delivery(
+                claimed.delivery_id if claimed is not None else UUID(int=0),
+                agent_id=context.agent.id,
+                succeeded=True,
+            ),
+            is_(True),
+        )
+        outbound_id = repository.enqueue_runtime_reply(
+            agent_id=context.agent.id,
+            source_delivery_id=accepted.delivery_id,
+            reply=RuntimeReplyCreate(idempotency_key="reply-1", text="private response"),
+        )
+        assert_that(repository.claim_next_outbound(), is_(not_(none())))
+        assert_that(repository.complete_outbound(outbound_id, provider_message_id="provider-reply"), is_(True))
+
+        with when("I inspect the completed Connection pipeline"):
+            response = context.client.get(
+                f"/api/v1/organizations/{context.organization.id}/agents/{context.agent.id}/connections/{connection_id}/summary",
+                headers=_auth(context),
+            )
+            journal = context.client.get(
+                f"/api/v1/organizations/{context.organization.id}/agents/{context.agent.id}/connections/{connection_id}/journal?kind=delivery",
+                headers=_auth(context),
+            )
+
+        with then("the diagnostics are complete and content-free"):
+            assert_that(response.status_code, equal_to(200))
+            body = response.json()
+            assert_that(body["provider_connectivity"], equal_to("CONNECTED"))
+            assert_that(body["end_to_end_health"], equal_to("healthy"))
+            assert_that(
+                body["pipeline"],
+                equal_to(
+                    {
+                        "provider_observed": 0,
+                        "policy_admitted": 0,
+                        "queued": 1,
+                        "agent_claimed": 1,
+                        "model_completed": 1,
+                        "reply_queued": 1,
+                        "initiated_queued": 0,
+                        "provider_delivered": 1,
+                        "dead_lettered": 0,
+                    }
+                ),
+            )
+            assert_that(body["delivery_counts"]["succeeded"], equal_to(2))
+            assert_that(body["recent_failures"], equal_to([]))
+            assert_that(len(body["latest_transitions"]), greater_than(0))
+            assert_that(journal.status_code, equal_to(200))
+            assert_that(journal.json()["total"], not_(equal_to(0)))
+            assert_that(
+                journal.json()["items"][0],
+                has_entries(
+                    direction="OUTBOUND",
+                    delivery_status="SUCCEEDED",
+                    queue_wait_ms=not_(none()),
+                    processing_ms=not_(none()),
+                    next_retry_at=none(),
+                ),
+            )
+            assert_that(repr(body), not_(contains_string("message provider-1")))
+            assert_that(repr(body), not_(contains_string("private response")))
+            assert_that(repr(journal.json()), not_(contains_string("message provider-1")))
+            assert_that(repr(journal.json()), not_(contains_string("private response")))
+
+
+def test_gateway_records_typed_admission_and_only_accepted_messages_enter_the_pipeline() -> None:
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        connection_id = _create_connection(context)
+        gateway = context.injector.get(CommunicationsGatewayService)
+        accepted_payload = {
+            "t": "MESSAGE_CREATE",
+            "agentbarn_bot_user_id": "bot-1",
+            "d": {
+                "id": "provider-accepted",
+                "guild_id": "guild-one",
+                "channel_id": "channel-one",
+                "timestamp": "2026-08-28T10:00:00+00:00",
+                "content": "hello",
+                "author": {"id": "person-one", "username": "Person One", "bot": False},
+                "member": {"roles": []},
+                "mentions": [{"id": "bot-1"}],
+            },
+        }
+        denied_payload = {
+            **accepted_payload,
+            "d": {**accepted_payload["d"], "id": "provider-denied", "mentions": []},
+        }
+
+        with patch("api.domains.communications.plugins.discord.DiscordClient") as client_type:
+            client_type.return_value.get_channel_display_name.return_value = None
+            with when("the provider emits one admitted and one mention-gated event"):
+                accepted = gateway.accept_plugin_payload(connection_id, accepted_payload)
+                denied = gateway.accept_plugin_payload(connection_id, denied_payload)
+
+        with Session(context.injector.get(PostgresRepositoryDelegate).engine) as session:
+            journal = list(
+                session.exec(
+                    select(CommunicationJournalEntry)
+                    .where(CommunicationJournalEntry.connection_id == connection_id)
+                    .order_by(col(CommunicationJournalEntry.occurred_at), col(CommunicationJournalEntry.id))
+                ).all()
+            )
+            deliveries = list(
+                session.exec(
+                    select(CommunicationDelivery).where(CommunicationDelivery.connection_id == connection_id)
+                ).all()
+            )
+
+        with then("only the accepted event is queued and both policy outcomes are journaled"):
+            assert_that(accepted, has_length(1))
+            assert_that(denied, equal_to([]))
+            assert_that(deliveries, has_length(1))
+            policy_entries = [
+                entry
+                for entry in journal
+                if entry.stage in (CommunicationJournalStage.POLICY_ADMITTED, CommunicationJournalStage.POLICY_REJECTED)
+            ]
+            assert_that(
+                {entry.disposition for entry in policy_entries},
+                equal_to(
+                    {
+                        CommunicationPolicyDisposition.ACCEPTED,
+                        CommunicationPolicyDisposition.MENTION_REQUIRED,
+                    }
+                ),
+            )
+            # The rejected event lands on its own stage so the pipeline funnel
+            # can show drop-off between provider_observed and policy_admitted.
+            assert_that(
+                [
+                    entry.disposition
+                    for entry in policy_entries
+                    if entry.stage == CommunicationJournalStage.POLICY_ADMITTED
+                ],
+                equal_to([CommunicationPolicyDisposition.ACCEPTED]),
+            )
+
+
+def test_dead_letter_retry_reuses_one_delivery_and_is_idempotent() -> None:
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        client: TestClient = context.client
+        connection_id = _create_connection(context)
+        repository = context.injector.get(CommunicationDeliveryRepository)
+        accepted = repository.accept_inbound(connection_id=connection_id, envelope=_envelope("provider-1"))
+        outbound_id = repository.enqueue_runtime_reply(
+            agent_id=context.agent.id,
+            source_delivery_id=accepted.delivery_id,
+            reply=RuntimeReplyCreate(idempotency_key="reply-1", text="retry me"),
+        )
+        claimed = repository.claim_next_outbound()
+        assert_that(claimed, is_(not_(none())))
+        assert_that(
+            repository.complete_outbound(
+                outbound_id,
+                error_code="provider_timeout",
+                error_message="temporary provider failure",
+                max_attempts=1,
+            ),
+            is_(True),
+        )
+        original = _delivery(context, outbound_id)
+        original_message_id = original.message_id
+
+        with when("I retry the one dead-lettered delivery"):
+            retried = client.post(
+                f"/api/v1/organizations/{context.organization.id}/agents/{context.agent.id}/connections/{connection_id}/deliveries/{outbound_id}/retry",
+                headers=_auth(context),
+            )
+            duplicate_retry = client.post(
+                f"/api/v1/organizations/{context.organization.id}/agents/{context.agent.id}/connections/{connection_id}/deliveries/{outbound_id}/retry",
+                headers=_auth(context),
+            )
+
+        with then("the existing delivery is requeued once without a duplicate message"):
+            assert_that(retried.status_code, equal_to(202))
+            assert_that(
+                retried.json(),
+                has_entries(
+                    delivery_id=str(outbound_id),
+                    status="PENDING",
+                    attempt_count=0,
+                ),
+            )
+            assert_that(duplicate_retry.status_code, equal_to(409))
+            current = _delivery(context, outbound_id)
+            assert_that(current.message_id, equal_to(original_message_id))
+            assert_that(current.status, equal_to(CommunicationDeliveryStatus.PENDING))
+            assert_that(current.id, equal_to(original.id))
+            with Session(context.injector.get(PostgresRepositoryDelegate).engine) as session:
+                journal = list(
+                    session.exec(
+                        select(CommunicationJournalEntry)
+                        .where(CommunicationJournalEntry.delivery_id == outbound_id)
+                        .order_by(col(CommunicationJournalEntry.occurred_at), col(CommunicationJournalEntry.id))
+                    ).all()
+                )
+            assert_that(
+                [getattr(entry.stage, "value", entry.stage) for entry in journal],
+                equal_to(
+                    [
+                        "reply_queued",
+                        "provider_delivery_attempted",
+                        "provider_delivery_attempted",
+                        "dead_lettered",
+                        "retry_requested",
+                    ]
+                ),
+            )
+
+
+def test_outbound_recovery_preserves_conversation_order_and_delivery_identity() -> None:
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        connection_id = _create_connection(context)
+        repository = context.injector.get(CommunicationDeliveryRepository)
+        accepted = repository.accept_inbound(connection_id=connection_id, envelope=_envelope("provider-1"))
+        first_id = repository.enqueue_runtime_reply(
+            agent_id=context.agent.id,
+            source_delivery_id=accepted.delivery_id,
+            reply=RuntimeReplyCreate(idempotency_key="reply-first", text="first"),
+        )
+        second_id = repository.enqueue_runtime_reply(
+            agent_id=context.agent.id,
+            source_delivery_id=accepted.delivery_id,
+            reply=RuntimeReplyCreate(idempotency_key="reply-second", text="second"),
+        )
+
+        first_claim = repository.claim_next_outbound()
+        assert_that(first_claim.id if first_claim is not None else None, equal_to(first_id))
+        assert_that(
+            repository.complete_outbound(
+                first_id,
+                error_code="provider_timeout",
+                error_message="temporary provider failure",
+                max_attempts=1,
+            ),
+            is_(True),
+        )
+
+        with when("an operator retries the earlier dead-lettered reply"):
+            blocked = repository.claim_next_outbound()
+            retried = repository.retry_dead_lettered(
+                first_id,
+                agent_id=context.agent.id,
+                connection_id=connection_id,
+                actor=ActorIdentity(type=ActorIdentityType.SYSTEM, id="test-operator"),
+            )
+            retry_claim = repository.claim_next_outbound()
+
+        assert_that(blocked, none())
+        assert_that(retried.id, equal_to(first_id))
+        assert_that(retry_claim.id if retry_claim is not None else None, equal_to(first_id))
+        assert_that(repository.complete_outbound(first_id, provider_message_id="provider-first"), is_(True))
+
+        with then("the next reply is released only after the earlier one succeeds"):
+            next_claim = repository.claim_next_outbound()
+            assert_that(next_claim.id if next_claim is not None else None, equal_to(second_id))
+            assert_that(
+                repository.complete_outbound(second_id, provider_message_id="provider-second"),
+                is_(True),
+            )
+            with Session(context.injector.get(PostgresRepositoryDelegate).engine) as session:
+                outbound_deliveries = list(
+                    session.exec(
+                        select(CommunicationDelivery).where(
+                            CommunicationDelivery.connection_id == connection_id,
+                            CommunicationDelivery.direction == "OUTBOUND",
+                        )
+                    ).all()
+                )
+            assert_that([delivery.id for delivery in outbound_deliveries], contains_inanyorder(first_id, second_id))
+
+
+def test_pending_inbound_cancel_is_terminal_and_never_claimed() -> None:
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        connection_id = _create_connection(context)
+        repository = context.injector.get(CommunicationDeliveryRepository)
+        accepted = repository.accept_inbound(connection_id=connection_id, envelope=_envelope("cancel-pending"))
+
+        status_after_cancel = repository.request_cancel(accepted.delivery_id, agent_id=context.agent.id)
+
+        assert_that(status_after_cancel, equal_to(CommunicationDeliveryStatus.CANCELLED))
+        assert_that(repository.claim_next_inbound(agent_id=context.agent.id), none())
+        assert_that(_delivery(context, accepted.delivery_id).completed_at, is_(not_(none())))
+
+
+def test_processing_cancel_wins_even_when_runtime_reports_success() -> None:
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        connection_id = _create_connection(context)
+        repository = context.injector.get(CommunicationDeliveryRepository)
+        accepted = repository.accept_inbound(connection_id=connection_id, envelope=_envelope("cancel-processing"))
+        claimed = repository.claim_next_inbound(agent_id=context.agent.id)
+        assert claimed is not None
+
+        repository.request_cancel(accepted.delivery_id, agent_id=context.agent.id)
+        completed = repository.complete_runtime_delivery(
+            claimed.delivery_id,
+            agent_id=context.agent.id,
+            succeeded=True,
+        )
+
+        assert_that(completed, is_(True))
+        assert_that(_delivery(context, claimed.delivery_id).status, equal_to(CommunicationDeliveryStatus.CANCELLED))
+
+
+def test_cancelled_source_rejects_runtime_reply_atomically() -> None:
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        connection_id = _create_connection(context)
+        repository = context.injector.get(CommunicationDeliveryRepository)
+        accepted = repository.accept_inbound(connection_id=connection_id, envelope=_envelope("cancel-reply"))
+        repository.claim_next_inbound(agent_id=context.agent.id)
+        repository.request_cancel(accepted.delivery_id, agent_id=context.agent.id)
+
+        with pytest.raises(CommunicationDeliveryCancelledError):
+            repository.enqueue_runtime_reply(
+                agent_id=context.agent.id,
+                source_delivery_id=accepted.delivery_id,
+                reply=RuntimeReplyCreate(idempotency_key="cancelled-reply", text="must not leak"),
+            )
+
+        delegate = context.injector.get(PostgresRepositoryDelegate)
+        with Session(delegate.engine) as session:
+            leaked = session.exec(select(AgentChatMessage).where(AgentChatMessage.content == "must not leak")).all()
+        assert_that(leaked, empty())

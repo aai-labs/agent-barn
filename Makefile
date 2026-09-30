@@ -1,9 +1,31 @@
 COMPOSE := docker compose -f compose.yml
 
 .PHONY: \
-	setup \
-	dev-api dev-ui dev-worker reconcile seed-event-deliveries seed-agent-overrides migrate merge-heads rollback makemigrations test-api test-ui lint-ui check-ui coverage check-api check-migrations check-monitoring fix-api test check fix \
-	up down restart logs build clean db-up db-down db-logs db-restart redis-up redis-down redis-logs worker-logs
+	setup run stop stop-clean \
+	restart-ui \
+	dev-api dev-ingest dev-communications dev-ui dev-worker reconcile reconcile-restore-points reconcile-llm-budgets run-llm-budget-alerts forward-teams forward-triggers seed-event-deliveries seed-costs seed-agent-overrides migrate merge-heads rollback makemigrations test-api test-ui lint-ui check-ui coverage check-api check-migrations check-monitoring fix-api test check fix \
+	db-up db-down db-logs db-restart redis-up redis-down redis-logs
+
+# One-command local dev: validates .env, brings up k3d + LiteLLM, loads agent
+# images (skipping any already in the cluster), migrates, starts the app
+# stack in Docker with hot reload, and follows logs. See run.sh for details.
+run:
+	@./run.sh
+
+# Stops containers; DB/redis data and the k3d cluster survive.
+stop:
+	@./stop.sh
+
+# Stops containers and deletes the k3d cluster (images will need reloading on
+# the next `make run`). Volumes are never touched.
+stop-clean:
+	@./stop.sh --clean
+
+# Next's Docker bind-mount watcher reliably refreshes changed files but may
+# miss a newly created App Router directory. This refreshes its route manifest
+# without rebuilding the UI image or restarting the rest of the local stack.
+restart-ui:
+	$(COMPOSE) restart ui
 
 # One-time project bootstrap: installs deps for api + ui and creates a local
 # .env from the tracked template if one doesn't already exist.
@@ -11,12 +33,57 @@ setup:
 	cd api && uv sync
 	cd ui && pnpm install
 	@test -f .env || cp .env.spec .env
-	@echo "Setup complete. Fill in .env, then run: make db-up && make migrate && make up"
+	@echo "Setup complete. Fill in .env, then run: ./run.sh"
 
 # Non-docker commands
 
+# Agent pods in k3d push telemetry back through the host, so the pod-facing URL
+# has to override the in-cluster default (which only resolves when the API runs
+# in k8s). Same value as compose.
+INGEST_PORT ?= 8001
+INGEST_BASE_URL ?= http://host.docker.internal:$(INGEST_PORT)/ingest/v1
+COMMUNICATIONS_PORT ?= 8002
+COMMUNICATIONS_BASE_URL ?= http://host.docker.internal:$(COMMUNICATIONS_PORT)/communications/v1
+# Overridable so a second worktree can run its own stack without port clashes.
+API_DEV_PORT ?= 8000
+# Host-run API processes relay runtime-owned Teams through the local
+# `forward-teams` port-forward. Compose uses its own host.docker.internal value.
+TEAMS_RUNTIME_WEBHOOK_URL ?= http://localhost:3978/api/messages
+# Same for Agent Webhook dispatch through the local `forward-triggers` port-forward.
+AGENT_TRIGGER_URL ?= http://localhost:8082/agent-triggers/v1/invocations
+
+# Runs Ingest and Communications alongside the main app so native development
+# has the same service topology as Docker and Helm. The trap kills every child
+# on Ctrl-C; stray listeners otherwise break the next run confusingly.
 dev-api:
-	cd api && uv run python -m fastapi dev main.py --host 0.0.0.0 --port 8000
+	@cd api && \
+	trap 'kill 0' EXIT INT TERM; \
+	uv run python -m fastapi dev ingest_main.py --host 0.0.0.0 --port $(INGEST_PORT) & \
+	uv run python -m fastapi dev communications_main.py --host 0.0.0.0 --port $(COMMUNICATIONS_PORT) & \
+	INGEST_BASE_URL=$(INGEST_BASE_URL) COMMUNICATIONS_BASE_URL=$(COMMUNICATIONS_BASE_URL) TEAMS_RUNTIME_WEBHOOK_URL=$(TEAMS_RUNTIME_WEBHOOK_URL) AGENT_TRIGGER_URL=$(AGENT_TRIGGER_URL) uv run python -m fastapi dev main.py --host 0.0.0.0 --port $(API_DEV_PORT)
+
+# Ingest on its own — `make dev-api` already starts it; use this to run or
+# restart the telemetry sink independently.
+# --host 0.0.0.0 is required: the default loopback bind is unreachable from pods.
+dev-ingest:
+	cd api && uv run python -m fastapi dev ingest_main.py --host 0.0.0.0 --port $(INGEST_PORT)
+
+# Communications on its own — `make dev-api` already starts it.
+dev-communications:
+	cd api && uv run python -m fastapi dev communications_main.py --host 0.0.0.0 --port $(COMMUNICATIONS_PORT)
+
+# Local runtime-owned Teams: the API (Docker or host) cannot reach Agent Services
+# in k3d, so expose one Agent's webhook port on the host. Re-run after the pod
+# restarts. Usage: make forward-teams AGENT=<agent-uuid>
+forward-teams:
+	@test -n "$(AGENT)" || { echo "usage: make forward-teams AGENT=<agent-uuid>"; exit 1; }
+	KUBECONFIG=.k3d/kubeconfig-host.yaml kubectl -n agent-farm port-forward --address 0.0.0.0 svc/agent-$(AGENT) 3978:3978
+
+# Local Agent Webhooks: same reason as forward-teams, for the private trigger
+# listener. Re-run after the pod restarts. Usage: make forward-triggers AGENT=<agent-uuid>
+forward-triggers:
+	@test -n "$(AGENT)" || { echo "usage: make forward-triggers AGENT=<agent-uuid>"; exit 1; }
+	KUBECONFIG=.k3d/kubeconfig-host.yaml kubectl -n agent-farm port-forward --address 0.0.0.0 svc/agent-$(AGENT) 8082:8082
 
 dev-ui:
 	cd ui && pnpm dev
@@ -28,10 +95,31 @@ dev-worker:
 reconcile:
 	cd api && uv run python -m api.domains.events.reconciliation
 
+# One-shot restore point reconciliation; production runs this on a CronJob schedule.
+# Deletes restore point Jobs and PVCs that no row owns, against whatever cluster
+# K8S_KUBECONFIG_PATH and K8S_NAMESPACE point at. Invoked the same way the CronJob
+# does it: `python -m` would re-import the module and break the injector bindings.
+reconcile-restore-points:
+	cd api && uv run python -c "from api.domains.restore_points.reconciliation import main; main()"
+
+# Both run as CronJobs in a deployment; these are the same passes by hand. Named to
+# match `reconcile`, not `check-*`: they mutate the proxy and send notifications,
+# unlike every other check-* target, which is static verification.
+reconcile-llm-budgets:
+	cd api && uv run python -c "from api.domains.organizations.llm_budget_reconciliation import main; main()"
+
+run-llm-budget-alerts:
+	cd api && uv run python -c "from api.domains.organizations.llm_budget_alerts import main; main()"
+
 # Local-only: populate the dev database with realistic Event Deliveries for
 # manually exercising the Platform Event Delivery Monitor UI. Safe to re-run.
 seed-event-deliveries:
 	api/.venv/bin/python -m api.scripts.seed_event_delivery_monitor_fixtures --count 200
+
+# Local-only: populate the dev database with realistic cost records for manually
+# exercising the org and platform Cost pages. Safe to re-run.
+seed-costs:
+	api/.venv/bin/python -m api.scripts.seed_cost_fixtures --count "$${SEED_COST_COUNT:-4000}"
 
 # Local-only: create stopped Telegram Agents for manually exercising Agent-owned
 # template override authoring. Set SEED_AGENT_ORGANIZATION_ID before invoking.
@@ -71,6 +159,9 @@ test-api:
 test-api-k8s:
 	cd api && uv run python -m pytest tests/integration/test_kubernetes_client.py -v
 
+test-api-runtime:
+	cd api && uv run python -m pytest runtime_tests -v
+
 test-ui:
 	cd ui && pnpm test
 
@@ -102,25 +193,10 @@ fix-api:
 	cd api && uv run ruff check --fix && uv run ruff format .
 
 # Docker commands
-
-up:
-	$(COMPOSE) up --build
-
-down:
-	$(COMPOSE) down
-
-restart:
-	$(COMPOSE) down
-	$(COMPOSE) up --build
-
-logs:
-	$(COMPOSE) logs -f
-
-build:
-	$(COMPOSE) build
-
-clean:
-	$(COMPOSE) down -v --remove-orphans
+#
+# The full app stack (db/redis/api/worker/communications/ui + k3d cluster) is run via
+# ./run.sh and ./stop.sh at the repo root, not make targets — see README.
+# The db/redis-only targets below remain for the native dev-* workflow.
 
 db-up:
 	$(COMPOSE) up -d db
@@ -142,6 +218,3 @@ redis-down:
 
 redis-logs:
 	$(COMPOSE) logs -f redis
-
-worker-logs:
-	$(COMPOSE) logs -f worker

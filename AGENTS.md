@@ -1,73 +1,88 @@
 # Agent work loop
 
-1. **Context** — Read the task-specific guidance below, inspect neighboring code, and clarify material ambiguity before large edits.
-2. **Plan** — Keep the approach scoped to the requested behavior; identify contracts, migrations, tests, and release impact before implementation. For work spanning multiple tickets or PRs, follow `docs/guidelines/epics.md`.
-3. **Implement** — Follow established domain and feature boundaries; avoid unrelated refactors.
-4. **Verify** — Run the checks in `docs/guidelines/testing.md` for every touched area and fix failures introduced by the change.
-5. **Document** — Update agent-facing docs when domain language, invariants, boundaries, state models, or change-impact surfaces change.
-6. **Release** — Apply `docs/guidelines/operations.md` version rules only when release preparation is requested.
+1. **Context** — Load the task-specific sources below and inspect neighboring
+   code before making substantial changes.
+2. **Plan** — Keep the approach scoped; identify affected contracts, migrations,
+   verification, documentation, and release impact. Use
+   `docs/guidelines/epics.md` for work spanning multiple tickets or pull
+   requests.
+3. **Implement** — Follow the routed domain and feature boundaries and avoid
+   unrelated refactors.
+4. **Verify** — Select checks from `docs/guidelines/testing.md` for every touched
+   area and fix failures introduced by the change.
+5. **Document** — Update the authoritative document when terminology,
+   invariants, boundaries, state models, or change-impact surfaces change.
+6. **Release** — Apply `docs/guidelines/operations.md` version rules only when
+   release preparation is requested.
 
-## Context routes
+## Sources of truth
 
-| When working on                                                          | Read first                      |
-| ------------------------------------------------------------------------ | ------------------------------- |
-| Domain terminology                                                       | `CONTEXT.md`                    |
-| Product behavior, architecture, or cross-domain changes                  | `docs/INDEX.md`                 |
-| API routes, services, repositories, models, authorization, or migrations | `docs/guidelines/code.md`       |
-| Next.js routes, React components, queries, providers, or API schemas     | `docs/guidelines/webapp.md`     |
-| Tests, coverage, lint, type checking, or verification                    | `docs/guidelines/testing.md`    |
-| Multi-ticket or multi-PR epic coordination                               | `docs/guidelines/epics.md`      |
-| Local setup, migrations, deployment, Helm, or release versions           | `docs/guidelines/operations.md` |
+- `CONTRIBUTING.md` owns the public contribution process.
+- `CONTEXT.md` owns domain terminology.
+- `docs/INDEX.md` routes product, architecture, feature, and engineering
+  context.
+- `docs/guidelines/code.md` owns API structure and layering;
+  `docs/guidelines/webapp.md` owns UI feature structure and shared-client
+  boundaries.
+- `docs/guidelines/testing.md` owns verification guidance;
+  `docs/guidelines/operations.md` owns local setup, migrations, deployment, and
+  releases.
+- `docs/adr/README.md` owns ADR qualification and format.
 
-Follow pointers in `docs/INDEX.md` before changing agent lifecycle, tenancy, templates/skills, activity ingest, integrations, costs, UI providers, or runtime/deployment behavior.
+## Repository-wide guardrails
 
-## Guardrails
-
-- **Always** — Follow `MUST` rules in the routed guideline; preserve tenant isolation; enforce Agent Access/Permission checks per `docs/features/rbac/IMPLEMENTATION-BRIEF.md` for any change that lets a user access, list, or mutate an Agent or a subordinate resource (conversations, tool calls, activity, logs, costs, Secrets, Skills, config); use repository `make` targets when available; keep the diff scoped.
-- **Clarify** — Resolve ambiguous authorization, lifecycle, ownership, or schema behavior before implementation.
-- **Never** — Put business workflows in routes, SQL in services, ordinary UI calls outside `ui/src/shared/api`, reuse an immutable `appVersion`, or invent rationale for an ADR.
-
-`MUST` is mandatory unless the user explicitly requests otherwise. `SHOULD` is the strong default. `MAY` is optional.
+- `MUST` is mandatory unless the user explicitly requests otherwise. `SHOULD`
+  is the strong default; `MAY` is optional.
+- Keep the diff scoped, use repository `make` targets when available, and never
+  commit secrets, credentials, or tokens.
+- Preserve tenant isolation. Any surface that accesses or mutates an Agent or a
+  subordinate resource must follow
+  `docs/features/rbac/IMPLEMENTATION-BRIEF.md`.
+- Resolve ambiguous authorization, lifecycle, ownership, or schema behavior
+  before implementation.
+- Respect the API and UI boundaries in their routed guidelines.
+- Do not invent ADR rationale; establish it from maintainers or historical
+  evidence and follow `docs/adr/README.md`.
 
 ## Review protocol
 
-Review agents MUST treat the routed documentation as review input, not optional background:
+Reviewers must:
 
-1. Map changed files and behaviors through `docs/INDEX.md`.
-2. Read every applicable guideline, feature document, architecture document, glossary term, and related ADR before judging the diff.
-3. Check both implementation correctness and documentation synchronization. A changed invariant, boundary, state model, or operational contract requires the authoritative document to change in the same diff.
-4. Cite the relevant documentation path and rule for each documentation-based finding.
-5. Treat documented behavior as the current contract, not an immutable one. When a change intentionally revises that contract, verify that code, tests, and docs move together instead of demanding the old behavior.
-6. For any diff touching an Agent or subordinate resource, check for authorization gaps against `docs/features/rbac/IMPLEMENTATION-BRIEF.md` even when the diff isn't framed as an RBAC change — a repository query missing an accessible-Agent join, a service trusting a client-supplied role, or a new endpoint bypassing the shared visibility pattern are common, easy-to-miss regressions.
+1. Map changed files and behavior through `docs/INDEX.md` and read every routed
+   contract before judging the diff.
+2. Check implementation correctness and documentation synchronization. When a
+   change intentionally revises a documented contract, code, tests, and docs
+   must move together.
+3. Cite the relevant path and rule for every documentation-based finding.
+4. Apply the RBAC brief to every Agent or subordinate-resource surface.
+5. Apply the review requirements in `docs/guidelines/epics.md` to every pull
+   request in an active multi-PR epic.
 
-For a PR belonging to an active multi-PR epic, reviewers MUST also verify that `docs/features/<epic-slug>/CHANGELOG.md` records the delivered slice and resulting current state.
+## Documentation ownership
 
-## Coding core
+Current behavior belongs in `docs/features/` or `docs/architecture/`,
+repeatable engineering conventions in `docs/guidelines/`, terminology in
+`CONTEXT.md`, and decision rationale in `docs/adr/`. Keep each fact or rule in
+one authoritative file and link to it elsewhere.
 
-API dependencies flow routes → services → repositories. UI code is feature-first under `ui/src/features/`, with shared transport and query infrastructure under `ui/src/shared/`. Current system relationships belong in `docs/`; repeatable coding conventions belong in the routed guideline files.
+Changes to scripts, Make targets, dependencies, CI, deployment or release
+behavior, and public project policy MUST update the owning contributor-facing
+document in the same change whenever its guidance would otherwise become
+inaccurate or incomplete.
 
-## Maintaining guidelines
-
-- Add repeatable API, UI, verification, and operational conventions to the matching file under `docs/guidelines/`.
-- Keep each rule in one authoritative file; link instead of duplicating it.
-- Update `docs/INDEX.md` when a routed document, domain, UI feature, runtime, or major responsibility is added, removed, renamed, or moved.
-- Record an ADR under `docs/adr/` only when the choice is hard to reverse, surprising without context, and based on a real trade-off. Follow `docs/adr/README.md` and establish rationale from maintainers or historical evidence.
+Update `docs/INDEX.md` when a routed document, domain, UI feature, runtime, or
+major responsibility is added, removed, renamed, or moved.
 
 ## Definition of done
 
-- Behavior, validation, tenancy, and authorization cover important paths.
-- Required tests and checks pass for touched areas.
-- Schema changes include a migration.
-- Agent-facing context remains accurate and discoverable.
-- Release versions follow `docs/guidelines/operations.md` when applicable.
+- Requested behavior, validation, tenancy, and authorization are covered.
+- Checks selected by the testing guide pass.
+- Schema and contract changes include their required migration and docs.
+- Release versions follow the operations guide when applicable.
 - The diff contains no unrelated churn.
 
-## Agent skills
+## Work tracking
 
-### Issue tracker
-
-Issues and specs live as markdown files under `.scratch/<feature-slug>/`. See `.agents/issue-tracker.md`.
-
-### Domain docs
-
-Single-context — one `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`.
+Public issues and proposals use GitHub Issues and Discussions as described in
+`CONTRIBUTING.md`. The ignored `.scratch/` directory is for local working notes
+only; it is not a contributor-facing source of truth.

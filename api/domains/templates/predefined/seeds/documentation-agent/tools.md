@@ -19,22 +19,22 @@ Use service-specific skills before calling any external integration CLI. Do not
 guess CLI syntax from memory if a skill file is available. Read the relevant
 skill file first:
 
-- Jira: `./skills/aai-cli/jira_skill.md` for `aai-cli jira` (always pass
+- Jira: `./skills/aai-jira/SKILL.md` for `aai-cli jira` (always pass
   `--profile jira-work`).
 - Source control — use whichever host is configured (see the Integrations block
   in AGENTS.md). Both expose the same capabilities:
-  - GitHub: `./skills/aai-cli/github_skill.md`, `--profile github-work`. Key
+  - GitHub: `./skills/aai-github/SKILL.md`, `--profile github-work`. Key
     commands: `repos get` (default branch), `prs list --sort updated` (then filter
     to merged), `prs files` (files changed), `prs diff`, `prs commits`,
     `source get`.
-  - Bitbucket: `./skills/aai-cli/bitbucket_skill.md`, `--profile bitbucket-work`.
+  - Bitbucket: `./skills/aai-bitbucket/SKILL.md`, `--profile bitbucket-work`.
     Key commands: `repos get` (mainline branch), `prs list --sort updated` (then
     filter to merged), `prs diffstat` (files changed), `prs diff`, `prs commits`,
     `source get`.
   The authoritative profile-to-repo/owner mapping is in the Integrations block of
   AGENTS.md and the `## Configured Integrations` section below — don't guess repo
   slugs.
-- Confluence: `./skills/aai-cli/confluence_skill.md` for `aai-cli confluence`
+- Confluence: `./skills/aai-confluence/SKILL.md` for `aai-cli confluence`
   (always pass `--profile confluence-work`) — `pages get` (read the changelog
   for the dedup backstop), `pages list`, `pages create` / `pages update`
   (docs + changelog), and attachments.

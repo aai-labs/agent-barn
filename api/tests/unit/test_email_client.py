@@ -45,6 +45,7 @@ from api.tests.mocks.email import make_email_blocking_post
 ACCOUNT_ID = "acct-123"
 API_TOKEN = "tok-secret-abc"
 SENDER = "noreply@mail.agentbarn.dev"
+AGENT_ADDRESS = "agent+tommy-4f2a@agents.agentbarn.dev"
 RECIPIENT = "a@example.com"
 SEND_URL = f"https://api.cloudflare.com/client/v4/accounts/{ACCOUNT_ID}/email/sending/send"
 
@@ -114,6 +115,75 @@ def test_build_payload_omits_attachments_when_logo_not_referenced():
     payload = _client()._build_payload(_email(), SENDER)
 
     assert_that("attachments" in payload, equal_to(False))
+
+
+def test_build_payload_keeps_the_transactional_shape_when_no_agent_fields_are_set():
+    payload = _client()._build_payload(_email(), SENDER)
+
+    assert_that(
+        payload,
+        equal_to(
+            {
+                "from": f"Agent Barn <{SENDER}>",
+                "to": RECIPIENT,
+                "subject": "Hi",
+                "html": "<p>no logo here</p>",
+            }
+        ),
+    )
+
+
+def test_build_payload_sends_as_the_agent_address_when_one_is_supplied():
+    email = Email(
+        to_email=RECIPIENT,
+        subject="Hi",
+        html_part="",
+        text_part="body",
+        from_name="Tommy",
+        from_email=AGENT_ADDRESS,
+    )
+
+    payload = _client()._build_payload(email, SENDER)
+
+    assert_that(payload["from"], equal_to(f"Tommy <{AGENT_ADDRESS}>"))
+
+
+def test_build_payload_includes_text_reply_to_and_headers_when_supplied():
+    email = Email(
+        to_email=RECIPIENT,
+        subject="Re: Question",
+        html_part="",
+        text_part="plain body",
+        reply_to=AGENT_ADDRESS,
+        headers={"In-Reply-To": "<abc@example.com>", "References": "<root@example.com>"},
+    )
+
+    payload = _client()._build_payload(email, SENDER)
+
+    assert_that(
+        payload,
+        has_entries(
+            {
+                "text": "plain body",
+                "reply_to": AGENT_ADDRESS,
+                "headers": has_entries(
+                    {
+                        "In-Reply-To": "<abc@example.com>",
+                        "References": "<root@example.com>",
+                    }
+                ),
+            }
+        ),
+    )
+
+
+def test_build_payload_omits_html_when_the_message_is_plain_text_only():
+    email = Email(to_email=RECIPIENT, subject="Hi", html_part="", text_part="plain body")
+
+    payload = _client()._build_payload(email, SENDER)
+
+    assert_that("html" in payload, equal_to(False))
+    assert_that(payload["text"], equal_to("plain body"))
 
 
 def test_send_posts_to_account_endpoint_with_bearer_token():

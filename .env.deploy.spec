@@ -20,11 +20,11 @@ REGISTRY_PASSWORD=
 
 # Image repository names under REGISTRY_PREFIX. Defaults match the internal
 # registry. The client release bundle ships these set to api/ui/hermes-base/
-# openclaw-base under REGISTRY_PREFIX=clients.registry.k8s.aai-labs.com/agent-farm.
-API_IMAGE_REPOSITORY=agentfarm-api
-UI_IMAGE_REPOSITORY=agentfarm-ui
-HERMES_IMAGE_REPOSITORY=agentfarm-hermes-base
-OPENCLAW_IMAGE_REPOSITORY=agentfarm-openclaw-base
+# openclaw-base under REGISTRY_PREFIX=clients.registry.k8s.aai-labs.com/agent-barn.
+API_IMAGE_REPOSITORY=agentbarn-api
+UI_IMAGE_REPOSITORY=agentbarn-ui
+HERMES_IMAGE_REPOSITORY=agentbarn-hermes-base
+OPENCLAW_IMAGE_REPOSITORY=agentbarn-openclaw-base
 
 # ── Image tags (pin explicit images for a manual deploy) ─────────────────────
 # GitHub Actions branch deploys set API/UI image tags automatically to the
@@ -71,11 +71,22 @@ CLOUDFLARE_ACCOUNT_ID=
 CLOUDFLARE_API_TOKEN=
 SENDER_EMAIL=
 
+# ── Per-Agent email addresses ────────────────────────────────────────────────
+# Leave blank to keep the Email platform disabled; Agent Barn then refuses new Email
+# Communication Connections and nothing else changes. Both are required on top of the
+# three values above.
+# AGENT_EMAIL_DOMAIN must be onboarded for BOTH Email Routing and Email Sending in the
+# same Cloudflare account, e.g. agents.agentbarn.dev.
+# EMAIL_INBOUND_SECRET is the bearer token the inbound Email Worker presents. Generate
+# with `openssl rand -hex 32` and set the same value as a Wrangler secret on the Worker.
+AGENT_EMAIL_DOMAIN=
+EMAIL_INBOUND_SECRET=
+
 # ── URLs / ingress hosts ─────────────────────────────────────────────────────
 # Hostnames the ingress serves. Point DNS (or /etc/hosts) at the cluster.
-API_HOST=api.agentfarm.local
-UI_HOST=agentfarm.local
-WEB_APP_URL=http://agentfarm.local
+API_HOST=api.agentbarn.local
+UI_HOST=agentbarn.local
+WEB_APP_URL=http://agentbarn.local
 
 # ── Gmail OAuth (AF-153) ─────────────────────────────────────────────────────
 # Shared Google OAuth 2.0 "Web application" client for the Gmail "Authenticate
@@ -96,6 +107,15 @@ INGRESS_CLUSTER_ISSUER=letsencrypt-http01
 # local-path. Set to a network-replicated class for node-loss durability.
 STORAGE_CLASS=local-path
 
+# ── Restore points ───────────────────────────────────────────────────────────
+# Each restore point gets its own PVC of this size. Must be at least the agent
+# PVC size (1Gi). On local-path these volumes are node-local and unreplicated:
+# a restore point does not survive loss of the node holding the agent's volume.
+RESTORE_POINT_SIZE=1Gi
+# Manual restore points retained per Agent. The Job image is not configured here
+# — the chart derives it from the API image so both are always the same build.
+RESTORE_POINT_MAX_PER_AGENT=5
+
 # ── Firecrawl ────────────────────────────────────────────────────────────────
 # API key used by the Firecrawl server (TEST_API_KEY) and agents (FIRECRAWL_API_KEY).
 # Same value serves both sides. Generate with: openssl rand -hex 24
@@ -113,6 +133,9 @@ POSTGRES_FIRECRAWL_DB=firecrawl
 # Comma-separated fnmatch globs limiting OpenRouter models, e.g. z-ai/glm-5.2,openai/gpt-5*
 # Empty offers the full catalogue.
 AGENT_MODEL_ALLOWLIST=
+# Comma-separated Platform keys handled by native runtime gateways, e.g.
+# slack,discord. Empty keeps all Platforms on the Communications Gateway.
+COMMUNICATIONS_NATIVE_PLATFORMS=
 # Default model. Format: litellm/openrouter/<slug>
 # e.g. litellm/openrouter/z-ai/glm-5.2. Empty uses the API's built-in default.
 AGENT_DEFAULT_MODEL=

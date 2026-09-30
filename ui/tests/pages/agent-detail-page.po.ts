@@ -1,11 +1,27 @@
+import { Locator, Page, Request } from "@playwright/test";
+
 import { TEST_ORG_ID } from "../constants";
-import { Locator, Page } from "@playwright/test";
 
 export class AgentDetailPage {
   constructor(private page: Page) {}
 
   async goto(agentId = "33333333-3333-4333-8333-333333333333") {
     await this.page.goto(`/dashboard/${TEST_ORG_ID}/agents/${agentId}`);
+  }
+
+  async openFocusedActivity(agentId: string) {
+    await this.page.goto(`/dashboard/${TEST_ORG_ID}/agents/${agentId}?tab=activity` +
+      "&from=2026-09-10T00:00:00Z&to=2026-09-13T00:00:00Z" +
+      "&focusFrom=2026-09-12T11:29:00Z&focusTo=2026-09-12T11:30:00Z");
+  }
+
+  async clearActivityDates() {
+    await this.page.getByRole("button", { name: "Date range", exact: true }).click();
+    await this.page.getByRole("button", { name: "Clear dates", exact: true }).click();
+  }
+
+  runtimeDiagnostics(): Locator {
+    return this.page.getByTestId("agent-runtime-diagnostics");
   }
 
   agentName(name: string): Locator {
@@ -28,6 +44,14 @@ export class AgentDetailPage {
     return this.page.getByRole("button", { name: /hire agent/i });
   }
 
+  costsTab(): Locator {
+    return this.page.getByRole("button", { name: "Costs", exact: true });
+  }
+
+  async openCostsTab() {
+    await this.costsTab().click();
+  }
+
   toolCallsTab(): Locator {
     return this.page.getByRole("button", { name: /tool calls/i });
   }
@@ -37,7 +61,158 @@ export class AgentDetailPage {
   }
 
   channelsTab(): Locator {
-    return this.page.getByRole("button", { name: /^(channels & endpoint|chats & endpoint)$/i });
+    return this.page.getByRole("button", { name: /^messaging$/i });
+  }
+
+  connectionDetailsLink(): Locator {
+    return this.page.getByRole("link", { name: "View details", exact: true });
+  }
+
+  connectionIdentity(identity: string): Locator {
+    return this.page.getByText(`Connected as ${identity}`, { exact: true });
+  }
+
+  connectionProviderStatus(status: string): Locator {
+    return this.page.getByText(status, { exact: true });
+  }
+
+  lifecycleMenu(): Locator {
+    return this.page.getByTestId("agent-lifecycle-menu");
+  }
+
+  updateBanner(): Locator {
+    return this.page.getByTestId("agent-update-banner");
+  }
+
+  updateButton(): Locator {
+    return this.page.getByTestId("agent-update-button");
+  }
+
+  updateReleasesLink(): Locator {
+    return this.page.getByTestId("agent-update-releases-link");
+  }
+
+  lifecycleMenuTrigger(): Locator {
+    return this.page.getByRole("button", { name: "More lifecycle actions" });
+  }
+
+  provisioningErrorBanner(): Locator {
+    return this.page.getByTestId("agent-error-banner");
+  }
+
+  provisioningErrorDetail(): Locator {
+    return this.page.getByTestId("agent-error-detail");
+  }
+
+  providerErrorAlert(): Locator {
+    return this.page.getByRole("alert").filter({ hasText: "Latest provider error" });
+  }
+
+  providerErrorMessage(): Locator {
+    return this.providerErrorAlert().locator("p");
+  }
+
+  addConnectionButton(): Locator {
+    return this.page.getByRole("button", { name: "Add connection", exact: true });
+  }
+
+  selectPlatformButton(platformName: string): Locator {
+    return this.page.getByRole("button", { name: `Select ${platformName}`, exact: true });
+  }
+
+  setupHint(text: string | RegExp): Locator {
+    return this.page.getByText(text);
+  }
+
+  editConnectionButton(connectionName: string): Locator {
+    return this.page.getByRole("button", { name: `Edit ${connectionName}`, exact: true });
+  }
+
+  getInstallLinkButton(): Locator {
+    return this.page.getByRole("button", { name: "Get install link", exact: true });
+  }
+
+  installBotServerLink(): Locator {
+    return this.page.getByRole("link", { name: "Install bot to server" });
+  }
+
+  connectionNameInput(): Locator {
+    return this.page.getByLabel("Connection name", { exact: true });
+  }
+
+  connectionSettingsInput(label: string): Locator {
+    return this.page.getByLabel(label, { exact: true });
+  }
+
+  removeArraySettingChip(label: string): Locator {
+    // Array settings render committed values as chips named after the directory
+    // label they display (falling back to the raw platform ID when unknown).
+    return this.page.getByRole("button", { name: `Remove ${label}`, exact: true });
+  }
+
+  saveConnectionButton(): Locator {
+    return this.page.getByRole("button", { name: "Save changes", exact: true });
+  }
+
+  credentialInput(label: string): Locator {
+    // The visibility toggle contributes its accessible name to the wrapped
+    // textbox, so use the stable field label as a partial accessible-name match.
+    return this.page.getByRole("textbox", { name: label });
+  }
+
+  credentialVisibilityButton(label: string, visible: boolean): Locator {
+    return this.page.getByRole("button", { name: `${visible ? "Hide" : "Show"} ${label}`, exact: true });
+  }
+
+  browseDirectoryButton(fieldLabel: string): Locator {
+    return this.page.getByRole("button", { name: `Browse ${fieldLabel}`, exact: true });
+  }
+
+  defaultDeliveryToggle(): Locator {
+    return this.page.getByRole("checkbox", { name: "Send scheduled results through this Connection" });
+  }
+
+  defaultDestinationBrowse(): Locator {
+    return this.page.getByRole("button", { name: "Browse Default channel or recipient" });
+  }
+
+  defaultDestinationInput(): Locator {
+    return this.page.getByLabel("Default channel or recipient", { exact: true });
+  }
+
+  /** The chosen destination renders as a removable chip, replacing the input. */
+  defaultDestinationChip(name: string | RegExp): Locator {
+    return this.page.getByRole("button", { name: new RegExp(`^Remove ${name}$`) });
+  }
+
+  defaultDestinationTypeOptions(): Locator {
+    return this.page.getByRole("option");
+  }
+
+  directoryPicker(): Locator {
+    return this.page.getByRole("dialog");
+  }
+
+  directoryPickerSearch(placeholder: string): Locator {
+    return this.directoryPicker().getByRole("combobox", { name: placeholder });
+  }
+
+  directoryPickerOption(name: string | RegExp): Locator {
+    return this.directoryPicker().getByRole("option", { name });
+  }
+
+  directoryPickerConfirmButton(): Locator {
+    return this.directoryPicker().getByRole("button", { name: "OK", exact: true });
+  }
+
+  connectPlatformButton(platformName: string): Locator {
+    return this.page.getByRole("button", { name: `Connect ${platformName}`, exact: true });
+  }
+
+  waitForConnectionMutation(method: "PATCH" | "POST"): Promise<Request> {
+    return this.page.waitForRequest(
+      (request) => request.method() === method && request.url().includes("/connections"),
+    );
   }
 
   groupPolicySelect(): Locator {
@@ -68,6 +243,10 @@ export class AgentDetailPage {
     return this.page.getByRole("button", { name: "Remove" });
   }
 
+  confirmRemoveSkillButton(): Locator {
+    return this.page.getByRole("dialog").getByRole("button", { name: "Remove skill", exact: true });
+  }
+
   undoSkillButton(): Locator {
     return this.page.getByRole("button", { name: "Undo" });
   }
@@ -86,7 +265,7 @@ export class AgentDetailPage {
   }
 
   keysTab(): Locator {
-    return this.page.getByRole("button", { name: "Keys & integrations", exact: true });
+    return this.page.getByRole("button", { name: "Integrations", exact: true });
   }
 
   appTokenInput(): Locator {
@@ -99,7 +278,7 @@ export class AgentDetailPage {
 
   saveTokensButton(): Locator {
     return this.page
-      .locator('section[aria-label="Keys & integrations"] footer')
+      .locator('section[aria-label="Integrations"] footer')
       .getByRole("button", { name: /^Apply(?: & Restart)?$/i });
   }
 

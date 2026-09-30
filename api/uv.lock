@@ -167,6 +167,7 @@ dependencies = [
     { name = "sqlalchemy" },
     { name = "sqlmodel" },
     { name = "testcontainers" },
+    { name = "websockets" },
 ]
 
 [package.dev-dependencies]
@@ -201,6 +202,7 @@ requires-dist = [
     { name = "sqlalchemy", specifier = ">=2.0.51" },
     { name = "sqlmodel", specifier = ">=0.0.39" },
     { name = "testcontainers", extras = ["postgres"], specifier = ">=4.15.0" },
+    { name = "websockets", specifier = ">=17.0" },
 ]
 
 [package.metadata.requires-dev]

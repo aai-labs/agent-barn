@@ -3,9 +3,20 @@ POSTGRES_PASSWORD=your_postgres_password
 POSTGRES_DB=your_database_name
 POSTGRES_PORT=5432
 
+# Required by host-run tools — `make migrate`, `make dev-api`, `make dev-worker`
+# — which read this directly; the config has no default and doesn't assemble
+# it from POSTGRES_* (api/core/config.py: db_connection_url). `./run.sh` doesn't
+# need this set correctly: compose overrides it to the in-network `db` hostname.
+DB_CONNECTION_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@localhost:${POSTGRES_PORT}/${POSTGRES_DB}
+
 API_PORT=8000
 ENVIRONMENT=local
-UI_APP_URL=http://localhost:3000
+WEB_APP_URL=http://localhost:3000
+
+# Optional: the base URL callers use to reach this API, shown as the Agent Webhook
+# and Teams Connection webhook URLs. Local runs derive http://localhost:${API_PORT},
+# so set this only when an outside caller needs a reachable address — a tunnel, say.
+# API_EXTERNAL_URL=https://your-tunnel.example.com
 
 # Optional: Redis is only needed to run the event delivery worker/reconciler
 # locally (`make redis-up`, `make dev-worker`); defaults to localhost:6379.
@@ -13,7 +24,14 @@ REDIS_PORT=6379
 REDIS_URL=redis://localhost:6379/0
 
 SECRET_SIGNING_KEY=replace_with_a_secure_random_value
-PLATFORM_ADMIN_CREDENTIALS=admin@example.com:replace_with_secure_password
+# The password must satisfy the API's own policy — at least 8 characters with an
+# uppercase letter, a lowercase letter and a digit (see
+# api/domains/auth/password_validation.py). Deliberately left non-compliant
+# (no uppercase, no digit) so startup fails with "500: Error while
+# initializing startup data" until you replace it — this is a real login
+# credential, not a value you want silently accepted as-is on a publicly
+# bound API.
+PLATFORM_ADMIN_CREDENTIALS=admin@example.com:replace_with_a_secure_password
 
 # Optional: if unset, email delivery is disabled and send attempts are logged. All three
 # are required for delivery. Transactional mail goes through Cloudflare Email Sending.
@@ -24,6 +42,15 @@ PLATFORM_ADMIN_CREDENTIALS=admin@example.com:replace_with_secure_password
 CLOUDFLARE_ACCOUNT_ID=
 CLOUDFLARE_API_TOKEN=
 SENDER_EMAIL=
+
+# Optional: per-Agent email addresses. Unset leaves the Email platform refusing new
+# Communication Connections; nothing else changes. Both are required on top of the three
+# values above. AGENT_EMAIL_DOMAIN must be onboarded for BOTH Email Routing and Email
+# Sending in the same Cloudflare account (e.g. agents.agentbarn.dev).
+# EMAIL_INBOUND_SECRET is the bearer token the inbound Email Worker presents; generate
+# with `openssl rand -hex 32` and set the same value as a Wrangler secret on the Worker.
+AGENT_EMAIL_DOMAIN=
+EMAIL_INBOUND_SECRET=
 
 # Optional: shared Google OAuth 2.0 "Web application" client for the Gmail
 # "Authenticate with Google" flow. If unset, the flow is disabled. Register
@@ -42,8 +69,27 @@ K8S_NAMESPACE=agent-farm
 # requires a data migration (StatefulSet volumeClaimTemplates are immutable).
 STORAGE_CLASS=
 
+# ── Restore points ──
+# Full image ref the capture/restore Job runs. It must be the SAME build as the
+# API that creates the Job: the archive exclusion sets ship with that code, and
+# a stale image could archive the plaintext provider-token store the current one
+# excludes. In Kubernetes the chart wires this from its own image values; set it
+# by hand only when running the API outside the chart.
+API_IMAGE=
+# Size of each restore point's own PVC. Must be at least the agent PVC size
+# (1Gi) — a capture that fills this volume fails and is reclaimed.
+RESTORE_POINT_SIZE=1Gi
+# Manual restore points retained per Agent. Automatic pre-restore backups do not
+# count against it, so an Agent at the cap can still roll back. Failed captures
+# release their volume and are not counted either.
+RESTORE_POINT_MAX_PER_AGENT=5
+# Deadlines for the capture and restore Jobs. Restore does a capture's work plus
+# an extraction, so it is given longer.
+RESTORE_POINT_CAPTURE_TIMEOUT_SECONDS=900
+RESTORE_POINT_RESTORE_TIMEOUT_SECONDS=1800
+
 # Agents
-# Full image ref for agent pods, e.g. {REGISTRY_URL}/agentfarm-openclaw-base:{VERSION}
+# Full image ref for agent pods, e.g. {REGISTRY_URL}/agentbarn-openclaw-base:{VERSION}
 AGENT_IMAGE=
 # Fernet key for encrypting Slack tokens at rest. Generate with:
 #   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
@@ -57,6 +103,9 @@ LITELLM_BASE_URL=
 AGENT_LITELLM_BASE_URL=
 # Name of the k8s Secret containing LITELLM_MASTER_KEY. Defaults to "litellm".
 LITELLM_SECRET_NAME=litellm
+# Percentages of an Organization's LLM limit at which its Owners and Admins are
+# notified. Comma separated, 1-100. Empty uses the default.
+ORGANIZATION_LLM_BUDGET_ALERT_THRESHOLDS=80,100
 # Default model for openclaw agents when agent.model is not set. Format: litellm/openrouter/<slug>
 AGENT_DEFAULT_MODEL=litellm/openrouter/z-ai/glm-5.2
 # OpenRouter API key used to fetch the model catalogue for the picker. Optional —
@@ -65,3 +114,37 @@ OPENROUTER_API_KEY=
 # Comma-separated fnmatch globs limiting which OpenRouter models the picker offers,
 # e.g. "z-ai/glm-5.2,openai/gpt-5*". Empty offers the full catalogue.
 AGENT_MODEL_ALLOWLIST=
+
+# ── Local Kubernetes (k3d) dev environment ──────────────────────────────────
+# Only needed to run agents locally (`./run.sh` sets this up for you).
+# See README → "Local Kubernetes (k3d) dev environment".
+
+# Stable admin key for the local LiteLLM proxy, e.g. sk-$(openssl rand -hex 16).
+# LiteLLM encrypts the virtual keys it stores with this value, so changing it
+# between runs breaks agents created under the old key. Set once and leave it.
+LITELLM_MASTER_KEY=
+
+# Full image refs the agent pods request. Each tag must equal the matching
+# openclaw-base/VERSION and hermes-base/VERSION; docker/k3d/k3d-load-images.sh
+# (run automatically by ./run.sh) builds and imports under exactly these tags.
+# These supersede AGENT_IMAGE above, which the API no longer reads.
+OPENCLAW_IMAGE=
+HERMES_IMAGE=
+
+# In-container path to the kubeconfig, for the API started by `./run.sh`.
+# ./run.sh sets this automatically. Leave empty if you're not using k3d.
+API_K8S_KUBECONFIG_PATH=
+
+# Optional. How the API inside Docker reaches LiteLLM; defaults to the compose
+# service (http://litellm:4000). LITELLM_BASE_URL above is host-facing
+# (127.0.0.1) and inside the container would resolve to the container itself.
+API_LITELLM_BASE_URL=
+
+# Optional. Host port the ingest API is published on for agent pods to push
+# telemetry to; defaults to 8001. (`make dev-api` takes API_DEV_PORT/INGEST_PORT
+# as make variables on the command line, not from here.)
+INGEST_PORT=
+
+# Optional. Host port for the Communications gateway. Agent pods reach it
+# through host.docker.internal; defaults to 8002.
+COMMUNICATIONS_PORT=

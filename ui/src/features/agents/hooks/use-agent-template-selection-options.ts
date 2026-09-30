@@ -35,11 +35,13 @@ export function useAgentTemplateSelectionOptions({
   active,
   overrideVersions,
   sourceUpdate,
+  sharedVersions: activeLineageVersions = [],
 }: {
   templates: AgentTemplateRead[];
   active: AgentConfigurationVersion;
   overrideVersions: AgentOverrideVersion[];
   sourceUpdate?: AgentConfigurationVersion | null;
+  sharedVersions?: AgentConfigurationVersion[];
 }) {
   const orgApiBase = useOrganizationApiBase();
   const templateKeys = useMemo(
@@ -72,6 +74,13 @@ export function useAgentTemplateSelectionOptions({
       latestByLineage.set(
         lineage,
         Math.max(latestByLineage.get(lineage) ?? 0, template.version),
+      );
+    }
+    for (const version of activeLineageVersions) {
+      const lineage = `${version.sourceType}:${version.sourceTemplateKey}`;
+      latestByLineage.set(
+        lineage,
+        Math.max(latestByLineage.get(lineage) ?? 0, version.sourceTemplateVersion),
       );
     }
 
@@ -110,6 +119,45 @@ export function useAgentTemplateSelectionOptions({
           template.description ?? "",
           template.platformUpdateAvailable ? "platform update available" : "",
           isSourceUpdate ? `${selectionType} update available` : "",
+        ].join(" "),
+      });
+    }
+
+    for (const version of activeLineageVersions) {
+      const selectionType = version.sourceType;
+      const value = templateSelectionValue(
+        selectionType,
+        version.sourceTemplateKey,
+        version.sourceTemplateVersion,
+      );
+      if (sharedOptionsByValue.has(value)) continue;
+      const typeLabel: TemplateSelectionOption["typeLabel"] =
+        selectionType === "platform"
+          ? "Built-in platform"
+          : version.sourcePlatformTemplateId
+            ? "Organization fork"
+            : "Organization-owned";
+      sharedOptionsByValue.set(value, {
+        value,
+        selectionType,
+        templateKey: version.sourceTemplateKey,
+        templateVersion: version.sourceTemplateVersion,
+        snapshot: version,
+        typeLabel,
+        name: version.templateName,
+        version: version.sourceTemplateVersion,
+        updatedAt: version.updatedAt,
+        isLatest:
+          version.sourceTemplateVersion ===
+          latestByLineage.get(`${selectionType}:${version.sourceTemplateKey}`),
+        platformUpdateAvailable: false,
+        sourceUpdateAvailable: false,
+        searchText: [
+          typeLabel,
+          version.templateName,
+          version.sourceTemplateKey,
+          `version ${version.sourceTemplateVersion}`,
+          version.description ?? "",
         ].join(" "),
       });
     }
@@ -248,7 +296,7 @@ export function useAgentTemplateSelectionOptions({
         left.name.localeCompare(right.name) ||
         right.version - left.version,
     );
-  }, [active, overrideVersions, sharedVersions, sourceUpdate, templates]);
+  }, [active, activeLineageVersions, overrideVersions, sharedVersions, sourceUpdate, templates]);
 
   return { options, isLoading, hasError };
 }

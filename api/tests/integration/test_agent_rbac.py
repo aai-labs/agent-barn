@@ -6,7 +6,15 @@ from hamcrest import assert_that, contains_inanyorder, equal_to, has_item, is_no
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, col, select
 
-from api.domains.agents.models import Agent, AgentAccess, AgentFilter, AgentPlatform, AgentStatus
+from api.domains.agents.models import (
+    Agent,
+    AgentAccess,
+    AgentFilter,
+    AgentRestorePoint,
+    AgentStatus,
+    RestorePointOrigin,
+    RestorePointStatus,
+)
 from api.domains.agents.repository import AgentRepository
 from api.domains.events import ActorIdentity, ActorIdentityType
 from api.domains.organizations.models import Organization
@@ -19,9 +27,9 @@ from api.domains.rbac.catalog import (
     PermissionKey,
 )
 from api.domains.rbac.models import AgentAccessRole, AgentAccessRolePermission
+from api.domains.restore_points.repository import RestorePointRepository
 from api.domains.users.organization_users.models import OrganizationRole
 from api.domains.users.organization_users.repository import OrganizationUserRepository
-from api.infrastructure.crypto import decrypt_token
 from api.infrastructure.shared.models import Pagination
 from api.tests.core.givenpy import given
 from api.tests.core.modules import (
@@ -48,9 +56,6 @@ from api.tests.steps.user import there_is_a_user, there_is_an_access_token_for_u
 _BASE = "/api/v1/organizations/{organization_id}/agents"
 _CREATE = {
     "name": "Member Agent",
-    "platform": "slack",
-    "slack_bot_token": "xoxb-member-agent",
-    "slack_app_token": "xapp-1-member-agent",
     "template_key": "test-template",
 }
 _GIVEN = [
@@ -149,35 +154,6 @@ def _insert_custom_agent_role(context, permissions: set[PermissionKey]) -> Agent
             )
         )
     return role
-
-
-def test_discord_token_rotation_requires_secret_permission_from_actual_caller():
-    with given([*_GIVEN, there_is_an_agent(platform=AgentPlatform.DISCORD)]) as context:
-        repository: AgentRepository = context.injector.get(AgentRepository)
-        original_config = repository.get_discord_config(context.agent.id)
-        assert original_config is not None
-        original_token = decrypt_token(original_config.bot_token_encrypted, TEST_ENCRYPTION_KEY)
-
-        _switch_to_member()(context)
-        role = _insert_custom_agent_role(
-            context,
-            {PermissionKey.AGENT_READ, PermissionKey.AGENT_UPDATE},
-        )
-        there_is_agent_access(access_role_id=role.id)(context)
-
-        response = context.client.patch(
-            f"{_BASE}/{context.agent.id}",
-            json={"discord_bot_token": "forbidden-rotation"},
-            headers=_auth(context),
-        )
-
-        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
-        persisted = repository.get_discord_config(context.agent.id)
-        assert persisted is not None
-        assert_that(
-            decrypt_token(persisted.bot_token_encrypted, TEST_ENCRYPTION_KEY),
-            equal_to(original_token),
-        )
 
 
 def test_member_creation_persists_creator_access_and_effective_permission_keys():
@@ -407,15 +383,29 @@ def test_assigned_activity_and_cost_endpoints_cannot_be_bypassed():
 
         assigned_urls = (
             f"{_BASE}/{assigned_agent.id}/logs",
+            f"{_BASE}/{assigned_agent.id}/diagnostics",
             f"{_BASE}/{assigned_agent.id}/conversations/channels",
             f"{_BASE}/{assigned_agent.id}/tool-calls",
+            f"{_BASE}/{assigned_agent.id}/activity",
+            f"{_BASE}/{assigned_agent.id}/activity/wakes",
+            f"{_BASE}/{assigned_agent.id}/activity/calls",
             f"/api/v1/organizations/{{organization_id}}/costs/agents/{assigned_agent.id}",
+            f"/api/v1/organizations/{{organization_id}}/costs/agents/{assigned_agent.id}/calls",
+            f"/api/v1/organizations/{{organization_id}}/costs/agents/{assigned_agent.id}/monthly",
+            f"/api/v1/organizations/{{organization_id}}/costs/agents/{assigned_agent.id}/filters/models",
         )
         hidden_urls = (
             f"{_BASE}/{hidden_agent.id}/logs",
+            f"{_BASE}/{hidden_agent.id}/diagnostics",
             f"{_BASE}/{hidden_agent.id}/conversations/channels",
             f"{_BASE}/{hidden_agent.id}/tool-calls",
+            f"{_BASE}/{hidden_agent.id}/activity",
+            f"{_BASE}/{hidden_agent.id}/activity/wakes",
+            f"{_BASE}/{hidden_agent.id}/activity/calls",
             f"/api/v1/organizations/{{organization_id}}/costs/agents/{hidden_agent.id}",
+            f"/api/v1/organizations/{{organization_id}}/costs/agents/{hidden_agent.id}/calls",
+            f"/api/v1/organizations/{{organization_id}}/costs/agents/{hidden_agent.id}/monthly",
+            f"/api/v1/organizations/{{organization_id}}/costs/agents/{hidden_agent.id}/filters/models",
         )
 
         for url in assigned_urls:
@@ -796,3 +786,87 @@ def test_membershipless_platform_admin_cannot_manage_agent_share_in_org_url():
         )
 
         assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+
+
+def _restore_points_url(context) -> str:
+    return f"{_BASE}/{context.agent.id}/restore-points"
+
+
+def _seed_ready_restore_point(context):
+    repository: RestorePointRepository = context.injector.get(RestorePointRepository)
+    return repository.save(
+        AgentRestorePoint(
+            agent_id=context.agent.id,
+            status=RestorePointStatus.READY,
+            origin=RestorePointOrigin.MANUAL,
+            agent_type=context.agent.agent_type,
+            pvc_name=f"restore-point-{uuid7()}",
+            config_manifest={},
+        )
+    )
+
+
+def test_viewer_can_list_restore_points():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        _seed_ready_restore_point(context)
+        _switch_to_member()(context)
+        there_is_agent_access(agent_id=context.agent.id, access_role_id=AGENT_VIEWER_ROLE_ID)(context)
+
+        response = context.client.get(_restore_points_url(context), headers=_auth(context))
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+
+
+def test_viewer_cannot_capture_a_restore_point():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        _switch_to_member()(context)
+        there_is_agent_access(agent_id=context.agent.id, access_role_id=AGENT_VIEWER_ROLE_ID)(context)
+
+        response = context.client.post(_restore_points_url(context), json={}, headers=_auth(context))
+
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+
+
+def test_viewer_cannot_restore_a_restore_point():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        restore_point = _seed_ready_restore_point(context)
+        _switch_to_member()(context)
+        there_is_agent_access(agent_id=context.agent.id, access_role_id=AGENT_VIEWER_ROLE_ID)(context)
+
+        response = context.client.post(
+            f"{_restore_points_url(context)}/{restore_point.id}/restore", headers=_auth(context)
+        )
+
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+
+
+def test_viewer_cannot_delete_a_restore_point():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        restore_point = _seed_ready_restore_point(context)
+        _switch_to_member()(context)
+        there_is_agent_access(agent_id=context.agent.id, access_role_id=AGENT_VIEWER_ROLE_ID)(context)
+
+        response = context.client.delete(f"{_restore_points_url(context)}/{restore_point.id}", headers=_auth(context))
+
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+
+
+def test_editor_can_delete_a_restore_point():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        restore_point = _seed_ready_restore_point(context)
+        _switch_to_member()(context)
+        there_is_agent_access(agent_id=context.agent.id, access_role_id=AGENT_EDITOR_ROLE_ID)(context)
+
+        response = context.client.delete(f"{_restore_points_url(context)}/{restore_point.id}", headers=_auth(context))
+
+        assert_that(response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
+
+
+def test_member_without_access_gets_404_for_restore_points_not_403():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        _seed_ready_restore_point(context)
+        _switch_to_member()(context)
+
+        response = context.client.get(_restore_points_url(context), headers=_auth(context))
+
+        assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))

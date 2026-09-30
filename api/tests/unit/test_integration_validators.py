@@ -11,8 +11,7 @@ from api.domains.agents.models import (
     BitbucketContent,
     ConfluenceContent,
     GithubContent,
-    GmailContent,
-    GoogleSheetsContent,
+    GoogleWorkspaceContent,
     JiraContent,
     PipedriveContent,
     SlackContent,
@@ -20,8 +19,7 @@ from api.domains.agents.models import (
 from api.infrastructure.integration_validators.bitbucket import validate_bitbucket
 from api.infrastructure.integration_validators.confluence import validate_confluence
 from api.infrastructure.integration_validators.github import validate_github
-from api.infrastructure.integration_validators.gmail import validate_gmail
-from api.infrastructure.integration_validators.google_sheets import validate_google_sheets
+from api.infrastructure.integration_validators.google_workspace import validate_google_workspace
 from api.infrastructure.integration_validators.jira import validate_jira
 from api.infrastructure.integration_validators.pipedrive import validate_pipedrive
 from api.infrastructure.integration_validators.result import IntegrationValidationResult
@@ -56,20 +54,9 @@ _CONFLUENCE_SCOPED = ConfluenceContent(
     use_scoped_token=True,
 )
 _BB = BitbucketContent(workspace="acme", repos=["backend"], email="alice@acme.com", api_token="bb-tok")
-_GMAIL = GmailContent(
-    client_id="client-id.apps.googleusercontent.com",
-    client_secret="client-secret",
-    refresh_token="rt-123",
-)
 _SLACK = SlackContent(token="xoxb-test-token")
 _PD = PipedriveContent(api_token="pd-tok")
 _PD_WITH_DOMAIN = PipedriveContent(api_token="pd-tok", domain="aai-labs")
-
-_SHEETS = GoogleSheetsContent(
-    client_id="client-id.apps.googleusercontent.com",
-    client_secret="client-secret",
-    refresh_token="rt-456",
-)
 
 # ── IntegrationValidationResult ───────────────────────────────────────────────
 
@@ -751,109 +738,6 @@ def test_confluence_identity_falls_back_to_content_email_when_absent():
     assert _CONFLUENCE.email in (result.identity or "")
 
 
-# ── Gmail ─────────────────────────────────────────────────────────────────────
-
-_GMAIL_TOKEN_MOD = "api.infrastructure.integration_validators.gmail.httpx.post"
-_GMAIL_PROFILE_MOD = "api.infrastructure.integration_validators.gmail.httpx.get"
-
-_GMAIL_TOKEN_OK = {
-    "access_token": "at-123",
-    "scope": "https://www.googleapis.com/auth/gmail.readonly",
-    "token_type": "Bearer",
-    "expires_in": 3599,
-}
-
-
-def test_gmail_valid_refresh_token_returns_identity():
-    token_resp = _resp(_GMAIL_TOKEN_OK)
-    profile_resp = _resp({"emailAddress": "alice@gmail.com"})
-
-    with (
-        patch(_GMAIL_TOKEN_MOD, return_value=token_resp),
-        patch(_GMAIL_PROFILE_MOD, return_value=profile_resp),
-    ):
-        result = validate_gmail(_GMAIL)
-
-    assert result.valid is True
-    assert result.identity == "alice@gmail.com"
-    assert result.missing_scopes == []
-    assert result.error is None
-
-
-def test_gmail_missing_client_credentials_returns_error():
-    """Should never reach Google — client id/secret weren't backfilled from config."""
-    no_client = GmailContent(refresh_token="rt-123")
-    with patch(_GMAIL_TOKEN_MOD) as mock_post:
-        result = validate_gmail(no_client)
-
-    assert result.valid is False
-    assert result.error is not None
-    assert "configured" in result.error.lower()
-    mock_post.assert_not_called()
-
-
-def test_gmail_invalid_grant_reports_reconnect_hint():
-    """Google's canonical error for a revoked/expired refresh token is invalid_grant."""
-    with patch(_GMAIL_TOKEN_MOD, return_value=_resp({"error": "invalid_grant"}, status=400)):
-        result = validate_gmail(_GMAIL)
-
-    assert result.valid is False
-    assert result.error is not None
-    assert "reconnect" in result.error.lower()
-
-
-def test_gmail_unexpected_status_returns_error():
-    with patch(_GMAIL_TOKEN_MOD, return_value=_resp({}, status=500)):
-        result = validate_gmail(_GMAIL)
-
-    assert result.valid is False
-    assert "500" in (result.error or "")
-
-
-def test_gmail_network_error_returns_error():
-    with patch(_GMAIL_TOKEN_MOD, side_effect=_connect_error()):
-        result = validate_gmail(_GMAIL)
-
-    assert result.valid is False
-    assert result.error is not None
-    assert "google" in result.error.lower()
-
-
-def test_gmail_missing_access_token_in_response():
-    with patch(_GMAIL_TOKEN_MOD, return_value=_resp({"scope": "gmail.readonly"})):
-        result = validate_gmail(_GMAIL)
-
-    assert result.valid is False
-    assert result.error is not None
-
-
-def test_gmail_missing_readonly_scope_warns():
-    token_resp = _resp({**_GMAIL_TOKEN_OK, "scope": "https://www.googleapis.com/auth/gmail.send"})
-    profile_resp = _resp({"emailAddress": "alice@gmail.com"})
-
-    with (
-        patch(_GMAIL_TOKEN_MOD, return_value=token_resp),
-        patch(_GMAIL_PROFILE_MOD, return_value=profile_resp),
-    ):
-        result = validate_gmail(_GMAIL)
-
-    assert result.valid is True
-    assert any("gmail.readonly" in s for s in result.missing_scopes)
-
-
-def test_gmail_profile_fetch_failure_still_valid_without_identity():
-    """Token exchange proves the refresh token works even if the profile probe fails."""
-    token_resp = _resp(_GMAIL_TOKEN_OK)
-
-    with (
-        patch(_GMAIL_TOKEN_MOD, return_value=token_resp),
-        patch(_GMAIL_PROFILE_MOD, side_effect=_connect_error()),
-    ):
-        result = validate_gmail(_GMAIL)
-
-    assert result.valid is True
-
-
 # ── Slack ─────────────────────────────────────────────────────────────────────
 
 _SLACK_MOD = "api.infrastructure.integration_validators.slack.httpx.post"
@@ -900,169 +784,6 @@ def test_slack_network_error_returns_error():
     assert result.valid is False
     assert result.error is not None
     assert "slack" in result.error.lower()
-    assert result.identity is None
-
-
-# ── Google Sheets ─────────────────────────────────────────────────────────────
-
-_SHEETS_TOKEN_MOD = "api.infrastructure.integration_validators.google_sheets.httpx.post"
-_SHEETS_ABOUT_MOD = "api.infrastructure.integration_validators.google_sheets.httpx.get"
-
-_SHEETS_TOKEN_OK = {
-    "access_token": "at-456",
-    "scope": ("https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/drive.metadata.readonly"),
-    "token_type": "Bearer",
-    "expires_in": 3599,
-}
-
-
-def test_google_sheets_valid_refresh_token_returns_identity():
-    token_resp = _resp(_SHEETS_TOKEN_OK)
-    about_resp = _resp({"user": {"emailAddress": "alice@gmail.com"}})
-
-    with (
-        patch(_SHEETS_TOKEN_MOD, return_value=token_resp),
-        patch(_SHEETS_ABOUT_MOD, return_value=about_resp),
-    ):
-        result = validate_google_sheets(_SHEETS)
-
-    assert result.valid is True
-    assert result.identity == "alice@gmail.com"
-    assert result.missing_scopes == []
-    assert result.error is None
-
-
-def test_google_sheets_missing_client_credentials_returns_error():
-    """Should never reach Google — client id/secret weren't backfilled from config."""
-    no_client = GoogleSheetsContent(refresh_token="rt-456")
-    with patch(_SHEETS_TOKEN_MOD) as mock_post:
-        result = validate_google_sheets(no_client)
-
-    assert result.valid is False
-    assert result.error is not None
-    assert "configured" in result.error.lower()
-    mock_post.assert_not_called()
-
-
-def test_google_sheets_invalid_grant_reports_reconnect_hint():
-    with patch(_SHEETS_TOKEN_MOD, return_value=_resp({"error": "invalid_grant"}, status=400)):
-        result = validate_google_sheets(_SHEETS)
-
-    assert result.valid is False
-    assert result.error is not None
-    assert "reconnect" in result.error.lower()
-
-
-def test_google_sheets_read_only_grant_warns_about_write_scope():
-    """A user who grants only spreadsheets.readonly can read but not update — the write
-    scope is missing and must be surfaced rather than silently failing at call time."""
-    token_resp = _resp(
-        {
-            **_SHEETS_TOKEN_OK,
-            "scope": (
-                "https://www.googleapis.com/auth/spreadsheets.readonly "
-                "https://www.googleapis.com/auth/drive.metadata.readonly"
-            ),
-        }
-    )
-    about_resp = _resp({"user": {"emailAddress": "alice@gmail.com"}})
-
-    with (
-        patch(_SHEETS_TOKEN_MOD, return_value=token_resp),
-        patch(_SHEETS_ABOUT_MOD, return_value=about_resp),
-    ):
-        result = validate_google_sheets(_SHEETS)
-
-    assert result.valid is True
-    assert any("spreadsheets" in s for s in result.missing_scopes)
-
-
-def test_google_sheets_missing_drive_scope_warns():
-    """Without Drive metadata access, `spreadsheets list` can't discover anything."""
-    token_resp = _resp({**_SHEETS_TOKEN_OK, "scope": "https://www.googleapis.com/auth/spreadsheets"})
-    about_resp = _resp({"user": {"emailAddress": "alice@gmail.com"}})
-
-    with (
-        patch(_SHEETS_TOKEN_MOD, return_value=token_resp),
-        patch(_SHEETS_ABOUT_MOD, return_value=about_resp),
-    ):
-        result = validate_google_sheets(_SHEETS)
-
-    assert result.valid is True
-    assert any("drive.metadata.readonly" in s for s in result.missing_scopes)
-
-
-def test_google_sheets_silent_scope_response_does_not_invent_warnings():
-    """Google omitting `scope` is not evidence that anything is missing."""
-    token_resp = _resp({"access_token": "at-456"})
-    about_resp = _resp({"user": {"emailAddress": "alice@gmail.com"}})
-
-    with (
-        patch(_SHEETS_TOKEN_MOD, return_value=token_resp),
-        patch(_SHEETS_ABOUT_MOD, return_value=about_resp),
-    ):
-        result = validate_google_sheets(_SHEETS)
-
-    assert result.valid is True
-    assert result.missing_scopes == []
-
-
-def test_google_sheets_reports_a_disabled_api_instead_of_a_green_tick():
-    """A disabled Drive/Sheets API is a 403 on every call, but the grant itself is fine —
-    so this used to validate green with a null identity and then fail at first use, which
-    is near-impossible to trace from the UI."""
-    disabled = _resp(
-        {
-            "error": {
-                "code": 403,
-                "message": "Google Drive API has not been used in project 1234 before or it is disabled.",
-            }
-        },
-        status=403,
-    )
-    with (
-        patch(_SHEETS_TOKEN_MOD, return_value=_resp(_SHEETS_TOKEN_OK)),
-        patch(_SHEETS_ABOUT_MOD, return_value=disabled),
-    ):
-        result = validate_google_sheets(_SHEETS)
-
-    assert result.valid is False
-    assert result.error is not None
-    assert "not enabled" in result.error
-    # It must not read as the user's fault — their grant is correct.
-    assert "scopes are fine" in result.error
-
-
-def test_google_sheets_other_probe_failures_still_do_not_fail_the_credential():
-    """Only the disabled-API signature is blocking; a flaky probe must not condemn an
-    otherwise working credential."""
-    for bad in (_resp({}, status=500), _resp({"error": {"message": "backend error"}}, status=403)):
-        with (
-            patch(_SHEETS_TOKEN_MOD, return_value=_resp(_SHEETS_TOKEN_OK)),
-            patch(_SHEETS_ABOUT_MOD, return_value=bad),
-        ):
-            result = validate_google_sheets(_SHEETS)
-        assert result.valid is True, bad.status_code
-        assert result.identity is None
-
-
-def test_google_sheets_network_error_returns_error():
-    with patch(_SHEETS_TOKEN_MOD, side_effect=_connect_error()):
-        result = validate_google_sheets(_SHEETS)
-
-    assert result.valid is False
-    assert result.error is not None
-    assert "google" in result.error.lower()
-
-
-def test_google_sheets_about_fetch_failure_still_valid_without_identity():
-    with (
-        patch(_SHEETS_TOKEN_MOD, return_value=_resp(_SHEETS_TOKEN_OK)),
-        patch(_SHEETS_ABOUT_MOD, side_effect=_connect_error()),
-    ):
-        result = validate_google_sheets(_SHEETS)
-
-    assert result.valid is True
     assert result.identity is None
 
 
@@ -1120,3 +841,133 @@ def test_pipedrive_network_error_returns_error():
     assert result.valid is False
     assert result.error is not None
     assert "pipedrive" in result.error.lower()
+
+
+# ── Google Workspace (gog) ────────────────────────────────────────────────────
+
+_GWS_TOKEN_MOD = "api.infrastructure.integration_validators.google_workspace.httpx.post"
+_GWS_USERINFO_MOD = "api.infrastructure.integration_validators.google_workspace.httpx.get"
+
+_GWS_SCOPES = [
+    "https://www.googleapis.com/auth/gmail.modify",
+    "https://www.googleapis.com/auth/gmail.settings.basic",
+    "https://www.googleapis.com/auth/gmail.settings.sharing",
+    "https://www.googleapis.com/auth/calendar",
+]
+_GWS = GoogleWorkspaceContent(
+    email="alice@example.com",
+    services=["gmail", "calendar"],
+    scopes=_GWS_SCOPES,
+    refresh_token="rt-123",
+    client_id="client-id",
+    client_secret="client-secret",
+)
+
+
+def _gws_token_ok(scope: str | None = None) -> dict:
+    return {
+        "access_token": "at-123",
+        "scope": " ".join(_GWS_SCOPES) if scope is None else scope,
+        "token_type": "Bearer",
+    }
+
+
+def test_google_workspace_valid_refresh_token_returns_identity():
+    with (
+        patch(_GWS_TOKEN_MOD, return_value=_resp(_gws_token_ok())),
+        patch(_GWS_USERINFO_MOD, return_value=_resp({"email": "alice@example.com"})),
+    ):
+        result = validate_google_workspace(_GWS)
+
+    assert result.valid is True
+    assert result.identity == "alice@example.com"
+    assert result.missing_scopes == []
+    assert result.error is None
+
+
+def test_google_workspace_missing_client_credentials_returns_error():
+    no_client = GoogleWorkspaceContent(
+        email="alice@example.com",
+        services=["gmail"],
+        refresh_token="rt-123",
+    )
+    with patch(_GWS_TOKEN_MOD) as mock_post:
+        result = validate_google_workspace(no_client)
+
+    assert result.valid is False
+    assert "configured" in (result.error or "").lower()
+    mock_post.assert_not_called()
+
+
+def test_google_workspace_invalid_grant_mentions_reconnect_and_testing_status():
+    """Testing-status OAuth apps expire refresh tokens weekly — the likeliest cause."""
+    with patch(_GWS_TOKEN_MOD, return_value=_resp({"error": "invalid_grant"}, status=400)):
+        result = validate_google_workspace(_GWS)
+
+    assert result.valid is False
+    assert "reconnect" in (result.error or "").lower()
+    assert "testing" in (result.error or "").lower()
+
+
+def test_google_workspace_reports_scopes_revoked_after_consent():
+    # The user trimmed the grant at myaccount.google.com; gog will fail on calendar.
+    narrowed = _gws_token_ok(scope=" ".join(_GWS_SCOPES[:-1]))
+    with (
+        patch(_GWS_TOKEN_MOD, return_value=_resp(narrowed)),
+        patch(_GWS_USERINFO_MOD, return_value=_resp({"email": "alice@example.com"})),
+    ):
+        result = validate_google_workspace(_GWS)
+
+    assert result.valid is True  # warning, not a hard failure
+    assert result.missing_scopes == ["https://www.googleapis.com/auth/calendar"]
+
+
+def test_google_workspace_flags_identity_drift():
+    # A refresh token that now resolves to a different account would silently act as
+    # the wrong user, and gog's stored token is keyed by the recorded email.
+    with (
+        patch(_GWS_TOKEN_MOD, return_value=_resp(_gws_token_ok())),
+        patch(_GWS_USERINFO_MOD, return_value=_resp({"email": "bob@example.com"})),
+    ):
+        result = validate_google_workspace(_GWS)
+
+    assert result.valid is False
+    assert result.identity == "bob@example.com"
+    assert "bob@example.com" in (result.error or "")
+
+
+def test_google_workspace_identity_comparison_ignores_case():
+    with (
+        patch(_GWS_TOKEN_MOD, return_value=_resp(_gws_token_ok())),
+        patch(_GWS_USERINFO_MOD, return_value=_resp({"email": "Alice@Example.com"})),
+    ):
+        result = validate_google_workspace(_GWS)
+
+    assert result.valid is True
+
+
+def test_google_workspace_falls_back_to_stored_email_when_userinfo_fails():
+    with (
+        patch(_GWS_TOKEN_MOD, return_value=_resp(_gws_token_ok())),
+        patch(_GWS_USERINFO_MOD, side_effect=_connect_error()),
+    ):
+        result = validate_google_workspace(_GWS)
+
+    assert result.valid is True
+    assert result.identity == "alice@example.com"
+
+
+def test_google_workspace_network_error_returns_error():
+    with patch(_GWS_TOKEN_MOD, side_effect=_connect_error()):
+        result = validate_google_workspace(_GWS)
+
+    assert result.valid is False
+    assert "google" in (result.error or "").lower()
+
+
+def test_google_workspace_unexpected_status_returns_error():
+    with patch(_GWS_TOKEN_MOD, return_value=_resp({}, status=500)):
+        result = validate_google_workspace(_GWS)
+
+    assert result.valid is False
+    assert "500" in (result.error or "")

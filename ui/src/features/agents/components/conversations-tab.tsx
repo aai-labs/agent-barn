@@ -20,6 +20,10 @@ function channelLabel(ch: ConversationChannel): string {
   return `#${ch.channelName ?? ch.channelId.toLowerCase()}`;
 }
 
+function channelSelectionKey(channel: ConversationChannel): string {
+  return `${channel.connectionId}:${channel.channelId}`;
+}
+
 export function ConversationsTab({ agent }: ConversationsTabProps) {
   const { channels, isLoading, error, refetch } = useConversationChannels(agent.id);
   const [selectedChannel, setSelectedChannel] = useQueryState(
@@ -67,7 +71,7 @@ export function ConversationsTab({ agent }: ConversationsTabProps) {
   }
 
   const activeChannel =
-    channels.find((c) => c.channelId === selectedChannel) ?? channels[0];
+    channels.find((channel) => channelSelectionKey(channel) === selectedChannel) ?? channels[0];
 
   const channelConvos = channels.filter((c) => c.conversationType === "CHANNEL");
   const dmConvos = channels.filter((c) => c.conversationType === "DM");
@@ -80,11 +84,11 @@ export function ConversationsTab({ agent }: ConversationsTabProps) {
       <ConversationSidebar
         channelConvos={channelConvos}
         dmConvos={dmConvos}
-        activeChannelId={activeChannel.channelId}
+        activeChannelKey={channelSelectionKey(activeChannel)}
         onSelect={setSelectedChannel}
       />
       <MessagePanel
-        key={activeChannel.channelId}
+        key={channelSelectionKey(activeChannel)}
         agentId={agent.id}
         agentName={agent.name}
         channel={activeChannel}
@@ -96,20 +100,21 @@ export function ConversationsTab({ agent }: ConversationsTabProps) {
 function ConversationSidebar({
   channelConvos,
   dmConvos,
-  activeChannelId,
+  activeChannelKey,
   onSelect,
 }: {
   channelConvos: ConversationChannel[];
   dmConvos: ConversationChannel[];
-  activeChannelId: string;
+  activeChannelKey: string;
   onSelect: (id: string) => void;
 }) {
   function SidebarItem({ ch }: { ch: ConversationChannel }) {
-    const active = ch.channelId === activeChannelId;
+    const selectionKey = channelSelectionKey(ch);
+    const active = selectionKey === activeChannelKey;
     return (
       <button
         key={ch.channelId}
-        onClick={() => onSelect(ch.channelId)}
+        onClick={() => onSelect(selectionKey)}
         className="w-full text-left px-4 py-2 text-[0.844rem] font-medium transition-colors"
         style={{
           color: active ? "var(--ink)" : "var(--ink-3)",
@@ -117,7 +122,10 @@ function ConversationSidebar({
           borderLeft: active ? "2px solid var(--accent, #4f46e5)" : "2px solid transparent",
         }}
       >
-        {channelLabel(ch)}
+        <span className="block">{channelLabel(ch)}</span>
+        <span className="block truncate text-[0.7rem] font-normal" style={{ color: "var(--ink-4)" }}>
+          {ch.connectionName}
+        </span>
       </button>
     );
   }
@@ -135,7 +143,7 @@ function ConversationSidebar({
           >
             Channels
           </div>
-          {channelConvos.map((ch) => <SidebarItem key={ch.channelId} ch={ch} />)}
+          {channelConvos.map((ch) => <SidebarItem key={channelSelectionKey(ch)} ch={ch} />)}
         </>
       )}
       {dmConvos.length > 0 && (
@@ -146,7 +154,7 @@ function ConversationSidebar({
           >
             Direct Messages
           </div>
-          {dmConvos.map((ch) => <SidebarItem key={ch.channelId} ch={ch} />)}
+          {dmConvos.map((ch) => <SidebarItem key={channelSelectionKey(ch)} ch={ch} />)}
         </>
       )}
     </div>
@@ -183,7 +191,7 @@ function MessagePanel({
     isFetchingNextPage,
     isLoading,
     error,
-  } = useChannelMessages(agentId, channel.channelId, filters);
+  } = useChannelMessages(agentId, channel, filters);
 
   const allThreads: ConversationThread[] = useMemo(() => {
     if (!data) return [];

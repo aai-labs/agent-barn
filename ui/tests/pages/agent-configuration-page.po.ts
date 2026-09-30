@@ -52,4 +52,38 @@ export class AgentConfigurationPage {
       .getByRole("dialog")
       .getByRole("button", { name: /^Apply(?: & Restart)?$/i });
   }
+
+  captureRestorePointButton(): Locator {
+    return this.page.getByRole("button", { name: /capture restore point/i });
+  }
+
+  captureAction(): Locator {
+    return this.page.getByTestId("capture-action");
+  }
+
+  restorePointRows(): Locator {
+    return this.page.getByTestId("restore-point-row");
+  }
+
+  restorePointRow(label: string): Locator {
+    return this.restorePointRows().filter({ hasText: label });
+  }
+
+  restoreButton(): Locator {
+    return this.page.getByRole("button", { name: /^Restore$/ });
+  }
+
+  restoreConfirmNameInput(): Locator {
+    return this.page.getByRole("dialog").getByLabel(/type .* to confirm/i);
+  }
+
+  restoreConfirmButton(): Locator {
+    return this.page.getByRole("dialog").getByRole("button", { name: /restore agent/i });
+  }
+
+  reapplyConfigurationCheckbox(): Locator {
+    return this.page.getByRole("checkbox", {
+      name: /also re-apply the recorded configuration/i,
+    });
+  }
 }

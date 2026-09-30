@@ -55,25 +55,22 @@ jobs:
       - name: Install dependencies
         working-directory: api
         run: uv sync --frozen
-      - name: Open SSH tunnel to k3s
-        run: |
-          mkdir -p ~/.ssh
-          printf '%s\n' '${{ secrets.BASTION_SSH_KEY }}' > ~/.ssh/bastion_ed25519
-          chmod 600 ~/.ssh/bastion_ed25519
-          printf '%s' '${{ secrets.KUBECONFIG_B64 }}' | base64 -d > $RUNNER_TEMP/kubeconfig
-          ssh -fN \
-            -i ~/.ssh/bastion_ed25519 \
-            -o StrictHostKeyChecking=no \
-            -o ExitOnForwardFailure=yes \
-            -o ServerAliveInterval=60 \
-            -o ServerAliveCountMax=3 \
-            -L 6443:10.100.0.11:6443 \
-            bastion@k8s.aai-labs.com
-          sleep 3
-          sed -i 's|server: https://.*|server: https://127.0.0.1:6443|' $RUNNER_TEMP/kubeconfig
+      - name: Create k3d cluster
+        uses: AbsaOSS/k3d-action@v2
+        with:
+          cluster-name: agentfarm-ci
+          # Pin k3d explicitly: the action's default (v5.4.6) is old enough that
+          # its install now 404s. Keep in sync with docker/k3d/Dockerfile.
+          k3d-version: v5.8.3
+          args: --wait
+      - name: Seed namespace
+        # The integration test assumes the target namespace already exists but
+        # does not create it (see tests/integration/test_kubernetes_client.py).
+        run: kubectl create namespace agent-farm
       - name: Run k8s integration tests
         env:
-          K8S_KUBECONFIG_PATH: ${{ runner.temp }}/kubeconfig
+          # k3d-action writes an admin kubeconfig to the default location, which
+          # the client falls back to when K8S_KUBECONFIG_PATH is unset.
           K8S_NAMESPACE: agent-farm
         run: make test-api-k8s
 
@@ -89,7 +86,7 @@ jobs:
           context: .
           file: api/Dockerfile
           push: false
-          tags: agentfarm-api:ci
+          tags: agentbarn-api:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -120,6 +117,6 @@ jobs:
           context: .
           file: api/Dockerfile
           push: true
-          tags: ${{ vars.REGISTRY_URL }}/agentfarm-api:${{ steps.tag.outputs.value }}
+          tags: ${{ vars.REGISTRY_URL }}/agentbarn-api:${{ steps.tag.outputs.value }}
           cache-from: type=gha
 

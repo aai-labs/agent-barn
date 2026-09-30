@@ -4,6 +4,18 @@ import { DataSupport } from "../pages/data-support/data-support.po";
 
 const USERS_URL = "/dashboard/platform/users";
 
+function user(index: number) {
+  return {
+    id: `11111111-1111-4111-8111-${String(index).padStart(12, "0")}`,
+    created_at: "2024-01-01T00:00:00Z",
+    updated_at: "2024-01-01T00:00:00Z",
+    full_name: `User ${index}`,
+    email: `user-${index}@example.com`,
+    is_platform_admin: false,
+    email_verified_at: "2024-01-01T00:00:00Z",
+  };
+}
+
 test.describe("Users Page — bounded platform authority", () => {
   let data: DataSupport;
 
@@ -26,6 +38,18 @@ test.describe("Users Page — bounded platform authority", () => {
     await expect(page.getByRole("button", { name: /create user/i })).toBeVisible();
     await expect(page.getByRole("button", { name: /delete user/i })).not.toBeVisible();
     await expect(page.getByRole("button", { name: /reset password/i })).not.toBeVisible();
+  });
+
+  test("loads more users when the grid reaches its loading sentinel", async ({ page }) => {
+    const firstPage = Array.from({ length: 20 }, (_, index) => user(index));
+    await data.users.interceptGetUsersRequest({ pages: [firstPage, [user(20)]] });
+
+    await page.goto(USERS_URL);
+    await expect(page.getByText("User 0")).toBeVisible();
+
+    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+
+    await expect(page.getByText("User 20")).toBeVisible();
   });
 
   test("creates a pending user with an initial organization and invitation", async ({

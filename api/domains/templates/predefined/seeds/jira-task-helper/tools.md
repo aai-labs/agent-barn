@@ -14,7 +14,7 @@ This file records integration-specific notes for the Jira Task Helper.
 Use the Jira skill before calling any external integration CLI. Do not guess CLI
 syntax from memory if a skill file is available.
 
-- Jira: `./skills/aai-cli/jira_skill.md` for the `aai-cli jira` commands (always
+- Jira: `./skills/aai-jira/SKILL.md` for the `aai-cli jira` commands (always
   pass `--profile jira-work`). It covers searching/reading issues and creating
   and updating issues.
 

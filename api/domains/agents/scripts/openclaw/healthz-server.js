@@ -1,21 +1,13 @@
 const http = require('http');
-const https = require('https');
 const { execFile } = require('child_process');
 
 
-const PROXY_PORT = 8090;
+const PROXY_PORT = Number(process.env.LLM_PROXY_PORT || 8090);
 const PORT = parseInt(process.env.HEALTHZ_PORT || '8081', 10);
 const CACHE_TTL_MS = 10_000;
-const TOKEN_POLL_MS = 5 * 60 * 1000; // 5 minutes
-
-const AGENT_PLATFORM = process.env.AGENT_PLATFORM || 'slack';
-const SKIP_VALIDATION = ['1', 'true', 'yes'].includes(
-  (process.env.SKIP_SLACK_TOKEN_VALIDATION || '').toLowerCase()
-);
 const LITELLM_PROXY_TARGET = process.env.LITELLM_PROXY_TARGET || '';
 
 let cache = null;
-let tokenCache = null;
 let proxyServer = null;
 let refreshing = false;
 
@@ -25,76 +17,75 @@ const TERMINAL_LLM_ERRORS = {
   403: 'LLM API access denied. Check your account permissions.',
 };
 
-function slackPost(path, token) {
-  return new Promise((resolve) => {
-    const req = https.request(
-      { hostname: 'slack.com', path: `/api/${path}`, method: 'POST',
-        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json', 'Content-Length': 0 } },
-      (res) => {
-        let raw = '';
-        res.on('data', (c) => raw += c);
-        res.on('end', () => {
-          try { resolve(JSON.parse(raw)); } catch { resolve({ ok: false, error: 'parse_error' }); }
-        });
-      }
-    );
-    req.on('error', (e) => resolve({ ok: false, error: e.message }));
-    req.setTimeout(15_000, () => { req.destroy(); resolve({ ok: false, error: 'timeout' }); });
-    req.end();
-  });
+const BUDGET_EXHAUSTED =
+  'This organization has reached its model spend limit. ' +
+  'Contact your administrator to raise it or wait for the limit to reset.';
+
+// An exhausted limit has been seen as a 400 and is documented as a 429 depending on
+// which budget was hit and which proxy version answered. Both are buffered and matched
+// on the error body, so a version difference cannot leak the upstream text. These
+// statuses also carry malformed requests, unknown models and rate limits, which must
+// keep their own errors.
+const BUDGET_STATUSES = [400, 429];
+function budgetMessage(body) {
+  try {
+    const { error } = JSON.parse(body.toString('utf8'));
+    return error && error.type === 'budget_exceeded' ? BUDGET_EXHAUSTED : null;
+  } catch {
+    return null;
+  }
 }
 
-function telegramGetMe(token) {
-  return new Promise((resolve) => {
-    const req = https.request(
-      { hostname: 'api.telegram.org', path: `/bot${token}/getMe`, method: 'GET' },
-      (res) => {
-        let raw = '';
-        res.on('data', (c) => raw += c);
-        res.on('end', () => {
-          try { resolve(JSON.parse(raw)); } catch { resolve({ ok: false, description: 'parse_error' }); }
-        });
-      }
-    );
-    req.on('error', (e) => resolve({ ok: false, description: e.message }));
-    req.setTimeout(15_000, () => { req.destroy(); resolve({ ok: false, description: 'timeout' }); });
-    req.end();
-  });
+// Native channel Connections have no supervisor session, so their health
+// transitions reach the Connection Journal from the gateway's own snapshot.
+// Content-free: provider error text (lastError) never leaves the pod.
+const NATIVE_CHANNELS = (process.env.AGENTBARN_NATIVE_CHANNELS || '').split(',').filter(Boolean);
+const lastChannelStage = {};
+
+function productPlatform(channelId) {
+  return channelId === 'msteams' ? 'teams' : channelId;
 }
 
-async function validateTokens() {
-  if (SKIP_VALIDATION) {
-    tokenCache = { ok: true };
-    return;
+// The Slack and Discord providers set connected: true once their socket is up,
+// and Telegram after its first successful poll; until then a running channel is
+// still connecting.
+function channelStage(snapshot) {
+  if (!snapshot) return null;
+  if (snapshot.running) return snapshot.connected === true ? 'connection_connected' : 'connection_connecting';
+  return snapshot.restartPending ? 'connection_degraded' : 'connection_error';
+}
+
+function reportChannelHealth(channels) {
+  const { AGENT_ID, INGEST_URL, INGEST_API_KEY } = process.env;
+  if (!AGENT_ID || !INGEST_URL || !INGEST_API_KEY) return;
+  const events = [];
+  for (const platform of NATIVE_CHANNELS) {
+    const stage = channelStage(channels[platform]);
+    if (!stage || lastChannelStage[platform] === stage) continue;
+    lastChannelStage[platform] = stage;
+    events.push({
+      stage,
+      platform: productPlatform(platform),
+      occurred_at: new Date().toISOString(),
+      ...(stage === 'connection_error' ? { error_code: 'channel_stopped' } : {}),
+    });
   }
-
-  if (AGENT_PLATFORM === 'telegram') {
-    const telegramToken = process.env.TELEGRAM_BOT_TOKEN || '';
-    const result = await telegramGetMe(telegramToken);
-    if (!result.ok) {
-      tokenCache = { ok: false, reason: `Invalid Telegram bot token: ${result.description || 'unknown_error'}` };
-      return;
-    }
-    tokenCache = { ok: true };
-    return;
-  }
-
-  const botToken = process.env.SLACK_BOT_TOKEN || '';
-  const appToken = process.env.SLACK_APP_TOKEN || '';
-
-  const botResult = await slackPost('auth.test', botToken);
-  if (!botResult.ok) {
-    tokenCache = { ok: false, reason: `Invalid bot token: ${botResult.error || 'unknown_error'}` };
-    return;
-  }
-
-  const appResult = await slackPost('apps.connections.open', appToken);
-  if (!appResult.ok) {
-    tokenCache = { ok: false, reason: `Invalid app token: ${appResult.error || 'unknown_error'}` };
-    return;
-  }
-
-  tokenCache = { ok: true };
+  if (events.length === 0) return;
+  const body = JSON.stringify({ events });
+  const req = http.request(`${INGEST_URL}/agents/${AGENT_ID}/communication-events`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${INGEST_API_KEY}`,
+      'Content-Length': Buffer.byteLength(body),
+    },
+    timeout: 10_000,
+  });
+  req.on('response', (res) => res.resume());
+  // ponytail: best-effort, a dropped transition shows on the next change; retry if health gaps show up.
+  req.on('error', (err) => console.error(`[healthz] channel health report failed: ${err.message}`));
+  req.on('timeout', () => req.destroy(new Error('timeout')));
+  req.end(body);
 }
 
 function refresh() {
@@ -107,29 +98,13 @@ function refresh() {
       return;
     }
     try {
-      const d = JSON.parse(stdout);
-      const order = d.channelOrder || [];
-      if (!order.length) { cache = { ok: false, everConnected: false, reason: 'no channels configured' }; return; }
-      for (const ch of order) {
-        const channel = d.channels[ch];
-        if (channel?.healthState !== 'healthy') {
-          if (AGENT_PLATFORM === 'telegram' && !channel?.lastError) {
-            continue;
-          }
-          const everConnected = typeof channel?.lastConnectedAt === 'number';
-          cache = { ok: false, everConnected, reason: channel?.lastError || 'channel ' + ch + ' not connected' };
-          return;
-        }
-      }
-      cache = { ok: true };
+      reportChannelHealth(JSON.parse(stdout).channels || {});
+      cache = { ok: true, everConnected: true };
     } catch {
       cache = { ok: false, everConnected: false, reason: 'failed to parse health output' };
     }
   });
 }
-
-validateTokens();
-setInterval(validateTokens, TOKEN_POLL_MS);
 
 refresh();
 setInterval(refresh, CACHE_TTL_MS);
@@ -137,9 +112,6 @@ setInterval(refresh, CACHE_TTL_MS);
 function metricsText() {
   const ok = cache?.ok ? 1 : 0;
   const ever = (cache?.ok || cache?.everConnected) ? 1 : 0;
-  // Token gauge stays 1 while unknown/starting; 0 only on a definite
-  // failure, so a slow first validation never trips an alert.
-  const tokensOk = (tokenCache && !tokenCache.ok) ? 0 : 1;
   const lines = [
     '# HELP agent_healthz_ok 1 if the agent runtime is reachable, 0 otherwise',
     '# TYPE agent_healthz_ok gauge',
@@ -147,17 +119,12 @@ function metricsText() {
     '# HELP agent_healthz_ever_connected 1 once the runtime has connected at least once',
     '# TYPE agent_healthz_ever_connected gauge',
     `agent_healthz_ever_connected ${ever}`,
-    '# HELP agent_slack_tokens_ok 0 if Slack token validation definitely failed, 1 otherwise',
-    '# TYPE agent_slack_tokens_ok gauge',
-    `agent_slack_tokens_ok ${tokensOk}`,
   ];
   return lines.join('\n') + '\n';
 }
 
 function healthzResult() {
-  // Token failure surfaces immediately as an error
-  if (tokenCache && !tokenCache.ok) return [500, { status: 'error', reason: tokenCache.reason }];
-  if (!cache || !tokenCache) return [503, { status: 'starting' }];
+  if (!cache) return [503, { status: 'starting' }];
   if (cache.ok) return [200, { status: 'ok' }];
   if (cache.everConnected) return [500, { status: 'error', reason: cache.reason }];
   return [503, { status: 'starting', reason: cache.reason }];
@@ -214,12 +181,21 @@ if (LITELLM_PROXY_TARGET) {
     };
 
     const upstreamReq = targetModule.request(opts, (upstreamRes) => {
-      const cleanMsg = TERMINAL_LLM_ERRORS[upstreamRes.statusCode];
-      if (cleanMsg) {
-        // Consume upstream body then send clean response
+      const mapped = TERMINAL_LLM_ERRORS[upstreamRes.statusCode];
+      // Only these are buffered alongside the mapped statuses. Everything else must
+      // keep streaming, which collecting it here would break.
+      if (mapped || BUDGET_STATUSES.includes(upstreamRes.statusCode)) {
         const chunks = [];
         upstreamRes.on('data', (c) => chunks.push(c));
         upstreamRes.on('end', () => {
+          const raw = Buffer.concat(chunks);
+          const cleanMsg = mapped || budgetMessage(raw);
+          if (!cleanMsg) {
+            // A 400 we have no better words for: pass it through untouched.
+            clientRes.writeHead(upstreamRes.statusCode, upstreamRes.headers);
+            clientRes.end(raw);
+            return;
+          }
           const body = JSON.stringify({
             error: { message: cleanMsg, type: null, param: null, code: String(upstreamRes.statusCode) }
           });

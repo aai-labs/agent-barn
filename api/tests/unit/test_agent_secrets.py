@@ -10,10 +10,11 @@ from api.domains.agents.models import (
     BitbucketContent,
     FirecrawlContent,
     GithubContent,
-    GmailContent,
+    GoogleWorkspaceContent,
     JiraContent,
     PipedriveContent,
     SecretProvider,
+    SharePointContent,
     SlackContent,
     ZohoMailContent,
     decrypt_content,
@@ -26,8 +27,6 @@ _KEY = Fernet.generate_key().decode()
 
 _BASE_CREATE = {
     "name": "Agent",
-    "slack_bot_token": "xoxb-x",
-    "slack_app_token": "xapp-x",
     "template_key": "test-template",
 }
 
@@ -80,6 +79,54 @@ def test_zoho_mail_content_validates_oauth_fields():
     assert content.email == "u@z.com"
     assert content.account_id == "56218000000008002"
     assert content.client_id == "1000.CLIENTID"
+
+
+_SHAREPOINT = {
+    "connection_id": "0199c2a4-7b1e-7c3d-9f00-1234567890ab",
+    "tenant_id": "b6f28f4f-97fe-41e6-903a-ff6cc7633ae3",
+    "client_id": "5ff671c1-57c7-44ef-a7b5-8fe4f81227f9",
+    "email": "alice@contoso.com",
+    "scopes": ["Sites.ReadWrite.All"],
+    "refresh_token": "rt-from-sign-in",
+    "sign_in_id": "0199c2a4-7b1e-7c3d-9f00-000000000001",
+}
+
+
+def test_sharepoint_content_round_trips():
+    content = validate_content(SecretProvider.SHAREPOINT, _SHAREPOINT)
+    assert isinstance(content, SharePointContent)
+    assert content.connection_id == "0199c2a4-7b1e-7c3d-9f00-1234567890ab"
+    assert content.client_id == "5ff671c1-57c7-44ef-a7b5-8fe4f81227f9"
+    assert content.refresh_token == "rt-from-sign-in"
+    assert content.read_only is False
+
+
+def test_sharepoint_content_survives_encryption():
+    # encrypt_content JSON-serialises model_dump(), so every field must be JSON-native.
+    original = validate_content(SecretProvider.SHAREPOINT, _SHAREPOINT)
+    blob = encrypt_content(original, _KEY)
+    assert decrypt_content(SecretProvider.SHAREPOINT, blob, _KEY) == original
+
+
+def test_sharepoint_content_never_holds_the_teams_app_secret():
+    # The sign-in is a public client (PKCE); the Teams app's secret has no business here,
+    # where it would reach the agent's pod and let it act as its bot.
+    for field in ("client_secret", "app_password", "access_token"):
+        with pytest.raises(ValidationError):
+            validate_content(SecretProvider.SHAREPOINT, {**_SHAREPOINT, field: "x"})
+
+
+@pytest.mark.parametrize("field", ["connection_id", "sign_in_id"])
+def test_sharepoint_content_requires_valid_uuids(field):
+    with pytest.raises(ValidationError):
+        validate_content(SecretProvider.SHAREPOINT, {**_SHAREPOINT, field: "not-a-uuid"})
+
+
+@pytest.mark.parametrize("field", ["connection_id", "tenant_id", "client_id", "email", "refresh_token", "sign_in_id"])
+def test_sharepoint_content_requires_its_fields(field):
+    payload = {k: v for k, v in _SHAREPOINT.items() if k != field}
+    with pytest.raises(ValidationError):
+        validate_content(SecretProvider.SHAREPOINT, payload)
 
 
 def test_display_names_cover_every_provider():
@@ -183,24 +230,6 @@ def test_decrypt_content_upgrades_legacy_bitbucket_blob():
     assert content.repos == ["legacy-repo"]
 
 
-# --- Gmail OAuth: refresh-token-only secrets (AF-153) ---
-
-
-def test_gmail_content_accepts_refresh_token_only():
-    """OAuth-created Gmail secrets carry only the refresh token; client id/secret come
-    from config at agent-start time and default to empty here."""
-    content = validate_content(SecretProvider.GMAIL, {"refresh_token": "rt-123"})
-    assert isinstance(content, GmailContent)
-    assert content.refresh_token == "rt-123"
-    assert content.client_id == ""
-    assert content.client_secret == ""
-
-
-def test_gmail_content_requires_refresh_token():
-    with pytest.raises(ValidationError):
-        validate_content(SecretProvider.GMAIL, {"client_id": "cid"})
-
-
 # --- Firecrawl (AF-152) ---
 
 
@@ -295,17 +324,13 @@ def test_pipedrive_encrypt_decrypt_round_trip_with_domain():
     assert decrypted.domain == "aai-labs"
 
 
-def test_decrypt_content_reads_legacy_gmail_blob():
-    """Legacy Gmail secrets from the old three-field form still decrypt with all fields."""
-    legacy_blob = encrypt_token(
-        json.dumps({"client_id": "cid", "client_secret": "cs", "refresh_token": "rt"}),
-        _KEY,
-    )
-    content = decrypt_content(SecretProvider.GMAIL, legacy_blob, _KEY)
-    assert isinstance(content, GmailContent)
-    assert content.client_id == "cid"
-    assert content.client_secret == "cs"
-    assert content.refresh_token == "rt"
+def test_retired_google_providers_are_gone():
+    """The per-service Google providers were removed outright, rows and all (their
+    secrets are deleted by migration). Nothing may resurrect them as a provider value:
+    one google_workspace credential covers Gmail, Calendar, Drive and Sheets."""
+    for retired in ("gmail", "google_calendar", "google_sheets"):
+        with pytest.raises(ValueError):
+            SecretProvider(retired)
 
 
 # --- Slack (AF-209) ---
@@ -334,3 +359,115 @@ def test_slack_encrypt_decrypt_round_trip():
     blob = encrypt_content(original, _KEY)
     assert "xoxb-test-token" not in blob
     assert decrypt_content(SecretProvider.SLACK, blob, _KEY) == original
+
+
+# --- google_workspace ---
+
+_GOOGLE_WORKSPACE_BASE = {
+    "email": "user@example.com",
+    "services": ["gmail", "calendar"],
+    "scopes": [
+        "https://www.googleapis.com/auth/gmail.modify",
+        "https://www.googleapis.com/auth/gmail.settings.basic",
+        "https://www.googleapis.com/auth/gmail.settings.sharing",
+        "https://www.googleapis.com/auth/calendar",
+        "https://www.googleapis.com/auth/drive",
+        "https://www.googleapis.com/auth/spreadsheets",
+    ],
+    "refresh_token": "rt-123",
+}
+
+
+def test_google_workspace_parses_and_defaults():
+    content = validate_content(SecretProvider.GOOGLE_WORKSPACE, _GOOGLE_WORKSPACE_BASE)
+    assert isinstance(content, GoogleWorkspaceContent)
+    assert content.services == ["gmail", "calendar"]
+    # Full access and a server-backfilled client are the defaults.
+    assert content.read_only is False
+    assert content.client_id == ""
+    assert content.client_secret == ""
+
+
+def test_google_workspace_rejects_unknown_service():
+    with pytest.raises(ValidationError):
+        validate_content(
+            SecretProvider.GOOGLE_WORKSPACE,
+            {**_GOOGLE_WORKSPACE_BASE, "services": ["gmail", "youtube"]},
+        )
+
+
+def test_google_workspace_rejects_empty_services():
+    # A credential covering nothing would consent to nothing and confuse the agent.
+    with pytest.raises(ValidationError):
+        validate_content(SecretProvider.GOOGLE_WORKSPACE, {**_GOOGLE_WORKSPACE_BASE, "services": []})
+
+
+def test_google_workspace_rejects_scopes_missing_selected_service():
+    with pytest.raises(ValidationError, match="scopes do not cover"):
+        validate_content(
+            SecretProvider.GOOGLE_WORKSPACE,
+            {
+                **_GOOGLE_WORKSPACE_BASE,
+                "services": ["gmail", "calendar"],
+                "scopes": ["https://www.googleapis.com/auth/gmail.modify"],
+            },
+        )
+
+
+def test_google_workspace_rejects_blank_email():
+    with pytest.raises(ValidationError):
+        validate_content(SecretProvider.GOOGLE_WORKSPACE, {**_GOOGLE_WORKSPACE_BASE, "email": ""})
+
+
+def test_google_workspace_rejects_scopes_for_wrong_access_level():
+    with pytest.raises(ValidationError, match="gmail.readonly"):
+        validate_content(
+            SecretProvider.GOOGLE_WORKSPACE,
+            {
+                **_GOOGLE_WORKSPACE_BASE,
+                "services": ["gmail"],
+                "read_only": True,
+                "scopes": [
+                    "https://www.googleapis.com/auth/gmail.modify",
+                    "https://www.googleapis.com/auth/gmail.settings.basic",
+                    "https://www.googleapis.com/auth/gmail.settings.sharing",
+                ],
+            },
+        )
+    with pytest.raises(ValidationError, match="gmail.modify"):
+        validate_content(
+            SecretProvider.GOOGLE_WORKSPACE,
+            {
+                **_GOOGLE_WORKSPACE_BASE,
+                "services": ["gmail"],
+                "read_only": False,
+                "scopes": ["https://www.googleapis.com/auth/gmail.readonly"],
+            },
+        )
+
+
+def test_google_workspace_deduplicates_services_preserving_order():
+    content = validate_content(
+        SecretProvider.GOOGLE_WORKSPACE,
+        {**_GOOGLE_WORKSPACE_BASE, "services": ["sheets", "gmail", "sheets"]},
+    )
+    assert isinstance(content, GoogleWorkspaceContent)
+    assert content.services == ["sheets", "gmail"]
+
+
+def test_google_workspace_requires_refresh_token():
+    payload = {k: v for k, v in _GOOGLE_WORKSPACE_BASE.items() if k != "refresh_token"}
+    with pytest.raises(ValidationError):
+        validate_content(SecretProvider.GOOGLE_WORKSPACE, payload)
+
+
+def test_google_workspace_rejects_unknown_field():
+    with pytest.raises(ValidationError):
+        validate_content(SecretProvider.GOOGLE_WORKSPACE, {**_GOOGLE_WORKSPACE_BASE, "client_json": "{}"})
+
+
+def test_google_workspace_encrypt_decrypt_round_trip():
+    original = validate_content(SecretProvider.GOOGLE_WORKSPACE, _GOOGLE_WORKSPACE_BASE)
+    blob = encrypt_content(original, _KEY)
+    assert "rt-123" not in blob
+    assert decrypt_content(SecretProvider.GOOGLE_WORKSPACE, blob, _KEY) == original

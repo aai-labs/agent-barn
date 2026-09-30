@@ -1,8 +1,11 @@
+from datetime import UTC, datetime
+
 from fastapi import status
 from hamcrest import assert_that, equal_to, has_length
 from starlette.testclient import TestClient
 
 from api.domains.agents.models import AgentStatus
+from api.infrastructure.kubernetes.client import KubernetesClient
 from api.tests.core.givenpy import given, then, when
 from api.tests.core.modules import (
     create_test_client,
@@ -91,3 +94,43 @@ def test_get_agent_logs_returns_empty_snapshot_for_stopped_agent():
                 body = response.json()
                 assert_that(body["source"], equal_to("snapshot"))
                 assert_that(body["lines"], has_length(0))
+
+
+def test_runtime_diagnostics_returns_previous_container_logs():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        context.injector.get(KubernetesClient).get_runtime_diagnostics.return_value = {
+            "observed_at": datetime.now(UTC),
+            "available": True,
+            "restart_count": 21,
+            "waiting_reason": "CrashLoopBackOff",
+            "exit_code": 1,
+            "previous_logs": ["Legacy workspace setup state requires migration"],
+            "previous_logs_available": True,
+        }
+        response = context.client.get(f"{_BASE}/{context.agent.id}/diagnostics", headers=_auth(context))
+        assert_that(response.status_code, equal_to(200))
+        assert_that(response.json()["restart_count"], equal_to(21))
+        assert_that(response.json()["previous_logs"], equal_to(["Legacy workspace setup state requires migration"]))
+
+
+def test_runtime_diagnostics_cluster_errors_are_safe():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        context.injector.get(KubernetesClient).get_runtime_diagnostics.side_effect = RuntimeError(
+            "private-cluster-detail"
+        )
+        response = context.client.get(f"{_BASE}/{context.agent.id}/diagnostics", headers=_auth(context))
+        assert_that(response.status_code, equal_to(503))
+        assert_that(response.json()["detail"], equal_to("Runtime diagnostics are temporarily unavailable"))
+
+
+def test_stopped_runtime_diagnostics_reports_no_current_evidence():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        response = context.client.get(f"{_BASE}/{context.agent.id}/diagnostics", headers=_auth(context))
+        assert_that(response.status_code, equal_to(200))
+        assert_that(response.json()["available"], equal_to(False))
+
+
+def test_runtime_diagnostics_requires_authentication():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        response = context.client.get(f"{_BASE}/{context.agent.id}/diagnostics")
+        assert_that(response.status_code, equal_to(401))

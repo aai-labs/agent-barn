@@ -16,14 +16,15 @@ from api.domains.agents.models import (
     AgentHealthRead,
     AgentLogHistoryRead,
     AgentLogsRead,
+    AgentNameSuggestionRead,
     AgentRead,
+    AgentRuntimeDiagnosticsRead,
     AgentTemplateOverrideDraftRead,
     AgentTemplateOverrideDraftUpdate,
     AgentTemplateOverridePublish,
     AgentTemplateOverrideVersionRead,
     AgentTemplateSelection,
     AgentUpdate,
-    PairRequest,
     SecretProvider,
     get_agent_filter,
 )
@@ -58,6 +59,14 @@ def list_agents(
         pagination=Pagination(page=page, size=page_size),
         context=context,
     )
+
+
+@agents_router.get("/name-suggestion", response_model=AgentNameSuggestionRead)
+def suggest_agent_name(
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[AgentService, Injected(AgentService)],
+) -> AgentNameSuggestionRead:
+    return service.suggest_agent_name(context)
 
 
 @agents_router.get("/models")
@@ -256,6 +265,15 @@ def stop_agent(
     return service.stop_agent(agent_id, context)
 
 
+@agents_router.get("/{agent_id}/diagnostics", response_model=AgentRuntimeDiagnosticsRead)
+def get_runtime_diagnostics(
+    agent_id: UUID,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[AgentService, Injected(AgentService)],
+):
+    return service.get_runtime_diagnostics(agent_id, context)
+
+
 @agents_router.get("/{agent_id}/healthz", response_model=AgentHealthRead)
 def get_agent_healthz(
     agent_id: UUID,
@@ -263,37 +281,6 @@ def get_agent_healthz(
     service: Annotated[AgentService, Injected(AgentService)],
 ):
     return service.get_agent_health(agent_id, context)
-
-
-@agents_router.post("/{agent_id}/pair")
-def pair_agent(
-    agent_id: UUID,
-    data: PairRequest,
-    context: Annotated[CurrentUserContext, Depends(get_current_user())],
-    service: Annotated[AgentService, Injected(AgentService)],
-):
-    output = service.pair_agent(agent_id, data, context)
-    return {"message": output}
-
-
-@agents_router.get("/{agent_id}/slack/channels")
-def list_slack_channels(
-    agent_id: UUID,
-    context: Annotated[CurrentUserContext, Depends(get_current_user())],
-    service: Annotated[AgentService, Injected(AgentService)],
-    search: Annotated[str | None, Query()] = None,
-):
-    return service.list_slack_channels(agent_id, context, search=search)
-
-
-@agents_router.get("/{agent_id}/slack/users")
-def list_slack_users(
-    agent_id: UUID,
-    context: Annotated[CurrentUserContext, Depends(get_current_user())],
-    service: Annotated[AgentService, Injected(AgentService)],
-    search: Annotated[str | None, Query()] = None,
-):
-    return service.list_slack_users(agent_id, context, search=search)
 
 
 @agents_router.post("/{agent_id}/integrations/{provider}/validate")

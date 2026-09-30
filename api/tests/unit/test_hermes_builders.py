@@ -1,848 +1,403 @@
-from types import SimpleNamespace
 from uuid import UUID
 
-import yaml
-from hamcrest import assert_that, contains_string, equal_to, has_key, is_not
-
 from api.domains.agents.builders import (
-    DISCORD_DENY_DMS_PLUGIN_INIT,
-    DISCORD_GUILD_ALLOWLIST_PLUGIN_INIT,
-    HERMES_START_SH,
-    SLACK_CHANNEL_ALLOWLIST_PLUGIN_INIT,
-    SLACK_DENY_DMS_PLUGIN_INIT,
-    TELEGRAM_CHANNEL_ALLOWLIST_PLUGIN_INIT,
-    TELEGRAM_DENY_DMS_PLUGIN_INIT,
-    build_hermes_config,
-    build_hermes_config_discord,
     build_hermes_config_map,
-    build_hermes_config_telegram,
     build_hermes_deployment,
-    build_secret_hermes_discord,
-    build_secret_hermes_slack,
-    build_secret_hermes_telegram,
+    build_hermes_gateway_config,
+    build_secret_hermes_runtime,
+    native_discord_env,
+    native_slack_env,
+    native_telegram_env,
+    runtime_teams_env,
 )
+from api.domains.agents.builders.hermes import HERMES_BOOTLOADER_FOOTER, HERMES_START_SH
+from api.domains.communications.models import ConversationLocation
 
 _AGENT_ID = UUID("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
 _ORG_ID = UUID("11111111-2222-3333-4444-555555555555")
 _NS = "agent-farm"
 
 
-def test_build_hermes_config_discord_uses_safe_mention_and_thread_defaults():
-    cfg = build_hermes_config_discord("litellm/qwen3", "http://litellm:4000")
+def test_gateway_config_is_headless_and_keeps_telemetry() -> None:
+    config = build_hermes_gateway_config("litellm/gpt-5", "http://litellm:4000")
 
-    assert_that(cfg["discord"]["require_mention"], equal_to(True))
-    assert_that(cfg["discord"]["thread_require_mention"], equal_to(True))
-    assert_that(cfg["discord"]["allow_mentions"], equal_to({"everyone": False, "roles": False}))
-    assert_that("discord-deny-dms" in cfg["plugins"]["enabled"], equal_to(True))
-    assert_that("discord-guild-allowlist" in cfg["plugins"]["enabled"], equal_to(True))
-
-
-def test_build_hermes_config_discord_open_group_policy_drops_guild_gate():
-    cfg = build_hermes_config_discord("litellm/qwen3", "http://litellm:4000", group_policy="open")
-
-    assert_that("discord-deny-dms" in cfg["plugins"]["enabled"], equal_to(True))
-    assert_that("discord-guild-allowlist" in cfg["plugins"]["enabled"], equal_to(False))
+    assert config["display"]["platforms"] == {}
+    assert config["plugins"]["enabled"] == ["telemetry-push", "agentbarn-messaging"]
+    assert "slack" not in config
+    assert "telegram" not in config
+    assert "discord" not in config
 
 
-def test_discord_policy_plugin_sources_are_valid_python():
-    compile(DISCORD_DENY_DMS_PLUGIN_INIT, "discord-deny-dms/__init__.py", "exec")
-    compile(DISCORD_GUILD_ALLOWLIST_PLUGIN_INIT, "discord-guild-allowlist/__init__.py", "exec")
+def test_native_slack_config_enables_the_observer_and_ignores_unknown_dms() -> None:
+    config = build_hermes_gateway_config("litellm/gpt-5", "http://litellm:4000", native_slack=True)
+
+    assert config["plugins"]["enabled"] == ["telemetry-push", "agentbarn-messaging", "agentbarn-observer"]
+    assert config["slack"]["unauthorized_dm_behavior"] == "ignore"
+    assert config["platforms"]["slack"]["extra"]["markdown_blocks"] is True
+    assert config["display"]["platforms"]["slack"]["tool_progress"] == "off"
+    assert config["display"]["platforms"]["slack"]["interim_assistant_messages"] is False
+
+    verbose = build_hermes_gateway_config("litellm/gpt-5", "http://litellm:4000", native_slack=True, verbose_mode=True)
+    assert verbose["display"]["platforms"]["slack"]["tool_progress"] == "all"
+    assert verbose["display"]["platforms"]["slack"]["tool_progress_grouping"] == "accumulate"
+    assert verbose["display"]["platforms"]["slack"]["interim_assistant_messages"] is True
 
 
-def test_discord_deny_dms_plugin_skips_direct_messages():
-    namespace: dict = {}
-    exec(DISCORD_DENY_DMS_PLUGIN_INIT, namespace)  # noqa: S102 - execute checked-in plugin source
-    event = SimpleNamespace(source=SimpleNamespace(platform="discord", chat_type="dm"))
+def test_native_slack_env_maps_connection_policy() -> None:
+    credentials = {"bot_token": "xoxb-1", "app_token": "xapp-1"}
 
-    assert_that(namespace["deny_discord_dms"](event), equal_to({"action": "skip", "reason": "discord-dm-denied"}))
-
-
-def test_discord_guild_allowlist_plugin_fails_closed(monkeypatch):
-    monkeypatch.setenv("DISCORD_GUILD_IDS", "guild-1")
-    namespace: dict = {}
-    exec(DISCORD_GUILD_ALLOWLIST_PLUGIN_INIT, namespace)  # noqa: S102 - execute checked-in plugin source
-    allowed = SimpleNamespace(source=SimpleNamespace(platform="discord", chat_type="channel", guild_id="guild-1"))
-    denied = SimpleNamespace(source=SimpleNamespace(platform="discord", chat_type="channel", guild_id="guild-2"))
-
-    assert_that(namespace["filter_guild"](allowed), equal_to(None))
-    assert_that(
-        namespace["filter_guild"](denied),
-        equal_to({"action": "skip", "reason": "discord-guild-not-allowlisted"}),
+    locked = native_slack_env(
+        {"group_policy": "allowlist", "channel_ids": ["C1", "C2"], "dm_policy": "off"},
+        credentials,
     )
+    assert locked["SLACK_BOT_TOKEN"] == "xoxb-1"
+    assert locked["SLACK_APP_TOKEN"] == "xapp-1"
+    assert locked["SLACK_ALLOWED_CHANNELS"] == "C1,C2"
+    assert locked["SLACK_DISABLE_DMS"] == "true"
+    assert locked["SLACK_ALLOW_ALL_USERS"] == "true"
+    assert locked["SLACK_THREAD_REQUIRE_MENTION"] == "true"
 
-
-def test_build_hermes_config_map_discord_contains_policy_plugins():
-    cfg = build_hermes_config_discord("litellm/m", "http://x:4000")
-    cm = build_hermes_config_map(
-        _AGENT_ID,
-        _ORG_ID,
-        _NS,
-        soul_md="# Soul",
-        identity_md="# Identity",
-        user_md="# User",
-        tools_md="# Tools",
-        agents_md="# Agents",
-        boot_md="# Boot",
-        heartbeat_md="# Heartbeat",
-        hermes_config=cfg,
-        platform="discord",
+    open_env = native_slack_env(
+        {
+            "group_policy": "open",
+            "dm_policy": "allowlist",
+            "dm_user_ids": ["U1"],
+            "thread_mention_policy": "start_only",
+        },
+        credentials,
     )
+    assert "SLACK_ALLOWED_CHANNELS" not in open_env
+    assert open_env["SLACK_DISABLE_DMS"] == "false"
+    assert open_env["SLACK_ALLOWED_USERS"] == "U1"
+    assert "SLACK_ALLOW_ALL_USERS" not in open_env
+    assert open_env["SLACK_THREAD_REQUIRE_MENTION"] == "false"
+    assert open_env["AGENTBARN_SCHEDULED_DELIVERY"] == "0"
+    assert open_env["SLACK_HOME_CHANNEL"] == "__agentbarn_no_home_channel__"
 
-    assert_that(cm.data, has_key("discord-deny-dms-plugin.yaml"))
-    assert_that(cm.data, has_key("discord-guild-allowlist-plugin.yaml"))
-
-
-def test_build_secret_hermes_discord_scopes_access_and_home_channel():
-    secret = build_secret_hermes_discord(
-        _AGENT_ID,
-        _ORG_ID,
-        _NS,
-        "Infra Sentinel",
-        "discord-token",
-        "key",
-        "http://litellm",
-        "api-key",
-        ["channel-1"],
-        ["user-1"],
-        ["role-1"],
-        "channel-1",
-        ["guild-1"],
+    home = native_slack_env(
+        {},
+        credentials,
+        ConversationLocation(id="C9", type="CHANNEL", display_name="alerts", thread_id="1700000000.000100"),
     )
+    assert home["SLACK_HOME_CHANNEL"] == "C9"
+    assert home["SLACK_HOME_CHANNEL_NAME"] == "alerts"
+    assert home["SLACK_HOME_CHANNEL_THREAD_ID"] == "1700000000.000100"
 
-    assert_that(secret.string_data["DISCORD_BOT_TOKEN"], equal_to("discord-token"))
-    assert_that(secret.string_data["DISCORD_ALLOWED_CHANNELS"], equal_to("channel-1"))
-    assert_that(secret.string_data["DISCORD_ALLOWED_USERS"], equal_to("user-1"))
-    assert_that(secret.string_data["DISCORD_ALLOWED_ROLES"], equal_to("role-1"))
-    assert_that(secret.string_data["DISCORD_GUILD_IDS"], equal_to("guild-1"))
-    assert_that(secret.string_data["DISCORD_HOME_CHANNEL"], equal_to("channel-1"))
-    assert_that(secret.string_data["DISCORD_ALLOW_BOTS"], equal_to("none"))
 
-
-def test_build_hermes_config_sets_model_and_base_url():
-    cfg = build_hermes_config("litellm/qwen3", "http://litellm:4000")
-    assert_that(cfg["model"]["model"], equal_to("qwen3"))
-    assert_that(cfg["model"]["base_url"], equal_to("http://litellm:4000"))
-    assert_that(cfg["model"]["api_mode"], equal_to("chat_completions"))
-
-
-def test_build_hermes_config_unauthorized_dm_behavior_is_ignore():
-    cfg = build_hermes_config("litellm/qwen3", "http://litellm:4000")
-    assert_that(cfg["slack"]["unauthorized_dm_behavior"], equal_to("ignore"))
-
-
-def test_build_hermes_config_strict_mention_is_enabled():
-    cfg = build_hermes_config("litellm/qwen3", "http://litellm:4000")
-    assert_that(cfg["slack"]["strict_mention"], equal_to(True))
-
-
-def test_build_hermes_config_require_mention_is_enabled():
-    cfg = build_hermes_config("litellm/qwen3", "http://litellm:4000")
-    assert_that(cfg["slack"]["require_mention"], equal_to(True))
-
-
-def test_build_hermes_config_plugins_has_deny_dms():
-    cfg = build_hermes_config("litellm/qwen3", "http://litellm:4000")
-    assert_that("slack-deny-dms" in cfg["plugins"]["enabled"], equal_to(True))
-
-
-def test_build_hermes_config_model_stripped_of_prefix():
-    cfg = build_hermes_config("litellm/my-special-model", "http://x:4000")
-    assert_that(cfg["model"]["model"], equal_to("my-special-model"))
-
-
-def test_build_hermes_config_model_no_prefix_stays_intact():
-    cfg = build_hermes_config("qwen3", "http://x:4000")
-    assert_that(cfg["model"]["model"], equal_to("qwen3"))
-
-
-def test_build_hermes_config_map_contains_all_required_keys():
-    cfg = build_hermes_config("litellm/m", "http://x:4000")
-    cm = build_hermes_config_map(
-        _AGENT_ID,
-        _ORG_ID,
-        _NS,
-        soul_md="# Soul",
-        identity_md="# Identity",
-        user_md="# User",
-        tools_md="# Tools",
-        agents_md="# Agents",
-        boot_md="# Boot",
-        heartbeat_md="# Heartbeat",
-        hermes_config=cfg,
-    )
-    for key in (
-        "SOUL.md",
-        "IDENTITY.md",
-        "USER.md",
-        "TOOLS.md",
-        "AGENTS.md",
-        "BOOT.md",
-        "HEARTBEAT.md",
-        "hermes-config.yaml",
-        "slack-deny-dms-plugin.yaml",
-        "slack-deny-dms-init.py",
-        "healthz-server.py",
-        "start.sh",
-    ):
-        assert_that(cm.data, has_key(key))
-
-
-def test_build_hermes_config_map_soul_has_bootloader_footer():
-    cfg = build_hermes_config("litellm/m", "http://x:4000")
-    cm = build_hermes_config_map(
-        _AGENT_ID,
-        _ORG_ID,
-        _NS,
-        soul_md="# Soul",
-        identity_md="# Identity",
-        user_md="# User",
-        tools_md="# Tools",
-        agents_md="# Agents",
-        boot_md="# Boot",
-        heartbeat_md="# Heartbeat",
-        hermes_config=cfg,
-    )
-    assert_that(cm.data["SOUL.md"], contains_string("# Soul"))
-    assert_that(cm.data["SOUL.md"], contains_string("/workspace/IDENTITY.md"))
-
-
-def test_build_hermes_config_map_no_bootstrap_md():
-    cfg = build_hermes_config("litellm/m", "http://x:4000")
-    cm = build_hermes_config_map(
-        _AGENT_ID,
-        _ORG_ID,
-        _NS,
-        soul_md="# Soul",
-        identity_md="# Identity",
-        user_md="# User",
-        tools_md="# Tools",
-        agents_md="# Agents",
-        boot_md="# Boot",
-        heartbeat_md="# Heartbeat",
-        hermes_config=cfg,
-    )
-    assert_that(cm.data, is_not(has_key("BOOTSTRAP.md")))
-
-
-def test_build_hermes_config_map_hermes_config_is_valid_yaml():
-    cfg = build_hermes_config("litellm/qwen3", "http://litellm:4000")
-    cm = build_hermes_config_map(
-        _AGENT_ID,
-        _ORG_ID,
-        _NS,
-        soul_md="# Soul",
-        identity_md="# Identity",
-        user_md="# User",
-        tools_md="# Tools",
-        agents_md="# Agents",
-        boot_md="# Boot",
-        heartbeat_md="# Heartbeat",
-        hermes_config=cfg,
-    )
-    parsed = yaml.safe_load(cm.data["hermes-config.yaml"])
-    assert_that(parsed["model"]["base_url"], equal_to("http://litellm:4000"))
-
-
-def test_build_secret_hermes_slack_contains_required_keys():
-    secret = build_secret_hermes_slack(
-        _AGENT_ID,
-        _ORG_ID,
-        _NS,
-        agent_name="myagent",
-        slack_bot_token="xoxb-bot",
-        slack_app_token="xapp-app",
-        litellm_api_key="sk-key",
-        litellm_base_url="http://litellm:4000",
-        api_server_key="secret-key-123",
-        channel_ids=["C001", "C002"],
-        dm_user_ids=["U001", "U002"],
-        dm_policy="allowlist",
-    )
-    data = secret.string_data
-    assert_that(data["SLACK_BOT_TOKEN"], equal_to("xoxb-bot"))
-    assert_that(data["SLACK_APP_TOKEN"], equal_to("xapp-app"))
-    assert_that(data["API_SERVER_KEY"], equal_to("secret-key-123"))
-    assert_that(data["SLACK_HOME_CHANNEL"], equal_to("C001"))
-    assert_that(data["SLACK_CHANNEL_IDS"], equal_to("C001,C002"))
-    assert_that(data["SLACK_DM_ALLOWED_USERS"], equal_to("U001,U002"))
-    assert_that(data["SLACK_ALLOW_ALL_USERS"], equal_to("true"))
-    assert_that(data["API_SERVER_ENABLED"], equal_to("true"))
-    assert_that(data["OPENAI_API_KEY"], equal_to("sk-key"))
-    assert_that(data["OPENAI_BASE_URL"], equal_to("http://litellm:4000"))
-
-
-def test_build_secret_hermes_slack_empty_lists_give_empty_strings():
-    secret = build_secret_hermes_slack(
-        _AGENT_ID,
-        _ORG_ID,
-        _NS,
-        agent_name="myagent",
-        slack_bot_token="xoxb-bot",
-        slack_app_token="xapp-app",
-        litellm_api_key="sk-key",
-        litellm_base_url="http://x:4000",
-        api_server_key="k",
-        channel_ids=[],
-        dm_user_ids=[],
-    )
-    assert_that(secret.string_data["SLACK_HOME_CHANNEL"], equal_to("C0000000000"))
-    assert_that(secret.string_data["SLACK_CHANNEL_IDS"], equal_to(""))
-    assert_that(secret.string_data["SLACK_DM_ALLOWED_USERS"], equal_to(""))
-
-
-def _secret_with(dm_user_ids, dm_policy):
-    return build_secret_hermes_slack(
-        _AGENT_ID,
-        _ORG_ID,
-        _NS,
-        agent_name="myagent",
-        slack_bot_token="xoxb-bot",
-        slack_app_token="xapp-app",
-        litellm_api_key="sk-key",
-        litellm_base_url="http://x:4000",
-        api_server_key="k",
-        channel_ids=[],
-        dm_user_ids=dm_user_ids,
-        dm_policy=dm_policy,
-    )
-
-
-def test_open_dm_policy_drops_deny_dms_plugin():
-    cfg = build_hermes_config("litellm/qwen3", "http://x:4000", dm_policy="open")
-    enabled = cfg["plugins"]["enabled"]
-    # Open means no DM gate: the deny plugin is left out, channel allowlist stays.
-    assert_that("slack-deny-dms" in enabled, equal_to(False))
-    assert_that("slack-channel-allowlist" in enabled, equal_to(True))
-
-
-def test_off_and_allowlist_keep_deny_dms_plugin():
-    for policy in ("off", "allowlist"):
-        cfg = build_hermes_config("litellm/qwen3", "http://x:4000", dm_policy=policy)
-        assert_that("slack-deny-dms" in cfg["plugins"]["enabled"], equal_to(True))
-
-
-def test_open_group_policy_drops_channel_allowlist_plugin():
-    cfg = build_hermes_config("litellm/qwen3", "http://x:4000", group_policy="open")
-    enabled = cfg["plugins"]["enabled"]
-    # Open means reply everywhere even if a channel list is retained in config.
-    assert_that("slack-channel-allowlist" in enabled, equal_to(False))
-
-
-def test_allowlist_group_policy_keeps_channel_allowlist_plugin():
-    cfg = build_hermes_config("litellm/qwen3", "http://x:4000", group_policy="allowlist")
-    assert_that("slack-channel-allowlist" in cfg["plugins"]["enabled"], equal_to(True))
-
-
-def test_open_group_and_dm_policy_drops_both_gating_plugins():
-    cfg = build_hermes_config("litellm/qwen3", "http://x:4000", dm_policy="open", group_policy="open")
-    enabled = cfg["plugins"]["enabled"]
-    assert_that("slack-deny-dms" in enabled, equal_to(False))
-    assert_that("slack-channel-allowlist" in enabled, equal_to(False))
-
-
-def test_default_verbose_mode_enables_interim_assistant_messages():
-    cfg = build_hermes_config("litellm/qwen3", "http://x:4000")
-    slack_display = cfg["display"]["platforms"]["slack"]
-    assert_that(slack_display["interim_assistant_messages"], equal_to(True))
-    # Verbosity drives interim messages only; progress spam stays suppressed.
-    assert_that(slack_display["tool_progress"], equal_to("off"))
-    assert_that(slack_display["busy_ack_detail"], equal_to(False))
-
-
-def test_concise_mode_disables_interim_assistant_messages():
-    cfg = build_hermes_config("litellm/qwen3", "http://x:4000", verbose_mode=False)
-    slack_display = cfg["display"]["platforms"]["slack"]
-    assert_that(slack_display["interim_assistant_messages"], equal_to(False))
-    assert_that(slack_display["tool_progress"], equal_to("off"))
-    assert_that(slack_display["busy_ack_detail"], equal_to(False))
-
-
-def test_allowlist_policy_seeds_dm_allowed_users():
-    secret = _secret_with(["U001", "U002"], "allowlist")
-    assert_that(secret.string_data["SLACK_DM_ALLOWED_USERS"], equal_to("U001,U002"))
-
-
-def test_off_policy_clears_dm_allowed_users_even_with_user_ids():
-    # Switching to "off" must not leave a stale allowlist that still grants DM access.
-    secret = _secret_with(["U001", "U002"], "off")
-    assert_that(secret.string_data["SLACK_DM_ALLOWED_USERS"], equal_to(""))
-
-
-def test_open_policy_does_not_seed_dm_allowed_users():
-    secret = _secret_with(["U001", "U002"], "open")
-    assert_that(secret.string_data["SLACK_DM_ALLOWED_USERS"], equal_to(""))
-
-
-def test_start_sh_includes_hermes_gateway_run():
-    assert_that(HERMES_START_SH, contains_string("hermes gateway run"))
-
-
-def test_start_sh_seeds_user_md_once():
-    assert_that(HERMES_START_SH, contains_string("USER.md"))
-    assert_that(HERMES_START_SH, contains_string("/opt/data/memories/USER.md"))
-
-
-def test_build_hermes_config_plugins_has_both():
-    cfg = build_hermes_config("litellm/qwen3", "http://litellm:4000")
-    enabled = cfg["plugins"]["enabled"]
-    assert_that("slack-channel-allowlist" in enabled, equal_to(True))
-    assert_that("slack-deny-dms" in enabled, equal_to(True))
-
-
-def test_build_hermes_config_map_has_channel_allowlist_plugin():
-    cfg = build_hermes_config("litellm/m", "http://x:4000")
-    cm = build_hermes_config_map(
-        _AGENT_ID,
-        _ORG_ID,
-        _NS,
-        soul_md="# Soul",
-        identity_md="# Identity",
-        user_md="# User",
-        tools_md="# Tools",
-        agents_md="# Agents",
-        boot_md="# Boot",
-        heartbeat_md="# Heartbeat",
-        hermes_config=cfg,
-    )
-    assert_that(cm.data, has_key("slack-channel-allowlist-plugin.yaml"))
-    assert_that(cm.data, has_key("slack-channel-allowlist-init.py"))
-
-
-def test_start_sh_copies_channel_allowlist_plugin():
-    assert_that(HERMES_START_SH, contains_string("slack-channel-allowlist"))
-
-
-def test_deny_dms_plugin_init_is_valid_python():
-    compile(SLACK_DENY_DMS_PLUGIN_INIT, "<plugin>", "exec")
-
-
-def test_channel_allowlist_plugin_init_is_valid_python():
-    compile(SLACK_CHANNEL_ALLOWLIST_PLUGIN_INIT, "<plugin>", "exec")
-
-
-def test_build_hermes_deployment_mounts_opt_data_and_workspace():
-    dep = build_hermes_deployment(_AGENT_ID, _ORG_ID, _NS, "hermes:latest")
-    mounts = {m.mount_path for m in dep.spec.template.spec.containers[0].volume_mounts}
-    assert_that("/opt/data" in mounts, equal_to(True))
-    assert_that("/workspace" in mounts, equal_to(True))
-
-
-def test_build_hermes_deployment_workspace_is_pvc_backed():
-    # /workspace must persist across restarts (AF-215): it is a subPath of the
-    # per-agent PVC, not an ephemeral emptyDir — mirroring ocbw's persistent
-    # ./agents/<name>/workspace bind-mount and OpenClaw's PVC-nested workspace.
-    dep = build_hermes_deployment(_AGENT_ID, _ORG_ID, _NS, "hermes:latest")
-    mounts = {m.mount_path: m for m in dep.spec.template.spec.containers[0].volume_mounts}
-    workspace = mounts["/workspace"]
-    assert_that(workspace.name, equal_to("data"))
-    assert_that(workspace.sub_path, equal_to("workspace"))
-
-
-def test_build_hermes_deployment_opt_data_stays_on_pvc_root():
-    dep = build_hermes_deployment(_AGENT_ID, _ORG_ID, _NS, "hermes:latest")
-    mounts = {m.mount_path: m for m in dep.spec.template.spec.containers[0].volume_mounts}
-    data = mounts["/opt/data"]
-    assert_that(data.name, equal_to("data"))
-    assert_that(data.sub_path, equal_to(None))
-
-
-def test_build_hermes_deployment_has_no_empty_dir_workspace_volume():
-    dep = build_hermes_deployment(_AGENT_ID, _ORG_ID, _NS, "hermes:latest")
-    volume_names = {v.name for v in dep.spec.template.spec.volumes}
-    assert_that("workspace" in volume_names, equal_to(False))
-
-
-def test_build_hermes_deployment_anchors_cwd_env_to_workspace():
-    # The hermes process starts in its install dir (/opt/hermes) and the user's
-    # HOME is /opt/data, so without these env vars the agent's shell is anchored
-    # in the wrong place and relative writes miss the persistent /workspace.
-    # ocbw sets both alongside terminal.cwd (openclaw_bootstrap/hermes.py) —
-    # mirror that.
-    dep = build_hermes_deployment(_AGENT_ID, _ORG_ID, _NS, "hermes:latest")
-    env = {e.name: e.value for e in dep.spec.template.spec.containers[0].env or []}
-    assert_that(env.get("TERMINAL_CWD"), equal_to("/workspace"))
-    assert_that(env.get("MESSAGING_CWD"), equal_to("/workspace"))
-
-
-def test_start_sh_prunes_stale_skills_before_seeding():
-    # /workspace persists now, so a skill file from a removed integration would
-    # linger without an explicit prune before re-seeding.
-    assert_that(HERMES_START_SH, contains_string("rm -rf /workspace/skills"))
-    prune_at = HERMES_START_SH.index("rm -rf /workspace/skills")
-    seed_at = HERMES_START_SH.index("skills.json")
-    assert_that(prune_at < seed_at, equal_to(True))
-
-
-def test_build_hermes_config_map_includes_aai_cli_kwargs_when_provided():
-    cfg = build_hermes_config("litellm/m", "http://x:4000")
-    cm = build_hermes_config_map(
-        _AGENT_ID,
-        _ORG_ID,
-        _NS,
-        soul_md="# Soul",
-        identity_md="# Identity",
-        user_md="# User",
-        tools_md="# Tools",
-        agents_md="# Agents",
-        boot_md="# Boot",
-        heartbeat_md="# Heartbeat",
-        hermes_config=cfg,
-        aai_cli_config_toml="[profiles.jira-work]",
-        aai_cli_setup_sh="#!/bin/sh\necho ok",
-        skills_json='[{"path": "aai-cli/skill.md", "content": "# Skill"}]',
-    )
-    assert_that(cm.data, has_key("aai-cli-config.toml"))
-    assert_that(cm.data, has_key("aai-cli-setup.sh"))
-    assert_that(cm.data, has_key("skills.json"))
-    assert_that(cm.data["aai-cli-config.toml"], contains_string("[profiles.jira-work]"))
-
-
-def test_build_hermes_config_map_omits_aai_cli_keys_when_not_provided():
-    cfg = build_hermes_config("litellm/m", "http://x:4000")
-    cm = build_hermes_config_map(
-        _AGENT_ID,
-        _ORG_ID,
-        _NS,
-        soul_md="# Soul",
-        identity_md="# Identity",
-        user_md="# User",
-        tools_md="# Tools",
-        agents_md="# Agents",
-        boot_md="# Boot",
-        heartbeat_md="# Heartbeat",
-        hermes_config=cfg,
-    )
-    assert_that(cm.data, is_not(has_key("aai-cli-config.toml")))
-    assert_that(cm.data, is_not(has_key("aai-cli-setup.sh")))
-    assert_that(cm.data, is_not(has_key("skills.json")))
-
-
-def test_start_sh_includes_aai_cli_setup_hook():
-    assert_that(HERMES_START_SH, contains_string("aai-cli-setup.sh"))
-
-
-def test_start_sh_includes_skills_json_reconstruction():
-    assert_that(HERMES_START_SH, contains_string("skills.json"))
-    assert_that(HERMES_START_SH, contains_string("/workspace/skills"))
-
-
-def test_build_hermes_config_approval_mode_auto_maps_to_smart():
-    cfg = build_hermes_config("litellm/qwen3", "http://litellm:4000", approval_mode="auto")
-    assert_that(cfg["approvals"]["mode"], equal_to("smart"))
-
-
-def test_build_hermes_config_approval_mode_off():
-    cfg = build_hermes_config("litellm/qwen3", "http://litellm:4000", approval_mode="off")
-    assert_that(cfg["approvals"]["mode"], equal_to("off"))
-
-
-def test_build_hermes_config_approval_mode_manual():
-    cfg = build_hermes_config("litellm/qwen3", "http://litellm:4000", approval_mode="manual")
-    assert_that(cfg["approvals"]["mode"], equal_to("manual"))
-
-
-def test_build_hermes_config_default_approval_mode_is_smart():
-    cfg = build_hermes_config("litellm/qwen3", "http://litellm:4000")
-    assert_that(cfg["approvals"]["mode"], equal_to("smart"))
-
-
-def test_build_hermes_deployment_pod_carries_agent_component_label():
-    dep = build_hermes_deployment(
-        agent_id=_AGENT_ID,
-        org_id=_ORG_ID,
-        namespace=_NS,
-        image="registry.example.com/hermes:0.1.0",
-    )
-    pod_labels = dep.spec.template.metadata.labels
-    assert_that(pod_labels["agentfarm.io/component"], equal_to("agent"))
-    # Selector must NOT include the new label, so existing agents keep matching.
-    assert_that(
-        dep.spec.selector.match_labels,
-        equal_to({"app": f"agent-{_AGENT_ID}"}),
-    )
-
-
-# --- Telegram config --------------------------------------------------------
-
-
-def test_build_hermes_config_telegram_sets_model():
-    cfg = build_hermes_config_telegram("litellm/qwen3", "http://litellm:4000")
-    assert_that(cfg["model"]["model"], equal_to("qwen3"))
-    assert_that(cfg["model"]["base_url"], equal_to("http://litellm:4000"))
-    assert_that(cfg["model"]["api_mode"], equal_to("chat_completions"))
-
-
-def test_build_hermes_config_telegram_has_no_slack_section():
-    cfg = build_hermes_config_telegram("litellm/qwen3", "http://litellm:4000")
-    assert_that(cfg, is_not(has_key("slack")))
-
-
-def test_build_hermes_config_telegram_require_mention_is_enabled():
-    cfg = build_hermes_config_telegram("litellm/qwen3", "http://litellm:4000")
-    assert_that(cfg["telegram"]["require_mention"], equal_to(True))
-
-
-def test_build_hermes_config_telegram_exclusive_bot_mentions_is_enabled():
-    cfg = build_hermes_config_telegram("litellm/qwen3", "http://litellm:4000")
-    assert_that(cfg["telegram"]["exclusive_bot_mentions"], equal_to(True))
-
-
-def test_build_hermes_config_telegram_has_telegram_platform():
-    cfg = build_hermes_config_telegram("litellm/qwen3", "http://litellm:4000")
-    assert_that(cfg["display"]["platforms"], has_key("telegram"))
-    assert_that(cfg["display"]["platforms"], is_not(has_key("slack")))
-
-
-def test_build_hermes_config_telegram_dm_off_enables_deny_plugin():
-    cfg = build_hermes_config_telegram("litellm/qwen3", "http://litellm:4000", dm_policy="off")
-    assert_that("telegram-deny-dms" in cfg["plugins"]["enabled"], equal_to(True))
-    assert_that(cfg, is_not(has_key("allow_from")))
-
-
-def test_build_hermes_config_telegram_dm_open_drops_deny_plugin():
-    cfg = build_hermes_config_telegram("litellm/qwen3", "http://litellm:4000", dm_policy="open")
-    assert_that("telegram-deny-dms" in cfg["plugins"]["enabled"], equal_to(False))
-    assert_that(cfg, is_not(has_key("allow_from")))
-
-
-def test_build_hermes_config_telegram_dm_allowlist_enables_deny_plugin():
-    cfg = build_hermes_config_telegram("litellm/qwen3", "http://litellm:4000", dm_policy="allowlist")
-    assert_that("telegram-deny-dms" in cfg["plugins"]["enabled"], equal_to(True))
-
-
-def test_build_hermes_config_telegram_group_open_drops_channel_plugin():
-    cfg = build_hermes_config_telegram("litellm/qwen3", "http://litellm:4000", group_policy="open")
-    assert_that("telegram-channel-allowlist" in cfg["plugins"]["enabled"], equal_to(False))
-    assert_that(cfg, is_not(has_key("guest_mode")))
-    assert_that(cfg, is_not(has_key("group_allowed_chats")))
-
-
-def test_build_hermes_config_telegram_group_allowlist_enables_channel_plugin():
-    cfg = build_hermes_config_telegram("litellm/qwen3", "http://litellm:4000", group_policy="allowlist")
-    assert_that("telegram-channel-allowlist" in cfg["plugins"]["enabled"], equal_to(True))
-    assert_that(cfg, is_not(has_key("guest_mode")))
-    assert_that(cfg, is_not(has_key("group_allowed_chats")))
-
-
-def test_build_hermes_config_telegram_open_both_only_telemetry():
-    cfg = build_hermes_config_telegram(
-        "litellm/qwen3",
+def test_native_discord_config_enables_observer_and_maps_verbose_mode() -> None:
+    config = build_hermes_gateway_config(
+        "litellm/gpt-5",
         "http://litellm:4000",
-        dm_policy="open",
-        group_policy="open",
+        native_discord=True,
+        discord_require_mention=False,
     )
-    assert_that(cfg["plugins"]["enabled"], equal_to(["telemetry-push"]))
+
+    assert config["plugins"]["enabled"] == ["telemetry-push", "agentbarn-messaging", "agentbarn-observer"]
+    assert config["discord"] == {"require_mention": False, "thread_require_mention": False}
+    assert config["display"]["platforms"]["discord"]["tool_progress"] == "off"
+
+    verbose = build_hermes_gateway_config(
+        "litellm/gpt-5", "http://litellm:4000", native_discord=True, verbose_mode=True
+    )
+    assert verbose["display"]["platforms"]["discord"]["tool_progress"] == "all"
+    assert verbose["display"]["platforms"]["discord"]["tool_progress_grouping"] == "accumulate"
+    assert verbose["display"]["platforms"]["discord"]["interim_assistant_messages"] is True
 
 
-def test_build_hermes_config_telegram_approval_mode():
-    cfg = build_hermes_config_telegram("litellm/qwen3", "http://litellm:4000", approval_mode="manual")
-    assert_that(cfg["approvals"]["mode"], equal_to("manual"))
+def test_native_discord_env_maps_hermes_authorization_gates() -> None:
+    settings = {
+        "allowed_channel_ids": ["channel-1"],
+        "allowed_user_ids": ["user-1"],
+        "allowed_role_ids": ["role-1"],
+        "allow_all_users": False,
+        "home_channel_id": "channel-home",
+    }
+
+    env = native_discord_env(settings, {"bot_token": "discord-token"})
+
+    assert env["DISCORD_BOT_TOKEN"] == "discord-token"
+    assert env["DISCORD_ALLOW_ALL_USERS"] == "false"
+    assert env["DISCORD_ALLOWED_CHANNELS"] == "channel-1"
+    assert env["DISCORD_ALLOWED_USERS"] == "user-1"
+    assert env["DISCORD_ALLOWED_ROLES"] == "role-1"
+    assert env["DISCORD_HOME_CHANNEL"] == "channel-home"
+    assert env["AGENTBARN_SCHEDULED_DELIVERY"] == "0"
+    assert "AGENTBARN_DISCORD_POLICY" not in env
 
 
-# --- Telegram secret --------------------------------------------------------
+def test_native_discord_env_uses_a_sentinel_when_home_is_unset() -> None:
+    env = native_discord_env({}, {"bot_token": "discord-token"})
+
+    assert env["DISCORD_HOME_CHANNEL"] == "__agentbarn_no_home_channel__"
 
 
-def test_build_secret_hermes_telegram_contains_required_keys():
-    secret = build_secret_hermes_telegram(
+_TELEGRAM_TOKEN = {"bot_token": "123:abc"}
+
+
+def test_native_telegram_config_ignores_unknown_dms() -> None:
+    config = build_hermes_gateway_config(
+        "litellm/gpt-5", "http://litellm:4000", telegram_settings={"group_policy": "open"}
+    )
+
+    assert config["plugins"]["enabled"] == ["telemetry-push", "agentbarn-messaging", "agentbarn-observer"]
+    assert config["telegram"] == {"unauthorized_dm_behavior": "ignore"}
+    assert config["display"]["platforms"]["telegram"]["tool_progress"] == "off"
+
+
+def test_native_telegram_config_closes_groups_without_an_allowlist() -> None:
+    config = build_hermes_gateway_config("litellm/gpt-5", "http://litellm:4000", telegram_settings={})
+
+    assert config["telegram"]["group_allow_from"] == []
+
+
+def test_native_telegram_config_treats_blank_chat_ids_as_no_allowlist() -> None:
+    # Hermes reads a missing chat allowlist as "any group", so blanks must close groups.
+    config = build_hermes_gateway_config(
+        "litellm/gpt-5", "http://litellm:4000", telegram_settings={"allowed_chat_ids": [""], "dm_policy": "open"}
+    )
+
+    assert config["telegram"]["group_allow_from"] == []
+
+
+def test_native_telegram_config_shows_tool_progress_in_verbose_mode() -> None:
+    config = build_hermes_gateway_config(
+        "litellm/gpt-5", "http://litellm:4000", telegram_settings={}, verbose_mode=True
+    )
+
+    assert config["display"]["platforms"]["telegram"]["tool_progress"] == "all"
+
+
+def test_native_telegram_env_confines_groups_to_the_allowlist_and_requires_mentions() -> None:
+    env = native_telegram_env({"allowed_chat_ids": ["-1001"], "allowed_user_ids": ["111"]}, _TELEGRAM_TOKEN)
+
+    assert env == {
+        "TELEGRAM_BOT_TOKEN": "123:abc",
+        "TELEGRAM_REQUIRE_MENTION": "true",
+        "AGENTBARN_SCHEDULED_DELIVERY": "0",
+        "TELEGRAM_ALLOWED_CHATS": "-1001",
+        "TELEGRAM_GROUP_ALLOWED_CHATS": "-1001",
+        "TELEGRAM_HOME_CHANNEL": "__agentbarn_no_home_channel__",
+    }
+
+
+def test_native_telegram_env_opens_groups_and_dms() -> None:
+    env = native_telegram_env({"group_policy": "open", "dm_policy": "open"}, _TELEGRAM_TOKEN)
+
+    assert env["TELEGRAM_GROUP_ALLOWED_CHATS"] == "*"
+    assert "TELEGRAM_ALLOWED_CHATS" not in env
+    assert env["TELEGRAM_ALLOW_ALL_USERS"] == "true"
+
+
+def test_native_telegram_env_maps_the_dm_allowlist() -> None:
+    env = native_telegram_env({"dm_policy": "allowlist", "allowed_user_ids": ["111"]}, _TELEGRAM_TOKEN)
+
+    assert env["TELEGRAM_ALLOWED_USERS"] == "111"
+    assert "TELEGRAM_GROUP_ALLOWED_CHATS" not in env
+    assert "TELEGRAM_ALLOW_ALL_USERS" not in env
+
+
+def test_native_telegram_env_sets_the_home_chat() -> None:
+    env = native_telegram_env({"home_channel_id": "-1009"}, _TELEGRAM_TOKEN)
+
+    assert env["TELEGRAM_HOME_CHANNEL"] == "-1009"
+
+
+def test_runtime_teams_config_enables_observer_and_verbose_progress() -> None:
+    config = build_hermes_gateway_config("litellm/gpt-5", "http://litellm:4000", runtime_teams=True, verbose_mode=True)
+
+    assert "agentbarn-observer" in config["plugins"]["enabled"]
+    assert config["display"]["platforms"]["teams"] == {
+        "tool_progress": "all",
+        "tool_progress_grouping": "accumulate",
+        "interim_assistant_messages": True,
+    }
+
+
+def test_runtime_teams_env_keeps_credentials_in_the_secret_and_sets_home() -> None:
+    env = runtime_teams_env(
+        {"home_channel_id": "19:home@thread.tacv2"},
+        {"app_id": "app-id", "app_password": "secret", "tenant_id": "tenant-id"},
+    )
+
+    assert env == {
+        "TEAMS_CLIENT_ID": "app-id",
+        "TEAMS_CLIENT_SECRET": "secret",
+        "TEAMS_TENANT_ID": "tenant-id",
+        "TEAMS_ALLOW_ALL_USERS": "true",
+        "TEAMS_PORT": "3978",
+        "TEAMS_HOME_CHANNEL": "19:home@thread.tacv2",
+        "AGENTBARN_SCHEDULED_DELIVERY": "0",
+    }
+
+
+def test_runtime_teams_env_uses_no_home_sentinel() -> None:
+    env = runtime_teams_env({}, {"app_id": "app-id", "app_password": "secret", "tenant_id": "tenant-id"})
+
+    assert env["TEAMS_HOME_CHANNEL"] == "__agentbarn_no_home_channel__"
+
+
+def test_native_gateway_does_not_drain_agent_barn_scheduled_completions() -> None:
+    guarded = HERMES_START_SH.split(
+        'if [ "${AGENTBARN_SCHEDULED_DELIVERY}" = "1" ]; then',
+        1,
+    )[1].split("\nfi", 1)[0]
+
+    assert "python3 /app/config/agentbarn_message.py drain &" in guarded
+
+
+def test_gateway_config_enables_persistent_memory_for_scheduled_runs() -> None:
+    config = build_hermes_gateway_config("litellm/gpt-5", "http://litellm:4000")
+
+    assert config["memory"]["memory_enabled"] is True
+    assert config["memory"]["user_profile_enabled"] is True
+
+
+def test_hermes_startup_context_exposes_runtime_memory_paths() -> None:
+    assert "/opt/data/memories/USER.md" in HERMES_BOOTLOADER_FOOTER
+    assert "/opt/data/memories/MEMORY.md" in HERMES_BOOTLOADER_FOOTER
+    assert "/workspace/memory/YYYY-MM-DD.md" in HERMES_BOOTLOADER_FOOTER
+    assert "Do not\nread or write `/workspace/USER.md`" in HERMES_BOOTLOADER_FOOTER
+
+
+def test_gateway_config_maps_approval_mode_onto_approvals_policy() -> None:
+    """Hermes is the only runtime that maps approval_mode onto a runtime policy
+    (AF-272): manual/auto/off must keep mapping to manual/smart/off.
+    """
+
+    def approvals(mode: str) -> dict:
+        return build_hermes_gateway_config("litellm/gpt-5", "http://litellm:4000", approval_mode=mode)["approvals"]
+
+    policy = {"timeout": 300, "cron_mode": "deny", "single_query_mode": "deny"}
+    assert approvals("manual") == {"mode": "manual", **policy}
+    assert approvals("auto") == {"mode": "smart", **policy}
+    assert approvals("off") == {"mode": "off", **policy}
+
+
+def test_gateway_config_routes_auxiliary_llm_tasks_through_the_litellm_proxy() -> None:
+    """Auxiliary tasks left on the openrouter lane reach the proxy without the
+    agent's key; smart approval then escalates every flagged command to the user.
+    """
+    auxiliary = build_hermes_gateway_config("litellm/gpt-5", "http://localhost:8090")["auxiliary"]
+
+    expected = {"provider": "custom", "base_url": "http://localhost:8090", "model": "gpt-5"}
+    assert {"approval", "title_generation", "vision"} <= auxiliary.keys()
+    assert all(task == expected for task in auxiliary.values())
+
+
+def test_gateway_config_pins_approval_policy_rather_than_inheriting_upstream_defaults() -> None:
+    """Every key here matches the pinned image's own default, so this changes no
+    behaviour today -- it stops a Hermes upgrade from moving the policy silently.
+    `unattended_mode` is deliberately absent: v2026.8.19 does not read it, so
+    writing it would be a no-op rather than an error.
+    """
+    approvals = build_hermes_gateway_config("litellm/gpt-5", "http://litellm:4000")["approvals"]
+
+    assert approvals == {
+        "mode": "smart",
+        "timeout": 300,
+        "cron_mode": "deny",
+        "single_query_mode": "deny",
+    }
+
+
+def test_config_map_contains_runtime_adapter_and_no_provider_policy_plugins() -> None:
+    config_map = build_hermes_config_map(
         _AGENT_ID,
         _ORG_ID,
         _NS,
-        agent_name="myagent",
-        telegram_bot_token="123:ABC",
-        litellm_api_key="sk-key",
+        "soul",
+        "identity",
+        "user",
+        "tools",
+        "agents",
+        "boot",
+        "heartbeat",
+        build_hermes_gateway_config("litellm/gpt-5", "http://litellm:4000"),
+    )
+
+    assert "communications-runtime-adapter.py" in config_map.data
+    assert "agent-trigger-server.py" in config_map.data
+    # Pinned Hermes ships no gateway:startup hook, so BOOT.md only runs if we drive it.
+    assert "boot-run.py" in config_map.data
+    assert "agentbarn_message.py" in config_map.data
+    # OpenClaw's plugin has no business in a Hermes ConfigMap.
+    assert "openclaw-messaging.js" not in config_map.data
+    assert not any("allowlist" in name or "deny-dms" in name for name in config_map.data)
+
+
+def test_runtime_secret_contains_only_runtime_and_llm_credentials() -> None:
+    secret = build_secret_hermes_runtime(
+        _AGENT_ID,
+        _ORG_ID,
+        _NS,
+        "Test Agent",
+        runtime_api_key="runtime-key",
+        litellm_api_key="llm-key",
         litellm_base_url="http://litellm:4000",
-        api_server_key="secret-key-123",
     )
-    data = secret.string_data
-    assert_that(data["TELEGRAM_BOT_TOKEN"], equal_to("123:ABC"))
-    assert_that(data["OPENAI_API_KEY"], equal_to("sk-key"))
-    assert_that(data["OPENAI_BASE_URL"], equal_to("http://litellm:4000"))
-    assert_that(data["API_SERVER_KEY"], equal_to("secret-key-123"))
-    assert_that(data["AGENT_PLATFORM"], equal_to("telegram"))
-    assert_that(data["API_SERVER_ENABLED"], equal_to("true"))
-    assert_that(data["TELEGRAM_HOME_CHANNEL"], equal_to("0000000000"))
-    assert_that(data["TELEGRAM_HOME_CHANNEL_NAME"], equal_to("No Telegram Home Channel"))
-    assert_that(data, has_key("TELEGRAM_CHANNEL_IDS"))
-    assert_that(data, has_key("TELEGRAM_DM_ALLOWED_USERS"))
+
+    assert secret.string_data["RUNTIME_API_KEY"] == "runtime-key"
+    assert secret.string_data["API_SERVER_KEY"] == "runtime-key"
+    assert secret.string_data["RUNTIME_KIND"] == "hermes"
+    assert secret.string_data["VERBOSE_MODE"] == "false"
+    assert not any(key.startswith(("SLACK_", "TELEGRAM_", "DISCORD_", "MSTEAMS_")) for key in secret.string_data)
 
 
-def test_build_secret_hermes_telegram_allowlist_seeds_dm_users():
-    secret = build_secret_hermes_telegram(
+def test_runtime_secret_verbose_mode_toggle() -> None:
+    secret = build_secret_hermes_runtime(
         _AGENT_ID,
         _ORG_ID,
         _NS,
-        agent_name="myagent",
-        telegram_bot_token="123:ABC",
-        litellm_api_key="sk-key",
+        "Test Agent",
+        runtime_api_key="runtime-key",
+        litellm_api_key="llm-key",
         litellm_base_url="http://litellm:4000",
-        api_server_key="k",
-        dm_policy="allowlist",
-        allowed_user_ids=["111", "222"],
-        allowed_chat_ids=["-100999"],
+        verbose_mode=True,
     )
-    data = secret.string_data
-    assert_that(data["TELEGRAM_DM_ALLOWED_USERS"], equal_to("111,222"))
-    assert_that(data["TELEGRAM_CHANNEL_IDS"], equal_to("-100999"))
-    assert_that(data["TELEGRAM_HOME_CHANNEL"], equal_to("-100999"))
-    assert_that(data["TELEGRAM_HOME_CHANNEL_NAME"], equal_to("-100999"))
+
+    assert secret.string_data["VERBOSE_MODE"] == "true"
 
 
-def test_build_secret_hermes_telegram_off_policy_clears_dm_users():
-    secret = build_secret_hermes_telegram(
+def test_runtime_secret_tells_the_adapter_the_approval_mode() -> None:
+    secret = build_secret_hermes_runtime(
         _AGENT_ID,
         _ORG_ID,
         _NS,
-        agent_name="myagent",
-        telegram_bot_token="123:ABC",
-        litellm_api_key="sk-key",
+        "Test Agent",
+        runtime_api_key="runtime-key",
+        litellm_api_key="llm-key",
         litellm_base_url="http://litellm:4000",
-        api_server_key="k",
-        dm_policy="off",
-        allowed_user_ids=["111"],
-    )
-    assert_that(secret.string_data["TELEGRAM_DM_ALLOWED_USERS"], equal_to(""))
-
-
-def test_build_secret_hermes_telegram_no_slack_bot_keys():
-    secret = build_secret_hermes_telegram(
-        _AGENT_ID,
-        _ORG_ID,
-        _NS,
-        agent_name="myagent",
-        telegram_bot_token="123:ABC",
-        litellm_api_key="sk-key",
-        litellm_base_url="http://litellm:4000",
-        api_server_key="k",
-    )
-    for key in secret.string_data:
-        assert_that(key.startswith("SLACK_"), equal_to(False))
-
-
-def test_build_secret_hermes_slack_has_agent_platform():
-    secret = build_secret_hermes_slack(
-        _AGENT_ID,
-        _ORG_ID,
-        _NS,
-        agent_name="myagent",
-        slack_bot_token="xoxb-bot",
-        slack_app_token="xapp-app",
-        litellm_api_key="sk-key",
-        litellm_base_url="http://x:4000",
-        api_server_key="k",
-        channel_ids=[],
-        dm_user_ids=[],
-    )
-    assert_that(secret.string_data["AGENT_PLATFORM"], equal_to("slack"))
-
-
-# --- Telegram config map ----------------------------------------------------
-
-
-def test_build_hermes_config_map_telegram_omits_slack_plugins():
-    cfg = build_hermes_config_telegram("litellm/m", "http://x:4000")
-    cm = build_hermes_config_map(
-        _AGENT_ID,
-        _ORG_ID,
-        _NS,
-        soul_md="# Soul",
-        identity_md="# Identity",
-        user_md="# User",
-        tools_md="# Tools",
-        agents_md="# Agents",
-        boot_md="# Boot",
-        heartbeat_md="# Heartbeat",
-        hermes_config=cfg,
-        platform="telegram",
-    )
-    assert_that(cm.data, is_not(has_key("slack-deny-dms-plugin.yaml")))
-    assert_that(cm.data, is_not(has_key("slack-deny-dms-init.py")))
-    assert_that(cm.data, is_not(has_key("slack-channel-allowlist-plugin.yaml")))
-    assert_that(cm.data, is_not(has_key("slack-channel-allowlist-init.py")))
-
-
-def test_build_hermes_config_map_telegram_has_telegram_plugins():
-    cfg = build_hermes_config_telegram("litellm/m", "http://x:4000")
-    cm = build_hermes_config_map(
-        _AGENT_ID,
-        _ORG_ID,
-        _NS,
-        soul_md="# Soul",
-        identity_md="# Identity",
-        user_md="# User",
-        tools_md="# Tools",
-        agents_md="# Agents",
-        boot_md="# Boot",
-        heartbeat_md="# Heartbeat",
-        hermes_config=cfg,
-        platform="telegram",
-    )
-    assert_that(cm.data, has_key("telegram-deny-dms-plugin.yaml"))
-    assert_that(cm.data, has_key("telegram-deny-dms-init.py"))
-    assert_that(cm.data, has_key("telegram-channel-allowlist-plugin.yaml"))
-    assert_that(cm.data, has_key("telegram-channel-allowlist-init.py"))
-
-
-def test_build_hermes_config_map_telegram_has_telemetry_plugin():
-    cfg = build_hermes_config_telegram("litellm/m", "http://x:4000")
-    cm = build_hermes_config_map(
-        _AGENT_ID,
-        _ORG_ID,
-        _NS,
-        soul_md="# Soul",
-        identity_md="# Identity",
-        user_md="# User",
-        tools_md="# Tools",
-        agents_md="# Agents",
-        boot_md="# Boot",
-        heartbeat_md="# Heartbeat",
-        hermes_config=cfg,
-        platform="telegram",
-    )
-    assert_that(cm.data, has_key("telemetry-push-plugin.yaml"))
-    assert_that(cm.data, has_key("telemetry-push-init.py"))
-
-
-def test_build_hermes_config_map_slack_default_still_has_slack_plugins():
-    cfg = build_hermes_config("litellm/m", "http://x:4000")
-    cm = build_hermes_config_map(
-        _AGENT_ID,
-        _ORG_ID,
-        _NS,
-        soul_md="# Soul",
-        identity_md="# Identity",
-        user_md="# User",
-        tools_md="# Tools",
-        agents_md="# Agents",
-        boot_md="# Boot",
-        heartbeat_md="# Heartbeat",
-        hermes_config=cfg,
-    )
-    assert_that(cm.data, has_key("slack-deny-dms-plugin.yaml"))
-    assert_that(cm.data, has_key("slack-channel-allowlist-plugin.yaml"))
-
-
-# --- start.sh conditional Slack plugins --------------------------------------
-
-
-def test_hermes_start_sh_conditional_slack_plugins():
-    assert_that(HERMES_START_SH, contains_string("if [ -f /app/config/slack-deny-dms"))
-    assert_that(
-        HERMES_START_SH,
-        contains_string("if [ -f /app/config/slack-channel-allowlist"),
+        approval_mode="manual",
     )
 
-
-def test_hermes_start_sh_conditional_telegram_plugins():
-    assert_that(HERMES_START_SH, contains_string("if [ -f /app/config/telegram-deny-dms"))
-    assert_that(
-        HERMES_START_SH,
-        contains_string("if [ -f /app/config/telegram-channel-allowlist"),
-    )
+    assert secret.string_data["APPROVAL_MODE"] == "manual"
 
 
-def test_telegram_deny_dms_plugin_init_is_valid_python():
-    compile(TELEGRAM_DENY_DMS_PLUGIN_INIT, "<plugin>", "exec")
+def test_deployment_runs_one_headless_runtime_container() -> None:
+    deployment = build_hermes_deployment(_AGENT_ID, _ORG_ID, _NS, "hermes:test")
+
+    assert deployment.spec.replicas == 1
+    assert deployment.spec.template.spec.containers[0].name == "agent"
 
 
-def test_telegram_channel_allowlist_plugin_init_is_valid_python():
-    compile(TELEGRAM_CHANNEL_ALLOWLIST_PLUGIN_INIT, "<plugin>", "exec")
+def test_deployment_declares_explicit_resources_matching_openclaw() -> None:
+    """Both runtimes get 1Gi so limits.memory (100Gi quota) never binds before
+    requests.memory (20Gi) -- a 2Gi Hermes limit would cap an all-Hermes fleet at
+    50 agents instead of 64. Unlike OpenClaw's V8 heap, this is a hard cap on
+    Hermes' real working set, not a GC trigger."""
+    deployment = build_hermes_deployment(_AGENT_ID, _ORG_ID, _NS, "hermes:test")
+    resources = deployment.spec.template.spec.containers[0].resources
+
+    assert resources is not None
+    assert resources.requests == {"memory": "320Mi", "cpu": "50m"}
+    assert resources.limits == {"memory": "1Gi", "cpu": "500m"}
+
+
+def test_deployment_recreates_rather_than_rolling_update() -> None:
+    deployment = build_hermes_deployment(_AGENT_ID, _ORG_ID, _NS, "hermes:test")
+    assert deployment.spec.strategy.type == "Recreate"
+
+
+def test_deployment_carries_the_hermes_runtime_label() -> None:
+    deployment = build_hermes_deployment(_AGENT_ID, _ORG_ID, _NS, "hermes:test")
+    assert deployment.metadata.labels["agentbarn.io/runtime"] == "hermes"

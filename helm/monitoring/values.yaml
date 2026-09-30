@@ -13,6 +13,29 @@
 # Alertmanager (slack_api_url_file) so it never lands in a ConfigMap.
 slackWebhookUrl: ""
 
+# LiteLLM serves /metrics only to proxy admins (its metrics carry every
+# Organization's key aliases and spend, so it must stay authenticated).
+# A pre-install/pre-upgrade Job (templates/litellm-metrics-key-job.yaml)
+# provisions a read-only proxy_admin_viewer key into secretName, which the
+# Prometheus server mounts for the litellm scrape job.
+litellmMetricsKey:
+  image: python:3.12-alpine
+  # Holds LITELLM_MASTER_KEY; created by the litellm release.
+  litellmSecretName: litellm
+  secretName: litellm-metrics-key
+  # Tenant SA with namespaced Secret write (helmfile sets <ns>-user).
+  serviceAccountName: agent-farm-user
+
+# Basic auth on the Prometheus server and Alertmanager web endpoints
+# (templates/web-auth-secret.yaml): agent pods share this namespace and can
+# reach every pod in it. helmfile sets password from MONITORING_WEB_PASSWORD
+# (alphanumeric, 12+ chars) plus the derived probe headers and reloader URL,
+# which the Secret template validates against it.
+webAuth:
+  username: monitoring
+  password: ""
+  secretName: monitoring-web-auth
+
 prometheus:
   # No Role/RoleBinding/ClusterRole rendered anywhere (tenant SA can't create
   # them); see serviceAccounts below.
@@ -51,6 +74,14 @@ prometheus:
     alertmanagers:
       - static_configs:
           - targets: ["monitoring-alertmanager:9093"]
+        basic_auth:
+          username: monitoring
+          password_file: /etc/monitoring-web-auth/password
+
+    # Basic auth on the web endpoint (see webAuth). probeHeaders and
+    # configmapReload.reloadUrl carry the same credentials; helmfile sets them.
+    extraArgs:
+      web.config.file: /etc/monitoring-web-auth/web-config.yml
 
     persistentVolume:
       enabled: true
@@ -65,12 +96,30 @@ prometheus:
       limits:
         memory: 1Gi
 
+    # Read-only LiteLLM key for the litellm scrape job (see litellmMetricsKey).
+    # optional: a missing Secret fails the scrape (LiteLLMDown) instead of
+    # blocking the Prometheus pod from starting.
+    extraSecretMounts:
+      - name: litellm-metrics-key
+        mountPath: /etc/prometheus-secrets/litellm
+        secretName: litellm-metrics-key
+        readOnly: true
+        optional: true
+      - name: web-auth
+        mountPath: /etc/monitoring-web-auth
+        secretName: monitoring-web-auth
+        readOnly: true
+
   # The chart's default jobs (kubelet/cAdvisor/apiserver/annotation-based
   # discovery) need node- and cluster-level read we don't have on a shared
   # cluster; consequence: no container CPU/memory metrics, dashboards stick
   # to app-level and kube-state-metrics series. Only the localhost
   # self-scrape stays on.
   scrapeConfigs:
+    prometheus:
+      basic_auth:
+        username: monitoring
+        password_file: /etc/monitoring-web-auth/password
     kubernetes-api-servers:
       enabled: false
     kubernetes-nodes:
@@ -98,7 +147,7 @@ prometheus:
         # The API container runs two processes; each exposes its own
         # /metrics. The endpoint label ("http" vs "ingest") tells the two
         # targets apart — alerts rely on it.
-        - job_name: agentfarm-api
+        - job_name: agentbarn-api
           kubernetes_sd_configs:
             - role: endpoints
               namespaces:
@@ -109,12 +158,15 @@ prometheus:
                   __meta_kubernetes_service_label_app_kubernetes_io_name,
                   __meta_kubernetes_endpoint_port_name,
                 ]
-              regex: agentfarm-api;(http|ingest)
+              regex: agentbarn-api;(http|ingest)
               action: keep
             - source_labels: [__meta_kubernetes_endpoint_port_name]
               target_label: endpoint
 
         - job_name: litellm
+          authorization:
+            type: Bearer
+            credentials_file: /etc/prometheus-secrets/litellm/LITELLM_METRICS_KEY
           kubernetes_sd_configs:
             - role: endpoints
               namespaces:
@@ -140,7 +192,7 @@ prometheus:
           relabel_configs:
             - source_labels:
                 [
-                  __meta_kubernetes_service_label_agentfarm_io_component,
+                  __meta_kubernetes_service_label_agentbarn_io_component,
                   __meta_kubernetes_endpoint_port_name,
                 ]
               regex: agent;healthz
@@ -172,29 +224,29 @@ prometheus:
     # annotations included, verbatim.
     alerting_rules.yml:
       groups:
-        - name: agent-farm.rules
+        - name: agent-barn.rules
           rules:
             # --- system up (API + DB) ---
             - alert: APIDown
-              expr: up{job="agentfarm-api", endpoint="http"} == 0
+              expr: up{job="agentbarn-api", endpoint="http"} == 0
               for: 2m
               labels:
                 severity: critical
               annotations:
-                summary: The agent-farm API is not responding to scrapes.
+                summary: The Agent Barn API is not responding to scrapes.
                 description: Prometheus cannot scrape the main API process on :8000.
 
             - alert: APIAbsent
-              expr: absent(up{job="agentfarm-api", endpoint="http"})
+              expr: absent(up{job="agentbarn-api", endpoint="http"})
               for: 5m
               labels:
                 severity: critical
               annotations:
-                summary: The agent-farm API target has disappeared entirely.
+                summary: The Agent Barn API target has disappeared entirely.
                 description: No scrape target exists for the API — the Service is gone or discovery is broken.
 
             - alert: IngestAPIDown
-              expr: up{job="agentfarm-api", endpoint="ingest"} == 0
+              expr: up{job="agentbarn-api", endpoint="ingest"} == 0
               for: 5m
               labels:
                 severity: warning
@@ -207,7 +259,7 @@ prometheus:
               # survives API redeploys instead of resolving + re-firing on
               # every rollout; keep_firing_for bridges the series gap while
               # pods are swapped.
-              expr: min(agentfarm_database_up) == 0
+              expr: min(agentbarn_database_up) == 0
               for: 2m
               keep_firing_for: 5m
               labels:
@@ -221,11 +273,11 @@ prometheus:
             - alert: HighAPI5xxRate
               expr: >-
                 (
-                  sum(rate(http_requests_total{job="agentfarm-api", status="5xx"}[5m]))
+                  sum(rate(http_requests_total{job="agentbarn-api", status="5xx"}[5m]))
                   /
-                  clamp_min(sum(rate(http_requests_total{job="agentfarm-api"}[5m])), 1e-9)
+                  clamp_min(sum(rate(http_requests_total{job="agentbarn-api"}[5m])), 1e-9)
                 ) > 0.05
-                and sum(rate(http_requests_total{job="agentfarm-api"}[5m])) > 0.1
+                and sum(rate(http_requests_total{job="agentbarn-api"}[5m])) > 0.1
               for: 5m
               labels:
                 severity: warning
@@ -236,11 +288,11 @@ prometheus:
             - alert: HighAPI5xxRate
               expr: >-
                 (
-                  sum(rate(http_requests_total{job="agentfarm-api", status="5xx"}[5m]))
+                  sum(rate(http_requests_total{job="agentbarn-api", status="5xx"}[5m]))
                   /
-                  clamp_min(sum(rate(http_requests_total{job="agentfarm-api"}[5m])), 1e-9)
+                  clamp_min(sum(rate(http_requests_total{job="agentbarn-api"}[5m])), 1e-9)
                 ) > 0.2
-                and sum(rate(http_requests_total{job="agentfarm-api"}[5m])) > 0.1
+                and sum(rate(http_requests_total{job="agentbarn-api"}[5m])) > 0.1
               for: 5m
               labels:
                 severity: critical
@@ -251,11 +303,11 @@ prometheus:
             - alert: HighToolCallErrorRate
               expr: >-
                 (
-                  sum(rate(agentfarm_tool_calls_total{status="error"}[15m]))
+                  sum(rate(agentbarn_tool_calls_total{status="error"}[15m]))
                   /
-                  clamp_min(sum(rate(agentfarm_tool_calls_total[15m])), 1e-9)
+                  clamp_min(sum(rate(agentbarn_tool_calls_total[15m])), 1e-9)
                 ) > 0.25
-                and sum(rate(agentfarm_tool_calls_total[15m])) > 0.01
+                and sum(rate(agentbarn_tool_calls_total[15m])) > 0.01
               for: 10m
               labels:
                 severity: warning
@@ -267,6 +319,10 @@ prometheus:
             - alert: AgentTargetDown
               expr: up{job="agent"} == 0
               for: 2m
+              # A crash-looping agent's healthz answers for a few seconds on
+              # each restart; without this, every restart resolves the alert
+              # and the next backoff re-fires it.
+              keep_firing_for: 15m
               labels:
                 severity: critical
               annotations:
@@ -282,20 +338,11 @@ prometheus:
                 summary: Agent {{ $labels.agent_name }} (org {{ $labels.org_name }}) lost its runtime connection.
                 description: The runtime of agent {{ $labels.agent_name }} ({{ $labels.app }}) in org {{ $labels.org_name }} was connected before and is now unhealthy.
 
-            - alert: AgentSlackTokensInvalid
-              expr: agent_slack_tokens_ok{job="agent"} == 0
-              for: 10m
-              labels:
-                severity: warning
-              annotations:
-                summary: Agent {{ $labels.agent_name }} (org {{ $labels.org_name }}) has invalid Slack tokens.
-                description: Slack token validation is failing for agent {{ $labels.agent_name }} ({{ $labels.app }}) in org {{ $labels.org_name }}; the agent cannot serve its workspace.
-
             - alert: AgentsInErrorState
               # max() drops pod/instance labels: stable identity across API
               # redeploys, and a fresh replica's default-0 gauge can't mask
               # the real count.
-              expr: max(agentfarm_agents_in_error) > 0
+              expr: max(agentbarn_agents_in_error) > 0
               for: 5m
               keep_firing_for: 5m
               labels:
@@ -321,8 +368,8 @@ prometheus:
               # identity across API redeploys) and ignores fresh replicas
               # that still export default 0.
               expr: >-
-                max(agentfarm_openrouter_credits_remaining) < 5
-                and max(agentfarm_openrouter_credits_scrape_ok) == 1
+                max(agentbarn_openrouter_credits_remaining) < 5
+                and max(agentbarn_openrouter_credits_scrape_ok) == 1
               for: 15m
               keep_firing_for: 5m
               labels:
@@ -334,7 +381,7 @@ prometheus:
             - alert: OpenRouterCreditsUnknown
               # max(): healthy if any replica polls successfully; drops
               # pod/instance labels so redeploys don't resolve + re-fire it.
-              expr: max(agentfarm_openrouter_credits_scrape_ok) == 0
+              expr: max(agentbarn_openrouter_credits_scrape_ok) == 0
               for: 30m
               keep_firing_for: 5m
               labels:
@@ -381,6 +428,14 @@ prometheus:
         mountPath: /etc/alertmanager-secrets
         secretName: alertmanager-slack-webhook
         readOnly: true
+      - name: web-auth
+        mountPath: /etc/monitoring-web-auth
+        secretName: monitoring-web-auth
+        readOnly: true
+    # Basic auth on the web endpoint (see webAuth); helmfile adds the
+    # Authorization header to the liveness/readiness probes.
+    extraArgs:
+      web.config.file: /etc/monitoring-web-auth/web-config.yml
 
   kube-state-metrics:
     enabled: true
@@ -412,6 +467,14 @@ grafana:
   replicas: 1
   # adminPassword is injected by helmfile from GRAFANA_ADMIN_PASSWORD.
   adminPassword: ""
+  # Prometheus requires basic auth (webAuth); the datasource reads it from here.
+  # Read only at startup, so helmfile also sets podAnnotations
+  # checksum/web-auth (sha256 of the password) to roll Grafana on rotation.
+  envValueFrom:
+    MONITORING_WEB_PASSWORD:
+      secretKeyRef:
+        name: monitoring-web-auth
+        key: password
   # The only ingress-exposed pod in the stack, so it gets the opposite
   # treatment of prometheus/ksm: no RBAC, no sidecar, and no ServiceAccount
   # token mounted — dashboards are mounted from the ConfigMap below instead
@@ -448,6 +511,11 @@ grafana:
           access: proxy
           url: http://monitoring-prometheus-server
           isDefault: true
+          basicAuth: true
+          basicAuthUser: monitoring
+          secureJsonData:
+            # Expanded by Grafana from its env (envValueFrom below).
+            basicAuthPassword: $MONITORING_WEB_PASSWORD
   ingress:
     enabled: true
     ingressClassName: traefik

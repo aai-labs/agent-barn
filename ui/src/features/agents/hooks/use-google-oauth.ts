@@ -5,19 +5,19 @@ import { z } from "zod";
 
 import { api } from "@/shared/api";
 
+import { openOAuthPopup, waitForOAuthPopupMessage } from "./use-oauth-popup";
+
 const AuthorizeUrlSchema = z.object({ authorizeUrl: z.string().url() });
-const TokenSchema = z.object({ refreshToken: z.string().min(1) });
+// email/grantedScopes are absent unless the openid scopes were requested, which
+// google_workspace always does.
+const TokenSchema = z.object({
+  refreshToken: z.string().min(1),
+  email: z.string().nullish(),
+  grantedScopes: z.array(z.string()).optional(),
+});
 
 // Must match the message contract the backend callback posts (google_oauth/routes.py).
 const MESSAGE_TYPE = "google-oauth";
-const POPUP_FEATURES =
-  "width=520,height=640,menubar=no,toolbar=no,location=no,status=no";
-
-type OAuthMessage = {
-  type?: string;
-  code?: string;
-  error?: string;
-};
 
 // Optional user-supplied Google client. When omitted, the app-owned client configured
 // on the backend is used.
@@ -33,6 +33,12 @@ export type GoogleOAuthResult = {
   refreshToken: string;
   clientId: string;
   clientSecret: string;
+  // Connected account's email, when the flow requested the openid scopes. Stored with
+  // the credential for providers keyed by account (google_workspace).
+  email: string;
+  // Scopes Google actually granted — may be narrower than requested, since the consent
+  // screen lets the user uncheck individual ones.
+  scopes: string[];
 };
 
 /**
@@ -53,23 +59,26 @@ export function useGoogleOAuth() {
     async (
       creds?: GoogleClientCredentials,
       // Which Google integration is being connected — decides the scopes the backend
-      // requests. Defaults to gmail, the only provider this flow originally served.
-      provider: string = "gmail",
+      // requests. google_workspace is the only Google provider left.
+      provider: string = "google_workspace",
+      // Extra authorize-url query params. google_workspace derives its scopes from the
+      // user's service selection, so it passes services + read_only here.
+      authorizeParams?: Record<string, string>,
     ): Promise<GoogleOAuthResult> => {
+      const popup = openOAuthPopup("google-oauth");
       setIsConnecting(true);
-      const popup = window.open("about:blank", "google-oauth", POPUP_FEATURES);
-      if (!popup) {
-        setIsConnecting(false);
-        throw new Error("Popup blocked. Allow popups for this site and try again.");
-      }
 
       try {
         const { data } = await api.get<{ authorizeUrl: string }>(
           "/api/v1/integrations/google/authorize-url",
           {
             schema: AuthorizeUrlSchema,
-            // Query params are sent as-is (not decamelized), so use the snake_case key.
-            params: creds?.clientId ? { provider, client_id: creds.clientId } : { provider },
+            // Query params are sent as-is (not decamelized), so use snake_case keys.
+            params: {
+              provider,
+              ...(creds?.clientId ? { client_id: creds.clientId } : {}),
+              ...authorizeParams,
+            },
           },
         );
         popup.location.href = data.authorizeUrl;
@@ -81,57 +90,15 @@ export function useGoogleOAuth() {
 
       try {
         // Wait for the callback popup to postMessage the authorization code back.
-        const code = await new Promise<string>((resolve, reject) => {
-          let settled = false;
-
-          const cleanup = () => {
-            window.removeEventListener("message", onMessage);
-            window.clearInterval(poll);
-          };
-          const finish = (fn: () => void) => {
-            if (settled) return;
-            settled = true;
-            cleanup();
-            fn();
-          };
-
-          function onMessage(event: MessageEvent) {
-            // The callback is same-origin (served through the /api proxy); reject anything else.
-            if (event.origin !== window.location.origin) return;
-            // Pin to this call's own popup so a concurrent flow (e.g. a second popup opened
-            // before this one settles) can't resolve this promise with its code/error.
-            if (event.source !== popup) return;
-            const data = event.data as OAuthMessage;
-            if (!data || data.type !== MESSAGE_TYPE) return;
-            try {
-              popup?.close();
-            } catch {
-              /* ignore */
-            }
-            if (data.error) {
-              finish(() => reject(new Error(data.error)));
-            } else if (data.code) {
-              const authCode = data.code;
-              finish(() => resolve(authCode));
-            } else {
-              finish(() =>
-                reject(new Error("Google did not return an authorization code.")),
-              );
-            }
-          }
-
-          window.addEventListener("message", onMessage);
-          // If the user closes the popup without finishing, stop waiting.
-          const poll = window.setInterval(() => {
-            if (popup?.closed) {
-              finish(() => reject(new Error("Authentication was cancelled.")));
-            }
-          }, 500);
-        });
+        const { code } = await waitForOAuthPopupMessage(popup, MESSAGE_TYPE, "Google");
 
         // Exchange the code for a refresh token server-side. The client secret (if the
         // user supplied their own client) rides only in this authenticated request body.
-        const { data } = await api.post<{ refreshToken: string }>(
+        const { data } = await api.post<{
+          refreshToken: string;
+          email?: string | null;
+          grantedScopes?: string[];
+        }>(
           "/api/v1/integrations/google/token",
           creds
             ? { code, clientId: creds.clientId, clientSecret: creds.clientSecret }
@@ -143,6 +110,8 @@ export function useGoogleOAuth() {
           refreshToken: data.refreshToken,
           clientId: creds?.clientId ?? "",
           clientSecret: creds?.clientSecret ?? "",
+          email: data.email ?? "",
+          scopes: data.grantedScopes ?? [],
         };
       } finally {
         setIsConnecting(false);

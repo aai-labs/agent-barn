@@ -5,7 +5,7 @@ from uuid import uuid7
 from fastapi import HTTPException
 from hamcrest import assert_that, calling, close_to, equal_to, has_entries, has_length, raises
 
-from api.domains.agents.models import AgentPlatform
+from api.domains.communications.models import CommunicationPlatform as AgentPlatform
 from api.domains.platform_admin.models import (
     PlatformStatsFilter,
     StatsGranularity,

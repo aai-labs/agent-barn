@@ -1,14 +1,11 @@
 from dataclasses import dataclass
+from datetime import datetime
 from uuid import UUID
 
 from injector import inject, singleton
 from sqlmodel import Session, select
 
-from api.domains.auth.models import (
-    PasswordResetToken,
-    RefreshToken,
-    UserSlackConfigToken,
-)
+from api.domains.auth.models import PasswordResetToken, RefreshToken
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 
 
@@ -54,9 +51,10 @@ class PasswordResetTokenRepository:
             self.delegate.save_all(tokens)
         return len(tokens)
 
-    def invalidate_unused_for_user_with_session(self, user_id: UUID, session: Session) -> int:
-        """Session-scoped variant, so token rotation can share a caller's transaction
-        (invite issued atomically with org/membership writes)."""
+    def refresh_unused_expiry_for_user_with_session(self, user_id: UUID, expires_at: datetime, session: Session) -> int:
+        """Push out the expiry of a user's outstanding (unused) links without touching the
+        tokens themselves, so the link already sitting in their inbox keeps working. Shares
+        the caller's transaction. Returns the count."""
         tokens = list(
             session.exec(
                 select(PasswordResetToken).where(
@@ -66,7 +64,7 @@ class PasswordResetTokenRepository:
             )
         )
         for token in tokens:
-            token.is_used = True
+            token.expires_at = expires_at
             session.add(token)
         return len(tokens)
 
@@ -78,41 +76,3 @@ class PasswordResetTokenRepository:
         session.add(pwd_reset_token)
         session.flush()
         return pwd_reset_token
-
-
-@inject
-@singleton
-@dataclass
-class SlackConfigTokenRepository:
-    delegate: PostgresRepositoryDelegate
-
-    def get_by_user_id(self, user_id: UUID) -> UserSlackConfigToken | None:
-        return self.delegate.find_one(UserSlackConfigToken, user_id=user_id)
-
-    def upsert(
-        self,
-        user_id: UUID,
-        access_token_encrypted: str,
-        refresh_token_encrypted: str,
-    ) -> UserSlackConfigToken:
-        with Session(self.delegate.engine) as session:
-            existing = session.exec(select(UserSlackConfigToken).where(UserSlackConfigToken.user_id == user_id)).first()
-            if existing:
-                existing.access_token_encrypted = access_token_encrypted
-                existing.refresh_token_encrypted = refresh_token_encrypted
-                session.commit()
-                session.refresh(existing)
-                return existing
-
-            token = UserSlackConfigToken(
-                user_id=user_id,
-                access_token_encrypted=access_token_encrypted,
-                refresh_token_encrypted=refresh_token_encrypted,
-            )
-            session.add(token)
-            session.commit()
-            session.refresh(token)
-            return token
-
-    def delete_by_user_id(self, user_id: UUID) -> bool:
-        return self.delegate.delete_all(UserSlackConfigToken, user_id=user_id)

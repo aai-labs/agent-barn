@@ -1,8 +1,8 @@
 """Seed stopped local Agents for manually exercising Agent configuration overrides.
 
 This is a local-development fixture, not production bootstrap data. It creates
-three Telegram Agents with fake encrypted bot tokens, so opening the Agent UI
-does not call an external platform or start a workload. Re-running the command
+three headless Agents, so opening the Agent UI does not call an external
+communication platform or start a workload. Re-running the command
 is idempotent by organization and fixture name.
 
 Usage (from the repository root)::
@@ -22,9 +22,7 @@ from api.core.config import get_config
 from api.domains.agents.models import (
     Agent,
     AgentAccess,
-    AgentPlatform,
     AgentStatus,
-    AgentTelegramConfig,
     AgentType,
 )
 from api.domains.organizations.models import Organization
@@ -33,7 +31,6 @@ from api.domains.rbac.models import AgentAccessRole
 from api.domains.templates.models import PlatformTemplate
 from api.domains.users.models import User
 from api.domains.users.organization_users.models import OrganizationRole, OrganizationUser
-from api.infrastructure.crypto import encrypt_token
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 
 DEFAULT_FIXTURE_PREFIX = "Override Playground"
@@ -114,18 +111,9 @@ def seed_agents(organization_id: UUID, count: int, prefix: str) -> None:
                     created_by_user_id=owner_membership.user_id,
                     name=name,
                     status=AgentStatus.STOPPED,
-                    platform=AgentPlatform.TELEGRAM,
                     agent_type=AgentType.OPENCLAW,
                     platform_template_id=template.id,
                     model=config.agent_default_model,
-                )
-                telegram_config = AgentTelegramConfig(
-                    agent_id=agent.id,
-                    bot_token_encrypted=encrypt_token(
-                        f"seeded-telegram-token-{agent.id}",
-                        config.agent_token_encryption_key,
-                    ),
-                    bot_username=f"seeded_{agent.id.hex[:10]}",
                 )
                 access = AgentAccess(
                     organization_id=organization_id,
@@ -133,7 +121,7 @@ def seed_agents(organization_id: UUID, count: int, prefix: str) -> None:
                     agent_id=agent.id,
                     access_role_id=AGENT_OWNER_ROLE_ID,
                 )
-                session.add_all([agent, telegram_config, access])
+                session.add_all([agent, access])
                 session.flush()
                 print(f"Created: {agent.name} ({agent.id}) — {template_key} v{template.version}")
                 created += 1

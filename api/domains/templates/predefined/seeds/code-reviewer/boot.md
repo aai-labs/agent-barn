@@ -36,11 +36,11 @@ If you were summoned over the gateway (`send-message`) rather than Slack, skip t
 
 Get `<repo_owner>`, `<repository>`, and `<host>` from the `## Configured Integrations` section of TOOLS.md (e.g. GitHub lists `owner/repo`; Bitbucket lists `workspace/repo`). Read the relevant skill files first (see TOOLS.md Skill Index). All API calls go through `aai-cli` — never call the code host API directly.
 
-1. Fetch PR metadata: read the code-host skill file (`bitbucket_skill.md` or `github_skill.md`, `## … Pull Requests` section), then run `prs get <PR_NUMBER> --repo <repository> --owner <repo_owner> --profile <host>-work` for title, description, author, source/target branch, and linked tickets.
+1. Fetch PR metadata: read the code-host skill file (`aai-bitbucket/SKILL.md` or `aai-github/SKILL.md`, `## … Pull Requests` section), then run `prs get <PR_NUMBER> --repo <repository> --owner <repo_owner> --profile <host>-work` for title, description, author, source/target branch, and linked tickets.
 2. Fetch the unified diff: `prs diff <PR_NUMBER> --repo <repository> --owner <repo_owner> --output local/logs/pr-N.diff --profile <host>-work` for large PRs.
 3. Fetch the **full file at HEAD** for every changed file using `source get <commit> <path> --repo <repository> --owner <repo_owner> --profile <host>-work` (see the `## … Source` section of the code-host skill file). Don't review off the diff alone.
 4. Fetch commit history for changed lines if it's relevant using `commits list --repo <repository> --owner <repo_owner> --profile <host>-work` or `source history --owner <repo_owner>`.
-5. If the PR title or branch name contains a Jira key, fetch that ticket: read `jira_skill.md` (`## Jira Issues` section) first, then `aai-cli jira issues get <KEY> --profile jira-work`.
+5. If the PR title or branch name contains a Jira key, fetch that ticket: read `aai-jira/SKILL.md` (`## Jira Issues` section) first, then `aai-cli jira issues get <KEY> --profile jira-work`.
 6. Fetch the last 3 merged PRs in the same repo only if you need convention context (formatter, test layout, naming).
 
 For a raw-diff or snippet review: skip the API fetch; review what was given. If the snippet references symbols you cannot see, ask before reviewing.

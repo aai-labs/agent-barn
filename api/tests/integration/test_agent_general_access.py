@@ -726,9 +726,6 @@ def test_owner_created_agent_share_settings_round_trip_without_creator_row():
             _BASE,
             json={
                 "name": "Owner Created Agent",
-                "platform": "slack",
-                "slack_bot_token": "xoxb-real-bot-token",
-                "slack_app_token": "xapp-1-real-app-token",
                 "template_key": "test-template",
             },
             headers=_auth(context),

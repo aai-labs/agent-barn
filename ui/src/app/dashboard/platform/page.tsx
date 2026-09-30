@@ -1,8 +1,9 @@
 import Link from "next/link";
+import { Suspense } from "react";
 import { BuildingIcon, ServerIcon, UsersIcon } from "@/components/icons";
 import { PlatformAdminOnly } from "@/auth/components/platform-admin-only";
 import { PlatformStatsPanel } from "@/features/platform-stats/components/platform-stats-panel";
-import { FileText } from "lucide-react";
+import { FileText, Receipt, Sparkles } from "lucide-react";
 
 const platformLinks = [
   {
@@ -26,10 +27,22 @@ const platformLinks = [
     Icon: ServerIcon,
   },
   {
+    href: "/dashboard/platform/costs",
+    title: "Platform Costs",
+    description: "Model spend across every organization, with burn rate and OpenRouter credits.",
+    Icon: Receipt,
+  },
+  {
     href: "/dashboard/platform/templates",
     title: "Platform Templates",
     description: "Author and publish the global agent prompt templates.",
     Icon: FileText,
+  },
+  {
+    href: "/dashboard/platform/skills",
+    title: "Platform Skills",
+    description: "Manage the global Skill catalogue, including the bundled aai-cli integrations.",
+    Icon: Sparkles,
   },
 ];
 
@@ -80,7 +93,9 @@ export default function PlatformPage() {
           ))}
         </div>
 
-        <PlatformStatsPanel />
+        <Suspense fallback={null}>
+          <PlatformStatsPanel />
+        </Suspense>
       </div>
     </PlatformAdminOnly>
   );

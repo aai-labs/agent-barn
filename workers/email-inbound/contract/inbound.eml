@@ -1,0 +1,10 @@
+From: Jane Customer <jane@acme.test>
+To: agent+tommy-4f2a@agents.agentbarn.test
+Subject: Question about pricing
+Message-ID: <abc123@acme.test>
+In-Reply-To: <root-9f2@agents.agentbarn.test>
+References: <root-9f2@agents.agentbarn.test> <cf-assigned@mail.test>
+Date: Mon, 31 Aug 2026 10:00:00 +0000
+Content-Type: text/plain; charset=utf-8
+
+What does the team plan cost?

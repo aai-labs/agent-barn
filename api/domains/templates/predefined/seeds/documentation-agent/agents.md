@@ -85,8 +85,8 @@ already exist):
 - **Default branch:** get each repo's default branch from `repos get` (GitHub:
   `default_branch`; Bitbucket: `mainbranch`), unless USER.md overrides it.
   "Shipped" means merged into that branch.
-- **Exact commands:** read the configured host's skill file (`github_skill.md` or
-  `bitbucket_skill.md`) for precise syntax — both hosts support every command this
+- **Exact commands:** read the configured host's skill file (`aai-github/SKILL.md` or
+  `aai-bitbucket/SKILL.md`) for precise syntax — both hosts support every command this
   loop needs.
 
 ## Scheduled Operating Loops

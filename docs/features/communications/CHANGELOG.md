@@ -1,0 +1,321 @@
+# Communications plugins and gateway — change log
+
+Status: Active
+Epic: Communications plugin architecture
+Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-ingest.md), [Runtime and Deployment](../../architecture/runtime-and-deployment.md), [gateway ownership ADR](../../adr/2026-08-22-agent-barn-owned-communications-gateway.md), [native gateway ADR](../../adr/2026-09-16-native-runtime-gateways-for-chat-platforms.md)
+
+## Current state
+
+- Delivered: Agent-subordinate Communication Connection persistence and scoped CRUD; explicit shipped Platform Plugin registry; Slack, Telegram, Discord, and Microsoft Teams plugins; the first webhook-ingress platform, authenticated by Bot Framework JWT verification at the `verify_webhook` seam; strict plugin-owned settings/credential schemas; encrypted credential envelopes; generic credential uniqueness; optimistic concurrency; platform catalogue; connection-scoped canonical Conversation Messages; durable inbound/outbound Communication Deliveries, including execution-bound interactive sends and durable scheduled-result delivery through Slack; gateway-supervised Slack Socket Mode, Telegram polling, and Discord Gateway ingress plus deployment-gated native Slack, Discord, Telegram, and Teams transport on Hermes and OpenClaw; database ingress leases; a separately served gateway; one versioned runtime-neutral protocol used by both runtimes; Slack channel/thread mention admission with durable Connection-scoped thread ownership; provider-neutral processing feedback with Slack reactions and assistant thread status, terminal failure notices across Discord, Telegram, and Teams, and safe terminal error projections in Web Chat; an outbound persistent runtime control stream with Redis Stream wakeups and durable PostgreSQL replay; optional, best-effort Platform Plugin name enrichment; and AF-273's content-free operational journal, typed admission dispositions, Agent-scoped diagnostics with richer aggregate health signals, filtered/chronological Journal reads including a per-Delivery lifecycle drill-down, reconnect/retry recovery controls, bounded retention, stable ordered outbound delivery, safe error projections, audit events, and low-cardinality Communications metrics.
+- Changed: Agents are headless and no longer own a single Platform. Legacy provider configuration tables, DTO fields, routes, and provider-specific UI have been removed after their data is migrated into Communication Connections.
+- Next: after the webhook Platform retirement, add Agent Barn Chat as another adapter at the Platform Plugin seam, then evaluate iMessage transport constraints independently of Agent runtimes. Email supports inbound and reply, but not agent-initiated outbound; initiated delivery on Discord, Telegram, and Teams remains unsupported through the Communications Gateway until each plugin supplies and tests target resolution and policy enforcement; native Discord, Telegram, and Teams deliver scheduled results to their origin or configured home.
+- Blockers: none.
+
+## Changes
+
+### 2026-09-22 — Retire the webhook Platform — PR pending
+
+- Removed: the unreleased webhook Platform Plugin and everything it alone required — minted connection credentials with one-time reveal and rotation, the several-Connections-per-Agent `singleton_key` index, the calls endpoint and its UI, Delivery Kind with `session_key`, the execution policy module, the delivery release route, `WebhookRequestRejected`, EVENT conversations, and their tests. External HTTP triggers are now [Agent Webhooks](../agent-webhooks.md), which never create a Communication Delivery.
+- Changed: the runtime Communications protocol is version 2 again. Version 3 is still accepted on the wire because staging pods speak it; their adapter falls back to version 2 behaviour, so they keep working until their Agent restarts.
+- Changed: migration `b6d4f0a91c37` deletes webhook Connections with their deliveries, journal entries, and transcript rows, then drops the columns only that Platform used and restores the one-Connection-per-Platform index. The `EVENT` value stays on the `conversationtype` enum because PostgreSQL cannot drop one; nothing writes it.
+- Kept: the `WebhookRequest` and `verify_webhook` plugin seam and the hardened provider webhook route, which Microsoft Teams ingress uses.
+
+### 2026-09-17 — Move Microsoft Teams to the runtime-owned transport — PR pending
+
+- Fixed: Teams app packages declare `supportsFiles: true`, enabling supported file intake in one-to-one bot chats. Teams' bot file API does not support channel or group-chat uploads; those require a separate Microsoft Graph OAuth integration.
+- Changed: enabled Teams Connections use the runtime-owned Bot Framework adapter on Hermes and OpenClaw when `teams` is in `COMMUNICATIONS_NATIVE_PLATFORMS`. The Azure messaging endpoint remains the public Agent Barn Connection webhook, but its ingress now terminates at the product API. A focused API relay verifies the JWT, enforces the existing DM/channel policy, and relays accepted raw activities and their Authorization header to the Agent's private port 3978 listener; runtime webhook ingress no longer depends on the Communications deployment. Gateway-owned Teams remains an API-proxied rollback path when `teams` is not enabled.
+- Changed: the relay passes the runtime's status, body, and content type back to Bot Framework so Adaptive Card `invoke` responses and other native lifecycle behavior remain intact. Policy denials are acknowledged without reaching the runtime; stopped or unreachable Agents return 503 for provider retry. The relay itself never retries a POST, avoiding duplicate activity processing.
+- Changed: Hermes receives its documented `TEAMS_*` environment contract. OpenClaw installs `@openclaw/msteams` at the pinned core version and receives credentials only through its documented `MSTEAMS_*` environment variables; no Teams secret is persisted in `openclaw.json`. Both runtime observers translate OpenClaw's internal `msteams` key back to the product key `teams`.
+- Delivered: Teams gains an optional Home conversation for originless runtime-owned scheduled results. Agent Services expose port 3978 only when they own an enabled runtime-owned Teams Connection and remain private ClusterIP Services.
+- Operations: deploy the shared native-platform flag, then restart every running Teams Agent so its listener and Service port exist. OpenClaw base image 0.7.1 aligns the preinstalled Teams plugin contract with core 2026.8.2.
+
+### 2026-09-17 — Mirror native runtime transcripts into dashboard history — PR pending
+
+- Fixed: native Slack and Discord conversations are now visible in the dashboard. The native runtime observer sends normalized inbound and outbound transcript messages alongside its existing content-free Connection Journal telemetry; Agent Barn authenticates the Agent, resolves its active Connection, and idempotently upserts the existing conversation-history rows. Journal entries remain content-free and native messages remain outside the claimable Communications Delivery workflow.
+- Fixed: the Hermes observer mirrors every observed outbound obligation state. A provider send that reaches `delivered` before the next two-second observer poll is therefore retained in dashboard history instead of being lost for missing its transient `attempting` state.
+
+### 2026-09-17 — Suppress native home-channel onboarding when intentionally unset — PR pending
+
+- Changed: Native Hermes Slack/Discord and OpenClaw Slack/Discord Connections without a configured default delivery target now receive an impossible home-channel sentinel. The runtimes therefore do not send their first-message home-channel setup notice. Explicitly configured home channels remain unchanged; an originless native cron delivery without one fails rather than being sent to an unintended real channel.
+
+### 2026-09-17 — Move Telegram to the native gateway — PR pending
+
+- Changed: enabled Telegram Connections run in the runtime's native Telegram adapter on Hermes and OpenClaw when `telegram` is in `COMMUNICATIONS_NATIVE_PLATFORMS`, using the existing supervisor, expired-lease recovery, and claim cutoff. The runtime owns polling, sessions, replies, approvals, progress, and scheduled delivery to origin. Running Agents lose gateway ingress on deploy and must be restarted. Telegram allows one poller per bot token, so the API flag should roll out before those restarts.
+- Changed: native group messages require a mention of the bot or a reply to it; DMs never do. Allowed groups, Group access, Direct messages, and Allowed DM senders keep their meaning. On Hermes an Allowed DM sender is also admitted in any group the Connection allows, which admits every member anyway.
+- Delivered: Telegram Connections gain an optional Home chat. Native Hermes receives it as `TELEGRAM_HOME_CHANNEL` and OpenClaw as `channels.telegram.defaultTo`, so scheduled results without an originating chat are delivered there. Without one, both runtimes receive the same no-home sentinel as Slack and Discord, which suppresses their home-channel setup notice.
+- Changed: Telegram setup no longer asks native Connections to disable privacy mode, since mentions and replies already reach the bot.
+- Changed: OpenClaw uses the Telegram channel bundled in its core, so `start.sh` installs nothing for it and `healthz-server.js` reports Telegram health after its first successful poll.
+- Delivered: `hermes-base/test-image.sh` drives each policy combination through the pinned Hermes Telegram adapter and gateway authorization chain.
+- Removed: Agent Barn's terminal failure notice for native Telegram; the runtime reports its own failures.
+
+### 2026-09-17 — Move OpenClaw Slack and Discord to the native gateway — PR pending
+
+- Changed: enabled Slack and Discord Connections on OpenClaw Agents run in OpenClaw's native channel plugins when their Platform is in `COMMUNICATIONS_NATIVE_PLATFORMS`. The native cutoff (supervisor, expired-lease recovery, inbound and outbound claims) no longer checks the Agent's runtime. OpenClaw Agents already running with a native Platform lose gateway ingress on deploy and must be restarted onto base image 0.7.0.
+- Changed: `openclaw-base` 0.7.0 moves core to 2026.8.2 (2026.6.11 had a reply-session init race that dropped Discord file uploads). OpenClaw Agents install `@openclaw/slack`, `@openclaw/discord`, and the Firecrawl plugin from npm at the core's version on first start, because 2026.8 only trusts recorded npm installs with plugin state.
+- Changed: Agent start projects each native Connection into `channels.slack`/`channels.discord`. Tokens go into the Secret, and `AGENTBARN_SCHEDULED_DELIVERY=0` hands cron delivery to OpenClaw. Discord replies open a thread per message, as on Hermes, but OpenClaw does not require a mention inside threads it created. Slack's DM allowlist applies only to DMs here, while Hermes applies it to channel senders too.
+- Delivered: the `agentbarn-observer` OpenClaw plugin reports `provider_observed`, `agent_claimed`, `model_completed`, and delivery stages. `healthz-server.js` reports connection health transitions from the gateway health snapshot. Both are content-free, and base-image CI drives the observer through the pinned hook runner.
+
+### 2026-09-16 — Move Hermes Discord to its native gateway — PR pending
+
+- Changed: enabled Discord Connections on Hermes can run in Hermes' native Discord adapter alongside native Slack. Agent Barn projects the bot token, mention policy, home channel, and Verbose mode at Agent start; Hermes owns sessions, replies, approvals, progress, reconnects, and scheduled delivery.
+- Changed: Discord adopts Hermes' native global user, role, and channel gates plus Allow all users. Agent Barn projects those settings directly into Hermes; the runtime observer is telemetry-only and reports content-free `provider_observed` Journal stages.
+- Fixed: Discord directory discovery identifies its bot-token REST calls with a User-Agent, allowing the Connection editor's Browse server selector to load the bot's servers instead of silently appearing empty.
+- Changed: native Discord is excluded by the same generic supervisor, stale-recovery, inbound-claim, and outbound-claim cutoff used by native Slack. Gateway-owned Discord remains unchanged when Discord is not in `COMMUNICATIONS_NATIVE_PLATFORMS` or the Agent is not Hermes.
+
+### 2026-09-16 — Close Hermes native Slack ownership seams — PR pending
+
+- Changed: Agent Barn's supervisor, expired-lease recovery, and inbound/outbound Delivery claim paths all exclude native Hermes Platforms. This prevents stale Slack work from reaching either the shared runtime adapter or provider sender after the Connection has moved to Hermes.
+- Changed: Native Hermes disables the Agent Barn scheduled-completion capture and does not start its persisted spool drain; Hermes owns cron delivery for the whole runtime. Gateway-owned Connections on the same Agent can still use the runtime adapter for ordinary inbound delivery.
+- Changed: The Connection chooser omits Platforms that already have an active Connection. Delivery Journal rows show their historical stage without repeating the Delivery's live current status on every row; the current status remains visible once at the end of the Delivery timeline.
+
+### 2026-09-16 — Provider-credit failure feedback across messaging channels — PR pending
+
+- Delivered: A terminal runtime failure now uses the same safe, normalized reason in Discord, Slack, Telegram, Teams, and Web Chat. Telegram replies to the originating message, Teams reuses the inbound activity's stored conversation routing, and Web Chat exposes the existing delivery error summary to the dashboard. Non-retryable provider failures, including HTTP 402 credit or billing failures, become terminal immediately instead of consuming the remaining runtime attempts.
+- Changed: Processing feedback carries provider-owned routing metadata only inside the Platform Plugin boundary. No migration is required; Web Chat reads the existing `CommunicationDelivery.last_error_message` field.
+
+### 2026-09-16 — Discord approval prompts fit the message limit — PR pending
+
+- Changed: a Discord command-approval prompt is rendered by the plugin instead of being sent as the runtime's text, so the command is bounded and the message stays inside Discord's 2,000-character `content` limit; a long command previously failed the send with 400 and dead-lettered the reply.
+- Changed: Discord ingress now forwards component interactions as well as messages, acknowledging each over HTTP before the gateway persists it, since the interaction token expires after three seconds. Message handling, intents, and every other platform's ingress are untouched.
+
+### 2026-09-14 — Remove the obsolete Slack announce-steps setting — PR pending
+
+- Removed: Slack Connections no longer expose the unused **Announce steps** setting. The schema-driven Connection form drops the checkbox with the backend schema; the Agent-level **Verbose mode** setting remains the single control for runtime progress messages.
+- Changed: Slack's Connection schema advances to version 2. Existing `verbose_mode` values are removed from persisted Slack Connection settings, and validation temporarily discards that one legacy key so Connections written by an older replica remain usable during a rolling deployment. Other unknown settings remain rejected.
+
+### 2026-09-14 — Markdown replies on Slack — PR pending
+
+- Changed: Slack replies are sent as a `markdown` block, so the standard Markdown Agents write (bold, links, headings, lists, code blocks, tables) renders instead of showing raw `**` and `[label](url)`. The plain `text` is still sent as the notification fallback. A reply carrying Slack mention markup (`<@…>`, `<#…>`, `<!…>`), which the markdown block does not document, or longer than the block's 12,000-character cap keeps the previous mrkdwn text path. Approval prompts keep their existing section and button blocks.
+
+### 2026-09-11 — Manual approval mode always asks — PR pending
+
+- Fixed: A Hermes Agent in manual mode could stop prompting entirely. An `always` answer on a dangerous-pattern finding is stored as the pattern, approving the whole category, and the pinned runtime consults that allowlist before it branches on the approval mode. Once `always` began surviving restarts, a grant made while the Agent ran in auto mode silenced manual mode after the switch.
+- Changed: Permanent grants are kept in an Agent Barn-owned file beside the runtime config and handed to Hermes only outside manual mode, so they return when the Agent leaves manual mode rather than being discarded. In manual mode the approval prompt offers only `once` and `deny`, and in every mode the adapter accepts only an answer that was offered, so a typed `always` cannot create the grant the buttons withheld.
+
+### 2026-09-11 — Readable command approvals and the approval envelope field — PR pending
+
+- Changed: A Hermes approval prompt now renders the command as a fenced block bounded at 2,500 characters, counting any dropped remainder explicitly rather than truncating silently, and neutralises a fence inside the command so it cannot terminate the block early. The idempotency suffix is keyed on the run and command rather than the SSE frame counter, which restarted on a re-drain and could either duplicate a prompt or drop it against an existing delivery's envelope.
+- Changed: Answering `always` is now permanent. Hermes persists that grant as root-level `command_allowlist` in `/opt/data/config.yaml`, which the Hermes start script previously overwrote from the ConfigMap on every boot; it now merges, reasserting every settings-derived key while carrying only the allowlist forward. The generated config also pins `approvals.timeout`, `approvals.cron_mode`, and `approvals.single_query_mode` to the pinned image's own defaults so a runtime upgrade cannot move the policy silently, and the image smoke test asserts those keys, the allowlist key, and the `approval.request` event shape still exist.
+- Delivered: `RuntimeReplyCreate` and `OutboundCommunicationEnvelope` accept an optional `approval` payload carrying the approval's identity, command, and the runtime's own offered choices, plus an `interactive_components` Platform Capability. The field is omitted from a stored envelope entirely when absent, so an ordinary reply serialises exactly as it did before and stays readable by a replica that predates the field. Only an approval prompt carries it. Outbound envelopes are persisted and re-validated on every retry under `extra="forbid"`, so the release that can read the field must be fully rolled out before any release writes it; otherwise an older replica rejects the envelope, exhausts its retries, and dead-letters a row that blocks its whole ordering key.
+- Changed: The sample Slack manifest enables interactivity. Apps created from an earlier manifest need **Interactivity & Shortcuts** switched on before approval buttons become clickable; Socket Mode requires no request URL and no reinstall, and the typed reply keeps working either way.
+
+### 2026-09-10 — Agent-initiated message delivery — [PR #188](https://github.com/aai-labs/agent-barn/pull/188)
+
+- Delivered: Hermes and OpenClaw can durably submit scheduled final responses to Communications. On Hermes, jobs created in a conversation return to that Connection, channel, and thread, and jobs created at startup use the Agent's single configured default. OpenClaw uses the default only when the completion has no recorded origin; its pinned cron hook exposes a delivery-channel label rather than the creating conversation, so those unmappable completions are refused until origin can be captured at job creation. Shared silence markers suppress empty scheduled updates.
+- Delivered: An interactive send requires a live inbound execution token and resolves only through that execution's Communication Connection. Scheduled submissions may use only their recorded origin or configured default; neither flow accepts a model-selected Connection ID.
+- Changed: Slack is the only Platform Plugin advertising agent-initiated delivery. It resolves channel and user targets, applies the current Connection allowlists again before provider delivery, and stores the resolved destination so retries cannot change recipients.
+- Changed: Initiated submissions persist canonical message and delivery state atomically under an Agent-scoped idempotency key, use a distinct `initiated_queued` journal stage, and retry scheduled completions from a runtime-local SQLite spool that abandons permanent 4xx refusals without retrying, stops after about a day of transient failures, and prunes settled rows after seven days. The Connection editor configures the one default target enforced by PostgreSQL.
+- Changed: Hermes executes `BOOT.md` through its local `/v1/runs` API at startup, and both runtime image workflows exercise the messaging hooks whenever shared messaging or runtime startup code changes.
+- Verified: API integration tests cover destination/context authorization, idempotency, policy revalidation, tenancy, and default conflicts. Pinned-image contracts cover the Hermes scheduler patch and OpenClaw completion/tool hooks.
+
+### 2026-09-06 — Hermes DM history continuity — PR pending
+
+- Fixed: Consecutive Hermes deliveries now explicitly resume the persisted Connection/location/thread session through `/v1/runs`. Previously the shared session ID selected persistence identity but supplied no prior messages to inference, so the Agent treated each DM as its first turn despite history remaining in SQLite.
+- Changed: The Hermes base image adds an opt-in session-history patch preserving native tool messages and compaction lineage. Storage failures fail the turn rather than erasing its context. The adapter and patched image must roll out together; OpenClaw delivery is unchanged.
+- Fixed: Hermes renews its active inbound-delivery lease throughout long async runs and approvals. A later message in the same session receives a completed “still working” acknowledgement rather than being silently reclaimed; reclaimed terminal failures now record metrics and provider failure feedback. Verbose progress and approval notices are rate-limited and best-effort, so their transient delivery failures do not fail a live run.
+- Fixed: Telegram long-message chunking now measures Telegram's UTF-16 code-unit limit and preserves newline/blank-line content exactly at chunk boundaries.
+- Verified: Existing PVC history is reused without a migration.
+
+### 2026-09-04 — Provider gateway close diagnostics — PR pending
+
+- Changed: WebSocket provider close codes are now retained as bounded
+  `provider_code` diagnostics while free-form close reasons remain excluded.
+  Discord close codes for disallowed or invalid intents (`4014`/`4013`) are
+  classified as configuration failures, and authentication close code `4004`
+  is classified as an authentication failure, so gateway setup problems no
+  longer surface only as opaque `PROVIDER_ERROR` incidents. Their summaries
+  include a concrete recovery action—enable Message Content Intent, review the
+  intent selection, or replace the bot token—and tell the operator to reconnect.
+
+### 2026-09-03 — Discord bot install link — PR pending
+
+- Delivered: A saved Discord Connection can regenerate its bot install URL on demand. The Connection card's **Get install link** action calls a new `install-link` endpoint, which resolves the bot's application through Discord's `GET /oauth2/applications/@me` using the stored bot token and returns the recommended least-privilege authorize URL — View Channels, Send Messages, Read Message History, and Send Messages in Threads, plus reactions, embeds, attachments, and external emoji. The URL is never persisted, so permission recommendations in code apply to every existing Connection immediately, and the action follows the app-package contract: authorized with `AGENT_UPDATE`, concealed cross-Organization, and rejected with 400 for platforms without the capability.
+- Changed: The install link follows the Teams app-package pattern — a new optional `build_install_link` Platform Plugin seam gated by the `INSTALL_LINK` capability, declared and implemented only by Discord. No Connection persistence, validation flow, or read-model shape changed, restoring the simple install workflow the pre-AF-271 wizard offered without its separate Application ID entry. The Discord setup hint now leads with the card action, keeping the OAuth2 URL Generator as the manual alternative.
+
+### 2026-09-01 — Event-driven runtime control and Web Chat cancellation — PR pending
+
+- Delivered: Communications protocol version 2 adds an Agent-initiated SSE control stream. Content-free Redis Streams wake the connected runtime for durable PostgreSQL delivery claims and carry cancellation requests without continuous idle claim polling, a reverse control-plane connection, or an HTTP admin server in every Agent pod. Version-1 delivery routes remain accepted during rolling Agent rebuilds.
+- Delivered: Dashboard Web Chat SSE now takes a Redis cursor, replays durable messages, and waits on Agent-scoped stream notifications instead of polling PostgreSQL. Delivery status is included in the Web Chat message read model so waiting state survives remounts and clears durably after cancellation.
+- Changed: Web Chat's initial history read is bounded to the newest 500 messages and restores chronological order after the database applies the limit, so older messages cannot permanently hide recent activity.
+- Changed: Web Chat SSE now advances with an `id > last_message_id` query for new messages and performs delivery-scoped reads for status signals, keeping the authorized Connection and thread fixed for the stream instead of reauthorizing and rereading the full history on every wakeup.
+- Changed: The runtime adapter now applies bounded exponential reconnect backoff after a clean control-stream close as well as an error, preventing a normal EOF from becoming a hot reconnect loop.
+- Changed: Runtime cancellation signals received after a Delivery claim but before its in-flight marker are retained in a bounded, expiring handoff so that race cannot silently defer cancellation until the model call completes.
+- Changed: The shared runtime adapter now has an explicit Python 3.12 Ruff target and source-grammar regression test, matching the oldest OpenClaw image that executes it while keeping the API package on Python 3.14.
+- Changed: The Communications supervisor now admits only Connections declaring supervised or webhook ingress; Web Chat declares neither and no longer acquires a lease or parked task, while a capability-less or unimplemented supervised ingress fails closed as `DEGRADED`.
+- Changed: Dashboard SSE connections now obtain bearer headers through the shared API auth interceptor, including proactive refresh and a forced refresh after a 401, instead of reading a potentially stale token directly from the auth store.
+- Changed: Web Chat history, thread-list, and stream GETs no longer create the built-in Connection as a side effect. The Web Connection remains lazily provisioned by the first sent message, and a stream that starts before that message adopts the newly created Connection on its next durable wakeup.
+- Changed: Web Chat thread mutation path parameters now enforce the same 128-character bound as request/query thread IDs, and the UI URL-encodes the stop-generation thread ID before sending it.
+- Changed: Web Chat thread summaries now select and order the newest 100 threads in PostgreSQL before loading fallback-title rows, rather than materializing every user's thread summary in Python.
+- Changed: Removed the unused `AGENT_RUNTIME_KIND` Secret entry from both runtime builders; the shared adapter already uses the configured runtime API contract and never read this value.
+- Changed: Web Chat stop-generation is explicitly modeled as an idempotent command: the service no longer returns a discarded boolean, and the route continues to return 204 whether it found an active delivery or the turn was already inactive.
+- Changed: Redis signal cursor and wait failures now fall back to bounded durable-replay wakeups instead of terminating long-lived runtime or Web Chat consumers; PostgreSQL remains authoritative while Redis recovers.
+- Changed: Cancellation is persisted before notification, takes precedence over late successful completion, and atomically prevents reply creation from a cancelled source. The Web Chat read model exposes `cancel_requested_at` while a processing Delivery is still finishing, so the UI stops showing it as awaiting a reply immediately. Both pinned runtimes currently soft-cancel by suppressing the eventual result because neither exposes a proven abort handle for this chat-completions path. Redis remains a wakeup mechanism only—PostgreSQL owns claims, leases, cancellation, idempotency, and reconnect replay—and the runtime adapter uses a bounded five-second safety claim poll for lost wakeups.
+
+### 2026-09-01 — Directory failures are reported instead of crashing — PR pending
+
+- Fixed: A provider-side directory read that failed — a revoked token, a missing scope, a rate limit, an outage — escaped as an unhandled 500, because `SlackFetchError` is not a `ValueError`. Both the preview and saved-Connection directory endpoints now translate any provider failure through the existing error normalizer. Credential and scope problems answer 400, rate limits 429, timeouts 504, and outages 502; 401/403 are deliberately never used, since the web client treats them as its own session expiring and would sign the operator out over a bad Slack token. Provider text still never reaches the client — only the bounded summary and a validated provider code such as `missing_scope`.
+- Changed: The shared error classifier now recognizes the provider error codes that carry no matching English text of their own — `missing_scope`, `not_authed`, `token_revoked`, `token_expired`, `account_inactive`, and `ratelimited` — so they land in the right category instead of Unknown.
+
+### 2026-09-01 — Connection form reordered and directory Browse picker — PR pending
+
+- Changed: The add-Connection form now leads with Credentials, then the Connection name, then Connection settings, so the setup guidance flows directly into the tokens it describes.
+- Changed: Slack allowlists are no longer gated behind a separate workspace-validation step. Every directory-backed allowlist is an ID field again, paired with a Browse control that opens a searchable multi-select of channels, people, servers, or roles; confirming it writes only the platform IDs. Slack loads its directory from the draft credentials on first open; a saved Connection browses its own directory. Manual ID entry remains available at all times.
+- Changed: Connection settings are stacked full width rather than paired into two columns, for every platform. Directory-backed fields render as one bordered token field holding its chips, a compact ID input, and the Browse control, and the picker itself has room to breathe: a padded search box separated from the list, taller rows, and the selection count in the footer.
+- Fixed: Directory suggestions never appeared, saved allowlist chips showed raw IDs instead of names, and the Slack workspace-validation control could never enable, because all three were keyed on snake_case plugin-schema property names. Responses are camelized in transit, so the keys are now camelCase.
+- Fixed: When a directory read failed while editing a saved Connection, the picker reported a generic "could not load" and cached that failure, so reopening it never retried. It now shows the reason the API returned and re-reads the directory on reopen.
+
+### 2026-09-01 — Pre-save Slack workspace preview — PR pending
+
+- Delivered: A user can now validate submitted Slack draft credentials and load workspace channel/user candidates before creating the Connection. The preview is Agent-update/secret-manage authorized, returns safe directory entries only, and never persists the submitted credentials or creates a Connection. Slack allowlists stay gated until that workspace load completes, with a manual-ID alternative for advanced setup.
+
+### 2026-09-01 — Expanded Slack sample manifest — PR pending
+
+- Changed: The UI-local Slack sample manifest now includes the requested full bot-scope and event-subscription set, including app mentions, canvases, files, pins, reactions, and membership/channel events. This is a user-provided sample manifest rather than a statement of the minimum permissions consumed by the Communications plugin.
+
+### 2026-09-01 — Local Markdown guidance and Slack sample manifest — PR pending
+
+- Changed: The Slack sample manifest now lives in the web application beside its copy control rather than travelling through the platform catalogue API. It is static user guidance, not a provider capability or API contract.
+- Changed: Slack, Discord, Telegram, and Teams setup guidance—including Teams' post-connection instructions—is now authored in the same Markdown subset. The shared renderer adds separation before subsequent headings so multi-section instructions remain scannable.
+
+### 2026-09-01 — Markdown setup guidance — PR pending
+
+- Changed: Provider-owned setup hints are now authored as Markdown and the Connection form renders their headings, ordered steps, links, inline code, and emphasis as structured UI. Slack and Discord setup guidance now use this format; the Slack app-management link is directly usable instead of appearing as unstructured prose.
+
+### 2026-09-01 — Slack manifest import instructions corrected — PR pending
+
+- Changed: Slack setup now gives the exact manifest-import sequence—open `https://api.slack.com/apps`, New App, From Manifest, paste the copied manifest, choose the workspace and Next, then Create. The copied manifest now matches the reviewed App Home, bot display name, organization deployment, Socket Mode, event, and scope configuration.
+
+### 2026-09-01 — Discord Connection directory discovery — PR pending
+
+- Delivered: Discord now advertises directory discovery and lists the bot's guilds plus a selected guild's message channels, active human members, and non-default roles through credential-scoped, ten-minute cached provider reads. Member enumeration follows Discord pagination and filters bot accounts; channel choices exclude non-message channels.
+- Delivered: Discord Connection editing is server-first: choose a server in the Browse server control, then select its channels, users, and roles as removable settings tokens. Raw IDs remain accepted, including for multi-server allowlists. The connection setup guidance now calls out Server Members Intent as necessary when member suggestions are used.
+
+### 2026-09-01 — Guided Slack and Discord Connection setup — PR pending
+
+- Delivered: Slack and Discord Connection setup hints now give ordered, provider-specific instructions instead of scope/permission inventories. The Slack flow explicitly separates manifest import, manual `xapp-` Socket Mode token creation, bot installation/token retrieval, credential entry, and channel access; Discord covers bot creation, Message Content Intent, OAuth installation permissions, token entry, and Connection policy.
+- Delivered: Slack setup includes a copyable manifest and documents the manual `connections:write` app-level-token step, which manifests cannot perform.
+
+### 2026-09-01 — Connection setup candidates and Agent platform indicators — PR pending
+
+- Delivered: Schema-backed multi-value Connection settings now use removable value tokens. Enter commits a value, typing or pasting comma-separated values commits each complete value, and the remaining text stays editable; raw IDs remain supported for every platform.
+- Delivered: Slack Connections now expose Agent-update-authorized, credential-backed directory reads for accessible channels and active users. Editing a Slack Connection offers those candidates for the channel and DM-sender allowlists while persisting only their provider IDs; the cached Slack client remains the only provider API boundary.
+- Delivered: Agent list and detail reads now carry their distinct active Connection platform keys, resolved through the same accessible-Agent predicates as the Agent collection. Agent cards and headers render those platform icons without issuing one Connection query per Agent.
+
+### 2026-08-28 — Structured safe failure diagnostics — PR pending
+
+- Changed: Connection and Delivery failures now pass through one structured diagnostic normalizer before persistence. Recent failure details retain a safe category, operation, HTTP status, provider error code, retryability, bounded retry-after value, and provider request ID without storing provider URLs, credentials, headers, bodies, or exception text. Legacy error projections remain redacted when no validated diagnostic envelope exists.
+- Changed: The Connection details page's expanded Recent failure cards and Delivery transition details render the structured diagnostics, giving authorized Agent users actionable provider context while keeping the content-free journal boundary intact.
+
+### 2026-08-28 — AF-273 — Journal filters, delivery lifecycle drill-down, and richer summary signals — PR pending
+
+- Delivered: `GET .../journal` now accepts server-backed `since`/`until`, `stage`, `failed_only`, `retryable_only`, `direction`, and `delivery_id` filters, composed as SQL predicates in `CommunicationOperationalRepository.find_journal_page` against the existing Delivery join — routes and the service stay thin, and authorization is unchanged. `retryable_only` reads the live joined Delivery status rather than the historical Journal stage, so a Delivery Transition that has already been retried drops off the filter even though its `dead_lettered` entry remains in the Journal. The same endpoint now accepts `order=asc`, which combined with `delivery_id` serves one Delivery's complete lifecycle in chronological order — a read, not a new table. The Connection details page's transition rows link to this as "View delivery timeline".
+- Delivered: The summary endpoint reports last successful provider connection, current error age, consecutive failure count, delivery success rate, and oldest pending Delivery age. The first three are deliberately unbounded by the diagnostics window — they answer "what is this Connection's current trajectory," not "what happened in the selected window" — while delivery success rate reuses the already-windowed delivery counts.
+- Changed: Diagnostics now returns a server-grouped Connection health read model made from actual provider health transitions. It carries a windowed state timeline plus recent connection incidents, reconnect count, median connect time, longest outage, recovery outcomes, and safe causes; provider observation and policy-admission rows remain available only in the raw Journal because they are not connectivity states. The summary and Journal accept the same inclusive, maximum-90-day window contract.
+- Changed: The Connection activity table gained a filter bar (time range, stage, direction, delivery ID, failed/retryable toggles) and a "Health signals" summary row. Journal stage/status text is now lowercased consistently before CSS capitalization, matching the existing stage-label convention instead of leaking raw uppercase enum values into the DOM.
+
+### 2026-08-28 — AF-273 — Connection details page — PR pending
+
+- Changed: Messaging settings now show each Connection's current observed status and compact actions. A dedicated Connection details page holds summary diagnostics, recovery controls, and a paginated Delivery transitions explorer. Summary diagnostics include capped safe recent failures and grouped provider-state history; Delivery transitions remain backed by the Journal endpoint. Failure cards expand to show safe error metadata, occurrence times, and associated Delivery IDs; eligible delivery retries remain available from the Delivery lifecycle. The compact view offers a manual status refresh; it reads the most recently recorded supervisor state and does not create a provider probe.
+- Changed: Journal reads enrich Delivery Transitions from their linked live Delivery with direction and current status. The explorer presents inbound/outbound and status badges plus per-entry duration without storing duplicate or content-bearing facts in the append-only Journal, and does not expose provider error details for copying.
+- Changed: Connection details now leads with an incident-oriented Connection health view—a state timeline, reconnect/connect/outage summary, and Recent incidents table—and keeps Delivery transitions as the primary activity table. Recent failures explain safe error details inline through collapsible cards; the raw connection-level Journal remains an API troubleshooting source rather than a page-level table. One diagnostics window drives the windowed cards and Delivery transitions; current provider state and freshness remain explicitly separate from that window.
+
+### 2026-08-27 — AF-273 — Communication diagnostics and recovery controls — PR pending
+
+- Delivered: An append-only, content-free Connection operation journal records provider observation, policy admission, delivery stages, connection health transitions, attempts, durations, bounded error metadata, dead-lettering, reconnect requests, retries, and successful delivery recovery. Slack, Telegram, Discord, and Teams now return typed admission dispositions (`accepted`, `bot_ignored`, `event_ignored`, `mention_required`, `user_denied`, `channel_denied`, and `malformed_payload`); only accepted envelopes create inbound Deliveries, while rejected admissions use a distinct `policy_rejected` journal stage. Provider observation and policy journal writes are best-effort: diagnostics persistence failures are logged but must not drop a consumed polling event or reject ingress.
+- Delivered: Agent-scoped diagnostics expose provider connectivity separately from end-to-end delivery health, pipeline and delivery counts, current queue depth/oldest queued age, latency summaries, capped recent failures, and the latest 50 transitions without message content or credentials. Authorized users can request one Connection reconnect or retry one active dead-lettered outbound Delivery while preserving its message and idempotency identity. Outbound claims preserve ordering within a conversation, and provider adapters receive a stable opaque idempotency key on every retry; error summaries are allowlisted/redacted on both writes and reads, while the supervisor prunes rows outside the configured retention window.
+- Changed: Connection health changes, dead-lettered Deliveries, requested retries, and successful recovery are registered as typed Organization-scoped Domain Events and projected through the existing Security Audit handler. Communications metrics expose status, outcomes, queue age/depth, latency, reconnects, and policy dispositions with no Organization, Agent, Connection, Conversation, or User labels.
+- Changed: Delivery transition detail derives queue wait, processing time, and any scheduled retry from the live Delivery; raw payloads, provider identifiers, and identities remain excluded. Ordinary successful Connection events are compact rows, while failures, degraded state, and reconnect requests retain a focused drill-down.
+- Follow-up: No bulk replay, org-wide dashboard, alert routing, or provider-specific recovery buttons were added.
+
+### 2026-08-31 — AF-276 — Email as a communication platform — PR pending
+
+- Delivered: A shipped Email Platform Plugin, the first platform reached at an address rather than through a per-Connection endpoint. Each Email Connection is allocated `agent+<slug>-<token>@<AGENT_EMAIL_DOMAIN>`, claimed on create and released on retirement or Agent deletion, with the local part never reissued. A Cloudflare Email Worker parses inbound MIME and posts to `POST /communications/v1/webhooks/email/inbound`, authenticated by a gateway-level shared secret because the Worker knows only the recipient address, never a Connection id. Replies are plain text, sent from the Agent's own address, threaded on the References root.
+- Changed: `PlatformCapability` gained `MANAGED_ADDRESS`, which now also suppresses the per-Connection `webhook_url` — Email declares `WEBHOOK_INGRESS` only so `PlatformIngressSupervisor` parks it instead of polling, and the URL it implied was meaningless for a mailbox-addressed platform. `CommunicationPlatform` gained `EMAIL` so the platform-admin stats filter can see these Connections. `CommunicationConnectionRepository.create` takes an optional address allocator and claims inside the Connection's transaction, retrying local-part collisions in a savepoint. `Email`/`EmailClient` gained a per-message sender address, plain-text part, `Reply-To` and custom headers.
+- Notes: Scope is **inbound and reply only**. `RuntimeReplyCreate` has no recipient field and `enqueue_runtime_reply` copies the location from the source inbound delivery, so an Agent structurally cannot address anyone who did not write to it first; a test pins this. Inbound email is untrusted text reaching the LLM, and unlike every other platform it needs no channel membership — mitigated by an allowlist that defaults to empty, an address Agent Barn never publishes, and the sender-only reply property.
+- Notes: Cloudflare's send API returns no message id, so threads anchor on the References root rather than on our own `Message-ID`, which we can never learn. Email Workers cannot read SPF/DKIM/DMARC verdicts (cloudflare/workerd#6740); Cloudflare's MX rejects DMARC failures upstream, and sender trust beyond that is the Connection allowlist.
+- Follow-up: agent-initiated ("cold") outbound needs a gateway path for an outbound delivery with no source delivery, plus a way for a runtime to invoke it — no tool or MCP surface exists today. Attachments, HTML replies, CC/BCC, processing feedback, and bounce handling are all unimplemented. The Worker deploys manually with `wrangler` and has no CI coverage. `prepare_communications_server` now exists, so the Teams provider webhook route can finally get the integration coverage this log recorded as missing.
+
+### 2026-08-28 — AF-118 — Harden the Teams authentication path — PR pending
+
+- Delivered: Inbound Bot Framework tokens are now bound to the activity they arrive with. `verify_inbound_jwt` requires the `serviceurl` claim and matches it against the activity's `serviceUrl`, ignoring trailing-slash and case differences. Without it a forged activity could name an attacker-controlled `serviceUrl`, which the plugin then uses as the base URL for outbound calls carrying the bot's token. A dedicated `api/tests/unit/test_msteams_client.py` drives the verifier with real RS256 tokens rather than patching it at the plugin boundary, covering audience, issuer, expiry and clock-skew leeway, malformed input, and the new claim binding.
+- Changed: `TeamsAuthError` now derives from `ValueError`, so a rejected Azure credential reaches the Connection service's validation handler as a 400 instead of escaping as a 500 — matching every other plugin, whose credential rejection is already a plain `ValueError`. `TeamsPlatformPlugin.verify_webhook` translates it to `PermissionError`, the gateway's ingress contract, so a rejected webhook answers Microsoft with 401 instead of a 500 it would retry. The Bot Framework token cache is now keyed on a hash of the client secret alongside tenant and app id; keyed on tenant and app alone, credential validation — which runs through `acquire_token` — reported a rotated or revoked secret as valid until the cached token expired.
+- Notes: Slack no longer declares `APPLICATION_PROVISIONING`. It never implemented the `build_app_package` seam, so the capability-driven download button introduced alongside the Teams package rendered on Slack Connections and failed with an unhandled `NotImplementedError`. The service now maps that seam's `NotImplementedError` to a 400 as well, so a future declare-without-implement degrades cleanly.
+- Follow-up: The provider webhook route still has no integration coverage; the 401 mapping is asserted at the plugin seam only.
+
+### 2026-08-27 — Communications on OpenClaw agents could never receive inbound messages — PR pending
+
+- Delivered: `RUNTIME_API_URL` in the OpenClaw runtime Secret now points at port 18789, the port `openclaw gateway` actually binds, rather than 8080. The in-pod communications adapter posts inbound activities to that URL, so every inbound delivery to an OpenClaw agent failed with `ECONNREFUSED` and dead-lettered after five attempts — on Slack, Telegram and Discord as well as Teams. The pod reported healthy throughout and chat history still filled in, which is why it went unnoticed.
+- Changed: The port is now a named `OPENCLAW_GATEWAY_PORT` constant in `api/domains/agents/builders/openclaw.py`. The gateway is deliberately _not_ moved onto the old value: `openclaw health` resolves the default port with no override flag, so pinning the gateway elsewhere breaks the health probe and leaves agents stuck reporting "initializing". Two tests guard both halves — that the adapter targets the constant, and that `start.sh` passes no `--port`.
+- Notes: Found while testing Teams end to end, but not specific to it. Recorded separately because it fixes existing platforms rather than adding Teams behaviour.
+
+### 2026-08-27 — AF-118 — Server-side Teams app package — PR pending
+
+- Delivered: A new `build_app_package` Platform Plugin seam, declared through the existing `APPLICATION_PROVISIONING` capability, and a Teams implementation that produces a sideloadable app package server-side. `GET /agents/{agent_id}/connections/{connection_id}/app-package` streams the zip; the schema-driven Connection panel offers a download button for any platform declaring the capability, so no platform is hard-coded in the UI. The manifest uses schema v1.17, takes publisher/website/privacy/terms values from configuration, and derives a stable manifest id from the Connection id so re-downloading updates the tenant's existing app rather than registering a second one.
+- Changed: `PlatformPlugin` gained the optional `build_app_package` seam, defaulting to `NotImplementedError` like the other opt-in seams. Package generation uses only the standard library, so no dependency was added; the two required icons ship as assets under `api/domains/communications/assets/`.
+- Notes: An operator can install a bot into a team or group chat only through an app package — Azure's _Open in Teams_ covers personal scope alone — so this closes the last manual step that had no supported path. The package deliberately carries no credential material: the App ID it contains is public by design and appears in every Teams manifest. Publisher URLs are validated as `https` before packaging; reachability is not checked, so a misconfigured deployment pointing at an unreachable host is still rejected by Teams at upload time rather than here.
+- Follow-up: The shipped icons are neutral defaults; per-Connection branding is not yet supported.
+
+### 2026-08-26 — AF-118 — Resolve Teams channel names — PR pending
+
+- Delivered: Teams now implements the `enrich_inbound` seam, resolving a channel's display name through the Bot Framework Teams extension (`GET {serviceUrl}/v3/teams/{teamId}/conversations`) when the inbound payload carries none. Results are cached per team, scoped by a hash of the acquired bot token so two Connections can never share a cached name — matching the existing Telegram and Discord scoping. `normalize_inbound` now records `team_id` from `channelData.team.id`, since enrichment sees envelopes rather than the provider payload.
+- Changed: Nothing else. Lookup failures fall back to the envelope as normalized and never delay or reject durable acceptance, per the seam's contract. A name already present in the payload is preferred and never overwritten; direct messages skip the lookup entirely.
+- Notes: This deliberately uses the **agent's own bot credentials, not Microsoft Graph** — the Teams extension requires only that the bot be installed at team scope, which it must be to receive channel messages at all. No admin consent or new permission is involved. Teams reports the default General channel with a null name so callers can localize it, and its channel id always equals the team id; that pair is labelled "General" rather than left blank.
+
+### 2026-08-26 — AF-118 — Strip the agent's own Teams @mention — PR pending
+
+- Delivered: Teams inbound normalization now removes the agent's own `<at>Name</at>` markup from the message text before persistence, matching Microsoft's documented guidance that the mention be stripped before the message is interpreted. Only the mention whose `mentioned.id` matches the connection's bot is removed; mentions of other people are preserved because they can be meaningful input.
+- Changed: Nothing else. Slack is unaffected — its markup is `<@U123>`, an identifier rather than a display name, so it never reads as a person.
+- Notes: Teams delivers channel and group-chat messages only when the agent is mentioned, so the markup was present on every one of them. Left in place it measurably degraded replies: an agent receiving `<at>Tommy</at> reply` answered "I don't see a message from Tommy to reply to", having read its own display name as a third party.
+
+### 2026-08-26 — AF-118 — Teams round-trip fixes — PR pending
+
+- Delivered: Teams outbound replies now send a complete Bot Framework Activity (`conversation`, `from`, `recipient`, `replyToId`) to `POST /v3/conversations/{id}/activities`. A minimal `{type, text}` body was rejected with `400 Bad Request` and dead-lettered after five attempts. `normalize_inbound` now also records the addressable Teams ids (`from_id`, `recipient_id`) in provider metadata, because `sender.id` holds the Entra object id used for policy matching and cannot address a reply. Conversations are now labelled: a named group chat uses `conversation.name`, a DM falls back to the sender's name.
+- Changed: `ConversationService.list_threads` no longer uppercases the requested channel id. That was a Slack-era assumption — Slack ids are natively uppercase and Discord/Telegram ids are numeric, so uppercasing was a silent no-op for every shipped platform. Teams conversation ids are case-sensitive mixed case (`a:1mc8AgCtwYH7…`), so the lookup never matched and stored messages rendered as "No messages in this range". Exact matching is correct for all platforms; message writing already stored provider ids verbatim.
+- Notes: Teams omits `channelData.channel.name` on ordinary messages — Microsoft documents it as sent only on channel modification events — so a team channel still displays its `19:…@thread.tacv2` id. Resolving it requires Microsoft Graph, which remains out of scope; DMs and named group chats are unaffected.
+- Follow-up: Threaded channel replies send the raw conversation id including its `;messageid=` suffix, percent-encoded in the request path. That form has not yet been exercised against live channel traffic.
+
+### 2026-08-26 — AF-118 — Microsoft Teams platform plugin — PR pending
+
+- Delivered: A shipped Microsoft Teams Platform Plugin with schema-driven Azure credentials (App ID, client secret, tenant ID), the same channel/DM policy settings the other platforms expose, and a provider setup hint covering Azure Bot creation, secret retrieval, enabling the Teams channel, and pasting the Connection's webhook URL into the bot's messaging endpoint. Teams is the first plugin to use `WEBHOOK_INGRESS`: inbound activities are authenticated through `verify_webhook` against the Bot Framework JWKS, requiring the documented issuer and the Connection's own App ID as audience. Outbound replies use the Bot Connector API, threading through the reply-to-activity form.
+- Changed: Nothing existing. Teams adds `skip_teams_token_validation` alongside the other per-platform validation switches and a new `api/infrastructure/msteams/` client for token acquisition, activity delivery, and inbound token verification.
+- Notes: A Teams channel conversation id carries a `;messageid=` suffix on thread replies; the plugin splits it so one channel stays one conversation and the suffix becomes the thread id. Sender identity prefers the Entra `aadObjectId` and falls back to the Teams `29:` user id, because the object id is not present in every context.
+- Follow-up: Teams app package (manifest) generation so operators do not hand-author a manifest to sideload the bot; no seam exists for it yet, and `APPLICATION_PROVISIONING` remains unconsumed.
+
+### 2026-08-26 — Agent retirement releases Connection credentials — PR pending
+
+- Delivered: Retiring (soft-deleting) an Agent now retires all owned Communication Connections in the same transaction, cancels pending and processing deliveries, clears credential identity material, and releases platform credentials for reassignment. Historical Conversation Messages remain preserved.
+- Changed: Agent-owned Connection cleanup is explicit because a soft delete does not trigger the database foreign-key cascade.
+
+### 2026-08-25 — Provider setup guidance — PR pending
+
+- Changed: Platform descriptors now expose optional provider-owned setup hints in the schema-driven Connection form. Slack, Discord, and Telegram hints now document credential locations/formats, required scopes or Gateway intents, bot membership/visibility requirements, and provider-specific polling or privacy setup.
+
+### 2026-08-25 — AF-272 — Restore communication sender/channel names — PR pending
+
+- Delivered: An optional `enrich_inbound` Platform Plugin seam resolves missing sender and channel/DM display names through cached, credential-scoped provider lookups (Slack user/channel/DM directory, Discord user/channel lookups, Telegram chat lookups) before durable persistence. `CommunicationsGatewayService` invokes it once at the single point all three ingress paths (supervised provider ingress, driver events, webhook events) already share, so no route duplicates the call. A provider payload's own names are always preferred; enrichment only fills what's missing, and any lookup failure falls back to the envelope as normalized rather than delaying or rejecting acceptance.
+- Changed: `CommunicationDeliveryRepository.accept_inbound` now backfills `sender_name`/`channel_name` on a duplicate provider delivery via `COALESCE`, so a retry can supply a name the first attempt lacked, but a duplicate can never clear a name already known. `ConversationRepository.upsert_messages` got the same `COALESCE` fix. Runtime outbound replies now inherit `channel_name` from their source inbound envelope's location. The Telegram chat-name cache key is now scoped by a hash of the bot token, matching Discord's existing per-token scoping, so two Connections can no longer share a cached name for the same provider-global chat/user ID. Message identity, delivery ordering/retries, and credential isolation are unchanged.
+- Follow-up: none. Hermes/OpenClaw telemetry plugins intentionally remain untouched — they own Tool Call telemetry only; Conversation Message names are resolved solely at the Platform Plugin seam.
+
+### 2026-08-24 — AF-272 — Bounded runtime claim backoff — PR pending
+
+- Delivered: The shared Hermes/OpenClaw Communications adapter now exponentially backs off empty claim responses from 500 ms to a bounded 5-second cadence with jitter, then resets immediately after a delivery is claimed.
+- Changed: Idle cadence is client-side; no new server/database polling loop or protocol version was introduced. Claim ordering, leases, retries, idempotency, and shutdown/error handling remain unchanged.
+- Follow-up: Communications cutover slices are complete; next platform work can proceed at the Platform Plugin seam.
+
+### 2026-08-24 — AF-272 — Slack processing feedback — PR pending
+
+- Delivered: Accepted Slack messages receive an immediate 👀 reaction; claimed deliveries show a Slack assistant processing status; successful outbound provider delivery replaces 👀 with ✅; terminal runtime/provider failure clears status, removes 👀, and adds ❌.
+- Changed: Added the provider-neutral processing-feedback capability and lifecycle seam. Slack's calls use existing `chat:write` and `reactions:write` scopes, target reactions by the canonical message timestamp, treat duplicate reaction state as success, and remain best-effort so feedback cannot alter durable delivery outcomes.
+- Follow-up: Replace idle runtime claim polling with bounded long polling/backoff.
+
+### 2026-08-24 — AF-272 — Slack mention and thread admission — PR pending
+
+- Delivered: Slack channel messages now require a direct bot mention. The schema-driven `thread_mention_policy` setting supports conservative `every_message` admission and conversational `start_only` admission for unmentioned replies in Agent-owned threads.
+- Changed: Slack ingress captures the bot user ID, rejects bot/edit events, and consumes only normalized `message` events to avoid duplicate `app_mention` deliveries. Thread ownership is resolved through persisted Connection-scoped Conversation Message state via the provider-neutral plugin admission seam.
+- Follow-up: Restore provider-neutral processing feedback, then replace idle runtime claim polling with bounded long polling/backoff.
+
+### 2026-08-22 — Hard cutover to communications plugins and gateway — PR pending
+
+- Delivered: generic Agent-owned Communication Connections, multiple same-platform connections, the code-owned plugin catalogue, shipped Slack/Telegram/Discord plugins, credential encryption/fingerprints, safe read projections, complete schema-driven create/edit management, Agent-permission authorization, optimistic concurrency, retirement, connection-scoped conversation reads, durable delivery workers, supervised provider ingress with replica-safe leases, and runtime protocol adapters.
+- Removed: the incomplete Microsoft Teams plugin and its legacy multi-tenant authentication path. A future Teams plugin must be designed around Microsoft's supported single-tenant identity model before it is shipped.
+- Changed: migrated existing provider configuration and attributable messages, removed the single-platform Agent schema and native runtime transport branching, and replaced provider-specific Agent forms with schema-driven Connection management.

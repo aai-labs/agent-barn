@@ -1,182 +1,1719 @@
 "use client";
 
-import { useRef, useState } from "react";
+import Link from "next/link";
+import { useMemo, useState, type ReactNode } from "react";
+import {
+  Check,
+  CircleAlert,
+  Copy,
+  Info,
+  LockKeyhole,
+  MessageCircleWarning,
+  Pencil,
+  Plug,
+  Plus,
+  RefreshCw,
+  Search,
+  Trash2,
+  X,
+} from "lucide-react";
+import { toast } from "sonner";
+
+import { ConfirmationDialog } from "@/components/confirmation-dialog";
+import { EyeIcon, EyeOffIcon } from "@/components/icons";
+import { platformIcon } from "@/components/brand-icons";
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  useCommunicationConnectionActions,
+  useCommunicationConnections,
+  useCommunicationConnectionDirectory,
+  useCommunicationPlatforms,
+  useDownloadAppPackage,
+  useInstallLink,
+} from "@/features/communication-connections/hooks/use-communication-connections";
+import { DefaultDeliveryTargetInput } from "@/features/communication-connections/components/default-delivery-target-input";
+import { DirectoryPickerDialog } from "@/features/communication-connections/components/directory-picker-dialog";
+import { SLACK_APP_MANIFEST } from "@/features/communication-connections/slack-manifest";
+import type { CommunicationConnection, CommunicationDirectoryEntry, CommunicationPlatform } from "@/features/communication-connections/schemas";
 
 import { useAgentApplyAndRestart } from "../hooks/use-agent-apply-and-restart";
 import type { Agent } from "../schemas";
+import { canAgent } from "../utils";
 import { AgentConfigurationSection } from "./agent-configuration-section";
-import type { AgentConfigurationEditHandle } from "./agent-configuration-utils";
-import { DiscordConfigPanel } from "./discord-config-panel";
-import { SlackConfigPanel } from "./slack-config-panel";
-import { TelegramConfigPanel } from "./telegram-config-panel";
+
+/** Built-in, lazily provisioned, one-per-agent, immutable — never user-added or user-edited. */
+const WEB_PLATFORM_KEY = "web";
+
+function titleCase(text: string): string {
+  return text.replace(/[_-]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function directoryLoadError(noun: string): string {
+  return `Could not load ${noun}. Check the Connection's permissions and try again.`;
+}
+
+/** Small colored dot + text, matching the status language used across the agent list/detail views. */
+function StatusDot({ color, label }: { color: string; label: string }) {
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      <span
+        className="h-1.5 w-1.5 flex-shrink-0 rounded-full"
+        style={{ background: color }}
+      />
+      {label}
+    </span>
+  );
+}
+
+function WebhookUrlField({ connectionId, url }: { connectionId: string; url: string }) {
+  const [copied, setCopied] = useState(false);
+  const inputId = `webhook-url-${connectionId}`;
+
+  async function copyWebhookUrl() {
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopied(true);
+      toast.success("Webhook URL copied to clipboard");
+    } catch {
+      toast.error("Could not copy the webhook URL. Select the address and copy it manually.");
+    }
+  }
+
+  return (
+    <div
+      className="mt-3 rounded-lg p-3"
+      style={{ border: "1px solid var(--line)", background: "var(--bg-soft)" }}
+    >
+      <label htmlFor={inputId} className="mb-1.5 block text-xs font-medium" style={{ color: "var(--ink)" }}>
+        Webhook URL
+      </label>
+      <div className="flex gap-2">
+        <input
+          id={inputId}
+          readOnly
+          value={url}
+          className="af-input min-w-0 flex-1 font-mono text-xs"
+          onFocus={(event) => event.currentTarget.select()}
+        />
+        <button
+          type="button"
+          className="af-btn af-btn-sm flex-shrink-0"
+          aria-label="Copy webhook URL"
+          title={copied ? "Webhook URL copied" : "Copy webhook URL"}
+          onClick={() => void copyWebhookUrl()}
+        >
+          {copied ? <Check size={14} aria-hidden="true" /> : <Copy size={14} aria-hidden="true" />}
+          <span className="sr-only">{copied ? "Copied" : "Copy"}</span>
+        </button>
+      </div>
+      <p className="mt-1.5 text-xs" style={{ color: "var(--ink-3)" }}>
+        Paste this address into the provider&apos;s webhook settings.
+      </p>
+    </div>
+  );
+}
+
+function connectionStatus(connection: CommunicationConnection): {
+  color: string;
+  label: string;
+} {
+  if (!connection.enabled) return { color: "var(--ink-4)", label: "Disabled" };
+  switch (connection.observedStatus) {
+    case "CONNECTED":
+      return { color: "var(--ok)", label: "Connected" };
+    case "DEGRADED":
+      return { color: "var(--warn)", label: "Degraded" };
+    case "ERROR":
+      return { color: "var(--err)", label: "Error" };
+    case "CONNECTING":
+      return { color: "var(--warn)", label: "Connecting…" };
+    case "PENDING":
+    default:
+      return { color: "var(--ink-4)", label: "Waiting to connect" };
+  }
+}
+
+/** Platform icon for a connection, falling back to a generic glyph for platforms without a brand icon yet. */
+function ConnectionIcon({
+  platformKey,
+  size = 16,
+}: {
+  platformKey: string;
+  size?: number;
+}) {
+  return platformIcon(platformKey, { size }) ?? <Plug size={size} />;
+}
+
+function renderSetupInline(markdown: string): ReactNode[] {
+  return markdown.split(/(\[[^\]]+\]\([^\s)]+\)|`[^`]+`|\*\*[^*]+\*\*)/g).filter(Boolean).map((part, index) => {
+    const link = /^\[([^\]]+)\]\(([^\s)]+)\)$/.exec(part);
+    if (link) return <a key={index} href={link[2]} target="_blank" rel="noreferrer" className="underline underline-offset-2">{link[1]}</a>;
+    if (part.startsWith("`") && part.endsWith("`")) return <code key={index} className="rounded px-1 py-0.5" style={{ background: "var(--bg-soft)" }}>{part.slice(1, -1)}</code>;
+    if (part.startsWith("**") && part.endsWith("**")) return <strong key={index}>{part.slice(2, -2)}</strong>;
+    return part;
+  });
+}
+
+function SetupMarkdown({ markdown }: { markdown: string }) {
+  return (
+    <div className="mt-2 space-y-3 text-xs leading-relaxed" style={{ color: "var(--ink-2)" }}>
+      {markdown.trim().split("\n\n").filter(Boolean).map((block, index) => {
+        if (block.startsWith("## ")) return <h3 key={index} className="mt-5 first:mt-0 text-xs font-semibold" style={{ color: "var(--ink)" }}>{renderSetupInline(block.slice(3))}</h3>;
+        const lines = block.split("\n");
+        if (lines.every((line) => /^\d+\. /.test(line))) return <ol key={index} className="m-0 list-decimal space-y-1 pl-4">{lines.map((line) => <li key={line}>{renderSetupInline(line.replace(/^\d+\. /, ""))}</li>)}</ol>;
+        return <p key={index} className="m-0 whitespace-pre-line">{renderSetupInline(block)}</p>;
+      })}
+    </div>
+  );
+}
+
+function PlatformSetupHint({
+  hint,
+  platformKey,
+  title = "Setup requirements",
+}: {
+  hint?: string | null;
+  platformKey?: string;
+  title?: string;
+}) {
+  const manifest = platformKey === "slack" ? SLACK_APP_MANIFEST : null;
+  if (!hint && !manifest) return null;
+  return (
+    <div
+      className="flex items-start gap-2.5 rounded-xl p-3.5"
+      style={{
+        border: "1px solid color-mix(in srgb, var(--accent) 30%, transparent)",
+        background: "var(--accent-soft)",
+      }}
+    >
+      <Info
+        size={16}
+        className="mt-0.5 flex-shrink-0"
+        style={{ color: "var(--accent-ink)" }}
+      />
+      <div>
+        <div
+          className="text-xs font-semibold uppercase tracking-[0.1em]"
+          style={{ color: "var(--accent-ink)" }}
+        >
+          {title}
+        </div>
+        {hint && <SetupMarkdown markdown={hint} />}
+        {manifest && (
+          <button
+            type="button"
+            className="af-btn af-btn-sm mt-3"
+            onClick={() => void navigator.clipboard.writeText(JSON.stringify(manifest, null, 2)).then(() => toast.success("Slack manifest copied"))}
+          >
+            <Copy size={14} /> Copy Slack manifest
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function PlatformOption({
+  platform,
+  selected,
+  onSelect,
+}: {
+  platform: { key: string; displayName: string };
+  selected: boolean;
+  onSelect: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      aria-pressed={selected}
+      aria-label={`Select ${platform.displayName}`}
+      className="group flex min-h-[4.75rem] cursor-pointer items-center gap-3 rounded-xl p-3 text-left transition-colors hover:shadow-sm"
+      style={{
+        border: selected
+          ? "1.5px solid var(--accent)"
+          : "1px solid var(--line)",
+        background: selected ? "var(--accent-soft)" : "var(--bg-elev)",
+        color: "var(--ink)",
+      }}
+      onClick={onSelect}
+    >
+      <span
+        className="grid h-10 w-10 flex-shrink-0 place-items-center rounded-lg transition-colors"
+        style={{ background: selected ? "var(--bg-elev)" : "var(--bg-soft)" }}
+      >
+        <ConnectionIcon platformKey={platform.key} size={20} />
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block text-sm font-semibold">
+          {platform.displayName}
+        </span>
+        <span
+          className="mt-0.5 block text-xs"
+          style={{ color: "var(--ink-3)" }}
+        >
+          {selected ? "Selected" : "Connect a channel"}
+        </span>
+      </span>
+      <span
+        className="grid h-5 w-5 flex-shrink-0 place-items-center rounded-full"
+        style={
+          selected
+            ? { background: "var(--accent-ink)", color: "var(--bg-elev)" }
+            : { border: "1px solid var(--line-strong)", color: "transparent" }
+        }
+      >
+        <Check size={12} strokeWidth={3} />
+      </span>
+    </button>
+  );
+}
+
+function schemaDefaults(
+  schema: Record<string, unknown>,
+): Record<string, unknown> {
+  const properties = schema.properties;
+  if (
+    !properties ||
+    typeof properties !== "object" ||
+    Array.isArray(properties)
+  )
+    return {};
+  return Object.fromEntries(
+    Object.entries(properties).flatMap(([key, value]) => {
+      if (
+        !value ||
+        typeof value !== "object" ||
+        Array.isArray(value) ||
+        !("default" in value)
+      )
+        return [];
+      return [[key, (value as { default: unknown }).default]];
+    }),
+  );
+}
+
+type SchemaProperty = {
+  title?: string;
+  description?: string;
+  type?: string;
+  default?: unknown;
+  pattern?: string;
+  items?: { type?: string };
+};
+
+function schemaProperties(
+  schema: Record<string, unknown>,
+): Array<[string, SchemaProperty]> {
+  if (
+    !schema.properties ||
+    typeof schema.properties !== "object" ||
+    Array.isArray(schema.properties)
+  )
+    return [];
+  return Object.entries(schema.properties).filter(
+    (entry): entry is [string, SchemaProperty] =>
+      Boolean(entry[1]) &&
+      typeof entry[1] === "object" &&
+      !Array.isArray(entry[1]),
+  );
+}
+
+function patternOptions(pattern?: string): string[] {
+  const match = pattern?.match(/^\^\(([^)]+)\)\$$/);
+  return match?.[1]?.split("|") ?? [];
+}
+
+/** A directory the "Browse" button can search for a given array field. Entries are only
+ * ever a naming aid — the field itself always stores raw platform IDs. */
+type ArrayBrowseSource = {
+  noun: string;
+  entries: CommunicationDirectoryEntry[];
+  isLoading?: boolean;
+  error?: string | null;
+  /** Set when browsing cannot work yet (missing credentials, no server picked) — shown as a hint. */
+  disabledReason?: string | null;
+  /** Fired when the picker opens, so the caller can fetch the directory lazily. */
+  onOpen?: () => void;
+};
+
+function SchemaArrayInput({
+  label,
+  value,
+  onChange,
+  browse,
+}: {
+  label: string;
+  value: unknown;
+  onChange: (value: string[]) => void;
+  browse?: ArrayBrowseSource;
+}) {
+  const values = Array.isArray(value) ? value.map(String) : [];
+  const [draft, setDraft] = useState("");
+  const [picking, setPicking] = useState(false);
+  const commit = (next: string) => {
+    const additions = next.split(",").map((item) => item.trim()).filter(Boolean);
+    if (additions.length) onChange([...values, ...additions.filter((item) => !values.includes(item))]);
+    setDraft("");
+  };
+  const remove = (item: string) => onChange(values.filter((valueItem) => valueItem !== item));
+  const displayName = (id: string) => browse?.entries.find((candidate) => candidate.id === id)?.label ?? id;
+
+  return (
+    <div
+      className="flex flex-col gap-2 rounded-lg p-2"
+      style={{ border: "1px solid var(--line-strong)", background: "var(--bg-elev)" }}
+    >
+      {values.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {values.map((item) => (
+            <span
+              key={item}
+              className="inline-flex max-w-full items-center gap-1 rounded-md py-1 pl-2 pr-1 text-xs"
+              style={{ border: "1px solid var(--line)", background: "var(--bg-soft)", color: "var(--ink-2)" }}
+            >
+              <span className="truncate">{displayName(item)}</span>
+              <button
+                type="button"
+                aria-label={`Remove ${displayName(item)}`}
+                className="grid size-4 flex-shrink-0 cursor-pointer place-items-center rounded transition-colors hover:bg-[var(--bg-sunken)]"
+                style={{ color: "var(--ink-4)" }}
+                onClick={() => remove(item)}
+              >
+                <X size={11} strokeWidth={2.5} />
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+      <div className="flex items-center gap-2">
+        <input
+          className="min-w-0 flex-1 bg-transparent px-1 py-1 text-sm font-normal outline-none"
+          style={{ color: "var(--ink)" }}
+          aria-label={label}
+          value={draft}
+          placeholder="Add an ID…"
+          onChange={(event) => {
+            const next = event.target.value;
+            if (next.includes(",")) {
+              const segments = next.split(",");
+              commit(segments.slice(0, -1).join(","));
+              setDraft(segments.at(-1) ?? "");
+            } else setDraft(next);
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" || event.key === ",") { event.preventDefault(); commit(draft); }
+            if (event.key === "Backspace" && !draft && values.length) remove(values.at(-1) ?? "");
+          }}
+          onBlur={() => commit(draft)}
+        />
+        {browse && (
+          <button
+            type="button"
+            className="af-btn af-btn-sm flex-shrink-0"
+            aria-label={`Browse ${label}`}
+            disabled={Boolean(browse.disabledReason)}
+            onClick={() => { browse.onOpen?.(); setPicking(true); }}
+          >
+            <Search size={13} /> Browse
+          </button>
+        )}
+      </div>
+      {browse?.disabledReason && (
+        <p className="m-0 px-1 text-xs" style={{ color: "var(--ink-4)" }}>{browse.disabledReason}</p>
+      )}
+      {browse && (
+        <DirectoryPickerDialog
+          open={picking}
+          onOpenChange={setPicking}
+          title={`Select ${browse.noun}`}
+          description={`Search the connected directory and pick as many ${browse.noun} as you need. Only their IDs are saved.`}
+          searchPlaceholder={`Search ${browse.noun}…`}
+          entries={browse.entries}
+          selected={values}
+          isLoading={browse.isLoading}
+          error={browse.error}
+          onConfirm={onChange}
+        />
+      )}
+    </div>
+  );
+}
+
+function SchemaTextInput({
+  label,
+  property,
+  value,
+  onChange,
+  secret,
+  browse,
+}: {
+  label: string;
+  property: SchemaProperty;
+  value: unknown;
+  onChange: (value: unknown) => void;
+  secret: boolean;
+  browse?: ArrayBrowseSource;
+}) {
+  const [visible, setVisible] = useState(false);
+  if (property.type === "array") {
+    return (
+      <SchemaArrayInput
+        label={label}
+        value={value}
+        onChange={(next) => onChange(next)}
+        browse={browse}
+      />
+    );
+  }
+
+  return (
+    <div className="relative w-full">
+      <input
+        className={secret ? "af-input w-full pr-10" : "af-input w-full"}
+        type={secret && !visible ? "password" : "text"}
+        autoComplete={secret ? "new-password" : undefined}
+        spellCheck={false}
+        value={String(value)}
+        onChange={(event) => onChange(event.target.value)}
+      />
+      {secret && (
+        <button
+          type="button"
+          className="absolute right-2 top-1/2 -translate-y-1/2 cursor-pointer rounded-md p-1 transition-colors hover:bg-[var(--bg-soft)]"
+          style={{ color: "var(--ink-4)" }}
+          aria-label={visible ? `Hide ${label}` : `Show ${label}`}
+          title={visible ? "Hide value" : "Show value"}
+          onClick={() => setVisible((current) => !current)}
+        >
+          {visible ? <EyeOffIcon size={15} /> : <EyeIcon size={15} />}
+        </button>
+      )}
+    </div>
+  );
+}
+
+function SchemaFields({
+  schema,
+  values,
+  onChange,
+  secret = false,
+  arrayBrowse = {},
+}: {
+  schema: Record<string, unknown>;
+  values: Record<string, unknown>;
+  onChange: (values: Record<string, unknown>) => void;
+  secret?: boolean;
+  arrayBrowse?: Record<string, ArrayBrowseSource>;
+}) {
+  const required = new Set(
+    Array.isArray(schema.required)
+      ? schema.required.filter(
+          (item): item is string => typeof item === "string",
+        )
+      : [],
+  );
+  return schemaProperties(schema).map(([key, property]) => {
+    const label = property.title ?? titleCase(key);
+    const value =
+      values[key] ??
+      property.default ??
+      (property.type === "array"
+        ? []
+        : property.type === "boolean"
+          ? false
+          : "");
+    const choices = patternOptions(property.pattern);
+    const update = (next: unknown) => onChange({ ...values, [key]: next });
+    const hint = property.description && (
+      <span className="text-xs" style={{ color: "var(--ink-4)" }}>
+        {property.description}
+      </span>
+    );
+
+    if (key === "defaultDeliveryTarget") {
+      return <DefaultDeliveryTargetInput key={key} value={values[key]} onChange={update}
+        channels={arrayBrowse.channelIds ?? arrayBrowse.allowedChannelIds}
+        users={arrayBrowse.dmUserIds ?? arrayBrowse.allowedUserIds} />;
+    }
+    if (property.type === "boolean") {
+      return (
+        <label key={key} className="flex flex-col gap-1">
+          <span className="flex items-center gap-2 text-sm font-medium">
+            <input
+              type="checkbox"
+              checked={Boolean(value)}
+              onChange={(event) => update(event.target.checked)}
+            />
+            {label}
+          </span>
+          {hint}
+        </label>
+      );
+    }
+    if (choices.length > 0) {
+      return (
+        <label key={key} className="flex flex-col gap-1.5 text-sm font-medium">
+          {label}
+          {required.has(key) ? " *" : ""}
+          <Select value={String(value)} onValueChange={update}>
+            <SelectTrigger className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectGroup>
+                {choices.map((choice) => (
+                  <SelectItem key={choice} value={choice}>
+                    {titleCase(choice)}
+                  </SelectItem>
+                ))}
+              </SelectGroup>
+            </SelectContent>
+          </Select>
+          {hint}
+        </label>
+      );
+    }
+    return (
+      <label
+        key={key}
+        className="flex w-full flex-col gap-1.5 text-sm font-medium"
+      >
+        {label}
+        {required.has(key) ? " *" : ""}
+        <SchemaTextInput
+          label={label}
+          property={property}
+          value={value}
+          onChange={update}
+          secret={secret}
+          browse={arrayBrowse[key]}
+        />
+        {hint}
+      </label>
+    );
+  });
+}
 
 export function AgentChannelSettings({
   agent,
   canEdit,
-  editing,
-  onEdit,
+  autoOpen = false,
 }: {
   agent: Agent;
   canEdit: boolean;
-  editing: boolean;
-  onEdit: () => void;
+  /** Open the add-connection form immediately — used when arriving here via the
+   * "Add a connection" shortcut on the Agent page, so there's no extra click to find. */
+  autoOpen?: boolean;
 }) {
-  const [copied, setCopied] = useState(false);
-  const [isDirty, setIsDirty] = useState(false);
-  const panelRef = useRef<AgentConfigurationEditHandle>(null);
+  const connections = useCommunicationConnections(agent.id);
+  const platforms = useCommunicationPlatforms();
+  // Web Chat is lazily provisioned on first send and can't be added by hand.
+  const addablePlatforms = useMemo(
+    () => {
+      const connected = new Set(connections.data?.map((connection) => connection.platformKey));
+      return platforms.data?.filter(
+        (platform) =>
+          platform.key !== WEB_PLATFORM_KEY && !connected.has(platform.key),
+      );
+    },
+    [connections.data, platforms.data],
+  );
+  const { previewConnectionDirectory, createConnection, updateConnection, retireConnection } =
+    useCommunicationConnectionActions();
+  const [adding, setAdding] = useState(autoOpen && canEdit);
+  const [platformKey, setPlatformKey] = useState("");
+  const [displayName, setDisplayName] = useState("");
+  const [settings, setSettings] = useState<Record<string, unknown>>({});
+  const [credentials, setCredentials] = useState<Record<string, unknown>>({});
+  // Add-form directory previews, keyed by "<kind>" or "<kind>:<guildId>". Slack has one
+  // ungated directory; Discord's is scoped per server the bot token can see.
+  const [previewEntries, setPreviewEntries] = useState<Record<string, CommunicationDirectoryEntry[]>>({});
+  const [previewErrors, setPreviewErrors] = useState<Record<string, string>>({});
+  const [discordAddGuildId, setDiscordAddGuildId] = useState("");
+
+  function resetDirectoryPreviews() {
+    setPreviewEntries({});
+    setPreviewErrors({});
+    setDiscordAddGuildId("");
+  }
+  const [formError, setFormError] = useState<string | null>(null);
+  const [retiring, setRetiring] = useState<CommunicationConnection | null>(
+    null,
+  );
   const { applyAndRestart } = useAgentApplyAndRestart(agent);
-  const editable = canEdit && agent.platform !== "teams";
-  const telegram = agent.telegramConfig;
-  const slack = agent.slackConfig;
-  const discord = agent.discordConfig;
+  const [restartChange, setRestartChange] = useState<{
+    confirmLabel: string;
+    run: () => Promise<void>;
+  } | null>(null);
+  const [isRestarting, setIsRestarting] = useState(false);
+  const canRestart = canAgent(agent, "agent.lifecycle.manage");
+  const downloadAppPackage = useDownloadAppPackage();
+  const fetchInstallLink = useInstallLink();
+  const [packageBusyId, setPackageBusyId] = useState<string | null>(null);
+  const [packageError, setPackageError] = useState<string | null>(null);
+  const [installLinks, setInstallLinks] = useState<Record<string, string>>({});
+  const [installBusyId, setInstallBusyId] = useState<string | null>(null);
+  const [installError, setInstallError] = useState<string | null>(null);
+  const [editingConnection, setEditingConnection] =
+    useState<CommunicationConnection | null>(null);
+  const [editDisplayName, setEditDisplayName] = useState("");
+  const [editSettings, setEditSettings] = useState<Record<string, unknown>>({});
+  const [editCredentials, setEditCredentials] = useState<
+    Record<string, unknown>
+  >({});
+  const editingSlack = editingConnection?.platformKey === "slack";
+  const editingDiscord = editingConnection?.platformKey === "discord";
+  const [discordGuildId, setDiscordGuildId] = useState("");
+  const slackChannels = useCommunicationConnectionDirectory(agent.id, editingConnection?.id ?? "", "channels", "", editingSlack);
+  const slackUsers = useCommunicationConnectionDirectory(agent.id, editingConnection?.id ?? "", "users", "", editingSlack);
+  const discordGuilds = useCommunicationConnectionDirectory(agent.id, editingConnection?.id ?? "", "guilds", "", editingDiscord);
+  const discordChannels = useCommunicationConnectionDirectory(agent.id, editingConnection?.id ?? "", "channels", "", editingDiscord && Boolean(discordGuildId), discordGuildId);
+  const discordUsers = useCommunicationConnectionDirectory(agent.id, editingConnection?.id ?? "", "users", "", editingDiscord && Boolean(discordGuildId), discordGuildId);
+  const discordRoles = useCommunicationConnectionDirectory(agent.id, editingConnection?.id ?? "", "roles", "", editingDiscord && Boolean(discordGuildId), discordGuildId);
 
-  async function applyChanges() {
-    const action = panelRef.current;
-    if (!action) return;
-    await applyAndRestart(action.apply);
+  const selectedPlatform = useMemo(
+    () => platforms.data?.find((platform) => platform.key === platformKey),
+    [platformKey, platforms.data],
+  );
+
+  /** Wraps a directory query as a browse source for an array field. */
+  function queryBrowse(
+    noun: string,
+    query: {
+      data?: CommunicationDirectoryEntry[];
+      isPending: boolean;
+      error: unknown;
+      refetch: () => unknown;
+    },
+    disabledReason?: string | null,
+  ): ArrayBrowseSource {
+    return {
+      noun,
+      entries: query.data ?? [],
+      isLoading: query.isPending,
+      error: query.error
+        ? directoryLoadError(noun)
+        : null,
+      disabledReason: disabledReason ?? null,
+      // A directory read that already failed is cached as an error, so re-opening the
+      // picker would show the same stale failure forever without this.
+      onOpen: () => { if (query.error) query.refetch(); },
+    };
   }
 
-  function cancelChanges() {
-    panelRef.current?.cancel();
-    setIsDirty(false);
-    onEdit();
+  function previewCacheKey(kind: string, guildId?: string): string {
+    return guildId ? `${kind}:${guildId}` : kind;
   }
 
-  async function copyEndpoint() {
-    if (!agent.webhookUrl) return;
-    await navigator.clipboard.writeText(agent.webhookUrl);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1600);
+  /** Fetches (and caches) one directory preview kind for the add form's typed-in credentials. */
+  function fetchDirectoryPreview(
+    noun: string,
+    platformKey: string,
+    kind: string,
+    guildId?: string,
+    refresh = false,
+  ): void {
+    const key = previewCacheKey(kind, guildId);
+    if ((!refresh && previewEntries[key]) || previewConnectionDirectory.isPending) return;
+    setPreviewErrors((prev) => ({ ...prev, [key]: "" }));
+    void previewConnectionDirectory
+      .mutateAsync({ agentId: agent.id, platformKey, kind, settings, credentials, guildId })
+      .then((result) => setPreviewEntries((prev) => ({ ...prev, [key]: result.entries })))
+      .catch(() => setPreviewErrors((prev) => ({ ...prev, [key]: directoryLoadError(noun) })));
+  }
+
+  /** Browse sources for the add form. Neither platform has a saved Connection to read
+   * from yet, so the directory is previewed from the credentials typed above.
+   * Keys are camelCase: the API client camelizes response bodies, including the
+   * property names inside a plugin's JSON settings schema. */
+  function addBrowseSources(platform: CommunicationPlatform): Record<string, ArrayBrowseSource> {
+    const previewSource = (
+      noun: string,
+      kind: string,
+      guildId: string | undefined,
+      disabledReason: string | null,
+    ): ArrayBrowseSource => {
+      const key = previewCacheKey(kind, guildId);
+      return {
+        noun,
+        entries: previewEntries[key] ?? [],
+        isLoading: previewConnectionDirectory.isPending,
+        error: previewErrors[key] || null,
+        disabledReason,
+        onOpen: () => fetchDirectoryPreview(noun, platform.key, kind, guildId),
+      };
+    };
+    if (platform.key === "slack") {
+      const missingCredentials = !credentials.botToken || !credentials.appToken;
+      const disabledReason = missingCredentials ? "Add the bot token and app-level token above to browse." : null;
+      return {
+        channelIds: previewSource("channels", "channels", undefined, disabledReason),
+        dmUserIds: previewSource("people", "users", undefined, disabledReason),
+      };
+    }
+    if (platform.key === "discord") {
+      const missingCredentials = !credentials.botToken;
+      const disabledReason = missingCredentials
+        ? "Add the bot token above to browse."
+        : discordAddGuildId
+          ? null
+          : "Choose a server above to browse.";
+      return {
+        allowedChannelIds: previewSource("channels", "channels", discordAddGuildId, disabledReason),
+        allowedUserIds: previewSource("people", "users", discordAddGuildId, disabledReason),
+        allowedRoleIds: previewSource("roles", "roles", discordAddGuildId, disabledReason),
+      };
+    }
+    return {};
+  }
+
+  /** Browse sources for the edit form, backed by the saved Connection's own directory. */
+  function editBrowseSources(platformKey: string): Record<string, ArrayBrowseSource> {
+    if (platformKey === "slack") {
+      return {
+        channelIds: queryBrowse("channels", slackChannels),
+        dmUserIds: queryBrowse("people", slackUsers),
+      };
+    }
+    if (platformKey === "discord") {
+      const needsGuild = discordGuildId ? null : "Choose a server above to browse.";
+      return {
+        guildIds: queryBrowse("servers", discordGuilds),
+        allowedChannelIds: queryBrowse("channels", discordChannels, needsGuild),
+        allowedUserIds: queryBrowse("people", discordUsers, needsGuild),
+        allowedRoleIds: queryBrowse("roles", discordRoles, needsGuild),
+      };
+    }
+    return {};
+  }
+
+  function choosePlatform(key: string) {
+    const platform = platforms.data?.find((candidate) => candidate.key === key);
+    setPlatformKey(key);
+    setDisplayName(platform?.displayName ?? key);
+    setSettings(schemaDefaults(platform?.settingsSchema ?? {}));
+    setCredentials(schemaDefaults(platform?.credentialsSchema ?? {}));
+    resetDirectoryPreviews();
+    setFormError(null);
+  }
+
+  /** The runtime runs this platform's Connections itself and reads them only at start,
+   * so a change to one on a running Agent is applied by restarting it. */
+  function restartsAgent(key: string | undefined) {
+    return agent.status === "RUNNING" && Boolean(key) && agent.nativePlatformKeys.includes(key!);
+  }
+
+  function applyChange(key: string, confirmLabel: string, change: () => Promise<void>) {
+    if (!restartsAgent(key)) return void change();
+    setRestartChange({ confirmLabel, run: () => applyAndRestart(change) });
+  }
+
+  async function addConnection() {
+    try {
+      await createConnection.mutateAsync({
+        agentId: agent.id,
+        platformKey,
+        displayName: displayName.trim(),
+        enabled: true,
+        settings,
+        credentials,
+      });
+      setAdding(false);
+      setPlatformKey("");
+      setDisplayName("");
+      setSettings({});
+      setCredentials({});
+      resetDirectoryPreviews();
+      setFormError(null);
+    } catch (error) {
+      setFormError(
+        error instanceof Error
+          ? error.message
+          : "Could not create the connection.",
+      );
+    }
+  }
+
+  function beginEditing(connection: CommunicationConnection) {
+    setEditingConnection(connection);
+    setEditDisplayName(connection.displayName);
+    setEditSettings(connection.settings);
+    setEditCredentials({});
+    setDiscordGuildId("");
+    setFormError(null);
+  }
+
+  async function saveConnection() {
+    if (!editingConnection) return;
+    const credentialsChanged = Object.values(editCredentials).some((value) =>
+      Array.isArray(value)
+        ? value.length > 0
+        : value !== "" && value !== null && value !== undefined,
+    );
+    try {
+      await updateConnection.mutateAsync({
+        agentId: agent.id,
+        connectionId: editingConnection.id,
+        revision: editingConnection.revision,
+        displayName: editDisplayName.trim(),
+        settings: editSettings,
+        ...(credentialsChanged ? { credentials: editCredentials } : {}),
+      });
+      setEditingConnection(null);
+      setEditCredentials({});
+      setFormError(null);
+    } catch (error) {
+      setFormError(
+        error instanceof Error
+          ? error.message
+          : "Could not update the connection.",
+      );
+    }
   }
 
   return (
     <AgentConfigurationSection
-      title={agent.platform === "teams" ? "Endpoint" : "Channels & endpoint"}
-      description="Messaging routes are separate from the Agent's template and can be changed without creating a new override."
-      canEdit={editable}
-      editing={editing}
-      onEdit={onEdit}
-      onApply={applyChanges}
-      onCancel={cancelChanges}
-      onApplied={onEdit}
-      applyDisabled={!isDirty}
-      restartOnApply={agent.status === "RUNNING"}
+      title="Messaging connections"
+      description="Connect messaging platforms so people can message this Agent. Each platform can have one active Connection."
+      footer={
+        canEdit && !adding ? (
+          <button
+            type="button"
+            className="af-btn af-btn-primary"
+            onClick={() => setAdding(true)}
+          >
+            <Plus size={14} /> Add connection
+          </button>
+        ) : undefined
+      }
     >
-      {editing && editable ? (
-        agent.platform === "slack" ? (
-          <SlackConfigPanel
-            ref={panelRef}
-            agent={agent}
-            isRunning={false}
-            onDirtyChange={setIsDirty}
-          />
-        ) : agent.platform === "telegram" ? (
-          <TelegramConfigPanel
-            ref={panelRef}
-            agent={agent}
-            onDirtyChange={setIsDirty}
-          />
-        ) : (
-          <DiscordConfigPanel
-            ref={panelRef}
-            agent={agent}
-            onDirtyChange={setIsDirty}
-          />
-        )
-      ) : (
-        <div className="flex flex-col gap-5">
-          {agent.platform === "slack" && slack && (
-            <dl className="grid gap-x-8 gap-y-4 sm:grid-cols-2">
-              <div>
-                <dt className="text-[0.72rem] font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--ink-4)" }}>Channel access</dt>
-                <dd className="mb-0 mt-1 text-[0.9rem]" style={{ color: "var(--ink-2)" }}>{slack.groupPolicy === "open" ? "Open" : "Allowlist"}</dd>
-              </div>
-              <div>
-                <dt className="text-[0.72rem] font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--ink-4)" }}>Direct messages</dt>
-                <dd className="mb-0 mt-1 text-[0.9rem]" style={{ color: "var(--ink-2)" }}>{slack.dmPolicy === "open" ? "Open" : slack.dmPolicy === "allowlist" ? "Allowlist" : "Off"}</dd>
-              </div>
-              <div>
-                <dt className="text-[0.72rem] font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--ink-4)" }}>Allowed channels</dt>
-                <dd className="mb-0 mt-1 text-[0.9rem]" style={{ color: "var(--ink-2)" }}>{slack.channelIds.length || "None"}</dd>
-              </div>
-              <div>
-                <dt className="text-[0.72rem] font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--ink-4)" }}>Allowed users</dt>
-                <dd className="mb-0 mt-1 text-[0.9rem]" style={{ color: "var(--ink-2)" }}>{slack.dmUserIds.length || "None"}</dd>
-              </div>
-            </dl>
-          )}
-
-          {agent.platform === "telegram" && telegram && (
-            <dl className="grid gap-x-8 gap-y-4 sm:grid-cols-2">
-              <div>
-                <dt className="text-[0.72rem] font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--ink-4)" }}>Bot</dt>
-                <dd className="mb-0 mt-1 font-mono text-[0.84rem]" style={{ color: "var(--ink-2)" }}>{telegram.botUsername ? `@${telegram.botUsername}` : "Configured"}</dd>
-              </div>
-              <div>
-                <dt className="text-[0.72rem] font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--ink-4)" }}>Group chats</dt>
-                <dd className="mb-0 mt-1 text-[0.9rem]" style={{ color: "var(--ink-2)" }}>{telegram.groupPolicy === "open" ? "Open" : "Allowlist"}</dd>
-              </div>
-              <div>
-                <dt className="text-[0.72rem] font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--ink-4)" }}>Direct messages</dt>
-                <dd className="mb-0 mt-1 text-[0.9rem]" style={{ color: "var(--ink-2)" }}>{telegram.dmPolicy === "open" ? "Open" : telegram.dmPolicy === "allowlist" ? "Allowlist" : "Off"}</dd>
-              </div>
-              <div>
-                <dt className="text-[0.72rem] font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--ink-4)" }}>Allowed chats / users</dt>
-                <dd className="mb-0 mt-1 text-[0.9rem]" style={{ color: "var(--ink-2)" }}>{telegram.allowedChatIds.length} chats · {telegram.allowedUserIds.length} users</dd>
-              </div>
-            </dl>
-          )}
-
-          {agent.platform === "discord" && discord && (
-            <dl className="grid gap-x-8 gap-y-4 sm:grid-cols-2">
-              <div>
-                <dt className="text-[0.72rem] font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--ink-4)" }}>Server access</dt>
-                <dd className="mb-0 mt-1 text-[0.9rem]" style={{ color: "var(--ink-2)" }}>{discord.groupPolicy === "open" ? "Open" : "Allowlist"}</dd>
-              </div>
-              <div>
-                <dt className="text-[0.72rem] font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--ink-4)" }}>Allowed servers</dt>
-                <dd className="mb-0 mt-1 text-[0.9rem]" style={{ color: "var(--ink-2)" }}>{discord.guildIds.length || "None"}</dd>
-              </div>
-              <div>
-                <dt className="text-[0.72rem] font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--ink-4)" }}>Allowed channels</dt>
-                <dd className="mb-0 mt-1 text-[0.9rem]" style={{ color: "var(--ink-2)" }}>{discord.allowedChannelIds.length || "None"}</dd>
-              </div>
-              <div>
-                <dt className="text-[0.72rem] font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--ink-4)" }}>Allowed operators</dt>
-                <dd className="mb-0 mt-1 text-[0.9rem]" style={{ color: "var(--ink-2)" }}>{discord.allowedUserIds.length} users · {discord.allowedRoleIds.length} roles</dd>
-              </div>
-              <div>
-                <dt className="text-[0.72rem] font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--ink-4)" }}>Mention gating</dt>
-                <dd className="mb-0 mt-1 text-[0.9rem]" style={{ color: "var(--ink-2)" }}>{discord.requireMention ? "Required" : "Not required"}</dd>
-              </div>
-              <div>
-                <dt className="text-[0.72rem] font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--ink-4)" }}>Alert destination</dt>
-                <dd className="mb-0 mt-1 break-all font-mono text-[0.84rem]" style={{ color: "var(--ink-2)" }}>{discord.homeChannelId || "None"}</dd>
-              </div>
-            </dl>
-          )}
-
-          {agent.platform === "teams" && (
+      <div className="flex flex-col gap-4">
+        {connections.isPending && (
+          <p className="m-0 text-sm" style={{ color: "var(--ink-3)" }}>
+            Loading connections…
+          </p>
+        )}
+        {connections.error && (
+          <div
+            className="flex items-center gap-2 text-sm"
+            style={{ color: "var(--err)" }}
+          >
+            <CircleAlert size={15} /> Could not load communication connections.
+          </div>
+        )}
+        {connections.data?.map((connection) => (
+          <div
+            key={connection.id}
+            className="rounded-xl p-4"
+            style={{
+              border: "1px solid var(--line)",
+              background: "var(--bg-soft)",
+            }}
+          >
             <div className="flex flex-col gap-3">
-              <p className="m-0 text-[0.84rem]" style={{ color: "var(--ink-3)" }}>
-                Microsoft Teams delivers messages through this webhook. Configure it in your Azure Bot registration.
-              </p>
-              {agent.webhookUrl ? (
-                <div className="flex items-center gap-2 rounded-xl p-3 font-mono text-[0.8rem]" style={{ background: "var(--bg-soft)", border: "1px solid var(--line)" }}>
-                  <span className="min-w-0 flex-1 break-all" style={{ color: "var(--ink-2)" }}>{agent.webhookUrl}</span>
-                  <button type="button" className="af-btn af-btn-sm shrink-0" onClick={() => void copyEndpoint()}>{copied ? "Copied!" : "Copy"}</button>
+              <div className="flex min-w-0 items-start gap-3">
+                <span
+                  className="mt-0.5 rounded-lg p-2"
+                  style={{
+                    background: "var(--bg-elev)",
+                    color: "var(--accent-ink)",
+                  }}
+                >
+                  <ConnectionIcon platformKey={connection.platformKey} />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <div className="font-medium" style={{ color: "var(--ink)" }}>
+                    {connection.displayName}
+                  </div>
+                  <div
+                    className="mt-0.5 flex flex-wrap items-center gap-x-1.5 text-xs"
+                    style={{ color: "var(--ink-4)" }}
+                  >
+                    <span>
+                      {connection.externalIdentity
+                        ? `Connected as ${connection.externalIdentity}`
+                        : "Not connected yet"}
+                    </span>
+                    <span aria-hidden>·</span>
+                    <span>Provider:</span>
+                    <StatusDot {...connectionStatus(connection)} />
+                  </div>
+                  {connection.lastErrorMessage && (
+                    <div
+                      className="mt-3 flex w-full max-w-none items-start gap-2 rounded-lg px-2.5 py-2"
+                      role="alert"
+                      style={{
+                        border:
+                          "1px solid color-mix(in srgb, var(--err) 24%, var(--line))",
+                        background:
+                          "color-mix(in srgb, var(--err) 6%, var(--bg-elev))",
+                      }}
+                    >
+                      <CircleAlert
+                        size={14}
+                        className="mt-0.5 flex-shrink-0"
+                        style={{ color: "var(--err)" }}
+                      />
+                      <div className="min-w-0 flex-1 text-xs">
+                        <div
+                          className="font-medium"
+                          style={{ color: "var(--ink-2)" }}
+                        >
+                          Latest provider error
+                          {connection.lastErrorCode
+                            ? ` · ${connection.lastErrorCode}`
+                            : ""}
+                        </div>
+                        <p
+                          className="mb-0 mt-0.5 break-words whitespace-pre-wrap leading-relaxed"
+                          style={{ color: "var(--ink-3)" }}
+                        >
+                          {connection.lastErrorMessage}
+                        </p>
+                        {connection.lastErrorDetails && (
+                          <div
+                            className="mt-2 flex flex-wrap gap-x-2 gap-y-1 text-[11px]"
+                            style={{ color: "var(--ink-4)" }}
+                          >
+                            <span>
+                              {connection.lastErrorDetails.category.replace(
+                                /_/g,
+                                " ",
+                              )}
+                            </span>
+                            {connection.lastErrorDetails.httpStatus !==
+                              null && (
+                              <span>
+                                HTTP {connection.lastErrorDetails.httpStatus}
+                              </span>
+                            )}
+                            {connection.lastErrorDetails.providerCode && (
+                              <span>
+                                Provider code:{" "}
+                                {connection.lastErrorDetails.providerCode}
+                              </span>
+                            )}
+                            {connection.lastErrorDetails.retryable && (
+                              <span>Retryable</span>
+                            )}
+                            {connection.lastErrorDetails.requestId && (
+                              <span>
+                                Request ID:{" "}
+                                {connection.lastErrorDetails.requestId}
+                              </span>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                  {connection.webhookUrl && (
+                    <WebhookUrlField connectionId={connection.id} url={connection.webhookUrl} />
+                  )}
+                  {connection.managedAddress && (
+                    <div className="mt-2 flex flex-wrap items-center gap-2 text-xs" style={{ color: "var(--ink-3)" }}>
+                      <span>Give people this address to reach the Agent:</span>
+                      <code className="break-all" data-testid="managed-address">{connection.managedAddress}</code>
+                      <button
+                        type="button"
+                        className="af-btn af-btn-sm flex-shrink-0"
+                        title="Copy address"
+                        aria-label="Copy address"
+                        onClick={() => {
+                          void navigator.clipboard
+                            .writeText(connection.managedAddress ?? "")
+                            .then(() => toast.success("Address copied to clipboard"));
+                        }}
+                      >
+                        <Copy width={13} height={13} />
+                      </button>
+                    </div>
+                  )}
+                  {platforms.data
+                    ?.find((p) => p.key === connection.platformKey)
+                    ?.capabilities.includes("application_provisioning") && (
+                    <div
+                      className="mt-2 flex items-center gap-2 text-xs"
+                      style={{ color: "var(--ink-3)" }}
+                    >
+                      <span>
+                        Install the app in your workspace to add this Agent to
+                        channels and chats.
+                      </span>
+                      <button
+                        type="button"
+                        className="af-btn af-btn-sm flex-shrink-0"
+                        disabled={packageBusyId === connection.id}
+                        onClick={() => {
+                          setPackageBusyId(connection.id);
+                          setPackageError(null);
+                          void downloadAppPackage(
+                            agent.id,
+                            connection.id,
+                            connection.displayName,
+                          )
+                            .catch((cause: unknown) =>
+                              setPackageError(
+                                cause instanceof Error
+                                  ? cause.message
+                                  : "Could not build the app package.",
+                              ),
+                            )
+                            .finally(() => setPackageBusyId(null));
+                        }}
+                      >
+                        {packageBusyId === connection.id
+                          ? "Preparing…"
+                          : "Download app package"}
+                      </button>
+                    </div>
+                  )}
+                  {packageError && packageBusyId === null && (
+                    <div
+                      className="mt-2 text-xs"
+                      style={{ color: "var(--err)" }}
+                    >
+                      {packageError}
+                    </div>
+                  )}
+                  {platforms.data
+                    ?.find((p) => p.key === connection.platformKey)
+                    ?.capabilities.includes("install_link") && (
+                    <div className="mt-2 flex items-center gap-2 text-xs" style={{ color: "var(--ink-3)" }}>
+                      <span>Add the bot to a server with the recommended permissions.</span>
+                      {installLinks[connection.id] ? (
+                        <a
+                          href={installLinks[connection.id]}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="af-btn af-btn-sm flex-shrink-0"
+                        >
+                          Install bot to server ↗
+                        </a>
+                      ) : (
+                        <button
+                          type="button"
+                          className="af-btn af-btn-sm flex-shrink-0"
+                          disabled={installBusyId === connection.id}
+                          onClick={() => {
+                            setInstallBusyId(connection.id);
+                            setInstallError(null);
+                            void fetchInstallLink(agent.id, connection.id)
+                              .then((url) => setInstallLinks((previous) => ({ ...previous, [connection.id]: url })))
+                              .catch((cause: unknown) =>
+                                setInstallError(
+                                  cause instanceof Error ? cause.message : "Could not build the install link.",
+                                ),
+                              )
+                              .finally(() => setInstallBusyId(null));
+                          }}
+                        >
+                          {installBusyId === connection.id ? "Preparing…" : "Get install link"}
+                        </button>
+                      )}
+                    </div>
+                  )}
+                  {installError && installBusyId === null && (
+                    <div className="mt-2 text-xs" style={{ color: "var(--err)" }}>{installError}</div>
+                  )}
+                  <div className="mt-3">
+                    <PlatformSetupHint
+                      hint={platforms.data?.find((p) => p.key === connection.platformKey)?.postSetupHint}
+                      title="Finish setup"
+                    />
+                  </div>
                 </div>
-              ) : (
-                <p className="m-0 text-[0.84rem]" style={{ color: "var(--ink-4)" }}>The endpoint becomes available after the API external URL is configured.</p>
-              )}
+              </div>
+              <div className="flex w-full flex-wrap gap-2">
+                <button
+                  type="button"
+                  className="af-btn af-btn-sm"
+                  aria-label={`Refresh status for ${connection.displayName}`}
+                  disabled={connections.isFetching}
+                  onClick={() => void connections.refetch()}
+                >
+                  <RefreshCw
+                    size={14}
+                    className={
+                      connections.isFetching ? "animate-spin" : undefined
+                    }
+                  />{" "}
+                  Refresh status
+                </button>
+                <Link
+                  href={`/dashboard/${agent.organizationId}/agents/${agent.id}/connections/${connection.id}`}
+                  className="af-btn af-btn-sm"
+                >
+                  View details
+                </Link>
+                {canEdit && connection.platformKey !== WEB_PLATFORM_KEY && (
+                  <>
+                    <button
+                      type="button"
+                      className="af-btn af-btn-sm"
+                      aria-label={`Edit ${connection.displayName}`}
+                      onClick={() => beginEditing(connection)}
+                    >
+                      <Pencil size={14} /> Edit
+                    </button>
+                    <button
+                      type="button"
+                      className="af-btn af-btn-sm"
+                      disabled={
+                        updateConnection.isPending ||
+                        (restartsAgent(connection.platformKey) && !canRestart)
+                      }
+                      onClick={() =>
+                        applyChange(
+                          connection.platformKey,
+                          connection.enabled ? "Disable & Restart" : "Enable & Restart",
+                          () =>
+                            updateConnection
+                              .mutateAsync({
+                                agentId: agent.id,
+                                connectionId: connection.id,
+                                revision: connection.revision,
+                                enabled: !connection.enabled,
+                              })
+                              .then(() => undefined),
+                        )
+                      }
+                    >
+                      {connection.enabled ? "Disable" : "Enable"}
+                    </button>
+                    <button
+                      type="button"
+                      className="af-btn af-btn-sm"
+                      aria-label={`Remove ${connection.displayName}`}
+                      onClick={() => setRetiring(connection)}
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </>
+                )}
+              </div>
+            </div>
+            {editingConnection?.id === connection.id &&
+              (() => {
+                const platform = platforms.data?.find(
+                  (candidate) => candidate.key === connection.platformKey,
+                );
+                return (
+                  <div
+                    className="mt-4 flex flex-col gap-4 border-t pt-4"
+                    style={{ borderColor: "var(--line)" }}
+                  >
+                    <label className="flex flex-col gap-1.5 text-sm font-medium">
+                      Connection name
+                      <input
+                        className="af-input"
+                        value={editDisplayName}
+                        onChange={(event) =>
+                          setEditDisplayName(event.target.value)
+                        }
+                      />
+                    </label>
+                    {platform && (
+                      <>
+                        <PlatformSetupHint
+                          hint={platform.setupHint}
+                          platformKey={platform.key}
+                        />
+                        <div className="flex flex-col gap-4">
+                          {connection.platformKey === "discord" && (
+                            <div className="flex flex-col gap-1.5 text-sm font-medium">
+                              <div className="flex items-center justify-between gap-2">
+                                Browse server
+                                <button
+                                  type="button"
+                                  className="af-btn af-btn-sm"
+                                  aria-label="Refresh server list"
+                                  disabled={discordGuilds.isFetching}
+                                  onClick={() => void discordGuilds.refetch()}
+                                >
+                                  <RefreshCw
+                                    size={14}
+                                    className={
+                                      discordGuilds.isFetching ? "animate-spin" : undefined
+                                    }
+                                  />{" "}
+                                  Refresh
+                                </button>
+                              </div>
+                              <Select
+                                value={discordGuildId}
+                                onValueChange={setDiscordGuildId}
+                              >
+                                <SelectTrigger className="w-full">
+                                  <SelectValue placeholder="Choose a server to browse channels, users, and roles" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectGroup>
+                                    {(discordGuilds.data ?? []).map((guild) => (
+                                      <SelectItem key={guild.id} value={guild.id}>
+                                        {guild.label}
+                                      </SelectItem>
+                                    ))}
+                                  </SelectGroup>
+                                </SelectContent>
+                              </Select>
+                              <span
+                                className="text-xs"
+                                style={{ color: "var(--ink-4)" }}
+                              >
+                                Select a server, then choose its channels,
+                                users, or roles below. Manual IDs still work.
+                              </span>
+                            </div>
+                          )}
+                          <SchemaFields
+                            schema={platform.settingsSchema}
+                            values={editSettings}
+                            onChange={setEditSettings}
+                            arrayBrowse={editBrowseSources(connection.platformKey)}
+                          />
+                        </div>
+                        {schemaProperties(platform.credentialsSchema).length > 0 && (
+                          <div
+                            className="rounded-lg p-3"
+                            style={{ border: "1px solid var(--line)" }}
+                          >
+                            <div
+                              className="mb-1 text-xs font-semibold uppercase tracking-wide"
+                              style={{ color: "var(--ink-4)" }}
+                            >
+                              Replace credentials
+                            </div>
+                            <p
+                              className="mb-3 mt-0 text-xs"
+                              style={{ color: "var(--ink-3)" }}
+                            >
+                              Leave every credential blank to keep the encrypted
+                              credentials already stored.
+                            </p>
+                            <div className="flex w-full flex-col gap-3">
+                              <SchemaFields
+                                schema={platform.credentialsSchema}
+                                values={editCredentials}
+                                onChange={setEditCredentials}
+                                secret
+                              />
+                            </div>
+                          </div>
+                        )}
+                      </>
+                    )}
+                    {formError && (
+                      <p
+                        className="m-0 text-xs"
+                        style={{ color: "var(--err)" }}
+                      >
+                        {formError}
+                      </p>
+                    )}
+                    <div className="flex justify-end gap-2">
+                      <button
+                        type="button"
+                        className="af-btn"
+                        onClick={() => {
+                          setEditingConnection(null);
+                          setFormError(null);
+                        }}
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        className="af-btn af-btn-primary"
+                        disabled={
+                          !editDisplayName.trim() ||
+                          updateConnection.isPending ||
+                          (restartsAgent(connection.platformKey) && !canRestart)
+                        }
+                        onClick={() => applyChange(connection.platformKey, "Save & Restart", saveConnection)}
+                      >
+                        {updateConnection.isPending
+                          ? "Saving…"
+                          : restartsAgent(connection.platformKey)
+                            ? "Save & Restart"
+                            : "Save changes"}
+                      </button>
+                    </div>
+                  </div>
+                );
+              })()}
+          </div>
+        ))}
+        {!connections.isPending &&
+          (connections.data?.length ?? 0) === 0 &&
+          !adding && (
+            <div
+              className="flex flex-col items-center gap-2 rounded-xl p-6 text-center"
+              style={{
+                border:
+                  "1px solid color-mix(in srgb, var(--warn) 30%, transparent)",
+                background: "var(--warn-soft)",
+              }}
+            >
+              <MessageCircleWarning
+                size={20}
+                style={{ color: "var(--warn)" }}
+              />
+              <p
+                className="m-0 text-sm font-medium"
+                style={{ color: "var(--ink)" }}
+              >
+                Nobody can message this Agent yet
+              </p>
+              <p className="m-0 text-sm" style={{ color: "var(--ink-3)" }}>
+                Connect a messaging platform below to make it reachable.
+              </p>
             </div>
           )}
 
-          {agent.platform !== "teams" && !slack && !telegram && !discord && (
-            <p className="m-0 text-[0.84rem]" style={{ color: "var(--ink-4)" }}>No channel configuration has been recorded.</p>
-          )}
-        </div>
-      )}
+        {adding && (
+          <div
+            className="overflow-hidden rounded-2xl"
+            style={{
+              border: "1px solid var(--line)",
+              background: "var(--bg-soft)",
+            }}
+          >
+            <div className="flex flex-col gap-5 p-4 sm:p-5">
+              <div>
+                <div
+                  className="text-sm font-semibold"
+                  style={{ color: "var(--ink)" }}
+                >
+                  Choose a platform
+                </div>
+                <p
+                  className="mb-0 mt-1 text-xs"
+                  style={{ color: "var(--ink-3)" }}
+                >
+                  You can add more channels later. Each connection has its own
+                  credentials and status.
+                </p>
+                {platforms.isPending && (
+                  <p
+                    className="mb-0 mt-3 text-xs"
+                    style={{ color: "var(--ink-3)" }}
+                  >
+                    Loading platforms…
+                  </p>
+                )}
+                {platforms.error && (
+                  <div
+                    className="mt-3 flex items-center gap-2 text-xs"
+                    style={{ color: "var(--err)" }}
+                  >
+                    <CircleAlert size={14} /> Could not load available
+                    platforms.
+                  </div>
+                )}
+                {addablePlatforms && addablePlatforms.length > 0 && (
+                  <div className="mt-3 grid gap-2.5 sm:grid-cols-2">
+                    {addablePlatforms.map((platform) => (
+                      <PlatformOption
+                        key={platform.key}
+                        platform={platform}
+                        selected={platformKey === platform.key}
+                        onSelect={() => choosePlatform(platform.key)}
+                      />
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {!selectedPlatform ? (
+                <div
+                  className="flex items-start gap-3 rounded-xl p-3.5"
+                  style={{
+                    border: "1px dashed var(--line-strong)",
+                    background: "var(--bg-elev)",
+                  }}
+                >
+                  <LockKeyhole
+                    size={17}
+                    className="mt-0.5 flex-shrink-0"
+                    style={{ color: "var(--ink-4)" }}
+                  />
+                  <div>
+                    <div
+                      className="text-sm font-medium"
+                      style={{ color: "var(--ink)" }}
+                    >
+                      Your credentials stay private
+                    </div>
+                    <p
+                      className="mb-0 mt-1 text-xs leading-relaxed"
+                      style={{ color: "var(--ink-3)" }}
+                    >
+                      Select a platform to see the small set of details needed
+                      to connect it securely.
+                    </p>
+                  </div>
+                </div>
+              ) : (
+                <div
+                  className="rounded-xl p-4 sm:p-5"
+                  style={{
+                    border: "1px solid var(--line)",
+                    background: "var(--bg-elev)",
+                  }}
+                >
+                  <div className="flex items-center gap-3">
+                    <span
+                      className="grid h-9 w-9 flex-shrink-0 place-items-center rounded-lg"
+                      style={{ background: "var(--bg-soft)" }}
+                    >
+                      <ConnectionIcon
+                        platformKey={selectedPlatform.key}
+                        size={19}
+                      />
+                    </span>
+                    <div>
+                      <div
+                        className="text-sm font-semibold"
+                        style={{ color: "var(--ink)" }}
+                      >
+                        Configure {selectedPlatform.displayName}
+                      </div>
+                      <p
+                        className="mb-0 mt-0.5 text-xs"
+                        style={{ color: "var(--ink-3)" }}
+                      >
+                        Add its credentials first, then name the connection
+                        and choose where it listens.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="mt-5 flex flex-col gap-4">
+                    <PlatformSetupHint hint={selectedPlatform.setupHint} platformKey={selectedPlatform.key} />
+                    {schemaProperties(selectedPlatform.credentialsSchema).length > 0 && (
+                      <div className="rounded-xl p-4" style={{ border: "1px solid var(--line)", background: "var(--bg-soft)" }}>
+                        <div className="flex items-start gap-2.5">
+                          <LockKeyhole size={16} className="mt-0.5 flex-shrink-0" style={{ color: "var(--accent-ink)" }} />
+                          <div>
+                            <div className="text-xs font-semibold uppercase tracking-[0.1em]" style={{ color: "var(--ink-2)" }}>Credentials</div>
+                            <p className="mb-0 mt-1 text-xs leading-relaxed" style={{ color: "var(--ink-3)" }}>
+                              Encrypted at rest and never shown again after you save this connection.
+                            </p>
+                          </div>
+                        </div>
+                        <div className="mt-4 flex w-full flex-col gap-3">
+                          <SchemaFields
+                            schema={selectedPlatform.credentialsSchema}
+                            values={credentials}
+                            onChange={(next) => { setCredentials(next); resetDirectoryPreviews(); }}
+                            secret
+                          />
+                        </div>
+                      </div>
+                    )}
+                    <label className="flex flex-col gap-1.5 text-sm font-medium">
+                      Connection name
+                      <input
+                        className="af-input"
+                        value={displayName}
+                        onChange={(event) => setDisplayName(event.target.value)}
+                        placeholder={`${selectedPlatform.displayName} connection`}
+                      />
+                      <span
+                        className="text-xs font-normal"
+                        style={{ color: "var(--ink-4)" }}
+                      >
+                        Only you will see this label in the Agent settings.
+                      </span>
+                    </label>
+                    {schemaProperties(selectedPlatform.settingsSchema).length >
+                      0 && (
+                      <div className="flex flex-col gap-2">
+                        <div
+                          className="text-xs font-semibold uppercase tracking-[0.1em]"
+                          style={{ color: "var(--ink-4)" }}
+                        >
+                          Connection settings
+                        </div>
+                        <div className="flex flex-col gap-4">
+                          {selectedPlatform.key === "discord" && (
+                            <div className="flex flex-col gap-1.5 text-sm font-medium">
+                              <div className="flex items-center justify-between gap-2">
+                                Browse server
+                                <button
+                                  type="button"
+                                  className="af-btn af-btn-sm"
+                                  aria-label="Refresh server list"
+                                  disabled={previewConnectionDirectory.isPending || !credentials.botToken}
+                                  onClick={() => fetchDirectoryPreview("servers", "discord", "guilds", undefined, true)}
+                                >
+                                  <RefreshCw
+                                    size={14}
+                                    className={
+                                      previewConnectionDirectory.isPending ? "animate-spin" : undefined
+                                    }
+                                  />{" "}
+                                  Refresh
+                                </button>
+                              </div>
+                              <Select
+                                value={discordAddGuildId}
+                                onValueChange={setDiscordAddGuildId}
+                              >
+                                <SelectTrigger className="w-full">
+                                  <SelectValue placeholder="Choose a server to browse channels, users, and roles" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectGroup>
+                                    {(previewEntries.guilds ?? []).map((guild) => (
+                                      <SelectItem key={guild.id} value={guild.id}>
+                                        {guild.label}
+                                      </SelectItem>
+                                    ))}
+                                  </SelectGroup>
+                                </SelectContent>
+                              </Select>
+                              <span
+                                className="text-xs"
+                                style={{ color: "var(--ink-4)" }}
+                              >
+                                {credentials.botToken
+                                  ? "Select a server, then choose its channels, users, or roles below. Manual IDs still work."
+                                  : "Add the bot token above, then refresh to list its servers."}
+                              </span>
+                            </div>
+                          )}
+                          <SchemaFields
+                            schema={selectedPlatform.settingsSchema}
+                            values={settings}
+                            onChange={setSettings}
+                            arrayBrowse={addBrowseSources(selectedPlatform)}
+                          />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {(formError || createConnection.error) && (
+                <div
+                  className="flex items-center gap-2 text-xs"
+                  style={{ color: "var(--err)" }}
+                  role="alert"
+                >
+                  <CircleAlert size={14} />{" "}
+                  {formError ?? "Could not create the connection."}
+                </div>
+              )}
+            </div>
+
+            <div
+              className="flex flex-wrap items-center justify-between gap-3 border-t px-4 py-3 sm:px-5"
+              style={{ borderColor: "var(--line)" }}
+            >
+              <div
+                className="inline-flex items-center gap-1.5 text-xs"
+                style={{ color: "var(--ink-4)" }}
+              >
+                <LockKeyhole size={13} /> Credentials are encrypted.
+              </div>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  className="af-btn af-btn-ghost"
+                  onClick={() => {
+                    setAdding(false);
+                    setFormError(null);
+                  }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="af-btn af-btn-primary"
+                  disabled={
+                    !platformKey ||
+                    !displayName.trim() ||
+                    createConnection.isPending ||
+                    (restartsAgent(platformKey) && !canRestart)
+                  }
+                  onClick={() => applyChange(platformKey, "Connect & Restart", addConnection)}
+                >
+                  {createConnection.isPending
+                    ? "Connecting…"
+                    : selectedPlatform
+                      ? `Connect ${selectedPlatform.displayName}${restartsAgent(platformKey) ? " & Restart" : ""}`
+                      : "Choose a platform"}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+
+      <ConfirmationDialog
+        open={Boolean(retiring)}
+        onOpenChange={(open) => {
+          if (!open) setRetiring(null);
+        }}
+        title="Remove this connection?"
+        description={
+          restartsAgent(retiring?.platformKey)
+            ? "Pending deliveries are cancelled, credentials are scrubbed, and conversation history is preserved. The Agent restarts so it stops using this connection."
+            : "Pending deliveries are cancelled, credentials are scrubbed, and conversation history is preserved."
+        }
+        confirmLabel={restartsAgent(retiring?.platformKey) ? "Remove & Restart" : "Remove connection"}
+        pendingLabel="Removing…"
+        variant="destructive"
+        isPending={retireConnection.isPending}
+        onConfirm={async () => {
+          if (!retiring) return;
+          if (restartsAgent(retiring.platformKey) && !canRestart) return;
+          const retire = () =>
+            retireConnection
+              .mutateAsync({
+                agentId: agent.id,
+                connectionId: retiring.id,
+                revision: retiring.revision,
+              })
+              .then(() => undefined);
+          await (restartsAgent(retiring.platformKey) ? applyAndRestart(retire) : retire());
+          setRetiring(null);
+        }}
+      />
+
+      <ConfirmationDialog
+        open={Boolean(restartChange)}
+        onOpenChange={(open) => {
+          if (!open) setRestartChange(null);
+        }}
+        title="Apply changes and restart the Agent?"
+        description="This Agent's runtime runs this connection itself and only reads it when it starts. This saves the change, stops the Agent, and starts it again."
+        confirmLabel={restartChange?.confirmLabel ?? "Apply & Restart"}
+        pendingLabel="Applying & Restarting…"
+        isPending={isRestarting}
+        onConfirm={async () => {
+          if (!restartChange) return;
+          setIsRestarting(true);
+          try {
+            await restartChange.run();
+            setRestartChange(null);
+          } catch (error) {
+            toast.error(error instanceof Error ? error.message : "Could not restart the Agent.");
+          } finally {
+            setIsRestarting(false);
+          }
+        }}
+      />
     </AgentConfigurationSection>
   );
 }

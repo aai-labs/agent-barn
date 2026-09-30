@@ -1,6 +1,7 @@
 from typing import cast
 
 from api.domains.agents.aai_cli_artifacts import (
+    _INTEGRATION_LABELS,
     CONFIG_PATH,
     PROFILE_SLUGS,
     build_config_toml,
@@ -13,10 +14,9 @@ from api.domains.agents.aai_cli_artifacts import (
 )
 from api.domains.agents.models import (
     FirecrawlContent,
-    GmailContent,
-    GoogleSheetsContent,
     PipedriveContent,
     SecretProvider,
+    SharePointContent,
     ZohoMailContent,
     validate_content,
 )
@@ -50,28 +50,6 @@ _BITBUCKET = validate_content(
         "api_token": "bb_tok",
     },
 )
-_GMAIL = cast(
-    GmailContent,
-    validate_content(
-        SecretProvider.GMAIL,
-        {
-            "client_id": "132806748841-abc.apps.googleusercontent.com",
-            "client_secret": "g_client_secret",
-            "refresh_token": "g_refresh_tok",
-        },
-    ),
-)
-_GOOGLE_SHEETS = cast(
-    GoogleSheetsContent,
-    validate_content(
-        SecretProvider.GOOGLE_SHEETS,
-        {
-            "client_id": "132806748841-sheets.apps.googleusercontent.com",
-            "client_secret": "xyz_sheet_client_sec",
-            "refresh_token": "xyz_sheet_refresh_tok",
-        },
-    ),
-)
 _ZOHO_MAIL = cast(
     ZohoMailContent,
     validate_content(
@@ -85,10 +63,6 @@ _ZOHO_MAIL = cast(
         },
     ),
 )
-_GOOGLE_CALENDAR = validate_content(
-    SecretProvider.GOOGLE_CALENDAR,
-    {"access_token": "gc_tok", "calendar_id": "primary"},
-)
 _SLACK = validate_content(SecretProvider.SLACK, {"token": "xoxb-slack-tok"})
 _PIPEDRIVE = cast(
     PipedriveContent,
@@ -99,12 +73,28 @@ _PIPEDRIVE_WITH_DOMAIN = cast(
     validate_content(SecretProvider.PIPEDRIVE, {"api_token": "pd_tok", "domain": "aai-labs"}),
 )
 
+_SHAREPOINT = cast(
+    SharePointContent,
+    validate_content(
+        SecretProvider.SHAREPOINT,
+        {
+            "connection_id": "33333333-3333-4333-8333-333333333333",
+            "tenant_id": "22222222-2222-4222-8222-222222222222",
+            "client_id": "11111111-1111-4111-8111-111111111111",
+            "email": "someone@contoso.com",
+            "scopes": ["Sites.Read.All"],
+            "read_only": True,
+            "refresh_token": "sp_refresh_tok",
+            "sign_in_id": "44444444-4444-4444-8444-444444444444",
+        },
+    ),
+)
+_SHAREPOINT_READ_WRITE = _SHAREPOINT.model_copy(update={"read_only": False, "scopes": ["Sites.ReadWrite.All"]})
+
 
 def test_env_var_for():
     assert env_var_for("jira.api_token") == "AAI_SECRET_JIRA_API_TOKEN"
     assert env_var_for("github.token") == "AAI_SECRET_GITHUB_TOKEN"
-    assert env_var_for("google.client_secret") == "AAI_SECRET_GOOGLE_CLIENT_SECRET"
-    assert env_var_for("google.gmail_refresh_token") == "AAI_SECRET_GOOGLE_GMAIL_REFRESH_TOKEN"
     assert env_var_for("zoho.client_secret") == "AAI_SECRET_ZOHO_CLIENT_SECRET"
     assert env_var_for("zoho.mail_refresh_token") == "AAI_SECRET_ZOHO_MAIL_REFRESH_TOKEN"
     assert env_var_for("slack.token") == "AAI_SECRET_SLACK_TOKEN"
@@ -125,7 +115,7 @@ def test_config_toml_emits_only_present_store_profiles():
     assert "[profiles.confluence-work]" in toml
     assert "[profiles.github-work]" in toml
     assert "[profiles.bitbucket-work]" not in toml
-    assert "[profiles.gmail-work]" not in toml
+    assert "[profiles.slack-work]" not in toml
     assert 'api_token_secret = "jira.api_token"' in toml
     assert 'token_secret = "github.token"' in toml
     assert 'site_url = "https://x.atlassian.net"' in toml
@@ -186,46 +176,6 @@ def test_config_toml_confluence_scoped_token_uses_gateway_url():
     assert 'email = "svc-account@x.com"' in toml
 
 
-def test_config_toml_gmail_uses_secret_store():
-    toml = build_config_toml({SecretProvider.GMAIL: _GMAIL})
-    assert "[profiles.gmail-work]" in toml
-    assert 'provider = "google"' in toml
-    assert 'auth_type = "bearer_token"' in toml
-    assert f'client_id = "{_GMAIL.client_id}"' in toml
-    assert 'client_secret_secret = "google.client_secret"' in toml
-    assert 'refresh_token_secret = "google.gmail_refresh_token"' in toml
-    assert 'user_id = "me"' in toml
-    # secret values must not appear in the config
-    assert "g_client_secret" not in toml
-    assert "g_refresh_tok" not in toml
-    assert "token_env" not in toml
-
-
-def test_config_toml_google_sheets_uses_secret_store():
-    toml = build_config_toml({SecretProvider.GOOGLE_SHEETS: _GOOGLE_SHEETS})
-    assert "[profiles.google-sheets-work]" in toml
-    assert 'provider = "google"' in toml
-    assert 'auth_type = "bearer_token"' in toml
-    assert f'client_id = "{_GOOGLE_SHEETS.client_id}"' in toml
-    assert 'client_secret_secret = "google.sheets_client_secret"' in toml
-    assert 'refresh_token_secret = "google.sheets_refresh_token"' in toml
-    # secret values must not appear in the config
-    assert "xyz_sheet_client_sec" not in toml
-    assert "xyz_sheet_refresh_tok" not in toml
-
-
-def test_gmail_and_sheets_secrets_do_not_collide():
-    """Each Google provider owns its secret names, so a user-supplied client for one
-    can't overwrite the other's credentials in the flat secret store."""
-    env = build_env({SecretProvider.GMAIL: _GMAIL, SecretProvider.GOOGLE_SHEETS: _GOOGLE_SHEETS})
-    assert env == {
-        "AAI_SECRET_GOOGLE_CLIENT_SECRET": "g_client_secret",
-        "AAI_SECRET_GOOGLE_GMAIL_REFRESH_TOKEN": "g_refresh_tok",
-        "AAI_SECRET_GOOGLE_SHEETS_CLIENT_SECRET": "xyz_sheet_client_sec",
-        "AAI_SECRET_GOOGLE_SHEETS_REFRESH_TOKEN": "xyz_sheet_refresh_tok",
-    }
-
-
 def test_config_toml_zoho_mail_uses_oauth_rest_profile():
     toml = build_config_toml({SecretProvider.ZOHO_MAIL: _ZOHO_MAIL})
     assert "[profiles.zoho-mail-rest]" in toml
@@ -268,30 +218,6 @@ def test_setup_sh_cp_always_and_secrets_set_per_store_provider():
     )
     assert "secrets set github.token" in setup
     assert "jira_tok" not in setup
-
-
-def test_setup_sh_gmail_sets_both_secrets():
-    setup = build_setup_sh([SecretProvider.GMAIL])
-    assert (
-        f"printf '%s' \"$AAI_SECRET_GOOGLE_CLIENT_SECRET\" | "
-        f"aai-cli --config {CONFIG_PATH} secrets set google.client_secret" in setup
-    )
-    assert (
-        f"printf '%s' \"$AAI_SECRET_GOOGLE_GMAIL_REFRESH_TOKEN\" | "
-        f"aai-cli --config {CONFIG_PATH} secrets set google.gmail_refresh_token" in setup
-    )
-
-
-def test_setup_sh_google_sheets_sets_both_secrets():
-    setup = build_setup_sh([SecretProvider.GOOGLE_SHEETS])
-    assert (
-        f"printf '%s' \"$AAI_SECRET_GOOGLE_SHEETS_CLIENT_SECRET\" | "
-        f"aai-cli --config {CONFIG_PATH} secrets set google.sheets_client_secret" in setup
-    )
-    assert (
-        f"printf '%s' \"$AAI_SECRET_GOOGLE_SHEETS_REFRESH_TOKEN\" | "
-        f"aai-cli --config {CONFIG_PATH} secrets set google.sheets_refresh_token" in setup
-    )
 
 
 def test_setup_sh_zoho_mail_sets_both_secrets():
@@ -342,14 +268,6 @@ def test_build_env_maps_tokens_to_env_vars():
     }
 
 
-def test_build_env_gmail_emits_both_secrets():
-    env = build_env({SecretProvider.GMAIL: _GMAIL})
-    assert env == {
-        "AAI_SECRET_GOOGLE_CLIENT_SECRET": "g_client_secret",
-        "AAI_SECRET_GOOGLE_GMAIL_REFRESH_TOKEN": "g_refresh_tok",
-    }
-
-
 def test_build_env_zoho_mail_emits_both_secrets():
     env = build_env({SecretProvider.ZOHO_MAIL: _ZOHO_MAIL})
     assert env == {
@@ -369,8 +287,17 @@ def test_build_env_pipedrive_emits_secret():
 
 
 def test_build_env_ignores_non_store_providers():
-    # GOOGLE_CALENDAR uses token_env, not the secret store
-    assert build_env({SecretProvider.GOOGLE_CALENDAR: _GOOGLE_CALENDAR}) == {}
+    # ZOHO_CALENDAR uses password_env, not the secret store
+    zoho_calendar = validate_content(
+        SecretProvider.ZOHO_CALENDAR,
+        {
+            "username": "samuel",
+            "email": "samuel@aai-labs.com",
+            "app_password": "zc_pw",
+            "caldav_url": "https://calendar.zoho.com/caldav/",
+        },
+    )
+    assert build_env({SecretProvider.ZOHO_CALENDAR: zoho_calendar}) == {}
 
 
 def test_config_toml_hermes_home_dir_uses_opt_data_paths():
@@ -434,10 +361,10 @@ def test_tool_context_md_lists_bitbucket_profile():
 def test_tool_context_md_lists_providers_without_metadata():
     # Providers with no per-secret metadata worth printing (no site URL, no
     # owner/workspace) are still listed. The block's job is "credentials are already in
-    # place", and that matters most for exactly these: a Gmail- or Slack-only agent used
+    # place", and that matters most for exactly these: a Slack-only agent used
     # to get no block at all and would tell the user it had no access.
-    md = build_tool_context_md({SecretProvider.GMAIL: _GMAIL})
-    assert "- **Gmail** (`gmail-work`)" in md
+    md = build_tool_context_md({SecretProvider.SLACK: _SLACK})
+    assert "- **Slack** (`slack-work`)" in md
 
 
 def test_tool_context_md_empty_when_only_firecrawl():
@@ -488,6 +415,26 @@ def test_integrations_policy_md_empty_when_no_secrets():
     assert build_integrations_policy_md({}) == ""
 
 
+def test_integrations_policy_md_empty_when_no_provider_has_a_profile():
+    """Providers reached by other means (gog, Firecrawl) must not produce a bare header.
+
+    The block opens with "aai-cli is the only way to reach them — always pass --profile",
+    which contradicts those tools' own guidance when no aai-cli profile follows it.
+    """
+    decrypted = {
+        SecretProvider.GOOGLE_WORKSPACE: validate_content(
+            SecretProvider.GOOGLE_WORKSPACE,
+            {
+                "email": "user@example.com",
+                "services": ["gmail"],
+                "refresh_token": "rt-123",
+            },
+        ),
+        SecretProvider.FIRECRAWL: FirecrawlContent(api_key="fc-x"),
+    }
+    assert build_integrations_policy_md(decrypted) == ""
+
+
 def test_integrations_policy_md_includes_no_fallback_policy():
     md = build_integrations_policy_md({SecretProvider.JIRA: _JIRA})
     # aai-cli is the only path; always pass --profile; no browser/curl/HTTP fallback;
@@ -495,7 +442,7 @@ def test_integrations_policy_md_includes_no_fallback_policy():
     assert "aai-cli" in md
     assert "--profile" in md
     assert "curl" in md
-    assert "./skills/aai-cli/" in md
+    assert "./skills/aai-<integration>/SKILL.md" in md
 
 
 def test_integrations_policy_md_includes_nested_command_grammar():
@@ -505,7 +452,7 @@ def test_integrations_policy_md_includes_nested_command_grammar():
     md = build_integrations_policy_md({SecretProvider.JIRA: _JIRA})
     assert "aai-cli --profile <slug> <service> <resource> <verb>" in md
     assert "aai-cli --profile jira-work jira issues get AF-147" in md
-    assert "./skills/aai-cli/<service>_skill.md" in md
+    assert "./skills/aai-<integration>/SKILL.md" in md
 
 
 def test_integrations_policy_md_emits_profile_line_per_provider():
@@ -537,14 +484,19 @@ def test_integrations_policy_md_appends_capability_to_repo_scoped_line():
 
 
 def test_integrations_policy_md_omits_capability_for_providers_without_one():
-    # Calendars ship no aai-cli skill doc, so there is no verified command surface to
-    # describe — the line renders exactly as before rather than inventing one.
+    # Zoho Calendar ships no aai-cli skill doc, so there is no verified command surface
+    # to describe — the line renders exactly as before rather than inventing one.
     calendar = validate_content(
-        SecretProvider.GOOGLE_CALENDAR,
-        {"calendar_id": "primary", "access_token": "ya29.tok"},
+        SecretProvider.ZOHO_CALENDAR,
+        {
+            "username": "samuel",
+            "email": "samuel@aai-labs.com",
+            "app_password": "zc_pw",
+            "caldav_url": "https://calendar.zoho.com/caldav/",
+        },
     )
-    md = build_integrations_policy_md({SecretProvider.GOOGLE_CALENDAR: calendar})
-    assert "- **Google Calendar**: `--profile google-calendar-work`\n" in md
+    md = build_integrations_policy_md({SecretProvider.ZOHO_CALENDAR: calendar})
+    assert "- **Zoho Calendar**: `--profile zoho-calendar-work`\n" in md
 
 
 def test_integrations_policy_md_github_multi_repo_lists_all_profiles():
@@ -624,15 +576,7 @@ def test_integrations_policy_md_bitbucket_no_repo_guides_repo_flag():
 
 
 def test_integrations_policy_md_covers_non_store_providers():
-    md = build_integrations_policy_md(
-        {
-            SecretProvider.GMAIL: _GMAIL,
-            SecretProvider.GOOGLE_SHEETS: _GOOGLE_SHEETS,
-            SecretProvider.ZOHO_MAIL: _ZOHO_MAIL,
-        }
-    )
-    assert "--profile gmail-work" in md
-    assert "--profile google-sheets-work" in md
+    md = build_integrations_policy_md({SecretProvider.ZOHO_MAIL: _ZOHO_MAIL})
     assert "--profile zoho-mail-rest" in md
 
 
@@ -660,33 +604,33 @@ def test_integrations_policy_md_never_leaks_tokens():
         {
             SecretProvider.GITHUB: _GITHUB,
             SecretProvider.JIRA: _JIRA,
-            SecretProvider.GMAIL: _GMAIL,
+            SecretProvider.ZOHO_MAIL: _ZOHO_MAIL,
             SecretProvider.SLACK: _SLACK,
         }
     )
     assert "ghp_tok" not in md
     assert "jira_tok" not in md
-    assert "g_client_secret" not in md
-    assert "g_refresh_tok" not in md
+    assert "z_client_secret" not in md
+    assert "z_refresh_tok" not in md
     assert "xoxb-slack-tok" not in md
 
 
 def test_local_tools_block_names_credential_free_capabilities():
     """A tool with no provider can never reach the integrations block, which is built from
     configured secrets — so without this the agent never learns Excel exists."""
-    md = build_local_tools_policy_md(["Google Sheets", "Excel"])
+    md = build_local_tools_policy_md(["Jira", "Excel"])
     assert "aai-cli excel" in md
     assert ".csv" in md
     # The integrations block tells the agent to always pass --profile; this must say the
     # opposite, or it will invent one.
     assert "no `--profile`" in md
-    assert "excel_skill.md" in md
+    assert "./skills/aai-excel/SKILL.md" in md
 
 
 def test_local_tools_block_is_empty_when_the_skill_is_not_mounted():
     """It is opt-in: advertising a skill the agent has not been given would send it after
     a file reference that was never mounted."""
-    assert build_local_tools_policy_md(["Google Sheets", "Jira"]) == ""
+    assert build_local_tools_policy_md(["Slack", "Jira"]) == ""
     assert build_local_tools_policy_md([]) == ""
 
 
@@ -725,3 +669,145 @@ def test_local_tools_block_forbids_the_python_fallback():
     assert "openpyxl" in md
     assert "Do not write Python" in md
     assert "only supported way" in md
+
+
+def test_config_toml_sharepoint_uses_aai_clis_delegated_microsoft_profile():
+    toml = build_config_toml({SecretProvider.SHAREPOINT: _SHAREPOINT})
+    assert "[profiles.sharepoint-work]" in toml
+    assert 'provider = "microsoft"' in toml
+    assert 'auth_type = "microsoft_delegated"' in toml
+    assert 'tenant_id = "22222222-2222-4222-8222-222222222222"' in toml
+    assert 'client_id = "11111111-1111-4111-8111-111111111111"' in toml
+    assert 'scope = "https://graph.microsoft.com/Sites.Read.All offline_access"' in toml
+    assert 'refresh_token_secret = "microsoft.sharepoint_refresh_token"' in toml
+    # the token itself goes through the secret store, never the config
+    assert "sp_refresh_tok" not in toml
+
+
+def test_config_toml_sharepoint_read_write_scope():
+    toml = build_config_toml({SecretProvider.SHAREPOINT: _SHAREPOINT_READ_WRITE})
+    assert 'scope = "https://graph.microsoft.com/Sites.ReadWrite.All offline_access"' in toml
+
+
+def test_build_env_carries_the_sharepoint_refresh_token_and_sign_in_marker():
+    env = build_env({SecretProvider.SHAREPOINT: _SHAREPOINT})
+    assert env["AAI_SECRET_MICROSOFT_SHAREPOINT_REFRESH_TOKEN"] == "sp_refresh_tok"
+    assert env["AAI_SHAREPOINT_SIGN_IN_ID"] == "44444444-4444-4444-8444-444444444444"
+
+
+def test_setup_sh_writes_the_sharepoint_token_only_for_a_new_sign_in():
+    # aai-cli rotates the refresh token in its store; rewriting the original on every boot
+    # would throw the rotation away and end access 90 days after sign-in.
+    script = build_setup_sh([SecretProvider.SHAREPOINT])
+    marker = "/home/node/.config/aai-cli/microsoft.sharepoint_refresh_token.sign-in"
+    assert f'if [ "$(cat {marker} 2>/dev/null)" != "$AAI_SHAREPOINT_SIGN_IN_ID" ]; then' in script
+    assert (
+        "printf '%s' \"$AAI_SECRET_MICROSOFT_SHAREPOINT_REFRESH_TOKEN\" | aai-cli --config "
+        "/home/node/.config/aai-cli/config.toml secrets set microsoft.sharepoint_refresh_token"
+    ) in script
+    assert f"printf '%s' \"$AAI_SHAREPOINT_SIGN_IN_ID\" > {marker}" in script
+    assert script.rstrip().endswith("fi")
+
+
+def test_setup_sh_new_sign_in_check_actually_gates_the_write(tmp_path):
+    import subprocess
+
+    store = tmp_path / "store"
+    calls = tmp_path / "calls"
+    fake_cli = tmp_path / "aai-cli"
+    fake_cli.write_text(f'#!/bin/sh\necho "$@" >> {calls}\ncat > /dev/null\n')
+    fake_cli.chmod(0o755)
+    script = build_setup_sh([SecretProvider.SHAREPOINT], home_dir=str(tmp_path / "home"), store_dir=str(store)).replace(
+        "cp /app/config/aai-cli-config.toml", "true"
+    )
+    env = {
+        "PATH": f"{tmp_path}:/usr/bin:/bin",
+        "AAI_SECRET_MICROSOFT_SHAREPOINT_REFRESH_TOKEN": "rt",
+        "AAI_SHAREPOINT_SIGN_IN_ID": "sign-in-1",
+    }
+
+    def boot(sign_in_id: str) -> int:
+        subprocess.run(["sh", "-c", script], env={**env, "AAI_SHAREPOINT_SIGN_IN_ID": sign_in_id}, check=True)
+        return calls.read_text().count("microsoft.sharepoint_refresh_token") if calls.exists() else 0
+
+    assert boot("sign-in-1") == 1  # first boot writes it
+    assert boot("sign-in-1") == 1  # a restart keeps aai-cli's rotated token
+    assert boot("sign-in-2") == 2  # a reconnect replaces it
+
+
+def test_setup_sh_removes_a_left_over_sharepoint_token_when_sharepoint_is_gone():
+    script = build_setup_sh([SecretProvider.GITHUB])
+    marker = "/home/node/.config/aai-cli/microsoft.sharepoint_refresh_token.sign-in"
+    assert f"if [ -f {marker} ]; then" in script
+    assert (
+        "aai-cli --secrets-file /home/node/.config/aai-cli/aai-secrets.enc.json "
+        "--key-file /home/node/.config/aai-cli/key secrets remove microsoft.sharepoint_refresh_token || true"
+    ) in script
+    assert f"rm -f {marker}" in script
+
+
+def test_setup_sh_without_profiles_skips_the_config_but_still_cleans_up():
+    script = build_setup_sh([], install_config=False)
+    assert "cp /app/config/aai-cli-config.toml" not in script
+    assert "secrets remove microsoft.sharepoint_refresh_token" in script
+
+
+def test_setup_sh_cleanup_actually_removes_the_token_after_sharepoint_is_removed(tmp_path):
+    import subprocess
+
+    store = tmp_path / "store"
+    calls = tmp_path / "calls"
+    fake_cli = tmp_path / "aai-cli"
+    fake_cli.write_text(f'#!/bin/sh\necho "$@" >> {calls}\ncat > /dev/null\n')
+    fake_cli.chmod(0o755)
+    env = {
+        "PATH": f"{tmp_path}:/usr/bin:/bin",
+        "AAI_SECRET_MICROSOFT_SHAREPOINT_REFRESH_TOKEN": "rt",
+        "AAI_SHAREPOINT_SIGN_IN_ID": "sign-in-1",
+    }
+    home = str(tmp_path / "home")
+
+    def boot(providers: list[SecretProvider]) -> None:
+        script = build_setup_sh(providers, home_dir=home, store_dir=str(store), install_config=False)
+        subprocess.run(["sh", "-c", script], env=env, check=True, stdin=subprocess.DEVNULL)
+
+    boot([SecretProvider.SHAREPOINT])
+    marker = store / "microsoft.sharepoint_refresh_token.sign-in"
+    assert marker.exists()
+
+    boot([])  # SharePoint was removed from the agent
+
+    assert "secrets remove microsoft.sharepoint_refresh_token" in calls.read_text()
+    assert not marker.exists()
+    boot([])  # and nothing more to do on the next boot
+    assert calls.read_text().count("secrets remove") == 1
+
+
+def test_store_dir_moves_the_secret_store_but_not_the_config():
+    toml = build_config_toml({SecretProvider.JIRA: _JIRA}, store_dir="/home/node/.openclaw/aai-cli")
+    assert 'secrets_file = "/home/node/.openclaw/aai-cli/aai-secrets.enc.json"' in toml
+    assert 'key_file = "/home/node/.openclaw/aai-cli/key"' in toml
+    setup = build_setup_sh([SecretProvider.JIRA], store_dir="/home/node/.openclaw/aai-cli")
+    assert "mkdir -p /home/node/.config/aai-cli /home/node/.openclaw/aai-cli" in setup
+    assert "cp /app/config/aai-cli-config.toml /home/node/.config/aai-cli/config.toml" in setup
+
+
+def test_tool_context_md_says_sharepoint_only_and_who_signed_in():
+    md = build_tool_context_md({SecretProvider.SHAREPOINT: _SHAREPOINT})
+    assert "sharepoint-work" in md
+    assert "someone@contoso.com" in md
+    assert "read-only" in md
+    assert "SharePoint only" in md
+
+
+def test_integrations_policy_points_sharepoint_at_the_microsoft_skill():
+    md = build_integrations_policy_md({SecretProvider.SHAREPOINT: _SHAREPOINT})
+    assert "`--profile sharepoint-work`" in md
+    assert "./skills/aai-microsoft/SKILL.md" in md
+    assert "microsoft sharepoint files" in md
+
+
+def test_every_profile_provider_has_an_integration_label():
+    # _INTEGRATION_LABELS[provider] is a bare subscript reached whenever a provider is in
+    # PROFILE_SLUGS, so a missing label is a KeyError at agent start, not at import.
+    assert set(PROFILE_SLUGS) <= set(_INTEGRATION_LABELS)

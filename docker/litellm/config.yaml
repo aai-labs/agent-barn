@@ -1,0 +1,14 @@
+model_list:
+  # Wildcard passthrough: route any OpenRouter model on demand so the
+  # available models are driven by OpenRouter, not a hand-maintained list.
+  # Agents request openrouter/<slug>; the picker is governed by the API's
+  # AGENT_MODEL_ALLOWLIST.
+  - model_name: "openrouter/*"
+    litellm_params:
+      model: "openrouter/*"
+      api_key: os.environ/OPENROUTER_API_KEY
+      api_base: https://openrouter.ai/api/v1
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  store_model_in_db: false

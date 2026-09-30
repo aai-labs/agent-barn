@@ -2,6 +2,7 @@
 
 import { format } from "date-fns";
 import { CalendarIcon } from "lucide-react";
+import { useState } from "react";
 import type { DateRange } from "react-day-picker";
 
 import { Calendar } from "@/components/ui/calendar";
@@ -24,6 +25,8 @@ interface DateRangePickerProps {
   className?: string;
   /** Optional. Leave unset so the trigger is named by its current value. */
   ariaLabel?: string;
+  /** Maximum number of inclusive calendar days a selected range may span. */
+  maxRangeDays?: number;
 }
 
 function toDateRange(from: string, to: string): DateRange | undefined {
@@ -39,7 +42,7 @@ function toDateRange(from: string, to: string): DateRange | undefined {
  *
  * Bounds come back as local start-of-day and end-of-day so a picked day is
  * covered end to end, which is what every caller here wants — the API treats
- * the upper bound as exclusive.
+ * both bounds as inclusive.
  */
 export function DateRangePicker({
   from,
@@ -49,8 +52,10 @@ export function DateRangePicker({
   width = "15rem",
   className = "af-input",
   ariaLabel,
+  maxRangeDays,
 }: DateRangePickerProps) {
   const range = toDateRange(from, to);
+  const [rangeError, setRangeError] = useState<string | null>(null);
 
   const label = range?.from
     ? range.to
@@ -80,13 +85,37 @@ export function DateRangePicker({
           selected={range}
           defaultMonth={range?.from}
           numberOfMonths={2}
+          disabled={
+            maxRangeDays && range?.from && !range.to
+              ? (date) => calendarDayDistance(range.from!, date) + 1 > maxRangeDays
+              : undefined
+          }
           onSelect={(next) => {
+            if (
+              maxRangeDays &&
+              next?.from &&
+              next?.to &&
+              calendarDayDistance(next.from, next.to) + 1 > maxRangeDays
+            ) {
+              setRangeError(`Choose a range of ${maxRangeDays} days or less.`);
+              return;
+            }
+            setRangeError(null);
             onChange(
               next?.from ? startOfDayIso(next.from) : "",
               next?.to ? endOfDayIso(next.to) : "",
             );
           }}
         />
+        {(rangeError || maxRangeDays) && (
+          <p
+            className="border-t px-3 py-2 text-xs"
+            role={rangeError ? "alert" : undefined}
+            style={{ borderColor: "var(--line)", color: rangeError ? "var(--err)" : "var(--ink-4)" }}
+          >
+            {rangeError ?? `Maximum range: ${maxRangeDays} days.`}
+          </p>
+        )}
         {(from || to) && (
           <div className="p-2 border-t" style={{ borderColor: "var(--line)" }}>
             <button
@@ -113,4 +142,10 @@ function endOfDayIso(date: Date): string {
   const end = new Date(date);
   end.setHours(23, 59, 59, 999);
   return end.toISOString();
+}
+
+function calendarDayDistance(left: Date, right: Date): number {
+  const leftDay = new Date(left.getFullYear(), left.getMonth(), left.getDate()).getTime();
+  const rightDay = new Date(right.getFullYear(), right.getMonth(), right.getDate()).getTime();
+  return Math.round(Math.abs(leftDay - rightDay) / (24 * 60 * 60 * 1000));
 }

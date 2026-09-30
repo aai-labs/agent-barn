@@ -1,4 +1,0 @@
-apiVersion: v2
-name: agentfarm-ui
-description: Next.js frontend for agent-farm
-version: 0.6.0

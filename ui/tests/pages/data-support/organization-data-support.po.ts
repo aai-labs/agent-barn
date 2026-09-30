@@ -20,6 +20,18 @@ function org(overrides: Record<string, unknown> = {}) {
   };
 }
 
+export function agentSettings(overrides: Record<string, unknown> = {}) {
+  return {
+    default_model: null,
+    effective_default_model: "litellm/openrouter/z-ai/glm-5.2",
+    default_model_source: "platform",
+    inheriting_agent_count: 2,
+    override_agent_count: 1,
+    updated_at: null,
+    ...overrides,
+  };
+}
+
 function platformOrg(overrides: Record<string, unknown> = {}) {
   return {
     id: ORG_A_ID,
@@ -60,10 +72,12 @@ export class OrganizationDataSupport {
 
   async interceptListOrganizations({
     items,
+    pages,
     status = 200,
     detail = "Unable to load organizations",
   }: {
     items?: unknown[];
+    pages?: unknown[][];
     status?: number;
     detail?: string;
   } = {}) {
@@ -73,13 +87,16 @@ export class OrganizationDataSupport {
         await route.fallback();
         return;
       }
+      const page = Number(new URL(route.request().url()).searchParams.get("page") ?? "1");
+      const pageSize = Number(new URL(route.request().url()).searchParams.get("page_size") ?? "200");
+      const pageItems = pages?.[page - 1] ?? list;
       await route.fulfill({
         status,
         contentType: "application/json",
         body: JSON.stringify(
           status >= 400
             ? { detail, page: 1, page_size: 200, total: 0, items: [] }
-            : { page: 1, page_size: 200, total: list.length, items: list },
+            : { page, page_size: pageSize, total: pages?.flat().length ?? list.length, items: pageItems },
         ),
       });
     });
@@ -123,6 +140,113 @@ export class OrganizationDataSupport {
         ),
       });
     });
+  }
+
+  async interceptGetOrganizationLlmBudget({
+    organizationId = ORG_A_ID,
+    budget,
+    status = 200,
+  }: {
+    organizationId?: string;
+    budget?: unknown;
+    status?: number;
+  } = {}) {
+    await this.page.route(
+      `**/api/v1/organizations/${organizationId}/llm-budget`,
+      async (route) => {
+        if (route.request().method() !== "GET") {
+          await route.fallback();
+          return;
+        }
+        await route.fulfill({
+          status,
+          contentType: "application/json",
+          body: JSON.stringify(status >= 400 ? { detail: "Forbidden" } : (budget ?? { state: "none" })),
+        });
+      },
+    );
+  }
+
+  async interceptGetOrganizationLlmCoverage({
+    organizationId = ORG_A_ID,
+    coverage,
+    status = 200,
+  }: {
+    organizationId?: string;
+    coverage?: unknown;
+    status?: number;
+  } = {}) {
+    await this.page.route(
+      `**/api/v1/platform/organizations/${organizationId}/llm-budget/coverage`,
+      async (route) => {
+        await route.fulfill({
+          status,
+          contentType: "application/json",
+          body: JSON.stringify(
+            status >= 400
+              ? { detail: "Coverage unavailable" }
+              : (coverage ?? { total_agents: 0, enrolled_agents: 0, uncovered: [], newly_enrolled: 0 }),
+          ),
+        });
+      },
+    );
+  }
+
+  async interceptEnrollOrganizationLlmKeys({
+    organizationId = ORG_A_ID,
+    coverage,
+    status = 200,
+  }: {
+    organizationId?: string;
+    coverage?: unknown;
+    status?: number;
+  } = {}) {
+    const calls: string[] = [];
+    await this.page.route(
+      `**/api/v1/platform/organizations/${organizationId}/llm-budget/enroll`,
+      async (route) => {
+        calls.push(route.request().method());
+        await route.fulfill({
+          status,
+          contentType: "application/json",
+          body: JSON.stringify(
+            status >= 400
+              ? { detail: "LiteLLM is not configured for this deployment" }
+              : (coverage ?? { total_agents: 2, enrolled_agents: 2, uncovered: [], newly_enrolled: 2 }),
+          ),
+        });
+      },
+    );
+    return calls;
+  }
+
+  /** Captures the PUT body so a test can assert what the card actually sent. */
+  async interceptSetPlatformOrganizationLlmBudget({
+    organizationId = ORG_A_ID,
+    organization,
+    status = 200,
+  }: {
+    organizationId?: string;
+    organization?: unknown;
+    status?: number;
+  } = {}) {
+    const requests: unknown[] = [];
+    await this.page.route(
+      `**/api/v1/platform/organizations/${organizationId}/llm-budget`,
+      async (route) => {
+        if (route.request().method() !== "PUT") {
+          await route.fallback();
+          return;
+        }
+        requests.push(route.request().postDataJSON());
+        await route.fulfill({
+          status,
+          contentType: "application/json",
+          body: JSON.stringify(status >= 400 ? { detail: "Proxy unavailable" } : organization),
+        });
+      },
+    );
+    return requests;
   }
 
   async interceptGetPlatformOrganizationMembers({
@@ -236,6 +360,45 @@ export class OrganizationDataSupport {
       }
     });
     return state;
+  }
+
+  async interceptAgentSettings({
+    settings,
+    status = 200,
+    detail = "Unable to load Agent settings",
+  }: {
+    settings?: Record<string, unknown>;
+    status?: number;
+    detail?: string;
+  } = {}) {
+    let current = { ...agentSettings(), ...(settings ?? {}) };
+    await this.page.route("**/api/v1/organizations/*/agent-settings", async (route) => {
+      const method = route.request().method();
+      if (method !== "GET" && method !== "PUT") {
+        await route.fallback();
+        return;
+      }
+      if (status >= 400) {
+        await route.fulfill({ status, contentType: "application/json", body: JSON.stringify({ detail }) });
+        return;
+      }
+      if (method === "PUT") {
+        // Mirror the server: a saved default becomes the organization's own choice.
+        const body = JSON.parse(route.request().postData() ?? "{}");
+        const chosen = body.default_model ?? null;
+        current = {
+          ...current,
+          default_model: chosen,
+          default_model_source: chosen ? "organization" : "platform",
+          effective_default_model: chosen ?? current.effective_default_model,
+        };
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(current),
+      });
+    });
   }
 
   async interceptDeleteOrganization({

@@ -65,6 +65,34 @@ export const PlatformOrganizationSchema = z.object({
   creatorUserId: z.string().uuid().nullable().optional(),
   creatorEmail: z.string().nullable().optional(),
   creatorName: z.string().nullable().optional(),
+  // Platform-administered spend ceiling. Null means no cap; 0 is a real zero
+  // allowance, so never coalesce it away.
+  llmBudgetUsd: z.number().nullable().optional(),
+  llmBudgetDuration: z.string().nullable().optional(),
+});
+
+export const OrganizationLlmBudgetSchema = z.object({
+  state: z.enum(["none", "ok", "warning", "exhausted", "unknown"]),
+  limitUsd: z.number().nullable().optional(),
+  spendUsd: z.number().nullable().optional(),
+  renewsAt: z.string().nullable().optional(),
+});
+
+export const AgentLlmCoverageSchema = z.object({
+  agentId: z.string().uuid(),
+  agentName: z.string(),
+  status: z.enum(["enrolled", "unenrolled", "other_team", "unknown_key", "unreadable"]),
+});
+
+export const OrganizationLlmCoverageSchema = z.object({
+  totalAgents: z.number().int().min(0),
+  enrolledAgents: z.number().int().min(0),
+  uncovered: z.array(AgentLlmCoverageSchema),
+  newlyEnrolled: z.number().int().min(0),
+  // Null means the proxy could not be read. Never coalesce it to 0 — "we don't
+  // know" and "nothing spent" are different answers.
+  spendUsd: z.number().nullable().optional(),
+  renewsAt: z.string().nullable().optional(),
 });
 
 export const PaginatedPlatformOrganizationsSchema = z.object({
@@ -116,3 +144,7 @@ export const RenameOrganizationFormSchema = z.object({
 });
 
 export type RenameOrganizationFormData = z.infer<typeof RenameOrganizationFormSchema>;
+
+export type AgentLlmCoverage = z.infer<typeof AgentLlmCoverageSchema>;
+export type OrganizationLlmCoverage = z.infer<typeof OrganizationLlmCoverageSchema>;
+export type OrganizationLlmBudget = z.infer<typeof OrganizationLlmBudgetSchema>;

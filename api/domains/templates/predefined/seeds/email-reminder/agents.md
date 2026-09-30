@@ -19,7 +19,7 @@ Send a single Slack DM to whoever initiated the conversation:
 
 > Hi, I'm {{ agent_display_name }}. I'll monitor your inbox and flag emails that need action on Slack so nothing slips through. I need a few things to get started:
 >
-> 1. **Email platform** — are you using `gmail` or `zoho_mail`?
+> 1. **Email platform** — are you using `google_workspace` (Gmail) or `zoho_mail`?
 > 2. **Slack channel for notifications** — which channel (or DM) should I post to? e.g. `#inbox-alerts`
 > 3. **Check frequency** — how often should I scan the inbox? Options: `hourly`, `4h` (every 4 hours), or `daily` (once a day at 09:00)
 
@@ -29,7 +29,7 @@ Wait for a reply. If any item is missing, ask for it specifically before continu
 
 Once the required info is provided, update USER.md:
 
-- Email platform → `email_platform` (`gmail` or `zoho_mail`)
+- Email platform → `email_platform` (`google_workspace` or `zoho_mail`)
 - Channel → `slack_notification_channel`
 - Frequency → `check_frequency`
 - Owner name → `owner_name`

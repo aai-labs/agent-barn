@@ -1,3 +1,0 @@
-name: telegram-deny-dms
-version: "1.0"
-description: Deny Telegram DMs; allow users listed in TELEGRAM_DM_ALLOWED_USERS

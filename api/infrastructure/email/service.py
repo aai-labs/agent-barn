@@ -236,6 +236,50 @@ class EmailService:
 
         self.client.send(email)
 
+    def send_organization_budget_email(
+        self,
+        *,
+        receiver_email: str,
+        receiver_name: str | None,
+        organization_name: str,
+        headline: str,
+        body: str,
+        reason: str,
+    ) -> None:
+        """Propagates EmailSendingException like the lifecycle send: the handler runs
+        under the delivery framework and needs the retryable/terminal distinction."""
+        if not self._email_enabled_or_log(
+            action="send_organization_budget_email",
+            receiver_email=receiver_email,
+        ):
+            # Delivery disabled is a documented no-op, not a failure — raising would
+            # dead-letter every budget notification on mail-less environments.
+            return
+
+        email_template = EmailTemplate(
+            file_name="organization-budget-template.mjml",
+            subject=headline,
+            receiver_name=receiver_name,
+            receiver_email=receiver_email,
+            attributes=[
+                EmailTemplateAttribute(name="user_name", value=receiver_name or receiver_email),
+                EmailTemplateAttribute(name="organization_name", value=organization_name),
+                EmailTemplateAttribute(name="headline", value=headline),
+                EmailTemplateAttribute(name="body", value=body),
+                EmailTemplateAttribute(name="reason", value=reason),
+            ],
+        )
+        try:
+            email = self.create_email(email_template)
+        except Exception as e:
+            logger.error(
+                f"Unable to build organization budget email for {receiver_email} "
+                f"from {email_template.file_name} : {traceback.format_exc()}"
+            )
+            raise TerminalEmailSendingException(str(e), email=receiver_email) from e
+
+        self.client.send(email)
+
     def send_user_deletion_email(
         self,
         receiver_email: str,

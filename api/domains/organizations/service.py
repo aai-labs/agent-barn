@@ -6,19 +6,24 @@ from uuid import UUID, uuid4
 
 from fastapi import HTTPException, status
 from injector import inject, singleton
-from sqlmodel import Session, select
+from sqlmodel import Session
 
 from api.core.config import get_config
+from api.domains.agent_settings.lookup import AgentSettingsLookupService
+from api.domains.agents.repository import AgentRepository
+from api.domains.agents.selection import _OPENROUTER_MODEL_PREFIX, is_model_allowed
 from api.domains.agents.service import AgentService
 from api.domains.auth.models import CurrentUserContext
 from api.domains.events import (
-    EventDelivery,
     EventDeliveryDispatcher,
     SubjectIdentity,
     SubjectIdentityType,
     resolve_actor_identity,
 )
-from api.domains.events.catalog import EVENT_REGISTRY, ORGANIZATION_MODEL_ALLOWLIST_CHANGED
+from api.domains.events.catalog import (
+    EVENT_REGISTRY,
+    ORGANIZATION_MODEL_ALLOWLIST_CHANGED,
+)
 from api.domains.organizations.exceptions import OrganizationCreationLimitReached
 from api.domains.organizations.models import (
     Organization,
@@ -31,9 +36,17 @@ from api.domains.organizations.models import (
 from api.domains.organizations.repository import OrganizationRepository
 from api.domains.rbac.catalog import ORG_OWNER_ONLY_ROLES, PermissionKey
 from api.domains.rbac.policy import PermissionPolicy
+from api.infrastructure.litellm.client import LiteLLMClient
 from api.infrastructure.shared.models import PaginatedItems, Pagination
 
 logger = logging.getLogger(__name__)
+
+
+def _and_list(items: list[str]) -> str:
+    """Renders "a", "a and b", or "a, b and c" for naming things back to a user."""
+    if len(items) <= 2:
+        return " and ".join(items)
+    return f"{', '.join(items[:-1])} and {items[-1]}"
 
 
 @inject
@@ -41,9 +54,12 @@ logger = logging.getLogger(__name__)
 @dataclass
 class OrganizationService:
     organization_repository: OrganizationRepository
+    litellm: LiteLLMClient
     agent_service: AgentService
     permission_policy: PermissionPolicy
     event_delivery_dispatcher: EventDeliveryDispatcher
+    agent_settings_lookup: AgentSettingsLookupService
+    agent_repository: AgentRepository
 
     def get_organization(self, organization_id: UUID, context: CurrentUserContext) -> OrganizationRead:
         # Any member (or a platform administrator in explicit Organization context) may
@@ -103,6 +119,62 @@ class OrganizationService:
                     detail=f"Model pattern '{pattern}' does not match any known models in the catalog.",
                 )
 
+    def _ensure_default_model_still_allowed(self, organization_id: UUID, allowed_models: list[str]) -> None:
+        """Keeps the Organization's own default model inside its allowlist.
+
+        The default is picked from the allowlist, so the only way it can leave is by
+        editing the allowlist. Blocking that here means an Agent that inherits the
+        default can never be pointed at a model the Organization disallows. An
+        Organization following the platform default has nothing to protect: that value
+        can change without any request to this API, so the invariant cannot be stated
+        about it.
+        """
+        default_model = self.agent_settings_lookup.get_default_model(organization_id)
+        if default_model is None:
+            return
+        if not is_model_allowed(default_model, allowed_models):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"Model '{default_model.removeprefix(_OPENROUTER_MODEL_PREFIX)}' is the organization's "
+                    "default Agent model and must stay in the "
+                    "allowed model list. Change the default under Agent Settings first."
+                ),
+            )
+
+    def _ensure_no_agent_is_pinned_to_a_removed_model(self, organization_id: UUID, allowed_models: list[str]) -> None:
+        """Blocks removing a model that an Agent explicitly names.
+
+        Removing it would not migrate that Agent onto anything — an explicit `model` is
+        never rewritten by an allowlist edit — it would only make the Agent fail to start,
+        because the start-time allowlist re-check applies precisely to explicit overrides.
+        The failure would surface later, on a restart, far from the edit that caused it.
+
+        Agents that inherit are unaffected and deliberately not consulted: they follow the
+        default, which `_ensure_default_model_still_allowed` protects separately.
+        """
+        stranded = [
+            (name, model)
+            for name, model in self.agent_repository.list_pinned_models(organization_id)
+            if not is_model_allowed(model, allowed_models)
+        ]
+        if not stranded:
+            return
+
+        names = [name for name, _ in stranded]
+        models = [
+            f"'{model.removeprefix(_OPENROUTER_MODEL_PREFIX)}'" for model in sorted({model for _, model in stranded})
+        ]
+        subject = "Agent is" if len(names) == 1 else "Agents are"
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"{len(names)} {subject} still pinned to {_and_list(models)}: {_and_list(names)}. "
+                "Point them at an allowed model, or set them to use the organization default, "
+                "before removing it from the allowed model list."
+            ),
+        )
+
     def create_organization_for_current_user(
         self,
         data: OrganizationCreate,
@@ -131,6 +203,15 @@ class OrganizationService:
                 detail=f"You can create up to {error.limit} organizations",
             ) from error
 
+        if config.litellm_base_url and config.litellm_secret_name:
+            try:
+                self.litellm.ensure_team_exists(str(organization.id))
+            except Exception as exc:
+                # Creation already committed; key generation retries provisioning
+                # and refuses to issue a key without its team.
+                logger.error(
+                    "LiteLLM team provisioning deferred for Organization %s (%s)", organization.id, type(exc).__name__
+                )
         organization_read = self.organization_repository.get_read(organization.id)
         if not organization_read:
             raise HTTPException(
@@ -221,6 +302,8 @@ class OrganizationService:
                 else:
                     self._validate_allowed_models(dump["allowed_models"], existing=organization.allowed_models)
                     dump["allowed_models"] = [m.removeprefix("litellm/openrouter/") for m in dump["allowed_models"]]
+                    self._ensure_default_model_still_allowed(organization_id, dump["allowed_models"])
+                    self._ensure_no_agent_is_pinned_to_a_removed_model(organization_id, dump["allowed_models"])
                     previous_set = set(organization.allowed_models)
                     new_set = set(dump["allowed_models"])
                     added_models = sorted(new_set - previous_set)
@@ -257,8 +340,8 @@ class OrganizationService:
                 self.organization_repository.outbox_repository.stage(
                     session=session, registry=EVENT_REGISTRY, event=event
                 )
-                delivery_ids = list(
-                    session.exec(select(EventDelivery.id).where(EventDelivery.event_id == event.event_id))
+                delivery_ids = self.organization_repository.outbox_repository.delivery_ids_for_event(
+                    session, event.event_id
                 )
 
             session.commit()

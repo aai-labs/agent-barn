@@ -6,6 +6,8 @@ from fastapi_injector import Injected
 from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.utils import get_current_user, require_platform_admin
 from api.domains.templates.models import (
+    AgentTemplateDraftRead,
+    OrganizationTemplateLineageSummary,
     PlatformTemplateAdminSummary,
     PlatformTemplateDraftCreate,
     PlatformTemplateDraftRead,
@@ -38,13 +40,21 @@ def list_templates(
     )
 
 
-@templates_router.post("", response_model=TemplateRead, status_code=status.HTTP_201_CREATED)
+@templates_router.post("", response_model=AgentTemplateDraftRead, status_code=status.HTTP_201_CREATED)
 def create_template(
     data: TemplateCreate,
     context: Annotated[CurrentUserContext, Depends(get_current_user())],
     service: Annotated[TemplateService, Injected(TemplateService)],
 ):
-    return service.create_template(data, context)
+    return service.create_new_org_template_draft(data, context)
+
+
+@templates_router.get("/lineages", response_model=list[OrganizationTemplateLineageSummary])
+def list_org_template_lineages(
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[TemplateService, Injected(TemplateService)],
+):
+    return service.list_org_template_lineages(context)
 
 
 @templates_router.get("/{template_key}", response_model=TemplateRead)
@@ -65,14 +75,56 @@ def list_template_versions(
     return service.list_template_versions(template_key, context)
 
 
-@templates_router.patch("/{template_key}", response_model=TemplateRead)
-def update_template(
+@templates_router.get("/{template_key}/draft", response_model=AgentTemplateDraftRead)
+def get_org_draft(
+    template_key: str,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[TemplateService, Injected(TemplateService)],
+):
+    return service.get_org_draft(template_key, context)
+
+
+@templates_router.post(
+    "/{template_key}/draft", response_model=AgentTemplateDraftRead, status_code=status.HTTP_201_CREATED
+)
+def start_org_draft(
+    template_key: str,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[TemplateService, Injected(TemplateService)],
+    source_version: Annotated[int | None, Query(ge=1)] = None,
+):
+    return service.start_org_draft(template_key, source_version, context)
+
+
+@templates_router.patch("/{template_key}/draft", response_model=AgentTemplateDraftRead)
+def update_org_draft(
     template_key: str,
     data: TemplateUpdate,
     context: Annotated[CurrentUserContext, Depends(get_current_user())],
     service: Annotated[TemplateService, Injected(TemplateService)],
 ):
-    return service.update_template(template_key, data, context)
+    return service.update_org_draft(template_key, data, context)
+
+
+@templates_router.delete("/{template_key}/draft", status_code=status.HTTP_204_NO_CONTENT)
+def discard_org_draft(
+    template_key: str,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[TemplateService, Injected(TemplateService)],
+):
+    service.discard_org_draft(template_key, context)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@templates_router.post(
+    "/{template_key}/draft/publish", response_model=TemplateRead, status_code=status.HTTP_201_CREATED
+)
+def publish_org_draft(
+    template_key: str,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[TemplateService, Injected(TemplateService)],
+):
+    return service.publish_org_draft(template_key, context)
 
 
 @templates_router.post(

@@ -14,6 +14,7 @@ check() {
 check python3   python3 --version
 check hermes    hermes --version
 check aai-cli   aai-cli --help
+check gog       gog --version
 check jq        jq --version
 check rg        rg --version
 check fd        fd --version
@@ -23,13 +24,144 @@ check convert   convert --version
 check pdftotext pdftotext -v
 check sqlite3   sqlite3 --version
 
-check chromium python3 -c "
-from playwright.sync_api import sync_playwright
-with sync_playwright() as p:
-    b = p.chromium.launch()
-    pg = b.new_page()
-    pg.goto('data:text/html,ok')
-    b.close()
+# Agent Barn relies on scheduled Hermes runs receiving the same durable
+# MEMORY.md / USER.md stores as interactive runs. This was disabled upstream
+# before v2026.8.19, so pin the runtime contract in the image smoke test rather
+# than discovering a regression from a live agent's output.
+check cron-memory-contract python3 -c "
+import ast
+import inspect
+
+from cron import scheduler
+
+
+def fail(message):
+    raise SystemExit('cron memory contract broken: ' + message)
+
+
+tree = ast.parse(inspect.getsource(scheduler.run_job))
+agent_calls = [
+    node
+    for node in ast.walk(tree)
+    if isinstance(node, ast.Call)
+    and (
+        (isinstance(node.func, ast.Name) and node.func.id == 'AIAgent')
+        or (isinstance(node.func, ast.Attribute) and node.func.attr == 'AIAgent')
+    )
+]
+if len(agent_calls) != 1:
+    fail(f'expected one AIAgent construction in run_job, found {len(agent_calls)}')
+
+skip_memory = next(
+    (keyword.value for keyword in agent_calls[0].keywords if keyword.arg == 'skip_memory'),
+    None,
+)
+if not isinstance(skip_memory, ast.Constant) or skip_memory.value is not False:
+    fail('run_job no longer constructs its AIAgent with skip_memory=False')
+
+disabled = scheduler._resolve_cron_disabled_toolsets({})
+if 'memory' in disabled:
+    fail('cron disabled toolsets still contain memory')
+
+if not scheduler._is_cron_silence_response('[SILENT]'):
+    fail('[SILENT] no longer suppresses cron delivery')
+if scheduler._is_cron_silence_response('Nothing to flag today.'):
+    fail('ordinary prose is incorrectly treated as cron silence')
+"
+
+check memory-prompt-contract python3 -c "
+import os
+import tempfile
+from pathlib import Path
+
+
+with tempfile.TemporaryDirectory() as temp_home:
+    os.environ['HERMES_HOME'] = temp_home
+
+    from tools.memory_tool import MemoryStore
+
+    memories = Path(temp_home) / 'memories'
+    memories.mkdir()
+    memories.joinpath('MEMORY.md').write_text('scheduled-memory-sentinel', encoding='utf-8')
+    memories.joinpath('USER.md').write_text('scheduled-user-sentinel', encoding='utf-8')
+
+    store = MemoryStore(memory_enabled=True, user_profile_enabled=True)
+    store.load_from_disk()
+    memory_prompt = store.format_for_system_prompt('memory') or ''
+    user_prompt = store.format_for_system_prompt('user') or ''
+
+    if 'scheduled-memory-sentinel' not in memory_prompt:
+        raise SystemExit('MEMORY.md content was not rendered into the system prompt')
+    if 'scheduled-user-sentinel' not in user_prompt:
+        raise SystemExit('USER.md content was not rendered into the system prompt')
+"
+
+check workspace-write-safety-contract python3 -c "
+import os
+
+from agent.file_safety import get_safe_write_roots, get_write_denied_error
+
+required = {os.path.realpath('/opt/data'), os.path.realpath('/workspace')}
+roots = get_safe_write_roots()
+if not required <= roots:
+    raise SystemExit(f'write roots missing {sorted(required - roots)}: {sorted(roots)}')
+
+for path in ('/workspace/memory/2026-09-17.md', '/workspace/local/scan_prs.py', '/opt/data/memories/USER.md'):
+    if error := get_write_denied_error(path):
+        raise SystemExit(error)
+
+for path in ('/etc/passwd', '/etc/cron.d/agentbarn', '/app/config/start.sh'):
+    if not get_write_denied_error(path):
+        raise SystemExit(f'write to {path} is no longer denied')
+"
+
+check cron-session-id-contract python3 -c "
+import ast
+import inspect
+
+from cron import scheduler
+
+tree = ast.parse(inspect.getsource(scheduler.run_job))
+prefixes = [
+    node.values[0].value
+    for node in ast.walk(tree)
+    if isinstance(node, ast.JoinedStr)
+    and node.values
+    and isinstance(node.values[0], ast.Constant)
+    and node.values[0].value.startswith('cron_')
+]
+if 'cron_' not in prefixes:
+    raise SystemExit('run_job no longer builds its session id with the cron_ prefix')
+"
+
+# Chromium is deliberately absent -- browser.cloud_provider=firecrawl routes the
+# browser tool to the shared service. Assert both the absence and that firecrawl
+# is genuinely registered in this runtime: a Hermes upgrade that drops the
+# provider must fail here, on the version bump, not on a live agent.
+check no-chromium sh -c '! command -v chromium >/dev/null 2>&1 && [ ! -d /opt/playwright ]'
+check firecrawl-browser-provider python3 -c "
+from tools.browser_tool import _PROVIDER_REGISTRY
+if 'firecrawl' not in _PROVIDER_REGISTRY:
+    raise SystemExit('firecrawl is no longer a registered browser cloud provider')
+"
+
+# Runtime-owned Teams keeps Azure pointed at Agent Barn, which relays the authenticated
+# activity to this private listener. Pin the adapter/route contract so a Hermes
+# upgrade cannot leave the relay targeting a port or path the runtime no longer owns.
+check teams-webhook-contract python3 -c "
+import inspect
+import sys
+
+sys.path.insert(0, '/opt/hermes')
+from gateway.config import Platform
+from plugins.platforms.teams import adapter
+
+if Platform('teams').value != 'teams':
+    raise SystemExit('Teams is no longer a Hermes gateway platform')
+source = inspect.getsource(adapter)
+for marker in ('TEAMS_CLIENT_ID', 'TEAMS_CLIENT_SECRET', 'TEAMS_TENANT_ID', 'TEAMS_PORT', '/api/messages'):
+    if marker not in source:
+        raise SystemExit('Teams webhook contract no longer contains ' + marker)
 "
 
 # The telemetry-push plugin resolves a reply's chat through the gateway's
@@ -64,7 +196,7 @@ if not hooks <= VALID_HOOKS:
 # sites rather than against hooks-test fixtures: pre_gateway_dispatch has no
 # _DEFAULT_PAYLOADS entry, and a fixture could drift from the gateway anyway.
 kwarg_at_call_site('/opt/hermes/gateway/run.py', 'pre_gateway_dispatch', 'session_store=')
-kwarg_at_call_site('/opt/hermes/agent/conversation_loop.py', 'post_llm_call', 'session_id=')
+kwarg_at_call_site('/opt/hermes/agent/turn_finalizer.py', 'post_llm_call', 'session_id=')
 
 for hook in ('pre_tool_call', 'post_tool_call'):
     if 'tool_call_id' not in _DEFAULT_PAYLOADS[hook]:
@@ -79,6 +211,71 @@ if not {'session_id', 'chat_type', 'origin'} <= set(SessionEntry.__dataclass_fie
     fail('SessionEntry no longer exposes session_id/chat_type/origin')
 if not {'chat_id', 'thread_id'} <= set(SessionSource.__dataclass_fields__):
     fail('SessionSource no longer exposes chat_id/thread_id')
+"
+
+check approvals-contract python3 -c "
+import inspect
+import sys
+
+sys.path.insert(0, '/opt/hermes')
+
+
+def fail(message):
+    raise SystemExit('approvals contract broken: ' + message)
+
+
+from hermes_cli.config_defaults import DEFAULT_CONFIG
+
+approvals = DEFAULT_CONFIG.get('approvals') or {}
+for key in ('mode', 'timeout', 'cron_mode', 'single_query_mode'):
+    if key not in approvals:
+        fail('approvals.' + key + ' is no longer a recognised config key')
+
+if 'command_allowlist' not in DEFAULT_CONFIG:
+    fail('command_allowlist is no longer a root-level config key')
+
+from tools import approval
+
+for name in ('load_permanent_allowlist', 'save_permanent_allowlist'):
+    if not hasattr(approval, name):
+        fail(name + ' is gone')
+    if 'command_allowlist' not in inspect.getsource(getattr(approval, name)):
+        fail(name + ' no longer reads/writes command_allowlist')
+
+from gateway.platforms.api_server import _approval_event_choices
+
+if _approval_event_choices(smart_denied=True, allow_permanent=True) != ['once', 'deny']:
+    fail('smart-denied choice set changed')
+if _approval_event_choices(smart_denied=False, allow_permanent=False) != ['once', 'session', 'deny']:
+    fail('non-permanent choice set changed')
+if _approval_event_choices(smart_denied=False, allow_permanent=True) != ['once', 'session', 'always', 'deny']:
+    fail('default choice set changed')
+
+source = open('/opt/hermes/gateway/platforms/api_server.py').read()
+for marker in ('\"event\": \"approval.request\"', '\"run_id\": run_id', '\"choices\": _approval_event_choices('):
+    if marker not in source:
+        fail('approval.request no longer carries ' + marker)
+
+for code in ('invalid_approval_choice', 'run_not_found', 'approval_not_active'):
+    if code not in source:
+        fail('approval endpoint no longer returns ' + code)
+"
+
+check approvals-allowlist-loads-at-import python3 -c "
+import os
+import sys
+import tempfile
+
+home = tempfile.mkdtemp()
+os.environ['HERMES_HOME'] = home
+with open(os.path.join(home, 'config.yaml'), 'w') as handle:
+    handle.write('command_allowlist:\n- recursive delete\n')
+sys.path.insert(0, '/opt/hermes')
+
+from tools import approval
+
+if 'recursive delete' not in approval._permanent_approved:
+    raise SystemExit('approvals contract broken: command_allowlist is no longer loaded when tools.approval is imported')
 "
 
 if [ "$CLOUD_CLIS" = "true" ]; then

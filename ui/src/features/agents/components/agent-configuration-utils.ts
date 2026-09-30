@@ -1,14 +1,13 @@
-import type { PlatformTemplateFileKey } from "@/features/platform-templates/utils";
+import type { TemplateFileKey } from "@/features/templates/utils";
 
 import type {
-  Agent,
   AgentConfigurationVersion,
   AgentOverrideDraft,
   AgentOverrideVersion,
   AgentTemplateRead,
 } from "../schemas";
 
-export type ArtifactKey = PlatformTemplateFileKey;
+export type ArtifactKey = TemplateFileKey;
 export type ConfigurationSnapshot =
   | AgentConfigurationVersion
   | AgentOverrideDraft
@@ -18,9 +17,11 @@ export type AgentConfigurationSectionKey =
   | "profile"
   | "template"
   | "channels"
+  | "webhooks"
   | "skills"
   | "keys"
   | "override"
+  | "restore"
   | "danger";
 
 export type AgentConfigurationSection = {
@@ -42,8 +43,13 @@ export const AGENT_CONFIGURATION_SECTIONS: AgentConfigurationSection[] = [
   },
   {
     key: "channels",
-    label: "Channels & endpoint",
+    label: "Messaging",
     description: "Where this Agent receives messages and sends replies.",
+  },
+  {
+    key: "webhooks",
+    label: "Webhooks",
+    description: "URLs external systems can call to make this Agent run a job.",
   },
   {
     key: "skills",
@@ -52,13 +58,18 @@ export const AGENT_CONFIGURATION_SECTIONS: AgentConfigurationSection[] = [
   },
   {
     key: "keys",
-    label: "Keys & integrations",
+    label: "Integrations",
     description: "Platform tokens and encrypted integration credentials.",
   },
   {
     key: "override",
     label: "Agent-owned override",
     description: "Draft, edit, and publish a private template snapshot.",
+  },
+  {
+    key: "restore",
+    label: "Restore points",
+    description: "Capture and roll back the Agent's working files.",
   },
   {
     key: "danger",
@@ -69,14 +80,7 @@ export const AGENT_CONFIGURATION_SECTIONS: AgentConfigurationSection[] = [
 
 export function configurationSectionLabel(
   key: AgentConfigurationSectionKey,
-  agent: Pick<Agent, "platform">,
 ): string {
-  if (key === "channels" && agent.platform === "telegram") {
-    return "Chats & endpoint";
-  }
-  if (key === "channels" && agent.platform === "teams") {
-    return "Endpoint";
-  }
   return AGENT_CONFIGURATION_SECTIONS.find((section) => section.key === key)?.label ?? key;
 }
 

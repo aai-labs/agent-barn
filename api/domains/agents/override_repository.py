@@ -10,6 +10,8 @@ from sqlmodel import Session, col, delete, select
 
 from api.domains.agents.models import (
     Agent,
+    AgentRestorePoint,
+    AgentSkill,
     AgentTemplateOverrideDraft,
     AgentTemplateOverrideDraftSkill,
     AgentTemplateOverrideSourceType,
@@ -21,6 +23,7 @@ from api.domains.events.catalog import (
     AGENT_TEMPLATE_OVERRIDE_DRAFT_SAVED,
     AGENT_TEMPLATE_OVERRIDE_PUBLISHED,
     AGENT_TEMPLATE_OVERRIDE_SELECTED,
+    AGENT_UPDATED,
     EVENT_REGISTRY,
 )
 from api.domains.events.repository import OutboxMessageRepository
@@ -74,13 +77,13 @@ class AgentOverrideSnapshot:
     boot_md: str
     bootstrap_md: str
     heartbeat_md: str
-    required_skill_map: Mapping[UUID, str | None]
+    required_skill_map: Mapping[UUID, tuple[int, str | None]]
 
     @classmethod
     def from_template(
         cls,
         template: AgentTemplate | PlatformTemplate,
-        required_skill_map: Mapping[UUID, str | None],
+        required_skill_map: Mapping[UUID, tuple[int, str | None]],
     ) -> AgentOverrideSnapshot:
         if isinstance(template, PlatformTemplate):
             source = AgentOverrideSource(
@@ -115,7 +118,7 @@ class AgentOverrideSnapshot:
     def from_override_version(
         cls,
         version: AgentTemplateOverrideVersion,
-        required_skill_map: Mapping[UUID, str | None],
+        required_skill_map: Mapping[UUID, tuple[int, str | None]],
     ) -> AgentOverrideSnapshot:
         return cls(
             source=AgentOverrideSource(
@@ -212,22 +215,24 @@ class AgentOverrideRepository:
                 )
             ).first()
 
-    def get_draft_skill_map(self, draft_id: UUID) -> dict[UUID, str | None]:
+    def get_draft_skill_map(self, draft_id: UUID) -> dict[UUID, tuple[int, str | None]]:
         with Session(self.delegate.engine) as session:
-            return dict(
-                session.exec(
+            return {
+                skill_id: (skill_version, group_key)
+                for skill_id, skill_version, group_key in session.exec(
                     select(
                         AgentTemplateOverrideDraftSkill.skill_id,
+                        AgentTemplateOverrideDraftSkill.skill_version,
                         AgentTemplateOverrideDraftSkill.group_key,
                     ).where(col(AgentTemplateOverrideDraftSkill.draft_id) == draft_id)
                 ).all()
-            )
+            }
 
     def get_draft_skill_map_for_agent(
         self,
         agent_id: UUID,
         organization_id: UUID,
-    ) -> dict[UUID, str | None]:
+    ) -> dict[UUID, tuple[int, str | None]]:
         with Session(self.delegate.engine) as session:
             draft_id = session.exec(
                 select(AgentTemplateOverrideDraft.id).where(
@@ -237,22 +242,26 @@ class AgentOverrideRepository:
             ).first()
         return self.get_draft_skill_map(draft_id) if draft_id is not None else {}
 
-    def get_version_skill_map(self, version_id: UUID) -> dict[UUID, str | None]:
+    def get_version_skill_map(self, version_id: UUID) -> dict[UUID, tuple[int, str | None]]:
         with Session(self.delegate.engine) as session:
-            return dict(
-                session.exec(
+            return {
+                skill_id: (skill_version, group_key)
+                for skill_id, skill_version, group_key in session.exec(
                     select(
                         AgentTemplateOverrideVersionSkill.skill_id,
+                        AgentTemplateOverrideVersionSkill.skill_version,
                         AgentTemplateOverrideVersionSkill.group_key,
                     ).where(col(AgentTemplateOverrideVersionSkill.version_id) == version_id)
                 ).all()
-            )
+            }
 
-    def get_skills_for_draft(self, draft_id: UUID) -> list[tuple[Skill, str | None]]:
+    def get_skills_for_draft(self, draft_id: UUID) -> list[tuple[Skill, int, str | None]]:
         with Session(self.delegate.engine) as session:
             return list(
                 session.exec(
-                    select(Skill, AgentTemplateOverrideDraftSkill.group_key)
+                    select(
+                        Skill, AgentTemplateOverrideDraftSkill.skill_version, AgentTemplateOverrideDraftSkill.group_key
+                    )
                     .join(
                         AgentTemplateOverrideDraftSkill,
                         col(AgentTemplateOverrideDraftSkill.skill_id) == col(Skill.id),
@@ -262,15 +271,15 @@ class AgentOverrideRepository:
                 ).all()
             )
 
-    def get_skills_for_version(self, version_id: UUID) -> list[tuple[Skill, str | None]]:
+    def get_skills_for_version(self, version_id: UUID) -> list[tuple[Skill, int, str | None]]:
         return self.get_skills_for_versions([version_id]).get(version_id, [])
 
     def get_skills_for_versions(
         self,
         version_ids: Collection[UUID],
-    ) -> dict[UUID, list[tuple[Skill, str | None]]]:
+    ) -> dict[UUID, list[tuple[Skill, int, str | None]]]:
         ids = list(version_ids)
-        result: dict[UUID, list[tuple[Skill, str | None]]] = {version_id: [] for version_id in ids}
+        result: dict[UUID, list[tuple[Skill, int, str | None]]] = {version_id: [] for version_id in ids}
         if not ids:
             return result
         with Session(self.delegate.engine) as session:
@@ -285,7 +294,7 @@ class AgentOverrideRepository:
                 )
             ).all()
             for link, skill in rows:
-                result[link.version_id].append((skill, link.group_key))
+                result[link.version_id].append((skill, link.skill_version, link.group_key))
         return result
 
     def get_author(self, user_id: UUID | None) -> User | None:
@@ -350,7 +359,7 @@ class AgentOverrideRepository:
         agent_id: UUID,
         organization_id: UUID,
         updates: Mapping[str, object],
-        skill_map: Mapping[UUID, str | None] | None,
+        skill_map: Mapping[UUID, tuple[int, str | None]] | None,
         *,
         expected_updated_at: datetime,
         actor: ActorIdentity,
@@ -443,6 +452,7 @@ class AgentOverrideRepository:
                     AgentTemplateOverrideVersionSkill(
                         version_id=published.id,
                         skill_id=row.skill_id,
+                        skill_version=row.skill_version,
                         group_key=row.group_key,
                     )
                     for row in draft_skills
@@ -490,16 +500,95 @@ class AgentOverrideRepository:
         template_key: str | None = None,
         selected_version: int | None = None,
         correlation_id: UUID | None = None,
+        skill_pins: Collection[tuple[UUID, int]] = (),
+        removed_skill_ids: Collection[UUID] = (),
+        scalar_updates: Mapping[str, Any] | None = None,
+        restored_configuration_id: UUID | None = None,
     ) -> Agent:
+        """Move the template pin, and any skill pins and settings that go with it,
+        in one transaction: a commit between them would leave the Agent pinned to a
+        template its skills do not satisfy."""
         with Session(self.delegate.engine, expire_on_commit=False) as session:
             agent = self._lock_agent(session, agent_id, organization_id)
             if agent is None:
                 raise ValueError("Agent not found")
             self._check_timestamp(agent.updated_at, expected_agent_updated_at)
+            if restored_configuration_id is not None:
+                restore_point = session.exec(
+                    select(AgentRestorePoint)
+                    .where(
+                        col(AgentRestorePoint.id) == restored_configuration_id,
+                        col(AgentRestorePoint.agent_id) == agent_id,
+                    )
+                    .with_for_update()
+                ).first()
+                if restore_point is None:
+                    raise AgentOverrideConcurrencyError("Restore point no longer exists")
+                # Persist completion with the pins and their audit events. An
+                # interrupted transaction leaves the replay discoverable.
+                restore_point.reapply_configuration = False
+                restore_point.configuration_error = None
+                session.add(restore_point)
             agent.platform_template_id = selected_id if selection_type == "platform" else None
             agent.agent_template_id = selected_id if selection_type == "organization" else None
             agent.agent_template_override_version_id = selected_id if selection_type == "override" else None
+
+            field_changes: dict[str, dict[str, Any]] = {}
+            for field, new_value in (scalar_updates or {}).items():
+                previous_value = getattr(agent, field)
+                if previous_value != new_value:
+                    field_changes[field] = {"previous": previous_value, "new": new_value}
+                    setattr(agent, field, new_value)
             session.add(agent)
+
+            if removed_skill_ids:
+                session.exec(
+                    delete(AgentSkill)
+                    .where(col(AgentSkill.agent_id) == agent_id)
+                    .where(col(AgentSkill.skill_id).in_(list(removed_skill_ids)))
+                )
+            for skill_id, pinned_version in skill_pins:
+                row = session.exec(
+                    select(AgentSkill)
+                    .where(col(AgentSkill.agent_id) == agent_id)
+                    .where(col(AgentSkill.skill_id) == skill_id)
+                ).first()
+                if row is None:
+                    session.add(AgentSkill(agent_id=agent_id, skill_id=skill_id, pinned_version=pinned_version))
+                else:
+                    row.pinned_version = pinned_version
+                    session.add(row)
+
+            # Explicit because `onupdate` fires only when the Agent row is dirty: a
+            # skill-only selection would otherwise keep a stale
+            # `expected_agent_updated_at` acceptable, and that check — above, under
+            # the row lock — is what serializes concurrent selections.
+            agent.updated_at = datetime.now(UTC)
+
+            if field_changes:
+                # The pin change has its own event below.
+                self.outbox_repository.stage(
+                    session=session,
+                    registry=EVENT_REGISTRY,
+                    event=EVENT_REGISTRY.build_event(
+                        event_name=AGENT_UPDATED,
+                        schema_version=1,
+                        occurred_at=datetime.now(UTC),
+                        organization_id=organization_id,
+                        actor=actor,
+                        subject=SubjectIdentity(
+                            type=SubjectIdentityType.AGENT, id=agent_id, organization_id=organization_id
+                        ),
+                        correlation_id=correlation_id or uuid4(),
+                        payload={
+                            "organization_id": organization_id,
+                            "agent_id": agent_id,
+                            "field_changes": field_changes,
+                            "actor_display": actor_display or actor.type.value,
+                            "subject_display": agent.name,
+                        },
+                    ),
+                )
             self.outbox_repository.stage(
                 session=session,
                 registry=EVENT_REGISTRY,
@@ -596,7 +685,7 @@ class AgentOverrideRepository:
     def _replace_draft_skills(
         session: Session,
         draft_id: UUID,
-        skill_map: Mapping[UUID, str | None],
+        skill_map: Mapping[UUID, tuple[int, str | None]],
     ) -> None:
         session.exec(
             delete(AgentTemplateOverrideDraftSkill).where(col(AgentTemplateOverrideDraftSkill.draft_id) == draft_id)
@@ -606,8 +695,9 @@ class AgentOverrideRepository:
                 AgentTemplateOverrideDraftSkill(
                     draft_id=draft_id,
                     skill_id=skill_id,
+                    skill_version=skill_version,
                     group_key=group_key,
                 )
-                for skill_id, group_key in skill_map.items()
+                for skill_id, (skill_version, group_key) in skill_map.items()
             ]
         )
