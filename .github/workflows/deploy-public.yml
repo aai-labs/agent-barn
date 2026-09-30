@@ -349,7 +349,7 @@ jobs:
     secrets: inherit
     with:
       deploy: true
-      environment: production
+      environment: cloud
       # Pinned like every other job here: a workflow_dispatch of an existing tag
       # runs from the dispatch ref, so an unpinned checkout would publish a
       # Worker built from a different commit than the release being deployed.
