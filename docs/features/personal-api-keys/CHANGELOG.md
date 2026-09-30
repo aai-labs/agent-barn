@@ -13,7 +13,7 @@ Related context: [Public API](../public-api.md), [Identity](../identity-and-orga
 
 ## Changes
 
-### 2026-09-30 — Personal API keys and supported v1 API — PR
+### 2026-09-30 — Personal API keys and supported v1 API — [PR #255](https://github.com/aai-labs/agent-barn/pull/255)
 
 - Delivered: Personal keys with read-only/full mode, optional expiry, revocation, and current User permissions.
 - Changed: Authentication dependencies, platform authority, database migration, account UI, public documentation and discovery.
