@@ -17,6 +17,8 @@ from api.tests.steps.agent import (
     TEST_ENCRYPTION_KEY,
     MockK8sModule,
     MockLiteLLMModule,
+    skill_is_assigned_to_agent,
+    there_is_a_skill,
     there_is_an_agent,
 )
 from api.tests.steps.database import database_is_clean, database_repo_is_ready
@@ -670,4 +672,32 @@ def test_organization_with_only_deleted_agents_can_be_deleted():
             f"/api/v1/organizations/{org_id}",
             headers={"Authorization": f"Bearer {context.access_token}"},
         )
+        assert_that(response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
+
+
+def test_organization_with_deleted_agent_skill_assignment_can_be_deleted():
+    """A soft-deleted Agent's skill pin must not block the organization cascade."""
+    org_id = uuid7()
+    owner_id = uuid7()
+
+    with given(
+        [
+            *_AGENT_GIVEN,
+            there_is_a_user(
+                id=owner_id,
+                email="owner-deletedagent-skill@example.com",
+                organization_id=org_id,
+                role=OrganizationRole.OWNER,
+            ),
+            there_is_an_access_token_for_user(user_id=owner_id),
+            there_is_an_agent(organization_id=org_id, name="Gone With Skill", deleted=True),
+            there_is_a_skill(name="Retired Skill"),
+            skill_is_assigned_to_agent(),
+        ]
+    ) as context:
+        response = context.client.delete(
+            f"/api/v1/organizations/{org_id}",
+            headers={"Authorization": f"Bearer {context.access_token}"},
+        )
+
         assert_that(response.status_code, equal_to(status.HTTP_204_NO_CONTENT))

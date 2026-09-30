@@ -6,9 +6,13 @@ from fastapi_injector import Injected
 
 from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.utils import get_current_user, require_platform_admin
+from api.domains.organizations.llm_budget_service import OrganizationLlmBudgetService
 from api.domains.organizations.models import (
     OrganizationCreate,
     OrganizationFilter,
+    OrganizationLlmBudgetRead,
+    OrganizationLlmBudgetUpdate,
+    OrganizationLlmCoverageRead,
     OrganizationRead,
     OrganizationUpdate,
     PlatformOrganizationRead,
@@ -85,3 +89,60 @@ def delete_organization(
 ):
     organization_service.delete_organization(organization_id, context)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@platform_org_router.put("/{organization_id}/llm-budget", response_model=PlatformOrganizationRead)
+def set_organization_llm_budget(
+    organization_id: UUID,
+    budget: OrganizationLlmBudgetUpdate,
+    _: Annotated[CurrentUserContext, Depends(require_platform_admin())],
+    budget_service: Annotated[OrganizationLlmBudgetService, Injected(OrganizationLlmBudgetService)],
+):
+    """Set or clear an Organization's LLM spend ceiling.
+
+    Platform-administered: an Organization cannot raise its own cap, which is the
+    whole point of it as a cost control.
+    """
+    return budget_service.set_llm_budget(organization_id, budget.budget_usd, budget.budget_duration)
+
+
+@platform_org_router.get("/{organization_id}/llm-budget/coverage", response_model=OrganizationLlmCoverageRead)
+def get_organization_llm_coverage(
+    organization_id: UUID,
+    _: Annotated[CurrentUserContext, Depends(require_platform_admin())],
+    budget_service: Annotated[OrganizationLlmBudgetService, Injected(OrganizationLlmBudgetService)],
+):
+    """Which of the Organization's Agents a spend limit would actually bind.
+
+    Agents created before the Organization had a LiteLLM team carry no team on their
+    key, so a limit does not apply to them until they are enrolled.
+    """
+    return budget_service.get_llm_coverage(organization_id)
+
+
+@platform_org_router.post("/{organization_id}/llm-budget/enroll", response_model=OrganizationLlmCoverageRead)
+def enroll_organization_llm_keys(
+    organization_id: UUID,
+    _: Annotated[CurrentUserContext, Depends(require_platform_admin())],
+    budget_service: Annotated[OrganizationLlmBudgetService, Injected(OrganizationLlmBudgetService)],
+):
+    """Attach the Organization's existing Agent keys to its team.
+
+    Returns the resulting coverage rather than a success flag: partial enrollment is
+    an ordinary outcome and the administrator needs to see what is still uncovered.
+    """
+    return budget_service.enroll_llm_keys(organization_id)
+
+
+@org_router.get("/{organization_id}/llm-budget", response_model=OrganizationLlmBudgetRead)
+def get_organization_llm_budget(
+    organization_id: UUID,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    budget_service: Annotated[OrganizationLlmBudgetService, Injected(OrganizationLlmBudgetService)],
+):
+    """The Organization's own view of its spend limit.
+
+    Read-only: an Organization can see what it is allowed to spend and what it has
+    spent, and can change neither.
+    """
+    return budget_service.get_organization_llm_budget(organization_id, context)

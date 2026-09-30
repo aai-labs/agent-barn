@@ -9,7 +9,7 @@ Registry layout:
   both apps; the counter is only ever incremented in the ingest process.
 - PROBE_REGISTRY: gauges refreshed on scrape of the main app only. Kept out
   of the default registry so the ingest endpoint never exports stale zeros
-  (e.g. agentfarm_database_up 0) that would trip alerts.
+  (e.g. agentbarn_database_up 0) that would trip alerts.
 - per-app registries: HTTP metrics from the instrumentator, created fresh in
   setup_http_metrics() so repeated app construction (tests) never collides
   on duplicated timeseries.
@@ -40,32 +40,32 @@ CONTENT_TYPE_LATEST = "text/plain; version=0.0.4; charset=utf-8"
 PROBE_REGISTRY = CollectorRegistry()
 
 TOOL_CALLS = Counter(
-    "agentfarm_tool_calls",
+    "agentbarn_tool_calls",
     "Completed tool calls by tool name and outcome",
     ["tool_name", "status"],
 )
 
 DATABASE_UP = Gauge(
-    "agentfarm_database_up",
+    "agentbarn_database_up",
     "1 if the API can run a query against Postgres, 0 otherwise",
     registry=PROBE_REGISTRY,
 )
 
 AGENTS_IN_ERROR = Gauge(
-    "agentfarm_agents_in_error",
+    "agentbarn_agents_in_error",
     "Number of agents whose stored status is ERROR",
     registry=PROBE_REGISTRY,
 )
 
 OPENROUTER_CREDITS = Gauge(
-    "agentfarm_openrouter_credits_remaining",
+    "agentbarn_openrouter_credits_remaining",
     "Credits remaining on the OpenRouter API key's credit limit "
     "(limit_remaining, USD); +Inf when the key has no limit set",
     registry=PROBE_REGISTRY,
 )
 
 OPENROUTER_SCRAPE_OK = Gauge(
-    "agentfarm_openrouter_credits_scrape_ok",
+    "agentbarn_openrouter_credits_scrape_ok",
     "1 if the last OpenRouter credits poll succeeded, 0 otherwise",
     registry=PROBE_REGISTRY,
 )

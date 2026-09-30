@@ -70,7 +70,7 @@ jobs:
           context: ui
           file: ui/Dockerfile
           push: false
-          tags: agentfarm-ui:ci
+          tags: agentbarn-ui:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -103,7 +103,7 @@ jobs:
           context: ui
           file: ui/Dockerfile
           push: true
-          tags: ${{ vars.REGISTRY_URL }}/agentfarm-ui:${{ steps.tag.outputs.value }}
+          tags: ${{ vars.REGISTRY_URL }}/agentbarn-ui:${{ steps.tag.outputs.value }}
           build-args: |
             NEXT_PUBLIC_BACKEND_URL=https://${{ steps.tag.outputs.api_host }}
           cache-from: type=gha

@@ -1,45 +1,37 @@
 # Development and operations
 
-## Install dependencies
-
-From the repository root:
-
-```bash
-cd api && uv sync
-cd ../ui && pnpm install
-```
-
-API configuration is read from the repository root `.env`; tests may use `.env.spec`.
+> **Naming note:** the product rebranded from Agent Farm to Agent Barn. Code and deployment identifiers were migrated in that rebrand (`agentbarn_*` metrics, `agentbarn.io` labels, `agentbarn-*` charts/releases/images). Only the Kubernetes namespaces deliberately keep the old name — `agent-farm` and `agent-farm-staging` — because renaming them would strand running workloads; treat those as stable identifiers, not branding. Rationale and layer-by-layer blast radius: [`../adr/2026-08-22-agent-barn-rebrand-with-frozen-namespaces.md`](../adr/2026-08-22-agent-barn-rebrand-with-frozen-namespaces.md).
 
 ## Local development
 
-```bash
-make db-up       # PostgreSQL only
-make dev-api     # product API on :8000
-make dev-ui      # UI on :3000
-make up          # full Docker stack, including the separately served Ingest app
-make down
-make restart
-make logs
-make clean       # remove stack volumes and orphans
-```
-
-Use `make db-down`, `make db-logs`, and `make db-restart` for database lifecycle. Prefer repository Make targets over ad hoc equivalents.
+The [README quick start](../../README.md#quick-start) owns dependency,
+configuration, start, and stop instructions. Its
+[development section](../../README.md#development) covers the native service
+topology.
 
 ## Database migrations
 
 ```bash
-make migrate
-make merge-heads
-make rollback
-make makemigrations
+make migrate          # upgrade the configured database to head
+make makemigrations   # autogenerate a revision after prompting for its message
+make rollback         # downgrade the configured database by one revision
+make merge-heads      # create a merge revision only when multiple heads exist
 ```
 
-Schema changes require a migration under `../../api/migrations/versions/`. Review generated migrations before applying them. Production deployment runs Alembic through the API chart migration hook described in `../architecture/runtime-and-deployment.md`.
+`make migrate`, `make rollback`, and `make makemigrations` require the database
+at `DB_CONNECTION_URL` to be running and reachable. Migrate to the current head
+before autogenerating a revision. `make merge-heads` operates on revision files
+and does not require a database.
+
+Schema changes require a migration under `../../api/migrations/versions/`.
+Review generated migrations before applying them and run the migration check
+listed in [`testing.md`](testing.md#verification-commands). Deployment runs
+Alembic through the API chart migration hook described in
+`../architecture/runtime-and-deployment.md`.
 
 ## Checks and tests
 
-Testing and verification commands live in `testing.md`. Run the smallest complete set for the touched area before widening to full suites.
+Testing and verification commands live in [`testing.md`](testing.md).
 
 ## Deployment shape
 
@@ -47,42 +39,230 @@ The deployable services have independent Helm charts. `../../helmfile.yaml.gotmp
 
 LiteLLM uses a non-overlapping rolling update (`maxSurge: 0`, `maxUnavailable: 1`): the namespace quota cannot accommodate its old and replacement 2Gi pods at once. Upgrades briefly interrupt the proxy while Kubernetes replaces the pod; do not restore the default surge behavior unless the quota is increased first.
 
+## Organization LLM budgets
+
+Each Organization has its own LLM spend ceiling, set by a Platform Administrator
+through `PUT /platform/organizations/{id}/llm-budget`. There is no deployment-wide
+budget and no environment variable: an amount belongs to one Organization, and an
+Organization cannot raise its own. The behaviour contract is in
+[Costs](../features/costs.md#organization-llm-budgets).
+
+Budgets are off until set. With LiteLLM configured, teams are still provisioned and
+new keys assigned even when no amount is set anywhere. No Agent restart is required,
+and a change takes effect as soon as it is saved — there is nothing to redeploy.
+
+`budget_usd` is a non-negative finite number, where `0` is a limit of nothing and
+omitting it removes the cap. `budget_duration` is a positive integer followed by
+`s`, `m`, `h` or `d`, defaulting to `30d` — a 30-day interval, not a calendar month.
+Clearing the amount also clears the renewal schedule. Changing only the amount
+preserves spend and the renewal date; changing the duration moves the next renewal
+without resetting spend.
+
+Saving a budget writes the Organization row first and then pushes it to LiteLLM. A
+proxy failure returns `502` with the amount already stored, because losing an
+administrator's setting because the proxy blinked is worse than a delayed push. The
+`<release>-llm-budget-reconciler` CronJob pushes stored budgets onto their teams every
+15 minutes to repair exactly that kind of drift, logging
+`Organization LiteLLM budgets reconciled`. Like the other reconcilers it runs under
+`concurrencyPolicy: Forbid`, so one runner regardless of API replica count, and the
+API itself never contacts the proxy at startup. A budget saved while the proxy was
+unreachable is therefore applied within one interval rather than at the next restart.
+Run either pass by hand with `make reconcile-llm-budgets` or `make run-llm-budget-alerts`.
+
+`ORGANIZATION_LLM_BUDGET_ALERT_THRESHOLDS` sets the percentages at which an
+Organization's Owners and Admins are notified — comma separated, each between 1 and
+100, defaulting to `80,100`. A malformed list refuses to boot rather than quietly
+alerting nobody. The value is read by the API and by the
+`<release>-llm-budget-alerts` CronJob, which runs every 5 minutes over Organizations
+that have a limit set. Alerting is informational: the limit is enforced in the
+request path, so the interval only bounds how late someone is told.
+
+Agents created before an Organization had a limit carry no team on their key, so a
+limit does not bind them until they are enrolled. A Platform Administrator does that
+from the Organization's page — the spend limit controls stay hidden until every Agent
+is covered, and the button reports anything it could not enroll by name. Historical
+pre-enrollment spend stays in reports but is not added to the new team counter.
+
 ## Transactional email
 
-Invites, password resets, and agent lifecycle notifications send through **Cloudflare Email Sending** (`POST https://api.cloudflare.com/client/v4/accounts/{account_id}/email/sending/send`, Bearer token). `../../api/infrastructure/email/client.py` is the only place that talks to the provider; `EmailService` above it is transport-agnostic.
+Invites, password resets, and agent lifecycle notifications send through
+[Cloudflare Email Service](https://developers.cloudflare.com/email-service/api/send-emails/rest-api/)
+(`POST https://api.cloudflare.com/client/v4/accounts/{account_id}/email/sending/send`,
+Bearer token). `../../api/infrastructure/email/client.py` is the only place that
+talks to the provider; `EmailService` above it is transport-agnostic.
 
 - **`CLOUDFLARE_ACCOUNT_ID`** and **`CLOUDFLARE_API_TOKEN`** are GitHub secrets; **`SENDER_EMAIL`** is a GitHub variable. All three flow through `helmfile.yaml.gotmpl` into the API chart's Secret. Unset leaves delivery disabled: sends are logged and no-op rather than raising.
 - The API token MUST carry the **Email Sending: Edit** permission on the account in `CLOUDFLARE_ACCOUNT_ID`.
-- `SENDER_EMAIL`'s domain MUST be onboarded and **Verified** for Email Sending in that account, or Cloudflare rejects every send with `550`-class errors. Sending domains are added in the Cloudflare dashboard (**Email → Email Sending**), never in code, and verification can take up to 24 hours.
+- `SENDER_EMAIL`'s domain MUST be onboarded for Email Sending in that account,
+  or Cloudflare rejects sends from it. Add domains under **Compute → Email
+  Service → Email Sending** in the Cloudflare dashboard; DNS propagation can
+  take up to 24 hours.
 - **Each environment sends from its own `mail.`-style subdomain**, never the root domain — production `noreply@mail.agentbarn.dev`, staging `noreply@mail-staging.agentbarn.dev`. Sending reputation is scored per-domain, so this keeps a damaged reputation away from the root domain that serves the website and logins, and away from other environments.
 - **`SENDER_EMAIL` is the only per-environment value.** `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN` are shared references reused across both environments, because one `Email Sending: Edit` token covers every verified domain on the account. Consequence: rotating that token takes both environments down at once. A token cannot be scoped to a single sending domain, so per-environment tokens would buy revocation independence but not access isolation.
-- **The daily sending quota is per Cloudflare account, not per domain** — currently 200/day, shared by staging and production. Fine for manual smoke tests; a staging load test or send loop can starve real invites.
+- **[Sending quotas](https://developers.cloudflare.com/email-service/platform/limits/)
+  are account-scoped and can change with account standing and
+  sending behavior.** Staging and production share that quota, so check the
+  account's current limit before a staging load test or send loop that could
+  starve real invites.
 - Message size is capped at 5 MiB including attachments. The inline barn logo is sent as a base64 attachment with `disposition: "inline"` and a snake_case `content_id` matching the `cid:` reference in the MJML templates — `contentId` is the Workers binding's spelling and is not accepted by the REST API.
+
+## Per-Agent email addresses
+
+Agents reachable by email get their own address on a dedicated subdomain, receive mail through a Cloudflare Email Worker, and reply through the same Email Sending path as transactional mail. Rationale for the Worker: [`../adr/2026-08-31-cloudflare-worker-for-inbound-email.md`](../adr/2026-08-31-cloudflare-worker-for-inbound-email.md).
+
+- **`AGENT_EMAIL_DOMAIN`** (GitHub variable, `STAGING_` variant) and **`EMAIL_INBOUND_SECRET`** (GitHub secret, `STAGING_` variant) flow through `helmfile.yaml.gotmpl` into the API chart's Secret. Unset leaves the Email platform refusing new Communication Connections; nothing else changes, so an environment whose Cloudflare domain is not yet onboarded can safely leave them blank. Both are read by the **Communications deployment** as well as the API — it mounts the same Secret with `envFrom`, so no separate wiring exists.
+- Unlike the shared `CLOUDFLARE_API_TOKEN`, `EMAIL_INBOUND_SECRET` is **per-environment**, and the two environments' values **must differ**: it is the only credential guarding mail injection, so a staging leak must not be usable against production. Generate with `openssl rand -hex 32`.
+- **The subdomain must be onboarded twice** — once under **Compute → Email Service → Email Routing** (inbound MX) and once under **Compute → Email Service → Email Sending** (the `From` address). They are separate flows with separate DKIM selectors (`cf2024-1._domainkey` and `cf-bounce._domainkey`). Sending verification can take up to 24 hours, and until it is Verified inbound works while every agent reply fails with a `550`-class error — a split that reads like a reply bug rather than a provisioning gap.
+- A subdomain is added from **inside the apex domain's settings** (Email Routing → select the apex → Settings → Subdomains), not as a new domain of its own. There is no top-level "onboard a subdomain" action.
+- **Subaddressing must be switched on explicitly** at **Email Routing → Settings**. It is **off by default**, and until it is enabled `agent+<slug>-<token>@…` matches no rule at all: the sender gets `550 5.1.1 Address does not exist` and **nothing is written to the Email Routing activity log**, because no rule ever matched. A bounce with an empty activity log is the signature of this being off.
+- **One routing rule serves every agent.** With subaddressing enabled, a single custom-address rule for `agent@agents.agentbarn.dev` → Worker matches `agent+<slug>-<token>@agents.agentbarn.dev` and preserves the `+tag` in `message.to`. The local part must equal `AGENT_EMAIL_MAILBOX` (default `agent`). No Cloudflare API call happens when an Agent is created. Catch-all is zone-apex only and cannot be used on a subdomain; making the subdomain its own zone is Enterprise-only.
+- The Worker must exist before the rule can point at it, so deploy it first — the destination picker only lists deployed Workers.
+- **One domain, Worker and variable set per cluster.** A domain carries a single Email Routing rule, so two clusters cannot share one: whichever Worker the rule names receives every message, and the other cluster's addresses resolve against a database that has never heard of them — answered `202` with an empty acceptance, which Email Routing reports as "handled".
+
+  | Domain | Cluster | Wrangler env | Worker | Variable / secret |
+  |---|---|---|---|---|
+  | `agents-staging.agentbarn.dev` | staging (k3s) | `staging` | `agentbarn-email-inbound-staging` | `STAGING_AGENT_EMAIL_DOMAIN` / `STAGING_EMAIL_INBOUND_SECRET` |
+  | `agents-prod.agentbarn.dev` | prod (k3s) | `prod` | `agentbarn-email-inbound-prod` | `AGENT_EMAIL_DOMAIN` / `EMAIL_INBOUND_SECRET` |
+  | `agents.agentbarn.dev` | cloud (Talos) | `cloud` | `agentbarn-email-inbound` | `PUBLIC_AGENT_EMAIL_DOMAIN` / `PUBLIC_EMAIL_INBOUND_SECRET` |
+
+  All three pairs must differ. The Worker environment names its **cluster**, never a role: while `production` meant the k3s cluster in `deploy.yml` and the Talos cluster in `wrangler.toml`, a Worker was published aimed at one and handed the other's secret, and every production message was rejected `401`.
+- **The Worker deploys through CI**, not by hand, and **each environment's Worker is published by the workflow that deploys the cluster it posts into**. `deploy.yml`'s `deploy-worker` publishes `staging` and `prod` when `workers/**` changed; `deploy-public.yml`'s publishes `cloud` on a release tag, gated on `PUBLIC_AGENT_EMAIL_DOMAIN` being set so an environment without agent email is unaffected. Both run only after their cluster deploy succeeds — the Worker posts into the product API, so the cluster must already hold the matching secret. Pull requests run `wrangler deploy --dry-run` for all three through `ci.yml`, which needs no Cloudflare credentials. This requires **`CLOUDFLARE_WORKERS_TOKEN`** (account-owned, scoped to `Workers Scripts: Edit`), deliberately separate from the `Email Sending: Edit` token so one leak cannot both send mail as the domain and replace the Worker receiving it.
+- **Both the cluster deploy and the Worker publish fail when an environment's domain is configured but its secret is empty**: the API rejects a blank configured secret outright, so an unset value bounces every inbound message with `401` rather than degrading. Each guard selects its secret with a shell `case` over separately passed values, never `A && B || C`, which yields `C` whenever `B` is empty and would validate the wrong environment's secret. `worker.yml`'s guard exports the resolved value to `$GITHUB_ENV` and the publish step consumes that, so the value checked is provably the value uploaded — a second expression could not express three environments and would reintroduce the drift.
+- **The Worker is built from the commit being deployed.** `deploy-public.yml` passes the resolved release sha to `worker.yml`, so a `workflow_dispatch` of an older tag republishes that tag's Worker rather than whatever the dispatch ref points at.
+- **`EMAIL_INBOUND_SECRET` is written to the Worker and the cluster by the same run**, from one GitHub secret, so the two cannot drift. **Rotating it has a brief window**: the two are updated by consecutive steps, so mail arriving between them bounces `401`. To rotate without that, set the Worker's copy first with `wrangler secret put EMAIL_INBOUND_SECRET --env <env>`, then update the GitHub secret and deploy.
+- **Break-glass manual deploy** (a broken pipeline, or first-time bring-up before the token exists): `cd workers/email-inbound && pnpm install && pnpm exec wrangler deploy --env <staging|prod|cloud>`. Prefer CI — a hand-deployed Worker can drift from the committed source with nothing detecting it.
+- **A routing rule names one specific Worker, and CI cannot repoint it.** When an environment's rule was created against a differently-named Worker — a `--env local` one used for tunnel testing, say — publishing through CI creates the correctly-named Worker but leaves the rule pointing at the old one, so mail keeps going to the stale Worker. Cut over in this order: **let CI publish first, then repoint the rule's destination, and only then delete the old Worker.** Deleting first leaves the rule aimed at nothing and bounces every message for that domain.
+- **Delete `--env local` Workers when finished.** They point at a `cloudflared` tunnel that stops existing when the laptop closes, and an account accumulating them is an account where it is easy to point a rule at the wrong one.
+- Deploys publish a **new version of one Worker per environment**, not new Workers; Cloudflare retains ~100 versions for `wrangler rollback`. That is why the deploy is path-filtered: unrelated merges would otherwise consume the rollback history.
+- **Local k3d testing**: a Worker runs on Cloudflare's edge and cannot reach a local cluster. Either expose the Communications service with a tunnel (`cloudflared tunnel`) and point `INBOUND_URL` at it, or skip the Cloudflare hop entirely and exercise the whole Agent Barn path by posting the Worker's JSON straight at `/communications/v1/webhooks/email/inbound` with the configured bearer token.
+- **Agent mail draws on the same account-wide sending quota** as invites, password resets, and lifecycle notifications, across both environments. A chatty Agent can starve real user invites; see the quota note above.
+- Relevant limits: 200 routing rules per domain, 200 verified destination addresses per account, 30 domains per zone, 25 MiB inbound message size.
+
+## Native runtime gateway rollout
+
+- **`COMMUNICATIONS_NATIVE_PLATFORMS`** is one shared GitHub variable containing a comma-separated native runtime Platform allowlist. Set it to **`slack,discord`** to enable the Hermes/OpenClaw native Slack and Discord gateways in every deployment workflow. It flows through `helmfile.yaml.gotmpl` into the API chart's shared Secret, so both the API and Communications processes receive the same cutoff.
+- Empty is the rollback setting: all Platforms remain on the Communications Gateway. Restart affected Agents after deploying a change so their runtime configuration is rebuilt.
 
 ## Staging environment
 
-Staging is a fully separate stack in its own namespace (`agent-farm-staging`), driven off the `staging` branch — not a GitHub Environment (Free plan + private repo can't gate those). `main` remains the production deploy source. See [`../adr/2026-07-13-staging-environment-namespace-isolation.md`](../adr/2026-07-13-staging-environment-namespace-isolation.md) for why.
+Staging is a fully separate stack in its own namespace (`agent-farm-staging`),
+driven off the `staging` branch rather than a GitHub Environment. `main` remains
+the k3s testing-ground deploy source. Hosted public production is the Talos
+cluster via release tags; see [Public cluster (Talos)](#public-cluster-talos).
+See
+[`../adr/2026-07-13-staging-environment-namespace-isolation.md`](../adr/2026-07-13-staging-environment-namespace-isolation.md)
+for why staging is a namespace.
 
 - **Trigger:** `deploy.yml` runs on pushes to `staging` and `main`, and via `workflow_dispatch`; it resolves `NAMESPACE`/`ENVIRONMENT`/image-tag suffix/hosts/secrets from `github.ref_name`. Dispatching from anything other than `staging` or `main` fails the workflow.
 - **Images:** all four images (api, ui, hermes-base, openclaw-base) get a `-staging` tag suffix on staging; staging never pushes `:latest`, since each environment builds its own base images and their installed contents can diverge.
 - **Change detection:** `deploy.yml` compares the current commit with the latest successful deploy run for the same branch. A failed deploy does not advance that baseline, so a later fix rebuilds every component changed since the last successful deploy. If no valid baseline can be found, or the workflow is dispatched manually, all four images are built.
 - **Secrets/vars:** every per-env value uses a `STAGING_`-prefixed GitHub secret or variable, selected by a `github.ref_name == 'staging' && secrets.STAGING_X || secrets.X` ternary in `deploy.yml`. Shared references (registry, `OPENROUTER_API_KEY`, Google OAuth client, DB user/db names, and the Cloudflare email account/token) are reused as-is. Email follows the standard convention: only `STAGING_SENDER_EMAIL` differs, pointing staging at its own `mail-staging.` sending subdomain.
-- **RBAC bootstrap:** `k8s/agent-farm-user.staging.yaml` provisions the `agent-farm-user` ServiceAccount/Role/RoleBinding for `agent-farm-staging` (omitting the cluster-scoped `Namespace` object, since a namespace-scoped kubeconfig can't create one and the namespace is expected to pre-exist). `deploy.sh` applies the prod manifest by default; a staging bring-up points its `kubectl apply` line at the staging manifest instead.
-- **Local bring-up:** copy `.env.deploy.spec` to `.env.deploy.staging`, set `NAMESPACE=agent-farm-staging`, the staging hosts, the four `*_IMAGE_TAG=<ver>-staging`, and the same passwords/keys as the `STAGING_*` GitHub secrets (they must match — see the ADR's consequences), then run `ENV_FILE=.env.deploy.staging bash deploy.sh`.
+- **RBAC bootstrap:** the staging namespace and its deploy identities are
+  provisioned out of band. Do not use `deploy.sh` as a staging entry point: it
+  always applies `k8s/agent-farm-user.yaml` for `agent-farm`. The current
+  `k8s/agent-farm-user.staging.yaml` defines `agent-farm-user`, while
+  `deploy.yml` selects `agent-farm-staging-user` for the LiteLLM key job; align
+  those names before treating that manifest as workflow bootstrap automation.
 - **Isolation invariant:** the API pod's `K8S_NAMESPACE` env var (from `{{ .Release.Namespace }}` in the API chart) must stay wired, or the staging API would create agent workloads in the prod namespace instead of its own.
+
+## Public cluster (Talos)
+
+Hosted public Agent Barn runs on the dedicated Talos cluster, not on k3s. k3s (`staging` / `main` via `deploy.yml`) stays the AAI Labs testing ground. Public deploys only from a `vX.Y.Z` tag via `../../.github/workflows/deploy-public.yml`. Rationale: [`../adr/2026-08-27-public-cluster-release-tags.md`](../adr/2026-08-27-public-cluster-release-tags.md).
+
+- **Trigger:** pushing a tag matching `v*.*.*`, or a `workflow_dispatch` with an
+  existing tag. A manual dispatch uses the selected branch's Helmfile and
+  configuration (normally `main`); API/UI use the requested release tag, while
+  the checked-in image context and runtime `VERSION` values come from that tag's
+  commit. Set `skip_build` to reuse images already in the registry.
+- **Images:** API and UI use the git tag; Hermes and OpenClaw use their
+  independent `VERSION` files. The workflow also publishes a moving `:latest`
+  alias for each image, but Helmfile deploys the explicit release/runtime tags.
+  Nothing in this workflow writes to `registry.k8s.aai-labs.com`.
+- **Registry:** `PUBLIC_REGISTRY_URL` (`registry.agentbarn.dev`). Do not reuse the k3s registry password or R2 bucket.
+- **Namespace:** still `agent-farm` so helmfile and `k8s/agent-farm-user.yaml` apply unchanged. This is a different cluster, so it does not collide with k3s.
+- **Secrets/vars:** every public-only value is `PUBLIC_`-prefixed. Postgres **user/db names**, `AGENT_DEFAULT_MODEL` / `AGENT_MODEL_ALLOWLIST`, the Cloudflare email account/token, and the Google OAuth client are reused. OpenRouter, Firecrawl, Slack webhook, DB passwords, and signing keys are **not** reused — copy a value into a `PUBLIC_` secret only when that sharing is intentional.
+- **Kubeconfig:** `PUBLIC_KUBECONFIG_B64` must reach the Talos API (`https://<cp-1>:6443`). There is no bastion tunnel. `PUBLIC_POD_KUBECONFIG_B64` is what the API pod uses to manage agents; if unset, the workflow falls back to the deploy kubeconfig. Prefer a namespace-scoped kubeconfig for the pod, as on k3s.
+- **Storage:** `PUBLIC_STORAGE_CLASS`. Intended value is `rook-ceph-block-main`. Use `local-path` only while Ceph has no OSDs — postgres then dies with the node that holds the volume.
+- **Hosts:** `PUBLIC_UI_HOST` is `cloud.agentbarn.dev` (not `app` — that hostname stays on k3s). Product Grafana is `grafana-app.agentbarn.dev`, not cluster `grafana.agentbarn.dev`.
+- **RBAC bootstrap:** the deploy kubeconfig is cluster-admin, so the workflow applies `k8s/agent-farm-user.yaml` (creates the namespace) before helmfile.
+- **Release command:** set `RELEASE_TAG` to the new `vX.Y.Z` tag, then run this
+  from the release commit already on `main`:
+
+```bash
+: "${RELEASE_TAG:?Set RELEASE_TAG to the new vX.Y.Z tag}"
+git tag "$RELEASE_TAG"
+git push origin "$RELEASE_TAG"
+```
+
+### Public GitHub variables
+
+| Variable | Intended value |
+|---|---|
+| `PUBLIC_REGISTRY_URL` | `registry.agentbarn.dev` |
+| `PUBLIC_REGISTRY_USERNAME` | platform registry user (`admin`) |
+| `PUBLIC_API_HOST` | `api.agentbarn.dev` |
+| `PUBLIC_UI_HOST` | `cloud.agentbarn.dev` |
+| `PUBLIC_WEB_APP_URL` | `https://cloud.agentbarn.dev` |
+| `PUBLIC_GRAFANA_HOST` | `grafana-app.agentbarn.dev` |
+| `PUBLIC_SENDER_EMAIL` | `noreply@mail.agentbarn.dev` |
+| `PUBLIC_AGENT_EMAIL_DOMAIN` | `agents.agentbarn.dev`. Unset leaves agent email inert and skips the Worker publish |
+| `PUBLIC_STORAGE_CLASS` | `rook-ceph-block-main` (or `local-path` until Ceph OSDs exist) |
+
+### Public GitHub secrets
+
+Generate new values; do not paste k3s `POSTGRES_*` / signing keys. Encode a
+kubeconfig portably with
+`base64 < path/to/kubeconfig | tr -d '\n'`.
+
+| Secret | What |
+|---|---|
+| `PUBLIC_KUBECONFIG_B64` | Talos kubeconfig (deploy identity) |
+| `PUBLIC_POD_KUBECONFIG_B64` | Optional. API pod identity; defaults to the deploy kubeconfig |
+| `PUBLIC_REGISTRY_PASSWORD` | `registry.agentbarn.dev` password |
+| `PUBLIC_POSTGRES_APP_PASSWORD` | New |
+| `PUBLIC_POSTGRES_LITELLM_PASSWORD` | New |
+| `PUBLIC_POSTGRES_FIRECRAWL_PASSWORD` | New |
+| `PUBLIC_LITELLM_MASTER_KEY` | New (`sk-` + random) |
+| `PUBLIC_SECRET_SIGNING_KEY` | New |
+| `PUBLIC_AGENT_TOKEN_ENCRYPTION_KEY` | New Fernet key |
+| `PUBLIC_PLATFORM_ADMIN_CREDENTIALS` | `email:password` (API policy: 8+, upper, lower, digit; `openssl rand -hex` is not enough) |
+| `PUBLIC_GRAFANA_ADMIN_PASSWORD` | Product Grafana (not cluster Grafana) |
+| `PUBLIC_MONITORING_WEB_PASSWORD` | Basic auth on Prometheus/Alertmanager; 12+ alphanumeric (`openssl rand -hex 16`) |
+| `PUBLIC_FIRECRAWL_API_KEY` | New (this cluster's Firecrawl) |
+| `PUBLIC_OPENROUTER_API_KEY` | Prefer a dedicated key so public traffic is not the testing quota |
+| `PUBLIC_SLACK_ALERTS_WEBHOOK_URL` | `#alerts` or a public-specific channel |
+| `PUBLIC_EMAIL_INBOUND_SECRET` | New (`openssl rand -hex 32`). Required once `PUBLIC_AGENT_EMAIL_DOMAIN` is set, and must differ from the staging and k3s values |
+
+Shared with k3s (already present): `CLOUDFLARE_ACCOUNT_ID`,
+`CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_WORKERS_TOKEN`, and
+`GOOGLE_CLOUD_CLIENT_SECRET`.
 
 ## Versioning and releases
 
-Each deployable chart has independent chart metadata in `Chart.yaml`:
+The public product release is identified by a `vX.Y.Z` git tag, which pins the
+API and UI images as one deployable bundle. Charts and runtime base images keep
+independent versions:
 
 - Chart `version` is the packaging version. Bump it when chart templates or values change, independently of application code.
+- `hermes-base/VERSION` and `openclaw-base/VERSION` identify immutable runtime
+  image contents. Bump the matching file when its Dockerfile, upstream runtime
+  pin, resolved `aai-cli` revision or other build dependency, or a file copied
+  into the image changes.
+  The Dockerfiles currently resolve `aai-cli` from its public default branch,
+  so rebuilding after that branch moves is a content change and requires a new
+  runtime version. Workflow, smoke-test, and runtime-plugin-only changes do not
+  otherwise alter the image and need no version bump.
 
 Rules:
 
 - API and UI image tags are explicit deployment inputs (`API_IMAGE_TAG`, `UI_IMAGE_TAG`), not chart metadata.
 - Bump chart versions late, ideally immediately before the PR, to reduce merge conflicts, when chart packaging actually changed.
-- The git commit or PR is the product release identifier; there is no shared API/UI release number.
 - `../../.github/workflows/deploy.yml` builds API and UI images under moving environment tags and passes those tags into Helm via `API_IMAGE_TAG` and `UI_IMAGE_TAG`: `latest` on `main`, `latest-staging` on `staging`. Branch deploys no longer depend on chart `appVersion` bumps.
+- Public hosted deploys (`../../.github/workflows/deploy-public.yml`) pin API/UI to the git tag (`vX.Y.Z`) on `registry.agentbarn.dev`. They never move k3s `latest` tags.
+- Runtime `VERSION` tags MUST NOT be reused for different image contents:
+  local loading skips a tag already present in k3d, and release workflows
+  publish that exact tag. The workflows do not enforce registry immutability,
+  so verify or bump the version before any published rebuild.
 - Manual/bundled release flows also pass explicit API/UI tags rather than reading them from chart metadata.
 - LiteLLM, PostgreSQL, and monitoring charts run upstream images; bump only chart `version` when their chart templates change.
 
@@ -92,15 +272,75 @@ Documentation-only changes do not change a service image and do not require a se
 
 `../../helm/monitoring/` (plain namespace-scoped Prometheus + Grafana + Alertmanager) deploys with the regular Helmfile sync. Operational notes:
 
-- Everything the chart renders is namespaced and it creates no RBAC objects at all (the tenant deployer may not create Roles/RoleBindings). Prometheus and kube-state-metrics run under the tenant deploy SA (`<namespace>-user`, set per environment by helmfile), which already has namespaced read; Grafana is the only ingress-exposed pod and runs without a ServiceAccount token. This is what makes the stack deployable on the shared cluster by the namespace-scoped deployer, staging branch included. Note the dashboards ConfigMap is deliberately not labeled `grafana_dashboard` — the cluster's central Grafana imports that label from every namespace.
-- Required GitHub Actions config: secrets `SLACK_ALERTS_WEBHOOK_URL` (incoming webhook for `#alerts`) and `GRAFANA_ADMIN_PASSWORD`; variable `GRAFANA_HOST` (DNS must resolve for the http01 challenge). The credits metric reuses the existing `OPENROUTER_API_KEY` secret (the API polls `GET /key` for the key's `limit_remaining`); for `OpenRouterCreditsLow` to be meaningful, set a credit limit on that key at openrouter.ai — an unlimited key reports `+Inf`.
-- The pinned prometheus and grafana chart dependencies are rebuilt locally with `helm dependency build helm/monitoring` (`Chart.lock` is committed, the fetched `charts/*.tgz` is gitignored).
-- `make check-monitoring` unit-tests the alert rules with promtool and parse-checks every dashboard panel query; run it after touching the alert rules in `helm/monitoring/values.yaml` or the dashboards (needs helm, docker, and the chart dependency built). CI runs it automatically on `helm/monitoring/**` changes (`.github/workflows/monitoring.yml`).
-- Agents that were already running before the monitoring deploy are invisible to Prometheus until stopped and started once: the `/metrics` sidecar script and the Service labels the agent scrape config relies on (`agentfarm.io/component`, `agent-name`, `org-name`) only apply when the API rebuilds the agent's resources in the start flow.
+- Everything the chart renders is namespaced and it creates no RBAC objects at
+  all (the tenant deployer may not create Roles/RoleBindings). Prometheus and
+  kube-state-metrics run under the environment-selected tenant ServiceAccount,
+  which must already have namespaced read; Grafana is the only ingress-exposed
+  pod and runs without a ServiceAccount token. This is what makes the stack
+  deployable on the shared cluster by the namespace-scoped deployer. Note the
+  dashboards ConfigMap is deliberately not labeled `grafana_dashboard` — the
+  cluster's central Grafana imports that label from every namespace.
+- Required GitHub Actions config: secrets `SLACK_ALERTS_WEBHOOK_URL` (incoming webhook for `#alerts`), `GRAFANA_ADMIN_PASSWORD`, and `MONITORING_WEB_PASSWORD` / `STAGING_MONITORING_WEB_PASSWORD` (basic auth on Prometheus and Alertmanager, which agent pods can otherwise reach in-namespace; 12+ alphanumeric, e.g. `openssl rand -hex 16`); variable `GRAFANA_HOST` (DNS must resolve for the http01 challenge). The credits metric reuses the existing `OPENROUTER_API_KEY` secret (the API polls `GET /key` for the key's `limit_remaining`); for `OpenRouterCreditsLow` to be meaningful, set a credit limit on that key at openrouter.ai — an unlimited key reports `+Inf`.
+- Monitoring verification and its prerequisites live in
+  [`testing.md`](testing.md#verification-commands). CI selects
+  `.github/workflows/monitoring.yml` for `helm/monitoring/**` changes.
+- Agents that were already running before the monitoring deploy are invisible to Prometheus until stopped and started once: the `/metrics` sidecar script and the Service labels the agent scrape config relies on (`agentbarn.io/component`, `agent-name`, `org-name`) only apply when the API rebuilds the agent's resources in the start flow. When only the scrape label is missing (e.g. agents predating the agentfarm→agentbarn rebrand), no restart is needed — patch the Service labels in place, which does not disturb running pods: `kubectl -n NAMESPACE label svc -l agentfarm.io/component=agent agentbarn.io/component=agent --overwrite`.
 
 ## Operational safety
 
 - Treat signing-key and encryption-key rotation as migrations: existing tokens or encrypted values depend on the current keys.
 - Verify migration and secret-hook behavior when changing API chart startup.
-- Keep runtime/platform differences explicit when changing Hermes, OpenClaw, Slack, Teams, or Telegram deployment configuration.
-- Use the existing deployment workflow rather than manually publishing mutable production tags.
+- Keep runtime/platform differences explicit when changing Hermes, OpenClaw, Slack, Teams, Telegram, or Discord deployment configuration.
+- The content-free Communications operation journal is retained for
+  `COMMUNICATION_JOURNAL_RETENTION_DAYS` days (default `31`, bounded to
+  `1`–`3650`). Its supervisor prunes expired entries; changing this window is
+  an operational configuration change, not a release-version change.
+- On k3s, use `deploy.yml` rather than manually publishing mutable `latest` tags. Public hosted releases are git tags via `deploy-public.yml`.
+
+### Agent Restore Points
+
+- **The API's cluster identity needs `batch/jobs` (`create`, `get`, `list`, `delete`) and
+  `pods/log` (`get`).** Capture and restore run as Jobs, and their status and archive manifest
+  are read back from the Job pod's logs. `k8s/agent-farm-user.yaml` and its staging sibling
+  grant both, but the API pod authenticates with the kubeconfig in `POD_KUBECONFIG_B64`, not
+  that ServiceAccount — on a cluster where those are different identities, verify with
+  `kubectl auth can-i create jobs.batch` and `kubectl auth can-i get pods/log` against the
+  pod's kubeconfig. Without `pods/log` a capture still runs but reports no archive size and a
+  generic failure reason.
+- **The Job runs as root** (uid 0) to read files owned by the runtime user and to restore
+  ownership. It therefore requires a namespace that is not Pod Security `restricted`.
+  `agent-farm` is labelled `privileged` by `k8s/agent-farm-user.yaml`; namespaces created
+  out-of-band, including `agent-farm-staging`, inherit whatever the cluster defaults to.
+- **On `local-path`, restore points are node-local and unreplicated.** Each restore point gets
+  its own PVC sized by `RESTORE_POINT_SIZE`, provisioned on the node holding the Agent's
+  volume. They do not survive loss of that node, and they consume real node disk — the only
+  bound is `RESTORE_POINT_MAX_PER_AGENT`, which is per Agent and not per Organization.
+- Restore point rows resolve from live Job status when they are read, and a
+  `<release>-restore-point-reconciliation` CronJob resolves the ones nobody reads. It runs every
+  10 minutes (`restorePoints.reconciliation.schedule`, disable with
+  `restorePoints.reconciliation.enabled=false`) under `concurrencyPolicy: Forbid`, and needs the
+  same `batch/jobs` and PVC permissions as the API pod because it authenticates with the same
+  mounted kubeconfig. Run one pass by hand with `make reconcile-restore-points`, which targets
+  whatever `K8S_KUBECONFIG_PATH` and `K8S_NAMESPACE` point at — check both before invoking it
+  against a shared cluster.
+- **The reconciler deletes storage**, so watch its first few runs in staging before trusting the
+  schedule. Each run logs a one-line summary: `claimed`, `resolved`, `replays_attempted`,
+  `volumes_missing`, `orphans_deleted`, `orphans_unidentified`, `failed`. A non-zero
+  `orphans_unidentified` means resources carrying the component label that match neither route
+  below, which the sweep refuses to touch — investigate rather than ignore, because nothing will
+  ever reclaim them. A climbing `failed` means rows are being claimed and not resolved, which is
+  where to look first if volumes stop being reclaimed.
+- **Reclamation identifies a resource by its `agentbarn.io/restore-point-id` label, falling back
+  to its name.** The label is not enough on its own: resources created before chart `0.10.0` do
+  not carry it. The names are generated by `builders/restore_point.py`
+  (`restore-point-<uuid>`, `rp-cap-<uuid>`, `rp-res-<uuid>-<suffix>`), so parsing one back is
+  exact rather than a guess. Before deploying `0.10.0` to a cluster that already has restore
+  points, `kubectl get pvc,job -l agentbarn.io/component=restore-point -L
+  agentbarn.io/restore-point-id` shows what the first sweep will newly be able to act on —
+  anything with an empty last column was previously inert and is now reclaimable if no row owns
+  it.
+- The sweep is deliberately conservative in three further ways, so a stale database or a bad
+  listing cannot empty the namespace: a resource younger than
+  `RESTORE_POINT_ORPHAN_MIN_AGE_SECONDS` is left alone, deletions are capped at
+  `RESTORE_POINT_ORPHAN_DELETE_LIMIT` per run, and a failed or empty PVC listing fails no rows at
+  all. A large backlog therefore drains over several runs rather than one.

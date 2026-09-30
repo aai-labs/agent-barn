@@ -66,6 +66,8 @@ async function interceptList(page: Page, items: unknown[]) {
 }
 
 async function openSharedCredentials(page: Page) {
+  // The Settings page opens on the Agents tab before this test clicks through.
+  await new DataSupport(page).organizations.interceptAgentSettings();
   await page.goto(`/dashboard/${TEST_ORG_ID}/settings`);
   await page.getByRole("button", { name: "Shared Credentials" }).click();
 }

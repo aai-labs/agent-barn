@@ -1,14 +1,15 @@
 import {
   FileCode2,
+  History,
   KeyRound,
   MessageSquare,
   ShieldAlert,
   SlidersHorizontal,
   Sparkles,
   UserRound,
+  Webhook,
 } from "lucide-react";
 
-import type { Agent } from "../schemas";
 import {
   AGENT_CONFIGURATION_SECTIONS,
   configurationSectionLabel,
@@ -19,20 +20,22 @@ const ICONS = {
   template: FileCode2,
   profile: UserRound,
   channels: MessageSquare,
+  webhooks: Webhook,
   skills: Sparkles,
   keys: KeyRound,
   override: SlidersHorizontal,
+  restore: History,
   danger: ShieldAlert,
 } as const;
 
 export function AgentConfigurationSidebar({
-  agent,
   activeSection,
   onSectionChange,
+  sections = AGENT_CONFIGURATION_SECTIONS,
 }: {
-  agent: Pick<Agent, "platform">;
   activeSection: AgentConfigurationSectionKey;
   onSectionChange: (section: AgentConfigurationSectionKey) => void;
+  sections?: typeof AGENT_CONFIGURATION_SECTIONS;
 }) {
   return (
     <aside className="w-full flex-shrink-0 lg:sticky lg:top-[77px] lg:w-56">
@@ -40,7 +43,7 @@ export function AgentConfigurationSidebar({
         Agent settings
       </div>
       <nav className="flex gap-1 overflow-x-auto lg:flex-col lg:overflow-visible">
-        {AGENT_CONFIGURATION_SECTIONS.map((section) => {
+        {sections.map((section) => {
           const Icon = ICONS[section.key];
           const isActive = activeSection === section.key;
           return (
@@ -57,7 +60,7 @@ export function AgentConfigurationSidebar({
               onClick={() => onSectionChange(section.key)}
             >
               <Icon size={15} aria-hidden />
-              <span>{configurationSectionLabel(section.key, agent)}</span>
+              <span>{configurationSectionLabel(section.key)}</span>
             </button>
           );
         })}

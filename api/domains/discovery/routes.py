@@ -8,7 +8,7 @@ from pydantic import BaseModel
 
 router = APIRouter(tags=["developer-documentation"])
 DOCS = Path(__file__).resolve().parents[2] / "developer_docs"
-GUIDES = ("quickstart", "authentication", "agents", "resources", "platform")
+GUIDES = ("quickstart", "authentication", "agents", "resources", "operations", "platform")
 
 
 class OperationRead(BaseModel):

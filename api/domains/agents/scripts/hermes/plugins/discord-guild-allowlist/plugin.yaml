@@ -1,3 +1,0 @@
-name: discord-guild-allowlist
-version: "1.0"
-description: Restrict Discord server messages to guilds listed in DISCORD_GUILD_IDS

@@ -35,7 +35,7 @@ jobs:
       - name: Assemble bundle
         run: |
           set -euo pipefail
-          root=agent-farm-deploy
+          root=agent-barn-deploy
           mkdir -p "$root"
           cp -r helm k8s helmfile.yaml.gotmpl deploy.sh "$root"/
 
@@ -43,7 +43,7 @@ jobs:
           # and pin image tags. Credentials are intentionally left blank for the
           # client to fill in.
           sed \
-            -e 's|^REGISTRY_PREFIX=.*|REGISTRY_PREFIX=clients.registry.k8s.aai-labs.com/agent-farm|' \
+            -e 's|^REGISTRY_PREFIX=.*|REGISTRY_PREFIX=clients.registry.k8s.aai-labs.com/agent-barn|' \
             -e 's|^REGISTRY_SERVER=.*|REGISTRY_SERVER=clients.registry.k8s.aai-labs.com|' \
             -e 's|^API_IMAGE_REPOSITORY=.*|API_IMAGE_REPOSITORY=api|' \
             -e 's|^UI_IMAGE_REPOSITORY=.*|UI_IMAGE_REPOSITORY=ui|' \
@@ -55,12 +55,12 @@ jobs:
             -e 's|^OPENCLAW_IMAGE_TAG=.*|OPENCLAW_IMAGE_TAG=${{ steps.ver.outputs.openclaw }}|' \
             .env.deploy.spec > "$root/.env.deploy"
 
-          tar -czf "agent-farm-deploy-${{ inputs.tag }}.tar.gz" "$root"
+          tar -czf "agent-barn-deploy-${{ inputs.tag }}.tar.gz" "$root"
 
       - name: Create release
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ inputs.tag }}
           name: ${{ inputs.tag }}
-          files: agent-farm-deploy-${{ inputs.tag }}.tar.gz
+          files: agent-barn-deploy-${{ inputs.tag }}.tar.gz
           generate_release_notes: true

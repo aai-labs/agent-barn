@@ -1,9 +1,8 @@
 name: Client Release
 
-# Builds every agent-farm image and pushes it to the client-facing registry.
-# Manual only. Distinct from deploy.yml: it uses the docker/* actions (no hand
-# -rolled docker login/build/push) and a matrix over the images rather than a
-# step per image.
+# Builds every Agent Barn image and pushes it to the client-facing registry
+# (self-host customers). Manual only. Distinct from deploy.yml (k3s testing
+# ground) and deploy-public.yml (hosted public cluster on release tags).
 
 on:
   workflow_dispatch:
@@ -22,7 +21,7 @@ env:
   # portable across any client cluster: the browser hits same-origin /api/*, and
   # the UI server proxies to this address from inside the agent-farm namespace
   # (same namespace as the API, so the short name resolves).
-  UI_BACKEND_URL: http://agentfarm-api:8000
+  UI_BACKEND_URL: http://agentbarn-api:8000
 
 jobs:
   release:
@@ -47,14 +46,12 @@ jobs:
             file: hermes-base/Dockerfile
             version_file: hermes-base/VERSION
             version_kind: file
-            needs_token: true
             smoke: hermes-base/smoke-test.sh
           - name: openclaw-base
             context: openclaw-base
             file: openclaw-base/Dockerfile
             version_file: openclaw-base/VERSION
             version_kind: file
-            needs_token: true
             smoke: openclaw-base/smoke-test.sh
     steps:
       - uses: actions/checkout@v5
@@ -82,7 +79,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v6
         with:
-          images: ${{ vars.CLIENT_REGISTRY_URL }}/agent-farm/${{ matrix.name }}
+          images: ${{ vars.CLIENT_REGISTRY_URL }}/agent-barn/${{ matrix.name }}
           tags: |
             type=raw,value=${{ steps.ver.outputs.version }}
             type=raw,value=latest
@@ -98,7 +95,6 @@ jobs:
           push: false
           tags: ${{ steps.meta.outputs.tags }}
           build-args: ${{ matrix.name == 'ui' && format('NEXT_PUBLIC_BACKEND_URL={0}', env.UI_BACKEND_URL) || '' }}
-          secrets: ${{ matrix.needs_token && format('gh_token={0}', secrets.AAI_CLI_REPO_ACCESS_TOKEN) || '' }}
           cache-from: type=gha,scope=${{ matrix.name }}
           cache-to: type=gha,mode=max,scope=${{ matrix.name }}
 
@@ -107,7 +103,7 @@ jobs:
         run: |
           docker run --rm \
             -v "${{ github.workspace }}/${{ matrix.smoke }}:/smoke-test.sh:ro" \
-            "${{ vars.CLIENT_REGISTRY_URL }}/agent-farm/${{ matrix.name }}:${{ steps.ver.outputs.version }}" \
+            "${{ vars.CLIENT_REGISTRY_URL }}/agent-barn/${{ matrix.name }}:${{ steps.ver.outputs.version }}" \
             /bin/sh /smoke-test.sh
 
       - name: Push
@@ -118,5 +114,4 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           build-args: ${{ matrix.name == 'ui' && format('NEXT_PUBLIC_BACKEND_URL={0}', env.UI_BACKEND_URL) || '' }}
-          secrets: ${{ matrix.needs_token && format('gh_token={0}', secrets.AAI_CLI_REPO_ACCESS_TOKEN) || '' }}
           cache-from: type=gha,scope=${{ matrix.name }}

@@ -92,7 +92,7 @@ Three cron jobs drive all recurring work. They are created by the Setup Flow and
 ### cron:blocker-scan — Daily Blocker Detection
 
 1. Read the current sprint goal from USER.md and memory.
-2. Pull active Jira tickets (read the skill file first: `./skills/aai-cli/jira_skill.md`), ticket threads, and linked Confluence context.
+2. Pull active Jira tickets (read the skill file first: `./skills/aai-jira/SKILL.md`), ticket threads, and linked Confluence context.
 3. Pull related GitHub/Bitbucket PRs: review state, failing checks, unanswered comments, blocked merge state.
 4. Decide whether anything is blocked, waiting on a stakeholder, missing an owner, or stale enough to need attention.
 5. If action is needed: send a focused stakeholder ping with blocker, evidence, owner, and a specific requested next step. Add low-risk clarifying comments to Jira tickets or PRs when they point to a delivery inconsistency.

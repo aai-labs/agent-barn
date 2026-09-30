@@ -1,6 +1,6 @@
-# Cluster prerequisite for agent-farm, applied outside helm.
+# Cluster prerequisite for Agent Barn, applied outside helm.
 #
-# The agentfarm-api chart's litellm-key pre-install Job runs as the
+# The agentbarn-api chart's litellm-key pre-install Job runs as the
 # `agent-farm-user` ServiceAccount: it mints a LiteLLM key and writes it to the
 # `litellm-api-key` Secret via the k8s API, so the SA needs create/update on
 # secrets. This is a cluster-bootstrap identity (not a per-release resource), so
@@ -10,6 +10,13 @@ apiVersion: v1
 kind: Namespace
 metadata:
   name: agent-farm
+  labels:
+    # Talos Kyverno ns-psa-labels mutates unlabeled namespaces to restricted.
+    # This is the hosted control-plane namespace (postgres/redis/API), not a
+    # sandbox farm — it must stay off restricted or those pods never schedule.
+    pod-security.kubernetes.io/enforce: privileged
+    pod-security.kubernetes.io/audit: privileged
+    pod-security.kubernetes.io/warn: privileged
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -26,6 +33,14 @@ rules:
   - apiGroups: [""]
     resources: ["secrets"]
     verbs: ["create", "update"]
+  # The monitoring chart's litellm-metrics-key hook Job reads its Secret to
+  # keep a still-valid key instead of rotating it on every upgrade. On the
+  # shared cluster the tenant chart already grants get; this is what reaches
+  # clusters where this file is the only grant.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["litellm-metrics-key"]
+    verbs: ["get"]
   # Read access for the monitoring release: Prometheus service discovery and
   # kube-state-metrics run under this SA (the tenant deployer may not create
   # new RBAC, so they reuse the identity that already has namespaced read).
@@ -35,6 +50,17 @@ rules:
   - apiGroups: [""]
     resources: ["pods", "services", "endpoints"]
     verbs: ["get", "list", "watch"]
+  # Agent Restore Points run capture/restore as batch Jobs, and read the Job
+  # pod's logs to recover the archive manifest and any failure reason. On the
+  # shared cluster the tenant chart's workspace-maintainer Role already grants
+  # this; the rule below is what reaches clusters where this file is the only
+  # grant.
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["create", "get", "list", "delete"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

@@ -165,10 +165,14 @@ export function LogsTab({ agent }: LogsTabProps) {
       <div
         ref={scrollRef}
         onScroll={handleScroll}
-        className="overflow-y-auto font-mono text-[0.8125rem] leading-[1.6] px-4 py-3 rounded-b-xl"
+        className="overflow-y-auto font-mono text-[12px] leading-relaxed px-4 py-3 rounded-b-xl"
         style={{
-          background: "var(--bg-deep, #0d1117)",
-          color: "var(--ink-on-deep, #c9d1d9)",
+          // The same surface the runtime diagnostics log blocks sit on. The
+          // previous values named `--bg-deep`/`--ink-on-deep`, which are not
+          // defined anywhere, so both themes fell through to a hardcoded
+          // terminal black that ignored the theme entirely.
+          background: "var(--bg-elev)",
+          color: "var(--ink-2)",
           height: "32rem",
           border: "1px solid var(--line)",
           borderTop: "none",

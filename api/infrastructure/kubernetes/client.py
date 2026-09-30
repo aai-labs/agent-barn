@@ -6,6 +6,7 @@ import os
 import tempfile
 from collections.abc import Generator
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import ClassVar
 
 import yaml
@@ -35,6 +36,7 @@ class KubernetesClient:
     config: Config
     _apps_v1_client: client.AppsV1Api | None = field(init=False, default=None)
     _core_v1_client: client.CoreV1Api | None = field(init=False, default=None)
+    _batch_v1_client: client.BatchV1Api | None = field(init=False, default=None)
     _stream_core_v1_client: client.CoreV1Api | None = field(init=False, default=None)
     _kubeconfig_path: str | None = field(init=False, default=None)
 
@@ -58,6 +60,7 @@ class KubernetesClient:
                     ) from e
         self._apps_v1_client = client.AppsV1Api()
         self._core_v1_client = client.CoreV1Api()
+        self._batch_v1_client = client.BatchV1Api()
         if self.config.k8s_kubeconfig_path:
             stream_api_client = k8s_config.new_client_from_config(config_file=self._kubeconfig_path)
         else:
@@ -83,6 +86,16 @@ class KubernetesClient:
     @_core_v1.setter
     def _core_v1(self, value: client.CoreV1Api) -> None:
         self._core_v1_client = value
+
+    @property
+    def _batch_v1(self) -> client.BatchV1Api:
+        self._ensure_configured()
+        assert self._batch_v1_client is not None
+        return self._batch_v1_client
+
+    @_batch_v1.setter
+    def _batch_v1(self, value: client.BatchV1Api) -> None:
+        self._batch_v1_client = value
 
     @property
     def _stream_core_v1(self) -> client.CoreV1Api:
@@ -133,7 +146,7 @@ class KubernetesClient:
                 changed = True
         if not changed:
             return path
-        patched = os.path.join(tempfile.gettempdir(), "agentfarm-kubeconfig-incluster.yaml")
+        patched = os.path.join(tempfile.gettempdir(), "agentbarn-kubeconfig-incluster.yaml")
         with open(patched, "w") as f:
             yaml.safe_dump(kubeconfig, f)
         return patched
@@ -180,18 +193,20 @@ class KubernetesClient:
 
     def create_service(self, namespace: str, manifest: client.V1Service) -> client.V1Service:
         # Not _create_or_get: agent stop keeps the Service (stable ClusterIP),
-        # so a restart must refresh its labels here or new monitoring labels
-        # (org-name, agent-name, agentfarm.io/component) would never propagate.
+        # so a restart must refresh its labels and ports here, or new monitoring
+        # labels (org-name, agent-name, agentbarn.io/component) and the runtime
+        # Teams webhook port would never propagate. JSON Patch replaces the port
+        # list outright so a disabled Connection's port is dropped too.
         try:
             return self._core_v1.create_namespaced_service(namespace, manifest)
         except ApiException as e:
             if e.status != 409:
                 raise
-            self._core_v1.patch_namespaced_service(
-                manifest.metadata.name,
-                namespace,
-                {"metadata": {"labels": manifest.metadata.labels}},
-            )
+            patch = [{"op": "add", "path": "/metadata/labels", "value": manifest.metadata.labels or {}}]
+            if manifest.spec is not None and manifest.spec.ports:
+                ports = client.ApiClient().sanitize_for_serialization(manifest.spec.ports)
+                patch.append({"op": "replace", "path": "/spec/ports", "value": ports})
+            self._core_v1.patch_namespaced_service(manifest.metadata.name, namespace, patch)
             return self._core_v1.read_namespaced_service(manifest.metadata.name, namespace)
 
     def delete_service(self, name: str, namespace: str) -> None:
@@ -251,8 +266,82 @@ class KubernetesClient:
     def get_config_map(self, name: str, namespace: str) -> client.V1ConfigMap | None:
         return self._get_or_none(self._core_v1.read_namespaced_config_map, name, namespace)
 
+    def create_job(self, namespace: str, manifest: client.V1Job) -> client.V1Job:
+        return self._batch_v1.create_namespaced_job(namespace, manifest)
+
+    def delete_job(self, name: str, namespace: str) -> None:
+        try:
+            self._batch_v1.delete_namespaced_job(name, namespace, propagation_policy="Background")
+        except ApiException as e:
+            if e.status != 404:
+                raise
+
+    def get_job(self, name: str, namespace: str) -> client.V1Job | None:
+        return self._get_or_none(self._batch_v1.read_namespaced_job, name, namespace)
+
+    def list_jobs(self, namespace: str, label_selector: str = "") -> list[client.V1Job]:
+        return self._batch_v1.list_namespaced_job(namespace, label_selector=label_selector).items
+
     def list_config_maps(self, namespace: str, label_selector: str = "") -> list[client.V1ConfigMap]:
         return self._core_v1.list_namespaced_config_map(namespace, label_selector=label_selector).items
+
+    def _newest_pod(self, label_selector: str, namespace: str) -> client.V1Pod | None:
+        pods = self._core_v1.list_namespaced_pod(namespace, label_selector=label_selector)
+        candidates = [p for p in pods.items if p.metadata.deletion_timestamp is None]
+        if not candidates:
+            return None
+        return max(candidates, key=lambda p: p.metadata.creation_timestamp or datetime.min.replace(tzinfo=UTC))
+
+    def _newest_job_pod(self, job_name: str, namespace: str) -> client.V1Pod | None:
+        return self._newest_pod(f"job-name={job_name}", namespace)
+
+    def get_pod_name_for_job(self, job_name: str, namespace: str) -> str | None:
+        pod = self._newest_job_pod(job_name, namespace)
+        return pod.metadata.name if pod is not None else None
+
+    def get_job_exit_code(self, job_name: str, namespace: str) -> int | None:
+        pod = self._newest_job_pod(job_name, namespace)
+        if pod is None:
+            return None
+        for container_status in pod.status.container_statuses or []:
+            terminated = container_status.state.terminated if container_status.state else None
+            if terminated is not None and terminated.exit_code is not None:
+                return terminated.exit_code
+        return None
+
+    def read_job_logs(
+        self,
+        job_name: str,
+        namespace: str,
+        tail_lines: int = 50,
+        container: str = "archive",
+    ) -> str | None:
+        pod_name = self.get_pod_name_for_job(job_name, namespace)
+        if pod_name is None:
+            return None
+        try:
+            response = self._core_v1.read_namespaced_pod_log(
+                pod_name,
+                namespace,
+                container=container,
+                tail_lines=tail_lines,
+                _preload_content=False,
+            )
+        except ApiException as e:
+            if e.status in (400, 403, 404):
+                return None
+            raise
+        return response.data.decode("utf-8", errors="replace")
+
+    def has_pods_for_deployment(self, deployment_name: str, namespace: str) -> bool:
+        """Whether any pod still exists, including one that is terminating.
+
+        Deliberately not ``get_pod_name_for_deployment``, which skips pods carrying a
+        deletion timestamp: a pod on its way out still holds the volume, and that is
+        exactly the state a caller needs to see.
+        """
+        pods = self._core_v1.list_namespaced_pod(namespace, label_selector=f"app={deployment_name}")
+        return bool(pods.items)
 
     def get_pod_name_for_deployment(self, deployment_name: str, namespace: str) -> str | None:
         pods = self._core_v1.list_namespaced_pod(namespace, label_selector=f"app={deployment_name}")
@@ -271,29 +360,106 @@ class KubernetesClient:
 
     def get_pod_readiness(self, deployment_name: str, namespace: str) -> tuple[str | None, str | None]:
         """Returns (status, reason). status is one of: 'ready', 'initializing', 'crashed', None."""
-        pods = self._core_v1.list_namespaced_pod(namespace, label_selector=f"app={deployment_name}")
-        for pod in pods.items:
-            if pod.status.phase == "Failed":
-                reason = None
-                for cs in pod.status.container_statuses or []:
-                    if cs.state and cs.state.terminated:
-                        reason = cs.state.terminated.reason or (
-                            f"exit code {cs.state.terminated.exit_code}"
-                            if cs.state.terminated.exit_code is not None
-                            else None
-                        )
-                        break
-                return "crashed", reason
-            if pod.status.phase in ("Pending", "Running"):
-                conditions = pod.status.conditions or []
-                if any(c.type == "Ready" and c.status == "True" for c in conditions):
-                    return "ready", None
-                container_statuses = pod.status.container_statuses or []
-                for cs in container_statuses:
-                    if cs.state and cs.state.waiting and cs.state.waiting.reason in self._TERMINAL_WAITING_REASONS:
-                        return "crashed", cs.state.waiting.reason
-                return "initializing", None
+        pod = self._newest_pod(f"app={deployment_name}", namespace)
+        if pod is None:
+            return None, None
+        if pod.status.phase == "Failed":
+            reason = None
+            for cs in pod.status.container_statuses or []:
+                if cs.state and cs.state.terminated:
+                    reason = cs.state.terminated.reason or (
+                        f"exit code {cs.state.terminated.exit_code}"
+                        if cs.state.terminated.exit_code is not None
+                        else None
+                    )
+                    break
+            return "crashed", reason
+        if pod.status.phase in ("Pending", "Running"):
+            conditions = pod.status.conditions or []
+            if any(c.type == "Ready" and c.status == "True" for c in conditions):
+                return "ready", None
+            for cs in pod.status.container_statuses or []:
+                if cs.state and cs.state.waiting and cs.state.waiting.reason in self._TERMINAL_WAITING_REASONS:
+                    return "crashed", cs.state.waiting.reason
+            return "initializing", None
         return None, None
+
+    def get_runtime_diagnostics(self, deployment_name: str, namespace: str) -> dict[str, object]:
+        """Bounded evidence from the newest non-deleting pod, including failed pods.
+
+        Container messages and cluster exception bodies are deliberately excluded.
+        Log text follows the existing activity-authorized Agent log boundary.
+        """
+        result: dict[str, object] = {"observed_at": datetime.now(UTC), "available": False}
+        pods = self._core_v1.list_namespaced_pod(
+            namespace,
+            label_selector=f"app={deployment_name}",
+            _request_timeout=10,
+        )
+        candidates = [p for p in pods.items if p.metadata.deletion_timestamp is None]
+        if not candidates:
+            return result
+        pod = max(candidates, key=lambda p: p.metadata.creation_timestamp)
+        result.update(available=True, pod_created_at=pod.metadata.creation_timestamp)
+        container = next((c for c in pod.status.container_statuses or [] if c.name == "agent"), None)
+        if container is None:
+            return result
+        result.update(restart_count=container.restart_count, ready=container.ready)
+        waiting = container.state.waiting if container.state else None
+        if waiting:
+            result["waiting_reason"] = (
+                waiting.reason
+                if waiting.reason in self._TERMINAL_WAITING_REASONS | {"ContainerCreating", "PodInitializing"}
+                else "Unknown"
+            )
+        terminated = container.state.terminated if container.state else None
+        if terminated is None and container.last_state:
+            terminated = container.last_state.terminated
+        if terminated:
+            result.update(
+                termination_reason=terminated.reason
+                if terminated.reason in {"OOMKilled", "Error", "Completed", "ContainerCannotRun"}
+                else "Unknown",
+                exit_code=terminated.exit_code,
+                finished_at=terminated.finished_at,
+            )
+        for previous, key in ((False, "current"), (True, "previous")):
+            if previous and not container.restart_count:
+                continue
+            try:
+                # `_preload_content=False` and an explicit decode, as stream_pod_logs
+                # does: preloaded content comes back as the *repr* of the response
+                # bytes, so every line would arrive inside one `b"...\\n..."` string
+                # and splitlines() would find a single line.
+                response = self._core_v1.read_namespaced_pod_log(
+                    pod.metadata.name,
+                    namespace,
+                    container="agent",
+                    previous=previous,
+                    tail_lines=100,
+                    limit_bytes=32000,
+                    timestamps=True,
+                    _preload_content=False,
+                    _request_timeout=10,
+                )
+                try:
+                    # Nothing raises when the content is not preloaded, so the
+                    # status has to be read rather than caught.
+                    if response.status in (400, 403, 404):
+                        continue
+                    if response.status >= 400:
+                        raise ApiException(http_resp=response)
+                    logs = response.data.decode("utf-8", errors="replace")
+                finally:
+                    response.close()
+                result[f"{key}_logs"] = logs.splitlines()
+                result[f"{key}_logs_available"] = True
+            except ApiException as error:
+                if error.status not in (400, 403, 404):
+                    raise
+                # A container may disappear or not have started yet. Missing
+                # evidence is distinct from a successful read of an empty log.
+        return result
 
     def read_pod_logs(
         self,
@@ -306,13 +472,25 @@ class KubernetesClient:
         if pod_name is None:
             return None
         try:
-            return self._core_v1.read_namespaced_pod_log(
+            # Not preloaded, then decoded: preloading hands back the repr of the
+            # response bytes (`b"line\\nline"`), which reads as a single escaped
+            # line everywhere it is split. See stream_pod_logs for the same idiom.
+            response = self._core_v1.read_namespaced_pod_log(
                 pod_name,
                 namespace,
                 container=container,
                 tail_lines=tail_lines,
-                timestamps=False,
+                timestamps=True,
+                _preload_content=False,
             )
+            try:
+                if response.status == 404:
+                    return None
+                if response.status >= 400:
+                    raise ApiException(http_resp=response)
+                return response.data.decode("utf-8", errors="replace")
+            finally:
+                response.close()
         except ApiException as e:
             if e.status == 404:
                 return None
@@ -334,6 +512,7 @@ class KubernetesClient:
             container=container,
             tail_lines=tail_lines,
             follow=True,
+            timestamps=True,
             _preload_content=False,
         )
         try:

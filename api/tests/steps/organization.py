@@ -15,6 +15,7 @@ def there_is_an_organization(
     id: UUID | None = None,
     description: str = "A test organization",
     owner_id: UUID | None = None,
+    allowed_models: list[str] | None = None,
 ):
     def step(context):
         organization_repository: OrganizationRepository = context.injector.get(OrganizationRepository)
@@ -32,7 +33,9 @@ def there_is_an_organization(
             id=id or uuid7(),
             name=name,
             description=description,
-            allowed_models=["*"],
+            # Permissive by default so tests that don't care about the allowlist
+            # aren't blocked by it. Pass an explicit list to exercise it.
+            allowed_models=["*"] if allowed_models is None else allowed_models,
         )
         organization_repository.save(organization)
 
@@ -75,10 +78,11 @@ def there_is_an_organization_with_user_and_access_token(
     email: str = "admin@example.com",
     user_id: UUID | None = None,
     role: OrganizationRole = OrganizationRole.OWNER,
+    allowed_models: list[str] | None = None,
 ):
     def step(context):
         there_is_a_user(email=email, id=user_id, role=role, organization_id=None)(context)
-        there_is_an_organization(name=name, id=id, owner_id=context.user.id)(context)
+        there_is_an_organization(name=name, id=id, owner_id=context.user.id, allowed_models=allowed_models)(context)
         there_is_an_access_token_for_user()(context)
 
     return step

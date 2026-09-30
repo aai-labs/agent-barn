@@ -33,17 +33,30 @@ def test_labels_include_stable_agent_component_label():
             {
                 "app": f"agent-{_AGENT_ID}",
                 "org-id": str(_ORG_ID),
-                "agentfarm.io/component": "agent",
+                "agentbarn.io/component": "agent",
             }
         ),
     )
     pvc = build_pvc(_AGENT_ID, _ORG_ID, _NS)
-    assert_that(pvc.metadata.labels, has_entries({"agentfarm.io/component": "agent"}))
+    assert_that(pvc.metadata.labels, has_entries({"agentbarn.io/component": "agent"}))
 
 
 def test_service_selector_stays_on_app_label_only():
     service = build_service(_AGENT_ID, _ORG_ID, _NS)
     assert_that(service.spec.selector, equal_to({"app": f"agent-{_AGENT_ID}"}))
+
+
+def test_service_exposes_the_private_teams_webhook_only_when_requested():
+    ordinary = build_service(_AGENT_ID, _ORG_ID, _NS)
+    teams = build_service(_AGENT_ID, _ORG_ID, _NS, include_webhook_port=True)
+
+    assert [port.name for port in ordinary.spec.ports] == ["gateway", "healthz", "triggers"]
+    assert [(port.name, port.port, port.target_port) for port in teams.spec.ports] == [
+        ("gateway", 80, 8080),
+        ("healthz", 8081, 8081),
+        ("triggers", 8082, 8082),
+        ("webhook", 3978, 3978),
+    ]
 
 
 def test_build_service_carries_org_name_slug_label():
@@ -86,3 +99,22 @@ def test_build_service_org_name_slug_fits_k8s_label_limits():
     assert_that(len(slug) <= 63, equal_to(True))
     assert_that(slug.endswith("-"), equal_to(False))
     assert_that(slug.startswith("-"), equal_to(False))
+
+
+def test_labels_carry_the_runtime_so_metrics_can_split_hermes_from_openclaw():
+    """Container memory series are only actionable per-runtime: a Hermes pod over
+    1Gi is unbounded context growth, an OpenClaw pod over 1Gi is V8 filling the
+    heap its cgroup limit allows. Without this label the two are indistinguishable
+    in Grafana and get the opposite fix."""
+    service = build_service(_AGENT_ID, _ORG_ID, _NS, runtime="openclaw")
+    assert_that(service.metadata.labels, has_entries({"agentbarn.io/runtime": "openclaw"}))
+
+    pvc = build_pvc(_AGENT_ID, _ORG_ID, _NS, runtime="hermes")
+    assert_that(pvc.metadata.labels, has_entries({"agentbarn.io/runtime": "hermes"}))
+
+
+def test_labels_omit_runtime_when_not_supplied():
+    """The label is additive: existing callers that pass no runtime must keep
+    producing exactly the labels they did before."""
+    service = build_service(_AGENT_ID, _ORG_ID, _NS)
+    assert_that("agentbarn.io/runtime" in service.metadata.labels, equal_to(False))

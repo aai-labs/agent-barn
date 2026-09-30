@@ -1,7 +1,6 @@
 "use client";
 
 import { ChangePasswordSection } from "./change-password-section";
-import { SlackTokenSection } from "./slack-token-section";
 import { ApiKeysSection } from "./api-keys-section";
 
 export function AccountPage() {
@@ -20,7 +19,6 @@ export function AccountPage() {
       <div className="flex flex-col gap-6">
         <ChangePasswordSection />
         <ApiKeysSection />
-        <SlackTokenSection />
       </div>
     </div>
   );

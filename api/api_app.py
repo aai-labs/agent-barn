@@ -21,23 +21,31 @@ from api.core.metrics import (
     setup_http_metrics,
 )
 from api.core.utils import create_injector
+from api.domains.activity.routes import activity_router
+from api.domains.agent_settings.routes import agent_settings_router
+from api.domains.agent_webhooks.routes import agent_webhook_ingress_router, agent_webhooks_router
 from api.domains.agents.routes import agents_router
 from api.domains.agents.service import AgentService
-from api.domains.agents.slack_routes import slack_router
-from api.domains.agents.webhook_routes import webhook_router
 from api.domains.api_keys.routes import router as api_keys_router
 from api.domains.auth.routes import auth_router
+from api.domains.communications.metrics import refresh_communication_metrics
+from api.domains.communications.operations import CommunicationOperationalRepository
+from api.domains.communications.routes import communications_router
+from api.domains.communications.runtime_webhook_routes import runtime_provider_webhook_router
 from api.domains.conversations.routes import conversations_router
+from api.domains.costs.platform_routes import platform_costs_router
 from api.domains.costs.routes import costs_router
 from api.domains.discovery.routes import router as discovery_router
 from api.domains.events.routes import event_delivery_monitor_router
 from api.domains.integrations.google_oauth.routes import integrations_router
+from api.domains.integrations.microsoft_oauth.routes import microsoft_callback_router, sharepoint_sign_in_router
 from api.domains.organizations.routes import org_router, platform_org_router
 from api.domains.platform_admin.routes import platform_stats_router
 from api.domains.rbac.seeder import RbacSeeder
+from api.domains.restore_points.routes import restore_points_router
 from api.domains.shared_credentials.routes import shared_credentials_router
 from api.domains.skills.repository import SkillRepository
-from api.domains.skills.routes import platform_skills_router, skills_router
+from api.domains.skills.routes import agent_skills_router, platform_skills_router, skills_router
 from api.domains.skills.skill_seeder import seed_aai_cli_skills
 from api.domains.templates.routes import platform_templates_router, templates_router
 from api.domains.templates.service import TemplateService
@@ -45,6 +53,7 @@ from api.domains.tool_calls.routes import tool_calls_router
 from api.domains.users.organization_users.routes import member_router, platform_member_router
 from api.domains.users.routes import users_router
 from api.domains.users.service import UserService
+from api.domains.web_chat.routes import web_chat_router
 from api.infrastructure.email.logging_utils import (
     log_email_delivery_disabled_warning,
 )
@@ -111,11 +120,15 @@ def create_app(injector: Injector | None = None):
     app_v1.mount("/api/v1", subapi)
 
     subapi.include_router(agents_router)
-    subapi.include_router(webhook_router)
+    subapi.include_router(agent_webhooks_router)
+    subapi.include_router(agent_settings_router)
     subapi.include_router(auth_router)
     subapi.include_router(api_keys_router)
     subapi.include_router(conversations_router)
+    subapi.include_router(communications_router)
+    subapi.include_router(web_chat_router)
     subapi.include_router(costs_router)
+    subapi.include_router(platform_costs_router)
     subapi.include_router(discovery_router)
     subapi.include_router(event_delivery_monitor_router)
     subapi.include_router(platform_stats_router)
@@ -125,13 +138,21 @@ def create_app(injector: Injector | None = None):
     subapi.include_router(platform_member_router)
     subapi.include_router(shared_credentials_router)
     subapi.include_router(skills_router)
+    subapi.include_router(agent_skills_router)
     subapi.include_router(platform_skills_router)
     subapi.include_router(integrations_router)
+    subapi.include_router(sharepoint_sign_in_router)
+    subapi.include_router(microsoft_callback_router)
     subapi.include_router(templates_router)
     subapi.include_router(platform_templates_router)
     subapi.include_router(tool_calls_router)
+    subapi.include_router(activity_router)
+    subapi.include_router(restore_points_router)
     subapi.include_router(users_router)
-    subapi.include_router(slack_router)
+    # This remains outside /api/v1 because Azure has the historical public
+    # Connection webhook URL registered at /communications/v1/webhooks/{id}.
+    app_v1.include_router(runtime_provider_webhook_router)
+    app_v1.include_router(agent_webhook_ingress_router)
 
     http_registry = setup_http_metrics(subapi)
 
@@ -139,10 +160,15 @@ def create_app(injector: Injector | None = None):
     async def metrics(
         db: Annotated[PostgresRepositoryDelegate, Injected(PostgresRepositoryDelegate)],
         agent_service: Annotated[AgentService, Injected(AgentService)],
+        communication_operations: Annotated[
+            CommunicationOperationalRepository,
+            Injected(CommunicationOperationalRepository),
+        ],
     ):
         refresh_database_gauge(db.engine)
         refresh_agents_in_error(agent_service.count_agents_in_error)
         refresh_openrouter_credits()
+        refresh_communication_metrics(communication_operations)
         return Response(
             content=render_metrics(REGISTRY, PROBE_REGISTRY, http_registry),
             media_type=CONTENT_TYPE_LATEST,

@@ -6,7 +6,7 @@ Read before adding or changing internal Domain Events, Outbox Messages, Event De
 
 ## Role in the system
 
-Agent Farm uses internal Domain Events to record immutable, typed business facts at either Organization or Platform scope. A committed Domain Event is persisted as one PostgreSQL `event_outbox_message` row and one `event_delivery` row per currently registered Event Handler. PostgreSQL is the durable source for event intent and intended handler delivery state; Dramatiq/Redis is the low-latency, at-least-once transport for committed Event Deliveries.
+Agent Barn uses internal Domain Events to record immutable, typed business facts at either Organization or Platform scope. A committed Domain Event is persisted as one PostgreSQL `event_outbox_message` row and one `event_delivery` row per currently registered Event Handler. PostgreSQL is the durable source for event intent and intended handler delivery state; Dramatiq/Redis is the low-latency, at-least-once transport for committed Event Deliveries.
 
 ## Invariants
 
@@ -71,8 +71,19 @@ AF-167 broadens Security Audit Record coverage to additional mutations:
 - `agent.secret.added` / `agent.secret.updated` / `agent.secret.removed` — emitted on Agent Secret (credential) create/update/delete; payload is built allowlist-style from safe fields only and never includes the encrypted `content`.
 - `template.created` / `template.updated` / `template.deleted` — emitted on org Template lineage create/update/delete; `template.updated`'s `field_changes` is scoped to `template_name`/`description` only, excluding the markdown prompt bodies.
 - `organization.model_allowlist.changed` — emitted when an Organization's `allowed_models` list changes.
+- `organization.agent_settings.changed` — emitted when an Organization's Agent Settings change, naming the setting and carrying its previous and current values plus the number of Agents that inherit it. Not emitted when a save leaves the value unchanged.
 - `organization.member.added` / `organization.member.removed` — emitted on Organization membership add/remove.
 - `organization.ownership_transferred` — emitted when Organization ownership transfers between Memberships.
+
+AF-273 adds Communications operational events as Organization-scoped audit inputs:
+
+- `communication.connection.health.changed` — emitted when a Connection's observed provider health changes.
+- `communication.connection.reconnect.requested` — emitted when an authorized user requests one Connection reconnect.
+- `communication.delivery.dead_lettered` — emitted when a Communication Delivery exhausts its bounded automatic attempts.
+- `communication.delivery.retry.requested` — emitted when an authorized user requeues one dead-lettered outbound Delivery.
+- `communication.delivery.recovered` — emitted when that retried Delivery succeeds.
+
+These events carry scoped resource IDs, lifecycle status, attempt/error metadata, and safe actor/subject display snapshots only. The Connection health event may also carry the validated, content-free diagnostic envelope (category, operation, HTTP status, provider code, retryability, bounded retry-after value, and provider request ID); it never carries provider URLs, credentials, headers, bodies, or exception text. The separate Communications operation journal remains runtime diagnostics rather than a Domain Event stream; it records intermediate attempts and timings without payload content, credentials, or sender identity.
 
 RBAC, Platform Privilege, and the AF-167 events above are intended for the `security_audit.projection` Event Handler, which persists deletion-independent Security Audit Records. Agent start/stop events are intended for the `agent.lifecycle_email.notification` Event Handler, which emails the Agent Creator and users with Agent Owner access, de-duplicated by email.
 
@@ -84,7 +95,7 @@ Dramatiq messages contain only the Event Delivery ID and safe diagnostic metadat
 
 The processor must atomically claim an eligible delivery in PostgreSQL before executing a handler. Claiming transitions `ENQUEUED` or stale `PROCESSING` to `PROCESSING`, sets `claimed_at`, and increments `attempt_count`; `PENDING`, fresh `PROCESSING`, `SUCCEEDED`, and `DEAD_LETTERED` are no-ops. Missing Delivery IDs in transport messages are logged/metricized and not retried forever because PostgreSQL is authoritative.
 
-Handlers use a formal interface. A handler has a unique stable name, declares supported event names and schema versions through a static startup registry, receives the `DomainEventEnvelope` plus a small `EventDeliveryContext`, and completes normally or raises typed retryable/terminal errors. Handler names are durable operational contracts once Event Deliveries can reference them; unknown handlers or unsupported event versions are terminal configuration errors and dead-letter their deliveries.
+Handlers use a formal interface. A handler has a unique stable name, declares supported event names and schema versions through a static startup registry, receives the `DomainEventEnvelope` plus a small `EventDeliveryContext`, and completes normally or raises typed retryable/terminal errors. Handler names are durable operational contracts once Event Deliveries can reference them; unknown handlers or unsupported event versions are terminal configuration errors and dead-letter their deliveries. The worker resolves the registry from one process-wide injector, so handler instances are singletons shared across worker threads: they must keep no per-delivery mutable state and must open their own database sessions per call.
 
 Handler side effects are at-least-once. The delivery framework prevents execution after terminal states, but a worker can crash after a handler commits side effects and before marking the delivery `SUCCEEDED`; each handler must prove its own idempotency using an appropriate key such as `event_id` or `(event_id, handler_name)`. Handlers may own their own database transactions, but they must not mutate Event Delivery lifecycle state directly.
 
@@ -228,7 +239,7 @@ Use `../../api/tests/integration/test_outbox_messages.py`, `../../api/tests/unit
 
 ### Run delivery workers locally
 
-The Product API can commit Domain Events without Redis, but low-latency delivery requires Redis and the worker process. `make up` starts Redis and the worker (`worker` service in `../../compose.yml`, a general-purpose background job container — not event-delivery-specific) alongside the API automatically.
+The Product API can commit Domain Events without Redis, but low-latency delivery requires Redis and the worker process. `./run.sh` starts Redis and the worker (`worker` service in `../../compose.yml`, a general-purpose background job container — not event-delivery-specific) alongside the API automatically.
 
 Running the API outside Docker (`make dev-api`), start Redis and the worker separately:
 

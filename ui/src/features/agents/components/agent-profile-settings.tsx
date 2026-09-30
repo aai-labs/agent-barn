@@ -2,6 +2,8 @@
 
 import { useState } from "react";
 
+import { Checkbox } from "@/components/ui/checkbox";
+import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
@@ -10,11 +12,14 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
-import { formatModelName } from "../utils";
+import { currentModelOf, formatModelName } from "../utils";
 import { useAgentApplyAndRestart } from "../hooks/use-agent-apply-and-restart";
+import { useModels } from "../hooks/use-models";
 import { useUpdateAgent } from "../hooks/use-update-agent";
 import type { Agent, CommandApprovalMode } from "../schemas";
-import { ModelSelect } from "./model-select";
+import { ModelChoice } from "./model-choice";
+import { ModelSourceBadge } from "./model-source-badge";
+import { PendingModelNote } from "./pending-model-note";
 import { AgentConfigurationSection } from "./agent-configuration-section";
 
 export function AgentProfileSettings({
@@ -29,15 +34,20 @@ export function AgentProfileSettings({
   onEdit: () => void;
 }) {
   const updateAgent = useUpdateAgent();
+  // The organization's default, not agent.effectiveModel — for an Agent that already
+  // has its own model those differ, and this control is about what it would inherit.
+  const { defaultModel: organizationDefaultModel } = useModels();
   const [name, setName] = useState(agent.name);
-  const [model, setModel] = useState(agent.model);
+  const [model, setModel] = useState<string | null>(agent.model || null);
   const [approvalMode, setApprovalMode] = useState<CommandApprovalMode>(agent.approvalMode);
+  const [verboseMode, setVerboseMode] = useState(agent.verboseMode);
   const { applyAndRestart } = useAgentApplyAndRestart(agent);
-  const approvalLabel = agent.agentType === "hermes" ? agent.approvalMode : "Managed by OpenClaw";
+  const approvalLabel = agent.agentType === "hermes" ? agent.approvalMode : "Full access — no approval prompts";
   const isDirty =
     name.trim() !== agent.name ||
-    model !== agent.model ||
-    (agent.agentType === "hermes" && approvalMode !== agent.approvalMode);
+    (model ?? "") !== agent.model ||
+    (agent.agentType === "hermes" && approvalMode !== agent.approvalMode) ||
+    (agent.agentType === "hermes" && verboseMode !== agent.verboseMode);
 
   async function applyChanges() {
     await applyAndRestart(() =>
@@ -45,15 +55,16 @@ export function AgentProfileSettings({
         agentId: agent.id,
         name: name.trim(),
         model,
-        ...(agent.agentType === "hermes" ? { approvalMode } : {}),
+        ...(agent.agentType === "hermes" ? { approvalMode, verboseMode } : {}),
       }).then(() => undefined),
     );
   }
 
   function cancelChanges() {
     setName(agent.name);
-    setModel(agent.model);
+    setModel(agent.model || null);
     setApprovalMode(agent.approvalMode);
+    setVerboseMode(agent.verboseMode);
     updateAgent.reset();
     onEdit();
   }
@@ -77,10 +88,16 @@ export function AgentProfileSettings({
             Agent name
             <input className="af-input" value={name} onChange={(event) => setName(event.target.value)} />
           </label>
-          <label className="flex flex-col gap-1.5 text-[0.84rem] font-medium" style={{ color: "var(--ink)" }}>
-            Model
-            <ModelSelect value={model} onChange={setModel} />
-          </label>
+          <fieldset className="flex flex-col gap-1.5 border-0 p-0">
+            <legend className="mb-1.5 text-[0.84rem] font-medium" style={{ color: "var(--ink)" }}>
+              Model
+            </legend>
+            <ModelChoice
+              value={model}
+              effectiveDefaultModel={organizationDefaultModel}
+              onChange={setModel}
+            />
+          </fieldset>
           {agent.agentType === "hermes" && (
             <label className="flex flex-col gap-1.5 text-[0.84rem] font-medium" style={{ color: "var(--ink)" }}>
               Command approval
@@ -96,6 +113,15 @@ export function AgentProfileSettings({
               </Select>
             </label>
           )}
+          {agent.agentType === "hermes" && (
+            <Label className="flex items-center gap-2 text-[0.84rem] font-medium" style={{ color: "var(--ink)" }}>
+              <Checkbox
+                checked={verboseMode}
+                onCheckedChange={(checked) => setVerboseMode(checked === true)}
+              />
+              Verbose mode — show progress while the Agent is working
+            </Label>
+          )}
           {updateAgent.error && (
             <span className="text-xs" style={{ color: "var(--err)" }}>
               {updateAgent.error instanceof Error ? updateAgent.error.message : "Save failed"}
@@ -110,7 +136,11 @@ export function AgentProfileSettings({
           </div>
           <div>
             <dt className="text-[0.72rem] font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--ink-4)" }}>Model</dt>
-            <dd className="mb-0 mt-1 font-mono text-[0.84rem]" style={{ color: "var(--ink-2)" }}>{formatModelName(agent.model) || "Default model"}</dd>
+            <dd className="mb-0 mt-1 flex flex-wrap items-center gap-2 font-mono text-[0.84rem]" style={{ color: "var(--ink-2)" }}>
+              {formatModelName(currentModelOf(agent)) || "—"}
+              <ModelSourceBadge source={agent.modelSource} />
+            </dd>
+            <PendingModelNote pendingModel={agent.pendingModel} />
           </div>
           <div>
             <dt className="text-[0.72rem] font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--ink-4)" }}>Runtime</dt>
@@ -120,6 +150,14 @@ export function AgentProfileSettings({
             <dt className="text-[0.72rem] font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--ink-4)" }}>Command approval</dt>
             <dd className="mb-0 mt-1 text-[0.9rem]" style={{ color: "var(--ink-2)" }}>{approvalLabel}</dd>
           </div>
+          {agent.agentType === "hermes" && (
+            <div>
+              <dt className="text-[0.72rem] font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--ink-4)" }}>Verbose mode</dt>
+              <dd className="mb-0 mt-1 text-[0.9rem]" style={{ color: "var(--ink-2)" }}>
+                {agent.verboseMode ? "Shown while the Agent is working" : "Hidden — only the final reply is sent"}
+              </dd>
+            </div>
+          )}
         </dl>
       )}
 
@@ -142,8 +180,8 @@ export function AgentProfileSettings({
             <div className="mt-1 text-[0.9rem]" style={{ color: "var(--ink-2)" }}>{agent.agentType === "hermes" ? "Hermes" : "OpenClaw"}</div>
           </div>
           <div className="rounded-xl px-3.5 py-3" style={{ border: "1px solid var(--line)", background: "var(--bg-soft)" }}>
-            <div className="text-[0.72rem] font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--ink-4)" }}>Messaging platform</div>
-            <div className="mt-1 text-[0.9rem] capitalize" style={{ color: "var(--ink-2)" }}>{agent.platform}</div>
+            <div className="text-[0.72rem] font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--ink-4)" }}>Communications</div>
+            <div className="mt-1 text-[0.9rem]" style={{ color: "var(--ink-2)" }}>Managed as independent connections</div>
           </div>
           <div className="rounded-xl px-3.5 py-3" style={{ border: "1px solid var(--line)", background: "var(--bg-soft)" }}>
             <div className="text-[0.72rem] font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--ink-4)" }}>Resource management</div>

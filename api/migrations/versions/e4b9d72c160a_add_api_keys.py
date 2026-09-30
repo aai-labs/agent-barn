@@ -1,7 +1,7 @@
 """Add personal API keys.
 
 Revision ID: e4b9d72c160a
-Revises: d5e2a9f4c781
+Revises: 73e85ce78653
 """
 
 import sqlalchemy as sa
@@ -9,7 +9,7 @@ from alembic import op
 from sqlalchemy.dialects import postgresql
 
 revision = "e4b9d72c160a"
-down_revision = "d5e2a9f4c781"
+down_revision = "73e85ce78653"
 branch_labels = None
 depends_on = None
 

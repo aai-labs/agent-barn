@@ -7,7 +7,7 @@
 // (smtp/imap host+port, folders, …) are NOT inputs here — the backend fills them
 // as schema defaults.
 
-export type IntegrationFieldType = "text" | "secret" | "repo-list" | "radio";
+export type IntegrationFieldType = "text" | "secret" | "repo-list" | "radio" | "checkbox-list";
 
 export interface IntegrationField {
   key: string;
@@ -28,10 +28,11 @@ export interface IntegrationProvider {
   // When set, the provider is configured via an OAuth flow (an "Authenticate with
   // <provider>" button) instead of manual field entry. "google_oauth" captures a
   // refresh token via the popup flow and writes it to content.refreshToken; the
-  // provider id selects which scopes Google is asked for.
-  authMethod?: "google_oauth";
-  // Shown next to the ✓ once an OAuth provider is connected — describes the access
-  // that was actually granted.
+  // provider id selects which scopes Google is asked for. "microsoft_sign_in" signs in
+  // on the agent's Microsoft Teams app; the credential is stored when the sign-in
+  // completes, so it never travels with the rest of the form.
+  authMethod?: "google_oauth" | "microsoft_sign_in";
+  // Fallback shown next to the ✓ when an OAuth provider connects without an identity.
   oauthConnectedNote?: string;
 }
 
@@ -41,16 +42,21 @@ export interface IntegrationDraft {
   sharedCredentialId?: string;
 }
 
-// These providers are derived from the agent configuration rather than stored as
-// standalone credentials. They can appear in a skill's required_providers list,
-// but must not be collected or validated as manual integration drafts.
-const AUTO_CONFIGURED_PROVIDER_IDS = new Set(["slack"]);
+const AUTO_CONFIGURED_PROVIDER_IDS = new Set<string>();
 
 export function isAutoConfiguredProvider(providerId: string): boolean {
   return AUTO_CONFIGURED_PROVIDER_IDS.has(providerId);
 }
 
 export const INTEGRATION_PROVIDERS: IntegrationProvider[] = [
+  {
+    id: "slack",
+    label: "Slack tool access",
+    scopeNote: "A tool credential is separate from Communication Connection credentials and is exposed only to the Agent's Slack skill.",
+    fields: [
+      { key: "token", label: "Bot or user token", type: "secret", required: true, placeholder: "xoxb-… or xoxp-…" },
+    ],
+  },
   {
     id: "github",
     label: "GitHub",
@@ -112,34 +118,64 @@ export const INTEGRATION_PROVIDERS: IntegrationProvider[] = [
       { key: "apiToken", label: "API token", type: "secret", required: true },
     ],
   },
+  // gmail, google_sheets and google_calendar are retired: one google_workspace
+  // credential (below) now covers Gmail, Calendar, Drive and Sheets through gog under a
+  // single consent. The retired providers and their rows were deleted by migration;
+  // affected agents must reconnect, so they must not be offered here.
   {
-    id: "gmail",
-    label: "Gmail",
-    authMethod: "google_oauth",
-    scopeNote: "Read-only Gmail access via Google sign-in (gmail.readonly). No manual keys needed.",
-    oauthConnectedNote: "read-only Gmail access granted",
-    fields: [],
-  },
-  {
-    id: "google_sheets",
-    label: "Google Sheets",
+    id: "google_workspace",
+    label: "Google Workspace",
     authMethod: "google_oauth",
     scopeNote:
-      "Read and write spreadsheet values via Google sign-in (spreadsheets), plus metadata-only Drive access to list your spreadsheets. No manual keys needed.",
-    oauthConnectedNote: "read/write access to your spreadsheets granted",
-    fields: [],
+      "One Google sign-in covering the services you pick, via the gog CLI. Requires your own Google OAuth client (Web application type) — see the setup steps below.",
+    oauthConnectedNote: "Google account connected",
+    fields: [
+      {
+        key: "services",
+        label: "Services",
+        type: "checkbox-list",
+        required: true,
+        options: [
+          { label: "Gmail", value: "gmail" },
+          { label: "Calendar", value: "calendar" },
+          { label: "Drive", value: "drive" },
+          { label: "Sheets", value: "sheets" },
+        ],
+        hint: "Pick these before connecting — they decide what Google asks you to approve. Changing them later requires reconnecting.",
+      },
+      {
+        key: "readOnly",
+        label: "Access level",
+        type: "radio",
+        required: true,
+        options: [
+          { label: "Full access", value: "false" },
+          { label: "Read-only", value: "true" },
+        ],
+        hint: "Read-only requests view-only scopes; Google enforces this, so writes are refused even if the agent tries.",
+      },
+    ],
   },
-  // google_calendar disabled: not currently offered as an integration. Re-enable by
-  // uncommenting once it's wired up (e.g. behind the Google OAuth flow like gmail).
-  // {
-  //   id: "google_calendar",
-  //   label: "Google Calendar",
-  //   scopeNote: "OAuth2 access token with calendar.readonly or calendar scope",
-  //   fields: [
-  //     { key: "accessToken", label: "Access token", type: "secret", required: true },
-  //     { key: "calendarId", label: "Calendar ID", type: "text", required: true, placeholder: "primary or calendar@group.calendar.google.com" },
-  //   ],
-  // },
+  {
+    id: "sharepoint",
+    label: "SharePoint",
+    authMethod: "microsoft_sign_in",
+    scopeNote:
+      "Signs in with Microsoft on the agent's Microsoft Teams app. The agent can open the sites and files the signed-in account can open.",
+    fields: [
+      {
+        key: "readOnly",
+        label: "Access level",
+        type: "radio",
+        required: true,
+        options: [
+          { label: "Read and write", value: "false" },
+          { label: "Read-only", value: "true" },
+        ],
+        hint: "Choose before signing in. To change it later, pick the new level and sign in again.",
+      },
+    ],
+  },
   {
     id: "zoho_mail",
     label: "Zoho Mail",
@@ -155,7 +191,7 @@ export const INTEGRATION_PROVIDERS: IntegrationProvider[] = [
   {
     id: "firecrawl",
     label: "Firecrawl",
-    scopeNote: "Optional — agents use the platform Firecrawl by default. Provide your own API key and URL to use Firecrawl Cloud or another instance.",
+    scopeNote: "Optional — web search and scraping are built in, and agents use the platform's Firecrawl by default. Adding a key does not enable Firecrawl; it points this agent at your own instance instead, such as Firecrawl Cloud.",
     fields: [
       { key: "apiKey", label: "API key", type: "secret", required: true, placeholder: "fc-…" },
       { key: "baseUrl", label: "Base URL", type: "text", required: false, placeholder: "https://api.firecrawl.dev", hint: "Leave empty to use the platform's self-hosted Firecrawl." },
@@ -201,7 +237,7 @@ export function expandGithubContent(
 // "radio" control can only emit the strings "true"/"false" (see IntegrationField.type).
 // The axios request interceptor decamelizes keys but leaves values untouched, so this
 // is the one place these get converted back to real booleans before submission.
-const BOOLEAN_FIELD_KEYS = new Set(["useScopedToken"]);
+const BOOLEAN_FIELD_KEYS = new Set(["useScopedToken", "readOnly"]);
 
 export function coerceBooleanFields(
   content: Record<string, string | string[]>,
@@ -215,10 +251,17 @@ export function coerceBooleanFields(
   return coerced;
 }
 
-// True if the OAuth-based provider hasn't captured its refresh token yet.
+// True once the OAuth-based provider is connected: a Google refresh token has been
+// captured, or a Microsoft sign-in has been stored.
 export function isOAuthConnected(draft: IntegrationDraft): boolean {
+  if (draft.content.signedIn === "true") return true;
   const token = draft.content.refreshToken;
   return typeof token === "string" && token.trim().length > 0;
+}
+
+// Providers whose credential is saved by their sign-in, not by submitting the form.
+export function isSignInOnlyProvider(providerId: string): boolean {
+  return getIntegrationProvider(providerId)?.authMethod === "microsoft_sign_in";
 }
 
 // True if any added integration is missing a required field — used to gate "Hire".
@@ -228,11 +271,12 @@ export function hasIncompleteIntegration(integrations: IntegrationDraft[]): bool
     if (draft.sharedCredentialId) return false;
     const provider = getIntegrationProvider(draft.provider);
     if (!provider) return true;
-    // OAuth providers have no manual fields; they're complete once connected.
-    if (provider.authMethod === "google_oauth") return !isOAuthConnected(draft);
+    // An OAuth provider must be connected, and — for those that also collect fields
+    // (google_workspace picks services before consent) — still have them filled in.
+    if (provider.authMethod && !isOAuthConnected(draft)) return true;
     return provider.fields.some((f) => {
       if (!f.required) return false;
-      
+
       // If the field depends on another field, check if the condition is met
       if (f.dependsOn) {
         const dependentValue = draft.content[f.dependsOn.key];
@@ -242,6 +286,11 @@ export function hasIncompleteIntegration(integrations: IntegrationDraft[]): bool
       }
 
       const value = draft.content[f.key];
+      // List-valued controls (repo-list, checkbox-list) satisfy "required" with at
+      // least one entry; text-like controls need a non-blank string.
+      if (f.type === "checkbox-list" || f.type === "repo-list") {
+        return !Array.isArray(value) || value.length === 0;
+      }
       return typeof value !== "string" || value.trim().length === 0;
     });
   });

@@ -1,7 +1,14 @@
 #!/bin/sh
 set -e
+export PYTHONPATH="/app/config${PYTHONPATH:+:$PYTHONPATH}"
+mkdir -p /tmp/agentbarn-bin
+printf '#!/bin/sh\nexec python3 /app/config/agentbarn_message.py "$@"\n' > /tmp/agentbarn-bin/agentbarn-message
+chmod 755 /tmp/agentbarn-bin/agentbarn-message
+export PATH="/tmp/agentbarn-bin:$PATH"
 
 python3 /app/config/healthz-server.py &
+python3 /app/config/communications-runtime-adapter.py &
+python3 /app/config/agent-trigger-server.py &
 
 mkdir -p /opt/data/plugins/telemetry-push /opt/data/memories /workspace
 
@@ -11,51 +18,20 @@ if [ ! -f /opt/data/memories/USER.md ]; then
 fi
 
 cp /app/config/SOUL.md /opt/data/SOUL.md
-cp /app/config/hermes-config.yaml /opt/data/config.yaml
+python3 /app/config/config-merge.py /app/config/hermes-config.yaml /opt/data/config.yaml \
+    || cp /app/config/hermes-config.yaml /opt/data/config.yaml
 
 # Remove any stale .env from the PVC — all vars are injected via k8s Secret.
 # A persisted .env takes precedence over system env and would cause stale
 # values (e.g. old home channel) to survive pod restarts.
 rm -f /opt/data/.env
 
-if [ -f /app/config/slack-deny-dms-plugin.yaml ]; then
-    mkdir -p /opt/data/plugins/slack-deny-dms
-    cp /app/config/slack-deny-dms-plugin.yaml /opt/data/plugins/slack-deny-dms/plugin.yaml
-    cp /app/config/slack-deny-dms-init.py /opt/data/plugins/slack-deny-dms/__init__.py
-fi
-
-if [ -f /app/config/slack-channel-allowlist-plugin.yaml ]; then
-    mkdir -p /opt/data/plugins/slack-channel-allowlist
-    cp /app/config/slack-channel-allowlist-plugin.yaml /opt/data/plugins/slack-channel-allowlist/plugin.yaml
-    cp /app/config/slack-channel-allowlist-init.py /opt/data/plugins/slack-channel-allowlist/__init__.py
-fi
-
-if [ -f /app/config/telegram-deny-dms-plugin.yaml ]; then
-    mkdir -p /opt/data/plugins/telegram-deny-dms
-    cp /app/config/telegram-deny-dms-plugin.yaml /opt/data/plugins/telegram-deny-dms/plugin.yaml
-    cp /app/config/telegram-deny-dms-init.py /opt/data/plugins/telegram-deny-dms/__init__.py
-fi
-
-if [ -f /app/config/telegram-channel-allowlist-plugin.yaml ]; then
-    mkdir -p /opt/data/plugins/telegram-channel-allowlist
-    cp /app/config/telegram-channel-allowlist-plugin.yaml /opt/data/plugins/telegram-channel-allowlist/plugin.yaml
-    cp /app/config/telegram-channel-allowlist-init.py /opt/data/plugins/telegram-channel-allowlist/__init__.py
-fi
-
-if [ -f /app/config/discord-deny-dms-plugin.yaml ]; then
-    mkdir -p /opt/data/plugins/discord-deny-dms
-    cp /app/config/discord-deny-dms-plugin.yaml /opt/data/plugins/discord-deny-dms/plugin.yaml
-    cp /app/config/discord-deny-dms-init.py /opt/data/plugins/discord-deny-dms/__init__.py
-fi
-
-if [ -f /app/config/discord-guild-allowlist-plugin.yaml ]; then
-    mkdir -p /opt/data/plugins/discord-guild-allowlist
-    cp /app/config/discord-guild-allowlist-plugin.yaml /opt/data/plugins/discord-guild-allowlist/plugin.yaml
-    cp /app/config/discord-guild-allowlist-init.py /opt/data/plugins/discord-guild-allowlist/__init__.py
-fi
-
 cp /app/config/telemetry-push-plugin.yaml /opt/data/plugins/telemetry-push/plugin.yaml
 cp /app/config/telemetry-push-init.py /opt/data/plugins/telemetry-push/__init__.py
+# Enabled only for native gateway Connections via plugins.enabled.
+mkdir -p /opt/data/plugins/agentbarn-observer
+cp /app/config/agentbarn-observer-plugin.yaml /opt/data/plugins/agentbarn-observer/plugin.yaml
+cp /app/config/agentbarn-observer-init.py /opt/data/plugins/agentbarn-observer/__init__.py
 
 for f in IDENTITY.md AGENTS.md TOOLS.md BOOT.md HEARTBEAT.md; do
     cp /app/config/$f /workspace/$f
@@ -63,6 +39,10 @@ done
 
 if [ -f /app/config/aai-cli-setup.sh ]; then
   sh /app/config/aai-cli-setup.sh || echo "[aai-cli] setup failed; continuing"
+fi
+
+if [ -f /app/config/gog-setup.sh ]; then
+  sh /app/config/gog-setup.sh || echo "[gog] setup failed; continuing"
 fi
 
 # /workspace persists across restarts (PVC). The personality files above are
@@ -87,4 +67,16 @@ print(f'[hermes-start] Wrote {written} skill files')
 PYEOF
 fi
 
+mkdir -p /opt/data/plugins/agentbarn-messaging
+cp /app/config/hermes-messaging.py /opt/data/plugins/agentbarn-messaging/__init__.py
+printf 'name: agentbarn-messaging\nversion: "1.0"\ndescription: Bind explicit message requests to inbound executions\n' > /opt/data/plugins/agentbarn-messaging/plugin.yaml
+# Native gateway agents set 0 in their Secret so Hermes delivers cron results itself.
+export AGENTBARN_SCHEDULED_DELIVERY="${AGENTBARN_SCHEDULED_DELIVERY:-1}"
+if [ "${AGENTBARN_SCHEDULED_DELIVERY}" = "1" ]; then
+  # The scheduler (inside the gateway) and the drain loop must name the same file.
+  export AGENTBARN_MESSAGE_SPOOL=/opt/data/agentbarn-messages.sqlite3
+  python3 /app/config/agentbarn_message.py drain &
+fi
+# Pinned Hermes never runs BOOT.md; OpenClaw bundles a gateway:startup hook for it.
+python3 /app/config/boot-run.py &
 exec hermes gateway run

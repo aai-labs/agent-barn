@@ -1,0 +1,3 @@
+name: agentbarn-observer
+version: "1.0"
+description: Report content-free native gateway journal stages to Agent Barn

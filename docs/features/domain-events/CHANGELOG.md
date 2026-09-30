@@ -13,6 +13,10 @@ Related context: [domain-events feature doc](../domain-events.md), [transactiona
 
 ## Changes
 
+### 2026-08-28 — Communications health event diagnostics — PR pending
+
+- Changed: `communication.connection.health.changed` now accepts the same validated, content-free diagnostic envelope used by the Communications operation journal. It carries only category, operation, HTTP status, provider code, retryability, bounded retry-after value, and provider request ID; provider URLs, credentials, headers, bodies, and exception text remain excluded.
+
 ### 2026-08-12 — [AF-167](https://aai-labs.atlassian.net/browse/AF-167) — PR #111 — Surface Actor/Subject display on the Event Delivery Monitor
 
 - Delivered: the Event Delivery Monitor now shows `actor_display`/`subject_display` (as "Actor"/"Subject") in each delivery's expanded detail panel, when the event's own payload carries them — absent for the handful of event types that don't set them yet (`agent.created`, `agent.started`/`.stopped`).

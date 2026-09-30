@@ -48,7 +48,7 @@ Every Organization can use these locked defaults:
 
 AF-216 adds Organization-defined custom Agent Access Roles using the same Agent Permission catalogue. AF-150 seeds only the locked defaults and implements role-bearing assignments.
 
-An Agent operation is allowed when the actor has the corresponding Permission through implicit Agent Owner authority, explicit Agent Access, or Agent General Access, and the Agent lifecycle permits the operation. Start and stop use one `agent.lifecycle.manage` Permission; current Agent state selects the valid transition. Agent role names are not authorization checks.
+An Agent operation is allowed when the actor has the corresponding Permission through implicit Agent Owner authority, explicit Agent Access, or Agent General Access, and the Agent lifecycle permits the operation. Start and stop use one `agent.lifecycle.manage` Permission; current Agent state selects the valid transition. Capturing, restoring, and deleting an Agent Restore Point reuse that same Permission, because each is a lifecycle operation on a stopped Agent; reading restore points uses `activity.read`, alongside conversations, tool calls, logs, and health. No restore-point-specific Permission exists — an Agent Editor who may stop an Agent and repin its template may also roll its volume back, and gating restore behind Agent Owner would let an Editor break an Agent without being able to fix it. Agent role names are not authorization checks.
 
 ## Agent Access
 
@@ -74,6 +74,8 @@ Explicit Agent Access and Agent General Access scope the complete Agent aggregat
 Visibility belongs in repository queries rather than post-fetch filtering. Member list, search, count, and detail queries must constrain by Organization, soft-deletion state, and either explicit Agent Access or applicable Agent General Access before ordering, totals, or pagination. Organization Owner/Admin use implicit Organization-wide visibility.
 
 Subordinate repositories must join or use an accessible-Agent query so alternate endpoints cannot reveal conversations, tool calls, costs, logs, Skills, configuration, or credential metadata.
+
+Scheduled background work is the one exception, and it is narrow. A CronJob has no `CurrentUserContext` and therefore no Active Organization to scope against, so `ToolCallService.platform_daily_active_agent_ids` and the restore point reconciler's repository methods run unscoped. The exception holds only while all three of these do: the method is never reachable from a router, the request paths over the same table keep their `AgentAuthorization` checks unchanged, and the work is driven by a schedule rather than by anything a user can trigger. A background method that acquires a user-facing caller stops qualifying and needs the accessible-Agent join like any other.
 
 HTTP semantics remain deliberate:
 

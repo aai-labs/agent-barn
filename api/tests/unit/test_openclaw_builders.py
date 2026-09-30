@@ -1,303 +1,322 @@
 from uuid import UUID
 
-from hamcrest import assert_that, equal_to, has_key, is_not
-
-from api.domains.agents.builders.openclaw import (
-    INIT_OPENCLAW_JS,
+from api.domains.agents.builders import (
     START_SH,
+    build_config_map,
     build_deployment,
-    build_openclaw_config_overlay,
-    build_openclaw_config_overlay_discord,
-    build_openclaw_config_overlay_teams,
-    build_openclaw_config_overlay_telegram,
-    build_secret_discord,
-    build_secret_slack,
-    build_secret_telegram,
+    build_openclaw_gateway_config,
+    build_secret_runtime,
+    native_channel_env,
+    native_discord_channel,
+    native_slack_channel,
+    native_telegram_channel,
+    runtime_teams_channel,
 )
-
-
-def test_build_openclaw_config_overlay_exec_mode_is_full():
-    overlay = build_openclaw_config_overlay("litellm/gpt-4o", "http://litellm:4000")
-    assert_that(overlay["tools"]["exec"]["mode"], equal_to("full"))
-
-
-def test_build_openclaw_config_overlay_exec_mode_ignores_approval_mode():
-    overlay = build_openclaw_config_overlay("litellm/gpt-4o", "http://litellm:4000", approval_mode="manual")
-    assert_that(overlay["tools"]["exec"]["mode"], equal_to("full"))
-
-
-def test_build_openclaw_config_overlay_teams_exec_mode_is_full():
-    overlay = build_openclaw_config_overlay_teams("litellm/gpt-4o", "http://litellm:4000")
-    assert_that(overlay["tools"]["exec"]["mode"], equal_to("full"))
-
-
-def test_build_openclaw_config_overlay_gateway_auth_is_none():
-    overlay = build_openclaw_config_overlay("litellm/gpt-4o", "http://litellm:4000")
-    assert_that(overlay["gateway"]["auth"]["mode"], equal_to("none"))
-
-
-def test_build_openclaw_config_overlay_teams_require_mention_is_enabled():
-    overlay = build_openclaw_config_overlay_teams("litellm/gpt-4o", "http://litellm:4000")
-    assert_that(overlay["channels"]["msteams"]["requireMention"], equal_to(True))
-
-
-def test_build_openclaw_config_overlay_teams_gateway_auth_is_none():
-    overlay = build_openclaw_config_overlay_teams("litellm/gpt-4o", "http://litellm:4000")
-    assert_that(overlay["gateway"]["auth"]["mode"], equal_to("none"))
-
-
-def test_build_openclaw_config_overlay_thread_requires_explicit_mention():
-    overlay = build_openclaw_config_overlay("litellm/gpt-4o", "http://litellm:4000")
-    assert_that(overlay["channels"]["slack"]["thread"]["requireExplicitMention"], equal_to(True))
-
-
-def test_build_openclaw_config_overlay_require_mention_is_enabled():
-    overlay = build_openclaw_config_overlay("litellm/gpt-4o", "http://litellm:4000")
-    assert_that(overlay["channels"]["slack"]["requireMention"], equal_to(True))
-
-
-def test_build_openclaw_config_overlay_allowlisted_channel_requires_mention():
-    overlay = build_openclaw_config_overlay(
-        "litellm/gpt-4o",
-        "http://litellm:4000",
-        slack_channel_ids=["C001"],
-    )
-    assert_that(overlay["channels"]["slack"]["channels"]["C001"]["requireMention"], equal_to(True))
-
-
-def test_build_deployment_has_pvc_owner_init_container():
-    dep = build_deployment(
-        agent_id=UUID("00000000-0000-0000-0000-000000000001"),
-        org_id=UUID("00000000-0000-0000-0000-000000000002"),
-        namespace="default",
-        image="registry.example.com/openclaw:0.4.0",
-    )
-    init_containers = dep.spec.template.spec.init_containers
-    assert init_containers is not None
-    assert len(init_containers) == 1
-    ic = init_containers[0]
-    assert ic.name == "fix-pvc-owner"
-    assert ic.command == ["chown", "1000:1000", "/home/node/.openclaw"]
-    assert ic.security_context.run_as_user == 0
-
-
-def test_build_deployment_pod_carries_agent_component_label():
-    dep = build_deployment(
-        agent_id=UUID("00000000-0000-0000-0000-000000000001"),
-        org_id=UUID("00000000-0000-0000-0000-000000000002"),
-        namespace="default",
-        image="registry.example.com/openclaw:0.4.0",
-    )
-    pod_labels = dep.spec.template.metadata.labels
-    assert_that(pod_labels["agentfarm.io/component"], equal_to("agent"))
-    # Selector must NOT include the new label, so existing agents keep matching.
-    assert_that(
-        dep.spec.selector.match_labels,
-        equal_to({"app": "agent-00000000-0000-0000-0000-000000000001"}),
-    )
-
+from api.domains.agents.builders.openclaw import LEGACY_WORKSPACE_MIGRATION_SH, OPENCLAW_GATEWAY_PORT
+from api.domains.communications.models import ConversationLocation
 
 _AGENT_ID = UUID("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
 _ORG_ID = UUID("11111111-2222-3333-4444-555555555555")
 _NS = "agent-farm"
 
 
-# --- Discord overlay --------------------------------------------------------
+def test_gateway_config_is_headless_and_exposes_chat_completions() -> None:
+    config = build_openclaw_gateway_config("litellm/gpt-5", "http://litellm:4000")
+
+    assert config["channels"] == {}
+    assert config["bindings"] == []
+    assert config["gateway"]["http"]["endpoints"]["chatCompletions"]["enabled"] is True
 
 
-def test_build_openclaw_config_overlay_discord_defaults_to_private_mentions_only():
-    overlay = build_openclaw_config_overlay_discord("litellm/gpt-4o", "http://litellm:4000")
+def test_gateway_config_disables_ambient_model_backed_heartbeats() -> None:
+    config = build_openclaw_gateway_config("litellm/gpt-5", "http://litellm:4000")
 
-    discord = overlay["channels"]["discord"]
-    assert_that(discord["groupPolicy"], equal_to("allowlist"))
-    assert_that(discord["guilds"], equal_to({}))
-    assert_that(discord["dmPolicy"], equal_to("disabled"))
-    assert_that(discord["dm"]["enabled"], equal_to(False))
-    assert_that(overlay["bindings"][0]["match"]["channel"], equal_to("discord"))
+    assert config["agents"]["defaults"]["heartbeat"] == {"every": "0m", "target": "none"}
 
 
-def test_build_openclaw_config_overlay_discord_allowlists_guilds_with_mentions():
-    overlay = build_openclaw_config_overlay_discord(
-        "litellm/gpt-4o",
-        "http://litellm:4000",
-        guild_ids=["123", "456"],
-        allowed_role_ids=["role-1"],
-        home_channel_id="channel-1",
-    )
+def test_startup_migrates_legacy_state_after_config_and_plugin_dirs_exist() -> None:
+    migration = START_SH.index("legacy-workspace-migration.sh")
 
-    assert_that(
-        overlay["channels"]["discord"]["guilds"],
-        equal_to(
-            {
-                "123": {"requireMention": True, "roles": ["role-1"]},
-                "456": {"requireMention": True, "roles": ["role-1"]},
-            }
-        ),
-    )
-    assert_that(
-        overlay["agents"]["defaults"]["heartbeat"],
-        equal_to({"target": "discord", "to": "channel:channel-1", "directPolicy": "block"}),
-    )
+    assert START_SH.index("init-openclaw.js") < migration
+    assert START_SH.index("$MESSAGE_PLUGIN_DIR/openclaw.plugin.json") < migration
+    assert migration < START_SH.index("OPENCLAW_VERSION=")
 
 
-def test_build_secret_discord_sets_runtime_token_and_platform():
-    secret = build_secret_discord(_AGENT_ID, _ORG_ID, _NS, "discord-token", "key", "http://litellm")
-
-    assert_that(secret.string_data["DISCORD_BOT_TOKEN"], equal_to("discord-token"))
-    assert_that(secret.string_data["AGENT_PLATFORM"], equal_to("discord"))
-
-
-# --- Telegram overlay -------------------------------------------------------
-
-
-def test_build_openclaw_config_overlay_telegram_has_telegram_channel():
-    overlay = build_openclaw_config_overlay_telegram("litellm/gpt-4o", "http://litellm:4000")
-    assert_that(overlay["channels"]["telegram"]["enabled"], equal_to(True))
-
-
-def test_build_openclaw_config_overlay_telegram_no_slack_channel():
-    overlay = build_openclaw_config_overlay_telegram("litellm/gpt-4o", "http://litellm:4000")
-    assert_that(overlay["channels"], is_not(has_key("slack")))
-
-
-def test_build_openclaw_config_overlay_telegram_dm_off():
-    overlay = build_openclaw_config_overlay_telegram("litellm/gpt-4o", "http://litellm:4000", dm_policy="off")
-    assert_that(overlay["channels"]["telegram"]["dmPolicy"], equal_to("allowlist"))
-    assert_that(overlay["channels"]["telegram"]["allowFrom"], equal_to([]))
-
-
-def test_build_openclaw_config_overlay_telegram_dm_open():
-    overlay = build_openclaw_config_overlay_telegram("litellm/gpt-4o", "http://litellm:4000", dm_policy="open")
-    assert_that(overlay["channels"]["telegram"]["dmPolicy"], equal_to("open"))
-    assert_that(overlay["channels"]["telegram"]["allowFrom"], equal_to(["*"]))
-
-
-def test_build_openclaw_config_overlay_telegram_dm_allowlist():
-    overlay = build_openclaw_config_overlay_telegram(
-        "litellm/gpt-4o",
-        "http://litellm:4000",
-        dm_policy="allowlist",
-        allowed_user_ids=["123", "456"],
-    )
-    assert_that(overlay["channels"]["telegram"]["dmPolicy"], equal_to("allowlist"))
-    assert_that(overlay["channels"]["telegram"]["allowFrom"], equal_to(["123", "456"]))
-
-
-def test_build_openclaw_config_overlay_telegram_gateway_auth_none():
-    overlay = build_openclaw_config_overlay_telegram("litellm/gpt-4o", "http://litellm:4000")
-    assert_that(overlay["gateway"]["auth"]["mode"], equal_to("none"))
-
-
-def test_build_openclaw_config_overlay_telegram_exec_mode_full():
-    overlay = build_openclaw_config_overlay_telegram("litellm/gpt-4o", "http://litellm:4000")
-    assert_that(overlay["tools"]["exec"]["mode"], equal_to("full"))
-
-
-def test_build_openclaw_config_overlay_telegram_binding_routes_to_telegram():
-    overlay = build_openclaw_config_overlay_telegram("litellm/gpt-4o", "http://litellm:4000")
-    assert_that(len(overlay["bindings"]), equal_to(1))
-    assert_that(overlay["bindings"][0]["match"]["channel"], equal_to("telegram"))
-
-
-def test_build_openclaw_config_overlay_telegram_group_policy_open():
-    overlay = build_openclaw_config_overlay_telegram("litellm/gpt-4o", "http://litellm:4000", group_policy="open")
-    assert_that(overlay["channels"]["telegram"]["groupPolicy"], equal_to("open"))
-
-
-def test_build_openclaw_config_overlay_telegram_group_policy_allowlist():
-    overlay = build_openclaw_config_overlay_telegram("litellm/gpt-4o", "http://litellm:4000", group_policy="allowlist")
-    assert_that(overlay["channels"]["telegram"]["groupPolicy"], equal_to("allowlist"))
-
-
-def test_build_openclaw_config_overlay_telegram_allowed_chat_ids():
-    overlay = build_openclaw_config_overlay_telegram(
-        "litellm/gpt-4o",
-        "http://litellm:4000",
-        group_policy="allowlist",
-        allowed_chat_ids=["-100123", "-100456"],
-    )
-    assert_that(
-        overlay["channels"]["telegram"]["groups"],
-        equal_to({"-100123": {"requireMention": True}, "-100456": {"requireMention": True}}),
-    )
-
-
-def test_build_openclaw_config_overlay_telegram_allowed_chat_ids_empty_when_none():
-    overlay = build_openclaw_config_overlay_telegram("litellm/gpt-4o", "http://litellm:4000", group_policy="allowlist")
-    assert_that(overlay["channels"]["telegram"]["groups"], equal_to({}))
-
-
-def test_build_openclaw_config_overlay_telegram_open_policy_gates_all_groups():
-    overlay = build_openclaw_config_overlay_telegram("litellm/gpt-4o", "http://litellm:4000", group_policy="open")
-    assert_that(
-        overlay["channels"]["telegram"]["groups"],
-        equal_to({"*": {"requireMention": True}}),
-    )
-
-
-# --- Telegram secret --------------------------------------------------------
-
-
-def test_build_secret_telegram_contains_required_keys():
-    secret = build_secret_telegram(
+def test_config_map_ships_the_legacy_workspace_migration_script() -> None:
+    config_map = build_config_map(
         _AGENT_ID,
         _ORG_ID,
         _NS,
-        telegram_bot_token="123:ABC",
-        litellm_api_key="sk-key",
+        "soul",
+        "identity",
+        "user",
+        "tools",
+        "agents",
+        "boot",
+        "bootstrap",
+        "heartbeat",
+        openclaw_config_overlay={},
+    )
+
+    assert config_map.data["legacy-workspace-migration.sh"] == LEGACY_WORKSPACE_MIGRATION_SH
+
+
+def test_gateway_config_has_no_command_approval_support() -> None:
+    """OpenClaw has no user-configurable command-approval control (AF-272): the
+    builder takes no approval_mode parameter and must never fabricate one.
+    """
+    config = build_openclaw_gateway_config("litellm/gpt-5", "http://litellm:4000")
+
+    assert "approvals" not in config
+
+
+def test_config_map_contains_runtime_adapter_and_no_provider_bundle() -> None:
+    config_map = build_config_map(
+        _AGENT_ID,
+        _ORG_ID,
+        _NS,
+        "soul",
+        "identity",
+        "user",
+        "tools",
+        "agents",
+        "boot",
+        "bootstrap",
+        "heartbeat",
+        openclaw_config_overlay=build_openclaw_gateway_config("litellm/gpt-5", "http://litellm:4000"),
+    )
+
+    assert "communications-runtime-adapter.py" in config_map.data
+    assert "agent-trigger-server.py" in config_map.data
+    assert not any(name.startswith(("slack-", "telegram-", "discord-")) for name in config_map.data)
+
+
+def test_runtime_secret_contains_only_runtime_and_llm_credentials() -> None:
+    secret = build_secret_runtime(
+        _AGENT_ID,
+        _ORG_ID,
+        _NS,
+        runtime_api_key="runtime-key",
+        litellm_api_key="llm-key",
         litellm_base_url="http://litellm:4000",
     )
-    data = secret.string_data
-    assert_that(data["TELEGRAM_BOT_TOKEN"], equal_to("123:ABC"))
-    assert_that(data["LITELLM_API_KEY"], equal_to("sk-key"))
-    assert_that(data["LITELLM_BASE_URL"], equal_to("http://litellm:4000"))
-    assert_that(data["AGENT_PLATFORM"], equal_to("telegram"))
+
+    assert secret.string_data["RUNTIME_API_KEY"] == "runtime-key"
+    assert secret.string_data["OPENCLAW_GATEWAY_TOKEN"] == "runtime-key"
+    assert secret.string_data["RUNTIME_KIND"] == "openclaw"
+    assert not any(key.startswith(("SLACK_", "TELEGRAM_", "DISCORD_", "MSTEAMS_")) for key in secret.string_data)
 
 
-def test_build_secret_telegram_no_slack_keys():
-    secret = build_secret_telegram(
+def test_deployment_runs_one_headless_runtime_container() -> None:
+    deployment = build_deployment(_AGENT_ID, _ORG_ID, _NS, "openclaw:test")
+
+    assert deployment.spec.replicas == 1
+    assert deployment.spec.template.spec.containers[0].name == "agent"
+
+
+def test_adapter_targets_the_port_the_gateway_actually_binds() -> None:
+    secret = build_secret_runtime(
         _AGENT_ID,
         _ORG_ID,
         _NS,
-        telegram_bot_token="123:ABC",
-        litellm_api_key="sk-key",
+        runtime_api_key="runtime-key",
+        litellm_api_key="key",
         litellm_base_url="http://litellm:4000",
     )
-    for key in secret.string_data:
-        assert_that(key.startswith("SLACK_"), equal_to(False))
+
+    # A mismatch here is silent: the pod reports healthy, chat history fills in,
+    # and every inbound delivery dead-letters with ECONNREFUSED because the
+    # adapter posts to a port nothing is listening on.
+    assert secret.string_data["RUNTIME_API_URL"] == f"http://127.0.0.1:{OPENCLAW_GATEWAY_PORT}"
 
 
-def test_build_secret_slack_has_agent_platform():
-    secret = build_secret_slack(
-        _AGENT_ID,
-        _ORG_ID,
-        _NS,
-        slack_bot_token="xoxb-bot",
-        slack_app_token="xapp-app",
-        litellm_api_key="sk-key",
-        litellm_base_url="http://x:4000",
+def test_start_sh_does_not_move_the_gateway_off_its_default_port() -> None:
+    # `openclaw health` resolves the default port with no override flag, so
+    # pinning the gateway elsewhere breaks the health probe and leaves every
+    # agent stuck reporting "initializing".
+    assert "--port" not in START_SH
+
+
+def test_deployment_declares_explicit_resources_rather_than_inheriting_limitrange() -> None:
+    """Without a resources block the namespace LimitRange defaults every agent to
+    512Mi/2Gi. requests.memory (20Gi quota) is the binding axis, so the request is
+    what governs how many agents fit; the 1Gi limit both halves limits.memory
+    consumption and caps V8's heap, which Node sizes at ~51% of the cgroup limit."""
+    deployment = build_deployment(_AGENT_ID, _ORG_ID, _NS, "openclaw:test")
+    resources = deployment.spec.template.spec.containers[0].resources
+
+    assert resources is not None
+    assert resources.requests == {"memory": "320Mi", "cpu": "50m"}
+    assert resources.limits == {"memory": "1Gi", "cpu": "500m"}
+
+
+def test_deployment_recreates_rather_than_rolling_update() -> None:
+    """replicas=1 on a ReadWriteOnce PVC: a RollingUpdate surge briefly wants two
+    pods, doubling the agent's memory and deadlocking on the volume."""
+    deployment = build_deployment(_AGENT_ID, _ORG_ID, _NS, "openclaw:test")
+    assert deployment.spec.strategy.type == "Recreate"
+
+
+def test_deployment_carries_the_openclaw_runtime_label() -> None:
+    deployment = build_deployment(_AGENT_ID, _ORG_ID, _NS, "openclaw:test")
+    assert deployment.metadata.labels["agentbarn.io/runtime"] == "openclaw"
+
+
+def test_native_channels_enable_installed_plugins_and_the_observer() -> None:
+    config = build_openclaw_gateway_config(
+        "litellm/gpt-5", "http://litellm:4000", {"slack": {"enabled": True}, "discord": {"enabled": True}}
     )
-    assert_that(secret.string_data["AGENT_PLATFORM"], equal_to("slack"))
+
+    assert config["channels"] == {"slack": {"enabled": True}, "discord": {"enabled": True}}
+    assert {"slack", "discord", "agentbarn-observer"} <= set(config["plugins"]["allow"])
+    assert not any("@openclaw" in path for path in config["plugins"]["load"]["paths"])
+    assert config["plugins"]["entries"]["agentbarn-observer"]["enabled"] is True
+    assert "agentbarn-observer" not in build_openclaw_gateway_config("litellm/gpt-5", "http://x")["plugins"]["allow"]
 
 
-# --- start.sh conditional Slack install --------------------------------------
+def test_native_slack_channel_maps_connection_policy() -> None:
+    locked = native_slack_channel({"channel_ids": ["C1"], "dm_user_ids": ["U1"], "dm_policy": "allowlist"})
+    assert locked["streaming"] == {"mode": "partial"}
+    assert locked["groupPolicy"] == "allowlist"
+    assert locked["channels"] == {"C1": {"enabled": True}}
+    assert locked["dmPolicy"] == "allowlist"
+    assert locked["allowFrom"] == ["U1"]
+    assert locked["implicitMentions"] == {"threadParticipation": False}
+    assert "botToken" not in locked
+
+    open_ = native_slack_channel(
+        {"group_policy": "open", "dm_policy": "open", "thread_mention_policy": "start_only"},
+        ConversationLocation(type="CHANNEL", id="C9"),
+    )
+    assert "channels" not in open_
+    assert open_["dmPolicy"] == "open"
+    assert open_["allowFrom"] == ["*"]
+    assert open_["implicitMentions"] == {"threadParticipation": True}
+    assert open_["defaultTo"] == "channel:C9"
+
+    unset = native_slack_channel({})
+    assert unset["dmPolicy"] == "disabled"
+    assert unset["defaultTo"] == "channel:__agentbarn_no_home_channel__"
 
 
-def test_openclaw_start_sh_conditional_slack_install():
-    assert_that(START_SH.count("@openclaw/slack"), equal_to(1))
-    assert_that("AGENT_PLATFORM" in START_SH, equal_to(True))
+def test_native_discord_channel_maps_global_gates_to_every_guild() -> None:
+    gated = native_discord_channel(
+        {
+            "allowed_channel_ids": ["c1"],
+            "allowed_user_ids": ["u1"],
+            "allowed_role_ids": ["r1"],
+            "require_mention": False,
+            "home_channel_id": "home",
+        }
+    )
+    assert gated["groupPolicy"] == "allowlist"
+    assert gated["guilds"] == {
+        "*": {
+            "requireMention": False,
+            "users": ["u1"],
+            "roles": ["r1"],
+            "channels": {"c1": {"enabled": True, "autoThread": True}},
+        }
+    }
+    assert (gated["dmPolicy"], gated["allowFrom"]) == ("allowlist", ["u1"])
+    assert gated["defaultTo"] == "channel:home"
+
+    everyone = native_discord_channel({"allow_all_users": True, "allowed_user_ids": ["u1"]})
+    assert everyone["guilds"] == {
+        "*": {"requireMention": True, "channels": {"*": {"enabled": True, "autoThread": True}}}
+    }
+    assert (everyone["dmPolicy"], everyone["allowFrom"]) == ("open", ["*"])
+    assert everyone["defaultTo"] == "channel:__agentbarn_no_home_channel__"
+
+    # Channel-only access admits anyone in those channels, and no DMs.
+    channels_only = native_discord_channel({"allowed_channel_ids": ["c1"]})
+    assert channels_only["guilds"]["*"] == {
+        "requireMention": True,
+        "channels": {"c1": {"enabled": True, "autoThread": True}},
+    }
+    assert channels_only["dmPolicy"] == "disabled"
+
+    closed = native_discord_channel({})
+    assert (closed["groupPolicy"], closed["dmPolicy"]) == ("disabled", "disabled")
+    assert "guilds" not in closed
 
 
-# --- init-openclaw.js Telegram support ---------------------------------------
+def test_native_telegram_channel_confines_groups_to_the_allowlist_and_requires_mentions() -> None:
+    channel = native_telegram_channel(
+        {"allowed_chat_ids": ["-1001"], "dm_policy": "allowlist", "allowed_user_ids": ["111"]}
+    )
+
+    assert channel == {
+        "enabled": True,
+        "dmPolicy": "allowlist",
+        "allowFrom": ["111"],
+        "groupPolicy": "open",
+        "groups": {"-1001": {"requireMention": True}},
+        "defaultTo": "channel:__agentbarn_no_home_channel__",
+    }
 
 
-def test_init_openclaw_js_has_telegram_replace_paths():
-    assert_that("'telegram'" in INIT_OPENCLAW_JS, equal_to(True))
+def test_native_telegram_channel_opens_groups_and_dms() -> None:
+    channel = native_telegram_channel({"group_policy": "open", "dm_policy": "open"})
+
+    assert channel["groups"] == {"*": {"requireMention": True}}
+    assert (channel["dmPolicy"], channel["allowFrom"]) == ("open", ["*"])
 
 
-def test_init_openclaw_js_has_telegram_credential_sync():
-    assert_that("telegram-allowFrom.json" in INIT_OPENCLAW_JS, equal_to(True))
+def test_native_telegram_channel_is_closed_by_default() -> None:
+    assert native_telegram_channel({"allowed_chat_ids": [""]}) == {
+        "enabled": True,
+        "dmPolicy": "disabled",
+        "groupPolicy": "disabled",
+        "defaultTo": "channel:__agentbarn_no_home_channel__",
+    }
 
 
-def test_init_openclaw_js_has_telegram_allowed_chats_replace_path():
-    assert_that("'groups'" in INIT_OPENCLAW_JS, equal_to(True))
+def test_native_telegram_channel_closes_dms_for_an_empty_allowlist() -> None:
+    # An empty allowlist drops every DM anyway, and OpenClaw warns about it.
+    assert native_telegram_channel({"dm_policy": "allowlist"})["dmPolicy"] == "disabled"
+
+
+def test_native_telegram_channel_sets_the_home_chat() -> None:
+    assert native_telegram_channel({"home_channel_id": "-1009"})["defaultTo"] == "-1009"
+
+
+def test_runtime_teams_channel_uses_environment_credentials_and_the_private_webhook() -> None:
+    channel = runtime_teams_channel({"home_channel_id": "19:home@thread.tacv2"})
+
+    assert channel == {
+        "enabled": True,
+        "webhook": {"port": 3978, "path": "/api/messages"},
+        "dmPolicy": "open",
+        "allowFrom": ["*"],
+        "groupPolicy": "open",
+        "groupAllowFrom": ["*"],
+        "defaultTo": "conversation:19:home@thread.tacv2",
+    }
+
+
+def test_runtime_teams_channel_uses_no_home_sentinel() -> None:
+    assert runtime_teams_channel({})["defaultTo"] == "conversation:__agentbarn_no_home_channel__"
+
+
+def test_native_channel_env_carries_tokens_and_hands_over_scheduled_delivery() -> None:
+    env = native_channel_env(
+        {
+            "slack": {"bot_token": "xoxb", "app_token": "xapp"},
+            "discord": {"bot_token": "discord-token"},
+            "telegram": {"bot_token": "123:abc"},
+            "msteams": {"app_id": "app-id", "app_password": "secret", "tenant_id": "tenant-id"},
+        }
+    )
+
+    assert env == {
+        "AGENTBARN_NATIVE_CHANNELS": "slack,discord,telegram,msteams",
+        "AGENTBARN_SCHEDULED_DELIVERY": "0",
+        "SLACK_BOT_TOKEN": "xoxb",
+        "SLACK_APP_TOKEN": "xapp",
+        "DISCORD_BOT_TOKEN": "discord-token",
+        "TELEGRAM_BOT_TOKEN": "123:abc",
+        "MSTEAMS_APP_ID": "app-id",
+        "MSTEAMS_APP_PASSWORD": "secret",
+        "MSTEAMS_TENANT_ID": "tenant-id",
+    }

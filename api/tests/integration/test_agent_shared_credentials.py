@@ -1,9 +1,12 @@
+from unittest.mock import patch
 from uuid import uuid4
 
 from fastapi import status
 from hamcrest import assert_that, equal_to, has_item
 from starlette.testclient import TestClient
 
+from api.domains.agents.models import SecretProvider
+from api.infrastructure.integration_validators.result import IntegrationValidationResult
 from api.tests.core.givenpy import given, then, when
 from api.tests.core.modules import (
     create_test_client,
@@ -62,9 +65,6 @@ def _auth(context) -> dict:
 
 _VALID_CREATE = {
     "name": "Agent with shared cred",
-    "platform": "slack",
-    "slack_bot_token": "xoxb-real-bot-token",
-    "slack_app_token": "xapp-1-real-app-token",
     "template_key": "test-template",
 }
 
@@ -81,7 +81,11 @@ def test_create_agent_with_shared_credential():
                 **_VALID_CREATE,
                 "shared_credentials": [{"shared_credential_id": str(ctx.shared_credential.id)}],
             }
-            response = client.post(_AGENTS, json=payload, headers=_auth(ctx))
+            with patch.dict(
+                "api.domains.agents.service.PROVIDER_VALIDATORS",
+                {SecretProvider.JIRA: lambda _content: IntegrationValidationResult(valid=True)},
+            ):
+                response = client.post(_AGENTS, json=payload, headers=_auth(ctx))
 
         with then("it returns 201 with the shared credential in secrets"):
             assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
@@ -121,7 +125,11 @@ def test_create_agent_rejects_shared_and_manual_same_provider():
                 "shared_credentials": [{"shared_credential_id": str(ctx.shared_credential.id)}],
                 "secrets": [{"provider": "jira", "content": _JIRA_CONTENT}],
             }
-            response = client.post(_AGENTS, json=payload, headers=_auth(ctx))
+            with patch.dict(
+                "api.domains.agents.service.PROVIDER_VALIDATORS",
+                {SecretProvider.JIRA: lambda _content: IntegrationValidationResult(valid=True)},
+            ):
+                response = client.post(_AGENTS, json=payload, headers=_auth(ctx))
 
         with then("it returns 400 (duplicate provider)"):
             assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))

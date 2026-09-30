@@ -100,14 +100,18 @@ export class EventDeliveryDataSupport {
 
   async interceptList({
     items,
+    pages,
     total,
     status = 200,
+    failOnPage,
     detail = "Unable to load Event Deliveries",
     delayMs = 0,
   }: {
     items?: unknown[];
+    pages?: unknown[][];
     total?: number;
     status?: number;
+    failOnPage?: number;
     detail?: string;
     delayMs?: number;
   } = {}) {
@@ -119,13 +123,16 @@ export class EventDeliveryDataSupport {
       }
       if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
       const page = Number(new URL(route.request().url()).searchParams.get("page") ?? "1");
+      const pageSize = Number(new URL(route.request().url()).searchParams.get("page_size") ?? "50");
+      const pageItems = pages?.[page - 1] ?? list;
+      const responseStatus = failOnPage === page ? 500 : status;
       await route.fulfill({
-        status,
+        status: responseStatus,
         contentType: "application/json",
         body: JSON.stringify(
-          status >= 400
+          responseStatus >= 400
             ? { detail }
-            : { page, page_size: 50, total: total ?? list.length, items: list },
+            : { page, page_size: pageSize, total: total ?? pages?.flat().length ?? list.length, items: pageItems },
         ),
       });
     });

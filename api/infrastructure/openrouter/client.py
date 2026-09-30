@@ -1,7 +1,8 @@
+import enum
 import logging
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 
 import httpx
@@ -20,15 +21,83 @@ _cache_lock = threading.Lock()
 _key_locks: dict[str, threading.Lock] = {}
 
 
+class CreditsStatus(str, enum.Enum):
+    OK = "ok"
+    NO_LIMIT = "no_limit"
+    UNAVAILABLE = "unavailable"
+
+
+@dataclass(frozen=True)
+class OpenRouterCredits:
+    """What the key reports about its credit limit.
+
+    The three statuses are kept apart because they call for different answers:
+    OK has numbers, NO_LIMIT means the key can spend without a ceiling, and
+    UNAVAILABLE means the poll failed and we know nothing. The monitoring rules
+    draw the same distinction — OpenRouterCreditsLow gates on a healthy probe so
+    that an unknown can never read as low.
+    """
+
+    status: CreditsStatus
+    limit: float | None = None
+    remaining: float | None = None
+
+
+# Remaining credit, cached separately from the catalogue: it changes constantly,
+# whereas the catalogue barely moves, so they cannot share a TTL.
+_credits_cache: tuple[float, OpenRouterCredits] | None = None
+_credits_lock = threading.Lock()
+
+
 class OpenRouterError(Exception):
     pass
 
 
+def _optional_number(value: object) -> float | None:
+    """A number, or None for a value that is not one. Bools are not numbers here."""
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    return float(value)
+
+
+def _classify(data: object) -> OpenRouterCredits:
+    """Turn a /key payload into one of the three states.
+
+    An absent `limit_remaining` is not the same as an explicit null. Null is
+    OpenRouter saying "this key has no limit"; absent means we did not get the
+    answer, and treating the two alike would cache a healthy-looking state from a
+    malformed response and silence the unavailable warning.
+    """
+    if not isinstance(data, Mapping):
+        return OpenRouterCredits(status=CreditsStatus.UNAVAILABLE)
+
+    payload = {str(key): value for key, value in data.items()}
+    if "limit_remaining" not in payload:
+        return OpenRouterCredits(status=CreditsStatus.UNAVAILABLE)
+
+    raw_remaining = payload["limit_remaining"]
+    if raw_remaining is None:
+        return OpenRouterCredits(status=CreditsStatus.NO_LIMIT)
+
+    remaining = _optional_number(raw_remaining)
+    if remaining is None:
+        return OpenRouterCredits(status=CreditsStatus.UNAVAILABLE)
+
+    return OpenRouterCredits(
+        status=CreditsStatus.OK,
+        limit=_optional_number(payload.get("limit")),
+        remaining=remaining,
+    )
+
+
 def clear_models_cache() -> None:
-    """Drops the cached catalogue. Intended for tests."""
+    """Drops the cached catalogue and credit reading. Intended for tests."""
+    global _credits_cache
     with _cache_lock:
         _cache.clear()
         _key_locks.clear()
+    with _credits_lock:
+        _credits_cache = None
 
 
 def _key_lock(key: str) -> threading.Lock:
@@ -72,6 +141,71 @@ class OpenRouterClient:
     def list_models(self) -> list[dict]:
         """Returns the OpenRouter catalogue as {id, name, context_length, pricing}."""
         return _cached(self.config.openrouter_base_url, self._fetch_models)
+
+    def get_credits(self) -> OpenRouterCredits:
+        """The key's credit limit and what is left of it.
+
+        Reads GET /key rather than the account-wide /credits endpoint, which needs a
+        management key that can also mint and delete keys — too much privilege for a
+        read. Cached for the same TTL as the credits metric.
+        """
+        global _credits_cache
+        ttl = self.config.openrouter_credits_cache_ttl_seconds
+        now = time.monotonic()
+        with _credits_lock:
+            if _credits_cache is not None and now - _credits_cache[0] < ttl:
+                return _credits_cache[1]
+
+        credits = OpenRouterCredits(status=CreditsStatus.UNAVAILABLE)
+        if self.config.openrouter_api_key:
+            try:
+                resp = httpx.get(
+                    f"{self.config.openrouter_base_url.rstrip('/')}/key",
+                    headers={"Authorization": f"Bearer {self.config.openrouter_api_key}"},
+                    timeout=10,
+                )
+                resp.raise_for_status()
+                credits = _classify(resp.json()["data"])
+            except Exception:
+                # Never let a credit poll fail a cost page. The caller reports that
+                # the balance is unavailable and the rest of the page still works.
+                logger.warning("Failed to read OpenRouter credit balance", exc_info=True)
+
+        with _credits_lock:
+            _credits_cache = (time.monotonic(), credits)
+        return credits
+
+    def get_generation(self, generation_id: str) -> dict | None:
+        """Return the true cost and token counts OpenRouter recorded for one call.
+
+        Used to recover spend that LiteLLM dropped on streamed responses. Reading
+        generation metadata does not consume credits — a 260-request benchmark moved
+        the account total by $0.00000000.
+
+        Returns None when OpenRouter has no such generation (HTTP 404). The caller
+        decides what that means; the cost sync treats it as retryable and leaves the
+        row alone, because writing a zero would claim "this call was free" when the
+        truth is "we could not find out". Every other failure raises, for the same
+        reason.
+        """
+        url = f"{self.config.openrouter_base_url}/generation"
+        headers = {}
+        if self.config.openrouter_api_key:
+            headers["Authorization"] = f"Bearer {self.config.openrouter_api_key}"
+        try:
+            resp = httpx.get(url, params={"id": generation_id}, headers=headers, timeout=30)
+            if resp.status_code == httpx.codes.NOT_FOUND:
+                return None
+            resp.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            raise OpenRouterError(f"OpenRouter generation lookup failed with {exc.response.status_code}") from exc
+        except httpx.HTTPError as exc:
+            raise OpenRouterError(f"OpenRouter generation lookup failed: {exc}") from exc
+
+        data = resp.json().get("data")
+        if not isinstance(data, dict):
+            raise OpenRouterError(f"Unexpected /generation response for {generation_id}")
+        return data
 
     def _fetch_models(self) -> list[dict]:
         url = f"{self.config.openrouter_base_url}/models"

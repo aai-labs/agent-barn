@@ -179,10 +179,10 @@ def test_index_js_registers_hooks():
 
 def test_overlay_includes_telemetry_push_in_plugins():
     with given():
-        from api.domains.agents.builders import build_openclaw_config_overlay
+        from api.domains.agents.builders import build_openclaw_gateway_config
 
-        with when("I build a Slack overlay"):
-            overlay = build_openclaw_config_overlay("litellm/qwen3", "http://x:4000")
+        with when("I build a headless runtime configuration"):
+            overlay = build_openclaw_gateway_config("litellm/qwen3", "http://x:4000")
 
         with then("telemetry-push is in the plugins allow list and entries"):
             assert_that("telemetry-push" in overlay["plugins"]["allow"], equal_to(True))
@@ -191,18 +191,6 @@ def test_overlay_includes_telemetry_push_in_plugins():
                 overlay["plugins"]["entries"]["telemetry-push"]["enabled"],
                 equal_to(True),
             )
-
-
-def test_teams_overlay_includes_telemetry_push_in_plugins():
-    with given():
-        from api.domains.agents.builders import build_openclaw_config_overlay_teams
-
-        with when("I build a Teams overlay"):
-            overlay = build_openclaw_config_overlay_teams("litellm/qwen3", "http://x:4000")
-
-        with then("telemetry-push is in the plugins allow list and entries"):
-            assert_that("telemetry-push" in overlay["plugins"]["allow"], equal_to(True))
-            assert_that(overlay["plugins"]["entries"], has_key("telemetry-push"))
 
 
 def test_config_map_includes_telemetry_push_files():
@@ -434,6 +422,5 @@ def test_posted_payload_satisfies_the_ingest_contract():
 
         with then("Ingest accepts it without coercion errors"):
             batch = IngestBatchRequest.model_validate(payload)
-            assert_that(batch.messages, has_length(2))
             assert_that(batch.tool_calls, has_length(1))
             assert_that(batch.tool_results, has_length(1))

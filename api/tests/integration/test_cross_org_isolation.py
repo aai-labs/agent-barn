@@ -12,9 +12,7 @@ Isolation contract:
 - Platform Administrators use platform routes; org URLs still require real membership.
 """
 
-import io
-import zipfile
-from uuid import UUID, uuid7
+from uuid import UUID, uuid4, uuid7
 
 from fastapi import status
 from hamcrest import assert_that, equal_to
@@ -100,19 +98,43 @@ def _there_is_a_bare_org(org_id: UUID, name: str):
 
 def _there_is_a_skill_in_org(org_id: UUID):
     def step(context):
-        buf = io.BytesIO()
-        with zipfile.ZipFile(buf, "w") as zf:
-            zf.writestr("skill.md", "# Org B Skill")
         skill = Skill(
             organization_id=org_id,
             name="Org B Skill",
+            slug="org-b-skill",
+            root_dir="org-b-skill",
+            entry_path="SKILL.md",
             source=SkillSource.CUSTOM,
             required_providers=[],
-            zip_content=buf.getvalue(),
         )
         repo: SkillRepository = context.injector.get(SkillRepository)
         repo.save(skill)
+        repo.publish_version(skill.id, [("SKILL.md", "# Org B Skill")])
         context.skill_b = skill
+
+    return step
+
+
+def _there_is_a_global_skill_assigned_to_agent():
+    def step(context):
+        from api.domains.agents.models import AgentSkill
+        from api.domains.agents.repository import AgentRepository
+
+        skill = Skill(
+            organization_id=None,
+            name="Global Shared Skill",
+            slug="global-shared-skill",
+            root_dir="global-shared-skill",
+            entry_path="SKILL.md",
+            source=SkillSource.AAI_CLI,
+            required_providers=[],
+        )
+        skill_repo: SkillRepository = context.injector.get(SkillRepository)
+        skill_repo.save(skill)
+        skill_repo.publish_version(skill.id, [("SKILL.md", "# Global Shared Skill")])
+        agent_repo: AgentRepository = context.injector.get(AgentRepository)
+        agent_repo.save_skills([AgentSkill(agent_id=context.agent.id, skill_id=skill.id, pinned_version=1)])
+        context.global_skill = skill
 
     return step
 
@@ -230,11 +252,57 @@ def test_cannot_update_skill_from_another_org():
         assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
 
 
-def test_cannot_delete_skill_from_another_org():
+def test_cannot_delete_skill_version_from_another_org():
+    with given(_member_a_with_org_b_skill()) as context:
+        skill_id = context.skill_b.id
+        response = context.client.delete(f"{_skills(ORG_A)}/{skill_id}/versions/1", headers=_headers(context))
+        assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
+
+
+def test_cannot_delete_skill_lineage_from_another_org():
     with given(_member_a_with_org_b_skill()) as context:
         skill_id = context.skill_b.id
         response = context.client.delete(f"{_skills(ORG_A)}/{skill_id}", headers=_headers(context))
         assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
+
+
+def test_global_skill_assignment_indicators_are_scoped_to_the_calling_org():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_user(
+                id=MEMBER_A,
+                email="member-a@example.com",
+                organization_id=ORG_A,
+                role=OrganizationRole.MEMBER,
+            ),
+            there_is_an_access_token_for_user(),
+            _there_is_a_bare_org(ORG_B, "Org B"),
+            there_is_an_agent(organization_id=ORG_B, name="Agent B"),
+            _there_is_a_global_skill_assigned_to_agent(),
+        ]
+    ) as context:
+        repository: SkillRepository = context.injector.get(SkillRepository)
+
+        with then("repository pin and assignment guards only count agents in the requested organization"):
+            assert_that(repository.is_skill_version_pinned(context.global_skill.id, 1, ORG_A), equal_to(False))
+            assert_that(repository.is_skill_version_pinned(context.global_skill.id, 1, ORG_B), equal_to(True))
+            assert_that(repository.get_pinned_versions_for_skill(context.global_skill.id, ORG_A), equal_to(set()))
+            assert_that(repository.get_pinned_versions_for_skill(context.global_skill.id, ORG_B), equal_to({1}))
+            assert_that(repository.is_assigned_to_any_agent(context.global_skill.id, ORG_A), equal_to(False))
+            assert_that(repository.is_assigned_to_any_agent(context.global_skill.id, ORG_B), equal_to(True))
+
+        with when("a member reads the global skill from organization A"):
+            detail = context.client.get(f"{_skills(ORG_A)}/{context.global_skill.id}/files", headers=_headers(context))
+            versions = context.client.get(
+                f"{_skills(ORG_A)}/{context.global_skill.id}/versions", headers=_headers(context)
+            )
+
+        with then("foreign organization assignments are not exposed"):
+            assert_that(detail.status_code, equal_to(200))
+            assert_that(detail.json()["is_assigned_to_agent"], equal_to(False))
+            assert_that(versions.status_code, equal_to(200))
+            assert_that(versions.json()[0]["is_pinned_by_agent"], equal_to(False))
 
 
 # --------------------------------------------------------------------------- #
@@ -265,11 +333,19 @@ def test_cannot_read_template_from_another_org():
         assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
 
 
-def test_cannot_update_template_from_another_org():
+def test_cannot_start_a_template_draft_from_another_org():
     with given(_member_a_with_org_b_template()) as context:
-        response = context.client.patch(
-            f"{_templates(ORG_A)}/{_ORG_B_TEMPLATE_KEY}",
-            json={"soul_md": "# Hijacked"},
+        response = context.client.post(
+            f"{_templates(ORG_A)}/{_ORG_B_TEMPLATE_KEY}/draft",
+            headers=_headers(context),
+        )
+        assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
+
+
+def test_cannot_read_a_template_draft_from_another_org():
+    with given(_member_a_with_org_b_template()) as context:
+        response = context.client.get(
+            f"{_templates(ORG_A)}/{_ORG_B_TEMPLATE_KEY}/draft",
             headers=_headers(context),
         )
         assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
@@ -394,3 +470,45 @@ def test_platform_admin_without_membership_cannot_list_org_members_via_url():
     ) as context:
         response = context.client.get(f"/api/v1/organizations/{ORG_B}/members", headers=_headers(context))
         assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+
+
+def test_cannot_list_restore_points_from_another_org():
+    with given(_member_a_with_org_b_agent()) as context:
+        agent_id = context.agent.id
+        with when("a member of org A lists org B's restore points, scoped to org A"):
+            response = context.client.get(f"{_agents(ORG_A)}/{agent_id}/restore-points", headers=_headers(context))
+            with then("the agent is not found"):
+                assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
+
+
+def test_cannot_capture_a_restore_point_for_an_agent_from_another_org():
+    with given(_member_a_with_org_b_agent()) as context:
+        agent_id = context.agent.id
+        with when("a member of org A captures org B's agent, scoped to org A"):
+            response = context.client.post(
+                f"{_agents(ORG_A)}/{agent_id}/restore-points", json={}, headers=_headers(context)
+            )
+            with then("the agent is not found"):
+                assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
+
+
+def test_cannot_restore_a_restore_point_from_another_org():
+    with given(_member_a_with_org_b_agent()) as context:
+        agent_id = context.agent.id
+        with when("a member of org A restores against org B's agent, scoped to org A"):
+            response = context.client.post(
+                f"{_agents(ORG_A)}/{agent_id}/restore-points/{uuid4()}/restore", headers=_headers(context)
+            )
+            with then("the agent is not found"):
+                assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
+
+
+def test_cannot_delete_a_restore_point_from_another_org():
+    with given(_member_a_with_org_b_agent()) as context:
+        agent_id = context.agent.id
+        with when("a member of org A deletes a restore point on org B's agent, scoped to org A"):
+            response = context.client.delete(
+                f"{_agents(ORG_A)}/{agent_id}/restore-points/{uuid4()}", headers=_headers(context)
+            )
+            with then("the agent is not found"):
+                assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))

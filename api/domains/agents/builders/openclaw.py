@@ -4,23 +4,52 @@ from uuid import UUID
 
 from kubernetes import client
 
-from .common import _labels, _resource_name
+from api.domains.communications.models import ConversationLocation
+
+from .common import _labels, _resource_name, _setting_ids
+
+# Explicit so agents stop inheriting the namespace LimitRange default of
+# 512Mi request / 2Gi limit. requests.memory is the binding quota axis
+# (20Gi hard), so the request sets how many agents fit; the 1Gi limit halves
+# limits.memory consumption and caps V8, which sizes its heap at ~51% of the
+# cgroup limit -- a 2Gi limit invites a 1Gi heap with no leak involved.
+AGENT_RESOURCES = client.V1ResourceRequirements(
+    requests={"memory": "320Mi", "cpu": "50m"},
+    limits={"memory": "1Gi", "cpu": "500m"},
+)
 
 _SCRIPTS = Path(__file__).parent.parent / "scripts" / "openclaw"
+_COMMON_SCRIPTS = _SCRIPTS.parent
 _TELEMETRY_PUSH = _SCRIPTS / "plugins" / "telemetry-push"
+_OBSERVER = _SCRIPTS / "plugins" / "agentbarn-observer"
+
+# OpenClaw's gateway binds this port and its own `openclaw health` CLI resolves
+# the same value with no way to override it, so the runtime must not be moved
+# off it. The in-pod communications adapter is pointed here to match.
+OPENCLAW_GATEWAY_PORT = 18789
 
 INIT_OPENCLAW_JS: str = (_SCRIPTS / "init-openclaw.js").read_text()
 HEALTHZ_SERVER_JS: str = (_SCRIPTS / "healthz-server.js").read_text()
 START_SH: str = (_SCRIPTS / "start.sh").read_text()
+LEGACY_WORKSPACE_MIGRATION_SH: str = (_SCRIPTS / "legacy-workspace-migration.sh").read_text()
 TELEMETRY_PUSH_INDEX_JS: str = (_TELEMETRY_PUSH / "index.js").read_text()
 TELEMETRY_PUSH_PACKAGE_JSON: str = (_TELEMETRY_PUSH / "package.json").read_text()
 TELEMETRY_PUSH_PLUGIN_JSON: str = (_TELEMETRY_PUSH / "openclaw.plugin.json").read_text()
+OBSERVER_INDEX_JS: str = (_OBSERVER / "index.js").read_text()
+OBSERVER_PACKAGE_JSON: str = (_OBSERVER / "package.json").read_text()
+OBSERVER_PLUGIN_JSON: str = (_OBSERVER / "openclaw.plugin.json").read_text()
+COMMUNICATIONS_RUNTIME_ADAPTER_PY: str = (_COMMON_SCRIPTS / "communications-runtime-adapter.py").read_text()
+AGENT_TRIGGER_SERVER_PY: str = (_COMMON_SCRIPTS / "agent-trigger-server.py").read_text()
+
+_MESSAGE_SCRIPTS = _COMMON_SCRIPTS / "messaging"
+AGENTBARN_MESSAGE_PY: str = (_MESSAGE_SCRIPTS / "agentbarn_message.py").read_text()
+OPENCLAW_MESSAGING_JS: str = (_MESSAGE_SCRIPTS / "openclaw-messaging.js").read_text()
 
 
 def _openclaw_config_core(
     model: str,
     litellm_base_url: str,
-    binding_channel: str,
+    binding_channel: str | None,
     channels: dict,
 ) -> dict:
     provider, _, model_name = model.partition("/")
@@ -38,24 +67,30 @@ def _openclaw_config_core(
                 "model": {
                     "primary": model,
                 },
-                "memorySearch": {
-                    "provider": "none",
-                },
+                "heartbeat": {"every": "0m", "target": "none"},
             }
         },
         "channels": channels,
-        "bindings": [{"type": "route", "agentId": "main", "match": {"channel": binding_channel}}],
+        "bindings": (
+            [{"type": "route", "agentId": "main", "match": {"channel": binding_channel}}] if binding_channel else []
+        ),
         "tools": {
             "profile": "full",
             "exec": {"mode": "full"},
         },
-        "memory": {"backend": "builtin"},
+        "memory": {"search": {"provider": "none"}},
         "plugins": {
-            "allow": ["memory-core", "active-memory", "telemetry-push"],
-            "load": {"paths": ["/home/node/.openclaw/local-plugins/telemetry-push"]},
+            "allow": ["memory-core", "active-memory", "telemetry-push", "agentbarn-messaging"],
+            "load": {
+                "paths": [
+                    "/home/node/.openclaw/local-plugins/telemetry-push",
+                    "/home/node/.openclaw/local-plugins/agentbarn-messaging",
+                ]
+            },
             "slots": {"memory": "memory-core"},
             "entries": {
                 "memory-core": {"enabled": True},
+                "agentbarn-messaging": {"enabled": True},
                 "active-memory": {
                     "enabled": True,
                     "config": {
@@ -76,178 +111,183 @@ def _openclaw_config_core(
                 },
             },
         },
-        "gateway": {"auth": {"mode": "none"}},
+        "gateway": {
+            "auth": {"mode": "token"},
+            "http": {"endpoints": {"chatCompletions": {"enabled": True}}},
+        },
     }
 
 
-def build_openclaw_config_overlay(
+_OBSERVER_PLUGIN_PATH = "/home/node/.openclaw/local-plugins/agentbarn-observer"
+_NO_HOME_CHANNEL_TARGET = "channel:__agentbarn_no_home_channel__"
+
+
+def build_openclaw_gateway_config(
     model: str,
     litellm_base_url: str,
-    slack_channel_ids: list[str] | None = None,
-    slack_dm_user_ids: list[str] | None = None,
-    slack_group_policy: str = "open",
-    slack_dm_policy: str = "open",
-    approval_mode: str = "auto",
+    native_channels: dict[str, dict] | None = None,
 ) -> dict:
-    channel_ids = slack_channel_ids or []
-    dm_user_ids = slack_dm_user_ids or []
-
-    if slack_dm_policy == "off":
-        openclaw_dm_policy = "allowlist"
-        allow_from = []
-        direct_reply_mode = "off"
-    elif slack_dm_policy == "open":
-        openclaw_dm_policy = "open"
-        allow_from = ["*"]
-        direct_reply_mode = "all"
-    else:
-        openclaw_dm_policy = slack_dm_policy
-        allow_from = dm_user_ids
-        direct_reply_mode = "all"
-
-    channels_config: dict = {channel_id: {"enabled": True, "requireMention": True} for channel_id in channel_ids}
-
-    return _openclaw_config_core(
-        model,
-        litellm_base_url,
-        binding_channel="slack",
-        channels={
-            "slack": {
-                "enabled": True,
-                "mode": "socket",
-                "webhookPath": "/slack/events",
-                "userTokenReadOnly": True,
-                "groupPolicy": slack_group_policy,
-                "dmPolicy": openclaw_dm_policy,
-                "allowFrom": allow_from,
-                "requireMention": True,
-                "thread": {"requireExplicitMention": True},
-                "replyToModeByChatType": {
-                    "direct": direct_reply_mode,
-                    "group": "all",
-                    "channel": "all",
-                },
-                "streaming": {
-                    "mode": "partial",
-                    "nativeTransport": True,
-                },
-                "channels": channels_config,
-            }
-        },
-    )
+    """``native_channels`` maps a Platform key to its OpenClaw ``channels.<key>`` block."""
+    channels = native_channels or {}
+    config = _openclaw_config_core(model, litellm_base_url, binding_channel=None, channels=channels)
+    if channels:
+        plugins = config["plugins"]
+        plugins["allow"] += [*channels, "agentbarn-observer"]
+        # start.sh installs non-bundled channel plugins from npm; OpenClaw only grants plugin
+        # state to official installs, so they must not be loaded by path.
+        plugins["load"]["paths"].append(_OBSERVER_PLUGIN_PATH)
+        for key in channels:
+            plugins["entries"][key] = {"enabled": True}
+        plugins["entries"]["agentbarn-observer"] = {"enabled": True, "hooks": {"allowConversationAccess": True}}
+    return config
 
 
-def build_openclaw_config_overlay_teams(
-    model: str,
-    litellm_base_url: str,
-    approval_mode: str = "auto",
-) -> dict:
-    return _openclaw_config_core(
-        model,
-        litellm_base_url,
-        binding_channel="msteams",
-        channels={
-            "msteams": {
-                "enabled": True,
-                "dmPolicy": "open",
-                "allowFrom": ["*"],
-                "groupPolicy": "open",
-                "requireMention": True,
-                "streaming": {"mode": "off"},
-                "webhook": {"port": 3978, "path": "/api/messages"},
-            }
-        },
-    )
+def native_slack_channel(settings: dict, home_channel: ConversationLocation | None = None) -> dict:
+    """Map a Slack Connection's policy onto OpenClaw's native Slack channel.
 
-
-def build_openclaw_config_overlay_telegram(
-    model: str,
-    litellm_base_url: str,
-    dm_policy: str = "off",
-    group_policy: str = "allowlist",
-    allowed_user_ids: list[str] | None = None,
-    allowed_chat_ids: list[str] | None = None,
-    approval_mode: str = "auto",
-) -> dict:
-    if dm_policy == "off":
-        openclaw_dm_policy = "allowlist"
-        allow_from: list[str] = []
-    elif dm_policy == "open":
-        openclaw_dm_policy = "open"
-        allow_from = ["*"]
-    else:
-        openclaw_dm_policy = "allowlist"
-        allow_from = list(allowed_user_ids or [])
-
-    return _openclaw_config_core(
-        model,
-        litellm_base_url,
-        binding_channel="telegram",
-        channels={
-            "telegram": {
-                "enabled": True,
-                "groupPolicy": group_policy,
-                "dmPolicy": openclaw_dm_policy,
-                "allowFrom": allow_from,
-                "groups": (
-                    {cid: {"requireMention": True} for cid in (allowed_chat_ids or [])}
-                    if group_policy == "allowlist"
-                    else {"*": {"requireMention": True}}
-                ),
-            }
-        },
-    )
-
-
-def build_openclaw_config_overlay_discord(
-    model: str,
-    litellm_base_url: str,
-    guild_ids: list[str] | None = None,
-    allowed_channel_ids: list[str] | None = None,
-    allowed_user_ids: list[str] | None = None,
-    allowed_role_ids: list[str] | None = None,
-    home_channel_id: str | None = None,
-    require_mention: bool = True,
-    group_policy: str = "allowlist",
-    approval_mode: str = "auto",
-) -> dict:
-    channel_rules = {
-        channel_id: {"enabled": True, "requireMention": require_mention} for channel_id in (allowed_channel_ids or [])
+    Tokens stay in the Secret (``SLACK_BOT_TOKEN``/``SLACK_APP_TOKEN``), not the
+    config file persisted on the PVC.
+    """
+    dm_policy = settings.get("dm_policy", "off")
+    channel = {
+        "enabled": True,
+        "mode": "socket",
+        "requireMention": True,
+        "replyToMode": "all",
+        # Replies stream through Slack's native API as markdown_text, so Slack renders
+        # tables; OpenClaw's plain send would convert them to fenced code.
+        "streaming": {"mode": "partial"},
+        "groupPolicy": settings.get("group_policy", "allowlist"),
+        # start_only accepts unmentioned replies in threads the Agent already joined.
+        "implicitMentions": {"threadParticipation": settings.get("thread_mention_policy") == "start_only"},
+        "dmPolicy": {"off": "disabled"}.get(dm_policy, dm_policy),
     }
-    guild_rule: dict = {"requireMention": require_mention}
-    if allowed_user_ids:
-        guild_rule["users"] = allowed_user_ids
-    if allowed_role_ids:
-        guild_rule["roles"] = allowed_role_ids
-    if channel_rules:
-        guild_rule["channels"] = channel_rules
-    guilds = (
-        {guild_id: dict(guild_rule) for guild_id in (guild_ids or [])}
-        if group_policy == "allowlist"
-        else {"*": guild_rule}
+    if channel["groupPolicy"] == "allowlist":
+        channel["channels"] = {channel_id: {"enabled": True} for channel_id in settings.get("channel_ids") or []}
+    if dm_policy == "open":
+        channel["allowFrom"] = ["*"]
+    elif dm_policy == "allowlist":
+        channel["allowFrom"] = list(settings.get("dm_user_ids") or [])
+    if home_channel is not None:
+        # ponytail: a home thread is dropped; cron results post top-level in the home channel.
+        channel["defaultTo"] = f"channel:{home_channel.id}"
+    else:
+        # OpenClaw shows an in-chat setup prompt when defaultTo is absent. Keep
+        # intentionally-unconfigured Connections quiet without selecting a real
+        # channel for originless proactive messages.
+        channel["defaultTo"] = _NO_HOME_CHANNEL_TARGET
+    return channel
+
+
+def native_discord_channel(settings: dict) -> dict:
+    """Map a Discord Connection's global gates onto OpenClaw's native Discord channel.
+
+    Agent Barn's channel, user, and role allowlists are not guild-scoped, so they
+    apply to every guild through OpenClaw's ``"*"`` guild entry.
+    """
+    allow_all = bool(settings.get("allow_all_users"))
+    users = _setting_ids(settings, "allowed_user_ids")
+    roles = _setting_ids(settings, "allowed_role_ids")
+    channel_ids = _setting_ids(settings, "allowed_channel_ids")
+    channel: dict = {"enabled": True, "groupPolicy": "allowlist"}
+    guild: dict = {"requireMention": settings.get("require_mention", True)}
+    if not allow_all:
+        if users:
+            guild["users"] = users
+        if roles:
+            guild["roles"] = roles
+    # Reply in a thread per message, as Hermes does. Threads inherit their parent
+    # channel's entry, and "*" keeps an empty channel allowlist unrestricted.
+    # ponytail: OpenClaw skips requireMention inside threads the bot created, and
+    # has no switch to keep it; Hermes still requires the mention there.
+    guild["channels"] = {channel_id: {"enabled": True, "autoThread": True} for channel_id in channel_ids or ["*"]}
+    if allow_all or users or roles or channel_ids:
+        channel["guilds"] = {"*": guild}
+    else:
+        channel["groupPolicy"] = "disabled"
+    # Roles cannot be resolved without a guild, so DMs admit listed users only.
+    if allow_all:
+        channel.update(dmPolicy="open", allowFrom=["*"])
+    elif users:
+        channel.update(dmPolicy="allowlist", allowFrom=users)
+    else:
+        channel["dmPolicy"] = "disabled"
+    if home_channel_id := settings.get("home_channel_id"):
+        channel["defaultTo"] = f"channel:{home_channel_id}"
+    else:
+        channel["defaultTo"] = _NO_HOME_CHANNEL_TARGET
+    return channel
+
+
+def native_telegram_channel(settings: dict) -> dict:
+    """Map a Telegram Connection onto OpenClaw's bundled Telegram channel.
+
+    ``groups`` is the group allowlist and ``groupPolicy: "open"`` admits any member
+    of those groups. Groups always require a mention; DMs never do.
+    """
+    channel: dict = {"enabled": True, "dmPolicy": "disabled", "groupPolicy": "disabled"}
+    user_ids = _setting_ids(settings, "allowed_user_ids")
+    dm_policy = settings.get("dm_policy", "off")
+    if dm_policy == "open":
+        channel.update(dmPolicy="open", allowFrom=["*"])
+    elif dm_policy == "allowlist" and user_ids:
+        # An empty allowlist drops every DM anyway and OpenClaw warns about it.
+        channel.update(dmPolicy="allowlist", allowFrom=user_ids)
+    group_ids = (
+        ["*"] if settings.get("group_policy", "allowlist") == "open" else _setting_ids(settings, "allowed_chat_ids")
     )
-    cfg = _openclaw_config_core(
-        model,
-        litellm_base_url,
-        binding_channel="discord",
-        channels={
-            "discord": {
-                "enabled": True,
-                "groupPolicy": group_policy,
-                "dmPolicy": "disabled",
-                "allowFrom": [],
-                "dm": {"enabled": False},
-                "guilds": guilds,
-            }
-        },
-    )
-    if home_channel_id:
-        cfg["agents"]["defaults"]["heartbeat"] = {
-            "target": "discord",
-            "to": f"channel:{home_channel_id}",
-            "directPolicy": "block",
-        }
-    return cfg
+    if group_ids:
+        channel["groupPolicy"] = "open"
+        channel["groups"] = {group_id: {"requireMention": True} for group_id in group_ids}
+    if home_channel_id := settings.get("home_channel_id"):
+        channel["defaultTo"] = str(home_channel_id)
+    else:
+        channel["defaultTo"] = _NO_HOME_CHANNEL_TARGET
+    return channel
+
+
+def runtime_teams_channel(settings: dict) -> dict:
+    """Configure OpenClaw's runtime-owned Microsoft Teams webhook adapter.
+
+    Credentials remain Kubernetes Secret values and are read from OpenClaw's
+    documented ``MSTEAMS_*`` environment variables rather than being written to
+    its persistent config.
+    Agent Barn's public relay owns Connection policy enforcement.
+    """
+    channel = {
+        "enabled": True,
+        "webhook": {"port": 3978, "path": "/api/messages"},
+        "dmPolicy": "open",
+        "allowFrom": ["*"],
+        "groupPolicy": "open",
+        "groupAllowFrom": ["*"],
+    }
+    if home_channel_id := settings.get("home_channel_id"):
+        channel["defaultTo"] = f"conversation:{home_channel_id}"
+    else:
+        channel["defaultTo"] = "conversation:__agentbarn_no_home_channel__"
+    return channel
+
+
+def native_channel_env(credentials_by_platform: dict[str, dict]) -> dict[str, str]:
+    """Secret entries for native channel tokens and the observer."""
+    env = {
+        "AGENTBARN_NATIVE_CHANNELS": ",".join(credentials_by_platform),
+        # The native gateway delivers scheduled results to their origin or defaultTo.
+        "AGENTBARN_SCHEDULED_DELIVERY": "0",
+    }
+    if slack := credentials_by_platform.get("slack"):
+        env["SLACK_BOT_TOKEN"] = slack["bot_token"]
+        env["SLACK_APP_TOKEN"] = slack["app_token"]
+    if discord := credentials_by_platform.get("discord"):
+        env["DISCORD_BOT_TOKEN"] = discord["bot_token"]
+    if telegram := credentials_by_platform.get("telegram"):
+        env["TELEGRAM_BOT_TOKEN"] = telegram["bot_token"]
+    if teams := credentials_by_platform.get("msteams"):
+        env["MSTEAMS_APP_ID"] = teams["app_id"]
+        env["MSTEAMS_APP_PASSWORD"] = teams["app_password"]
+        env["MSTEAMS_TENANT_ID"] = teams["tenant_id"]
+    return env
 
 
 def build_config_map(
@@ -265,6 +305,7 @@ def build_config_map(
     openclaw_config_overlay: dict | None = None,
     aai_cli_config_toml: str | None = None,
     aai_cli_setup_sh: str | None = None,
+    gog_setup_sh: str | None = None,
     skills_json: str | None = None,
 ) -> client.V1ConfigMap:
     data = {
@@ -282,13 +323,23 @@ def build_config_map(
         data["init-openclaw.js"] = INIT_OPENCLAW_JS
         data["healthz-server.js"] = HEALTHZ_SERVER_JS
         data["start.sh"] = START_SH
+        data["legacy-workspace-migration.sh"] = LEGACY_WORKSPACE_MIGRATION_SH
         data["telemetry-push-index.js"] = TELEMETRY_PUSH_INDEX_JS
         data["telemetry-push-package.json"] = TELEMETRY_PUSH_PACKAGE_JSON
         data["telemetry-push-plugin.json"] = TELEMETRY_PUSH_PLUGIN_JSON
+        data["agentbarn-observer-index.js"] = OBSERVER_INDEX_JS
+        data["agentbarn-observer-package.json"] = OBSERVER_PACKAGE_JSON
+        data["agentbarn-observer-plugin.json"] = OBSERVER_PLUGIN_JSON
+        data["communications-runtime-adapter.py"] = COMMUNICATIONS_RUNTIME_ADAPTER_PY
+        data["agent-trigger-server.py"] = AGENT_TRIGGER_SERVER_PY
+        data["agentbarn_message.py"] = AGENTBARN_MESSAGE_PY
+        data["openclaw-messaging.js"] = OPENCLAW_MESSAGING_JS
     if aai_cli_config_toml is not None:
         data["aai-cli-config.toml"] = aai_cli_config_toml
     if aai_cli_setup_sh is not None:
         data["aai-cli-setup.sh"] = aai_cli_setup_sh
+    if gog_setup_sh is not None:
+        data["gog-setup.sh"] = gog_setup_sh
     if skills_json is not None:
         data["skills.json"] = skills_json
     return client.V1ConfigMap(
@@ -301,12 +352,12 @@ def build_config_map(
     )
 
 
-def build_secret_slack(
+def build_secret_runtime(
     agent_id: UUID,
     org_id: UUID,
     namespace: str,
-    slack_bot_token: str,
-    slack_app_token: str,
+    *,
+    runtime_api_key: str,
     litellm_api_key: str,
     litellm_base_url: str,
 ) -> client.V1Secret:
@@ -317,79 +368,12 @@ def build_secret_slack(
             labels=_labels(agent_id, org_id),
         ),
         string_data={
-            "SLACK_BOT_TOKEN": slack_bot_token,
-            "SLACK_APP_TOKEN": slack_app_token,
-            "LITELLM_API_KEY": litellm_api_key,
-            "LITELLM_BASE_URL": litellm_base_url,
-            "AGENT_PLATFORM": "slack",
-        },
-    )
-
-
-def build_secret_telegram(
-    agent_id: UUID,
-    org_id: UUID,
-    namespace: str,
-    telegram_bot_token: str,
-    litellm_api_key: str,
-    litellm_base_url: str,
-) -> client.V1Secret:
-    return client.V1Secret(
-        metadata=client.V1ObjectMeta(
-            name=_resource_name(agent_id),
-            namespace=namespace,
-            labels=_labels(agent_id, org_id),
-        ),
-        string_data={
-            "TELEGRAM_BOT_TOKEN": telegram_bot_token,
-            "LITELLM_API_KEY": litellm_api_key,
-            "LITELLM_BASE_URL": litellm_base_url,
-            "AGENT_PLATFORM": "telegram",
-        },
-    )
-
-
-def build_secret_discord(
-    agent_id: UUID,
-    org_id: UUID,
-    namespace: str,
-    discord_bot_token: str,
-    litellm_api_key: str,
-    litellm_base_url: str,
-) -> client.V1Secret:
-    return client.V1Secret(
-        metadata=client.V1ObjectMeta(
-            name=_resource_name(agent_id), namespace=namespace, labels=_labels(agent_id, org_id)
-        ),
-        string_data={
-            "DISCORD_BOT_TOKEN": discord_bot_token,
-            "LITELLM_API_KEY": litellm_api_key,
-            "LITELLM_BASE_URL": litellm_base_url,
-            "AGENT_PLATFORM": "discord",
-        },
-    )
-
-
-def build_secret_teams(
-    agent_id: UUID,
-    org_id: UUID,
-    namespace: str,
-    msteams_app_id: str,
-    msteams_app_password: str,
-    msteams_tenant_id: str,
-    litellm_api_key: str,
-    litellm_base_url: str,
-) -> client.V1Secret:
-    return client.V1Secret(
-        metadata=client.V1ObjectMeta(
-            name=_resource_name(agent_id),
-            namespace=namespace,
-            labels=_labels(agent_id, org_id),
-        ),
-        string_data={
-            "MSTEAMS_APP_ID": msteams_app_id,
-            "MSTEAMS_APP_PASSWORD": msteams_app_password,
-            "MSTEAMS_TENANT_ID": msteams_tenant_id,
+            "OPENCLAW_GATEWAY_TOKEN": runtime_api_key,
+            "RUNTIME_API_KEY": runtime_api_key,
+            "RUNTIME_API_URL": f"http://127.0.0.1:{OPENCLAW_GATEWAY_PORT}",
+            "RUNTIME_MODEL": "openclaw/default",
+            "RUNTIME_KIND": "openclaw",
+            "AGENT_TRIGGER_RECEIPT_PATH": "/home/node/.openclaw/agent-trigger-receipts.sqlite3",
             "LITELLM_API_KEY": litellm_api_key,
             "LITELLM_BASE_URL": litellm_base_url,
         },
@@ -404,7 +388,7 @@ def build_deployment(
     image_pull_secret: str = "",
 ) -> client.V1Deployment:
     name = _resource_name(agent_id)
-    labels = _labels(agent_id, org_id)
+    labels = _labels(agent_id, org_id, runtime="openclaw")
 
     return client.V1Deployment(
         metadata=client.V1ObjectMeta(
@@ -414,6 +398,10 @@ def build_deployment(
         ),
         spec=client.V1DeploymentSpec(
             replicas=1,
+            # replicas=1 backed by a ReadWriteOnce PVC: RollingUpdate's surge wants
+            # a second pod, which doubles the agent's memory and then deadlocks
+            # waiting for a volume the outgoing pod still holds.
+            strategy=client.V1DeploymentStrategy(type="Recreate"),
             selector=client.V1LabelSelector(match_labels={"app": name}),
             template=client.V1PodTemplateSpec(
                 metadata=client.V1ObjectMeta(labels=labels),
@@ -442,6 +430,7 @@ def build_deployment(
                             name="agent",
                             image=image,
                             command=["sh", "/app/config/start.sh"],
+                            resources=AGENT_RESOURCES,
                             readiness_probe=client.V1Probe(
                                 http_get=client.V1HTTPGetAction(
                                     path="/ready",

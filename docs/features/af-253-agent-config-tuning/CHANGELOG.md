@@ -7,11 +7,22 @@ Related context: [`../agents.md`](../agents.md), [`../../adr/2026-08-09-agent-sc
 ## Current state
 
 - Delivered: full-page Agent configuration, Agent-owned drafts, immutable published Override Versions, authorship, required-Skill validation, shared and Override history, safe historical selection/rollback, draft preservation, retention after soft Agent deletion, and direct Platform/Organization source updates.
-- In transition: pending activation state was intentionally discarded; the explicit Apply & Restart workflow remains.
+- In transition: pending activation state was intentionally discarded; the explicit Apply & Restart workflow remains. Required-Skill version enforcement moved out of Override authoring to selection under AF-341.
 - Next: none for the delivered AF-253 slices.
 - Blockers: none.
 
 ## Changes
+
+### 2026-09-23 — AF-341-01
+
+- Changed: the required-Skill validation this epic delivered no longer asks for
+  exact Skill Version match at Override Draft save or Override publish. Those
+  steps record a requirement without activating it, so they validate presence,
+  visibility and provider requirements only; exact version match is asked at
+  `select_agent_template`, where the pin becomes live. An Override may therefore
+  be drafted and published requiring a Skill Version above the Agent's current
+  pin, and selecting it still refuses unless the matching pins arrive with it.
+- Context: [`../af-341-required-skill-versions/CHANGELOG.md`](../af-341-required-skill-versions/CHANGELOG.md).
 
 ### 2026-08-11 — AF-253-04
 

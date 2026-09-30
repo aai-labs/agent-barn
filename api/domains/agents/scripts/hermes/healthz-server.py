@@ -8,28 +8,45 @@ from urllib.error import URLError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
-PROXY_PORT = 8090
+PROXY_PORT = int(os.environ.get("LLM_PROXY_PORT", "8090"))
 PORT = int(os.environ.get("HEALTHZ_PORT", "8081"))
-HERMES_URL = "http://localhost:8642/v1/models"
+HERMES_URL = "http://127.0.0.1:8642/v1/models"
 POLL_INTERVAL = 10
-TOKEN_POLL_INTERVAL = 300  # 5 minutes
 
 LITELLM_PROXY_TARGET = os.environ.get("LITELLM_PROXY_TARGET", "")
-
 _lock = threading.Lock()
 _cache: dict = {"ok": None, "ever_connected": False, "reason": None}
-_token_cache: dict = {"ok": None, "reason": None}
-
-AGENT_PLATFORM = os.environ.get("AGENT_PLATFORM", "slack")
-_SLACK_API = "https://slack.com/api"
-_TELEGRAM_API = "https://api.telegram.org"
-_SKIP_VALIDATION = os.environ.get("SKIP_SLACK_TOKEN_VALIDATION", "").lower() in ("1", "true", "yes")
 
 _TERMINAL_LLM_ERRORS: dict[int, str] = {
     401: "LLM API key is invalid or expired. Check your API key configuration.",
     402: "OpenRouter credits exhausted. Add credits at https://openrouter.ai/credits.",
     403: "LLM API access denied. Check your account permissions.",
 }
+
+_BUDGET_EXHAUSTED = (
+    "This organization has reached its model spend limit. "
+    "Contact your administrator to raise it or wait for the limit to reset."
+)
+
+
+# An exhausted limit has been seen as a 400 and is documented as a 429 depending on
+# which budget was hit and which proxy version answered. Both are buffered and matched
+# on the error body, so a version difference cannot leak the upstream text.
+_BUDGET_STATUSES = (400, 429)
+
+
+def _budget_message(body: bytes) -> str | None:
+    """Matched on the body rather than the status: these statuses also carry malformed
+    requests, unknown models and rate limits, which must keep their own errors. The
+    upstream text names an internal team id, so it is replaced, never passed through.
+    """
+    try:
+        error = json.loads(body).get("error") or {}
+    except (ValueError, AttributeError):
+        return None
+    if not isinstance(error, dict) or error.get("type") != "budget_exceeded":
+        return None
+    return _BUDGET_EXHAUSTED
 
 
 def _poll() -> None:
@@ -50,77 +67,20 @@ def _poll() -> None:
         time.sleep(POLL_INTERVAL)
 
 
-def _check_token(url: str, token: str, label: str) -> tuple[bool, str]:
-    try:
-        req = Request(
-            url,
-            data=b"",
-            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
-        )
-        with urlopen(req, timeout=15) as resp:
-            body = json.loads(resp.read())
-        if body.get("ok"):
-            return True, ""
-        return False, f"Invalid {label}: {body.get('error', 'unknown_error')}"
-    except Exception as exc:
-        return False, f"{label} validation failed: {exc}"
-
-
-def _check_telegram_token(token: str) -> tuple[bool, str]:
-    try:
-        url = f"{_TELEGRAM_API}/bot{token}/getMe"
-        req = Request(url)
-        with urlopen(req, timeout=15) as resp:
-            body = json.loads(resp.read())
-        if body.get("ok"):
-            return True, ""
-        return False, f"Invalid Telegram bot token: {body.get('description', 'unknown_error')}"
-    except Exception as exc:
-        return False, f"Telegram token validation failed: {exc}"
-
-
-def _poll_tokens() -> None:
-    if _SKIP_VALIDATION:
-        with _lock:
-            _token_cache["ok"] = True
-            _token_cache["reason"] = None
-        return
-
-    while True:
-        if AGENT_PLATFORM == "telegram":
-            telegram_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-            ok, reason = _check_telegram_token(telegram_token)
-        else:
-            bot_token = os.environ.get("SLACK_BOT_TOKEN", "")
-            app_token = os.environ.get("SLACK_APP_TOKEN", "")
-            ok, reason = _check_token(f"{_SLACK_API}/auth.test", bot_token, "bot token")
-            if ok:
-                ok, reason = _check_token(f"{_SLACK_API}/apps.connections.open", app_token, "app token")
-        with _lock:
-            _token_cache["ok"] = ok
-            _token_cache["reason"] = reason if not ok else None
-        time.sleep(TOKEN_POLL_INTERVAL)
-
-
 threading.Thread(target=_poll, daemon=True).start()
-threading.Thread(target=_poll_tokens, daemon=True).start()
 
 
 def _snapshot() -> tuple:
-    """One consistent read of both caches; handlers stay lock-free."""
+    """One consistent read of the runtime cache; handlers stay lock-free."""
     with _lock:
         return (
             _cache["ok"],
             _cache["ever_connected"],
             _cache["reason"],
-            _token_cache["ok"],
-            _token_cache["reason"],
         )
 
 
-def _metrics_text(ok, ever, tok_ok) -> str:
-    # Token gauge stays 1 while unknown/starting; 0 only on a definite
-    # failure, so a slow first validation never trips an alert.
+def _metrics_text(ok, ever) -> str:
     lines = [
         "# HELP agent_healthz_ok 1 if the agent runtime is reachable, 0 otherwise",
         "# TYPE agent_healthz_ok gauge",
@@ -128,24 +88,23 @@ def _metrics_text(ok, ever, tok_ok) -> str:
         "# HELP agent_healthz_ever_connected 1 once the runtime has connected at least once",
         "# TYPE agent_healthz_ever_connected gauge",
         f"agent_healthz_ever_connected {1 if ever else 0}",
-        "# HELP agent_slack_tokens_ok 0 if Slack token validation definitely failed, 1 otherwise",
-        "# TYPE agent_slack_tokens_ok gauge",
-        f"agent_slack_tokens_ok {0 if tok_ok is False else 1}",
     ]
     return "\n".join(lines) + "\n"
 
 
-def _healthz_result(ok, ever, reason, tok_ok, tok_reason) -> tuple[int, dict]:
-    # Token failures surface immediately as errors
-    if tok_ok is False:
-        return 500, {"status": "error", "reason": tok_reason}
-    if ok is None or tok_ok is None:
+def _healthz_result(ok, ever, reason) -> tuple[int, dict]:
+    if ok is None:
         return 503, {"status": "starting"}
     if ok:
         return 200, {"status": "ok"}
     if ever:
         return 500, {"status": "error", "reason": reason}
     return 503, {"status": "starting", "reason": reason}
+
+
+def _liveness_result() -> tuple[int, dict]:
+    """The sidecar process is live; provider sessions run in Communications."""
+    return 200, {"live": True}
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -155,9 +114,11 @@ class _Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         if self.path == "/ready":
             self._send(200, {"ready": True})
+        elif self.path == "/live":
+            self._send(*_liveness_result())
         elif self.path == "/metrics":
-            ok, ever, _, tok_ok, _ = _snapshot()
-            self._send_text(200, _metrics_text(ok, ever, tok_ok))
+            ok, ever, _ = _snapshot()
+            self._send_text(200, _metrics_text(ok, ever))
         elif self.path == "/healthz":
             code, body = _healthz_result(*_snapshot())
             self._send(code, body)
@@ -236,8 +197,16 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             upstream = conn.getresponse()
 
             clean_msg = _TERMINAL_LLM_ERRORS.get(upstream.status)
+            buffered: bytes | None = None
+            if clean_msg is None and upstream.status in _BUDGET_STATUSES:
+                # Only these are buffered. Everything else is either already mapped or
+                # must keep streaming, which reading it here would break.
+                buffered = upstream.read()
+                clean_msg = _budget_message(buffered)
+
             if clean_msg:
-                upstream.read()
+                if buffered is None:
+                    upstream.read()
                 clean_body = json.dumps(
                     {"error": {"message": clean_msg, "type": None, "param": None, "code": str(upstream.status)}}
                 ).encode()
@@ -256,11 +225,15 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                         self.send_header(key, val)
                 self.end_headers()
                 headers_sent = True
-                while True:
-                    chunk = upstream.read(8192)
-                    if not chunk:
-                        break
-                    self.wfile.write(chunk)
+                if buffered is not None:
+                    # Already consumed while checking for a budget rejection.
+                    self.wfile.write(buffered)
+                else:
+                    while True:
+                        chunk = upstream.read(8192)
+                        if not chunk:
+                            break
+                        self.wfile.write(chunk)
         except Exception:
             if not headers_sent:
                 self.send_response(502)

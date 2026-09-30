@@ -71,6 +71,8 @@ class AgentTemplate(BaseModel, table=True):
 
 
 class TemplateRequiredSkillRead(SkillRead):
+    # The exact immutable Skill Version required by this Template Version.
+    version: int
     # None for a standalone (AND-required) skill; otherwise the key of the
     # "at least one of" group this skill belongs to on this template.
     group_key: str | None = None
@@ -155,6 +157,58 @@ class PlatformTemplateDraft(BaseModel, table=True):
     heartbeat_md: str = SqlField(nullable=False)
 
 
+class AgentTemplateDraft(BaseModel, table=True):
+    __tablename__: str = "agent_template_draft"
+
+    # An unpublished, in-progress next version of an organization's Template
+    # lineage. Mirrors PlatformTemplateDraft, but organization-scoped: two
+    # organizations can hold a draft for the same forked template_key, so
+    # uniqueness is (organization_id, template_key). Publishing turns it into
+    # the next immutable agent_template row and deletes this row.
+    #
+    # The fork columns are stored rather than re-derived at publish: a Platform
+    # Template can be published between seeding this draft and publishing it,
+    # so the baseline recorded here is the one the author actually copied.
+    __table_args__ = (
+        sa.Index("ix_agent_template_draft_organization_id", "organization_id"),
+        sa.UniqueConstraint(
+            "organization_id",
+            "template_key",
+            name="uq_agent_template_draft_org_key",
+        ),
+    )
+
+    organization_id: UUID = SqlField(foreign_key="organization.id", nullable=False, ondelete="CASCADE")
+    forked_from_platform_template_id: UUID | None = SqlField(
+        default=None,
+        foreign_key="platform_template.id",
+        nullable=True,
+        ondelete="SET NULL",
+    )
+    fork_baseline_platform_template_id: UUID | None = SqlField(
+        default=None,
+        foreign_key="platform_template.id",
+        nullable=True,
+        ondelete="SET NULL",
+    )
+    fork_baseline_platform_version: int | None = SqlField(default=None, nullable=True)
+    template_key: str = SqlField(nullable=False, max_length=255)
+    template_name: str = SqlField(nullable=False, max_length=255)
+    template_source: TemplateSource = SqlField(
+        default=TemplateSource.CUSTOM,
+        sa_column=Column(sa.String(20), nullable=False, server_default="custom"),
+    )
+    description: str | None = SqlField(default=None, nullable=True, max_length=500)
+    soul_md: str = SqlField(nullable=False)
+    identity_md: str = SqlField(nullable=False)
+    user_md: str = SqlField(nullable=False)
+    tools_md: str = SqlField(nullable=False)
+    agents_md: str = SqlField(nullable=False)
+    boot_md: str = SqlField(nullable=False)
+    bootstrap_md: str = SqlField(nullable=False)
+    heartbeat_md: str = SqlField(nullable=False)
+
+
 class TemplateRead(PydanticBaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -211,6 +265,31 @@ class PlatformTemplateDraftRead(PydanticBaseModel):
     required_skills: list[TemplateRequiredSkillRead] = Field(default_factory=list)
 
 
+class AgentTemplateDraftRead(PydanticBaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    organization_id: UUID
+    template_key: str
+    template_name: str
+    template_source: TemplateSource
+    forked_from_platform_template_id: UUID | None = None
+    fork_baseline_platform_template_id: UUID | None = None
+    fork_baseline_platform_version: int | None = None
+    description: str | None
+    soul_md: str
+    identity_md: str
+    user_md: str
+    tools_md: str
+    agents_md: str
+    boot_md: str
+    bootstrap_md: str
+    heartbeat_md: str
+    created_at: datetime
+    updated_at: datetime
+    required_skills: list[TemplateRequiredSkillRead] = Field(default_factory=list)
+
+
 class TemplateCreate(PydanticBaseModel):
     template_name: str = Field(min_length=1, max_length=255)
     description: str | None = None
@@ -224,6 +303,7 @@ class TemplateCreate(PydanticBaseModel):
     heartbeat_md: str | None = None
     required_skill_ids: list[UUID] = Field(default_factory=list)
     required_skill_groups: list[TemplateSkillGroup] = Field(default_factory=list)
+    required_skill_versions: dict[UUID, int] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def validate_skill_groups(self) -> TemplateCreate:
@@ -245,6 +325,7 @@ class TemplateUpdate(PydanticBaseModel):
     heartbeat_md: str | None = None
     required_skill_ids: list[UUID] | None = None
     required_skill_groups: list[TemplateSkillGroup] | None = None
+    required_skill_versions: dict[UUID, int] | None = None
 
     @model_validator(mode="after")
     def validate_not_empty(self) -> TemplateUpdate:
@@ -277,6 +358,7 @@ class PlatformTemplateDraftCreate(PydanticBaseModel):
     heartbeat_md: str | None = None
     required_skill_ids: list[UUID] = Field(default_factory=list)
     required_skill_groups: list[TemplateSkillGroup] = Field(default_factory=list)
+    required_skill_versions: dict[UUID, int] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def validate_skill_groups(self) -> PlatformTemplateDraftCreate:
@@ -296,6 +378,7 @@ class PlatformTemplateDraftUpdate(PydanticBaseModel):
     heartbeat_md: str | None = None
     required_skill_ids: list[UUID] | None = None
     required_skill_groups: list[TemplateSkillGroup] | None = None
+    required_skill_versions: dict[UUID, int] | None = None
 
     @model_validator(mode="after")
     def validate_not_empty(self) -> PlatformTemplateDraftUpdate:
@@ -317,6 +400,13 @@ class PlatformTemplateAdminSummary(PydanticBaseModel):
     template_name: str
     latest_published_version: int | None
     has_draft: bool
+
+
+class OrganizationTemplateLineageSummary(PlatformTemplateAdminSummary):
+    template_source: TemplateSource
+    is_fork: bool = False
+    platform_update_available: bool = False
+    in_use: bool = False
 
 
 class TemplateFilter(PydanticBaseModel):

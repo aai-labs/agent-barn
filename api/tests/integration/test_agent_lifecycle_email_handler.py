@@ -75,7 +75,6 @@ def _start_agent_and_get_delivery_id(context) -> tuple[DomainEventEnvelope, Even
             "agent_name": agent.name,
             "previous_status": AgentStatus.STOPPED.value,
             "new_status": AgentStatus.RUNNING.value,
-            "platform": agent.platform,
             "runtime": agent.agent_type,
         },
     )

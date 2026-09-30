@@ -1,4 +1,4 @@
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Protocol
@@ -10,6 +10,7 @@ from sqlmodel import Session, col, delete, select, update
 
 from api.domains.agents.models import (
     Agent,
+    AgentTemplateDraftSkill,
     AgentTemplateOverrideVersion,
     AgentTemplateOverrideVersionSkill,
     AgentTemplateSkill,
@@ -21,12 +22,13 @@ from api.domains.events.catalog import (
     EVENT_REGISTRY,
     TEMPLATE_CREATED,
     TEMPLATE_DELETED,
-    TEMPLATE_UPDATED,
 )
 from api.domains.events.repository import OutboxMessageRepository
-from api.domains.skills.models import Skill
+from api.domains.skills.models import Skill, SkillVersion
 from api.domains.templates.models import (
     AgentTemplate,
+    AgentTemplateDraft,
+    AgentTemplateDraftRead,
     PlatformTemplate,
     PlatformTemplateAdminSummary,
     PlatformTemplateDraft,
@@ -50,33 +52,65 @@ class TemplateKeyCollisionError(RuntimeError):
     """Raised when a newly generated key is already used by any template row."""
 
 
-_TEMPLATE_KEY_ALLOCATION_LOCK = "agent-farm.template-key-allocation"
+class SkillVersionResolutionError(ValueError):
+    """Raised when a legacy requirement has no published Skill Version."""
+
+
+_TEMPLATE_KEY_ALLOCATION_LOCK = "agent-barn.template-key-allocation"
 
 
 class _RequiredSkillRow(Protocol):
     skill_id: UUID
+    skill_version: int
     group_key: str | None
+
+
+SkillRequirementMap = dict[UUID, tuple[int, str | None]]
+SkillRequirementInput = Mapping[UUID, str | None | tuple[int, str | None]]
+
+
+def _resolve_skill_versions(session: Session, requirements: SkillRequirementInput) -> SkillRequirementMap:
+    """Pin lineage-only authoring inputs to the latest published Skill Version."""
+    if not requirements:
+        return {}
+    skill_ids = list(requirements)
+    latest_rows = session.exec(
+        select(SkillVersion.skill_id, func.max(col(SkillVersion.version)))
+        .where(col(SkillVersion.skill_id).in_(skill_ids))
+        .group_by(col(SkillVersion.skill_id))
+    ).all()
+    latest = dict(latest_rows)
+    resolved: SkillRequirementMap = {}
+    for skill_id, value in requirements.items():
+        if isinstance(value, tuple):
+            resolved[skill_id] = value
+            continue
+        version = latest.get(skill_id)
+        if version is None:
+            raise SkillVersionResolutionError(f"Skill {skill_id} has no published version")
+        resolved[skill_id] = (version, value)
+    return resolved
 
 
 def _diff_sync_skill_rows(
     session: Session,
     existing_rows: Sequence[_RequiredSkillRow],
-    group_keys_by_skill_id: dict[UUID, str | None],
-    make_row: Callable[[UUID, str | None], _RequiredSkillRow],
+    requirements: SkillRequirementInput,
+    make_row: Callable[[UUID, int, str | None], _RequiredSkillRow],
 ) -> None:
-    """Reconcile a parent's required-skill rows with the desired group_key per
-    skill (None = standalone AND-required; shared non-None keys form an
-    "at least one of" group)."""
+    """Reconcile required-skill rows, including their immutable version pins."""
+    resolved = _resolve_skill_versions(session, requirements)
     existing_by_id = {row.skill_id: row for row in existing_rows}
     for skill_id, row in existing_by_id.items():
-        if skill_id not in group_keys_by_skill_id:
+        desired = resolved.get(skill_id)
+        if desired is None:
             session.delete(row)
-        elif row.group_key != group_keys_by_skill_id[skill_id]:
-            row.group_key = group_keys_by_skill_id[skill_id]
+        elif (row.skill_version, row.group_key) != desired:
+            row.skill_version, row.group_key = desired
             session.add(row)
-    for skill_id, group_key in group_keys_by_skill_id.items():
+    for skill_id, (version, group_key) in resolved.items():
         if skill_id not in existing_by_id:
-            session.add(make_row(skill_id, group_key))
+            session.add(make_row(skill_id, version, group_key))
 
 
 @inject
@@ -89,13 +123,15 @@ class TemplateRepository:
     @staticmethod
     def to_read(
         template: AgentTemplate | PlatformTemplate,
-        skills: list[tuple[Skill, str | None]] | None = None,
+        skills: list[tuple[Skill, int, str | None]] | None = None,
     ) -> TemplateRead:
         from api.domains.skills.models import SkillRead
 
         required_skills = [
-            TemplateRequiredSkillRead(**SkillRead.model_validate(skill).model_dump(), group_key=group_key)
-            for skill, group_key in (skills or [])
+            TemplateRequiredSkillRead(
+                **SkillRead.model_validate(skill).model_dump(), version=version, group_key=group_key
+            )
+            for skill, version, group_key in (skills or [])
         ]
         if isinstance(template, PlatformTemplate):
             return TemplateRead(
@@ -147,13 +183,15 @@ class TemplateRepository:
     @staticmethod
     def to_draft_read(
         draft: PlatformTemplateDraft,
-        skills: list[tuple[Skill, str | None]] | None = None,
+        skills: list[tuple[Skill, int, str | None]] | None = None,
     ) -> PlatformTemplateDraftRead:
         from api.domains.skills.models import SkillRead
 
         required_skills = [
-            TemplateRequiredSkillRead(**SkillRead.model_validate(skill).model_dump(), group_key=group_key)
-            for skill, group_key in (skills or [])
+            TemplateRequiredSkillRead(
+                **SkillRead.model_validate(skill).model_dump(), version=version, group_key=group_key
+            )
+            for skill, version, group_key in (skills or [])
         ]
         return PlatformTemplateDraftRead(
             id=draft.id,
@@ -177,13 +215,15 @@ class TemplateRepository:
     def to_override_read(
         version: AgentTemplateOverrideVersion,
         organization_id: UUID,
-        skills: list[tuple[Skill, str | None]] | None = None,
+        skills: list[tuple[Skill, int, str | None]] | None = None,
     ) -> TemplateRead:
         from api.domains.skills.models import SkillRead
 
         required_skills = [
-            TemplateRequiredSkillRead(**SkillRead.model_validate(skill).model_dump(), group_key=group_key)
-            for skill, group_key in (skills or [])
+            TemplateRequiredSkillRead(
+                **SkillRead.model_validate(skill).model_dump(), version=skill_version, group_key=group_key
+            )
+            for skill, skill_version, group_key in (skills or [])
         ]
         return TemplateRead(
             id=version.id,
@@ -299,7 +339,7 @@ class TemplateRepository:
 
     @staticmethod
     def _template_key_exists(session: Session, template_key: str) -> bool:
-        for model in (AgentTemplate, PlatformTemplate, PlatformTemplateDraft):
+        for model in (AgentTemplate, PlatformTemplate, PlatformTemplateDraft, AgentTemplateDraft):
             if (
                 session.exec(select(model.id).where(col(model.template_key) == template_key).limit(1)).first()
                 is not None
@@ -310,7 +350,7 @@ class TemplateRepository:
     def save_new_org_template_with_skills_and_event(
         self,
         template: AgentTemplate,
-        group_keys_by_skill_id: dict[UUID, str | None],
+        group_keys_by_skill_id: SkillRequirementInput,
         *,
         actor: ActorIdentity,
         actor_display: str | None = None,
@@ -326,8 +366,16 @@ class TemplateRepository:
                 raise TemplateKeyCollisionError(template.template_key)
             session.add(template)
             session.flush()
-            for skill_id, group_key in group_keys_by_skill_id.items():
-                session.add(AgentTemplateSkill(template_id=template.id, skill_id=skill_id, group_key=group_key))
+            resolved = _resolve_skill_versions(session, group_keys_by_skill_id)
+            for skill_id, (skill_version, group_key) in resolved.items():
+                session.add(
+                    AgentTemplateSkill(
+                        template_id=template.id,
+                        skill_id=skill_id,
+                        skill_version=skill_version,
+                        group_key=group_key,
+                    )
+                )
             event = EVENT_REGISTRY.build_event(
                 event_name=TEMPLATE_CREATED,
                 schema_version=1,
@@ -359,19 +407,27 @@ class TemplateRepository:
     def save_org_template_version_with_skills(
         self,
         template: AgentTemplate,
-        group_keys_by_skill_id: dict[UUID, str | None],
+        group_keys_by_skill_id: SkillRequirementInput,
     ) -> AgentTemplate:
         """Persist one org template version and its requirements atomically."""
         with Session(self.delegate.engine) as session:
             session.add(template)
             session.flush()
-            for skill_id, group_key in group_keys_by_skill_id.items():
-                session.add(AgentTemplateSkill(template_id=template.id, skill_id=skill_id, group_key=group_key))
+            resolved = _resolve_skill_versions(session, group_keys_by_skill_id)
+            for skill_id, (skill_version, group_key) in resolved.items():
+                session.add(
+                    AgentTemplateSkill(
+                        template_id=template.id,
+                        skill_id=skill_id,
+                        skill_version=skill_version,
+                        group_key=group_key,
+                    )
+                )
             session.commit()
             session.refresh(template)
         return template
 
-    def save_org_template_skills(self, template_id: UUID, group_keys_by_skill_id: dict[UUID, str | None]) -> None:
+    def save_org_template_skills(self, template_id: UUID, group_keys_by_skill_id: SkillRequirementInput) -> None:
         """Diff-sync a template's required-skill rows (see _diff_sync_skill_rows)."""
         with Session(self.delegate.engine) as session:
             existing_rows = session.exec(
@@ -381,71 +437,19 @@ class TemplateRepository:
                 session,
                 existing_rows,
                 group_keys_by_skill_id,
-                lambda skill_id, group_key: AgentTemplateSkill(
-                    template_id=template_id, skill_id=skill_id, group_key=group_key
+                lambda skill_id, version, group_key: AgentTemplateSkill(
+                    template_id=template_id,
+                    skill_id=skill_id,
+                    skill_version=version,
+                    group_key=group_key,
                 ),
             )
             session.commit()
 
-    def save_template_with_updated_event(
-        self,
-        template: AgentTemplate,
-        skills_map: dict[UUID, str | None],
-        *,
-        previous_version: int,
-        field_changes: dict[str, dict[str, Any]],
-        actor: ActorIdentity,
-        actor_display: str | None = None,
-        correlation_id: UUID | None = None,
-    ) -> TemplateLifecycleEventResult:
-        """Insert the new immutable version row, its required-skill rows, and a
-        template.updated event in one transaction. `field_changes` is caller-supplied
-        (scoped to template_name/description only — see TemplateService.update_template)
-        rather than diffed here, since which fields count as audit-worthy is a product
-        decision, not a repository concern. No event is staged when field_changes is
-        empty (skills/markdown-only edits are covered elsewhere or excluded by design)."""
-        with Session(self.delegate.engine, expire_on_commit=False) as session:
-            session.add(template)
-            session.flush()
-            for skill_id, group_key in skills_map.items():
-                session.add(AgentTemplateSkill(template_id=template.id, skill_id=skill_id, group_key=group_key))
-            if not field_changes:
-                session.commit()
-                session.refresh(template)
-                return TemplateLifecycleEventResult(template=template, delivery_ids=[])
-            event = EVENT_REGISTRY.build_event(
-                event_name=TEMPLATE_UPDATED,
-                schema_version=1,
-                occurred_at=datetime.now(UTC),
-                organization_id=template.organization_id,
-                actor=actor,
-                subject=SubjectIdentity(
-                    type=SubjectIdentityType.TEMPLATE,
-                    id=template.id,
-                    organization_id=template.organization_id,
-                ),
-                correlation_id=correlation_id or uuid4(),
-                payload={
-                    "organization_id": template.organization_id,
-                    "template_id": template.id,
-                    "template_key": template.template_key,
-                    "previous_version": previous_version,
-                    "new_version": template.version,
-                    "field_changes": field_changes,
-                    "actor_display": actor_display or actor.type.value,
-                    "subject_display": template.template_name,
-                },
-            )
-            self.outbox_repository.stage(session=session, registry=EVENT_REGISTRY, event=event)
-            delivery_ids = list(session.exec(select(EventDelivery.id).where(EventDelivery.event_id == event.event_id)))
-            session.commit()
-            session.refresh(template)
-            return TemplateLifecycleEventResult(template=template, delivery_ids=delivery_ids)
-
-    def get_org_required_skills(self, template_id: UUID) -> list[tuple[Skill, str | None]]:
+    def get_org_required_skills(self, template_id: UUID) -> list[tuple[Skill, int, str | None]]:
         with Session(self.delegate.engine) as session:
             query = (
-                select(Skill, AgentTemplateSkill.group_key)
+                select(Skill, AgentTemplateSkill.skill_version, AgentTemplateSkill.group_key)
                 .join(
                     AgentTemplateSkill,
                     col(AgentTemplateSkill.skill_id) == col(Skill.id),
@@ -455,12 +459,16 @@ class TemplateRepository:
             )
             return list(session.exec(query).all())
 
-    def get_org_required_skill_map(self, template_id: UUID) -> dict[UUID, str | None]:
+    def get_org_required_skill_map(self, template_id: UUID) -> SkillRequirementMap:
         with Session(self.delegate.engine) as session:
-            query = select(AgentTemplateSkill.skill_id, AgentTemplateSkill.group_key).where(
-                col(AgentTemplateSkill.template_id) == template_id
-            )
-            return dict(session.exec(query).all())
+            query = select(
+                AgentTemplateSkill.skill_id,
+                AgentTemplateSkill.skill_version,
+                AgentTemplateSkill.group_key,
+            ).where(col(AgentTemplateSkill.template_id) == template_id)
+            return {
+                skill_id: (skill_version, group_key) for skill_id, skill_version, group_key in session.exec(query).all()
+            }
 
     def get_org_required_skill_ids(self, template_id: UUID) -> set[UUID]:
         with Session(self.delegate.engine) as session:
@@ -543,22 +551,30 @@ class TemplateRepository:
         self,
         published: PlatformTemplate,
         draft_id: UUID,
-        group_keys_by_skill_id: dict[UUID, str | None],
+        group_keys_by_skill_id: SkillRequirementInput,
     ) -> PlatformTemplate:
         """Persist the newly published platform template version, its required
         skills, and the draft's deletion in a single transaction."""
         with Session(self.delegate.engine) as session:
             session.add(published)
             session.flush()
-            for skill_id, group_key in group_keys_by_skill_id.items():
-                session.add(PlatformTemplateSkill(template_id=published.id, skill_id=skill_id, group_key=group_key))
+            resolved = _resolve_skill_versions(session, group_keys_by_skill_id)
+            for skill_id, (skill_version, group_key) in resolved.items():
+                session.add(
+                    PlatformTemplateSkill(
+                        template_id=published.id,
+                        skill_id=skill_id,
+                        skill_version=skill_version,
+                        group_key=group_key,
+                    )
+                )
             purge = delete(PlatformTemplateDraft).where(col(PlatformTemplateDraft.id) == draft_id)
             session.exec(purge)  # type: ignore[call-overload]
             session.commit()
             session.refresh(published)
         return published
 
-    def save_platform_template_skills(self, template_id: UUID, group_keys_by_skill_id: dict[UUID, str | None]) -> None:
+    def save_platform_template_skills(self, template_id: UUID, group_keys_by_skill_id: SkillRequirementInput) -> None:
         """Diff-sync a platform template's required-skill rows (see _diff_sync_skill_rows),
         group-aware (None = standalone AND-required; shared non-None keys form an
         "at least one of" group)."""
@@ -570,16 +586,19 @@ class TemplateRepository:
                 session,
                 existing_rows,
                 group_keys_by_skill_id,
-                lambda skill_id, group_key: PlatformTemplateSkill(
-                    template_id=template_id, skill_id=skill_id, group_key=group_key
+                lambda skill_id, version, group_key: PlatformTemplateSkill(
+                    template_id=template_id,
+                    skill_id=skill_id,
+                    skill_version=version,
+                    group_key=group_key,
                 ),
             )
             session.commit()
 
-    def get_platform_required_skills(self, template_id: UUID) -> list[tuple[Skill, str | None]]:
+    def get_platform_required_skills(self, template_id: UUID) -> list[tuple[Skill, int, str | None]]:
         with Session(self.delegate.engine) as session:
             query = (
-                select(Skill, PlatformTemplateSkill.group_key)
+                select(Skill, PlatformTemplateSkill.skill_version, PlatformTemplateSkill.group_key)
                 .join(
                     PlatformTemplateSkill,
                     col(PlatformTemplateSkill.skill_id) == col(Skill.id),
@@ -589,12 +608,16 @@ class TemplateRepository:
             )
             return list(session.exec(query).all())
 
-    def get_platform_required_skill_map(self, template_id: UUID) -> dict[UUID, str | None]:
+    def get_platform_required_skill_map(self, template_id: UUID) -> SkillRequirementMap:
         with Session(self.delegate.engine) as session:
-            query = select(PlatformTemplateSkill.skill_id, PlatformTemplateSkill.group_key).where(
-                col(PlatformTemplateSkill.template_id) == template_id
-            )
-            return dict(session.exec(query).all())
+            query = select(
+                PlatformTemplateSkill.skill_id,
+                PlatformTemplateSkill.skill_version,
+                PlatformTemplateSkill.group_key,
+            ).where(col(PlatformTemplateSkill.template_id) == template_id)
+            return {
+                skill_id: (skill_version, group_key) for skill_id, skill_version, group_key in session.exec(query).all()
+            }
 
     def get_platform_required_skill_ids(self, template_id: UUID) -> set[UUID]:
         with Session(self.delegate.engine) as session:
@@ -609,7 +632,7 @@ class TemplateRepository:
     def save_new_draft_with_skills(
         self,
         draft: PlatformTemplateDraft,
-        group_keys_by_skill_id: dict[UUID, str | None],
+        group_keys_by_skill_id: SkillRequirementInput,
     ) -> PlatformTemplateDraft:
         """Persist a new platform lineage draft, with a globally unique key, and
         its required skills atomically."""
@@ -619,8 +642,16 @@ class TemplateRepository:
                 raise TemplateKeyCollisionError(draft.template_key)
             session.add(draft)
             session.flush()
-            for skill_id, group_key in group_keys_by_skill_id.items():
-                session.add(PlatformTemplateDraftSkill(draft_id=draft.id, skill_id=skill_id, group_key=group_key))
+            resolved = _resolve_skill_versions(session, group_keys_by_skill_id)
+            for skill_id, (skill_version, group_key) in resolved.items():
+                session.add(
+                    PlatformTemplateDraftSkill(
+                        draft_id=draft.id,
+                        skill_id=skill_id,
+                        skill_version=skill_version,
+                        group_key=group_key,
+                    )
+                )
             session.commit()
             session.refresh(draft)
         return draft
@@ -628,7 +659,7 @@ class TemplateRepository:
     def save_draft_with_skills(
         self,
         draft: PlatformTemplateDraft,
-        group_keys_by_skill_id: dict[UUID, str | None],
+        group_keys_by_skill_id: SkillRequirementInput,
     ) -> PlatformTemplateDraft:
         """Persist a draft seeded from an existing lineage, and its required
         skills, atomically. The draft's template_key intentionally reuses the
@@ -636,8 +667,16 @@ class TemplateRepository:
         with Session(self.delegate.engine) as session:
             session.add(draft)
             session.flush()
-            for skill_id, group_key in group_keys_by_skill_id.items():
-                session.add(PlatformTemplateDraftSkill(draft_id=draft.id, skill_id=skill_id, group_key=group_key))
+            resolved = _resolve_skill_versions(session, group_keys_by_skill_id)
+            for skill_id, (skill_version, group_key) in resolved.items():
+                session.add(
+                    PlatformTemplateDraftSkill(
+                        draft_id=draft.id,
+                        skill_id=skill_id,
+                        skill_version=skill_version,
+                        group_key=group_key,
+                    )
+                )
             session.commit()
             session.refresh(draft)
         return draft
@@ -645,7 +684,7 @@ class TemplateRepository:
     def update_draft_with_skills(
         self,
         draft: PlatformTemplateDraft,
-        group_keys_by_skill_id: dict[UUID, str | None],
+        group_keys_by_skill_id: SkillRequirementInput,
     ) -> PlatformTemplateDraft:
         """Persist edits to an existing draft and diff-sync its required-skill
         rows atomically (see _diff_sync_skill_rows)."""
@@ -659,8 +698,11 @@ class TemplateRepository:
                 session,
                 existing_rows,
                 group_keys_by_skill_id,
-                lambda skill_id, group_key: PlatformTemplateDraftSkill(
-                    draft_id=draft.id, skill_id=skill_id, group_key=group_key
+                lambda skill_id, version, group_key: PlatformTemplateDraftSkill(
+                    draft_id=draft.id,
+                    skill_id=skill_id,
+                    skill_version=version,
+                    group_key=group_key,
                 ),
             )
             session.commit()
@@ -673,10 +715,10 @@ class TemplateRepository:
             session.exec(purge)  # type: ignore[call-overload]
             session.commit()
 
-    def get_draft_required_skills(self, draft_id: UUID) -> list[tuple[Skill, str | None]]:
+    def get_draft_required_skills(self, draft_id: UUID) -> list[tuple[Skill, int, str | None]]:
         with Session(self.delegate.engine) as session:
             query = (
-                select(Skill, PlatformTemplateDraftSkill.group_key)
+                select(Skill, PlatformTemplateDraftSkill.skill_version, PlatformTemplateDraftSkill.group_key)
                 .join(
                     PlatformTemplateDraftSkill,
                     col(PlatformTemplateDraftSkill.skill_id) == col(Skill.id),
@@ -686,12 +728,271 @@ class TemplateRepository:
             )
             return list(session.exec(query).all())
 
-    def get_draft_required_skill_map(self, draft_id: UUID) -> dict[UUID, str | None]:
+    def get_draft_required_skill_map(self, draft_id: UUID) -> SkillRequirementMap:
         with Session(self.delegate.engine) as session:
-            query = select(PlatformTemplateDraftSkill.skill_id, PlatformTemplateDraftSkill.group_key).where(
-                col(PlatformTemplateDraftSkill.draft_id) == draft_id
+            query = select(
+                PlatformTemplateDraftSkill.skill_id,
+                PlatformTemplateDraftSkill.skill_version,
+                PlatformTemplateDraftSkill.group_key,
+            ).where(col(PlatformTemplateDraftSkill.draft_id) == draft_id)
+            return {
+                skill_id: (skill_version, group_key) for skill_id, skill_version, group_key in session.exec(query).all()
+            }
+
+    # --- organization drafts -------------------------------------------------
+    #
+    # Mirrors the platform draft block above. Two differences: every query is
+    # organization-scoped, and the draft carries the fork baseline it copied so
+    # publishing is a pure copy of what the author saw.
+
+    @staticmethod
+    def to_org_draft_read(
+        draft: AgentTemplateDraft,
+        skills: list[tuple[Skill, int, str | None]] | None = None,
+    ) -> AgentTemplateDraftRead:
+        from api.domains.skills.models import SkillRead
+
+        required_skills = [
+            TemplateRequiredSkillRead(
+                **SkillRead.model_validate(skill).model_dump(), version=version, group_key=group_key
             )
-            return dict(session.exec(query).all())
+            for skill, version, group_key in (skills or [])
+        ]
+        return AgentTemplateDraftRead(
+            id=draft.id,
+            organization_id=draft.organization_id,
+            template_key=draft.template_key,
+            template_name=draft.template_name,
+            template_source=draft.template_source,
+            forked_from_platform_template_id=draft.forked_from_platform_template_id,
+            fork_baseline_platform_template_id=draft.fork_baseline_platform_template_id,
+            fork_baseline_platform_version=draft.fork_baseline_platform_version,
+            description=draft.description,
+            soul_md=draft.soul_md,
+            identity_md=draft.identity_md,
+            user_md=draft.user_md,
+            tools_md=draft.tools_md,
+            agents_md=draft.agents_md,
+            boot_md=draft.boot_md,
+            bootstrap_md=draft.bootstrap_md,
+            heartbeat_md=draft.heartbeat_md,
+            created_at=draft.created_at,
+            updated_at=draft.updated_at,
+            required_skills=required_skills,
+        )
+
+    def get_org_draft_names_by_key(self, org_id: UUID) -> dict[str, str]:
+        with Session(self.delegate.engine) as session:
+            rows = session.exec(
+                select(AgentTemplateDraft.template_key, AgentTemplateDraft.template_name)
+                .where(col(AgentTemplateDraft.organization_id) == org_id)
+                .order_by(col(AgentTemplateDraft.template_name).asc())
+            ).all()
+        return {template_key: name for template_key, name in rows}
+
+    def get_org_draft(self, org_id: UUID, template_key: str) -> AgentTemplateDraft | None:
+        with Session(self.delegate.engine) as session:
+            query = (
+                select(AgentTemplateDraft)
+                .where(col(AgentTemplateDraft.organization_id) == org_id)
+                .where(col(AgentTemplateDraft.template_key) == template_key)
+            )
+            return session.exec(query).first()
+
+    def save_new_org_draft_with_skills(
+        self,
+        draft: AgentTemplateDraft,
+        group_keys_by_skill_id: SkillRequirementInput,
+    ) -> AgentTemplateDraft:
+        """Persist a new org lineage draft, with a globally unique key, and its
+        required skills atomically. Raises TemplateKeyCollisionError so callers
+        retry with a fresh key (see TemplateService._allocate_unique_key)."""
+        with Session(self.delegate.engine) as session:
+            self._lock_template_key_allocation(session)
+            if self._template_key_exists(session, draft.template_key):
+                raise TemplateKeyCollisionError(draft.template_key)
+            session.add(draft)
+            session.flush()
+            resolved = _resolve_skill_versions(session, group_keys_by_skill_id)
+            for skill_id, (skill_version, group_key) in resolved.items():
+                session.add(
+                    AgentTemplateDraftSkill(
+                        draft_id=draft.id,
+                        skill_id=skill_id,
+                        skill_version=skill_version,
+                        group_key=group_key,
+                    )
+                )
+            session.commit()
+            session.refresh(draft)
+        return draft
+
+    def save_org_draft_with_skills(
+        self,
+        draft: AgentTemplateDraft,
+        group_keys_by_skill_id: SkillRequirementInput,
+    ) -> AgentTemplateDraft:
+        """Persist a draft seeded from an existing lineage, and its required
+        skills, atomically. The draft's template_key intentionally reuses the
+        source lineage's key, so no uniqueness check runs here."""
+        with Session(self.delegate.engine) as session:
+            session.add(draft)
+            session.flush()
+            resolved = _resolve_skill_versions(session, group_keys_by_skill_id)
+            for skill_id, (skill_version, group_key) in resolved.items():
+                session.add(
+                    AgentTemplateDraftSkill(
+                        draft_id=draft.id,
+                        skill_id=skill_id,
+                        skill_version=skill_version,
+                        group_key=group_key,
+                    )
+                )
+            session.commit()
+            session.refresh(draft)
+        return draft
+
+    def update_org_draft_with_skills(
+        self,
+        draft: AgentTemplateDraft,
+        group_keys_by_skill_id: SkillRequirementInput,
+    ) -> AgentTemplateDraft:
+        """Persist edits to an existing draft and diff-sync its required-skill
+        rows atomically (see _diff_sync_skill_rows)."""
+        with Session(self.delegate.engine) as session:
+            session.add(draft)
+            session.flush()
+            existing_rows = session.exec(
+                select(AgentTemplateDraftSkill).where(col(AgentTemplateDraftSkill.draft_id) == draft.id)
+            ).all()
+            _diff_sync_skill_rows(
+                session,
+                existing_rows,
+                group_keys_by_skill_id,
+                lambda skill_id, version, group_key: AgentTemplateDraftSkill(
+                    draft_id=draft.id,
+                    skill_id=skill_id,
+                    skill_version=version,
+                    group_key=group_key,
+                ),
+            )
+            session.commit()
+            session.refresh(draft)
+        return draft
+
+    def delete_org_draft(self, draft_id: UUID) -> None:
+        with Session(self.delegate.engine) as session:
+            purge = delete(AgentTemplateDraft).where(col(AgentTemplateDraft.id) == draft_id)
+            session.exec(purge)  # type: ignore[call-overload]
+            session.commit()
+
+    def get_org_draft_required_skills(self, draft_id: UUID) -> list[tuple[Skill, int, str | None]]:
+        with Session(self.delegate.engine) as session:
+            query = (
+                select(Skill, AgentTemplateDraftSkill.skill_version, AgentTemplateDraftSkill.group_key)
+                .join(
+                    AgentTemplateDraftSkill,
+                    col(AgentTemplateDraftSkill.skill_id) == col(Skill.id),
+                )
+                .where(col(AgentTemplateDraftSkill.draft_id) == draft_id)
+                .order_by(col(AgentTemplateDraftSkill.group_key).nulls_first(), col(Skill.name))
+            )
+            return list(session.exec(query).all())
+
+    def get_org_draft_required_skill_map(self, draft_id: UUID) -> SkillRequirementMap:
+        with Session(self.delegate.engine) as session:
+            query = select(
+                AgentTemplateDraftSkill.skill_id,
+                AgentTemplateDraftSkill.skill_version,
+                AgentTemplateDraftSkill.group_key,
+            ).where(col(AgentTemplateDraftSkill.draft_id) == draft_id)
+            return {
+                skill_id: (skill_version, group_key) for skill_id, skill_version, group_key in session.exec(query).all()
+            }
+
+    def publish_org_draft_with_skills(
+        self,
+        published: AgentTemplate,
+        draft_id: UUID,
+        group_keys_by_skill_id: SkillRequirementInput,
+        *,
+        event_name: str,
+        previous_version: int | None,
+        field_changes: dict[str, dict[str, Any]],
+        actor: ActorIdentity,
+        actor_display: str | None = None,
+        correlation_id: UUID | None = None,
+    ) -> TemplateLifecycleEventResult:
+        """Insert the newly published organization version, its required-skill
+        rows, the draft's deletion, and the lifecycle event in one transaction.
+
+        Fuses publish_draft_with_skills (platform) with
+        save_template_with_updated_event (org), because an organization publish
+        has to do both. `event_name` is TEMPLATE_CREATED for a lineage's first
+        version and TEMPLATE_UPDATED afterwards; as in
+        save_template_with_updated_event, an update with no audit-worthy
+        field_changes stages no event."""
+        with Session(self.delegate.engine, expire_on_commit=False) as session:
+            session.add(published)
+            session.flush()
+            resolved = _resolve_skill_versions(session, group_keys_by_skill_id)
+            for skill_id, (skill_version, group_key) in resolved.items():
+                session.add(
+                    AgentTemplateSkill(
+                        template_id=published.id,
+                        skill_id=skill_id,
+                        skill_version=skill_version,
+                        group_key=group_key,
+                    )
+                )
+            purge = delete(AgentTemplateDraft).where(col(AgentTemplateDraft.id) == draft_id)
+            session.exec(purge)  # type: ignore[call-overload]
+
+            if event_name == TEMPLATE_CREATED:
+                payload: dict[str, Any] = {
+                    "organization_id": published.organization_id,
+                    "template_id": published.id,
+                    "template_key": published.template_key,
+                    "template_name": published.template_name,
+                    "version": published.version,
+                    "actor_display": actor_display or actor.type.value,
+                    "subject_display": published.template_name,
+                }
+            elif field_changes:
+                payload = {
+                    "organization_id": published.organization_id,
+                    "template_id": published.id,
+                    "template_key": published.template_key,
+                    "previous_version": previous_version,
+                    "new_version": published.version,
+                    "field_changes": field_changes,
+                    "actor_display": actor_display or actor.type.value,
+                    "subject_display": published.template_name,
+                }
+            else:
+                session.commit()
+                session.refresh(published)
+                return TemplateLifecycleEventResult(template=published, delivery_ids=[])
+
+            event = EVENT_REGISTRY.build_event(
+                event_name=event_name,
+                schema_version=1,
+                occurred_at=datetime.now(UTC),
+                organization_id=published.organization_id,
+                actor=actor,
+                subject=SubjectIdentity(
+                    type=SubjectIdentityType.TEMPLATE,
+                    id=published.id,
+                    organization_id=published.organization_id,
+                ),
+                correlation_id=correlation_id or uuid4(),
+                payload=payload,
+            )
+            self.outbox_repository.stage(session=session, registry=EVENT_REGISTRY, event=event)
+            delivery_ids = list(session.exec(select(EventDelivery.id).where(EventDelivery.event_id == event.event_id)))
+            session.commit()
+            session.refresh(published)
+            return TemplateLifecycleEventResult(template=published, delivery_ids=delivery_ids)
 
     def list_platform_lineages_for_admin(self) -> list[PlatformTemplateAdminSummary]:
         """Every Platform Template lineage plus its draft status, for the admin authoring catalogue.
@@ -767,15 +1068,7 @@ class TemplateRepository:
 
     def resolve_versions(self, org_id: UUID, template_key: str) -> list[AgentTemplate | PlatformTemplate]:
         org_versions = self.find_org_versions(org_id, template_key)
-        platform_versions = self.find_platform_versions(template_key)
-        # Version numbers are shared across the platform lineage and an org
-        # fork. When both tables contain a number, the org version shadows the
-        # platform row just as it does for latest-template resolution.
-        by_version: dict[int, AgentTemplate | PlatformTemplate] = {
-            template.version: template for template in platform_versions
-        }
-        by_version.update({template.version: template for template in org_versions})
-        return sorted(by_version.values(), key=lambda template: template.version, reverse=True)
+        return list(org_versions) if org_versions else list(self.find_platform_versions(template_key))
 
     def get_shared_versions(self, org_id: UUID, template_key: str) -> list[AgentTemplate | PlatformTemplate]:
         """Return both shared source tables for one lineage without shadowing IDs.
@@ -951,8 +1244,9 @@ class TemplateRepository:
         actor_display: str | None = None,
         correlation_id: UUID | None = None,
     ) -> list[UUID]:
-        """Delete every org-scoped version, detaching soft-deleted agents first,
-        and stage a template.deleted event in the same transaction.
+        """Delete every org-scoped version and any in-progress draft, detaching
+        soft-deleted agents first, and stage a template.deleted event in the
+        same transaction.
 
         Live agents retain their RESTRICT pin and are checked before purge.
         Soft-deleted agents keep their row for audit/history, but no longer
@@ -966,6 +1260,14 @@ class TemplateRepository:
             ).all()
             if not rows:
                 return []
+            # Drop the draft with the lineage, or the deleted lineage would
+            # reappear as a draft-only row in the catalogue.
+            purge_draft = (
+                delete(AgentTemplateDraft)
+                .where(col(AgentTemplateDraft.organization_id) == org_id)
+                .where(col(AgentTemplateDraft.template_key) == template_key)
+            )
+            session.exec(purge_draft)  # type: ignore[call-overload]
             template_ids = [row[0] for row in rows]
             versions_deleted = sorted(row[1] for row in rows)
             latest_id, _, latest_name = max(rows, key=lambda row: row[1])
@@ -1007,7 +1309,7 @@ class TemplateRepository:
     def get_required_skills_for(
         self,
         template: AgentTemplate | PlatformTemplate | AgentTemplateOverrideVersion,
-    ) -> list[tuple[Skill, str | None]]:
+    ) -> list[tuple[Skill, int, str | None]]:
         if isinstance(template, PlatformTemplate):
             return self.get_platform_required_skills(template.id)
         if isinstance(template, AgentTemplateOverrideVersion):
@@ -1017,7 +1319,7 @@ class TemplateRepository:
     def get_required_skill_map_for(
         self,
         template: AgentTemplate | PlatformTemplate | AgentTemplateOverrideVersion,
-    ) -> dict[UUID, str | None]:
+    ) -> SkillRequirementMap:
         if isinstance(template, PlatformTemplate):
             return self.get_platform_required_skill_map(template.id)
         if isinstance(template, AgentTemplateOverrideVersion):
@@ -1034,7 +1336,7 @@ class TemplateRepository:
 
     def _org_required_skills_for_templates(
         self, template_ids: list[UUID]
-    ) -> dict[UUID, list[tuple[Skill, str | None]]]:
+    ) -> dict[UUID, list[tuple[Skill, int, str | None]]]:
         if not template_ids:
             return {}
         with Session(self.delegate.engine) as session:
@@ -1044,14 +1346,14 @@ class TemplateRepository:
                 .where(col(AgentTemplateSkill.template_id).in_(template_ids))
                 .order_by(col(AgentTemplateSkill.group_key).nulls_first(), col(Skill.name))
             )
-            result: dict[UUID, list[tuple[Skill, str | None]]] = {}
+            result: dict[UUID, list[tuple[Skill, int, str | None]]] = {}
             for ats, skill in session.exec(query).all():
-                result.setdefault(ats.template_id, []).append((skill, ats.group_key))
+                result.setdefault(ats.template_id, []).append((skill, ats.skill_version, ats.group_key))
             return result
 
     def _platform_required_skills_for_templates(
         self, template_ids: list[UUID]
-    ) -> dict[UUID, list[tuple[Skill, str | None]]]:
+    ) -> dict[UUID, list[tuple[Skill, int, str | None]]]:
         if not template_ids:
             return {}
         with Session(self.delegate.engine) as session:
@@ -1061,15 +1363,17 @@ class TemplateRepository:
                 .where(col(PlatformTemplateSkill.template_id).in_(template_ids))
                 .order_by(col(PlatformTemplateSkill.group_key).nulls_first(), col(Skill.name))
             )
-            result: dict[UUID, list[tuple[Skill, str | None]]] = {}
+            result: dict[UUID, list[tuple[Skill, int, str | None]]] = {}
             for pts, skill in session.exec(query).all():
-                result.setdefault(pts.template_id, []).append((skill, pts.group_key))
+                result.setdefault(pts.template_id, []).append((skill, pts.skill_version, pts.group_key))
             return result
 
-    def get_override_required_skills(self, version_id: UUID) -> list[tuple[Skill, str | None]]:
+    def get_override_required_skills(self, version_id: UUID) -> list[tuple[Skill, int, str | None]]:
         with Session(self.delegate.engine) as session:
             query = (
-                select(Skill, AgentTemplateOverrideVersionSkill.group_key)
+                select(
+                    Skill, AgentTemplateOverrideVersionSkill.skill_version, AgentTemplateOverrideVersionSkill.group_key
+                )
                 .join(
                     AgentTemplateOverrideVersionSkill,
                     col(AgentTemplateOverrideVersionSkill.skill_id) == col(Skill.id),
@@ -1079,13 +1383,16 @@ class TemplateRepository:
             )
             return list(session.exec(query).all())
 
-    def get_override_required_skill_map(self, version_id: UUID) -> dict[UUID, str | None]:
+    def get_override_required_skill_map(self, version_id: UUID) -> SkillRequirementMap:
         with Session(self.delegate.engine) as session:
             query = select(
                 AgentTemplateOverrideVersionSkill.skill_id,
+                AgentTemplateOverrideVersionSkill.skill_version,
                 AgentTemplateOverrideVersionSkill.group_key,
             ).where(col(AgentTemplateOverrideVersionSkill.version_id) == version_id)
-            return dict(session.exec(query).all())
+            return {
+                skill_id: (skill_version, group_key) for skill_id, skill_version, group_key in session.exec(query).all()
+            }
 
     def get_pinned_template(
         self, agent: Agent
@@ -1144,17 +1451,15 @@ class TemplateRepository:
                     result[a.id] = (version.source_template_key, version.version, "override", version.version)
         return result
 
-    def get_required_skill_map_for_agents(self, agents: list[Agent]) -> dict[UUID, dict[UUID, str | None]]:
-        """Bulk-fetch each agent's required-skill map (skill_id -> group_key),
-        across both pin kinds, group-aware."""
-        result: dict[UUID, dict[UUID, str | None]] = {a.id: {} for a in agents}
+    def get_required_skill_map_for_agents(self, agents: list[Agent]) -> dict[UUID, SkillRequirementMap]:
+        """Bulk-fetch each agent's required-skill map with immutable version pins."""
+        result: dict[UUID, SkillRequirementMap] = {a.id: {} for a in agents}
         org_template_ids = [a.agent_template_id for a in agents if a.agent_template_id is not None]
         platform_template_ids = [a.platform_template_id for a in agents if a.platform_template_id is not None]
         override_version_ids = [
             a.agent_template_override_version_id for a in agents if a.agent_template_override_version_id is not None
         ]
 
-        # Map template id -> list of agent ids that pin it.
         org_agents: dict[UUID, list[UUID]] = {}
         for a in agents:
             if a.agent_template_id is not None:
@@ -1171,7 +1476,7 @@ class TemplateRepository:
                 ).all()
                 for row in rows:
                     for agent_id in org_agents.get(row.template_id, []):
-                        result[agent_id][row.skill_id] = row.group_key
+                        result[agent_id][row.skill_id] = (row.skill_version, row.group_key)
 
         if platform_template_ids:
             with Session(self.delegate.engine) as session:
@@ -1182,7 +1487,7 @@ class TemplateRepository:
                 ).all()
                 for row in rows:
                     for agent_id in platform_agents.get(row.template_id, []):
-                        result[agent_id][row.skill_id] = row.group_key
+                        result[agent_id][row.skill_id] = (row.skill_version, row.group_key)
 
         if override_version_ids:
             override_agents: dict[UUID, list[UUID]] = {}
@@ -1197,6 +1502,6 @@ class TemplateRepository:
                 ).all()
                 for row in rows:
                     for agent_id in override_agents.get(row.version_id, []):
-                        result[agent_id][row.skill_id] = row.group_key
+                        result[agent_id][row.skill_id] = (row.skill_version, row.group_key)
 
         return result

@@ -19,7 +19,7 @@ Read USER.md. If the Required fields (Jira project key(s)) are empty:
 - **Direct operator request**: do the requested task; call out anything missing.
 
 Always draft and confirm before creating or changing an issue. Read the Jira
-skill file (`./skills/aai-cli/jira_skill.md`) before calling `aai-cli jira`.
+skill file (`./skills/aai-jira/SKILL.md`) before calling `aai-cli jira`.
 
 If the task sends a message, use the message tool and then reply with the exact
 silent token `NO_REPLY` / `no_reply`.

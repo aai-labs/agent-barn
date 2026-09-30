@@ -6,7 +6,7 @@ Read before changing API composition, dependency injection, route/service/reposi
 
 ## Composition and layering
 
-The API has two composition roots. `../../api/api_app.py` mounts product routes at `/api/v1`, attaches the Injector, configures CORS, and defines the database-backed health check. `../../api/ingest_app.py` mounts runtime telemetry at `/ingest/v1`. `../../api/start.sh` serves the ingest app on port 8001 alongside the product API on port 8000.
+The API image has three HTTP composition roots. `../../api/api_app.py` serves organization and platform product routes at `/api/v1` on port 8000, the Agent Webhook ingress at `/agent-hooks/v1`, and the stable public provider webhook paths at `/communications/v1/webhooks/email/inbound` and `/communications/v1/webhooks/{connection_id}`. `../../api/ingest_app.py` serves runtime telemetry at `/ingest/v1` on port 8001. `../../api/communications_app.py` serves the runtime-neutral delivery protocol and gateway-owned provider-webhook fallback at `/communications/v1` on port 8002; its lifespan also runs provider ingress supervision and outbound delivery. Each root attaches the shared Injector, while authentication and exposed routes remain boundary-specific.
 
 The default dependency direction is:
 
@@ -18,7 +18,7 @@ routes.py → service.py → repository.py → PostgresRepositoryDelegate
 - Routes authenticate, parse, delegate, and return.
 - Services own business rules, permission-sensitive behavior, error translation, and cross-domain orchestration.
 - Repositories own SQLModel/SQLAlchemy queries and persistence behavior.
-- Infrastructure adapters own PostgreSQL, Kubernetes, email, Slack, LiteLLM, OpenRouter, crypto, and related external concerns.
+- Infrastructure adapters own PostgreSQL, Kubernetes, email, provider HTTP clients, LiteLLM, OpenRouter, crypto, and related external concerns. Shipped communication-platform behavior belongs in `domains/communications/plugins/`, above those clients.
 
 Nearby domains are the implementation template. Costs and Ingest intentionally differ from CRUD-shaped domains, while Agents has additional route, builder, artifact, and runtime files.
 
@@ -26,7 +26,7 @@ Nearby domains are the implementation template. Costs and Ingest intentionally d
 
 Authentication builds `CurrentUserContext`; organization-scoped services derive the active organization from it. Organization-scoped routes carry the organization ID in the URL, generally as `/api/v1/organizations/{organization_id}/...`. Routes without an `organization_id` path parameter have no active Organization. Org-scoped access always requires a real persisted Membership — Platform Administrators receive no synthesized or implicit organization role, and an org-scoped request from a Platform Administrator without a Membership in that Organization is rejected the same as for any other user. Platform-only routes use the platform-admin dependency without resolving an active Organization. Platform administration routes live under `/api/v1/platform/...`.
 
-The active Membership's fixed Organization Role is resolved through an immutable code-owned Permission mapping on each request. Organization Roles govern Organization, Membership, Template, Skill, and Organization-summary capabilities; protected Organization Owner recovery actions remain explicit governance invariants. Platform Administrators use platform routes and do not receive implicit Organization authority. Database-backed Agent Access Roles separately govern one Agent aggregate, while Organization Owner/Admin have implicit Agent Owner authority. Agent user-facing queries apply visibility in repositories before count and pagination, and Agent services use the shared authorization module for effective operations and action checks. Runtime Ingest and Teams webhook authentication remain separate non-user boundaries.
+The active Membership's fixed Organization Role is resolved through an immutable code-owned Permission mapping on each request. Organization Roles govern Organization, Membership, Template, Skill, and Organization-summary capabilities; protected Organization Owner recovery actions remain explicit governance invariants. Platform Administrators use platform routes and do not receive implicit Organization authority. Database-backed Agent Access Roles separately govern one Agent aggregate, while Organization Owner/Admin have implicit Agent Owner authority. Agent user-facing queries apply visibility in repositories before count and pagination, and Agent services use the shared authorization module for effective operations and action checks. Runtime Ingest, the runtime Communications protocol, driver callbacks, and provider webhooks are separate non-user authentication boundaries.
 
 Tenant-sensitive reads generally return 404 when a resource is absent, belongs to another Organization, or is outside the caller's Agent Access visibility. A visible resource with a missing action Permission returns 403. Organization administration retains its documented 403 behavior. The integration contract is exercised in `../../api/tests/integration/test_cross_org_isolation.py`, `../../api/tests/integration/test_tenant_resolution.py`, and `../../api/tests/integration/test_agent_rbac.py`.
 
@@ -42,6 +42,8 @@ Database records generally inherit UUID and timestamp fields from `../../api/inf
 
 The application lifespan ensures a bootstrap Platform Administrator, seeds built-in aai-cli skills, and seeds the global predefined template catalogue into the `platform_template` table. The system has no default Organization. Platform-owned resources are global resources, not Organization-owned rows: built-in skills use `organization_id = NULL` in the `skill` table, and predefined templates live in a dedicated `platform_template` table with no `organization_id` column. Agents pin a template via one of two mutually-exclusive FKs (`platform_template_id` or `agent_template_id`), enforced by a CHECK constraint. Platform-admin behavior must use the platform-admin seam rather than adding dependencies on an Organization. Changes to bootstrap entities can affect startup, tests, and predefined catalog behavior simultaneously.
 
+Product API startup deliberately does **not** reconcile [Organization LiteLLM budgets](../features/costs.md#organization-llm-budgets). That runs as its own CronJob alongside cost sync and event-delivery reconciliation, so the API's readiness never depends on the proxy being reachable.
+
 ## Testing
 
 - Integration tests use the real FastAPI app and migrated PostgreSQL with additive Injector overrides.
@@ -53,22 +55,26 @@ The application lifespan ensures a bootstrap Platform Administrator, seeds built
 
 | Concern | Source |
 |---|---|
-| Product API composition and router registry | `../../api/api_app.py` |
+| Product API composition, public provider-webhook adapters, and Teams runtime webhook relay | `../../api/api_app.py`, `../../api/domains/communications/runtime_webhook_routes.py`, `../../api/domains/communications/teams_runtime_webhook.py` |
+| Agent Webhook management and signed ingress | `../../api/domains/agent_webhooks/`, `../features/agent-webhooks.md` |
+| Immediate Agent Webhook dispatch and native scheduler admission | `../../api/domains/agent_webhooks/dispatch.py`, `../../api/domains/agents/scripts/agent-trigger-server.py` |
 | Ingest API composition and process entry | `../../api/ingest_app.py`, `../../api/ingest_main.py`, `../../api/start.sh` |
+| Communications composition and process entry | `../../api/communications_app.py`, `../../api/communications_main.py` |
 | Injector configuration | `../../api/core/utils.py`, `../../api/infrastructure/app.py` |
 | Auth and tenant resolution | `../../api/domains/auth/utils.py`, `../../api/domains/auth/models.py` |
 | Platform administration authority | `../../api/domains/platform_admin/service.py` |
 | Permission and Agent authorization | `../../api/domains/rbac/catalog.py`, `../../api/domains/rbac/policy.py`, `../../api/domains/agents/authorization.py` |
 | Shared persistence delegate | `../../api/infrastructure/postgres/repository.py` |
 | Domain Event outbox persistence | `../../api/domains/events/`, `../features/domain-events.md` |
+| Communications diagnostics and recovery | `../../api/domains/communications/operations.py`, `../../api/domains/communications/routes.py` |
 | Base database model | `../../api/infrastructure/postgres/models.py` |
 | Migrations | `../../api/migrations/versions/` |
 | Test app and database setup | `../../api/tests/conftest.py`, `../../api/tests/core/` |
 
 ## Change impact
 
-When adding or moving a product router, update `../../api/api_app.py`; ingest routes are registered through `../../api/ingest_app.py`. When a schema changes, update the database model, API DTO where required, migration, integration tests, and corresponding UI Zod schema. When a workflow spans repositories, verify whether partial persistence is acceptable before relying on the default session-per-operation behavior. When a mutation produces a Domain Event, use a domain-specific transaction boundary and update the Domain Events feature guide if the envelope, delivery lifecycle, privacy rules, or excluded scope changes.
+When adding or moving a product router, update `../../api/api_app.py`; telemetry routes belong to `../../api/ingest_app.py`, public provider-webhook adapters belong to the API, and the runtime communications protocol plus gateway-owned fallback routes belong to `../../api/communications_app.py`. When a schema changes, update the database model, API DTO where required, migration, integration tests, and corresponding UI Zod schema. When a workflow spans repositories, verify whether partial persistence is acceptable before relying on the default session-per-operation behavior. When a mutation produces a Domain Event, use a domain-specific transaction boundary and update the Domain Events feature guide if the envelope, delivery lifecycle, privacy rules, or excluded scope changes.
 
 ## Supported external API
 
-The `/api/v1` product API accepts User session JWTs and User-owned Personal API Keys through the shared authentication dependencies. Keys are resolved to the same `CurrentUserContext`, then current Organization Membership, Agent Access, and Platform Administrator checks apply. Read-only key mode is enforced before write handlers execute. The separate Ingest app and Teams webhook keep their protocol-specific credentials. The public schema, discovery endpoint, and developer guides are described in [`../features/public-api.md`](../features/public-api.md).
+The `/api/v1` product API accepts User session JWTs and User-owned Personal API Keys through the shared authentication dependencies. Keys resolve to the same `CurrentUserContext`; current Organization Membership, Agent Access, and Platform Administrator checks then apply. Read-only key mode is enforced before write handlers execute. Ingest, Communications, and provider webhooks retain their protocol-specific credentials. The public schema, discovery endpoint, and developer guides are described in [`../features/public-api.md`](../features/public-api.md).

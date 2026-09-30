@@ -17,6 +17,7 @@ import { useCurrentUser } from "@/auth/providers/user-context-provider";
 import { AppErrorState } from "@/components/app-error-state";
 import { ListPageHeader } from "@/components/list-page-header";
 import { Button } from "@/components/ui/button";
+import { useLoadMoreOnScroll } from "@/hooks/use-load-more-on-scroll";
 
 import { useResendUserInvite } from "../hooks/use-create-user";
 import { useInfiniteUsers } from "../hooks/use-infinite-users";
@@ -64,6 +65,11 @@ export function UsersGrid() {
     isLoading,
     refetch,
   } = useInfiniteUsers({ search });
+  const loadMoreRef = useLoadMoreOnScroll({
+    hasNextPage: Boolean(hasNextPage),
+    isFetchingNextPage,
+    fetchNextPage: () => void fetchNextPage(),
+  });
 
   return (
     <div className="af-page">
@@ -176,6 +182,16 @@ export function UsersGrid() {
               </div>
             </div>
           ))}
+          {hasNextPage && (
+            <div
+              ref={loadMoreRef}
+              className="col-span-full flex items-center justify-center gap-2 py-6 text-[13px]"
+              style={{ color: "var(--ink-4)" }}
+            >
+              <Loader2 width={14} className={isFetchingNextPage ? "animate-spin" : "invisible"} />
+              Loading more users…
+            </div>
+          )}
         </div>
       )}
 
@@ -186,16 +202,6 @@ export function UsersGrid() {
         >
           <div className="font-medium text-[15px] mb-1" style={{ color: "var(--ink)" }}>No users found</div>
           <div className="text-[13.5px]" style={{ color: "var(--ink-3)" }}>Try a different search term.</div>
-        </div>
-      )}
-
-      {hasNextPage && (
-        <div className="flex justify-center mt-6">
-          <button className="af-btn" onClick={() => fetchNextPage()} disabled={isFetchingNextPage}>
-            {isFetchingNextPage
-              ? <><Loader2 width={14} height={14} className="animate-spin" /> Loading more</>
-              : "Load more users"}
-          </button>
         </div>
       )}
 

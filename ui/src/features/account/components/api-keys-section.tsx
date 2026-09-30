@@ -6,7 +6,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ConfirmationDialog } from "@/components/confirmation-dialog";
 import { api } from "@/shared/api";
 import { apiKeysKey } from "@/shared/query-keys";
-import { ApiKeyCreatedSchema, ApiKeyListSchema, type ApiKeyCreated, type ApiKeyRead } from "../schemas";
+import { ApiKeyCreatedSchema, ApiKeyListSchema, type ApiKeyCreated, type ApiKeyRead } from "../api-key-schemas";
 
 const url = "/api/v1/auth/me/api-keys";
 
