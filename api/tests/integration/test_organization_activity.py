@@ -1,6 +1,7 @@
 from datetime import UTC, datetime, timedelta
 from uuid import uuid7
 
+import sqlalchemy as sa
 from hamcrest import assert_that, contains_inanyorder, equal_to
 
 from api.domains.agent_webhooks.models import WebhookInvocationStatus
@@ -15,6 +16,7 @@ from api.domains.organizations.repository import OrganizationRepository
 from api.domains.platform_admin.models import StatsGranularity, StatsWindow
 from api.domains.rbac.policy import AuthorizationScope
 from api.domains.tool_calls.models import ToolCallStatus
+from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.tests.core.givenpy import given, then, when
 from api.tests.core.modules import prepare_injector, set_env_variable
 from api.tests.steps.agent import TEST_ENCRYPTION_KEY, MockK8sModule, MockLiteLLMModule, there_is_an_agent
@@ -40,6 +42,10 @@ UNAVAILABLE = CommunicationDeliveryStatus.UNAVAILABLE
 CANCELLED = CommunicationDeliveryStatus.CANCELLED
 PENDING = CommunicationDeliveryStatus.PENDING
 PROCESSING = CommunicationDeliveryStatus.PROCESSING
+DELIVERY_ACTIVITY_INDEX = "ix_communication_delivery_agent_direction_completed"
+DELIVERY_ACTIVITY_COLUMNS = ["agent_id", "direction", "completed_at"]
+MESSAGE_ACTIVITY_INDEX = "ix_agent_chat_message_agent_direction_occurred"
+MESSAGE_ACTIVITY_COLUMNS = ["agent_id", "direction", "occurred_at"]
 _ENV = set_env_variable(
     {
         "AGENT_TOKEN_ENCRYPTION_KEY": TEST_ENCRYPTION_KEY,
@@ -99,6 +105,22 @@ def _delivered(seconds: float, *, attempt_count: int = 1, status=SUCCEEDED, comp
         created_at=completed_at - timedelta(seconds=seconds),
         completed_at=completed_at,
     )
+
+
+def _index_columns(context, table: str) -> dict[str, list[str | None]]:
+    inspector = sa.inspect(context.injector.get(PostgresRepositoryDelegate).engine)
+    return {index["name"]: index["column_names"] for index in inspector.get_indexes(table)}
+
+
+def test_activity_indexes_exist_after_migration():
+    with given(_GIVEN) as context:
+        with when("the migrated schema is inspected"):
+            delivery_indexes = _index_columns(context, "communication_delivery")
+            message_indexes = _index_columns(context, "agent_chat_message")
+
+        with then("delivery outcomes and inbound messages can be read per Agent over a time range"):
+            assert_that(delivery_indexes.get(DELIVERY_ACTIVITY_INDEX), equal_to(DELIVERY_ACTIVITY_COLUMNS))
+            assert_that(message_indexes.get(MESSAGE_ACTIVITY_INDEX), equal_to(MESSAGE_ACTIVITY_COLUMNS))
 
 
 def test_inbound_messages_are_counted_per_agent_inside_the_half_open_window():

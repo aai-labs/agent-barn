@@ -22,11 +22,42 @@ Related context: [Activity and Ingest](../activity-and-ingest.md), [Agent Activi
 - In transition:
   - gog classification has not been deployed to local k3d. The API pod there still runs the previous image.
   - After deploying, run the operator backfill once, so the gog Tool Calls already stored are counted.
-- Also delivered: the scoped aggregate reads the Organization activity KPI needs (`ValueActivityRepository`). The endpoint is not built yet.
+- Also delivered: the scoped aggregate reads the Organization activity KPI needs (`ValueActivityRepository`), and the two indexes that serve them (migration `45bcefcb0749`). The endpoint is not built yet.
 - Next: the Organization activity endpoint (`GET /organizations/{organization_id}/value/activity`), then the Stage 3 UI that renders value settings, the Organization value, and activity.
 - Blockers: the product owner has not signed off the default minutes per Outcome Type. They are placeholders until then, and every value figure inherits them.
 
 ## Slice history
+
+### 2026-09-30 — AF-346 — Activity indexes
+
+Delivered:
+- Migration `45bcefcb0749` (revises `1045836844da`) adds two indexes, each declared in its model's `__table_args__`:
+  - `ix_communication_delivery_agent_direction_completed` on `communication_delivery (agent_id, direction, completed_at)`, the shape the ticket names;
+  - `ix_agent_chat_message_agent_direction_occurred` on `agent_chat_message (agent_id, direction, occurred_at)`.
+- Both are built without CONCURRENTLY, like every other migration here.
+
+Why the message index, which the ticket did not ask for:
+- The "Activity aggregates" measurement spread its rows over 180 days, so a 30-day window was about a sixth of the table. The existing time index `ix_agent_chat_message_occurred_at_direction` could have been skipped for that reason alone.
+- Re-run over 365 days, the read still seq-scanned (629 ms). That index holds every Organization's rows in the window, and the planner preferred a scan to reading that range and filtering down to one Organization's Agents.
+- The index was added on that result, as agreed before the re-run.
+
+Measured on local k3d (PostgreSQL 18.4), in one transaction ending in `ROLLBACK`:
+- Data: the same synthetic data as "Activity aggregates", spread over 365 days, reading one of 20 Organizations over a 30-day window. The indexes were created exactly as the migration defines them.
+
+  | Read | Before | With the index |
+  |---|---|---|
+  | deliveries | 1,468 ms (parallel seq scan) | 26.2 ms (bitmap scan on the new index) |
+  | inbound messages per Agent | 629 ms (parallel seq scan) | 15.4 ms (bitmap scan on the new index) |
+  | webhook invocations | 122 ms | 84 ms (unchanged index; no new index warranted) |
+  | tool calls | 9.3 ms | 7.9 ms (unchanged index) |
+
+Coverage:
+- `test_activity_indexes_exist_after_migration` in `test_organization_activity.py` inspects the migrated schema. It failed first, listing the table's existing indexes, and passes after the migration.
+- On a fresh Postgres 18 container, upgrading to head, downgrading to `1045836844da`, and upgrading again succeeds, and the indexes appear, disappear, and reappear.
+- `compare_metadata` shows no index drift on either table. The only differences reported on them already existed: TEXT columns reported against `AutoString`, and the `agent_chat_message.conversation_type` enum variants noted in "Value settings tables".
+- `make check-migrations` reports a single head, `45bcefcb0749`.
+
+Not verified: production data distribution, hardware, and how long the index builds lock writes on real table sizes.
 
 ### 2026-09-30 — AF-346 — Activity aggregates
 
