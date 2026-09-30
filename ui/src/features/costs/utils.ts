@@ -10,9 +10,15 @@ import type {
 
 export const COSTS_PAGE_SIZE = 50;
 
-// The Costs pages refresh on a timer. refetchIntervalInBackground stays at its default,
-// so a hidden tab stops polling and resumes when it comes back.
 export const COSTS_REFRESH_INTERVAL_MS = 60_000;
+
+// Shared by every polled Costs query. The interval keeps running while a tab is hidden
+// and only skips the fetch, so refetchOnWindowFocus has to override the global false:
+// without it a tab brought back would sit on stale numbers until the next tick.
+export const costsPollingOptions = {
+  refetchInterval: COSTS_REFRESH_INTERVAL_MS,
+  refetchOnWindowFocus: true,
+} as const;
 
 // Every org-scoped cost query hangs off the single "cost" base key, distinguished
 // by scope rather than by its own key. ORG_SCOPED_QUERY_KEYS matches the base key

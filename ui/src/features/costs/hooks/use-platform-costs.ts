@@ -19,8 +19,8 @@ import {
 } from "../schemas";
 import {
   COSTS_PAGE_SIZE,
-  COSTS_REFRESH_INTERVAL_MS,
   costFilterParams,
+  costsPollingOptions,
   mergePlatformCostPages,
   monthlyCostParams,
   platformCostKey,
@@ -41,7 +41,7 @@ export function usePlatformCostSummary(filters: CostFilters) {
       );
       return response.data;
     },
-    refetchInterval: COSTS_REFRESH_INTERVAL_MS,
+    ...costsPollingOptions,
   });
 
   return {
@@ -72,7 +72,7 @@ export function usePlatformCosts(filters: CostFilters) {
         ? nextPage
         : undefined;
     },
-    refetchInterval: COSTS_REFRESH_INTERVAL_MS,
+    ...costsPollingOptions,
   });
 
   return {
@@ -108,7 +108,7 @@ export function usePlatformCostOrganizations(filters: CostFilters) {
       );
       return response.data;
     },
-    refetchInterval: COSTS_REFRESH_INTERVAL_MS,
+    ...costsPollingOptions,
   });
 
   return { organizations: query.data ?? [], isLoading: query.isPending };
@@ -169,7 +169,7 @@ export function usePlatformMonthlyCosts(filters: CostFilters) {
       );
       return response.data;
     },
-    refetchInterval: COSTS_REFRESH_INTERVAL_MS,
+    ...costsPollingOptions,
   });
 
   return {

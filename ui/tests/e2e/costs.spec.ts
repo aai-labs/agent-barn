@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 
 import { TEST_ORG_ID } from "../constants";
 import {
@@ -9,6 +9,18 @@ import {
 } from "../pages/data-support/cost-data-support.po";
 import { DataSupport } from "../pages/data-support/data-support.po";
 import { COSTS_REFRESH_INTERVAL_MS } from "@/features/costs/utils";
+
+/** Drives what TanStack's focus manager listens to: document visibility. */
+async function setVisibility(page: Page, state: "hidden" | "visible") {
+  await page.evaluate((value) => {
+    Object.defineProperty(document, "visibilityState", {
+      value,
+      configurable: true,
+    });
+    // TanStack listens on window; the real event reaches it by bubbling.
+    document.dispatchEvent(new Event("visibilitychange", { bubbles: true }));
+  }, state);
+}
 
 const COSTS_URL = `/dashboard/${TEST_ORG_ID}/costs`;
 
@@ -461,5 +473,34 @@ test.describe("Organization costs auto-refresh", () => {
     await page.clock.runFor(COSTS_REFRESH_INTERVAL_MS);
 
     await expect(page.getByTestId("cost-total-spend")).toContainText("$999.99");
+  });
+
+  test("a tab brought back from the background updates at once, not on the next tick", async ({
+    page,
+  }) => {
+    await page.clock.install();
+    let calls = 0;
+    await page.route("**/organizations/*/costs/summary?*", async (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      calls += 1;
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(costSummary({ total_spend: calls === 1 ? 143.03 : 777.77 })),
+      });
+    });
+
+    await page.goto(COSTS_URL);
+    await expect(page.getByTestId("cost-total-spend")).toContainText("$143.03");
+
+    await setVisibility(page, "hidden");
+    await page.clock.runFor(COSTS_REFRESH_INTERVAL_MS * 2);
+    // The interval keeps firing while hidden, it just skips the fetch, so the
+    // reader is still looking at what was on screen when they left.
+    expect(calls).toBe(1);
+
+    await setVisibility(page, "visible");
+
+    await expect(page.getByTestId("cost-total-spend")).toContainText("$777.77");
   });
 });

@@ -6,7 +6,7 @@ import { useOrganizationApiBase } from "@/features/organizations/hooks/use-organ
 import { api } from "@/shared/api";
 
 import { AgentSpendListSchema, type AgentSpend } from "../schemas";
-import { COSTS_REFRESH_INTERVAL_MS, costFilterParams, costKey, type CostFilters } from "../utils";
+import { costFilterParams, costKey, costsPollingOptions, type CostFilters } from "../utils";
 
 /**
  * Every agent that spent anything in the window, ranked by spend.
@@ -25,7 +25,7 @@ export function useAgentSpend(filters: CostFilters) {
       );
       return response.data;
     },
-    refetchInterval: COSTS_REFRESH_INTERVAL_MS,
+    ...costsPollingOptions,
   });
 
   return {
