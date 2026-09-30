@@ -921,7 +921,8 @@ test.describe("Agent Detail Page — Channels tab", () => {
     });
   });
 
-  test("shows provider setup requirements before connecting", async ({ page }) => {
+  test("shows provider setup requirements before connecting", async ({ page, context }) => {
+    await context.grantPermissions(["clipboard-read", "clipboard-write"]);
     await page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}/connections`, async (route) => {
       if (route.request().method() !== "GET") return route.fallback();
       await route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
@@ -938,7 +939,15 @@ test.describe("Agent Detail Page — Channels tab", () => {
     await expect(page.getByText("connections:write", { exact: true })).toBeVisible();
     await expect(page.getByText("xapp-", { exact: true })).toBeVisible();
     await expect(page.getByRole("link", { name: "Slack app management" })).toHaveAttribute("href", "https://api.slack.com/apps");
-    await expect(page.getByRole("button", { name: "Copy Slack manifest" })).toBeVisible();
+    const copyManifest = page.getByRole("button", { name: "Copy Slack manifest" });
+    await expect(copyManifest).toBeVisible();
+    await copyManifest.click();
+    const copiedManifest = JSON.parse(await page.evaluate(() => navigator.clipboard.readText())) as {
+      display_information: { name: string };
+      features: { bot_user: { display_name: string } };
+    };
+    expect(copiedManifest.display_information.name).toBe("Maya");
+    expect(copiedManifest.features.bot_user.display_name).toBe("AgentBarn");
 
     await agentDetailPage.selectPlatformButton("Discord").click();
     const discordHint = agentDetailPage.setupHint(/Invite the bot/);

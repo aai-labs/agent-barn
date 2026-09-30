@@ -1,7 +1,6 @@
-/** Static sample pasted into Slack's "From Manifest" flow; it is not an API contract. */
-export const SLACK_APP_MANIFEST = {
+/** Static portion of the copyable Slack sample; this is not an API contract. */
+const SLACK_APP_MANIFEST_TEMPLATE = {
   display_information: {
-    name: "Agent Barn",
     description: "Connect an Agent Barn agent to Slack.",
   },
   features: {
@@ -75,3 +74,18 @@ export const SLACK_APP_MANIFEST = {
     token_rotation_enabled: false,
   },
 } as const;
+
+/** Slack limits display_information.name to 35 characters. */
+const MAX_SLACK_APP_NAME_LENGTH = 35;
+
+export function createSlackAppManifest(agentName: string) {
+  const appName = Array.from(agentName).slice(0, MAX_SLACK_APP_NAME_LENGTH).join("");
+
+  return {
+    ...SLACK_APP_MANIFEST_TEMPLATE,
+    display_information: {
+      name: appName,
+      ...SLACK_APP_MANIFEST_TEMPLATE.display_information,
+    },
+  } as const;
+}

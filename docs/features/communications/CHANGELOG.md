@@ -13,6 +13,10 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
 
 ## Changes
 
+### 2026-09-30 — Prefill Slack app name from its Agent — PR pending
+
+- Changed: the copied Slack manifest uses the Agent's name for `display_information.name`, truncated to Slack's 35-character limit. The separate bot-user display name remains `AgentBarn`.
+
 ### 2026-09-22 — Retire the webhook Platform — PR pending
 
 - Removed: the unreleased webhook Platform Plugin and everything it alone required — minted connection credentials with one-time reveal and rotation, the several-Connections-per-Agent `singleton_key` index, the calls endpoint and its UI, Delivery Kind with `session_key`, the execution policy module, the delivery release route, `WebhookRequestRejected`, EVENT conversations, and their tests. External HTTP triggers are now [Agent Webhooks](../agent-webhooks.md), which never create a Communication Delivery.
