@@ -83,7 +83,7 @@ export function RenameOrganizationDialog({
           </div>
           <DialogFooter>
             <button type="button" className="af-btn" disabled={updateOrganization.isPending} onClick={onClose}>Cancel</button>
-            <button type="submit" className="af-btn-primary" disabled={updateOrganization.isPending}>
+            <button type="submit" className="af-btn af-btn-primary" disabled={updateOrganization.isPending}>
               {updateOrganization.isPending ? "Saving…" : "Save name"}
             </button>
           </DialogFooter>

@@ -138,9 +138,11 @@ export function OrganizationDetail({ organizationId }: { organizationId: string 
           </p>
         </div>
 
-        <button className="af-btn flex-shrink-0" onClick={() => setRenameOpen(true)}>
-          Rename organization
-        </button>
+        {(currentRole === "OWNER" || currentRole === "ADMIN") && (
+          <button className="af-btn flex-shrink-0" onClick={() => setRenameOpen(true)}>
+            Rename organization
+          </button>
+        )}
 
         {canDelete && (
           <button

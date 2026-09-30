@@ -659,6 +659,7 @@ test.describe("Organization rename", () => {
 
   for (const role of ["OWNER", "ADMIN"]) {
     test(`${role} can rename and refresh the selector`, async ({ page }) => {
+      // Given an organization owner or admin viewing its management page.
       const data = new DataSupport(page);
       const context = userWithOrgMemberships({ isPlatformAdmin: false, roles: [role, "MEMBER"] });
       await data.auth.interceptRefreshRequest();
@@ -670,7 +671,9 @@ test.describe("Organization rename", () => {
       await detail.openRename();
       await expect(detail.name).toHaveValue("AAI Labs");
       (context.organization_users[0].organization as { name: string }).name = "Renamed Org";
+      // When they save a new display name with surrounding whitespace.
       await detail.rename("  Renamed Org  ");
+      // Then the trimmed name appears in the heading and organization selector.
       await expect(detail.dialog).not.toBeVisible();
       expect(state.payload).toEqual({ name: "Renamed Org" });
       await expect(page.getByRole("heading", { name: "Renamed Org", exact: true })).toBeVisible();
