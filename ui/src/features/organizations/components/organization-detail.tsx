@@ -27,6 +27,7 @@ import { useDeleteOrganization } from "../hooks/use-organization-actions";
 import { useOrganization } from "../hooks/use-organization";
 import { useOrganizationMembers } from "../hooks/use-organization-members";
 import { useRequireOrgManager } from "../hooks/use-require-org-manager";
+import { RenameOrganizationDialog } from "./rename-organization-dialog";
 import { MembersSection } from "./members-section";
 import { AllowedModelsSection } from "./allowed-models-section";
 import { DetailStatTile } from "@/components/detail-stat-tile";
@@ -43,6 +44,7 @@ export function OrganizationDetail({ organizationId }: { organizationId: string 
     useOrganizationMembers(organizationId);
   const deleteOrganization = useDeleteOrganization();
 
+  const [renameOpen, setRenameOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [confirmName, setConfirmName] = useState("");
 
@@ -129,6 +131,10 @@ export function OrganizationDetail({ organizationId }: { organizationId: string 
           </p>
         </div>
 
+        <button className="af-btn flex-shrink-0" onClick={() => setRenameOpen(true)}>
+          Rename organization
+        </button>
+
         {canDelete && (
           <button
             className="af-btn flex-shrink-0"
@@ -174,6 +180,14 @@ export function OrganizationDetail({ organizationId }: { organizationId: string 
       <div style={{ borderTop: "1px solid var(--line)" }} className="mt-8 pt-8">
         <AllowedModelsSection organization={organization} />
       </div>
+
+      {renameOpen && (
+        <RenameOrganizationDialog
+          key={organizationId}
+          organization={organization}
+          onClose={() => setRenameOpen(false)}
+        />
+      )}
 
       <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
         <DialogContent>

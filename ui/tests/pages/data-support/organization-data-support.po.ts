@@ -221,6 +221,23 @@ export class OrganizationDataSupport {
     });
   }
 
+  async interceptRenameOrganization({ status = 200 }: { status?: number } = {}) {
+    const state = { name: "AAI Labs", payload: undefined as unknown };
+    await this.page.route(`**/api/v1/organizations/${ORG_A_ID}`, async (route) => {
+      const method = route.request().method();
+      if (method === "PATCH") {
+        state.payload = route.request().postDataJSON();
+        if (status < 400) state.name = (state.payload as { name: string }).name;
+        await route.fulfill({ status, json: status >= 400 ? { detail: "Unable to rename organization" } : org({ name: state.name }) });
+      } else if (method === "GET") {
+        await route.fulfill({ json: org({ name: state.name }) });
+      } else {
+        await route.fallback();
+      }
+    });
+    return state;
+  }
+
   async interceptDeleteOrganization({
     success = true,
     status = 409,

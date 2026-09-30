@@ -108,3 +108,11 @@ export type OrganizationMember = z.infer<typeof OrganizationMemberSchema>;
 export type MemberInviteResult = z.infer<typeof MemberInviteResultSchema>;
 export type InviteLinkResult = z.infer<typeof InviteLinkResultSchema>;
 export type AddMemberFormData = z.infer<typeof AddMemberFormSchema>;
+
+export const RenameOrganizationFormSchema = z.object({
+  name: z.string().trim()
+    .min(3, "Name must be at least 3 characters")
+    .max(255, "Name must be at most 255 characters"),
+});
+
+export type RenameOrganizationFormData = z.infer<typeof RenameOrganizationFormSchema>;
