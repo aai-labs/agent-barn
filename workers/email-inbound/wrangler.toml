@@ -6,9 +6,15 @@ compatibility_date = "2026-08-01"
 # Cloudflare's edge, so a local k3d cluster needs a tunnel (see
 # docs/guidelines/operations.md).
 #
+# One environment per cluster, each named after the cluster rather than its role:
+# "production" previously meant the k3s cluster in deploy.yml and the Talos cluster
+# here, and a Worker was published holding one cluster's secret while posting into
+# the other's. Each is published by the workflow that deploys its INBOUND_URL host.
+#
 # EMAIL_INBOUND_SECRET is NOT set here. Set it per environment with:
 #   wrangler secret put EMAIL_INBOUND_SECRET --env staging
-#   wrangler secret put EMAIL_INBOUND_SECRET --env production
+#   wrangler secret put EMAIL_INBOUND_SECRET --env prod
+#   wrangler secret put EMAIL_INBOUND_SECRET --env cloud
 # It must match the value deployed to the cluster.
 
 [env.local]
@@ -23,8 +29,16 @@ name = "agentbarn-email-inbound-staging"
 [env.staging.vars]
 INBOUND_URL = "https://api.agent-farm-staging.k8s.aai-labs.com/communications/v1/webhooks/email/inbound"
 
-[env.production]
+[env.prod]
+name = "agentbarn-email-inbound-prod"
+
+[env.prod.vars]
+INBOUND_URL = "https://api.agentbarn.k8s.aai-labs.com/communications/v1/webhooks/email/inbound"
+
+# Renamed from [env.production]; `name` is unchanged, so the deployed Worker and the
+# agents.agentbarn.dev routing rule pointing at it are untouched.
+[env.cloud]
 name = "agentbarn-email-inbound"
 
-[env.production.vars]
+[env.cloud.vars]
 INBOUND_URL = "https://api.agentbarn.dev/communications/v1/webhooks/email/inbound"
