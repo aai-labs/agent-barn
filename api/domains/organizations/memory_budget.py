@@ -21,6 +21,7 @@ from injector import inject
 
 from api.core.config import get_config
 from api.domains.costs.service import CostService
+from api.domains.organizations.llm_budget_service import parse_timestamp
 from api.domains.organizations.models import Organization, budget_window_start
 from api.domains.organizations.repository import OrganizationRepository
 from api.infrastructure.litellm.client import LiteLLMClient
@@ -30,15 +31,6 @@ logger = logging.getLogger(__name__)
 
 def _now() -> datetime:
     return datetime.now(UTC)
-
-
-def _parse_timestamp(value: object) -> datetime | None:
-    if not isinstance(value, str) or not value:
-        return None
-    try:
-        return datetime.fromisoformat(value)
-    except ValueError:
-        return None
 
 
 @inject
@@ -77,7 +69,7 @@ class OrganizationMemoryBudgetService:
         suspend_percent: int,
     ) -> None:
         status_ = self.litellm.get_team_budget_status(str(organization.id))
-        renews_at = _parse_timestamp(status_.get("renews_at")) if status_ else None
+        renews_at = parse_timestamp(status_.get("renews_at")) if status_ else None
         if status_ is None or status_.get("spend") is None or renews_at is None:
             # "Could not read it" is not "nothing spent", and without the window
             # there is nothing to measure memory against: leave the row alone.

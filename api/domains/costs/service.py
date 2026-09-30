@@ -137,10 +137,14 @@ class CostService:
         whose group has since been deleted can no longer be traced to anyone, so its
         spend is dropped rather than attributed to the wrong Organization.
         """
-        organization_by_group = self.memory_groups.organization_by_group()
+        # Keyed by string: the pool ids come from Honcho's workspace names, which a
+        # malformed telemetry row can make anything, and must not stop the pass.
+        organization_by_group = {
+            str(group_id): org for group_id, org in self.memory_groups.organization_by_group().items()
+        }
         by_organization: dict[UUID, float] = {}
         for group_id, cost in self.honcho_usage.cost_by_group(start, end).items():
-            organization_id = organization_by_group.get(UUID(group_id))
+            organization_id = organization_by_group.get(group_id)
             if organization_id is not None:
                 by_organization[organization_id] = by_organization.get(organization_id, 0.0) + cost
         return by_organization

@@ -39,10 +39,14 @@ class _Chunks(httpx.AsyncByteStream):
 
     def __init__(self, *chunks: bytes):
         self.chunks = chunks
+        self.closed = False
 
     async def __aiter__(self):
         for chunk in self.chunks:
             yield chunk
+
+    async def aclose(self):
+        self.closed = True
 
 
 class Upstream:
@@ -56,7 +60,8 @@ class Upstream:
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
-        return httpx.Response(self.status, headers=self.headers, stream=_Chunks(*self.chunks))
+        self.stream = _Chunks(*self.chunks)
+        return httpx.Response(self.status, headers=self.headers, stream=self.stream)
 
 
 def proxy_client(upstream: Upstream, *, authorize=None, **config_values) -> TestClient:
@@ -155,3 +160,29 @@ def test_an_unreachable_honcho_is_a_bad_gateway():
 
 def test_the_proxy_reports_its_own_health_without_a_key():
     assert_that(proxy_client(Upstream()).get("/health").status_code, equal_to(200))
+
+
+def test_the_upstream_connection_is_closed_by_the_body_itself():
+    """Closed from the streaming body rather than a background task: Starlette skips
+    background tasks when the client goes away mid-stream, which would leave the
+    Honcho connection open until garbage collection."""
+    upstream = Upstream(chunks=(b"a", b"b"))
+    proxy_client(upstream).post(f"/v3/workspaces/{WS}/chat", json={}, headers=bearer())
+    assert_that(upstream.stream.closed, equal_to(True))
+
+
+def test_the_body_closes_upstream_even_when_the_client_stops_reading():
+    import asyncio
+
+    from api.domains.memory_proxy.proxy import _stream_then_close
+
+    upstream = Upstream(chunks=(b"a", b"b", b"c"))
+    response = upstream(httpx.Request("GET", "http://honcho"))
+
+    async def read_one_then_stop():
+        body = _stream_then_close(response)
+        await body.__anext__()
+        await body.aclose()
+
+    asyncio.run(read_one_then_stop())
+    assert_that(upstream.stream.closed, equal_to(True))

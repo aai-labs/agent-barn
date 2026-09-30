@@ -64,7 +64,7 @@ class BudgetCrossing:
     renews_at: str | None
 
 
-def _parse_timestamp(value: object) -> datetime | None:
+def parse_timestamp(value: object) -> datetime | None:
     """LiteLLM returns ISO-8601; a value we cannot parse is stored as unknown rather
     than guessed at."""
     if not isinstance(value, str) or not value:
@@ -256,7 +256,7 @@ class OrganizationLlmBudgetService:
         """The team is read whenever its limit is written, so its renewal date is known
         then, not only after the next scheduled refresh. An unreadable date leaves the
         previous one alone."""
-        parsed = _parse_timestamp(renews_at)
+        parsed = parse_timestamp(renews_at)
         if parsed is not None:
             self.organization_repository.set_llm_budget_renews_at(organization_id, parsed)
 
@@ -410,7 +410,7 @@ class OrganizationLlmBudgetService:
         # the threshold is measured against both, as the Organization sees it.
         organization.llm_spend_usd = agent_spend
         organization.llm_spend_observed_at = datetime.now(UTC)
-        organization.llm_budget_renews_at = _parse_timestamp(renews_at)
+        organization.llm_budget_renews_at = parse_timestamp(renews_at)
         spend = agent_spend + organization.memory_spend_this_window_usd
 
         # The key spans the window and the limit, so both a renewal and a limit change

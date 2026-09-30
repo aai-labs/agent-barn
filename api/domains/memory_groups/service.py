@@ -187,6 +187,7 @@ class MemoryGroupService:
                 detail="Memory sharing requires Honcho-backed memory to be enabled.",
             )
         source = self._get_or_404(source_group_id, org_id)
+        self.memory.require_memory_not_paused(org_id)
 
         # Resolve and validate every target up front — a bad target is a client
         # error, not a per-item outcome — then do the writes, where a Honcho hiccup
@@ -265,7 +266,8 @@ class MemoryGroupService:
     def search_memory(
         self, group_id: UUID, query: str, context: CurrentUserContext, *, limit: int
     ) -> list[MemoryItemRead]:
-        workspace, _org_id = self._require_pool_workspace(group_id, context)
+        workspace, org_id = self._require_pool_workspace(group_id, context)
+        self.memory.require_memory_not_paused(org_id)
         return self.memory.search_memory_for_workspace(
             workspace, query, limit=limit, scope=self.memory.name_resolution_scope(context)
         )
@@ -284,7 +286,8 @@ class MemoryGroupService:
         observer: str | None = None,
         observed: str | None = None,
     ) -> MemoryItemRead:
-        workspace, _org_id = self._require_pool_workspace(group_id, context)
+        workspace, org_id = self._require_pool_workspace(group_id, context)
+        self.memory.require_memory_not_paused(org_id)
         return self.memory.correct_in_workspace(
             workspace,
             memory_id,

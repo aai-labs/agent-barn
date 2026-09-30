@@ -24,6 +24,7 @@ from api.domains.agents.authorization import AgentAuthorization
 from api.domains.agents.models import Agent
 from api.domains.agents.repository import AgentRepository, PoolMemoryProvenance, SharedPoolMemoryFactRepository
 from api.domains.auth.models import CurrentUserContext
+from api.domains.organizations.lookup import OrganizationLookupService
 from api.domains.rbac.catalog import PermissionKey
 from api.domains.rbac.policy import AuthorizationScope, PermissionPolicy
 from api.infrastructure.honcho.client import (
@@ -255,6 +256,21 @@ class AgentMemoryService:
     pool_provenance: SharedPoolMemoryFactRepository
     agents: AgentRepository
     permission_policy: PermissionPolicy
+    organization_lookup: OrganizationLookupService
+
+    def require_memory_not_paused(self, organization_id: UUID) -> None:
+        """Refuse anything that makes memory spend while the Organization is
+        suspended for reaching its spend limit (AF-338): search embeds the query and
+        a correction or share embeds the new memory. Listing and forgetting cost
+        nothing and stay open, so people can still see and prune what is stored."""
+        if self.organization_lookup.memory_suspended(organization_id):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "Memory is paused because your organization has reached its spend limit. "
+                    "It resumes when the limit renews or is raised."
+                ),
+            )
 
     def _require(self, agent_id: UUID, permission: PermissionKey, context: CurrentUserContext) -> Agent:
         if not self.config.honcho_enabled:
@@ -512,6 +528,7 @@ class AgentMemoryService:
     ) -> MemoryItemRead:
         agent = self._require(agent_id, PermissionKey.AGENT_MEMORY_MANAGE, context)
         workspace = self._require_pool(agent)
+        self.require_memory_not_paused(agent.organization_id)
         existing = self._require_curate(agent, workspace, memory_id, context, observer=observer, observed=observed)
         return self._apply_correction(workspace, memory_id, existing, payload, self.name_resolution_scope(context))
 
@@ -581,6 +598,7 @@ class AgentMemoryService:
             self._require_group_manage(agent, context)
         if not memory_active(agent, honcho_enabled=self.config.honcho_enabled):
             return []
+        self.require_memory_not_paused(agent.organization_id)
         observer = ai_peer_name_for_agent(agent) if scope == "mine" else None
         return self.search_memory_for_workspace(
             memory_workspace_for_agent(agent),

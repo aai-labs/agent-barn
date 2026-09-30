@@ -61,8 +61,8 @@ def test_legacy_per_agent_workspace_is_not_a_pool():
     assert_that(pool_id_from_workspace(f"af-{uuid.uuid4()}"), is_(none()))
 
 
-def test_a_suspended_organization_starts_its_agents_with_memory_off():
-    """AF-338: once agents and memory together reach the Organization's limit, its
-    memory is suspended until the window renews or the limit changes."""
+def test_the_suspension_is_a_live_gate_not_a_start_time_one():
+    """AF-338: the memory proxy refuses a suspended Organization's Agents per request.
+    `memory_active` still accepts the flag for that live check."""
     in_group = _agent(memory_group_id=uuid.uuid4())
     assert_that(memory_active(in_group, honcho_enabled=True, organization_memory_suspended=True), equal_to(False))
