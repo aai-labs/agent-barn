@@ -178,14 +178,18 @@ function PlatformSetupHint({
   hint,
   platformKey,
   agentName,
+  agentDescription,
   title = "Setup requirements",
 }: {
   hint?: string | null;
   platformKey?: string;
   agentName?: string;
+  agentDescription?: string | null;
   title?: string;
 }) {
-  const manifest = platformKey === "slack" && agentName ? createSlackAppManifest(agentName) : null;
+  const manifest = platformKey === "slack" && agentName
+    ? createSlackAppManifest(agentName, agentDescription)
+    : null;
   if (!hint && !manifest) return null;
   return (
     <div
@@ -605,10 +609,12 @@ function SchemaFields({
 
 export function AgentChannelSettings({
   agent,
+  agentDescription,
   canEdit,
   autoOpen = false,
 }: {
   agent: Agent;
+  agentDescription: string | null;
   canEdit: boolean;
   /** Open the add-connection form immediately — used when arriving here via the
    * "Add a connection" shortcut on the Agent page, so there's no extra click to find. */
@@ -1228,6 +1234,7 @@ export function AgentChannelSettings({
                           hint={platform.setupHint}
                           platformKey={platform.key}
                           agentName={agent.name}
+                          agentDescription={agentDescription}
                         />
                         <div className="flex flex-col gap-4">
                           {connection.platformKey === "discord" && (
@@ -1504,6 +1511,7 @@ export function AgentChannelSettings({
                       hint={selectedPlatform.setupHint}
                       platformKey={selectedPlatform.key}
                       agentName={agent.name}
+                      agentDescription={agentDescription}
                     />
                     {schemaProperties(selectedPlatform.credentialsSchema).length > 0 && (
                       <div className="rounded-xl p-4" style={{ border: "1px solid var(--line)", background: "var(--bg-soft)" }}>

@@ -921,8 +921,20 @@ test.describe("Agent Detail Page — Channels tab", () => {
     });
   });
 
-  test("shows provider setup requirements before connecting", async ({ page, context }) => {
+  test("copies the Slack manifest with the Agent name and description", async ({ page, context }) => {
     await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+    await dataSupportPage.agents.interceptGetAgentRequest({
+      body: { ...mockAgent, name: "Maya Smith" },
+    });
+    await dataSupportPage.agents.interceptGetAgentConfigurationRequest({
+      body: {
+        ...mockAgentConfiguration,
+        active: {
+          ...mockAgentConfiguration.active,
+          description: "Onboards and offboards people",
+        },
+      },
+    });
     await page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}/connections`, async (route) => {
       if (route.request().method() !== "GET") return route.fallback();
       await route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
@@ -943,11 +955,12 @@ test.describe("Agent Detail Page — Channels tab", () => {
     await expect(copyManifest).toBeVisible();
     await copyManifest.click();
     const copiedManifest = JSON.parse(await page.evaluate(() => navigator.clipboard.readText())) as {
-      display_information: { name: string };
+      display_information: { name: string; description: string };
       features: { bot_user: { display_name: string } };
     };
-    expect(copiedManifest.display_information.name).toBe("Maya");
-    expect(copiedManifest.features.bot_user.display_name).toBe("AgentBarn");
+    expect(copiedManifest.display_information.name).toBe("Maya Smith");
+    expect(copiedManifest.display_information.description).toBe("Onboards and offboards people");
+    expect(copiedManifest.features.bot_user.display_name).toBe("maya-smith");
 
     await agentDetailPage.selectPlatformButton("Discord").click();
     const discordHint = agentDetailPage.setupHint(/Invite the bot/);

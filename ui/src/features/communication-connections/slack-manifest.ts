@@ -77,15 +77,36 @@ const SLACK_APP_MANIFEST_TEMPLATE = {
 
 /** Slack limits display_information.name to 35 characters. */
 const MAX_SLACK_APP_NAME_LENGTH = 35;
+/** Slack limits display_information.description to 140 characters. */
+const MAX_SLACK_APP_DESCRIPTION_LENGTH = 140;
+/** Slack limits features.bot_user.display_name to 80 characters. */
+const MAX_SLACK_BOT_DISPLAY_NAME_LENGTH = 80;
 
-export function createSlackAppManifest(agentName: string) {
+export function createSlackAppManifest(agentName: string, agentDescription?: string | null) {
   const appName = Array.from(agentName).slice(0, MAX_SLACK_APP_NAME_LENGTH).join("");
+  const description = Array.from(
+    agentDescription?.trim() || SLACK_APP_MANIFEST_TEMPLATE.display_information.description,
+  ).slice(0, MAX_SLACK_APP_DESCRIPTION_LENGTH).join("");
+  const botDisplayName = agentName
+    .normalize("NFKD")
+    .replace(/\p{M}/gu, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, MAX_SLACK_BOT_DISPLAY_NAME_LENGTH) || "agent";
 
   return {
     ...SLACK_APP_MANIFEST_TEMPLATE,
     display_information: {
       name: appName,
-      ...SLACK_APP_MANIFEST_TEMPLATE.display_information,
+      description,
+    },
+    features: {
+      ...SLACK_APP_MANIFEST_TEMPLATE.features,
+      bot_user: {
+        ...SLACK_APP_MANIFEST_TEMPLATE.features.bot_user,
+        display_name: botDisplayName,
+      },
     },
   } as const;
 }
