@@ -1929,11 +1929,10 @@ class AgentService:
         # Memory is per-Agent opt-in on top of the infra flag (is Honcho deployed
         # at all). When on, the Agent reads and writes its pool's shared
         # workspace so it can see the other opted-in Agents' memory.
-        memory_on = memory_active(
-            agent,
-            honcho_enabled=self.config.honcho_enabled,
-            organization_memory_suspended=self.organization_lookup.memory_suspended(org_id),
-        )
+        # Not gated on a budget suspension: the memory proxy refuses a suspended
+        # Organization per request, so an Agent started mid-suspension gets its
+        # memory back when the suspension lifts, without a restart.
+        memory_on = memory_active(agent, honcho_enabled=self.config.honcho_enabled)
         memory_workspace = memory_workspace_for_agent(agent) if memory_on else None
         # The pod reaches memory through the memory proxy, never Honcho directly: a
         # Honcho token cannot be revoked, and a copied one would outlive a stop, a

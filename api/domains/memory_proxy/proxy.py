@@ -11,13 +11,13 @@ SDKs can ask for server-sent events.
 import asyncio
 import json
 import logging
+from collections.abc import AsyncGenerator
 from typing import Any
 
 import httpx
 from fastapi import Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 from injector import inject, noninjectable, singleton
-from starlette.background import BackgroundTask
 from starlette.concurrency import run_in_threadpool
 
 from api.core.config import Config
@@ -92,11 +92,23 @@ class MemoryProxy:
             logger.warning("Memory proxy could not reach Honcho for workspace %s", workspace)
             return _error(502, "Memory is unavailable right now")
         return StreamingResponse(
-            upstream.aiter_raw(),
+            _stream_then_close(upstream),
             status_code=upstream.status_code,
             headers={k: v for k, v in upstream.headers.items() if k.lower() not in _HOP_BY_HOP},
-            background=BackgroundTask(upstream.aclose),
         )
+
+
+async def _stream_then_close(upstream: httpx.Response) -> AsyncGenerator[bytes]:
+    """The upstream body, closing the Honcho connection however the stream ends.
+
+    Not a background task: Starlette skips those when the client disconnects
+    mid-stream, which would leave the connection open until garbage collection.
+    """
+    try:
+        async for chunk in upstream.aiter_raw():
+            yield chunk
+    finally:
+        await upstream.aclose()
 
 
 def _bearer(header: str | None) -> str | None:

@@ -81,3 +81,13 @@ def test_spend_on_a_pool_whose_group_is_gone_is_attributed_to_nobody() -> None:
     service.memory_groups.organization_by_group.return_value = {live: org}
 
     assert_that(service.memory_cost_by_organization(MagicMock(), MagicMock()), equal_to({org: 1.0}))
+
+
+def test_a_pool_workspace_that_is_not_a_group_id_is_skipped_not_fatal() -> None:
+    """Workspace names come from Honcho telemetry. One malformed `af-pool-…` name
+    must not stop every Organization's enforcement pass."""
+    org, group = uuid7(), uuid7()
+    service = _service({str(group): 2.0, "not-a-uuid": 5.0}, {})
+    service.memory_groups.organization_by_group.return_value = {group: org}
+
+    assert_that(service.memory_cost_by_organization(MagicMock(), MagicMock()), equal_to({org: 2.0}))

@@ -12,6 +12,7 @@ from api.domains.agents.models import AgentType
 from api.domains.agents.repository import AgentRepository
 from api.domains.memory_groups.models import MemoryGroup
 from api.domains.memory_groups.repository import MemoryGroupRepository
+from api.domains.organizations.repository import OrganizationRepository
 from api.infrastructure.kubernetes.client import KubernetesClient
 from api.tests.core.givenpy import given, then, when
 from api.tests.core.modules import create_test_client, prepare_api_server, prepare_injector, set_env_variable
@@ -125,3 +126,34 @@ def test_a_restart_replaces_the_key():
         assert_that(access.authorize(second), starts_with("af-pool-"))
         with pytest.raises(MemoryKeyRejected):
             access.authorize(first)
+
+
+def test_an_agent_started_during_a_suspension_gets_memory_back_when_it_lifts():
+    """Starting during a suspension still issues the key and the memory config: the
+    proxy refuses it while suspended and lets it through once the suspension lifts,
+    without a restart — the same as an Agent that was already running."""
+    with given(_given(AgentType.OPENCLAW)) as ctx:
+        client: TestClient = ctx.client
+        k8s: MagicMock = ctx.injector.get(KubernetesClient)
+        access = ctx.injector.get(AgentMemoryAccessService)
+        organizations = ctx.injector.get(OrganizationRepository)
+
+        with when("the agent starts while its Organization's memory is suspended"):
+            organization = organizations.get(ctx.organization.id)
+            organization.llm_memory_suspended_key = organization.llm_budget_window_key
+            organizations.save(organization)
+            client.post(f"{_AGENTS}/{ctx.agent.id}/start", headers=_auth(ctx))
+            base_url, key = _memory_config(k8s, AgentType.OPENCLAW)
+
+        with then("it is given memory, but refused while suspended"):
+            assert_that(base_url, equal_to(_PROXY))
+            with pytest.raises(MemoryAccessDenied):
+                access.authorize(key)
+
+        with when("the suspension lifts"):
+            organization = organizations.get(ctx.organization.id)
+            organization.llm_memory_suspended_key = None
+            organizations.save(organization)
+
+        with then("the same running agent reaches its pool again"):
+            assert_that(access.authorize(key), equal_to(f"af-pool-{ctx.group.id}"))

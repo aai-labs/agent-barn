@@ -88,3 +88,34 @@ def test_paths_that_could_escape_the_pool_are_refused(path):
 def test_a_workspace_write_whose_body_cannot_be_read_is_refused():
     with pytest.raises(MemoryRequestRefused):
         check_memory_request("PUT", f"v3/workspaces/{WS}", "not json", WS)
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "body"),
+    [
+        # Sessions, peers and messages carry configuration that overrides the pool's
+        # (deriver instructions, dreams), so it is refused wherever it appears.
+        ("POST", f"v3/workspaces/{WS}/sessions", {"id": "s1", "configuration": {"dream": {"enabled": True}}}),
+        ("PUT", f"v3/workspaces/{WS}/sessions/s1", {"configuration": {"reasoning": {"custom_instructions": "x"}}}),
+        ("PUT", f"v3/workspaces/{WS}/peers/p1", {"configuration": {}}),
+        (
+            "POST",
+            f"v3/workspaces/{WS}/sessions/s1/messages",
+            {"messages": [{"content": "hi", "peer_id": "p1"}, {"content": "x", "peer_id": "p1", "configuration": {}}]},
+        ),
+    ],
+)
+def test_configuration_is_refused_below_the_pool_too(method, path, body):
+    with pytest.raises(MemoryRequestRefused):
+        check_memory_request(method, path, body, WS)
+
+
+def test_what_the_runtimes_actually_send_still_passes():
+    """Neither runtime sends configuration; session peer observation settings are a
+    different field and stay allowed."""
+    assert_that(allowed("POST", f"v3/workspaces/{WS}/sessions", {"id": "s1", "metadata": {}}), equal_to(True))
+    assert_that(
+        allowed("POST", f"v3/workspaces/{WS}/sessions/s1/messages", {"messages": [{"content": "hi", "peer_id": "p1"}]}),
+        equal_to(True),
+    )
+    assert_that(allowed("PUT", f"v3/workspaces/{WS}/sessions/s1/peers/p1/config", {"observe_me": True}), equal_to(True))

@@ -30,3 +30,19 @@ def test_the_reconciler_pushes_each_limit_less_the_memory_spent_this_window():
 
         assert_that(policies[with_memory.id], equal_to((45.0, "30d")))
         assert_that(policies[without.id], equal_to((40.0, "30d")))
+
+
+def test_a_suspension_still_matches_after_the_row_is_saved_and_read_back():
+    """The key embeds the renewal timestamp; it must render the same from a freshly
+    parsed LiteLLM value and from the database."""
+    with given([prepare_injector(), database_repo_is_ready(), database_is_clean()]) as context:
+        repository = context.injector.get(OrganizationRepository)
+        organization = Organization(
+            name="Suspended",
+            llm_budget_usd=100.0,
+            llm_budget_renews_at=datetime.fromisoformat("2099-01-01T00:00:00Z"),
+        )
+        organization.llm_memory_suspended_key = organization.llm_budget_window_key
+        saved = repository.save(organization)
+
+        assert_that(repository.get(saved.id).llm_memory_suspended, equal_to(True))

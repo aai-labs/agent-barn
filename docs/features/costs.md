@@ -194,7 +194,11 @@ the Organization's memory once agents + memory reach `LLM_MEMORY_SUSPEND_PERCENT
 the limit (100 by default; lower trips early to absorb the spend between runs). The
 suspension is keyed to the window and the limit (`llm_memory_suspended_key`), so it
 holds even if the apportioned figure later dips, and lifts when the window renews or
-the limit changes. A suspended Organization's Agents start with memory off.
+the limit changes. The suspension is checked live, per request, by the memory proxy
+(see the AF-280 deployment notes), so it applies to running Agents at once and lifts
+without a restart — including for an Agent started while it was in force. In the app,
+searching memory and correcting or sharing an item are refused while suspended, since
+each makes a model call; browsing and forgetting cost nothing and stay open.
 
 A memory figure only counts in the window it was measured in, so a renewal is never
 held down by last window's memory. The window is `[previous renewal, now]`, and a
