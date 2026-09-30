@@ -1,0 +1,175 @@
+"""Agent Resource Usage: how much CPU and memory an Agent's container is using.
+
+Read from Prometheus, which scrapes the figures each Agent's healthz server reads from
+its own cgroup (see `docs/features/resource-usage.md`). Nothing here is stored, so these
+are read models only. This is container usage, not model usage or spend.
+"""
+
+import enum
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
+from uuid import UUID
+
+from pydantic import BaseModel as PydanticBaseModel
+
+from api.domains.agents.models import AgentStatus, AgentType
+from api.domains.platform_admin.models import StatsPeriod
+from api.domains.rbac.catalog import PermissionKey
+
+
+class ResourceUsageRange(str, enum.Enum):
+    """How far back a chart looks. Capped at 14 days: Prometheus keeps 15."""
+
+    ONE_HOUR = "1h"
+    SIX_HOURS = "6h"
+    ONE_DAY = "24h"
+    SEVEN_DAYS = "7d"
+    FOURTEEN_DAYS = "14d"
+
+    @property
+    def seconds(self) -> int:
+        return _RANGE_SECONDS[self]
+
+    @property
+    def step_seconds(self) -> int:
+        return _RANGE_STEP_SECONDS[self]
+
+
+_RANGE_SECONDS = {
+    ResourceUsageRange.ONE_HOUR: 3600,
+    ResourceUsageRange.SIX_HOURS: 6 * 3600,
+    ResourceUsageRange.ONE_DAY: 24 * 3600,
+    ResourceUsageRange.SEVEN_DAYS: 7 * 24 * 3600,
+    ResourceUsageRange.FOURTEEN_DAYS: 14 * 24 * 3600,
+}
+
+# Each range is drawn with a step that keeps a chart at 60 to 337 points.
+_RANGE_STEP_SECONDS = {
+    ResourceUsageRange.ONE_HOUR: 60,
+    ResourceUsageRange.SIX_HOURS: 120,
+    ResourceUsageRange.ONE_DAY: 300,
+    ResourceUsageRange.SEVEN_DAYS: 1800,
+    ResourceUsageRange.FOURTEEN_DAYS: 3600,
+}
+
+# The cap on the agents overview. Its queries and its per-row health polling grow with
+# the page, so a bounded page is a deliberate limit, and `total` reports the rest.
+OVERVIEW_MAX_AGENTS = 100
+
+
+@dataclass(frozen=True)
+class UsageWindow:
+    """A chart window with its end aligned to the step.
+
+    Aligned so that repeated polls ask for the same points; a moving start would shift
+    every bucket on each refresh and make the chart wobble.
+    """
+
+    usage_range: ResourceUsageRange
+    start: datetime
+    end: datetime
+    step_seconds: int
+
+    def timeline(self) -> list[datetime]:
+        count = int((self.end - self.start).total_seconds()) // self.step_seconds
+        return [self.start + timedelta(seconds=self.step_seconds * i) for i in range(count + 1)]
+
+
+def resolve_usage_window(usage_range: ResourceUsageRange, now: datetime) -> UsageWindow:
+    step = usage_range.step_seconds
+    end = datetime.fromtimestamp(int(now.timestamp()) // step * step, UTC)
+    return UsageWindow(
+        usage_range=usage_range,
+        start=end - timedelta(seconds=usage_range.seconds),
+        end=end,
+        step_seconds=step,
+    )
+
+
+class ResourceUsageAvailability(str, enum.Enum):
+    """Whether the numbers could be fetched at all. About the source, not the Agent."""
+
+    AVAILABLE = "available"
+    NOT_CONFIGURED = "not_configured"
+    UNAVAILABLE = "unavailable"
+
+
+class ResourceUsageState(str, enum.Enum):
+    """What the source knows about one Agent."""
+
+    REPORTING = "reporting"
+    # Scraped, but still running a healthz script from before it reported usage.
+    RESTART_REQUIRED = "restart_required"
+    # The container cannot read its cgroup v2 files (an older node).
+    UNSUPPORTED = "unsupported"
+    NO_DATA = "no_data"
+
+
+class ResourceUsagePoint(PydanticBaseModel):
+    bucket: datetime
+    memory_working_set_bytes: int | None = None
+    cpu_cores: float | None = None
+    cpu_throttled_ratio: float | None = None
+
+
+class AgentResourceUsageRead(PydanticBaseModel):
+    agent_id: UUID
+    range: ResourceUsageRange
+    from_date: datetime
+    to_date: datetime
+    step_seconds: int
+    availability: ResourceUsageAvailability
+    # Set only when the source was reachable.
+    state: ResourceUsageState | None = None
+    observed_at: datetime
+    memory_working_set_bytes: int | None = None
+    memory_limit_bytes: int | None = None
+    memory_peak_bytes: int | None = None
+    # A 5-minute average, so a short spike is smoothed away.
+    cpu_cores: float | None = None
+    cpu_limit_cores: float | None = None
+    cpu_average_cores: float | None = None
+    # Share of scheduling periods in which the container hit its CPU limit.
+    cpu_throttled_ratio: float | None = None
+    # One entry per step across the window; a missing reading is null so a gap shows.
+    series: list[ResourceUsagePoint] = []
+
+
+class AgentUsageSnapshotRead(PydanticBaseModel):
+    state: ResourceUsageState
+    memory_working_set_bytes: int | None = None
+    memory_limit_bytes: int | None = None
+    cpu_cores: float | None = None
+    cpu_limit_cores: float | None = None
+    # Over the last hour.
+    cpu_throttled_ratio: float | None = None
+
+
+class AgentOverviewSpendRead(PydanticBaseModel):
+    spend: float
+    calls: int
+    last_call_at: datetime | None = None
+
+
+class AgentOverviewItemRead(PydanticBaseModel):
+    id: UUID
+    name: str
+    status: AgentStatus
+    agent_type: AgentType
+    effective_model: str
+    created_at: datetime
+    allowed_actions: list[PermissionKey]
+    # None without `cost.read` on this Agent. An Agent with no calls has zero spend.
+    spend: AgentOverviewSpendRead | None = None
+    # None without `activity.read`, and for a stopped Agent (there is no container).
+    resource_usage: AgentUsageSnapshotRead | None = None
+
+
+class AgentOverviewRead(PydanticBaseModel):
+    period: StatsPeriod | None = None
+    from_date: datetime
+    to_date: datetime
+    resource_usage_availability: ResourceUsageAvailability
+    # Every Agent the caller can read; `items` stops at OVERVIEW_MAX_AGENTS.
+    total: int
+    items: list[AgentOverviewItemRead]

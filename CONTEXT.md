@@ -96,6 +96,10 @@ _Avoid_: model usage, observed model
 The models and token usage attributed to Agent executions during a defined reporting period. It may include multiple models and may differ from the Agent's current Configured Model.
 _Avoid_: configured model, current model
 
+**Agent Resource Usage**:
+The CPU and memory an Agent's container is using, against the limits it runs with. Each Agent reports its own; Prometheus stores it. It describes the container, not model calls or spend.
+_Avoid_: model usage, observed model usage, cost, spend
+
 **Runtime**:
 The implementation that executes an agent. Agent Barn currently supports Hermes and OpenClaw.
 _Avoid_: platform

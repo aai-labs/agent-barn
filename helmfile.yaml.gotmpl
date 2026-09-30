@@ -215,6 +215,11 @@ releases:
       # with it for the remaining-credit-limit metric.
       - name: openrouterApiKey
         value: {{ env "OPENROUTER_API_KEY" | default "" | quote }}
+      # The API queries the monitoring release's Prometheus, which requires this
+      # password. Passed here rather than read from that release's Secret: monitoring
+      # needs this release, so on a fresh install the Secret does not exist yet.
+      - name: prometheus.password
+        value: {{ env "MONITORING_WEB_PASSWORD" | required "MONITORING_WEB_PASSWORD is required" | quote }}
     needs:
       - {{ env "NAMESPACE" | default "agent-farm" }}/postgres-app
       - {{ env "NAMESPACE" | default "agent-farm" }}/litellm

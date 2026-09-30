@@ -1,9 +1,13 @@
 const http = require('http');
+const fs = require('fs');
+const path = require('path');
 const { execFile } = require('child_process');
 
 
 const PROXY_PORT = Number(process.env.LLM_PROXY_PORT || 8090);
 const PORT = parseInt(process.env.HEALTHZ_PORT || '8081', 10);
+// Test-only override; the builders never set it.
+const CGROUP_ROOT = process.env.HEALTHZ_CGROUP_ROOT || '/sys/fs/cgroup';
 const CACHE_TTL_MS = 10_000;
 const LITELLM_PROXY_TARGET = process.env.LITELLM_PROXY_TARGET || '';
 
@@ -123,6 +127,94 @@ function metricsText() {
   return lines.join('\n') + '\n';
 }
 
+function parseUint(text) {
+  const trimmed = text.trim();
+  return /^\d+$/.test(trimmed) ? Number(trimmed) : null;
+}
+
+function readCgroup(name) {
+  try {
+    return fs.readFileSync(path.join(CGROUP_ROOT, name), 'utf8');
+  } catch {
+    return null;
+  }
+}
+
+// A single-number cgroup file; `max` (no limit) and unreadable both give null.
+function cgroupInt(name) {
+  const text = readCgroup(name);
+  return text === null ? null : parseUint(text);
+}
+
+// A flat `key value` cgroup file. Unknown and malformed lines are skipped.
+function cgroupKeyed(name) {
+  const values = new Map();
+  for (const line of (readCgroup(name) || '').split('\n')) {
+    const parts = line.trim().split(/\s+/);
+    const value = parts.length === 2 ? parseUint(parts[1]) : null;
+    if (value !== null) values.set(parts[0], value);
+  }
+  return values;
+}
+
+function cpuLimitCores() {
+  const parts = (readCgroup('cpu.max') || '').trim().split(/\s+/);
+  if (parts.length !== 2) return null;
+  const quota = parseUint(parts[0]);
+  const period = parseUint(parts[1]);
+  return quota && period ? quota / period : null;
+}
+
+// Container CPU and memory from the cgroup v2 files. Every series is independent:
+// one that cannot be read is left out, never guessed. The order and help text must
+// match hermes/healthz-server.py (a test compares them).
+function resourceMetricsText() {
+  const current = cgroupInt('memory.current');
+  const inactive = cgroupKeyed('memory.stat').get('inactive_file');
+  const cpuStat = cgroupKeyed('cpu.stat');
+  const usageUsec = cpuStat.get('usage_usec');
+  const workingSet = current !== null && inactive !== undefined ? Math.max(current - inactive, 0) : null;
+  const series = [
+    [
+      'agent_cgroup_metrics_available',
+      'gauge',
+      "1 if the container's cgroup v2 CPU and memory files were readable at this scrape, 0 otherwise",
+      workingSet !== null && usageUsec !== undefined ? 1 : 0,
+    ],
+    [
+      'agent_memory_working_set_bytes',
+      'gauge',
+      'Container memory in use excluding reclaimable page cache (memory.current minus inactive_file)',
+      workingSet,
+    ],
+    ['agent_memory_limit_bytes', 'gauge', 'Container memory limit (memory.max); absent when unlimited', cgroupInt('memory.max')],
+    [
+      'agent_cpu_usage_seconds_total',
+      'counter',
+      'CPU time consumed by the container (cpu.stat usage_usec)',
+      usageUsec === undefined ? null : usageUsec / 1e6,
+    ],
+    [
+      'agent_cpu_limit_cores',
+      'gauge',
+      'Container CPU limit in cores (cpu.max quota / period); absent when unlimited',
+      cpuLimitCores(),
+    ],
+    ['agent_cpu_periods_total', 'counter', 'CFS enforcement periods elapsed (cpu.stat nr_periods)', cpuStat.get('nr_periods') ?? null],
+    [
+      'agent_cpu_throttled_periods_total',
+      'counter',
+      'CFS periods in which the container was throttled (cpu.stat nr_throttled)',
+      cpuStat.get('nr_throttled') ?? null,
+    ],
+  ];
+  const lines = [];
+  for (const [name, kind, help, value] of series) {
+    if (value !== null) lines.push(`# HELP ${name} ${help}`, `# TYPE ${name} ${kind}`, `${name} ${value}`);
+  }
+  return lines.join('\n') + '\n';
+}
+
 function healthzResult() {
   if (!cache) return [503, { status: 'starting' }];
   if (cache.ok) return [200, { status: 'ok' }];
@@ -144,7 +236,7 @@ const server = http.createServer((req, res) => {
     // Prometheus exposition content type; canonical value lives in
     // api/core/metrics.py (standalone script, cannot share the constant).
     res.writeHead(200, { 'Content-Type': 'text/plain; version=0.0.4; charset=utf-8' });
-    res.end(metricsText());
+    res.end(metricsText() + resourceMetricsText());
   } else if (req.url === '/healthz') {
     const [code, body] = healthzResult();
     sendJson(res, code, body);

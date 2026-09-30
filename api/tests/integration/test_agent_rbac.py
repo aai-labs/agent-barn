@@ -50,6 +50,7 @@ from api.tests.steps.database import database_is_clean, database_repo_is_ready
 from api.tests.steps.organization import (
     there_is_an_organization_with_user_and_access_token,
 )
+from api.tests.steps.resource_usage import MockPrometheusModule
 from api.tests.steps.template import there_is_a_template
 from api.tests.steps.user import there_is_a_user, there_is_an_access_token_for_user
 
@@ -68,7 +69,7 @@ _GIVEN = [
             "SKIP_SLACK_TOKEN_VALIDATION": "true",
         }
     ),
-    prepare_injector(modules=[MockK8sModule(), MockLiteLLMModule()]),
+    prepare_injector(modules=[MockK8sModule(), MockLiteLLMModule(), MockPrometheusModule()]),
     prepare_api_server(),
     create_test_client(),
     database_repo_is_ready(),
@@ -389,6 +390,7 @@ def test_assigned_activity_and_cost_endpoints_cannot_be_bypassed():
             f"{_BASE}/{assigned_agent.id}/activity",
             f"{_BASE}/{assigned_agent.id}/activity/wakes",
             f"{_BASE}/{assigned_agent.id}/activity/calls",
+            f"{_BASE}/{assigned_agent.id}/resource-usage",
             f"/api/v1/organizations/{{organization_id}}/costs/agents/{assigned_agent.id}",
             f"/api/v1/organizations/{{organization_id}}/costs/agents/{assigned_agent.id}/calls",
             f"/api/v1/organizations/{{organization_id}}/costs/agents/{assigned_agent.id}/monthly",
@@ -402,6 +404,7 @@ def test_assigned_activity_and_cost_endpoints_cannot_be_bypassed():
             f"{_BASE}/{hidden_agent.id}/activity",
             f"{_BASE}/{hidden_agent.id}/activity/wakes",
             f"{_BASE}/{hidden_agent.id}/activity/calls",
+            f"{_BASE}/{hidden_agent.id}/resource-usage",
             f"/api/v1/organizations/{{organization_id}}/costs/agents/{hidden_agent.id}",
             f"/api/v1/organizations/{{organization_id}}/costs/agents/{hidden_agent.id}/calls",
             f"/api/v1/organizations/{{organization_id}}/costs/agents/{hidden_agent.id}/monthly",
@@ -414,6 +417,21 @@ def test_assigned_activity_and_cost_endpoints_cannot_be_bypassed():
         for url in hidden_urls:
             response = context.client.get(url, headers=_auth(context))
             assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND), url)
+
+
+def test_assigned_overview_lists_only_visible_agents():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        assigned_agent = context.agent
+        there_is_an_agent(name="Hidden Aggregate")(context)
+        hidden_agent = context.agent
+        _switch_to_member()(context)
+        there_is_agent_access(agent_id=assigned_agent.id)(context)
+
+        response = context.client.get("/api/v1/organizations/{organization_id}/agent-overview", headers=_auth(context))
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+        assert_that([item["id"] for item in response.json()["items"]], equal_to([str(assigned_agent.id)]))
+        assert_that(str(hidden_agent.id) in response.text, equal_to(False))
 
 
 def test_access_revocation_is_observed_on_next_request():

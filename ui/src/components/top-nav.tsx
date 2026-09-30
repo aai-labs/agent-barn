@@ -51,6 +51,9 @@ export function TopNav({ onHire }: TopNavProps) {
       ]
     : [
         { href: orgBase, label: "Home" },
+        // Every member: the page lists the agents they can read, with what each costs and
+        // uses, and shows each figure only where they hold the permission for it.
+        { href: `${orgBase}/agents`, label: "Usage" },
         // Costs is owner/admin-only (the endpoint is gated too); hide it from members.
         ...(canManageMembers ? [{ href: `${orgBase}/costs`, label: "Costs" }] : []),
         { href: `${orgBase}/settings`, label: "Settings" },
@@ -82,9 +85,14 @@ export function TopNav({ onHire }: TopNavProps) {
   const isActive = (href: string) => {
     // Home and Overview are prefixes of every tab beside them, so a prefix test would
     // report them active on every page in their section. Both match exactly instead —
-    // Home additionally claims the agent pages, which have no tab of their own.
+    // Home additionally claims the agent pages, which have no tab of their own (their
+    // back link says "Your team" and leads Home).
     if (href === orgBase) {
-      return pathname === orgBase || pathname.startsWith(`${orgBase}/agents`);
+      return pathname === orgBase || pathname.startsWith(`${orgBase}/agents/`);
+    }
+    // Usage lives at /agents, the parent of every agent page, so it too matches exactly.
+    if (href === `${orgBase}/agents`) {
+      return pathname === href;
     }
     if (href === PLATFORM_BASE) {
       return pathname === PLATFORM_BASE;

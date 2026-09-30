@@ -148,3 +148,15 @@ INGEST_PORT=
 # Optional. Host port for the Communications gateway. Agent pods reach it
 # through host.docker.internal; defaults to 8002.
 COMMUNICATIONS_PORT=
+
+# Optional. Local Prometheus for the Resource usage views. `make dev-monitoring`
+# generates PROMETHEUS_PASSWORD here; once it is set the API in Docker looks for
+# Prometheus on the host at PROMETHEUS_PORT (default 9090), which is where
+# `make forward-prometheus` publishes it. Leave all three empty to run without it:
+# the views then say resource usage is not configured.
+PROMETHEUS_PASSWORD=
+PROMETHEUS_PORT=
+# Overrides the URL the API container uses, e.g. for a Prometheus somewhere else. A
+# host-run API (`make dev-api`) does not use compose, so set PROMETHEUS_URL instead,
+# e.g. http://localhost:9090.
+API_PROMETHEUS_URL=

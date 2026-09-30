@@ -40,6 +40,7 @@ from api.domains.integrations.microsoft_oauth.routes import microsoft_callback_r
 from api.domains.organizations.routes import org_router, platform_org_router
 from api.domains.platform_admin.routes import platform_stats_router
 from api.domains.rbac.seeder import RbacSeeder
+from api.domains.resource_usage.routes import agent_overview_router, resource_usage_router
 from api.domains.restore_points.routes import restore_points_router
 from api.domains.shared_credentials.routes import shared_credentials_router
 from api.domains.skills.repository import SkillRepository
@@ -134,6 +135,8 @@ def create_app(injector: Injector | None = None):
     subapi.include_router(platform_templates_router)
     subapi.include_router(tool_calls_router)
     subapi.include_router(activity_router)
+    subapi.include_router(resource_usage_router)
+    subapi.include_router(agent_overview_router)
     subapi.include_router(restore_points_router)
     subapi.include_router(users_router)
     # This remains outside /api/v1 because Azure has the historical public
