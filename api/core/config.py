@@ -55,6 +55,33 @@ class Config(BaseSettings):
     agent_litellm_base_url: str = ""
     agent_image_pull_secret: str = ""
     agent_default_model: str = "litellm/openrouter/z-ai/glm-5.2"
+    # Honcho-backed Agent memory. Off by default: enabling it moves the runtime's
+    # single memory slot off the file-backed default, and a running Agent only
+    # picks the change up when it is stopped and started again.
+    honcho_enabled: bool = False
+    # What the API itself calls to purge a deleted Agent's workspace.
+    honcho_base_url: str = "http://honcho:8000"
+    # What an Agent pod calls. Same value in-cluster, but locally the API runs in
+    # Compose while Agents run in k3d, so they reach Honcho by different names —
+    # the same split `agent_litellm_base_url` exists for.
+    agent_honcho_base_url: str = "http://honcho:8000"
+    # Shared secret Honcho presents when posting its usage telemetry. Empty
+    # rejects every post, so usage is simply not recorded rather than accepted
+    # from anyone who can reach the Ingest service.
+    honcho_telemetry_key: str = ""
+    # Honcho's own LiteLLM virtual key. The API needs it to read the spend that
+    # Honcho's token telemetry is divided against; it is never used to call a model.
+    honcho_litellm_key: str = ""
+    # Shared secret Honcho signs/verifies its JWT access keys with (its
+    # AUTH_JWT_SECRET). Empty means Honcho auth is off (dev only): the API sends no
+    # bearer and Agents get no token. When set, the API signs an admin token for its
+    # own calls and mints a per-Agent token scoped to that Agent's pool workspace, so
+    # a pod can only reach its own pool. Never used to call a model.
+    honcho_jwt_secret: str = ""
+    # Max Agents in one memory group. Pool operations (search, recall, facets) fan
+    # out per member, so the cap keeps them bounded and search complete rather than
+    # silently truncated. A config value so it can be tuned per env without a deploy.
+    max_memory_group_size: int = 25
     organization_creation_limit: int = 5
     # Percentages of an Organization's limit at which it is notified. Empty falls back
     # to the default; 100 is always meaningful because it is the enforcement boundary.

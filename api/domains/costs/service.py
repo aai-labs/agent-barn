@@ -23,12 +23,15 @@ from api.domains.costs.models import (
     CostRecordSource,
     CostSeriesPoint,
     CostSummaryRead,
+    GroupMemoryCostRead,
     MonthlyCostRead,
     MonthlyWindow,
     TokenSeriesPoint,
     month_start,
 )
 from api.domains.costs.repository import CostRepository
+from api.domains.costs.usage_service import HonchoUsageService
+from api.domains.memory_groups.service import MemoryGroupService
 from api.domains.platform_admin.models import StatsWindow
 from api.domains.rbac.catalog import PermissionKey
 from api.domains.rbac.policy import PermissionPolicy
@@ -51,6 +54,8 @@ class CostService:
     agent_authorization: AgentAuthorization
     permission_policy: PermissionPolicy
     repository: CostRepository
+    honcho_usage: HonchoUsageService
+    memory_groups: MemoryGroupService
 
     def _org_id(self, context: CurrentUserContext) -> UUID:
         return context.require_current_user_organization().organization_id
@@ -86,8 +91,44 @@ class CostService:
         window: StatsWindow,
         filters: CostFilter,
     ) -> CostSummaryRead:
-        scoped = self._scoped(self._authorized_org(context), filters)
-        return build_cost_summary(self.repository, window, scoped)
+        org_id = self._authorized_org(context)
+        scoped = self._scoped(org_id, filters)
+        summary = build_cost_summary(self.repository, window, scoped)
+        # Memory spend is billed on Honcho's separate credential, so it is added here
+        # rather than coming from the cost_record table the summary reads. It is this
+        # Organization's share of the pools — the sum of its groups' apportioned costs,
+        # NOT Honcho's platform-wide total (one credential bills every org) — so it
+        # reconciles with the per-group rows in memory_cost_by_group.
+        cost_by_group = self.honcho_usage.cost_by_group(window.start, window.end)
+        summary.total_memory_cost = round(
+            sum(cost_by_group.get(str(gid), 0.0) for gid in self.memory_groups.names_for_org(org_id)),
+            12,
+        )
+        return summary
+
+    def memory_cost_by_group(self, context: CurrentUserContext, window: StatsWindow) -> list[GroupMemoryCostRead]:
+        """This Organization's memory spend split across its memory groups.
+
+        Memory has no per-Agent attribution (Agents share pools), but the pool is a
+        group, so this is the finest split that is meaningful. The figures come from
+        apportioning Honcho's authoritative total by per-pool token share, then are
+        scoped to the groups this Organization owns and labelled with their names.
+        Groups with no memory activity in the window appear with 0, and the rows sum
+        to the summary's `total_memory_cost`.
+        """
+        org_id = self._authorized_org(context)
+        cost_by_group = self.honcho_usage.cost_by_group(window.start, window.end)
+        names = self.memory_groups.names_for_org(org_id)
+        rows = [
+            GroupMemoryCostRead(
+                group_id=group_id,
+                group_name=name,
+                memory_cost=round(cost_by_group.get(str(group_id), 0.0), 12),
+            )
+            for group_id, name in names.items()
+        ]
+        rows.sort(key=lambda r: (-r.memory_cost, r.group_name.lower()))
+        return rows
 
     def list_org_costs(
         self,
@@ -239,6 +280,9 @@ class CostService:
             daily_burn_rate=daily_burn_rate(spend, window.start, window.end),
             first_call_at=totals.first_call_at,
             last_call_at=totals.last_call_at,
+            # Memory cost is pool-level, not per-Agent (Agents share pools), so the
+            # per-Agent view carries no memory figure — see the org summary total.
+            memory_cost=0.0,
             models_breakdown=[
                 AgentModelBreakdown(
                     model=model,

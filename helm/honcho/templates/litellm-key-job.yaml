@@ -1,0 +1,43 @@
+{{- if not .Values.litellmKey }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .Release.Name }}-litellm-key
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "honcho.labels" . | nindent 4 }}
+  annotations:
+    # Runs before Honcho's own workloads so the Secret exists by the time a pod
+    # mounts it. Weight -5 keeps it behind the script ConfigMap at -10.
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 2
+  template:
+    metadata:
+      labels:
+        {{- include "honcho.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: litellm-key-job
+    spec:
+      serviceAccountName: {{ .Values.keyJob.serviceAccountName }}
+      automountServiceAccountToken: true
+      restartPolicy: Never
+      containers:
+        - name: generate-key
+          image: {{ .Values.keyJob.image }}
+          command: ["python3", "/scripts/generate_key.py"]
+          env:
+            - name: LITELLM_MASTER_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.keyJob.litellmSecretName }}
+                  key: {{ .Values.keyJob.litellmMasterKeyRef }}
+          volumeMounts:
+            - name: script
+              mountPath: /scripts
+      volumes:
+        - name: script
+          configMap:
+            name: {{ .Release.Name }}-litellm-key-script
+{{- end }}

@@ -2,7 +2,7 @@
 
 ## Read when
 
-Read before changing agent creation, Agent Access Roles, explicit Agent Access assignments, Agent General Access, lifecycle, runtime or platform selection, template pinning, Agent Template Overrides, model selection, skill assignment, credentials, logs, health, Agent Restore Points, or Kubernetes resources.
+Read before changing agent creation, Agent Access Roles, explicit Agent Access assignments, Agent General Access, lifecycle, runtime or platform selection, template pinning, Agent Template Overrides, model selection, skill assignment, credentials, logs, health, Agent Restore Points, memory groups (shared memory pools) or memory viewing/curation/sharing, or Kubernetes resources.
 
 ## Role in the system
 
@@ -126,6 +126,26 @@ Restoring may optionally replay the recorded configuration. The replay is opt-in
 
 Share-management endpoints expose locked Agent Access Roles and one canonical Agent share snapshot. `GET /agents/{agent_id}/share` returns Agent General Access plus explicit Agent Access assignments, and `PUT /agents/{agent_id}/share` replaces both in one transaction. Implicit Organization Owner/Admin authority is not a revocable assignment. Share changes take effect on the next request; missing, cross-Organization, or inaccessible resources retain the documented 404 concealment behavior. Custom Agent Access Roles are added by AF-216, and access-management UI is added by AF-217.
 
+### Memory groups (shared pools)
+
+Memory is **opt-in through memory groups**. A group is a shared memory pool: every Agent in a group uses one Honcho workspace, `af-pool-<group id>`, so members see what the others have learned. `agent.memory_group_id` (nullable FK, `SET NULL` on group delete) records an Agent's group; an Agent in no group has no shared memory, and `memory_active` requires both Honcho deployed and the Agent in a group. Adding an Agent to a group is the opt-in and removing it is the opt-out — the change reaches the Agent on its next start, and opting out only revokes access, leaving the Agent's past contributions in the pool. Members keep **distinct Honcho peers**, so contributions stay attributable to the Agent that made them. Group management (create/rename/delete, assign Agents) is org-scoped and gated on `memory_group.manage`; see [`../adr/2026-09-21-shared-memory-pools-via-groups.md`](../adr/2026-09-21-shared-memory-pools-via-groups.md).
+
+### View and curate memory
+
+Memory is a tab on the Agent detail page, alongside conversations, tool calls, logs, and work. `GET /agents/{agent_id}/memory` lists conclusions from the Agent's pool, paginated, each item carrying the (observer, observed) peer pair it belongs to — memory is stored per pair, so every member holds a separate view of each person it talks to plus a model of itself. A `scope` param picks the view: `pool` (default) shows what the whole group knows — every member's conclusions, so the Agent sees what the others learned — while `mine` narrows to this Agent as observer, its own contributions. `GET /agents/{agent_id}/memory/search?q=` searches the pool semantically; Honcho stores those vectors per pair and rejects a query that does not name both peers, so a search fans out across peers and merges, capped because the fan-out is quadratic in peer count. Both need `agent.memory.read`, and both return 409 if the Agent is in no group (there is no pool to read).
+
+`DELETE /agents/{agent_id}/memory/{memory_id}` forgets one item and `PUT` replaces its content; both need `agent.memory.manage`, because changing what the pool knows changes how every member behaves. Honcho has no update endpoint, so a correction is a delete followed by a create: the item gets a new id, and the replacement is always `explicit` since a level cannot be set on create — a corrected inference stops being labelled an inference. `owner` is not a user but the peer for messages that arrived with no sender identity.
+
+Curation acts on the shared pool, not a per-Agent store, so a forget or correct by one member removes or rewrites the fact for the whole group. Deleting an Agent never erases the pool: `delete_workspace` refuses a pool workspace, so one member's teardown can never nuke memory the others still rely on. Erasing a pool is done deliberately by deleting the *group*, which also drops its members via the FK.
+
+### Share memory across pools
+
+Sharing *within* a group is automatic through the shared workspace; these paths cross the boundary *between* pools. Distinct pools are separate Honcho workspaces (`workspace_name` participates in nearly every composite foreign key, so isolation is a schema property), so crossing it always means copying into the destination — the destination keeps its copy even if the source later forgets it.
+
+The path is `POST /organizations/{organization_id}/memory-groups/{source_group_id}/shared-items` `{ memory_id, target_group_ids }`: it reads one conclusion from the source pool and copies it into each target pool. It is gated on `memory_group.manage` (a group operation), org-scoped (source and every target must be in the caller's org), rejects a group sharing with itself (400) and a memory that is not in the source pool (404). The copy is written onto the destination pool's neutral `owner` peer — knowledge handed to the whole pool, not attributed to one member — and recalled pool-wide like any other pooled memory. Origin is tracked in `shared_pool_memory_fact` (kept in the agents domain so the memory read path joins it without a cross-domain cycle) and returned as `sharedFromGroupId`; the client resolves the group name, so the item reads "Shared from <group>". Both the Agent memory tab and the group memory page expose this as a per-item "Share to group" action. Deleting the source group nulls the id (badge falls back to a neutral "Shared in"); deleting the target group drops the row with its pool.
+
+There is no per-Agent sharing: within a group, memory is already shared; across groups, this is the one path. (The v1 per-Agent `shared-facts`/`carry-over` endpoints and the erase-on-delete purge were removed — they predated the pool model, which shares within a group automatically and never erases a pool on Agent deletion.)
+
 ## Source map
 
 | Concern                                     | Authoritative source                                                                                                                                                                                         |
@@ -142,6 +162,9 @@ Share-management endpoints expose locked Agent Access Roles and one canonical Ag
 | Communication Connections and Plugins       | `../../api/domains/communications/`                                                                                                                                                                          |
 | Agent Webhooks and Webhook Invocations      | `../../api/domains/agent_webhooks/`, [`agent-webhooks.md`](agent-webhooks.md)                                                                                                                                |
 | Runtime resources                           | `../../api/domains/agents/builders/`                                                                                                                                                                         |
+| Memory viewing, curation, and sharing       | `../../api/domains/agents/memory_sharing.py`                                                                                                                                                                |
+| Memory groups (shared pools) domain         | `../../api/domains/memory_groups/`                                                                                                                                                                          |
+| Pool workspace naming and delete-safety     | `../../api/infrastructure/honcho/client.py`                                                                                                                                                                 |
 | Integration and skill artifacts             | `../../api/domains/agents/aai_cli_artifacts.py`, `../../api/domains/agents/aai_cli_skills/bundled/skills/`, `../../api/domains/agents/gog_artifacts.py`                                                      |
 | UI contracts and hooks                      | `../../ui/src/features/agents/schemas.ts`, `../../ui/src/features/agents/hooks/`                                                                                                                             |
 | UI components                               | `../../ui/src/features/agents/components/`                                                                                                                                                                   |
@@ -155,6 +178,7 @@ Share-management endpoints expose locked Agent Access Roles and one canonical Ag
 - [`2026-08-09-agent-scoped-template-overrides.md`](../adr/2026-08-09-agent-scoped-template-overrides.md)
 - [`2026-08-19-organization-scoped-agent-settings.md`](../adr/2026-08-19-organization-scoped-agent-settings.md)
 - [`2026-08-22-agent-barn-owned-communications-gateway.md`](../adr/2026-08-22-agent-barn-owned-communications-gateway.md)
+- [`2026-09-21-shared-memory-pools-via-groups.md`](../adr/2026-09-21-shared-memory-pools-via-groups.md) (supersedes [`2026-09-03-honcho-backed-agent-memory.md`](../adr/2026-09-03-honcho-backed-agent-memory.md))
 - [`2026-09-10-restore-points-use-tar-jobs-not-csi-snapshots.md`](../adr/2026-09-10-restore-points-use-tar-jobs-not-csi-snapshots.md)
 
 ## Change impact

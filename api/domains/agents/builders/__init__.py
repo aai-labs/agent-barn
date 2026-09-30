@@ -8,6 +8,7 @@ from .hermes import (
     build_hermes_config_map,
     build_hermes_deployment,
     build_hermes_gateway_config,
+    build_honcho_config,
     build_secret_hermes_runtime,
     native_discord_env,
     native_slack_env,
@@ -64,6 +65,7 @@ __all__ = [  # noqa: RUF022 - grouped by runtime (common/openclaw/hermes), not a
     "native_telegram_env",
     "runtime_teams_env",
     "build_hermes_config_map",
+    "build_honcho_config",
     "build_secret_hermes_runtime",
     "build_hermes_deployment",
 ]

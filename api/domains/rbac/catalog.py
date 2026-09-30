@@ -27,12 +27,21 @@ class PermissionKey(str, Enum):
     AGENT_LIFECYCLE_MANAGE = "agent.lifecycle.manage"
     AGENT_ACCESS_MANAGE = "agent.access.manage"
     AGENT_SECRET_MANAGE = "agent.secret.manage"
+    # Memory is split from agent.read/agent.update deliberately: it holds derived
+    # conclusions about real people, and rewriting it changes what an Agent
+    # believes rather than how it is configured. Same reasoning that gave secrets
+    # their own key instead of riding on agent.update.
+    AGENT_MEMORY_READ = "agent.memory.read"
+    AGENT_MEMORY_MANAGE = "agent.memory.manage"
     TEMPLATE_READ = "template.read"
     TEMPLATE_MANAGE = "template.manage"
     SKILL_READ = "skill.read"
     SKILL_MANAGE = "skill.manage"
     ACTIVITY_READ = "activity.read"
     COST_READ = "cost.read"
+    # Manage memory groups (create/rename/delete, assign Agents). Org-scoped
+    # management, like the membership.* keys — not an agent-access permission.
+    MEMORY_GROUP_MANAGE = "memory_group.manage"
 
 
 @dataclass(frozen=True)
@@ -81,12 +90,15 @@ PERMISSIONS: tuple[PermissionSeed, ...] = (
     ),
     PermissionSeed(UUID("8c5ae860-1a12-52e0-8902-de39b94e8145"), PermissionKey.AGENT_ACCESS_MANAGE),
     PermissionSeed(UUID("4412d59f-4e8c-5e7e-81a9-b257f99f9dbf"), PermissionKey.AGENT_SECRET_MANAGE),
+    PermissionSeed(UUID("eda5f5c4-5a91-54d1-9b70-149dfd20366f"), PermissionKey.AGENT_MEMORY_READ),
+    PermissionSeed(UUID("3245a9b1-89f3-5ce1-a652-02c683628391"), PermissionKey.AGENT_MEMORY_MANAGE),
     PermissionSeed(UUID("a07c3af3-17d6-53cf-841a-80d509b94de4"), PermissionKey.TEMPLATE_READ),
     PermissionSeed(UUID("7b44d5da-b324-586b-9d32-d9c49c293037"), PermissionKey.TEMPLATE_MANAGE),
     PermissionSeed(UUID("36494947-1572-5cdd-8853-79a2bdbf8c4f"), PermissionKey.SKILL_READ),
     PermissionSeed(UUID("222ab95b-f67b-5275-8139-3f601574f3e1"), PermissionKey.SKILL_MANAGE),
     PermissionSeed(UUID("3f24e385-7c5e-56f0-828c-502985376af9"), PermissionKey.ACTIVITY_READ),
     PermissionSeed(UUID("b6557147-248a-5d34-8bb2-7c51944d9ee7"), PermissionKey.COST_READ),
+    PermissionSeed(UUID("cefd77e7-0e67-500e-8fe4-37879667c6e6"), PermissionKey.MEMORY_GROUP_MANAGE),
 )
 PERMISSION_ID_BY_KEY = {permission.key: permission.id for permission in PERMISSIONS}
 
@@ -107,6 +119,7 @@ _OWNER_ORGANIZATION_KEYS = frozenset(
         PermissionKey.SKILL_MANAGE,
         PermissionKey.ACTIVITY_READ,
         PermissionKey.COST_READ,
+        PermissionKey.MEMORY_GROUP_MANAGE,
     }
 )
 _ADMIN_ORGANIZATION_KEYS = _OWNER_ORGANIZATION_KEYS - {
@@ -136,6 +149,7 @@ _VIEWER_KEYS = frozenset(
     {
         PermissionKey.AGENT_READ,
         PermissionKey.ACTIVITY_READ,
+        PermissionKey.AGENT_MEMORY_READ,
         PermissionKey.COST_READ,
     }
 )
@@ -143,6 +157,7 @@ _EDITOR_KEYS = _VIEWER_KEYS | {
     PermissionKey.AGENT_UPDATE,
     PermissionKey.AGENT_LIFECYCLE_MANAGE,
     PermissionKey.AGENT_SECRET_MANAGE,
+    PermissionKey.AGENT_MEMORY_MANAGE,
 }
 _OWNER_KEYS = _EDITOR_KEYS | {
     PermissionKey.AGENT_DELETE,

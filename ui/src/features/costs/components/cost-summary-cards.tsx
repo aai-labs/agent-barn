@@ -51,7 +51,9 @@ export function CostSummaryCards({
     >
       <StatCard
         label="Total spend"
-        value={formatSpend(summary.totalSpend)}
+        // Memory is real spend (billed on a separate credential), so the total that
+        // claims to be "total" includes it; the Memory card below breaks out its share.
+        value={formatSpend(summary.totalSpend + summary.totalMemoryCost)}
         // Names its window: a spend allowance runs to its own renewal date, so an
         // unlabelled total sitting beside one reads as a contradiction.
         hint={`${summary.totalCalls.toLocaleString()} ${summary.totalCalls === 1 ? "call" : "calls"} · ${formatWindowLabel(
@@ -61,6 +63,14 @@ export function CostSummaryCards({
         )}`}
         testId="cost-total-spend"
       />
+      {summary.totalMemoryCost > 0 && (
+        <StatCard
+          label="Memory cost"
+          value={formatSpend(summary.totalMemoryCost)}
+          hint="included in total spend"
+          testId="cost-memory"
+        />
+      )}
       <StatCard
         label="Active agents"
         value={summary.activeAgents.toLocaleString()}

@@ -339,6 +339,7 @@ def test_policy_and_repository_resolve_separate_role_permissions(fresh_database)
             {
                 PermissionKey.AGENT_READ,
                 PermissionKey.ACTIVITY_READ,
+                PermissionKey.AGENT_MEMORY_READ,
                 PermissionKey.COST_READ,
             }
         ),

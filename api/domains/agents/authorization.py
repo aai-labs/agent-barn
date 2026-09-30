@@ -23,6 +23,8 @@ _AGENT_ACTION_PERMISSIONS: tuple[PermissionKey, ...] = (
     PermissionKey.AGENT_LIFECYCLE_MANAGE,
     PermissionKey.AGENT_ACCESS_MANAGE,
     PermissionKey.AGENT_SECRET_MANAGE,
+    PermissionKey.AGENT_MEMORY_READ,
+    PermissionKey.AGENT_MEMORY_MANAGE,
     PermissionKey.ACTIVITY_READ,
     PermissionKey.COST_READ,
 )

@@ -81,6 +81,9 @@ export const CostSummarySchema = z.object({
   toDate: z.string(),
   granularity: GranularitySchema,
   totalSpend: z.number(),
+  // Memory spend for this org's agents, billed on Honcho's separate credential
+  // and not part of totalSpend. Undeclared fields are stripped by zod.
+  totalMemoryCost: z.number().default(0),
   totalCalls: z.number().int(),
   activeAgents: z.number().int(),
   topModel: z.string().nullable().default(null),
@@ -124,6 +127,17 @@ export const AgentSpendSchema = z.object({
 
 export const AgentSpendListSchema = z.array(AgentSpendSchema);
 
+// One memory group's share of the org's memory spend. Memory has no per-agent
+// attribution (agents share pools), so the pool/group is the finest split; the
+// figures are apportioned from Honcho's total by token share and sum to it.
+export const GroupMemoryCostSchema = z.object({
+  groupId: z.string().uuid(),
+  groupName: z.string(),
+  memoryCost: z.number(),
+});
+export const GroupMemoryCostListSchema = z.array(GroupMemoryCostSchema);
+export type GroupMemoryCost = z.infer<typeof GroupMemoryCostSchema>;
+
 /** Cost totals for a single agent, used by the agent detail surface. */
 export const AgentModelBreakdownSchema = z.object({
   model: z.string(),
@@ -156,6 +170,7 @@ export const AgentCostSchema = z.object({
   dailyBurnRate: z.number().default(0),
   firstCallAt: z.string().nullable().default(null),
   lastCallAt: z.string().nullable().default(null),
+  memoryCost: z.number().default(0),
   modelsBreakdown: z.array(AgentModelBreakdownSchema).default([]),
   spendOverTime: z.array(CostSeriesPointSchema).default([]),
   avgPromptTokensOverTime: z.array(TokenSeriesPointSchema).default([]),

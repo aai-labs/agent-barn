@@ -19,6 +19,7 @@ from api.domains.events.reconciliation import EventDeliveryReconciler
 from api.domains.events.repository import OutboxMessageRepository
 from api.domains.events.security_audit import SecurityAuditProjection
 from api.domains.events.transport import EventDeliveryTransport
+from api.domains.memory_groups.event_handlers import MemoryPoolPurgeHandler
 from api.domains.organizations.event_handlers import OrganizationBudgetEmailHandler
 from api.domains.restore_points.reconciliation import RestorePointReconciler
 from api.domains.restore_points.repository import RestorePointRepository
@@ -78,9 +79,15 @@ class AppModule(Module):
         agent_lifecycle_email_handler: AgentLifecycleEmailHandler,
         organization_budget_email_handler: OrganizationBudgetEmailHandler,
         security_audit_projection: SecurityAuditProjection,
+        memory_pool_purge_handler: MemoryPoolPurgeHandler,
     ) -> EventHandlerRegistry:
         return EventHandlerRegistry(
-            [agent_lifecycle_email_handler, organization_budget_email_handler, security_audit_projection]
+            [
+                agent_lifecycle_email_handler,
+                organization_budget_email_handler,
+                security_audit_projection,
+                memory_pool_purge_handler,
+            ]
         )
 
     @provider

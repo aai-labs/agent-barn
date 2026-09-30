@@ -5,6 +5,7 @@ from typing import cast
 from api.domains.costs.models import CostFilter
 from api.domains.costs.platform_service import PlatformCostService
 from api.domains.costs.repository import CostRepository, CostTotals
+from api.domains.costs.usage_service import HonchoUsageService
 from api.domains.platform_admin.models import StatsGranularity, StatsWindow
 from api.infrastructure.openrouter.client import CreditsStatus, OpenRouterClient, OpenRouterCredits
 
@@ -54,18 +55,35 @@ class FakeOpenRouter:
         return self.credits
 
 
-def _summary(*, spend="300.00", calls=100, credits=OpenRouterCredits(status=CreditsStatus.UNAVAILABLE)):
+class FakeHonchoUsage:
+    def __init__(self, memory_cost=0.0):
+        self._memory_cost = memory_cost
+
+    def memory_cost_total(self, _start_date, _end_date):
+        return self._memory_cost
+
+
+def _summary(
+    *, spend="300.00", calls=100, credits=OpenRouterCredits(status=CreditsStatus.UNAVAILABLE), memory_cost=0.0
+):
     # cast: the service takes concrete types because injector resolves it from
-    # annotations. These stand in for the two reads the arithmetic below depends on.
+    # annotations. These stand in for the reads the arithmetic below depends on.
     service = PlatformCostService(
         repository=cast(CostRepository, FakeRepository(spend, calls)),
         openrouter=cast(OpenRouterClient, FakeOpenRouter(credits)),
+        honcho_usage=cast(HonchoUsageService, FakeHonchoUsage(memory_cost)),
     )
     return service.get_summary(WINDOW, CostFilter())
 
 
 def test_burn_rate_is_window_spend_divided_by_window_days():
     assert _summary(spend="300.00").daily_burn_rate == 10.0
+
+
+def test_platform_summary_carries_the_honcho_memory_total():
+    # Memory is billed on Honcho's one credential, so its whole spend is the
+    # platform-wide memory figure the summary surfaces.
+    assert _summary(memory_cost=42.5).total_memory_cost == 42.5
 
 
 def test_a_healthy_read_carries_the_limit_and_what_is_left():

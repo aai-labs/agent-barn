@@ -13,6 +13,7 @@ from api.domains.costs.models import (
     CostFilterOption,
     CostRecordRead,
     CostSummaryRead,
+    GroupMemoryCostRead,
     MonthlyCostRead,
     MonthlyWindow,
     get_agent_cost_filter,
@@ -40,6 +41,15 @@ def get_cost_summary(
     filters: Annotated[CostFilter, Depends(get_cost_filter)],
 ):
     return service.get_org_cost_summary(context, window, filters)
+
+
+@costs_router.get("/memory-by-group", response_model=list[GroupMemoryCostRead])
+def list_memory_cost_by_group(
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[CostService, Injected(CostService)],
+    window: Annotated[StatsWindow, Depends(get_stats_window)],
+):
+    return service.memory_cost_by_group(context, window)
 
 
 @costs_router.get("", response_model=PaginatedItems[CostRecordRead])

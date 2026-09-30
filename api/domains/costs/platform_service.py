@@ -16,6 +16,7 @@ from api.domains.costs.models import (
 )
 from api.domains.costs.repository import CostRepository
 from api.domains.costs.service import build_cost_summary, build_monthly_costs, daily_burn_rate
+from api.domains.costs.usage_service import HonchoUsageService
 from api.domains.platform_admin.models import StatsWindow
 from api.infrastructure.openrouter.client import OpenRouterClient
 from api.infrastructure.shared.models import PaginatedItems, Pagination
@@ -38,9 +39,17 @@ class PlatformCostService:
 
     repository: CostRepository
     openrouter: OpenRouterClient
+    honcho_usage: HonchoUsageService
 
     def get_summary(self, window: StatsWindow, filters: CostFilter) -> PlatformCostSummaryRead:
         base = build_cost_summary(self.repository, window, filters)
+        # Memory runs on Honcho's one LiteLLM credential, so its whole spend is the
+        # platform-wide memory total (all pools, every org) — added here since it is
+        # not in the cost_record table the summary reads.
+        base.total_memory_cost = round(
+            self.honcho_usage.memory_cost_total(window.start.date().isoformat(), window.end.date().isoformat()),
+            12,
+        )
         unattributed_spend, unattributed_calls = self.repository.unattributed_totals(window, filters)
         organizations = self.repository.spend_by_organization(window, filters)
 

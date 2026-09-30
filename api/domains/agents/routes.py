@@ -1,4 +1,4 @@
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, Response, status
@@ -6,6 +6,12 @@ from fastapi.responses import StreamingResponse
 from fastapi_injector import Injected
 
 from api.domains.agents.access_service import AgentAccessService
+from api.domains.agents.memory_sharing import (
+    AgentMemoryService,
+    MemoryItemRead,
+    MemoryItemUpdate,
+    MemoryPage,
+)
 from api.domains.agents.models import (
     AgentAccessRoleRead,
     AgentAccessSettingsRead,
@@ -103,6 +109,60 @@ def replace_agent_share_settings(
     service: Annotated[AgentAccessService, Injected(AgentAccessService)],
 ):
     return service.replace_access_settings(agent_id, data, context)
+
+
+@agents_router.get("/{agent_id}/memory", response_model=MemoryPage, response_model_by_alias=True)
+def list_agent_memory(
+    agent_id: UUID,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[AgentMemoryService, Injected(AgentMemoryService)],
+    page: int = Query(default=1, ge=1),
+    size: int = Query(default=50, ge=1, le=100),
+    observed: str | None = Query(default=None),
+    scope: Literal["pool", "mine"] = Query(default="pool"),
+):
+    return service.list_memory(agent_id, context, page=page, size=size, observed=observed, scope=scope)
+
+
+@agents_router.get("/{agent_id}/memory/search", response_model=list[MemoryItemRead], response_model_by_alias=True)
+def search_agent_memory(
+    agent_id: UUID,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[AgentMemoryService, Injected(AgentMemoryService)],
+    q: str = Query(min_length=1, max_length=500),
+    limit: int = Query(default=20, ge=1, le=100),
+    scope: Literal["pool", "mine"] = Query(default="pool"),
+):
+    return service.search_memory(agent_id, q, context, limit=limit, scope=scope)
+
+
+# `observer`/`observed` are the peer pair the client already displayed for this
+# item; they scope the server-side lookup (so an old item in a large pool is still
+# found) and are validated against the stored conclusion — never trusted for authz.
+@agents_router.delete("/{agent_id}/memory/{memory_id}", status_code=status.HTTP_204_NO_CONTENT)
+def forget_agent_memory(
+    agent_id: UUID,
+    memory_id: str,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[AgentMemoryService, Injected(AgentMemoryService)],
+    observer: str | None = Query(default=None),
+    observed: str | None = Query(default=None),
+):
+    service.forget(agent_id, memory_id, context, observer=observer, observed=observed)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@agents_router.put("/{agent_id}/memory/{memory_id}", response_model=MemoryItemRead, response_model_by_alias=True)
+def correct_agent_memory(
+    agent_id: UUID,
+    memory_id: str,
+    data: MemoryItemUpdate,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[AgentMemoryService, Injected(AgentMemoryService)],
+    observer: str | None = Query(default=None),
+    observed: str | None = Query(default=None),
+):
+    return service.correct(agent_id, memory_id, data, context, observer=observer, observed=observed)
 
 
 @agents_router.get("/{agent_id}/logs/stream")

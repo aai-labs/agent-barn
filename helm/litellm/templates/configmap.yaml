@@ -18,6 +18,18 @@ data:
           api_key: os.environ/OPENROUTER_API_KEY
           api_base: https://openrouter.ai/api/v1
 
+      # Embeddings. OpenRouter serves these but does not list them in /models,
+      # so the wildcard above cannot reach them and this entry names the model
+      # explicitly. It routes on the same OpenRouter credential as everything
+      # else, through LiteLLM's OpenAI-compatible passthrough.
+      - model_name: "{{ .Values.embeddingModel }}"
+        litellm_params:
+          model: "openai/{{ .Values.embeddingModel }}"
+          api_key: os.environ/OPENROUTER_API_KEY
+          api_base: https://openrouter.ai/api/v1
+          # OpenRouter rejects LiteLLM's default encoding_format; pin the one it
+          # accepts so callers that omit it (Honcho does) don't get a 400.
+          encoding_format: float
     general_settings:
       master_key: os.environ/LITELLM_MASTER_KEY
       store_model_in_db: false

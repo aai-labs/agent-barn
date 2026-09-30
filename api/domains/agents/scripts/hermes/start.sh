@@ -21,6 +21,12 @@ cp /app/config/SOUL.md /opt/data/SOUL.md
 python3 /app/config/config-merge.py /app/config/hermes-config.yaml /opt/data/config.yaml \
     || cp /app/config/hermes-config.yaml /opt/data/config.yaml
 
+# Honcho provider config, when the Agent is configured for it. Hermes resolves
+# honcho.json from $HERMES_HOME, so it has to land beside config.yaml.
+if [ -f /app/config/honcho.json ]; then
+    cp /app/config/honcho.json /opt/data/honcho.json
+fi
+
 # Remove any stale .env from the PVC — all vars are injected via k8s Secret.
 # A persisted .env takes precedence over system env and would cause stale
 # values (e.g. old home channel) to survive pod restarts.
