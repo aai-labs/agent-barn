@@ -1817,7 +1817,16 @@ def test_create_agent_calls_litellm_generate_key():
             assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
             agent_id = response.json()["id"]
             # the test uses _VALID_CREATE where name is "Test Agent"
-            litellm.generate_key.assert_called_once_with(agent_id, _VALID_CREATE["name"], str(context.organization.id))
+            # Capped from the first call at the default Agent limit, and a team created
+            # here would carry the Organization's (conftest: 25 and 100 per 30d).
+            litellm.generate_key.assert_called_once_with(
+                agent_id,
+                _VALID_CREATE["name"],
+                str(context.organization.id),
+                max_budget=25.0,
+                budget_duration="30d",
+                team_budget=100.0,
+            )
             litellm.delete_key.assert_not_called()
             litellm.block_key.assert_not_called()
 

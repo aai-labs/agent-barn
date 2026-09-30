@@ -48,6 +48,11 @@ class MemoryGroupRepository:
             )
             return list(session.exec(query).all())
 
+    def find_all(self) -> list[MemoryGroup]:
+        """Every group across every Organization. System callers only."""
+        with Session(self.delegate.engine) as session:
+            return list(session.exec(select(MemoryGroup)).all())
+
     def delete(self, group: MemoryGroup) -> None:
         self.delegate.delete(group)
 

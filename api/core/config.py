@@ -61,10 +61,10 @@ class Config(BaseSettings):
     honcho_enabled: bool = False
     # What the API itself calls to purge a deleted Agent's workspace.
     honcho_base_url: str = "http://honcho:8000"
-    # What an Agent pod calls. Same value in-cluster, but locally the API runs in
-    # Compose while Agents run in k3d, so they reach Honcho by different names —
-    # the same split `agent_litellm_base_url` exists for.
-    agent_honcho_base_url: str = "http://honcho:8000"
+    # The memory proxy Agent pods call instead of Honcho (AF-338): they never hold a
+    # Honcho token. Locally the proxy runs in Compose while Agents run in k3d, so
+    # they reach it by a different name — the split `agent_litellm_base_url` has.
+    agent_memory_proxy_base_url: str = "http://agentbarn-api-memory-proxy:8003"
     # Shared secret Honcho presents when posting its usage telemetry. Empty
     # rejects every post, so usage is simply not recorded rather than accepted
     # from anyone who can reach the Ingest service.
@@ -86,6 +86,16 @@ class Config(BaseSettings):
     # Percentages of an Organization's limit at which it is notified. Empty falls back
     # to the default; 100 is always meaningful because it is the enforcement boundary.
     organization_llm_budget_alert_thresholds: str = "80,100"
+    # Share of an Organization's limit at which the enforcement pass suspends its
+    # memory. Memory keeps spending until the next pass sees it, so a deployment
+    # can trip early to absorb that overshoot; the default trips at the limit.
+    llm_memory_suspend_percent: int = Field(default=100, ge=1, le=100)
+    # Model spend limits (USD) a new Organization and a new Agent start with. Required:
+    # nobody should be uncapped just because an administrator has not got to them yet.
+    # A platform administrator changes an Organization's afterwards; the Organization
+    # divides its own allowance among its Agents.
+    organization_default_llm_budget_usd: float = Field(ge=0, allow_inf_nan=False)
+    agent_default_llm_budget_usd: float = Field(ge=0, allow_inf_nan=False)
     # The API's own public base URL, used to show callers where to reach an Agent
     # Webhook or a Teams Connection. Deployments set it from API_HOST; locally it is
     # derived below, because the host port is the only thing that makes it up.
@@ -165,6 +175,14 @@ class Config(BaseSettings):
         """
         if not self.api_external_url and self.environment == "local":
             self.api_external_url = f"http://localhost:{self.api_port}"
+        return self
+
+    @model_validator(mode="after")
+    def agent_default_within_organization_default(self) -> Self:
+        """An Agent's limit may never exceed its Organization's, so a default that did
+        would put every new Agent in breach from its first call."""
+        if self.agent_default_llm_budget_usd > self.organization_default_llm_budget_usd:
+            raise ValueError("AGENT_DEFAULT_LLM_BUDGET_USD must not exceed ORGANIZATION_DEFAULT_LLM_BUDGET_USD")
         return self
 
     @field_validator("organization_llm_budget_alert_thresholds", mode="before")

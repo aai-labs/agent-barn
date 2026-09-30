@@ -1,5 +1,6 @@
 export type OrganizationSettingsSectionKey =
   | "agents"
+  | "spend-limits"
   | "templates"
   | "skills"
   | "shared-credentials";
@@ -19,6 +20,13 @@ export const ORGANIZATION_SETTINGS_SECTIONS: OrganizationSettingsSection[] = [
     label: "Agents",
     description:
       "Defaults every Agent in this organization follows unless it has been given its own setting.",
+    adminOnly: true,
+  },
+  {
+    key: "spend-limits",
+    label: "Spend limits",
+    description:
+      "The most your organization and each of its Agents can spend on model calls. Each limit is held beneath the one above it.",
     adminOnly: true,
   },
   {

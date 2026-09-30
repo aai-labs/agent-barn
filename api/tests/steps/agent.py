@@ -62,6 +62,8 @@ class MockLiteLLMModule(Module):
         # return value fails validation rather than behaving like "no data".
         mock.get_team_budget_status.return_value = None
         mock.get_key_team.return_value = None
+        mock.get_key_budget_status.return_value = {"spend": None, "renews_at": None}
+        mock.apply_team_budget.return_value = None
         return mock
 
 

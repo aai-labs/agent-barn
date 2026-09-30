@@ -1,5 +1,7 @@
+import calendar
 import enum
-from datetime import datetime
+from datetime import datetime, timedelta
+from typing import Literal
 from uuid import UUID
 
 import sqlalchemy as sa
@@ -11,7 +13,35 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import CheckConstraint, Field
 from sqlmodel import Field as SqlField
 
+from api.core.config import get_config
 from api.infrastructure.postgres.models import BaseModel
+
+# The windows LiteLLM snaps to calendar boundaries (next midnight, next Monday, the
+# 1st of the month). An Organization's team and every Agent key share one of these,
+# so they all renew at the same moment; any other "Nd" renews N days from whenever
+# it was set and would drift apart.
+LlmBudgetWindow = Literal["1d", "7d", "30d"]
+DEFAULT_LLM_BUDGET_WINDOW: LlmBudgetWindow = "30d"
+
+
+def budget_window_start(renews_at: datetime, window: str) -> datetime:
+    """When the budget window that renews at `renews_at` began.
+
+    LiteLLM snaps a 30d window to the 1st of the month, so it spans a calendar
+    month rather than 30 days: stepping back a month keeps memory spend aligned
+    with the window the team's own spend accrues in. A day that does not exist in
+    the earlier month (31 March back to February) clamps to its last day.
+    """
+    if window == "30d":
+        year, month = (renews_at.year, renews_at.month - 1) if renews_at.month > 1 else (renews_at.year - 1, 12)
+        last_day = calendar.monthrange(year, month)[1]
+        return renews_at.replace(year=year, month=month, day=min(renews_at.day, last_day))
+    return renews_at - timedelta(days=int(window.removesuffix("d")))
+
+
+def _default_llm_ceiling() -> float:
+    """Every new Organization starts capped, whichever path creates it."""
+    return get_config().organization_default_llm_budget_usd
 
 
 class Organization(BaseModel, table=True):
@@ -28,12 +58,17 @@ class Organization(BaseModel, table=True):
     )
     allowed_models: list[str] = Field(default_factory=list, sa_column=sa.Column(JSONB, server_default="[]"))
 
-    # Platform-administered LLM spend ceiling, mirrored onto the Organization's LiteLLM
-    # team. NULL means no cap; 0 is a real zero allowance. A float is enough here where
-    # cost_record needs NUMERIC: this is a configured ceiling, never a summed figure.
-    llm_budget_usd: float | None = Field(default=None, nullable=True)
-    # LiteLLM budget window (e.g. "30d"). Only meaningful while a budget is set.
-    llm_budget_duration: str | None = Field(default=None, nullable=True, max_length=32)
+    # Platform-administered LLM spend ceiling. Always set: a new Organization starts at
+    # the deployment default, and 0 is a real zero allowance. A float is enough here
+    # where cost_record needs NUMERIC: this is a configured ceiling, never a summed
+    # figure.
+    llm_budget_usd: float = Field(default_factory=_default_llm_ceiling, nullable=False)
+    # LiteLLM budget window, shared by the team and every Agent key.
+    llm_budget_duration: str = Field(default=DEFAULT_LLM_BUDGET_WINDOW, nullable=False, max_length=32)
+    # The Organization's own limit, set by its Owners and Admins. NULL follows the
+    # ceiling; never above it (lowering the ceiling pulls this down with it). The
+    # proxy enforces `llm_own_budget_usd ?? llm_budget_usd` on the team.
+    llm_own_budget_usd: float | None = Field(default=None, nullable=True)
 
     # Spend snapshot, refreshed on a schedule. Organization-facing surfaces read this
     # rather than the proxy: a banner on every page load must not put an external
@@ -55,12 +90,77 @@ class Organization(BaseModel, table=True):
     llm_alerted_threshold: int | None = Field(default=None, nullable=True)
     llm_alert_key: str | None = Field(default=None, nullable=True, max_length=128)
 
+    # Memory spend this window, measured by the enforcement pass. Memory runs on
+    # Honcho's own LiteLLM key, which is in no team, so the team's spend never
+    # includes it; the pass apportions Honcho's total to the Organization's pools.
+    # NULL means "not yet measured", never zero.
+    llm_memory_spend_usd: float | None = Field(default=None, nullable=True)
+    llm_memory_spend_observed_at: datetime | None = SqlField(
+        default=None,
+        sa_type=sa.DateTime(timezone=True),  # type: ignore
+        nullable=True,
+    )
+    # Set to `llm_budget_window_key` when agents and memory together reached the
+    # limit. The Organization's memory stays off while it matches, so a memory
+    # figure that dips (apportionment shifts as other pools grow) cannot flap it
+    # back on; a renewal or a new limit changes the key and lifts it.
+    llm_memory_suspended_key: str | None = Field(default=None, nullable=True, max_length=128)
+
     __table_args__ = (
         sa.Index("ix_organization_name", "name"),
         CheckConstraint("length(name) >= 3", name="check_name_length_min"),
         CheckConstraint("length(name) <= 255", name="check_name_length_max"),
         CheckConstraint("llm_budget_usd IS NULL OR llm_budget_usd >= 0", name="check_llm_budget_non_negative"),
+        CheckConstraint(
+            "llm_own_budget_usd IS NULL OR (llm_own_budget_usd >= 0 AND llm_own_budget_usd <= llm_budget_usd)",
+            name="check_llm_own_budget_within_ceiling",
+        ),
     )
+
+    @property
+    def effective_llm_budget_usd(self) -> float:
+        """The Organization's limit: its own where it set one, else the ceiling."""
+        return self.llm_own_budget_usd if self.llm_own_budget_usd is not None else self.llm_budget_usd
+
+    @property
+    def memory_spend_this_window_usd(self) -> float:
+        """Memory spend measured in the current window, else 0.
+
+        A figure measured before the window renewed belongs to the last window; it
+        must not hold the new one down until the next pass replaces it.
+        """
+        if self.llm_memory_spend_usd is None or self.llm_memory_spend_observed_at is None:
+            return 0.0
+        if self.llm_budget_renews_at is None:
+            return 0.0
+        if self.llm_memory_spend_observed_at < budget_window_start(self.llm_budget_renews_at, self.llm_budget_duration):
+            return 0.0
+        return self.llm_memory_spend_usd
+
+    @property
+    def enforced_llm_budget_usd(self) -> float:
+        """The limit the proxy enforces on the Organization's team.
+
+        The team only sees agent spend, so the memory already spent comes off the
+        limit instead: the proxy then refuses agents once agents + memory reach it.
+        Never shown to anyone — surfaces show the real limit and combined spend.
+
+        Rounded to a millionth of a dollar: the subtraction leaves float noise
+        (0.45997120708399997) that never equals what LiteLLM stores and reads back
+        (0.459971207084), so an unchanged ceiling would be rewritten on every pass
+        and fail the client's verification each time.
+        """
+        return round(max(0.0, self.effective_llm_budget_usd - self.memory_spend_this_window_usd), 6)
+
+    @property
+    def llm_budget_window_key(self) -> str:
+        """Identifies the current window and limit, like `llm_alert_key`."""
+        renews_at = self.llm_budget_renews_at.isoformat() if self.llm_budget_renews_at else ""
+        return f"{renews_at}|{self.effective_llm_budget_usd}"
+
+    @property
+    def llm_memory_suspended(self) -> bool:
+        return self.llm_memory_suspended_key is not None and self.llm_memory_suspended_key == self.llm_budget_window_key
 
 
 class OrganizationRead(PydanticBaseModel):
@@ -96,6 +196,8 @@ class PlatformOrganizationRead(PydanticBaseModel):
     creator_name: str | None = None
     llm_budget_usd: float | None = None
     llm_budget_duration: str | None = None
+    # The Organization's own limit beneath the ceiling; None when it follows it.
+    llm_own_budget_usd: float | None = None
 
 
 class OrganizationBudgetEmailReceipt(BaseModel, table=True):
@@ -116,7 +218,6 @@ class OrganizationBudgetEmailReceipt(BaseModel, table=True):
 
 
 class OrganizationLlmBudgetState(str, enum.Enum):
-    NONE = "none"
     OK = "ok"
     WARNING = "warning"
     EXHAUSTED = "exhausted"
@@ -133,9 +234,22 @@ class OrganizationLlmBudgetRead(PydanticBaseModel):
     """
 
     state: OrganizationLlmBudgetState
-    limit_usd: float | None = None
+    # The limit in force: the Organization's own when it set one, else the ceiling.
+    limit_usd: float
+    # What the platform allows; the Organization's own limit can only go below it.
+    ceiling_usd: float
+    # The Organization's own limit, or None when it follows the ceiling.
+    own_limit_usd: float | None = None
+    window: str
+    # Agents and memory together this window — what the limit is measured against.
     spend_usd: float | None = None
+    # The memory share of `spend_usd`. Memory runs on its own credential, so the
+    # proxy's team figure never includes it; it is added here.
+    memory_spend_usd: float | None = None
     renews_at: datetime | None = None
+    # Whether the caller may change the Organization's own limit, so the UI shows a
+    # control only to the people the API would accept it from.
+    can_manage: bool = False
 
 
 class AgentLlmEnrollment(str, enum.Enum):
@@ -177,14 +291,23 @@ class OrganizationLlmCoverageRead(PydanticBaseModel):
 
 
 class OrganizationLlmBudgetUpdate(PydanticBaseModel):
-    """Platform-administered spend ceiling. Absent amount means no cap at all."""
+    """Platform-administered spend ceiling. Always an amount: an Organization can no
+    longer be uncapped, and an administrator who means "unlimited" sets a large one."""
 
     model_config = ConfigDict(extra="forbid")
 
-    budget_usd: float | None = PydanticField(default=None, ge=0, allow_inf_nan=False)
-    # LiteLLM duration: a positive integer followed by s/m/h/d. "30d" is a 30-day
-    # interval, not a calendar month.
-    budget_duration: str | None = PydanticField(default=None, pattern=r"^[1-9][0-9]*[smhd]$")
+    budget_usd: float = PydanticField(ge=0, allow_inf_nan=False)
+    # Omitted keeps the current window, so changing only the amount never reschedules
+    # the Organization's renewal date.
+    budget_duration: LlmBudgetWindow | None = None
+
+
+class OrganizationOwnLlmBudgetUpdate(PydanticBaseModel):
+    """An Organization's own limit. Null follows the platform ceiling."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    budget_usd: float | None = PydanticField(ge=0, allow_inf_nan=False)
 
 
 class OrganizationUpdate(PydanticBaseModel):

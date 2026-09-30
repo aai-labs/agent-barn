@@ -14,6 +14,7 @@ from fastapi import HTTPException, status
 from hamcrest import assert_that, equal_to
 
 from api.core.config import Config
+from api.domains.agents.memory_sharing import MemoryItemUpdate
 from api.domains.events.handlers import RetryableEventHandlerError
 from api.domains.memory_groups.event_handlers import MemoryPoolPurgeHandler
 from api.domains.memory_groups.models import (
@@ -398,3 +399,39 @@ def test_group_memory_409_when_memory_backend_is_off():
 
     assert_that(exc.value.status_code, equal_to(status.HTTP_409_CONFLICT))
     memory.list_memory_for_workspace.assert_not_called()
+
+
+def test_every_group_maps_to_its_organization_for_system_callers() -> None:
+    org_a, org_b = uuid7(), uuid7()
+    g1 = MemoryGroup(organization_id=org_a, name="One")
+    g2 = MemoryGroup(organization_id=org_b, name="Two")
+    service, repository, *_ = _service()
+    repository.find_all.return_value = [g1, g2]
+
+    assert_that(service.organization_by_group(), equal_to({g1.id: org_a, g2.id: org_b}))
+
+
+# --- a suspended Organization's pools cost nothing from the app (AF-338) ------
+
+
+def test_group_search_correct_and_share_check_the_organization_is_not_paused():
+    org_id = uuid7()
+    service, repository, *_rest = _service()
+    memory = service.memory
+    source = MemoryGroup(id=uuid7(), organization_id=org_id, name="Research")
+    target = MemoryGroup(id=uuid7(), organization_id=org_id, name="Support")
+    repository.get_by_id_and_org.side_effect = _known_groups(org_id, source, target)
+    memory.require_memory_not_paused.side_effect = HTTPException(status_code=409, detail="paused")
+
+    for call in (
+        lambda: service.search_memory(source.id, "q", _context(org_id), limit=5),
+        lambda: service.correct_memory(source.id, "c1", MemoryItemUpdate(content="x"), _context(org_id)),
+        lambda: service.share_item(
+            source.id, ShareMemoryItemCreate(memory_id="c1", target_group_ids=[target.id]), _context(org_id)
+        ),
+    ):
+        with pytest.raises(HTTPException):
+            call()
+    assert_that(memory.require_memory_not_paused.call_count, equal_to(3))
+    memory.search_memory_for_workspace.assert_not_called()
+    memory.correct_in_workspace.assert_not_called()

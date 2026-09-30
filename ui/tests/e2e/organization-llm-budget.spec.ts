@@ -5,7 +5,7 @@ import { ORG_A_ID } from "../pages/data-support/organization-data-support.po";
 
 const DETAIL_URL = `/dashboard/platform/organizations/${ORG_A_ID}`;
 
-function organization(budget: { usd: number | null; duration: string | null }) {
+function organization(budget: { usd: number; duration: string; own?: number | null }) {
   return {
     id: ORG_A_ID,
     created_at: "2024-01-01T00:00:00Z",
@@ -18,10 +18,20 @@ function organization(budget: { usd: number | null; duration: string | null }) {
     creator_name: "Grace Hopper",
     llm_budget_usd: budget.usd,
     llm_budget_duration: budget.duration,
+    llm_own_budget_usd: budget.own ?? null,
   };
 }
 
-test.describe("Platform organization LLM budget", () => {
+const COVERED = {
+  total_agents: 2,
+  enrolled_agents: 2,
+  uncovered: [],
+  newly_enrolled: 0,
+  spend_usd: 12.5,
+  renews_at: "2026-10-01T00:00:00Z",
+};
+
+test.describe("Platform organization spend limit", () => {
   let data: DataSupport;
   test.use({ storageState: { cookies: [], origins: [] } });
 
@@ -30,96 +40,90 @@ test.describe("Platform organization LLM budget", () => {
     await data.auth.interceptRefreshRequest();
     await data.users.interceptGetUserContextRequest();
     await data.organizations.interceptGetPlatformOrganizationMembers();
-    // Fully covered by default; the gate has its own describe block below.
-    await data.organizations.interceptGetOrganizationLlmCoverage({
-      coverage: {
-        total_agents: 2,
-        enrolled_agents: 2,
-        uncovered: [],
-        newly_enrolled: 0,
-        spend_usd: 12.5,
-        renews_at: "2026-10-01T00:00:00Z",
-      },
-    });
+    await data.organizations.interceptGetOrganizationLlmCoverage({ coverage: COVERED });
   });
 
-  test("an organization with no ceiling reads as unlimited", async ({ page }) => {
-    await data.organizations.interceptGetPlatformOrganization({
-      organization: organization({ usd: null, duration: null }),
-    });
-    await page.goto(DETAIL_URL);
-
-    await expect(page.getByRole("heading", { name: /model spend limit/i })).toBeVisible();
-    await expect(page.getByText(/currently no limit/i)).toBeVisible();
-    await expect(page.getByRole("button", { name: /remove limit/i })).toHaveCount(0);
-  });
-
-  test("a configured ceiling shows its amount and window", async ({ page }) => {
+  test("a ceiling shows its amount and calendar window", async ({ page }) => {
     await data.organizations.interceptGetPlatformOrganization({
       organization: organization({ usd: 50, duration: "30d" }),
     });
     await page.goto(DETAIL_URL);
 
-    await expect(page.getByText(/currently \$50 per 30 days/i)).toBeVisible();
-    await expect(page.getByRole("button", { name: /remove limit/i })).toBeVisible();
+    await expect(page.getByRole("heading", { name: /model spend limit/i })).toBeVisible();
+    await expect(page.getByText(/most this organization can spend is \$50\.00 per month/i)).toBeVisible();
+    await expect(page.getByText(/can set a lower limit of its own/i)).toBeVisible();
   });
 
-  test("a zero allowance is not shown as no limit", async ({ page }) => {
+  test("a ceiling can never be removed, and an unchanged one is not re-sent", async ({ page }) => {
+    await data.organizations.interceptGetPlatformOrganization({
+      organization: organization({ usd: 50, duration: "30d" }),
+    });
+    await page.goto(DETAIL_URL);
+
+    await expect(page.getByLabel("Spend limit (US dollars)", { exact: true })).toHaveValue("50");
+    await expect(page.getByRole("button", { name: /remove limit/i })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Save" })).toBeDisabled();
+
+    await page.getByLabel("Spend limit (US dollars)", { exact: true }).fill("");
+    await expect(page.getByRole("button", { name: "Save" })).toBeDisabled();
+  });
+
+  test("the organization's own lower limit is shown as the one in force", async ({ page }) => {
+    await data.organizations.interceptGetPlatformOrganization({
+      organization: organization({ usd: 50, duration: "30d", own: 20 }),
+    });
+    await page.goto(DETAIL_URL);
+
+    await expect(
+      page.getByText(/set its own lower limit of \$20\.00, which is the one in force/i),
+    ).toBeVisible();
+    // Spend is measured against the limit in force, not the ceiling.
+    await expect(page.getByText(/\$12\.50 of \$20\.00 used/i)).toBeVisible();
+  });
+
+  test("a zero allowance is shown as zero", async ({ page }) => {
     await data.organizations.interceptGetPlatformOrganization({
       organization: organization({ usd: 0, duration: "30d" }),
     });
     await page.goto(DETAIL_URL);
 
-    await expect(page.getByText(/currently \$0 per 30 days/i)).toBeVisible();
+    await expect(page.getByText(/most this organization can spend is \$0\.00 per month/i)).toBeVisible();
   });
 
   test("saving sends the amount and the selected window", async ({ page }) => {
     await data.organizations.interceptGetPlatformOrganization({
-      organization: organization({ usd: null, duration: null }),
+      organization: organization({ usd: 50, duration: "30d" }),
     });
     const requests = await data.organizations.interceptSetPlatformOrganizationLlmBudget({
       organization: organization({ usd: 25, duration: "7d" }),
     });
     await page.goto(DETAIL_URL);
 
-    await page.getByLabel("Spend limit in USD").fill("25");
-    await page.getByLabel("Budget window").click();
-    await page.getByRole("option", { name: "per 7 days" }).click();
+    await page.getByLabel("Spend limit (US dollars)", { exact: true }).fill("25");
+    await page.getByLabel("Renewal period").click();
+    await page.getByRole("option", { name: "per week" }).click();
     await page.getByRole("button", { name: "Save" }).click();
 
     await expect.poll(() => requests).toEqual([{ budget_usd: 25, budget_duration: "7d" }]);
   });
 
-  test("removing the limit clears the amount and the window together", async ({ page }) => {
-    await data.organizations.interceptGetPlatformOrganization({
-      organization: organization({ usd: 50, duration: "30d" }),
-    });
-    const requests = await data.organizations.interceptSetPlatformOrganizationLlmBudget({
-      organization: organization({ usd: null, duration: null }),
-    });
-    await page.goto(DETAIL_URL);
-
-    await page.getByRole("button", { name: /remove limit/i }).click();
-
-    await expect.poll(() => requests).toEqual([{ budget_usd: null, budget_duration: null }]);
-  });
-
   test("a negative amount is refused before any request", async ({ page }) => {
     await data.organizations.interceptGetPlatformOrganization({
-      organization: organization({ usd: null, duration: null }),
+      organization: organization({ usd: 50, duration: "30d" }),
     });
     const requests = await data.organizations.interceptSetPlatformOrganizationLlmBudget();
     await page.goto(DETAIL_URL);
 
-    await page.getByLabel("Spend limit in USD").fill("-5");
+    await page.getByLabel("Spend limit (US dollars)", { exact: true }).fill("-5");
+    await page.getByLabel("Spend limit (US dollars)", { exact: true }).blur();
     await expect(page.getByText(/enter an amount of zero or more/i)).toBeVisible();
     await expect(page.getByRole("button", { name: "Save" })).toBeDisabled();
     expect(requests).toEqual([]);
   });
 
-  test("a proxy failure still shows the amount that was stored", async ({ page }) => {
-    // The API stores the row before pushing to LiteLLM, so a 502 means "saved, not
-    // applied". The card must refetch rather than keep rendering the old value.
+  test("a failure to apply still shows the amount that was stored", async ({ page }) => {
+    // The API stores the row before applying it, so a 502 means "saved, not applied".
+    // The card must refetch rather than keep rendering the old value.
     let reads = 0;
     await page.route(`**/api/v1/platform/organizations/${ORG_A_ID}`, async (route) => {
       if (route.request().method() !== "GET") {
@@ -131,7 +135,9 @@ test.describe("Platform organization LLM budget", () => {
         status: 200,
         contentType: "application/json",
         body: JSON.stringify(
-          reads === 1 ? organization({ usd: null, duration: null }) : organization({ usd: 50, duration: "30d" }),
+          reads === 1
+            ? organization({ usd: 20, duration: "30d" })
+            : organization({ usd: 50, duration: "30d" }),
         ),
       });
     });
@@ -140,21 +146,21 @@ test.describe("Platform organization LLM budget", () => {
         status: 502,
         contentType: "application/json",
         body: JSON.stringify({
-          detail: "Budget saved but the LLM proxy could not be updated; it will be retried automatically",
+          detail: "Spend limit saved, but it could not be applied yet. It will be retried automatically.",
         }),
       });
     });
     await page.goto(DETAIL_URL);
 
-    await page.getByLabel("Spend limit in USD").fill("50");
+    await page.getByLabel("Spend limit (US dollars)", { exact: true }).fill("50");
     await page.getByRole("button", { name: "Save" }).click();
 
-    await expect(page.getByText(/proxy could not be updated/i)).toBeVisible();
-    await expect(page.getByText(/currently \$50 per 30 days/i)).toBeVisible();
+    await expect(page.getByText(/could not be applied yet/i)).toBeVisible();
+    await expect(page.getByText(/most this organization can spend is \$50\.00 per month/i)).toBeVisible();
   });
 });
 
-test.describe("Enrollment gate", () => {
+test.describe("Agents a limit does not cover yet", () => {
   let data: DataSupport;
   test.use({ storageState: { cookies: [], origins: [] } });
 
@@ -173,27 +179,23 @@ test.describe("Enrollment gate", () => {
     await data.auth.interceptRefreshRequest();
     await data.users.interceptGetUserContextRequest();
     await data.organizations.interceptGetPlatformOrganizationMembers();
+    await data.organizations.interceptGetPlatformOrganization({
+      organization: organization({ usd: 50, duration: "30d" }),
+    });
   });
 
-  test("an organization with unenrolled agents cannot be given a limit yet", async ({ page }) => {
-    await data.organizations.interceptGetPlatformOrganization({
-      organization: organization({ usd: null, duration: null }),
-    });
+  test("are named beside the controls, which stay usable", async ({ page }) => {
     await data.organizations.interceptGetOrganizationLlmCoverage({ coverage: PARTIAL });
     await page.goto(DETAIL_URL);
 
-    await expect(page.getByText(/2 of 3 agents aren't enrolled yet/i)).toBeVisible();
-    // Named, so an administrator can see what a limit would miss and why.
+    await expect(page.getByText(/2 of 3 agents aren't covered by this limit yet/i)).toBeVisible();
     await expect(page.getByText(/Scribe — not enrolled/i)).toBeVisible();
     await expect(page.getByText(/Borrowed — already assigned elsewhere/i)).toBeVisible();
-    await expect(page.getByLabel("Spend limit in USD")).toHaveCount(0);
+    await expect(page.getByLabel("Spend limit (US dollars)", { exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: /enroll agents/i })).toBeVisible();
   });
 
-  test("enrolling reveals the limit controls", async ({ page }) => {
-    await data.organizations.interceptGetPlatformOrganization({
-      organization: organization({ usd: null, duration: null }),
-    });
+  test("enrolling them clears the notice", async ({ page }) => {
     let covered = false;
     await page.route(
       `**/api/v1/platform/organizations/${ORG_A_ID}/llm-budget/coverage`,
@@ -231,22 +233,14 @@ test.describe("Enrollment gate", () => {
 
     await page.getByRole("button", { name: /enroll agents/i }).click();
 
-    await expect(page.getByLabel("Spend limit in USD")).toBeVisible();
     await expect(page.getByRole("button", { name: /enroll agents/i })).toHaveCount(0);
   });
 
-  test("an organization that already has a limit is never gated out of removing it", async ({
-    page,
-  }) => {
-    await data.organizations.interceptGetPlatformOrganization({
-      organization: organization({ usd: 50, duration: "30d" }),
-    });
-    await data.organizations.interceptGetOrganizationLlmCoverage({ coverage: PARTIAL });
+  test("an unknown coverage check never hides the controls", async ({ page }) => {
+    await data.organizations.interceptGetOrganizationLlmCoverage({ status: 503 });
     await page.goto(DETAIL_URL);
 
-    await expect(page.getByRole("button", { name: /remove limit/i })).toBeVisible();
-    // Still told the truth about what the existing limit does not cover.
-    await expect(page.getByText(/2 of 3 agents are not covered/i)).toBeVisible();
+    await expect(page.getByLabel("Spend limit (US dollars)", { exact: true })).toBeVisible();
   });
 });
 
@@ -266,73 +260,24 @@ test.describe("Spend against the limit", () => {
       organization: organization({ usd: 0.01, duration: "30d" }),
     });
     await data.organizations.interceptGetOrganizationLlmCoverage({
-      coverage: {
-        total_agents: 1,
-        enrolled_agents: 1,
-        uncovered: [],
-        newly_enrolled: 0,
-        spend_usd: 0.011985,
-        renews_at: "2026-10-01T00:00:00Z",
-      },
+      coverage: { ...COVERED, total_agents: 1, enrolled_agents: 1, spend_usd: 0.011985 },
     });
     await page.goto(DETAIL_URL);
 
     // Sub-cent amounts must not collapse to $0.00, or a tiny limit reads as unused.
-    await expect(page.getByText(/\$0\.0120 of \$0\.0100 used — exhausted/i)).toBeVisible();
+    await expect(page.getByText(/\$0\.0120 of \$0\.0100 used — limit reached/i)).toBeVisible();
   });
 
-  test("an unreadable proxy leaves spend unknown rather than showing zero", async ({ page }) => {
+  test("an unreadable spend figure is unknown rather than zero", async ({ page }) => {
     await data.organizations.interceptGetPlatformOrganization({
       organization: organization({ usd: 50, duration: "30d" }),
     });
     await data.organizations.interceptGetOrganizationLlmCoverage({
-      coverage: {
-        total_agents: 1,
-        enrolled_agents: 1,
-        uncovered: [],
-        newly_enrolled: 0,
-        spend_usd: null,
-        renews_at: null,
-      },
+      coverage: { ...COVERED, spend_usd: null, renews_at: null },
     });
     await page.goto(DETAIL_URL);
 
     await expect(page.getByText(/spend against this limit is unavailable right now/i)).toBeVisible();
     await expect(page.getByText(/\$0\.00 of/)).toHaveCount(0);
-  });
-});
-
-test.describe("Unknown coverage", () => {
-  let data: DataSupport;
-  test.use({ storageState: { cookies: [], origins: [] } });
-
-  test.beforeEach(async ({ page }) => {
-    data = new DataSupport(page);
-    await data.auth.interceptRefreshRequest();
-    await data.users.interceptGetUserContextRequest();
-    await data.organizations.interceptGetPlatformOrganizationMembers();
-  });
-
-  test("a failed coverage check hides the controls rather than letting a limit through", async ({
-    page,
-  }) => {
-    await data.organizations.interceptGetPlatformOrganization({
-      organization: organization({ usd: null, duration: null }),
-    });
-    await data.organizations.interceptGetOrganizationLlmCoverage({ status: 503 });
-    await page.goto(DETAIL_URL);
-
-    await expect(page.getByText(/couldn't check which agents this limit would cover/i)).toBeVisible();
-    await expect(page.getByLabel("Spend limit in USD")).toHaveCount(0);
-  });
-
-  test("an organization that already has a limit can still remove it", async ({ page }) => {
-    await data.organizations.interceptGetPlatformOrganization({
-      organization: organization({ usd: 50, duration: "30d" }),
-    });
-    await data.organizations.interceptGetOrganizationLlmCoverage({ status: 503 });
-    await page.goto(DETAIL_URL);
-
-    await expect(page.getByRole("button", { name: /remove limit/i })).toBeVisible();
   });
 });
