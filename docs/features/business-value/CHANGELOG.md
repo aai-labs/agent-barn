@@ -22,11 +22,80 @@ Related context: [Activity and Ingest](../activity-and-ingest.md), [Agent Activi
 - In transition:
   - gog classification has not been deployed to local k3d. The API pod there still runs the previous image.
   - After deploying, run the operator backfill once, so the gog Tool Calls already stored are counted.
-- Also delivered: the scoped aggregate reads the Organization activity KPI needs (`ValueActivityRepository`), and the two indexes that serve them (migration `45bcefcb0749`). The endpoint is not built yet.
-- Next: the Organization activity endpoint (`GET /organizations/{organization_id}/value/activity`), then the Stage 3 UI that renders value settings, the Organization value, and activity.
+- Also delivered: `GET /organizations/{organization_id}/value/activity`, the Organization activity KPI. The feature doc's [Organization activity](../business-value.md#organization-activity) section is the contract. It rests on `ValueActivityRepository` and the two indexes of migration `45bcefcb0749`.
+- Next: the Stage 3 UI that renders value settings, the Organization value, and activity.
 - Blockers: the product owner has not signed off the default minutes per Outcome Type. They are placeholders until then, and every value figure inherits them.
 
 ## Slice history
+
+### 2026-09-30 — AF-346 — Organization activity API
+
+Delivered: `GET /organizations/{organization_id}/value/activity` on `business_value_router`, with `Depends(get_stats_window)`. The feature doc's [Organization activity](../business-value.md#organization-activity) section is the contract.
+- **Authorization:** `BusinessValueService.get_organization_activity` authorizes through the existing `_require_read` (`cost.read`, then `activity.read`).
+- **Totals and per-Agent rows:** it builds both from `ValueActivityRepository` and `CostRepository`, with `activity_figures`.
+- **Series:** it builds the series from `ConversationRepository.daily_direction_counts_since(..., organization_id=scope.organization_id)` plus the webhook bucket counts, merged by `utc_bucket`. No parallel message query was written.
+- **Row identity:** `agent_identity` now gives both the value and the activity rows their name and deleted flag. The `/value` behaviour is unchanged.
+- **Docstring:** `daily_direction_counts_since`'s docstring now names this caller. It had said the helper was reached only through `require_platform_admin` and that `agent_scope_predicates` was unusable.
+
+Ticket corrections:
+- The ticket names a shared `value_router`. The router is `business_value_router`, so the route lives there.
+- Only OUTBOUND deliveries can be retried by hand. An INBOUND delivery's automatic retries keep the same row, which counts once at its final status. This is recorded under "Activity aggregates".
+- An answer to a command approval arrives as a new inbound message and delivery (`web_chat/service.py`), so it counts as a Request. The feature doc lists it as a caveat.
+
+Docs:
+- `business-value.md` gains the Organization activity section, its reads in Boundaries, and change-impact rules.
+- `CONTEXT.md` defines **Request**.
+- `activity-and-ingest.md` Boundaries names this reader.
+- `agent-webhooks.md` Change impact notes that every invocation is a Request.
+- `INDEX.md` routes Organization activity to `business-value.md`.
+
+Coverage:
+- `api/tests/integration/test_organization_activity.py` gains 20 API tests:
+  - Requests across messages and webhooks, with the series summing to the total
+  - OUTBOUND ignored
+  - the handled rate with UNAVAILABLE as a failure, and CANCELLED, PENDING, and PROCESSING left out
+  - an automatically retried delivery: handled, but left out of the median
+  - the interpolated median, and null figures without deliveries
+  - null per-Request figures without Requests, and `0.0` cost with no spend
+  - a native-only Agent with zero coverage
+  - a soft-deleted Agent
+  - a retired connection
+  - an approval answer sent through the real Web Chat route
+  - the half-open window and its echo, and 422 for an inverted window
+  - the series buckets equal to `spend_series`
+  - row union and order, including the Unattributed row
+  - Admin 200, Member 403, non-member 403, and unauthenticated 401
+- `api/tests/integration/test_cross_org_isolation.py`:
+  - an Owner of Org A gets 403 on Org B's activity;
+  - Org B's messages, webhooks, deliveries, tool calls, and spend never reach Org A's figures.
+- All 22 failed first, on 404 before the route existed.
+- `test_organization_value.py` and the unit tests still pass: 120 tests across the four files.
+
+Live check (local k3d, deployed by the user at migration `45bcefcb0749`), with one Hermes Agent, "Tommy", in a fresh Organization:
+- **Traffic:**
+  - Three Web Chat messages went through the real API, one of them asking Tommy to run `date -u`.
+  - The Agent was stopped through the API, and one more message returned `delivery_status: UNAVAILABLE`.
+  - Webhooks cannot be created locally, because they require an enabled native Slack, Discord, Telegram, or Teams Connection and local k3d has none. One `webhook_invocation` row labelled "AF-346 e2e synthetic" (status `DISPATCH_FAILED`) was inserted instead, as the integration tests do.
+- **Result:** `GET …/value/activity` matched SQL computed independently over the same window on every figure:
+
+  | Figure | Endpoint | SQL |
+  |---|---|---|
+  | Requests | 5 | 4 inbound messages + 1 invocation |
+  | Handled without failure | 0.75, coverage 4 | 3 SUCCEEDED, 1 UNAVAILABLE |
+  | Median response | 1.462131 s, coverage 3 | `percentile_cont` over 1.255851, 1.462131, and 2.822847 s |
+  | Cost per Request | 0.00700796592 | $0.0350398296 ÷ 5 |
+  | Tool Calls per Request | 1.0 | 5 ÷ 5 |
+
+  - The series put all 5 Requests in the 09:00 UTC bucket.
+  - 981 older `cost_record` rows with no Organization were correctly left out.
+- **Observed:**
+  - 4 of the 5 Tool Calls (`read_file` ×3, `cronjob`) ran during the Agent's startup, before the first message. This confirms that Tool Calls per Request includes background work.
+  - Spend lags live usage until the next cost sync: the newest attributed cost row was the first reply's.
+- **Authorization on the live stack:** a Platform Administrator without a Membership got 403, a request with no token got 401, and an inverted window got 422.
+
+Not verified live:
+- Webhook ingress end to end, because it needs a native Connection. That path is covered by `test_agent_webhooks.py`.
+- A Member's 403: there is no second account locally. That path is covered by the integration test.
 
 ### 2026-09-30 — AF-346 — Activity rules and DTOs
 
