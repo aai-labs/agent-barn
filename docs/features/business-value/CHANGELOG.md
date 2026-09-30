@@ -22,10 +22,72 @@ Related context: [Activity and Ingest](../activity-and-ingest.md), [Agent Activi
 - In transition:
   - gog classification has not been deployed to local k3d. The API pod there still runs the previous image.
   - After deploying, run the operator backfill once, so the gog Tool Calls already stored are counted.
-- Next: the Stage 3 UI that renders value settings and the Organization value.
+- Also delivered: the scoped aggregate reads the Organization activity KPI needs (`ValueActivityRepository`). The endpoint is not built yet.
+- Next: the Organization activity endpoint (`GET /organizations/{organization_id}/value/activity`), then the Stage 3 UI that renders value settings, the Organization value, and activity.
 - Blockers: the product owner has not signed off the default minutes per Outcome Type. They are placeholders until then, and every value figure inherits them.
 
 ## Slice history
+
+### 2026-09-30 — AF-346 — Activity aggregates
+
+Delivered: `ValueActivityRepository` in `api/domains/business_value/repository.py`. Every read takes a `StatsWindow` and an `AuthorizationScope`, and filters on:
+- the half-open window `[start, end)`;
+- a join to `agent` with `agent_scope_predicates(scope, include_deleted=True)`, so a soft-deleted Agent's history still counts;
+- the table's own `organization_id`, wherever the table has one.
+
+The reads:
+- `inbound_messages_by_agent`: INBOUND `agent_chat_message` rows by `occurred_at`. The table has no `organization_id`, so scoping is through the Agent join alone.
+- `webhook_invocations_by_agent` and `webhook_invocations_by_bucket`: `webhook_invocation` rows of every status, by `created_at`. The bucket read uses the same UTC `generate_series(date_trunc(...))` spine as `CostRepository.spend_series`.
+- `delivery_outcomes_total` and `delivery_outcomes_by_agent`: INBOUND `communication_delivery` rows by `completed_at`, limited to SUCCEEDED, DEAD_LETTERED, and UNAVAILABLE. They return the three counts, the first-attempt success count, and `percentile_cont(0.5)` over `completed_at − created_at`, filtered to SUCCEEDED with `attempt_count = 1` and cast to `double precision`. The median is null when nothing qualifies.
+- `tool_calls_by_agent`: `tool_call` rows of every status, by `occurred_at`.
+
+Ticket correction:
+- The ticket says a dead-lettered delivery that is retried and later succeeds counts as succeeded.
+- Only OUTBOUND deliveries can be retried by hand (`delivery_repository.py` `retry_dead_lettered`). An INBOUND retryable failure, including a lease-expiry reclaim, returns the same row to PENDING and keeps `attempt_count`, which only a claim increments. It ends SUCCEEDED with `attempt_count ≥ 2`, and DEAD_LETTERED is terminal for INBOUND.
+- The tests therefore cover an automatically retried delivery: it counts as succeeded and is left out of the median.
+
+Test support: `api/tests/steps/communication.py`.
+- It seeds connections, inbound deliveries through `CommunicationDeliveryRepository.accept_inbound` (with the status, attempt count, and timestamps overridden afterwards), outbound deliveries, messages, webhook invocations, and tool calls. It also soft-deletes the current Agent the product way.
+- `accept_inbound` refuses a deleted Agent, so the soft-deleted case seeds its rows first and deletes afterwards.
+
+Coverage: `api/tests/integration/test_organization_activity.py`, 10 repository tests:
+- per-Agent inbound messages, including the half-open window and ignoring OUTBOUND and other Organizations;
+- a soft-deleted Agent's messages;
+- webhook invocations of every status, including the window and other Organizations;
+- the webhook bucket spine, which equals `spend_series`'s buckets;
+- the delivery statuses: CANCELLED, PENDING, PROCESSING, and OUTBOUND are left out, and UNAVAILABLE comes from a stopped Agent;
+- the `completed_at` window;
+- the median over first-attempt successes only (10 s and 20 s give 15.0, with a retried 600 s success excluded), and a null median with no deliveries;
+- the per-Agent split, including a soft-deleted Agent and another Organization;
+- tool calls of every status, including the window and other Organizations.
+
+All 10 failed first on `NotImplementedError` stubs, with every seeding step completing. `test_organization_value.py` and `test_business_action_repository.py` still pass, and `api.api_app` and `api.ingest_app` import cleanly.
+
+Index check (local k3d, PostgreSQL 18.4):
+- Setup: one transaction ending in `ROLLBACK`, so nothing persisted.
+  - Rows: 20 synthetic Organizations and 200 Agents (marked deleted to skip template pinning; the reads do not filter on `deleted_at`), 500,006 `agent_chat_message`, 1,000,006 `communication_delivery` (half OUTBOUND), 100,000 `webhook_invocation`, and 500,024 `tool_call` rows.
+  - All rows were spread evenly over 180 days, and the tables were analyzed.
+  - Each query was compiled from the repository code and run with `EXPLAIN (ANALYZE, BUFFERS)` for one Organization over a 30-day window.
+- Without new indexes:
+
+  | Read | Plan | Time |
+  |---|---|---|
+  | deliveries | parallel sequential scan | 1,405 ms |
+  | inbound messages per Agent | parallel sequential scan; `ix_agent_chat_message_occurred_at_direction` not chosen | 606 ms |
+  | webhook invocations | bitmap scan on `ix_webhook_invocation_webhook_created` | 91 ms |
+  | tool calls | `ix_tool_call_agent_occurred` | 10 ms |
+
+- Candidate indexes, each created inside the same rolled-back transaction:
+
+  | Index | Read | Time |
+  |---|---|---|
+  | `communication_delivery (agent_id, direction, completed_at)`, the ticket's shape | deliveries | 17.6 ms |
+  | `communication_delivery (organization_id, direction, completed_at)` | deliveries | 12.4 ms |
+  | `communication_delivery (completed_at, organization_id)` | deliveries | 16.5 ms |
+  | `agent_chat_message (agent_id, direction, occurred_at)` | inbound messages per Agent | 45 ms (index-only scan) |
+
+- The planner serves the ticket's Agent-first shape with a nested loop over the Organization's Agents and a range scan per Agent. A planning review had claimed that shape could not serve an Organization-wide range; this measurement shows it can.
+- Not verified: production data distribution and hardware. This was a laptop with evenly spread synthetic rows.
 
 ### 2026-09-29 — AF-345 — gog (Google Workspace) classification
 
