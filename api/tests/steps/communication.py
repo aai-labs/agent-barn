@@ -232,3 +232,16 @@ def the_agent_is_soft_deleted():
         )
 
     return step
+
+
+def the_connection_is_retired():
+    def step(context):
+        with Session(_delegate(context).engine) as session:
+            session.exec(  # type: ignore[call-overload]
+                sa.update(CommunicationConnection)
+                .where(col(CommunicationConnection.id) == context.connection.id)
+                .values(retired_at=datetime.now(UTC))
+            )
+            session.commit()
+
+    return step

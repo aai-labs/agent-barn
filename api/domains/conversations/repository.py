@@ -84,15 +84,15 @@ class ConversationRepository:
         """Daily inbound/outbound message counts for the stats surfaces (AF-256).
         Returns (iso_date, inbound, outbound) ordered by day.
 
-        Unscoped by default and only ever reached through
-        `require_platform_admin` — org-scoped reads go through AuthorizationScope
-        like everything else. `agent_scope_predicates` is unusable here on three
-        counts: it hard-requires a single organization_id, it appends
-        `deleted_at IS NULL`, and it adds per-membership EXISTS subqueries.
+        Unscoped by default, which only Platform View reaches, through
+        `require_platform_admin`.
 
-        `organization_id` narrows the same aggregate to one tenant so a future
-        Organization dashboard reuses this query behind its own route, DTO, and
-        authorization rather than growing a second one.
+        `organization_id` narrows the same aggregate to one tenant for the
+        Organization activity read (`BusinessValueService`). That caller
+        authorizes through `require_organization` and passes its scope's
+        organization_id. An Organization-wide scope reduces
+        `agent_scope_predicates(scope, include_deleted=True)` to exactly this
+        Agent join.
 
         The join to Agent is conditional: with no Agent-owned filter there is no
         join at all, which keeps messages of soft-deleted Agents counted.

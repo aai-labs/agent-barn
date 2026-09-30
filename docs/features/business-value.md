@@ -2,7 +2,7 @@
 
 ## Read when
 
-Read before changing how Agent Barn derives Business Actions from Tool Calls, the aai-cli or gog command catalogues, Outcome Types or their default minutes, the `business_action` table, the `agentbarn_business_actions` metric, or any read that reports value from Business Actions.
+Read before changing how Agent Barn derives Business Actions from Tool Calls, the aai-cli or gog command catalogues, Outcome Types or their default minutes, the `business_action` table, the `agentbarn_business_actions` metric, or any read that reports value from Business Actions. Also read before changing the Organization activity read, or what counts as a Request, a handled delivery, or a response time.
 
 ## Role in the system
 
@@ -196,6 +196,75 @@ Each Business Action falls in exactly one category. A write is **classified** wh
 - With no rate set, every `value` and ratio is `null`, while minutes and spend are still reported.
 - A ratio is also `null` when its spend is zero.
 
+## Organization activity
+
+`GET /organizations/{organization_id}/value/activity` shows how much work each Agent handles, how reliably and quickly it responds, and what each Request costs. It explains why an Agent is or is not producing value.
+
+This is not the per-Agent Activity tab ([`agent-activity.md`](agent-activity.md), `api/domains/activity`), which groups one Agent's billed model calls into wakes and is unchanged.
+
+### Window and authorization
+
+- The window is the same `get_stats_window` as [Organization value](#organization-value): half-open `[start, end)` and echoed in the response.
+- Authorization is also the same. It requires both `cost.read` and `activity.read` through `PermissionPolicy.require_organization`, so a Member gets 403 and so does a non-member.
+- Every aggregate joins `agent` with `agent_scope_predicates(scope, include_deleted=True)`, so a soft-deleted Agent stays in the periods it worked.
+- `agent_chat_message` has no `organization_id` column, so it is scoped only through that Agent join. The other tables also filter on their own `organization_id`.
+
+### Metrics
+
+Each metric is named for what the data proves.
+
+| Metric | Definition | Time column |
+|---|---|---|
+| **Requests** | Inbound Conversation Messages (`agent_chat_message`, direction INBOUND), which include native-runtime transcripts and Web Chat, plus every `webhook_invocation` row of any status. A Webhook Invocation writes no Conversation Message, so nothing is counted twice. | message `occurred_at`; invocation `created_at` |
+| **Handled without failure** | SUCCEEDED ÷ (SUCCEEDED + DEAD_LETTERED + UNAVAILABLE) over INBOUND Communication Deliveries. CANCELLED, PENDING, and PROCESSING are left out. Returned with `handled_coverage`, the denominator. | `completed_at` |
+| **Median response time** | `percentile_cont(0.5)` of `completed_at − created_at`, in seconds, over SUCCEEDED INBOUND deliveries with `attempt_count = 1`. Returned with `response_time_coverage`, the number of such deliveries. | `completed_at` |
+| **Cost per Request** | Organization LLM spend (`CostRepository`, Organization-only `CostFilter`, as in [Spend](#spend)) ÷ Requests. | cost `occurred_at` |
+| **Tool Calls per Request** | Tool Calls of any status ÷ Requests. | tool call `occurred_at` |
+
+What the delivery statuses mean:
+- UNAVAILABLE means the message arrived while the Agent was not running. It is set only when the delivery is accepted, so it counts as a failure.
+- SUCCEEDED means the runtime completed its run, not that the reply was correct.
+- An INBOUND delivery that fails in a retryable way, including a lease expiry, returns to PENDING on the same row and keeps its `attempt_count`. Only a claim raises that count.
+  - It counts once, at its final status.
+  - If it ends SUCCEEDED, it is handled but left out of the median, which times first attempts only.
+  - Only OUTBOUND deliveries can be retried by hand, and DEAD_LETTERED is final for an INBOUND delivery.
+- The response time includes queue wait and any command-approval wait. No approval stage is stored, so the two cannot be separated.
+
+### Coverage
+
+- Only Connections on the Communications Gateway create Communication Deliveries. Platforms listed in `COMMUNICATIONS_NATIVE_PLATFORMS` run natively. That is Slack, Discord, Telegram, and Teams in deployed environments; the setting is empty by default and in local k3d.
+- Native traffic is mirrored into `agent_chat_message` through Ingest but has no delivery rows. Web Chat and Email always create them.
+- The handled rate and the response time therefore cover only part of the Requests. Each is returned with its coverage count, so the dashboard can say "based on 120 of 480 requests".
+- Native avoidance is transport routing, not a check when a delivery is accepted. A delivery created before its Platform switched to native stays PENDING and is left out of the denominator.
+
+### Response
+
+- **`totals`** (`ActivityTotalsRead`):
+  - `requests`
+  - `handled_without_failure_rate` and `handled_coverage`
+  - `median_response_seconds` and `response_time_coverage`
+  - `cost_per_request` and `tool_calls_per_request`
+- **`requests_series`:** `bucket` and `requests` for each UTC bucket.
+  - It comes from `ConversationRepository.daily_direction_counts_since(..., organization_id=scope.organization_id)` for inbound messages, plus `ValueActivityRepository.webhook_invocations_by_bucket`.
+  - Both use the same `generate_series(date_trunc(...))` spine as `CostRepository.spend_series`, and every bucket is emitted as a UTC instant.
+  - Totals equal the sum of the series.
+- **`agents`:** one row for every Agent with Requests, deliveries, Tool Calls, or spend.
+  - Each row carries the same figures, plus `agent_id`, `agent_name`, `agent_deleted`, and `spend`.
+  - Names and the `"Unattributed"` row follow [Organization value](#organization-value).
+  - Rows are ordered by Requests, then spend, both descending.
+
+### Nulls
+
+- Every rate, median, and per-Request figure is `null` when its denominator is zero.
+- Zero spend over some Requests is a cost per Request of `0.0`.
+
+### Caveats
+
+- **Scheduled runs are not Requests.** A cron run leaves no Request, but its Tool Calls and spend still count. Cost per Request and Tool Calls per Request therefore include background work.
+- **An approval answer is a Request.** Answering a command approval in Web Chat sends a new inbound message and delivery.
+- **Webhook Invocations without an event id are never deduplicated.** Each one is its own row, and so its own Request.
+- **Inbound messages may be overcounted** on Hermes, as described in [Known gaps](#known-gaps).
+
 ## Known gaps
 
 Each of these is an **undercount**, not a verdict on the Agent. The last one is a possible overcount.
@@ -237,7 +306,7 @@ Agent runtime ──→ Ingest API ──→ Tool Call repository (upsert pendin
 
 ## Boundaries
 
-Ingest owns authentication and the transaction. The Business Value domain owns the aai-cli and gog catalogues, the classifier, `business_action` persistence, and the Organization's value settings. How gog is installed and authenticated in the runtimes belongs to [`integrations.md`](integrations.md). Tool Calls remain the audit record, and Business Actions are derived from them and cascade with them. Value settings cascade with their Organization.
+Ingest owns authentication and the transaction. The Business Value domain owns the aai-cli and gog catalogues, the classifier, `business_action` persistence, and the Organization's value settings. How gog is installed and authenticated in the runtimes belongs to [`integrations.md`](integrations.md). Tool Calls remain the audit record, and Business Actions are derived from them and cascade with them. Value settings cascade with their Organization. For Organization activity, Business Value only reads: Conversation Message direction and occurrence time, INBOUND Communication Delivery outcomes and timestamps, Webhook Invocations, and Tool Calls. It writes nothing to them, and it never reads message, prompt, or tool content.
 
 ## Source map
 
@@ -253,7 +322,7 @@ Ingest owns authentication and the transaction. The Business Value domain owns t
 | Recorded runtime fixtures | `../../api/tests/fixtures/business_actions/` (aai-cli: `hermes.json`, `openclaw.json`; gog: `gog_hermes.json`, `gog_openclaw.json`, redacted) |
 | Value settings tables, DTOs, and bounds | `../../api/domains/business_value/models.py`, migration `1045836844da` |
 | Value settings persistence and audit event | `../../api/domains/business_value/repository.py` (`ValueSettingsRepository`), `../../api/domains/events/catalog.py` |
-| Valuation rules, value settings, and the Organization value service | `../../api/domains/business_value/service.py` |
+| Valuation rules, value settings, and the Organization value and activity service | `../../api/domains/business_value/service.py` (activity rules: `activity_figures`, `per_request`, `handled_rate`, `utc_bucket`) |
 | Organization value aggregates | `../../api/domains/business_value/repository.py` (`BusinessActionRepository.category_counts`, `successful_counts_by_bucket`, `successful_counts_by_agent`) |
 | Organization activity aggregates | `../../api/domains/business_value/repository.py` (`ValueActivityRepository`: inbound messages, webhook invocations, delivery outcomes, and tool calls, all scoped through the Agent join), served by migration `45bcefcb0749` (`ix_communication_delivery_agent_direction_completed`, `ix_agent_chat_message_agent_direction_occurred`) |
 | HTTP routes | `../../api/domains/business_value/routes.py` |
@@ -277,3 +346,6 @@ Ingest owns authentication and the transaction. The Business Value domain owns t
 - **A change to the value settings bounds or authorization** must update this document, `test_value_settings.py`, and the audit event's documentation in [`domain-events.md`](domain-events.md) together.
 - **A change to the Costs read predicates** (`CostRepository._predicates`, `spend_series` buckets, or `spend_by_agent`) changes the Organization value's spend and series. Re-run `test_organization_value.py`.
 - **A change to the Business Action status rules** moves actions between the successful, unverified, and failed categories, and so changes reported value.
+- **A change to Communication Delivery statuses, `attempt_count` semantics, or native transport** changes the handled rate, the response time, or their coverage. Re-run `test_organization_activity.py`.
+- **A change to Webhook Invocation admission or deduplication** changes the Request count.
+- **A change to `ConversationRepository.daily_direction_counts_since`** changes the Request series. Its Organization caller relies on the unfiltered-`deleted_at` Agent join.

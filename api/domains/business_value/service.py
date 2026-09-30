@@ -6,12 +6,17 @@ from uuid import UUID
 
 from injector import inject, singleton
 
+from api.domains.agents.models import Agent
 from api.domains.agents.repository import AgentRepository
 from api.domains.auth.models import CurrentUserContext
 from api.domains.business_value.catalogue import DEFAULT_MINUTES, OutcomeType
 from api.domains.business_value.classifier import BusinessActionStatus
 from api.domains.business_value.models import (
+    ActivitySeriesPoint,
+    ActivityTotalsRead,
+    AgentActivityRead,
     AgentValueRead,
+    OrganizationActivityRead,
     OrganizationValueRead,
     OutcomeMinutesRead,
     OutcomeTypeValueRead,
@@ -20,7 +25,13 @@ from api.domains.business_value.models import (
     ValueSettingsUpdate,
     ValueTotalsRead,
 )
-from api.domains.business_value.repository import BusinessActionRepository, ValueSettingsRepository
+from api.domains.business_value.repository import (
+    BusinessActionRepository,
+    DeliveryOutcomes,
+    ValueActivityRepository,
+    ValueSettingsRepository,
+)
+from api.domains.conversations.repository import ConversationRepository
 from api.domains.costs.models import CostFilter
 from api.domains.costs.repository import CostRepository
 from api.domains.events import EventDeliveryDispatcher, resolve_actor_identity
@@ -82,6 +93,29 @@ def utc_bucket(bucket: datetime) -> datetime:
     return bucket.astimezone(UTC)
 
 
+def activity_figures(requests: int, outcomes: DeliveryOutcomes, tool_calls: int, spend: Decimal) -> dict:
+    return {
+        "requests": requests,
+        "handled_without_failure_rate": handled_rate(outcomes.succeeded, outcomes.dead_lettered + outcomes.unavailable),
+        "handled_coverage": outcomes.succeeded + outcomes.dead_lettered + outcomes.unavailable,
+        "median_response_seconds": outcomes.median_seconds,
+        "response_time_coverage": outcomes.first_attempt,
+        "cost_per_request": per_request(spend, requests),
+        "tool_calls_per_request": per_request(tool_calls, requests),
+    }
+
+
+def agent_identity(
+    agent_id: UUID | None, known_agents: dict[UUID, Agent], cost_name: str | None
+) -> tuple[str | None, bool]:
+    if agent_id is None:
+        return UNATTRIBUTED_AGENT_NAME, False
+    agent = known_agents.get(agent_id)
+    if agent is None:
+        return cost_name, True
+    return agent.name, agent.deleted_at is not None
+
+
 def categorise(rows: Sequence[tuple[bool | None, str | None, BusinessActionStatus, int]]) -> WriteCategories:
     successful: dict[OutcomeType, int] = {}
     unverified = failed = unclassified = 0
@@ -134,6 +168,8 @@ class BusinessValueService:
     business_action_repository: BusinessActionRepository
     cost_repository: CostRepository
     agent_repository: AgentRepository
+    activity_repository: ValueActivityRepository
+    conversation_repository: ConversationRepository
     permission_policy: PermissionPolicy
     organization_lookup: OrganizationLookupService
     event_delivery_dispatcher: EventDeliveryDispatcher
@@ -177,6 +213,34 @@ class BusinessValueService:
             series=self._series(window, scope, cost_filter, minutes, rate),
             agents=self._agents(organization_id, window, scope, cost_filter, minutes, rate),
             top_outcome_types=self._top_outcome_types(categories.successful, minutes, rate),
+        )
+
+    def get_organization_activity(
+        self,
+        organization_id: UUID,
+        context: CurrentUserContext,
+        window: StatsWindow,
+    ) -> OrganizationActivityRead:
+        scope = self._require_read(organization_id, context)
+        cost_filter = CostFilter(organization_id=organization_id)
+        series = self._requests_series(window, scope)
+        tool_calls_by_agent: dict[UUID | None, int] = dict(self.activity_repository.tool_calls_by_agent(window, scope))
+
+        return OrganizationActivityRead(
+            period=window.period,
+            from_date=window.start,
+            to_date=window.end,
+            granularity=window.granularity,
+            totals=ActivityTotalsRead(
+                **activity_figures(
+                    sum(point.requests for point in series),
+                    self.activity_repository.delivery_outcomes_total(window, scope),
+                    sum(tool_calls_by_agent.values()),
+                    self.cost_repository.totals(window, cost_filter).spend,
+                )
+            ),
+            requests_series=series,
+            agents=self._activity_agents(organization_id, window, scope, cost_filter, tool_calls_by_agent),
         )
 
     def update_settings(
@@ -284,13 +348,7 @@ class BusinessValueService:
         for agent_id in rows_by_agent.keys() | spend_by_agent.keys():
             counts = _catalogue_counts(rows_by_agent.get(agent_id, []))
             cost_name, spend = spend_by_agent.get(agent_id, (None, Decimal(0)))
-            agent = known_agents.get(agent_id) if agent_id is not None else None
-            if agent_id is None:
-                agent_name, agent_deleted = UNATTRIBUTED_AGENT_NAME, False
-            elif agent is None:
-                agent_name, agent_deleted = cost_name, True
-            else:
-                agent_name, agent_deleted = agent.name, agent.deleted_at is not None
+            agent_name, agent_deleted = agent_identity(agent_id, known_agents, cost_name)
             agent_minutes = _minutes_for(counts, minutes)
             agent_value = value_usd(agent_minutes, rate)
             rows.append(
@@ -308,6 +366,67 @@ class BusinessValueService:
         return sorted(
             rows,
             key=lambda row: (-row.minutes_saved, -row.spend, row.agent_id is None, str(row.agent_id)),
+        )
+
+    def _requests_series(self, window: StatsWindow, scope: AuthorizationScope) -> list[ActivitySeriesPoint]:
+        webhooks = {
+            utc_bucket(bucket): count
+            for bucket, count in self.activity_repository.webhook_invocations_by_bucket(window, scope)
+        }
+        return [
+            ActivitySeriesPoint(bucket=utc_bucket(bucket), requests=inbound + webhooks.get(utc_bucket(bucket), 0))
+            for bucket, inbound, _outbound in self.conversation_repository.daily_direction_counts_since(
+                window.start,
+                window.end,
+                unit=window.granularity,
+                organization_id=scope.organization_id,
+            )
+        ]
+
+    def _activity_agents(
+        self,
+        organization_id: UUID,
+        window: StatsWindow,
+        scope: AuthorizationScope,
+        cost_filter: CostFilter,
+        tool_calls_by_agent: dict[UUID | None, int],
+    ) -> list[AgentActivityRead]:
+        messages: dict[UUID | None, int] = dict(self.activity_repository.inbound_messages_by_agent(window, scope))
+        webhooks: dict[UUID | None, int] = dict(self.activity_repository.webhook_invocations_by_agent(window, scope))
+        outcomes: dict[UUID | None, DeliveryOutcomes] = dict(
+            self.activity_repository.delivery_outcomes_by_agent(window, scope)
+        )
+        spend_by_agent: dict[UUID | None, tuple[str | None, Decimal]] = {
+            agent_id: (agent_name, spend)
+            for agent_id, agent_name, spend, _calls, _prompt, _completion in self.cost_repository.spend_by_agent(
+                window, cost_filter
+            )
+        }
+        known_agents = {agent.id: agent for agent in self.agent_repository.find_all_for_org(organization_id)}
+
+        rows = []
+        agent_ids: set[UUID | None] = {*messages, *webhooks, *outcomes, *tool_calls_by_agent, *spend_by_agent}
+        for agent_id in agent_ids:
+            cost_name, spend = spend_by_agent.get(agent_id, (None, Decimal(0)))
+            agent_name, agent_deleted = agent_identity(agent_id, known_agents, cost_name)
+            figures = activity_figures(
+                messages.get(agent_id, 0) + webhooks.get(agent_id, 0),
+                outcomes.get(agent_id, DeliveryOutcomes()),
+                tool_calls_by_agent.get(agent_id, 0),
+                spend,
+            )
+            rows.append(
+                AgentActivityRead(
+                    agent_id=agent_id,
+                    agent_name=agent_name,
+                    agent_deleted=agent_deleted,
+                    spend=float(spend),
+                    **figures,
+                )
+            )
+        return sorted(
+            rows,
+            key=lambda row: (-row.requests, -row.spend, row.agent_id is None, str(row.agent_id)),
         )
 
     @staticmethod
