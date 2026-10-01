@@ -6,9 +6,10 @@ from typing import Any
 from uuid import UUID
 
 from injector import inject, singleton
+from sqlalchemy import delete, or_, tuple_
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import SQLAlchemyError
-from sqlmodel import Session, col, select
+from sqlmodel import Session, SQLModel, col, select
 
 from api.domains.business_value.classifier import SHELL_TOOL_NAMES, ClassifiedAction, classify
 from api.domains.business_value.models import TOOL_CALL_ORDINAL_CONSTRAINT, BusinessAction
@@ -17,7 +18,14 @@ from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 
 logger = logging.getLogger(__name__)
 
-REMAPPED_COLUMNS = ("integration", "resource", "verb", "is_write", "outcome_type", "updated_at")
+MAPPED_COLUMNS = ("integration", "resource", "verb", "is_write", "outcome_type")
+BUSINESS_ACTION_TABLE = SQLModel.metadata.tables["business_action"]
+
+
+@dataclass(frozen=True)
+class AppliedClassification:
+    recorded: int
+    removed: int
 
 
 @inject
@@ -71,24 +79,46 @@ class BusinessActionRepository:
         with Session(self.delegate.engine) as session:
             return list(session.exec(query.order_by(col(ToolCall.id)).limit(limit)).all())
 
-    def upsert_classified(self, classified: list[tuple[ToolCall, list[ClassifiedAction]]]) -> int:
-        """Insert or re-map Business Actions, leaving the stored status untouched.
+    def apply_classified(self, classified: list[tuple[ToolCall, list[ClassifiedAction]]]) -> AppliedClassification:
+        """Make each Tool Call's stored Business Actions match its new classification.
 
-        Unscoped: only the operator-run backfill calls this, and no router reaches it.
+        Rows whose ordinal the classification no longer produces are deleted, new rows are
+        inserted, and existing rows are updated only when their mapping changed. Status is
+        never changed. Unscoped: only the operator-run backfill calls this, and no router
+        reaches it.
         """
+        if not classified:
+            return AppliedClassification(recorded=0, removed=0)
         now = datetime.now(UTC)
         values = [self._values(tool_call, action, now) for tool_call, actions in classified for action in actions]
-        if not values:
-            return 0
-        statement = pg_insert(BusinessAction).values(values)
-        statement = statement.on_conflict_do_update(
-            constraint=TOOL_CALL_ORDINAL_CONSTRAINT,
-            set_={column: statement.excluded[column] for column in REMAPPED_COLUMNS},
-        ).returning(col(BusinessAction.id))
+        kept = [(value["tool_call_id"], value["ordinal"]) for value in values]
+        stale = (
+            delete(BusinessAction)
+            .where(
+                col(BusinessAction.tool_call_id).in_([tool_call.id for tool_call, _ in classified]),
+                ~tuple_(col(BusinessAction.tool_call_id), col(BusinessAction.ordinal)).in_(kept),
+            )
+            .returning(col(BusinessAction.id))
+        )
         with Session(self.delegate.engine) as session:
-            upserted = len(session.exec(statement).all())  # type: ignore[call-overload]
+            removed = len(session.exec(stale).all())  # type: ignore[call-overload]
+            recorded = len(session.exec(self._upsert(values)).all()) if values else 0  # type: ignore[call-overload]
             session.commit()
-        return upserted
+        return AppliedClassification(recorded=recorded, removed=removed)
+
+    @staticmethod
+    def _upsert(values: list[dict[str, Any]]):
+        statement = pg_insert(BusinessAction).values(values)
+        return statement.on_conflict_do_update(
+            constraint=TOOL_CALL_ORDINAL_CONSTRAINT,
+            set_={column: statement.excluded[column] for column in (*MAPPED_COLUMNS, "updated_at")},
+            where=or_(
+                *(
+                    BUSINESS_ACTION_TABLE.c[column].is_distinct_from(statement.excluded[column])
+                    for column in MAPPED_COLUMNS
+                )
+            ),
+        ).returning(col(BusinessAction.id))
 
     @staticmethod
     def _values(tool_call: ToolCall, action: ClassifiedAction, now: datetime) -> dict[str, Any]:

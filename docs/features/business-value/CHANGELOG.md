@@ -17,6 +17,26 @@ Related context: [Activity and Ingest](../activity-and-ingest.md), [Agent Activi
 
 ## Slice history
 
+### 2026-10-01 — AF-344 — Review fixes: backfill removes stale actions and writes only changes
+
+Changed:
+- `BusinessActionRepository.upsert_classified` is now `apply_classified`. Per batch and in one transaction it now:
+  - deletes the rows of each classified Tool Call whose ordinal the new classification no longer produces, including every row of a Tool Call that now classifies to nothing
+  - upserts with `ON CONFLICT … DO UPDATE … WHERE` any mapped column `IS DISTINCT FROM` the new value
+- Before this, a path the catalogue later ignored kept its old rows (`is_write=true`, with an Outcome Type), so they would still have been valued, and the only safeguard was a manual-cleanup note. Every re-run also rewrote every row's `updated_at`.
+- Ordinals count ignored invocations too, so the delete removes exactly the stale rows. A Tool Call whose classification raises is not passed to the repository and keeps its rows.
+- `BackfillResult` and the summary line gain `removed`. `recorded` now counts rows inserted or actually changed, so a re-run with no catalogue change reports `recorded=0 removed=0`.
+- `updated_at` moves only on rows whose mapping changed. The 2026-09-28 entry's "only `updated_at` moved" describes the behaviour before this fix.
+- Updated docs: `operations.md` (the manual-cleanup note is gone), `business-value.md`, the RBAC brief's unscoped-method list, and the Makefile comment.
+
+Coverage:
+- `api/tests/integration/test_business_action_backfill.py` adds four tests:
+  - removing the now-ignored action of an `&&` chain while keeping the other unchanged
+  - removing every action of a Tool Call that now classifies to nothing
+  - keeping rows when classification fails
+  - a no-change re-run writing nothing (`updated_at` unchanged)
+- The re-map test now checks `recorded=1` and that `updated_at` moved on the re-mapped row.
+
 ### 2026-09-28 — AF-344 — Live end-to-end check (local k3d)
 
 Setup:

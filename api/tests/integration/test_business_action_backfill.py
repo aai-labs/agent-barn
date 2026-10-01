@@ -5,7 +5,7 @@ from typing import Any
 from hamcrest import assert_that, equal_to
 from sqlmodel import col, select
 
-from api.domains.business_value import catalogue
+from api.domains.business_value import backfill, catalogue
 from api.domains.business_value.backfill import BackfillResult, run_backfill
 from api.domains.business_value.catalogue import CatalogueEntry, CommandKind, OutcomeType
 from api.domains.business_value.classifier import BusinessActionStatus
@@ -104,7 +104,7 @@ def test_backfill_classifies_completed_shell_tool_calls_across_batches():
 
         with then("every completed shell Tool Call is classified and nothing else is"):
             assert_that(_actions(context), equal_to(_EXPECTED_HISTORY))
-            assert_that(result, equal_to(BackfillResult(scanned=4, recorded=4, failed=0)))
+            assert_that(result, equal_to(BackfillResult(scanned=4, recorded=4, removed=0, failed=0)))
 
 
 def test_backfill_infers_status_from_content_not_the_stored_tool_call_status():
@@ -139,16 +139,98 @@ def test_backfill_remaps_history_after_a_catalogue_change_and_keeps_status(monke
             session.add(row)
             session.commit()
 
+        before = _snapshot(context)
+
         with when("the catalogue re-maps the path and the backfill runs again"):
             monkeypatch.setitem(
                 catalogue.CATALOGUE,
                 ("excel", "workbook", "create"),
                 CatalogueEntry(CommandKind.WRITE, OutcomeType.RECORD_CREATED),
             )
-            _backfill(context)
+            result = _backfill(context)
 
-        with then("the mapping changes and the stored status is left alone"):
+        with then("the mapping changes, the row is counted as changed, and the stored status is left alone"):
             assert_that(
                 _actions(context),
                 equal_to([("excel", "workbook", "create", "RECORD_CREATED", BusinessActionStatus.UNKNOWN)]),
             )
+            assert_that(result, equal_to(BackfillResult(scanned=1, recorded=1, removed=0, failed=0)))
+            assert_that(_snapshot(context)[0][4] > before[0][4], equal_to(True))
+
+
+def _snapshot(context) -> list[tuple[Any, ...]]:
+    with context.injector.get(ToolCallRepository).get_session() as session:
+        rows = session.exec(
+            select(BusinessAction).order_by(col(BusinessAction.tool_call_id), col(BusinessAction.ordinal))
+        ).all()
+        return [(row.id, row.ordinal, row.outcome_type, row.status, row.updated_at) for row in rows]
+
+
+def test_backfill_rerun_without_a_catalogue_change_changes_nothing():
+    with given([*_GIVEN]) as context:
+        _seed_history(context)
+        _backfill(context)
+        before = _snapshot(context)
+
+        with when("the backfill runs again with the same catalogue"):
+            result = _backfill(context)
+
+        with then("no row is written and the summary says so"):
+            assert_that(_snapshot(context), equal_to(before))
+            assert_that(result, equal_to(BackfillResult(scanned=4, recorded=0, removed=0, failed=0)))
+
+
+def test_backfill_removes_actions_the_catalogue_now_ignores(monkeypatch):
+    with given([*_GIVEN]) as context:
+        _seed(
+            context,
+            "call-1",
+            "aai-cli excel workbook create f.xlsx && aai-cli excel sheets add f.xlsx X",
+            _hermes_result(0),
+        )
+        _backfill(context)
+
+        with when("the catalogue starts ignoring the second command and the backfill runs again"):
+            monkeypatch.setitem(catalogue.CATALOGUE, ("excel", "sheets", "add"), CatalogueEntry(CommandKind.IGNORED))
+            result = _backfill(context)
+
+        with then("only the first action remains, unchanged"):
+            assert_that(
+                _actions(context),
+                equal_to([("excel", "workbook", "create", "DOCUMENT_AUTHORED", BusinessActionStatus.SUCCESS)]),
+            )
+            assert_that(result, equal_to(BackfillResult(scanned=1, recorded=0, removed=1, failed=0)))
+
+
+def test_backfill_removes_every_action_of_a_tool_call_that_now_classifies_to_nothing(monkeypatch):
+    with given([*_GIVEN]) as context:
+        _seed(context, "call-1", "aai-cli excel workbook create f.xlsx", _hermes_result(0))
+        _backfill(context)
+
+        with when("the catalogue starts ignoring the only command and the backfill runs again"):
+            monkeypatch.setitem(
+                catalogue.CATALOGUE, ("excel", "workbook", "create"), CatalogueEntry(CommandKind.IGNORED)
+            )
+            result = _backfill(context)
+
+        with then("the Tool Call has no Business Actions left"):
+            assert_that(_actions(context), equal_to([]))
+            assert_that(result, equal_to(BackfillResult(scanned=1, recorded=0, removed=1, failed=0)))
+
+
+def test_backfill_keeps_actions_when_classification_fails(monkeypatch):
+    def fail(_tool_call):
+        raise RuntimeError("boom")
+
+    with given([*_GIVEN]) as context:
+        _seed_history(context)
+        _backfill(context)
+        before = _snapshot(context)
+
+        with when("the classifier raises for every Tool Call on a re-run"):
+            monkeypatch.setattr(backfill, "classify", fail)
+            result = _backfill(context)
+
+        with then("stored actions are left alone and the failures are counted"):
+            assert_that(_snapshot(context), equal_to(before))
+            assert_that(result, equal_to(BackfillResult(scanned=4, recorded=0, removed=0, failed=4)))

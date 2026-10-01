@@ -1,9 +1,11 @@
 """Operator-run backfill of Business Actions from stored Tool Calls.
 
 Classifies every completed shell Tool Call from its stored content, never from its
-stored status, and upserts the result. Re-running it after a catalogue change re-maps
-integration, resource, verb, is_write, and outcome_type on existing rows while leaving
-their status alone. It is never reachable from a router.
+stored status, and makes its stored rows match. Re-running it after a catalogue change
+re-maps integration, resource, verb, is_write, and outcome_type on rows whose mapping
+changed, and removes rows the catalogue no longer produces, while leaving status alone.
+A Tool Call whose classification fails is skipped and keeps its rows. It is never
+reachable from a router.
 """
 
 import argparse
@@ -25,11 +27,12 @@ logger = logging.getLogger(__name__)
 class BackfillResult:
     scanned: int
     recorded: int
+    removed: int
     failed: int
 
 
 def run_backfill(repository: BusinessActionRepository, batch_size: int = BACKFILL_BATCH_SIZE) -> BackfillResult:
-    scanned = recorded = failed = 0
+    scanned = recorded = removed = failed = 0
     after_id: UUID | None = None
     while batch := repository.find_backfill_batch(after_id, batch_size):
         classified: list[tuple[ToolCall, list[ClassifiedAction]]] = []
@@ -39,14 +42,17 @@ def run_backfill(repository: BusinessActionRepository, batch_size: int = BACKFIL
             except Exception:
                 failed += 1
                 logger.exception("Could not classify tool call %s", tool_call.id)
-        recorded += repository.upsert_classified(classified)
+        applied = repository.apply_classified(classified)
+        recorded += applied.recorded
+        removed += applied.removed
         scanned += len(batch)
         after_id = batch[-1].id
-    result = BackfillResult(scanned=scanned, recorded=recorded, failed=failed)
+    result = BackfillResult(scanned=scanned, recorded=recorded, removed=removed, failed=failed)
     logger.info(
-        "Business action backfill summary: scanned=%s recorded=%s failed=%s",
+        "Business action backfill summary: scanned=%s recorded=%s removed=%s failed=%s",
         result.scanned,
         result.recorded,
+        result.removed,
         result.failed,
     )
     return result

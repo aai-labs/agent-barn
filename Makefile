@@ -112,8 +112,8 @@ run-llm-budget-alerts:
 	cd api && uv run python -c "from api.domains.organizations.llm_budget_alerts import main; main()"
 
 # Operator-run, never scheduled: classifies stored shell Tool Calls into Business Actions
-# against whatever DB_CONNECTION_URL points at. Safe to re-run; a re-run re-maps rows
-# after a catalogue change and never changes their status.
+# against whatever DB_CONNECTION_URL points at. Safe to re-run; a re-run re-maps changed
+# rows and removes rows the catalogue no longer produces, and never changes their status.
 backfill-business-actions:
 	cd api && uv run python -c "from api.domains.business_value.backfill import main; main()"
 
