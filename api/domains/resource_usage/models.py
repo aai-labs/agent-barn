@@ -173,3 +173,71 @@ class AgentOverviewRead(PydanticBaseModel):
     # Every Agent the caller can read; `items` stops at OVERVIEW_MAX_AGENTS.
     total: int
     items: list[AgentOverviewItemRead]
+
+
+# --- Platform view ---------------------------------------------------------------------
+# Dedicated read models, per the Platform oversight ADR: none of the Organization-scoped
+# ones above is reused, so neither surface can grow a field into the other by accident.
+
+
+class PlatformUsageTotalsRead(PydanticBaseModel):
+    # Live Agents that should have a container: running, or in error (it may be crashing).
+    # Read from the database, so it is there even when the source is not.
+    agents_with_container: int
+    # The rest are None when the source could not be read.
+    # Agents whose container reported CPU or memory.
+    agents_reporting: int | None = None
+    # Sums over the reporting Agents. A limit is what a container may use, not what it
+    # holds, so the limits add up to what the namespace quota counts, not to free room.
+    memory_working_set_bytes: int | None = None
+    memory_limit_bytes: int | None = None
+    cpu_cores: float | None = None
+    cpu_limit_cores: float | None = None
+
+
+class PlatformOrganizationUsageRead(PlatformUsageTotalsRead):
+    # Both None for containers that report but belong to no live Agent: deleted, or
+    # never known to this database.
+    organization_id: UUID | None = None
+    organization_name: str | None = None
+
+
+class PlatformAgentUsageRead(PydanticBaseModel):
+    agent_id: UUID
+    # None when no live Agent has this id; the same goes for the organization.
+    agent_name: str | None = None
+    organization_id: UUID | None = None
+    organization_name: str | None = None
+    memory_working_set_bytes: int | None = None
+    memory_limit_bytes: int | None = None
+    cpu_cores: float | None = None
+    cpu_limit_cores: float | None = None
+    # Over the last hour.
+    cpu_throttled_ratio: float | None = None
+
+
+class PlatformUsagePoint(PydanticBaseModel):
+    """All the selected Agents together at one step. A missing reading is null."""
+
+    bucket: datetime
+    memory_working_set_bytes: int | None = None
+    cpu_cores: float | None = None
+
+
+class PlatformResourceUsageRead(PydanticBaseModel):
+    range: ResourceUsageRange
+    from_date: datetime
+    to_date: datetime
+    step_seconds: int
+    observed_at: datetime
+    availability: ResourceUsageAvailability
+    organization_id: UUID | None = None
+    # Narrowed to `organization_id` when one is given. The counts come from the database,
+    # so they are there even when the source is not.
+    totals: PlatformUsageTotalsRead
+    # Always the whole platform, heaviest memory first, so a filtered page can still
+    # switch to another Organization. The no-live-Agent row, if any, is last.
+    organizations: list[PlatformOrganizationUsageRead] = []
+    # Every reporting Agent within the filter, heaviest memory first.
+    agents: list[PlatformAgentUsageRead] = []
+    series: list[PlatformUsagePoint] = []

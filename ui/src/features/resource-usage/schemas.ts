@@ -95,3 +95,56 @@ export const AgentOverviewSchema = z.object({
   items: z.array(AgentOverviewItemSchema),
 });
 export type AgentOverview = z.infer<typeof AgentOverviewSchema>;
+
+/** The Platform view's own shapes. None of the Organization ones above is reused. */
+export const PlatformUsageTotalsSchema = z.object({
+  /** From the database, so it is there even when the source is not. */
+  agentsWithContainer: z.number().int(),
+  /** The rest are null when the source could not be read. */
+  agentsReporting: z.number().int().nullable().default(null),
+  memoryWorkingSetBytes: z.number().nullable().default(null),
+  memoryLimitBytes: z.number().nullable().default(null),
+  cpuCores: z.number().nullable().default(null),
+  cpuLimitCores: z.number().nullable().default(null),
+});
+export type PlatformUsageTotals = z.infer<typeof PlatformUsageTotalsSchema>;
+
+export const PlatformOrganizationUsageSchema = PlatformUsageTotalsSchema.extend({
+  /** Both null for containers that report but belong to no live Agent. */
+  organizationId: z.string().uuid().nullable().default(null),
+  organizationName: z.string().nullable().default(null),
+});
+export type PlatformOrganizationUsage = z.infer<typeof PlatformOrganizationUsageSchema>;
+
+export const PlatformAgentUsageSchema = z.object({
+  agentId: z.string().uuid(),
+  /** Null when no live Agent has this id; so is the organization. */
+  agentName: z.string().nullable().default(null),
+  organizationId: z.string().uuid().nullable().default(null),
+  organizationName: z.string().nullable().default(null),
+  memoryWorkingSetBytes: z.number().nullable().default(null),
+  memoryLimitBytes: z.number().nullable().default(null),
+  cpuCores: z.number().nullable().default(null),
+  cpuLimitCores: z.number().nullable().default(null),
+  /** Over the last hour. */
+  cpuThrottledRatio: z.number().nullable().default(null),
+});
+export type PlatformAgentUsage = z.infer<typeof PlatformAgentUsageSchema>;
+
+export const PlatformResourceUsageSchema = z.object({
+  range: ResourceUsageRangeSchema,
+  fromDate: z.string(),
+  toDate: z.string(),
+  stepSeconds: z.number().int(),
+  observedAt: z.string(),
+  availability: ResourceUsageAvailabilitySchema,
+  organizationId: z.string().uuid().nullable().default(null),
+  totals: PlatformUsageTotalsSchema,
+  /** Always the whole platform, heaviest memory first, the no-live-Agent row last. */
+  organizations: z.array(PlatformOrganizationUsageSchema).default([]),
+  /** Every reporting Agent within the filter, heaviest memory first. */
+  agents: z.array(PlatformAgentUsageSchema).default([]),
+  /** All the selected Agents together; throttling is not drawn, so it stays null. */
+  series: z.array(ResourceUsagePointSchema).default([]),
+});
+export type PlatformResourceUsage = z.infer<typeof PlatformResourceUsageSchema>;

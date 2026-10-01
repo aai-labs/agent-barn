@@ -1,0 +1,359 @@
+"""Integration tests for the Platform resource usage surface.
+
+Cross-Organization by design: a Platform Administrator reads it without an Active
+Organization, so the scenarios seed more than one Organization and expect both counted.
+"""
+
+from typing import Any
+from uuid import uuid4, uuid7
+
+from fastapi import status
+from hamcrest import assert_that, contains_exactly, equal_to, has_length, none
+
+from api.domains.agents.models import AgentStatus
+from api.infrastructure.prometheus.client import PrometheusClient, PrometheusSample
+from api.tests.core.givenpy import given, then, when
+from api.tests.core.modules import (
+    create_test_client,
+    prepare_api_server,
+    prepare_injector,
+    set_env_variable,
+)
+from api.tests.steps.agent import (
+    TEST_ENCRYPTION_KEY,
+    MockK8sModule,
+    MockLiteLLMModule,
+    there_is_an_agent,
+)
+from api.tests.steps.database import database_is_clean, database_repo_is_ready
+from api.tests.steps.organization import (
+    there_is_an_organization_with_user_and_access_token,
+)
+from api.tests.steps.resource_usage import (
+    MockPrometheusModule,
+    prometheus_is_down,
+    prometheus_is_not_configured,
+    prometheus_reports_for_agents,
+)
+from api.tests.steps.template import there_is_a_template
+from api.tests.steps.user import there_is_a_user, there_is_an_access_token_for_user
+
+_URL = "/api/v1/platform/resource-usage"
+
+_BASE_GIVEN = [
+    set_env_variable(
+        {
+            "AGENT_TOKEN_ENCRYPTION_KEY": TEST_ENCRYPTION_KEY,
+            "LITELLM_BASE_URL": "http://litellm:4000",
+            "LITELLM_SECRET_NAME": "litellm",
+            "AGENT_DEFAULT_MODEL": "litellm/gpt-5-mini",
+            "SKIP_SLACK_TOKEN_VALIDATION": "true",
+        }
+    ),
+    prepare_injector(modules=[MockK8sModule(), MockLiteLLMModule(), MockPrometheusModule()]),
+    prepare_api_server(),
+    create_test_client(),
+    database_repo_is_ready(),
+    database_is_clean(),
+]
+
+_GiB = 1024**3
+
+
+def _reading(memory_gib: float, cpu: float) -> dict[str, float]:
+    return {
+        "up": 1.0,
+        "cgroup_metrics_available": 1.0,
+        "memory_working_set_bytes": memory_gib * _GiB,
+        "memory_limit_bytes": 2.0 * _GiB,
+        "cpu_cores": cpu,
+        "cpu_limit_cores": 1.0,
+        "cpu_throttled_ratio": 0.0,
+    }
+
+
+def _auth(token: str) -> dict:
+    return {"Authorization": f"Bearer {token}"}
+
+
+def _platform_admin(email: str):
+    """A Platform Administrator with no Membership, whose token lands last in context.
+
+    `there_is_a_user` attaches a new user to `context.organization` as OWNER when one is
+    present, which would hand this user the Membership these endpoints must not need.
+    """
+    admin_id = uuid7()
+
+    def step(context):
+        original_organization = getattr(context, "organization", None)
+        context.organization = None
+        there_is_a_user(id=admin_id, email=email, is_platform_admin=True)(context)
+        context.organization = original_organization
+        there_is_an_access_token_for_user(user_id=admin_id)(context)
+
+    return [step]
+
+
+def _two_organizations(first_email: str, second_email: str, *, second_status: AgentStatus = AgentStatus.RUNNING):
+    """Acme with "Ada" and Globex with "Cy", remembered as context.ada / context.cy."""
+
+    def step(context):
+        there_is_an_organization_with_user_and_access_token(email=first_email)(context)
+        there_is_a_template()(context)
+        there_is_an_agent(name="Ada", status=AgentStatus.RUNNING)(context)
+        context.acme, context.ada = context.organization, context.agent
+        context.organization = None
+        there_is_an_organization_with_user_and_access_token(email=second_email)(context)
+        there_is_a_template()(context)
+        there_is_an_agent(name="Cy", status=second_status)(context)
+        context.globex, context.cy = context.organization, context.agent
+        context.organization = context.acme
+
+    return step
+
+
+def _reports(rows):
+    """Report these readings, keyed by a function of the scenario so ids need not be known."""
+
+    def step(context):
+        prometheus_reports_for_agents(rows(context))(context)
+
+    return step
+
+
+def _prometheus(context) -> Any:
+    """The scenario's mock client, which the type checker cannot see through."""
+    return context.injector.get(PrometheusClient)
+
+
+# --- authorization -------------------------------------------------------
+
+
+def test_platform_resource_usage_requires_authentication():
+    with given(_BASE_GIVEN) as context:
+        response = context.client.get(_URL)
+
+        assert_that(response.status_code, equal_to(status.HTTP_401_UNAUTHORIZED))
+
+
+def test_platform_resource_usage_rejects_an_organization_owner():
+    with given(
+        [*_BASE_GIVEN, there_is_an_organization_with_user_and_access_token(email="owner-only@example.com")]
+    ) as context:
+        with when("an owner without Platform Privilege asks for it"):
+            response = context.client.get(_URL, headers=_auth(context.access_token))
+
+        with then("it is refused, and Prometheus was never asked"):
+            assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+            _prometheus(context).query.assert_not_called()
+
+
+# --- cross-organization reads --------------------------------------------
+
+
+def test_every_organization_is_counted_and_named_from_the_database():
+    with given(
+        [
+            *_BASE_GIVEN,
+            _two_organizations("owner-a@example.com", "owner-b@example.com"),
+            _reports(lambda c: {c.ada.id: _reading(0.5, 0.2), c.cy.id: _reading(1.0, 0.1)}),
+            *_platform_admin("admin-all@example.com"),
+        ]
+    ) as context:
+        with when("the platform admin asks"):
+            response = context.client.get(_URL, headers=_auth(context.access_token))
+
+        with then("both organizations and both agents are in the answer"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            body = response.json()
+            assert_that(body["availability"], equal_to("available"))
+            assert_that(body["totals"]["agents_with_container"], equal_to(2))
+            assert_that(body["totals"]["agents_reporting"], equal_to(2))
+            assert_that(body["totals"]["memory_working_set_bytes"], equal_to(int(1.5 * _GiB)))
+            assert_that([org["organization_name"] for org in body["organizations"]], has_length(2))
+            assert_that([agent["agent_name"] for agent in body["agents"]], contains_exactly("Cy", "Ada"))
+            ids = {org["organization_id"] for org in body["organizations"]}
+            assert_that(ids, equal_to({str(context.acme.id), str(context.globex.id)}))
+
+
+def test_one_platform_wide_query_is_made_for_the_readings_and_one_for_the_chart():
+    with given(
+        [
+            *_BASE_GIVEN,
+            _two_organizations("owner-c@example.com", "owner-d@example.com"),
+            _reports(lambda c: {c.ada.id: _reading(0.5, 0.2)}),
+            *_platform_admin("admin-queries@example.com"),
+        ]
+    ) as context:
+        with when("the platform admin asks without a filter"):
+            context.client.get(_URL, headers=_auth(context.access_token))
+
+        with then("neither query is pinned to an organization"):
+            client = _prometheus(context)
+            assert_that(client.query.call_count, equal_to(1))
+            assert_that(client.query_range.call_count, equal_to(1))
+            assert "org_id" not in client.query.call_args.args[0]
+            assert "org_id" not in client.query_range.call_args.args[0]
+            assert '{job="agent"}' in client.query.call_args.args[0]
+
+
+def test_a_label_cannot_rename_an_organization_or_move_an_agent():
+    """Names come from the database; a label that says otherwise is ignored."""
+    with given(
+        [
+            *_BASE_GIVEN,
+            _two_organizations("owner-e@example.com", "owner-f@example.com"),
+            *_platform_admin("admin-labels@example.com"),
+        ]
+    ) as context:
+        _prometheus(context).query.return_value = [
+            PrometheusSample(
+                labels={
+                    "app": f"agent-{context.ada.id}",
+                    "usage_field": field,
+                    "org_id": str(context.globex.id),
+                    "org_name": "Evil Corp",
+                    "agent_name": "someone-else",
+                },
+                value=value,
+            )
+            for field, value in _reading(0.5, 0.2).items()
+        ]
+
+        with when("a reading claims another organization in its labels"):
+            body = context.client.get(_URL, headers=_auth(context.access_token)).json()
+
+        with then("it is still filed under its agent's own organization"):
+            [agent] = body["agents"]
+            assert_that(agent["agent_name"], equal_to("Ada"))
+            assert_that(agent["organization_id"], equal_to(str(context.acme.id)))
+            assert_that(agent["organization_name"], equal_to(context.acme.name))
+
+
+def test_a_container_with_no_live_agent_is_shown_apart():
+    with given(
+        [
+            *_BASE_GIVEN,
+            _two_organizations("owner-g@example.com", "owner-h@example.com"),
+            _reports(lambda c: {c.ada.id: _reading(0.25, 0.1), uuid4(): _reading(2.0, 0.1)}),
+            *_platform_admin("admin-orphan@example.com"),
+        ]
+    ) as context:
+        with when("Prometheus reports a container the database does not know"):
+            body = context.client.get(_URL, headers=_auth(context.access_token)).json()
+
+        with then("it has its own last row, and still counts toward the platform"):
+            leaked = body["organizations"][-1]
+            assert_that(leaked["organization_id"], none())
+            assert_that(leaked["organization_name"], none())
+            assert_that(leaked["agents_reporting"], equal_to(1))
+            assert_that(body["totals"]["memory_working_set_bytes"], equal_to(int(2.25 * _GiB)))
+            orphan = next(agent for agent in body["agents"] if agent["agent_name"] is None)
+            assert_that(orphan["organization_id"], none())
+
+
+def test_a_stopped_agent_is_not_counted_as_having_a_container():
+    with given(
+        [
+            *_BASE_GIVEN,
+            _two_organizations("owner-i@example.com", "owner-j@example.com", second_status=AgentStatus.STOPPED),
+            _reports(lambda c: {c.ada.id: _reading(0.5, 0.2), c.cy.id: _reading(1.0, 0.1)}),
+            *_platform_admin("admin-stopped@example.com"),
+        ]
+    ) as context:
+        body = context.client.get(_URL, headers=_auth(context.access_token)).json()
+
+        assert_that(body["totals"]["agents_with_container"], equal_to(1))
+        assert_that(body["totals"]["agents_reporting"], equal_to(1))
+        assert_that([agent["agent_name"] for agent in body["agents"]], contains_exactly("Ada"))
+
+
+# --- the organization filter ---------------------------------------------
+
+
+def test_the_filter_narrows_totals_agents_and_chart_but_not_the_organization_list():
+    with given(
+        [
+            *_BASE_GIVEN,
+            _two_organizations("owner-k@example.com", "owner-l@example.com"),
+            _reports(lambda c: {c.ada.id: _reading(0.5, 0.2), c.cy.id: _reading(1.0, 0.1)}),
+            *_platform_admin("admin-narrow@example.com"),
+        ]
+    ) as context:
+        with when("the admin filters to Globex"):
+            response = context.client.get(
+                f"{_URL}?organization_id={context.globex.id}", headers=_auth(context.access_token)
+            )
+
+        with then("the figures cover Globex only, and the list still offers both"):
+            body = response.json()
+            assert_that(body["organization_id"], equal_to(str(context.globex.id)))
+            assert_that(body["totals"]["agents_reporting"], equal_to(1))
+            assert_that(body["totals"]["memory_working_set_bytes"], equal_to(1 * _GiB))
+            assert_that([agent["agent_name"] for agent in body["agents"]], contains_exactly("Cy"))
+            assert_that(body["organizations"], has_length(2))
+
+        with then("the chart asks about exactly Globex's agents"):
+            promql = _prometheus(context).query_range.call_args.args[0]
+            assert f'org_id="{context.globex.id}"' in promql
+            assert f"agent-{context.cy.id}" in promql
+            assert str(context.ada.id) not in promql
+
+
+def test_filtering_to_an_organization_with_no_agents_asks_for_no_chart():
+    with given(
+        [
+            *_BASE_GIVEN,
+            _two_organizations("owner-m@example.com", "owner-n@example.com"),
+            _reports(lambda c: {c.ada.id: _reading(0.5, 0.2)}),
+            *_platform_admin("admin-empty@example.com"),
+        ]
+    ) as context:
+        with when("the admin filters to an organization that does not exist"):
+            response = context.client.get(f"{_URL}?organization_id={uuid4()}", headers=_auth(context.access_token))
+
+        with then("everything is zero and no chart query is made"):
+            body = response.json()
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(body["totals"]["agents_with_container"], equal_to(0))
+            assert_that(body["agents"], has_length(0))
+            _prometheus(context).query_range.assert_not_called()
+
+
+# --- the source ------------------------------------------------------------
+
+
+def test_an_unreachable_prometheus_still_returns_the_database_counts():
+    with given(
+        [
+            *_BASE_GIVEN,
+            _two_organizations("owner-o@example.com", "owner-p@example.com"),
+            prometheus_is_down(),
+            *_platform_admin("admin-down@example.com"),
+        ]
+    ) as context:
+        response = context.client.get(_URL, headers=_auth(context.access_token))
+
+        body = response.json()
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+        assert_that(body["availability"], equal_to("unavailable"))
+        assert_that(body["totals"]["agents_with_container"], equal_to(2))
+        assert_that(body["totals"]["agents_reporting"], none())
+        assert_that(body["totals"]["memory_working_set_bytes"], none())
+        assert_that(body["organizations"], has_length(0))
+
+
+def test_an_unconfigured_prometheus_is_reported_without_a_query():
+    with given(
+        [
+            *_BASE_GIVEN,
+            _two_organizations("owner-q@example.com", "owner-r@example.com"),
+            prometheus_is_not_configured(),
+            *_platform_admin("admin-unconfigured@example.com"),
+        ]
+    ) as context:
+        response = context.client.get(_URL, headers=_auth(context.access_token))
+
+        assert_that(response.json()["availability"], equal_to("not_configured"))
+        _prometheus(context).query.assert_not_called()
+        _prometheus(context).query_range.assert_not_called()

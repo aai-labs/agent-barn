@@ -27,6 +27,11 @@ def selector(organization_id: UUID, agent_ids: Sequence[UUID]) -> str:
     return f'{{job="agent", org_id="{organization_id}", {app}}}'
 
 
+def platform_selector() -> str:
+    """Select every Agent's series, for the Platform view. Rows are matched to Agents later."""
+    return '{job="agent"}'
+
+
 def _tag(field: str, expression: str) -> str:
     """Name a sub-query so several can be read from one response."""
     return f'label_replace({expression}, "{_FIELD_LABEL}", "{field}", "", "")'
@@ -78,15 +83,40 @@ def range_query(sel: str, step_seconds: int) -> str:
     )
 
 
-def agent_id_from_labels(labels: Mapping[str, str], permitted: set[UUID]) -> UUID | None:
-    """The Agent a result row belongs to, or None if it is not one we asked about."""
+def platform_range_query(sel: str, step_seconds: int) -> str:
+    """Memory and CPU of all the selected Agents together, one point per step.
+
+    Memory adds up each Agent's highest reading in the step. Agents rarely peak at the
+    same moment, so this can sit a little above the true combined peak, never below it.
+    There is no throttling series: a ratio summed across Agents means nothing.
+    """
+    s = f"{step_seconds}s"
+    w = f"{max(step_seconds, _MIN_RATE_WINDOW_SECONDS)}s"
+    return _join(
+        [
+            _tag(
+                "memory_working_set_bytes",
+                f"sum(max by (app) (max_over_time(agent_memory_working_set_bytes{sel}[{s}])))",
+            ),
+            _tag("cpu_cores", f"sum(rate(agent_cpu_usage_seconds_total{sel}[{w}]))"),
+        ]
+    )
+
+
+def _agent_id_from_app(labels: Mapping[str, str]) -> UUID | None:
+    """The Agent a result row belongs to, read from its `app="agent-<uuid>"` label."""
     app = labels.get("app", "")
     if not app.startswith(_APP_PREFIX):
         return None
     try:
-        agent_id = UUID(app.removeprefix(_APP_PREFIX))
+        return UUID(app.removeprefix(_APP_PREFIX))
     except ValueError:
         return None
+
+
+def agent_id_from_labels(labels: Mapping[str, str], permitted: set[UUID]) -> UUID | None:
+    """The Agent a result row belongs to, or None if it is not one we asked about."""
+    agent_id = _agent_id_from_app(labels)
     return agent_id if agent_id in permitted else None
 
 
@@ -98,6 +128,34 @@ def group_instant(samples: Iterable[PrometheusSample], permitted: set[UUID]) -> 
         field = sample.labels.get(_FIELD_LABEL)
         if agent_id is not None and field:
             grouped.setdefault(agent_id, {})[field] = sample.value
+    return grouped
+
+
+def group_instant_all(samples: Iterable[PrometheusSample]) -> dict[UUID, dict[str, float]]:
+    """Instant results as {agent id: {field: value}}, for every Agent that reported.
+
+    For the Platform view, which asks about every Agent and so keeps rows for Agents the
+    database no longer knows. The caller decides what those are.
+    """
+    grouped: dict[UUID, dict[str, float]] = {}
+    for sample in samples:
+        agent_id = _agent_id_from_app(sample.labels)
+        field = sample.labels.get(_FIELD_LABEL)
+        if agent_id is not None and field:
+            grouped.setdefault(agent_id, {})[field] = sample.value
+    return grouped
+
+
+def group_totals(series: Iterable[PrometheusSeries]) -> dict[str, dict[int, float]]:
+    """Range results of `platform_range_query` as {field: {epoch second: value}}."""
+    grouped: dict[str, dict[int, float]] = {}
+    for item in series:
+        field = item.labels.get(_FIELD_LABEL)
+        if not field:
+            continue
+        points = grouped.setdefault(field, {})
+        for timestamp, value in item.points:
+            points[int(timestamp.timestamp())] = value
     return grouped
 
 

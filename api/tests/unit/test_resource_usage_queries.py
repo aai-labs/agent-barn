@@ -8,8 +8,12 @@ from api.domains.resource_usage.models import ResourceUsageRange, ResourceUsageS
 from api.domains.resource_usage.promql import (
     agent_id_from_labels,
     group_instant,
+    group_instant_all,
     group_range,
+    group_totals,
     instant_query,
+    platform_range_query,
+    platform_selector,
     range_query,
     selector,
 )
@@ -40,6 +44,10 @@ def test_duplicate_ids_are_collapsed():
 def test_selecting_no_agents_is_refused():
     with pytest.raises(ValueError):
         selector(_ORG, [])
+
+
+def test_the_platform_selector_takes_every_agent_and_names_none():
+    assert platform_selector() == '{job="agent"}'
 
 
 # --- queries ---------------------------------------------------------------
@@ -100,6 +108,21 @@ def test_a_short_step_still_uses_a_rate_window_long_enough_for_scrapes():
     assert f"rate(agent_cpu_usage_seconds_total{_SEL}[120s])" in query
 
 
+def test_the_platform_range_query_adds_up_every_agent_peak_and_cpu():
+    sel = platform_selector()
+    query = platform_range_query(sel, 300)
+
+    assert f"sum(max by (app) (max_over_time(agent_memory_working_set_bytes{sel}[300s])))" in query
+    assert f"sum(rate(agent_cpu_usage_seconds_total{sel}[300s]))" in query
+    # A ratio added up across agents means nothing, so there is no throttling series.
+    assert "throttled" not in query
+    assert query.count(" or ") == 1
+
+
+def test_the_platform_range_query_keeps_a_rate_window_long_enough_for_scrapes():
+    assert "[120s]" in platform_range_query(platform_selector(), 60)
+
+
 # --- mapping results back to agents ----------------------------------------
 
 
@@ -139,6 +162,35 @@ def test_range_points_are_keyed_by_epoch_second_and_strangers_are_dropped():
 
     second = int(start.timestamp())
     assert group_range(series, {_A}) == {_A: {"cpu_cores": {second: 0.5, second + 300: 0.6}}}
+
+
+def test_the_platform_view_keeps_every_agent_that_reported():
+    stranger = uuid4()
+    samples = [
+        PrometheusSample({"app": f"agent-{_A}", "usage_field": "cpu_cores"}, 0.1),
+        PrometheusSample({"app": f"agent-{stranger}", "usage_field": "up"}, 1.0),
+        PrometheusSample({"app": "litellm", "usage_field": "up"}, 1.0),
+        PrometheusSample({"app": "agent-not-a-uuid", "usage_field": "up"}, 1.0),
+        PrometheusSample({"agent_name": str(_B), "usage_field": "up"}, 1.0),
+        PrometheusSample({"app": f"agent-{_A}"}, 5.0),
+    ]
+
+    assert group_instant_all(samples) == {_A: {"cpu_cores": 0.1}, stranger: {"up": 1.0}}
+
+
+def test_combined_points_are_keyed_by_field_and_epoch_second():
+    start = datetime(2026, 9, 29, 12, 0, tzinfo=UTC)
+    series = [
+        PrometheusSeries({"usage_field": "cpu_cores"}, ((start, 0.5), (start + timedelta(minutes=5), 0.6))),
+        PrometheusSeries({"usage_field": "memory_working_set_bytes"}, ((start, 1024.0),)),
+        PrometheusSeries({}, ((start, 9.0),)),
+    ]
+
+    second = int(start.timestamp())
+    assert group_totals(series) == {
+        "cpu_cores": {second: 0.5, second + 300: 0.6},
+        "memory_working_set_bytes": {second: 1024.0},
+    }
 
 
 # --- windows ---------------------------------------------------------------

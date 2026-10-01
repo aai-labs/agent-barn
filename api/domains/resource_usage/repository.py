@@ -5,7 +5,17 @@ from uuid import UUID
 from injector import inject, singleton
 
 from api.domains.resource_usage.models import UsageWindow
-from api.domains.resource_usage.promql import group_instant, group_range, instant_query, range_query, selector
+from api.domains.resource_usage.promql import (
+    group_instant,
+    group_instant_all,
+    group_range,
+    group_totals,
+    instant_query,
+    platform_range_query,
+    platform_selector,
+    range_query,
+    selector,
+)
 from api.infrastructure.prometheus.client import PrometheusClient
 
 
@@ -45,3 +55,26 @@ class ResourceUsageRepository:
         query = range_query(selector(organization_id, [agent_id]), window.step_seconds)
         series = self.prometheus.query_range(query, window.start, window.end, window.step_seconds)
         return group_range(series, {agent_id}).get(agent_id, {})
+
+    def all_current_fields(
+        self, *, at: datetime, window_seconds: int, throttle_window_seconds: int
+    ) -> dict[UUID, dict[str, float]]:
+        """{agent id: {field: value}} for every Agent on the platform that has any series.
+
+        Platform view only. Rows are keyed by the `app` label alone; the caller maps them
+        to Agents and Organizations through the database. One request.
+        """
+        query = instant_query(platform_selector(), window_seconds, throttle_window_seconds)
+        return group_instant_all(self.prometheus.query(query, at))
+
+    def combined_series(
+        self, window: UsageWindow, organization: tuple[UUID, list[UUID]] | None = None
+    ) -> dict[str, dict[int, float]]:
+        """{field: {epoch second: value}} of Agents added together. One request.
+
+        Every Agent on the platform, or with `organization` as (its id, its Agent ids),
+        just those Agents, so the chart counts the same ones as the totals beside it.
+        """
+        sel = selector(*organization) if organization else platform_selector()
+        query = platform_range_query(sel, window.step_seconds)
+        return group_totals(self.prometheus.query_range(query, window.start, window.end, window.step_seconds))

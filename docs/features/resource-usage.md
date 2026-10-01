@@ -2,16 +2,17 @@
 
 ## Read when
 
-Read before changing the Resource usage tab, the Agents overview page, the CPU and memory series the healthz servers export, the PromQL that reads them, or how the API reaches Prometheus.
+Read before changing the Resource usage tab, the Agents overview page, the Platform resource usage page, the CPU and memory series the healthz servers export, the PromQL that reads them, or how the API reaches Prometheus.
 
 ## Role in the system
 
 Resource usage answers how much CPU and memory an Agent's container is using, against the limits it runs with. Costs answers what the Agent spent, and Activity answers what it did. This is container usage, not model usage or spend.
 
-Two surfaces show it:
+Three surfaces show it:
 
 - The **Resource usage** tab on the Agent page: current figures, peak memory, CPU throttling, and charts over 1 hour to 14 days.
 - The **Agents overview** at `/dashboard/{org}/agents`, reached from the **Usage** tab in the top nav: every Agent the viewer can read, with status, spend, CPU and memory in the row. A row opens to status, cost and resource usage in full, each linking to its own tab.
+- The **Platform Resource Usage** page at `/dashboard/platform/resource-usage`, for Platform Administrators: the same figures across every Organization, as totals, a table by Organization, the heaviest Agents, and two charts. It can be narrowed to one Organization.
 
 The data path has no table of its own:
 
@@ -19,7 +20,7 @@ The data path has no table of its own:
 Agent container  healthz server reads /sys/fs/cgroup ──► /metrics on :8081
 Prometheus       `agent` scrape job (helm/monitoring) ──► keeps 15 days
 API              resource_usage domain ──► PromQL over HTTP, basic auth
-UI               Resource usage tab, Agents overview
+UI               Resource usage tab, Agents overview, Platform Resource Usage
 ```
 
 ## Invariants
@@ -45,9 +46,21 @@ UI               Resource usage tab, Agents overview
 - The overview's spend comes from `CostService.spend_for_agents`, which reads the same `cost_record` predicates as the Agent's own Costs tab, so a row and its cost panel agree. It joins through `agent_scope_predicates`, so an Agent the caller cannot read is absent, not zero.
 - A stopped Agent has no container, so it is not queried and its `resource_usage` is `null`.
 - The overview lists at most 100 Agents (`OVERVIEW_MAX_AGENTS`) and reports the full count in `total`.
-- Platform administrators get no bypass on these routes (see the oversight ADR). A cross-organization Agent list is separate work (AF-250).
+- Platform administrators get no bypass on the Organization routes (see the oversight ADR). They have their own route, below.
 - The API reads `PROMETHEUS_PASSWORD` from its own Secret. helmfile sets it from `MONITORING_WEB_PASSWORD` directly, not from the monitoring release's Secret, because that release deploys after the API.
 - The scripts ship in the Agent's ConfigMap, so an Agent reports only after it restarts. Editing them changes the runtime digest, so every running Agent shows "update available" until it does.
+
+## Platform view
+
+`GET /api/v1/platform/resource-usage?range=&organization_id=` is behind `require_platform_admin`, with its own service (`PlatformResourceUsageService`) and read models, so the Organization surface has no path to another Organization's figures. Classing this as oversight data is recorded in [`2026-10-01-resource-usage-as-platform-oversight-data.md`](../adr/2026-10-01-resource-usage-as-platform-oversight-data.md).
+
+- It makes one platform-wide instant query (`{job="agent"}`) and one range query, plus one database read of every live Agent. Readings are keyed by the `app` label alone. The Agent, its name and its Organization come from the database, never from the `org_id`, `org_name` or `agent_name` labels, so a wrong label cannot move an Agent or rename an Organization.
+- A container that reports but belongs to no live Agent (deleted, or never known here) is not dropped. It becomes its own row with no Organization, listed last and not selectable as a filter, so the Organization rows add up to the platform total and a leaked container is visible. In the Agent table it is named `agent-<first 8 characters of its id>`, enough to find its Deployment.
+- A stopped Agent counts as having no container even if a reading arrives for a few minutes after it stops, as on the Organization overview. `agents_with_container` is the database's count of running and errored Agents, so it is there when Prometheus is not.
+- The Organization list is always platform-wide, whatever the filter, so a filtered page can switch Organization. Totals, the Agent list and the chart follow the filter. The filtered chart selects by the Agent ids the database places in that Organization, so it counts the Agents the totals count. A deleted Agent's history is in the platform chart but not in an Organization's.
+- The chart adds each Agent's highest memory reading in a step and sums them. Agents rarely peak in the same step, so the line can sit a little above the true combined peak, never below it. CPU is the summed five-minute-or-longer rate. There is no throttling series, since a ratio added up across Agents means nothing. Throttling stays per Agent, over the last hour.
+- Limits are summed too. They are what the containers may use, which is what the namespace quota counts, not a pool with free room in it.
+- The page does not show the namespace quota, volumes or events. That needs the Kubernetes API and belongs to the cluster health page (AF-266).
 
 ## Boundaries
 
@@ -80,21 +93,23 @@ Local Docker Compose has no Prometheus, so the views say resource usage is not c
 | Queries against the client       | `../../api/domains/resource_usage/repository.py` |
 | Authorization and assembly       | `../../api/domains/resource_usage/service.py` |
 | HTTP routes                      | `../../api/domains/resource_usage/routes.py` |
+| Platform view                    | `../../api/domains/resource_usage/platform_service.py`, `../../api/domains/resource_usage/platform_routes.py`, `AgentRepository.find_live_for_platform_usage` in `../../api/domains/agents/repository.py` |
 | Spend for a page of Agents       | `CostService.spend_for_agents` in `../../api/domains/costs/service.py` |
 | API settings                     | `../../api/core/config.py` (`prometheus_*`), `../../helm/agentbarn-api/values.yaml` (`prometheus`), `../../helmfile.yaml.gotmpl` |
 | Local Prometheus                 | `../../docker/k3d/k3d-monitoring.sh`, `../../docker/k3d/monitoring-values.yaml`, `make dev-monitoring`, `make forward-prometheus` |
 | UI feature                       | `../../ui/src/features/resource-usage/` |
-| UI page and tab wiring           | `../../ui/src/app/dashboard/[orgId]/agents/page.tsx`, `../../ui/src/features/agents/components/agent-detail-page.tsx`, `../../ui/src/components/top-nav.tsx` |
+| UI page and tab wiring           | `../../ui/src/app/dashboard/[orgId]/agents/page.tsx`, `../../ui/src/app/dashboard/platform/resource-usage/page.tsx`, `../../ui/src/features/agents/components/agent-detail-page.tsx`, `../../ui/src/components/top-nav.tsx` |
 | Script tests                     | `../../api/tests/unit/test_healthz_server_metrics.py` (both runtimes, parity), `../../hermes-base/test-image.sh`, `../../openclaw-base/test-healthz-metrics.sh` (real images) |
-| API tests                        | `../../api/tests/unit/test_prometheus_client.py`, `../../api/tests/unit/test_resource_usage_queries.py`, `../../api/tests/integration/test_resource_usage.py`, `../../api/tests/integration/test_agent_overview.py`, `../../api/tests/integration/test_agent_rbac.py` |
+| API tests                        | `../../api/tests/unit/test_prometheus_client.py`, `../../api/tests/unit/test_resource_usage_queries.py`, `../../api/tests/unit/test_platform_resource_usage.py`, `../../api/tests/integration/test_resource_usage.py`, `../../api/tests/integration/test_agent_overview.py`, `../../api/tests/integration/test_platform_resource_usage.py`, `../../api/tests/integration/test_agent_rbac.py` |
 | Contract test (real Prometheus)  | `../../api/tests/integration/test_resource_usage_prometheus_contract.py` |
-| UI tests                         | `../../ui/tests/e2e/agent-resource-usage.spec.ts`, `../../ui/tests/e2e/agents-overview.spec.ts` |
+| UI tests                         | `../../ui/tests/e2e/agent-resource-usage.spec.ts`, `../../ui/tests/e2e/agents-overview.spec.ts`, `../../ui/tests/e2e/platform-resource-usage.spec.ts` |
 
 ## Change impact
 
-Renaming a series, or changing its help text or order, touches both healthz scripts, `promql.py`, and the script, query, contract and in-image tests together. Changing the labels the `agent` scrape job adds means changing the selectors. A new read of per-Agent resource data must go through `AgentAuthorization` and be added to the assigned/hidden bypass test in `../../api/tests/integration/test_agent_rbac.py`. Changing Prometheus retention changes the longest safe range in `ResourceUsageRange`. Changing what `state` means changes the notices in `resource-usage-notice.tsx`.
+Renaming a series, or changing its help text or order, touches both healthz scripts, `promql.py`, and the script, query, contract and in-image tests together. Changing the labels the `agent` scrape job adds means changing the selectors. A new read of per-Agent resource data on an Organization route must go through `AgentAuthorization` and be added to the assigned/hidden bypass test in `../../api/tests/integration/test_agent_rbac.py`. A new field on the Platform route is a data-classification decision under the oversight ADR, not an automatic addition. Changing Prometheus retention changes the longest safe range in `ResourceUsageRange`. Changing what `state` means changes the notices in `resource-usage-notice.tsx`.
 
 ## Related decisions
 
 - [`2026-09-29-agent-resource-usage-from-prometheus.md`](../adr/2026-09-29-agent-resource-usage-from-prometheus.md)
+- [`2026-10-01-resource-usage-as-platform-oversight-data.md`](../adr/2026-10-01-resource-usage-as-platform-oversight-data.md)
 - [`2026-07-30-platform-oversight-without-organization-access.md`](../adr/2026-07-30-platform-oversight-without-organization-access.md)

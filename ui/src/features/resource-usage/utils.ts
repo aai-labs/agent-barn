@@ -60,4 +60,7 @@ export const resourceUsageKey = {
   /** Under the Agent lists, so starting, stopping or deleting one refreshes the overview. */
   overview: (period: string) =>
     agentsKey.list({ scope: { view: "overview" }, filters: { period } }),
+  /** Not under the Agent keys: it is Platform data, and no Organization's cache is its. */
+  platform: (range: ResourceUsageRange, organizationId: string | null) =>
+    ["platform", "resource-usage", range, organizationId] as const,
 };

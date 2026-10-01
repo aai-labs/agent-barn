@@ -83,8 +83,145 @@ export function mockAgentOverview(
   };
 }
 
+export const PLATFORM_ACME_ID = "55555555-5555-4555-8555-555555555555";
+export const PLATFORM_GLOBEX_ID = "66666666-6666-4666-8666-666666666666";
+export const PLATFORM_ADA_ID = "77777777-7777-4777-8777-777777777777";
+export const PLATFORM_CY_ID = "88888888-8888-4888-8888-888888888888";
+/** A container that reports but that no live agent owns. */
+export const PLATFORM_ORPHAN_ID = "99999999-9999-4999-8999-999999999999";
+
+const GIB = 1024 ** 3;
+
+export function mockPlatformAgent(overrides: Record<string, unknown> = {}) {
+  return {
+    agent_id: PLATFORM_ADA_ID,
+    agent_name: "Ada",
+    organization_id: PLATFORM_ACME_ID,
+    organization_name: "Acme",
+    memory_working_set_bytes: GIB,
+    memory_limit_bytes: 2 * GIB,
+    cpu_cores: 0.4,
+    cpu_limit_cores: 1,
+    cpu_throttled_ratio: 0.05,
+    ...overrides,
+  };
+}
+
+function platformTotals(overrides: Record<string, unknown> = {}) {
+  return {
+    agents_with_container: 2,
+    agents_reporting: 3,
+    memory_working_set_bytes: GIB + 1_950_000_000 + 268_435_456,
+    memory_limit_bytes: 6 * GIB,
+    cpu_cores: 0.55,
+    cpu_limit_cores: 3,
+    ...overrides,
+  };
+}
+
+/**
+ * Two organizations and one container nobody owns. Cy sits at 91% of its memory limit and
+ * is throttled 30% of the last hour, so both warning cards have something to count.
+ */
+export function mockPlatformUsage(overrides: Record<string, unknown> = {}) {
+  return {
+    range: "24h",
+    from_date: "2026-09-28T12:00:00Z",
+    to_date: "2026-09-29T12:00:00Z",
+    step_seconds: 300,
+    observed_at: "2026-09-29T12:03:00Z",
+    availability: "available",
+    organization_id: null,
+    totals: platformTotals(),
+    organizations: [
+      {
+        organization_id: PLATFORM_GLOBEX_ID,
+        organization_name: "Globex",
+        agents_with_container: 1,
+        agents_reporting: 1,
+        memory_working_set_bytes: 1_950_000_000,
+        memory_limit_bytes: 2 * GIB,
+        cpu_cores: 0.1,
+        cpu_limit_cores: 1,
+      },
+      {
+        organization_id: PLATFORM_ACME_ID,
+        organization_name: "Acme",
+        agents_with_container: 1,
+        agents_reporting: 1,
+        memory_working_set_bytes: GIB,
+        memory_limit_bytes: 2 * GIB,
+        cpu_cores: 0.4,
+        cpu_limit_cores: 1,
+      },
+      {
+        organization_id: null,
+        organization_name: null,
+        agents_with_container: 0,
+        agents_reporting: 1,
+        memory_working_set_bytes: 268_435_456,
+        memory_limit_bytes: 2 * GIB,
+        cpu_cores: 0.05,
+        cpu_limit_cores: 1,
+      },
+    ],
+    agents: [
+      mockPlatformAgent({
+        agent_id: PLATFORM_CY_ID,
+        agent_name: "Cy",
+        organization_id: PLATFORM_GLOBEX_ID,
+        organization_name: "Globex",
+        memory_working_set_bytes: 1_950_000_000,
+        cpu_cores: 0.1,
+        cpu_throttled_ratio: 0.3,
+      }),
+      mockPlatformAgent(),
+      mockPlatformAgent({
+        agent_id: PLATFORM_ORPHAN_ID,
+        agent_name: null,
+        organization_id: null,
+        organization_name: null,
+        memory_working_set_bytes: 268_435_456,
+        cpu_cores: 0.05,
+        cpu_throttled_ratio: 0,
+      }),
+    ],
+    series: usageSeries().map(({ bucket, memory_working_set_bytes, cpu_cores }) => ({
+      bucket,
+      memory_working_set_bytes,
+      cpu_cores,
+      cpu_throttled_ratio: null,
+    })),
+    ...overrides,
+  };
+}
+
+/** What the API returns when Prometheus cannot be read: only the database's count. */
+export function mockPlatformUsageUnavailable(availability = "unavailable") {
+  return mockPlatformUsage({
+    availability,
+    totals: {
+      agents_with_container: 2,
+      agents_reporting: null,
+      memory_working_set_bytes: null,
+      memory_limit_bytes: null,
+      cpu_cores: null,
+      cpu_limit_cores: null,
+    },
+    organizations: [],
+    agents: [],
+    series: [],
+  });
+}
+
 interface Options {
   body?: unknown;
+  status?: number;
+}
+
+interface PlatformOptions {
+  /** A fixed body, or one worked out from the query the page sent. */
+  body?: Record<string, unknown> | ((params: URLSearchParams) => Record<string, unknown>);
   status?: number;
 }
 
@@ -133,6 +270,29 @@ export class ResourceUsageDataSupport {
         body: JSON.stringify(
           status >= 400 ? { detail: "Unable to load the agents overview" } : (body ?? mockAgentOverview()),
         ),
+      });
+    });
+    return requests;
+  }
+
+  /** Answers the platform page. Returns the query strings it was asked with. */
+  async interceptPlatformResourceUsage({
+    body,
+    status = 200,
+  }: PlatformOptions = {}): Promise<URLSearchParams[]> {
+    const requests: URLSearchParams[] = [];
+    await this.page.route("**/api/v1/platform/resource-usage*", async (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      const params = new URL(route.request().url()).searchParams;
+      requests.push(params);
+      const answer =
+        typeof body === "function"
+          ? body(params)
+          : (body ?? mockPlatformUsage({ range: params.get("range") ?? "24h" }));
+      await route.fulfill({
+        status,
+        contentType: "application/json",
+        body: JSON.stringify(status >= 400 ? { detail: "Unable to load resource usage" } : answer),
       });
     });
     return requests;

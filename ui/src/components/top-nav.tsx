@@ -6,7 +6,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useCurrentUser } from "@/auth/providers/user-context-provider";
 import { useLogout } from "@/auth/hooks/use-logout";
 import { PlusIcon, UserIcon, UsersIcon, BuildingIcon, LogOutIcon, ShieldIcon, ServerIcon } from "@/components/icons";
-import { FileText, Menu, Receipt, Sparkles } from "lucide-react";
+import { Activity, FileText, Menu, Receipt, Sparkles } from "lucide-react";
 import { LogoMark } from "@/components/logo-mark";
 import {
   Sheet,
@@ -46,6 +46,7 @@ export function TopNav({ onHire }: TopNavProps) {
         { href: "/dashboard/platform/organizations", label: "Organizations" },
         { href: "/dashboard/platform/event-deliveries", label: "Event Deliveries" },
         { href: "/dashboard/platform/costs", label: "Costs" },
+        { href: "/dashboard/platform/resource-usage", label: "Resources" },
         { href: "/dashboard/platform/templates", label: "Templates" },
         { href: "/dashboard/platform/skills", label: "Skills" },
       ]
@@ -58,6 +59,10 @@ export function TopNav({ onHire }: TopNavProps) {
         ...(canManageMembers ? [{ href: `${orgBase}/costs`, label: "Costs" }] : []),
         { href: `${orgBase}/settings`, label: "Settings" },
       ];
+  // Platform view has the most tabs, so it keeps them in the drawer until there is room
+  // for all of them inline. The class names are written out so Tailwind can find them.
+  const drawerTrigger = isPlatformView ? "xl:hidden" : "lg:hidden";
+  const inlineTabs = isPlatformView ? "xl:flex" : "lg:flex";
   const [menuOpen, setMenuOpen] = useState(false);
   const routeKey = pathname ?? "";
   const [navOpenedOn, setNavOpenedOn] = useState<string | null>(null);
@@ -107,7 +112,7 @@ export function TopNav({ onHire }: TopNavProps) {
     >
       <Sheet open={navOpen} onOpenChange={setNavOpen}>
         <SheetTrigger
-          className="af-hover-bg -ml-1.5 grid h-9 w-9 flex-shrink-0 place-items-center rounded-lg lg:hidden"
+          className={`af-hover-bg -ml-1.5 grid h-9 w-9 flex-shrink-0 place-items-center rounded-lg ${drawerTrigger}`}
           style={{ color: "var(--ink-2)" }}
           aria-label="Open navigation"
         >
@@ -155,7 +160,7 @@ export function TopNav({ onHire }: TopNavProps) {
 
       <OrgSwitcher />
 
-      <nav className="no-scrollbar hidden min-w-0 flex-1 gap-0.5 overflow-x-auto lg:flex">
+      <nav className={`no-scrollbar hidden min-w-0 flex-1 gap-0.5 overflow-x-auto ${inlineTabs}`}>
         {navTabs.map(({ href, label }) => (
           <Link
             key={href}
@@ -180,8 +185,8 @@ export function TopNav({ onHire }: TopNavProps) {
         ))}
       </nav>
 
-      {/* The drawer carries the tabs below lg, so keep the actions right-aligned. */}
-      <div className="flex-1 lg:hidden" />
+      {/* The drawer carries the tabs below that width, so keep the actions right-aligned. */}
+      <div className={`flex-1 ${drawerTrigger}`} />
 
       <div className="flex flex-shrink-0 items-center gap-2.5">
         {!isPlatformView && (
@@ -282,6 +287,14 @@ export function TopNav({ onHire }: TopNavProps) {
                     onClick={() => setMenuOpen(false)}
                   >
                     <Receipt size={14} /> Costs
+                  </Link>
+                  <Link
+                    href="/dashboard/platform/resource-usage"
+                    className="af-hover-bg w-full text-left flex items-center gap-2.5 px-3.5 py-2 text-[13.5px]"
+                    style={{ color: "var(--ink-2)" }}
+                    onClick={() => setMenuOpen(false)}
+                  >
+                    <Activity size={14} /> Resources
                   </Link>
                   <Link
                     href="/dashboard/platform/templates"

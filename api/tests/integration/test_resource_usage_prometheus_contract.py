@@ -269,3 +269,43 @@ def test_history_comes_back_as_points_along_the_window(scraped: Scraped):
     assert any(value > 0 for value in series["cpu_cores"].values())
     assert all(0 <= value <= 1.5 for value in series["cpu_throttled_ratio"].values())
     assert all(int(window.start.timestamp()) <= stamp <= int(window.end.timestamp()) for stamp in memory)
+
+
+def test_the_platform_view_reads_every_agent_without_naming_any(scraped: Scraped):
+    fields = scraped.repository.all_current_fields(at=_now(), window_seconds=86400, throttle_window_seconds=3600)
+
+    # Both organizations' agents, from the one query, keyed by the `app` label alone.
+    assert {scraped.agent_id, scraped.other_agent_id} <= set(fields)
+    assert fields[scraped.agent_id]["memory_working_set_bytes"] == _MEMORY_WORKING_SET
+    assert fields[scraped.other_agent_id]["memory_limit_bytes"] == _MEMORY_LIMIT
+
+
+def test_the_platform_chart_adds_the_agents_up_into_one_series_per_field(scraped: Scraped):
+    def history(organization: tuple[UUID, list[UUID]] | None) -> dict[str, dict[int, float]] | None:
+        now = _now()
+        window = UsageWindow(
+            usage_range=ResourceUsageRange.ONE_HOUR,
+            start=now - timedelta(seconds=120),
+            end=now,
+            step_seconds=5,
+        )
+        series = scraped.repository.combined_series(window, organization)
+        return series if len(series.get("memory_working_set_bytes", {})) >= 3 else None
+
+    everyone = _wait_until(lambda: history(None), "three points of platform history", timeout=60)
+    one = _wait_until(
+        lambda: history((scraped.org_id, [scraped.agent_id])), "three points of one organization's history", timeout=60
+    )
+
+    # Two agents in the same state add up to twice one agent, and the `sum` leaves one
+    # series per field rather than one per agent. The two targets are first scraped a
+    # moment apart, so the earliest points can hold only one of them: judge the latest
+    # point, and require that nothing ever exceeds the sum of both.
+    def latest(points: dict[int, float]) -> float:
+        return points[max(points)]
+
+    assert latest(everyone["memory_working_set_bytes"]) == 2.0 * _MEMORY_WORKING_SET
+    assert max(everyone["memory_working_set_bytes"].values()) == 2.0 * _MEMORY_WORKING_SET
+    assert set(one["memory_working_set_bytes"].values()) == {float(_MEMORY_WORKING_SET)}
+    assert any(value > 0 for value in everyone["cpu_cores"].values())
+    assert "cpu_throttled_ratio" not in everyone
