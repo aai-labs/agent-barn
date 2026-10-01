@@ -7,13 +7,10 @@ from fastapi.responses import StreamingResponse
 from fastapi_injector import Injected
 from starlette.concurrency import run_in_threadpool
 
-from api.domains.communications.agent_message_service import AgentMessageService
 from api.domains.communications.delivery_repository import CommunicationDeliveryCancelledError
 from api.domains.communications.gateway_service import CommunicationsGatewayService
 from api.domains.communications.models import (
     AcceptedCommunicationRead,
-    AgentMessageCreate,
-    AgentMessageRead,
     RuntimeDeliveryRead,
     RuntimeDeliveryResult,
     RuntimeReplyCreate,
@@ -242,14 +239,17 @@ async def accept_provider_webhook(
     return {"accepted": accepted}
 
 
-@runtime_communications_router.post("/{agent_id}/messages", status_code=status.HTTP_202_ACCEPTED)
-def submit_agent_message(
+# Remove after all deployed bridge clients restart onto the retired-bridge runtime
+# configuration and legacy submissions cease; see the native rollout runbook.
+@runtime_communications_router.post("/{agent_id}/messages", include_in_schema=False)
+def reject_retired_agent_message(
     agent_id: UUID,
-    request: AgentMessageCreate,
     service: Annotated[CommunicationsGatewayService, Injected(CommunicationsGatewayService)],
-    messages: Annotated[AgentMessageService, Injected(AgentMessageService)],
     authorization: Annotated[str, Header()],
     protocol_version: Annotated[str, Header(alias="X-AgentBarn-Communications-Version")],
-) -> AgentMessageRead:
-    agent = _authenticate(service, agent_id, authorization, protocol_version)
-    return messages.submit_agent_message(agent, request)
+) -> None:
+    _authenticate(service, agent_id, authorization, protocol_version)
+    raise HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail="Gateway-initiated messages are retired; use the runtime's native delivery",
+    )

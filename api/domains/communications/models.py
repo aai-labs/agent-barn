@@ -588,7 +588,6 @@ class RuntimeDeliveryRead(PydanticBaseModel):
     attempt_count: int
     envelope: NormalizedCommunicationEnvelope
     progress_updates: bool = True
-    execution_token: str | None = None
 
 
 class RuntimeDeliveryResult(PydanticBaseModel):
@@ -649,76 +648,6 @@ class OutboundTargetRequest(PydanticBaseModel):
     kind: Literal["channel", "user", "dm"] = "channel"
     recipient: str = Field(min_length=1, max_length=512, title="Channel or recipient")
     thread_id: str | None = Field(default=None, min_length=1, max_length=512, title="Thread (optional)")
-
-
-class DefaultMessageDestination(PydanticBaseModel):
-    model_config = ConfigDict(extra="forbid")
-    kind: Literal["default"] = "default"
-
-
-class ExplicitMessageDestination(PydanticBaseModel):
-    """An Agent names where to send, never which Connection carries it.
-
-    Connection identity is infrastructure: it changes when an operator recreates a
-    Connection, so it must not live in a prompt. Communications resolves the route.
-    """
-
-    model_config = ConfigDict(extra="forbid")
-    kind: Literal["explicit"] = "explicit"
-    target: OutboundTargetRequest
-
-
-class OriginMessageDestination(PydanticBaseModel):
-    """The conversation a scheduled job was created from, recorded by the trusted adapter.
-
-    Not model-chosen: the runtime derives this from the session key Communications
-    minted for an inbound delivery that already passed inbound admission. Every field
-    is still verified against the Agent's own Connections and history on arrival.
-    """
-
-    model_config = ConfigDict(extra="forbid")
-    kind: Literal["origin"] = "origin"
-    connection_id: UUID
-    channel_id: str = Field(min_length=1, max_length=512)
-    thread_id: str | None = Field(default=None, min_length=1, max_length=512)
-
-
-class ScheduledMessageContext(PydanticBaseModel):
-    model_config = ConfigDict(extra="forbid")
-    kind: Literal["scheduled"] = "scheduled"
-    run_id: str = Field(min_length=1, max_length=256)
-
-
-class InteractiveMessageContext(PydanticBaseModel):
-    model_config = ConfigDict(extra="forbid")
-    kind: Literal["interactive"] = "interactive"
-    execution_token: str = Field(min_length=1, max_length=256)
-
-
-class AgentMessageCreate(PydanticBaseModel):
-    model_config = ConfigDict(extra="forbid")
-    text: str = Field(min_length=1, max_length=100_000)
-    idempotency_key: str = Field(min_length=1, max_length=512)
-    destination: DefaultMessageDestination | ExplicitMessageDestination | OriginMessageDestination = Field(
-        discriminator="kind"
-    )
-    context: ScheduledMessageContext | InteractiveMessageContext = Field(discriminator="kind")
-
-    # A scheduled run may reach its configured default or the conversation that created
-    # it, never a destination the model named. An interactive run has a live execution
-    # that authorizes an explicit send on the inbound Connection only.
-    _ALLOWED_DESTINATIONS = {"scheduled": {"default", "origin"}, "interactive": {"explicit"}}
-
-    @model_validator(mode="after")
-    def validate_context(self) -> AgentMessageCreate:
-        if self.destination.kind not in self._ALLOWED_DESTINATIONS[self.context.kind]:
-            raise ValueError(f"A {self.context.kind} execution may not use a {self.destination.kind} destination")
-        return self
-
-
-class AgentMessageRead(PydanticBaseModel):
-    delivery_id: UUID
-    status: CommunicationDeliveryStatus
 
 
 class ResolvedOutboundTarget(PydanticBaseModel):

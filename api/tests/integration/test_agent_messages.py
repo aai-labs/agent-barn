@@ -1,15 +1,11 @@
 from unittest.mock import patch
-from uuid import uuid4
 
 import pytest
 from hamcrest import assert_that, contains_string, empty, equal_to
-from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError
 
-from api.domains.communications.models import (
-    AgentMessageCreate,
-    CommunicationConnection,
-)
+from api.domains.communications.models import CommunicationConnection
+from api.infrastructure.crypto import encrypt_token
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.tests.core.givenpy import given, then, when
 from api.tests.helpers.agent_messages import (
@@ -20,6 +16,7 @@ from api.tests.helpers.agent_messages import (
     scheduled_request,
     submit,
 )
+from api.tests.steps.agent import TEST_ENCRYPTION_KEY, there_is_an_agent, there_is_an_agent_in_another_org
 
 
 def _conversation(channel):
@@ -95,63 +92,39 @@ def test_setting_a_conflicting_default_returns_conflict_through_connection_edito
         assert_that(response.status_code, equal_to(409), response.text)
 
 
-@pytest.mark.parametrize(
-    "context_kind,destination_kind,allowed",
-    [
-        # A scheduled run may reach its configured default or the conversation that
-        # created it. It may never name a destination itself -- that is the whole
-        # authorization boundary for work with no user in the loop.
-        ("scheduled", "default", True),
-        ("scheduled", "origin", True),
-        ("scheduled", "explicit", False),
-        # An interactive run has a live execution to authorize an explicit send, but
-        # no job origin to inherit.
-        ("interactive", "default", False),
-        ("interactive", "explicit", True),
-        ("interactive", "origin", False),
-    ],
-)
-def test_only_the_allowed_destination_kinds_are_accepted_per_context(context_kind, destination_kind, allowed):
-    destinations = {
-        "default": {"kind": "default"},
-        "explicit": {"kind": "explicit", "target": {"recipient": "C456"}},
-        "origin": {
-            "kind": "origin",
-            "connection_id": str(uuid4()),
-            "channel_id": "C456",
-            "thread_id": None,
-        },
-    }
-    contexts = {
-        "scheduled": {"kind": "scheduled", "run_id": "hermes:run"},
-        "interactive": {"kind": "interactive", "execution_token": "token"},
-    }
-    payload = {
-        "text": "Scheduled result",
-        "idempotency_key": "matrix",
-        "destination": destinations[destination_kind],
-        "context": contexts[context_kind],
-    }
-    if allowed:
-        AgentMessageCreate.model_validate(payload)
-    else:
-        with pytest.raises(ValidationError):
-            AgentMessageCreate.model_validate(payload)
+@pytest.mark.parametrize("body", ["", "{invalid", "null", "{}"])
+def test_retired_message_endpoint_ignores_obsolete_body_contract(body):
+    with given([*STEPS, messaging_ready]) as context:
+        with when("a retired client submits an absent or unusable body"):
+            response = context.communications_client.post(
+                f"/communications/v1/agents/{context.agent.id}/messages",
+                headers={**context.runtime_headers, "Content-Type": "application/json"},
+                content=body,
+            )
+        with then("the authenticated request receives terminal retirement without writes"):
+            assert_that(response.status_code, equal_to(410))
+            for records in rows(context):
+                assert_that(records, empty())
 
 
-def test_a_connection_id_is_not_part_of_the_explicit_contract():
-    """Connection identity changes when an operator recreates a Connection, so it
-    must never be something a prompt carries or a model can name."""
-    with pytest.raises(ValidationError):
-        AgentMessageCreate.model_validate(
-            {
-                "text": "hello",
-                "idempotency_key": "k",
-                "destination": {
-                    "kind": "explicit",
-                    "connection_id": str(uuid4()),
-                    "target": {"recipient": "C456"},
-                },
-                "context": {"kind": "interactive", "execution_token": "token"},
-            }
-        )
+@pytest.mark.parametrize("cross_organization", [False, True])
+def test_retired_message_endpoint_rejects_another_agents_credential(cross_organization):
+    with given([*STEPS, messaging_ready]) as context:
+        (there_is_an_agent_in_another_org() if cross_organization else there_is_an_agent())(context)
+        context.agent.communication_key_encrypted = encrypt_token("other-runtime", TEST_ENCRYPTION_KEY)
+        context.injector.get(PostgresRepositoryDelegate).save(context.agent)
+        with when("a runtime submits to a different Agent using its own credential"):
+            response = submit(context, scheduled_request())
+        with then("the runtime identity is rejected before returning retirement information"):
+            assert_that(response.status_code, equal_to(401))
+            for records in rows(context):
+                assert_that(records, empty())
+
+
+def test_retired_message_endpoint_keeps_protocol_negotiation():
+    with given([*STEPS, messaging_ready]) as context:
+        context.runtime_headers["X-AgentBarn-Communications-Version"] = "unknown"
+        with when("a client submits with an unsupported protocol version"):
+            response = submit(context, scheduled_request())
+        with then("the existing protocol upgrade response is preserved"):
+            assert_that(response.status_code, equal_to(426))
