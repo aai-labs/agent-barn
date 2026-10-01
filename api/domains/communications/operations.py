@@ -36,6 +36,7 @@ from api.domains.communications.models import (
     CommunicationTransitionRead,
     ConnectionObservedStatus,
 )
+from api.domains.communications.transport import GATEWAY_PLATFORM_KEYS
 from api.domains.events.catalog import EVENT_REGISTRY
 from api.domains.events.models import ActorIdentity, SubjectIdentity
 from api.domains.events.repository import OutboxMessageRepository
@@ -129,6 +130,7 @@ class CommunicationOperationalRepository:
                         ),
                         col(CommunicationConnection.enabled).is_(True),
                         col(CommunicationConnection.retired_at).is_(None),
+                        col(CommunicationConnection.platform_key).in_(GATEWAY_PLATFORM_KEYS),
                     )
                     .group_by(CommunicationDelivery.direction)
                 ).all()
@@ -329,6 +331,11 @@ class CommunicationOperationalRepository:
                         col(CommunicationDelivery.organization_id) == organization_id,
                         col(CommunicationDelivery.agent_id) == agent_id,
                         col(CommunicationDelivery.connection_id) == connection_id,
+                        col(CommunicationDelivery.connection_id).in_(
+                            select(CommunicationConnection.id).where(
+                                col(CommunicationConnection.platform_key).in_(GATEWAY_PLATFORM_KEYS)
+                            )
+                        ),
                         col(CommunicationDelivery.status).in_(
                             [CommunicationDeliveryStatus.PENDING, CommunicationDeliveryStatus.PROCESSING]
                         ),

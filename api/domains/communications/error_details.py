@@ -34,6 +34,7 @@ _SAFE_ERROR_SUMMARIES = {
     "agent was not running when the message arrived": "Agent was not running when the message arrived",
     "communication connection is unavailable": "Communication Connection is unavailable",
     "communication connection was retired": "Communication Connection was retired",
+    "native chat gateway work was retired without replay.": "Native chat gateway work was retired without replay.",
     _REDACTED_ERROR_SUMMARY.casefold(): _REDACTED_ERROR_SUMMARY,
 }
 _ERROR_CODES = {
