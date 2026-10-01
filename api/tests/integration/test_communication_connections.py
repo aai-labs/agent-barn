@@ -55,6 +55,7 @@ from api.domains.events.models import OutboxMessage
 from api.domains.rbac.catalog import AGENT_VIEWER_ROLE_ID
 from api.domains.users.organization_users.models import OrganizationRole
 from api.domains.users.organization_users.repository import OrganizationUserRepository
+from api.infrastructure.crypto import decrypt_token
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.infrastructure.slack.errors import SlackFetchError
 from api.tests.core.givenpy import given, then, when
@@ -463,6 +464,35 @@ def test_email_connection_is_created_without_any_per_agent_credential() -> None:
             body = response.json()
             assert_that(body["platform_key"], equal_to("email"))
             assert_that(body, not_(has_key("credentials")))
+            delegate = context.injector.get(PostgresRepositoryDelegate)
+            with Session(delegate.engine) as session:
+                connection = session.exec(
+                    select(CommunicationConnection).where(CommunicationConnection.id == UUID(body["id"]))
+                ).one()
+                assert_that(connection.driver_key_encrypted, equal_to(""))
+
+
+@pytest.mark.parametrize("payload_factory", [_slack_payload, _discord_payload, _telegram_payload])
+def test_new_native_connection_stores_provider_credentials_without_a_driver_key(payload_factory) -> None:
+    with given(_GIVEN) as context:
+        payload = payload_factory()
+        with when("I create a native Connection"):
+            response = context.client.post(_base(context), json=payload, headers=_auth(context))
+
+        with then("provider credentials remain encrypted and no driver credential is minted"):
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+            body = response.json()
+            assert_that(body, not_(has_key("driver_key_encrypted")))
+            delegate = context.injector.get(PostgresRepositoryDelegate)
+            with Session(delegate.engine) as session:
+                connection = session.exec(
+                    select(CommunicationConnection).where(CommunicationConnection.id == UUID(body["id"]))
+                ).one()
+                assert_that(connection.driver_key_encrypted, equal_to(""))
+                assert_that(
+                    json.loads(decrypt_token(connection.credentials_encrypted, TEST_ENCRYPTION_KEY)),
+                    equal_to(payload["credentials"]),
+                )
 
 
 def test_an_email_connection_is_allocated_its_own_address() -> None:

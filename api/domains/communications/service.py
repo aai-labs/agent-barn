@@ -1,5 +1,4 @@
 import json
-import secrets
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -217,10 +216,6 @@ class CommunicationsService:
             schema_version=plugin.schema_version,
             settings=validated.settings,
             credentials_encrypted=self._encrypt_credentials(validated.credentials),
-            driver_key_encrypted=encrypt_token(
-                secrets.token_urlsafe(32),
-                self.config.agent_token_encryption_key,
-            ),
             external_identity=validated.external_identity,
             credential_fingerprint=validated.credential_fingerprint,
             credential_scope_key=validated.credential_scope_key,

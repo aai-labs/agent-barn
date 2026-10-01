@@ -9,10 +9,16 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
 - Delivered: scoped Communication Connection CRUD and strict Platform configuration/credential validation; permanent native Slack, Discord, Telegram, and Teams transport on both runtimes; authenticated Teams public relay; native transcript and health observation; Web Chat/Email durable delivery through the shared runtime protocol; permission-scoped diagnostics and content-free historical Journal/Delivery timelines; gateway Delivery retry, bounded retention, safe errors, and low-cardinality Communications metrics. Native provider sessions, replies, approvals, and schedules belong to the selected runtime.
 - Changed: Agents are headless and no longer own a single Platform. Legacy provider configuration tables, DTO fields, routes, and provider-specific UI have been removed after their data is migrated into Communication Connections.
 - In transition: chat gateway transport is fenced out; retired schema fields, compatibility routes, and ignored deployment configuration remain pending cleanup. All four chat gateway transports, senders, and provider approval codecs are removed. Runtime assembly retires the old messaging artifacts on each start. Only an authenticated legacy `410` handler remains until the documented deployed-client cutoff; the initiated-message service/repository and execution-token issuance are removed.
-- Next: stop minting retired driver credentials and prepare compatible column defaults, then contract physical schema only after old mapped readers/writers exit. Remove compatibility routes only at their documented rollout cutoffs. Evaluate iMessage transport constraints independently of Agent runtimes. Email supports inbound and reply, but not agent-initiated outbound; native Discord, Telegram, and Teams deliver scheduled results to their origin or configured home.
+- Next: remove retired driver/ingress-lease mappings and consumers now that omitted driver values have a database default; physical schema contraction and remaining compatibility route removal still require their documented rollout cutoffs. Evaluate iMessage transport constraints independently of Agent runtimes. Email supports inbound and reply, but not agent-initiated outbound; native Discord, Telegram, and Teams deliver scheduled results to their origin or configured home.
 - Blockers: none.
 
 ## Changes
+
+### 2026-10-02 — Native gateway cleanup: stop driver credential minting (slice 4b) — PR pending
+
+- Changed: Connection creation and lazy Web Chat creation stop minting retired gateway driver credentials. The application and database default the retained non-null driver column to an empty string, preparing future writers to omit it without breaking older mapped readers/writers.
+- Preserved: existing driver values, encrypted provider credentials, native Connection policy, historical data and ingress-lease columns. Connection retirement and Agent deletion still scrub credentials and clear legacy leases. Downgrade removes the database default without modifying rows; see the [writer ordering requirement](../../guidelines/operations.md#native-runtime-gateway-rollout).
+- Follow-up: remove driver/ingress-lease mappings and remaining consumers in the next code slice; defer physical column removal until deployed mapped readers/writers exit. Durable Web Chat/Email claim leases and native home targets remain supported.
 
 ### 2026-10-01 — Native gateway cleanup: retire stranded native work (slice 4a) — PR pending
 

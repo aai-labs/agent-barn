@@ -102,6 +102,17 @@ def test_send_then_list_messages_round_trips_on_the_default_thread():
             assert_that(messages[0]["direction"], equal_to("INBOUND"))
             assert_that(messages[0]["delivery_status"], equal_to("UNAVAILABLE"))
 
+        with then("the lazily created Web Chat Connection has no driver credential"):
+            delegate = context.injector.get(PostgresRepositoryDelegate)
+            with Session(delegate.engine) as session:
+                connection = session.exec(
+                    select(CommunicationConnection).where(
+                        CommunicationConnection.agent_id == context.agent.id,
+                        CommunicationConnection.platform_key == "web",
+                    )
+                ).one()
+                assert_that(connection.driver_key_encrypted, equal_to(""))
+
 
 def test_failed_web_chat_message_exposes_the_safe_error_summary():
     error_summary = (

@@ -360,10 +360,6 @@ class WebChatService:
             schema_version=1,
             settings={},
             credentials_encrypted=encrypt_token("{}", self.config.agent_token_encryption_key),
-            driver_key_encrypted=encrypt_token(
-                secrets.token_urlsafe(32),
-                self.config.agent_token_encryption_key,
-            ),
             observed_status=ConnectionObservedStatus.CONNECTED,
         )
         try:
