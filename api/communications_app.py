@@ -14,10 +14,10 @@ from api.domains.communications.gateway_routes import (
     provider_webhook_router,
     runtime_communications_router,
 )
+from api.domains.communications.maintenance import CommunicationsMaintenance
 from api.domains.communications.metrics import refresh_communication_metrics
 from api.domains.communications.operations import CommunicationOperationalRepository
 from api.domains.communications.processor import OutboundCommunicationProcessor
-from api.domains.communications.supervisor import PlatformIngressSupervisor
 
 
 def create_communications_app(injector: Injector | None = None) -> FastAPI:
@@ -36,16 +36,16 @@ def create_communications_app(injector: Injector | None = None) -> FastAPI:
     async def lifespan(_: FastAPI):
         worker = threading.Thread(target=process_outbound, name="communications-outbound", daemon=True)
         worker.start()
-        ingress_stop = asyncio.Event()
-        ingress_task = asyncio.create_task(
-            injector.get(PlatformIngressSupervisor).run(ingress_stop),
-            name="communications-ingress-supervisor",
+        maintenance_stop = asyncio.Event()
+        maintenance_task = asyncio.create_task(
+            injector.get(CommunicationsMaintenance).run(maintenance_stop),
+            name="communications-maintenance",
         )
         try:
             yield
         finally:
-            ingress_stop.set()
-            await ingress_task
+            maintenance_stop.set()
+            await maintenance_task
             stop.set()
             worker.join(timeout=5)
 

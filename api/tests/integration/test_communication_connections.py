@@ -1,6 +1,7 @@
 import io
 import json
 import zipfile
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 from uuid import UUID, uuid4
@@ -765,24 +766,6 @@ def test_unknown_connection_update_returns_404() -> None:
 
         with then("the subordinate resource is hidden as not found"):
             assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
-
-
-def test_ingress_lease_allows_only_one_gateway_replica() -> None:
-    with given(_GIVEN) as context:
-        created = context.client.post(_base(context), json=_discord_payload(), headers=_auth(context)).json()
-        connection_id = UUID(created["id"])
-        repository = context.injector.get(CommunicationConnectionRepository)
-
-        with when("two gateway replicas contend for one Connection"):
-            first = repository.claim_ingress_lease(connection_id, "gateway-a")
-            second = repository.claim_ingress_lease(connection_id, "gateway-b")
-            repository.release_ingress_lease(connection_id, "gateway-a")
-            after_release = repository.claim_ingress_lease(connection_id, "gateway-b")
-
-        with then("the lease serializes provider ownership and can be transferred"):
-            assert_that(first, equal_to(True))
-            assert_that(second, equal_to(False))
-            assert_that(after_release, equal_to(True))
 
 
 def test_connection_diagnostics_and_reconnect_preserve_safe_operational_history() -> None:
@@ -1614,10 +1597,106 @@ def test_supervised_connections_exclude_native_platforms_on_every_runtime():
             context.hermes_discord.id,
         }
 
-        with when("the supervisor lists Connections with Slack and Discord running natively"):
+        with when("the repository lists gateway Connections with Slack and Discord running natively"):
             native = {connection.id for connection in repository.list_enabled(frozenset({"slack", "discord"}))}
             gateway = {connection.id for connection in repository.list_enabled()}
 
         with then("both runtimes' native Connections are left to the runtime"):
             assert_that(connections.isdisjoint(native), equal_to(True))
             assert_that(connections.isdisjoint(gateway), equal_to(True))
+
+
+@pytest.mark.parametrize("mutation", ["revision", "disabled", "retired", "native"])
+def test_stale_email_configuration_health_cannot_mutate_changed_connection(mutation: str) -> None:
+    with given(_GIVEN_WITH_AGENT_EMAIL) as context:
+        created = context.client.post(_base(context), json=_email_payload(), headers=_auth(context)).json()
+        connection_id = UUID(created["id"])
+        repository = context.injector.get(CommunicationConnectionRepository)
+        delegate = context.injector.get(PostgresRepositoryDelegate)
+        with Session(delegate.engine) as session:
+            connection = session.get(CommunicationConnection, connection_id)
+            assert connection is not None
+            if mutation == "revision":
+                connection.revision += 1
+            elif mutation == "disabled":
+                connection.enabled = False
+            elif mutation == "retired":
+                connection.retired_at = datetime.now(UTC)
+            else:
+                connection.platform_key = "slack"
+            session.add(connection)
+            session.commit()
+        repository.record_health(
+            connection_id, ConnectionObservedStatus.CONNECTED, expected_revision=created["revision"]
+        )
+        with Session(delegate.engine) as session:
+            connection = session.get(CommunicationConnection, connection_id)
+            assert connection is not None
+            assert connection.observed_status == ConnectionObservedStatus.PENDING
+            assert connection.last_health_at is None
+
+
+def test_concurrent_email_configuration_health_emits_one_connection_transition() -> None:
+    with given(_GIVEN_WITH_AGENT_EMAIL) as context:
+        created = context.client.post(_base(context), json=_email_payload(), headers=_auth(context)).json()
+        connection_id = UUID(created["id"])
+        repository = context.injector.get(CommunicationConnectionRepository)
+
+        def record_health():
+            repository.record_health(
+                connection_id, ConnectionObservedStatus.CONNECTED, expected_revision=created["revision"]
+            )
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            futures = [executor.submit(record_health) for _ in range(2)]
+            for future in futures:
+                future.result()
+        delegate = context.injector.get(PostgresRepositoryDelegate)
+        with Session(delegate.engine) as session:
+            entries = session.exec(
+                select(CommunicationJournalEntry).where(
+                    col(CommunicationJournalEntry.connection_id) == connection_id,
+                    col(CommunicationJournalEntry.stage) == CommunicationJournalStage.CONNECTION_CONNECTED,
+                )
+            ).all()
+            assert len(entries) == 1
+            connection = session.get(CommunicationConnection, connection_id)
+            assert connection is not None
+            assert connection.ingress_lease_owner is None
+            assert connection.ingress_lease_expires_at is None
+
+
+def test_email_maintenance_pages_only_enabled_nonretired_email_connections() -> None:
+    with given(_GIVEN_WITH_AGENT_EMAIL) as context:
+        created = context.client.post(_base(context), json=_email_payload(), headers=_auth(context)).json()
+        context.client.post(_base(context), json=_discord_payload(), headers=_auth(context))
+        repository = context.injector.get(CommunicationConnectionRepository)
+        page = repository.list_enabled_email_page(limit=1)
+        assert [connection.id for connection in page] == [UUID(created["id"])]
+        assert repository.list_enabled_email_page(after_id=page[-1].id, limit=1) == []
+        delegate = context.injector.get(PostgresRepositoryDelegate)
+        with Session(delegate.engine) as session:
+            connection = session.get(CommunicationConnection, page[-1].id)
+            assert connection is not None
+            connection.enabled = False
+            session.add(connection)
+            session.commit()
+        assert repository.list_enabled_email_page() == []
+
+
+def test_journal_pruning_deletes_at_most_one_batch_and_preserves_recent_entries() -> None:
+    with given(_GIVEN_WITH_AGENT_EMAIL) as context:
+        created = context.client.post(_base(context), json=_discord_payload(), headers=_auth(context)).json()
+        connection_id = UUID(created["id"])
+        operations = context.injector.get(CommunicationOperationalRepository)
+        for _ in range(3):
+            operations.record_journal(
+                organization_id=context.organization.id,
+                agent_id=context.agent.id,
+                connection_id=connection_id,
+                stage=CommunicationJournalStage.CONNECTION_ERROR,
+                occurred_at=datetime.now(UTC) - timedelta(days=40),
+            )
+        assert operations.prune_journal(retention_days=30, batch_size=2) == 2
+        assert operations.prune_journal(retention_days=30, batch_size=2) == 1
+        assert operations.prune_journal(retention_days=30, batch_size=2) == 0

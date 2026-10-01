@@ -664,7 +664,7 @@ class CommunicationsService:
             return []
         actions: list[Literal["reconnect", "retry_delivery"]] = ["retry_delivery"]
         capabilities = self.plugins.require(connection.platform_key).capabilities
-        # Webhook ingress takes precedence in the supervisor when both are declared.
+        # Reconnect is meaningful only for supervised provider sessions.
         if (
             PlatformCapability.SUPERVISED_INGRESS in capabilities
             and PlatformCapability.WEBHOOK_INGRESS not in capabilities

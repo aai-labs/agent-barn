@@ -975,15 +975,23 @@ class CommunicationOperationalRepository:
     ) -> str | None:
         return _safe_error_summary(value, details=details)
 
-    def prune_journal(self, *, retention_days: int) -> int:
+    def prune_journal(self, *, retention_days: int, batch_size: int = 2500) -> int:
         """Delete journal rows older than the configured bounded retention window."""
         if retention_days < 1:
             raise ValueError("Communication journal retention must be at least one day")
+        if batch_size < 1:
+            raise ValueError("Communication journal prune batch must be positive")
         cutoff = datetime.now(UTC) - timedelta(days=retention_days)
         with Session(self.delegate.engine) as session:
             result = session.exec(
                 sa.delete(CommunicationJournalEntry).where(
-                    col(CommunicationJournalEntry.occurred_at) < cutoff,
+                    col(CommunicationJournalEntry.id).in_(
+                        select(CommunicationJournalEntry.id)
+                        .where(col(CommunicationJournalEntry.occurred_at) < cutoff)
+                        .order_by(col(CommunicationJournalEntry.occurred_at), col(CommunicationJournalEntry.id))
+                        .limit(batch_size)
+                        .with_for_update(skip_locked=True)
+                    ),
                 )
             )
             session.commit()

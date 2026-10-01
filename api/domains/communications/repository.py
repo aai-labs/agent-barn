@@ -1,6 +1,6 @@
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
@@ -141,17 +141,50 @@ class CommunicationConnectionRepository:
                 ).all()
             )
 
+    def list_enabled_email_page(
+        self, *, after_id: UUID | None = None, limit: int = 100
+    ) -> list[CommunicationConnection]:
+        """Scan only active Email configuration in bounded, stable pages."""
+        if limit < 1:
+            raise ValueError("Email page size must be positive")
+        with Session(self.delegate.engine) as session:
+            query = select(CommunicationConnection).where(
+                col(CommunicationConnection.platform_key) == "email",
+                col(CommunicationConnection.enabled).is_(True),
+                col(CommunicationConnection.retired_at).is_(None),
+            )
+            if after_id is not None:
+                query = query.where(col(CommunicationConnection.id) > after_id)
+            return list(session.exec(query.order_by(col(CommunicationConnection.id)).limit(limit)).all())
+
     def record_health(
         self,
         connection_id: UUID,
         status: ConnectionObservedStatus,
         *,
+        expected_revision: int | None = None,
         error_code: str | None = None,
         error_message: str | None = None,
         error_details: CommunicationErrorDetails | dict[str, Any] | None = None,
     ) -> None:
+        """Record observer health, or revision-guarded active Email configuration health."""
         with Session(self.delegate.engine, expire_on_commit=False) as session:
-            connection = session.get(CommunicationConnection, connection_id)
+            if expected_revision is None:
+                connection = session.get(CommunicationConnection, connection_id)
+            else:
+                # Serialize maintenance replicas and ignore configuration changed
+                # or disabled while its validation was in flight.
+                connection = session.exec(
+                    select(CommunicationConnection)
+                    .where(
+                        col(CommunicationConnection.id) == connection_id,
+                        col(CommunicationConnection.platform_key) == "email",
+                        col(CommunicationConnection.enabled).is_(True),
+                        col(CommunicationConnection.retired_at).is_(None),
+                        col(CommunicationConnection.revision) == expected_revision,
+                    )
+                    .with_for_update()
+                ).one_or_none()
             if connection is None or connection.retired_at is not None:
                 return
             previous_status = connection.observed_status
@@ -191,7 +224,12 @@ class CommunicationConnectionRepository:
                         session=session,
                         event_name=COMMUNICATION_CONNECTION_HEALTH_CHANGED,
                         organization_id=connection.organization_id,
-                        actor=ActorIdentity(type=ActorIdentityType.SYSTEM, id="communications-supervisor"),
+                        actor=ActorIdentity(
+                            type=ActorIdentityType.SYSTEM,
+                            id="communications-maintenance"
+                            if expected_revision is not None
+                            else "communications-supervisor",
+                        ),
                         subject=SubjectIdentity(
                             type=SubjectIdentityType.AGENT,
                             id=connection.agent_id,
@@ -208,7 +246,9 @@ class CommunicationConnectionRepository:
                             "error_details": safe_details.model_dump(mode="json", exclude_none=True)
                             if safe_details is not None
                             else None,
-                            "actor_display": "Communications Supervisor",
+                            "actor_display": "Communications Maintenance"
+                            if expected_revision is not None
+                            else "Communications Supervisor",
                             "subject_display": connection.display_name,
                         },
                     )
@@ -307,42 +347,6 @@ class CommunicationConnectionRepository:
 
             record_reconnect()
             return connection
-
-    def claim_ingress_lease(self, connection_id: UUID, owner: str, *, lease_seconds: int = 15) -> bool:
-        now = datetime.now(UTC)
-        with Session(self.delegate.engine) as session:
-            claimed = session.exec(
-                sa.update(CommunicationConnection)
-                .where(
-                    col(CommunicationConnection.id) == connection_id,
-                    col(CommunicationConnection.enabled).is_(True),
-                    col(CommunicationConnection.retired_at).is_(None),
-                    sa.or_(
-                        col(CommunicationConnection.ingress_lease_owner) == owner,
-                        col(CommunicationConnection.ingress_lease_expires_at).is_(None),
-                        col(CommunicationConnection.ingress_lease_expires_at) < now,
-                    ),
-                )
-                .values(
-                    ingress_lease_owner=owner,
-                    ingress_lease_expires_at=now + timedelta(seconds=lease_seconds),
-                )
-                .returning(sa.column("id"))
-            ).first()
-            session.commit()
-            return claimed is not None
-
-    def release_ingress_lease(self, connection_id: UUID, owner: str) -> None:
-        with Session(self.delegate.engine) as session:
-            session.exec(
-                sa.update(CommunicationConnection)
-                .where(
-                    col(CommunicationConnection.id) == connection_id,
-                    col(CommunicationConnection.ingress_lease_owner) == owner,
-                )
-                .values(ingress_lease_owner=None, ingress_lease_expires_at=None)
-            )
-            session.commit()
 
     def create(
         self,

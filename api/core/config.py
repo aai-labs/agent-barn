@@ -86,8 +86,8 @@ class Config(BaseSettings):
     teams_privacy_url: str = "https://aai-labs.com/privacy"
     teams_terms_url: str = "https://aai-labs.com/terms"
     slack_directory_cache_ttl_seconds: int = 600
-    # Content-free Communication journal history is pruned by the gateway
-    # supervisor after this many days.
+    # Content-free Communication journal history is pruned by Communications
+    # maintenance after this many days.
     communication_journal_retention_days: int = Field(default=31, ge=1, le=3650)
     # Deprecated deployment input, retained until chart/workflow cleanup.
     # Transport ownership is fixed by the shipped Platform declaration.
