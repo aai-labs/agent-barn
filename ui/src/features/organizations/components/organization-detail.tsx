@@ -28,6 +28,7 @@ import { useDeleteOrganization } from "../hooks/use-organization-actions";
 import { useOrganization } from "../hooks/use-organization";
 import { useOrganizationMembers } from "../hooks/use-organization-members";
 import { useRequireOrgManager } from "../hooks/use-require-org-manager";
+import { RenameOrganizationDialog } from "./rename-organization-dialog";
 import { MembersSection } from "./members-section";
 import { DetailStatTile } from "@/components/detail-stat-tile";
 
@@ -46,6 +47,7 @@ export function OrganizationDetail({ organizationId }: { organizationId: string 
     (state) => state.setDeletingOrganizationId,
   );
 
+  const [renameOpen, setRenameOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [confirmName, setConfirmName] = useState("");
 
@@ -136,6 +138,12 @@ export function OrganizationDetail({ organizationId }: { organizationId: string 
           </p>
         </div>
 
+        {(currentRole === "OWNER" || currentRole === "ADMIN") && (
+          <button className="af-btn flex-shrink-0" onClick={() => setRenameOpen(true)}>
+            Rename organization
+          </button>
+        )}
+
         {canDelete && (
           <button
             className="af-btn flex-shrink-0"
@@ -177,6 +185,14 @@ export function OrganizationDetail({ organizationId }: { organizationId: string 
           organizationName={organization.name}
         />
       </div>
+
+      {renameOpen && (
+        <RenameOrganizationDialog
+          key={organizationId}
+          organization={organization}
+          onClose={() => setRenameOpen(false)}
+        />
+      )}
 
       <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
         <DialogContent>

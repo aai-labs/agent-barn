@@ -1,0 +1,352 @@
+[
+  {
+    "name": "non_aai_cli_command",
+    "tool_name": "terminal",
+    "stored_status": "SUCCESS",
+    "arguments": {
+      "command": "date -u; ls -la /workspace/memory/ 2>/dev/null || echo \"no memory dir\""
+    },
+    "result": "{\"output\": \"Sun Sep 27 16:05:05 UTC 2026\\nno memory dir\", \"exit_code\": 0, \"error\": null}",
+    "expected_actions": []
+  },
+  {
+    "name": "write_success",
+    "tool_name": "terminal",
+    "stored_status": "SUCCESS",
+    "arguments": {
+      "command": "aai-cli excel workbook create /tmp/bv-N.xlsx"
+    },
+    "result": "{\"output\": \"{\\n  \\\"_aai\\\": {\\n    \\\"pagination\\\": {\\n      \\\"continuation\\\": null,\\n      \\\"has_more\\\": false,\\n      \\\"instruction\\\": \\\"The provider indicates there are no more results.\\\",\\n      \\\"next_command\\\": null,\\n      \\\"returned_count\\\": null,\\n      \\\"status\\\": \\\"complete\\\"\\n    }\\n  },\\n  \\\"created\\\": true,\\n  \\\"file\\\": \\\"/tmp/bv-N.xlsx\\\",\\n  \\\"sheets\\\": [\\n    \\\"Sheet1\\\"\\n  ],\\n  \\\"truncated\\\": false\\n}\", \"exit_code\": 0, \"error\": null}",
+    "expected_actions": [
+      {
+        "integration": "excel",
+        "resource": "workbook",
+        "verb": "create",
+        "is_write": true,
+        "outcome_type": "DOCUMENT_AUTHORED",
+        "status": "SUCCESS",
+        "ordinal": 0
+      }
+    ]
+  },
+  {
+    "name": "read_config_error",
+    "tool_name": "terminal",
+    "stored_status": "SUCCESS",
+    "arguments": {
+      "command": "aai-cli jira issues get X-1"
+    },
+    "result": "{\"output\": \"{\\\"code\\\":\\\"config_error\\\",\\\"details\\\":null,\\\"message\\\":\\\"jira.issues.get requires profile.site_url or profile.base_url\\\",\\\"operation\\\":\\\"issues.get\\\",\\\"service\\\":\\\"jira\\\",\\\"status\\\":null}\", \"exit_code\": 3, \"error\": null}",
+    "expected_actions": [
+      {
+        "integration": "jira",
+        "resource": "issues",
+        "verb": "get",
+        "is_write": false,
+        "outcome_type": null,
+        "status": "ERROR",
+        "ordinal": 0
+      }
+    ]
+  },
+  {
+    "name": "and_chain_success",
+    "tool_name": "terminal",
+    "stored_status": "SUCCESS",
+    "arguments": {
+      "command": "aai-cli excel workbook create /tmp/bv-chain.xlsx && aai-cli excel sheets list /tmp/bv-chain.xlsx"
+    },
+    "result": "{\"output\": \"{\\n  \\\"_aai\\\": {\\n    \\\"pagination\\\": {\\n      \\\"continuation\\\": null,\\n      \\\"has_more\\\": false,\\n      \\\"instruction\\\": \\\"The provider indicates there are no more results.\\\",\\n      \\\"next_command\\\": null,\\n      \\\"returned_count\\\": null,\\n      \\\"status\\\": \\\"complete\\\"\\n    }\\n  },\\n  \\\"created\\\": true,\\n  \\\"file\\\": \\\"/tmp/bv-chain.xlsx\\\",\\n  \\\"sheets\\\": [\\n    \\\"Sheet1\\\"\\n  ],\\n  \\\"truncated\\\": false\\n}\\n{\\n  \\\"_aai\\\": {\\n    \\\"pagination\\\": {\\n      \\\"continuation\\\": null,\\n      \\\"has_more\\\": false,\\n      \\\"instruction\\\": \\\"The provider indicates there are no more results.\\\",\\n      \\\"next_command\\\": null,\\n      \\\"returned_count\\\": null,\\n      \\\"status\\\": \\\"complete\\\"\\n    }\\n  },\\n  \\\"file\\\": \\\"/tmp/bv-chain.xlsx\\\",\\n  \\\"sheets\\\": [\\n    {\\n      \\\"columnCount\\\": 0,\\n      \\\"index\\\": 0,\\n      \\\"rowCount\\\": 0,\\n      \\\"title\\\": \\\"Sheet1\\\",\\n      \\\"usedRange\\\": \\\"'Sheet1'!A1:A1\\\"\\n    }\\n  ],\\n  \\\"truncated\\\": false\\n}\", \"exit_code\": 0, \"error\": null}",
+    "expected_actions": [
+      {
+        "integration": "excel",
+        "resource": "workbook",
+        "verb": "create",
+        "is_write": true,
+        "outcome_type": "DOCUMENT_AUTHORED",
+        "status": "SUCCESS",
+        "ordinal": 0
+      },
+      {
+        "integration": "excel",
+        "resource": "sheets",
+        "verb": "list",
+        "is_write": false,
+        "outcome_type": null,
+        "status": "SUCCESS",
+        "ordinal": 1
+      }
+    ]
+  },
+  {
+    "name": "pipe_masks_failure",
+    "tool_name": "terminal",
+    "stored_status": "SUCCESS",
+    "arguments": {
+      "command": "aai-cli excel sheets list /tmp/bv-1.xlsx | head -5"
+    },
+    "result": "{\"output\": \"{\\\"code\\\":\\\"not_found\\\",\\\"details\\\":null,\\\"message\\\":\\\"no such file: /tmp/bv-1.xlsx\\\",\\\"operation\\\":\\\"sheets.list\\\",\\\"service\\\":\\\"excel\\\",\\\"status\\\":null}\", \"exit_code\": 0, \"error\": null}",
+    "expected_actions": [
+      {
+        "integration": "excel",
+        "resource": "sheets",
+        "verb": "list",
+        "is_write": false,
+        "outcome_type": null,
+        "status": "ERROR",
+        "ordinal": 0
+      }
+    ]
+  },
+  {
+    "name": "agentbarn_message_chain_failure",
+    "tool_name": "terminal",
+    "stored_status": "SUCCESS",
+    "arguments": {
+      "command": "aai-cli excel sheets list /tmp/bv-1.xlsx && agentbarn-message --help"
+    },
+    "result": "{\"output\": \"{\\\"code\\\":\\\"not_found\\\",\\\"details\\\":null,\\\"message\\\":\\\"no such file: /tmp/bv-1.xlsx\\\",\\\"operation\\\":\\\"sheets.list\\\",\\\"service\\\":\\\"excel\\\",\\\"status\\\":null}\", \"exit_code\": 5, \"error\": null}",
+    "expected_actions": [
+      {
+        "integration": "excel",
+        "resource": "sheets",
+        "verb": "list",
+        "is_write": false,
+        "outcome_type": null,
+        "status": "ERROR",
+        "ordinal": 0
+      }
+    ]
+  },
+  {
+    "name": "write_success_second",
+    "tool_name": "terminal",
+    "stored_status": "SUCCESS",
+    "arguments": {
+      "command": "aai-cli excel workbook create /tmp/bv-2.xlsx"
+    },
+    "result": "{\"output\": \"{\\n  \\\"_aai\\\": {\\n    \\\"pagination\\\": {\\n      \\\"continuation\\\": null,\\n      \\\"has_more\\\": false,\\n      \\\"instruction\\\": \\\"The provider indicates there are no more results.\\\",\\n      \\\"next_command\\\": null,\\n      \\\"returned_count\\\": null,\\n      \\\"status\\\": \\\"complete\\\"\\n    }\\n  },\\n  \\\"created\\\": true,\\n  \\\"file\\\": \\\"/tmp/bv-2.xlsx\\\",\\n  \\\"sheets\\\": [\\n    \\\"Sheet1\\\"\\n  ],\\n  \\\"truncated\\\": false\\n}\", \"exit_code\": 0, \"error\": null}",
+    "expected_actions": [
+      {
+        "integration": "excel",
+        "resource": "workbook",
+        "verb": "create",
+        "is_write": true,
+        "outcome_type": "DOCUMENT_AUTHORED",
+        "status": "SUCCESS",
+        "ordinal": 0
+      }
+    ]
+  },
+  {
+    "name": "sheets_add_success",
+    "tool_name": "terminal",
+    "stored_status": "SUCCESS",
+    "arguments": {
+      "command": "aai-cli excel sheets add /tmp/bv-2.xlsx Extra"
+    },
+    "result": "{\"output\": \"{\\n  \\\"_aai\\\": {\\n    \\\"pagination\\\": {\\n      \\\"continuation\\\": null,\\n      \\\"has_more\\\": false,\\n      \\\"instruction\\\": \\\"The provider indicates there are no more results.\\\",\\n      \\\"next_command\\\": null,\\n      \\\"returned_count\\\": null,\\n      \\\"status\\\": \\\"complete\\\"\\n    }\\n  },\\n  \\\"added\\\": \\\"Extra\\\",\\n  \\\"file\\\": \\\"/tmp/bv-2.xlsx\\\",\\n  \\\"sheets\\\": [\\n    \\\"Sheet1\\\",\\n    \\\"Extra\\\"\\n  ],\\n  \\\"truncated\\\": false\\n}\", \"exit_code\": 0, \"error\": null}",
+    "expected_actions": [
+      {
+        "integration": "excel",
+        "resource": "sheets",
+        "verb": "add",
+        "is_write": true,
+        "outcome_type": "SPREADSHEET_UPDATED",
+        "status": "SUCCESS",
+        "ordinal": 0
+      }
+    ]
+  },
+  {
+    "name": "values_update_success",
+    "tool_name": "terminal",
+    "stored_status": "SUCCESS",
+    "arguments": {
+      "command": "aai-cli excel values update /tmp/bv-2.xlsx \"'Sheet1'!A1\" --values '[[\"x\"]]'"
+    },
+    "result": "{\"output\": \"{\\n  \\\"_aai\\\": {\\n    \\\"pagination\\\": {\\n      \\\"continuation\\\": null,\\n      \\\"has_more\\\": false,\\n      \\\"instruction\\\": \\\"The provider indicates there are no more results.\\\",\\n      \\\"next_command\\\": null,\\n      \\\"returned_count\\\": null,\\n      \\\"status\\\": \\\"complete\\\"\\n    }\\n  },\\n  \\\"file\\\": \\\"/tmp/bv-2.xlsx\\\",\\n  \\\"truncated\\\": false,\\n  \\\"updatedCells\\\": 1,\\n  \\\"updatedColumns\\\": 1,\\n  \\\"updatedRange\\\": \\\"'Sheet1'!A1:A1\\\",\\n  \\\"updatedRows\\\": 1\\n}\", \"exit_code\": 0, \"error\": null}",
+    "expected_actions": [
+      {
+        "integration": "excel",
+        "resource": "values",
+        "verb": "update",
+        "is_write": true,
+        "outcome_type": "SPREADSHEET_UPDATED",
+        "status": "SUCCESS",
+        "ordinal": 0
+      }
+    ]
+  },
+  {
+    "name": "global_flag_before_group",
+    "tool_name": "terminal",
+    "stored_status": "SUCCESS",
+    "arguments": {
+      "command": "aai-cli --profile none excel values get /tmp/bv-2.xlsx \"'Sheet1'!A1:A1\""
+    },
+    "result": "{\"output\": \"{\\n  \\\"_aai\\\": {\\n    \\\"pagination\\\": {\\n      \\\"continuation\\\": null,\\n      \\\"has_more\\\": false,\\n      \\\"instruction\\\": \\\"The provider indicates there are no more results.\\\",\\n      \\\"next_command\\\": null,\\n      \\\"returned_count\\\": 1,\\n      \\\"status\\\": \\\"complete\\\"\\n    }\\n  },\\n  \\\"file\\\": \\\"/tmp/bv-2.xlsx\\\",\\n  \\\"majorDimension\\\": \\\"ROWS\\\",\\n  \\\"range\\\": \\\"'Sheet1'!A1:A1\\\",\\n  \\\"truncated\\\": false,\\n  \\\"values\\\": [\\n    [\\n      \\\"x\\\"\\n    ]\\n  ]\\n}\", \"exit_code\": 0, \"error\": null}",
+    "expected_actions": [
+      {
+        "integration": "excel",
+        "resource": "values",
+        "verb": "get",
+        "is_write": false,
+        "outcome_type": null,
+        "status": "SUCCESS",
+        "ordinal": 0
+      }
+    ]
+  },
+  {
+    "name": "global_flag_equals_form_at_end",
+    "tool_name": "terminal",
+    "stored_status": "SUCCESS",
+    "arguments": {
+      "command": "aai-cli excel sheets list /tmp/bv-2.xlsx --profile=none"
+    },
+    "result": "{\"output\": \"{\\n  \\\"_aai\\\": {\\n    \\\"pagination\\\": {\\n      \\\"continuation\\\": null,\\n      \\\"has_more\\\": false,\\n      \\\"instruction\\\": \\\"The provider indicates there are no more results.\\\",\\n      \\\"next_command\\\": null,\\n      \\\"returned_count\\\": null,\\n      \\\"status\\\": \\\"complete\\\"\\n    }\\n  },\\n  \\\"file\\\": \\\"/tmp/bv-2.xlsx\\\",\\n  \\\"sheets\\\": [\\n    {\\n      \\\"columnCount\\\": 1,\\n      \\\"index\\\": 0,\\n      \\\"rowCount\\\": 1,\\n      \\\"title\\\": \\\"Sheet1\\\",\\n      \\\"usedRange\\\": \\\"'Sheet1'!A1:A1\\\"\\n    },\\n    {\\n      \\\"columnCount\\\": 0,\\n      \\\"index\\\": 1,\\n      \\\"rowCount\\\": 0,\\n      \\\"title\\\": \\\"Extra\\\",\\n      \\\"usedRange\\\": \\\"'Extra'!A1:A1\\\"\\n    }\\n  ],\\n  \\\"truncated\\\": false\\n}\", \"exit_code\": 0, \"error\": null}",
+    "expected_actions": [
+      {
+        "integration": "excel",
+        "resource": "sheets",
+        "verb": "list",
+        "is_write": false,
+        "outcome_type": null,
+        "status": "SUCCESS",
+        "ordinal": 0
+      }
+    ]
+  },
+  {
+    "name": "env_prefix_and_full_path",
+    "tool_name": "terminal",
+    "stored_status": "SUCCESS",
+    "arguments": {
+      "command": "AAI_PROFILE=none /usr/local/bin/aai-cli excel sheets list /tmp/bv-2.xlsx"
+    },
+    "result": "{\"output\": \"{\\n  \\\"_aai\\\": {\\n    \\\"pagination\\\": {\\n      \\\"continuation\\\": null,\\n      \\\"has_more\\\": false,\\n      \\\"instruction\\\": \\\"The provider indicates there are no more results.\\\",\\n      \\\"next_command\\\": null,\\n      \\\"returned_count\\\": null,\\n      \\\"status\\\": \\\"complete\\\"\\n    }\\n  },\\n  \\\"file\\\": \\\"/tmp/bv-2.xlsx\\\",\\n  \\\"sheets\\\": [\\n    {\\n      \\\"columnCount\\\": 1,\\n      \\\"index\\\": 0,\\n      \\\"rowCount\\\": 1,\\n      \\\"title\\\": \\\"Sheet1\\\",\\n      \\\"usedRange\\\": \\\"'Sheet1'!A1:A1\\\"\\n    },\\n    {\\n      \\\"columnCount\\\": 0,\\n      \\\"index\\\": 1,\\n      \\\"rowCount\\\": 0,\\n      \\\"title\\\": \\\"Extra\\\",\\n      \\\"usedRange\\\": \\\"'Extra'!A1:A1\\\"\\n    }\\n  ],\\n  \\\"truncated\\\": false\\n}\", \"exit_code\": 0, \"error\": null}",
+    "expected_actions": [
+      {
+        "integration": "excel",
+        "resource": "sheets",
+        "verb": "list",
+        "is_write": false,
+        "outcome_type": null,
+        "status": "SUCCESS",
+        "ordinal": 0
+      }
+    ]
+  },
+  {
+    "name": "write_config_error",
+    "tool_name": "terminal",
+    "stored_status": "SUCCESS",
+    "arguments": {
+      "command": "aai-cli github prs create --title t"
+    },
+    "result": "{\"output\": \"{\\\"code\\\":\\\"config_error\\\",\\\"details\\\":null,\\\"message\\\":\\\"github.prs.create requires --owner or profile.owner\\\",\\\"operation\\\":\\\"prs.create\\\",\\\"service\\\":\\\"github\\\",\\\"status\\\":null}\", \"exit_code\": 3, \"error\": null}",
+    "expected_actions": [
+      {
+        "integration": "github",
+        "resource": "prs",
+        "verb": "create",
+        "is_write": true,
+        "outcome_type": "PULL_REQUEST_OPENED",
+        "status": "ERROR",
+        "ordinal": 0
+      }
+    ]
+  },
+  {
+    "name": "usage_error_without_envelope",
+    "tool_name": "terminal",
+    "stored_status": "SUCCESS",
+    "arguments": {
+      "command": "aai-cli excel nonsense-command"
+    },
+    "result": "{\"output\": \"error: unrecognized subcommand 'nonsense-command'\\n\\nUsage: aai-cli excel [OPTIONS] <COMMAND>\\n\\nFor more information, try '--help'.\", \"exit_code\": 2, \"error\": null}",
+    "expected_actions": [
+      {
+        "integration": "excel",
+        "resource": "",
+        "verb": "nonsense-command",
+        "is_write": null,
+        "outcome_type": null,
+        "status": "ERROR",
+        "ordinal": 0
+      }
+    ]
+  },
+  {
+    "name": "or_chain_masks_failure",
+    "tool_name": "terminal",
+    "stored_status": "SUCCESS",
+    "arguments": {
+      "command": "aai-cli jira issues get X-2 || true"
+    },
+    "result": "{\"output\": \"{\\\"code\\\":\\\"config_error\\\",\\\"details\\\":null,\\\"message\\\":\\\"jira.issues.get requires profile.site_url or profile.base_url\\\",\\\"operation\\\":\\\"issues.get\\\",\\\"service\\\":\\\"jira\\\",\\\"status\\\":null}\", \"exit_code\": 0, \"error\": null}",
+    "expected_actions": [
+      {
+        "integration": "jira",
+        "resource": "issues",
+        "verb": "get",
+        "is_write": false,
+        "outcome_type": null,
+        "status": "ERROR",
+        "ordinal": 0
+      }
+    ]
+  },
+  {
+    "name": "semicolon_chain_not_last_segment",
+    "tool_name": "terminal",
+    "stored_status": "SUCCESS",
+    "arguments": {
+      "command": "aai-cli excel sheets list /tmp/bv-2.xlsx; echo done"
+    },
+    "result": "{\"output\": \"{\\n  \\\"_aai\\\": {\\n    \\\"pagination\\\": {\\n      \\\"continuation\\\": null,\\n      \\\"has_more\\\": false,\\n      \\\"instruction\\\": \\\"The provider indicates there are no more results.\\\",\\n      \\\"next_command\\\": null,\\n      \\\"returned_count\\\": null,\\n      \\\"status\\\": \\\"complete\\\"\\n    }\\n  },\\n  \\\"file\\\": \\\"/tmp/bv-2.xlsx\\\",\\n  \\\"sheets\\\": [\\n    {\\n      \\\"columnCount\\\": 1,\\n      \\\"index\\\": 0,\\n      \\\"rowCount\\\": 1,\\n      \\\"title\\\": \\\"Sheet1\\\",\\n      \\\"usedRange\\\": \\\"'Sheet1'!A1:A1\\\"\\n    },\\n    {\\n      \\\"columnCount\\\": 0,\\n      \\\"index\\\": 1,\\n      \\\"rowCount\\\": 0,\\n      \\\"title\\\": \\\"Extra\\\",\\n      \\\"usedRange\\\": \\\"'Extra'!A1:A1\\\"\\n    }\\n  ],\\n  \\\"truncated\\\": false\\n}\\ndone\", \"exit_code\": 0, \"error\": null}",
+    "expected_actions": [
+      {
+        "integration": "excel",
+        "resource": "sheets",
+        "verb": "list",
+        "is_write": false,
+        "outcome_type": null,
+        "status": "UNKNOWN",
+        "ordinal": 0
+      }
+    ]
+  },
+  {
+    "name": "help_ignored",
+    "tool_name": "terminal",
+    "stored_status": "SUCCESS",
+    "arguments": {
+      "command": "aai-cli excel --help"
+    },
+    "result": "{\"output\": \"Read and write local spreadsheets: .xlsx/.xlsm and .csv/.tsv, plus read-only .xls/.xlsb/.ods. Needs no profile or credentials\\n\\nUsage: aai-cli excel [OPTIONS] <COMMAND>\\n\\nCommands:\\n  workbook  Create a new spreadsheet file (.xlsx or .csv/.tsv)\\n  sheets    Inspect, add, delete, or rename the sheet tabs in a workbook\\n  values    Read, write, or clear cell values in a workbook range\\n  help      Print this message or the help of the given subcommand(s)\\n\\nOptions:\\n      --profile <PROFILE>            [env: AAI_PROFILE=]\\n      --config <CONFIG>              [env: AAI_CONFIG=]\\n      --secrets-file <SECRETS_FILE>  [env: AAI_SECRETS_FILE=]\\n      --key-file <KEY_FILE>          [env: AAI_SECRET_KEY_FILE=]\\n  -h, --help                         Print help\", \"exit_code\": 0, \"error\": null}",
+    "expected_actions": []
+  },
+  {
+    "name": "background_run",
+    "tool_name": "terminal",
+    "stored_status": "SUCCESS",
+    "arguments": {
+      "command": "aai-cli excel sheets list /tmp/bv-2.xlsx",
+      "background": true
+    },
+    "result": "{\"output\": \"Background process started\", \"session_id\": \"proc_9fff6b537459\", \"pid\": 801, \"exit_code\": 0, \"error\": null, \"hint\": \"background=true without notify_on_complete=true means this process runs SILENTLY — you will not be told when it exits. If this is a bounded task (test suite, build, CI poller, deploy, anything with a defined end), you almost certainly wanted notify_on_complete=true so the system pings you on exit. Re-launch with notify_on_complete=true, or call process(action='poll') / process(action='wait') yourself to learn the outcome. Only ignore this hint for genuine long-lived processes that never exit (servers, watchers, daemons).\"}",
+    "expected_actions": [
+      {
+        "integration": "excel",
+        "resource": "sheets",
+        "verb": "list",
+        "is_write": false,
+        "outcome_type": null,
+        "status": "UNKNOWN",
+        "ordinal": 0
+      }
+    ]
+  }
+]

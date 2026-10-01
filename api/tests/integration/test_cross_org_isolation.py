@@ -12,11 +12,16 @@ Isolation contract:
 - Platform Administrators use platform routes; org URLs still require real membership.
 """
 
+from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4, uuid7
 
 from fastapi import status
 from hamcrest import assert_that, equal_to
 
+from api.domains.agents.models import AgentStatus
+from api.domains.business_value.catalogue import OutcomeType
+from api.domains.business_value.classifier import BusinessActionStatus
+from api.domains.communications.models import CommunicationDeliveryStatus, CommunicationPlatform
 from api.domains.organizations.models import Organization
 from api.domains.organizations.repository import OrganizationRepository
 from api.domains.skills.models import Skill, SkillSource
@@ -35,6 +40,14 @@ from api.tests.steps.agent import (
     MockLiteLLMModule,
     there_is_an_agent,
 )
+from api.tests.steps.business_action import there_are_business_actions
+from api.tests.steps.communication import (
+    there_are_tool_calls,
+    there_is_a_connection,
+    there_is_a_webhook_invocation,
+    there_is_an_inbound_delivery,
+)
+from api.tests.steps.cost import cost_records_are_clean, there_are_cost_records
 from api.tests.steps.database import database_is_clean, database_repo_is_ready
 from api.tests.steps.template import there_is_a_template
 from api.tests.steps.user import (
@@ -413,6 +426,113 @@ def test_cannot_remove_member_from_another_org():
             headers=_headers(context),
         )
         assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+
+
+def test_cannot_read_value_settings_of_another_org():
+    with given(_owner_a_and_bare_org_b()) as context:
+        response = context.client.get(f"/api/v1/organizations/{ORG_B}/value-settings", headers=_headers(context))
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+
+
+def test_cannot_change_value_settings_of_another_org():
+    with given(_owner_a_and_bare_org_b()) as context:
+        response = context.client.put(
+            f"/api/v1/organizations/{ORG_B}/value-settings",
+            json={"hourly_rate_usd": 30},
+            headers=_headers(context),
+        )
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+
+
+def test_cannot_read_value_of_another_org():
+    with given(_owner_a_and_bare_org_b()) as context:
+        response = context.client.get(f"/api/v1/organizations/{ORG_B}/value", headers=_headers(context))
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+
+
+def _org_b_agent_with_work_and_spend():
+    def step(context):
+        there_is_an_agent(organization_id=ORG_B, name="Agent B")(context)
+        there_are_business_actions(
+            outcome_type=OutcomeType.RECORD_CREATED.value,
+            is_write=True,
+            status=BusinessActionStatus.SUCCESS,
+            count=4,
+        )(context)
+        there_are_cost_records(count=2, spend="3.00", organization_id=ORG_B, organization_name="Org B")(context)
+
+    return step
+
+
+def test_value_of_one_org_excludes_another_orgs_work_and_spend():
+    with given(
+        [
+            *_owner_a_and_bare_org_b(),
+            cost_records_are_clean(),
+            there_is_an_agent(organization_id=ORG_A, name="Agent A"),
+            there_are_business_actions(
+                outcome_type=OutcomeType.COMMENT_POSTED.value,
+                is_write=True,
+                status=BusinessActionStatus.SUCCESS,
+            ),
+            there_are_cost_records(count=1, spend="1.00", organization_id=ORG_A, organization_name="Org A"),
+            _org_b_agent_with_work_and_spend(),
+        ]
+    ) as context:
+        response = context.client.get(f"/api/v1/organizations/{ORG_A}/value", headers=_headers(context))
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+        body = response.json()
+        assert_that(body["totals"]["successful_writes"], equal_to(1))
+        assert_that(body["totals"]["spend"], equal_to(1.0))
+        assert_that([row["agent_name"] for row in body["agents"]], equal_to(["Agent A"]))
+
+
+def test_cannot_read_activity_of_another_org():
+    with given(_owner_a_and_bare_org_b()) as context:
+        response = context.client.get(f"/api/v1/organizations/{ORG_B}/value/activity", headers=_headers(context))
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+
+
+def _an_agent_with_a_handled_request_a_webhook_and_a_tool_call(organization_id: UUID, name: str):
+    def step(context):
+        completed_at = datetime.now(UTC) - timedelta(minutes=5)
+        there_is_an_agent(organization_id=organization_id, name=name, status=AgentStatus.RUNNING)(context)
+        there_is_a_connection(CommunicationPlatform.WEB)(context)
+        there_is_an_inbound_delivery(
+            occurred_at=completed_at - timedelta(seconds=10),
+            status=CommunicationDeliveryStatus.SUCCEEDED,
+            attempt_count=1,
+            created_at=completed_at - timedelta(seconds=10),
+            completed_at=completed_at,
+        )(context)
+        there_is_a_webhook_invocation()(context)
+        there_are_tool_calls()(context)
+
+    return step
+
+
+def test_activity_of_one_org_excludes_another_orgs_requests_deliveries_and_spend():
+    with given(
+        [
+            *_owner_a_and_bare_org_b(),
+            cost_records_are_clean(),
+            _an_agent_with_a_handled_request_a_webhook_and_a_tool_call(ORG_A, "Agent A"),
+            there_are_cost_records(count=1, spend="1.00", organization_id=ORG_A, organization_name="Org A"),
+            _an_agent_with_a_handled_request_a_webhook_and_a_tool_call(ORG_B, "Agent B"),
+            there_are_cost_records(count=2, spend="3.00", organization_id=ORG_B, organization_name="Org B"),
+        ]
+    ) as context:
+        response = context.client.get(f"/api/v1/organizations/{ORG_A}/value/activity", headers=_headers(context))
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+        body = response.json()
+        assert_that(body["totals"]["requests"], equal_to(2))
+        assert_that(body["totals"]["handled_coverage"], equal_to(1))
+        assert_that(body["totals"]["tool_calls_per_request"], equal_to(0.5))
+        assert_that(body["totals"]["cost_per_request"], equal_to(0.5))
+        assert_that(sum(point["requests"] for point in body["requests_series"]), equal_to(2))
+        assert_that([row["agent_name"] for row in body["agents"]], equal_to(["Agent A"]))
 
 
 def test_cannot_transfer_ownership_of_another_org():
