@@ -239,6 +239,11 @@ def _enrich_atlassian_content(content: Any) -> Any:
     return content
 
 
+def _validation_problems(exc: ValidationError) -> str:
+    """Field paths and messages of a validation failure, without the rejected values."""
+    return "; ".join(f"{'.'.join(str(p) for p in e['loc'])}: {e['msg']}" for e in exc.errors(include_input=False))
+
+
 def filter_models_by_allowlist(catalog: list[dict], allowlist: list[str]) -> list[dict]:
     """Keeps catalogue entries whose id matches any glob pattern in the allowlist.
     An empty allowlist blocks everything. Matching is case-insensitive.
@@ -734,11 +739,21 @@ class AgentService:
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail=f"Provider {shared_cred.provider} already has a credential in this request",
                 )
-            shared_content = decrypt_content(
-                shared_cred.provider,
-                shared_cred.content,
-                self.config.agent_token_encryption_key,
-            )
+            try:
+                shared_content = decrypt_content(
+                    shared_cred.provider,
+                    shared_cred.content,
+                    self.config.agent_token_encryption_key,
+                )
+            except ValidationError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=(
+                        f"Shared credential {shared_cred.name!r} has stored "
+                        f"{PROVIDER_DISPLAY_NAMES[shared_cred.provider]} settings that are no longer valid "
+                        f"({_validation_problems(exc)}). Edit the shared credential and save it again."
+                    ),
+                ) from exc
             live_validation_contents.append((shared_cred.provider, shared_content))
             prepared_secrets.append(
                 AgentSecret(
@@ -1992,14 +2007,11 @@ class AgentService:
                 # after the secret was saved (e.g. the Pipedrive domain rule) stops here with
                 # a fixable message rather than an unhandled error. Re-saving the
                 # integration replaces the stored content.
-                problems = "; ".join(
-                    f"{'.'.join(str(p) for p in e['loc'])}: {e['msg']}" for e in exc.errors(include_input=False)
-                )
                 raise AgentProvisioningPrecondition(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail=(
                         f"The stored {PROVIDER_DISPLAY_NAMES[provider]} integration settings are no longer valid "
-                        f"({problems}). Edit the integration and save it again."
+                        f"({_validation_problems(exc)}). Edit the integration and save it again."
                     ),
                 ) from exc
         self._backfill_google_client_credentials(decrypted)

@@ -7,14 +7,17 @@ scripts="$repo_root/api/domains/agents/scripts/openclaw"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
-# The overlay is the builder's real output, so the assertions below track what
-# Agent Barn actually ships rather than a copy of it.
+# The overlay and the migration script are the builder's real output, so the
+# assertions below track what Agent Barn actually ships rather than a copy of it.
+# (The builder fills the workspace path into the migration script.)
 (cd "$repo_root/api" && PYTHONPATH="$repo_root" uv run --frozen python -c '
-import json
+import json, sys
 from api.domains.agents.builders import build_openclaw_gateway_config
+from api.domains.agents.builders.openclaw import LEGACY_WORKSPACE_MIGRATION_SH
 print(json.dumps(build_openclaw_gateway_config("litellm/gpt-5", "http://litellm:4000")))
-') > "$work/openclaw-config-overlay.json"
-cp "$scripts/init-openclaw.js" "$scripts/legacy-workspace-migration.sh" "$work/"
+open(sys.argv[1], "w").write(LEGACY_WORKSPACE_MIGRATION_SH)
+' "$work/legacy-workspace-migration.sh") > "$work/openclaw-config-overlay.json"
+cp "$scripts/init-openclaw.js" "$work/"
 chmod -R a+rX "$work"
 
 run() {
@@ -38,6 +41,18 @@ for marker in "$W/openclaw-workspace-state.json" "$W/.openclaw/workspace-state.j
               "$S/workspace.attested" "$S/workspace-attestations/$key.attested"; do
     [ ! -e "$marker" ] || { echo "marker survived migration: $marker"; exit 1; }
 done
+'
+
+echo 'legacy PVC with only a workspace marker: the rendered workspace path finds it'
+run '
+mkdir -p /tmp/bin
+printf "#!/bin/sh\ntouch /tmp/doctor-ran\n" > /tmp/bin/openclaw
+chmod +x /tmp/bin/openclaw
+W=/home/node/.openclaw/workspace
+mkdir -p "$W"
+echo "{\"version\":1}" > "$W/openclaw-workspace-state.json"
+PATH=/tmp/bin:$PATH sh /app/config/legacy-workspace-migration.sh
+[ -e /tmp/doctor-ran ] || { echo "workspace marker not detected: is the workspace path filled in?"; exit 1; }
 '
 
 echo 'clean PVC: doctor must not run'
