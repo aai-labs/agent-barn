@@ -24,6 +24,7 @@ from starlette.testclient import TestClient
 
 from api.core.config import Config
 from api.domains.agents.models import (
+    AgentSecret,
     AgentStatus,
     AgentTemplateOverrideSourceType,
     AgentTemplateOverrideVersion,
@@ -1290,6 +1291,32 @@ def test_start_agent_wires_telemetry_push_into_the_secret():
             assert_that(secret.string_data["AGENT_ID"], equal_to(str(context.agent.id)))
             assert_that(secret.string_data["INGEST_URL"], equal_to(_INGEST_BASE_URL))
             assert_that(secret.string_data["INGEST_API_KEY"], is_not(equal_to("")))
+
+
+def test_start_with_stored_secret_that_no_longer_validates_returns_400():
+    """Stored content is re-validated on every start. A Pipedrive domain saved before the
+    single-label rule must stop the start with a fixable message, not an unhandled error."""
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        client.patch(
+            f"{_BASE}/{context.agent.id}",
+            json={"secrets": [{"provider": "pipedrive", "content": {"api_token": "pd-token", "domain": "acme"}}]},
+            headers=_auth(context),
+        )
+        delegate = context.injector.get(PostgresRepositoryDelegate)
+        [stored] = [s for s in delegate.find_all(AgentSecret) if s.agent_id == context.agent.id]
+        stored.content = encrypt_token(json.dumps({"api_token": "pd-token", "domain": "foo.bar"}), TEST_ENCRYPTION_KEY)
+        delegate.save(stored)
+        k8s: MagicMock = context.injector.get(KubernetesClient)
+
+        with when("I start the agent"):
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("it returns 400 naming the integration, and nothing is deployed"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+            assert_that("Pipedrive" in response.json()["detail"], equal_to(True))
+            assert_that("save it again" in response.json()["detail"], equal_to(True))
+            k8s.create_deployment.assert_not_called()
 
 
 def test_start_already_running_returns_409():
@@ -2702,6 +2729,43 @@ def test_start_openclaw_agent_runs_chat_platforms_in_the_native_gateway() -> Non
             assert_that(secret["AGENTBARN_SCHEDULED_DELIVERY"], equal_to("0"))
             service = k8s.create_service.call_args.args[1]
             assert_that([port.name for port in service.spec.ports], has_item("webhook"))
+
+
+@pytest.mark.parametrize(
+    "agent_type,workspace",
+    [(AgentType.OPENCLAW, "/home/node/.openclaw/workspace"), (AgentType.HERMES, "/workspace")],
+)
+def test_start_agent_with_native_chat_connection_tells_it_how_to_send_files(agent_type, workspace) -> None:
+    with given([*_GIVEN_WITH_NATIVE_PLATFORMS, there_is_an_agent(agent_type=agent_type), _native_slack_connection]) as (
+        context
+    ):
+        client: TestClient = context.client
+        k8s: MagicMock = context.injector.get(KubernetesClient)
+
+        with when("an Agent with a native Slack Connection and no file-producing skill starts"):
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("AGENTS.md explains how to attach a file, since any reply can carry one"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            agents_md = k8s.create_config_map.call_args.args[1].data["AGENTS.md"]
+            assert_that(agents_md, contains_string("MEDIA:<absolute path>"))
+
+        with then("the example path is inside that runtime's workspace, where it can read files"):
+            assert_that(agents_md, contains_string(f"\nMEDIA:{workspace}/q1-report.xlsx\n"))
+
+
+def test_start_agent_without_native_chat_connection_does_not_promise_file_delivery() -> None:
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        k8s: MagicMock = context.injector.get(KubernetesClient)
+
+        with when("an Agent reachable only through gateway-owned Connections starts"):
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("AGENTS.md does not tell it to attach files the gateway would drop"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            agents_md = k8s.create_config_map.call_args.args[1].data["AGENTS.md"]
+            assert_that(agents_md, is_not(contains_string("MEDIA:")))
 
 
 @pytest.mark.parametrize(
@@ -4945,6 +5009,110 @@ def test_agent_configuration_publish_rejects_unassigned_required_skill():
                 headers=_auth(context),
             )
             assert_that(publish.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+
+
+def _override_requiring_latest_skill(context) -> dict:
+    client: TestClient = context.client
+    skill_repository: SkillRepository = context.injector.get(SkillRepository)
+    skill_repository.publish_version(context.skill.id, [("SKILL.md", "# Calendar v2")])
+    configuration_url = f"{_BASE}/{context.agent.id}/configuration"
+    draft = client.post(f"{configuration_url}/draft", headers=_auth(context)).json()
+    marked = client.patch(
+        f"{configuration_url}/draft",
+        json={
+            "expected_updated_at": draft["updated_at"],
+            "required_skill_ids": [str(context.skill.id)],
+        },
+        headers=_auth(context),
+    )
+    assert_that(marked.status_code, equal_to(status.HTTP_200_OK))
+    return marked.json()
+
+
+def test_override_draft_and_publish_accept_a_requirement_newer_than_the_agent_pin():
+    with given(
+        [
+            *_GIVEN,
+            there_is_an_agent(),
+            there_is_a_skill(name="Calendar"),
+            skill_is_assigned_to_agent(),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        configuration_url = f"{_BASE}/{context.agent.id}/configuration"
+
+        with when("I require the Skill while the Agent is still pinned to v1"):
+            marked_body = _override_requiring_latest_skill(context)
+
+        with then("the draft records the newer requirement"):
+            assert_that(marked_body["required_skills"], has_length(1))
+            assert_that(marked_body["required_skills"][0]["version"], equal_to(2))
+
+        with when("I publish that draft"):
+            publish = client.post(
+                f"{configuration_url}/draft/publish",
+                json={"expected_updated_at": marked_body["updated_at"]},
+                headers=_auth(context),
+            )
+
+        with then("the Override Version is created and the Agent's pin is untouched"):
+            assert_that(publish.status_code, equal_to(status.HTTP_201_CREATED))
+            assert_that(publish.json()["required_skills"][0]["version"], equal_to(2))
+            agent = client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context)).json()
+            assert_that(agent["skills"][0]["version"], equal_to(1))
+
+
+def test_selecting_an_override_applies_its_newer_required_skill_pin():
+    with given(
+        [
+            *_GIVEN,
+            there_is_an_agent(),
+            there_is_a_skill(name="Calendar"),
+            skill_is_assigned_to_agent(),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        configuration_url = f"{_BASE}/{context.agent.id}/configuration"
+        marked_body = _override_requiring_latest_skill(context)
+        published = client.post(
+            f"{configuration_url}/draft/publish",
+            json={"expected_updated_at": marked_body["updated_at"]},
+            headers=_auth(context),
+        ).json()
+        agent = client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context)).json()
+
+        with when("I select the Override without its skill pin"):
+            refused = client.post(
+                f"{configuration_url}/select",
+                json={
+                    "selection_type": "override",
+                    "override_version": published["version"],
+                    "expected_agent_updated_at": agent["updated_at"],
+                },
+                headers=_auth(context),
+            )
+
+        with then("it is refused against the Agent's current assignments"):
+            assert_that(refused.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+            assert_that(refused.json()["detail"], contains_string("must be pinned to version 2"))
+
+        with when("I select the Override and its skill pin together"):
+            accepted = client.post(
+                f"{configuration_url}/select",
+                json={
+                    "selection_type": "override",
+                    "override_version": published["version"],
+                    "expected_agent_updated_at": agent["updated_at"],
+                    "skill_versions": [{"skill_id": str(context.skill.id), "version": 2}],
+                },
+                headers=_auth(context),
+            )
+
+        with then("both land"):
+            assert_that(accepted.status_code, equal_to(status.HTTP_200_OK))
+            body = accepted.json()
+            assert_that(body["template_pin_type"], equal_to("override"))
+            assert_that(body["skills"][0]["version"], equal_to(2))
 
 
 def test_agent_configuration_override_history_retained_after_soft_delete():

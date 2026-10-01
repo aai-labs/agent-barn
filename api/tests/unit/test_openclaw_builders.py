@@ -12,7 +12,11 @@ from api.domains.agents.builders import (
     native_telegram_channel,
     runtime_teams_channel,
 )
-from api.domains.agents.builders.openclaw import LEGACY_WORKSPACE_MIGRATION_SH, OPENCLAW_GATEWAY_PORT
+from api.domains.agents.builders.openclaw import (
+    LEGACY_WORKSPACE_MIGRATION_SH,
+    OPENCLAW_GATEWAY_PORT,
+    OPENCLAW_WORKSPACE_DIR,
+)
 from api.domains.communications.models import ConversationLocation
 
 _AGENT_ID = UUID("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
@@ -32,6 +36,24 @@ def test_gateway_config_disables_ambient_model_backed_heartbeats() -> None:
     config = build_openclaw_gateway_config("litellm/gpt-5", "http://litellm:4000")
 
     assert config["agents"]["defaults"]["heartbeat"] == {"every": "0m", "target": "none"}
+
+
+def test_gateway_config_isolates_each_persons_direct_messages() -> None:
+    """OpenClaw's default dmScope ("main") puts every sender's DMs in one session, so a
+    multi-user Agent would show one person's private conversation to the next."""
+    config = build_openclaw_gateway_config("litellm/gpt-5", "http://litellm:4000")
+
+    assert config["session"]["dmScope"] == "per-channel-peer"
+
+
+def test_workspace_comes_from_one_constant() -> None:
+    """The file-delivery policy names OPENCLAW_WORKSPACE_DIR as the place to write
+    attachments, so the runtime config and the migration script must use the same path."""
+    config = build_openclaw_gateway_config("litellm/gpt-5", "http://litellm:4000")
+
+    assert config["agents"]["defaults"]["workspace"] == OPENCLAW_WORKSPACE_DIR
+    assert f"workspace={OPENCLAW_WORKSPACE_DIR}\n" in LEGACY_WORKSPACE_MIGRATION_SH
+    assert "@OPENCLAW_WORKSPACE_DIR@" not in LEGACY_WORKSPACE_MIGRATION_SH
 
 
 def test_startup_migrates_legacy_state_after_config_and_plugin_dirs_exist() -> None:
@@ -196,6 +218,8 @@ def test_native_slack_channel_maps_connection_policy() -> None:
 
     unset = native_slack_channel({})
     assert unset["dmPolicy"] == "disabled"
+    # Meeting recordings run well past OpenClaw's 20 MB default; an hour of MP3 is ~60-90 MB.
+    assert unset["mediaMaxMb"] == 100
     assert unset["defaultTo"] == "channel:__agentbarn_no_home_channel__"
 
 

@@ -7,9 +7,13 @@ from injector import inject, singleton
 from sqlalchemy.exc import MultipleResultsFound
 
 from api.core.config import get_config
-from api.core.metrics import TOOL_CALLS
+from api.core.metrics import BUSINESS_ACTIONS, TOOL_CALLS
 from api.domains.agents.models import Agent
 from api.domains.agents.repository import AgentRepository
+from api.domains.business_value.catalogue import INTEGRATIONS
+from api.domains.business_value.gog_catalogue import GOG_INTEGRATIONS
+from api.domains.business_value.models import BusinessAction
+from api.domains.business_value.repository import BusinessActionRepository
 from api.domains.communications.models import CommunicationJournalStage, ConnectionObservedStatus
 from api.domains.communications.operations import CommunicationOperationalRepository
 from api.domains.communications.repository import CommunicationConnectionRepository
@@ -20,6 +24,10 @@ from api.domains.tool_calls.repository import ToolCallRepository
 from api.infrastructure.crypto import decrypt_token
 
 logger = logging.getLogger(__name__)
+
+OTHER_INTEGRATION_LABEL = "other"
+LABELLED_INTEGRATIONS = INTEGRATIONS | GOG_INTEGRATIONS
+UNKNOWN_WRITE_LABEL = "unknown"
 
 _HEALTH_BY_STAGE = {
     CommunicationJournalStage.CONNECTION_CONNECTING: ConnectionObservedStatus.CONNECTING,
@@ -35,6 +43,7 @@ _HEALTH_BY_STAGE = {
 class IngestService:
     agent_repository: AgentRepository
     tool_call_repository: ToolCallRepository
+    business_action_repository: BusinessActionRepository
     connection_repository: CommunicationConnectionRepository
     operational_repository: CommunicationOperationalRepository
     conversation_repository: ConversationRepository
@@ -162,4 +171,18 @@ class IngestService:
                         tool_name=completed.tool_name,
                         status=completed.status.value.lower(),
                     ).inc()
+                    for action in self.business_action_repository.record_in_session(session, completed):
+                        BUSINESS_ACTIONS.labels(**_business_action_labels(action)).inc()
             session.commit()
+
+
+def _business_action_labels(action: BusinessAction) -> dict[str, str]:
+    if action.is_write is None:
+        is_write = UNKNOWN_WRITE_LABEL
+    else:
+        is_write = str(action.is_write).lower()
+    return {
+        "integration": action.integration if action.integration in LABELLED_INTEGRATIONS else OTHER_INTEGRATION_LABEL,
+        "is_write": is_write,
+        "status": action.status.value.lower(),
+    }

@@ -1,3 +1,4 @@
+import json
 from unittest.mock import patch
 from uuid import uuid4
 
@@ -6,7 +7,9 @@ from hamcrest import assert_that, equal_to, has_item
 from starlette.testclient import TestClient
 
 from api.domains.agents.models import SecretProvider
+from api.infrastructure.crypto import encrypt_token
 from api.infrastructure.integration_validators.result import IntegrationValidationResult
+from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.tests.core.givenpy import given, then, when
 from api.tests.core.modules import (
     create_test_client,
@@ -161,6 +164,31 @@ def test_update_agent_attach_shared_credential():
                 jira_secret["shared_credential_id"],
                 equal_to(str(ctx.shared_credential.id)),
             )
+
+
+def test_creating_an_agent_with_a_shared_credential_that_no_longer_validates_returns_400():
+    """Creating an Agent decrypts and re-validates the shared credentials it names. One
+    saved before a rule tightened (a multi-label Pipedrive domain) must give a fixable 400
+    rather than a server error."""
+    pipedrive = {"api_token": "shared-pd-token", "domain": "acme"}
+    with given([*_GIVEN, there_is_a_shared_credential(provider="pipedrive", content=pipedrive)]) as ctx:
+        client: TestClient = ctx.client
+        repository = ctx.injector.get(PostgresRepositoryDelegate)
+        ctx.shared_credential.content = encrypt_token(
+            json.dumps({**pipedrive, "domain": "foo.bar"}), TEST_ENCRYPTION_KEY
+        )
+        repository.save(ctx.shared_credential)
+
+        with when("I create an agent with the stale shared credential"):
+            payload = {
+                **_VALID_CREATE,
+                "shared_credentials": [{"shared_credential_id": str(ctx.shared_credential.id)}],
+            }
+            response = client.post(_AGENTS, json=payload, headers=_auth(ctx))
+
+        with then("it returns 400 naming the credential, not a server error"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+            assert_that("no longer valid" in response.json()["detail"], equal_to(True))
 
 
 # --- Update agent: detach shared credential via removed_secret_providers ---

@@ -6,7 +6,7 @@ from injector import inject, singleton
 from sqlalchemy.exc import IntegrityError
 
 from api.domains.agents.authorization import AgentAuthorization
-from api.domains.agents.models import Agent
+from api.domains.agents.models import Agent, SecretProvider
 from api.domains.auth.models import CurrentUserContext
 from api.domains.rbac.catalog import PermissionKey
 from api.domains.rbac.policy import PermissionPolicy
@@ -29,6 +29,13 @@ from api.domains.skills.models import (
 from api.domains.skills.repository import SkillRepository
 from api.domains.templates.slug import slugify
 from api.infrastructure.shared.models import PaginatedItems, Pagination
+
+
+def _provider_values(providers) -> list[str]:
+    """Provider names for storage. Request models carry ``SecretProvider`` members, but a
+    Skill's stored ``required_providers`` (a JSON column) reads back as plain strings, so
+    ``.value`` alone fails on any lineage that requires a provider."""
+    return [SecretProvider(provider).value for provider in providers]
 
 
 @inject
@@ -274,7 +281,7 @@ class SkillService:
             skill.id,
             files,
             description=latest.description if latest.description is not None else skill.description,
-            required_providers=[provider.value for provider in (latest.required_providers or skill.required_providers)],
+            required_providers=_provider_values(latest.required_providers or skill.required_providers),
             source_skill_id=latest.source_skill_id,
             source_skill_version=latest.source_skill_version,
         )
@@ -494,7 +501,7 @@ class SkillService:
             skill.id,
             files,
             description=latest.description if latest.description is not None else skill.description,
-            required_providers=[provider.value for provider in (latest.required_providers or skill.required_providers)],
+            required_providers=_provider_values(latest.required_providers or skill.required_providers),
             source_skill_id=latest.source_skill_id,
             source_skill_version=latest.source_skill_version,
         )
@@ -565,7 +572,7 @@ class SkillService:
         files = [(file.path, file.content) for file in self.repository.get_files(source.id)]
         metadata = {
             "description": source.description,
-            "required_providers": [provider.value for provider in source.required_providers],
+            "required_providers": _provider_values(source.required_providers),
         }
         draft = self.repository.get_draft(skill.id)
         if draft is not None:
@@ -709,7 +716,7 @@ class SkillService:
             skill.id,
             files,
             description=skill.description,
-            required_providers=[provider.value for provider in providers],
+            required_providers=_provider_values(providers),
             source_skill_id=source.id,
             source_skill_version=latest.version,
         )
@@ -823,7 +830,7 @@ class SkillService:
         source_files = [(file.path, file.content) for file in self.repository.get_files(source.id)]
         metadata = {
             "description": source.description,
-            "required_providers": [provider.value for provider in source.required_providers],
+            "required_providers": _provider_values(source.required_providers),
         }
         draft = self.repository.get_draft(skill.id)
         if draft is not None:

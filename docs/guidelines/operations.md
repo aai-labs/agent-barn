@@ -152,12 +152,20 @@ Agents reachable by email get their own address on a dedicated subdomain, receiv
 - **Subaddressing must be switched on explicitly** at **Email Routing → Settings**. It is **off by default**, and until it is enabled `agent+<slug>-<token>@…` matches no rule at all: the sender gets `550 5.1.1 Address does not exist` and **nothing is written to the Email Routing activity log**, because no rule ever matched. A bounce with an empty activity log is the signature of this being off.
 - **One routing rule serves every agent.** With subaddressing enabled, a single custom-address rule for `agent@agents.agentbarn.dev` → Worker matches `agent+<slug>-<token>@agents.agentbarn.dev` and preserves the `+tag` in `message.to`. The local part must equal `AGENT_EMAIL_MAILBOX` (default `agent`). No Cloudflare API call happens when an Agent is created. Catch-all is zone-apex only and cannot be used on a subdomain; making the subdomain its own zone is Enterprise-only.
 - The Worker must exist before the rule can point at it, so deploy it first — the destination picker only lists deployed Workers.
-- **The Worker deploys through CI**, not by hand, and **each environment's Worker is published by the workflow that deploys the cluster it posts into**. `deploy.yml`'s `deploy-worker` publishes the staging Worker on merges to `staging`, only when `workers/**` changed. `deploy-public.yml`'s `deploy-worker` publishes the production Worker on a release tag, gated on `PUBLIC_AGENT_EMAIL_DOMAIN` being set so an environment without agent email is unaffected. Both run only after their cluster deploy succeeds — the Worker posts into the product API, so the cluster must already hold the matching secret. Pull requests run `wrangler deploy --dry-run` through `ci.yml`, which needs no Cloudflare credentials. This requires **`CLOUDFLARE_WORKERS_TOKEN`** (account-owned, scoped to `Workers Scripts: Edit`), deliberately separate from the `Email Sending: Edit` token so one leak cannot both send mail as the domain and replace the Worker receiving it.
-- **Never publish a Worker from a workflow that does not deploy its `INBOUND_URL` host.** `deploy.yml` on `main` deploys the k3s `agent-farm` namespace, but the production Worker points at `api.agentbarn.dev` on the Talos cluster. Publishing it there handed it one cluster's secret while it posted into another's, and every production message was rejected `401`. `worker.yml` therefore selects its secret from the `environment` input rather than `github.ref_name`, which is a release tag on the public deploy and cannot identify the target cluster.
-- **Each environment has its own pair, and the three environments' pairs must all differ**: `STAGING_AGENT_EMAIL_DOMAIN`/`STAGING_EMAIL_INBOUND_SECRET` for staging, `AGENT_EMAIL_DOMAIN`/`EMAIL_INBOUND_SECRET` for the k3s `main` namespace, and `PUBLIC_AGENT_EMAIL_DOMAIN`/`PUBLIC_EMAIL_INBOUND_SECRET` for the hosted public cluster. Both the cluster deploy and the Worker publish fail when the environment's domain is configured but its secret is empty: the API rejects a blank configured secret outright, so an unset value would bounce every inbound message with `401` rather than degrading. Each guard selects its secret in shell rather than through `A && B || C`, which yields `C` whenever `B` is empty and would otherwise validate the wrong environment's value.
+- **One domain, Worker and variable set per cluster.** A domain carries a single Email Routing rule, so two clusters cannot share one: whichever Worker the rule names receives every message, and the other cluster's addresses resolve against a database that has never heard of them — answered `202` with an empty acceptance, which Email Routing reports as "handled".
+
+  | Domain | Cluster | Wrangler env | Worker | Variable / secret |
+  |---|---|---|---|---|
+  | `agents-staging.agentbarn.dev` | staging (k3s) | `staging` | `agentbarn-email-inbound-staging` | `STAGING_AGENT_EMAIL_DOMAIN` / `STAGING_EMAIL_INBOUND_SECRET` |
+  | `agents-prod.agentbarn.dev` | prod (k3s) | `prod` | `agentbarn-email-inbound-prod` | `AGENT_EMAIL_DOMAIN` / `EMAIL_INBOUND_SECRET` |
+  | `agents.agentbarn.dev` | cloud (Talos) | `cloud` | `agentbarn-email-inbound` | `PUBLIC_AGENT_EMAIL_DOMAIN` / `PUBLIC_EMAIL_INBOUND_SECRET` |
+
+  All three pairs must differ. The Worker environment names its **cluster**, never a role: while `production` meant the k3s cluster in `deploy.yml` and the Talos cluster in `wrangler.toml`, a Worker was published aimed at one and handed the other's secret, and every production message was rejected `401`.
+- **The Worker deploys through CI**, not by hand, and **each environment's Worker is published by the workflow that deploys the cluster it posts into**. `deploy.yml`'s `deploy-worker` publishes `staging` and `prod` when `workers/**` changed; `deploy-public.yml`'s publishes `cloud` on a release tag, gated on `PUBLIC_AGENT_EMAIL_DOMAIN` being set so an environment without agent email is unaffected. Both run only after their cluster deploy succeeds — the Worker posts into the product API, so the cluster must already hold the matching secret. Pull requests run `wrangler deploy --dry-run` for all three through `ci.yml`, which needs no Cloudflare credentials. This requires **`CLOUDFLARE_WORKERS_TOKEN`** (account-owned, scoped to `Workers Scripts: Edit`), deliberately separate from the `Email Sending: Edit` token so one leak cannot both send mail as the domain and replace the Worker receiving it.
+- **Both the cluster deploy and the Worker publish fail when an environment's domain is configured but its secret is empty**: the API rejects a blank configured secret outright, so an unset value bounces every inbound message with `401` rather than degrading. Each guard selects its secret with a shell `case` over separately passed values, never `A && B || C`, which yields `C` whenever `B` is empty and would validate the wrong environment's secret. `worker.yml`'s guard exports the resolved value to `$GITHUB_ENV` and the publish step consumes that, so the value checked is provably the value uploaded — a second expression could not express three environments and would reintroduce the drift.
 - **The Worker is built from the commit being deployed.** `deploy-public.yml` passes the resolved release sha to `worker.yml`, so a `workflow_dispatch` of an older tag republishes that tag's Worker rather than whatever the dispatch ref points at.
 - **`EMAIL_INBOUND_SECRET` is written to the Worker and the cluster by the same run**, from one GitHub secret, so the two cannot drift. **Rotating it has a brief window**: the two are updated by consecutive steps, so mail arriving between them bounces `401`. To rotate without that, set the Worker's copy first with `wrangler secret put EMAIL_INBOUND_SECRET --env <env>`, then update the GitHub secret and deploy.
-- **Break-glass manual deploy** (a broken pipeline, or first-time bring-up before the token exists): `cd workers/email-inbound && pnpm install && pnpm exec wrangler deploy --env production`. Prefer CI — a hand-deployed Worker can drift from the committed source with nothing detecting it.
+- **Break-glass manual deploy** (a broken pipeline, or first-time bring-up before the token exists): `cd workers/email-inbound && pnpm install && pnpm exec wrangler deploy --env <staging|prod|cloud>`. Prefer CI — a hand-deployed Worker can drift from the committed source with nothing detecting it.
 - **A routing rule names one specific Worker, and CI cannot repoint it.** When an environment's rule was created against a differently-named Worker — a `--env local` one used for tunnel testing, say — publishing through CI creates the correctly-named Worker but leaves the rule pointing at the old one, so mail keeps going to the stale Worker. Cut over in this order: **let CI publish first, then repoint the rule's destination, and only then delete the old Worker.** Deleting first leaves the rule aimed at nothing and bounces every message for that domain.
 - **Delete `--env local` Workers when finished.** They point at a `cloudflared` tunnel that stops existing when the laptop closes, and an account accumulating them is an account where it is easy to point a rule at the wrong one.
 - Deploys publish a **new version of one Worker per environment**, not new Workers; Cloudflare retains ~100 versions for `wrangler rollback`. That is why the deploy is path-filtered: unrelated merges would otherwise consume the rollback history.
@@ -254,6 +262,7 @@ kubeconfig portably with
 | `PUBLIC_AGENT_TOKEN_ENCRYPTION_KEY` | New Fernet key |
 | `PUBLIC_PLATFORM_ADMIN_CREDENTIALS` | `email:password` (API policy: 8+, upper, lower, digit; `openssl rand -hex` is not enough) |
 | `PUBLIC_GRAFANA_ADMIN_PASSWORD` | Product Grafana (not cluster Grafana) |
+| `PUBLIC_MONITORING_WEB_PASSWORD` | Basic auth on Prometheus/Alertmanager; 12+ alphanumeric (`openssl rand -hex 16`) |
 | `PUBLIC_FIRECRAWL_API_KEY` | New (this cluster's Firecrawl) |
 | `PUBLIC_OPENROUTER_API_KEY` | Prefer a dedicated key so public traffic is not the testing quota |
 | `PUBLIC_SLACK_ALERTS_WEBHOOK_URL` | `#alerts` or a public-specific channel |
@@ -306,7 +315,7 @@ Documentation-only changes do not change a service image and do not require a se
   deployable on the shared cluster by the namespace-scoped deployer. Note the
   dashboards ConfigMap is deliberately not labeled `grafana_dashboard` — the
   cluster's central Grafana imports that label from every namespace.
-- Required GitHub Actions config: secrets `SLACK_ALERTS_WEBHOOK_URL` (incoming webhook for `#alerts`) and `GRAFANA_ADMIN_PASSWORD`; variable `GRAFANA_HOST` (DNS must resolve for the http01 challenge). The credits metric reuses the existing `OPENROUTER_API_KEY` secret (the API polls `GET /key` for the key's `limit_remaining`); for `OpenRouterCreditsLow` to be meaningful, set a credit limit on that key at openrouter.ai — an unlimited key reports `+Inf`.
+- Required GitHub Actions config: secrets `SLACK_ALERTS_WEBHOOK_URL` (incoming webhook for `#alerts`), `GRAFANA_ADMIN_PASSWORD`, and `MONITORING_WEB_PASSWORD` / `STAGING_MONITORING_WEB_PASSWORD` (basic auth on Prometheus and Alertmanager, which agent pods can otherwise reach in-namespace; 12+ alphanumeric, e.g. `openssl rand -hex 16`); variable `GRAFANA_HOST` (DNS must resolve for the http01 challenge). The credits metric reuses the existing `OPENROUTER_API_KEY` secret (the API polls `GET /key` for the key's `limit_remaining`); for `OpenRouterCreditsLow` to be meaningful, set a credit limit on that key at openrouter.ai — an unlimited key reports `+Inf`.
 - Monitoring verification and its prerequisites live in
   [`testing.md`](testing.md#verification-commands). CI selects
   `.github/workflows/monitoring.yml` for `helm/monitoring/**` changes.
@@ -315,6 +324,7 @@ Documentation-only changes do not change a service image and do not require a se
 ## Operational safety
 
 - Treat signing-key and encryption-key rotation as migrations: existing tokens or encrypted values depend on the current keys.
+- Treat a stricter provider content schema like a data migration too: every Agent start re-validates stored Agent Secrets and Shared Credentials, so rows saved under the old rule stop their Agents' starts (with a 400 naming the integration) until re-saved. Before deploying such a change, run `python -m api.scripts.check_secret_contents` in each environment's API pod. It is read-only, lists failing rows by id and provider without printing values, and exits non-zero when any fail.
 - Verify migration and secret-hook behavior when changing API chart startup.
 - Keep runtime/platform differences explicit when changing Hermes, OpenClaw, Slack, Teams, Telegram, or Discord deployment configuration.
 - The content-free Communications operation journal is retained for
@@ -370,3 +380,36 @@ Documentation-only changes do not change a service image and do not require a se
   `RESTORE_POINT_ORPHAN_MIN_AGE_SECONDS` is left alone, deletions are capped at
   `RESTORE_POINT_ORPHAN_DELETE_LIMIT` per run, and a failed or empty PVC listing fails no rows at
   all. A large backlog therefore drains over several runs rather than one.
+
+### Business Action backfill
+
+Ingest records Business Actions only for Tool Calls it completes after the Business Value
+release (see [`../features/business-value.md`](../features/business-value.md)). The backfill
+classifies the history that already exists. It is operator-run and never scheduled: nothing
+calls it from a router, and no CronJob runs it.
+
+- Run it against a deployed release from the API container, which holds the database
+  credentials:
+  `kubectl -n <namespace> exec deploy/<release> -c api -- python -c "from api.domains.business_value.backfill import main; main()"`.
+  Locally, `make backfill-business-actions` runs the same entry point against whatever
+  `DB_CONNECTION_URL` points at, so check that value before invoking it.
+- It walks completed `terminal` and `exec` Tool Calls in id order, `BACKFILL_BATCH_SIZE`
+  (500) per batch.
+  - It infers each action's status from the stored result, never from the Tool Call's own
+    status.
+  - It writes each batch in its own transaction, so an interrupted run keeps the batches it
+    finished.
+- It is safe to re-run. For each Tool Call it makes the stored rows match the current
+  catalogue, keyed on `(tool_call_id, ordinal)`, and it never changes a row's `status`:
+  - It inserts rows that are missing.
+  - It updates `integration`, `resource`, `verb`, `is_write`, and `outcome_type` (and
+    `updated_at`) only on rows whose mapping actually changed.
+  - It deletes rows the catalogue no longer produces, for example a path that is now ignored,
+    including every row of a Tool Call that now classifies to nothing.
+- A re-run with no catalogue change writes nothing and reports `recorded=0 removed=0`.
+- Each run logs one summary line: `scanned`, `recorded` (rows inserted or changed), `removed`,
+  `failed`. A non-zero `failed` means the classifier raised for those Tool Calls, whose ids are
+  logged individually. They are skipped, not retried, and keep their stored rows.
+- Classifier code changes that alter how a command is split into invocations can shift
+  ordinals. The backfill then deletes and re-inserts those Tool Calls' rows with new ids
+  instead of updating them.

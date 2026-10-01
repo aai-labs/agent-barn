@@ -38,7 +38,8 @@ Templates provide versioned agent configuration; Skills provide packaged instruc
 - Runtime materialization prefixes files with each Skill's isolated slug directory. Hermes writes them beneath `/workspace/skills` and registers that tree in `skills.external_dirs`; OpenClaw writes them beneath `/home/node/.openclaw/workspace/skills`. The manifest includes the exact Agent-pinned version and reports path collisions instead of silently overwriting content.
 - `tools_pointer` is a curated Platform/aai-cli pointer or a derived pointer for custom Skills. It always references `./skills/<skill-root>/SKILL.md`, so renaming a lineage never moves its files or invalidates its entry path.
 - Agent create/update validates declared `required_providers` against Agent Secrets. Skills never grant permissions, tools, or secrets; provider requirements are declarative integration metadata. Eligible aai-cli Skills with a supported configured provider may still be auto-mounted, but that does not create an explicit assignment.
-- Template-required skills must be explicitly present on the Agent: standalone required skills must all be present; for a required-skill group, at least one member must be present. A group member becomes individually required only when it is the sole assigned member of that group.
+- Template-required skills must be explicitly present on the Agent: standalone required skills must all be present; for a required-skill group, at least one member must be present.
+- A required Skill must be pinned to the Template's exact required version, and that match is enforced where the pin becomes live: Agent create, Agent update, and Template Version selection. Because the check runs against the assignments the request *ends up with*, a Template Version and the Skill pins it requires can and must travel in one request; neither is accepted alone when they disagree. Authoring an Agent Template Override is not such a moment — publishing an Override Version does not activate it — so Override draft save and publish validate presence, visibility and provider requirements only, and may record a required version above the Agent's current pin. A group member becomes individually required only when it is the sole assigned member of that group.
 
 ## Authorization invariants
 
@@ -64,6 +65,17 @@ For an organization fork with a newer Platform Template Version available, an ex
 ### Apply a source update to an Agent Override
 
 An Agent Override may show an update only from the direct Platform or Organization lineage of its Override Source Version. The user explicitly selects the complete newer source snapshot as the Agent's shared pin; a stopped Agent changes pins immediately and a running Agent uses Apply & Restart. Source updates never mutate or merge local Override Draft edits, never publish an Override Version, and an unavailable source does not invalidate an existing self-contained Override snapshot.
+
+### Select a Template Version for an Agent
+
+The Agent configuration Template section sends the chosen version together with the required-Skill assignments and pins that version demands, so a Template Version that bumps a required Skill Version, or adds a requirement the Agent does not yet hold, applies in one request.
+
+- Standalone requirements are pinned to the version the selected snapshot records, including when that is older than the Agent currently holds. A standalone requirement the Agent does not have is added at that version.
+- A requirement group is left alone when an assigned member already sits at its required version; a member beyond that version is the caller's choice and is never pulled back. When no assigned member satisfies the group, one assigned member is moved. When no member is assigned at all, the author picks one and Apply stays disabled until they do.
+- Pins that already match are not resent, so a Template switch is never judged against provider requirements belonging to a Skill Version the Agent does not use.
+- Apply is disabled while a Skill being added declares a provider the Agent has no Secret for, because that assignment would be refused.
+
+Every resulting version move and addition is listed in the Apply confirmation before anything is written. The Skills section keeps a template-required Skill's version read-only and points at this flow.
 
 ### Assign and mount skills
 

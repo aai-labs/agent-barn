@@ -212,13 +212,8 @@ class SelectionValidator:
         org_id: UUID,
         prospective_pins: Mapping[UUID, int] | None = None,
         check_providers: bool = True,
+        check_versions: bool = True,
     ) -> None:
-        """Check a template's required Skills against the assignments that will hold.
-
-        ``prospective_pins`` is the pins *after* the caller's changes; without it the
-        present assignments are used, which rejects a template and its own skills
-        arriving together.
-        """
         if not required_map:
             return
         accessible = {skill.id: skill for skill in self.skill_repository.find_visible_for_agent(agent.id, org_id)}
@@ -251,9 +246,8 @@ class SelectionValidator:
                     detail=f"At least one of these template skills must be assigned to the Agent: {names}",
                 )
 
-        # The same group-aware validator `update_agent` uses, so both write paths
-        # accept the same configurations.
-        self.validate_required_skill_versions(required_map, assigned_versions)
+        if check_versions:
+            self.validate_required_skill_versions(required_map, assigned_versions)
 
         if not check_providers:
             return

@@ -1,0 +1,39 @@
+[
+  {
+    "name": "read_failure_masked_by_agent_echo",
+    "tool_name": "exec",
+    "stored_status": "SUCCESS",
+    "arguments": {
+      "command": "gog gmail labels list --json --no-input; echo \"EXIT_CODE:$?\""
+    },
+    "result": {
+      "content": [
+        {
+          "text": "missing --account (or set GOG_ACCOUNT, set default via `gog auth manage`, or store exactly one token)\nEXIT_CODE:2",
+          "type": "text"
+        }
+      ],
+      "details": {
+        "cwd": "/home/node/.openclaw/workspace",
+        "status": "completed",
+        "exitCode": 0,
+        "aggregated": "missing --account (or set GOG_ACCOUNT, set default via `gog auth manage`, or store exactly one token)\nEXIT_CODE:2",
+        "durationMs": 679,
+        "exitReason": "exit",
+        "exitSignal": null,
+        "noOutputTimedOut": false
+      }
+    },
+    "expected_actions": [
+      {
+        "integration": "google-gmail",
+        "resource": "labels",
+        "verb": "list",
+        "is_write": false,
+        "outcome_type": null,
+        "status": "UNKNOWN",
+        "ordinal": 0
+      }
+    ]
+  }
+]

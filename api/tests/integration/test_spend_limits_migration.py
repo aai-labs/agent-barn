@@ -15,7 +15,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError
 
-PRE_AF337_REVISION = "73e85ce78653"
+PRE_AF337_REVISION = "45bcefcb0749"
 AF337_REVISION = "d7a2c4f81b36"
 ALEMBIC_INI = Path(__file__).resolve().parents[2] / "alembic.ini"
 LLM_BUDGET_MANAGE_ID = UUID("5d0c2b7e-8f41-5a6c-9e3d-1b7f4a2c6e90")

@@ -44,6 +44,7 @@ class AgentChatMessage(BaseModel, table=True):
         # Agents, which neither agent_id-prefixed index above can serve. agent_id
         # trails so the distinct-active-Agents query stays index-only too.
         sa.Index("ix_agent_chat_message_occurred_at_direction", "occurred_at", "direction", "agent_id"),
+        sa.Index("ix_agent_chat_message_agent_direction_occurred", "agent_id", "direction", "occurred_at"),
     )
 
     agent_id: UUID = SqlField(foreign_key="agent.id", nullable=False, ondelete="CASCADE")

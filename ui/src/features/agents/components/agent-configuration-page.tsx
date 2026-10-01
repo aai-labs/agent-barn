@@ -228,6 +228,7 @@ export function AgentConfigurationPage({ agentId }: { agentId: string }) {
             {activeSection === "channels" && (
               <AgentChannelSettings
                 agent={agent}
+                agentDescription={configuration.active.description}
                 canEdit={canEdit}
                 autoOpen={connect}
               />

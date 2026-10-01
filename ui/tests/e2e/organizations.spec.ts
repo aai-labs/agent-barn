@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 
+import { OrganizationDetailPage } from "../pages/organization-detail-page.po";
 import { DataSupport } from "../pages/data-support/data-support.po";
 import {
   ORG_A_ID,
@@ -649,5 +650,56 @@ test.describe("Forgot / reset password", () => {
 
     await expect(page.getByText(/please log in to continue/i)).toBeVisible();
     await expect(page).toHaveURL(/\/login/);
+  });
+});
+
+
+test.describe("Organization rename", () => {
+  test.use({ storageState: { cookies: [], origins: [] } });
+
+  for (const role of ["OWNER", "ADMIN"]) {
+    test(`${role} can rename and refresh the selector`, async ({ page }) => {
+      // Given an organization owner or admin viewing its management page.
+      const data = new DataSupport(page);
+      const context = userWithOrgMemberships({ isPlatformAdmin: false, roles: [role, "MEMBER"] });
+      await data.auth.interceptRefreshRequest();
+      await data.users.interceptGetUserContextRequest({ userContext: context });
+      await data.organizations.interceptGetMembers();
+      const state = await data.organizations.interceptRenameOrganization();
+      await page.goto(DETAIL_URL);
+      const detail = new OrganizationDetailPage(page);
+      await detail.openRename();
+      await expect(detail.name).toHaveValue("AAI Labs");
+      (context.organization_users[0].organization as { name: string }).name = "Renamed Org";
+      // When they save a new display name with surrounding whitespace.
+      await detail.rename("  Renamed Org  ");
+      // Then the trimmed name appears in the heading and organization selector.
+      await expect(detail.dialog).not.toBeVisible();
+      expect(state.payload).toEqual({ name: "Renamed Org" });
+      await expect(page.getByRole("heading", { name: "Renamed Org", exact: true })).toBeVisible();
+      await expect(page.locator('button[aria-haspopup="listbox"]')).toContainText("Renamed Org");
+    });
+  }
+
+  test("validates names, preserves failed edits, and discards cancelled edits", async ({ page }) => {
+    const data = new DataSupport(page);
+    await data.auth.interceptRefreshRequest();
+    await data.users.interceptGetUserContextRequest();
+    await data.organizations.interceptGetMembers();
+    const state = await data.organizations.interceptRenameOrganization({ status: 500 });
+    await page.goto(DETAIL_URL);
+    const detail = new OrganizationDetailPage(page);
+    await detail.openRename();
+    for (const name of ["   ", "ab", "a".repeat(256)]) {
+      await detail.rename(name);
+      await expect(detail.dialog.getByRole("alert")).toBeVisible();
+      expect(state.payload).toBeUndefined();
+    }
+    await detail.rename("New name");
+    await expect(page.getByText("Unable to rename organization", { exact: true })).toBeVisible();
+    await expect(detail.name).toHaveValue("New name");
+    await detail.cancel();
+    await detail.openRename();
+    await expect(detail.name).toHaveValue("AAI Labs");
   });
 });

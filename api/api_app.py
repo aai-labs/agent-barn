@@ -27,6 +27,7 @@ from api.domains.agent_webhooks.routes import agent_webhook_ingress_router, agen
 from api.domains.agents.routes import agents_router
 from api.domains.agents.service import AgentService
 from api.domains.auth.routes import auth_router
+from api.domains.business_value.routes import business_value_router
 from api.domains.communications.metrics import refresh_communication_metrics
 from api.domains.communications.operations import CommunicationOperationalRepository
 from api.domains.communications.routes import communications_router
@@ -112,6 +113,7 @@ def create_app(injector: Injector | None = None):
     subapi.include_router(agent_webhooks_router)
     subapi.include_router(agent_settings_router)
     subapi.include_router(auth_router)
+    subapi.include_router(business_value_router)
     subapi.include_router(conversations_router)
     subapi.include_router(communications_router)
     subapi.include_router(web_chat_router)

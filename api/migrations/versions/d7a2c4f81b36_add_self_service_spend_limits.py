@@ -11,7 +11,7 @@ against that month's spend rather than everything ever spent. From here on nobod
 uncapped, and the ceiling can no longer be cleared.
 
 Revision ID: d7a2c4f81b36
-Revises: 73e85ce78653
+Revises: 45bcefcb0749
 Create Date: 2026-09-23 00:00:00.000000
 """
 
@@ -22,7 +22,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "d7a2c4f81b36"
-down_revision: str | Sequence[str] | None = "73e85ce78653"
+down_revision: str | Sequence[str] | None = "45bcefcb0749"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
