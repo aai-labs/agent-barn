@@ -1,195 +1,111 @@
-import json
 from types import SimpleNamespace
-from typing import cast
 from unittest.mock import Mock, patch
 from uuid import uuid4
 
-from hamcrest import assert_that, equal_to
+import pytest
 
 from api.core.config import Config
-from api.domains.communications.models import (
-    CommunicationDeliveryStatus,
-    ConversationLocation,
-    OutboundCommunicationEnvelope,
-    ProcessingFeedbackStage,
-)
-from api.domains.communications.plugins.slack import SlackCredentials, SlackSettings
+from api.domains.communications.models import ConversationLocation, OutboundCommunicationEnvelope
+from api.domains.communications.plugins.base import GatewayDeliveryPlugin
+from api.domains.communications.plugins.email import EmailCredentials, EmailSettings
+from api.domains.communications.plugins.registry import PlatformPluginRegistry
 from api.domains.communications.processor import OutboundCommunicationProcessor
 
 
-def _delivery() -> tuple[SimpleNamespace, OutboundCommunicationEnvelope]:
-    connection_id = uuid4()
-    source_delivery_id = uuid4()
+def processor(platform_key="email", origin="reply", error=None):
     outbound = OutboundCommunicationEnvelope(
-        source_delivery_id=source_delivery_id,
-        location=ConversationLocation(id="C123", type="CHANNEL", thread_id="1724264405.531769"),
+        origin=origin,
+        execution_id="historical-run" if origin != "reply" else None,
+        source_delivery_id=uuid4() if origin != "cron" else None,
+        location=ConversationLocation(id="sender@example.test", type="DM"),
         text="reply",
-        reply_to_provider_message_id="1724264405.531769",
-        provider_metadata={"service_url": "https://service.example"},
+        provider_metadata={"subject": "Subject"},
     )
-    return (
-        SimpleNamespace(
-            id=uuid4(),
-            connection_id=connection_id,
-            idempotency_key="reply-1",
-            envelope=outbound.model_dump(mode="json"),
-        ),
-        outbound,
+    delivery = SimpleNamespace(
+        id=uuid4(), connection_id=uuid4(), idempotency_key="reply-1", envelope=outbound.model_dump(mode="json")
     )
-
-
-def _processor(
-    delivery: SimpleNamespace,
-    plugin: Mock,
-    *,
-    status: CommunicationDeliveryStatus,
-) -> tuple[OutboundCommunicationProcessor, Mock, Mock]:
     deliveries = Mock()
     deliveries.claim_next_outbound.return_value = delivery
-    deliveries.complete_outbound.return_value = True
-    deliveries.delivery_status.return_value = status
     connections = Mock()
     connections.get_active.return_value = SimpleNamespace(
         enabled=True,
-        platform_key="email",
+        platform_key=platform_key,
         settings={},
         credentials_encrypted="ciphertext",
         agent_id=uuid4(),
     )
     agents = Mock()
     agents.get_by_id.return_value = SimpleNamespace(name="Tommy")
-    plugins = Mock()
-    plugins.require.return_value = plugin
-    gateway = Mock()
-    processor = OutboundCommunicationProcessor(
-        config=cast(Config, SimpleNamespace(agent_token_encryption_key="key")),
+    plugin = Mock(spec=GatewayDeliveryPlugin)
+    plugin.key = "email"
+    plugin.schema_version = 1
+    plugin.settings_model = EmailSettings
+    plugin.credentials_model = EmailCredentials
+    plugin.send.return_value = "provider-reply"
+    plugin.send.side_effect = error
+    worker = OutboundCommunicationProcessor(
+        config=Config(agent_token_encryption_key="key"),
         deliveries=deliveries,
         connections=connections,
         agents=agents,
-        plugins=plugins,
-        gateway=gateway,
+        plugins=PlatformPluginRegistry([plugin]),
     )
-    return processor, gateway, deliveries
+    return worker, deliveries, plugin, delivery
 
 
-def _plugin(send_result: str | None = "provider-reply", *, error: Exception | None = None) -> Mock:
-    plugin = Mock()
-    plugin.settings_model = SlackSettings
-    plugin.credentials_model = SlackCredentials
-    plugin.send.side_effect = error or None
-    if error is None:
-        plugin.send.return_value = send_result
-    return plugin
-
-
-def test_outbound_success_feedback_runs_after_durable_provider_success() -> None:
-    delivery, outbound = _delivery()
-    processor, gateway, deliveries = _processor(
-        delivery,
-        _plugin(),
-        status=CommunicationDeliveryStatus.SUCCEEDED,
-    )
-
-    with patch(
-        "api.domains.communications.processor.decrypt_token",
-        return_value=json.dumps({"bot_token": "xoxb-token", "app_token": "xapp-token"}),
-    ):
-        assert processor.process_one() is True
-
+def test_provider_success_completes_with_stable_idempotency_and_current_agent_identity():
+    worker, deliveries, plugin, delivery = processor()
+    with patch("api.domains.communications.processor.decrypt_token", return_value="{}"):
+        assert worker.process_one() is True
     deliveries.complete_outbound.assert_called_once_with(delivery.id, provider_message_id="provider-reply")
-    context = gateway.notify_processing_feedback.call_args.args[0]
-    assert context.stage == ProcessingFeedbackStage.SUCCEEDED
-    assert context.connection_id == delivery.connection_id
-    assert context.location == outbound.location
-    assert context.provider_message_id == outbound.reply_to_provider_message_id
-    assert context.source_delivery_id == outbound.source_delivery_id
-    assert_that(context.provider_metadata, equal_to(outbound.provider_metadata))
+    sent = plugin.send.call_args.args[2]
+    assert sent.provider_metadata == {"subject": "Subject", "agent_name": "Tommy"}
+    assert plugin.send.call_args.kwargs == {"idempotency_key": "reply-1"}
+    assert deliveries.claim_next_outbound.call_args.kwargs == {
+        "native_platform_keys": frozenset({"slack", "discord", "telegram", "teams"})
+    }
 
 
-def test_outbound_processor_does_not_claim_native_platform_deliveries() -> None:
-    delivery, _ = _delivery()
-    processor, _, deliveries = _processor(
-        delivery,
-        _plugin(),
-        status=CommunicationDeliveryStatus.SUCCEEDED,
-    )
-    processor.config = Config(
-        agent_token_encryption_key="key",
-        communications_native_platforms="slack,discord",
-    )
-    deliveries.claim_next_outbound.return_value = None
-
-    assert processor.process_one() is False
-
-    deliveries.claim_next_outbound.assert_called_once_with(
-        native_platform_keys=frozenset({"slack", "discord", "telegram", "teams"}),
-    )
+def test_provider_failure_is_normalized_for_durable_retry():
+    worker, deliveries, _, delivery = processor(error=TimeoutError("provider timed out"))
+    with patch("api.domains.communications.processor.decrypt_token", return_value="{}"):
+        assert worker.process_one() is True
+    assert deliveries.complete_outbound.call_args.args == (delivery.id,)
+    assert deliveries.complete_outbound.call_args.kwargs["error_details"].operation == "send_message"
 
 
-def test_outbound_processor_refuses_a_native_claim_already_in_flight() -> None:
-    delivery, _ = _delivery()
-    plugin = _plugin()
-    processor, gateway, deliveries = _processor(delivery, plugin, status=CommunicationDeliveryStatus.PROCESSING)
-    cast(Mock, processor.connections.get_active).return_value.platform_key = "slack"
-    deliveries.complete_outbound.return_value = False
-
-    assert processor.process_one() is True
-
-    cast(Mock, processor.plugins.require).assert_not_called()
+@pytest.mark.parametrize("platform_key", ["slack", "discord", "telegram", "teams"])
+def test_native_claim_already_in_flight_cannot_reach_a_provider(platform_key):
+    worker, deliveries, plugin, delivery = processor(platform_key=platform_key)
+    with patch("api.domains.communications.processor.decrypt_token") as decrypt:
+        assert worker.process_one() is True
+    decrypt.assert_not_called()
     plugin.send.assert_not_called()
-    gateway.notify_processing_feedback.assert_not_called()
-    deliveries.complete_outbound.assert_called_once()
+    assert deliveries.complete_outbound.call_args.args == (delivery.id,)
 
 
-def test_outbound_terminal_failure_feedback_marks_failed_after_dead_letter() -> None:
-    delivery, _ = _delivery()
-    processor, gateway, _ = _processor(
-        delivery,
-        _plugin(error=RuntimeError("provider unavailable")),
-        status=CommunicationDeliveryStatus.DEAD_LETTERED,
-    )
+@pytest.mark.parametrize("origin", ["cron", "user_directed"])
+def test_historical_initiated_gateway_work_is_rejected_before_provider_send(origin):
+    worker, deliveries, plugin, delivery = processor(origin=origin)
+    with patch("api.domains.communications.processor.decrypt_token", return_value="{}"):
+        assert worker.process_one() is True
+    plugin.send.assert_not_called()
+    assert deliveries.complete_outbound.call_args.args == (delivery.id,)
+    assert deliveries.complete_outbound.call_args.kwargs["error_details"].retryable is False
 
+
+@pytest.mark.parametrize("origin", ["cron", "user_directed"])
+def test_retired_initiated_work_does_not_consult_unavailable_dependencies(origin):
+    worker, deliveries, plugin, delivery = processor(origin=origin)
+    worker.connections.get_active.side_effect = TimeoutError("database unavailable")
+    worker.agents.get_by_id.side_effect = TimeoutError("database unavailable")
     with patch(
-        "api.domains.communications.processor.decrypt_token",
-        return_value=json.dumps({"bot_token": "xoxb-token", "app_token": "xapp-token"}),
-    ):
-        assert processor.process_one() is True
-
-    context = gateway.notify_processing_feedback.call_args.args[0]
-    assert context.stage == ProcessingFeedbackStage.FAILED
-
-
-def test_outbound_retry_does_not_mark_processing_failed() -> None:
-    delivery, _ = _delivery()
-    processor, gateway, _ = _processor(
-        delivery,
-        _plugin(error=RuntimeError("temporary provider failure")),
-        status=CommunicationDeliveryStatus.PENDING,
-    )
-
-    with patch(
-        "api.domains.communications.processor.decrypt_token",
-        return_value=json.dumps({"bot_token": "xoxb-token", "app_token": "xapp-token"}),
-    ):
-        assert processor.process_one() is True
-
-    gateway.notify_processing_feedback.assert_not_called()
-
-
-def test_feedback_status_lookup_failure_does_not_escape_after_completion() -> None:
-    delivery, _ = _delivery()
-    processor, gateway, deliveries = _processor(
-        delivery,
-        _plugin(),
-        status=CommunicationDeliveryStatus.SUCCEEDED,
-    )
-    deliveries.delivery_status.side_effect = RuntimeError("database unavailable")
-
-    with patch(
-        "api.domains.communications.processor.decrypt_token",
-        return_value=json.dumps({"bot_token": "xoxb-token", "app_token": "xapp-token"}),
-    ):
-        assert processor.process_one() is True
-
-    deliveries.complete_outbound.assert_called_once_with(delivery.id, provider_message_id="provider-reply")
-    gateway.notify_processing_feedback.assert_not_called()
+        "api.domains.communications.processor.decrypt_token", side_effect=TimeoutError("decryption unavailable")
+    ) as decrypt:
+        assert worker.process_one() is True
+    worker.connections.get_active.assert_not_called()
+    worker.agents.get_by_id.assert_not_called()
+    decrypt.assert_not_called()
+    plugin.send.assert_not_called()
+    assert deliveries.complete_outbound.call_args.args == (delivery.id,)
+    assert deliveries.complete_outbound.call_args.kwargs["error_details"].retryable is False

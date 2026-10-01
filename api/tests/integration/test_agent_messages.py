@@ -26,8 +26,7 @@ def _conversation(channel):
 @pytest.fixture(autouse=True)
 def slack_lookup():
     with patch("api.domains.communications.plugins.slack.SlackClient.get_conversation", side_effect=_conversation):
-        with patch("api.domains.communications.plugins.slack.SlackPlatformPlugin.processing_feedback"):
-            yield
+        yield
 
 
 @pytest.mark.parametrize("destination", ["default", "origin", "explicit"])

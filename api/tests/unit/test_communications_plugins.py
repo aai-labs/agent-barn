@@ -17,7 +17,7 @@ from api.domains.communications.models import (
     PlatformCapability,
 )
 from api.domains.communications.plugins.base import (
-    PlatformPlugin,
+    GatewayDeliveryPlugin,
     WebhookRequest,
 )
 from api.domains.communications.plugins.discord import DiscordPlatformPlugin
@@ -599,9 +599,9 @@ def test_teams_offers_guidance_for_after_the_connection_is_saved() -> None:
 
 @pytest.mark.parametrize(
     "plugin_class",
-    [SlackPlatformPlugin, DiscordPlatformPlugin, TelegramPlatformPlugin, TeamsPlatformPlugin],
+    [WebPlatformPlugin],
 )
-def test_chat_platforms_hand_the_runtime_the_message_exactly_as_stored(plugin_class) -> None:
+def test_web_delivery_hands_the_runtime_the_message_exactly_as_stored(plugin_class) -> None:
     envelope = NormalizedCommunicationEnvelope(
         provider_message_id="1724264405.531769",
         occurred_at=datetime(2026, 8, 24, 10, 0, tzinfo=UTC),
@@ -609,5 +609,5 @@ def test_chat_platforms_hand_the_runtime_the_message_exactly_as_stored(plugin_cl
         text="the original message text",
     )
 
-    assert plugin_class.runtime_prompt is PlatformPlugin.runtime_prompt
-    assert PlatformPlugin.runtime_prompt(plugin_class.__new__(plugin_class), envelope) == envelope.text
+    assert plugin_class.runtime_prompt is GatewayDeliveryPlugin.runtime_prompt
+    assert GatewayDeliveryPlugin.runtime_prompt(plugin_class.__new__(plugin_class), envelope) == envelope.text

@@ -87,30 +87,11 @@ def test_chat_plugins_do_not_advertise_gateway_initiated_delivery(plugin):
 @pytest.mark.parametrize(
     "plugin_type", [DiscordPlatformPlugin, TelegramPlatformPlugin, SlackPlatformPlugin, TeamsPlatformPlugin]
 )
-def test_native_only_plugins_cannot_send_gateway_messages(plugin_type):
-    from api.domains.communications.models import ConversationLocation, OutboundCommunicationEnvelope
+def test_native_plugins_cannot_resolve_gateway_delivery(plugin_type):
+    from api.domains.communications.plugins.registry import PlatformPluginRegistry
+    from api.domains.communications.transport import NativeTransportUnsupported
 
     plugin = plugin_type(CONFIG)
-    settings = plugin.settings_model.model_validate({})
-    credential_values = {
-        "bot_token": "test-bot",
-        "app_token": "test-app",
-        "tenant_id": "test-tenant",
-        "app_id": "test-app",
-        "app_password": "test-password",
-    }
-    credentials = plugin.credentials_model.model_validate(
-        {name: credential_values[name] for name in plugin.credentials_model.model_fields}
-    )
-    envelope = OutboundCommunicationEnvelope(
-        origin="cron",
-        execution_id="historical-run",
-        location=ConversationLocation(id="channel", type="CHANNEL"),
-        text="old output",
-    )
-
-    with patch("httpx.request", side_effect=AssertionError("Native transport must not call the provider")):
-        with pytest.raises(NotImplementedError):
-            plugin.send(settings, credentials, envelope, idempotency_key="historical-delivery")
-    assert PlatformCapability.SUPERVISED_INGRESS not in plugin.capabilities
-    assert PlatformCapability.PROCESSING_FEEDBACK not in plugin.capabilities
+    registry = PlatformPluginRegistry([plugin])
+    with pytest.raises(NativeTransportUnsupported):
+        registry.require_delivery(plugin.key)

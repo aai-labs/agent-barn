@@ -2,7 +2,7 @@ import hashlib
 import json
 from abc import ABC, abstractmethod
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
@@ -10,19 +10,15 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from api.domains.communications.models import (
     CommunicationPolicyDisposition,
-    ConversationLocation,
     CredentialUniquenessScope,
     NormalizedCommunicationEnvelope,
     OutboundCommunicationEnvelope,
     OutboundTargetRequest,
     PlatformCapability,
     PlatformDescriptorRead,
-    ProcessingFeedbackStage,
     ResolvedOutboundTarget,
 )
 from api.domains.communications.transport import platform_transport
-
-_FALLBACK_FAILURE_SUMMARY = "The failure is recorded in this Connection's diagnostics."
 
 
 class PlatformSettings(BaseModel):
@@ -76,24 +72,6 @@ class WebhookRequest:
 
 
 @dataclass(frozen=True)
-class ProcessingFeedbackContext:
-    """Provider-neutral lifecycle facts for best-effort user feedback."""
-
-    connection_id: UUID
-    stage: ProcessingFeedbackStage
-    location: ConversationLocation
-    provider_message_id: str | None = None
-    source_delivery_id: UUID | None = None
-    # Provider-owned routing data is needed by webhook platforms such as Teams
-    # to address a reply. It is copied from the normalized envelope and stays
-    # inside the trusted Platform Plugin boundary.
-    provider_metadata: dict[str, str | int | float | bool | None] = field(default_factory=dict)
-    # Already normalized and redacted by normalize_communication_error, so it is
-    # safe to show a channel; raw provider text never reaches a plugin.
-    error_summary: str | None = None
-
-
-@dataclass(frozen=True)
 class InboundAdmissionResult(Sequence[NormalizedCommunicationEnvelope]):
     """Typed provider admission outcome with list-compatible envelopes.
 
@@ -132,7 +110,6 @@ class PlatformPlugin(ABC):
     settings_model: type[PlatformSettings]
     credentials_model: type[PlatformCredentials]
     credential_uniqueness_scope: CredentialUniquenessScope = CredentialUniquenessScope.NONE
-    supports_progress_updates: bool = True
 
     def resolve_outbound_target(
         self,
@@ -140,13 +117,10 @@ class PlatformPlugin(ABC):
         credentials: PlatformCredentials,
         request: OutboundTargetRequest,
     ) -> ResolvedOutboundTarget:
-        raise NotImplementedError("This platform does not support agent-initiated delivery")
+        raise NotImplementedError("This platform does not support native scheduled home delivery")
 
     def validate_outbound_target(self, settings: PlatformSettings, target: ResolvedOutboundTarget) -> None:
-        raise NotImplementedError("This platform does not support agent-initiated delivery")
-
-    def runtime_prompt(self, envelope: NormalizedCommunicationEnvelope) -> str:
-        return envelope.text
+        raise NotImplementedError("This platform does not support native scheduled home delivery")
 
     @property
     def descriptor(self) -> PlatformDescriptorRead:
@@ -216,34 +190,6 @@ class PlatformPlugin(ABC):
     ) -> str | None:
         """Validate credentials with the provider and return a safe external identity."""
 
-    def send(
-        self,
-        settings: PlatformSettings,
-        credentials: PlatformCredentials,
-        envelope: OutboundCommunicationEnvelope,
-        *,
-        idempotency_key: str,
-    ) -> str:
-        """Deliver one normalized reply and return the provider message id.
-
-        ``idempotency_key`` is stable for the durable Delivery across leases
-        and manual retries. Provider adapters must pass it to the provider's
-        native deduplication field or idempotency transport header.
-
-        A shipped plugin that cannot provide outbound delivery is not eligible for
-        an enabled Communication Connection.
-        """
-        raise NotImplementedError(f"{self.key} does not implement outbound delivery")
-
-    def normalize_inbound(
-        self,
-        settings: PlatformSettings,
-        payload: dict[str, Any],
-    ) -> InboundAdmissionResult:
-        """Verify/filter a provider-decoded event and map it to protocol envelopes."""
-        del settings, payload
-        return InboundAdmissionResult(CommunicationPolicyDisposition.MALFORMED_PAYLOAD)
-
     def list_directory_entries(
         self,
         settings: PlatformSettings,
@@ -261,20 +207,6 @@ class PlatformPlugin(ABC):
         """
         del settings, credentials, kind, search, guild_id
         raise NotImplementedError(f"{self.key} does not implement directory discovery")
-
-    def processing_feedback(
-        self,
-        settings: PlatformSettings,
-        credentials: PlatformCredentials,
-        context: ProcessingFeedbackContext,
-    ) -> None:
-        """Publish optional provider UX for an inbound delivery lifecycle.
-
-        The hook is deliberately outside durable delivery state transitions:
-        failures here must never change whether a Communication Delivery is
-        accepted, retried, or terminally completed.
-        """
-        del settings, credentials, context
 
     def verify_webhook(self, credentials: PlatformCredentials, request: WebhookRequest) -> None:
         """Authenticate a provider webhook before normalization; raise PermissionError to reject it."""
@@ -309,3 +241,32 @@ class PlatformPlugin(ABC):
         carry only non-secret material (client id, scopes, permissions).
         """
         raise NotImplementedError(f"{self.key} does not implement bot install links")
+
+
+class GatewayDeliveryPlugin(PlatformPlugin):
+    """Web Chat/Email durable replies and runtime prompt/progress behavior."""
+
+    supports_progress_updates: bool = True
+
+    def runtime_prompt(self, envelope: NormalizedCommunicationEnvelope) -> str:
+        return envelope.text
+
+    @abstractmethod
+    def send(
+        self,
+        settings: PlatformSettings,
+        credentials: PlatformCredentials,
+        envelope: OutboundCommunicationEnvelope,
+        *,
+        idempotency_key: str,
+    ) -> str:
+        """Deliver a reply using the durable Delivery's stable idempotency key."""
+
+    def normalize_inbound(
+        self,
+        settings: PlatformSettings,
+        payload: dict[str, Any],
+    ) -> InboundAdmissionResult:
+        """Normalize and apply policy to a gateway-owned inbound payload."""
+        del settings, payload
+        return InboundAdmissionResult(CommunicationPolicyDisposition.MALFORMED_PAYLOAD)

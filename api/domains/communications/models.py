@@ -49,13 +49,6 @@ class PlatformCapability(str, enum.Enum):
     INTERACTIVE_COMPONENTS = "interactive_components"
 
 
-class ProcessingFeedbackStage(str, enum.Enum):
-    ACCEPTED = "accepted"
-    CLAIMED = "claimed"
-    SUCCEEDED = "succeeded"
-    FAILED = "failed"
-
-
 class CredentialUniquenessScope(str, enum.Enum):
     NONE = "none"
     AGENT = "agent"

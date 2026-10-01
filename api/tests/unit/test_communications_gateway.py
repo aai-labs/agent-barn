@@ -7,7 +7,7 @@ from uuid import uuid4
 
 import httpx
 import pytest
-from hamcrest import assert_that, empty, equal_to, is_
+from hamcrest import assert_that, empty, is_
 
 from api.core.config import Config
 from api.domains.agents.models import Agent, AgentStatus, AgentType
@@ -15,19 +15,16 @@ from api.domains.communications.gateway_service import (
     CommunicationsGatewayService,
 )
 from api.domains.communications.models import (
-    AcceptedCommunicationRead,
     CommunicationConnection,
     CommunicationDeliveryStatus,
     CommunicationPolicyDisposition,
     ConversationLocation,
     NormalizedCommunicationEnvelope,
-    PlatformCapability,
-    ProcessingFeedbackStage,
     RuntimeDeliveryRead,
     RuntimeDeliveryResult,
     RuntimeReplyCreate,
 )
-from api.domains.communications.plugins.base import InboundAdmissionResult, PlatformPlugin
+from api.domains.communications.plugins.base import GatewayDeliveryPlugin, InboundAdmissionResult, PlatformPlugin
 from api.domains.communications.plugins.registry import PlatformPluginRegistry
 from api.domains.communications.plugins.slack import SlackCredentials, SlackSettings
 from api.domains.communications.plugins.teams import TeamsPlatformPlugin
@@ -83,12 +80,12 @@ def _service(
     return service, deliveries
 
 
-def _feedback_plugin() -> Mock:
-    plugin = Mock()
+def _delivery_plugin() -> Mock:
+    plugin = Mock(spec=GatewayDeliveryPlugin)
     plugin.key = "email"
     plugin.display_name = "Slack"
     plugin.schema_version = 1
-    plugin.capabilities = frozenset({PlatformCapability.PROCESSING_FEEDBACK})
+    plugin.capabilities = frozenset()
     plugin.settings_model = SlackSettings
     plugin.credentials_model = SlackCredentials
     plugin.supports_progress_updates = True
@@ -265,36 +262,9 @@ def test_runtime_relay_refuses_a_non_teams_connection_without_proxying() -> None
         service.relay(connection.id, _teams_activity(), "Bearer signed-token")
 
 
-def test_gateway_feedback_is_best_effort_after_inbound_acceptance() -> None:
-    connection = cast(CommunicationConnection, _connection())
-    plugin = _feedback_plugin()
-    service, deliveries = _service(connection, plugin)
-    deliveries.accept_inbound.return_value = AcceptedCommunicationRead(
-        message_id=uuid4(),
-        delivery_id=uuid4(),
-        status=CommunicationDeliveryStatus.PENDING,
-    )
-    plugin.processing_feedback.side_effect = RuntimeError("Slack unavailable")
-
-    with patch(
-        "api.domains.communications.gateway_service.decrypt_token",
-        return_value=json.dumps({"bot_token": "xoxb-token", "app_token": "xapp-token"}),
-    ):
-        accepted = service._accept_admitted_payload(connection, plugin, SlackSettings(), {})
-
-    assert len(accepted) == 1
-    deliveries.accept_inbound.assert_called_once()
-    plugin.processing_feedback.assert_called_once()
-    assert plugin.processing_feedback.call_args.args[2].stage == ProcessingFeedbackStage.ACCEPTED
-    signals = cast(Mock, service.signals)
-    published_agent_id, published_signal = signals.publish.call_args.args
-    assert published_agent_id == connection.agent_id
-    assert published_signal.type == CommunicationSignalType.DELIVERY_AVAILABLE
-
-
 def test_gateway_renews_only_the_authenticated_agents_live_delivery() -> None:
     connection = cast(CommunicationConnection, _connection())
-    service, deliveries = _service(connection, _feedback_plugin())
+    service, deliveries = _service(connection, _delivery_plugin())
     agent = cast(Agent, SimpleNamespace(id=uuid4(), status=AgentStatus.RUNNING))
     deliveries.renew_runtime_delivery_lease.return_value = True
 
@@ -307,7 +277,7 @@ def test_gateway_renews_only_the_authenticated_agents_live_delivery() -> None:
 
 def test_gateway_does_not_create_a_delivery_for_a_denied_admission() -> None:
     connection = cast(CommunicationConnection, _connection())
-    plugin = _feedback_plugin()
+    plugin = _delivery_plugin()
     plugin.normalize_inbound.return_value = InboundAdmissionResult(CommunicationPolicyDisposition.USER_DENIED)
     service, deliveries = _service(connection, plugin)
 
@@ -323,7 +293,7 @@ def test_gateway_journal_failure_does_not_drop_an_event() -> None:
     connection = cast(CommunicationConnection, _connection())
     connection.organization_id = uuid4()
     connection.agent_id = uuid4()
-    plugin = _feedback_plugin()
+    plugin = _delivery_plugin()
     operations = Mock()
     operations.record_journal.side_effect = RuntimeError("database unavailable")
     service, deliveries = _service(connection, plugin, operations=operations)
@@ -335,9 +305,9 @@ def test_gateway_journal_failure_does_not_drop_an_event() -> None:
     plugin.normalize_inbound.assert_called_once()
 
 
-def test_gateway_marks_claim_and_terminal_runtime_failure_at_lifecycle_seam() -> None:
+def test_gateway_claim_and_terminal_failure_preserve_status_wakeup() -> None:
     connection = cast(CommunicationConnection, _connection())
-    plugin = _feedback_plugin()
+    plugin = _delivery_plugin()
     service, deliveries = _service(connection, plugin)
     envelope = _envelope()
     delivery = RuntimeDeliveryRead(
@@ -349,9 +319,7 @@ def test_gateway_marks_claim_and_terminal_runtime_failure_at_lifecycle_seam() ->
     )
     deliveries.claim_next_inbound.return_value = delivery
     deliveries.reclaim_expired_inbound.return_value = []
-    deliveries.get_inbound_runtime_delivery.return_value = delivery
     deliveries.complete_runtime_delivery.return_value = True
-    deliveries.delivery_status.return_value = CommunicationDeliveryStatus.DEAD_LETTERED
     agent = cast(Agent, SimpleNamespace(id=uuid4(), status=AgentStatus.RUNNING))
 
     with patch(
@@ -365,15 +333,8 @@ def test_gateway_marks_claim_and_terminal_runtime_failure_at_lifecycle_seam() ->
             RuntimeDeliveryResult(succeeded=False, error_code="RuntimeError", error_message="failed"),
         )
 
-    # The claim now carries a server-issued execution token; the rest must be unchanged.
     assert claimed == delivery
     assert completed is True
-    stages = [call.args[2].stage for call in plugin.processing_feedback.call_args_list]
-    assert stages == [ProcessingFeedbackStage.CLAIMED, ProcessingFeedbackStage.FAILED]
-    assert_that(
-        plugin.processing_feedback.call_args_list[1].args[2].provider_metadata,
-        equal_to(envelope.provider_metadata),
-    )
     published_agent_id, published_signal = cast(Mock, service.signals).publish.call_args.args
     assert published_agent_id == agent.id
     assert published_signal.type == CommunicationSignalType.MESSAGE_CHANGED
@@ -382,7 +343,7 @@ def test_gateway_marks_claim_and_terminal_runtime_failure_at_lifecycle_seam() ->
 
 def test_native_platform_deliveries_are_not_reclaimed_or_claimed_by_the_gateway() -> None:
     connection = cast(CommunicationConnection, _connection())
-    service, deliveries = _service(connection, _feedback_plugin())
+    service, deliveries = _service(connection, _delivery_plugin())
     service.config = Config(
         agent_token_encryption_key="key",
         communications_native_platforms="slack,discord",
@@ -410,7 +371,7 @@ def test_native_platform_deliveries_are_not_reclaimed_or_claimed_by_the_gateway(
 
 def test_cancel_persists_before_publishing_to_the_runtime_control_stream() -> None:
     connection = cast(CommunicationConnection, _connection())
-    plugin = _feedback_plugin()
+    plugin = _delivery_plugin()
     service, deliveries = _service(connection, plugin)
     delivery_id = uuid4()
     agent_id = uuid4()
@@ -428,7 +389,7 @@ def test_cancel_persists_before_publishing_to_the_runtime_control_stream() -> No
 
 def test_runtime_reply_publishes_message_changed_for_the_new_outbound_delivery() -> None:
     connection = cast(CommunicationConnection, _connection())
-    plugin = _feedback_plugin()
+    plugin = _delivery_plugin()
     service, deliveries = _service(connection, plugin)
     agent = cast(Agent, SimpleNamespace(id=uuid4()))
     source_delivery_id = uuid4()
@@ -452,7 +413,7 @@ def test_runtime_reply_publishes_message_changed_for_the_new_outbound_delivery()
 
 def test_runtime_control_stream_replays_then_heartbeats_without_claim_polling() -> None:
     connection = cast(CommunicationConnection, _connection())
-    plugin = _feedback_plugin()
+    plugin = _delivery_plugin()
     service, _ = _service(connection, plugin)
     agent = cast(Agent, SimpleNamespace(id=uuid4()))
     signals = cast(Mock, service.signals)
@@ -477,7 +438,7 @@ def test_runtime_control_stream_replays_then_heartbeats_without_claim_polling() 
 def test_a_claimed_delivery_carries_whether_its_platform_accepts_progress_updates() -> None:
     for accepts_progress in (True, False):
         connection = cast(CommunicationConnection, _connection())
-        plugin = _feedback_plugin()
+        plugin = _delivery_plugin()
         plugin.supports_progress_updates = accepts_progress
         service, deliveries = _service(connection, plugin)
         delivery = RuntimeDeliveryRead(
@@ -503,7 +464,7 @@ def test_a_claimed_delivery_carries_whether_its_platform_accepts_progress_update
 
 def test_a_claimed_delivery_carries_the_prompt_its_platform_builds_for_the_runtime() -> None:
     connection = cast(CommunicationConnection, _connection())
-    plugin = _feedback_plugin()
+    plugin = _delivery_plugin()
     plugin.runtime_prompt.side_effect = lambda envelope: f"FRAMING\n\n{envelope.text}"
     service, deliveries = _service(connection, plugin)
     delivery = RuntimeDeliveryRead(
@@ -532,7 +493,7 @@ def test_a_claim_retries_when_its_platform_plugin_is_gone() -> None:
     retired_platform = _connection()
     retired_platform.platform_key = "platform-that-no-longer-ships"
     connection = cast(CommunicationConnection, retired_platform)
-    service, deliveries = _service(connection, _feedback_plugin())
+    service, deliveries = _service(connection, _delivery_plugin())
     delivery = RuntimeDeliveryRead(
         delivery_id=uuid4(),
         message_id=uuid4(),
@@ -550,7 +511,7 @@ def test_a_claim_retries_when_its_platform_plugin_is_gone() -> None:
 
 def test_a_claim_retries_when_its_connection_is_no_longer_active() -> None:
     connection = cast(CommunicationConnection, _connection())
-    service, deliveries = _service(connection, _feedback_plugin())
+    service, deliveries = _service(connection, _delivery_plugin())
     cast(Mock, service.connection_repository).get_active.return_value = None
     delivery = RuntimeDeliveryRead(
         delivery_id=uuid4(),
@@ -565,47 +526,3 @@ def test_a_claim_retries_when_its_connection_is_no_longer_active() -> None:
 
     with pytest.raises(RuntimeError, match="is no longer active"):
         service.claim_runtime_delivery(agent)
-
-
-def test_gateway_reports_a_dead_letter_created_by_lease_reclaim() -> None:
-    connection = cast(CommunicationConnection, _connection())
-    plugin = _feedback_plugin()
-    service, deliveries = _service(connection, plugin)
-    stale = RuntimeDeliveryRead(
-        delivery_id=uuid4(),
-        message_id=uuid4(),
-        connection_id=connection.id,
-        attempt_count=5,
-        envelope=_envelope(),
-    )
-    deliveries.reclaim_expired_inbound.return_value = [stale]
-    deliveries.claim_next_inbound.return_value = None
-    agent = cast(Agent, SimpleNamespace(id=uuid4(), status=AgentStatus.RUNNING))
-
-    with patch(
-        "api.domains.communications.gateway_service.decrypt_token",
-        return_value=json.dumps({"bot_token": "xoxb-token", "app_token": "xapp-token"}),
-    ):
-        assert service.claim_runtime_delivery(agent) is None
-
-    assert plugin.processing_feedback.call_args.args[2].stage == ProcessingFeedbackStage.FAILED
-
-
-def test_runtime_completion_is_not_blocked_by_feedback_context_lookup() -> None:
-    connection = cast(CommunicationConnection, _connection())
-    plugin = _feedback_plugin()
-    service, deliveries = _service(connection, plugin)
-    deliveries.complete_runtime_delivery.return_value = True
-    deliveries.delivery_status.return_value = CommunicationDeliveryStatus.DEAD_LETTERED
-    deliveries.get_inbound_runtime_delivery.side_effect = RuntimeError("database unavailable")
-    agent = cast(Agent, SimpleNamespace(id=uuid4(), status=AgentStatus.RUNNING))
-
-    completed = service.complete_runtime_delivery(
-        agent,
-        uuid4(),
-        RuntimeDeliveryResult(succeeded=False, error_code="RuntimeError", error_message="failed"),
-    )
-
-    assert completed is True
-    deliveries.complete_runtime_delivery.assert_called_once()
-    plugin.processing_feedback.assert_not_called()

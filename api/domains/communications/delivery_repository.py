@@ -587,31 +587,6 @@ class CommunicationDeliveryRepository:
             session.commit()
             return delivery
 
-    def get_inbound_runtime_delivery(
-        self,
-        delivery_id: UUID,
-        *,
-        agent_id: UUID,
-    ) -> RuntimeDeliveryRead | None:
-        """Load a claimed inbound delivery for lifecycle feedback context."""
-        with Session(self.delegate.engine) as session:
-            delivery = session.exec(
-                select(CommunicationDelivery).where(
-                    col(CommunicationDelivery.id) == delivery_id,
-                    col(CommunicationDelivery.agent_id) == agent_id,
-                    col(CommunicationDelivery.direction) == CommunicationDirection.INBOUND,
-                )
-            ).one_or_none()
-            if delivery is None:
-                return None
-            return RuntimeDeliveryRead(
-                delivery_id=delivery.id,
-                message_id=delivery.message_id,
-                connection_id=delivery.connection_id,
-                attempt_count=delivery.attempt_count,
-                envelope=NormalizedCommunicationEnvelope.model_validate(delivery.envelope),
-            )
-
     @staticmethod
     def select_inbound(source_id: UUID, agent_id: UUID) -> Any:
         """The one way to address an Agent's inbound delivery by id."""
@@ -620,30 +595,6 @@ class CommunicationDeliveryRepository:
             col(CommunicationDelivery.agent_id) == agent_id,
             col(CommunicationDelivery.direction) == CommunicationDirection.INBOUND,
         )
-
-    def source_is_cancelled(self, source_id: UUID, *, agent_id: UUID) -> bool:
-        with Session(self.delegate.engine) as session:
-            source = session.exec(self.select_inbound(source_id, agent_id)).one_or_none()
-            return (
-                source is None
-                or source.cancel_requested_at is not None
-                or source.status == CommunicationDeliveryStatus.CANCELLED
-            )
-
-    def delivery_status(
-        self,
-        delivery_id: UUID,
-        *,
-        direction: CommunicationDirection,
-    ) -> CommunicationDeliveryStatus | None:
-        with Session(self.delegate.engine) as session:
-            status = session.exec(
-                select(CommunicationDelivery.status).where(
-                    col(CommunicationDelivery.id) == delivery_id,
-                    col(CommunicationDelivery.direction) == direction,
-                )
-            ).one_or_none()
-            return CommunicationDeliveryStatus(status) if status is not None else None
 
     def complete_outbound(
         self,
