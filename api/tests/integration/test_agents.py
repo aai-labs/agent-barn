@@ -2455,7 +2455,7 @@ def test_start_hermes_agent_configmap_has_hermes_config():
             cfg = _yaml.safe_load(config_map.data["hermes-config.yaml"])
             assert_that(cfg["model"]["base_url"], equal_to("http://localhost:8090"))
             assert_that(cfg["display"]["platforms"], equal_to({}))
-            assert_that(cfg["plugins"]["enabled"], equal_to(["telemetry-push", "agentbarn-messaging"]))
+            assert_that(cfg["plugins"]["enabled"], equal_to(["telemetry-push"]))
             assert_that(cfg, is_not(has_key("slack")))
 
         with then("the ConfigMap has the headless runtime adapter"):
@@ -2528,7 +2528,6 @@ def test_start_hermes_agent_runs_discord_in_the_native_gateway() -> None:
             assert_that(secret["DISCORD_ALLOWED_USERS"], equal_to("user-1"))
             assert_that(secret["DISCORD_ALLOWED_ROLES"], equal_to("role-1"))
             assert_that(secret["DISCORD_HOME_CHANNEL"], equal_to("channel-home"))
-            assert_that(secret["AGENTBARN_SCHEDULED_DELIVERY"], equal_to("0"))
             assert_that("AGENTBARN_DISCORD_POLICY" in secret, equal_to(False))
 
 
@@ -2581,7 +2580,6 @@ def test_start_hermes_agent_runs_telegram_in_the_native_gateway() -> None:
             assert_that(secret["TELEGRAM_ALLOWED_CHATS"], equal_to("-1001"))
             assert_that(secret["TELEGRAM_ALLOWED_USERS"], equal_to("111"))
             assert_that(secret["TELEGRAM_HOME_CHANNEL"], equal_to("-1009"))
-            assert_that(secret["AGENTBARN_SCHEDULED_DELIVERY"], equal_to("0"))
 
 
 def _runtime_teams_connection(context) -> None:
@@ -2690,7 +2688,6 @@ def test_start_openclaw_agent_runs_chat_platforms_in_the_native_gateway() -> Non
             assert_that(secret["TELEGRAM_BOT_TOKEN"], equal_to("123:telegram-token"))
             assert_that(secret["MSTEAMS_APP_PASSWORD"], equal_to("teams-secret"))
             assert_that(secret["AGENTBARN_NATIVE_CHANNELS"], equal_to("slack,discord,telegram,msteams"))
-            assert_that(secret["AGENTBARN_SCHEDULED_DELIVERY"], equal_to("0"))
             service = k8s.create_service.call_args.args[1]
             assert_that([port.name for port in service.spec.ports], has_item("webhook"))
 

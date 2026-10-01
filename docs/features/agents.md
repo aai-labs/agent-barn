@@ -45,6 +45,10 @@ An Agent is the central execution aggregate. It connects organization tenancy, a
 - Agent Restore Points capture and restore only while the Agent is `STOPPED`, and only one capture or restore may be in flight per Agent — enforced by a database constraint, not only a service check. The per-Agent retention cap counts manual restore points that still hold a volume: Pre-Restore Restore Points and failed captures do not consume it, so an Agent at the cap can still roll back and a run of failures cannot lock it out of capturing.
 - A restore point archive never contains credential material or state the runtime regenerates on boot, so it is not a byte-exact image of the volume. It also never contains a member a restore could not extract: capture offers every member to the same safety filter the restore applies, and drops what that filter refuses — a link pointing outside the volume, for instance, which is unusable once the volume is mounted somewhere else. The count of dropped members is reported with the archive's size. Without this a single such link fails the entire restore rather than costing one link. Reads authorize on `activity.read`; capture, restore, and delete on `agent.lifecycle.manage`. No restore-point-specific Permission exists.
 
+Runtime startup retires the custom messaging bridge and audits old scheduled-job routing
+without changing destinations or history. See [runtime assembly and sanitation](../architecture/runtime-and-deployment.md#runtime-neutral-communications)
+before changing startup or restore behavior.
+
 ## State model
 
 ```text

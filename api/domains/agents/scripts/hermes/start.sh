@@ -1,11 +1,6 @@
 #!/bin/sh
 set -e
-export PYTHONPATH="/app/config${PYTHONPATH:+:$PYTHONPATH}"
-mkdir -p /tmp/agentbarn-bin
-printf '#!/bin/sh\nexec python3 /app/config/agentbarn_message.py "$@"\n' > /tmp/agentbarn-bin/agentbarn-message
-chmod 755 /tmp/agentbarn-bin/agentbarn-message
-export PATH="/tmp/agentbarn-bin:$PATH"
-
+python3 /app/config/retire-messaging.py hermes /opt/data
 python3 /app/config/healthz-server.py &
 python3 /app/config/communications-runtime-adapter.py &
 python3 /app/config/agent-trigger-server.py &
@@ -67,16 +62,6 @@ print(f'[hermes-start] Wrote {written} skill files')
 PYEOF
 fi
 
-mkdir -p /opt/data/plugins/agentbarn-messaging
-cp /app/config/hermes-messaging.py /opt/data/plugins/agentbarn-messaging/__init__.py
-printf 'name: agentbarn-messaging\nversion: "1.0"\ndescription: Bind explicit message requests to inbound executions\n' > /opt/data/plugins/agentbarn-messaging/plugin.yaml
-# Native gateway agents set 0 in their Secret so Hermes delivers cron results itself.
-export AGENTBARN_SCHEDULED_DELIVERY="${AGENTBARN_SCHEDULED_DELIVERY:-1}"
-if [ "${AGENTBARN_SCHEDULED_DELIVERY}" = "1" ]; then
-  # The scheduler (inside the gateway) and the drain loop must name the same file.
-  export AGENTBARN_MESSAGE_SPOOL=/opt/data/agentbarn-messages.sqlite3
-  python3 /app/config/agentbarn_message.py drain &
-fi
 # Pinned Hermes never runs BOOT.md; OpenClaw bundles a gateway:startup hook for it.
 python3 /app/config/boot-run.py &
 exec hermes gateway run

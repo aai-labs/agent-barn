@@ -8,11 +8,17 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
 
 - Delivered: scoped Communication Connection CRUD and strict Platform configuration/credential validation; permanent native Slack, Discord, Telegram, and Teams transport on both runtimes; authenticated Teams public relay; native transcript and health observation; Web Chat/Email durable delivery through the shared runtime protocol; permission-scoped diagnostics and content-free historical Journal/Delivery timelines; gateway Delivery retry, bounded retention, safe errors, and low-cardinality Communications metrics. Native provider sessions, replies, approvals, and schedules belong to the selected runtime.
 - Changed: Agents are headless and no longer own a single Platform. Legacy provider configuration tables, DTO fields, routes, and provider-specific UI have been removed after their data is migrated into Communication Connections.
-- In transition: chat gateway transport is fenced out; legacy transport implementations, runtime messaging artifacts, historical queue state, and ignored deployment configuration remain pending cleanup. The authenticated legacy message endpoint returns terminal `410` until old clients have exited.
-- Next: retire the obsolete runtime messaging bridge, then remove the fenced chat provider transport implementations and stranded state while preserving Web Chat and Email. Evaluate iMessage transport constraints independently of Agent runtimes. Email supports inbound and reply, but not agent-initiated outbound; native Discord, Telegram, and Teams deliver scheduled results to their origin or configured home.
+- In transition: chat gateway transport is fenced out; legacy transport implementations, historical queue state, and ignored deployment configuration remain pending cleanup. Runtime assembly retires the old messaging artifacts on each start. The authenticated legacy message endpoint returns terminal `410` until old clients have exited.
+- Next: remove the fenced chat provider transport implementations and retired message API/service, then clean stranded state while preserving Web Chat and Email. Evaluate iMessage transport constraints independently of Agent runtimes. Email supports inbound and reply, but not agent-initiated outbound; native Discord, Telegram, and Teams deliver scheduled results to their origin or configured home.
 - Blockers: none.
 
 ## Changes
+
+### 2026-10-01 — Native gateway cleanup: retire the runtime messaging bridge — PR pending
+
+- Removed: both runtime messaging plugins, the message CLI wrapper, scheduled capture/spool drain, execution binding, and the Hermes completion-capture image patch. The shared Web Chat/Email adapter and Hermes history patch remain.
+- Changed: each boot removes managed retired-plugin artifacts and prevents persisted config from re-enabling them. Content-free job audit reports gateway-era destinations needing repair; it preserves schedules and history, leaves old spools unread, and never guesses a recipient. Runtime policy uses native replies and scheduled delivery; separate initiated sends remain unsupported, and OpenClaw denies its broader `message` tool.
+- Follow-up: remove the fenced provider transport implementations and the `410` compatibility message API/service in the next slice. Older running pods still need restart; see [rollout guidance](../../guidelines/operations.md#native-runtime-gateway-rollout).
 
 ### 2026-10-01 — Native gateway cleanup: permanent transport ownership — PR pending
 
