@@ -44,7 +44,7 @@ def _connection() -> SimpleNamespace:
         id=uuid4(),
         agent_id=uuid4(),
         enabled=True,
-        platform_key="slack",
+        platform_key="email",
         settings={},
         credentials_encrypted="ciphertext",
     )
@@ -85,7 +85,7 @@ def _service(
 
 def _feedback_plugin() -> Mock:
     plugin = Mock()
-    plugin.key = "slack"
+    plugin.key = "email"
     plugin.display_name = "Slack"
     plugin.schema_version = 1
     plugin.capabilities = frozenset({PlatformCapability.PROCESSING_FEEDBACK})
@@ -259,21 +259,11 @@ def test_runtime_teams_webhook_maps_transport_failure_to_unavailable() -> None:
         service.relay(connection.id, _teams_activity(), "Bearer signed-token")
 
 
-def test_gateway_owned_teams_webhook_is_not_handled_by_the_runtime_relay() -> None:
-    service, plugin, connection = _teams_runtime_service()
-    cast(Any, service.config).native_platform_keys = frozenset()
-
-    with (
-        patch(
-            "api.domains.communications.teams_runtime_webhook.decrypt_token",
-            return_value=json.dumps({"app_id": "app", "app_password": "secret", "tenant_id": "tenant"}),
-        ),
-        patch.object(plugin, "verify_webhook") as verify,
-    ):
-        result = service.relay(connection.id, _teams_activity(), "Bearer signed-token")
-
-    assert result is None
-    verify.assert_not_called()
+def test_runtime_relay_refuses_a_non_teams_connection_without_proxying() -> None:
+    service, _, connection = _teams_runtime_service()
+    connection.platform_key = "web"
+    with pytest.raises(PermissionError, match="not found"):
+        service.relay(connection.id, _teams_activity(), "Bearer signed-token")
 
 
 def test_gateway_feedback_is_best_effort_after_inbound_acceptance() -> None:
@@ -478,7 +468,7 @@ def test_native_platform_deliveries_are_not_reclaimed_or_claimed_by_the_gateway(
 
     assert service.claim_runtime_delivery(agent) is None
 
-    excluded = frozenset({"slack", "discord"})
+    excluded = frozenset({"slack", "discord", "telegram", "teams"})
     deliveries.reclaim_expired_inbound.assert_called_once_with(
         agent_id=agent.id,
         excluded_platform_keys=excluded,

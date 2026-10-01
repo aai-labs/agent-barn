@@ -48,6 +48,7 @@ from api.domains.communications.repository import (
     CommunicationConnectionConflictError,
     CommunicationConnectionRepository,
 )
+from api.domains.communications.transport import NATIVE_PLATFORM_KEYS, platform_transport
 from api.domains.events import resolve_actor_identity
 from api.domains.rbac.catalog import PermissionKey
 from api.infrastructure.crypto import decrypt_token, encrypt_token
@@ -645,7 +646,7 @@ class CommunicationsService:
         safe_details = CommunicationOperationalRepository.safe_error_details(connection.last_error_details)
         return read.model_copy(
             update={
-                "transport": "native" if connection.platform_key in self.config.native_platform_keys else "gateway",
+                "transport": platform_transport(connection.platform_key),
                 "recovery_actions": self._recovery_actions(connection),
                 "last_error_code": CommunicationOperationalRepository.safe_error_code(read.last_error_code),
                 "last_error_message": CommunicationOperationalRepository.safe_error_summary(
@@ -659,7 +660,7 @@ class CommunicationsService:
         )
 
     def _recovery_actions(self, connection: CommunicationConnection) -> list[Literal["reconnect", "retry_delivery"]]:
-        if connection.platform_key in self.config.native_platform_keys:
+        if connection.platform_key in NATIVE_PLATFORM_KEYS:
             return []
         actions: list[Literal["reconnect", "retry_delivery"]] = ["retry_delivery"]
         capabilities = self.plugins.require(connection.platform_key).capabilities
@@ -678,7 +679,7 @@ class CommunicationsService:
             return
         detail = (
             "This Connection uses native transport; restart the Agent to recover it"
-            if connection.platform_key in self.config.native_platform_keys
+            if connection.platform_key in NATIVE_PLATFORM_KEYS
             else "This Connection has no gateway provider session to reconnect"
         )
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=detail)

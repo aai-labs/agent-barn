@@ -23,6 +23,7 @@ from api.domains.communications.models import (
     ConnectionObservedStatus,
 )
 from api.domains.communications.operations import CommunicationOperationalRepository
+from api.domains.communications.transport import GATEWAY_PLATFORM_KEYS
 from api.domains.events.catalog import (
     COMMUNICATION_CONNECTION_HEALTH_CHANGED,
     COMMUNICATION_CONNECTION_RECONNECT_REQUESTED,
@@ -163,6 +164,7 @@ class CommunicationConnectionRepository:
                     .where(
                         col(CommunicationConnection.enabled).is_(True),
                         col(CommunicationConnection.retired_at).is_(None),
+                        col(CommunicationConnection.platform_key).in_(GATEWAY_PLATFORM_KEYS),
                         col(CommunicationConnection.platform_key).not_in(native_platform_keys),
                     )
                     .order_by(col(CommunicationConnection.id))

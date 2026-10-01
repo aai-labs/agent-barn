@@ -51,7 +51,7 @@ def _processor(
     connections = Mock()
     connections.get_active.return_value = SimpleNamespace(
         enabled=True,
-        platform_key="slack",
+        platform_key="email",
         settings={},
         credentials_encrypted="ciphertext",
         agent_id=uuid4(),
@@ -122,8 +122,23 @@ def test_outbound_processor_does_not_claim_native_platform_deliveries() -> None:
     assert processor.process_one() is False
 
     deliveries.claim_next_outbound.assert_called_once_with(
-        native_platform_keys=frozenset({"slack", "discord"}),
+        native_platform_keys=frozenset({"slack", "discord", "telegram", "teams"}),
     )
+
+
+def test_outbound_processor_refuses_a_native_claim_already_in_flight() -> None:
+    delivery, _ = _delivery()
+    plugin = _plugin()
+    processor, gateway, deliveries = _processor(delivery, plugin, status=CommunicationDeliveryStatus.PROCESSING)
+    cast(Mock, processor.connections.get_active).return_value.platform_key = "slack"
+    deliveries.complete_outbound.return_value = False
+
+    assert processor.process_one() is True
+
+    cast(Mock, processor.plugins.require).assert_not_called()
+    plugin.send.assert_not_called()
+    gateway.notify_processing_feedback.assert_not_called()
+    deliveries.complete_outbound.assert_called_once()
 
 
 def test_outbound_terminal_failure_feedback_marks_failed_after_dead_letter() -> None:

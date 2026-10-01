@@ -1,13 +1,10 @@
-"""The shared /webhooks/{connection_id} route, exercised through Teams.
-
-The route reads the raw body itself so a signed webhook can be verified. Teams is the one
-provider authenticated by a bearer token instead, so these pin that its activities still
-get through that route and that an unauthenticated one does not.
-"""
+"""Native Teams public relay and its retired gateway ingress compatibility."""
 
 from typing import Any
 from unittest.mock import patch
 
+import httpx
+import pytest
 from fastapi import status
 from hamcrest import assert_that, equal_to, has_length
 from sqlmodel import Session, col, select
@@ -115,7 +112,7 @@ def _inbound(context) -> list[CommunicationDelivery]:
         )
 
 
-def test_a_teams_activity_with_a_valid_token_is_accepted() -> None:
+def test_a_teams_activity_with_a_valid_token_cannot_use_retired_gateway_ingress() -> None:
     with given(_GIVEN) as context:
         connection = _create_teams_connection(context)
 
@@ -127,11 +124,9 @@ def test_a_teams_activity_with_a_valid_token_is_accepted() -> None:
                     headers={"Authorization": "Bearer valid"},
                 )
 
-        with then("it is accepted and queued as an ordinary conversation delivery"):
-            assert_that(response.status_code, equal_to(status.HTTP_202_ACCEPTED))
-            assert_that(response.json()["accepted"], has_length(1))
-            [delivery] = _inbound(context)
-            assert_that(str(delivery.id), equal_to(response.json()["accepted"][0]["delivery_id"]))
+        with then("it is refused after authentication and nothing is queued"):
+            assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
+            assert_that(_inbound(context), has_length(0))
 
 
 def test_a_teams_activity_with_a_rejected_token_is_unauthorized() -> None:
@@ -165,4 +160,54 @@ def test_a_teams_activity_without_an_authorization_header_is_unauthorized() -> N
 
         with then("it is refused and nothing is queued"):
             assert_that(response.status_code, equal_to(status.HTTP_401_UNAUTHORIZED))
+            assert_that(_inbound(context), has_length(0))
+
+
+@pytest.mark.parametrize("activity_type", ["message", "invoke"])
+def test_public_teams_webhook_passes_runtime_response_through_without_gateway_work(activity_type: str) -> None:
+    with given(_GIVEN) as context:
+        connection = _create_teams_connection(context)
+        activity = {**_activity(), "type": activity_type}
+        with when("an authenticated activity reaches the public product API"):
+            with (
+                patch(_VERIFY, side_effect=_accepts_only("valid")),
+                patch(
+                    "api.domains.communications.teams_runtime_webhook.resilient_request",
+                    return_value=httpx.Response(200, json={"native": activity_type}),
+                ) as relay,
+            ):
+                response = context.client.post(
+                    f"/communications/v1/webhooks/{connection['id']}",
+                    json=activity,
+                    headers={"Authorization": "Bearer valid"},
+                )
+        with then("Teams receives the native result and no gateway Delivery is created"):
+            assert_that(response.status_code, equal_to(200))
+            assert_that(response.json(), equal_to({"native": activity_type}))
+            assert_that(response.headers["content-type"], equal_to("application/json"))
+            assert_that(_inbound(context), has_length(0))
+            assert_that(
+                relay.call_args.args[1],
+                equal_to(f"http://agent-{context.agent.id}.agent-farm.svc.cluster.local:3978/api/messages"),
+            )
+
+
+def test_public_teams_webhook_returns_503_when_native_runtime_is_unreachable() -> None:
+    with given(_GIVEN) as context:
+        connection = _create_teams_connection(context)
+        with when("Teams posts a valid activity while its Agent runtime is unavailable"):
+            with (
+                patch(_VERIFY, side_effect=_accepts_only("valid")),
+                patch(
+                    "api.domains.communications.teams_runtime_webhook.resilient_request",
+                    side_effect=httpx.ConnectError("runtime unavailable"),
+                ),
+            ):
+                response = context.client.post(
+                    f"/communications/v1/webhooks/{connection['id']}",
+                    json=_activity(),
+                    headers={"Authorization": "Bearer valid"},
+                )
+        with then("the public API reports unavailability without enqueuing a fallback"):
+            assert_that(response.status_code, equal_to(503))
             assert_that(_inbound(context), has_length(0))

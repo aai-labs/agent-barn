@@ -728,6 +728,7 @@ class ResolvedOutboundTarget(PydanticBaseModel):
 
 class PlatformDescriptorRead(PydanticBaseModel):
     key: str
+    transport: Literal["gateway", "native"]
     display_name: str
     schema_version: int
     capabilities: list[PlatformCapability]

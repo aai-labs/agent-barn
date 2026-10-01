@@ -39,7 +39,7 @@ _GIVEN = [
             "AGENT_DEFAULT_MODEL": "litellm/gpt-5-mini",
             "AGENT_LITELLM_BASE_URL": "http://litellm:4000",
             "API_EXTERNAL_URL": "https://api.agentbarn.test",
-            "COMMUNICATIONS_NATIVE_PLATFORMS": "slack,discord,telegram,teams",
+            "COMMUNICATIONS_NATIVE_PLATFORMS": "",
         }
     ),
     prepare_injector(modules=[MockK8sModule(), MockLiteLLMModule()]),

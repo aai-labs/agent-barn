@@ -104,7 +104,9 @@ def there_is_an_inbound_delivery(
     return step
 
 
-def there_is_an_outbound_delivery(*, completed_at: datetime | None = None):
+def there_is_an_outbound_delivery(
+    *, completed_at: datetime | None = None, status: CommunicationDeliveryStatus = CommunicationDeliveryStatus.SUCCEEDED
+):
     def step(context):
         at = completed_at if completed_at is not None else _default_time()
         agent = context.agent
@@ -124,18 +126,19 @@ def there_is_an_outbound_delivery(*, completed_at: datetime | None = None):
             connection_id=context.connection.id,
             message_id=message.id,
             direction=CommunicationDirection.OUTBOUND,
-            status=CommunicationDeliveryStatus.SUCCEEDED,
+            status=status,
             idempotency_key=f"out-{uuid4().hex}",
             ordering_key=f"out-{uuid4().hex}",
             attempt_count=1,
             available_at=at,
-            completed_at=at,
+            completed_at=at if status == CommunicationDeliveryStatus.SUCCEEDED else None,
             envelope={},
         )
         with Session(_delegate(context).engine) as session:
             session.add(message)
             session.flush()
             session.add(delivery)
+            context.outbound_delivery_id = delivery.id
             session.commit()
 
     return step

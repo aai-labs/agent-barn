@@ -75,6 +75,7 @@ from api.tests.steps.agent import (
     there_is_an_agent_in_another_org,
     use_org_for_auth,
 )
+from api.tests.steps.communication import there_is_a_connection, there_is_an_outbound_delivery
 from api.tests.steps.database import database_is_clean, database_repo_is_ready
 from api.tests.steps.organization import there_is_an_organization_with_user_and_access_token
 
@@ -107,7 +108,7 @@ _GIVEN_WITH_HERMES_AGENT = [*_GIVEN[:-1], there_is_an_agent(agent_type=AgentType
 
 _GIVEN_WITH_NATIVE_PLATFORMS = [
     *_GIVEN[:1],
-    set_env_variable({"COMMUNICATIONS_NATIVE_PLATFORMS": "slack,discord,telegram,teams"}),
+    set_env_variable({"COMMUNICATIONS_NATIVE_PLATFORMS": ""}),
     *_GIVEN[1:],
 ]
 
@@ -810,16 +811,16 @@ def test_connection_diagnostics_and_reconnect_preserve_safe_operational_history(
                     delivery_counts=has_entries(total=0),
                 ),
             )
-            assert_that(reconnect.status_code, equal_to(status.HTTP_202_ACCEPTED))
+            assert_that(reconnect.status_code, equal_to(status.HTTP_409_CONFLICT))
             assert_that(journal_page.status_code, equal_to(status.HTTP_200_OK))
             assert_that(delivery_page.status_code, equal_to(status.HTTP_200_OK))
             assert_that(
-                reconnect.json()["connection"],
+                diagnostics.json()["connection"],
                 has_entries(
-                    observed_status="CONNECTING",
-                    revision=2,
-                    transport="gateway",
-                    recovery_actions=["reconnect", "retry_delivery"],
+                    observed_status="ERROR",
+                    revision=1,
+                    transport="native",
+                    recovery_actions=[],
                 ),
             )
 
@@ -841,15 +842,15 @@ def test_connection_diagnostics_and_reconnect_preserve_safe_operational_history(
 
             assert_that(
                 [getattr(entry.stage, "value", entry.stage) for entry in journal],
-                equal_to(["connection_error", "connection_connecting", "reconnect_requested"]),
+                equal_to(["connection_error"]),
             )
             assert_that(journal[0].error_code, equal_to("REDACTED"))
             assert_that(journal[0].error_summary, equal_to("Provider error details were redacted"))
-            assert_that(len(events), equal_to(3))
+            assert_that(len(events), equal_to(1))
             assert_that(str(events[0].payload), not_(contains_string("invalid credential")))
             assert_that(str(diagnostics.json()), not_(contains_string("provider rejected")))
-            assert_that(journal_page.json(), has_entries(page=1, page_size=2, total=3))
-            assert_that(len(journal_page.json()["items"]), equal_to(2))
+            assert_that(journal_page.json(), has_entries(page=1, page_size=2, total=1))
+            assert_that(len(journal_page.json()["items"]), equal_to(1))
             assert_that(str(journal_page.json()), not_(contains_string("provider rejected")))
             assert_that(delivery_page.json(), has_entries(total=0, items=[]))
 
@@ -937,7 +938,7 @@ def test_structured_provider_diagnostics_are_retained_without_provider_secrets()
         assert_that(str(summary.json()), not_(contains_string("botsecret-token")))
 
 
-@pytest.mark.parametrize("platform_key", ["web", "email", "teams"])
+@pytest.mark.parametrize("platform_key", ["web", "email"])
 def test_gateway_without_provider_session_only_offers_delivery_retry(platform_key: str) -> None:
     with given(_GIVEN_WITH_AGENT_EMAIL) as context:
         if platform_key == "web":
@@ -1020,18 +1021,16 @@ def test_native_retry_preserves_historical_dead_lettered_delivery() -> None:
         created = client.post(_base(context), json=_discord_payload(), headers=_auth(context))
         assert_that(created.status_code, equal_to(status.HTTP_201_CREATED))
         connection_id = UUID(created.json()["id"])
-        deliveries = context.injector.get(CommunicationDeliveryRepository)
-        source = deliveries.accept_inbound(connection_id=connection_id, envelope=_envelope("historical-message"))
-        outbound_id = deliveries.enqueue_runtime_reply(
+        context.connection = context.injector.get(CommunicationConnectionRepository).get_active(connection_id)
+        there_is_an_outbound_delivery(status=CommunicationDeliveryStatus.DEAD_LETTERED)(context)
+        outbound_id = context.outbound_delivery_id
+        context.injector.get(CommunicationOperationalRepository).record_journal(
+            organization_id=context.organization.id,
             agent_id=context.agent.id,
-            source_delivery_id=source.delivery_id,
-            reply=RuntimeReplyCreate(idempotency_key="historical-reply", text="previous reply"),
-        )
-        claimed = deliveries.claim_next_outbound()
-        assert_that(claimed, not_none())
-        assert_that(
-            deliveries.complete_outbound(outbound_id, error_code="PROVIDER_UNAVAILABLE", max_attempts=1),
-            is_(True),
+            connection_id=connection_id,
+            delivery_id=outbound_id,
+            stage=CommunicationJournalStage.DEAD_LETTERED,
+            error_code="PROVIDER_UNAVAILABLE",
         )
 
         with when("I retry a gateway Delivery after its Connection has moved to native transport"):
@@ -1110,8 +1109,8 @@ def _envelope(message_id: str) -> NormalizedCommunicationEnvelope:
 def test_connection_summary_reports_richer_health_and_delivery_signals() -> None:
     with given([*_GIVEN[:-1], there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
         client: TestClient = context.client
-        created = client.post(_base(context), json=_discord_payload(), headers=_auth(context)).json()
-        connection_id = UUID(created["id"])
+        there_is_a_connection()(context)
+        connection_id = context.connection.id
         connections = context.injector.get(CommunicationConnectionRepository)
         deliveries = context.injector.get(CommunicationDeliveryRepository)
 
@@ -1309,8 +1308,8 @@ def test_communication_journal_pruning_keeps_the_configured_retention_window_bou
 def test_journal_filters_narrow_by_stage_error_direction_and_delivery() -> None:
     with given([*_GIVEN[:-1], there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
         client: TestClient = context.client
-        created = client.post(_base(context), json=_discord_payload(), headers=_auth(context)).json()
-        connection_id = UUID(created["id"])
+        there_is_a_connection()(context)
+        connection_id = context.connection.id
         deliveries = context.injector.get(CommunicationDeliveryRepository)
 
         # An inbound Delivery that stays queued, plus an outbound reply that
@@ -1386,8 +1385,8 @@ def test_journal_filters_narrow_by_stage_error_direction_and_delivery() -> None:
 
 def test_retryable_journal_filter_excludes_dead_lettered_inbound_deliveries() -> None:
     with given([*_GIVEN[:-1], there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
-        created = context.client.post(_base(context), json=_discord_payload(), headers=_auth(context)).json()
-        connection_id = UUID(created["id"])
+        there_is_a_connection()(context)
+        connection_id = context.connection.id
         deliveries = context.injector.get(CommunicationDeliveryRepository)
         accepted = deliveries.accept_inbound(connection_id=connection_id, envelope=_envelope("inbound-dead-letter"))
         claimed = deliveries.claim_next_inbound(agent_id=context.agent.id)
@@ -1613,4 +1612,4 @@ def test_supervised_connections_exclude_native_platforms_on_every_runtime():
 
         with then("both runtimes' native Connections are left to the runtime"):
             assert_that(connections.isdisjoint(native), equal_to(True))
-            assert_that(connections <= gateway, equal_to(True))
+            assert_that(connections.isdisjoint(gateway), equal_to(True))

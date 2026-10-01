@@ -163,7 +163,7 @@ _GIVEN_WITH_NATIVE_PLATFORMS = [
             "AGENT_LITELLM_BASE_URL": "http://litellm:4000",
             "API_EXTERNAL_URL": "https://api.test.com",
             "HERMES_IMAGE": "nousresearch/hermes-agent:v1.0",
-            "COMMUNICATIONS_NATIVE_PLATFORMS": "slack,discord,telegram,teams",
+            "COMMUNICATIONS_NATIVE_PLATFORMS": "",
         }
     ),
     *_GIVEN_WITH_HERMES_IMAGE[1:],

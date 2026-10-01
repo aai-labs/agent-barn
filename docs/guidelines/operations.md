@@ -140,8 +140,9 @@ Agents reachable by email get their own address on a dedicated subdomain, receiv
 
 ## Native runtime gateway rollout
 
-- **`COMMUNICATIONS_NATIVE_PLATFORMS`** is one shared GitHub variable containing a comma-separated native runtime Platform allowlist. Set it to **`slack,discord`** to enable the Hermes/OpenClaw native Slack and Discord gateways in every deployment workflow. It flows through `helmfile.yaml.gotmpl` into the API chart's shared Secret, so both the API and Communications processes receive the same cutoff.
-- Empty is the rollback setting: all Platforms remain on the Communications Gateway. Restart affected Agents after deploying a change so their runtime configuration is rebuilt.
+- Transport ownership is fixed by Platform under the [runtime ownership contract](../architecture/runtime-and-deployment.md#platform-plugin-boundary). `COMMUNICATIONS_NATIVE_PLATFORMS` remains accepted and forwarded by older chart/workflow configuration but is ignored by current applications. Empty values cannot restore chat gateway transport; removal of the variable and chart field is a later compatibility cleanup.
+- Before replacing older application replicas, set their existing allowlist to `slack,discord,telegram,teams` so they also exclude chat gateway sessions and claims. Restart affected Agents onto compatible Hermes/OpenClaw images to rebuild native configuration; application rollout alone does not restart Agent pods.
+- Rollback requires a compatible application/runtime release. Never re-enable legacy provider sessions or replay historical chat Deliveries. Web Chat and Email still require the Communications deployment.
 
 ## Staging environment
 

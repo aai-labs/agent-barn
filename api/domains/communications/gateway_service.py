@@ -43,6 +43,7 @@ from api.domains.communications.plugins.base import (
 )
 from api.domains.communications.plugins.registry import PlatformPluginRegistry
 from api.domains.communications.repository import CommunicationConnectionRepository
+from api.domains.communications.transport import NATIVE_PLATFORM_KEYS, require_gateway_transport
 from api.infrastructure.communication_signals import (
     CommunicationSignal,
     CommunicationSignalBus,
@@ -71,6 +72,10 @@ class CommunicationsGatewayService:
         connection_id: UUID,
         envelope: NormalizedCommunicationEnvelope,
     ) -> AcceptedCommunicationRead:
+        connection = self.connection_repository.get_active(connection_id)
+        if connection is None or not connection.enabled:
+            raise LookupError("Communication Connection is unavailable")
+        require_gateway_transport(connection.platform_key)
         accepted = self.delivery_repository.accept_inbound(
             connection_id=connection_id,
             envelope=envelope,
@@ -115,7 +120,7 @@ class CommunicationsGatewayService:
     def claim_runtime_delivery(self, agent: Agent) -> RuntimeDeliveryRead | None:
         if agent.status != AgentStatus.RUNNING:
             raise RuntimeError("Agent is not running")
-        native_platform_keys = self.config.native_platform_keys
+        native_platform_keys = NATIVE_PLATFORM_KEYS
         expired = self.delivery_repository.reclaim_expired_inbound(
             agent_id=agent.id,
             excluded_platform_keys=native_platform_keys,
@@ -331,6 +336,7 @@ class CommunicationsGatewayService:
         )
         if not secrets.compare_digest(driver_key, provided_key):
             raise PermissionError("Invalid Platform Driver credential")
+        require_gateway_transport(connection.platform_key)
         plugin = self.plugins.require(connection.platform_key)
         settings = plugin.settings_model.model_validate(connection.settings)
         return self._accept_admitted_payload(connection, plugin, settings, payload)
@@ -344,6 +350,7 @@ class CommunicationsGatewayService:
         connection = self.connection_repository.get_active(connection_id)
         if connection is None or not connection.enabled:
             return []
+        require_gateway_transport(connection.platform_key)
         plugin = self.plugins.require(connection.platform_key)
         settings = plugin.settings_model.model_validate(connection.settings)
         return self._accept_admitted_payload(connection, plugin, settings, payload)
@@ -448,6 +455,8 @@ class CommunicationsGatewayService:
         connection: CommunicationConnection,
         context: ProcessingFeedbackContext,
     ) -> None:
+        if connection.platform_key in NATIVE_PLATFORM_KEYS:
+            return
         try:
             plugin = self.plugins.require(connection.platform_key)
             if PlatformCapability.PROCESSING_FEEDBACK not in plugin.capabilities:
@@ -577,4 +586,5 @@ class CommunicationsGatewayService:
             json.loads(decrypt_token(connection.credentials_encrypted, self.config.agent_token_encryption_key))
         )
         plugin.verify_webhook(credentials, request)
+        require_gateway_transport(connection.platform_key)
         return self.accept_plugin_payload(connection.id, request.payload)

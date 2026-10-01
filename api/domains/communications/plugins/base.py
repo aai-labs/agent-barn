@@ -21,6 +21,7 @@ from api.domains.communications.models import (
     ProcessingFeedbackStage,
     ResolvedOutboundTarget,
 )
+from api.domains.communications.transport import platform_transport
 
 _FAILURE_NOTICE_PREFIX = "⚠️ I couldn't process that message."
 _FALLBACK_FAILURE_SUMMARY = "The failure is recorded in this Connection's diagnostics."
@@ -213,6 +214,7 @@ class PlatformPlugin(ABC):
     def descriptor(self) -> PlatformDescriptorRead:
         return PlatformDescriptorRead(
             key=self.key,
+            transport=platform_transport(self.key),
             display_name=self.display_name,
             setup_hint=self.setup_hint,
             post_setup_hint=self.post_setup_hint,

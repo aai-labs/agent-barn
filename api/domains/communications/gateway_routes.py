@@ -19,6 +19,7 @@ from api.domains.communications.models import (
     RuntimeReplyCreate,
 )
 from api.domains.communications.plugins.base import WebhookRequest
+from api.domains.communications.transport import NativeTransportUnsupported
 
 # 3 was only ever shipped to staging by the retired webhook Platform. Its adapter falls
 # back to version 2 behaviour, so those pods stay accepted until the Agent restarts.
@@ -148,7 +149,7 @@ def enqueue_runtime_reply(
     agent = _authenticate(service, agent_id, authorization, protocol_version)
     try:
         outbound_delivery_id = service.enqueue_runtime_reply(agent, delivery_id, reply)
-    except CommunicationDeliveryCancelledError as exc:
+    except (CommunicationDeliveryCancelledError, NativeTransportUnsupported) as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except LookupError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
@@ -173,6 +174,8 @@ def accept_driver_event(
         )
     except PermissionError as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED) from exc
+    except NativeTransportUnsupported as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     return {"accepted": accepted}
 
 
@@ -234,6 +237,8 @@ async def accept_provider_webhook(
         accepted = await run_in_threadpool(service.accept_provider_webhook, connection_id, webhook_request)
     except (PermissionError, NotImplementedError) as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Webhook authentication failed") from exc
+    except NativeTransportUnsupported as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     return {"accepted": accepted}
 
 

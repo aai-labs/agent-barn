@@ -6,16 +6,19 @@ Related context: [`../communications/CHANGELOG.md`](../communications/CHANGELOG.
 
 ## Current state
 
-- Delivered: Slack renders clickable command-approval buttons and ingests clicks (AF-299, PR #198). The platform-neutral pieces every approval-capable plugin shares — the `approval_id` metadata key, the synthesized `action:` message-id prefix, and the button-value codec — live in `api/domains/communications/plugins/approvals.py`; offered choice labels travel in the `ApprovalRequest` contract. The runtime adapter keeps its own copy of the metadata key because it runs inside the Agent pod and cannot import the API; a unit test pins the two together.
-- Delivered: Web Chat renders approval buttons — one per offered choice — and sends the choice with its `approval_id`. Buttons are hidden from users without `agent.update`, disabled while the Agent is not working, and disabled once the approval is answered in that browser session (re-enabled if the answer fails to send).
-- In transition: nothing.
-- Delivered: Discord renders approval buttons, ingests clicks, removes the buttons once an accepted click is answered, and keeps its prompt under the 2,000-character content limit.
-- Next: Telegram — baseline `normalize_inbound` tests and explicit `allowed_updates`, then buttons and clicks.
-- Blockers: Teams implementation waits on a live-tenant spike to confirm the `Action.Execute` invoke payload in personal chat, group chat and channel before any card code is written.
+- Delivered: Web Chat renders one approval button per offered choice and sends the choice with its `approval_id`. Buttons are hidden without `agent.update`, disabled while the Agent is not working, and disabled after that browser session answers (re-enabled when sending fails). The shared runtime adapter and `APPROVAL_METADATA_KEY` remain supported.
+- In transition: the earlier Slack/Discord gateway approval codecs remain in source but are unreachable through chat gateway ingress/delivery after permanent native ownership. Native gateways own chat approvals under the [transport contract](../../architecture/runtime-and-deployment.md#platform-plugin-boundary); prior gateway delivery entries below are historical.
+- Next: preserve Web Chat approval behavior when removing the obsolete chat provider transport and approval codecs. Further native approval improvements require evidence against the selected runtime.
+- Blockers: live native provider approval coverage remains a rollout verification task.
 
-Every slice must hold the shared contract: one button per offered choice; the typed reply stays usable; a click arrives as an ordinary inbound message whose conversation and thread match the pending approval; the click re-passes every policy gate a typed message passes; a synthesized `action:` id is never sent to a provider as a reply reference; and ordinary sends are unchanged. None of the planned slices changes the runtime adapter, so each ships with an API deploy alone.
 
 ## Changes
+
+### 2026-10-01 — Native gateway cleanup: approval ownership
+
+- Changed: gateway claims, replies, and ingress are fenced for Slack, Discord, Telegram, and Teams. Native gateways own their provider approval interactions; Web Chat retains the shared runtime protocol and dashboard approval contract.
+- Follow-up: remove only provider-specific gateway codecs in the transport-removal slice; retain the shared metadata key and Web Chat envelope support.
+
 
 ### 2026-09-16 — AF-325 — Discord buttons fit inside the identifier limit
 

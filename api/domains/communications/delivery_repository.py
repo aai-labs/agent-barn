@@ -26,6 +26,7 @@ from api.domains.communications.models import (
     RuntimeReplyCreate,
 )
 from api.domains.communications.operations import CommunicationOperationalRepository
+from api.domains.communications.transport import GATEWAY_PLATFORM_KEYS, require_gateway_transport
 from api.domains.conversations.models import (
     AgentChatMessage,
     ConversationType,
@@ -198,11 +199,13 @@ class CommunicationDeliveryRepository:
                     col(active_ordering.awaiting_input).is_(False),
                 ),
             )
-            if excluded_platform_keys:
-                query = query.join(
-                    CommunicationConnection,
-                    col(CommunicationConnection.id) == col(CommunicationDelivery.connection_id),
-                ).where(col(CommunicationConnection.platform_key).not_in(excluded_platform_keys))
+            query = query.join(
+                CommunicationConnection,
+                col(CommunicationConnection.id) == col(CommunicationDelivery.connection_id),
+            ).where(
+                col(CommunicationConnection.platform_key).in_(GATEWAY_PLATFORM_KEYS),
+                col(CommunicationConnection.platform_key).not_in(excluded_platform_keys),
+            )
             query = (
                 query.order_by(
                     col(CommunicationDelivery.available_at).asc(),
@@ -334,11 +337,13 @@ class CommunicationDeliveryRepository:
                 col(CommunicationDelivery.status) == CommunicationDeliveryStatus.PROCESSING,
                 col(CommunicationDelivery.lease_expires_at) < now,
             )
-            if excluded_platform_keys:
-                query = query.join(
-                    CommunicationConnection,
-                    col(CommunicationConnection.id) == col(CommunicationDelivery.connection_id),
-                ).where(col(CommunicationConnection.platform_key).not_in(excluded_platform_keys))
+            query = query.join(
+                CommunicationConnection,
+                col(CommunicationConnection.id) == col(CommunicationDelivery.connection_id),
+            ).where(
+                col(CommunicationConnection.platform_key).in_(GATEWAY_PLATFORM_KEYS),
+                col(CommunicationConnection.platform_key).not_in(excluded_platform_keys),
+            )
             expired = session.exec(query.with_for_update(skip_locked=True)).all()
             for stale in expired:
                 self._apply_completion(
@@ -386,7 +391,11 @@ class CommunicationDeliveryRepository:
         with Session(self.delegate.engine) as session:
             delivery = session.exec(
                 select(CommunicationDelivery)
+                .join(
+                    CommunicationConnection, col(CommunicationConnection.id) == col(CommunicationDelivery.connection_id)
+                )
                 .where(
+                    col(CommunicationConnection.platform_key).in_(GATEWAY_PLATFORM_KEYS),
                     col(CommunicationDelivery.id) == delivery_id,
                     col(CommunicationDelivery.agent_id) == agent_id,
                     col(CommunicationDelivery.direction) == CommunicationDirection.INBOUND,
@@ -450,6 +459,10 @@ class CommunicationDeliveryRepository:
             ).one_or_none()
             if source is None:
                 raise LookupError("Source Communication Delivery not found")
+            connection = session.get(CommunicationConnection, source.connection_id)
+            if connection is None:
+                raise LookupError("Communication Connection not found")
+            require_gateway_transport(connection.platform_key)
             if source.cancel_requested_at is not None or source.status == CommunicationDeliveryStatus.CANCELLED:
                 raise CommunicationDeliveryCancelledError("Source Communication Delivery was cancelled")
             existing = session.exec(
@@ -528,11 +541,11 @@ class CommunicationDeliveryRepository:
                 col(CommunicationDelivery.status) == CommunicationDeliveryStatus.PROCESSING,
                 col(CommunicationDelivery.lease_expires_at) < now,
             )
-            if native_platform_keys:
-                native_connection_ids = select(CommunicationConnection.id).where(
-                    col(CommunicationConnection.platform_key).in_(native_platform_keys)
-                )
-                reclaim = reclaim.where(col(CommunicationDelivery.connection_id).not_in(native_connection_ids))
+            gateway_connection_ids = select(CommunicationConnection.id).where(
+                col(CommunicationConnection.platform_key).in_(GATEWAY_PLATFORM_KEYS),
+                col(CommunicationConnection.platform_key).not_in(native_platform_keys),
+            )
+            reclaim = reclaim.where(col(CommunicationDelivery.connection_id).in_(gateway_connection_ids))
             session.exec(
                 reclaim.values(status=CommunicationDeliveryStatus.PENDING, claimed_at=None, lease_expires_at=None)
             )
@@ -567,8 +580,10 @@ class CommunicationDeliveryRepository:
                     ),
                 )
             )
-            if native_platform_keys:
-                query = query.where(col(CommunicationConnection.platform_key).not_in(native_platform_keys))
+            query = query.where(
+                col(CommunicationConnection.platform_key).in_(GATEWAY_PLATFORM_KEYS),
+                col(CommunicationConnection.platform_key).not_in(native_platform_keys),
+            )
             delivery = session.exec(
                 query.order_by(
                     col(CommunicationDelivery.available_at).asc(),
@@ -671,7 +686,11 @@ class CommunicationDeliveryRepository:
         with Session(self.delegate.engine) as session:
             delivery = session.exec(
                 select(CommunicationDelivery)
+                .join(
+                    CommunicationConnection, col(CommunicationConnection.id) == col(CommunicationDelivery.connection_id)
+                )
                 .where(
+                    col(CommunicationConnection.platform_key).in_(GATEWAY_PLATFORM_KEYS),
                     col(CommunicationDelivery.id) == delivery_id,
                     col(CommunicationDelivery.direction) == CommunicationDirection.OUTBOUND,
                     col(CommunicationDelivery.status) == CommunicationDeliveryStatus.PROCESSING,
@@ -711,7 +730,11 @@ class CommunicationDeliveryRepository:
         with Session(self.delegate.engine) as session:
             delivery = session.exec(
                 select(CommunicationDelivery)
+                .join(
+                    CommunicationConnection, col(CommunicationConnection.id) == col(CommunicationDelivery.connection_id)
+                )
                 .where(
+                    col(CommunicationConnection.platform_key).in_(GATEWAY_PLATFORM_KEYS),
                     col(CommunicationDelivery.id) == delivery_id,
                     col(CommunicationDelivery.agent_id) == agent_id,
                     col(CommunicationDelivery.direction) == CommunicationDirection.INBOUND,

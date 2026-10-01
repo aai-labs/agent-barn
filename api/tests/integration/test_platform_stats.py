@@ -18,14 +18,14 @@ from api.domains.agents.repository import AgentRepository
 from api.domains.communications.delivery_repository import CommunicationDeliveryRepository
 from api.domains.communications.models import (
     CommunicationConnection,
+    CommunicationDelivery,
     CommunicationPlatform,
     CommunicationSender,
     ConversationLocation,
     NormalizedCommunicationEnvelope,
-    RuntimeReplyCreate,
 )
 from api.domains.communications.repository import CommunicationConnectionRepository
-from api.domains.conversations.models import AgentChatMessage
+from api.domains.conversations.models import AgentChatMessage, MessageDirection
 from api.domains.events.models import ActorIdentity, ActorIdentityType
 from api.domains.tool_calls.models import ToolCall, ToolCallStatus
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
@@ -114,22 +114,22 @@ def _accept_inbound(context, *, connection, occurred_at, suffix=""):
 
 
 def _seed_reply(context, *, agent, delivery_id, occurred_at, suffix=""):
-    """Answer one inbound delivery through the gateway, backdating the row it wrote."""
-    repository: CommunicationDeliveryRepository = context.injector.get(CommunicationDeliveryRepository)
-    idempotency_key = f"out-{occurred_at.isoformat()}-{suffix}"
-    repository.enqueue_runtime_reply(
-        agent_id=agent.id,
-        source_delivery_id=delivery_id,
-        reply=RuntimeReplyCreate(idempotency_key=idempotency_key, text="ack"),
-    )
+    """Persist a historical outbound transcript, independent of current transport ownership."""
     delegate: PostgresRepositoryDelegate = context.injector.get(PostgresRepositoryDelegate)
-    message = delegate.find_one_by_query(
-        AgentChatMessage,
-        select(AgentChatMessage).where(col(AgentChatMessage.openclaw_msg_id) == f"outbound:{idempotency_key}"),
+    source = delegate.find_by_id(CommunicationDelivery, delivery_id)
+    assert source is not None
+    delegate.save(
+        AgentChatMessage(
+            agent_id=agent.id,
+            connection_id=source.connection_id,
+            openclaw_msg_id=f"outbound:out-{occurred_at.isoformat()}-{suffix}",
+            session_key=source.ordering_key,
+            channel_id="CHANNEL:C1",
+            direction=MessageDirection.OUTBOUND,
+            content="ack",
+            occurred_at=occurred_at,
+        )
     )
-    assert message is not None
-    message.occurred_at = occurred_at
-    delegate.save(message)
 
 
 def _seed_message(

@@ -1072,14 +1072,14 @@ test.describe("Agent Detail Page — Channels tab", () => {
     settings: { channel_ids: ["C1"], dm_user_ids: [] },
   };
 
-  async function serveSavedSlackConnection(page: Page) {
+  async function serveSavedSlackConnection(page: Page, overrides: Partial<typeof savedSlackConnection> = {}) {
     // Registered after the shared intercepts, and the last matching route wins.
     await page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}/connections`, async (route) => {
       if (route.request().method() !== "GET") return route.fallback();
       await route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify([savedSlackConnection]),
+        body: JSON.stringify([{ ...savedSlackConnection, ...overrides }]),
       });
     });
     // Re-run the beforeEach navigation so the list refetches through the new route.
@@ -1117,7 +1117,7 @@ test.describe("Agent Detail Page — Channels tab", () => {
 
   test("restarts a running Agent to apply a change to a Connection its runtime runs", async ({ page }) => {
     await dataSupportPage.agents.interceptGetAgentRequest({
-      body: { ...mockAgent, agent_type: "hermes", native_platform_keys: ["slack"] },
+      body: { ...mockAgent, agent_type: "hermes", native_platform_keys: [] },
     });
     await dataSupportPage.agents.interceptStopAgentRequest();
     await dataSupportPage.agents.interceptStartAgentRequest();
@@ -1131,7 +1131,7 @@ test.describe("Agent Detail Page — Channels tab", () => {
       if (request.method() === "POST" && /\/(stop|start)$/.test(url)) calls.push(url.endsWith("/stop") ? "stop" : "start");
       if (request.method() === "PATCH" && url.includes("/connections/")) calls.push("update");
     });
-    await serveSavedSlackConnection(page);
+    await serveSavedSlackConnection(page, { transport: "native", recovery_actions: [] });
 
     await agentDetailPage.editConnectionButton("Team Slack").click();
     await expect(agentDetailPage.saveConnectionButton()).toHaveCount(0);
@@ -1144,6 +1144,21 @@ test.describe("Agent Detail Page — Channels tab", () => {
 
     await expect(dialog).toBeHidden();
     expect(calls).toEqual(["stop", "update", "start"]);
+  });
+
+  test("requires lifecycle permission to apply a native Connection change using server ownership", async ({ page }) => {
+    await dataSupportPage.agents.interceptGetAgentRequest({
+      body: {
+        ...mockAgent,
+        status: "RUNNING",
+        native_platform_keys: [],
+        allowed_actions: mockAgentAllowedActions.filter((action) => action !== "agent.lifecycle.manage"),
+      },
+    });
+    await serveSavedSlackConnection(page, { transport: "native", recovery_actions: [] });
+    await agentDetailPage.editConnectionButton("Team Slack").click();
+
+    await expect(page.getByRole("button", { name: "Save & Restart", exact: true })).toBeDisabled();
   });
 
   test("browses a saved Connection's own directory when editing it", async ({ page }) => {

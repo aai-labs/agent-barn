@@ -21,6 +21,7 @@ from api.domains.communications.models import (
 from api.domains.communications.plugins.base import ProcessingFeedbackContext
 from api.domains.communications.plugins.registry import PlatformPluginRegistry
 from api.domains.communications.repository import CommunicationConnectionRepository
+from api.domains.communications.transport import NATIVE_PLATFORM_KEYS, require_gateway_transport
 from api.infrastructure.crypto import decrypt_token
 
 logger = logging.getLogger(__name__)
@@ -39,7 +40,7 @@ class OutboundCommunicationProcessor:
 
     def process_one(self) -> bool:
         delivery = self.deliveries.claim_next_outbound(
-            native_platform_keys=getattr(self.config, "native_platform_keys", frozenset()),
+            native_platform_keys=NATIVE_PLATFORM_KEYS,
         )
         if delivery is None:
             return False
@@ -49,6 +50,7 @@ class OutboundCommunicationProcessor:
             connection = self.connections.get_active(delivery.connection_id)
             if connection is None or not connection.enabled:
                 raise RuntimeError("Communication Connection is unavailable")
+            require_gateway_transport(connection.platform_key)
             plugin = self.plugins.require(connection.platform_key)
             settings = plugin.settings_model.model_validate(connection.settings)
             credentials = plugin.credentials_model.model_validate(

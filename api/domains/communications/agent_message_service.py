@@ -85,14 +85,7 @@ class AgentMessageService:
             raise AgentMessageConflictError("Platform does not support agent-initiated delivery")
 
     def submit_agent_message(self, agent: Agent, request: AgentMessageCreate) -> AgentMessageRead:
-        try:
-            return self._submit(agent, request)
-        except PermissionError as exc:
-            raise HTTPException(403, str(exc)) from exc
-        except AgentMessageConflictError as exc:
-            raise HTTPException(409, str(exc)) from exc
-        except ValueError as exc:
-            raise HTTPException(400, "Invalid or ambiguous outbound destination") from exc
+        raise HTTPException(410, "Gateway-initiated messages are retired; use the runtime's native delivery")
 
     def _submit(self, agent: Agent, request: AgentMessageCreate) -> AgentMessageRead:
         source_id = None

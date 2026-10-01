@@ -34,6 +34,7 @@ export const CommunicationDirectoryPreviewSchema = z.object({
 
 export const CommunicationPlatformSchema = z.object({
   key: z.string(),
+  transport: z.enum(["gateway", "native"]).optional(),
   displayName: z.string(),
   schemaVersion: z.number().int().positive(),
   capabilities: z.array(z.string()),

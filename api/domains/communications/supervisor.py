@@ -19,6 +19,7 @@ from api.domains.communications.models import (
 from api.domains.communications.operations import CommunicationOperationalRepository
 from api.domains.communications.plugins.registry import PlatformPluginRegistry
 from api.domains.communications.repository import CommunicationConnectionRepository
+from api.domains.communications.transport import NATIVE_PLATFORM_KEYS
 from api.infrastructure.crypto import decrypt_token
 
 logger = logging.getLogger(__name__)
@@ -90,7 +91,7 @@ class PlatformIngressSupervisor:
                     type(exc).__name__,
                 )
             self._last_journal_prune_at = now
-        enabled_connections = await asyncio.to_thread(self.connections.list_enabled, self.config.native_platform_keys)
+        enabled_connections = await asyncio.to_thread(self.connections.list_enabled, NATIVE_PLATFORM_KEYS)
         enabled = {
             connection.id: connection for connection in enabled_connections if self._needs_ingress_task(connection)
         }

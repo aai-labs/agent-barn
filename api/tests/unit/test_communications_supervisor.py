@@ -298,7 +298,7 @@ def test_reconcile_asks_for_connections_less_native_platforms() -> None:
 
     asyncio.run(supervisor._reconcile({}))
 
-    connections.list_enabled.assert_called_once_with(frozenset({"discord", "slack"}))
+    connections.list_enabled.assert_called_once_with(frozenset({"discord", "slack", "telegram", "teams"}))
 
 
 def test_unsupported_supervised_ingress_fails_closed_as_degraded() -> None:
