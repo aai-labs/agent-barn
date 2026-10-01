@@ -13,6 +13,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import SQLAlchemyError
 from sqlmodel import Session, SQLModel, col, select
 
+from api.domains.agent_webhooks.models import WebhookInvocation
 from api.domains.agents.models import Agent
 from api.domains.agents.repository import agent_scope_predicates
 from api.domains.business_value.classifier import SHELL_TOOL_NAMES, BusinessActionStatus, ClassifiedAction, classify
@@ -24,6 +25,12 @@ from api.domains.business_value.models import (
     OrganizationOutcomeMinutes,
     OrganizationValueSettings,
 )
+from api.domains.communications.models import (
+    CommunicationDelivery,
+    CommunicationDeliveryStatus,
+    CommunicationDirection,
+)
+from api.domains.conversations.models import AgentChatMessage, MessageDirection
 from api.domains.events import ActorIdentity, EventDelivery, SubjectIdentity, SubjectIdentityType
 from api.domains.events.catalog import EVENT_REGISTRY, ORGANIZATION_VALUE_SETTINGS_CHANGED
 from api.domains.events.repository import OutboxMessageRepository
@@ -39,6 +46,12 @@ BUSINESS_ACTION_TABLE = SQLModel.metadata.tables["business_action"]
 RATE_QUANTUM = Decimal("0.01")
 HOURLY_RATE_FIELD = "hourly_rate_usd"
 OUTCOME_MINUTES_FIELD_PREFIX = "outcome_minutes."
+SUCCEEDED = CommunicationDeliveryStatus.SUCCEEDED
+DEAD_LETTERED = CommunicationDeliveryStatus.DEAD_LETTERED
+UNAVAILABLE = CommunicationDeliveryStatus.UNAVAILABLE
+HANDLED_DENOMINATOR_STATUSES = (SUCCEEDED, DEAD_LETTERED, UNAVAILABLE)
+FIRST_ATTEMPT = 1
+MEDIAN = 0.5
 
 
 @dataclass(frozen=True)
@@ -230,6 +243,160 @@ class BusinessActionRepository:
             "occurred_at": tool_call.occurred_at,
             "completed_at": tool_call.completed_at,
         }
+
+
+@dataclass(frozen=True)
+class DeliveryOutcomes:
+    succeeded: int = 0
+    dead_lettered: int = 0
+    unavailable: int = 0
+    first_attempt: int = 0
+    median_seconds: float | None = None
+
+
+@inject
+@singleton
+@dataclass
+class ValueActivityRepository:
+    delegate: PostgresRepositoryDelegate
+
+    def inbound_messages_by_agent(self, window: StatsWindow, scope: AuthorizationScope) -> list[tuple[UUID, int]]:
+        query = (
+            sa.select(col(AgentChatMessage.agent_id), sa.func.count())
+            .select_from(AgentChatMessage)
+            .join(Agent, col(Agent.id) == col(AgentChatMessage.agent_id))
+            .where(
+                col(AgentChatMessage.direction) == MessageDirection.INBOUND,
+                *self._visible(col(AgentChatMessage.occurred_at), window, scope),
+            )
+            .group_by(col(AgentChatMessage.agent_id))
+        )
+        return self._counts(query)
+
+    def webhook_invocations_by_bucket(
+        self, window: StatsWindow, scope: AuthorizationScope
+    ) -> list[tuple[datetime, int]]:
+        unit = window.granularity.value
+        buckets = sa.select(
+            sa.func.generate_series(
+                sa.func.date_trunc(unit, sa.func.timezone("UTC", sa.literal(window.start))),
+                sa.func.date_trunc(unit, sa.func.timezone("UTC", sa.literal(window.end))),
+                sa.text(f"interval '{window.granularity.interval}'"),
+            ).label("bucket")
+        ).subquery()
+        counts = (
+            sa.select(
+                sa.func.date_trunc(unit, sa.func.timezone("UTC", col(WebhookInvocation.created_at))).label("bucket"),
+                sa.func.count().label("invocations"),
+            )
+            .select_from(WebhookInvocation)
+            .join(Agent, col(Agent.id) == col(WebhookInvocation.agent_id))
+            .where(
+                col(WebhookInvocation.organization_id) == scope.organization_id,
+                *self._visible(col(WebhookInvocation.created_at), window, scope),
+            )
+            .group_by(sa.text("1"))
+            .subquery()
+        )
+        query = (
+            sa.select(buckets.c.bucket, sa.func.coalesce(counts.c.invocations, 0))
+            .select_from(buckets.outerjoin(counts, buckets.c.bucket == counts.c.bucket))
+            .order_by(buckets.c.bucket)
+        )
+        with self.delegate.engine.connect() as connection:
+            rows = connection.execute(query).all()
+        return [(row[0], int(row[1])) for row in rows]
+
+    def webhook_invocations_by_agent(self, window: StatsWindow, scope: AuthorizationScope) -> list[tuple[UUID, int]]:
+        query = (
+            sa.select(col(WebhookInvocation.agent_id), sa.func.count())
+            .select_from(WebhookInvocation)
+            .join(Agent, col(Agent.id) == col(WebhookInvocation.agent_id))
+            .where(
+                col(WebhookInvocation.organization_id) == scope.organization_id,
+                *self._visible(col(WebhookInvocation.created_at), window, scope),
+            )
+            .group_by(col(WebhookInvocation.agent_id))
+        )
+        return self._counts(query)
+
+    def delivery_outcomes_total(self, window: StatsWindow, scope: AuthorizationScope) -> DeliveryOutcomes:
+        query = self._delivery_outcomes_query(window, scope)
+        with self.delegate.engine.connect() as connection:
+            row = connection.execute(query).one()
+        return self._outcomes(row)
+
+    def delivery_outcomes_by_agent(
+        self, window: StatsWindow, scope: AuthorizationScope
+    ) -> list[tuple[UUID, DeliveryOutcomes]]:
+        query = self._delivery_outcomes_query(window, scope, col(CommunicationDelivery.agent_id)).group_by(
+            col(CommunicationDelivery.agent_id)
+        )
+        with self.delegate.engine.connect() as connection:
+            rows = connection.execute(query).all()
+        return [(row[0], self._outcomes(row[1:])) for row in rows]
+
+    def tool_calls_by_agent(self, window: StatsWindow, scope: AuthorizationScope) -> list[tuple[UUID, int]]:
+        query = (
+            sa.select(col(ToolCall.agent_id), sa.func.count())
+            .select_from(ToolCall)
+            .join(Agent, col(Agent.id) == col(ToolCall.agent_id))
+            .where(
+                col(ToolCall.organization_id) == scope.organization_id,
+                *self._visible(col(ToolCall.occurred_at), window, scope),
+            )
+            .group_by(col(ToolCall.agent_id))
+        )
+        return self._counts(query)
+
+    def _delivery_outcomes_query(self, window: StatsWindow, scope: AuthorizationScope, *group_columns):
+        status = col(CommunicationDelivery.status)
+        first_attempt = sa.and_(status == SUCCEEDED, col(CommunicationDelivery.attempt_count) == FIRST_ATTEMPT)
+        response_seconds = sa.cast(
+            sa.func.extract("epoch", col(CommunicationDelivery.completed_at) - col(CommunicationDelivery.created_at)),
+            sa.Float,
+        )
+        return (
+            sa.select(
+                *group_columns,
+                sa.func.count().filter(status == SUCCEEDED),
+                sa.func.count().filter(status == DEAD_LETTERED),
+                sa.func.count().filter(status == UNAVAILABLE),
+                sa.func.count().filter(first_attempt),
+                sa.func.percentile_cont(MEDIAN).within_group(response_seconds).filter(first_attempt),
+            )
+            .select_from(CommunicationDelivery)
+            .join(Agent, col(Agent.id) == col(CommunicationDelivery.agent_id))
+            .where(
+                col(CommunicationDelivery.organization_id) == scope.organization_id,
+                col(CommunicationDelivery.direction) == CommunicationDirection.INBOUND,
+                status.in_(HANDLED_DENOMINATOR_STATUSES),
+                *self._visible(col(CommunicationDelivery.completed_at), window, scope),
+            )
+        )
+
+    def _counts(self, query) -> list[tuple[UUID, int]]:
+        with self.delegate.engine.connect() as connection:
+            rows = connection.execute(query).all()
+        return [(row[0], int(row[1])) for row in rows]
+
+    @staticmethod
+    def _outcomes(row) -> DeliveryOutcomes:
+        return DeliveryOutcomes(
+            succeeded=int(row[0]),
+            dead_lettered=int(row[1]),
+            unavailable=int(row[2]),
+            first_attempt=int(row[3]),
+            median_seconds=None if row[4] is None else float(row[4]),
+        )
+
+    @staticmethod
+    def _visible(time_column, window: StatsWindow, scope: AuthorizationScope) -> tuple:
+        return (
+            time_column >= window.start,
+            time_column < window.end,
+            *agent_scope_predicates(scope, include_deleted=True),
+        )
 
 
 @dataclass(frozen=True)

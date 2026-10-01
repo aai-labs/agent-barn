@@ -1,3 +1,4 @@
+from datetime import UTC, datetime, timedelta, timezone
 from decimal import Decimal
 
 import pytest
@@ -9,11 +10,15 @@ from api.domains.business_value.service import (
     WriteCategories,
     categorise,
     effective_minutes,
+    handled_rate,
+    per_request,
+    utc_bucket,
     value_to_spend_ratio,
     value_usd,
 )
 
 STALE_OUTCOME_TYPE = "OUTCOME_REMOVED_FROM_CATALOGUE"
+NAIVE_BUCKET = datetime(2026, 9, 1)  # noqa: DTZ001
 
 
 def test_effective_minutes_default_to_the_catalogue_without_overrides():
@@ -153,3 +158,48 @@ def test_categorise_sums_counts_across_rows():
 
 def test_categorise_of_nothing_is_empty():
     assert_that(categorise([]), equal_to(WriteCategories(successful={}, unverified=0, failed=0, unclassified=0)))
+
+
+def test_per_request_divides_spend_by_requests_as_a_float():
+    assert_that(per_request(Decimal("3.00"), 4), equal_to(0.75))
+
+
+def test_per_request_divides_a_count_by_requests():
+    assert_that(per_request(7, 2), equal_to(3.5))
+
+
+def test_per_request_is_zero_when_nothing_was_spent_on_requests():
+    assert_that(per_request(Decimal(0), 5), equal_to(0.0))
+
+
+def test_per_request_is_null_without_requests():
+    assert_that(per_request(Decimal("2.50"), 0), none())
+
+
+def test_handled_rate_is_successes_over_every_handled_outcome():
+    assert_that(handled_rate(succeeded=3, failed=1), equal_to(0.75))
+
+
+def test_handled_rate_is_zero_when_nothing_succeeded():
+    assert_that(handled_rate(succeeded=0, failed=2), equal_to(0.0))
+
+
+def test_handled_rate_is_null_without_handled_outcomes():
+    assert_that(handled_rate(succeeded=0, failed=0), none())
+
+
+def test_utc_bucket_reads_a_naive_bucket_as_utc():
+    assert_that(utc_bucket(NAIVE_BUCKET), equal_to(datetime(2026, 9, 1, tzinfo=UTC)))
+
+
+def test_utc_bucket_converts_an_aware_bucket_to_utc():
+    bucket = utc_bucket(datetime(2026, 9, 1, 2, tzinfo=timezone(timedelta(hours=2))))
+
+    assert_that((bucket, bucket.tzinfo), equal_to((datetime(2026, 9, 1, tzinfo=UTC), UTC)))
+
+
+def test_utc_bucket_gives_naive_and_aware_forms_of_one_instant_the_same_key():
+    naive = utc_bucket(NAIVE_BUCKET)
+    aware = utc_bucket(datetime(2026, 9, 1, 3, tzinfo=timezone(timedelta(hours=3))))
+
+    assert_that({naive: 1}.get(aware), equal_to(1))

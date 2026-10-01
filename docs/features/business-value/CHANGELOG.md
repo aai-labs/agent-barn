@@ -20,8 +20,9 @@ Related context: [Activity and Ingest](../activity-and-ingest.md), [Agent Activi
 - Also delivered: `GET /organizations/{organization_id}/value`, the Organization value KPI. The feature doc's [Organization value](../business-value.md#organization-value) section is the contract.
 - Also delivered: gog (Google Workspace) commands are classified as Business Actions and valued like aai-cli ones. See the feature doc's [gog commands](../business-value.md#gog-commands) section.
 - Also delivered: review fixes. Value-settings saves are serialized under a row lock and record what they actually replaced, and the per-bucket Business Action query no longer builds an unused bucket spine.
+- Also delivered: `GET /organizations/{organization_id}/value/activity`, the Organization activity KPI. The feature doc's [Organization activity](../business-value.md#organization-activity) section is the contract. It rests on `ValueActivityRepository` and the two indexes of migration `45bcefcb0749`.
 - In transition: nothing. gog classification is deployed to local k3d and was verified live.
-- Next: the Stage 3 UI that renders value settings and the Organization value.
+- Next: the Stage 3 UI that renders value settings, the Organization value, and activity.
 - Blockers: the product owner has not signed off the default minutes per Outcome Type. They are placeholders until then, and every value figure inherits them.
 
 ## Slice history
@@ -81,6 +82,196 @@ Coverage:
   - keeping rows when classification fails
   - a no-change re-run writing nothing (`updated_at` unchanged)
 - The re-map test now checks `recorded=1` and that `updated_at` moved on the re-mapped row.
+
+### 2026-09-30 — AF-346 — Organization activity API
+
+Delivered: `GET /organizations/{organization_id}/value/activity` on `business_value_router`, with `Depends(get_stats_window)`. The feature doc's [Organization activity](../business-value.md#organization-activity) section is the contract.
+- **Authorization:** `BusinessValueService.get_organization_activity` authorizes through the existing `_require_read` (`cost.read`, then `activity.read`).
+- **Totals and per-Agent rows:** it builds both from `ValueActivityRepository` and `CostRepository`, with `activity_figures`.
+- **Series:** it builds the series from `ConversationRepository.daily_direction_counts_since(..., organization_id=scope.organization_id)` plus the webhook bucket counts, merged by `utc_bucket`. No parallel message query was written.
+- **Row identity:** `agent_identity` now gives both the value and the activity rows their name and deleted flag. The `/value` behaviour is unchanged.
+- **Docstring:** `daily_direction_counts_since`'s docstring now names this caller. It had said the helper was reached only through `require_platform_admin` and that `agent_scope_predicates` was unusable.
+
+Ticket corrections:
+- The ticket names a shared `value_router`. The router is `business_value_router`, so the route lives there.
+- Only OUTBOUND deliveries can be retried by hand. An INBOUND delivery's automatic retries keep the same row, which counts once at its final status. This is recorded under "Activity aggregates".
+- An answer to a command approval arrives as a new inbound message and delivery (`web_chat/service.py`), so it counts as a Request. The feature doc lists it as a caveat.
+
+Docs:
+- `business-value.md` gains the Organization activity section, its reads in Boundaries, and change-impact rules.
+- `CONTEXT.md` defines **Request**.
+- `activity-and-ingest.md` Boundaries names this reader.
+- `agent-webhooks.md` Change impact notes that every invocation is a Request.
+- `INDEX.md` routes Organization activity to `business-value.md`.
+
+Coverage:
+- `api/tests/integration/test_organization_activity.py` gains 20 API tests:
+  - Requests across messages and webhooks, with the series summing to the total
+  - OUTBOUND ignored
+  - the handled rate with UNAVAILABLE as a failure, and CANCELLED, PENDING, and PROCESSING left out
+  - an automatically retried delivery: handled, but left out of the median
+  - the interpolated median, and null figures without deliveries
+  - null per-Request figures without Requests, and `0.0` cost with no spend
+  - a native-only Agent with zero coverage
+  - a soft-deleted Agent
+  - a retired connection
+  - an approval answer sent through the real Web Chat route
+  - the half-open window and its echo, and 422 for an inverted window
+  - the series buckets equal to `spend_series`
+  - row union and order, including the Unattributed row
+  - Admin 200, Member 403, non-member 403, and unauthenticated 401
+- `api/tests/integration/test_cross_org_isolation.py`:
+  - an Owner of Org A gets 403 on Org B's activity;
+  - Org B's messages, webhooks, deliveries, tool calls, and spend never reach Org A's figures.
+- All 22 failed first, on 404 before the route existed.
+- `test_organization_value.py` and the unit tests still pass: 120 tests across the four files.
+
+Live check (local k3d, deployed by the user at migration `45bcefcb0749`), with one Hermes Agent, "Tommy", in a fresh Organization:
+- **Traffic:**
+  - Three Web Chat messages went through the real API, one of them asking Tommy to run `date -u`.
+  - The Agent was stopped through the API, and one more message returned `delivery_status: UNAVAILABLE`.
+  - Webhooks cannot be created locally, because they require an enabled native Slack, Discord, Telegram, or Teams Connection and local k3d has none. One `webhook_invocation` row labelled "AF-346 e2e synthetic" (status `DISPATCH_FAILED`) was inserted instead, as the integration tests do.
+- **Result:** `GET …/value/activity` matched SQL computed independently over the same window on every figure:
+
+  | Figure | Endpoint | SQL |
+  |---|---|---|
+  | Requests | 5 | 4 inbound messages + 1 invocation |
+  | Handled without failure | 0.75, coverage 4 | 3 SUCCEEDED, 1 UNAVAILABLE |
+  | Median response | 1.462131 s, coverage 3 | `percentile_cont` over 1.255851, 1.462131, and 2.822847 s |
+  | Cost per Request | 0.00700796592 | $0.0350398296 ÷ 5 |
+  | Tool Calls per Request | 1.0 | 5 ÷ 5 |
+
+  - The series put all 5 Requests in the 09:00 UTC bucket.
+  - 981 older `cost_record` rows with no Organization were correctly left out.
+- **Observed:**
+  - 4 of the 5 Tool Calls (`read_file` ×3, `cronjob`) ran during the Agent's startup, before the first message. This confirms that Tool Calls per Request includes background work.
+  - Spend lags live usage until the next cost sync: the newest attributed cost row was the first reply's.
+- **Authorization on the live stack:** a Platform Administrator without a Membership got 403, a request with no token got 401, and an inverted window got 422.
+
+Not verified live:
+- Webhook ingress end to end, because it needs a native Connection. That path is covered by `test_agent_webhooks.py`.
+- A Member's 403: there is no second account locally. That path is covered by the integration test.
+
+### 2026-09-30 — AF-346 — Activity rules and DTOs
+
+Delivered: pure module-level functions in `api/domains/business_value/service.py`, with nothing calling them yet:
+- `per_request(amount, requests)`: `float(Decimal(amount) / requests)`, used for cost per request (on `Decimal` spend) and tool calls per request (on an integer count).
+  - It is `None` when there are no requests.
+  - Zero spend over some requests is `0.0`, not `None`.
+- `handled_rate(succeeded, failed)`: successes over every handled outcome, `None` when there were none.
+- `utc_bucket(bucket)`: a naive bucket is read as UTC, and an aware one is converted to UTC.
+  - `CostRepository.spend_series` and `ValueActivityRepository.webhook_invocations_by_bucket` return naive buckets.
+  - `ConversationRepository.daily_direction_counts_since` returns aware ones (`timezone('UTC', bucket)`).
+  - This gives both forms of one instant the same merge key.
+
+The response DTOs in `api/domains/business_value/models.py`:
+- `ActivityTotalsRead`:
+  - `requests`
+  - `handled_without_failure_rate` and `handled_coverage`
+  - `median_response_seconds` and `response_time_coverage`
+  - `cost_per_request` and `tool_calls_per_request`
+- `ActivitySeriesPoint`: `bucket` and `requests`.
+- `AgentActivityRead`: the totals fields, plus `agent_id`, `agent_name`, `agent_deleted`, and `spend`.
+- `OrganizationActivityRead`: the echoed window, plus `totals`, `requests_series`, and `agents`.
+
+Coverage:
+- `api/tests/unit/test_business_value_valuation.py` gains 10 tests:
+  - division for spend and for counts, zero spend, and no requests
+  - the handled rate, including its zero and null cases
+  - a naive bucket, an aware non-UTC bucket, and naive and aware forms of one instant sharing a dictionary key
+- All 10 failed first on `NotImplementedError` stubs, while the existing 22 still passed. All 32 pass.
+
+### 2026-09-30 — AF-346 — Activity indexes
+
+Delivered:
+- Migration `45bcefcb0749` (revises `1045836844da`) adds two indexes, each declared in its model's `__table_args__`:
+  - `ix_communication_delivery_agent_direction_completed` on `communication_delivery (agent_id, direction, completed_at)`, the shape the ticket names;
+  - `ix_agent_chat_message_agent_direction_occurred` on `agent_chat_message (agent_id, direction, occurred_at)`.
+- Both are built without CONCURRENTLY, like every other migration here.
+
+Why the message index, which the ticket did not ask for:
+- The "Activity aggregates" measurement spread its rows over 180 days, so a 30-day window was about a sixth of the table. The existing time index `ix_agent_chat_message_occurred_at_direction` could have been skipped for that reason alone.
+- Re-run over 365 days, the read still seq-scanned (629 ms). That index holds every Organization's rows in the window, and the planner preferred a scan to reading that range and filtering down to one Organization's Agents.
+- The index was added on that result, as agreed before the re-run.
+
+Measured on local k3d (PostgreSQL 18.4), in one transaction ending in `ROLLBACK`:
+- Data: the same synthetic data as "Activity aggregates", spread over 365 days, reading one of 20 Organizations over a 30-day window. The indexes were created exactly as the migration defines them.
+
+  | Read | Before | With the index |
+  |---|---|---|
+  | deliveries | 1,468 ms (parallel seq scan) | 26.2 ms (bitmap scan on the new index) |
+  | inbound messages per Agent | 629 ms (parallel seq scan) | 15.4 ms (bitmap scan on the new index) |
+  | webhook invocations | 122 ms | 84 ms (unchanged index; no new index warranted) |
+  | tool calls | 9.3 ms | 7.9 ms (unchanged index) |
+
+Coverage:
+- `test_activity_indexes_exist_after_migration` in `test_organization_activity.py` inspects the migrated schema. It failed first, listing the table's existing indexes, and passes after the migration.
+- On a fresh Postgres 18 container, upgrading to head, downgrading to `1045836844da`, and upgrading again succeeds, and the indexes appear, disappear, and reappear.
+- `compare_metadata` shows no index drift on either table. The only differences reported on them already existed: TEXT columns reported against `AutoString`, and the `agent_chat_message.conversation_type` enum variants noted in "Value settings tables".
+- `make check-migrations` reports a single head, `45bcefcb0749`.
+
+Not verified: production data distribution, hardware, and how long the index builds lock writes on real table sizes.
+
+### 2026-09-30 — AF-346 — Activity aggregates
+
+Delivered: `ValueActivityRepository` in `api/domains/business_value/repository.py`. Every read takes a `StatsWindow` and an `AuthorizationScope`, and filters on:
+- the half-open window `[start, end)`;
+- a join to `agent` with `agent_scope_predicates(scope, include_deleted=True)`, so a soft-deleted Agent's history still counts;
+- the table's own `organization_id`, wherever the table has one.
+
+The reads:
+- `inbound_messages_by_agent`: INBOUND `agent_chat_message` rows by `occurred_at`. The table has no `organization_id`, so scoping is through the Agent join alone.
+- `webhook_invocations_by_agent` and `webhook_invocations_by_bucket`: `webhook_invocation` rows of every status, by `created_at`. The bucket read uses the same UTC `generate_series(date_trunc(...))` spine as `CostRepository.spend_series`.
+- `delivery_outcomes_total` and `delivery_outcomes_by_agent`: INBOUND `communication_delivery` rows by `completed_at`, limited to SUCCEEDED, DEAD_LETTERED, and UNAVAILABLE. They return the three counts, the first-attempt success count, and `percentile_cont(0.5)` over `completed_at − created_at`, filtered to SUCCEEDED with `attempt_count = 1` and cast to `double precision`. The median is null when nothing qualifies.
+- `tool_calls_by_agent`: `tool_call` rows of every status, by `occurred_at`.
+
+Ticket correction:
+- The ticket says a dead-lettered delivery that is retried and later succeeds counts as succeeded.
+- Only OUTBOUND deliveries can be retried by hand (`delivery_repository.py` `retry_dead_lettered`). An INBOUND retryable failure, including a lease-expiry reclaim, returns the same row to PENDING and keeps `attempt_count`, which only a claim increments. It ends SUCCEEDED with `attempt_count ≥ 2`, and DEAD_LETTERED is terminal for INBOUND.
+- The tests therefore cover an automatically retried delivery: it counts as succeeded and is left out of the median.
+
+Test support: `api/tests/steps/communication.py`.
+- It seeds connections, inbound deliveries through `CommunicationDeliveryRepository.accept_inbound` (with the status, attempt count, and timestamps overridden afterwards), outbound deliveries, messages, webhook invocations, and tool calls. It also soft-deletes the current Agent the product way.
+- `accept_inbound` refuses a deleted Agent, so the soft-deleted case seeds its rows first and deletes afterwards.
+
+Coverage: `api/tests/integration/test_organization_activity.py`, 10 repository tests:
+- per-Agent inbound messages, including the half-open window and ignoring OUTBOUND and other Organizations;
+- a soft-deleted Agent's messages;
+- webhook invocations of every status, including the window and other Organizations;
+- the webhook bucket spine, which equals `spend_series`'s buckets;
+- the delivery statuses: CANCELLED, PENDING, PROCESSING, and OUTBOUND are left out, and UNAVAILABLE comes from a stopped Agent;
+- the `completed_at` window;
+- the median over first-attempt successes only (10 s and 20 s give 15.0, with a retried 600 s success excluded), and a null median with no deliveries;
+- the per-Agent split, including a soft-deleted Agent and another Organization;
+- tool calls of every status, including the window and other Organizations.
+
+All 10 failed first on `NotImplementedError` stubs, with every seeding step completing. `test_organization_value.py` and `test_business_action_repository.py` still pass, and `api.api_app` and `api.ingest_app` import cleanly.
+
+Index check (local k3d, PostgreSQL 18.4):
+- Setup: one transaction ending in `ROLLBACK`, so nothing persisted.
+  - Rows: 20 synthetic Organizations and 200 Agents (marked deleted to skip template pinning; the reads do not filter on `deleted_at`), 500,006 `agent_chat_message`, 1,000,006 `communication_delivery` (half OUTBOUND), 100,000 `webhook_invocation`, and 500,024 `tool_call` rows.
+  - All rows were spread evenly over 180 days, and the tables were analyzed.
+  - Each query was compiled from the repository code and run with `EXPLAIN (ANALYZE, BUFFERS)` for one Organization over a 30-day window.
+- Without new indexes:
+
+  | Read | Plan | Time |
+  |---|---|---|
+  | deliveries | parallel sequential scan | 1,405 ms |
+  | inbound messages per Agent | parallel sequential scan; `ix_agent_chat_message_occurred_at_direction` not chosen | 606 ms |
+  | webhook invocations | bitmap scan on `ix_webhook_invocation_webhook_created` | 91 ms |
+  | tool calls | `ix_tool_call_agent_occurred` | 10 ms |
+
+- Candidate indexes, each created inside the same rolled-back transaction:
+
+  | Index | Read | Time |
+  |---|---|---|
+  | `communication_delivery (agent_id, direction, completed_at)`, the ticket's shape | deliveries | 17.6 ms |
+  | `communication_delivery (organization_id, direction, completed_at)` | deliveries | 12.4 ms |
+  | `communication_delivery (completed_at, organization_id)` | deliveries | 16.5 ms |
+  | `agent_chat_message (agent_id, direction, occurred_at)` | inbound messages per Agent | 45 ms (index-only scan) |
+
+- The planner serves the ticket's Agent-first shape with a nested loop over the Organization's Agents and a range scan per Agent. A planning review had claimed that shape could not serve an Organization-wide range; this measurement shows it can.
+- Not verified: production data distribution and hardware. This was a laptop with evenly spread synthetic rows.
 
 ### 2026-09-29 — AF-345 — gog (Google Workspace) classification
 
