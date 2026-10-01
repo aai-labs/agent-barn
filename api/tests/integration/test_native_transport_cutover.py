@@ -15,7 +15,7 @@ from api.tests.steps.communication import there_is_an_inbound_delivery, there_is
 
 
 @pytest.mark.parametrize("platform_key", ["slack", "discord", "telegram", "teams"])
-def test_native_driver_ingress_authenticates_before_refusing_delivery(platform_key: str) -> None:
+def test_retired_driver_ingress_is_absent(platform_key: str) -> None:
     with given([*STEPS, messaging_ready]) as context:
         change_connection(
             context,
@@ -30,9 +30,9 @@ def test_native_driver_ingress_authenticates_before_refusing_delivery(platform_k
             valid = context.communications_client.post(
                 url, json={}, headers={"Authorization": "Bearer legacy-driver", "X-AgentBarn-Driver-Version": "1"}
             )
-        with then("authentication still runs first and the native event cannot create gateway work"):
-            assert_that(invalid.status_code, equal_to(401))
-            assert_that(valid.status_code, equal_to(409))
+        with then("the route is absent and the event cannot create gateway work"):
+            assert_that(invalid.status_code, equal_to(404))
+            assert_that(valid.status_code, equal_to(404))
             for records in rows(context):
                 assert_that(records, has_length(0))
 

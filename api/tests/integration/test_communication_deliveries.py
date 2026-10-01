@@ -10,7 +10,6 @@ from hamcrest import (
     equal_to,
     greater_than,
     has_entries,
-    has_length,
     is_,
     none,
     not_,
@@ -24,7 +23,6 @@ from api.domains.communications.delivery_repository import (
     CommunicationDeliveryRepository,
 )
 from api.domains.communications.error_details import normalize_communication_error
-from api.domains.communications.gateway_service import CommunicationsGatewayService
 from api.domains.communications.models import (
     CommunicationConnection,
     CommunicationDelivery,
@@ -37,7 +35,6 @@ from api.domains.communications.models import (
     RuntimeReplyCreate,
 )
 from api.domains.communications.repository import CommunicationConnectionRepository
-from api.domains.communications.transport import NativeTransportUnsupported
 from api.domains.conversations.models import AgentChatMessage
 from api.domains.events.models import ActorIdentity, ActorIdentityType
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
@@ -443,41 +440,6 @@ def test_runtime_can_renew_its_live_inbound_delivery_lease() -> None:
             assert_that(delivery.lease_expires_at, greater_than(datetime.now(UTC) + timedelta(seconds=100)))
 
 
-def test_thread_state_is_durable_and_connection_scoped() -> None:
-    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
-        connection_id = _create_connection(context, bot_token="gateway-token-one")
-        second_connection = CommunicationConnection(
-            organization_id=context.agent.organization_id,
-            agent_id=context.agent.id,
-            platform_key="email",
-            display_name="Gateway Telegram",
-            credentials_encrypted="unused",
-            driver_key_encrypted="unused",
-        )
-        context.injector.get(PostgresRepositoryDelegate).save(second_connection)
-        second_connection_id = second_connection.id
-        repository = context.injector.get(CommunicationDeliveryRepository)
-        envelope = _envelope("provider-owned")
-
-        repository.accept_inbound(connection_id=connection_id, envelope=envelope)
-
-        with then("only the accepted Connection owns the persisted thread"):
-            assert_that(
-                repository.thread_has_agent_state(connection_id=connection_id, location=envelope.location), is_(True)
-            )
-            assert_that(
-                repository.thread_has_agent_state(connection_id=second_connection_id, location=envelope.location),
-                is_(False),
-            )
-            assert_that(
-                repository.thread_has_agent_state(
-                    connection_id=connection_id,
-                    location=ConversationLocation(id="other-channel", type="CHANNEL", thread_id="thread-one"),
-                ),
-                is_(False),
-            )
-
-
 def test_message_for_intentionally_stopped_agent_is_terminally_unavailable() -> None:
     with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
         connection_id = _create_connection(context)
@@ -652,29 +614,6 @@ def test_diagnostics_reports_pipeline_transitions_without_message_content() -> N
             assert_that(repr(body), not_(contains_string("private response")))
             assert_that(repr(journal.json()), not_(contains_string("message provider-1")))
             assert_that(repr(journal.json()), not_(contains_string("private response")))
-
-
-def test_native_platform_cannot_enter_gateway_ingress() -> None:
-    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
-        connection = CommunicationConnection(
-            organization_id=context.agent.organization_id,
-            agent_id=context.agent.id,
-            platform_key="discord",
-            display_name="Native Discord",
-            credentials_encrypted="unused",
-            driver_key_encrypted="unused",
-        )
-        context.injector.get(PostgresRepositoryDelegate).save(connection)
-        gateway = context.injector.get(CommunicationsGatewayService)
-
-        with when("a stale supervised provider session submits an event"):
-            with pytest.raises(NativeTransportUnsupported):
-                gateway.accept_plugin_payload(connection.id, {})
-
-        with then("no gateway delivery or admission journal is written"):
-            with Session(context.injector.get(PostgresRepositoryDelegate).engine) as session:
-                assert_that(session.exec(select(CommunicationDelivery)).all(), has_length(0))
-                assert_that(session.exec(select(CommunicationJournalEntry)).all(), has_length(0))
 
 
 def test_dead_letter_retry_reuses_one_delivery_and_is_idempotent() -> None:

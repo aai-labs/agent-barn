@@ -1,4 +1,4 @@
-"""Native Teams public relay and its retired gateway ingress compatibility."""
+"""Native Teams public relay and absence of the retired gateway ingress."""
 
 from typing import Any
 from unittest.mock import patch
@@ -124,12 +124,12 @@ def test_a_teams_activity_with_a_valid_token_cannot_use_retired_gateway_ingress(
                     headers={"Authorization": "Bearer valid"},
                 )
 
-        with then("it is refused after authentication and nothing is queued"):
-            assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
+        with then("it is absent and nothing is queued"):
+            assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
             assert_that(_inbound(context), has_length(0))
 
 
-def test_a_teams_activity_with_a_rejected_token_is_unauthorized() -> None:
+def test_retired_gateway_provider_ingress_is_absent_with_a_rejected_token() -> None:
     with given(_GIVEN) as context:
         connection = _create_teams_connection(context)
 
@@ -141,14 +141,12 @@ def test_a_teams_activity_with_a_rejected_token_is_unauthorized() -> None:
                     headers={"Authorization": "Bearer forged"},
                 )
 
-        with then("it is refused and nothing is queued"):
-            assert_that(response.status_code, equal_to(status.HTTP_401_UNAUTHORIZED))
+        with then("the route is absent and nothing is queued"):
+            assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
             assert_that(_inbound(context), has_length(0))
 
 
-def test_a_teams_activity_without_an_authorization_header_is_unauthorized() -> None:
-    """This used to be a 422 from a required header. The header is optional now, because a
-    caller that signs its body sends none, so the plugin is what refuses it."""
+def test_retired_gateway_provider_ingress_is_absent_without_authorization() -> None:
     with given(_GIVEN) as context:
         connection = _create_teams_connection(context)
 
@@ -158,8 +156,8 @@ def test_a_teams_activity_without_an_authorization_header_is_unauthorized() -> N
                 json=_activity(),
             )
 
-        with then("it is refused and nothing is queued"):
-            assert_that(response.status_code, equal_to(status.HTTP_401_UNAUTHORIZED))
+        with then("the route is absent and nothing is queued"):
+            assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
             assert_that(_inbound(context), has_length(0))
 
 
@@ -211,3 +209,16 @@ def test_public_teams_webhook_returns_503_when_native_runtime_is_unreachable() -
         with then("the public API reports unavailability without enqueuing a fallback"):
             assert_that(response.status_code, equal_to(503))
             assert_that(_inbound(context), has_length(0))
+
+
+def test_public_teams_webhook_rejects_forged_credentials_without_gateway_work() -> None:
+    with given(_GIVEN) as context:
+        connection = _create_teams_connection(context)
+        with patch(_VERIFY, side_effect=_accepts_only("valid")):
+            response = context.client.post(
+                f"/communications/v1/webhooks/{connection['id']}",
+                json=_activity(),
+                headers={"Authorization": "Bearer forged"},
+            )
+        assert response.status_code == status.HTTP_401_UNAUTHORIZED
+        assert _inbound(context) == []

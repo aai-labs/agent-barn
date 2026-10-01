@@ -1,7 +1,7 @@
 import hashlib
 import json
 from abc import ABC, abstractmethod
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 from uuid import UUID
@@ -54,19 +54,6 @@ class ValidatedConnectionConfiguration:
     external_identity: str | None
     credential_fingerprint: str | None
     credential_scope_key: str | None
-
-
-@dataclass(frozen=True)
-class InboundAdmissionContext:
-    """Provider-neutral state a plugin may consult while admitting an event.
-
-    Plugins decide provider-specific admission rules, while the callback keeps
-    durable conversation ownership in Communications persistence rather than in
-    a provider task's process memory.
-    """
-
-    connection_id: UUID
-    thread_is_agent_owned: Callable[[ConversationLocation], bool]
 
 
 @dataclass(frozen=True)
@@ -257,38 +244,6 @@ class PlatformPlugin(ABC):
         del settings, payload
         return InboundAdmissionResult(CommunicationPolicyDisposition.MALFORMED_PAYLOAD)
 
-    def admit_inbound(
-        self,
-        settings: PlatformSettings,
-        payload: dict[str, Any],
-        *,
-        context: InboundAdmissionContext,
-    ) -> InboundAdmissionResult:
-        """Apply provider admission policy before durable delivery acceptance.
-
-        Most plugins only need normalization. Plugins with conversation-scoped
-        policies (for example Slack thread mention gating) override this seam and
-        use the supplied durable ownership callback without reaching into SQL.
-        """
-        del context
-        return self.normalize_inbound(settings, payload)
-
-    def enrich_inbound(
-        self,
-        settings: PlatformSettings,
-        credentials: PlatformCredentials,
-        envelopes: list[NormalizedCommunicationEnvelope],
-    ) -> list[NormalizedCommunicationEnvelope]:
-        """Best-effort provider lookups to fill sender/location names before persistence.
-
-        Default no-op. Plugins override this to resolve names the provider
-        payload omitted. Lookups must be cached and must never raise past this
-        seam: a failure here must fall back to the envelopes as normalized
-        rather than delay or reject durable message acceptance.
-        """
-        del settings, credentials
-        return envelopes
-
     def list_directory_entries(
         self,
         settings: PlatformSettings,
@@ -320,20 +275,6 @@ class PlatformPlugin(ABC):
         accepted, retried, or terminally completed.
         """
         del settings, credentials, context
-
-    async def run_ingress(
-        self,
-        settings: PlatformSettings,
-        credentials: PlatformCredentials,
-        emit: Callable[[dict[str, Any]], Awaitable[None]],
-        connected: Callable[[], Awaitable[None]],
-    ) -> None:
-        """Run one Connection's provider ingress session until cancelled.
-
-        Socket and polling providers implement this hook. Webhook providers use
-        the gateway's HTTP ingress contract instead.
-        """
-        raise NotImplementedError(f"{self.key} does not implement supervised ingress")
 
     def verify_webhook(self, credentials: PlatformCredentials, request: WebhookRequest) -> None:
         """Authenticate a provider webhook before normalization; raise PermissionError to reject it."""

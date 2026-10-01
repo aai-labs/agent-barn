@@ -21,12 +21,12 @@ Conversation Messages and Tool Calls share the Agent Activity UI but have differ
 - Product API conversation and tool-call reads require `activity.read` and are scoped through an accessible, organization-owned, non-deleted Agent. Assigned Members cannot bypass Agent Access through activity endpoints.
 - Runtime Ingest Tool Call writes use Agent identity plus ingest-key authentication rather than a human Membership or Agent Access check. Runtime communication claims/replies use a separate versioned Communications protocol credential.
 - Telemetry Events are runtime-originated operational facts. They are not Domain Events, Outbox Messages, Event Deliveries, or Security Audit Records.
-- Platform Plugins normalize provider-specific identities into the canonical envelope. Missing sender/location display names are resolved by an optional, best-effort `enrich_inbound` plugin seam that the Communications Gateway invokes centrally — for gateway-owned webhook/driver events — after admission and before persistence. Enrichment lookups are cached, credential-scoped, and never delay or reject durable message acceptance on failure.
+- Email normalizes sender/location identities and applies policy directly before durable Communication Delivery acceptance; the shared provider enrichment and driver-ingress hooks are removed. Teams authenticates and applies admission policy at the product API relay, passing the raw activity to its native runtime without creating a gateway Delivery. Native runtime observers continue mirroring conversation identities and names through Ingest.
 
 ## Data flow
 
 ```text
-Platform provider → Platform Plugin → Communication Delivery/Conversation repository
+Email Worker → API Email normalization → Communication Delivery/Conversation repository
 Agent runtime ─────→ Communications protocol ────────┘
 Native chat observer → Ingest API → Conversation repository
 Agent runtime ─────→ Ingest API → Tool Call repository → Business Action repository

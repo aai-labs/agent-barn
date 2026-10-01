@@ -93,11 +93,10 @@ def _feedback_plugin() -> Mock:
     plugin.credentials_model = SlackCredentials
     plugin.supports_progress_updates = True
     plugin.runtime_prompt.side_effect = lambda envelope: envelope.text
-    plugin.admit_inbound.return_value = InboundAdmissionResult(
+    plugin.normalize_inbound.return_value = InboundAdmissionResult(
         CommunicationPolicyDisposition.ACCEPTED,
         (_envelope(),),
     )
-    plugin.enrich_inbound.side_effect = lambda settings, credentials, envelopes: envelopes
     return plugin
 
 
@@ -306,80 +305,10 @@ def test_gateway_renews_only_the_authenticated_agents_live_delivery() -> None:
     assert deliveries.renew_runtime_delivery_lease.call_args.kwargs["agent_id"] == agent.id
 
 
-def test_gateway_enriches_inbound_envelopes_with_decrypted_credentials_before_acceptance() -> None:
-    connection = cast(CommunicationConnection, _connection())
-    plugin = _feedback_plugin()
-    enriched = _envelope().model_copy(update={"text": "enriched"})
-    plugin.enrich_inbound.side_effect = None
-    plugin.enrich_inbound.return_value = [enriched]
-    service, deliveries = _service(connection, plugin)
-    deliveries.accept_inbound.return_value = AcceptedCommunicationRead(
-        message_id=uuid4(),
-        delivery_id=uuid4(),
-        status=CommunicationDeliveryStatus.PENDING,
-    )
-
-    with patch(
-        "api.domains.communications.gateway_service.decrypt_token",
-        return_value=json.dumps({"bot_token": "xoxb-token", "app_token": "xapp-token"}),
-    ):
-        service._accept_admitted_payload(connection, plugin, SlackSettings(), {})
-
-    plugin.enrich_inbound.assert_called_once()
-    call_settings, call_credentials, call_envelopes = plugin.enrich_inbound.call_args.args
-    assert isinstance(call_settings, SlackSettings)
-    assert call_credentials == SlackCredentials(bot_token="xoxb-token", app_token="xapp-token")
-    assert call_envelopes == [_envelope()]
-    deliveries.accept_inbound.assert_called_once_with(connection_id=connection.id, envelope=enriched)
-
-
-def test_gateway_enrichment_failure_falls_back_to_unenriched_envelope() -> None:
-    connection = cast(CommunicationConnection, _connection())
-    plugin = _feedback_plugin()
-    plugin.enrich_inbound.side_effect = RuntimeError("Slack directory unavailable")
-    service, deliveries = _service(connection, plugin)
-    deliveries.accept_inbound.return_value = AcceptedCommunicationRead(
-        message_id=uuid4(),
-        delivery_id=uuid4(),
-        status=CommunicationDeliveryStatus.PENDING,
-    )
-
-    with patch(
-        "api.domains.communications.gateway_service.decrypt_token",
-        return_value=json.dumps({"bot_token": "xoxb-token", "app_token": "xapp-token"}),
-    ):
-        accepted = service._accept_admitted_payload(connection, plugin, SlackSettings(), {})
-
-    assert len(accepted) == 1
-    deliveries.accept_inbound.assert_called_once_with(connection_id=connection.id, envelope=_envelope())
-
-
-def test_gateway_enrichment_validation_warning_does_not_log_credential_values(caplog) -> None:
-    connection = cast(CommunicationConnection, _connection())
-    plugin = _feedback_plugin()
-    service, deliveries = _service(connection, plugin)
-    deliveries.accept_inbound.return_value = AcceptedCommunicationRead(
-        message_id=uuid4(),
-        delivery_id=uuid4(),
-        status=CommunicationDeliveryStatus.PENDING,
-    )
-
-    with patch(
-        "api.domains.communications.gateway_service.decrypt_token",
-        return_value=json.dumps({"bot_token": ["super-secret-token"], "app_token": "xapp-token"}),
-    ):
-        with caplog.at_level("WARNING"):
-            accepted = service._accept_admitted_payload(connection, plugin, SlackSettings(), {})
-
-    assert len(accepted) == 1
-    assert "super-secret-token" not in caplog.text
-    deliveries.accept_inbound.assert_called_once_with(connection_id=connection.id, envelope=_envelope())
-
-
 def test_gateway_does_not_create_a_delivery_for_a_denied_admission() -> None:
     connection = cast(CommunicationConnection, _connection())
     plugin = _feedback_plugin()
-    plugin.admit_inbound.return_value = InboundAdmissionResult(CommunicationPolicyDisposition.USER_DENIED)
+    plugin.normalize_inbound.return_value = InboundAdmissionResult(CommunicationPolicyDisposition.USER_DENIED)
     service, deliveries = _service(connection, plugin)
 
     with patch("api.domains.communications.metrics.record_policy_disposition") as record_disposition:
@@ -403,7 +332,7 @@ def test_gateway_journal_failure_does_not_drop_an_event() -> None:
 
     assert len(accepted) == 1
     deliveries.accept_inbound.assert_called_once_with(connection_id=connection.id, envelope=_envelope())
-    plugin.admit_inbound.assert_called_once()
+    plugin.normalize_inbound.assert_called_once()
 
 
 def test_gateway_marks_claim_and_terminal_runtime_failure_at_lifecycle_seam() -> None:

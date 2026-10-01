@@ -33,12 +33,10 @@ from api.domains.communications.models import (
 )
 from api.domains.communications.operations import CommunicationOperationalRepository
 from api.domains.communications.plugins.base import (
-    InboundAdmissionContext,
     InboundAdmissionResult,
     PlatformPlugin,
     PlatformSettings,
     ProcessingFeedbackContext,
-    WebhookRequest,
 )
 from api.domains.communications.plugins.registry import PlatformPluginRegistry
 from api.domains.communications.repository import CommunicationConnectionRepository
@@ -314,40 +312,6 @@ class CommunicationsGatewayService:
         )
         return delivery_id
 
-    def accept_driver_event(
-        self,
-        connection_id: UUID,
-        provided_key: str,
-        payload: dict[str, Any],
-    ) -> list[AcceptedCommunicationRead]:
-        connection = self.connection_repository.get_active(connection_id)
-        if connection is None or not connection.enabled:
-            raise PermissionError("Communication Connection not found")
-        driver_key = decrypt_token(
-            connection.driver_key_encrypted,
-            self.config.agent_token_encryption_key,
-        )
-        if not secrets.compare_digest(driver_key, provided_key):
-            raise PermissionError("Invalid Platform Driver credential")
-        require_gateway_transport(connection.platform_key)
-        plugin = self.plugins.require(connection.platform_key)
-        settings = plugin.settings_model.model_validate(connection.settings)
-        return self._accept_admitted_payload(connection, plugin, settings, payload)
-
-    def accept_plugin_payload(
-        self,
-        connection_id: UUID,
-        payload: dict[str, Any],
-    ) -> list[AcceptedCommunicationRead]:
-        """Accept an event from a plugin task already bound to its Connection."""
-        connection = self.connection_repository.get_active(connection_id)
-        if connection is None or not connection.enabled:
-            return []
-        require_gateway_transport(connection.platform_key)
-        plugin = self.plugins.require(connection.platform_key)
-        settings = plugin.settings_model.model_validate(connection.settings)
-        return self._accept_admitted_payload(connection, plugin, settings, payload)
-
     def _accept_admitted_payload(
         self,
         connection: CommunicationConnection,
@@ -374,8 +338,6 @@ class CommunicationsGatewayService:
         if admission.disposition != CommunicationPolicyDisposition.ACCEPTED:
             return []
         envelopes = list(admission)
-        if envelopes:
-            envelopes = self._enrich_inbound(connection, plugin, settings, envelopes)
         accepted: list[AcceptedCommunicationRead] = []
         for envelope in envelopes:
             result = self.accept_inbound(connection.id, envelope)
@@ -383,35 +345,6 @@ class CommunicationsGatewayService:
             if not result.duplicate and result.status == CommunicationDeliveryStatus.PENDING:
                 self._notify_processing_feedback(connection, ProcessingFeedbackStage.ACCEPTED, envelope)
         return accepted
-
-    def _enrich_inbound(
-        self,
-        connection: CommunicationConnection,
-        plugin: PlatformPlugin,
-        settings: PlatformSettings,
-        envelopes: list[NormalizedCommunicationEnvelope],
-    ) -> list[NormalizedCommunicationEnvelope]:
-        """Resolve optional provider names before durable persistence.
-
-        Best-effort: any failure (decrypt, validation, or a plugin's own
-        provider lookups) falls back to the envelopes as normalized rather
-        than delaying or rejecting durable acceptance.
-        """
-        try:
-            credentials = plugin.credentials_model.model_validate(
-                json.loads(decrypt_token(connection.credentials_encrypted, self.config.agent_token_encryption_key))
-            )
-            return plugin.enrich_inbound(settings, credentials, envelopes)
-        except Exception as exc:
-            # Validation errors can include input values. Credentials are
-            # decrypted only for this best-effort lookup and must never appear
-            # in logs, even when a stored payload is malformed.
-            logger.warning(
-                "Communication inbound enrichment failed for Connection %s (%s)",
-                connection.id,
-                type(exc).__name__,
-            )
-            return envelopes
 
     def notify_processing_feedback(self, context: ProcessingFeedbackContext) -> None:
         """Best-effort feedback hook for a provider-owned delivery lifecycle."""
@@ -479,17 +412,7 @@ class CommunicationsGatewayService:
         payload: dict[str, Any],
     ) -> InboundAdmissionResult:
         try:
-            result = plugin.admit_inbound(
-                settings,
-                payload,
-                context=InboundAdmissionContext(
-                    connection_id=connection_id,
-                    thread_is_agent_owned=lambda location: self.delivery_repository.thread_has_agent_state(
-                        connection_id=connection_id,
-                        location=location,
-                    ),
-                ),
-            )
+            result = plugin.normalize_inbound(settings, payload)
         except Exception as exc:
             logger.warning(
                 "Communication payload admission failed for Connection %s (%s)",
@@ -564,20 +487,9 @@ class CommunicationsGatewayService:
         connection_id = self.email_addresses.resolve(local_part)
         if connection_id is None:
             return []
-        return self.accept_plugin_payload(connection_id, payload)
-
-    def accept_provider_webhook(
-        self,
-        connection_id: UUID,
-        request: WebhookRequest,
-    ) -> list[AcceptedCommunicationRead]:
         connection = self.connection_repository.get_active(connection_id)
-        if connection is None or not connection.enabled:
-            raise PermissionError("Communication Connection not found")
-        plugin = self.plugins.require(connection.platform_key)
-        credentials = plugin.credentials_model.model_validate(
-            json.loads(decrypt_token(connection.credentials_encrypted, self.config.agent_token_encryption_key))
-        )
-        plugin.verify_webhook(credentials, request)
-        require_gateway_transport(connection.platform_key)
-        return self.accept_plugin_payload(connection.id, request.payload)
+        if connection is None or not connection.enabled or connection.platform_key != "email":
+            return []
+        plugin = self.plugins.require("email")
+        settings = plugin.settings_model.model_validate(connection.settings)
+        return self._accept_admitted_payload(connection, plugin, settings, payload)

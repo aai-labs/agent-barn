@@ -10,8 +10,7 @@ from prometheus_client import REGISTRY
 from api.core.metrics import CONTENT_TYPE_LATEST, render_metrics, setup_http_metrics
 from api.core.utils import create_injector
 from api.domains.communications.gateway_routes import (
-    driver_communications_router,
-    provider_webhook_router,
+    email_compatibility_router,
     runtime_communications_router,
 )
 from api.domains.communications.maintenance import CommunicationsMaintenance
@@ -52,8 +51,7 @@ def create_communications_app(injector: Injector | None = None) -> FastAPI:
     app = FastAPI(lifespan=lifespan)
     subapi = FastAPI()
     subapi.include_router(runtime_communications_router)
-    subapi.include_router(driver_communications_router)
-    subapi.include_router(provider_webhook_router)
+    subapi.include_router(email_compatibility_router)
     app.mount("/communications/v1", subapi)
 
     http_registry = setup_http_metrics(subapi)

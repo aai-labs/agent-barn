@@ -87,9 +87,7 @@ def test_chat_plugins_do_not_advertise_gateway_initiated_delivery(plugin):
 @pytest.mark.parametrize(
     "plugin_type", [DiscordPlatformPlugin, TelegramPlatformPlugin, SlackPlatformPlugin, TeamsPlatformPlugin]
 )
-def test_native_only_plugins_cannot_send_or_open_gateway_sessions(plugin_type):
-    import asyncio
-
+def test_native_only_plugins_cannot_send_gateway_messages(plugin_type):
     from api.domains.communications.models import ConversationLocation, OutboundCommunicationEnvelope
 
     plugin = plugin_type(CONFIG)
@@ -111,16 +109,8 @@ def test_native_only_plugins_cannot_send_or_open_gateway_sessions(plugin_type):
         text="old output",
     )
 
-    async def emit(_payload):
-        raise AssertionError("Native transport must not emit gateway events")
-
-    async def connected():
-        raise AssertionError("Native transport must not open gateway sessions")
-
     with patch("httpx.request", side_effect=AssertionError("Native transport must not call the provider")):
         with pytest.raises(NotImplementedError):
             plugin.send(settings, credentials, envelope, idempotency_key="historical-delivery")
-        with pytest.raises(NotImplementedError):
-            asyncio.run(plugin.run_ingress(settings, credentials, emit, connected))
     assert PlatformCapability.SUPERVISED_INGRESS not in plugin.capabilities
     assert PlatformCapability.PROCESSING_FEEDBACK not in plugin.capabilities
