@@ -203,7 +203,7 @@ export const INTEGRATION_PROVIDERS: IntegrationProvider[] = [
     scopeNote: "Personal API token grants full account access — no scopes to select. Domain is optional; only needed for a custom Pipedrive endpoint.",
     fields: [
       { key: "apiToken", label: "API token", type: "secret", required: true },
-      { key: "domain", label: "Company domain", type: "text", required: false, placeholder: "aai-labs", hint: "Leave empty to use the default api.pipedrive.com endpoint." },
+      { key: "domain", label: "Company domain", type: "text", required: false, placeholder: "aai-labs", hint: "Subdomain only — the part before .pipedrive.com. Leave empty to use the default api.pipedrive.com endpoint." },
     ],
   },
   // zoho_calendar disabled: not currently offered as an integration. Re-enable by

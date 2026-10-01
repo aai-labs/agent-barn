@@ -289,6 +289,7 @@ Documentation-only changes do not change a service image and do not require a se
 ## Operational safety
 
 - Treat signing-key and encryption-key rotation as migrations: existing tokens or encrypted values depend on the current keys.
+- Treat a stricter provider content schema like a data migration too: every Agent start re-validates stored Agent Secrets and Shared Credentials, so rows saved under the old rule stop their Agents' starts (with a 400 naming the integration) until re-saved. Before deploying such a change, run `python -m api.scripts.check_secret_contents` in each environment's API pod. It is read-only, lists failing rows by id and provider without printing values, and exits non-zero when any fail.
 - Verify migration and secret-hook behavior when changing API chart startup.
 - Keep runtime/platform differences explicit when changing Hermes, OpenClaw, Slack, Teams, Telegram, or Discord deployment configuration.
 - The content-free Communications operation journal is retained for
