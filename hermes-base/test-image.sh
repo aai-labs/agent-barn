@@ -45,4 +45,13 @@ docker run --rm --network none \
     -v "$repo_root/api/tests/fixtures/hermes_message_completion_driver.py:/message-driver.py:ro" \
     --entrypoint python3 "$image" /message-driver.py
 
+# The healthz server reports the container's own CPU and memory from its cgroup v2
+# files. Run the real script under known limits, as the image's own user: a fake
+# directory cannot prove the files are there or readable to this user. The same check
+# for OpenClaw lives in openclaw-base/test-healthz-metrics.sh.
+docker run --rm --network none --memory 1g --cpus 0.5 \
+    -v "$repo_root/api/domains/agents/scripts/hermes/healthz-server.py:/healthz-server.py:ro" \
+    -v "$repo_root/api/tests/fixtures/hermes_healthz_metrics_driver.py:/healthz-driver.py:ro" \
+    --entrypoint python3 "$image" /healthz-driver.py /healthz-server.py
+
 echo 'All Hermes image tests passed'

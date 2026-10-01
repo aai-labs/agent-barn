@@ -1,0 +1,240 @@
+"""Integration tests for the platform capacity limits (AF-170).
+
+A Platform Administrator enters the ceilings the namespace's ResourceQuota sets, because
+the tenant service account cannot read the quota. Each change leaves one audit Event, and a
+save that changes nothing leaves none.
+"""
+
+from uuid import uuid7
+
+import pytest
+from fastapi import status
+from hamcrest import assert_that, contains_inanyorder, empty, equal_to, has_length, is_not, none
+from pydantic import ValidationError
+
+from api.domains.events.catalog import PLATFORM_RESOURCE_LIMITS_CHANGED
+from api.domains.events.models import EventScope, OutboxMessage
+from api.domains.resource_limits.models import PLATFORM_RESOURCE_LIMITS_ID, ResourceLimitsUpdate
+from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
+from api.tests.core.givenpy import given, then, when
+from api.tests.core.modules import (
+    create_test_client,
+    prepare_api_server,
+    prepare_injector,
+    set_env_variable,
+)
+from api.tests.steps.agent import TEST_ENCRYPTION_KEY, MockK8sModule, MockLiteLLMModule
+from api.tests.steps.database import database_is_clean, database_repo_is_ready
+from api.tests.steps.organization import there_is_an_organization_with_user_and_access_token
+from api.tests.steps.resource_usage import MockPrometheusModule
+from api.tests.steps.user import there_is_a_user, there_is_an_access_token_for_user
+
+_URL = "/api/v1/platform/resource-limits"
+_GiB = 1024**3
+
+_BASE_GIVEN = [
+    set_env_variable(
+        {
+            "AGENT_TOKEN_ENCRYPTION_KEY": TEST_ENCRYPTION_KEY,
+            "LITELLM_BASE_URL": "http://litellm:4000",
+            "LITELLM_SECRET_NAME": "litellm",
+            "AGENT_DEFAULT_MODEL": "litellm/gpt-5-mini",
+            "SKIP_SLACK_TOKEN_VALIDATION": "true",
+        }
+    ),
+    prepare_injector(modules=[MockK8sModule(), MockLiteLLMModule(), MockPrometheusModule()]),
+    prepare_api_server(),
+    create_test_client(),
+    database_repo_is_ready(),
+    database_is_clean(),
+]
+
+
+def _auth(token: str) -> dict:
+    return {"Authorization": f"Bearer {token}"}
+
+
+def _platform_admin(email: str):
+    """A Platform Administrator with no Membership, whose token lands last in context."""
+    admin_id = uuid7()
+
+    def step(context):
+        original_organization = getattr(context, "organization", None)
+        context.organization = None
+        there_is_a_user(id=admin_id, email=email, is_platform_admin=True)(context)
+        context.organization = original_organization
+        there_is_an_access_token_for_user(user_id=admin_id)(context)
+
+    return [step]
+
+
+def _put(context, body: dict | None = None, *, raw: str | None = None):
+    headers = _auth(context.access_token)
+    if raw is not None:
+        return context.client.put(_URL, content=raw, headers={**headers, "content-type": "application/json"})
+    return context.client.put(_URL, json=body or {}, headers=headers)
+
+
+def _limit_events(context) -> list[OutboxMessage]:
+    messages = context.injector.get(PostgresRepositoryDelegate).find_all(OutboxMessage)
+    return [m for m in messages if m.event_name == PLATFORM_RESOURCE_LIMITS_CHANGED]
+
+
+# --- authorization -------------------------------------------------------
+
+
+def test_setting_limits_requires_authentication():
+    with given(_BASE_GIVEN) as context:
+        response = context.client.put(_URL, json={"memory_limit_bytes": 70 * _GiB})
+
+        assert_that(response.status_code, equal_to(status.HTTP_401_UNAUTHORIZED))
+
+
+def test_an_organization_owner_cannot_set_the_platform_limits():
+    with given(
+        [*_BASE_GIVEN, there_is_an_organization_with_user_and_access_token(email="owner-limits@example.com")]
+    ) as context:
+        with when("an owner without Platform Privilege tries to set a limit"):
+            response = _put(context, {"memory_limit_bytes": 70 * _GiB})
+
+        with then("it is refused and nothing is recorded"):
+            assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+            assert_that(_limit_events(context), empty())
+
+
+# --- saving ----------------------------------------------------------------
+
+
+def test_the_first_save_creates_the_limits_and_returns_them():
+    with given([*_BASE_GIVEN, *_platform_admin("admin-first@example.com")]) as context:
+        with when("the admin enters both limits"):
+            response = _put(context, {"memory_limit_bytes": 70 * _GiB, "cpu_limit_cores": 24.5})
+
+        with then("they come back with a timestamp"):
+            body = response.json()
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(body["memory_limit_bytes"], equal_to(70 * _GiB))
+            assert_that(body["cpu_limit_cores"], equal_to(24.5))
+            assert_that(body["updated_at"], is_not(none()))
+
+
+def test_omitting_a_limit_leaves_it_and_null_clears_it():
+    with given([*_BASE_GIVEN, *_platform_admin("admin-partial@example.com")]) as context:
+        _put(context, {"memory_limit_bytes": 70 * _GiB, "cpu_limit_cores": 24})
+
+        with when("only the CPU limit is sent"):
+            changed = _put(context, {"cpu_limit_cores": 32}).json()
+
+        with then("the memory limit is untouched"):
+            assert_that(changed["memory_limit_bytes"], equal_to(70 * _GiB))
+            assert_that(changed["cpu_limit_cores"], equal_to(32))
+
+        with when("the memory limit is explicitly cleared"):
+            cleared = _put(context, {"memory_limit_bytes": None}).json()
+
+        with then("it is gone and the CPU limit stays"):
+            assert_that(cleared["memory_limit_bytes"], none())
+            assert_that(cleared["cpu_limit_cores"], equal_to(32))
+
+
+def test_an_empty_save_changes_nothing_and_records_nothing():
+    with given([*_BASE_GIVEN, *_platform_admin("admin-empty@example.com")]) as context:
+        response = _put(context, {})
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+        assert_that(response.json()["memory_limit_bytes"], none())
+        assert_that(_limit_events(context), empty())
+
+
+# --- validation ------------------------------------------------------------
+
+
+def test_a_limit_that_cannot_be_real_is_refused():
+    with given([*_BASE_GIVEN, *_platform_admin("admin-invalid@example.com")]) as context:
+        bad_bodies = [
+            {"memory_limit_bytes": 0},
+            {"memory_limit_bytes": -1},
+            {"memory_limit_bytes": 2**50 + 1},
+            {"cpu_limit_cores": 0},
+            {"cpu_limit_cores": -2},
+            {"cpu_limit_cores": 100_001},
+            # Not a limit at all: a setting that does not exist.
+            {"pod_limit": 110},
+        ]
+
+        statuses = [_put(context, body).status_code for body in bad_bodies]
+
+        assert_that(statuses, equal_to([status.HTTP_422_UNPROCESSABLE_ENTITY] * len(bad_bodies)))
+        assert_that(_limit_events(context), empty())
+
+
+def test_a_limit_that_is_not_a_number_is_refused():
+    with given([*_BASE_GIVEN, *_platform_admin("admin-text@example.com")]) as context:
+        response = _put(context, raw='{"memory_limit_bytes": "lots"}')
+
+        assert_that(response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_ENTITY))
+
+
+def test_the_update_model_rejects_nan_and_infinity():
+    # At the model, not over HTTP: FastAPI cannot write its own 422 body for a NaN input,
+    # so a request carrying one fails before this model's verdict reaches the caller. The
+    # UI never sends one, since it sends numbers it parsed from a text box.
+    for value in (float("nan"), float("inf"), float("-inf")):
+        with pytest.raises(ValidationError):
+            ResourceLimitsUpdate(cpu_limit_cores=value)
+
+
+# --- the audit trail -------------------------------------------------------
+
+
+def test_each_changed_limit_leaves_one_platform_event_with_its_before_and_after():
+    with given([*_BASE_GIVEN, *_platform_admin("admin-audit@example.com")]) as context:
+        with when("the admin sets memory, then raises it and sets CPU in one save"):
+            _put(context, {"memory_limit_bytes": 50 * _GiB})
+            _put(context, {"memory_limit_bytes": 70 * _GiB, "cpu_limit_cores": 24})
+
+        with then("three events exist: one per limit that moved"):
+            events = _limit_events(context)
+            assert_that(events, has_length(3))
+            moves = [(e.payload["setting"], e.payload["previous"], e.payload["current"]) for e in events]
+            assert_that(
+                moves,
+                contains_inanyorder(
+                    ("memory_limit_bytes", None, float(50 * _GiB)),
+                    ("memory_limit_bytes", float(50 * _GiB), float(70 * _GiB)),
+                    ("cpu_limit_cores", None, 24.0),
+                ),
+            )
+
+        with then("they are Platform events about the limits, not about any Organization"):
+            for event in events:
+                assert_that(event.event_scope, equal_to(EventScope.PLATFORM))
+                assert_that(event.organization_id, none())
+                assert_that(event.subject["type"], equal_to("SYSTEM"))
+                assert_that(event.subject["id"], equal_to(str(PLATFORM_RESOURCE_LIMITS_ID)))
+                assert_that(event.payload["actor_display"], is_not(empty()))
+
+
+def test_saving_the_same_values_again_records_nothing():
+    with given([*_BASE_GIVEN, *_platform_admin("admin-same@example.com")]) as context:
+        _put(context, {"memory_limit_bytes": 70 * _GiB, "cpu_limit_cores": 24})
+        before = len(_limit_events(context))
+
+        with when("the admin saves the same limits again"):
+            response = _put(context, {"memory_limit_bytes": 70 * _GiB, "cpu_limit_cores": 24})
+
+        with then("no Event is staged: an audit trail of unchanged values is noise"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(_limit_events(context), has_length(before))
+
+
+def test_clearing_a_limit_is_recorded_as_a_change_to_none():
+    with given([*_BASE_GIVEN, *_platform_admin("admin-clear@example.com")]) as context:
+        _put(context, {"cpu_limit_cores": 24})
+
+        _put(context, {"cpu_limit_cores": None})
+
+        last = max(_limit_events(context), key=lambda e: e.occurred_at)
+        assert_that(last.payload["setting"], equal_to("cpu_limit_cores"))
+        assert_that(last.payload["previous"], equal_to(24.0))
+        assert_that(last.payload["current"], none())

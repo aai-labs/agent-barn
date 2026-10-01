@@ -10,6 +10,7 @@ import { OrganizationDataSupport } from "./organization-data-support.po";
 import { OrgTemplateDataSupport } from "./org-template-data-support.po";
 import { PlatformStatsDataSupport } from "./platform-stats-data-support.po";
 import { PlatformTemplateDataSupport } from "./platform-template-data-support.po";
+import { ResourceUsageDataSupport } from "./resource-usage-data-support.po";
 import { SkillDataSupport } from "./skill-data-support.po";
 import { UserDataSupport } from "./user-data-support.po";
 
@@ -26,6 +27,7 @@ export class DataSupport {
   public orgTemplates: OrgTemplateDataSupport;
   public platformTemplates: PlatformTemplateDataSupport;
   public platformStats: PlatformStatsDataSupport;
+  public resourceUsage: ResourceUsageDataSupport;
 
   constructor(page: Page) {
     this.auth = new AuthSupport(page);
@@ -40,5 +42,6 @@ export class DataSupport {
     this.orgTemplates = new OrgTemplateDataSupport(page);
     this.platformTemplates = new PlatformTemplateDataSupport(page);
     this.platformStats = new PlatformStatsDataSupport(page);
+    this.resourceUsage = new ResourceUsageDataSupport(page);
   }
 }

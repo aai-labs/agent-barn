@@ -20,6 +20,7 @@ from api.domains.agents.models import (
     AgentSecret,
     AgentSkill,
     AgentStatus,
+    PlatformAgentIdentity,
     SecretProvider,
 )
 from api.domains.communications.email_address_repository import release_agent_email_addresses
@@ -43,6 +44,7 @@ from api.domains.events.catalog import (
     EVENT_REGISTRY,
 )
 from api.domains.events.repository import OutboxMessageRepository
+from api.domains.organizations.models import Organization
 from api.domains.platform_admin.models import StatsGranularity
 from api.domains.rbac.catalog import (
     AGENT_OWNER_ROLE_ID,
@@ -1267,6 +1269,26 @@ class AgentRepository:
                 .order_by(col(Agent.organization_id), col(Agent.created_at))
             )
             return list(session.exec(query).all())
+
+    def find_live_for_platform_usage(self) -> list[PlatformAgentIdentity]:
+        """Every live Agent on the platform, with its Organization's name.
+
+        Platform-wide by design, for the Platform resource usage page behind
+        `require_platform_admin`. Only identity and lifecycle columns are read.
+        """
+        query = (
+            sa.select(
+                col(Agent.id),
+                col(Agent.name),
+                col(Agent.status),
+                col(Agent.organization_id),
+                col(Organization.name),
+            )
+            .join(Organization, col(Organization.id) == col(Agent.organization_id))
+            .where(col(Agent.deleted_at).is_(None))
+        )
+        with self.delegate.engine.connect() as connection:
+            return [PlatformAgentIdentity(*row) for row in connection.execute(query).all()]
 
     def find_all_for_org(self, org_id: UUID) -> list[Agent]:
         """Return all agents for an org — both live and deleted."""

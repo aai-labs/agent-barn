@@ -2,7 +2,7 @@ import enum
 import json
 import re
 from datetime import datetime
-from typing import Any, Literal, Self
+from typing import Any, Literal, NamedTuple, Self
 from uuid import UUID
 
 import sqlalchemy as sa
@@ -1326,6 +1326,20 @@ class AgentRead(PydanticBaseModel):
 
 class AgentFilter(PydanticBaseModel):
     status: AgentStatus | None = None
+
+
+class PlatformAgentIdentity(NamedTuple):
+    """An Agent as the Platform view may name it: identity and lifecycle, nothing more.
+
+    A fixed column list rather than the Agent row, per the Platform oversight ADR's
+    explicit-allowlist rule.
+    """
+
+    id: UUID
+    name: str
+    status: AgentStatus
+    organization_id: UUID
+    organization_name: str
 
 
 class AgentRuntimeDiagnosticsRead(PydanticBaseModel):

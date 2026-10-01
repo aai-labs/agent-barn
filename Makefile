@@ -3,7 +3,7 @@ COMPOSE := docker compose -f compose.yml
 .PHONY: \
 	setup run stop stop-clean \
 	restart-ui \
-	dev-api dev-ingest dev-communications dev-ui dev-worker reconcile reconcile-restore-points reconcile-llm-budgets run-llm-budget-alerts backfill-business-actions forward-teams forward-triggers seed-event-deliveries seed-costs seed-agent-overrides migrate merge-heads rollback makemigrations test-api test-ui lint-ui check-ui coverage check-api check-migrations check-monitoring fix-api test check fix \
+	dev-api dev-ingest dev-communications dev-ui dev-worker dev-monitoring reconcile reconcile-restore-points reconcile-llm-budgets run-llm-budget-alerts backfill-business-actions forward-teams forward-triggers forward-prometheus seed-event-deliveries seed-costs seed-agent-overrides migrate merge-heads rollback makemigrations test-api test-ui lint-ui check-ui coverage check-api check-migrations check-monitoring fix-api test check fix \
 	db-up db-down db-logs db-restart redis-up redis-down redis-logs
 
 # One-command local dev: validates .env, brings up k3d + LiteLLM, loads agent
@@ -84,6 +84,18 @@ forward-teams:
 forward-triggers:
 	@test -n "$(AGENT)" || { echo "usage: make forward-triggers AGENT=<agent-uuid>"; exit 1; }
 	KUBECONFIG=.k3d/kubeconfig-host.yaml kubectl -n agent-farm port-forward --address 0.0.0.0 svc/agent-$(AGENT) 8082:8082
+
+# Local Prometheus for the Resource usage views: installs the real monitoring chart
+# into the k3d cluster (needs helm and kubectl on the host). See README, "Resource
+# usage (local Prometheus)".
+dev-monitoring:
+	@bash docker/k3d/k3d-monitoring.sh
+
+# The API (in Docker) cannot resolve k3d cluster DNS, so it reaches Prometheus through
+# this host port-forward. Re-run it after the pod restarts.
+PROMETHEUS_PORT ?= 9090
+forward-prometheus:
+	KUBECONFIG=.k3d/kubeconfig-host.yaml kubectl -n agent-farm port-forward --address 0.0.0.0 svc/monitoring-prometheus-server $(PROMETHEUS_PORT):80
 
 dev-ui:
 	cd ui && pnpm dev

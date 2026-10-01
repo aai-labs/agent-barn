@@ -28,7 +28,7 @@ from api.domains.costs.models import (
     TokenSeriesPoint,
     month_start,
 )
-from api.domains.costs.repository import CostRepository
+from api.domains.costs.repository import AgentSpendTotals, CostRepository
 from api.domains.platform_admin.models import StatsWindow
 from api.domains.rbac.catalog import PermissionKey
 from api.domains.rbac.policy import PermissionPolicy
@@ -172,6 +172,21 @@ class CostService:
     # Authorized through the effective Agent Access Role rather than the
     # Organization-wide `cost.read`, so an Agent Viewer can read the Agent they were
     # given. Every read pins the filter to that Agent and its Organization.
+
+    def spend_for_agents(
+        self,
+        context: CurrentUserContext,
+        window: StatsWindow,
+        agent_ids: list[UUID],
+    ) -> dict[UUID, AgentSpendTotals]:
+        """Spend per Agent for a page of Agents (the agents overview).
+
+        Authorized per Agent, like the Costs tab: the scope is the caller's Agent-level
+        `cost.read`, so a Member sees the Agents they were given and nothing else, and
+        no Organization-wide total is produced.
+        """
+        scope = self.agent_authorization.authorization_scope(context, PermissionKey.COST_READ)
+        return self.repository.spend_for_agents(window, scope, agent_ids)
 
     def _authorized_agent(self, agent_id: UUID, context: CurrentUserContext) -> Agent:
         try:
