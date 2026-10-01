@@ -1,3 +1,5 @@
+import threading
+import time
 from datetime import UTC, datetime
 from decimal import Decimal
 from uuid import UUID, uuid7
@@ -24,7 +26,7 @@ from sqlmodel import Session, col, select
 
 from api.domains.business_value.catalogue import DEFAULT_MINUTES, OutcomeType
 from api.domains.business_value.repository import ValueSettingsChangeResult, ValueSettingsRepository
-from api.domains.events.catalog import ORGANIZATION_VALUE_SETTINGS_CHANGED
+from api.domains.events.catalog import EVENT_REGISTRY, ORGANIZATION_VALUE_SETTINGS_CHANGED
 from api.domains.events.models import ActorIdentity, ActorIdentityType, EventDelivery, OutboxMessage
 from api.domains.events.processor import EventDeliveryProcessor
 from api.domains.events.registry import DomainEventValidationError
@@ -45,6 +47,9 @@ ACTOR_DISPLAY = "Owner Person"
 SUBJECT_DISPLAY = "Test Organization"
 SETTINGS_URL = "/api/v1/organizations/{organization_id}/value-settings"
 STALE_OUTCOME_TYPE = "OUTCOME_REMOVED_FROM_CATALOGUE"
+LOCK_WAIT_TIMEOUT_SECONDS = 10
+LOCK_WAIT_POLL_SECONDS = 0.05
+SAVE_JOIN_TIMEOUT_SECONDS = 15
 
 _GIVEN = [
     prepare_injector(),
@@ -204,16 +209,14 @@ def _save(
     context,
     *,
     hourly_rate: Decimal | None = None,
-    rate_changed: bool = False,
-    minute_changes: dict[str, int | None] | None = None,
-    field_changes: dict[str, dict[str, str | None]] | None = None,
+    rate_addressed: bool = False,
+    outcome_minutes: dict[str, int | None] | None = None,
 ) -> ValueSettingsChangeResult:
     return _repository(context).save_with_event(
         context.organization.id,
         hourly_rate=hourly_rate,
-        rate_changed=rate_changed,
-        minute_changes=minute_changes or {},
-        field_changes=field_changes or {"hourly_rate_usd": {"previous": None, "current": "1.00"}},
+        rate_addressed=rate_addressed,
+        outcome_minutes=outcome_minutes or {},
         actor=_actor(context),
         actor_display=ACTOR_DISPLAY,
         subject_display=SUBJECT_DISPLAY,
@@ -237,12 +240,7 @@ def _delivery_ids(context, event_id: UUID) -> list[UUID]:
 def test_saving_value_settings_persists_the_rate_and_overrides():
     with given(_GIVEN) as context:
         with when("a rate and an override are saved"):
-            _save(
-                context,
-                hourly_rate=Decimal("42.50"),
-                rate_changed=True,
-                minute_changes={"RECORD_CREATED": 12},
-            )
+            _save(context, hourly_rate=Decimal("42.50"), rate_addressed=True, outcome_minutes={"RECORD_CREATED": 12})
 
         with then("both read back"):
             assert_that(_repository(context).get_hourly_rate(context.organization.id), equal_to(Decimal("42.50")))
@@ -252,22 +250,17 @@ def test_saving_value_settings_persists_the_rate_and_overrides():
             )
 
 
-def test_saving_value_settings_stages_one_change_event_with_its_deliveries():
-    field_changes = {
-        "hourly_rate_usd": {"previous": None, "current": "42.50"},
-        "outcome_minutes.RECORD_CREATED": {"previous": None, "current": "12"},
-    }
+def test_saving_value_settings_stages_one_change_event_with_the_computed_diff():
     with given(_GIVEN) as context:
         with when("a change is saved"):
             result = _save(
                 context,
-                hourly_rate=Decimal("42.50"),
-                rate_changed=True,
-                minute_changes={"RECORD_CREATED": 12},
-                field_changes=field_changes,
+                hourly_rate=Decimal("42.5"),
+                rate_addressed=True,
+                outcome_minutes={"RECORD_CREATED": 12},
             )
 
-        with then("exactly one change event is staged, carrying the diff"):
+        with then("exactly one change event is staged, carrying the diff the repository computed"):
             events = _change_events(context)
             assert_that(events, has_length(1))
             assert_that(events[0].organization_id, equal_to(context.organization.id))
@@ -276,7 +269,10 @@ def test_saving_value_settings_stages_one_change_event_with_its_deliveries():
                 equal_to(
                     {
                         "organization_id": str(context.organization.id),
-                        "field_changes": field_changes,
+                        "field_changes": {
+                            "hourly_rate_usd": {"previous": None, "current": "42.50"},
+                            "outcome_minutes.RECORD_CREATED": {"previous": None, "current": "12"},
+                        },
                         "actor_display": ACTOR_DISPLAY,
                         "subject_display": SUBJECT_DISPLAY,
                     }
@@ -291,25 +287,29 @@ def test_saving_value_settings_stages_one_change_event_with_its_deliveries():
 
 def test_saving_an_existing_override_replaces_its_minutes():
     with given(_GIVEN) as context:
-        _save(context, minute_changes={"RECORD_CREATED": 12})
+        _save(context, outcome_minutes={"RECORD_CREATED": 12})
 
         with when("the same Outcome Type is saved again"):
-            _save(context, minute_changes={"RECORD_CREATED": 30})
+            _save(context, outcome_minutes={"RECORD_CREATED": 30})
 
-        with then("the override holds the new minutes and is still a single row"):
+        with then("the override holds the new minutes, is still a single row, and the diff names both values"):
             assert_that(
                 _repository(context).get_minute_overrides(context.organization.id),
                 equal_to({"RECORD_CREATED": 30}),
             )
             assert_that(_count(context, OUTCOME_MINUTES_TABLE, context.organization.id), equal_to(1))
+            assert_that(
+                _change_events(context)[-1].payload["field_changes"],
+                equal_to({"outcome_minutes.RECORD_CREATED": {"previous": "12", "current": "30"}}),
+            )
 
 
 def test_saving_a_null_override_deletes_it():
     with given(_GIVEN) as context:
-        _save(context, minute_changes={"RECORD_CREATED": 12, "COMMENT_POSTED": 9})
+        _save(context, outcome_minutes={"RECORD_CREATED": 12, "COMMENT_POSTED": 9})
 
         with when("one override is saved as null"):
-            _save(context, minute_changes={"RECORD_CREATED": None})
+            _save(context, outcome_minutes={"RECORD_CREATED": None})
 
         with then("only the other override remains"):
             assert_that(
@@ -318,25 +318,56 @@ def test_saving_a_null_override_deletes_it():
             )
 
 
-def test_saving_only_minutes_creates_no_settings_row():
+def test_a_minutes_only_save_leaves_the_rate_unset():
     with given(_GIVEN) as context:
         with when("only an override is saved"):
-            _save(context, minute_changes={"RECORD_CREATED": 12})
+            _save(context, outcome_minutes={"RECORD_CREATED": 12})
 
-        with then("no rate row exists and the rate reads as unset"):
-            assert_that(_count(context, VALUE_SETTINGS_TABLE, context.organization.id), equal_to(0))
+        with then("the rate reads as unset"):
             assert_that(_repository(context).get_hourly_rate(context.organization.id), none())
 
 
 def test_saving_a_null_rate_clears_it():
     with given(_GIVEN) as context:
-        _save(context, hourly_rate=Decimal("42.50"), rate_changed=True)
+        _save(context, hourly_rate=Decimal("42.50"), rate_addressed=True)
 
         with when("the rate is saved as null"):
-            _save(context, hourly_rate=None, rate_changed=True)
+            _save(context, hourly_rate=None, rate_addressed=True)
 
-        with then("the rate reads as unset"):
+        with then("the rate reads as unset and the diff records what was cleared"):
             assert_that(_repository(context).get_hourly_rate(context.organization.id), none())
+            assert_that(
+                _change_events(context)[-1].payload["field_changes"],
+                equal_to({"hourly_rate_usd": {"previous": "42.50", "current": None}}),
+            )
+
+
+def test_an_unchanged_save_stages_no_event():
+    with given(_GIVEN) as context:
+        _save(context, hourly_rate=Decimal("42.50"), rate_addressed=True, outcome_minutes={"RECORD_CREATED": 12})
+
+        with when("the same values are saved again, with the rate spelled differently"):
+            result = _save(
+                context,
+                hourly_rate=Decimal("42.5"),
+                rate_addressed=True,
+                outcome_minutes={"RECORD_CREATED": 12},
+            )
+
+        with then("no second event is staged and no delivery ids are returned"):
+            assert_that(_change_events(context), has_length(1))
+            assert_that(result.delivery_ids, empty())
+
+
+def test_an_unaddressed_rate_is_left_alone():
+    with given(_GIVEN) as context:
+        _save(context, hourly_rate=Decimal("42.50"), rate_addressed=True)
+
+        with when("only an override is saved"):
+            _save(context, hourly_rate=None, rate_addressed=False, outcome_minutes={"RECORD_CREATED": 12})
+
+        with then("the rate is kept"):
+            assert_that(_repository(context).get_hourly_rate(context.organization.id), equal_to(Decimal("42.50")))
 
 
 def test_an_unset_organization_has_no_rate_and_no_overrides():
@@ -346,21 +377,25 @@ def test_an_unset_organization_has_no_rate_and_no_overrides():
             assert_that(_repository(context).get_minute_overrides(context.organization.id), equal_to({}))
 
 
-def test_a_rejected_change_event_leaves_the_settings_unchanged():
-    with given(_GIVEN) as context:
-        with when("a save carries a change event the registry rejects"):
+def test_a_rejected_change_event_leaves_the_settings_unchanged(monkeypatch):
+    def reject(**_kwargs):
+        raise DomainEventValidationError("rejected")
 
-            def _save_with_invalid_event():
+    with given(_GIVEN) as context:
+        monkeypatch.setattr(EVENT_REGISTRY, "build_event", reject)
+
+        with when("a save's change event is rejected by the registry"):
+
+            def _save_with_rejected_event():
                 _save(
                     context,
                     hourly_rate=Decimal("42.50"),
-                    rate_changed=True,
-                    minute_changes={"RECORD_CREATED": 12},
-                    field_changes={"api_token": {"previous": None, "current": "x"}},
+                    rate_addressed=True,
+                    outcome_minutes={"RECORD_CREATED": 12},
                 )
 
         with then("the save fails"):
-            assert_that(calling(_save_with_invalid_event), raises(DomainEventValidationError))
+            assert_that(calling(_save_with_rejected_event), raises(DomainEventValidationError))
 
         with then("neither the settings nor the event were written"):
             assert_that(_count(context, VALUE_SETTINGS_TABLE, context.organization.id), equal_to(0))
@@ -685,6 +720,63 @@ def test_an_invalid_update_is_rejected_and_records_nothing(body):
             assert_that(_count(context, VALUE_SETTINGS_TABLE, context.organization.id), equal_to(0))
             assert_that(_count(context, OUTCOME_MINUTES_TABLE, context.organization.id), equal_to(0))
             assert_that(_change_events(context), empty())
+
+
+def _a_value_settings_statement_waits_on_a_lock(context) -> bool:
+    deadline = time.monotonic() + LOCK_WAIT_TIMEOUT_SECONDS
+    while time.monotonic() < deadline:
+        with _engine(context).connect() as connection:
+            waiting = connection.execute(
+                sa.text(
+                    "SELECT count(*) FROM pg_stat_activity "
+                    "WHERE wait_event_type = 'Lock' AND query ILIKE :pattern AND pid <> pg_backend_pid()"
+                ),
+                {"pattern": f"%{VALUE_SETTINGS_TABLE}%"},
+            ).scalar_one()
+        if waiting:
+            return True
+        time.sleep(LOCK_WAIT_POLL_SECONDS)
+    return False
+
+
+def test_a_concurrent_first_save_waits_and_records_what_it_replaced():
+    with given(_API_GIVEN) as context:
+        outcome: dict = {}
+
+        def second_save():
+            try:
+                outcome["response"] = _put(context, {"hourly_rate_usd": 20})
+            except Exception as error:
+                outcome["error"] = f"{type(error).__name__}: {str(error).splitlines()[0]}"
+
+        with _engine(context).connect() as first_save:
+            first_save.execute(
+                sa.text(
+                    f"INSERT INTO {VALUE_SETTINGS_TABLE} "
+                    "(id, created_at, updated_at, organization_id, hourly_rate_usd) "
+                    "VALUES (:id, :now, :now, :organization_id, :rate)"
+                ),
+                {"id": uuid7(), "now": datetime.now(UTC), "organization_id": context.organization.id, "rate": "10.00"},
+            )
+            thread = threading.Thread(target=second_save)
+
+            with when("a second save starts while the first save's row is uncommitted, then the first commits"):
+                thread.start()
+                waited = _a_value_settings_statement_waits_on_a_lock(context)
+                first_save.commit()
+                thread.join(SAVE_JOIN_TIMEOUT_SECONDS)
+
+        with then("the second save waited for the first instead of racing it"):
+            assert_that(waited, equal_to(True))
+
+        with then("it succeeds and records the rate it actually replaced"):
+            assert_that(outcome.get("error"), none())
+            assert_that(outcome["response"].status_code, equal_to(status.HTTP_200_OK))
+            assert_that(outcome["response"].json()["hourly_rate_usd"], equal_to(20.0))
+            assert_that(
+                _change_events(context)[-1].payload["field_changes"],
+                equal_to({"hourly_rate_usd": {"previous": "10.00", "current": "20.00"}}),
+            )
 
 
 def test_a_change_projects_to_a_durable_security_audit_record():

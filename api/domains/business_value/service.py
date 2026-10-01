@@ -26,6 +26,7 @@ from api.domains.business_value.models import (
     ValueTotalsRead,
 )
 from api.domains.business_value.repository import (
+    HOURLY_RATE_FIELD,
     BusinessActionRepository,
     DeliveryOutcomes,
     ValueActivityRepository,
@@ -43,9 +44,6 @@ from api.domains.rbac.policy import AuthorizationScope, PermissionPolicy
 MINUTES_PER_HOUR = 60
 CATALOGUE_OUTCOME_TYPES = frozenset(outcome.value for outcome in OutcomeType)
 UNATTRIBUTED_AGENT_NAME = "Unattributed"
-RATE_QUANTUM = Decimal("0.01")
-HOURLY_RATE_FIELD = "hourly_rate_usd"
-OUTCOME_MINUTES_FIELD_PREFIX = "outcome_minutes."
 READ_DENIED_DETAIL = "You don't have permission to view value for this organization."
 MANAGE_DENIED_DETAIL = "You don't have permission to manage value settings for this organization."
 
@@ -133,14 +131,6 @@ def categorise(rows: Sequence[tuple[bool | None, str | None, BusinessActionStatu
         else:
             failed += count
     return WriteCategories(successful=successful, unverified=unverified, failed=failed, unclassified=unclassified)
-
-
-def _rate_text(rate: Decimal | None) -> str | None:
-    return None if rate is None else str(rate.quantize(RATE_QUANTUM))
-
-
-def _minutes_text(minutes: int | None) -> str | None:
-    return None if minutes is None else str(minutes)
 
 
 def _as_float(value: Decimal | None) -> float | None:
@@ -250,41 +240,21 @@ class BusinessValueService:
         context: CurrentUserContext,
     ) -> ValueSettingsRead:
         self._require_manage(organization_id, context)
-        current_rate = self.settings_repository.get_hourly_rate(organization_id)
-        overrides = self.settings_repository.get_minute_overrides(organization_id)
-
-        field_changes: dict[str, dict[str, str | None]] = {}
-        rate_changed = HOURLY_RATE_FIELD in data.model_fields_set and data.hourly_rate_usd != current_rate
-        if rate_changed:
-            field_changes[HOURLY_RATE_FIELD] = {
-                "previous": _rate_text(current_rate),
-                "current": _rate_text(data.hourly_rate_usd),
-            }
-        minute_changes: dict[str, int | None] = {}
-        for outcome, minutes in data.outcome_minutes.items():
-            previous = overrides.get(outcome.value)
-            if minutes == previous:
-                continue
-            minute_changes[outcome.value] = minutes
-            field_changes[f"{OUTCOME_MINUTES_FIELD_PREFIX}{outcome.value}"] = {
-                "previous": _minutes_text(previous),
-                "current": _minutes_text(minutes),
-            }
-
-        if not field_changes:
+        rate_addressed = HOURLY_RATE_FIELD in data.model_fields_set
+        if not rate_addressed and not data.outcome_minutes:
             return self._read_settings(organization_id)
 
         result = self.settings_repository.save_with_event(
             organization_id,
             hourly_rate=data.hourly_rate_usd,
-            rate_changed=rate_changed,
-            minute_changes=minute_changes,
-            field_changes=field_changes,
+            rate_addressed=rate_addressed,
+            outcome_minutes={outcome.value: minutes for outcome, minutes in data.outcome_minutes.items()},
             actor=resolve_actor_identity(context, organization_id),
             actor_display=context.user.full_name or context.user.email,
             subject_display=self.organization_lookup.get_name(organization_id),
         )
-        self.event_delivery_dispatcher.enqueue_immediate(result.delivery_ids)
+        if result.delivery_ids:
+            self.event_delivery_dispatcher.enqueue_immediate(result.delivery_ids)
         return self._read_settings(organization_id)
 
     def _require_read(self, organization_id: UUID, context: CurrentUserContext) -> AuthorizationScope:
@@ -308,7 +278,7 @@ class BusinessValueService:
         minutes: dict[OutcomeType, int],
         rate: Decimal | None,
     ) -> list[ValueSeriesPoint]:
-        rows_by_bucket: dict[datetime, list[tuple[str | None, int]]] = {}
+        rows_by_bucket: dict[datetime, list[tuple[str, int]]] = {}
         for bucket, outcome_type, count in self.business_action_repository.successful_counts_by_bucket(window, scope):
             rows_by_bucket.setdefault(bucket, []).append((outcome_type, count))
         points = []

@@ -131,6 +131,11 @@ An Organization turns Business Actions into time and money through its value set
 - **Audit.** A save that changes anything emits `organization.value_settings.changed` through the outbox, in the same transaction as the settings rows. After commit it is enqueued for the security-audit projection.
   - `field_changes` is keyed `hourly_rate_usd` or `outcome_minutes.<OUTCOME_TYPE>`. Each entry holds `previous` and `current` as strings: the rate to two places, minutes as an integer, and `null` for unset or default.
   - A save that changes nothing, including the same rate spelled differently, emits nothing.
+  - **Concurrent saves are serialized.** The diff is computed inside the transaction that writes it:
+    - every save first ensures the Organization's settings row exists (`INSERT … ON CONFLICT DO NOTHING`), then locks it (`SELECT … FOR UPDATE`) before reading the rate and overrides;
+    - a save that overlaps another waits for it and records the values that save committed, so each audit entry matches what it actually replaced;
+    - two first saves no longer collide on the unique row.
+  - A settings row whose `hourly_rate_usd` is `NULL` means no rate is set, the same as having no row. The first save that addresses anything creates it, even if it only changes minutes.
 
 ## Organization value
 
@@ -180,7 +185,8 @@ Each Business Action falls in exactly one category. A write is **classified** wh
   - `unverified_writes`, `failed_writes`, and `unclassified_actions`
   - `hourly_rate_usd`, the rate used
 - **`series`:** one point per UTC bucket, with `bucket`, `minutes_saved`, `value`, and `spend`.
-  - The Business Action counts and `CostRepository.spend_series` are built on the same `generate_series(date_trunc(...))` spine, so every bucket is present and the two merge by key.
+  - The bucket spine is the one `CostRepository.spend_series` builds with `generate_series(date_trunc(...))`, so every bucket is present.
+  - Business Action counts are grouped by the same UTC `date_trunc(...)` key and looked up on that spine; a bucket with no successful writes reads as zero.
   - Buckets are emitted as UTC instants.
 - **`agents`:** a full outer merge of the per-Agent Business Action counts with `CostRepository.spend_by_agent`.
   - Each row carries `agent_id`, `agent_name`, `agent_deleted`, `successful_writes`, `minutes_saved`, `value`, `spend`, and `value_to_spend_ratio`.
@@ -285,11 +291,15 @@ Each of these is an **undercount**, not a verdict on the Agent. The last one is 
 
 ## Backfill
 
-`api/domains/business_value/backfill.py` classifies Tool Calls stored before Ingest recorded Business Actions, and re-maps stored rows after a catalogue change.
+`api/domains/business_value/backfill.py` classifies Tool Calls stored before Ingest recorded Business Actions, and brings stored rows in line after a catalogue change.
 
 - It walks completed `terminal`/`exec` Tool Calls in id-keyset batches and infers status from content.
-- It upserts on `(tool_call_id, ordinal)`, updating `integration`, `resource`, `verb`, `is_write`, and `outcome_type` and never `status`.
-- It never deletes rows.
+- Per Tool Call, keyed on `(tool_call_id, ordinal)`, it never changes `status`. It:
+  - inserts missing rows
+  - updates `integration`, `resource`, `verb`, `is_write`, and `outcome_type` only where the mapping changed
+  - deletes rows the catalogue no longer produces
+- Ordinals stay stable when a path becomes ignored, so the deletes remove exactly the stale rows and a now-ignored write stops being valued.
+- A Tool Call whose classification fails keeps its rows.
 - It is operator-run only (`make backfill-business-actions` locally, or `kubectl exec` in a deployment) and runs unscoped under the RBAC brief's background-work exception.
 
 How to run it is in [`../guidelines/operations.md`](../guidelines/operations.md#business-action-backfill).
@@ -339,7 +349,7 @@ Ingest owns authentication and the transaction. The Business Value domain owns t
 - **A gog upgrade** (`GOG_VERSION` in either runtime Dockerfile) fails `test_gog_catalogue.py` until the command tree is re-recorded from the new binary (`gog schema --json`, pruned to names, aliases, one-line help, and global flags) and the catalogue is updated to match.
 - **A catalogue change** needs the drift test to pass. A catalogue that no longer matches the bundled references, or the recorded gog command tree, fails CI.
   - It applies to Tool Calls completed after the deploy.
-  - To re-map rows already stored, run the operator backfill (see [Backfill](#backfill)).
+  - To bring rows already stored in line, re-mapping changed paths and removing paths that are now ignored, run the operator backfill (see [Backfill](#backfill)).
 - **A change to the Tool Call telemetry shape** (result format, exit code location, `is_error` semantics) must update the classifier's evidence rules and the recorded fixtures together.
 - **A new read surface** over `business_action` must apply the RBAC brief and report `UNKNOWN` as unverified, never as value.
 - **A new Outcome Type** needs a `DEFAULT_MINUTES` entry and appears in value settings automatically. **Removing one** leaves any stored overrides in place; they are ignored on read.
