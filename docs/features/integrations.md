@@ -12,7 +12,7 @@ Integrations make external services available to an Agent. Agent Secrets hold en
 
 Provider credential contracts are defined by `SecretProvider` and its content models in `../../api/domains/agents/models.py`. Current providers cover GitHub, Jira, Confluence, Bitbucket, Google Workspace, Zoho Mail, Zoho Calendar, Firecrawl, Slack, Pipedrive, and SharePoint. The per-service Google providers (Gmail, Google Calendar, Google Sheets) are retired; affected agents must reconnect through Google Workspace.
 
-Providers reach their service through one of two CLIs: aai-cli (all of the above except Google Workspace) or gog (Google Workspace only). The two have separate runtime artifacts, secret stores, and agent policy blocks.
+Providers reach their service through one of two CLIs: aai-cli (all of the above except Google Workspace) or gog (Google Workspace only). The two have separate runtime artifacts, secret stores, and agent policy blocks. Commands run through either CLI are recorded as Business Actions (see [`business-value.md`](business-value.md)).
 
 ## Shared credentials
 
@@ -91,4 +91,4 @@ Google Workspace materializes through `gog_artifacts.py`: the pod Secret carries
 
 ## Change impact
 
-A tool Integration provider addition or schema change affects request validation, encrypted compatibility, runtime environment/config generation, built-in Skill seeding, UI forms/Zod schemas, and Agent start tests. Platform additions instead use the shipped Platform Plugin seam. Encryption-key changes require an explicit migration/rotation plan because Agent Secrets, Shared Credentials, and Communication Connection credentials depend on the existing key.
+A tool Integration provider addition or schema change affects request validation, encrypted compatibility, runtime environment/config generation, built-in Skill seeding, UI forms/Zod schemas, and Agent start tests. Platform additions instead use the shipped Platform Plugin seam. Encryption-key changes require an explicit migration/rotation plan because Agent Secrets, Shared Credentials, and Communication Connection credentials depend on the existing key. Bumping `GOG_VERSION` also requires re-recording the gog command tree the Business Action catalogue is tested against (see [`business-value.md`](business-value.md#change-impact)).

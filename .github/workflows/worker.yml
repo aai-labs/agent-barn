@@ -43,15 +43,18 @@ jobs:
         working-directory: workers/email-inbound
         run: pnpm install --frozen-lockfile
       # `deploy --dry-run` bundles and resolves vars without contacting Cloudflare,
-      # so this needs no credentials and works on pull requests from forks. Both
-      # deployable environments are checked: a fault confined to one env block
-      # would otherwise reach that environment unverified.
+      # so this needs no credentials and works on pull requests from forks. Every
+      # deployable environment is checked: a fault confined to one env block would
+      # otherwise reach that environment unverified.
       - name: Bundle the Worker (staging)
         working-directory: workers/email-inbound
         run: pnpm exec wrangler deploy --dry-run --env staging
-      - name: Bundle the Worker (production)
+      - name: Bundle the Worker (prod)
         working-directory: workers/email-inbound
-        run: pnpm exec wrangler deploy --dry-run --env production
+        run: pnpm exec wrangler deploy --dry-run --env prod
+      - name: Bundle the Worker (cloud)
+        working-directory: workers/email-inbound
+        run: pnpm exec wrangler deploy --dry-run --env cloud
 
   publish:
     name: Publish
@@ -76,21 +79,28 @@ jobs:
       # and pass. Staging would then publish holding the production secret while
       # its cluster fell back to a third value, and every message would 401.
       # An unknown environment is rejected rather than silently treated as public.
-      - name: Require an inbound secret for the target environment
+      - name: Resolve the inbound secret for the target environment
         env:
           ENVIRONMENT: ${{ inputs.environment }}
           STAGING_SECRET: ${{ secrets.STAGING_EMAIL_INBOUND_SECRET }}
-          PUBLIC_SECRET: ${{ secrets.PUBLIC_EMAIL_INBOUND_SECRET }}
+          PROD_SECRET: ${{ secrets.EMAIL_INBOUND_SECRET }}
+          CLOUD_SECRET: ${{ secrets.PUBLIC_EMAIL_INBOUND_SECRET }}
         run: |
           case "$ENVIRONMENT" in
-            staging)    secret="$STAGING_SECRET" ;;
-            production) secret="$PUBLIC_SECRET" ;;
+            staging) secret="$STAGING_SECRET" ;;
+            prod)    secret="$PROD_SECRET" ;;
+            cloud)   secret="$CLOUD_SECRET" ;;
             *) echo "::error::Unknown Worker environment '$ENVIRONMENT'"; exit 1 ;;
           esac
           [ -n "$secret" ] || { echo "::error::No inbound secret set for '$ENVIRONMENT'; every inbound email would 401."; exit 1; }
-      # `secrets` uploads EMAIL_INBOUND_SECRET on every publish, so the Worker and
-      # the cluster Secret are written from the same GitHub secret in one run and
-      # cannot drift apart. A mismatch would 401 every inbound message.
+          echo "::add-mask::$secret"
+          echo "EMAIL_INBOUND_SECRET=$secret" >> "$GITHUB_ENV"
+      # EMAIL_INBOUND_SECRET comes from $GITHUB_ENV, written by the step above, so the
+      # value checked is the value uploaded. A second expression here could not express
+      # three environments -- a two-branch ternary sent the cloud secret for any
+      # environment that was not staging -- and would reintroduce guard/upload drift.
+      # The same GitHub secret reaches the cluster in the same run, so the two cannot
+      # diverge; a mismatch would 401 every inbound message.
       - uses: cloudflare/wrangler-action@v4
         with:
           apiToken: ${{ secrets.CLOUDFLARE_WORKERS_TOKEN }}
@@ -100,5 +110,3 @@ jobs:
           environment: ${{ inputs.environment }}
           secrets: |
             EMAIL_INBOUND_SECRET
-        env:
-          EMAIL_INBOUND_SECRET: ${{ inputs.environment == 'staging' && secrets.STAGING_EMAIL_INBOUND_SECRET || secrets.PUBLIC_EMAIL_INBOUND_SECRET }}
