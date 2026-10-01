@@ -297,6 +297,7 @@ class CommunicationDelivery(BaseModel, table=True):
         sa.Index("ix_communication_delivery_status_available", "status", "available_at"),
         sa.Index("ix_communication_delivery_ordering", "ordering_key", "created_at"),
         sa.Index("ix_communication_delivery_agent", "agent_id"),
+        sa.Index("ix_communication_delivery_agent_direction_completed", "agent_id", "direction", "completed_at"),
     )
 
     organization_id: UUID = SqlField(nullable=False)

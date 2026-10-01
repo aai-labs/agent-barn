@@ -141,7 +141,7 @@ that must keep their own errors.
 
 ## Boundaries
 
-Agents own LiteLLM key creation, encryption, deletion blocking, and lifecycle status. The LiteLLM and OpenRouter infrastructure clients own remote API behavior. Costs owns the persisted record, attribution, healing, and aggregation. Conversation and Tool Call data do not feed cost calculation. Agent Activity reads `cost_record` for its own per-Agent surface and annotates it with message timing; it owns no table and changes no figure here (see [`agent-activity.md`](agent-activity.md)).
+Agents own LiteLLM key creation, encryption, deletion blocking, and lifecycle status. The LiteLLM and OpenRouter infrastructure clients own remote API behavior. Costs owns the persisted record, attribution, healing, and aggregation. Conversation and Tool Call data do not feed cost calculation. Agent Activity reads `cost_record` for its own per-Agent surface and annotates it with message timing; it owns no table and changes no figure here (see [`agent-activity.md`](agent-activity.md)). Business Value reads `cost_record` through `CostRepository` (`totals`, `spend_series`, and `spend_by_agent`, under an Organization-only `CostFilter`) to set an Organization's value against its spend. It writes nothing here, and its spend total matches this page's (see [`business-value.md`](business-value.md#organization-value)).
 
 ## Source map
 
