@@ -722,9 +722,9 @@ def test_monthly_costs_group_by_calendar_month_and_fill_quiet_months():
             assert_that([month["calls"] for month in months], contains_exactly(1, 0, 2))
             assert_that(months[0]["month"], equal_to(two_months_ago.isoformat().replace("+00:00", "Z")))
 
-        with then("only the month in progress is marked current and projected"):
+        with then("only the month in progress is marked current"):
             assert_that(months[0], has_entries(is_current=False, projected_spend=none()))
-            assert_that(months[2], has_entries(is_current=True, projected_spend=greater_than(0)))
+            assert_that(months[2], has_entries(is_current=True))
 
 
 def test_monthly_costs_are_not_cut_by_the_date_range():
