@@ -12,6 +12,12 @@ const NO_LIVE_AGENT_HINT =
   "Containers that are still running but belong to no live agent: the agent was deleted, " +
   "or this database never knew it. They still use the cluster's memory and CPU quota.";
 
+// One compact line per row at every width. Written out whole, apart from the template
+// below, so Tailwind finds both classes. The reporting count is the first thing to go on
+// a phone: name, memory and CPU are what the row is for.
+const ROW_COLUMNS =
+  "grid-cols-[minmax(0,1fr)_72px_84px] sm:grid-cols-[minmax(140px,1fr)_140px_90px_90px]";
+
 interface OrganizationsByUsageProps {
   organizations: PlatformOrganizationUsage[];
   activeOrganizationId: string | null;
@@ -62,9 +68,7 @@ export function OrganizationsByUsage({
               }}
               data-testid="organization-usage-row"
               data-organization-id={id ?? "none"}
-              // The reporting count is the first thing to go on a phone: name, memory and CPU
-              // are what the row is for.
-              className={`relative grid grid-cols-[minmax(0,1fr)_72px_84px] items-center gap-3 rounded px-2 py-2 text-left text-[13px] sm:grid-cols-[minmax(140px,1fr)_130px_90px_90px]${
+              className={`relative grid ${ROW_COLUMNS} items-center gap-3 rounded px-2 py-2 text-left text-[13px]${
                 isNoLiveAgent ? " cursor-default" : ""
               }`}
               style={{ background: isActive ? "var(--surface-2)" : "transparent" }}
@@ -80,7 +84,10 @@ export function OrganizationsByUsage({
               >
                 {name}
               </span>
-              <span className="relative hidden text-right sm:block" style={{ color: "var(--ink-4)" }}>
+              <span
+                className="relative hidden whitespace-nowrap text-right sm:block"
+                style={{ color: "var(--ink-4)" }}
+              >
                 {isNoLiveAgent
                   ? `${organization.agentsReporting ?? 0} ${
                       organization.agentsReporting === 1 ? "container" : "containers"
@@ -90,7 +97,7 @@ export function OrganizationsByUsage({
               <span className="relative text-right font-medium" style={{ color: "var(--ink)" }}>
                 {formatBytes(memory)}
               </span>
-              <span className="relative text-right" style={{ color: "var(--ink-4)" }}>
+              <span className="relative whitespace-nowrap text-right" style={{ color: "var(--ink-4)" }}>
                 {formatCores(organization.cpuCores ?? 0)} cores
               </span>
             </button>

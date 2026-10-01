@@ -70,6 +70,32 @@ test.describe("Platform resource usage (platform_admin)", () => {
     await expect(page.getByTestId("platform-usage-cpu-chart")).toBeVisible();
   });
 
+  test("keeps each organization on one compact line, with its reporting count", async () => {
+    await data.resourceUsage.interceptPlatformResourceUsage();
+
+    await usagePage.goto();
+
+    const rows = usagePage.organizationRows();
+    await expect(rows).toHaveCount(3);
+    for (const index of [0, 1, 2]) {
+      const row = rows.nth(index);
+      const box = await row.boundingBox();
+      // One line of text plus padding. A wrapped count or a CPU figure pushed onto a
+      // second line makes a row twice this tall.
+      expect(box?.height ?? Infinity).toBeLessThan(44);
+    }
+    await expect(rows.nth(0)).toContainText("1 of 1 reporting");
+
+    // Name, count, memory and CPU all sit on the same line.
+    const tops = await rows
+      .nth(0)
+      .locator("span")
+      .evaluateAll((spans) =>
+        spans.filter((span) => span.textContent?.trim()).map((span) => Math.round(span.getBoundingClientRect().top)),
+      );
+    expect(new Set(tops).size).toBe(1);
+  });
+
   test("names a container with no live agent by its id, not by a guess", async () => {
     await data.resourceUsage.interceptPlatformResourceUsage();
 
