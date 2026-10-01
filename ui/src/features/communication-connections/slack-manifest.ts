@@ -1,7 +1,6 @@
-/** Static sample pasted into Slack's "From Manifest" flow; it is not an API contract. */
-export const SLACK_APP_MANIFEST = {
+/** Static portion of the copyable Slack sample; this is not an API contract. */
+const SLACK_APP_MANIFEST_TEMPLATE = {
   display_information: {
-    name: "Agent Barn",
     description: "Connect an Agent Barn agent to Slack.",
   },
   features: {
@@ -75,3 +74,47 @@ export const SLACK_APP_MANIFEST = {
     token_rotation_enabled: false,
   },
 } as const;
+
+/** Slack limits display_information.name to 35 characters. */
+const MAX_SLACK_APP_NAME_LENGTH = 35;
+/** Slack limits display_information.description to 140 characters. */
+const MAX_SLACK_APP_DESCRIPTION_LENGTH = 140;
+/** Slack limits features.bot_user.display_name to 80 characters. */
+const MAX_SLACK_BOT_DISPLAY_NAME_LENGTH = 80;
+
+export function createSlackAppManifest(rawAgentName: string, agentDescription?: string | null) {
+  const agentName = rawAgentName.trim();
+  const agentNameCharacters = Array.from(agentName);
+  const appName = agentNameCharacters.slice(0, MAX_SLACK_APP_NAME_LENGTH).join("").trim();
+  const description = Array.from(
+    agentDescription?.trim() || SLACK_APP_MANIFEST_TEMPLATE.display_information.description,
+  ).slice(0, MAX_SLACK_APP_DESCRIPTION_LENGTH).join("").trim();
+  const normalizedBotName = agentName
+    .normalize("NFKD")
+    .replace(/\p{M}/gu, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  // Give names without an ASCII slug a stable, Slack-safe label.
+  const encodedAgentName = agentNameCharacters
+    .map((character) => character.codePointAt(0)!.toString(16))
+    .join("-");
+  const botDisplayName = (
+    normalizedBotName || (encodedAgentName ? `agent-${encodedAgentName}` : "agent")
+  ).slice(0, MAX_SLACK_BOT_DISPLAY_NAME_LENGTH);
+
+  return {
+    ...SLACK_APP_MANIFEST_TEMPLATE,
+    display_information: {
+      name: appName,
+      description,
+    },
+    features: {
+      ...SLACK_APP_MANIFEST_TEMPLATE.features,
+      bot_user: {
+        ...SLACK_APP_MANIFEST_TEMPLATE.features.bot_user,
+        display_name: botDisplayName,
+      },
+    },
+  } as const;
+}

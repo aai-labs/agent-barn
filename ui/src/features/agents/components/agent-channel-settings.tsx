@@ -40,7 +40,7 @@ import {
 } from "@/features/communication-connections/hooks/use-communication-connections";
 import { DefaultDeliveryTargetInput } from "@/features/communication-connections/components/default-delivery-target-input";
 import { DirectoryPickerDialog } from "@/features/communication-connections/components/directory-picker-dialog";
-import { SLACK_APP_MANIFEST } from "@/features/communication-connections/slack-manifest";
+import { createSlackAppManifest } from "@/features/communication-connections/slack-manifest";
 import type { CommunicationConnection, CommunicationDirectoryEntry, CommunicationPlatform } from "@/features/communication-connections/schemas";
 
 import { useAgentApplyAndRestart } from "../hooks/use-agent-apply-and-restart";
@@ -176,14 +176,14 @@ function SetupMarkdown({ markdown }: { markdown: string }) {
 
 function PlatformSetupHint({
   hint,
-  platformKey,
+  manifest,
   title = "Setup requirements",
 }: {
   hint?: string | null;
-  platformKey?: string;
+  /** Copyable Slack app manifest; shown as a copy button when present. */
+  manifest?: object | null;
   title?: string;
 }) {
-  const manifest = platformKey === "slack" ? SLACK_APP_MANIFEST : null;
   if (!hint && !manifest) return null;
   return (
     <div
@@ -603,10 +603,12 @@ function SchemaFields({
 
 export function AgentChannelSettings({
   agent,
+  agentDescription,
   canEdit,
   autoOpen = false,
 }: {
   agent: Agent;
+  agentDescription: string | null;
   canEdit: boolean;
   /** Open the add-connection form immediately — used when arriving here via the
    * "Add a connection" shortcut on the Agent page, so there's no extra click to find. */
@@ -614,6 +616,8 @@ export function AgentChannelSettings({
 }) {
   const connections = useCommunicationConnections(agent.id);
   const platforms = useCommunicationPlatforms();
+  const setupManifest = (platformKey: string) =>
+    platformKey === "slack" ? createSlackAppManifest(agent.name, agentDescription) : null;
   // Web Chat is lazily provisioned on first send and can't be added by hand.
   const addablePlatforms = useMemo(
     () => {
@@ -1224,7 +1228,7 @@ export function AgentChannelSettings({
                       <>
                         <PlatformSetupHint
                           hint={platform.setupHint}
-                          platformKey={platform.key}
+                          manifest={setupManifest(platform.key)}
                         />
                         <div className="flex flex-col gap-4">
                           {connection.platformKey === "discord" && (
@@ -1497,7 +1501,10 @@ export function AgentChannelSettings({
                   </div>
 
                   <div className="mt-5 flex flex-col gap-4">
-                    <PlatformSetupHint hint={selectedPlatform.setupHint} platformKey={selectedPlatform.key} />
+                    <PlatformSetupHint
+                      hint={selectedPlatform.setupHint}
+                      manifest={setupManifest(selectedPlatform.key)}
+                    />
                     {schemaProperties(selectedPlatform.credentialsSchema).length > 0 && (
                       <div className="rounded-xl p-4" style={{ border: "1px solid var(--line)", background: "var(--bg-soft)" }}>
                         <div className="flex items-start gap-2.5">
