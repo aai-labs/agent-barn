@@ -334,27 +334,23 @@ CREDENTIAL_FREE_TOOLS: dict[str, str] = {
 }
 
 
-def build_local_tools_policy_md(mounted_skill_names: Iterable[str], workspace_dir: str) -> str:
+def build_local_tools_policy_md(mounted_skill_names: Iterable[str]) -> str:
     """Render the agents_md block for mounted credential-free tools.
 
     Kept separate from the integrations block because that one tells the agent to always
     pass ``--profile``, which is exactly wrong here — these take no profile and no
-    credentials. How to hand a produced file back is ``build_file_delivery_policy_md``'s
-    job: it depends on the agent's Connections, not on which tool made the file.
+    credentials. Where to write a file and how to hand it back is
+    ``build_file_delivery_policy_md``'s job: it depends on the agent's Connections, not on
+    which tool made the file, and an Agent without a native chat Connection cannot share one.
     """
     lines = [CREDENTIAL_FREE_TOOLS[name] for name in mounted_skill_names if name in CREDENTIAL_FREE_TOOLS]
     if not lines:
         return ""
-    block = (
+    return (
         "\n## Local file tools (aai-cli)\n\n"
         "These work on files on this machine. They need **no credentials and no "
         "`--profile`** — do not ask the user to authenticate for them.\n\n" + "\n".join(lines) + "\n"
     )
-    block += (
-        f"\nWrite files you intend to share into `{workspace_dir}` — it persists across restarts "
-        "and is readable by the messaging layer.\n"
-    )
-    return block
 
 
 # Display label per provider for the agents_md integrations block.

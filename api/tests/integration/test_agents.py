@@ -24,6 +24,7 @@ from starlette.testclient import TestClient
 
 from api.core.config import Config
 from api.domains.agents.models import (
+    AgentSecret,
     AgentStatus,
     AgentTemplateOverrideSourceType,
     AgentTemplateOverrideVersion,
@@ -1290,6 +1291,32 @@ def test_start_agent_wires_telemetry_push_into_the_secret():
             assert_that(secret.string_data["AGENT_ID"], equal_to(str(context.agent.id)))
             assert_that(secret.string_data["INGEST_URL"], equal_to(_INGEST_BASE_URL))
             assert_that(secret.string_data["INGEST_API_KEY"], is_not(equal_to("")))
+
+
+def test_start_with_stored_secret_that_no_longer_validates_returns_400():
+    """Stored content is re-validated on every start. A Pipedrive domain saved before the
+    single-label rule must stop the start with a fixable message, not an unhandled error."""
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        client.patch(
+            f"{_BASE}/{context.agent.id}",
+            json={"secrets": [{"provider": "pipedrive", "content": {"api_token": "pd-token", "domain": "acme"}}]},
+            headers=_auth(context),
+        )
+        delegate = context.injector.get(PostgresRepositoryDelegate)
+        [stored] = [s for s in delegate.find_all(AgentSecret) if s.agent_id == context.agent.id]
+        stored.content = encrypt_token(json.dumps({"api_token": "pd-token", "domain": "foo.bar"}), TEST_ENCRYPTION_KEY)
+        delegate.save(stored)
+        k8s: MagicMock = context.injector.get(KubernetesClient)
+
+        with when("I start the agent"):
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("it returns 400 naming the integration, and nothing is deployed"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+            assert_that("Pipedrive" in response.json()["detail"], equal_to(True))
+            assert_that("save it again" in response.json()["detail"], equal_to(True))
+            k8s.create_deployment.assert_not_called()
 
 
 def test_start_already_running_returns_409():

@@ -12,7 +12,11 @@ from api.domains.agents.builders import (
     native_telegram_channel,
     runtime_teams_channel,
 )
-from api.domains.agents.builders.openclaw import LEGACY_WORKSPACE_MIGRATION_SH, OPENCLAW_GATEWAY_PORT
+from api.domains.agents.builders.openclaw import (
+    LEGACY_WORKSPACE_MIGRATION_SH,
+    OPENCLAW_GATEWAY_PORT,
+    OPENCLAW_WORKSPACE_DIR,
+)
 from api.domains.communications.models import ConversationLocation
 
 _AGENT_ID = UUID("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
@@ -40,6 +44,16 @@ def test_gateway_config_isolates_each_persons_direct_messages() -> None:
     config = build_openclaw_gateway_config("litellm/gpt-5", "http://litellm:4000")
 
     assert config["session"]["dmScope"] == "per-channel-peer"
+
+
+def test_workspace_comes_from_one_constant() -> None:
+    """The file-delivery policy names OPENCLAW_WORKSPACE_DIR as the place to write
+    attachments, so the runtime config and the migration script must use the same path."""
+    config = build_openclaw_gateway_config("litellm/gpt-5", "http://litellm:4000")
+
+    assert config["agents"]["defaults"]["workspace"] == OPENCLAW_WORKSPACE_DIR
+    assert f"workspace={OPENCLAW_WORKSPACE_DIR}\n" in LEGACY_WORKSPACE_MIGRATION_SH
+    assert "@OPENCLAW_WORKSPACE_DIR@" not in LEGACY_WORKSPACE_MIGRATION_SH
 
 
 def test_startup_migrates_legacy_state_after_config_and_plugin_dirs_exist() -> None:

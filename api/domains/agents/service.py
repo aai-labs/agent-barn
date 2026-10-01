@@ -10,6 +10,7 @@ from uuid import UUID
 
 from fastapi import HTTPException, status
 from injector import inject, singleton
+from pydantic import ValidationError
 
 from api.core.config import Config
 from api.domains.agent_settings.lookup import AgentSettingsLookupService
@@ -1984,7 +1985,23 @@ class AgentService:
             else:
                 ciphertext = s.content
             assert ciphertext is not None
-            decrypted[provider] = decrypt_content(provider, ciphertext, key)
+            try:
+                decrypted[provider] = decrypt_content(provider, ciphertext, key)
+            except ValidationError as exc:
+                # Stored content is re-validated on every start, so a schema that tightened
+                # after the secret was saved (e.g. the Pipedrive domain rule) stops here with
+                # a fixable message rather than an unhandled error. Re-saving the
+                # integration replaces the stored content.
+                problems = "; ".join(
+                    f"{'.'.join(str(p) for p in e['loc'])}: {e['msg']}" for e in exc.errors(include_input=False)
+                )
+                raise AgentProvisioningPrecondition(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=(
+                        f"The stored {PROVIDER_DISPLAY_NAMES[provider]} integration settings are no longer valid "
+                        f"({problems}). Edit the integration and save it again."
+                    ),
+                ) from exc
         self._backfill_google_client_credentials(decrypted)
         # Only google_workspace is materialized. The retired per-service Google providers
         # and their rows were deleted by migration; affected agents must reconnect through
@@ -2140,7 +2157,7 @@ class AgentService:
             rendered.agents_md
             + build_integrations_policy_md(decrypted)
             + build_gog_policy_md(gws_content if isinstance(gws_content, GoogleWorkspaceContent) else None)
-            + build_local_tools_policy_md((s.name for s in mounted_skills), workspace_dir)
+            + build_local_tools_policy_md(s.name for s in mounted_skills)
             + build_file_delivery_policy_md(
                 # Native adapters attach MEDIA: files; gateway-owned Connections send text only.
                 workspace_dir if any(c is not None for c in (native_slack, native_discord, native_telegram)) else None
