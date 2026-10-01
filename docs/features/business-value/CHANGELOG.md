@@ -19,13 +19,48 @@ Related context: [Activity and Ingest](../activity-and-ingest.md), [Agent Activi
 - Also delivered: the scoped Business Action aggregate reads the value KPI needs.
 - Also delivered: `GET /organizations/{organization_id}/value`, the Organization value KPI. The feature doc's [Organization value](../business-value.md#organization-value) section is the contract.
 - Also delivered: gog (Google Workspace) commands are classified as Business Actions and valued like aai-cli ones. See the feature doc's [gog commands](../business-value.md#gog-commands) section.
-- In transition:
-  - gog classification has not been deployed to local k3d. The API pod there still runs the previous image.
-  - After deploying, run the operator backfill once, so the gog Tool Calls already stored are counted.
+- Also delivered: review fixes. Value-settings saves are serialized under a row lock and record what they actually replaced, and the per-bucket Business Action query no longer builds an unused bucket spine.
+- In transition: nothing. gog classification is deployed to local k3d and was verified live.
 - Next: the Stage 3 UI that renders value settings and the Organization value.
 - Blockers: the product owner has not signed off the default minutes per Outcome Type. They are placeholders until then, and every value figure inherits them.
 
 ## Slice history
+
+### 2026-10-01 — AF-345 — Review fixes: serialized value-settings saves and a simpler bucket query
+
+Finding 1: a race on the first save, and an audit diff read outside the write.
+- **Problem:**
+  - `ValueSettingsRepository.save_with_event` selected the settings row and created it if it was missing. Two concurrent first saves both inserted, and the second failed on `uq_organization_value_settings_organization_id`, returning a 500.
+  - `update_settings` also read the current values in separate sessions before the write, so two overlapping saves could record the same `previous`.
+- **Fix:** `save_with_event` now owns the whole diff, in one transaction:
+  1. `INSERT … ON CONFLICT DO NOTHING` for the settings row;
+  2. `SELECT … FOR UPDATE` on that row;
+  3. read the overrides;
+  4. compare only the addressed fields;
+  5. write;
+  6. stage the event only when something changed. This follows `AgentRepository`'s update-with-event pattern.
+- A plain `FOR UPDATE` would not have been enough: an Organization's first save has no row to lock.
+- **Proven before the fix** on Postgres 18 (READ COMMITTED), with two concurrent connections:
+  - the old path waits, then fails with `UniqueViolation`;
+  - the new path waits, then records the value the other save committed, including overrides that save added.
+- **Trade-off:** the first save that addresses anything creates the settings row, even a minutes-only save. `hourly_rate_usd = NULL` still means unset, exactly like no row. A request that addresses nothing still writes nothing.
+
+Finding 2: `successful_counts_by_bucket` built a `generate_series` spine that `_series` never iterated.
+- `_series` loops over `CostRepository.spend_series` buckets and looks counts up by key, so the extra `(bucket, None, 0)` rows were never used.
+- The query is now a plain `GROUP BY` on `date_trunc(unit, timezone('UTC', occurred_at))` and `outcome_type`, the same key the spend spine uses.
+
+Coverage:
+- `test_value_settings.py::test_a_concurrent_first_save_waits_and_records_what_it_replaced`:
+  - holds an uncommitted settings row on one connection, then sends `PUT /value-settings` from a second thread;
+  - waits until `pg_stat_activity` shows that thread blocked on a lock, then commits.
+  - Before the fix it failed with `IntegrityError` on the unique constraint. After it, the save returns 200 and records `previous: "10.00"`.
+- The repository tests now assert the diff the repository computes:
+  - an unchanged save stages no event and returns no delivery ids;
+  - an unaddressed rate is left alone;
+  - a minutes-only save leaves the rate unset;
+  - a rejected event writes nothing.
+- The 27 API tests are unchanged and pass.
+- `test_organization_value.py::test_successful_counts_by_bucket_are_keyed_on_the_spend_series_buckets` now rejects gap rows. It failed against the spine, which returned 4 rows including `(…, None, 0)`, and passes with the `GROUP BY`. All 24 value tests pass, including the series tests that need every bucket.
 
 ### 2026-10-01 — AF-344 — Review fixes: backfill removes stale actions and writes only changes
 
@@ -104,7 +139,16 @@ Coverage:
 
 Not verified:
 - The exit code when Google refuses a write under a read-only credential. It would need a read-only credential and a write attempt.
-- The in-cluster Ingest metric and backfill runs. They wait for a local deploy.
+
+Live check after deploying to local k3d (2026-09-29, migration head `1045836844da`, fresh database):
+- **Ingest recorded each gog Tool Call:**
+  - Hermes `gog calendar calendars` (exit 0): `google-calendar`, read, SUCCESS.
+  - OpenClaw `gog gmail labels list` (exit 2, no credential): `google-gmail`, read, ERROR.
+  - Hermes `gog drive mkdir` (exit 0), run by the user: `google-drive`, `RECORD_CREATED`, SUCCESS.
+- **Metric:** the Ingest `/metrics` exported the `google-calendar` and `google-gmail` labels by name.
+- **Backfill:** two backfill runs left the rows identical in id, mapping, status, and `created_at`. These runs predate AF-344's review fix, under which a no-change re-run reports `recorded=0`.
+- **Value report:** `GET /value` counted the reads as not valued, with the rate at $60.
+- **Incident:** one read-back started a second full-app Python process inside the `api` container. That pushed it over its 512Mi limit, and it was OOMKilled and restarted. Later checks used `psql` in the Postgres pod instead.
 
 ### 2026-09-29 — AF-345 — Organization value API
 

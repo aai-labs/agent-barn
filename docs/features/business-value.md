@@ -131,6 +131,11 @@ An Organization turns Business Actions into time and money through its value set
 - **Audit.** A save that changes anything emits `organization.value_settings.changed` through the outbox, in the same transaction as the settings rows. After commit it is enqueued for the security-audit projection.
   - `field_changes` is keyed `hourly_rate_usd` or `outcome_minutes.<OUTCOME_TYPE>`. Each entry holds `previous` and `current` as strings: the rate to two places, minutes as an integer, and `null` for unset or default.
   - A save that changes nothing, including the same rate spelled differently, emits nothing.
+  - **Concurrent saves are serialized.** The diff is computed inside the transaction that writes it:
+    - every save first ensures the Organization's settings row exists (`INSERT … ON CONFLICT DO NOTHING`), then locks it (`SELECT … FOR UPDATE`) before reading the rate and overrides;
+    - a save that overlaps another waits for it and records the values that save committed, so each audit entry matches what it actually replaced;
+    - two first saves no longer collide on the unique row.
+  - A settings row whose `hourly_rate_usd` is `NULL` means no rate is set, the same as having no row. The first save that addresses anything creates it, even if it only changes minutes.
 
 ## Organization value
 
@@ -180,7 +185,8 @@ Each Business Action falls in exactly one category. A write is **classified** wh
   - `unverified_writes`, `failed_writes`, and `unclassified_actions`
   - `hourly_rate_usd`, the rate used
 - **`series`:** one point per UTC bucket, with `bucket`, `minutes_saved`, `value`, and `spend`.
-  - The Business Action counts and `CostRepository.spend_series` are built on the same `generate_series(date_trunc(...))` spine, so every bucket is present and the two merge by key.
+  - The bucket spine is the one `CostRepository.spend_series` builds with `generate_series(date_trunc(...))`, so every bucket is present.
+  - Business Action counts are grouped by the same UTC `date_trunc(...)` key and looked up on that spine; a bucket with no successful writes reads as zero.
   - Buckets are emitted as UTC instants.
 - **`agents`:** a full outer merge of the per-Agent Business Action counts with `CostRepository.spend_by_agent`.
   - Each row carries `agent_id`, `agent_name`, `agent_deleted`, `successful_writes`, `minutes_saved`, `value`, `spend`, and `value_to_spend_ratio`.

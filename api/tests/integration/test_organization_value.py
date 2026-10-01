@@ -258,7 +258,7 @@ def test_successful_counts_by_agent_count_only_successful_classified_writes():
             )
 
 
-def test_successful_counts_by_bucket_share_the_spend_series_buckets():
+def test_successful_counts_by_bucket_are_keyed_on_the_spend_series_buckets():
     with given(
         [
             *_GIVEN,
@@ -280,21 +280,18 @@ def test_successful_counts_by_bucket_share_the_spend_series_buckets():
         with when("successful counts are read per bucket"):
             rows = _repository(context).successful_counts_by_bucket(window, _scope(context))
 
-        with then("the buckets are exactly the ones the spend series uses, empty ones included"):
+        with then("only buckets with successful writes are returned, keyed like the spend series buckets"):
             spend_buckets = [
                 bucket
                 for bucket, _spend, _calls in context.injector.get(CostRepository).spend_series(
                     window, CostFilter(organization_id=context.organization.id)
                 )
             ]
-            assert_that(sorted({bucket for bucket, _outcome, _count in rows}), equal_to(spend_buckets))
-
-        with then("successful writes land in their UTC day, and unverified ones are not counted"):
-            first_day = spend_buckets[0]
-            third_day = spend_buckets[2]
-            counted = [(bucket, outcome, count) for bucket, outcome, count in rows if count]
-            assert_that(counted, has_length(2))
-            assert_that(set(counted), equal_to({(first_day, RECORD_CREATED, 2), (third_day, COMMENT_POSTED, 1)}))
+            assert_that(rows, has_length(2))
+            assert_that(
+                set(rows),
+                equal_to({(spend_buckets[0], RECORD_CREATED, 2), (spend_buckets[2], COMMENT_POSTED, 1)}),
+            )
 
 
 # --- API --------------------------------------------------------------------------

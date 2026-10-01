@@ -19,6 +19,7 @@ from api.domains.business_value.classifier import SHELL_TOOL_NAMES, BusinessActi
 from api.domains.business_value.models import (
     OUTCOME_MINUTES_ORGANIZATION_TYPE_CONSTRAINT,
     TOOL_CALL_ORDINAL_CONSTRAINT,
+    VALUE_SETTINGS_ORGANIZATION_CONSTRAINT,
     BusinessAction,
     OrganizationOutcomeMinutes,
     OrganizationValueSettings,
@@ -35,6 +36,9 @@ logger = logging.getLogger(__name__)
 
 MAPPED_COLUMNS = ("integration", "resource", "verb", "is_write", "outcome_type")
 BUSINESS_ACTION_TABLE = SQLModel.metadata.tables["business_action"]
+RATE_QUANTUM = Decimal("0.01")
+HOURLY_RATE_FIELD = "hourly_rate_usd"
+OUTCOME_MINUTES_FIELD_PREFIX = "outcome_minutes."
 
 
 @dataclass(frozen=True)
@@ -160,31 +164,15 @@ class BusinessActionRepository:
         self,
         window: StatsWindow,
         scope: AuthorizationScope,
-    ) -> list[tuple[datetime, str | None, int]]:
-        unit = window.granularity.value
-        buckets = sa.select(
-            sa.func.generate_series(
-                sa.func.date_trunc(unit, sa.func.timezone("UTC", sa.literal(window.start))),
-                sa.func.date_trunc(unit, sa.func.timezone("UTC", sa.literal(window.end))),
-                sa.text(f"interval '{window.granularity.interval}'"),
-            ).label("bucket")
-        ).subquery()
-        counts = (
-            sa.select(
-                sa.func.date_trunc(unit, sa.func.timezone("UTC", col(BusinessAction.occurred_at))).label("bucket"),
-                col(BusinessAction.outcome_type).label("outcome_type"),
-                sa.func.count().label("actions"),
-            )
+    ) -> list[tuple[datetime, str, int]]:
+        bucket = sa.func.date_trunc(window.granularity.value, sa.func.timezone("UTC", col(BusinessAction.occurred_at)))
+        query = (
+            sa.select(bucket, col(BusinessAction.outcome_type), sa.func.count())
             .select_from(BusinessAction)
             .join(Agent, col(Agent.id) == col(BusinessAction.agent_id))
             .where(*self._visible(window, scope), *self._successful())
-            .group_by(sa.text("1"), col(BusinessAction.outcome_type))
-            .subquery()
-        )
-        query = (
-            sa.select(buckets.c.bucket, counts.c.outcome_type, sa.func.coalesce(counts.c.actions, 0))
-            .select_from(buckets.outerjoin(counts, buckets.c.bucket == counts.c.bucket))
-            .order_by(buckets.c.bucket, counts.c.outcome_type)
+            .group_by(bucket, col(BusinessAction.outcome_type))
+            .order_by(bucket, col(BusinessAction.outcome_type))
         )
         with self.delegate.engine.connect() as connection:
             rows = connection.execute(query).all()
@@ -249,6 +237,14 @@ class ValueSettingsChangeResult:
     delivery_ids: list[UUID]
 
 
+def _rate_text(rate: Decimal | None) -> str | None:
+    return None if rate is None else str(rate.quantize(RATE_QUANTUM))
+
+
+def _minutes_text(minutes: int | None) -> str | None:
+    return None if minutes is None else str(minutes)
+
+
 @inject
 @singleton
 @dataclass
@@ -278,29 +274,50 @@ class ValueSettingsRepository:
         organization_id: UUID,
         *,
         hourly_rate: Decimal | None,
-        rate_changed: bool,
-        minute_changes: dict[str, int | None],
-        field_changes: dict[str, dict[str, str | None]],
+        rate_addressed: bool,
+        outcome_minutes: dict[str, int | None],
         actor: ActorIdentity,
         actor_display: str,
         subject_display: str,
     ) -> ValueSettingsChangeResult:
         now = datetime.now(UTC)
         with Session(self.delegate.engine, expire_on_commit=False) as session:
-            if rate_changed:
-                settings = session.exec(
-                    select(OrganizationValueSettings).where(
-                        col(OrganizationValueSettings.organization_id) == organization_id
+            session.exec(self._ensure_settings_statement(organization_id, now))  # type: ignore[call-overload]
+            settings = session.exec(
+                select(OrganizationValueSettings)
+                .where(col(OrganizationValueSettings.organization_id) == organization_id)
+                .with_for_update()
+            ).one()
+            overrides = dict(
+                session.exec(
+                    select(OrganizationOutcomeMinutes.outcome_type, OrganizationOutcomeMinutes.minutes_saved).where(
+                        col(OrganizationOutcomeMinutes.organization_id) == organization_id
                     )
-                ).first()
-                if settings is None:
-                    settings = OrganizationValueSettings(organization_id=organization_id)
+                ).all()
+            )
+
+            field_changes: dict[str, dict[str, str | None]] = {}
+            if rate_addressed and hourly_rate != settings.hourly_rate_usd:
+                field_changes[HOURLY_RATE_FIELD] = {
+                    "previous": _rate_text(settings.hourly_rate_usd),
+                    "current": _rate_text(hourly_rate),
+                }
                 settings.hourly_rate_usd = hourly_rate
                 settings.updated_at = now
                 session.add(settings)
-
-            for outcome_type, minutes in minute_changes.items():
+            for outcome_type, minutes in outcome_minutes.items():
+                previous = overrides.get(outcome_type)
+                if minutes == previous:
+                    continue
+                field_changes[f"{OUTCOME_MINUTES_FIELD_PREFIX}{outcome_type}"] = {
+                    "previous": _minutes_text(previous),
+                    "current": _minutes_text(minutes),
+                }
                 session.exec(self._minute_change_statement(organization_id, outcome_type, minutes, now))  # type: ignore[call-overload]
+
+            if not field_changes:
+                session.commit()
+                return ValueSettingsChangeResult(delivery_ids=[])
             session.flush()
 
             event = EVENT_REGISTRY.build_event(
@@ -326,6 +343,20 @@ class ValueSettingsRepository:
             delivery_ids = list(session.exec(select(EventDelivery.id).where(EventDelivery.event_id == event.event_id)))
             session.commit()
         return ValueSettingsChangeResult(delivery_ids=delivery_ids)
+
+    @staticmethod
+    def _ensure_settings_statement(organization_id: UUID, now: datetime):
+        return (
+            pg_insert(OrganizationValueSettings)
+            .values(
+                id=uuid.uuid7(),
+                created_at=now,
+                updated_at=now,
+                organization_id=organization_id,
+                hourly_rate_usd=None,
+            )
+            .on_conflict_do_nothing(constraint=VALUE_SETTINGS_ORGANIZATION_CONSTRAINT)
+        )
 
     @staticmethod
     def _minute_change_statement(organization_id: UUID, outcome_type: str, minutes: int | None, now: datetime):
