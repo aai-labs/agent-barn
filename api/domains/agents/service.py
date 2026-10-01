@@ -1776,7 +1776,7 @@ class AgentService:
         if target:
             plugin = self.plugins.require("slack")
             try:
-                # Same resolution and allowlist policy as gateway-delivered sends.
+                # Resolve the native home target through the Connection recipient policy.
                 home_channel = plugin.resolve_outbound_target(
                     plugin.settings_model.model_validate(connection.settings),
                     plugin.credentials_model.model_validate(connection.credentials),

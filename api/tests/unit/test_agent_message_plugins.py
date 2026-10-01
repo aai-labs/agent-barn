@@ -11,7 +11,14 @@ from api.domains.communications.plugins.teams import TeamsPlatformPlugin
 from api.domains.communications.plugins.telegram import TelegramPlatformPlugin
 
 CONFIG = SimpleNamespace(
-    skip_slack_token_validation=True, skip_discord_token_validation=True, skip_telegram_token_validation=True
+    skip_slack_token_validation=True,
+    skip_discord_token_validation=True,
+    skip_telegram_token_validation=True,
+    skip_teams_token_validation=True,
+    teams_publisher_name="Test",
+    teams_publisher_website_url="https://example.com",
+    teams_privacy_url="https://example.com/privacy",
+    teams_terms_url="https://example.com/terms",
 )
 
 
@@ -70,12 +77,16 @@ def test_disabled_dm_is_rejected_before_opening_conversation():
         )
 
 
-@pytest.mark.parametrize("plugin", [DiscordPlatformPlugin, TelegramPlatformPlugin, TeamsPlatformPlugin])
-def test_only_slack_advertises_initiated_delivery(plugin):
+@pytest.mark.parametrize(
+    "plugin", [DiscordPlatformPlugin, TelegramPlatformPlugin, TeamsPlatformPlugin, SlackPlatformPlugin]
+)
+def test_chat_plugins_do_not_advertise_gateway_initiated_delivery(plugin):
     assert_that(PlatformCapability.AGENT_INITIATED_DELIVERY in plugin.capabilities, equal_to(False))
 
 
-@pytest.mark.parametrize("plugin_type", [DiscordPlatformPlugin, TelegramPlatformPlugin])
+@pytest.mark.parametrize(
+    "plugin_type", [DiscordPlatformPlugin, TelegramPlatformPlugin, SlackPlatformPlugin, TeamsPlatformPlugin]
+)
 def test_native_only_plugins_cannot_send_or_open_gateway_sessions(plugin_type):
     import asyncio
 
@@ -83,7 +94,16 @@ def test_native_only_plugins_cannot_send_or_open_gateway_sessions(plugin_type):
 
     plugin = plugin_type(CONFIG)
     settings = plugin.settings_model.model_validate({})
-    credentials = plugin.credentials_model.model_validate({"bot_token": "test-bot"})
+    credential_values = {
+        "bot_token": "test-bot",
+        "app_token": "test-app",
+        "tenant_id": "test-tenant",
+        "app_id": "test-app",
+        "app_password": "test-password",
+    }
+    credentials = plugin.credentials_model.model_validate(
+        {name: credential_values[name] for name in plugin.credentials_model.model_fields}
+    )
     envelope = OutboundCommunicationEnvelope(
         origin="cron",
         execution_id="historical-run",

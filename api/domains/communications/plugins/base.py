@@ -1,6 +1,5 @@
 import hashlib
 import json
-import logging
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -23,26 +22,7 @@ from api.domains.communications.models import (
 )
 from api.domains.communications.transport import platform_transport
 
-_FAILURE_NOTICE_PREFIX = "⚠️ I couldn't process that message."
 _FALLBACK_FAILURE_SUMMARY = "The failure is recorded in this Connection's diagnostics."
-_FAILURE_NOTICE_IDEMPOTENCY_NAMESPACE = "failure-notice"
-
-
-def failure_notice(error_summary: str | None) -> str:
-    """Render the in-channel notice for a terminally failed Delivery."""
-    return f"{_FAILURE_NOTICE_PREFIX} {error_summary or _FALLBACK_FAILURE_SUMMARY}"
-
-
-def provider_idempotency_key(delivery_key: str) -> str:
-    """Return a bounded opaque key safe to pass to a provider adapter.
-
-    Runtime reply keys are user/runtime input and may be long or contain
-    provider-sensitive characters. The delivery row remains the source of
-    truth, while adapters receive the same deterministic, non-secret token on
-    every retry.
-    """
-
-    return hashlib.sha256(f"agentbarn:communication:{delivery_key}".encode()).hexdigest()
 
 
 class PlatformSettings(BaseModel):
@@ -53,12 +33,11 @@ class PlatformCredentials(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-class AgentInitiatedDeliverySettings(BaseModel):
-    """Mix into a platform's settings to opt it into agent-initiated delivery.
+class NativeHomeDeliverySettings(BaseModel):
+    """Native scheduled delivery home target, validated through Connection policy.
 
-    Additive: a platform that mixes this in still has all of its ordinary inbound
-    settings. Only platforms carrying AGENT_INITIATED_DELIVERY should mix it in,
-    since the field is rendered into the Connection editor from the settings schema.
+    This field does not authorize separate initiated sends. The schema-driven
+    Connection editor and native runtime assembly use the same stored target.
     """
 
     default_delivery_target: OutboundTargetRequest | None = Field(
@@ -125,34 +104,6 @@ class ProcessingFeedbackContext:
     # Already normalized and redacted by normalize_communication_error, so it is
     # safe to show a channel; raw provider text never reaches a plugin.
     error_summary: str | None = None
-
-
-def failure_feedback_idempotency_key(context: ProcessingFeedbackContext) -> str | None:
-    if context.source_delivery_id is None:
-        return None
-    # The notice is a separate provider message from the reply. Keep it in a
-    # distinct namespace so provider-native deduplication cannot turn a retry
-    # of the reply into the already-posted failure notice.
-    return provider_idempotency_key(f"{_FAILURE_NOTICE_IDEMPOTENCY_NAMESPACE}:{context.source_delivery_id}")
-
-
-def best_effort_failure_notice(
-    context: ProcessingFeedbackContext,
-    callback: Callable[[str, str | None], Any],
-    *,
-    target: str,
-    logger: logging.Logger,
-) -> None:
-    """Render and publish one terminal failure notice without raising."""
-    if context.stage != ProcessingFeedbackStage.FAILED:
-        return
-    try:
-        callback(
-            failure_notice(context.error_summary),
-            failure_feedback_idempotency_key(context),
-        )
-    except Exception as exc:
-        logger.warning("Communication failure notice failed for %s (%s)", target, type(exc).__name__)
 
 
 @dataclass(frozen=True)
@@ -235,7 +186,7 @@ class PlatformPlugin(ABC):
         settings = self.settings_model.model_validate(raw_settings)
         credentials = self.credentials_model.model_validate(raw_credentials)
         external_identity = self.validate_external(settings, credentials)
-        if isinstance(settings, AgentInitiatedDeliverySettings) and settings.default_delivery_target is not None:
+        if isinstance(settings, NativeHomeDeliverySettings) and settings.default_delivery_target is not None:
             self.resolve_outbound_target(settings, credentials, settings.default_delivery_target)
         fingerprint = self.credential_fingerprint(credentials)
         return ValidatedConnectionConfiguration(
