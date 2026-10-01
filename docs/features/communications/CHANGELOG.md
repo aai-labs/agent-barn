@@ -8,11 +8,18 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
 
 - Delivered: scoped Communication Connection CRUD and strict Platform configuration/credential validation; permanent native Slack, Discord, Telegram, and Teams transport on both runtimes; authenticated Teams public relay; native transcript and health observation; Web Chat/Email durable delivery through the shared runtime protocol; permission-scoped diagnostics and content-free historical Journal/Delivery timelines; gateway Delivery retry, bounded retention, safe errors, and low-cardinality Communications metrics. Native provider sessions, replies, approvals, and schedules belong to the selected runtime.
 - Changed: Agents are headless and no longer own a single Platform. Legacy provider configuration tables, DTO fields, routes, and provider-specific UI have been removed after their data is migrated into Communication Connections.
-- In transition: chat gateway transport is fenced out; legacy transport implementations, historical queue state, and ignored deployment configuration remain pending cleanup. Runtime assembly retires the old messaging artifacts on each start. Only an authenticated legacy `410` handler remains until the documented deployed-client cutoff; the initiated-message service/repository and execution-token issuance are removed.
-- Next: remove the fenced chat provider transport implementations and later remove the compatibility handler at its rollout cutoff, then clean stranded state while preserving Web Chat and Email. Evaluate iMessage transport constraints independently of Agent runtimes. Email supports inbound and reply, but not agent-initiated outbound; native Discord, Telegram, and Teams deliver scheduled results to their origin or configured home.
+- In transition: chat gateway transport is fenced out; legacy Slack/Teams transport implementations, historical queue state, and ignored deployment configuration remain pending cleanup. Discord/Telegram gateway sessions, senders, and transport-only helpers are removed. Runtime assembly retires the old messaging artifacts on each start. Only an authenticated legacy `410` handler remains until the documented deployed-client cutoff; the initiated-message service/repository and execution-token issuance are removed.
+- Next: remove the fenced Slack/Teams transport implementations, replace lease-based maintenance, and later remove the compatibility handler at its rollout cutoff, then clean stranded state while preserving Web Chat and Email. Evaluate iMessage transport constraints independently of Agent runtimes. Email supports inbound and reply, but not agent-initiated outbound; native Discord, Telegram, and Teams deliver scheduled results to their origin or configured home.
 - Blockers: none.
 
 ## Changes
+
+### 2026-10-01 — Native gateway cleanup: remove Discord/Telegram transports (slice 3b) — PR pending
+
+- Removed: Discord Gateway sessions, interaction acknowledgements, senders and approval components; Telegram polling and senders; both providers' gateway normalization/enrichment and processing feedback, with their retired capability declarations. Provider clients no longer expose message-send or transport-only lookup methods.
+- Preserved: settings, credential validation/fingerprinting, setup hints, Discord directories and install links, native runtime configuration, observers and health, and shared approval metadata/value handling used by Web Chat and the remaining Slack transport. Telegram setup guidance now describes native mention/reply admission consistently.
+- Verified: native-only boundary tests fail against the old send implementations and pass after removal; retained validation and credential-scoped directory tests pass.
+- Follow-up: remove Slack/Teams transport while retaining Slack home-target resolution and Teams public authentication/admission/relay, then replace ingress lease maintenance. Keep the legacy message handler until its documented rollout cutoff.
 
 ### 2026-10-01 — Native gateway cleanup: remove initiated-message backend (slice 3a) — PR pending
 

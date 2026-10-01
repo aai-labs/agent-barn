@@ -7,12 +7,19 @@ Related context: [`../communications/CHANGELOG.md`](../communications/CHANGELOG.
 ## Current state
 
 - Delivered: Web Chat renders one approval button per offered choice and sends the choice with its `approval_id`. Buttons are hidden without `agent.update`, disabled while the Agent is not working, and disabled after that browser session answers (re-enabled when sending fails). The shared runtime adapter and `APPROVAL_METADATA_KEY` remain supported.
-- In transition: the earlier Slack/Discord gateway approval codecs remain in source but are unreachable through chat gateway ingress/delivery after permanent native ownership. Native gateways own chat approvals under the [transport contract](../../architecture/runtime-and-deployment.md#platform-plugin-boundary); prior gateway delivery entries below are historical.
-- Next: preserve Web Chat approval behavior when removing the obsolete chat provider transport and approval codecs. Further native approval improvements require evidence against the selected runtime.
+- In transition: the Discord gateway approval rendering, component codec, and interaction acknowledgement are removed. The earlier Slack gateway approval codec remains in source but is unreachable through chat gateway ingress/delivery after permanent native ownership. Native gateways own chat approvals under the [transport contract](../../architecture/runtime-and-deployment.md#platform-plugin-boundary); prior gateway delivery entries below are historical.
+- Next: preserve Web Chat approval behavior when removing the remaining Slack provider transport and approval codec. Further native approval improvements require evidence against the selected runtime.
 - Blockers: live native provider approval coverage remains a rollout verification task.
 
 
 ## Changes
+
+### 2026-10-01 — Native gateway cleanup: remove Discord gateway approval components
+
+- Removed: obsolete Discord button rendering, compact component encoding/decoding, and gateway interaction acknowledgement/admission. Native Discord owns its approval interactions.
+- Preserved: Web Chat approval envelopes/rendering, shared `APPROVAL_METADATA_KEY`, and the runtime adapter; Slack value handling remains until its transport-removal checkpoint.
+- Follow-up: complete the remaining Slack codec removal without changing Web Chat's approval contract. Live native provider coverage remains a rollout task.
+
 
 ### 2026-10-01 — Native gateway cleanup: approval ownership
 

@@ -198,6 +198,11 @@ def test_platform_catalog_lists_the_shipped_plugins() -> None:
                 [item["key"] for item in catalogue],
                 contains_inanyorder("discord", "email", "slack", "teams", "telegram", "web"),
             )
+            for platform in ("discord", "telegram"):
+                native = next(item for item in catalogue if item["key"] == platform)
+                assert_that(native["transport"], equal_to("native"))
+                assert_that("supervised_ingress" in native["capabilities"], equal_to(False))
+                assert_that("processing_feedback" in native["capabilities"], equal_to(False))
             slack = next(item for item in catalogue if item["key"] == "slack")
             assert_that(slack["schema_version"], equal_to(2))
             assert_that(slack["settings_schema"]["properties"], not_(has_key("verbose_mode")))
@@ -229,7 +234,8 @@ def test_platform_catalog_lists_the_shipped_plugins() -> None:
                     contains_string("@BotFather"),
                     contains_string("/newbot"),
                     contains_string("getUpdates"),
-                    contains_string("/setprivacy"),
+                    contains_string("native runtime"),
+                    contains_string("privacy mode already delivers"),
                     contains_string("webhook"),
                 ),
             )
