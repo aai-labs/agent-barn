@@ -238,12 +238,17 @@ class AgentLlmBudgetService:
         organization = self._organization_limit(agent.organization_id)
         default = self.agent_settings_lookup.resolve_default_agent_llm_budget(agent.organization_id)
         resolved = resolve_agent_limit(agent.llm_budget_usd, default, organization)
+        can_manage = (
+            self.permission_policy.resolve(context, agent.organization_id, PermissionKey.LLM_BUDGET_MANAGE) is not None
+        )
         return AgentLlmBudgetRead(
             limit_usd=resolved.limit_usd,
             own_limit_usd=agent.llm_budget_usd,
             source=resolved.source,
-            default_limit_usd=min(default, organization.limit_usd),
-            organization_limit_usd=organization.limit_usd,
+            # Organization-wide figures, for the edit form only: anyone who may read
+            # this Agent's costs sees its limit, not the Organization's.
+            default_limit_usd=min(default, organization.limit_usd) if can_manage else None,
+            organization_limit_usd=organization.limit_usd if can_manage else None,
             window=organization.window,
             state=self._state(agent, resolved.limit_usd),
             spend_usd=agent.llm_spend_usd if agent.llm_spend_observed_at is not None else None,
@@ -251,8 +256,7 @@ class AgentLlmBudgetService:
             # date — known as soon as a limit is written — stands in until this key's
             # own snapshot has been taken.
             renews_at=agent.llm_budget_renews_at or organization.renews_at,
-            can_manage=self.permission_policy.resolve(context, agent.organization_id, PermissionKey.LLM_BUDGET_MANAGE)
-            is not None,
+            can_manage=can_manage,
         )
 
     def _state(self, agent: Agent, limit: float) -> AgentLlmBudgetState:
@@ -276,33 +280,21 @@ class AgentLlmBudgetService:
         """(inheriting, own) — for the default Agent limit's reach."""
         return self.repository.count_by_llm_budget_source(organization_id)
 
-    def key_limits(self, organization_id: UUID) -> dict[UUID, float]:
-        """Each Agent key's resolved limit right now. Taken before an Organization-wide
-        change so that afterwards only the keys whose limit actually moved are
-        rewritten — every other one would cost a proxy round trip for nothing."""
+    def key_limits(self, organization_id: UUID) -> dict[UUID, tuple[float, str]]:
+        """Each Agent key's resolved limit and window right now. Taken before an
+        Organization-wide change so that afterwards only the keys whose limit or
+        window actually moved are rewritten — every other one would cost a proxy
+        round trip for nothing."""
         organization = self._organization_limit(organization_id)
         default = self.agent_settings_lookup.resolve_default_agent_llm_budget(organization_id)
         return {
-            agent.id: resolve_agent_limit(agent.llm_budget_usd, default, organization).limit_usd
+            agent.id: (resolve_agent_limit(agent.llm_budget_usd, default, organization).limit_usd, organization.window)
             for agent in self.repository.list_llm_budget_targets(organization_id)
         }
 
-    def fit_to_organization(
-        self,
-        organization_id: UUID,
-        *,
-        before: dict[UUID, float] | None,
-        actor: ActorIdentity,
-        actor_display: str,
-    ) -> int:
-        """Bring every Agent within its Organization's current limit and default.
-
-        Agent limits above the Organization's are pulled down to it, each with an
-        audit record saying why; then every key whose resolved limit differs from
-        `before` is rewritten (all of them when `before` is None). Returns the number
-        of keys that could not be updated, which the scheduled reconciliation
-        retries — the rows are already right.
-        """
+    def lower_to_fit_organization(self, organization_id: UUID, *, actor: ActorIdentity, actor_display: str) -> None:
+        """Pull every Agent limit above its Organization's down to it, each with an
+        audit record saying why. Rows only: the keys follow in fit_to_organization."""
         organization = self._organization_limit(organization_id)
         _, delivery_ids = self.repository.lower_llm_budgets_above(
             organization_id,
@@ -312,13 +304,32 @@ class AgentLlmBudgetService:
             reason=LOWERED_TO_FIT_ORGANIZATION,
         )
         self.event_delivery_dispatcher.enqueue_immediate(delivery_ids)
+
+    def fit_to_organization(
+        self,
+        organization_id: UUID,
+        *,
+        before: dict[UUID, tuple[float, str]] | None,
+        actor: ActorIdentity,
+        actor_display: str,
+    ) -> int:
+        """Bring every Agent within its Organization's current limit, default and window.
+
+        Agent limits above the Organization's are pulled down to it; then every key
+        whose resolved limit or window differs from `before` is rewritten (all of
+        them when `before` is None). Returns the number of keys that could not be
+        updated, which the scheduled reconciliation retries — the rows are already
+        right.
+        """
+        self.lower_to_fit_organization(organization_id, actor=actor, actor_display=actor_display)
         if not self._litellm_configured():
             return 0
+        organization = self._organization_limit(organization_id)
         default = self.agent_settings_lookup.resolve_default_agent_llm_budget(organization_id)
         failures = 0
         for agent in self.repository.list_llm_budget_targets(organization_id):
             limit = resolve_agent_limit(agent.llm_budget_usd, default, organization).limit_usd
-            if before is not None and before.get(agent.id) == limit:
+            if before is not None and before.get(agent.id) == (limit, organization.window):
                 continue
             failures += 0 if self._push_key(agent, organization) else 1
         return failures

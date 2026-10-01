@@ -459,3 +459,122 @@ def test_setting_a_limit_records_when_it_renews_for_the_organization_and_its_age
                 headers=auth(context),
             )
             assert_that(agent.json()["renews_at"], equal_to("2026-10-01T00:00:00Z"))
+
+
+# --- review fixes: a concurrent change is never overwritten ---------------------------
+
+
+def _stale_reads(monkeypatch, context, **stale_fields) -> None:
+    """Make the service's first read of the Organization return values another request
+    has since changed, as it would when two saves overlap."""
+    repository = context.injector.get(OrganizationRepository)
+    stale = repository.get(context.organization.id).model_copy(update=stale_fields)
+    monkeypatch.setattr(OrganizationRepository, "get", lambda self, organization_id: stale)
+
+
+def test_an_own_limit_checked_against_a_ceiling_lowered_meanwhile_is_refused(monkeypatch):
+    with given(signed_in()) as context:
+        repository = context.injector.get(OrganizationRepository)
+        organization = repository.get(context.organization.id)
+        organization.llm_budget_usd = 50.0
+        repository.save(organization)
+
+        with when("an own-limit save that read the old ceiling of 100 lands after it was lowered to 50"):
+            with monkeypatch.context() as patched:
+                _stale_reads(patched, context, llm_budget_usd=CEILING)
+                response = put_own(context, 80)
+
+        with then("it is refused against the ceiling in force, and the ceiling stays where the admin put it"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+            stored = stored_organization(context)
+            assert_that((stored.llm_budget_usd, stored.llm_own_budget_usd), equal_to((50.0, None)))
+
+
+def test_lowering_the_ceiling_clamps_an_own_limit_set_meanwhile(monkeypatch):
+    with given(platform_admin()) as context:
+        repository = context.injector.get(OrganizationRepository)
+        organization = repository.get(context.organization.id)
+        organization.llm_own_budget_usd = 80.0
+        repository.save(organization)
+
+        with when("a ceiling change that read no own limit lands after the Organization set one"):
+            with monkeypatch.context() as patched:
+                _stale_reads(patched, context, llm_own_budget_usd=None)
+                context.client.put(
+                    PLATFORM_BUDGET.format(organization_id=context.organization.id),
+                    json={"budget_usd": 50},
+                    headers=auth(context),
+                )
+
+        with then("the own limit is still pulled down beneath the new ceiling"):
+            stored = stored_organization(context)
+            assert_that((stored.llm_budget_usd, stored.llm_own_budget_usd), equal_to((50.0, 50.0)))
+
+
+# --- review fixes: a window change reaches every key -----------------------------------
+
+
+def test_changing_only_the_window_reaches_agent_keys():
+    with given([*platform_admin(), there_is_an_agent()]) as context:
+        litellm: MagicMock = proxy(context)
+        litellm.apply_key_budget.reset_mock()
+
+        with when("a platform administrator changes the window and leaves the amount alone"):
+            context.client.put(
+                PLATFORM_BUDGET.format(organization_id=context.organization.id),
+                json={"budget_usd": CEILING, "budget_duration": "7d"},
+                headers=auth(context),
+            )
+
+        with then("the Agent's key moves to the new window with its team"):
+            litellm.apply_key_budget.assert_called_with(FAKE_LITELLM_KEY, AGENT_DEFAULT, "7d")
+
+
+# --- review fixes: a failed proxy push still lowers what sits beneath -----------------
+
+
+def test_a_failed_team_push_still_lowers_the_default_and_agent_limits():
+    with given([*signed_in(), there_is_an_agent()]) as context:
+        put_default(context, 60)
+        put_agent(context, 70)
+        proxy(context).apply_team_budget.side_effect = RuntimeError("proxy down")
+
+        with when("the Organization lowers its limit while the proxy is unreachable"):
+            response = put_own(context, 40)
+
+        with then("the save is reported as not applied yet"):
+            assert_that(response.status_code, equal_to(status.HTTP_502_BAD_GATEWAY))
+
+        with then("the stored default and the Agent's limit are already beneath it"):
+            settings = context.client.get(
+                SETTINGS.format(organization_id=context.organization.id), headers=auth(context)
+            ).json()
+            assert_that(settings["default_agent_llm_budget_usd"], equal_to(40.0))
+            assert_that(stored_agent(context).llm_budget_usd, equal_to(40.0))
+
+
+# --- review fixes: Organization figures stay with those who manage them ---------------
+
+
+def test_an_agent_viewer_is_not_shown_the_organizations_figures():
+    with given(
+        [
+            *signed_in(OrganizationRole.MEMBER),
+            there_is_an_agent(),
+            there_is_agent_access(access_role_id=AGENT_VIEWER_ROLE_ID),
+        ]
+    ) as context:
+        response = context.client.get(
+            AGENT_BUDGET.format(organization_id=context.organization.id, agent_id=context.agent.id),
+            headers=auth(context),
+        )
+        assert_that(response.json(), has_entries(organization_limit_usd=None, default_limit_usd=None))
+
+
+def test_an_owner_is_shown_the_organizations_figures():
+    with given([*signed_in(), there_is_an_agent()]) as context:
+        response = context.client.get(
+            AGENT_BUDGET.format(organization_id=context.organization.id, agent_id=context.agent.id),
+            headers=auth(context),
+        )
+        assert_that(response.json(), has_entries(organization_limit_usd=CEILING, default_limit_usd=AGENT_DEFAULT))

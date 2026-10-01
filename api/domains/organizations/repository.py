@@ -11,7 +11,7 @@ from sqlmodel import Session, col, or_, select
 from api.domains.events import ActorIdentity, EventDelivery, SubjectIdentity, SubjectIdentityType
 from api.domains.events.catalog import EVENT_REGISTRY, ORGANIZATION_LLM_BUDGET_CHANGED
 from api.domains.events.repository import OutboxMessageRepository
-from api.domains.organizations.exceptions import OrganizationCreationLimitReached
+from api.domains.organizations.exceptions import LlmBudgetAboveCeiling, OrganizationCreationLimitReached
 from api.domains.organizations.models import (
     Organization,
     OrganizationBudgetEmailReceipt,
@@ -212,67 +212,133 @@ class OrganizationRepository:
             session.add(organization)
             session.commit()
 
-    def set_llm_budgets_with_event(
+    def set_llm_ceiling_with_event(
         self,
         organization_id: UUID,
+        *,
+        ceiling_usd: float,
+        window: str | None,
+        actor: ActorIdentity,
+        actor_display: str,
+        reason_if_lowered: str,
+    ) -> tuple[Organization, list[UUID]] | None:
+        """Set the platform ceiling, pulling the Organization's own limit down to it if
+        it is higher, and stage the change Event atomically.
+
+        The own limit is compared under the row lock, not as the caller last read it:
+        an own limit saved concurrently is still clamped instead of escaping above
+        the new ceiling. A `window` of None keeps the one in force. None when the
+        Organization does not exist.
+        """
+        with Session(self.delegate.engine, expire_on_commit=False) as session:
+            organization = self._locked(session, organization_id)
+            if organization is None:
+                return None
+            own = organization.llm_own_budget_usd
+            lowered = own is not None and own > ceiling_usd
+            return self._write_llm_budgets(
+                session,
+                organization,
+                ceiling_usd=ceiling_usd,
+                window=window or organization.llm_budget_duration,
+                own_limit_usd=ceiling_usd if lowered else own,
+                actor=actor,
+                actor_display=actor_display,
+                reason=reason_if_lowered if lowered else None,
+            )
+
+    def set_own_llm_budget_with_event(
+        self,
+        organization_id: UUID,
+        *,
+        own_limit_usd: float | None,
+        actor: ActorIdentity,
+        actor_display: str,
+    ) -> tuple[Organization, list[UUID]] | None:
+        """Set the Organization's own limit and stage the change Event atomically.
+
+        Checked against the ceiling under the row lock and written without touching
+        it, so a ceiling lowered by a concurrent request can neither be exceeded nor
+        written back. Raises LlmBudgetAboveCeiling; None when the Organization does
+        not exist.
+        """
+        with Session(self.delegate.engine, expire_on_commit=False) as session:
+            organization = self._locked(session, organization_id)
+            if organization is None:
+                return None
+            if own_limit_usd is not None and own_limit_usd > organization.llm_budget_usd:
+                raise LlmBudgetAboveCeiling(organization.llm_budget_usd)
+            return self._write_llm_budgets(
+                session,
+                organization,
+                ceiling_usd=organization.llm_budget_usd,
+                window=organization.llm_budget_duration,
+                own_limit_usd=own_limit_usd,
+                actor=actor,
+                actor_display=actor_display,
+                reason=None,
+            )
+
+    @staticmethod
+    def _locked(session: Session, organization_id: UUID) -> Organization | None:
+        return session.exec(
+            select(Organization).where(col(Organization.id) == organization_id).with_for_update()
+        ).first()
+
+    def _write_llm_budgets(
+        self,
+        session: Session,
+        organization: Organization,
         *,
         ceiling_usd: float,
         window: str,
         own_limit_usd: float | None,
         actor: ActorIdentity,
         actor_display: str,
-        reason: str | None = None,
-    ) -> tuple[Organization, list[UUID]] | None:
-        """Persist the ceiling and the Organization's own limit, and stage their change
-        Event atomically, so a limit can never move without its audit record.
+        reason: str | None,
+    ) -> tuple[Organization, list[UUID]]:
+        """Persist the limits on a locked row and stage their change Event in the same
+        transaction, so a limit can never move without its audit record. The previous
+        values are read under that lock, so two concurrent changes cannot both report
+        the same "before"."""
+        organization_id = organization.id
+        previous_ceiling = organization.llm_budget_usd
+        previous_own = organization.llm_own_budget_usd
+        organization.llm_budget_usd = ceiling_usd
+        organization.llm_budget_duration = window
+        organization.llm_own_budget_usd = own_limit_usd
+        organization.updated_at = datetime.now(UTC)
+        session.add(organization)
+        session.flush()
 
-        None when the Organization does not exist. The previous values are read under
-        the same row lock the write takes, so two concurrent changes cannot both
-        report the same "before".
-        """
-        with Session(self.delegate.engine, expire_on_commit=False) as session:
-            organization = session.exec(
-                select(Organization).where(col(Organization.id) == organization_id).with_for_update()
-            ).first()
-            if organization is None:
-                return None
-            previous_ceiling = organization.llm_budget_usd
-            previous_own = organization.llm_own_budget_usd
-            organization.llm_budget_usd = ceiling_usd
-            organization.llm_budget_duration = window
-            organization.llm_own_budget_usd = own_limit_usd
-            organization.updated_at = datetime.now(UTC)
-            session.add(organization)
-            session.flush()
-
-            event = EVENT_REGISTRY.build_event(
-                event_name=ORGANIZATION_LLM_BUDGET_CHANGED,
-                schema_version=1,
-                occurred_at=datetime.now(UTC),
+        event = EVENT_REGISTRY.build_event(
+            event_name=ORGANIZATION_LLM_BUDGET_CHANGED,
+            schema_version=1,
+            occurred_at=datetime.now(UTC),
+            organization_id=organization_id,
+            actor=actor,
+            subject=SubjectIdentity(
+                type=SubjectIdentityType.ORGANIZATION,
+                id=organization_id,
                 organization_id=organization_id,
-                actor=actor,
-                subject=SubjectIdentity(
-                    type=SubjectIdentityType.ORGANIZATION,
-                    id=organization_id,
-                    organization_id=organization_id,
-                ),
-                correlation_id=uuid4(),
-                payload={
-                    "organization_id": organization_id,
-                    "ceiling_usd": ceiling_usd,
-                    "previous_ceiling_usd": previous_ceiling,
-                    "own_limit_usd": own_limit_usd,
-                    "previous_own_limit_usd": previous_own,
-                    "window": window,
-                    "reason": reason,
-                    "actor_display": actor_display,
-                    "subject_display": organization.name,
-                },
-            )
-            self.outbox_repository.stage(session=session, registry=EVENT_REGISTRY, event=event)
-            delivery_ids = list(session.exec(select(EventDelivery.id).where(EventDelivery.event_id == event.event_id)))
-            session.commit()
-            return organization, delivery_ids
+            ),
+            correlation_id=uuid4(),
+            payload={
+                "organization_id": organization_id,
+                "ceiling_usd": ceiling_usd,
+                "previous_ceiling_usd": previous_ceiling,
+                "own_limit_usd": own_limit_usd,
+                "previous_own_limit_usd": previous_own,
+                "window": window,
+                "reason": reason,
+                "actor_display": actor_display,
+                "subject_display": organization.name,
+            },
+        )
+        self.outbox_repository.stage(session=session, registry=EVENT_REGISTRY, event=event)
+        delivery_ids = list(session.exec(select(EventDelivery.id).where(EventDelivery.event_id == event.event_id)))
+        session.commit()
+        return organization, delivery_ids
 
     def get(self, organization_id: UUID) -> Organization | None:
         return self.delegate.find_by_id(Organization, organization_id)

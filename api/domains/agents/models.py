@@ -1406,10 +1406,12 @@ class AgentLlmBudgetRead(PydanticBaseModel):
     # Where `limit_usd` comes from: the Agent's own limit, or the default. A default
     # or own limit above the Organization's is held to the Organization's instead.
     source: AgentLlmBudgetSource
-    # What an Agent without a limit of its own gets, for "use default ($X)".
-    default_limit_usd: float
-    # The ceiling an Agent's own limit may not exceed: the Organization's limit.
-    organization_limit_usd: float
+    # What an Agent without a limit of its own gets, for "use default ($X)". Only for
+    # callers who may change the limit (`can_manage`); None otherwise.
+    default_limit_usd: float | None = None
+    # The ceiling an Agent's own limit may not exceed: the Organization's limit. Only
+    # for callers who may change the limit (`can_manage`); None otherwise.
+    organization_limit_usd: float | None = None
     window: str
     state: AgentLlmBudgetState
     spend_usd: float | None = None

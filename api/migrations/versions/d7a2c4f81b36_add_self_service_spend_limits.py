@@ -3,8 +3,12 @@
 An Organization's own limit below the platform ceiling, a default limit for its
 Agents, a limit per Agent, and the permission that lets an Organization manage them.
 
-Every Organization without a ceiling is given the deployment default: from here on
-nobody is uncapped, and the ceiling can no longer be cleared.
+Every existing Organization without a ceiling is given one it will not reach, and the
+same amount as its default Agent limit, so existing Organizations and their Agents keep
+behaving as before. The ceiling still matters: it gives every team and key a window,
+so their spend renews monthly from here on, and a real limit set later is measured
+against that month's spend rather than everything ever spent. From here on nobody is
+uncapped, and the ceiling can no longer be cleared.
 
 Revision ID: d7a2c4f81b36
 Revises: 73e85ce78653
@@ -16,7 +20,6 @@ from uuid import UUID
 
 import sqlalchemy as sa
 from alembic import op
-from api.core.config import get_config
 
 revision: str = "d7a2c4f81b36"
 down_revision: str | Sequence[str] | None = "73e85ce78653"
@@ -28,6 +31,10 @@ depends_on: str | Sequence[str] | None = None
 LLM_BUDGET_MANAGE_ID = UUID("5d0c2b7e-8f41-5a6c-9e3d-1b7f4a2c6e90")
 LLM_BUDGET_MANAGE_KEY = "llm_budget.manage"
 DEFAULT_BUDGET_DURATION = "30d"
+# "Unlimited" for an Organization that existed before limits did: high enough not to
+# bind, while still giving its team and keys a monthly window. A platform
+# administrator lowers it to a real limit when one is wanted.
+EXISTING_ORGANIZATION_LLM_BUDGET_USD = 10_000.0
 
 
 def _with_catalogue_unlocked(statement: sa.TextClause, **params: object) -> None:
@@ -40,12 +47,29 @@ def _with_catalogue_unlocked(statement: sa.TextClause, **params: object) -> None
 
 def upgrade() -> None:
     op.add_column("organization", sa.Column("llm_own_budget_usd", sa.Float(), nullable=True))
+    op.add_column(
+        "organization_agent_settings",
+        sa.Column("default_agent_llm_budget_usd", sa.Float(), nullable=True),
+    )
+    # The existing Organization's own default Agent limit, so its Agents are not held
+    # to the deployment's AGENT_DEFAULT_LLM_BUDGET_USD either. Before the ceiling
+    # backfill below, which is what identifies the Organizations that had none.
+    op.get_bind().execute(
+        sa.text(
+            "INSERT INTO organization_agent_settings "
+            "(id, created_at, updated_at, organization_id, default_agent_llm_budget_usd) "
+            "SELECT gen_random_uuid(), now(), now(), id, :budget FROM organization WHERE llm_budget_usd IS NULL "
+            "ON CONFLICT (organization_id) DO UPDATE "
+            "SET default_agent_llm_budget_usd = EXCLUDED.default_agent_llm_budget_usd, updated_at = now()"
+        ),
+        {"budget": EXISTING_ORGANIZATION_LLM_BUDGET_USD},
+    )
     op.get_bind().execute(
         sa.text(
             "UPDATE organization SET llm_budget_usd = :budget, llm_budget_duration = :duration "
             "WHERE llm_budget_usd IS NULL"
         ),
-        {"budget": get_config().organization_default_llm_budget_usd, "duration": DEFAULT_BUDGET_DURATION},
+        {"budget": EXISTING_ORGANIZATION_LLM_BUDGET_USD, "duration": DEFAULT_BUDGET_DURATION},
     )
     # A ceiling set before the window became mandatory kept it NULL only while uncapped,
     # but a hand-edited row could still carry an amount without one.
@@ -61,10 +85,6 @@ def upgrade() -> None:
         "llm_own_budget_usd IS NULL OR (llm_own_budget_usd >= 0 AND llm_own_budget_usd <= llm_budget_usd)",
     )
 
-    op.add_column(
-        "organization_agent_settings",
-        sa.Column("default_agent_llm_budget_usd", sa.Float(), nullable=True),
-    )
     op.create_check_constraint(
         "check_default_agent_llm_budget_non_negative",
         "organization_agent_settings",

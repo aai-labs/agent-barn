@@ -2,7 +2,7 @@ from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
-from hamcrest import assert_that, equal_to
+from hamcrest import assert_that, equal_to, is_not
 
 from api.core.config import Config
 from api.infrastructure.litellm.client import LiteLLMClient, LiteLLMError
@@ -234,6 +234,31 @@ def test_reconcile_brings_agent_keys_in_step_after_the_teams():
     service.agent_budgets.reconcile_key_budgets.assert_called_once_with()
 
 
+def test_reconcile_lowers_a_default_agent_limit_left_above_its_organizations():
+    """A request interrupted between saving a lower Organization limit and lowering the
+    default leaves the stored default above it; the sweep repairs that, as it does
+    Agent limits."""
+    repo = MagicMock()
+    repo.list_budget_policies.return_value = [("a", 50.0, "30d"), ("b", 5.0, "7d")]
+    service = organization_service(organization_repository=repo)
+    with configured():
+        service.reconcile_llm_budgets()
+    assert_that(
+        [call.args for call in service.agent_settings.lower_default_agent_llm_budget.call_args_list],
+        equal_to([("a", 50.0), ("b", 5.0)]),
+    )
+
+
+def test_reconcile_lowers_the_default_even_when_the_team_push_fails():
+    repo = MagicMock()
+    repo.list_budget_policies.return_value = [("a", 50.0, "30d")]
+    service = organization_service(organization_repository=repo)
+    service.litellm.apply_team_budget.side_effect = LiteLLMError("down")
+    with configured():
+        service.reconcile_llm_budgets()
+    service.agent_settings.lower_default_agent_llm_budget.assert_called_once()
+
+
 def test_one_failing_organization_does_not_abort_the_sweep():
     """Drift repair is best effort: budgets are applied when set, not here."""
     repo = MagicMock()
@@ -272,15 +297,19 @@ def ceiling_service(organization, *, saved=None, **overrides):
     repo = MagicMock()
     repo.get.return_value = organization
 
-    def write(organization_id, *, ceiling_usd, window, own_limit_usd, **_):
+    def write(organization_id, *, ceiling_usd, window, **_):
+        """The repository's contract: an own limit above the new ceiling comes down
+        to it (decided under the row lock; exercised against a real row in the
+        integration suite)."""
         if saved is False:
             return None
         organization.llm_budget_usd = ceiling_usd
-        organization.llm_budget_duration = window
-        organization.llm_own_budget_usd = own_limit_usd
+        organization.llm_budget_duration = window or organization.llm_budget_duration
+        own = organization.llm_own_budget_usd
+        organization.llm_own_budget_usd = ceiling_usd if own is not None and own > ceiling_usd else own
         return organization, []
 
-    repo.set_llm_budgets_with_event.side_effect = write
+    repo.set_llm_ceiling_with_event.side_effect = write
     return organization_service(organization_repository=repo, **overrides)
 
 
@@ -294,7 +323,7 @@ def test_setting_a_ceiling_stores_it_with_its_audit_record_and_pushes_it():
     service = ceiling_service(organization)
     with configured(), acting():
         service.set_llm_budget(organization.id, 50.0, "30d", MagicMock())
-    service.organization_repository.set_llm_budgets_with_event.assert_called_once()
+    service.organization_repository.set_llm_ceiling_with_event.assert_called_once()
     service.litellm.apply_team_budget.assert_called_once_with(str(organization.id), 50.0, "30d")
 
 
@@ -336,8 +365,8 @@ def test_a_ceiling_below_the_organizations_own_limit_pulls_it_down():
     service = ceiling_service(organization)
     with configured(), acting():
         service.set_llm_budget(organization.id, 50.0, None, MagicMock())
-    write = service.organization_repository.set_llm_budgets_with_event.call_args.kwargs
-    assert_that((write["own_limit_usd"], write["reason"] is not None), equal_to((50.0, True)))
+    write = service.organization_repository.set_llm_ceiling_with_event.call_args.kwargs
+    assert_that(write["reason_if_lowered"], is_not(None))
     service.litellm.apply_team_budget.assert_called_once_with(str(organization.id), 50.0, "30d")
 
 
@@ -346,8 +375,6 @@ def test_a_ceiling_above_the_organizations_own_limit_leaves_it_alone():
     service = ceiling_service(organization)
     with configured(), acting():
         service.set_llm_budget(organization.id, 200.0, None, MagicMock())
-    write = service.organization_repository.set_llm_budgets_with_event.call_args.kwargs
-    assert_that((write["own_limit_usd"], write["reason"]), equal_to((30.0, None)))
     # The Organization's own limit is still the one in force.
     service.litellm.apply_team_budget.assert_called_once_with(str(organization.id), 30.0, "30d")
 

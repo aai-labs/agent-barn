@@ -502,8 +502,9 @@ export const AgentLlmBudgetSchema = z.object({
   // Where the limit in force comes from; "organization" means a higher own limit or
   // default is being held to the organization's limit instead.
   source: z.enum(["agent", "default", "organization"]),
-  defaultLimitUsd: z.number(),
-  organizationLimitUsd: z.number(),
+  // Organization-wide figures: sent only when canManage, null otherwise.
+  defaultLimitUsd: z.number().nullable().optional(),
+  organizationLimitUsd: z.number().nullable().optional(),
   window: z.string(),
   state: z.enum(["ok", "warning", "exhausted", "unknown"]),
   // Null means not yet observed. Never coalesce it to 0.

@@ -19,7 +19,7 @@ from api.tests.unit.test_agent_llm_error_proxy import BUDGET_BODY, UNKNOWN_MODEL
 from api.tests.unit.test_communications_runtime_adapter import _DELIVERY, _fake_urlopen, _load_adapter
 
 SPEND_LIMIT_NOTICE = (
-    "This agent has reached its model spend limit. "
+    "A model spend limit has been reached, so this agent cannot reply right now. "
     "Contact your administrator to raise it or wait for the limit to renew."
 )
 

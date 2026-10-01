@@ -26,8 +26,8 @@ _TERMINAL_LLM_ERRORS: dict[int, str] = {
 # Neutral about whose limit ran out: the Agent's own and its Organization's come back
 # as the same error type, and telling them apart would mean parsing upstream text.
 _BUDGET_EXHAUSTED = (
-    "This agent has reached its model spend limit. "
-    "Contact your administrator to raise it or wait for the limit to reset."
+    "A model spend limit has been reached, so this agent cannot reply right now. "
+    "Contact your administrator to raise it or wait for the limit to renew."
 )
 
 

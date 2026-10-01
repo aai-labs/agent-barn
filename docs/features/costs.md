@@ -84,10 +84,16 @@ Organization's own limit; `../../api/domains/agents/llm_budget.py` owns Agent li
 `../../api/infrastructure/litellm/client.py` owns the remote team/key API calls.
 
 **Nobody is uncapped.** A new Organization starts at
-`ORGANIZATION_DEFAULT_LLM_BUDGET_USD` whichever path creates it, and the migration
-that introduced these limits gave every existing Organization without a ceiling that
-default. The ceiling can be changed but never cleared; "no practical limit" is a very
-large amount. A new Agent's key is issued with its limit already on it.
+`ORGANIZATION_DEFAULT_LLM_BUDGET_USD` whichever path creates it. The migration that
+introduced these limits gave every existing Organization without a ceiling $10,000 a
+month, and the same amount as its own default Agent limit, so existing Organizations
+and their Agents keep behaving as before until a platform administrator sets a real
+limit. The ceiling still does work there: LiteLLM counts a budget's first window from
+all the spend a key or team has ever had and only zeroes it when the window renews,
+so giving every team and key a window now means a real limit set later is measured
+against that month's spend. The ceiling can be changed but never cleared; "no
+practical limit" is a very large amount. A new Agent's key is issued with its limit
+already on it.
 
 **Lower limits never exceed higher ones.** Asking for an Organization limit above the
 ceiling, or an Agent or default Agent limit above the Organization's, is refused
@@ -162,9 +168,11 @@ message with its own billing text, and Hermes aborts the turn. So the proxy also
 records the refusal in the container (`/tmp/agentbarn-llm-terminal-error.json`), and
 the Communications adapter in the same container reports a turn that fails after it
 as `SPEND_LIMIT_REACHED`. Communications turns that code into a terminal,
-non-retried failure whose notice reads "This agent has reached its model spend
-limit…": shown under the message in web chat, and posted as the failure notice on
-Slack, Telegram, Discord and Teams. The message is the same whichever limit ran out.
+non-retried failure whose notice reads "A model spend limit has been reached, so this
+agent cannot reply right now…": shown under the message in web chat, and posted as the
+failure notice on Slack, Telegram, Discord and Teams. The wording deliberately does not
+say whose limit it was: the rejection is the same whether the Agent's or its
+Organization's ran out.
 
 ## Operational
 

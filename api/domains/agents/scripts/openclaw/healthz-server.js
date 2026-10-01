@@ -21,8 +21,8 @@ const TERMINAL_LLM_ERRORS = {
 // Neutral about whose limit ran out: the Agent's own and its Organization's come back
 // as the same error type, and telling them apart would mean parsing upstream text.
 const BUDGET_EXHAUSTED =
-  'This agent has reached its model spend limit. ' +
-  'Contact your administrator to raise it or wait for the limit to reset.';
+  'A model spend limit has been reached, so this agent cannot reply right now. ' +
+  'Contact your administrator to raise it or wait for the limit to renew.';
 
 // An exhausted limit has been seen as a 400, is documented as a 429, and is a 422 by
 // default on LiteLLM releases after the pinned one, depending on which budget was hit

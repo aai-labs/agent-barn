@@ -71,7 +71,7 @@ _SUMMARY_BY_PROVIDER_CODE = {
 # plainly: no "(HTTP ...)" qualifiers, and nothing about how it is enforced.
 _RUNTIME_CODES = {
     "SPEND_LIMIT_REACHED": (
-        "This agent has reached its model spend limit. "
+        "A model spend limit has been reached, so this agent cannot reply right now. "
         "Contact your administrator to raise it or wait for the limit to renew."
     ),
 }

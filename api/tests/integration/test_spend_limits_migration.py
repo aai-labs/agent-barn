@@ -1,5 +1,6 @@
-"""AF-337 migration: every Organization ends up with a ceiling, and the permission that
-lets an Organization manage its own limits exists."""
+"""AF-337 migration: every Organization ends up with a ceiling — existing ones one they
+will not reach, so they keep behaving as before — and the permission that lets an
+Organization manage its own limits exists."""
 
 import os
 from pathlib import Path
@@ -78,17 +79,61 @@ def ceiling_of(engine, organization_id):
         ).one()
 
 
-def test_an_uncapped_organization_gets_the_deployment_default(pre_af337_database):
-    """conftest sets ORGANIZATION_DEFAULT_LLM_BUDGET_USD=100."""
+def default_agent_limit_of(engine, organization_id):
+    with engine.connect() as connection:
+        return connection.execute(
+            text("SELECT default_agent_llm_budget_usd FROM organization_agent_settings WHERE organization_id = :id"),
+            {"id": organization_id},
+        ).scalar_one_or_none()
+
+
+def insert_agent_settings(engine, organization_id, default_model) -> None:
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO organization_agent_settings (id, created_at, updated_at, organization_id, default_model) "
+                "VALUES (:id, :now, :now, :organization_id, :default_model)"
+            ),
+            {"id": uuid7(), "now": NOW, "organization_id": organization_id, "default_model": default_model},
+        )
+
+
+def test_an_existing_uncapped_organization_gets_a_ceiling_it_will_not_reach(pre_af337_database):
+    """Existing Organizations are left as they were: the ceiling is there so their spend
+    renews monthly from now on, not to stop them."""
     organization_id = insert_organization(pre_af337_database.engine)
     command.upgrade(pre_af337_database.config, AF337_REVISION)
-    assert_that(tuple(ceiling_of(pre_af337_database.engine, organization_id)), equal_to((100.0, "30d")))
+    assert_that(tuple(ceiling_of(pre_af337_database.engine, organization_id)), equal_to((10_000.0, "30d")))
+
+
+def test_its_existing_agents_are_not_held_to_the_deployment_default(pre_af337_database):
+    """conftest sets AGENT_DEFAULT_LLM_BUDGET_USD=25; the Organization's own default
+    takes precedence over it."""
+    organization_id = insert_organization(pre_af337_database.engine)
+    command.upgrade(pre_af337_database.config, AF337_REVISION)
+    assert_that(default_agent_limit_of(pre_af337_database.engine, organization_id), equal_to(10_000.0))
+
+
+def test_existing_agent_settings_are_kept_when_the_default_limit_is_added(pre_af337_database):
+    organization_id = insert_organization(pre_af337_database.engine)
+    insert_agent_settings(pre_af337_database.engine, organization_id, default_model="claude-sonnet-5")
+    command.upgrade(pre_af337_database.config, AF337_REVISION)
+    with pre_af337_database.engine.connect() as connection:
+        row = connection.execute(
+            text(
+                "SELECT default_model, default_agent_llm_budget_usd FROM organization_agent_settings "
+                "WHERE organization_id = :id"
+            ),
+            {"id": organization_id},
+        ).one()
+    assert_that(tuple(row), equal_to(("claude-sonnet-5", 10_000.0)))
 
 
 def test_a_capped_organization_keeps_its_ceiling_and_window(pre_af337_database):
     organization_id = insert_organization(pre_af337_database.engine, budget=12.5, duration="7d")
     command.upgrade(pre_af337_database.config, AF337_REVISION)
     assert_that(tuple(ceiling_of(pre_af337_database.engine, organization_id)), equal_to((12.5, "7d")))
+    assert_that(default_agent_limit_of(pre_af337_database.engine, organization_id), equal_to(None))
 
 
 def test_the_ceiling_can_no_longer_be_cleared(pre_af337_database):

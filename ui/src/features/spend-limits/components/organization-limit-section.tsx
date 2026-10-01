@@ -157,7 +157,7 @@ export function OrganizationLimitSection({ editing, onEdit }: { editing: boolean
           <Fact label="Limit in force">
             {formatUsd(budget.limitUsd)} {per}
           </Fact>
-          <Fact label="Set by">{budget.ownLimitUsd == null ? "The most you are allowed" : "This organization"}</Fact>
+          <Fact label="Set by">{budget.ownLimitUsd == null ? "The platform" : "This organization"}</Fact>
           <Fact label={`Spent ${periodLabel(budget.window)}`}>
             <span style={{ color: budget.state === "exhausted" ? "var(--err)" : undefined }}>
               {budget.spendUsd == null

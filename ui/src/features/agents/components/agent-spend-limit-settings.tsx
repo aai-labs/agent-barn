@@ -60,13 +60,17 @@ export function AgentSpendLimitSettings({
   }
 
   const per = windowLabel(budget.window);
+  // Organization-wide figures are only sent to people who can change the limit, and
+  // only they ever see the form that uses them.
+  const defaultLimit = budget.defaultLimitUsd ?? budget.limitUsd;
+  const organizationLimit = budget.organizationLimitUsd ?? budget.limitUsd;
   // Empty means "follow the default Agent limit", the same rule as everywhere else.
   const value = amount ?? (budget.ownLimitUsd == null ? "" : String(budget.ownLimitUsd));
-  const error_ = amountError(value, { max: budget.organizationLimitUsd });
+  const error_ = amountError(value, { max: organizationLimit });
   const next = parseAmount(value);
   const isDirty = !error_ && next !== (budget.ownLimitUsd ?? null);
   const limitsHref = `/dashboard/${organizationId}/settings?tab=spend-limits`;
-  const nextLimit = next ?? budget.defaultLimitUsd;
+  const nextLimit = next ?? defaultLimit;
   const renews = budget.renewsAt ? formatRenewal(budget.renewsAt) : null;
   const until = renews ? ` until ${renews}` : " until the limit renews";
   // Newly cut off: under its limit today, at or over it after the change.
@@ -105,7 +109,7 @@ export function AgentSpendLimitSettings({
           <>
             <span className="block">
               {next === null
-                ? `It will follow the default Agent limit of ${formatUsd(budget.defaultLimitUsd)} ${per} straight away.`
+                ? `It will follow the default Agent limit of ${formatUsd(defaultLimit)} ${per} straight away.`
                 : `It will be limited to ${formatUsd(next)} ${per} straight away.`}
             </span>
             {stops && (
@@ -126,11 +130,11 @@ export function AgentSpendLimitSettings({
             value={value}
             onChange={setAmount}
             onBlur={() => setTouched(true)}
-            placeholder={formatUsd(budget.defaultLimitUsd).slice(1)}
+            placeholder={formatUsd(defaultLimit).slice(1)}
             hint={
               zeroNotice(value, "this Agent") ??
-              `Leave empty to use the default Agent limit (${formatUsd(budget.defaultLimitUsd)} ${per}). ` +
-                `Up to your organization limit of ${formatUsd(budget.organizationLimitUsd)} ${per}.`
+              `Leave empty to use the default Agent limit (${formatUsd(defaultLimit)} ${per}). ` +
+                `Up to your organization limit of ${formatUsd(organizationLimit)} ${per}.`
             }
             error={touched || amount !== null ? error_ : null}
             action={

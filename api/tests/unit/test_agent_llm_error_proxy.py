@@ -48,8 +48,8 @@ KEY_BUDGET_BODY = {
 # Neutral on purpose: the same rejection comes back whether the Agent's own limit or
 # its Organization's ran out, and nothing in-pod can tell them apart reliably.
 SPEND_LIMIT_MESSAGE = (
-    "This agent has reached its model spend limit. "
-    "Contact your administrator to raise it or wait for the limit to reset."
+    "A model spend limit has been reached, so this agent cannot reply right now. "
+    "Contact your administrator to raise it or wait for the limit to renew."
 )
 UNKNOWN_MODEL_BODY = {"error": {"message": "model 'nope' not found", "type": "invalid_request_error"}}
 

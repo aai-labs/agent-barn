@@ -6,6 +6,7 @@ allowlists and this. The two share only the Organization row.
 """
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
@@ -31,6 +32,7 @@ from api.domains.events.catalog import (
     ORGANIZATION_LLM_BUDGET_EXHAUSTED,
     ORGANIZATION_LLM_BUDGET_THRESHOLD_REACHED,
 )
+from api.domains.organizations.exceptions import LlmBudgetAboveCeiling
 from api.domains.organizations.models import (
     AgentLlmCoverageRead,
     AgentLlmEnrollment,
@@ -62,6 +64,9 @@ class BudgetCrossing:
     spend_usd: float
     limit_usd: float
     renews_at: str | None
+
+
+_RECONCILER = ActorIdentity(type=ActorIdentityType.SYSTEM, id="llm-budget-reconciler")
 
 
 def _parse_timestamp(value: object) -> datetime | None:
@@ -101,6 +106,15 @@ class OrganizationLlmBudgetService:
         policies = self.organization_repository.list_budget_policies()
         failures = 0
         for organization_id, budget, duration in policies:
+            # Rows before the proxy, as when a limit is saved: a default Agent limit
+            # left above its Organization's by an interrupted request comes down even
+            # if the team push below fails.
+            try:
+                self.agent_settings.lower_default_agent_llm_budget(
+                    organization_id, budget, actor=_RECONCILER, actor_display="Spend limit reconciliation"
+                )
+            except Exception:
+                logger.exception("Default Agent limit reconciliation failed for Organization %s", organization_id)
             try:
                 self._record_renewal(
                     organization_id, self.litellm.apply_team_budget(str(organization_id), budget, duration)
@@ -131,18 +145,20 @@ class OrganizationLlmBudgetService:
         and are authoritative; if the proxy write fails the administrator is told,
         and the stored intent survives for the reconciler to apply.
         """
-        organization = self._organization_or_404(organization_id)
-        own = organization.llm_own_budget_usd
-        lowered = own is not None and own > budget_usd
+        self._organization_or_404(organization_id)
         self._store_and_apply(
-            organization,
-            ceiling_usd=budget_usd,
-            # Omitted keeps the configured window: changing only the amount must not
-            # silently reschedule the Organization's renewal date.
-            window=budget_duration or organization.llm_budget_duration,
-            own_limit_usd=budget_usd if lowered else own,
-            context=context,
-            reason="Lowered to fit within the platform's spend limit." if lowered else None,
+            organization_id,
+            context,
+            lambda actor, actor_display: self.organization_repository.set_llm_ceiling_with_event(
+                organization_id,
+                ceiling_usd=budget_usd,
+                # Omitted keeps the configured window: changing only the amount must
+                # not silently reschedule the Organization's renewal date.
+                window=budget_duration,
+                actor=actor,
+                actor_display=actor_display,
+                reason_if_lowered="Lowered to fit within the platform's spend limit.",
+            ),
         )
         return self._platform_read_or_404(organization_id)
 
@@ -152,7 +168,8 @@ class OrganizationLlmBudgetService:
         """The Organization's own limit, beneath the platform's.
 
         Refused rather than clamped above the ceiling: storing less than was asked
-        for would leave the caller believing a number that is not in force.
+        for would leave the caller believing a number that is not in force. The
+        ceiling is checked as it stands when the row is written, not as read here.
         """
         self.permission_policy.require(
             context,
@@ -161,23 +178,22 @@ class OrganizationLlmBudgetService:
             detail="You don't have permission to change this organization's spend limit.",
         )
         organization = self._organization_or_404(organization_id)
-        if budget_usd is not None and budget_usd > organization.llm_budget_usd:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=(
-                    "Your organization's spend limit can't be more than the "
-                    f"${organization.llm_budget_usd:,.2f} your plan allows."
-                ),
-            )
         if budget_usd != organization.llm_own_budget_usd:
-            self._store_and_apply(
-                organization,
-                ceiling_usd=organization.llm_budget_usd,
-                window=organization.llm_budget_duration,
-                own_limit_usd=budget_usd,
-                context=context,
-                reason=None,
-            )
+            try:
+                self._store_and_apply(
+                    organization_id,
+                    context,
+                    lambda actor, actor_display: self.organization_repository.set_own_llm_budget_with_event(
+                        organization_id, own_limit_usd=budget_usd, actor=actor, actor_display=actor_display
+                    ),
+                )
+            except LlmBudgetAboveCeiling as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=(
+                        f"Your organization's spend limit can't be more than the ${exc.ceiling_usd:,.2f} your plan allows."
+                    ),
+                ) from exc
         return self.get_organization_llm_budget(organization_id, context)
 
     def provision_team(self, organization_id: UUID) -> None:
@@ -204,33 +220,31 @@ class OrganizationLlmBudgetService:
 
     def _store_and_apply(
         self,
-        organization: Organization,
-        *,
-        ceiling_usd: float,
-        window: str,
-        own_limit_usd: float | None,
+        organization_id: UUID,
         context: CurrentUserContext,
-        reason: str | None,
+        write: Callable[[ActorIdentity, str], tuple[Organization, list[UUID]] | None],
     ) -> None:
-        organization_id = organization.id
+        """Write the Organization's limits, then bring everything beneath them in line
+        and push the result to the proxy.
+
+        Everything stored comes first — the Organization's row, then the default
+        Agent limit and Agent limits it lowered — so a proxy failure can only delay
+        enforcement, never leave a stored limit above the one it sits beneath.
+        """
         before = self.agent_budgets.key_limits(organization_id)
         actor = resolve_actor_identity(context, organization_id)
         actor_display = context.user.full_name or context.user.email
-        result = self.organization_repository.set_llm_budgets_with_event(
-            organization_id,
-            ceiling_usd=ceiling_usd,
-            window=window,
-            own_limit_usd=own_limit_usd,
-            actor=actor,
-            actor_display=actor_display,
-            reason=reason,
-        )
+        result = write(actor, actor_display)
         if result is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, detail=f"Organization {organization_id} not found"
             )
         stored, delivery_ids = result
         self.event_delivery_dispatcher.enqueue_immediate(delivery_ids)
+        self.agent_settings.lower_default_agent_llm_budget(
+            organization_id, stored.effective_llm_budget_usd, actor=actor, actor_display=actor_display
+        )
+        self.agent_budgets.lower_to_fit_organization(organization_id, actor=actor, actor_display=actor_display)
 
         if self._litellm_configured():
             try:
@@ -244,12 +258,9 @@ class OrganizationLlmBudgetService:
                     detail="Spend limit saved, but it could not be applied yet. It will be retried automatically.",
                 ) from exc
             self._record_renewal(organization_id, renews_at)
-        self.agent_settings.lower_default_agent_llm_budget(
-            organization_id, stored.effective_llm_budget_usd, actor=actor, actor_display=actor_display
-        )
-        # Agents follow the Organization: any limit above the new one comes down, and
-        # every key whose limit moved is rewritten. A key that cannot be updated now is
-        # left to the reconciler rather than failing a change that is already saved.
+        # Agents follow the Organization: every key whose limit or window moved is
+        # rewritten. A key that cannot be updated now is left to the reconciler rather
+        # than failing a change that is already saved.
         self.agent_budgets.fit_to_organization(organization_id, before=before, actor=actor, actor_display=actor_display)
 
     def _record_renewal(self, organization_id: UUID, renews_at: object) -> None:
