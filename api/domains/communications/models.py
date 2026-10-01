@@ -793,6 +793,8 @@ class CommunicationConnectionRead(PydanticBaseModel):
     platform_key: str
     display_name: str
     enabled: bool
+    transport: Literal["gateway", "native"] = "gateway"
+    recovery_actions: list[Literal["reconnect", "retry_delivery"]] = Field(default_factory=list)
     schema_version: int
     settings: dict[str, Any]
     external_identity: str | None

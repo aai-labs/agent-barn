@@ -3,7 +3,7 @@ import secrets
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import NoReturn
+from typing import Literal, NoReturn
 from uuid import UUID
 
 from fastapi import HTTPException, status
@@ -439,6 +439,7 @@ class CommunicationsService:
         connection = self.repository.get_active_in_scope(connection_id, agent_id, action_scope)
         if connection is None:
             self._raise_not_found(connection_id)
+        self._require_recovery_action(connection, "reconnect")
         if not connection.enabled:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -464,8 +465,10 @@ class CommunicationsService:
     ) -> CommunicationRetryRead:
         agent = self.authorization.require_action(context, agent_id, PermissionKey.AGENT_UPDATE)
         action_scope = self.authorization.authorization_scope(context, PermissionKey.AGENT_UPDATE)
-        if self.repository.get_active_in_scope(connection_id, agent_id, action_scope) is None:
+        connection = self.repository.get_active_in_scope(connection_id, agent_id, action_scope)
+        if connection is None:
             self._raise_not_found(connection_id)
+        self._require_recovery_action(connection, "retry_delivery")
         if self.delivery_repository is None:
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Recovery is unavailable")
         try:
@@ -642,6 +645,8 @@ class CommunicationsService:
         safe_details = CommunicationOperationalRepository.safe_error_details(connection.last_error_details)
         return read.model_copy(
             update={
+                "transport": "native" if connection.platform_key in self.config.native_platform_keys else "gateway",
+                "recovery_actions": self._recovery_actions(connection),
                 "last_error_code": CommunicationOperationalRepository.safe_error_code(read.last_error_code),
                 "last_error_message": CommunicationOperationalRepository.safe_error_summary(
                     read.last_error_message,
@@ -652,6 +657,31 @@ class CommunicationsService:
                 "managed_address": managed_address,
             }
         )
+
+    def _recovery_actions(self, connection: CommunicationConnection) -> list[Literal["reconnect", "retry_delivery"]]:
+        if connection.platform_key in self.config.native_platform_keys:
+            return []
+        actions: list[Literal["reconnect", "retry_delivery"]] = ["retry_delivery"]
+        capabilities = self.plugins.require(connection.platform_key).capabilities
+        # Webhook ingress takes precedence in the supervisor when both are declared.
+        if (
+            PlatformCapability.SUPERVISED_INGRESS in capabilities
+            and PlatformCapability.WEBHOOK_INGRESS not in capabilities
+        ):
+            actions.insert(0, "reconnect")
+        return actions
+
+    def _require_recovery_action(
+        self, connection: CommunicationConnection, action: Literal["reconnect", "retry_delivery"]
+    ) -> None:
+        if action in self._recovery_actions(connection):
+            return
+        detail = (
+            "This Connection uses native transport; restart the Agent to recover it"
+            if connection.platform_key in self.config.native_platform_keys
+            else "This Connection has no gateway provider session to reconnect"
+        )
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=detail)
 
     @staticmethod
     def _raise_not_found(connection_id: UUID) -> NoReturn:

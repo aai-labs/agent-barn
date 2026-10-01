@@ -17,7 +17,12 @@ import {
 export class CommunicationConnectionDataSupport {
   constructor(private page: Page) {}
 
-  async interceptChannelsRequests({ agentId }: { agentId: string }) {
+  async interceptChannelsRequests({ agentId, connection, deliveryJournal = mockCommunicationDeliveryJournalPage }: {
+    agentId: string;
+    connection?: Partial<typeof mockCommunicationConnection>;
+    deliveryJournal?: typeof mockCommunicationDeliveryJournalPage;
+  }) {
+    const savedConnection = { ...mockCommunicationConnection, ...connection };
     await this.page.route("**/api/v1/organizations/*/communication-platforms", async (route) => {
       if (route.request().method() !== "GET") {
         await route.fallback();
@@ -62,7 +67,7 @@ export class CommunicationConnectionDataSupport {
       await route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify([mockCommunicationConnection]),
+        body: JSON.stringify([savedConnection]),
       });
     });
 
@@ -89,7 +94,7 @@ export class CommunicationConnectionDataSupport {
         body: JSON.stringify(
           route.request().method() === "PATCH"
             ? mockUpdatedCommunicationConnection
-            : { ...mockCommunicationConnection, id: COMMUNICATION_CONNECTION_ID },
+            : { ...savedConnection, id: COMMUNICATION_CONNECTION_ID },
         ),
       });
     });
@@ -102,7 +107,10 @@ export class CommunicationConnectionDataSupport {
       await route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify(mockCommunicationConnectionSummary),
+        body: JSON.stringify({
+          ...mockCommunicationConnectionSummary,
+          connection: { ...mockCommunicationConnectionSummary.connection, ...connection },
+        }),
       });
     });
 
@@ -122,7 +130,7 @@ export class CommunicationConnectionDataSupport {
               ? url.searchParams.get("page") === "2"
                 ? mockCommunicationDeliveryLifecyclePage2
                 : mockCommunicationDeliveryLifecyclePage
-              : mockCommunicationDeliveryJournalPage,
+              : deliveryJournal,
         ),
       });
     });

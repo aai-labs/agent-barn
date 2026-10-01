@@ -6,6 +6,7 @@ import {
   COMMUNICATION_DELIVERY_ID,
   mockCommunicationConnection,
   mockCommunicationPlatforms,
+  mockDeadLetteredCommunicationDeliveryJournalPage,
   SAFE_ERROR_DETAILS,
   SAFE_PROVIDER_ERROR,
 } from "../fixtures/communication-connections";
@@ -889,6 +890,33 @@ test.describe("Agent Detail Page — Channels tab", () => {
     await connectionDetailPage.confirmReconnectButton().click();
     await reconnect;
   });
+
+  for (const recovery of [
+    { name: "native transport", transport: "native", recovery_actions: [], canRetry: false },
+    { name: "gateway without a provider session", transport: "gateway", recovery_actions: ["retry_delivery"], canRetry: true },
+    { name: "an older API without recovery metadata", transport: undefined, recovery_actions: undefined, canRetry: false },
+  ]) {
+    test(`keeps historical deliveries readable with supported recovery for ${recovery.name}`, async () => {
+      await dataSupportPage.communicationConnections.interceptChannelsRequests({
+        agentId: MOCK_AGENT_ID,
+        connection: { transport: recovery.transport, recovery_actions: recovery.recovery_actions },
+        deliveryJournal: mockDeadLetteredCommunicationDeliveryJournalPage,
+      });
+      await connectionDetailPage.goto(MOCK_AGENT_ID, COMMUNICATION_CONNECTION_ID);
+
+      await expect(connectionDetailPage.pipelineSummary()).toBeVisible();
+      await expect(connectionDetailPage.reconnectButton()).toHaveCount(0);
+      if (recovery.transport === "native") {
+        await expect(connectionDetailPage.nativeRecoveryGuidance()).toBeVisible();
+      }
+      await connectionDetailPage.deliveryTransitionRow(/dead lettered/i).click();
+      await expect(connectionDetailPage.retryDeliveryButton()).toHaveCount(recovery.canRetry ? 1 : 0);
+
+      await connectionDetailPage.deliveryTimelineButton().click();
+      await expect(connectionDetailPage.timelineStage("reply queued")).toBeVisible();
+      await expect(connectionDetailPage.timelineStage("provider delivered")).toBeVisible();
+    });
+  }
 
   test("drills down into a Delivery's full lifecycle from a transition row", async () => {
     await agentDetailPage.connectionDetailsLink().click();

@@ -97,6 +97,14 @@ export class CommunicationConnectionDetailPage {
     return this.page.getByRole("button", { name: "Reconnect", exact: true }).first();
   }
 
+  retryDeliveryButton(): Locator {
+    return this.activityPanel("delivery").getByRole("button", { name: "Retry delivery", exact: true });
+  }
+
+  nativeRecoveryGuidance(): Locator {
+    return this.page.getByText("Restart the Agent to recover this connection.", { exact: true });
+  }
+
   reconnectDialog(): Locator {
     return this.page.getByRole("dialog", { name: "Reconnect this connection?" });
   }

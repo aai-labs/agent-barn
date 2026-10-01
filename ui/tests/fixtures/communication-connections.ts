@@ -80,6 +80,8 @@ export const mockCommunicationConnection = {
   platform_key: "discord",
   display_name: "Customer Discord",
   enabled: true,
+  transport: "gateway",
+  recovery_actions: ["reconnect", "retry_delivery"],
   schema_version: 2,
   settings: { allowed_channel_ids: ["channel-one"] },
   external_identity: "validation-skipped",
@@ -111,6 +113,8 @@ export const mockCreatedCommunicationConnection = {
   platform_key: "discord",
   display_name: "Partner Discord",
   enabled: true,
+  transport: "gateway",
+  recovery_actions: ["reconnect", "retry_delivery"],
   schema_version: 2,
   settings: { allowed_channel_ids: ["channel-two"] },
   external_identity: "validation-skipped",
@@ -336,6 +340,11 @@ export const mockCommunicationDeliveryJournalPage = {
       next_retry_at: null,
     },
   ],
+};
+
+export const mockDeadLetteredCommunicationDeliveryJournalPage = {
+  ...mockCommunicationDeliveryJournalPage,
+  items: [{ ...mockCommunicationDeliveryJournalPage.items[0], stage: "dead_lettered" }],
 };
 
 export const mockCommunicationDeliveryLifecyclePage = {

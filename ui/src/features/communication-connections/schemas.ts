@@ -49,6 +49,8 @@ export const CommunicationConnectionSchema = z.object({
   platformKey: z.string(),
   displayName: z.string(),
   enabled: z.boolean(),
+  transport: z.enum(["gateway", "native"]).optional(),
+  recoveryActions: z.array(z.enum(["reconnect", "retry_delivery"])).default([]),
   schemaVersion: z.number().int().positive(),
   settings: z.record(z.string(), z.unknown()),
   externalIdentity: z.string().nullable(),

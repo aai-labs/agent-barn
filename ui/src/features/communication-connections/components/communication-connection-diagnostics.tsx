@@ -309,6 +309,7 @@ export function CommunicationConnectionDiagnostics({
     ? new Date(diagnostics.dataUpdatedAt).toISOString()
     : null;
   const failureGroups = diagnostics.data ? groupFailures(diagnostics.data.recentFailures) : [];
+  const recoveryConnection = diagnostics.data?.connection ?? connection;
 
   function handleWindowChange(from: string, to: string) {
     setWindowRange(from || to ? { since: from || undefined, until: to || undefined } : null);
@@ -328,7 +329,9 @@ export function CommunicationConnectionDiagnostics({
               Communication health
             </div>
             <p className="mb-0 mt-1 text-xs" style={{ color: "var(--ink-3)" }}>
-              Provider connectivity and end-to-end delivery are measured separately.
+              {recoveryConnection.transport === "native"
+                ? "Restart the Agent to recover this connection."
+                : "Provider connectivity and end-to-end delivery are measured separately."}
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -343,7 +346,7 @@ export function CommunicationConnectionDiagnostics({
                 Refresh
               </button>
             )}
-            {canEdit && (
+            {canEdit && recoveryConnection.recoveryActions.includes("reconnect") && (
               <button
                 type="button"
                 className="af-btn af-btn-sm"
@@ -567,7 +570,7 @@ export function CommunicationConnectionDiagnostics({
                     agentId={agentId}
                     connectionId={connection.id}
                     kind="delivery"
-                    canEdit={canEdit}
+                    canEdit={canEdit && recoveryConnection.recoveryActions.includes("retry_delivery")}
                     timeRange={effectiveWindow}
                     lastCheckedAt={lastCheckedAt}
                     onRetryDelivery={setRetryDeliveryId}
