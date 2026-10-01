@@ -216,11 +216,15 @@ Each of these is an **undercount**, not a verdict on the Agent. The last one is 
 
 ## Backfill
 
-`api/domains/business_value/backfill.py` classifies Tool Calls stored before Ingest recorded Business Actions, and re-maps stored rows after a catalogue change.
+`api/domains/business_value/backfill.py` classifies Tool Calls stored before Ingest recorded Business Actions, and brings stored rows in line after a catalogue change.
 
 - It walks completed `terminal`/`exec` Tool Calls in id-keyset batches and infers status from content.
-- It upserts on `(tool_call_id, ordinal)`, updating `integration`, `resource`, `verb`, `is_write`, and `outcome_type` and never `status`.
-- It never deletes rows.
+- Per Tool Call, keyed on `(tool_call_id, ordinal)`, it never changes `status`. It:
+  - inserts missing rows
+  - updates `integration`, `resource`, `verb`, `is_write`, and `outcome_type` only where the mapping changed
+  - deletes rows the catalogue no longer produces
+- Ordinals stay stable when a path becomes ignored, so the deletes remove exactly the stale rows and a now-ignored write stops being valued.
+- A Tool Call whose classification fails keeps its rows.
 - It is operator-run only (`make backfill-business-actions` locally, or `kubectl exec` in a deployment) and runs unscoped under the RBAC brief's background-work exception.
 
 How to run it is in [`../guidelines/operations.md`](../guidelines/operations.md#business-action-backfill).
@@ -269,7 +273,7 @@ Ingest owns authentication and the transaction. The Business Value domain owns t
 - **A gog upgrade** (`GOG_VERSION` in either runtime Dockerfile) fails `test_gog_catalogue.py` until the command tree is re-recorded from the new binary (`gog schema --json`, pruned to names, aliases, one-line help, and global flags) and the catalogue is updated to match.
 - **A catalogue change** needs the drift test to pass. A catalogue that no longer matches the bundled references, or the recorded gog command tree, fails CI.
   - It applies to Tool Calls completed after the deploy.
-  - To re-map rows already stored, run the operator backfill (see [Backfill](#backfill)).
+  - To bring rows already stored in line, re-mapping changed paths and removing paths that are now ignored, run the operator backfill (see [Backfill](#backfill)).
 - **A change to the Tool Call telemetry shape** (result format, exit code location, `is_error` semantics) must update the classifier's evidence rules and the recorded fixtures together.
 - **A new read surface** over `business_action` must apply the RBAC brief and report `UNKNOWN` as unverified, never as value.
 - **A new Outcome Type** needs a `DEFAULT_MINUTES` entry and appears in value settings automatically. **Removing one** leaves any stored overrides in place; they are ignored on read.

@@ -355,11 +355,17 @@ calls it from a router, and no CronJob runs it.
     status.
   - It writes each batch in its own transaction, so an interrupted run keeps the batches it
     finished.
-- It is safe to re-run. It upserts on `(tool_call_id, ordinal)`: a re-run after a catalogue
-  change re-maps `integration`, `resource`, `verb`, `is_write`, and `outcome_type` on existing
-  rows and never changes their `status`.
-- It never deletes. If a catalogue change starts ignoring a path, rows already stored for that
-  path remain and must be removed by hand if they should not count.
-- Each run logs one summary line: `scanned`, `recorded`, `failed`. A non-zero `failed` means
-  the classifier raised for those Tool Calls, whose ids are logged individually. They are
-  skipped, not retried.
+- It is safe to re-run. For each Tool Call it makes the stored rows match the current
+  catalogue, keyed on `(tool_call_id, ordinal)`, and it never changes a row's `status`:
+  - It inserts rows that are missing.
+  - It updates `integration`, `resource`, `verb`, `is_write`, and `outcome_type` (and
+    `updated_at`) only on rows whose mapping actually changed.
+  - It deletes rows the catalogue no longer produces, for example a path that is now ignored,
+    including every row of a Tool Call that now classifies to nothing.
+- A re-run with no catalogue change writes nothing and reports `recorded=0 removed=0`.
+- Each run logs one summary line: `scanned`, `recorded` (rows inserted or changed), `removed`,
+  `failed`. A non-zero `failed` means the classifier raised for those Tool Calls, whose ids are
+  logged individually. They are skipped, not retried, and keep their stored rows.
+- Classifier code changes that alter how a command is split into invocations can shift
+  ordinals. The backfill then deletes and re-inserts those Tool Calls' rows with new ids
+  instead of updating them.
