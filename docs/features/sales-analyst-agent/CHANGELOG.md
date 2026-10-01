@@ -11,7 +11,7 @@ Platform work needed to run a Pipedrive sales-analysis Agent on Agent Barn: reli
 - Delivered: nothing merged yet. aai-labs/agent-barn#252 delivers the changes listed below once merged.
 - In transition: none.
 - Next: publish new Platform Template versions carrying the corrected memory guidance (existing lineages are not re-seeded); the aai-cli Pipedrive work (files, field definitions, users/pipelines/stages, note and activity writes, merges, label add/remove, pagination fixes, and a credential-safe download redirect) is in review as aai-labs/aai-cli#26 (AF-353). It reaches Agents through a base-image rebuild, after which the bundled `aai-pipedrive` Skill copy here must be re-synced.
-- Blockers: `staging` already uses `openclaw-base` 0.7.2 for different contents, so after merging `staging` into this branch, `openclaw-base/VERSION` must become 0.7.3 (runtime versions are never reused). Before deploying, run `python -m api.scripts.check_secret_contents` in each environment's API pod (see below).
+- Blockers: none. `openclaw-base/VERSION` is 0.7.3, since `staging` already uses 0.7.2 for different contents. Before deploying, run `python -m api.scripts.check_secret_contents` in each environment's API pod (see below).
 
 ## Changes
 
