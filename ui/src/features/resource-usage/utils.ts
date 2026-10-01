@@ -53,6 +53,30 @@ export function meterTone(ratio: number | null): MeterTone {
   return "ok";
 }
 
+export type CapacityState = "unset" | "unknown" | "ok" | "warn" | "critical" | "over";
+
+export interface CapacityStatus {
+  state: CapacityState;
+  /** Committed as a share of the limit; null while either is missing. Not clamped. */
+  ratio: number | null;
+}
+
+/**
+ * How close what the namespace commits is to the ceiling an administrator entered.
+ *
+ * Over the ceiling is its own state: the quota itself cannot be exceeded, so a figure past
+ * it means the entered limit is out of date. Exactly at the ceiling is "critical".
+ */
+export function capacityStatus(committed: number | null, limit: number | null): CapacityStatus {
+  if (limit === null || limit <= 0) return { state: "unset", ratio: null };
+  if (committed === null) return { state: "unknown", ratio: null };
+  const ratio = committed / limit;
+  if (ratio > 1) return { state: "over", ratio };
+  if (ratio >= METER_CRITICAL_RATIO) return { state: "critical", ratio };
+  if (ratio >= METER_WARN_RATIO) return { state: "warn", ratio };
+  return { state: "ok", ratio };
+}
+
 export const resourceUsageKey = {
   /** Under the Agent's own key, so anything that refreshes the Agent refreshes this. */
   agent: (agentId: string, range: ResourceUsageRange) =>
@@ -63,4 +87,6 @@ export const resourceUsageKey = {
   /** Not under the Agent keys: it is Platform data, and no Organization's cache is its. */
   platform: (range: ResourceUsageRange, organizationId: string | null) =>
     ["platform", "resource-usage", range, organizationId] as const,
+  /** Every Platform usage query, whatever its range or filter. */
+  platformAll: ["platform", "resource-usage"] as const,
 };

@@ -131,6 +131,33 @@ export const PlatformAgentUsageSchema = z.object({
 });
 export type PlatformAgentUsage = z.infer<typeof PlatformAgentUsageSchema>;
 
+/**
+ * The namespace's ceilings, entered by a Platform Administrator because the quota itself
+ * cannot be read, beside what its pods commit in limits. Always for the whole namespace.
+ */
+export const PlatformCapacitySchema = z.object({
+  memoryLimitBytes: z.number().nullable().default(null),
+  cpuLimitCores: z.number().nullable().default(null),
+  limitsUpdatedAt: z.string().nullable().default(null),
+  /** Null when the source could not be read: unknown, not zero. */
+  memoryCommittedBytes: z.number().nullable().default(null),
+  cpuCommittedCores: z.number().nullable().default(null),
+});
+export type PlatformCapacity = z.infer<typeof PlatformCapacitySchema>;
+
+export const ResourceLimitsSchema = z.object({
+  memoryLimitBytes: z.number().nullable().default(null),
+  cpuLimitCores: z.number().nullable().default(null),
+  updatedAt: z.string().nullable().default(null),
+});
+export type ResourceLimits = z.infer<typeof ResourceLimitsSchema>;
+
+/** A null clears a limit. Both are always sent: an unchanged one is not a change. */
+export interface ResourceLimitsUpdate {
+  memoryLimitBytes: number | null;
+  cpuLimitCores: number | null;
+}
+
 export const PlatformResourceUsageSchema = z.object({
   range: ResourceUsageRangeSchema,
   fromDate: z.string(),
@@ -140,6 +167,8 @@ export const PlatformResourceUsageSchema = z.object({
   availability: ResourceUsageAvailabilitySchema,
   organizationId: z.string().uuid().nullable().default(null),
   totals: PlatformUsageTotalsSchema,
+  /** There even when the source is not: the limits come from the database. */
+  capacity: PlatformCapacitySchema,
   /** Always the whole platform, heaviest memory first, the no-live-Agent row last. */
   organizations: z.array(PlatformOrganizationUsageSchema).default([]),
   /** Every reporting Agent within the filter, heaviest memory first. */

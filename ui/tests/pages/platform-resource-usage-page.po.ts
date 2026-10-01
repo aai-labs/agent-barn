@@ -40,4 +40,32 @@ export class PlatformResourceUsagePage {
   navLink(name: string): Locator {
     return this.page.locator("header nav").getByRole("link", { name, exact: true });
   }
+
+  capacityCard(kind: "memory" | "cpu"): Locator {
+    return this.page.getByTestId(`capacity-${kind}`);
+  }
+
+  capacityWarning(): Locator {
+    return this.page.getByTestId("capacity-warning");
+  }
+
+  async openCapacityDialog() {
+    await this.page.getByTestId("capacity-limits-open").click();
+  }
+
+  dialog(): Locator {
+    return this.page.getByTestId("capacity-limits-dialog");
+  }
+
+  memoryInput(): Locator {
+    return this.page.getByLabel("Memory (GiB)");
+  }
+
+  cpuInput(): Locator {
+    return this.page.getByLabel("CPU (cores)");
+  }
+
+  saveButton(): Locator {
+    return this.page.getByTestId("capacity-limits-save");
+  }
 }

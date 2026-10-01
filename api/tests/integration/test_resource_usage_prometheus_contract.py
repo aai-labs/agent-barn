@@ -22,7 +22,9 @@ import urllib.request
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
+from typing import Any
 from uuid import UUID, uuid4
 
 import bcrypt
@@ -46,6 +48,50 @@ _STATIC_CGROUP = {
     "memory.stat": "anon 263245824\ninactive_file 83718144\n",
     "cpu.max": "50000 100000\n",
 }
+
+
+_GiB = 1024**3
+# What kube-state-metrics says about a namespace's pods, in the shape it says it. Worked out
+# so the sums below are not a coincidence: two Agents' worth of limits, one pod with two
+# containers, one pod still Pending, and one that Succeeded and must not count.
+_KSM_METRICS = f"""\
+# TYPE kube_pod_container_resource_limits gauge
+kube_pod_container_resource_limits{{namespace="ns",pod="agent-a",container="agent",resource="memory",unit="byte"}} {2 * _GiB}
+kube_pod_container_resource_limits{{namespace="ns",pod="agent-a",container="agent",resource="cpu",unit="core"}} 0.5
+kube_pod_container_resource_limits{{namespace="ns",pod="two",container="main",resource="memory",unit="byte"}} {_GiB}
+kube_pod_container_resource_limits{{namespace="ns",pod="two",container="sidecar",resource="memory",unit="byte"}} {_GiB // 2}
+kube_pod_container_resource_limits{{namespace="ns",pod="two",container="main",resource="cpu",unit="core"}} 0.25
+kube_pod_container_resource_limits{{namespace="ns",pod="two",container="sidecar",resource="cpu",unit="core"}} 0.25
+kube_pod_container_resource_limits{{namespace="ns",pod="waiting",container="agent",resource="memory",unit="byte"}} {_GiB}
+kube_pod_container_resource_limits{{namespace="ns",pod="done",container="job",resource="memory",unit="byte"}} {4 * _GiB}
+kube_pod_container_resource_limits{{namespace="ns",pod="done",container="job",resource="cpu",unit="core"}} 8
+kube_pod_container_resource_limits{{namespace="ns",pod="agent-a",container="agent",resource="ephemeral-storage",unit="byte"}} 99
+# TYPE kube_pod_status_phase gauge
+kube_pod_status_phase{{namespace="ns",pod="agent-a",phase="Running"}} 1
+kube_pod_status_phase{{namespace="ns",pod="agent-a",phase="Pending"}} 0
+kube_pod_status_phase{{namespace="ns",pod="two",phase="Running"}} 1
+kube_pod_status_phase{{namespace="ns",pod="two",phase="Succeeded"}} 0
+kube_pod_status_phase{{namespace="ns",pod="waiting",phase="Pending"}} 1
+kube_pod_status_phase{{namespace="ns",pod="waiting",phase="Running"}} 0
+kube_pod_status_phase{{namespace="ns",pod="done",phase="Succeeded"}} 1
+kube_pod_status_phase{{namespace="ns",pod="done",phase="Running"}} 0
+"""
+# Live pods only: agent-a (2 GiB, 0.5), two (1.5 GiB, 0.5) and waiting (1 GiB). `done` is out.
+_COMMITTED_MEMORY = 2 * _GiB + _GiB + _GiB // 2 + _GiB
+_COMMITTED_CPU = 1.0
+
+
+class _KsmHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        body = _KSM_METRICS.encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain; version=0.0.4")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, format: str, *args: Any) -> None:
+        pass
 
 
 def _cpu_stat(tick: int) -> str:
@@ -139,6 +185,10 @@ def scraped(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Scraped]:
 
     org_id, agent_id, other_org_id, other_agent_id = uuid4(), uuid4(), uuid4(), uuid4()
     port = _free_port()
+    # Stands in for kube-state-metrics, which Prometheus scrapes under its own job.
+    ksm_port = _free_port()
+    ksm = HTTPServer(("0.0.0.0", ksm_port), _KsmHandler)
+    threading.Thread(target=ksm.serve_forever, daemon=True).start()
     healthz = subprocess.Popen(
         [sys.executable, str(_SCRIPT)],
         env={**os.environ, "HEALTHZ_PORT": str(port), "HEALTHZ_CGROUP_ROOT": str(cgroup)},
@@ -167,6 +217,9 @@ scrape_configs:
         labels: {{app: "agent-{agent_id}", org_id: "{org_id}", agent_name: mine, org_name: mine}}
       - targets: ["{target}"]
         labels: {{app: "agent-{other_agent_id}", org_id: "{other_org_id}", agent_name: theirs, org_name: theirs}}
+  - job_name: kube-state-metrics
+    static_configs:
+      - targets: ["host.docker.internal:{ksm_port}"]
 """,
             encoding="utf-8",
         )
@@ -202,6 +255,7 @@ scrape_configs:
             )
             yield result
     finally:
+        ksm.shutdown()
         ticker.stop()
         healthz.terminate()
         healthz.wait(timeout=5)
@@ -309,3 +363,14 @@ def test_the_platform_chart_adds_the_agents_up_into_one_series_per_field(scraped
     assert set(one["memory_working_set_bytes"].values()) == {float(_MEMORY_WORKING_SET)}
     assert any(value > 0 for value in everyone["cpu_cores"].values())
     assert "cpu_throttled_ratio" not in everyone
+
+
+def test_the_namespace_commitment_counts_live_pods_and_sums_their_containers(scraped: Scraped):
+    def committed() -> dict[str, float] | None:
+        return scraped.repository.committed_limits(at=_now()) or None
+
+    figures = _wait_until(committed, "kube-state-metrics to be scraped")
+
+    # Running and Pending pods are counted, a Succeeded one is not, a pod with two containers
+    # adds both up, and a resource other than memory and CPU is left out.
+    assert figures == {"memory": float(_COMMITTED_MEMORY), "cpu": _COMMITTED_CPU}

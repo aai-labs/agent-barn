@@ -9,9 +9,11 @@ from api.domains.resource_usage.promql import (
     agent_id_from_labels,
     group_instant,
     group_instant_all,
+    group_namespace_limits,
     group_range,
     group_totals,
     instant_query,
+    namespace_limits_query,
     platform_range_query,
     platform_selector,
     range_query,
@@ -123,6 +125,18 @@ def test_the_platform_range_query_keeps_a_rate_window_long_enough_for_scrapes():
     assert "[120s]" in platform_range_query(platform_selector(), 60)
 
 
+def test_the_namespace_limits_query_adds_up_live_pods_from_kube_state_metrics_only():
+    query = namespace_limits_query()
+
+    # Pinned to its own job, as the Agent queries are pinned to theirs.
+    assert query.count('job="kube-state-metrics"') == 2
+    assert 'kube_pod_container_resource_limits{job="kube-state-metrics", resource=~"memory|cpu"}' in query
+    # Only pods that are Pending or Running count, as with the quota; one row per resource.
+    assert 'kube_pod_status_phase{job="kube-state-metrics", phase=~"Pending|Running"} == 1' in query
+    assert query.startswith("sum by (resource) (")
+    assert "on (namespace, pod) group_left ()" in query
+
+
 # --- mapping results back to agents ----------------------------------------
 
 
@@ -176,6 +190,22 @@ def test_the_platform_view_keeps_every_agent_that_reported():
     ]
 
     assert group_instant_all(samples) == {_A: {"cpu_cores": 0.1}, stranger: {"up": 1.0}}
+
+
+def test_namespace_limits_are_read_by_resource():
+    samples = [
+        PrometheusSample({"resource": "memory"}, 4_294_967_296.0),
+        PrometheusSample({"resource": "cpu"}, 1.5),
+        PrometheusSample({"resource": "ephemeral-storage"}, 9.0),
+        PrometheusSample({}, 7.0),
+    ]
+
+    assert group_namespace_limits(samples) == {"memory": 4_294_967_296.0, "cpu": 1.5}
+
+
+def test_a_resource_the_source_did_not_answer_for_is_absent_not_zero():
+    assert group_namespace_limits([]) == {}
+    assert group_namespace_limits([PrometheusSample({"resource": "cpu"}, 2.0)]) == {"cpu": 2.0}
 
 
 def test_combined_points_are_keyed_by_field_and_epoch_second():

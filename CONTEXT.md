@@ -100,6 +100,10 @@ _Avoid_: configured model, current model
 The CPU and memory an Agent's container is using, against the limits it runs with. Each Agent reports its own; Prometheus stores it. It describes the container, not model calls or spend. Platform Administrators see it across every Organization, named from the database.
 _Avoid_: model usage, observed model usage, cost, spend
 
+**Capacity Limit**:
+A ceiling on the total memory or CPU limits of the namespace's containers, typed in by a Platform Administrator, normally the namespace's ResourceQuota. It is entered by hand because the tenant service account cannot read the quota. Platform Resource Usage compares it with what the namespace's pods have committed in limits, which is not the same as what they use.
+_Avoid_: quota (the cluster's own object), usage limit, budget
+
 **Runtime**:
 The implementation that executes an agent. Agent Barn currently supports Hermes and OpenClaw.
 _Avoid_: platform

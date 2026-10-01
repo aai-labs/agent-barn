@@ -8,8 +8,11 @@ from injector import inject, singleton
 
 from api.domains.agents.models import AgentStatus, PlatformAgentIdentity
 from api.domains.agents.repository import AgentRepository
+from api.domains.resource_limits.models import ResourceLimitsRead
+from api.domains.resource_limits.service import ResourceLimitsService
 from api.domains.resource_usage.models import (
     PlatformAgentUsageRead,
+    PlatformCapacityRead,
     PlatformOrganizationUsageRead,
     PlatformResourceUsageRead,
     PlatformUsagePoint,
@@ -155,6 +158,22 @@ def _whole(value: float | None) -> int | None:
     return None if value is None else int(value)
 
 
+def _capacity(limits: ResourceLimitsRead, committed: Mapping[str, float] | None) -> PlatformCapacityRead:
+    """The ceilings an administrator entered, beside what the namespace commits.
+
+    `committed` is None when the source could not be read; a resource it did not answer
+    for is also left None, so "unknown" is never drawn as "nothing committed".
+    """
+    committed = committed or {}
+    return PlatformCapacityRead(
+        memory_limit_bytes=limits.memory_limit_bytes,
+        cpu_limit_cores=limits.cpu_limit_cores,
+        limits_updated_at=limits.updated_at,
+        memory_committed_bytes=_whole(committed.get("memory")),
+        cpu_committed_cores=committed.get("cpu"),
+    )
+
+
 @inject
 @singleton
 @dataclass
@@ -171,11 +190,14 @@ class PlatformResourceUsageService:
 
     agent_repository: AgentRepository
     usage_repository: ResourceUsageRepository
+    # Composed as a service, never through its repository, as the stats service does.
+    resource_limits_service: ResourceLimitsService
 
     def get_usage(self, usage_range: ResourceUsageRange, organization_id: UUID | None) -> PlatformResourceUsageRead:
         now = datetime.now(UTC)
         window = resolve_usage_window(usage_range, now)
         identities = self.agent_repository.find_live_for_platform_usage()
+        limits = self.resource_limits_service.get_limits()
 
         def unmeasured(availability: ResourceUsageAvailability) -> PlatformResourceUsageRead:
             return PlatformResourceUsageRead(
@@ -187,6 +209,8 @@ class PlatformResourceUsageService:
                 availability=availability,
                 organization_id=organization_id,
                 totals=PlatformUsageTotalsRead(agents_with_container=count_with_container(identities, organization_id)),
+                # The limits are in the database, so they are there when the source is not.
+                capacity=_capacity(limits, None),
             )
 
         if not self.usage_repository.is_configured:
@@ -199,6 +223,7 @@ class PlatformResourceUsageService:
                 throttle_window_seconds=_THROTTLE_WINDOW_SECONDS,
             )
             series = self._combined_series(window, identities, organization_id)
+            committed = self.usage_repository.committed_limits(at=now)
         except PrometheusError:
             logger.warning("Platform resource usage is unavailable", exc_info=True)
             return unmeasured(ResourceUsageAvailability.UNAVAILABLE)
@@ -215,6 +240,7 @@ class PlatformResourceUsageService:
             availability=ResourceUsageAvailability.AVAILABLE,
             organization_id=organization_id,
             totals=usage.totals,
+            capacity=_capacity(limits, committed),
             organizations=usage.organizations,
             agents=usage.agents,
             series=[

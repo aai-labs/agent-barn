@@ -25,7 +25,7 @@ UI               Resource usage tab, Agents overview, Platform Resource Usage
 
 ## Invariants
 
-- The API stores nothing. Prometheus is the store, and its 15-day retention is the limit, so the longest range is 14 days.
+- The API stores no usage. Prometheus is the store, and its 15-day retention is the limit, so the longest range is 14 days. The one thing stored is the capacity limits a Platform Administrator enters (see Capacity limits below).
 - Each Agent's own healthz server reads the container's cgroup v2 files on every scrape and appends these series to its existing `/metrics`. Both runtimes emit the same series, with the same help text, in the same order; a test compares them.
 
   | Series | Meaning |
@@ -62,6 +62,18 @@ UI               Resource usage tab, Agents overview, Platform Resource Usage
 - Limits are summed too. They are what the containers may use, which is what the namespace quota counts, not a pool with free room in it.
 - The page does not show the namespace quota, volumes or events. That needs the Kubernetes API and belongs to the cluster health page (AF-266).
 
+## Capacity limits
+
+The namespace's ResourceQuota caps the total of every container's **limits**, and a full quota leaves new agents stuck without a pod. The Platform page warns before that. Why the ceilings are typed in, and why this figure, is in [`2026-10-01-capacity-limits-entered-by-hand.md`](../adr/2026-10-01-capacity-limits-entered-by-hand.md).
+
+- A Platform Administrator enters the ceilings in the **Capacity limits** dialog: memory in GiB and CPU in cores, the `limits.memory` and `limits.cpu` Hard values of `kubectl describe quota`. A blank field means no limit, and nothing warns for it. They are saved by `PUT /api/v1/platform/resource-limits` as whole bytes and cores, in the `platform_resource_limits` table, one row at most.
+- The same row is read back inside the Platform usage response as `capacity`, with what is committed. There is no separate GET, so there is one place to read them, and the limits are there even when Prometheus is not.
+- **Committed** is what every Pending or Running pod in the namespace is allowed to use, added up: `kube_pod_container_resource_limits` joined to `kube_pod_status_phase`, from kube-state-metrics (the `kube-state-metrics` job). It covers the API, UI and database pods as well as the Agents, and Agents that do not report through healthz yet, which is what the quota counts. It is not usage: an agent using 300 MiB with a 2 GiB limit commits 2 GiB. Empty means unknown (`null`), never zero.
+- The cards turn amber at 75% of the ceiling and red at 90%, the same constants as the meters (`METER_WARN_RATIO`, `METER_CRITICAL_RATIO`). A figure above 100% is its own state: the quota cannot be exceeded, so it says the entered limit is probably out of date.
+- Each change to a limit is a `platform.resource_limits.changed` Security Audit Record, one per limit that moved, with its before and after. A save that changes nothing records nothing. The row is locked while it is read, so two administrators saving at once cannot record the same "previous" value.
+- The ceilings are for the whole namespace, so the Organization filter does not change them or the committed figure.
+- It does not show pod count, volumes or events. Those need the Kubernetes API and belong to the cluster health page (AF-266).
+
 ## Boundaries
 
 The monitoring chart owns Prometheus, the `agent` scrape job and the labels it adds. The healthz scripts own the metric names. The `resource_usage` domain owns the queries and read models. Costs owns spend, and Agents owns health and diagnostics. Resource usage writes nothing and raises no alerts; a memory or throttling alert would be a change to the monitoring chart.
@@ -93,23 +105,26 @@ Local Docker Compose has no Prometheus, so the views say resource usage is not c
 | Queries against the client       | `../../api/domains/resource_usage/repository.py` |
 | Authorization and assembly       | `../../api/domains/resource_usage/service.py` |
 | HTTP routes                      | `../../api/domains/resource_usage/routes.py` |
+| Capacity limits (stored)         | `../../api/domains/resource_limits/` (`models.py`, `repository.py`, `service.py`, `routes.py`), `../../api/migrations/versions/c7a1e4b92d58_add_platform_resource_limits.py` |
+| Committed limits (read)          | `namespace_limits_query` in `../../api/domains/resource_usage/promql.py` |
 | Platform view                    | `../../api/domains/resource_usage/platform_service.py`, `../../api/domains/resource_usage/platform_routes.py`, `AgentRepository.find_live_for_platform_usage` in `../../api/domains/agents/repository.py` |
 | Spend for a page of Agents       | `CostService.spend_for_agents` in `../../api/domains/costs/service.py` |
 | API settings                     | `../../api/core/config.py` (`prometheus_*`), `../../helm/agentbarn-api/values.yaml` (`prometheus`), `../../helmfile.yaml.gotmpl` |
 | Local Prometheus                 | `../../docker/k3d/k3d-monitoring.sh`, `../../docker/k3d/monitoring-values.yaml`, `make dev-monitoring`, `make forward-prometheus` |
-| UI feature                       | `../../ui/src/features/resource-usage/` |
+| UI feature                       | `../../ui/src/features/resource-usage/` (capacity: `components/capacity-section.tsx`, `components/capacity-limits-dialog.tsx`) |
 | UI page and tab wiring           | `../../ui/src/app/dashboard/[orgId]/agents/page.tsx`, `../../ui/src/app/dashboard/platform/resource-usage/page.tsx`, `../../ui/src/features/agents/components/agent-detail-page.tsx`, `../../ui/src/components/top-nav.tsx` |
 | Script tests                     | `../../api/tests/unit/test_healthz_server_metrics.py` (both runtimes, parity), `../../hermes-base/test-image.sh`, `../../openclaw-base/test-healthz-metrics.sh` (real images) |
-| API tests                        | `../../api/tests/unit/test_prometheus_client.py`, `../../api/tests/unit/test_resource_usage_queries.py`, `../../api/tests/unit/test_platform_resource_usage.py`, `../../api/tests/integration/test_resource_usage.py`, `../../api/tests/integration/test_agent_overview.py`, `../../api/tests/integration/test_platform_resource_usage.py`, `../../api/tests/integration/test_agent_rbac.py` |
+| API tests                        | `../../api/tests/unit/test_prometheus_client.py`, `../../api/tests/unit/test_resource_usage_queries.py`, `../../api/tests/unit/test_platform_resource_usage.py`, `../../api/tests/integration/test_resource_usage.py`, `../../api/tests/integration/test_agent_overview.py`, `../../api/tests/integration/test_platform_resource_usage.py`, `../../api/tests/integration/test_resource_limits.py`, `../../api/tests/integration/test_agent_rbac.py` |
 | Contract test (real Prometheus)  | `../../api/tests/integration/test_resource_usage_prometheus_contract.py` |
 | UI tests                         | `../../ui/tests/e2e/agent-resource-usage.spec.ts`, `../../ui/tests/e2e/agents-overview.spec.ts`, `../../ui/tests/e2e/platform-resource-usage.spec.ts` |
 
 ## Change impact
 
-Renaming a series, or changing its help text or order, touches both healthz scripts, `promql.py`, and the script, query, contract and in-image tests together. Changing the labels the `agent` scrape job adds means changing the selectors. A new read of per-Agent resource data on an Organization route must go through `AgentAuthorization` and be added to the assigned/hidden bypass test in `../../api/tests/integration/test_agent_rbac.py`. A new field on the Platform route is a data-classification decision under the oversight ADR, not an automatic addition. Changing Prometheus retention changes the longest safe range in `ResourceUsageRange`. Changing what `state` means changes the notices in `resource-usage-notice.tsx`.
+Renaming a series, or changing its help text or order, touches both healthz scripts, `promql.py`, and the script, query, contract and in-image tests together. Changing the labels the `agent` scrape job adds means changing the selectors. A new read of per-Agent resource data on an Organization route must go through `AgentAuthorization` and be added to the assigned/hidden bypass test in `../../api/tests/integration/test_agent_rbac.py`. A new field on the Platform route is a data-classification decision under the oversight ADR, not an automatic addition. Changing Prometheus retention changes the longest safe range in `ResourceUsageRange`. Changing what `state` means changes the notices in `resource-usage-notice.tsx`. Adding another capacity limit adds a typed nullable column, its change Event setting name, and a card; the committed figure for it must exist in kube-state-metrics.
 
 ## Related decisions
 
 - [`2026-09-29-agent-resource-usage-from-prometheus.md`](../adr/2026-09-29-agent-resource-usage-from-prometheus.md)
 - [`2026-10-01-resource-usage-as-platform-oversight-data.md`](../adr/2026-10-01-resource-usage-as-platform-oversight-data.md)
+- [`2026-10-01-capacity-limits-entered-by-hand.md`](../adr/2026-10-01-capacity-limits-entered-by-hand.md)
 - [`2026-07-30-platform-oversight-without-organization-access.md`](../adr/2026-07-30-platform-oversight-without-organization-access.md)

@@ -224,6 +224,23 @@ class PlatformUsagePoint(PydanticBaseModel):
     cpu_cores: float | None = None
 
 
+class PlatformCapacityRead(PydanticBaseModel):
+    """The namespace's ceilings and what is committed against them.
+
+    The ceilings are entered by a Platform Administrator, because the quota itself cannot
+    be read; the committed figures come from kube-state-metrics. They are always for the
+    whole namespace, whatever Organization the page is narrowed to.
+    """
+
+    memory_limit_bytes: int | None = None
+    cpu_limit_cores: float | None = None
+    # None until the first save.
+    limits_updated_at: datetime | None = None
+    # What every Pending or Running pod commits in limits. None when it could not be read.
+    memory_committed_bytes: int | None = None
+    cpu_committed_cores: float | None = None
+
+
 class PlatformResourceUsageRead(PydanticBaseModel):
     range: ResourceUsageRange
     from_date: datetime
@@ -235,6 +252,8 @@ class PlatformResourceUsageRead(PydanticBaseModel):
     # Narrowed to `organization_id` when one is given. The counts come from the database,
     # so they are there even when the source is not.
     totals: PlatformUsageTotalsRead
+    # Present even when the source is not: the limits come from the database.
+    capacity: PlatformCapacityRead
     # Always the whole platform, whatever the filter, heaviest memory first, with the
     # no-live-Agent row, if any, last. How many of them to show is the page's choice.
     organizations: list[PlatformOrganizationUsageRead] = []

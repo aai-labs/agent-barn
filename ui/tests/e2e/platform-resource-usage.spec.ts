@@ -8,6 +8,7 @@ import {
   PLATFORM_CY_ID,
   PLATFORM_GLOBEX_ID,
   PLATFORM_ORPHAN_ID,
+  mockCapacity,
   mockPlatformAgent,
   mockPlatformUsage,
   mockPlatformUsageUnavailable,
@@ -323,5 +324,218 @@ test.describe("Platform resource usage (non platform_admin)", () => {
     ).not.toBeVisible();
     // The page never mounted, so nothing asked for cross-organization figures.
     expect(requests).toHaveLength(0);
+  });
+});
+
+
+const GIB = 1024 ** 3;
+
+test.describe("Platform capacity limits (platform_admin)", () => {
+  let usagePage: PlatformResourceUsagePage;
+  let data: DataSupport;
+
+  test.use({ storageState: { cookies: [], origins: [] }, viewport: { width: 1440, height: 900 } });
+
+  test.beforeEach(async ({ page }) => {
+    usagePage = new PlatformResourceUsagePage(page);
+    data = new DataSupport(page);
+
+    await data.auth.interceptRefreshRequest();
+    await data.users.interceptGetUserContextRequest();
+    await data.users.interceptGetOrganizationsRequest();
+    await data.organizations.interceptListOrganizations();
+  });
+
+  /** The page with the namespace committing this much against these limits. */
+  async function openWith(capacity: Record<string, unknown>) {
+    const requests = await data.resourceUsage.interceptPlatformResourceUsage({
+      body: mockPlatformUsage({ capacity: mockCapacity(capacity) }),
+    });
+    await usagePage.goto();
+    await expect(usagePage.heading()).toBeVisible();
+    return requests;
+  }
+
+  test("holds what the namespace commits against the limits that were entered", async () => {
+    await openWith({
+      memory_limit_bytes: 70 * GIB,
+      cpu_limit_cores: 24,
+      memory_committed_bytes: 46 * GIB,
+      cpu_committed_cores: 11.5,
+    });
+
+    await expect(usagePage.capacityCard("memory")).toContainText("46 GiB");
+    await expect(usagePage.capacityCard("memory")).toContainText("66% of the 70 GiB limit");
+    await expect(usagePage.capacityCard("memory")).toHaveAttribute("data-state", "ok");
+    await expect(usagePage.capacityCard("memory").getByRole("meter")).toHaveAttribute("aria-valuenow", "66");
+    await expect(usagePage.capacityCard("cpu")).toContainText("11.5 cores");
+    await expect(usagePage.capacityCard("cpu")).toContainText("48% of the 24 cores limit");
+    // Well under the limits, so there is nothing to warn about.
+    await expect(usagePage.capacityWarning()).toHaveCount(0);
+  });
+
+  test("warns in amber when the namespace is filling up", async () => {
+    await openWith({ memory_limit_bytes: 70 * GIB, memory_committed_bytes: 56 * GIB });
+
+    await expect(usagePage.capacityCard("memory")).toHaveAttribute("data-state", "warn");
+    await expect(usagePage.capacityWarning()).toHaveAttribute("data-tone", "warn");
+    await expect(usagePage.capacityWarning()).toContainText(
+      "Memory limits committed are 80% of the 70 GiB limit (56 GiB). Room for new agents is running low.",
+    );
+  });
+
+  test("warns in red when new agents may fail to start", async () => {
+    await openWith({ memory_limit_bytes: 70 * GIB, memory_committed_bytes: 66.5 * GIB });
+
+    await expect(usagePage.capacityCard("memory")).toHaveAttribute("data-state", "critical");
+    await expect(usagePage.capacityWarning()).toHaveAttribute("data-tone", "err");
+    await expect(usagePage.capacityWarning()).toContainText("95% of the 70 GiB limit");
+    await expect(usagePage.capacityWarning()).toContainText("New agents may fail to start.");
+  });
+
+  test("says the limit is probably out of date when the namespace is past it", async () => {
+    await openWith({ memory_limit_bytes: 70 * GIB, memory_committed_bytes: 72 * GIB });
+
+    await expect(usagePage.capacityCard("memory")).toHaveAttribute("data-state", "over");
+    await expect(usagePage.capacityWarning()).toContainText(
+      "Memory limits committed (72 GiB) are above the 70 GiB limit you entered, so the limit is probably out of date.",
+    );
+  });
+
+  test("one banner follows the worst of the two, with a line for each that needs it", async () => {
+    await openWith({
+      memory_limit_bytes: 70 * GIB,
+      memory_committed_bytes: 56 * GIB,
+      cpu_limit_cores: 24,
+      cpu_committed_cores: 23,
+    });
+
+    await expect(usagePage.capacityWarning()).toHaveAttribute("data-tone", "err");
+    await expect(usagePage.capacityWarning().getByTestId("capacity-warning-memory")).toBeVisible();
+    await expect(usagePage.capacityWarning().getByTestId("capacity-warning-cpu")).toBeVisible();
+  });
+
+  test("a limit that was never entered asks for one instead of guessing", async ({ page }) => {
+    await openWith({});
+
+    await expect(usagePage.capacityCard("memory")).toHaveAttribute("data-state", "unset");
+    await expect(usagePage.capacityCard("memory")).toContainText("No limit set");
+    // The committed figure is still shown, since it needs no limit to be read.
+    await expect(usagePage.capacityCard("memory")).toContainText("4 GiB");
+    await expect(usagePage.capacityWarning()).toHaveCount(0);
+
+    await usagePage.capacityCard("memory").getByRole("button", { name: "Set limit" }).click();
+
+    await expect(usagePage.dialog()).toBeVisible();
+    await expect(usagePage.memoryInput()).toHaveValue("");
+    await expect(page.getByText("Last changed")).toHaveCount(0);
+  });
+
+  test("keeps the limits, and says the committed figure is missing, when the source is down", async () => {
+    await data.resourceUsage.interceptPlatformResourceUsage({
+      body: {
+        ...mockPlatformUsageUnavailable(),
+        capacity: mockCapacity({
+          memory_limit_bytes: 70 * GIB,
+          memory_committed_bytes: null,
+          cpu_committed_cores: null,
+        }),
+      },
+    });
+    await usagePage.goto();
+
+    await expect(usagePage.capacityCard("memory")).toHaveAttribute("data-state", "unknown");
+    await expect(usagePage.capacityCard("memory")).toContainText("Committed figure not available");
+    await expect(usagePage.capacityCard("memory")).toContainText("70 GiB");
+    // Editable even now: the limits are in the database, not in Prometheus.
+    await usagePage.openCapacityDialog();
+    await expect(usagePage.memoryInput()).toHaveValue("70");
+  });
+
+  test("the dialog opens on what is saved, in GiB and cores, with when it last changed", async ({ page }) => {
+    await openWith({
+      memory_limit_bytes: 70 * GIB,
+      cpu_limit_cores: 24,
+      limits_updated_at: "2026-09-30T08:30:00Z",
+    });
+
+    await usagePage.openCapacityDialog();
+
+    await expect(usagePage.dialog()).toBeVisible();
+    await expect(usagePage.memoryInput()).toHaveValue("70");
+    await expect(usagePage.cpuInput()).toHaveValue("24");
+    await expect(page.getByText("Last changed")).toBeVisible();
+    await expect(usagePage.dialog()).toContainText("limits.memory");
+  });
+
+  test("saving sends whole bytes and refreshes the page", async ({ page }) => {
+    const requests = await openWith({ memory_limit_bytes: 70 * GIB, cpu_limit_cores: 24 });
+    const sent = await data.resourceUsage.interceptUpdateResourceLimits();
+    await usagePage.openCapacityDialog();
+    const before = requests.length;
+
+    await usagePage.memoryInput().fill("62.5");
+    await usagePage.cpuInput().fill("16");
+    await usagePage.saveButton().click();
+
+    await expect(usagePage.dialog()).toBeHidden();
+    // 62.5 GiB, as a whole number of bytes.
+    expect(sent).toEqual([{ memory_limit_bytes: 67_108_864_000, cpu_limit_cores: 16 }]);
+    await expect.poll(() => requests.length).toBeGreaterThan(before);
+    await expect(page.getByText("Capacity limits saved")).toBeVisible();
+  });
+
+  test("a blank field clears that limit", async () => {
+    await openWith({ memory_limit_bytes: 70 * GIB, cpu_limit_cores: 24 });
+    const sent = await data.resourceUsage.interceptUpdateResourceLimits();
+    await usagePage.openCapacityDialog();
+
+    await usagePage.memoryInput().fill("");
+    await usagePage.cpuInput().fill("");
+    await usagePage.saveButton().click();
+
+    await expect(usagePage.dialog()).toBeHidden();
+    expect(sent).toEqual([{ memory_limit_bytes: null, cpu_limit_cores: null }]);
+  });
+
+  test("text that is not a positive number is caught before anything is sent", async ({ page }) => {
+    await openWith({});
+    const sent = await data.resourceUsage.interceptUpdateResourceLimits();
+    await usagePage.openCapacityDialog();
+
+    await usagePage.memoryInput().fill("lots");
+    await usagePage.cpuInput().fill("0");
+    await usagePage.saveButton().click();
+
+    await expect(page.getByText("Enter a number above 0, or leave it blank.")).toHaveCount(2);
+    await expect(usagePage.dialog()).toBeVisible();
+    expect(sent).toHaveLength(0);
+  });
+
+  test("an error from the API stays in the dialog, next to what caused it", async () => {
+    await openWith({});
+    await data.resourceUsage.interceptUpdateResourceLimits({
+      status: 422,
+      detail: "memory_limit_bytes must be at most 1125899906842624",
+    });
+    await usagePage.openCapacityDialog();
+
+    await usagePage.memoryInput().fill("70");
+    await usagePage.saveButton().click();
+
+    await expect(usagePage.dialog().getByTestId("capacity-limits-error")).toBeVisible();
+    await expect(usagePage.dialog()).toBeVisible();
+  });
+
+  test("cancelling throws the edit away, so the next opening starts from what is saved", async () => {
+    await openWith({ memory_limit_bytes: 70 * GIB });
+    await usagePage.openCapacityDialog();
+    await usagePage.memoryInput().fill("5");
+
+    await usagePage.dialog().getByRole("button", { name: "Cancel" }).click();
+    await expect(usagePage.dialog()).toBeHidden();
+    await usagePage.openCapacityDialog();
+
+    await expect(usagePage.memoryInput()).toHaveValue("70");
   });
 });

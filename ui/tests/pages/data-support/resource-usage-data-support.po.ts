@@ -107,6 +107,21 @@ export function mockPlatformAgent(overrides: Record<string, unknown> = {}) {
   };
 }
 
+/**
+ * The namespace's ceilings and what it commits. By default nothing is entered, and the
+ * namespace commits 4 GiB and 1.5 cores, as the local cluster does.
+ */
+export function mockCapacity(overrides: Record<string, unknown> = {}) {
+  return {
+    memory_limit_bytes: null,
+    cpu_limit_cores: null,
+    limits_updated_at: null,
+    memory_committed_bytes: 4 * GIB,
+    cpu_committed_cores: 1.5,
+    ...overrides,
+  };
+}
+
 function platformTotals(overrides: Record<string, unknown> = {}) {
   return {
     agents_with_container: 2,
@@ -133,6 +148,7 @@ export function mockPlatformUsage(overrides: Record<string, unknown> = {}) {
     availability: "available",
     organization_id: null,
     totals: platformTotals(),
+    capacity: mockCapacity(),
     organizations: [
       {
         organization_id: PLATFORM_GLOBEX_ID,
@@ -208,6 +224,8 @@ export function mockPlatformUsageUnavailable(availability = "unavailable") {
       cpu_cores: null,
       cpu_limit_cores: null,
     },
+    // The limits come from the database, so they are there; the committed figure is not.
+    capacity: mockCapacity({ memory_committed_bytes: null, cpu_committed_cores: null }),
     organizations: [],
     agents: [],
     series: [],
@@ -296,5 +314,35 @@ export class ResourceUsageDataSupport {
       });
     });
     return requests;
+  }
+
+  /**
+   * Answers the save of the capacity limits. Returns the bodies it was sent, as the API sees
+   * them (snake_case). With no `body` it echoes them back as saved.
+   */
+  async interceptUpdateResourceLimits({
+    status = 200,
+    detail = "Memory limit must be greater than 0",
+  }: { status?: number; detail?: string } = {}): Promise<Record<string, unknown>[]> {
+    const sent: Record<string, unknown>[] = [];
+    await this.page.route("**/api/v1/platform/resource-limits", async (route) => {
+      if (route.request().method() !== "PUT") return route.fallback();
+      const body = route.request().postDataJSON() as Record<string, unknown>;
+      sent.push(body);
+      await route.fulfill({
+        status,
+        contentType: "application/json",
+        body: JSON.stringify(
+          status >= 400
+            ? { detail }
+            : {
+                memory_limit_bytes: body.memory_limit_bytes ?? null,
+                cpu_limit_cores: body.cpu_limit_cores ?? null,
+                updated_at: "2026-10-01T12:00:00Z",
+              },
+        ),
+      });
+    });
+    return sent;
   }
 }

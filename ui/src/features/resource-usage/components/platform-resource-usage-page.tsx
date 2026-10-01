@@ -26,6 +26,7 @@ import {
   THROTTLING_WARN_RATIO,
   usageRatio,
 } from "../utils";
+import { CapacitySection } from "./capacity-section";
 import { OrganizationsByUsage } from "./organizations-by-usage";
 import { PlatformAgentsUsageTable } from "./platform-agents-usage-table";
 import { CpuChart, MemoryChart } from "./resource-usage-charts";
@@ -134,6 +135,8 @@ export function PlatformResourceUsagePage() {
               </div>
             )}
             <UsageStats usage={usage} />
+            {/* Outside the availability check: the limits are in the database and stay editable. */}
+            <CapacitySection capacity={usage.capacity} />
             {usage.availability === "available" && (
               <>
                 <OrganizationsByUsage

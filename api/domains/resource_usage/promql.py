@@ -103,6 +103,26 @@ def platform_range_query(sel: str, step_seconds: int) -> str:
     )
 
 
+def namespace_limits_query() -> str:
+    """What every Pending or Running pod in the namespace commits in limits, by resource.
+
+    This is what a ResourceQuota counts for `limits.memory` and `limits.cpu`, so it is the
+    figure to hold against the ceiling an administrator enters. It comes from
+    kube-state-metrics, which already runs in the namespace under the tenant account, so
+    reading it needs no new permission. It covers every pod (API, UI, database, Agents),
+    including Agents that do not report through their own healthz server yet.
+
+    Pinned to the `kube-state-metrics` job, as the Agent queries are pinned to `agent`.
+    A pod that finished (Succeeded or Failed) no longer counts, as with the quota.
+    """
+    ksm = 'job="kube-state-metrics"'
+    return (
+        f'sum by (resource) (kube_pod_container_resource_limits{{{ksm}, resource=~"memory|cpu"}}'
+        f" * on (namespace, pod) group_left ()"
+        f' (kube_pod_status_phase{{{ksm}, phase=~"Pending|Running"}} == 1))'
+    )
+
+
 def _agent_id_from_app(labels: Mapping[str, str]) -> UUID | None:
     """The Agent a result row belongs to, read from its `app="agent-<uuid>"` label."""
     app = labels.get("app", "")
@@ -144,6 +164,17 @@ def group_instant_all(samples: Iterable[PrometheusSample]) -> dict[UUID, dict[st
         if agent_id is not None and field:
             grouped.setdefault(agent_id, {})[field] = sample.value
     return grouped
+
+
+def group_namespace_limits(samples: Iterable[PrometheusSample]) -> dict[str, float]:
+    """The namespace's committed limits as {"memory": bytes, "cpu": cores}.
+
+    A resource the source did not answer for is absent, not zero: no figure is not the same
+    as nothing committed.
+    """
+    return {
+        resource: sample.value for sample in samples if (resource := sample.labels.get("resource")) in ("memory", "cpu")
+    }
 
 
 def group_totals(series: Iterable[PrometheusSeries]) -> dict[str, dict[int, float]]:
