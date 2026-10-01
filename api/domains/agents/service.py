@@ -10,6 +10,7 @@ from uuid import UUID
 
 from fastapi import HTTPException, status
 from injector import inject, singleton
+from pydantic import ValidationError
 
 from api.core.config import Config
 from api.domains.agent_settings.lookup import AgentSettingsLookupService
@@ -26,6 +27,8 @@ from api.domains.agents.aai_cli_artifacts import (
 from api.domains.agents.aai_cli_skills import build_skills_manifest
 from api.domains.agents.authorization import AgentAuthorization
 from api.domains.agents.builders import (
+    HERMES_WORKSPACE_DIR,
+    OPENCLAW_WORKSPACE_DIR,
     build_config_map,
     build_deployment,
     build_hermes_config_map,
@@ -111,6 +114,7 @@ from api.domains.agents.repository import AgentRepository
 from api.domains.agents.runtime_digest import agent_runtime_config_digest
 from api.domains.agents.runtime_policy import (
     build_chat_commands_policy_md,
+    build_file_delivery_policy_md,
     build_messaging_policy_md,
     build_role_scope_policy_md,
 )
@@ -233,6 +237,11 @@ def _enrich_atlassian_content(content: Any) -> Any:
         else:
             logger.warning(f"Failed to fetch Confluence cloud_id for {content.site_url}: {cloud_err}")
     return content
+
+
+def _validation_problems(exc: ValidationError) -> str:
+    """Field paths and messages of a validation failure, without the rejected values."""
+    return "; ".join(f"{'.'.join(str(p) for p in e['loc'])}: {e['msg']}" for e in exc.errors(include_input=False))
 
 
 def filter_models_by_allowlist(catalog: list[dict], allowlist: list[str]) -> list[dict]:
@@ -730,11 +739,21 @@ class AgentService:
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail=f"Provider {shared_cred.provider} already has a credential in this request",
                 )
-            shared_content = decrypt_content(
-                shared_cred.provider,
-                shared_cred.content,
-                self.config.agent_token_encryption_key,
-            )
+            try:
+                shared_content = decrypt_content(
+                    shared_cred.provider,
+                    shared_cred.content,
+                    self.config.agent_token_encryption_key,
+                )
+            except ValidationError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=(
+                        f"Shared credential {shared_cred.name!r} has stored "
+                        f"{PROVIDER_DISPLAY_NAMES[shared_cred.provider]} settings that are no longer valid "
+                        f"({_validation_problems(exc)}). Edit the shared credential and save it again."
+                    ),
+                ) from exc
             live_validation_contents.append((shared_cred.provider, shared_content))
             prepared_secrets.append(
                 AgentSecret(
@@ -1981,7 +2000,20 @@ class AgentService:
             else:
                 ciphertext = s.content
             assert ciphertext is not None
-            decrypted[provider] = decrypt_content(provider, ciphertext, key)
+            try:
+                decrypted[provider] = decrypt_content(provider, ciphertext, key)
+            except ValidationError as exc:
+                # Stored content is re-validated on every start, so a schema that tightened
+                # after the secret was saved (e.g. the Pipedrive domain rule) stops here with
+                # a fixable message rather than an unhandled error. Re-saving the
+                # integration replaces the stored content.
+                raise AgentProvisioningPrecondition(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=(
+                        f"The stored {PROVIDER_DISPLAY_NAMES[provider]} integration settings are no longer valid "
+                        f"({_validation_problems(exc)}). Edit the integration and save it again."
+                    ),
+                ) from exc
         self._backfill_google_client_credentials(decrypted)
         # Only google_workspace is materialized. The retired per-service Google providers
         # and their rows were deleted by migration; affected agents must reconnect through
@@ -2132,11 +2164,16 @@ class AgentService:
         # in the auto-loaded prompt no matter that its skill is mounted.
         # gog gets its own block: the aai-cli one insists on --profile and on aai-cli
         # being the only route to its integrations, neither of which is true of gog.
+        workspace_dir = HERMES_WORKSPACE_DIR if agent.agent_type == AgentType.HERMES else OPENCLAW_WORKSPACE_DIR
         agents_md = (
             rendered.agents_md
             + build_integrations_policy_md(decrypted)
             + build_gog_policy_md(gws_content if isinstance(gws_content, GoogleWorkspaceContent) else None)
             + build_local_tools_policy_md(s.name for s in mounted_skills)
+            + build_file_delivery_policy_md(
+                # Native adapters attach MEDIA: files; gateway-owned Connections send text only.
+                workspace_dir if any(c is not None for c in (native_slack, native_discord, native_telegram)) else None
+            )
             + build_chat_commands_policy_md()
             + build_role_scope_policy_md()
             + build_messaging_policy_md()

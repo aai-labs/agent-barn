@@ -81,6 +81,7 @@ export function useUpdateOrganization({ toastOnError = true }: { toastOnError?: 
       return response.data;
     },
     onSuccess: (_, variables) => {
+      void queryClient.invalidateQueries({ queryKey: currentUserContextKey.all });
       void queryClient.invalidateQueries({ queryKey: organizationsKey.lists() });
       void queryClient.invalidateQueries({ queryKey: platformOrganizationsKey.lists() });
       void queryClient.invalidateQueries({

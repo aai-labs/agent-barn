@@ -291,6 +291,7 @@ Documentation-only changes do not change a service image and do not require a se
 ## Operational safety
 
 - Treat signing-key and encryption-key rotation as migrations: existing tokens or encrypted values depend on the current keys.
+- Treat a stricter provider content schema like a data migration too: every Agent start re-validates stored Agent Secrets and Shared Credentials, so rows saved under the old rule stop their Agents' starts (with a 400 naming the integration) until re-saved. Before deploying such a change, run `python -m api.scripts.check_secret_contents` in each environment's API pod. It is read-only, lists failing rows by id and provider without printing values, and exits non-zero when any fail.
 - Verify migration and secret-hook behavior when changing API chart startup.
 - Keep runtime/platform differences explicit when changing Hermes, OpenClaw, Slack, Teams, Telegram, or Discord deployment configuration.
 - The content-free Communications operation journal is retained for
@@ -346,3 +347,36 @@ Documentation-only changes do not change a service image and do not require a se
   `RESTORE_POINT_ORPHAN_MIN_AGE_SECONDS` is left alone, deletions are capped at
   `RESTORE_POINT_ORPHAN_DELETE_LIMIT` per run, and a failed or empty PVC listing fails no rows at
   all. A large backlog therefore drains over several runs rather than one.
+
+### Business Action backfill
+
+Ingest records Business Actions only for Tool Calls it completes after the Business Value
+release (see [`../features/business-value.md`](../features/business-value.md)). The backfill
+classifies the history that already exists. It is operator-run and never scheduled: nothing
+calls it from a router, and no CronJob runs it.
+
+- Run it against a deployed release from the API container, which holds the database
+  credentials:
+  `kubectl -n <namespace> exec deploy/<release> -c api -- python -c "from api.domains.business_value.backfill import main; main()"`.
+  Locally, `make backfill-business-actions` runs the same entry point against whatever
+  `DB_CONNECTION_URL` points at, so check that value before invoking it.
+- It walks completed `terminal` and `exec` Tool Calls in id order, `BACKFILL_BATCH_SIZE`
+  (500) per batch.
+  - It infers each action's status from the stored result, never from the Tool Call's own
+    status.
+  - It writes each batch in its own transaction, so an interrupted run keeps the batches it
+    finished.
+- It is safe to re-run. For each Tool Call it makes the stored rows match the current
+  catalogue, keyed on `(tool_call_id, ordinal)`, and it never changes a row's `status`:
+  - It inserts rows that are missing.
+  - It updates `integration`, `resource`, `verb`, `is_write`, and `outcome_type` (and
+    `updated_at`) only on rows whose mapping actually changed.
+  - It deletes rows the catalogue no longer produces, for example a path that is now ignored,
+    including every row of a Tool Call that now classifies to nothing.
+- A re-run with no catalogue change writes nothing and reports `recorded=0 removed=0`.
+- Each run logs one summary line: `scanned`, `recorded` (rows inserted or changed), `removed`,
+  `failed`. A non-zero `failed` means the classifier raised for those Tool Calls, whose ids are
+  logged individually. They are skipped, not retried, and keep their stored rows.
+- Classifier code changes that alter how a command is split into invocations can shift
+  ordinals. The backfill then deletes and re-inserts those Tool Calls' rows with new ids
+  instead of updating them.

@@ -921,7 +921,20 @@ test.describe("Agent Detail Page — Channels tab", () => {
     });
   });
 
-  test("shows provider setup requirements before connecting", async ({ page }) => {
+  test("copies the Slack manifest with the Agent name and description", async ({ page, context }) => {
+    await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+    await dataSupportPage.agents.interceptGetAgentRequest({
+      body: { ...mockAgent, name: "Maya Smith" },
+    });
+    await dataSupportPage.agents.interceptGetAgentConfigurationRequest({
+      body: {
+        ...mockAgentConfiguration,
+        active: {
+          ...mockAgentConfiguration.active,
+          description: "Onboards and offboards people",
+        },
+      },
+    });
     await page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}/connections`, async (route) => {
       if (route.request().method() !== "GET") return route.fallback();
       await route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
@@ -938,7 +951,17 @@ test.describe("Agent Detail Page — Channels tab", () => {
     await expect(page.getByText("connections:write", { exact: true })).toBeVisible();
     await expect(page.getByText("xapp-", { exact: true })).toBeVisible();
     await expect(page.getByRole("link", { name: "Slack app management" })).toHaveAttribute("href", "https://api.slack.com/apps");
-    await expect(page.getByRole("button", { name: "Copy Slack manifest" })).toBeVisible();
+    const copyManifest = page.getByRole("button", { name: "Copy Slack manifest" });
+    await expect(copyManifest).toBeVisible();
+    await copyManifest.click();
+    await expect(page.getByText("Slack manifest copied", { exact: true })).toBeVisible();
+    const copiedManifest = JSON.parse(await page.evaluate(() => navigator.clipboard.readText())) as {
+      display_information: { name: string; description: string };
+      features: { bot_user: { display_name: string } };
+    };
+    expect(copiedManifest.display_information.name).toBe("Maya Smith");
+    expect(copiedManifest.display_information.description).toBe("Onboards and offboards people");
+    expect(copiedManifest.features.bot_user.display_name).toBe("maya-smith");
 
     await agentDetailPage.selectPlatformButton("Discord").click();
     const discordHint = agentDetailPage.setupHint(/Invite the bot/);
@@ -952,6 +975,65 @@ test.describe("Agent Detail Page — Channels tab", () => {
     await expect(telegramHint).toContainText("getUpdates");
     await expect(telegramHint).toContainText("/setprivacy");
     await expect(telegramHint).toContainText("webhook");
+  });
+
+  test("encodes a Unicode Agent name in the Slack bot display name", async ({ page, context }) => {
+    await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+    await dataSupportPage.agents.interceptGetAgentRequest({
+      body: { ...mockAgent, name: "山田太郎" },
+    });
+    await page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}/connections`, async (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      await route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
+    });
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await agentDetailPage.configureButton().click();
+    await agentDetailPage.channelsTab().click();
+    await agentDetailPage.addConnectionButton().click();
+    await agentDetailPage.selectPlatformButton("Slack").click();
+
+    const copyManifest = page.getByRole("button", { name: "Copy Slack manifest" });
+    await copyManifest.click();
+    await expect(page.getByText("Slack manifest copied", { exact: true })).toBeVisible();
+    const copiedManifest = JSON.parse(await page.evaluate(() => navigator.clipboard.readText())) as {
+      display_information: { name: string };
+      features: { bot_user: { display_name: string } };
+    };
+    expect(copiedManifest.display_information.name).toBe("山田太郎");
+    expect(copiedManifest.features.bot_user.display_name).toBe("agent-5c71-7530-592a-90ce");
+  });
+
+  test("trims and bounds the Slack manifest to Slack's field limits", async ({ page, context }) => {
+    await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+    await dataSupportPage.agents.interceptGetAgentRequest({
+      body: { ...mockAgent, name: `  ${"A".repeat(34)} ${"b".repeat(60)}  ` },
+    });
+    await dataSupportPage.agents.interceptGetAgentConfigurationRequest({
+      body: {
+        ...mockAgentConfiguration,
+        active: { ...mockAgentConfiguration.active, description: `${"d".repeat(139)} ${"e".repeat(20)}` },
+      },
+    });
+    await page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}/connections`, async (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      await route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
+    });
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await agentDetailPage.configureButton().click();
+    await agentDetailPage.channelsTab().click();
+    await agentDetailPage.addConnectionButton().click();
+    await agentDetailPage.selectPlatformButton("Slack").click();
+
+    await page.getByRole("button", { name: "Copy Slack manifest" }).click();
+    await expect(page.getByText("Slack manifest copied", { exact: true })).toBeVisible();
+    const copiedManifest = JSON.parse(await page.evaluate(() => navigator.clipboard.readText())) as {
+      display_information: { name: string; description: string };
+      features: { bot_user: { display_name: string } };
+    };
+    // 34 "A"s + the space is 35 characters; the trailing space is trimmed off.
+    expect(copiedManifest.display_information.name).toBe("A".repeat(34));
+    expect(copiedManifest.display_information.description).toBe("d".repeat(139));
+    expect(copiedManifest.features.bot_user.display_name).toBe(`${"a".repeat(34)}-${"b".repeat(45)}`);
   });
 
   /** A saved Slack Connection, served in place of the default Discord one. */
