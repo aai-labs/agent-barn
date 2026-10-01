@@ -94,7 +94,6 @@ def _seed_connection(context, *, agent, platform=CommunicationPlatform.SLACK, di
         platform_key=platform.value,
         display_name=display_name or f"Stats {platform.value} {uuid7()}",
         credentials_encrypted="test-credentials",
-        driver_key_encrypted="test-driver-key",
     )
     delegate.save(connection)
     return connection

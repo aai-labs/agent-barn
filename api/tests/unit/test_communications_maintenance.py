@@ -33,7 +33,6 @@ def email_connection():
         platform_key="email",
         display_name="Email",
         credentials_encrypted="encrypted",
-        driver_key_encrypted="unused",
     )
 
 
@@ -58,7 +57,6 @@ def test_email_health_checks_configuration_without_provider_session_or_lease():
         error_message=None,
         error_details=None,
     )
-    worker.connections.claim_ingress_lease.assert_not_called()
 
 
 def test_bad_email_configuration_does_not_prevent_later_connections():

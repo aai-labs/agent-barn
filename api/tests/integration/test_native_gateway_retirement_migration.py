@@ -10,7 +10,7 @@ from alembic import command
 from alembic.config import Config
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
-from sqlalchemy import create_engine, inspect, text
+from sqlalchemy import MetaData, Table, create_engine, inspect, text
 from sqlalchemy.engine import make_url
 from sqlmodel import Session, select
 
@@ -59,6 +59,7 @@ def retirement_database(monkeypatch):
 
 def seed(engine, *, bulk=False):
     now = datetime.now(UTC)
+    table = Table("communication_connection", MetaData(), autoload_with=engine)
     with Session(engine) as session:
         organizations = [Organization(name="Retirement A"), Organization(name="Retirement B")]
         session.add_all(organizations)
@@ -75,14 +76,15 @@ def seed(engine, *, bulk=False):
                     platform_key=platform,
                     display_name=platform,
                     credentials_encrypted="historical-credentials",
-                    driver_key_encrypted="historical-driver",
                     settings={"historical": "policy"},
                     credential_fingerprint=uuid4().hex,
                     credential_scope_key="historical",
                     retired_at=now if platform == "discord" else None,
                     enabled=platform != "telegram",
                 )
-                session.add(connection)
+                session.connection().execute(
+                    table.insert().values(**connection.model_dump(), driver_key_encrypted="historical-driver")
+                )
                 session.flush()
                 for direction in CommunicationDirection:
                     for status in CommunicationDeliveryStatus:
@@ -149,12 +151,18 @@ def seed(engine, *, bulk=False):
         return rows
 
 
+def connection_history(engine):
+    table = Table("communication_connection", MetaData(), autoload_with=engine)
+    with engine.connect() as connection:
+        return {row["id"]: dict(row) for row in connection.execute(table.select()).mappings()}
+
+
 def test_migration_cancels_only_native_live_work_and_preserves_history(retirement_database):
     database = retirement_database
     originals = seed(database.engine, bulk=True)
     schema = inspect(database.engine).get_columns("communication_connection")
+    original_connections = connection_history(database.engine)
     with Session(database.engine) as session:
-        connection_history = {row.id: row.model_dump() for row in session.exec(select(CommunicationConnection)).all()}
         messages = {row.id: row.model_dump() for row in session.exec(select(AgentChatMessage)).all()}
         prior_journal_ids = {row.id for row in session.exec(select(CommunicationJournalEntry)).all()}
     command.upgrade(database.config, REVISION)
@@ -185,9 +193,7 @@ def test_migration_cancels_only_native_live_work_and_preserves_history(retiremen
                     assert getattr(delivery, field) == original[field]
             else:
                 assert delivery.model_dump() == original
-        assert {
-            row.id: row.model_dump() for row in session.exec(select(CommunicationConnection)).all()
-        } == connection_history
+        assert connection_history(database.engine) == original_connections
         assert {row.id: row.model_dump() for row in session.exec(select(AgentChatMessage)).all()} == messages
         entries = session.exec(select(CommunicationJournalEntry)).all()
         assert prior_journal_ids.issubset({row.id for row in entries})

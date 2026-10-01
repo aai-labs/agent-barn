@@ -413,8 +413,6 @@ class CommunicationConnectionRepository:
                         "created_at",
                         "updated_at",
                         "revision",
-                        "ingress_lease_owner",
-                        "ingress_lease_expires_at",
                     },
                 )
                 for field, value in values.items():
@@ -444,11 +442,8 @@ class CommunicationConnectionRepository:
             connection.enabled = False
             connection.observed_status = None
             connection.credentials_encrypted = ""
-            connection.driver_key_encrypted = ""
             connection.credential_fingerprint = None
             connection.credential_scope_key = None
-            connection.ingress_lease_owner = None
-            connection.ingress_lease_expires_at = None
             connection.retired_at = now
             connection.updated_at = now
             connection.revision += 1

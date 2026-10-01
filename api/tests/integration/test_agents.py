@@ -2493,7 +2493,6 @@ def _native_discord_connection(context) -> None:
                 "home_channel_id": "channel-home",
             },
             credentials_encrypted=encrypt_token(json.dumps({"bot_token": "discord-token"}), TEST_ENCRYPTION_KEY),
-            driver_key_encrypted=encrypt_token("unused", TEST_ENCRYPTION_KEY),
         )
     )
 
@@ -2546,7 +2545,6 @@ def _native_telegram_connection(context) -> None:
                 "home_channel_id": "-1009",
             },
             credentials_encrypted=encrypt_token(json.dumps({"bot_token": "123:telegram-token"}), TEST_ENCRYPTION_KEY),
-            driver_key_encrypted=encrypt_token("unused", TEST_ENCRYPTION_KEY),
         )
     )
 
@@ -2595,7 +2593,6 @@ def _runtime_teams_connection(context) -> None:
                 json.dumps({"app_id": "teams-app", "app_password": "teams-secret", "tenant_id": "teams-tenant"}),
                 TEST_ENCRYPTION_KEY,
             ),
-            driver_key_encrypted=encrypt_token("unused", TEST_ENCRYPTION_KEY),
         )
     )
 
@@ -2644,7 +2641,6 @@ def _native_slack_connection(context) -> None:
             credentials_encrypted=encrypt_token(
                 json.dumps({"bot_token": "xoxb-token", "app_token": "xapp-token"}), TEST_ENCRYPTION_KEY
             ),
-            driver_key_encrypted=encrypt_token("unused", TEST_ENCRYPTION_KEY),
         )
     )
 

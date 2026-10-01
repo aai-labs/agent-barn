@@ -53,7 +53,6 @@ def there_is_a_connection(platform: CommunicationPlatform = CommunicationPlatfor
             platform_key=platform.value,
             display_name=f"{platform.value} {uuid7()}",
             credentials_encrypted="test-credentials",
-            driver_key_encrypted="test-driver-key",
         )
         _delegate(context).save(connection)
         context.connection = connection

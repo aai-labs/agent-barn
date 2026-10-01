@@ -75,7 +75,6 @@ def _ensure_native_connection(context, platform: str = "slack", settings: dict |
             display_name=f"Native {platform.title()}",
             settings=_default_channel_settings(platform) if settings is None else settings,
             credentials_encrypted="unused",
-            driver_key_encrypted="unused",
         )
     )
 

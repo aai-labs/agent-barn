@@ -29,6 +29,7 @@ from hamcrest import (
     not_none,
     starts_with,
 )
+from sqlalchemy import MetaData, Table
 from sqlmodel import Session, col, select
 from starlette.testclient import TestClient
 
@@ -469,7 +470,7 @@ def test_email_connection_is_created_without_any_per_agent_credential() -> None:
                 connection = session.exec(
                     select(CommunicationConnection).where(CommunicationConnection.id == UUID(body["id"]))
                 ).one()
-                assert_that(connection.driver_key_encrypted, equal_to(""))
+                assert_that(connection.model_dump(), not_(has_key("driver_key_encrypted")))
 
 
 @pytest.mark.parametrize("payload_factory", [_slack_payload, _discord_payload, _telegram_payload])
@@ -488,11 +489,69 @@ def test_new_native_connection_stores_provider_credentials_without_a_driver_key(
                 connection = session.exec(
                     select(CommunicationConnection).where(CommunicationConnection.id == UUID(body["id"]))
                 ).one()
-                assert_that(connection.driver_key_encrypted, equal_to(""))
+                assert_that(connection.model_dump(), not_(has_key("driver_key_encrypted")))
                 assert_that(
                     json.loads(decrypt_token(connection.credentials_encrypted, TEST_ENCRYPTION_KEY)),
                     equal_to(payload["credentials"]),
                 )
+
+
+@pytest.mark.parametrize("retire_agent", [False, True])
+def test_current_connection_crud_leaves_inert_legacy_fields_and_scrubs_provider_credentials(retire_agent) -> None:
+    with given(_GIVEN) as context:
+        created = context.client.post(_base(context), json=_discord_payload(), headers=_auth(context))
+        assert_that(created.status_code, equal_to(status.HTTP_201_CREATED))
+        connection_id = UUID(created.json()["id"])
+        delegate = context.injector.get(PostgresRepositoryDelegate)
+        # Reflection models an older reader/writer without reintroducing these
+        # retired fields into the current application mapping.
+        table = Table("communication_connection", MetaData(), autoload_with=delegate.engine)
+        legacy_fields = {
+            "driver_key_encrypted": "fixture-retired-driver",
+            "ingress_lease_owner": "fixture-retired-owner",
+            "ingress_lease_expires_at": datetime.now(UTC) + timedelta(hours=1),
+        }
+        with delegate.engine.begin() as connection:
+            connection.execute(table.update().where(table.c.id == connection_id).values(**legacy_fields))
+
+        with when("current code reads and updates a Connection with legacy values"):
+            listed = context.client.get(_base(context), headers=_auth(context))
+            updated = context.client.patch(
+                f"{_base(context)}/{connection_id}",
+                headers=_auth(context),
+                json={"revision": created.json()["revision"], "display_name": "Updated native Connection"},
+            )
+
+        with then("current reads omit legacy fields and updates preserve older readers' values"):
+            assert_that(listed.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(updated.status_code, equal_to(status.HTTP_200_OK))
+            for name in legacy_fields:
+                assert_that(updated.json(), not_(has_key(name)))
+            with delegate.engine.connect() as connection:
+                row = connection.execute(table.select().where(table.c.id == connection_id)).mappings().one()
+                assert_that({name: row[name] for name in legacy_fields}, equal_to(legacy_fields))
+
+        with when("current code retires the Connection or deletes its Agent"):
+            if retire_agent:
+                retired = context.client.delete(
+                    f"/api/v1/organizations/{context.organization.id}/agents/{context.agent.id}",
+                    headers=_auth(context),
+                )
+            else:
+                retired = context.client.delete(
+                    f"{_base(context)}/{connection_id}?revision={updated.json()['revision']}",
+                    headers=_auth(context),
+                )
+
+        with then("provider credentials and identities are released while legacy values remain inert"):
+            assert_that(retired.status_code, equal_to(status.HTTP_204_NO_CONTENT))
+            with delegate.engine.connect() as connection:
+                row = connection.execute(table.select().where(table.c.id == connection_id)).mappings().one()
+                assert_that({name: row[name] for name in legacy_fields}, equal_to(legacy_fields))
+                assert_that(row["credentials_encrypted"], equal_to(""))
+                assert_that(row["credential_fingerprint"], none())
+                assert_that(row["credential_scope_key"], none())
+                assert_that(row["retired_at"], not_none())
 
 
 def test_an_email_connection_is_allocated_its_own_address() -> None:
@@ -1599,7 +1658,6 @@ def _connection_for_current_agent(key: str, platform_key: str):
             platform_key=platform_key,
             display_name=key,
             credentials_encrypted="unused",
-            driver_key_encrypted="unused",
         )
         delegate.save(connection)
         setattr(context, key, connection)
@@ -1692,8 +1750,8 @@ def test_concurrent_email_configuration_health_emits_one_connection_transition()
             assert len(entries) == 1
             connection = session.get(CommunicationConnection, connection_id)
             assert connection is not None
-            assert connection.ingress_lease_owner is None
-            assert connection.ingress_lease_expires_at is None
+            assert_that(connection.model_dump(), not_(has_key("ingress_lease_owner")))
+            assert_that(connection.model_dump(), not_(has_key("ingress_lease_expires_at")))
 
 
 def test_email_maintenance_pages_only_enabled_nonretired_email_connections() -> None:

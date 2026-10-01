@@ -203,11 +203,6 @@ class CommunicationConnection(BaseModel, table=True):
         sa_column=Column(sa.JSON(), nullable=False, server_default="{}"),
     )
     credentials_encrypted: str = SqlField(nullable=False, sa_type=sa.Text)
-    # Retained for older mapped readers until physical schema contraction.
-    driver_key_encrypted: str = SqlField(
-        default="",
-        sa_column=Column(sa.Text(), nullable=False, server_default=""),
-    )
     external_identity: str | None = SqlField(default=None, nullable=True, max_length=512)
     credential_fingerprint: str | None = SqlField(default=None, nullable=True, max_length=128)
     credential_scope_key: str | None = SqlField(default=None, nullable=True, max_length=128)
@@ -225,12 +220,6 @@ class CommunicationConnection(BaseModel, table=True):
     last_error_details: dict[str, Any] | None = SqlField(
         default=None,
         sa_column=Column(JSONB, nullable=True),
-    )
-    ingress_lease_owner: str | None = SqlField(default=None, nullable=True, max_length=64)
-    ingress_lease_expires_at: datetime | None = SqlField(
-        default=None,
-        nullable=True,
-        sa_type=sa.DateTime(timezone=True),  # type: ignore
     )
     revision: int = SqlField(
         default=1,

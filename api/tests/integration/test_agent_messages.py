@@ -69,7 +69,6 @@ def test_database_enforces_one_default_including_disabled_connections():
             enabled=False,
             settings=dict(context.connection.settings),
             credentials_encrypted=context.connection.credentials_encrypted,
-            driver_key_encrypted=context.connection.driver_key_encrypted,
         )
         with pytest.raises(IntegrityError):
             context.injector.get(PostgresRepositoryDelegate).save(other)

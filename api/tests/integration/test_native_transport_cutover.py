@@ -20,7 +20,6 @@ def test_retired_driver_ingress_is_absent(platform_key: str) -> None:
         change_connection(
             context,
             platform_key=platform_key,
-            driver_key_encrypted=encrypt_token("legacy-driver", TEST_ENCRYPTION_KEY),
         )
         url = f"/communications/v1/connections/{context.connection.id}/events"
         with when("a legacy driver submits an event with invalid and valid credentials"):

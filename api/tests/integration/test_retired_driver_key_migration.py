@@ -11,10 +11,9 @@ from hamcrest import assert_that, equal_to, is_, none
 from sqlalchemy import MetaData, Table, create_engine, inspect, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError
-from sqlmodel import Session, select
+from sqlmodel import Session
 
 from api.domains.agents.models import Agent
-from api.domains.communications.models import CommunicationConnection
 from api.domains.organizations.models import Organization
 
 PREVIOUS_REVISION = "72c4a9e1b6d8"
@@ -59,8 +58,7 @@ def driver_key_database(monkeypatch):
 
 
 def insert_connection(database, platform, **legacy_fields):
-    # Reflection avoids the current model's Python default, proving the database
-    # accepts a future writer that omits the retired column entirely.
+    # Reflection supports both historical explicit writers and omitted-column writers.
     table = Table("communication_connection", MetaData(), autoload_with=database.engine)
     with database.engine.begin() as connection:
         return connection.execute(
@@ -94,20 +92,12 @@ def test_driver_default_preserves_old_rows_and_accepts_old_and_future_writers(dr
     omitted_id = insert_connection(database, "web")
     explicit_id = insert_connection(database, "email", driver_key_encrypted="fixture-old-writer")
 
-    with Session(database.engine) as session:
-        # The retained mapping represents older readers of all legacy columns.
-        assert_that(
-            session.exec(select(CommunicationConnection).where(CommunicationConnection.id == omitted_id))
-            .one()
-            .driver_key_encrypted,
-            equal_to(""),
-        )
-        assert_that(
-            session.exec(select(CommunicationConnection).where(CommunicationConnection.id == explicit_id))
-            .one()
-            .driver_key_encrypted,
-            equal_to("fixture-old-writer"),
-        )
+    with database.engine.connect() as connection:
+        # Reflection selects every retained column like older mapped readers.
+        omitted = connection.execute(table.select().where(table.c.id == omitted_id)).mappings().one()
+        explicit = connection.execute(table.select().where(table.c.id == explicit_id)).mappings().one()
+        assert_that(omitted["driver_key_encrypted"], equal_to(""))
+        assert_that(explicit["driver_key_encrypted"], equal_to("fixture-old-writer"))
     with database.engine.connect() as connection:
         assert_that(
             dict(connection.execute(table.select().where(table.c.id == historical_id)).mappings().one()),
@@ -134,13 +124,10 @@ def test_driver_default_downgrade_preserves_rows_and_restores_required_explicit_
         if column["name"] == "driver_key_encrypted"
     )
     assert_that(driver["default"], none())
-    with Session(database.engine) as session:
-        assert_that(
-            session.exec(select(CommunicationConnection).where(CommunicationConnection.id == created_id))
-            .one()
-            .driver_key_encrypted,
-            equal_to(""),
-        )
+    with database.engine.connect() as connection:
+        table = Table("communication_connection", MetaData(), autoload_with=database.engine)
+        created = connection.execute(table.select().where(table.c.id == created_id)).mappings().one()
+        assert_that(created["driver_key_encrypted"], equal_to(""))
     with pytest.raises(IntegrityError):
         insert_connection(database, "email")
     insert_connection(database, "email", driver_key_encrypted="fixture-old-writer")

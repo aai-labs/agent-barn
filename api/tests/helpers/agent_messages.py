@@ -64,7 +64,6 @@ def messaging_ready(context):
         credentials_encrypted=encrypt_token(
             json.dumps({"bot_token": "xoxb-test", "app_token": "xapp-test"}), TEST_ENCRYPTION_KEY
         ),
-        driver_key_encrypted="unused",
     )
     delegate.save(context.connection)
     context.runtime_headers = {"Authorization": "Bearer runtime-key", "X-AgentBarn-Communications-Version": "2"}

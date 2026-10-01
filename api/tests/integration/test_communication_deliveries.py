@@ -92,7 +92,6 @@ def _create_connection(
         platform_key="web",
         display_name=display_name,
         credentials_encrypted="unused",
-        driver_key_encrypted="unused",
     )
     context.injector.get(PostgresRepositoryDelegate).save(connection)
     return connection.id
@@ -179,7 +178,6 @@ def test_runtime_claim_skips_native_platform_deliveries() -> None:
             platform_key="slack",
             display_name="Native Slack",
             credentials_encrypted="unused",
-            driver_key_encrypted="unused",
         )
         delegate.save(native_connection)
         gateway_connection_id = _create_connection(context)
@@ -211,7 +209,6 @@ def test_outbound_claim_skips_native_platform_deliveries() -> None:
             platform_key="slack",
             display_name="Native Slack",
             credentials_encrypted="unused",
-            driver_key_encrypted="unused",
         )
         delegate.save(native_connection)
         gateway_connection_id = _create_connection(context)

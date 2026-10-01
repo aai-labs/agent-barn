@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid7
 
 from fastapi import status
-from hamcrest import assert_that, contains_inanyorder, equal_to, has_length, is_, none, not_
+from hamcrest import assert_that, contains_inanyorder, equal_to, has_key, has_length, is_, none, not_
 from sqlmodel import Session, select
 from starlette.testclient import TestClient
 
@@ -111,7 +111,7 @@ def test_send_then_list_messages_round_trips_on_the_default_thread():
                         CommunicationConnection.platform_key == "web",
                     )
                 ).one()
-                assert_that(connection.driver_key_encrypted, equal_to(""))
+                assert_that(connection.model_dump(), not_(has_key("driver_key_encrypted")))
 
 
 def test_failed_web_chat_message_exposes_the_safe_error_summary():
