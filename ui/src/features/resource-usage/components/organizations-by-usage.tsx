@@ -18,6 +18,9 @@ const NO_LIVE_AGENT_HINT =
 const ROW_COLUMNS =
   "grid-cols-[minmax(0,1fr)_72px_84px] sm:grid-cols-[minmax(140px,1fr)_140px_90px_90px]";
 
+/** Organizations listed when the page is not narrowed to one. */
+const TOP_COUNT = 5;
+
 interface OrganizationsByUsageProps {
   organizations: PlatformOrganizationUsage[];
   activeOrganizationId: string | null;
@@ -27,18 +30,27 @@ interface OrganizationsByUsageProps {
 /**
  * Organizations ranked by memory in use, doubling as a one-click filter.
  *
- * The no-live-agent row stays in the list rather than being filtered out: without it the
- * rows would not add up to the platform total above them, and leaked containers would be
- * invisible.
+ * Narrowed to one organization, it shows only that one. Otherwise it shows the top five.
+ * The no-live-agent row is kept beside them whatever the count: without it the rows would
+ * not add up to the platform total above them, and leaked containers would be invisible.
+ * It is the one row that is not an organization, so it does not use up one of the five.
  */
 export function OrganizationsByUsage({
   organizations,
   activeOrganizationId,
   onSelect,
 }: OrganizationsByUsageProps) {
-  if (organizations.length === 0) return null;
+  const named = organizations.filter((row) => row.organizationId !== null);
+  const noLiveAgent = organizations.find((row) => row.organizationId === null);
+  // A narrowed page leaves the no-live-agent row out too: its totals do not include it.
+  const shown = activeOrganizationId
+    ? named.filter((row) => row.organizationId === activeOrganizationId)
+    : [...named.slice(0, TOP_COUNT), ...(noLiveAgent ? [noLiveAgent] : [])];
+  const hiddenCount = activeOrganizationId ? 0 : named.length - TOP_COUNT;
 
-  const top = Math.max(...organizations.map((row) => row.memoryWorkingSetBytes ?? 0), 0);
+  if (shown.length === 0) return null;
+
+  const top = Math.max(...shown.map((row) => row.memoryWorkingSetBytes ?? 0), 0);
 
   return (
     <div className="af-card mb-6 p-4" data-testid="organizations-by-usage">
@@ -46,7 +58,7 @@ export function OrganizationsByUsage({
         Organizations by memory
       </h2>
       <div className="flex flex-col">
-        {organizations.map((organization) => {
+        {shown.map((organization) => {
           const id = organization.organizationId;
           const isActive = id !== null && id === activeOrganizationId;
           const isNoLiveAgent = id === null;
@@ -113,6 +125,16 @@ export function OrganizationsByUsage({
           );
         })}
       </div>
+      {hiddenCount > 0 && (
+        <p
+          className="m-0 mt-2 px-2 text-[12.5px]"
+          style={{ color: "var(--ink-4)" }}
+          data-testid="organizations-by-usage-note"
+        >
+          Showing the top {TOP_COUNT} of {named.length} organizations. Use the organization filter
+          to see another.
+        </p>
+      )}
     </div>
   );
 }

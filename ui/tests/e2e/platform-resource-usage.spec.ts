@@ -55,8 +55,10 @@ test.describe("Platform resource usage (platform_admin)", () => {
     await expect(usagePage.stat("near-limit")).toContainText("1");
     await expect(usagePage.stat("throttled")).toContainText("1");
 
-    // Heaviest first, with the container nobody owns last.
+    // Heaviest first, with the container nobody owns last. Three rows is under the top
+    // five, so nothing is held back and there is nothing to explain.
     await expect(usagePage.organizationRows()).toHaveCount(3);
+    await expect(page.getByTestId("organizations-by-usage-note")).toHaveCount(0);
     await expect(usagePage.organizationRows().nth(0)).toContainText("Globex");
     await expect(usagePage.organizationRows().nth(1)).toContainText("Acme");
     await expect(usagePage.organizationRows().nth(2)).toContainText("No live agent");
@@ -68,6 +70,45 @@ test.describe("Platform resource usage (platform_admin)", () => {
 
     await expect(page.getByTestId("platform-usage-memory-chart")).toBeVisible();
     await expect(page.getByTestId("platform-usage-cpu-chart")).toBeVisible();
+  });
+
+  test("lists the top five organizations, keeps the no-live-agent row, and says how many more", async ({
+    page,
+  }) => {
+    // Seven organizations, heaviest first, then the container nobody owns: the order the
+    // API sends them in.
+    const named = Array.from({ length: 7 }, (_, index) => ({
+      organization_id: `00000000-0000-4000-8000-0000000001${String(index).padStart(2, "0")}`,
+      organization_name: `Org ${index}`,
+      agents_with_container: 1,
+      agents_reporting: 1,
+      memory_working_set_bytes: (8 - index) * 100_000_000,
+      memory_limit_bytes: 2_147_483_648,
+      cpu_cores: 0.1,
+      cpu_limit_cores: 1,
+    }));
+    const noLiveAgent = {
+      ...named[0],
+      organization_id: null,
+      organization_name: null,
+      agents_with_container: 0,
+      memory_working_set_bytes: 50_000_000,
+    };
+    await data.resourceUsage.interceptPlatformResourceUsage({
+      body: mockPlatformUsage({ organizations: [...named, noLiveAgent] }),
+    });
+
+    await usagePage.goto();
+
+    // Five organizations, then the no-live-agent row as a sixth: it is not one of the five.
+    await expect(usagePage.organizationRows()).toHaveCount(6);
+    await expect(usagePage.organizationRows().nth(0)).toContainText("Org 0");
+    await expect(usagePage.organizationRows().nth(4)).toContainText("Org 4");
+    await expect(usagePage.organizationRows().nth(5)).toContainText("No live agent");
+    await expect(page.getByText("Org 5")).toHaveCount(0);
+    await expect(page.getByTestId("organizations-by-usage-note")).toContainText(
+      "Showing the top 5 of 7 organizations",
+    );
   });
 
   test("keeps each organization on one compact line, with its reporting count", async () => {
@@ -131,16 +172,21 @@ test.describe("Platform resource usage (platform_admin)", () => {
 
     await expect(usagePage.agentRows()).toHaveCount(1);
     await expect(usagePage.stat("memory")).toContainText("1 GiB");
-    // The list still offers every organization, so the filter can be switched.
-    await expect(usagePage.organizationRows()).toHaveCount(3);
+    // Narrowed, the card shows that organization alone: not the others, and not the
+    // container with no live agent, which the narrowed totals leave out.
+    await expect(usagePage.organizationRows()).toHaveCount(1);
+    await expect(usagePage.organizationRow(PLATFORM_ACME_ID)).toHaveAttribute("aria-pressed", "true");
+    await expect(usagePage.organizationRow(PLATFORM_GLOBEX_ID)).toHaveCount(0);
+    await expect(usagePage.organizationRow("none")).toHaveCount(0);
     await expect(page).toHaveURL(new RegExp(`orgId=${PLATFORM_ACME_ID}`));
     await expect(page).toHaveURL(/orgName=Acme/);
     expect(requests.at(-1)?.get("organization_id")).toBe(PLATFORM_ACME_ID);
 
-    // Clicking it again clears the filter.
+    // Clicking it again clears the filter, and the others come back.
     await usagePage.organizationRow(PLATFORM_ACME_ID).click();
 
     await expect(usagePage.agentRows()).toHaveCount(3);
+    await expect(usagePage.organizationRows()).toHaveCount(3);
     await expect(page).not.toHaveURL(/orgId=/);
     expect(requests.at(-1)?.get("organization_id")).toBeNull();
   });

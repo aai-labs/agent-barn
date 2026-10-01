@@ -235,8 +235,8 @@ class PlatformResourceUsageRead(PydanticBaseModel):
     # Narrowed to `organization_id` when one is given. The counts come from the database,
     # so they are there even when the source is not.
     totals: PlatformUsageTotalsRead
-    # Always the whole platform, heaviest memory first, so a filtered page can still
-    # switch to another Organization. The no-live-Agent row, if any, is last.
+    # Always the whole platform, whatever the filter, heaviest memory first, with the
+    # no-live-Agent row, if any, last. How many of them to show is the page's choice.
     organizations: list[PlatformOrganizationUsageRead] = []
     # Every reporting Agent within the filter, heaviest memory first.
     agents: list[PlatformAgentUsageRead] = []
