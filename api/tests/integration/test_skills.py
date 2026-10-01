@@ -537,6 +537,56 @@ def test_platform_admin_can_list_global_skills():
         assert_that([skill["name"] for skill in response.json()], has_item("Global Platform Skill"))
 
 
+def test_platform_admin_can_draft_and_publish_a_builtin_skill_that_requires_a_provider():
+    """Stored required_providers read back as plain strings; starting a draft from them
+    raised AttributeError (HTTP 500), which blocked re-syncing a bundled aai-cli Skill."""
+    platform_admin_id = uuid7()
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_skill(name="Pipedrive", global_skill=True, required_providers=[SecretProvider.PIPEDRIVE]),
+            there_is_a_user(
+                id=platform_admin_id,
+                email="platform-skill-curator@example.com",
+                role=OrganizationRole.MEMBER,
+                is_platform_admin=True,
+            ),
+            there_is_an_access_token_for_user(user_id=platform_admin_id),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        skill_id = context.skill.id
+
+        with when("I start a draft, replace its files, and publish"):
+            started = client.post(f"{_PLATFORM_BASE}/{skill_id}/draft", headers=_auth(context))
+            updated = client.patch(
+                f"{_PLATFORM_BASE}/{skill_id}/draft",
+                json={"files": _files(content="# Pipedrive v2")},
+                headers=_auth(context),
+            )
+            published = client.post(f"{_PLATFORM_BASE}/{skill_id}/draft/publish", headers=_auth(context))
+
+        with then("the draft keeps the provider and publishes as v2"):
+            assert_that(started.status_code, equal_to(status.HTTP_201_CREATED))
+            assert_that(started.json()["required_providers"], equal_to(["pipedrive"]))
+            assert_that(updated.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(published.status_code, equal_to(status.HTTP_201_CREATED))
+            assert_that(published.json()["version"], equal_to(2))
+            assert_that(published.json()["required_providers"], equal_to(["pipedrive"]))
+
+
+def test_fork_builtin_skill_that_requires_a_provider_keeps_it():
+    with given(
+        [*_GIVEN, there_is_a_skill(name="Pipedrive", global_skill=True, required_providers=[SecretProvider.PIPEDRIVE])]
+    ) as context:
+        with when("I fork the built-in skill"):
+            response = context.client.post(f"{_BASE}/{context.skill.id}/fork", headers=_auth(context))
+
+        with then("the fork's draft keeps the required provider"):
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+            assert_that(response.json()["required_providers"], equal_to(["pipedrive"]))
+
+
 def test_platform_admin_can_create_and_publish_platform_skill():
     platform_admin_id = uuid7()
     with given(
