@@ -11,6 +11,7 @@ from api.core.metrics import BUSINESS_ACTIONS, TOOL_CALLS
 from api.domains.agents.models import Agent
 from api.domains.agents.repository import AgentRepository
 from api.domains.business_value.catalogue import INTEGRATIONS
+from api.domains.business_value.gog_catalogue import GOG_INTEGRATIONS
 from api.domains.business_value.models import BusinessAction
 from api.domains.business_value.repository import BusinessActionRepository
 from api.domains.communications.models import CommunicationJournalStage, ConnectionObservedStatus
@@ -25,6 +26,7 @@ from api.infrastructure.crypto import decrypt_token
 logger = logging.getLogger(__name__)
 
 OTHER_INTEGRATION_LABEL = "other"
+LABELLED_INTEGRATIONS = INTEGRATIONS | GOG_INTEGRATIONS
 UNKNOWN_WRITE_LABEL = "unknown"
 
 _HEALTH_BY_STAGE = {
@@ -180,7 +182,7 @@ def _business_action_labels(action: BusinessAction) -> dict[str, str]:
     else:
         is_write = str(action.is_write).lower()
     return {
-        "integration": action.integration if action.integration in INTEGRATIONS else OTHER_INTEGRATION_LABEL,
+        "integration": action.integration if action.integration in LABELLED_INTEGRATIONS else OTHER_INTEGRATION_LABEL,
         "is_write": is_write,
         "status": action.status.value.lower(),
     }

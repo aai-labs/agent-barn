@@ -11,11 +11,56 @@ Related context: [Activity and Ingest](../activity-and-ingest.md), [Agent Activi
 - Also delivered: the `business_action` table (migration `39ea6a8e2fe4`) and `BusinessActionRepository.record_in_session`.
 - Also delivered: Ingest records Business Actions for every completed shell Tool Call and exports `agentbarn_business_actions_total`. The feature doc is [`../business-value.md`](../business-value.md).
 - Also delivered: the operator backfill (`make backfill-business-actions`) for Tool Calls stored before Ingest recorded Business Actions.
-- In transition: nothing. The live end-to-end check passed on local k3d on 2026-09-28.
-- Next: the reporting ticket that reads Business Actions and reports `UNKNOWN` as unverified.
-- Blockers: the product owner has not signed off the default minutes per Outcome Type. They are placeholders until then.
+- Also delivered: the `organization_value_settings` and `organization_outcome_minutes` tables (migration `1045836844da`).
+- Also delivered: the `organization.value_settings.changed` Domain Event, registered and projected to the security audit and emitted by the value settings API.
+- Also delivered: the pure valuation rules in `api/domains/business_value/service.py` (effective minutes, value, the value-to-spend ratio, and write categories).
+- Also delivered: `ValueSettingsRepository`, which saves value settings and stages `organization.value_settings.changed` in one transaction.
+- Also delivered: `GET` and `PUT /organizations/{organization_id}/value-settings`. The feature doc's [Value settings](../business-value.md#value-settings) section is the contract.
+- Also delivered: the scoped Business Action aggregate reads the value KPI needs.
+- Also delivered: `GET /organizations/{organization_id}/value`, the Organization value KPI. The feature doc's [Organization value](../business-value.md#organization-value) section is the contract.
+- Also delivered: gog (Google Workspace) commands are classified as Business Actions and valued like aai-cli ones. See the feature doc's [gog commands](../business-value.md#gog-commands) section.
+- Also delivered: review fixes. Value-settings saves are serialized under a row lock and record what they actually replaced, and the per-bucket Business Action query no longer builds an unused bucket spine.
+- In transition: nothing. gog classification is deployed to local k3d and was verified live.
+- Next: the Stage 3 UI that renders value settings and the Organization value.
+- Blockers: the product owner has not signed off the default minutes per Outcome Type. They are placeholders until then, and every value figure inherits them.
 
 ## Slice history
+
+### 2026-10-01 — AF-345 — Review fixes: serialized value-settings saves and a simpler bucket query
+
+Finding 1: a race on the first save, and an audit diff read outside the write.
+- **Problem:**
+  - `ValueSettingsRepository.save_with_event` selected the settings row and created it if it was missing. Two concurrent first saves both inserted, and the second failed on `uq_organization_value_settings_organization_id`, returning a 500.
+  - `update_settings` also read the current values in separate sessions before the write, so two overlapping saves could record the same `previous`.
+- **Fix:** `save_with_event` now owns the whole diff, in one transaction:
+  1. `INSERT … ON CONFLICT DO NOTHING` for the settings row;
+  2. `SELECT … FOR UPDATE` on that row;
+  3. read the overrides;
+  4. compare only the addressed fields;
+  5. write;
+  6. stage the event only when something changed. This follows `AgentRepository`'s update-with-event pattern.
+- A plain `FOR UPDATE` would not have been enough: an Organization's first save has no row to lock.
+- **Proven before the fix** on Postgres 18 (READ COMMITTED), with two concurrent connections:
+  - the old path waits, then fails with `UniqueViolation`;
+  - the new path waits, then records the value the other save committed, including overrides that save added.
+- **Trade-off:** the first save that addresses anything creates the settings row, even a minutes-only save. `hourly_rate_usd = NULL` still means unset, exactly like no row. A request that addresses nothing still writes nothing.
+
+Finding 2: `successful_counts_by_bucket` built a `generate_series` spine that `_series` never iterated.
+- `_series` loops over `CostRepository.spend_series` buckets and looks counts up by key, so the extra `(bucket, None, 0)` rows were never used.
+- The query is now a plain `GROUP BY` on `date_trunc(unit, timezone('UTC', occurred_at))` and `outcome_type`, the same key the spend spine uses.
+
+Coverage:
+- `test_value_settings.py::test_a_concurrent_first_save_waits_and_records_what_it_replaced`:
+  - holds an uncommitted settings row on one connection, then sends `PUT /value-settings` from a second thread;
+  - waits until `pg_stat_activity` shows that thread blocked on a lock, then commits.
+  - Before the fix it failed with `IntegrityError` on the unique constraint. After it, the save returns 200 and records `previous: "10.00"`.
+- The repository tests now assert the diff the repository computes:
+  - an unchanged save stages no event and returns no delivery ids;
+  - an unaddressed rate is left alone;
+  - a minutes-only save leaves the rate unset;
+  - a rejected event writes nothing.
+- The 27 API tests are unchanged and pass.
+- `test_organization_value.py::test_successful_counts_by_bucket_are_keyed_on_the_spend_series_buckets` now rejects gap rows. It failed against the spine, which returned 4 rows including `(…, None, 0)`, and passes with the `GROUP BY`. All 24 value tests pass, including the series tests that need every bucket.
 
 ### 2026-10-01 — AF-344 — Review fixes: backfill removes stale actions and writes only changes
 
@@ -36,6 +81,258 @@ Coverage:
   - keeping rows when classification fails
   - a no-change re-run writing nothing (`updated_at` unchanged)
 - The re-map test now checks `recorded=1` and that `updated_at` moved on the re-mapped row.
+
+### 2026-09-29 — AF-345 — gog (Google Workspace) classification
+
+Scope: added to AF-345 at the user's request, and noted on the PR.
+
+Why:
+- Google Workspace Integrations reach Google only through gog (`integrations.md`). The classifier matched only `aai-cli`, so all of an Agent's Gmail, Calendar, Drive, and Sheets work produced no Business Action.
+- aai-cli's own `drive` group has no credential in Agent Barn, so it did not cover this work either.
+
+Evidence (local k3d, gog `v0.37.0 (45b5d766)`, identical binary sha256 `ba1a5b40…36e0c` in both runtime images):
+- `gog schema --json` has 586 leaf commands, and 209 of them belong to the four services a Google Workspace credential can grant. No node marks commands as reads or writes.
+- Errors are plain text on stderr, with no JSON envelope even with `--json`. A missing account and a usage error both exit `2`.
+- Empty results exit `0`. Exit `3` happens only with the opt-in `--fail-empty`.
+- `--dry-run` exits `0` and prints `{"dry_run": true, …}`. A search afterwards confirmed nothing was created.
+- Live Web Chat Tool Calls:
+  - Hermes, a failed read: `exit_code` 2.
+  - Hermes, a successful read: `exit_code` 0.
+  - Hermes, a successful write: `drive mkdir`, `exit_code` 0. The user ran it against their own workspace; it left one empty folder, `agentbarn-gog-probe`.
+  - OpenClaw: the Agent appended `; echo "EXIT_CODE:$?"`, which hid gog's exit code.
+  - None of them produced a Business Action before this change.
+
+Delivered:
+- `api/domains/business_value/gog_catalogue.py`:
+  - all 209 command paths, classified by hand under the same rules as aai-cli: 84 reads, 16 ignored, and 109 writes over the existing 10 Outcome Types;
+  - alias tables, top-level shortcuts, value-taking global flags, and ignored tooling commands, generated from the recorded command tree.
+- The classifier recognises `gog` alongside `aai-cli`:
+  - `integration` is `google-<service>`, keeping it apart from aai-cli's `drive` and `email` groups.
+  - Dry runs, help, tooling, and ignored entries are dropped.
+  - Other Google services are stored as unclassified.
+  - gog ordinals follow the aai-cli ordinals, so no stored ordinal moves.
+  - Status comes from the exit code only. Exit `3` counts as success only for a single gog command.
+- The `agentbarn_business_actions` metric labels the four `google-*` integrations by name; any other value is still `other`.
+- The runtime config digest is unchanged: `4827db07…f9d47` before and after, for fixed image names. No `business_value` module is in the Agent start closure.
+
+Coverage:
+- Fixtures:
+  - `api/tests/fixtures/business_actions/gog_hermes.json` (3) and `gog_openclaw.json` (1) hold the real Tool Calls. Every string inside gog's JSON output is redacted.
+  - `api/tests/fixtures/gog/command-tree.json` is the pruned command tree: names, aliases, one-line help, and global flags. It contains no account data.
+- `api/tests/unit/test_gog_catalogue.py` (19) checks the catalogue against that tree in both directions: paths, aliases, shortcuts, and value flags.
+  - It checks that both Dockerfiles still pin the recorded version, so a gog upgrade fails CI until the tree is re-recorded.
+  - It checks the Outcome Type rules.
+- `test_business_action_classifier.py` gains 37 gog tests:
+  - command paths and aliases, including flags in any position
+  - ignored invocations, ordinals in mixed commands, and exit-code statuses
+  - the four fixtures
+- `test_metrics.py`: the label for a granted gog service versus an ungranted one.
+- `test_ingest.py` posts the gog fixtures through the Ingest endpoint.
+- `test_business_action_backfill.py`:
+  - classifies stored gog history;
+  - adds gog actions after an aai-cli action that was stored before gog support, without renumbering it.
+- `test_organization_value.py`: a gog write recorded through the repository is valued in `GET /value`, and a failed one is reported as failed.
+- Test-first:
+  - Every new classifier, catalogue, and metric test failed first.
+  - The Ingest, backfill, and valuation tests were added once the classifier existed; the same fixtures had failed at the classifier.
+- Running the new classifier over the four unredacted gog Tool Calls stored on local k3d gave exactly the fixtures' expected actions.
+
+Not verified:
+- The exit code when Google refuses a write under a read-only credential. It would need a read-only credential and a write attempt.
+
+Live check after deploying to local k3d (2026-09-29, migration head `1045836844da`, fresh database):
+- **Ingest recorded each gog Tool Call:**
+  - Hermes `gog calendar calendars` (exit 0): `google-calendar`, read, SUCCESS.
+  - OpenClaw `gog gmail labels list` (exit 2, no credential): `google-gmail`, read, ERROR.
+  - Hermes `gog drive mkdir` (exit 0), run by the user: `google-drive`, `RECORD_CREATED`, SUCCESS.
+- **Metric:** the Ingest `/metrics` exported the `google-calendar` and `google-gmail` labels by name.
+- **Backfill:** two backfill runs left the rows identical in id, mapping, status, and `created_at`. These runs predate AF-344's review fix, under which a no-change re-run reports `recorded=0`.
+- **Value report:** `GET /value` counted the reads as not valued, with the rate at $60.
+- **Incident:** one read-back started a second full-app Python process inside the `api` container. That pushed it over its 512Mi limit, and it was OOMKilled and restarted. Later checks used `psql` in the Postgres pod instead.
+
+### 2026-09-29 — AF-345 — Organization value API
+
+Delivered: `GET /organizations/{organization_id}/value` with `Depends(get_stats_window)`. The response echoes the resolved window and returns four parts.
+- **`totals`:**
+  - successful writes, minutes saved, value, spend, and the value-to-spend ratio
+  - unverified, failed, and unclassified counts
+  - the hourly rate used
+- **`series`:** `bucket`, `minutes_saved`, `value`, and `spend` per UTC bucket, emitted with an explicit UTC offset.
+- **`agents`:** a full outer merge of the Business Action counts with `CostRepository.spend_by_agent`.
+  - Names come from `AgentRepository.find_all_for_org`, which includes deleted Agents. A hard-deleted Agent falls back to the cost record's name.
+  - A null id is labelled `"Unattributed"`.
+  - Rows are ordered by minutes saved, then spend.
+- **`top_outcome_types`:** ordered by minutes saved, then count.
+
+Value is computed at read time in `Decimal` and emitted as a float. It is null, as is every ratio, until a rate is set. A ratio is also null when spend is zero.
+
+Spend comes from `CostRepository` with an Organization-only `CostFilter`, with no Agent join. `costs.md` Boundaries now names Business Value as a reader.
+
+Ticket correction:
+- Cost sync attributes all-or-nothing (`costs/sync.py:295-296`), so spend with no Organization is never in any Organization's total.
+- The org-scoped "Unattributed" row appears only for a cost row with an Organization but no Agent, which the sync does not write today.
+- The row is kept, mirroring Costs, and tested with a synthetic row (`there_are_cost_records(without_agent=True)`).
+
+Docs:
+- `business-value.md` gains the Organization value section, the category table, source map entries, and change-impact rules.
+- `CONTEXT.md`'s Outcome Type entry now defines unclassified (including Outcome Types no longer in the catalogue), unverified, and failed writes.
+
+Coverage:
+- `api/tests/integration/test_organization_value.py` adds 17 API tests:
+  - totals and the echoed window, and the half-open period for both actions and spend
+  - the per-Agent split, including a soft-deleted Agent, the Unattributed row, and a hard-deleted Agent
+  - an Agent with work but no spend
+  - top Outcome Types and their tie-break
+  - the series with its full UTC bucket spine
+  - overrides applied, a null rate, and zero spend
+  - the unverified, failed, and unclassified counts
+  - an empty period
+  - Admin 200, Member 403, non-member 403, and unauthenticated 401
+- `api/tests/integration/test_cross_org_isolation.py`:
+  - an Owner of Org A gets 403 on Org B's `/value`
+  - Org B's Business Actions and spend never appear in Org A's figures
+- All 17 API tests failed first, on 404 before the route existed.
+- `test_value_settings.py` (43) and the relevant subset of `test_costs.py` (11) still pass.
+
+### 2026-09-29 — AF-345 — Value aggregates
+
+Delivered: three read methods on `BusinessActionRepository`. They return raw counts grouped by Outcome Type; valuation happens in the service.
+
+Every method filters on:
+- `business_action.organization_id`, which uses the existing `(organization_id, occurred_at)` index
+- the half-open window `[start, end)` on `occurred_at`
+- a join to `agent` with `agent_scope_predicates(scope, include_deleted=True)`, so a soft-deleted Agent's work still counts
+
+The methods:
+- `category_counts(window, scope)` returns `(is_write, outcome_type, status, count)` for every action, so the service can categorise it.
+- `successful_counts_by_bucket(window, scope)` returns `(bucket, outcome_type, count)` for SUCCESS writes that have an Outcome Type.
+  - The rows are left-joined onto the same UTC `generate_series(date_trunc(...))` spine as `CostRepository.spend_series`, so empty buckets are present and the two series merge by key.
+- `successful_counts_by_agent(window, scope)` returns `(agent_id, outcome_type, count)` for the same successful writes.
+
+Test support:
+- `api/tests/steps/business_action.py:there_are_business_actions(...)` inserts one Tool Call and its Business Actions directly for `context.agent`. It sets the Outcome Type, `is_write`, status, count, and `occurred_at`.
+
+Coverage: `api/tests/integration/test_organization_value.py`, 6 repository tests:
+- grouping by `(is_write, outcome_type, status)`
+- the half-open window: the start is included and the end is excluded
+- a soft-deleted Agent is included
+- another Organization's actions are excluded from all three reads
+- per-Agent counts include only successful classified writes
+- the bucket spine equals `spend_series`'s buckets for the same window, empty buckets included, and each write lands in its UTC day
+
+All 6 failed first against `NotImplementedError` stubs. `test_business_action_repository.py` and `test_business_action_backfill.py` still pass, and the app entrypoints import cleanly with the new `agents` import.
+
+### 2026-09-29 — AF-345 — Value settings API
+
+Delivered:
+- `GET` and `PUT /organizations/{organization_id}/value-settings`, in `api/domains/business_value/routes.py`, registered in `api/api_app.py`.
+- `BusinessValueService` authorizes through `PermissionPolicy.require_organization`:
+  - reads require `cost.read`, then `activity.read`
+  - writes require `organization.update`
+- The service compares each field the request addresses with what is stored.
+  - A rate is compared as a Decimal, so `42.5` and `"42.50"` count as the same.
+  - An unchanged save writes nothing and emits no event.
+  - Otherwise it saves through `save_with_event` and calls `EventDeliveryDispatcher.enqueue_immediate` after commit.
+- `ValueSettingsUpdate` validation (confirmed with pydantic 2.13.4 before the build):
+  - The rate is a `Decimal` from 0 to 10,000.00, with at most two decimal places.
+  - Minutes are strict JSON integers from 1 to 1,440.
+  - Keys must be catalogue Outcome Types. Anything else returns 422.
+- Responses report the rate as a float, following the Costs convention.
+- Docs: `business-value.md` gains a Value settings section (it replaces "There is no product read endpoint yet") plus its source map and change impact. `docs/INDEX.md` routes value settings and the value KPI here, and `domain-events.md` names the emitting route.
+
+Test fixture finding:
+- `there_is_an_organization_with_user_and_access_token(role=...)` always makes the user Owner (`api/tests/steps/organization.py:44-49`); its `role` never reaches the membership.
+- The new tests add Admin and Member actors with `there_is_a_user(role=...)`, as `test_costs.py` does. The helper itself is unchanged.
+
+Coverage:
+- `api/tests/integration/test_value_settings.py`, 27 new tests:
+  - Owner and Admin get 200; Member, non-member, and a Platform Administrator without a Membership get 403; an unauthenticated caller gets 401.
+  - Defaults on a new Organization; setting a rate and an override.
+  - Exactly one event with string `field_changes`; no event for an unchanged or empty save.
+  - An omitted rate is kept; a null rate clears it; a null override reverts to the default.
+  - A stored override outside the catalogue is ignored.
+  - Twelve 422 cases, each storing nothing.
+  - Projection to a durable `security_audit_record`.
+- `api/tests/integration/test_cross_org_isolation.py`: an Owner of Org A gets 403 on `GET` and `PUT` for Org B.
+- Every new test failed first, on 404s or missing response fields, before the routes existed.
+
+### 2026-09-29 — AF-345 — Value settings persistence
+
+Delivered: `ValueSettingsRepository` in `api/domains/business_value/repository.py`.
+- `get_hourly_rate(organization_id)` returns `None` when no rate is set.
+- `get_minute_overrides(organization_id)` returns the stored overrides keyed by Outcome Type. They are returned raw; the service ignores any Outcome Type outside the catalogue.
+- `save_with_event(...)` copies the `AgentSettingsRepository.set_default_model_with_event` pattern. It opens one session and commits once, so a settings change is never visible without its audit record.
+  - **Rate:** written only when `rate_changed` is set. The settings row is created lazily, so a save that changes only minutes creates none.
+  - **Minutes:** a `None` minute change deletes the override. An integer upserts it on `(organization_id, outcome_type)`.
+  - **Event:** built through `EVENT_REGISTRY` with an Organization subject, then staged through the outbox with its Event Deliveries. The delivery ids are returned for post-commit enqueue.
+- The caller decides what changed and supplies `field_changes`, so the repository never decides whether an event is warranted.
+
+Coverage: `api/tests/integration/test_value_settings.py` covers:
+- a rate and an override that read back after saving
+- exactly one staged event carrying the diff, with an Organization subject and its committed delivery ids
+- an upsert of an existing override, deletion by `None`, a minutes-only save that creates no settings row, clearing the rate, and an Organization with nothing set
+- atomicity: an event the registry rejects leaves no settings rows and no event
+- All 8 new tests failed first, against `NotImplementedError` stubs.
+- `test_business_action_repository.py` still passes, and `api.ingest_app` and `api.api_app` import cleanly with the new events import.
+
+### 2026-09-29 — AF-345 — Valuation rules
+
+Delivered: module-level functions in `api/domains/business_value/service.py`. They are pure; valuation happens when figures are read.
+- `effective_minutes(overrides)` returns `DEFAULT_MINUTES` with an Organization's overrides applied. An override for an Outcome Type that is no longer in the catalogue is ignored.
+- `value_usd(minutes, rate)` computes `Decimal(minutes) * rate / 60`, unrounded, so the value stays exact until it is emitted as a float. It is `None` when no rate is set.
+- `value_to_spend_ratio(value, spend)` is `None` when there is no value or the spend is zero.
+- `categorise(rows)` takes counts grouped by `(is_write, outcome_type, status)` and puts each action in exactly one category. An action is classified when it is a write whose Outcome Type is in the current catalogue.
+  - Successful: a classified SUCCESS, counted per Outcome Type. This is the only valued category.
+  - Unverified: a classified UNKNOWN.
+  - Failed: a classified ERROR.
+  - Unclassified, at any status: a path outside the catalogue, a write with no Outcome Type, or a write whose Outcome Type is no longer in the catalogue.
+  - Reads are not counted in any category.
+
+Coverage:
+- `api/tests/unit/test_business_value_valuation.py` has 22 tests.
+  - They cover overrides, stale override keys and stale action types, and every category.
+  - They also cover summing counts across rows, empty input, a null rate, a zero rate, zero spend, and Decimal exactness.
+  - Before the implementation they failed inside `NotImplementedError` stubs. They pass now.
+
+### 2026-09-29 — AF-345 — Value settings audit event
+
+Delivered:
+- `organization.value_settings.changed`, schema v1, is registered in `build_default_event_registry` with Organization scope. It is routed to `security_audit.projection`, and `SecurityAuditProjection.supported_events` lists it.
+- `OrganizationValueSettingsChangedPayload` uses `extra="forbid"` and carries:
+  - `organization_id`
+  - `field_changes: dict[str, dict[str, str | None]]`, keyed `hourly_rate_usd` or `outcome_minutes.<OUTCOME_TYPE>`, each holding `previous` and `current`
+  - `actor_display` and `subject_display`
+- Every value in `field_changes` is a string or `null`. The later settings service renders the rate to two places and minutes as integers.
+- `docs/features/domain-events.md` lists the event.
+
+Coverage:
+- `api/tests/unit/test_event_handler_registry_wiring.py` includes the event. It failed with `supports(...) is False` before the projection registration and passes after.
+- `api/tests/unit/test_domain_events.py` passes unchanged.
+
+### 2026-09-29 — AF-345 — Value settings tables
+
+Delivered:
+- Migration `1045836844da` (revises `39ea6a8e2fe4`) adds two tables.
+- `organization_value_settings`: one row per Organization.
+  - `organization_id` is unique, with a foreign key using `ON DELETE CASCADE`.
+  - `hourly_rate_usd` is a nullable `NUMERIC(12,2)`, checked to be `NULL` or `>= 0`.
+- `organization_outcome_minutes`:
+  - `organization_id` is a foreign key with `ON DELETE CASCADE`.
+  - `outcome_type` is a `VARCHAR(64)`, matching `business_action.outcome_type`.
+  - `minutes_saved` is an integer checked to be `> 0`.
+  - `(organization_id, outcome_type)` is unique.
+- The bounds the API will enforce are constants in `api/domains/business_value/models.py`: `MAX_HOURLY_RATE_USD = 10000.00` and `MAX_OUTCOME_MINUTES = 1440`.
+
+Coverage:
+- `api/tests/integration/test_value_settings.py` covers the migrated schema:
+  - both tables exist, and a rate reads back as an exact two-place decimal
+  - the rate and minutes check constraints, and both uniqueness constraints
+  - deleting an Organization cascades both tables
+- `test_rbac_schema.py::test_downgrade_to_rbac_revision_removes_general_access_column` downgrades through the new migration.
+- Checked by hand, not in CI, on a fresh Postgres container:
+  - upgrading to head, downgrading to `39ea6a8e2fe4`, and upgrading again succeeds
+  - `compare_metadata` scoped to the two tables shows no drift
+  - The only other difference reported is an existing mismatch in the `agent_chat_message.conversation_type` enum variants, unrelated to this change.
 
 ### 2026-09-28 — AF-344 — Live end-to-end check (local k3d)
 

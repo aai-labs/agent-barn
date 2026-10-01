@@ -48,7 +48,8 @@ TOOL_CALLS = Counter(
 
 BUSINESS_ACTIONS = Counter(
     "agentbarn_business_actions",
-    "Recorded Business Actions by aai-cli command group, write flag, and inferred status",
+    "Recorded Business Actions by integration (aai-cli command group or google-<service> for gog), write flag, "
+    "and inferred status",
     ["integration", "is_write", "status"],
 )
 

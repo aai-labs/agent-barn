@@ -2,17 +2,33 @@ import logging
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
+import sqlalchemy as sa
 from injector import inject, singleton
 from sqlalchemy import delete, or_, tuple_
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import SQLAlchemyError
 from sqlmodel import Session, SQLModel, col, select
 
-from api.domains.business_value.classifier import SHELL_TOOL_NAMES, ClassifiedAction, classify
-from api.domains.business_value.models import TOOL_CALL_ORDINAL_CONSTRAINT, BusinessAction
+from api.domains.agents.models import Agent
+from api.domains.agents.repository import agent_scope_predicates
+from api.domains.business_value.classifier import SHELL_TOOL_NAMES, BusinessActionStatus, ClassifiedAction, classify
+from api.domains.business_value.models import (
+    OUTCOME_MINUTES_ORGANIZATION_TYPE_CONSTRAINT,
+    TOOL_CALL_ORDINAL_CONSTRAINT,
+    VALUE_SETTINGS_ORGANIZATION_CONSTRAINT,
+    BusinessAction,
+    OrganizationOutcomeMinutes,
+    OrganizationValueSettings,
+)
+from api.domains.events import ActorIdentity, EventDelivery, SubjectIdentity, SubjectIdentityType
+from api.domains.events.catalog import EVENT_REGISTRY, ORGANIZATION_VALUE_SETTINGS_CHANGED
+from api.domains.events.repository import OutboxMessageRepository
+from api.domains.platform_admin.models import StatsWindow
+from api.domains.rbac.policy import AuthorizationScope
 from api.domains.tool_calls.models import ToolCall
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 
@@ -20,6 +36,9 @@ logger = logging.getLogger(__name__)
 
 MAPPED_COLUMNS = ("integration", "resource", "verb", "is_write", "outcome_type")
 BUSINESS_ACTION_TABLE = SQLModel.metadata.tables["business_action"]
+RATE_QUANTUM = Decimal("0.01")
+HOURLY_RATE_FIELD = "hourly_rate_usd"
+OUTCOME_MINUTES_FIELD_PREFIX = "outcome_minutes."
 
 
 @dataclass(frozen=True)
@@ -120,6 +139,78 @@ class BusinessActionRepository:
             ),
         ).returning(col(BusinessAction.id))
 
+    def category_counts(
+        self,
+        window: StatsWindow,
+        scope: AuthorizationScope,
+    ) -> list[tuple[bool | None, str | None, BusinessActionStatus, int]]:
+        query = (
+            sa.select(
+                col(BusinessAction.is_write),
+                col(BusinessAction.outcome_type),
+                col(BusinessAction.status),
+                sa.func.count(),
+            )
+            .select_from(BusinessAction)
+            .join(Agent, col(Agent.id) == col(BusinessAction.agent_id))
+            .where(*self._visible(window, scope))
+            .group_by(col(BusinessAction.is_write), col(BusinessAction.outcome_type), col(BusinessAction.status))
+        )
+        with self.delegate.engine.connect() as connection:
+            rows = connection.execute(query).all()
+        return [(row[0], row[1], row[2], int(row[3])) for row in rows]
+
+    def successful_counts_by_bucket(
+        self,
+        window: StatsWindow,
+        scope: AuthorizationScope,
+    ) -> list[tuple[datetime, str, int]]:
+        bucket = sa.func.date_trunc(window.granularity.value, sa.func.timezone("UTC", col(BusinessAction.occurred_at)))
+        query = (
+            sa.select(bucket, col(BusinessAction.outcome_type), sa.func.count())
+            .select_from(BusinessAction)
+            .join(Agent, col(Agent.id) == col(BusinessAction.agent_id))
+            .where(*self._visible(window, scope), *self._successful())
+            .group_by(bucket, col(BusinessAction.outcome_type))
+            .order_by(bucket, col(BusinessAction.outcome_type))
+        )
+        with self.delegate.engine.connect() as connection:
+            rows = connection.execute(query).all()
+        return [(row[0], row[1], int(row[2])) for row in rows]
+
+    def successful_counts_by_agent(
+        self,
+        window: StatsWindow,
+        scope: AuthorizationScope,
+    ) -> list[tuple[UUID, str, int]]:
+        query = (
+            sa.select(col(BusinessAction.agent_id), col(BusinessAction.outcome_type), sa.func.count())
+            .select_from(BusinessAction)
+            .join(Agent, col(Agent.id) == col(BusinessAction.agent_id))
+            .where(*self._visible(window, scope), *self._successful())
+            .group_by(col(BusinessAction.agent_id), col(BusinessAction.outcome_type))
+        )
+        with self.delegate.engine.connect() as connection:
+            rows = connection.execute(query).all()
+        return [(row[0], row[1], int(row[2])) for row in rows]
+
+    @staticmethod
+    def _visible(window: StatsWindow, scope: AuthorizationScope) -> tuple:
+        return (
+            col(BusinessAction.organization_id) == scope.organization_id,
+            col(BusinessAction.occurred_at) >= window.start,
+            col(BusinessAction.occurred_at) < window.end,
+            *agent_scope_predicates(scope, include_deleted=True),
+        )
+
+    @staticmethod
+    def _successful() -> tuple:
+        return (
+            col(BusinessAction.is_write).is_(True),
+            col(BusinessAction.outcome_type).is_not(None),
+            col(BusinessAction.status) == BusinessActionStatus.SUCCESS,
+        )
+
     @staticmethod
     def _values(tool_call: ToolCall, action: ClassifiedAction, now: datetime) -> dict[str, Any]:
         return {
@@ -139,3 +230,153 @@ class BusinessActionRepository:
             "occurred_at": tool_call.occurred_at,
             "completed_at": tool_call.completed_at,
         }
+
+
+@dataclass(frozen=True)
+class ValueSettingsChangeResult:
+    delivery_ids: list[UUID]
+
+
+def _rate_text(rate: Decimal | None) -> str | None:
+    return None if rate is None else str(rate.quantize(RATE_QUANTUM))
+
+
+def _minutes_text(minutes: int | None) -> str | None:
+    return None if minutes is None else str(minutes)
+
+
+@inject
+@singleton
+@dataclass
+class ValueSettingsRepository:
+    delegate: PostgresRepositoryDelegate
+    outbox_repository: OutboxMessageRepository
+
+    def get_hourly_rate(self, organization_id: UUID) -> Decimal | None:
+        with Session(self.delegate.engine) as session:
+            return session.exec(
+                select(col(OrganizationValueSettings.hourly_rate_usd)).where(
+                    col(OrganizationValueSettings.organization_id) == organization_id
+                )
+            ).first()
+
+    def get_minute_overrides(self, organization_id: UUID) -> dict[str, int]:
+        with Session(self.delegate.engine) as session:
+            rows = session.exec(
+                select(OrganizationOutcomeMinutes.outcome_type, OrganizationOutcomeMinutes.minutes_saved).where(
+                    col(OrganizationOutcomeMinutes.organization_id) == organization_id
+                )
+            ).all()
+        return {outcome_type: minutes_saved for outcome_type, minutes_saved in rows}
+
+    def save_with_event(
+        self,
+        organization_id: UUID,
+        *,
+        hourly_rate: Decimal | None,
+        rate_addressed: bool,
+        outcome_minutes: dict[str, int | None],
+        actor: ActorIdentity,
+        actor_display: str,
+        subject_display: str,
+    ) -> ValueSettingsChangeResult:
+        now = datetime.now(UTC)
+        with Session(self.delegate.engine, expire_on_commit=False) as session:
+            session.exec(self._ensure_settings_statement(organization_id, now))  # type: ignore[call-overload]
+            settings = session.exec(
+                select(OrganizationValueSettings)
+                .where(col(OrganizationValueSettings.organization_id) == organization_id)
+                .with_for_update()
+            ).one()
+            overrides = dict(
+                session.exec(
+                    select(OrganizationOutcomeMinutes.outcome_type, OrganizationOutcomeMinutes.minutes_saved).where(
+                        col(OrganizationOutcomeMinutes.organization_id) == organization_id
+                    )
+                ).all()
+            )
+
+            field_changes: dict[str, dict[str, str | None]] = {}
+            if rate_addressed and hourly_rate != settings.hourly_rate_usd:
+                field_changes[HOURLY_RATE_FIELD] = {
+                    "previous": _rate_text(settings.hourly_rate_usd),
+                    "current": _rate_text(hourly_rate),
+                }
+                settings.hourly_rate_usd = hourly_rate
+                settings.updated_at = now
+                session.add(settings)
+            for outcome_type, minutes in outcome_minutes.items():
+                previous = overrides.get(outcome_type)
+                if minutes == previous:
+                    continue
+                field_changes[f"{OUTCOME_MINUTES_FIELD_PREFIX}{outcome_type}"] = {
+                    "previous": _minutes_text(previous),
+                    "current": _minutes_text(minutes),
+                }
+                session.exec(self._minute_change_statement(organization_id, outcome_type, minutes, now))  # type: ignore[call-overload]
+
+            if not field_changes:
+                session.commit()
+                return ValueSettingsChangeResult(delivery_ids=[])
+            session.flush()
+
+            event = EVENT_REGISTRY.build_event(
+                event_name=ORGANIZATION_VALUE_SETTINGS_CHANGED,
+                schema_version=1,
+                occurred_at=now,
+                organization_id=organization_id,
+                actor=actor,
+                subject=SubjectIdentity(
+                    type=SubjectIdentityType.ORGANIZATION,
+                    id=organization_id,
+                    organization_id=organization_id,
+                ),
+                correlation_id=uuid4(),
+                payload={
+                    "organization_id": organization_id,
+                    "field_changes": field_changes,
+                    "actor_display": actor_display,
+                    "subject_display": subject_display,
+                },
+            )
+            self.outbox_repository.stage(session=session, registry=EVENT_REGISTRY, event=event)
+            delivery_ids = list(session.exec(select(EventDelivery.id).where(EventDelivery.event_id == event.event_id)))
+            session.commit()
+        return ValueSettingsChangeResult(delivery_ids=delivery_ids)
+
+    @staticmethod
+    def _ensure_settings_statement(organization_id: UUID, now: datetime):
+        return (
+            pg_insert(OrganizationValueSettings)
+            .values(
+                id=uuid.uuid7(),
+                created_at=now,
+                updated_at=now,
+                organization_id=organization_id,
+                hourly_rate_usd=None,
+            )
+            .on_conflict_do_nothing(constraint=VALUE_SETTINGS_ORGANIZATION_CONSTRAINT)
+        )
+
+    @staticmethod
+    def _minute_change_statement(organization_id: UUID, outcome_type: str, minutes: int | None, now: datetime):
+        if minutes is None:
+            return sa.delete(OrganizationOutcomeMinutes).where(
+                col(OrganizationOutcomeMinutes.organization_id) == organization_id,
+                col(OrganizationOutcomeMinutes.outcome_type) == outcome_type,
+            )
+        statement = pg_insert(OrganizationOutcomeMinutes).values(
+            id=uuid.uuid7(),
+            created_at=now,
+            updated_at=now,
+            organization_id=organization_id,
+            outcome_type=outcome_type,
+            minutes_saved=minutes,
+        )
+        return statement.on_conflict_do_update(
+            constraint=OUTCOME_MINUTES_ORGANIZATION_TYPE_CONSTRAINT,
+            set_={
+                "minutes_saved": statement.excluded.minutes_saved,
+                "updated_at": statement.excluded.updated_at,
+            },
+        )

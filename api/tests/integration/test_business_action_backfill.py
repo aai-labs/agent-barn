@@ -5,7 +5,7 @@ from typing import Any
 from hamcrest import assert_that, equal_to
 from sqlmodel import col, select
 
-from api.domains.business_value import backfill, catalogue
+from api.domains.business_value import backfill, catalogue, classifier
 from api.domains.business_value.backfill import BackfillResult, run_backfill
 from api.domains.business_value.catalogue import CatalogueEntry, CommandKind, OutcomeType
 from api.domains.business_value.classifier import BusinessActionStatus
@@ -70,6 +70,12 @@ def _backfill(context, batch_size: int = 2) -> BackfillResult:
     return run_backfill(context.injector.get(BusinessActionRepository), batch_size=batch_size)
 
 
+def _ordinals(context) -> list[tuple[int, str, str]]:
+    with context.injector.get(ToolCallRepository).get_session() as session:
+        rows = session.exec(select(BusinessAction).order_by(col(BusinessAction.ordinal))).all()
+        return [(row.ordinal, row.integration, row.verb) for row in rows]
+
+
 def _actions(context) -> list[tuple[Any, ...]]:
     with context.injector.get(ToolCallRepository).get_session() as session:
         rows = session.exec(
@@ -127,6 +133,42 @@ def test_backfill_rerun_does_not_duplicate_actions():
 
         with then("each action is stored once"):
             assert_that(_actions(context), equal_to(_EXPECTED_HISTORY))
+
+
+def test_backfill_classifies_stored_gog_tool_calls():
+    with given([*_GIVEN]) as context:
+        _seed(context, "call-1", "gog drive mkdir probe --json --no-input", _hermes_result(0))
+        _seed(context, "call-2", "gog gmail labels list --json --no-input", _hermes_result(2, "missing --account"))
+
+        with when("the backfill runs over gog history"):
+            result = _backfill(context)
+
+        with then("each gog Tool Call gets its Business Action"):
+            assert_that(
+                _actions(context),
+                equal_to(
+                    [
+                        ("google-drive", "", "mkdir", "RECORD_CREATED", BusinessActionStatus.SUCCESS),
+                        ("google-gmail", "labels", "list", None, BusinessActionStatus.ERROR),
+                    ]
+                ),
+            )
+            assert_that(result, equal_to(BackfillResult(scanned=2, recorded=2, removed=0, failed=0)))
+
+
+def test_backfill_adds_gog_actions_without_renumbering_stored_aai_cli_actions(monkeypatch):
+    with given([*_GIVEN]) as context:
+        _seed(context, "call-1", "gog drive mkdir probe && aai-cli jira issues create --project P", _hermes_result(0))
+        monkeypatch.setattr(classifier, "GOG_EXECUTABLE", "gog-not-yet-supported")
+        _backfill(context)
+        assert_that(_ordinals(context), equal_to([(0, "jira", "create")]))
+
+        with when("gog support is present and the backfill runs again"):
+            monkeypatch.undo()
+            _backfill(context)
+
+        with then("the stored aai-cli action keeps its ordinal and the gog action is added after it"):
+            assert_that(_ordinals(context), equal_to([(0, "jira", "create"), (1, "google-drive", "mkdir")]))
 
 
 def test_backfill_remaps_history_after_a_catalogue_change_and_keeps_status(monkeypatch):

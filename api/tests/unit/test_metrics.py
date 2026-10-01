@@ -212,6 +212,26 @@ def test_business_action_counter_clamps_unknown_integrations_and_write_flags():
             )
 
 
+def test_business_action_counter_labels_granted_gog_services_by_name():
+    with given():
+        agent = _make_agent()
+        row = _make_tool_call(agent, "terminal", ToolCallStatus.SUCCESS)
+        recorded = [
+            _business_action("google-gmail", True, BusinessActionStatus.SUCCESS),
+            _business_action("google-docs", None, BusinessActionStatus.SUCCESS),
+        ]
+        service = _make_service(_mock_tc_repo(completed=row), recorded)
+        gmail_before = _business_actions_total("google-gmail", "true", "success")
+        other_before = _business_actions_total("other", "unknown", "success")
+
+        with when("a gog action for a granted service and one for an ungranted service are recorded"):
+            service.process(agent, _result_batch())
+
+        with then("the granted service keeps its name and the ungranted one is clamped to other"):
+            assert_that(_business_actions_total("google-gmail", "true", "success"), equal_to(gmail_before + 1.0))
+            assert_that(_business_actions_total("other", "unknown", "success"), equal_to(other_before + 1.0))
+
+
 def test_business_action_counter_not_incremented_when_nothing_is_recorded():
     with given():
         agent = _make_agent()

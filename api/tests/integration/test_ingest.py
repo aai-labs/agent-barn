@@ -313,9 +313,9 @@ def test_ingest_records_nothing_for_an_orphaned_result():
 def _runtime_fixtures() -> list[tuple[str, AgentType, dict[str, Any]]]:
     cases = []
     for runtime in (AgentType.HERMES, AgentType.OPENCLAW):
-        path = _FIXTURES_DIR / f"{runtime.value}.json"
-        for fixture in json.loads(path.read_text(encoding="utf-8")):
-            cases.append((f"{runtime.value}:{fixture['name']}", runtime, fixture))
+        for path in (_FIXTURES_DIR / f"{runtime.value}.json", _FIXTURES_DIR / f"gog_{runtime.value}.json"):
+            for fixture in json.loads(path.read_text(encoding="utf-8")):
+                cases.append((f"{path.stem}:{fixture['name']}", runtime, fixture))
     return cases
 
 
