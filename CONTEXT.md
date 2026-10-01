@@ -264,6 +264,14 @@ _Avoid_: domain event, outbox message, audit event
 An ingested record of one external tool execution by an agent, with pending, success, or error status.
 _Avoid_: integration call
 
+**Business Action**:
+A content-free record of one aai-cli command an Agent ran, derived from a Tool Call at Ingest. It carries the command's integration (the aai-cli command group, such as `jira` or `microsoft`, distinct from an **Integration**), its resource and verb, whether it writes, its **Outcome Type**, and a SUCCESS, ERROR, or UNKNOWN status inferred from the command's result. It stores no arguments and no results.
+_Avoid_: event, activity, tool call
+
+**Outcome Type**:
+The kind of business result a write Business Action produces, such as `PULL_REQUEST_OPENED` or `RECORD_UPDATED`, with default minutes of value. A write without an Outcome Type is unclassified and never valued.
+_Avoid_: action type, category
+
 **Domain Event**:
 An immutable, typed business fact that occurred at Platform or Organization scope and may be handled internally by Agent Barn.
 _Avoid_: outbox row, telemetry event, audit log

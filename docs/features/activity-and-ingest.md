@@ -6,7 +6,7 @@ Read before changing conversation history, Connection/channel/thread grouping, C
 
 ## Role in the system
 
-Conversation Messages and Tool Calls share the Agent Activity UI but have different write boundaries. The Communications Gateway persists canonical Conversation Messages from provider ingress and runtime replies. The separately served Ingest API persists authenticated runtime Tool Call telemetry. Neither path writes Domain Events to the Domain Event outbox.
+Conversation Messages and Tool Calls share the Agent Activity UI but have different write boundaries. The Communications Gateway persists canonical Conversation Messages from provider ingress and runtime replies. The separately served Ingest API persists authenticated runtime Tool Call telemetry and, in the same transaction, the Business Actions derived from completed shell Tool Calls (see [`business-value.md`](business-value.md)). Neither path writes Domain Events to the Domain Event outbox.
 
 ## Invariants
 
@@ -28,7 +28,7 @@ Conversation Messages and Tool Calls share the Agent Activity UI but have differ
 ```text
 Platform provider → Platform Plugin → Communication Delivery/Conversation repository
 Agent runtime ─────→ Communications protocol ────────┘
-Agent runtime ─────→ Ingest API → Tool Call repository
+Agent runtime ─────→ Ingest API → Tool Call repository → Business Action repository
                                       ↓
                          Conversation and Tool Call APIs
                                       ↓
@@ -39,7 +39,7 @@ Conversation reads list channels and return cursor-paginated messages or grouped
 
 ## Boundaries
 
-Platform Plugins own translation from provider payloads into the normalized communication envelope. Communications owns durable message/reply orchestration. Ingest owns Tool Call telemetry authentication and writes. Conversation and Tool Call domains own read models and query behavior. Costs do not derive from these activity records; the Agent Activity tab reads Conversation Message direction and occurrence time to say whether a person triggered a piece of billed work, and never its content (see [`agent-activity.md`](agent-activity.md)).
+Platform Plugins own translation from provider payloads into the normalized communication envelope. Communications owns durable message/reply orchestration. Ingest owns Tool Call telemetry authentication and writes, and calls the Business Value domain to record Business Actions for each completed Tool Call. Conversation and Tool Call domains own read models and query behavior. Costs do not derive from these activity records; the Agent Activity tab reads Conversation Message direction and occurrence time to say whether a person triggered a piece of billed work, and never its content (see [`agent-activity.md`](agent-activity.md)).
 
 ## Source map
 
@@ -63,4 +63,4 @@ Platform Plugins own translation from provider payloads into the normalized comm
 
 ## Change impact
 
-Conversation contract changes require normalized envelopes, Communication Delivery persistence, read API schemas, UI Zod schemas/hooks, and Connection-isolation tests. Tool Call telemetry changes require both runtime producers, Ingest services, repositories, and Activity UI coverage. Identity or idempotency changes require migration and duplicate-delivery coverage.
+Conversation contract changes require normalized envelopes, Communication Delivery persistence, read API schemas, UI Zod schemas/hooks, and Connection-isolation tests. Tool Call telemetry changes require both runtime producers, Ingest services, repositories, and Activity UI coverage. Changes to shell Tool Call arguments or result shapes also require the Business Action classifier and its recorded fixtures. Identity or idempotency changes require migration and duplicate-delivery coverage.
