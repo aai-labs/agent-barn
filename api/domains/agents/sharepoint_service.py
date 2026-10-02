@@ -1,5 +1,9 @@
 """SharePoint for an agent, signed in with Microsoft on the agent's Teams app.
 
+Two modes, one per agent. *Delegated* (the default, described below) reaches whatever the
+person who signed in can open. *Selected sites* reaches only sites an administrator granted:
+see ``_complete_site_grant`` and ``access_token``.
+
 The Teams app is already registered in the customer's tenant, so signing in on it needs no
 app of ours and no publisher verification. The sign-in is a public client (PKCE, no secret):
 the customer registers our callback under "Mobile and desktop applications", turns on "Allow
@@ -12,10 +16,14 @@ refreshes without a secret and keeps each rotated token in aai-cli's own store. 
 app's secret is never read for SharePoint.
 """
 
+import hashlib
 import json
 import logging
+import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
+from typing import Literal
 from uuid import UUID, uuid4
 
 import jwt
@@ -27,15 +35,26 @@ from pydantic import BaseModel
 from api.core.config import Config
 from api.domains.agents.authorization import AgentAuthorization
 from api.domains.agents.microsoft_graph_scopes import (
+    SELECTED_SITES_PERMISSION,
+    SITE_GRANT_PERMISSION,
     granted_permissions,
     missing_sharepoint_permissions,
     sharepoint_scopes,
+    site_grant_scopes,
+)
+from api.domains.agents.microsoft_graph_sites import (
+    MicrosoftGraphSites,
+    SiteAccessRefused,
+    SiteNotFound,
+    SitesUnavailable,
 )
 from api.domains.agents.microsoft_identity import (
     MicrosoftIdentityClient,
     MicrosoftIdentityError,
     MicrosoftIdentityUnavailable,
+    MicrosoftTokens,
     build_admin_consent_url,
+    build_app_permission_consent_url,
     build_authorize_url,
     claims_from_id_token,
     pkce_pair,
@@ -44,11 +63,14 @@ from api.domains.agents.models import (
     PROVIDER_DISPLAY_NAMES,
     Agent,
     AgentSecret,
+    GrantedSite,
     SecretProvider,
     SharePointContent,
+    decrypt_content,
     encrypt_content,
 )
 from api.domains.agents.repository import AgentRepository
+from api.domains.agents.sharepoint_sites import normalize_site_url
 from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.service import JWT_ENCODING_ALGORITHM
 from api.domains.communications.service import CommunicationsService
@@ -85,6 +107,21 @@ _PUBLIC_CLIENT_SETUP_NEEDED = (
 # the app as a confidential (web) client for this redirect URI.
 _PUBLIC_CLIENT_ERROR_CODES = ("AADSTS7000218",)
 
+SharePointMode = Literal["delegated", "selected_sites"]
+
+# Each site rides in the signed state through Microsoft and the browser; keep it a sane size.
+_MAX_SITES = 50
+
+_UNREACHABLE = "Microsoft couldn't be reached. Please try again."
+_NOT_CONNECTED = "SharePoint isn't connected for this agent. Ask someone to set it up in the agent's Integrations."
+
+# A cached app-only token is handed out only while it has longer than this left.
+_TOKEN_MARGIN = timedelta(minutes=5)
+_NOT_AN_ADMINISTRATOR = (
+    "Microsoft didn't let this account manage SharePoint site permissions. Sign in as a SharePoint "
+    "or Microsoft 365 administrator."
+)
+
 
 def _same_tenant(configured: str, token_tid: str) -> bool:
     """Whether the id_token's tenant is the Teams app's.
@@ -118,6 +155,10 @@ class SignInState:
     user_id: UUID
     read_only: bool
     code_verifier: str
+    mode: SharePointMode = "delegated"
+    # Selected-sites mode: every site the agent should reach once the sign-in completes,
+    # already reduced to site roots. Sites granted before and missing here are revoked.
+    sites: tuple[str, ...] = ()
 
 
 def encode_sign_in_state(config: Config, state: SignInState, *, ttl_seconds: int = _STATE_TTL_SECONDS) -> str:
@@ -130,6 +171,8 @@ def encode_sign_in_state(config: Config, state: SignInState, *, ttl_seconds: int
         # The state passes through Microsoft and the browser; the verifier is what proves the
         # code redemption is ours, so it travels encrypted.
         "verifier": encrypt_token(state.code_verifier, config.agent_token_encryption_key),
+        "mode": state.mode,
+        "sites": list(state.sites),
         "exp": int(time.time()) + ttl_seconds,
     }
     return jwt.encode(payload, config.secret_signing_key, algorithm=JWT_ENCODING_ALGORITHM)
@@ -147,6 +190,8 @@ def decode_sign_in_state(token: str, config: Config) -> SignInState | None:
             user_id=UUID(payload["user_id"]),
             read_only=bool(payload["read_only"]),
             code_verifier=decrypt_token(payload["verifier"], config.agent_token_encryption_key),
+            mode="selected_sites" if payload.get("mode") == "selected_sites" else "delegated",
+            sites=tuple(str(site) for site in payload.get("sites", [])),
         )
     except Exception:
         return None
@@ -208,11 +253,33 @@ class SharePointSetupRead(BaseModel):
     # Links an administrator opens to approve SharePoint access for the whole organization.
     admin_consent_url: str
     read_only_admin_consent_url: str
+    # Selected-sites mode: approves the application permissions listed on the app, which
+    # must include Sites.Selected.
+    app_permission_consent_url: str
+
+
+class SharePointAccessTokenRead(BaseModel):
+    access_token: str
+    expires_at: datetime
 
 
 class SharePointSignInRead(BaseModel):
+    """Who signed in and what the agent reaches. Also the agent's current SharePoint access."""
+
     email: str
     read_only: bool
+    mode: SharePointMode = "delegated"
+    # Selected-sites mode only: the granted sites' URLs. Never the grant ids.
+    sites: list[str] = []
+
+    @classmethod
+    def of(cls, content: SharePointContent) -> "SharePointSignInRead":
+        return cls(
+            email=content.email,
+            read_only=content.read_only,
+            mode=content.mode,
+            sites=[site.url for site in content.sites],
+        )
 
 
 @inject
@@ -223,8 +290,14 @@ class SharePointService:
     repository: AgentRepository
     communications: CommunicationsService
     identity: MicrosoftIdentityClient
+    graph_sites: MicrosoftGraphSites
     event_delivery_dispatcher: EventDeliveryDispatcher
     config: Config
+    # App-only tokens per Teams app, until shortly before they lapse: pods ask for one per
+    # command. Keyed by a hash of the secret too, so a rotated secret is never served a token
+    # minted with the old one. Per process, like the Teams bot's own token cache.
+    _app_tokens: dict[tuple[str, str, str], tuple[str, datetime]] = field(default_factory=dict, init=False)
+    _app_tokens_lock: threading.Lock = field(default_factory=threading.Lock, init=False)
 
     def setup(self, agent_id: UUID, connection_id: UUID, context: CurrentUserContext) -> SharePointSetupRead:
         """What the customer registers on the Teams app. All public values."""
@@ -243,10 +316,37 @@ class SharePointService:
             redirect_uri=redirect_uri,
             admin_consent_url=consent(read_only=False),
             read_only_admin_consent_url=consent(read_only=True),
+            app_permission_consent_url=build_app_permission_consent_url(
+                tenant_id=app.tenant_id, client_id=app.app_id, redirect_uri=redirect_uri
+            ),
         )
 
-    def authorize_url(self, agent_id: UUID, connection_id: UUID, read_only: bool, context: CurrentUserContext) -> str:
+    def current(self, agent_id: UUID, context: CurrentUserContext) -> SharePointSignInRead:
+        """The agent's SharePoint access as the UI shows it. Nothing secret."""
         self._require_manage(agent_id, context)
+        content = self._stored_content(agent_id)
+        if content is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="SharePoint isn't connected for this agent.")
+        return SharePointSignInRead.of(content)
+
+    def authorize_url(
+        self,
+        agent_id: UUID,
+        connection_id: UUID,
+        read_only: bool,
+        context: CurrentUserContext,
+        *,
+        mode: SharePointMode = "delegated",
+        sites: list[str] | None = None,
+    ) -> str:
+        """Where to send the browser to sign in.
+
+        In selected-sites mode the person must be an administrator: the sign-in asks for
+        ``Sites.FullControl.All`` to grant the Teams app each site in ``sites``, which are
+        the complete set the agent should reach afterwards.
+        """
+        self._require_manage(agent_id, context)
+        site_roots = _site_roots(sites or []) if mode == "selected_sites" else ()
         app = self.communications.get_teams_app_identity(agent_id, connection_id)
         verifier, challenge = pkce_pair()
         state = SignInState(
@@ -255,12 +355,14 @@ class SharePointService:
             user_id=context.user.id,
             read_only=read_only,
             code_verifier=verifier,
+            mode=mode,
+            sites=site_roots,
         )
         return build_authorize_url(
             tenant_id=app.tenant_id,
             client_id=app.app_id,
             redirect_uri=sign_in_redirect_uri(self.config),
-            scopes=sharepoint_scopes(read_only),
+            scopes=_sign_in_scopes(state),
             state=encode_sign_in_state(self.config, state),
             code_challenge=challenge,
         )
@@ -305,7 +407,7 @@ class SharePointService:
                 code=code,
                 redirect_uri=sign_in_redirect_uri(self.config),
                 code_verifier=state.code_verifier,
-                scopes=sharepoint_scopes(state.read_only),
+                scopes=_sign_in_scopes(state),
             )
         except MicrosoftIdentityError as exc:
             logger.info("SharePoint sign-in code exchange refused: %s", exc.error)
@@ -315,10 +417,7 @@ class SharePointService:
                 detail = "Microsoft didn't accept the sign-in. Please try again."
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail) from exc
         except MicrosoftIdentityUnavailable as exc:
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail="Microsoft couldn't be reached. Please try again.",
-            ) from exc
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=_UNREACHABLE) from exc
 
         claims = claims_from_id_token(tokens.id_token)
         tenant_id = str(claims.get("tid") or "")
@@ -327,6 +426,8 @@ class SharePointService:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Sign in with an account from the organization this agent's Microsoft Teams app belongs to.",
             )
+        if state.mode == "selected_sites":
+            return self._complete_site_grant(agent, app.app_id, state, tokens, tenant_id, claims, context)
         granted = tokens.scope.split()
         if missing_sharepoint_permissions(granted, state.read_only):
             raise HTTPException(
@@ -355,7 +456,165 @@ class SharePointService:
             sign_in_id=str(uuid4()),
         )
         self._save_secret(agent, content, context)
-        return SharePointSignInRead(email=content.email, read_only=content.read_only)
+        return SharePointSignInRead.of(content)
+
+    def _complete_site_grant(
+        self,
+        agent: Agent,
+        app_id: str,
+        state: SignInState,
+        tokens: MicrosoftTokens,
+        tenant_id: str,
+        claims: dict,
+        context: CurrentUserContext,
+    ) -> SharePointSignInRead:
+        """Reconcile the Teams app's site grants with ``state.sites``, using the administrator's token.
+
+        New sites are granted, removed ones revoked, and kept ones left alone unless the access
+        level changed. The token is used only here and never stored. Ordered so a failure leaves
+        the record true to Microsoft: every site is looked up before anything changes, a failed
+        grant takes back this attempt's grants, and a grant that couldn't be removed stays on
+        record so the next sign-in tries again.
+        """
+        if SITE_GRANT_PERMISSION not in granted_permissions(tokens.scope.split()):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    "Microsoft didn't grant permission to manage SharePoint sites. Sign in as a SharePoint "
+                    "or Microsoft 365 administrator."
+                ),
+            )
+        token = tokens.access_token
+        role = "read" if state.read_only else "write"
+        previous = self._stored_content(agent.id)
+        existing = {
+            site.url: site
+            for site in (previous.sites if previous is not None and previous.mode == "selected_sites" else [])
+        }
+        level_changed = previous is not None and previous.read_only != state.read_only
+        kept = {url: site for url, site in existing.items() if url in state.sites and not level_changed}
+        replaced = [site for url, site in existing.items() if url in state.sites and level_changed]
+        removed = [site for url, site in existing.items() if url not in state.sites]
+
+        try:
+            site_ids = {
+                url: existing[url].site_id if url in existing else self.graph_sites.resolve_site_id(token, url)
+                for url in state.sites
+                if url not in kept
+            }
+            # The old grant goes first: Graph may hand back the same permission for the same app.
+            for site in replaced:
+                self.graph_sites.revoke_site(token, site_id=site.site_id, permission_id=site.permission_id)
+            granted: dict[str, GrantedSite] = {}
+            try:
+                for url, site_id in site_ids.items():
+                    permission_id = self.graph_sites.grant_site(
+                        token, site_id=site_id, app_id=app_id, display_name=agent.name, role=role
+                    )
+                    granted[url] = GrantedSite(url=url, site_id=site_id, permission_id=permission_id)
+            except (SiteAccessRefused, SiteNotFound, SitesUnavailable):
+                for site in granted.values():
+                    self._revoke_quietly(token, site)
+                raise
+        except SiteNotFound as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"Couldn't find the SharePoint site {exc}. Check the address, and that the account you "
+                    "signed in with can open it."
+                ),
+            ) from exc
+        except SiteAccessRefused as exc:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=_NOT_AN_ADMINISTRATOR) from exc
+        except SitesUnavailable as exc:
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=_UNREACHABLE) from exc
+
+        still_granted: list[GrantedSite] = []
+        for site in removed:
+            try:
+                self.graph_sites.revoke_site(token, site_id=site.site_id, permission_id=site.permission_id)
+            except (SiteAccessRefused, SitesUnavailable):
+                logger.warning("SharePoint site grant could not be removed for agent %s", agent.id)
+                still_granted.append(site)
+
+        content = SharePointContent(
+            mode="selected_sites",
+            connection_id=str(state.connection_id),
+            tenant_id=tenant_id,
+            client_id=app_id,
+            email=str(claims.get("preferred_username") or claims.get("email") or "unknown account"),
+            scopes=[SELECTED_SITES_PERMISSION],
+            read_only=state.read_only,
+            sites=[kept.get(url) or granted[url] for url in state.sites] + still_granted,
+        )
+        self._save_secret(agent, content, context)
+        if still_granted:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=(
+                    "The new sites are saved, but access to "
+                    + ", ".join(site.url for site in still_granted)
+                    + " couldn't be removed. Sign in again to retry."
+                ),
+            )
+        return SharePointSignInRead.of(content)
+
+    def access_token(self, agent_id: UUID) -> SharePointAccessTokenRead:
+        """A short-lived app-only token for an agent in selected-sites mode.
+
+        It reaches only the sites granted to the agent's Teams app. Minted here with the Teams
+        app's secret, which never leaves the API. Callers authenticate the agent first (its
+        ingest key); there is no user here.
+        """
+        content = self._stored_content(agent_id)
+        if content is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_NOT_CONNECTED)
+        if content.mode != "selected_sites":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="This agent's SharePoint uses a personal sign-in, which issues no tokens here.",
+            )
+        app = self.communications.get_teams_app_credentials(agent_id, UUID(content.connection_id))
+        key = (app.tenant_id, app.app_id, hashlib.sha256(app.app_password.encode()).hexdigest())
+        now = datetime.now(UTC)
+        with self._app_tokens_lock:
+            cached = self._app_tokens.get(key)
+        if cached is not None and cached[1] - now > _TOKEN_MARGIN:
+            return SharePointAccessTokenRead(access_token=cached[0], expires_at=cached[1])
+
+        try:
+            tokens = self.identity.client_credentials(
+                tenant_id=app.tenant_id, client_id=app.app_id, client_secret=app.app_password
+            )
+        except MicrosoftIdentityError as exc:
+            logger.info("SharePoint app-only token refused for agent %s: %s", agent_id, exc.error)
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "Microsoft refused the agent's Microsoft Teams app. Check its client secret is current "
+                    "and that an administrator approved Sites.Selected for it."
+                ),
+            ) from exc
+        except MicrosoftIdentityUnavailable as exc:
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=_UNREACHABLE) from exc
+        expires_at = now + timedelta(seconds=tokens.expires_in)
+        with self._app_tokens_lock:
+            self._app_tokens[key] = (tokens.access_token, expires_at)
+        return SharePointAccessTokenRead(access_token=tokens.access_token, expires_at=expires_at)
+
+    def _revoke_quietly(self, token: str, site: GrantedSite) -> None:
+        try:
+            self.graph_sites.revoke_site(token, site_id=site.site_id, permission_id=site.permission_id)
+        except (SiteAccessRefused, SitesUnavailable):
+            logger.warning("SharePoint site grant could not be taken back after a failed sign-in")
+
+    def _stored_content(self, agent_id: UUID) -> SharePointContent | None:
+        secret = self.repository.get_secret(agent_id, SecretProvider.SHAREPOINT)
+        if secret is None or secret.content is None:
+            return None
+        content = decrypt_content(SecretProvider.SHAREPOINT, secret.content, self.config.agent_token_encryption_key)
+        assert isinstance(content, SharePointContent)
+        return content
 
     def _require_manage(self, agent_id: UUID, context: CurrentUserContext) -> Agent:
         # The same pair creating a connection needs: changing the agent and its credentials.
@@ -387,3 +646,29 @@ class SharePointService:
             actor_display=context.user.full_name or context.user.email,
         )
         self.event_delivery_dispatcher.enqueue_immediate(delivery_ids)
+
+
+def _sign_in_scopes(state: SignInState) -> tuple[str, ...]:
+    return site_grant_scopes() if state.mode == "selected_sites" else sharepoint_scopes(state.read_only)
+
+
+def _site_roots(sites: list[str]) -> tuple[str, ...]:
+    """Each site reduced to its root, de-duplicated in the order given; 400 for a bad URL."""
+    roots: list[str] = []
+    for site in sites:
+        try:
+            root = normalize_site_url(site)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"{site.strip()} isn't a SharePoint site address.",
+            ) from exc
+        if root not in roots:
+            roots.append(root)
+    if not roots:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Add at least one SharePoint site.")
+    if len(roots) > _MAX_SITES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=f"Choose at most {_MAX_SITES} SharePoint sites."
+        )
+    return tuple(roots)
