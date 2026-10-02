@@ -68,4 +68,15 @@ export class PlatformResourceUsagePage {
   saveButton(): Locator {
     return this.page.getByTestId("capacity-limits-save");
   }
+
+  /** The chevron of an Agent's row. Absent for a container with no live agent. */
+  agentToggle(agentId: string): Locator {
+    return this.page.locator(
+      `[data-testid="platform-agent-usage-row"][data-agent-id="${agentId}"] button[aria-expanded]`,
+    );
+  }
+
+  agentDetails(): Locator {
+    return this.page.getByTestId("platform-agent-details");
+  }
 }

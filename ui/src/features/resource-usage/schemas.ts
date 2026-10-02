@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { AgentPermissionKeySchema } from "@/features/agents/schemas";
+import { AgentHealthSchema, AgentPermissionKeySchema } from "@/features/agents/schemas";
 
 export const ResourceUsageRangeSchema = z.enum(["1h", "6h", "24h", "7d", "14d"]);
 export type ResourceUsageRange = z.infer<typeof ResourceUsageRangeSchema>;
@@ -177,3 +177,34 @@ export const PlatformResourceUsageSchema = z.object({
   series: z.array(ResourceUsagePointSchema).default([]),
 });
 export type PlatformResourceUsage = z.infer<typeof PlatformResourceUsageSchema>;
+
+/** One Agent's last-day usage on the Platform page: the Organization panel's figures. */
+export const PlatformAgentResourceUsageSchema = AgentResourceUsageSchema.omit({ agentId: true });
+export type PlatformAgentResourceUsage = z.infer<typeof PlatformAgentResourceUsageSchema>;
+
+/**
+ * What an opened Heaviest agents row shows. An allowlist: identity and lifecycle, whether
+ * the Agent is working, restarts, and usage. No logs, no free-text health reason.
+ */
+export const PlatformAgentDetailsSchema = z.object({
+  agentId: z.string().uuid(),
+  name: z.string(),
+  status: z.enum(["STOPPED", "RUNNING", "ERROR"]),
+  agentType: z.enum(["openclaw", "hermes"]).default("openclaw"),
+  effectiveModel: z.string().default(""),
+  createdAt: z.string(),
+  organizationId: z.string().uuid(),
+  organizationName: z.string(),
+  /** Set for an Agent in ERROR only. */
+  lastErrorSummary: z.string().nullable().default(null),
+  /**
+   * The word only. A value the runtime invents is read as "error", which the status line
+   * draws as Disconnected, so an unexpected word cannot blank the whole row.
+   */
+  healthStatus: AgentHealthSchema.shape.status.catch("error").nullable().default(null),
+  restartCount: z.number().int().nullable().default(null),
+  terminationReason: z.string().nullable().default(null),
+  /** Null for a stopped Agent: there is no container to measure. */
+  resourceUsage: PlatformAgentResourceUsageSchema.nullable().default(null),
+});
+export type PlatformAgentDetails = z.infer<typeof PlatformAgentDetailsSchema>;

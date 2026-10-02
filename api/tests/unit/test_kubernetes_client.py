@@ -415,6 +415,26 @@ def test_runtime_diagnostics_reads_failed_pod_and_previous_container_evidence():
         assert_that(result["current_logs"], equal_to(["Starting"]))
 
 
+def test_runtime_diagnostics_can_skip_the_logs_and_keep_the_rest():
+    created = datetime(2026, 9, 17, 12, tzinfo=UTC)
+    log_reads = []
+
+    class LogsApi(_FakeCoreApi):
+        def read_namespaced_pod_log(self, pod_name, namespace, **kwargs):
+            log_reads.append(kwargs)
+            return _FakeLogResponse("a line that must not be read")
+
+    core = LogsApi(pods=[_diagnostic_pod(created, phase="Failed")])
+    with when("the caller is outside the log boundary and asks for no logs"):
+        result = _make_client(core_api=core).get_runtime_diagnostics("agent-id", "agent-farm", include_logs=False)
+    with then("no log is read at all, and restarts and the reason the last one ended are still there"):
+        assert_that(log_reads, equal_to([]))
+        assert_that(result["restart_count"], equal_to(21))
+        assert_that(result["termination_reason"], equal_to("Error"))
+        assert_that("current_logs" in result or "previous_logs" in result, equal_to(False))
+        assert_that(result.get("current_logs_available", False), equal_to(False))
+
+
 def test_runtime_diagnostics_decodes_log_text_into_separate_lines():
     """The evidence is only readable if it survives as lines.
 

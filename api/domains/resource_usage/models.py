@@ -260,3 +260,65 @@ class PlatformResourceUsageRead(PydanticBaseModel):
     # Every reporting Agent within the filter, heaviest memory first.
     agents: list[PlatformAgentUsageRead] = []
     series: list[PlatformUsagePoint] = []
+
+
+class PlatformAgentUsagePoint(PydanticBaseModel):
+    """One Agent at one step. A missing reading is null, so a gap shows as a gap."""
+
+    bucket: datetime
+    memory_working_set_bytes: int | None = None
+    cpu_cores: float | None = None
+    cpu_throttled_ratio: float | None = None
+
+
+class PlatformAgentResourceUsageRead(PydanticBaseModel):
+    """One Agent's usage over the last day, as the Platform page shows it.
+
+    Mirrors the figures the Organization overview's panel shows, field for field, without
+    reusing its DTO. `availability` is about the source, `state` about the Agent.
+    """
+
+    range: ResourceUsageRange
+    from_date: datetime
+    to_date: datetime
+    step_seconds: int
+    availability: ResourceUsageAvailability
+    state: ResourceUsageState | None = None
+    observed_at: datetime
+    memory_working_set_bytes: int | None = None
+    memory_limit_bytes: int | None = None
+    memory_peak_bytes: int | None = None
+    cpu_cores: float | None = None
+    cpu_limit_cores: float | None = None
+    cpu_average_cores: float | None = None
+    cpu_throttled_ratio: float | None = None
+    series: list[PlatformAgentUsagePoint] = []
+
+
+class PlatformAgentDetailsRead(PydanticBaseModel):
+    """What the Platform page shows when a Heaviest agents row is opened.
+
+    An explicit allowlist, per the Platform oversight ADR: identity and lifecycle, whether
+    the Agent is working, restarts and why the last one ended, and its usage. It carries no
+    log text, no free-text health reason and no failure detail; the failure summary is fixed
+    product copy chosen by category.
+    """
+
+    agent_id: UUID
+    name: str
+    status: AgentStatus
+    agent_type: AgentType
+    effective_model: str
+    created_at: datetime
+    organization_id: UUID
+    organization_name: str
+    # Set for an Agent in ERROR only.
+    last_error_summary: str | None = None
+    # The word only (ok, initializing, crashed, error, starting); None for a stopped Agent
+    # or one whose healthz could not be reached.
+    health_status: str | None = None
+    # None when the cluster could not be asked, or there is no container.
+    restart_count: int | None = None
+    termination_reason: str | None = None
+    # None for a stopped Agent: there is no container to measure.
+    resource_usage: PlatformAgentResourceUsageRead | None = None

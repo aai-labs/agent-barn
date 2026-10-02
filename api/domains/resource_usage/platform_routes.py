@@ -6,7 +6,11 @@ from fastapi_injector import Injected
 
 from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.utils import require_platform_admin
-from api.domains.resource_usage.models import PlatformResourceUsageRead, ResourceUsageRange
+from api.domains.resource_usage.models import (
+    PlatformAgentDetailsRead,
+    PlatformResourceUsageRead,
+    ResourceUsageRange,
+)
 from api.domains.resource_usage.platform_service import PlatformResourceUsageService
 
 # Platform Oversight surface: no Active Organization is resolved, and the organization
@@ -24,3 +28,13 @@ def get_platform_resource_usage(
     organization_id: Annotated[UUID | None, Query()] = None,
 ):
     return service.get_usage(usage_range, organization_id)
+
+
+@platform_resource_usage_router.get("/agents/{agent_id}", response_model=PlatformAgentDetailsRead)
+def get_platform_agent_details(
+    agent_id: UUID,
+    context: Annotated[CurrentUserContext, Depends(require_platform_admin())],
+    service: Annotated[PlatformResourceUsageService, Injected(PlatformResourceUsageService)],
+):
+    """Status and last-day usage for one Agent: what a Heaviest agents row shows when opened."""
+    return service.get_agent_details(agent_id)

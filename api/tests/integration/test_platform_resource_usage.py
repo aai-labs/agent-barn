@@ -4,13 +4,17 @@ Cross-Organization by design: a Platform Administrator reads it without an Activ
 Organization, so the scenarios seed more than one Organization and expect both counted.
 """
 
+from datetime import UTC, datetime
 from typing import Any
-from uuid import uuid4, uuid7
+from uuid import UUID, uuid4, uuid7
 
 from fastapi import status
 from hamcrest import assert_that, contains_exactly, equal_to, has_length, is_not, none
 
 from api.domains.agents.models import AgentStatus
+from api.domains.agents.provisioning_errors import persisted_provisioning_error
+from api.domains.agents.repository import AgentRepository
+from api.infrastructure.kubernetes.client import KubernetesClient
 from api.infrastructure.prometheus.client import PrometheusClient, PrometheusSample
 from api.tests.core.givenpy import given, then, when
 from api.tests.core.modules import (
@@ -495,3 +499,278 @@ def test_nothing_is_set_and_nothing_is_committed_until_someone_says_so():
         assert_that(capacity["limits_updated_at"], none())
         # A reachable Prometheus that reports no pods leaves the figure unknown, not zero.
         assert_that(capacity["memory_committed_bytes"], none())
+
+
+# --- one Agent's details, for a row that is opened ------------------------
+
+_DETAILS = "/api/v1/platform/resource-usage/agents/{agent_id}"
+_SECRET_LOG = "SECRET LOG LINE from the agent's own container"
+_SECRET_REASON = "SECRET free-text reason from the agent's healthz"
+
+
+def _details(context, agent_id: UUID):
+    return context.client.get(_DETAILS.format(agent_id=agent_id), headers=_auth(context.access_token))
+
+
+def _cluster_says(
+    *,
+    pod: tuple[str, str | None] = ("ready", None),
+    healthz: dict | Exception | None = None,
+    diagnostics: dict | Exception | None = None,
+):
+    """What the cluster answers about a running Agent's pod, its healthz and its restarts."""
+
+    def step(context):
+        k8s: Any = context.injector.get(KubernetesClient)
+        k8s.get_pod_readiness.return_value = pod
+        healthz_answer = {"status": "ok", "reason": _SECRET_REASON} if healthz is None else healthz
+        if isinstance(healthz_answer, Exception):
+            k8s.fetch_agent_healthz.side_effect = healthz_answer
+        else:
+            k8s.fetch_agent_healthz.return_value = healthz_answer
+        diagnostics_answer = (
+            {
+                "observed_at": datetime.now(UTC),
+                "available": True,
+                "restart_count": 3,
+                "ready": True,
+                "termination_reason": "OOMKilled",
+                "exit_code": 137,
+                "current_logs": [_SECRET_LOG],
+                "current_logs_available": True,
+            }
+            if diagnostics is None
+            else diagnostics
+        )
+        if isinstance(diagnostics_answer, Exception):
+            k8s.get_runtime_diagnostics.side_effect = diagnostics_answer
+        else:
+            k8s.get_runtime_diagnostics.return_value = diagnostics_answer
+
+    return step
+
+
+def _cy_failed_with(code: str | None, detail: str | None, legacy: str | None = None):
+    """Put the second Agent into ERROR with a stored failure, as a failed start leaves it."""
+
+    def step(context):
+        repository: AgentRepository = context.injector.get(AgentRepository)
+        agent = repository.get_by_id(context.cy.id)
+        assert agent is not None
+        agent.status = AgentStatus.ERROR
+        agent.last_error_code, agent.last_error_detail, agent.last_error = code, detail, legacy
+        repository.delegate.save(agent)
+
+    return step
+
+
+def test_agent_details_require_a_platform_administrator():
+    with given(
+        [
+            *_BASE_GIVEN,
+            _two_organizations("owner-det-a@example.com", "owner-det-b@example.com"),
+            _cluster_says(),
+        ]
+    ) as context:
+        with when("nobody, then an organization owner, asks about an agent"):
+            anonymous = context.client.get(_DETAILS.format(agent_id=context.cy.id))
+            owner = context.client.get(_DETAILS.format(agent_id=context.ada.id), headers=_auth(context.access_token))
+
+        with then("both are refused, and the cluster was never asked"):
+            assert_that(anonymous.status_code, equal_to(status.HTTP_401_UNAUTHORIZED))
+            assert_that(owner.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+            k8s: Any = context.injector.get(KubernetesClient)
+            k8s.get_pod_readiness.assert_not_called()
+            k8s.get_runtime_diagnostics.assert_not_called()
+
+
+def test_an_unknown_or_deleted_agent_is_not_found():
+    with given(
+        [
+            *_BASE_GIVEN,
+            _two_organizations("owner-det-c@example.com", "owner-det-d@example.com"),
+            *_platform_admin("admin-details-404@example.com"),
+        ]
+    ) as context:
+        there_is_an_agent(name="Gone", deleted=True, organization_id=context.acme.id)(context)
+
+        assert_that(_details(context, uuid4()).status_code, equal_to(status.HTTP_404_NOT_FOUND))
+        assert_that(_details(context, context.agent.id).status_code, equal_to(status.HTTP_404_NOT_FOUND))
+
+
+def test_a_running_agent_has_its_status_restarts_and_last_day_of_usage():
+    with given(
+        [
+            *_BASE_GIVEN,
+            _two_organizations("owner-det-e@example.com", "owner-det-f@example.com"),
+            _reports(lambda c: {c.cy.id: _reading(1.0, 0.1)}),
+            _cluster_says(),
+            *_platform_admin("admin-details@example.com"),
+        ]
+    ) as context:
+        with when("the admin opens an agent in another organization"):
+            response = _details(context, context.cy.id)
+
+        with then("the agent is named from the database, with its organization"):
+            body = response.json()
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(body["name"], equal_to("Cy"))
+            assert_that(body["status"], equal_to("RUNNING"))
+            assert_that(body["organization_id"], equal_to(str(context.globex.id)))
+            assert_that(body["organization_name"], equal_to(context.globex.name))
+            assert_that(body["effective_model"], is_not(none()))
+
+        with then("it is working, and says how often it restarted and why the last one ended"):
+            assert_that(body["health_status"], equal_to("ok"))
+            assert_that(body["restart_count"], equal_to(3))
+            assert_that(body["termination_reason"], equal_to("OOMKilled"))
+
+        with then("its usage covers the last 24 hours, with the limits it runs with"):
+            usage = body["resource_usage"]
+            assert_that(usage["range"], equal_to("24h"))
+            assert_that(usage["availability"], equal_to("available"))
+            assert_that(usage["state"], equal_to("reporting"))
+            assert_that(usage["memory_working_set_bytes"], equal_to(1 * _GiB))
+            assert_that(usage["memory_limit_bytes"], equal_to(2 * _GiB))
+            assert_that(usage["cpu_limit_cores"], equal_to(1))
+
+
+def test_the_page_never_asks_the_cluster_for_logs_and_none_come_back():
+    with given(
+        [
+            *_BASE_GIVEN,
+            _two_organizations("owner-det-g@example.com", "owner-det-h@example.com"),
+            _reports(lambda c: {c.cy.id: _reading(1.0, 0.1)}),
+            _cluster_says(),
+            *_platform_admin("admin-details-leaks@example.com"),
+        ]
+    ) as context:
+        response = _details(context, context.cy.id)
+
+        # The call asks for no logs at all, so there is nothing to filter out afterwards.
+        k8s: Any = context.injector.get(KubernetesClient)
+        assert_that(k8s.get_runtime_diagnostics.call_args.kwargs, equal_to({"include_logs": False}))
+        # And what the cluster did hand back that is free text stays out of the answer.
+        assert _SECRET_LOG not in response.text
+        assert _SECRET_REASON not in response.text
+        # The model is an allowlist: exactly these fields, nothing added by accident.
+        assert_that(
+            sorted(response.json()),
+            equal_to(
+                sorted(
+                    [
+                        "agent_id",
+                        "name",
+                        "status",
+                        "agent_type",
+                        "effective_model",
+                        "created_at",
+                        "organization_id",
+                        "organization_name",
+                        "last_error_summary",
+                        "health_status",
+                        "restart_count",
+                        "termination_reason",
+                        "resource_usage",
+                    ]
+                )
+            ),
+        )
+
+
+def test_an_agent_in_error_shows_its_fixed_copy_summary_and_not_the_detail():
+    with given(
+        [
+            *_BASE_GIVEN,
+            _two_organizations("owner-det-i@example.com", "owner-det-j@example.com"),
+            _cy_failed_with("QUOTA_EXHAUSTED", "requested 2Gi, namespace has 0Gi left"),
+            _cluster_says(),
+            *_platform_admin("admin-details-error@example.com"),
+        ]
+    ) as context:
+        body = _details(context, context.cy.id).json()
+
+        summary = persisted_provisioning_error(code="QUOTA_EXHAUSTED", detail=None, legacy_message=None)
+        assert summary is not None
+        assert_that(body["status"], equal_to("ERROR"))
+        assert_that(body["health_status"], equal_to("error"))
+        assert_that(body["last_error_summary"], equal_to(summary.summary))
+        assert "0Gi" not in str(body)
+
+
+def test_a_legacy_failure_message_straight_from_the_cluster_is_not_shown():
+    with given(
+        [
+            *_BASE_GIVEN,
+            _two_organizations("owner-det-k@example.com", "owner-det-l@example.com"),
+            _cy_failed_with(None, None, legacy="pods is forbidden: User system:serviceaccount:agent-farm cannot"),
+            _cluster_says(),
+            *_platform_admin("admin-details-legacy@example.com"),
+        ]
+    ) as context:
+        body = _details(context, context.cy.id).json()
+
+        # Reported as an unclassified failure, the stored text dropped, as in the product.
+        assert_that(body["last_error_summary"], is_not(none()))
+        assert "forbidden" not in str(body)
+
+
+def test_a_stopped_agent_has_no_container_to_ask_about():
+    with given(
+        [
+            *_BASE_GIVEN,
+            _two_organizations("owner-det-m@example.com", "owner-det-n@example.com", second_status=AgentStatus.STOPPED),
+            _cluster_says(),
+            *_platform_admin("admin-details-stopped@example.com"),
+        ]
+    ) as context:
+        body = _details(context, context.cy.id).json()
+
+        assert_that(body["status"], equal_to("STOPPED"))
+        assert_that(body["health_status"], none())
+        assert_that(body["restart_count"], none())
+        assert_that(body["resource_usage"], none())
+        assert_that(body["last_error_summary"], none())
+        k8s: Any = context.injector.get(KubernetesClient)
+        k8s.get_pod_readiness.assert_not_called()
+        k8s.get_runtime_diagnostics.assert_not_called()
+        _prometheus(context).query.assert_not_called()
+
+
+def test_an_unreachable_healthz_or_cluster_leaves_those_fields_empty_and_the_rest_in_place():
+    with given(
+        [
+            *_BASE_GIVEN,
+            _two_organizations("owner-det-o@example.com", "owner-det-p@example.com"),
+            _reports(lambda c: {c.cy.id: _reading(1.0, 0.1)}),
+            _cluster_says(healthz=RuntimeError("unreachable"), diagnostics=RuntimeError("cluster down")),
+            *_platform_admin("admin-details-down@example.com"),
+        ]
+    ) as context:
+        response = _details(context, context.cy.id)
+
+        # The Organization route answers 503 for these. A row that is opened should still
+        # show what is known, so here they are just empty.
+        body = response.json()
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+        assert_that(body["health_status"], none())
+        assert_that(body["restart_count"], none())
+        assert_that(body["termination_reason"], none())
+        assert_that(body["resource_usage"]["availability"], equal_to("available"))
+
+
+def test_an_unreachable_prometheus_leaves_usage_unavailable_and_the_rest_in_place():
+    with given(
+        [
+            *_BASE_GIVEN,
+            _two_organizations("owner-det-q@example.com", "owner-det-r@example.com"),
+            prometheus_is_down(),
+            _cluster_says(),
+            *_platform_admin("admin-details-prom@example.com"),
+        ]
+    ) as context:
+        body = _details(context, context.cy.id).json()
+
+        assert_that(body["resource_usage"]["availability"], equal_to("unavailable"))
+        assert_that(body["health_status"], equal_to("ok"))
+        assert_that(body["restart_count"], equal_to(3))

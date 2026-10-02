@@ -10,6 +10,7 @@ import {
   PLATFORM_ORPHAN_ID,
   mockCapacity,
   mockPlatformAgent,
+  mockPlatformAgentDetails,
   mockPlatformUsage,
   mockPlatformUsageUnavailable,
 } from "../pages/data-support/resource-usage-data-support.po";
@@ -537,5 +538,210 @@ test.describe("Platform capacity limits (platform_admin)", () => {
     await usagePage.openCapacityDialog();
 
     await expect(usagePage.memoryInput()).toHaveValue("70");
+  });
+});
+
+test.describe("Platform opened agent rows (platform_admin)", () => {
+  let usagePage: PlatformResourceUsagePage;
+  let data: DataSupport;
+
+  test.use({ storageState: { cookies: [], origins: [] }, viewport: { width: 1440, height: 900 } });
+
+  test.beforeEach(async ({ page }) => {
+    usagePage = new PlatformResourceUsagePage(page);
+    data = new DataSupport(page);
+
+    await data.auth.interceptRefreshRequest();
+    await data.users.interceptGetUserContextRequest();
+    await data.users.interceptGetOrganizationsRequest();
+    await data.organizations.interceptListOrganizations();
+    await data.resourceUsage.interceptPlatformResourceUsage();
+  });
+
+  test("rows start closed, and a closed row asks for nothing", async ({ page }) => {
+    const asked = await data.resourceUsage.interceptPlatformAgentDetails();
+
+    await usagePage.goto();
+
+    await expect(usagePage.agentRows()).toHaveCount(3);
+    await expect(usagePage.agentDetails()).toHaveCount(0);
+    await expect(page.getByTestId("platform-agent-details-row")).toHaveCount(0);
+    expect(asked).toHaveLength(0);
+  });
+
+  test("opening a row shows the same Status and Resource usage panels as the organization page", async () => {
+    const asked = await data.resourceUsage.interceptPlatformAgentDetails();
+    await usagePage.goto();
+
+    await usagePage.agentToggle(PLATFORM_CY_ID).click();
+
+    await expect(usagePage.agentDetails()).toBeVisible();
+    expect(asked).toEqual([PLATFORM_CY_ID]);
+
+    const status = usagePage.agentDetails().getByTestId("platform-agent-status");
+    await expect(status).toContainText("Working");
+    await expect(status).toContainText("hermes");
+    await expect(status).toContainText("Restarts");
+    await expect(status).toContainText("3");
+    await expect(status).toContainText("Last stopped by");
+    await expect(status).toContainText("OOMKilled");
+
+    const usage = usagePage.agentDetails().getByTestId("platform-agent-usage");
+    await expect(usage).toContainText("1.82 GiB of 2 GiB");
+    await expect(usage).toContainText("0.1 of 1 cores");
+    await expect(usage).toContainText("Peak memory, 24h");
+    await expect(usage).toContainText("30%");
+    await expect(usage.getByRole("img", { name: "Memory over time" })).toBeVisible();
+  });
+
+  test("has no Cost panel and no links, since an organization's agent pages are not an admin's to open", async () => {
+    await data.resourceUsage.interceptPlatformAgentDetails();
+    await usagePage.goto();
+
+    await usagePage.agentToggle(PLATFORM_CY_ID).click();
+
+    await expect(usagePage.agentDetails()).toBeVisible();
+    await expect(usagePage.agentDetails().getByRole("heading", { name: "Cost" })).toHaveCount(0);
+    await expect(usagePage.agentDetails().getByRole("heading", { name: "Status" })).toBeVisible();
+    await expect(usagePage.agentDetails().getByRole("heading", { name: "Resource usage" })).toBeVisible();
+    await expect(usagePage.agentDetails().getByRole("link")).toHaveCount(0);
+  });
+
+  test("clicking the row opens it, and clicking it again closes it", async ({ page }) => {
+    await data.resourceUsage.interceptPlatformAgentDetails();
+    await usagePage.goto();
+    const row = page.locator(`[data-testid="platform-agent-usage-row"][data-agent-id="${PLATFORM_ADA_ID}"]`);
+
+    await row.getByText("Ada").click();
+    await expect(usagePage.agentToggle(PLATFORM_ADA_ID)).toHaveAttribute("aria-expanded", "true");
+    await expect(usagePage.agentDetails()).toBeVisible();
+
+    await row.getByText("Ada").click();
+    await expect(usagePage.agentToggle(PLATFORM_ADA_ID)).toHaveAttribute("aria-expanded", "false");
+    await expect(usagePage.agentDetails()).toHaveCount(0);
+  });
+
+  test("more than one row can be open, each showing its own agent", async () => {
+    await data.resourceUsage.interceptPlatformAgentDetails({
+      body: (agentId) =>
+        mockPlatformAgentDetails({
+          agent_id: agentId,
+          name: agentId === PLATFORM_CY_ID ? "Cy" : "Ada",
+          restart_count: agentId === PLATFORM_CY_ID ? 3 : 0,
+        }),
+    });
+    await usagePage.goto();
+
+    await usagePage.agentToggle(PLATFORM_CY_ID).click();
+    await usagePage.agentToggle(PLATFORM_ADA_ID).click();
+
+    await expect(usagePage.agentDetails()).toHaveCount(2);
+  });
+
+  test("a row stays open when the table is sorted", async ({ page }) => {
+    await data.resourceUsage.interceptPlatformAgentDetails();
+    await usagePage.goto();
+    await usagePage.agentToggle(PLATFORM_CY_ID).click();
+    await expect(usagePage.agentDetails()).toBeVisible();
+
+    await page.getByTestId("platform-agents-sort-cpu").click();
+
+    await expect(usagePage.agentToggle(PLATFORM_CY_ID)).toHaveAttribute("aria-expanded", "true");
+    await expect(usagePage.agentDetails()).toBeVisible();
+  });
+
+  test("an agent in error shows its failure summary and that it needs attention", async () => {
+    await data.resourceUsage.interceptPlatformAgentDetails({
+      body: (agentId) =>
+        mockPlatformAgentDetails({
+          agent_id: agentId,
+          status: "ERROR",
+          health_status: "error",
+          last_error_summary: "Couldn't start — the namespace is out of quota",
+          restart_count: null,
+          termination_reason: null,
+          resource_usage: {
+            ...mockPlatformAgentDetails().resource_usage,
+            state: "no_data",
+            memory_working_set_bytes: null,
+            series: [],
+          },
+        }),
+    });
+    await usagePage.goto();
+
+    await usagePage.agentToggle(PLATFORM_CY_ID).click();
+
+    const status = usagePage.agentDetails().getByTestId("platform-agent-status");
+    await expect(status).toContainText("Needs attention");
+    await expect(status).toContainText("Couldn't start — the namespace is out of quota");
+    await expect(status).not.toContainText("Restarts");
+    await expect(usagePage.agentDetails().getByTestId("platform-agent-usage")).toContainText(
+      "No usage recorded for this period",
+    );
+  });
+
+  test("a stopped agent says it is idle and that usage is recorded while it runs", async () => {
+    await data.resourceUsage.interceptPlatformAgentDetails({
+      body: (agentId) =>
+        mockPlatformAgentDetails({
+          agent_id: agentId,
+          status: "STOPPED",
+          health_status: null,
+          restart_count: null,
+          termination_reason: null,
+          resource_usage: null,
+        }),
+    });
+    await usagePage.goto();
+
+    await usagePage.agentToggle(PLATFORM_CY_ID).click();
+
+    await expect(usagePage.agentDetails().getByTestId("platform-agent-status")).toContainText("Idle");
+    await expect(usagePage.agentDetails().getByTestId("platform-agent-usage")).toContainText(
+      "Stopped. Usage is recorded while the agent runs.",
+    );
+  });
+
+  test("a container with no live agent has nothing to open", async ({ page }) => {
+    const asked = await data.resourceUsage.interceptPlatformAgentDetails();
+    await usagePage.goto();
+    const orphan = page.locator(
+      `[data-testid="platform-agent-usage-row"][data-agent-id="${PLATFORM_ORPHAN_ID}"]`,
+    );
+
+    await expect(orphan.getByRole("button")).toHaveCount(0);
+    await orphan.getByText("agent-99999999").click();
+
+    await expect(usagePage.agentDetails()).toHaveCount(0);
+    expect(asked).toHaveLength(0);
+  });
+
+  test("a failed request is said inline, in both panels, and the row stays", async () => {
+    await data.resourceUsage.interceptPlatformAgentDetails({ status: 500 });
+    await usagePage.goto();
+
+    await usagePage.agentToggle(PLATFORM_CY_ID).click();
+
+    await expect(usagePage.agentDetails().getByTestId("platform-agent-status")).toContainText(
+      "Status couldn't be loaded.",
+    );
+    await expect(usagePage.agentDetails().getByTestId("platform-agent-usage")).toContainText(
+      "Resource usage couldn't be loaded.",
+    );
+    await expect(usagePage.agentRows()).toHaveCount(3);
+  });
+
+  test("an unexpected health word from the runtime does not blank the panel", async () => {
+    await data.resourceUsage.interceptPlatformAgentDetails({
+      body: (agentId) => mockPlatformAgentDetails({ agent_id: agentId, health_status: "wedged" }),
+    });
+    await usagePage.goto();
+
+    await usagePage.agentToggle(PLATFORM_CY_ID).click();
+
+    // Read as an error, which the status line draws as Disconnected, and the rest still shows.
+    await expect(usagePage.agentDetails().getByTestId("platform-agent-status")).toContainText("Disconnected");
+    await expect(usagePage.agentDetails().getByTestId("platform-agent-usage")).toContainText("1.82 GiB of 2 GiB");
   });
 });

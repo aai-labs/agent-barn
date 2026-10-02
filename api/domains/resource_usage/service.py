@@ -9,7 +9,7 @@ from injector import inject, singleton
 
 from api.domains.agent_settings.lookup import AgentSettingsLookupService
 from api.domains.agents.authorization import AgentAuthorization
-from api.domains.agents.models import AgentFilter, AgentStatus
+from api.domains.agents.models import Agent, AgentFilter, AgentStatus
 from api.domains.agents.repository import AgentRepository
 from api.domains.auth.models import CurrentUserContext
 from api.domains.costs.service import CostService
@@ -90,6 +90,15 @@ class ResourceUsageService:
         usage_range: ResourceUsageRange,
     ) -> AgentResourceUsageRead:
         agent = self.agent_authorization.require_action(context, agent_id, PermissionKey.ACTIVITY_READ)
+        return self.usage_for(agent, usage_range)
+
+    def usage_for(self, agent: Agent, usage_range: ResourceUsageRange) -> AgentResourceUsageRead:
+        """One Agent's usage over a range, for an Agent already authorized by the caller.
+
+        The Organization route requires `activity.read` first, and the Platform view sits
+        behind `require_platform_admin`. A source that cannot be reached is an answer
+        (`availability`), not an error.
+        """
         now = datetime.now(UTC)
         window = resolve_usage_window(usage_range, now)
 

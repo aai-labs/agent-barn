@@ -4,13 +4,21 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import UUID
 
+from fastapi import HTTPException, status
 from injector import inject, singleton
 
-from api.domains.agents.models import AgentStatus, PlatformAgentIdentity
+from api.domains.agent_settings.lookup import AgentSettingsLookupService
+from api.domains.agents.models import Agent, AgentStatus, PlatformAgentIdentity
+from api.domains.agents.provisioning_errors import persisted_provisioning_error
 from api.domains.agents.repository import AgentRepository
+from api.domains.agents.service import AgentService
+from api.domains.organizations.lookup import OrganizationLookupService
 from api.domains.resource_limits.models import ResourceLimitsRead
 from api.domains.resource_limits.service import ResourceLimitsService
 from api.domains.resource_usage.models import (
+    PlatformAgentDetailsRead,
+    PlatformAgentResourceUsageRead,
+    PlatformAgentUsagePoint,
     PlatformAgentUsageRead,
     PlatformCapacityRead,
     PlatformOrganizationUsageRead,
@@ -24,7 +32,7 @@ from api.domains.resource_usage.models import (
     resolve_usage_window,
 )
 from api.domains.resource_usage.repository import ResourceUsageRepository
-from api.domains.resource_usage.service import usage_state
+from api.domains.resource_usage.service import ResourceUsageService, usage_state
 from api.infrastructure.prometheus.client import PrometheusError
 
 logger = logging.getLogger(__name__)
@@ -154,6 +162,20 @@ def build_platform_usage(
     return PlatformUsage(totals=totals, organizations=organizations, agents=agents)
 
 
+def _error_summary(agent: Agent) -> str | None:
+    """The fixed-copy summary of an Agent's provisioning failure, never its detail.
+
+    Rebuilt from the stored category code, so a legacy message that came straight from the
+    cluster is dropped rather than shown.
+    """
+    if agent.status != AgentStatus.ERROR:
+        return None
+    stored = persisted_provisioning_error(
+        code=agent.last_error_code, detail=agent.last_error_detail, legacy_message=agent.last_error
+    )
+    return stored.summary if stored else None
+
+
 def _whole(value: float | None) -> int | None:
     return None if value is None else int(value)
 
@@ -190,8 +212,12 @@ class PlatformResourceUsageService:
 
     agent_repository: AgentRepository
     usage_repository: ResourceUsageRepository
-    # Composed as a service, never through its repository, as the stats service does.
+    # Composed as services, never through their repositories, as the stats service does.
     resource_limits_service: ResourceLimitsService
+    agent_service: AgentService
+    resource_usage_service: ResourceUsageService
+    organization_lookup: OrganizationLookupService
+    agent_settings_lookup: AgentSettingsLookupService
 
     def get_usage(self, usage_range: ResourceUsageRange, organization_id: UUID | None) -> PlatformResourceUsageRead:
         now = datetime.now(UTC)
@@ -251,6 +277,45 @@ class PlatformResourceUsageService:
                 )
                 for bucket in window.timeline()
             ],
+        )
+
+    def get_agent_details(self, agent_id: UUID) -> PlatformAgentDetailsRead:
+        """Status and usage for one live Agent, for a Heaviest agents row that is opened.
+
+        The same facts the Organization overview's panels show, from the same sources, but
+        through the Platform's own read model: no log text, no free-text health reason and
+        no failure detail leave here. Authorization is the route's `require_platform_admin`.
+        """
+        agent = self.agent_repository.get_by_id(agent_id)
+        if agent is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
+
+        has_container = agent.status != AgentStatus.STOPPED
+        health = self.agent_service.agent_health(agent) if has_container else None
+        diagnostics = self.agent_service.runtime_restarts(agent) if has_container else None
+        usage = self.resource_usage_service.usage_for(agent, ResourceUsageRange.ONE_DAY) if has_container else None
+        organization_id = agent.organization_id
+        return PlatformAgentDetailsRead(
+            agent_id=agent.id,
+            name=agent.name,
+            status=agent.status,
+            agent_type=agent.agent_type,
+            effective_model=agent.model or self.agent_settings_lookup.resolve_default_model(organization_id),
+            created_at=agent.created_at,
+            organization_id=organization_id,
+            organization_name=self.organization_lookup.get_name(organization_id),
+            last_error_summary=_error_summary(agent),
+            health_status=health.status if health else None,
+            restart_count=diagnostics.restart_count if diagnostics and diagnostics.available else None,
+            termination_reason=diagnostics.termination_reason if diagnostics and diagnostics.available else None,
+            resource_usage=(
+                PlatformAgentResourceUsageRead(
+                    **usage.model_dump(exclude={"agent_id", "series"}),
+                    series=[PlatformAgentUsagePoint(**point.model_dump()) for point in usage.series],
+                )
+                if usage
+                else None
+            ),
         )
 
     def _combined_series(

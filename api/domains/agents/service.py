@@ -2655,17 +2655,33 @@ class AgentService:
     def get_agent_health(self, agent_id: UUID, context: CurrentUserContext) -> AgentHealthRead:
         agent = self.authorization.require_action(context, agent_id, PermissionKey.ACTIVITY_READ)
 
-        if agent.status == AgentStatus.ERROR:
-            stored = _stored_provisioning_error(agent)
-            return AgentHealthRead(status="error", reason=stored.display_message if stored else None)
-
-        if agent.status != AgentStatus.RUNNING:
+        if agent.status not in (AgentStatus.ERROR, AgentStatus.RUNNING):
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=f"Agent {agent_id} is not running",
             )
 
-        name = f"agent-{agent_id}"
+        health = self.agent_health(agent)
+        if health is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={"status": "error", "reason": "unreachable"},
+            )
+        return health
+
+    def agent_health(self, agent: Agent) -> AgentHealthRead | None:
+        """What the pod and the Agent's own healthz say, for an Agent already authorized.
+
+        The callers authorize: the Organization route requires `activity.read` on the Agent,
+        and the Platform resource usage page sits behind `require_platform_admin`. None means
+        the healthz server could not be reached, which the Organization route answers with a
+        503. A stopped Agent has no health and is not asked about.
+        """
+        if agent.status == AgentStatus.ERROR:
+            stored = _stored_provisioning_error(agent)
+            return AgentHealthRead(status="error", reason=stored.display_message if stored else None)
+
+        name = f"agent-{agent.id}"
         ns = self.config.k8s_namespace
 
         pod_status, pod_reason = self.k8s.get_pod_readiness(name, ns)
@@ -2678,7 +2694,21 @@ class AgentService:
             data = self.k8s.fetch_agent_healthz(name, ns)
             return AgentHealthRead.model_validate(data)
         except RuntimeError:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail={"status": "error", "reason": "unreachable"},
+            return None
+
+    def runtime_restarts(self, agent: Agent) -> AgentRuntimeDiagnosticsRead | None:
+        """Restarts and why the last one ended, without any log text.
+
+        For an Agent already authorized by a caller outside the activity log boundary (the
+        Platform view), so it never asks the cluster for logs. None when the cluster could
+        not be asked.
+        """
+        if agent.status != AgentStatus.RUNNING:
+            return AgentRuntimeDiagnosticsRead(observed_at=dt.datetime.now(dt.UTC))
+        try:
+            return AgentRuntimeDiagnosticsRead.model_validate(
+                self.k8s.get_runtime_diagnostics(f"agent-{agent.id}", self.config.k8s_namespace, include_logs=False)
             )
+        except Exception:
+            logger.exception("Runtime diagnostics unavailable for agent %s", agent.id)
+            return None

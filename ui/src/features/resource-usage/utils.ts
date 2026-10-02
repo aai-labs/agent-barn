@@ -89,4 +89,6 @@ export const resourceUsageKey = {
     ["platform", "resource-usage", range, organizationId] as const,
   /** Every Platform usage query, whatever its range or filter. */
   platformAll: ["platform", "resource-usage"] as const,
+  /** One opened Heaviest agents row. */
+  platformAgent: (agentId: string) => ["platform", "resource-usage", "agent", agentId] as const,
 };

@@ -212,6 +212,45 @@ export function mockPlatformUsage(overrides: Record<string, unknown> = {}) {
   };
 }
 
+/**
+ * What an opened Heaviest agents row asks for. By default it is Cy, working, restarted three
+ * times (the last one OOM-killed), at 91% of its memory limit and throttled 30% of the day.
+ */
+export function mockPlatformAgentDetails(overrides: Record<string, unknown> = {}) {
+  return {
+    agent_id: PLATFORM_CY_ID,
+    name: "Cy",
+    status: "RUNNING",
+    agent_type: "hermes",
+    effective_model: "litellm/gpt-5-mini",
+    created_at: "2026-03-14T00:00:00Z",
+    organization_id: PLATFORM_GLOBEX_ID,
+    organization_name: "Globex",
+    last_error_summary: null,
+    health_status: "ok",
+    restart_count: 3,
+    termination_reason: "OOMKilled",
+    resource_usage: {
+      range: "24h",
+      from_date: "2026-09-28T12:00:00Z",
+      to_date: "2026-09-29T12:00:00Z",
+      step_seconds: 300,
+      availability: "available",
+      state: "reporting",
+      observed_at: "2026-09-29T12:03:00Z",
+      memory_working_set_bytes: 1_950_000_000,
+      memory_limit_bytes: 2 * GIB,
+      memory_peak_bytes: 2_000_000_000,
+      cpu_cores: 0.1,
+      cpu_limit_cores: 1,
+      cpu_average_cores: 0.08,
+      cpu_throttled_ratio: 0.3,
+      series: usageSeries(),
+    },
+    ...overrides,
+  };
+}
+
 /** What the API returns when Prometheus cannot be read: only the database's count. */
 export function mockPlatformUsageUnavailable(availability = "unavailable") {
   return mockPlatformUsage({
@@ -344,5 +383,34 @@ export class ResourceUsageDataSupport {
       });
     });
     return sent;
+  }
+
+  /**
+   * Answers an opened row. Returns the agent ids it was asked about. With no `body` every
+   * agent gets the default details, under its own id.
+   */
+  async interceptPlatformAgentDetails({
+    body,
+    status = 200,
+  }: {
+    body?: (agentId: string) => Record<string, unknown>;
+    status?: number;
+  } = {}): Promise<string[]> {
+    const asked: string[] = [];
+    await this.page.route("**/api/v1/platform/resource-usage/agents/*", async (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      const agentId = new URL(route.request().url()).pathname.split("/").pop() ?? "";
+      asked.push(agentId);
+      await route.fulfill({
+        status,
+        contentType: "application/json",
+        body: JSON.stringify(
+          status >= 400
+            ? { detail: "Unable to load this agent" }
+            : (body?.(agentId) ?? mockPlatformAgentDetails({ agent_id: agentId })),
+        ),
+      });
+    });
+    return asked;
   }
 }
