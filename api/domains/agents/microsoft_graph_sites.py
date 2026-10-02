@@ -48,6 +48,10 @@ class MicrosoftGraphSites:
             raise SitesUnavailable("permission response without an id")
         return str(permission_id)
 
+    def update_site_role(self, token: str, *, site_id: str, permission_id: str, role: str) -> None:
+        """Change an existing grant's role in place, so access never lapses in between."""
+        self._call("PATCH", f"/sites/{site_id}/permissions/{permission_id}", token, {"roles": [role]})
+
     def revoke_site(self, token: str, *, site_id: str, permission_id: str) -> None:
         """Remove a grant. One already gone, or a site since deleted, is not an error."""
         try:

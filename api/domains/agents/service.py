@@ -94,6 +94,7 @@ from api.domains.agents.models import (
     GoogleWorkspaceContent,
     JiraContent,
     SecretProvider,
+    SharePointContent,
     SkillVersionPin,
     decrypt_content,
     encrypt_content,
@@ -2040,9 +2041,14 @@ class AgentService:
                     "Authenticate with Google, or configure google_cloud_client_id/secret."
                 ),
             )
-        # SharePoint's refresh token goes through the store too, written only for a new sign-in.
+        # A delegated SharePoint refresh token goes through the store too, written only for a new
+        # sign-in. Selected sites keeps no token: the pod fetches one with its platform key.
+        sharepoint = decrypted.get(SecretProvider.SHAREPOINT)
+        selected_sites = isinstance(sharepoint, SharePointContent) and sharepoint.mode == "selected_sites"
         store = {
-            p: c for p, c in decrypted.items() if p.value in provider_secrets_map or p == SecretProvider.SHAREPOINT
+            p: c
+            for p, c in decrypted.items()
+            if p.value in provider_secrets_map or (p == SecretProvider.SHAREPOINT and not selected_sites)
         }
         aai_home = "/opt/data" if agent.agent_type == AgentType.HERMES else "/home/node"
         # The store must survive restarts: aai-cli rotates delegated Microsoft tokens in it.
@@ -2053,11 +2059,22 @@ class AgentService:
         # a config.toml holding nothing but the store header.
         has_aai_profiles = bool(decrypted.keys() & set(PROFILE_SLUGS))
         aai_config_toml = (
-            build_config_toml(decrypted, home_dir=aai_home, store_dir=aai_store_dir) if has_aai_profiles else None
+            build_config_toml(
+                decrypted,
+                home_dir=aai_home,
+                store_dir=aai_store_dir,
+                sharepoint_token_url=f"{self.config.ingest_base_url}/agents/{agent.id}/integrations/sharepoint/token",
+            )
+            if has_aai_profiles
+            else None
         )
         # Always mounted, even without profiles, so a removed SharePoint sign-in is cleaned up.
         aai_setup_sh = build_setup_sh(
-            list(store), home_dir=aai_home, store_dir=aai_store_dir, install_config=has_aai_profiles
+            list(store),
+            home_dir=aai_home,
+            store_dir=aai_store_dir,
+            install_config=has_aai_profiles,
+            store_platform_key=selected_sites,
         )
         if store:
             secret.string_data.update(build_env(store))

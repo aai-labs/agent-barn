@@ -11,7 +11,7 @@ from sqlmodel import Session, col, select
 from api.core.config import Config
 from api.domains.agents.microsoft_graph_sites import MicrosoftGraphSites, SiteNotFound
 from api.domains.agents.microsoft_identity import MicrosoftIdentityClient, MicrosoftIdentityError, MicrosoftTokens
-from api.domains.agents.models import AgentSecret, SecretProvider
+from api.domains.agents.models import AgentSecret, SecretProvider, SharePointContent, encrypt_content
 from api.domains.agents.sharepoint_service import SignInState, encode_sign_in_state
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 
@@ -65,7 +65,9 @@ class FakeMicrosoftIdentity(MicrosoftIdentityClient):
 
 
 def app_tokens(access_token: str = "app-only-token", expires_in: int = 3599) -> MicrosoftTokens:
-    return MicrosoftTokens(access_token=access_token, refresh_token=None, expires_in=expires_in, scope="", id_token=None)
+    return MicrosoftTokens(
+        access_token=access_token, refresh_token=None, expires_in=expires_in, scope="", id_token=None
+    )
 
 
 ADMIN_EMAIL = "admin@contoso.com"
@@ -97,6 +99,7 @@ class FakeMicrosoftGraphSites(MicrosoftGraphSites):
     revoke_failures: dict[str, Exception] = field(default_factory=dict)
     grants: list[dict] = field(default_factory=list)
     revokes: list[dict] = field(default_factory=list)
+    role_updates: list[dict] = field(default_factory=list)
 
     def resolve_site_id(self, token: str, site_url: str) -> str:
         if site_url in self.unknown_sites:
@@ -108,6 +111,9 @@ class FakeMicrosoftGraphSites(MicrosoftGraphSites):
             raise self.grant_failures[site_id]
         self.grants.append({"token": token, "site_id": site_id, "app_id": app_id, "role": role})
         return f"perm-{len(self.grants)}"
+
+    def update_site_role(self, token: str, *, site_id: str, permission_id: str, role: str) -> None:
+        self.role_updates.append({"site_id": site_id, "permission_id": permission_id, "role": role})
 
     def revoke_site(self, token: str, *, site_id: str, permission_id: str) -> None:
         if site_id in self.revoke_failures:
@@ -204,9 +210,7 @@ def sign_in_state(
     )
 
 
-def sign_in(
-    context, *, read_only: bool = False, user_id: UUID | None = None, sites: tuple[str, ...] | None = None
-):
+def sign_in(context, *, read_only: bool = False, user_id: UUID | None = None, sites: tuple[str, ...] | None = None):
     """Complete a sign-in; passing ``sites`` makes it the administrator's selected-sites grant."""
     return context.client.post(
         f"{agent_base(context)}/integrations/sharepoint/sign-in",
@@ -247,3 +251,18 @@ def sharepoint_secret(context) -> AgentSecret | None:
             .where(col(AgentSecret.agent_id) == context.agent.id)
             .where(col(AgentSecret.provider) == SecretProvider.SHAREPOINT)
         ).first()
+
+
+def replace_sharepoint_content(context, content: SharePointContent) -> None:
+    """Overwrite the stored credential, as if it had been saved in an earlier state."""
+    delegate = context.injector.get(PostgresRepositoryDelegate)
+    config = context.injector.get(Config)
+    with Session(delegate.engine) as session:
+        secret = session.exec(
+            select(AgentSecret)
+            .where(col(AgentSecret.agent_id) == context.agent.id)
+            .where(col(AgentSecret.provider) == SecretProvider.SHAREPOINT)
+        ).one()
+        secret.content = encrypt_content(content, config.agent_token_encryption_key)
+        session.add(secret)
+        session.commit()

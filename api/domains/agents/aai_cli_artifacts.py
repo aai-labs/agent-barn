@@ -59,6 +59,11 @@ PROFILE_SLUGS: dict[SecretProvider, str] = {
 SHAREPOINT_REFRESH_TOKEN_SECRET = "microsoft.sharepoint_refresh_token"
 SHAREPOINT_SIGN_IN_ID_ENV = "AAI_SHAREPOINT_SIGN_IN_ID"
 
+# aai-cli secret-store name for the agent's platform key (its ingest key). A ``token_url``
+# profile presents it to fetch short-lived tokens from the API, so the credential behind them
+# never reaches the pod. Used by SharePoint's selected-sites mode.
+PLATFORM_KEY_SECRET = "agentfarm.ingest_key"
+
 # Default config dir for OpenClaw (node user). Callers can pass a different home_dir for other
 # runtimes (e.g. Hermes runs as root → home_dir="/root").
 SECRETS_DIR = "/home/node/.config/aai-cli"
@@ -208,12 +213,26 @@ def _pipedrive_block(c: PipedriveContent) -> str:
     return "".join(lines)
 
 
-def _sharepoint_block(c: SharePointContent) -> str:
-    """aai-cli ``microsoft`` profile for the person who signed in on the agent's Teams app.
+def _sharepoint_block(c: SharePointContent, token_url: str | None = None) -> str:
+    """aai-cli ``microsoft`` profile for SharePoint on the agent's Teams app.
 
-    ``microsoft_delegated`` refreshes as a public client (no secret), which is how the sign-in
-    obtained the token. The scope is SharePoint only, whatever else the microsoft commands cover.
+    Delegated: ``microsoft_delegated`` refreshes as a public client (no secret), which is how
+    the sign-in obtained the token. The scope is SharePoint only, whatever else the microsoft
+    commands cover.
+
+    Selected sites: ``token_url`` holds no credential; aai-cli presents the agent's platform key
+    to the API, which mints an app-only token reaching only the granted sites.
     """
+    if c.mode == "selected_sites":
+        if token_url is None:
+            raise ValueError("a selected-sites SharePoint profile needs the agent's token URL")
+        return (
+            f"[profiles.{PROFILE_SLUGS[SecretProvider.SHAREPOINT]}]\n"
+            'provider = "microsoft"\n'
+            'auth_type = "token_url"\n'
+            f"token_url = {_q(token_url)}\n"
+            f"api_token_secret = {_q(PLATFORM_KEY_SECRET)}\n"
+        )
     scope = f"{GRAPH_SCOPE_PREFIX}{sharepoint_permission(c.read_only)} offline_access"
     return (
         f"[profiles.{PROFILE_SLUGS[SecretProvider.SHAREPOINT]}]\n"
@@ -235,7 +254,6 @@ _PROFILE_BUILDERS: dict[SecretProvider, Callable[..., str]] = {
     SecretProvider.ZOHO_CALENDAR: _zoho_calendar_block,
     SecretProvider.SLACK: _slack_block,
     SecretProvider.PIPEDRIVE: _pipedrive_block,
-    SecretProvider.SHAREPOINT: _sharepoint_block,
 }
 
 
@@ -299,6 +317,14 @@ def build_tool_context_md(decrypted: Mapping[SecretProvider, SecretContent]) -> 
                     f"- **Bitbucket** (`{base}`): workspace `{content.workspace}` "
                     f"({content.email}) — no repository configured; pass --repo explicitly"
                 )
+        elif isinstance(content, SharePointContent) and content.mode == "selected_sites":
+            slug = PROFILE_SLUGS[SecretProvider.SHAREPOINT]
+            access = "read-only" if content.read_only else "read and write"
+            sites = ", ".join(site.url for site in content.sites)
+            lines.append(
+                f"- **SharePoint** (`{slug}`): only these sites ({access}): {sites}. Anything else is refused. "
+                "Excel workbook commands aren't available here; download, edit and upload the file instead"
+            )
         elif isinstance(content, SharePointContent):
             slug = PROFILE_SLUGS[SecretProvider.SHAREPOINT]
             access = "read-only" if content.read_only else "read and write"
@@ -412,6 +438,13 @@ def _repo_scoped_profile_line(label: str, base: str, scope: str, scope_kind: str
     )
 
 
+_SELECTED_SITES_CAPABILITY = (
+    "SharePoint, the granted sites only: files in their document libraries "
+    "(`microsoft sharepoint files` upload/download/delete), lists and list items; find libraries "
+    "and folders with `microsoft request get` — read `./skills/aai-microsoft/SKILL.md`"
+)
+
+
 def build_integrations_policy_md(
     decrypted: Mapping[SecretProvider, SecretContent],
 ) -> str:
@@ -457,7 +490,10 @@ def build_integrations_policy_md(
             line = _repo_scoped_profile_line("Bitbucket", base, content.workspace, "workspace", content.repos)
         else:
             line = f"- **{_INTEGRATION_LABELS[provider]}**: `--profile {base}`"
-        capability = _INTEGRATION_CAPABILITIES.get(provider)
+        if isinstance(content, SharePointContent) and content.mode == "selected_sites":
+            capability = _SELECTED_SITES_CAPABILITY
+        else:
+            capability = _INTEGRATION_CAPABILITIES.get(provider)
         lines.append(f"{line} — {capability}" if capability else line)
     return "\n".join(lines) + "\n"
 
@@ -467,18 +503,22 @@ def build_config_toml(
     home_dir: str = "/home/node",
     *,
     store_dir: str | None = None,
+    sharepoint_token_url: str | None = None,
 ) -> str:
     """Render config.toml with one profile per provider present in ``decrypted``.
 
     Providers are emitted in a fixed (enum) order for deterministic output. Store-based providers
     reference their secret via ``*_secret``; env-based providers via ``*_env`` (token not injected).
     ``store_dir`` places the encrypted secret store (default: beside the config); it must survive
-    restarts for tokens aai-cli rotates itself.
+    restarts for tokens aai-cli rotates itself. ``sharepoint_token_url`` is where a selected-sites
+    SharePoint profile fetches its tokens.
     """
     blocks = [_header(store_dir or f"{home_dir}/.config/aai-cli")]
     for provider in SecretProvider:
         content = decrypted.get(provider)
-        if content is not None and provider in _PROFILE_BUILDERS:
+        if isinstance(content, SharePointContent):
+            blocks.append(_sharepoint_block(content, sharepoint_token_url))
+        elif content is not None and provider in _PROFILE_BUILDERS:
             blocks.append(_PROFILE_BUILDERS[provider](content))
     return "\n".join(blocks)
 
@@ -489,6 +529,7 @@ def build_setup_sh(
     *,
     store_dir: str | None = None,
     install_config: bool = True,
+    store_platform_key: bool = False,
 ) -> str:
     """Render the in-pod setup script: install config.toml, then `secrets set` per store secret.
 
@@ -498,6 +539,9 @@ def build_setup_sh(
     aai-cli rotates that token in the store, and a restart must not put the original back.
     Without SharePoint, a token left from an earlier sign-in is removed. ``install_config=False``
     is for an agent with no aai-cli profiles, which still needs that cleanup.
+    ``store_platform_key`` also stores the agent's ingest key, regenerated on every start, for a
+    ``token_url`` profile; stored rather than read from the environment at command time because a
+    runtime need not pass the pod's env to the tools it runs.
     """
     config_dir = f"{home_dir}/.config/aai-cli"
     config_path = f"{config_dir}/config.toml"
@@ -517,6 +561,10 @@ def build_setup_sh(
         for secret_name, _ in provider_secrets_map.get(provider.value, []):
             env = env_var_for(secret_name)
             lines.append(f"printf '%s' \"${env}\" | aai-cli --config {config_path} secrets set {secret_name}")
+    if store_platform_key:
+        lines.append(
+            f"printf '%s' \"$INGEST_API_KEY\" | aai-cli --config {config_path} secrets set {PLATFORM_KEY_SECRET}"
+        )
     marker = f"{store}/{SHAREPOINT_REFRESH_TOKEN_SECRET}.sign-in"
     if SecretProvider.SHAREPOINT in present:
         token_env = env_var_for(SHAREPOINT_REFRESH_TOKEN_SECRET)
@@ -551,7 +599,7 @@ def build_env(
     for provider, content in store_decrypted.items():
         for secret_name, attr in provider_secrets_map.get(provider.value, []):
             env[env_var_for(secret_name)] = getattr(content, attr)
-        if isinstance(content, SharePointContent):
+        if isinstance(content, SharePointContent) and content.refresh_token and content.sign_in_id:
             env[env_var_for(SHAREPOINT_REFRESH_TOKEN_SECRET)] = content.refresh_token
             env[SHAREPOINT_SIGN_IN_ID_ENV] = content.sign_in_id
     return env

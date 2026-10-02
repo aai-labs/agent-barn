@@ -2,6 +2,7 @@
 authorize and admin-approval URLs, the popup callback page, and the Microsoft token client."""
 
 import base64
+import dataclasses
 import hashlib
 import urllib.parse
 import uuid
@@ -65,15 +66,14 @@ _APP_ID = "11111111-1111-4111-8111-111111111111"
 
 
 def _state(**overrides) -> SignInState:
-    values = {
-        "agent_id": uuid.uuid4(),
-        "connection_id": uuid.uuid4(),
-        "user_id": uuid.uuid4(),
-        "read_only": False,
-        "code_verifier": "verifier-" + "x" * 50,
-    }
-    values.update(overrides)
-    return SignInState(**values)
+    state = SignInState(
+        agent_id=uuid.uuid4(),
+        connection_id=uuid.uuid4(),
+        user_id=uuid.uuid4(),
+        read_only=False,
+        code_verifier="verifier-" + "x" * 50,
+    )
+    return dataclasses.replace(state, **overrides)
 
 
 def _query(url: str) -> dict[str, str]:

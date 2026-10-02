@@ -64,10 +64,10 @@ def sharepoint_authorize_url(
     service: Annotated[SharePointService, Injected(SharePointService)],
     read_only: bool = False,
     mode: Literal["delegated", "selected_sites"] = "delegated",
-    sites: Annotated[list[str], Query()] = [],
+    sites: Annotated[list[str] | None, Query()] = None,
 ):
     return SharePointAuthorizeUrlRead(
-        authorize_url=service.authorize_url(agent_id, connection_id, read_only, context, mode=mode, sites=sites)
+        authorize_url=service.authorize_url(agent_id, connection_id, read_only, context, mode=mode, sites=sites or [])
     )
 
 

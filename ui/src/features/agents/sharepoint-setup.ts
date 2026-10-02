@@ -22,8 +22,13 @@ export const MICROSOFT_GUIDES = {
     "https://learn.microsoft.com/en-us/entra/identity-platform/scenario-desktop-app-configuration#enable-public-client-flow",
   graphPermission:
     "https://learn.microsoft.com/en-us/entra/identity-platform/quickstart-configure-app-access-web-apis#delegated-permission-to-microsoft-graph",
+  applicationPermission:
+    "https://learn.microsoft.com/en-us/entra/identity-platform/quickstart-configure-app-access-web-apis#application-permission-to-microsoft-graph",
   adminConsent: "https://learn.microsoft.com/en-us/entra/identity/enterprise-apps/grant-admin-consent",
 } as const;
+
+// Selected-sites mode: an application permission that reaches only sites granted one by one.
+export const SELECTED_SITES_PERMISSION = "Sites.Selected";
 
 export function sharepointPermission(readOnly: boolean): string {
   return readOnly ? "Sites.Read.All" : "Sites.ReadWrite.All";

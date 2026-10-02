@@ -23,7 +23,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from typing import Literal
+from typing import Literal, Self
 from uuid import UUID, uuid4
 
 import jwt
@@ -273,7 +273,7 @@ class SharePointSignInRead(BaseModel):
     sites: list[str] = []
 
     @classmethod
-    def of(cls, content: SharePointContent) -> "SharePointSignInRead":
+    def of(cls, content: SharePointContent) -> Self:
         return cls(
             email=content.email,
             read_only=content.read_only,
@@ -326,7 +326,9 @@ class SharePointService:
         self._require_manage(agent_id, context)
         content = self._stored_content(agent_id)
         if content is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="SharePoint isn't connected for this agent.")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="SharePoint isn't connected for this agent."
+            )
         return SharePointSignInRead.of(content)
 
     def authorize_url(
@@ -471,10 +473,12 @@ class SharePointService:
         """Reconcile the Teams app's site grants with ``state.sites``, using the administrator's token.
 
         New sites are granted, removed ones revoked, and kept ones left alone unless the access
-        level changed. The token is used only here and never stored. Ordered so a failure leaves
-        the record true to Microsoft: every site is looked up before anything changes, a failed
-        grant takes back this attempt's grants, and a grant that couldn't be removed stays on
-        record so the next sign-in tries again.
+        level changed, in which case their grants are updated in place. Grants recorded for a
+        different app (the Teams connection now uses another one) are all replaced. The token is
+        used only here and never stored. Ordered so a failure leaves the record true to
+        Microsoft, or one sign-in away from it: every new site is looked up before anything
+        changes, a failed grant takes back this attempt's grants, and a grant that couldn't be
+        removed stays on record so the next sign-in tries again.
         """
         if SITE_GRANT_PERMISSION not in granted_permissions(tokens.scope.split()):
             raise HTTPException(
@@ -487,24 +491,20 @@ class SharePointService:
         token = tokens.access_token
         role = "read" if state.read_only else "write"
         previous = self._stored_content(agent.id)
-        existing = {
-            site.url: site
-            for site in (previous.sites if previous is not None and previous.mode == "selected_sites" else [])
-        }
+        recorded = previous.sites if previous is not None and previous.mode == "selected_sites" else []
+        same_app = previous is not None and previous.client_id == app_id
+        existing = {site.url: site for site in recorded} if same_app else {}
         level_changed = previous is not None and previous.read_only != state.read_only
-        kept = {url: site for url, site in existing.items() if url in state.sites and not level_changed}
-        replaced = [site for url, site in existing.items() if url in state.sites and level_changed]
-        removed = [site for url, site in existing.items() if url not in state.sites]
+        kept = {url: site for url, site in existing.items() if url in state.sites}
+        removed = [site for site in recorded if site.url not in kept]
 
         try:
-            site_ids = {
-                url: existing[url].site_id if url in existing else self.graph_sites.resolve_site_id(token, url)
-                for url in state.sites
-                if url not in kept
-            }
-            # The old grant goes first: Graph may hand back the same permission for the same app.
-            for site in replaced:
-                self.graph_sites.revoke_site(token, site_id=site.site_id, permission_id=site.permission_id)
+            site_ids = {url: self.graph_sites.resolve_site_id(token, url) for url in state.sites if url not in kept}
+            if level_changed:
+                for site in kept.values():
+                    self.graph_sites.update_site_role(
+                        token, site_id=site.site_id, permission_id=site.permission_id, role=role
+                    )
             granted: dict[str, GrantedSite] = {}
             try:
                 for url, site_id in site_ids.items():
@@ -512,7 +512,7 @@ class SharePointService:
                         token, site_id=site_id, app_id=app_id, display_name=agent.name, role=role
                     )
                     granted[url] = GrantedSite(url=url, site_id=site_id, permission_id=permission_id)
-            except (SiteAccessRefused, SiteNotFound, SitesUnavailable):
+            except SiteAccessRefused, SiteNotFound, SitesUnavailable:
                 for site in granted.values():
                     self._revoke_quietly(token, site)
                 raise
@@ -533,7 +533,7 @@ class SharePointService:
         for site in removed:
             try:
                 self.graph_sites.revoke_site(token, site_id=site.site_id, permission_id=site.permission_id)
-            except (SiteAccessRefused, SitesUnavailable):
+            except SiteAccessRefused, SitesUnavailable:
                 logger.warning("SharePoint site grant could not be removed for agent %s", agent.id)
                 still_granted.append(site)
 
@@ -605,7 +605,7 @@ class SharePointService:
     def _revoke_quietly(self, token: str, site: GrantedSite) -> None:
         try:
             self.graph_sites.revoke_site(token, site_id=site.site_id, permission_id=site.permission_id)
-        except (SiteAccessRefused, SitesUnavailable):
+        except SiteAccessRefused, SitesUnavailable:
             logger.warning("SharePoint site grant could not be taken back after a failed sign-in")
 
     def _stored_content(self, agent_id: UUID) -> SharePointContent | None:

@@ -31,6 +31,7 @@ from api.tests.steps.sharepoint import (
     auth,
     fake_graph_sites,
     fake_identity,
+    replace_sharepoint_content,
     sharepoint_is_signed_in,
     sharepoint_secret,
     sign_in,
@@ -84,6 +85,14 @@ def _authorize_url(context, *sites: str, read_only: bool = False):
 def _admin_signs_in(context, *sites: str, read_only: bool = False):
     fake_identity(context).exchange_result = admin_tokens()
     return sign_in(context, read_only=read_only, sites=sites)
+
+
+def _stored_grants_belong_to_another_app():
+    def step(context):
+        moved = _stored(context).model_copy(update={"client_id": "99999999-9999-4999-8999-999999999999"})
+        replace_sharepoint_content(context, moved)
+
+    return step
 
 
 def _stored(context) -> SharePointContent:
@@ -173,7 +182,9 @@ def test_the_administrators_sign_in_grants_each_site_and_keeps_no_token() -> Non
             assert_that(content.mode, equal_to("selected_sites"))
             assert_that(content.email, equal_to(ADMIN_EMAIL))
             assert_that(content.tenant_id, equal_to(TEAMS_TENANT_ID))
-            assert_that([(s.url, s.permission_id) for s in content.sites], equal_to([(_FINANCE, "perm-1"), (_LEGAL, "perm-2")]))
+            assert_that(
+                [(s.url, s.permission_id) for s in content.sites], equal_to([(_FINANCE, "perm-1"), (_LEGAL, "perm-2")])
+            )
             assert_that(content.refresh_token, none())
 
         with then("the response says who granted which sites"):
@@ -217,7 +228,7 @@ def test_signing_in_again_grants_added_sites_and_revokes_removed_ones() -> None:
             )
 
 
-def test_changing_the_access_level_replaces_each_kept_sites_grant() -> None:
+def test_changing_the_access_level_updates_each_kept_sites_grant_in_place() -> None:
     with given([*_GIVEN, sites_are_granted(_FINANCE)]) as context:
         graph = fake_graph_sites(context)
         graph.grants.clear()
@@ -225,11 +236,32 @@ def test_changing_the_access_level_replaces_each_kept_sites_grant() -> None:
         with when("an administrator signs in again for the same site, read-only"):
             response = _admin_signs_in(context, _FINANCE, read_only=True)
 
-        with then("the write grant is removed and a read grant made"):
+        with then("the existing grant becomes read-only, with no moment without access"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK), response.text)
+            assert_that(
+                graph.role_updates,
+                equal_to([{"site_id": site_id_for(_FINANCE), "permission_id": "perm-1", "role": "read"}]),
+            )
+            assert_that(graph.grants, empty())
+            assert_that(graph.revokes, empty())
+            assert_that(_stored(context).read_only, equal_to(True))
+
+
+def test_grants_made_for_a_previous_teams_app_are_replaced() -> None:
+    with given([*_GIVEN, sites_are_granted(_FINANCE), _stored_grants_belong_to_another_app()]) as context:
+        graph = fake_graph_sites(context)
+        graph.grants.clear()
+
+        with when("an administrator signs in again for the same site"):
+            response = _admin_signs_in(context, _FINANCE)
+
+        with then("the old app's grant is removed and the agent's current Teams app is granted"):
             assert_that(response.status_code, equal_to(status.HTTP_200_OK), response.text)
             assert_that([r["permission_id"] for r in graph.revokes], equal_to(["perm-1"]))
-            assert_that([g["role"] for g in graph.grants], equal_to(["read"]))
-            assert_that(_stored(context).read_only, equal_to(True))
+            assert_that(
+                [(g["site_id"], g["app_id"]) for g in graph.grants], equal_to([(site_id_for(_FINANCE), TEAMS_APP_ID)])
+            )
+            assert_that(_stored(context).client_id, equal_to(TEAMS_APP_ID))
 
 
 def test_switching_from_a_personal_sign_in_replaces_it() -> None:

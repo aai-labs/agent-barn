@@ -86,6 +86,17 @@ def test_a_grant_refused_by_microsoft_is_reported_as_refused(graph):
         MicrosoftGraphSites().grant_site("t", site_id="site-1", app_id=_APP_ID, display_name="x", role="read")
 
 
+def test_changing_a_grants_role_updates_it_in_place(graph):
+    recorder = graph(httpx.Response(200, json={"id": "perm-1", "roles": ["read"]}))
+
+    MicrosoftGraphSites().update_site_role("admin-token", site_id="site-1", permission_id="perm-1", role="read")
+
+    call = recorder.calls[0]
+    assert_that(call["method"], equal_to("PATCH"))
+    assert_that(call["url"], equal_to(f"{_GRAPH}/sites/site-1/permissions/perm-1"))
+    assert_that(call["json"], equal_to({"roles": ["read"]}))
+
+
 def test_revoking_deletes_the_grant(graph):
     recorder = graph(httpx.Response(204))
 

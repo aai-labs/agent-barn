@@ -135,7 +135,9 @@ def test_the_token_is_minted_with_the_teams_apps_credentials() -> None:
         with then("the token came from the agent's Teams app"):
             assert_that(
                 fake_identity(context).app_token_requests,
-                equal_to([{"tenant_id": TEAMS_TENANT_ID, "client_id": TEAMS_APP_ID, "client_secret": TEAMS_APP_PASSWORD}]),
+                equal_to(
+                    [{"tenant_id": TEAMS_TENANT_ID, "client_id": TEAMS_APP_ID, "client_secret": TEAMS_APP_PASSWORD}]
+                ),
             )
 
 

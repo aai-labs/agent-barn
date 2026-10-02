@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { useCommunicationConnections } from "@/features/communication-connections/hooks/use-communication-connections";
 import { useOrganizationContext } from "@/features/organizations/providers/organization-provider";
@@ -9,12 +9,15 @@ import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
 
 import {
   useAdministratorApproval,
+  useSharePointAccess,
   useSharePointSetup,
   useSharePointSignIn,
+  type SharePointMode,
   type SharePointSetup,
 } from "../hooks/use-sharepoint-sign-in";
 import { isOAuthConnected, type IntegrationDraft, type IntegrationProvider } from "../integrations";
-import { MICROSOFT_GUIDES, entraAppLinks, sharepointPermission } from "../sharepoint-setup";
+import { MICROSOFT_GUIDES, SELECTED_SITES_PERMISSION, entraAppLinks, sharepointPermission } from "../sharepoint-setup";
+import { normalizeSiteUrl } from "../sharepoint-sites";
 import { CredentialErrorAlert } from "./credential-error-alert";
 import { IntegrationFields } from "./integration-fields";
 
@@ -87,10 +90,23 @@ function Links({ children }: { children: React.ReactNode }) {
  * The one-time setup on the agent's Teams app, as numbered steps that link straight to each
  * page in Microsoft Entra and to Microsoft's own guide for it.
  */
-function TeamsAppSetupGuide({ setup, readOnly }: { setup: SharePointSetup; readOnly: boolean }) {
+function TeamsAppSetupGuide({
+  setup,
+  readOnly,
+  mode,
+}: {
+  setup: SharePointSetup;
+  readOnly: boolean;
+  mode: SharePointMode;
+}) {
   const links = entraAppLinks(setup.appId);
-  const permission = sharepointPermission(readOnly);
-  const approvalUrl = readOnly ? setup.readOnlyAdminConsentUrl : setup.adminConsentUrl;
+  const selectedSites = mode === "selected_sites";
+  const permission = selectedSites ? SELECTED_SITES_PERMISSION : sharepointPermission(readOnly);
+  const approvalUrl = selectedSites
+    ? setup.appPermissionConsentUrl
+    : readOnly
+      ? setup.readOnlyAdminConsentUrl
+      : setup.adminConsentUrl;
   const { approve, isApproving } = useAdministratorApproval();
   const [approved, setApproved] = useState(false);
   const [approvalError, setApprovalError] = useState<string | null>(null);
@@ -166,18 +182,26 @@ function TeamsAppSetupGuide({ setup, readOnly }: { setup: SharePointSetup; readO
         <Step n={4} title="Add the SharePoint permission">
           <Note>
             Under <strong>API permissions</strong>, select <strong>Add a permission</strong> →{" "}
-            <strong>Microsoft Graph</strong> → <strong>Delegated permissions</strong>, tick{" "}
+            <strong>Microsoft Graph</strong> →{" "}
+            <strong>{selectedSites ? "Application permissions" : "Delegated permissions"}</strong>, tick{" "}
             <code>{permission}</code> and select <strong>Add permissions</strong>.
+            {selectedSites && " On its own it reaches no site until an administrator grants each one below."}
           </Note>
           <Links>
             <ExternalLink href={links.apiPermissions}>Open API permissions</ExternalLink>
-            <ExternalLink href={MICROSOFT_GUIDES.graphPermission}>Microsoft&apos;s guide</ExternalLink>
+            <ExternalLink
+              href={selectedSites ? MICROSOFT_GUIDES.applicationPermission : MICROSOFT_GUIDES.graphPermission}
+            >
+              Microsoft&apos;s guide
+            </ExternalLink>
           </Links>
         </Step>
 
         <Step n={5} title="Approve it for your organization">
           <Note>
-            If your organization only lets administrators approve apps, a Microsoft 365 administrator selects{" "}
+            {selectedSites
+              ? "A Microsoft 365 administrator must approve it: they select "
+              : "If your organization only lets administrators approve apps, a Microsoft 365 administrator selects "}
             <strong>Grant admin consent</strong> on the API permissions page, or opens this approval link. Send it
             to them, or approve here if you are one.
           </Note>
@@ -213,6 +237,115 @@ function TeamsAppSetupGuide({ setup, readOnly }: { setup: SharePointSetup; readO
  * sign-in saves the credential itself, so on success the draft is only marked as signed in;
  * nothing from here is submitted with the rest of the form.
  */
+/**
+ * The sites an administrator's next sign-in leaves the agent with. Sites not yet granted, and
+ * granted ones taken off the list, are marked until that sign-in happens.
+ */
+function SiteList({
+  sites,
+  granted,
+  onChange,
+  disabled,
+}: {
+  sites: string[];
+  granted: string[];
+  onChange: (sites: string[]) => void;
+  disabled?: boolean;
+}) {
+  const [input, setInput] = useState("");
+  const [inputError, setInputError] = useState<string | null>(null);
+  const removed = granted.filter((site) => !sites.includes(site));
+
+  function add() {
+    const site = normalizeSiteUrl(input);
+    if (!site) {
+      setInputError("That isn't a SharePoint site address. It looks like https://contoso.sharepoint.com/sites/team.");
+      return;
+    }
+    setInputError(null);
+    setInput("");
+    if (!sites.includes(site)) onChange([...sites, site]);
+  }
+
+  return (
+    <div className="flex flex-col gap-2">
+      <span className="text-[0.8125rem] font-medium" style={{ color: "var(--ink)" }}>
+        Sites
+      </span>
+      {(sites.length > 0 || removed.length > 0) && (
+        <ul aria-label="SharePoint sites" className="flex flex-col gap-1.5 list-none p-0 m-0">
+          {sites.map((site) => (
+            <li key={site} className="flex items-center gap-2 min-w-0">
+              <span className="text-[0.75rem] break-all" style={{ color: "var(--ink-1)" }}>
+                {site}
+              </span>
+              {!granted.includes(site) && (
+                <span className="text-[0.6875rem] shrink-0" style={{ color: "var(--ink-4)" }}>
+                  Not granted yet
+                </span>
+              )}
+              <button
+                type="button"
+                className="af-btn af-btn-sm shrink-0 ml-auto"
+                aria-label={`Remove ${site}`}
+                onClick={() => onChange(sites.filter((s) => s !== site))}
+                disabled={disabled}
+              >
+                Remove
+              </button>
+            </li>
+          ))}
+          {removed.map((site) => (
+            <li key={site} className="flex items-center gap-2 min-w-0">
+              <span className="text-[0.75rem] break-all line-through" style={{ color: "var(--ink-4)" }}>
+                {site}
+              </span>
+              <span className="text-[0.6875rem] shrink-0" style={{ color: "var(--ink-4)" }}>
+                Access ends at the next administrator sign-in
+              </span>
+              <button
+                type="button"
+                className="af-btn af-btn-sm shrink-0 ml-auto"
+                aria-label={`Keep ${site}`}
+                onClick={() => onChange([...sites, site])}
+                disabled={disabled}
+              >
+                Keep
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="flex items-start gap-2">
+        <input
+          className="af-input flex-1 min-w-0"
+          aria-label="SharePoint site address"
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              add();
+            }
+          }}
+          placeholder="https://contoso.sharepoint.com/sites/finance"
+          autoComplete="off"
+          disabled={disabled}
+        />
+        <button type="button" className="af-btn af-btn-sm shrink-0" onClick={add} disabled={disabled || !input.trim()}>
+          Add site
+        </button>
+      </div>
+      {inputError && (
+        <span role="alert" className="text-[0.75rem]" style={{ color: "var(--danger, #c53030)" }}>
+          {inputError}
+        </span>
+      )}
+      <Note>Paste any address inside a site; it&apos;s reduced to the site itself.</Note>
+    </div>
+  );
+}
+
 export function SharePointSignIn({
   agentId,
   provider,
@@ -231,7 +364,14 @@ export function SharePointSignIn({
   const { selectedOrganization } = useOrganizationContext();
   const connections = useCommunicationConnections(agentId);
   const { signIn, isSigningIn } = useSharePointSignIn(agentId);
+  const access = useSharePointAccess(agentId);
   const [error, setError] = useState<string | null>(null);
+  // Unset until the person picks one: the agent's current mode, or everything by default.
+  const [chosenMode, setChosenMode] = useState<SharePointMode | null>(null);
+  // Sites granted so far, as last confirmed by Microsoft through a sign-in.
+  const [grantedOverride, setGrantedOverride] = useState<{ email: string; sites: string[] } | null>(null);
+  // The sites the next administrator sign-in should leave the agent with; unset means "as granted".
+  const [chosenSites, setChosenSites] = useState<string[] | null>(null);
 
   const channelsHref = `/dashboard/${selectedOrganization?.id ?? ""}/agents/${agentId}/configuration?section=channels`;
   const teamsApps = (connections.data ?? []).filter((c) => c.platformKey === "teams");
@@ -242,6 +382,19 @@ export function SharePointSignIn({
   const hasAccessLevel = readOnly === "true" || readOnly === "false";
   const signedIn = isOAuthConnected(draft);
   const email = typeof draft.content.email === "string" ? draft.content.email : "";
+  const current = access.data ?? null;
+  const mode: SharePointMode = chosenMode ?? current?.mode ?? "delegated";
+  const selectedSites = mode === "selected_sites";
+  const granted =
+    grantedOverride ??
+    (current?.mode === "selected_sites" ? { email: current.email, sites: current.sites } : { email: "", sites: [] });
+  const wantedSites = chosenSites ?? granted.sites;
+  const accessReadOnly = current ? (current.readOnly ? "true" : "false") : undefined;
+
+  // Start from the agent's current access level, so a grant can be changed without re-picking it.
+  useEffect(() => {
+    if (!hasAccessLevel && accessReadOnly) onFieldChange("readOnly", accessReadOnly);
+  }, [hasAccessLevel, accessReadOnly, onFieldChange]);
 
   if (connections.isPending) {
     return <Note>Checking the agent&apos;s Microsoft Teams connection…</Note>;
@@ -268,7 +421,16 @@ export function SharePointSignIn({
   async function handleSignIn() {
     setError(null);
     try {
-      const result = await signIn({ connectionId, readOnly: readOnly === "true" });
+      const result = await signIn({
+        connectionId,
+        readOnly: readOnly === "true",
+        mode,
+        sites: selectedSites ? wantedSites : [],
+      });
+      if (result.mode === "selected_sites") {
+        setGrantedOverride({ email: result.email, sites: result.sites });
+        setChosenSites(null);
+      }
       onSignedIn({
         signedIn: "true",
         email: result.email,
@@ -280,10 +442,54 @@ export function SharePointSignIn({
     }
   }
 
+  const signInLabel = selectedSites
+    ? "Sign in as an administrator to grant sites"
+    : signedIn
+      ? "Sign in again"
+      : "Sign in with Microsoft";
+  const canSignIn = hasAccessLevel && (!selectedSites || wantedSites.length > 0);
+  const showGuide = selectedSites ? granted.sites.length === 0 : !signedIn;
+
   return (
     <div className="flex flex-col gap-3.5">
-      {!signedIn && setup.data && <TeamsAppSetupGuide setup={setup.data} readOnly={readOnly === "true"} />}
-      {!signedIn && setup.error && (
+      <fieldset className="flex flex-col gap-2 border-0 p-0 m-0">
+        <legend className="text-[0.8125rem] font-medium mb-1" style={{ color: "var(--ink)" }}>
+          What the agent can reach
+        </legend>
+        {(
+          [
+            ["delegated", "Everything the person signing in can open"],
+            ["selected_sites", "Only sites you choose"],
+          ] as const
+        ).map(([value, label]) => (
+          <label key={value} className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="radio"
+              name={`sharepoint-${agentId}-mode`}
+              value={value}
+              checked={mode === value}
+              onChange={() => setChosenMode(value)}
+              disabled={disabled || isSigningIn}
+              className="accent-[var(--blue-9)]"
+            />
+            <span className="text-[13px]" style={{ color: "var(--ink-1)" }}>
+              {label}
+            </span>
+          </label>
+        ))}
+        {selectedSites && (
+          <Note>
+            A Microsoft 365 administrator signs in to grant the agent each site below, and again whenever the
+            list changes. Editing Excel workbooks in place isn&apos;t available this way; the agent can still
+            download and upload them.
+          </Note>
+        )}
+      </fieldset>
+
+      {showGuide && setup.data && (
+        <TeamsAppSetupGuide setup={setup.data} readOnly={readOnly === "true"} mode={mode} />
+      )}
+      {showGuide && setup.error && (
         <CredentialErrorAlert
           title="Couldn't load the Teams app details"
           message={setup.error instanceof Error ? setup.error.message : "Please try again."}
@@ -299,6 +505,15 @@ export function SharePointSignIn({
         disabled={disabled || isSigningIn}
       />
 
+      {selectedSites && (
+        <SiteList
+          sites={wantedSites}
+          granted={granted.sites}
+          onChange={setChosenSites}
+          disabled={disabled || isSigningIn}
+        />
+      )}
+
       <Note>
         Signing in saves SharePoint access for this agent straight away, even if you don&apos;t apply
         your other changes. It takes effect when the agent restarts, which Apply does for you. To take
@@ -309,12 +524,17 @@ export function SharePointSignIn({
         type="button"
         className="af-btn af-btn-sm flex items-center gap-2 self-start"
         onClick={() => void handleSignIn()}
-        disabled={disabled || isSigningIn || !hasAccessLevel}
+        disabled={disabled || isSigningIn || !canSignIn}
       >
         <MicrosoftGlyph size={15} />
-        {isSigningIn ? "Waiting for Microsoft…" : signedIn ? "Sign in again" : "Sign in with Microsoft"}
+        {isSigningIn ? "Waiting for Microsoft…" : signInLabel}
       </button>
-      {signedIn && !isSigningIn && (
+      {selectedSites && granted.email && !isSigningIn && (
+        <span className="text-[0.75rem] font-medium" style={{ color: "var(--ok, #2f855a)" }}>
+          ✓ Sites granted by {granted.email}
+        </span>
+      )}
+      {!selectedSites && signedIn && !isSigningIn && (
         <span className="text-[0.75rem] font-medium" style={{ color: "var(--ok, #2f855a)" }}>
           ✓ {email ? `Signed in as ${email}` : "Signed in"}
         </span>
