@@ -216,6 +216,8 @@ class LiteLLMClient:
         changed = {name: value for name, value in desired.items() if current.get(name) != value}
         if not changed:
             return
+        if current.get("budget_duration") is None and current.get("spend"):
+            self._reset_key_spend(key, failure)
         try:
             response = httpx.post(
                 f"{self.config.litellm_base_url}/key/update",
@@ -231,6 +233,27 @@ class LiteLLMClient:
         unapplied = [name for name, value in changed.items() if applied.get(name) != value]
         if unapplied:
             raise LiteLLMError(f"LiteLLM did not apply {', '.join(sorted(unapplied))}")
+
+    def _reset_key_spend(self, key: str, failure: str) -> None:
+        """Zero a key's spend before its first window.
+
+        LiteLLM only zeroes spend when a window renews, so a key that never had one
+        carries everything it has ever spent — and its first cap would be measured
+        against that until the first renewal. Keys created before AF-337 have none.
+        Done before the cap is written, and only then: a key with a window keeps its
+        spend, which is that window's. Spend logs, and so cost records, are untouched.
+        """
+        try:
+            response = httpx.post(
+                # The hash, not the key, as for /key/info: the path reaches access logs.
+                f"{self.config.litellm_base_url}/key/{hashlib.sha256(key.encode()).hexdigest()}/reset_spend",
+                json={"reset_to": 0},
+                headers=self._headers(self._master_key()),
+                timeout=self._TIMEOUT,
+            )
+            response.raise_for_status()
+        except httpx.HTTPError, ValueError, KeyError, TypeError:
+            raise LiteLLMError(failure) from None
 
     def get_key_budget_status(self, key: str) -> dict:
         """Spend accrued against the key's own limit in its current window."""

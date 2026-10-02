@@ -86,14 +86,15 @@ Organization's own limit; `../../api/domains/agents/llm_budget.py` owns Agent li
 **Nobody is uncapped.** A new Organization starts at
 `ORGANIZATION_DEFAULT_LLM_BUDGET_USD` whichever path creates it. The migration that
 introduced these limits gave every existing Organization without a ceiling $10,000 a
-month, and the same amount as its own default Agent limit, so existing Organizations
-and their Agents keep behaving as before until a platform administrator sets a real
-limit. The ceiling still does work there: LiteLLM counts a budget's first window from
-all the spend a key or team has ever had and only zeroes it when the window renews,
-so giving every team and key a window now means a real limit set later is measured
-against that month's spend. The ceiling can be changed but never cleared; "no
-practical limit" is a very large amount. A new Agent's key is issued with its limit
-already on it.
+month, and every existing Organization its ceiling as its default Agent limit, so
+existing Organizations and their Agents keep behaving as before until a limit is
+changed. The ceiling still does work there: LiteLLM counts a budget's first window
+from all the spend a key or team has ever had and only zeroes it when the window
+renews, so giving every team a window now means a real limit set later is measured
+against that month's spend. Keys are zeroed by the API the first time they are capped
+(see the rollout note in `docs/guidelines/operations.md`). The ceiling can be changed
+but never cleared; "no practical limit" is a very large amount. A new Agent's key is
+issued with its limit already on it.
 
 **Lower limits never exceed higher ones.** Asking for an Organization limit above the
 ceiling, or an Agent or default Agent limit above the Organization's, is refused

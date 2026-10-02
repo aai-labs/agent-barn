@@ -133,7 +133,29 @@ def test_a_capped_organization_keeps_its_ceiling_and_window(pre_af337_database):
     organization_id = insert_organization(pre_af337_database.engine, budget=12.5, duration="7d")
     command.upgrade(pre_af337_database.config, AF337_REVISION)
     assert_that(tuple(ceiling_of(pre_af337_database.engine, organization_id)), equal_to((12.5, "7d")))
-    assert_that(default_agent_limit_of(pre_af337_database.engine, organization_id), equal_to(None))
+
+
+def test_a_capped_organizations_agents_follow_its_ceiling_not_the_deployment_default(pre_af337_database):
+    """An Organization capped before AF-337 (AF-303) keeps the team as the only limit
+    that binds: its Agents default to the ceiling, not AGENT_DEFAULT_LLM_BUDGET_USD."""
+    organization_id = insert_organization(pre_af337_database.engine, budget=12.5, duration="7d")
+    command.upgrade(pre_af337_database.config, AF337_REVISION)
+    assert_that(default_agent_limit_of(pre_af337_database.engine, organization_id), equal_to(12.5))
+
+
+def test_a_capped_organizations_existing_agent_settings_are_kept(pre_af337_database):
+    organization_id = insert_organization(pre_af337_database.engine, budget=12.5, duration="7d")
+    insert_agent_settings(pre_af337_database.engine, organization_id, default_model="claude-sonnet-5")
+    command.upgrade(pre_af337_database.config, AF337_REVISION)
+    with pre_af337_database.engine.connect() as connection:
+        row = connection.execute(
+            text(
+                "SELECT default_model, default_agent_llm_budget_usd FROM organization_agent_settings "
+                "WHERE organization_id = :id"
+            ),
+            {"id": organization_id},
+        ).one()
+    assert_that(tuple(row), equal_to(("claude-sonnet-5", 12.5)))
 
 
 def test_the_ceiling_can_no_longer_be_cleared(pre_af337_database):

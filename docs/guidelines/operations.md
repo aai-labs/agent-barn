@@ -78,18 +78,27 @@ renewal without resetting spend.
 
 **Rollout (AF-337): no manual step is needed.** LiteLLM keeps one running spend total
 per key and per team and only zeroes it when a window renews, so a key or team that
-was never capped carries everything it has ever spent into its first window. The
-migration therefore gives every existing Organization a ceiling of $10,000 a month,
-and the same as its default Agent limit, rather than the deployment defaults: high
-enough that lifetime spend refuses nobody, while every team and key gets a window and
-renews on the 1st. From the first renewal on, spend is per month, and a platform
-administrator can set a real limit without any reset.
+was never capped carries everything it has ever spent into its first window. Three
+things keep that from refusing anyone at rollout:
 
-Two edge cases are not covered: an Organization or Agent whose lifetime spend is
-already above $10,000, or a real limit set on an existing Organization before its
-first renewal, is measured against lifetime spend until the 1st. LiteLLM can zero a
-single key (`POST /key/{key}/reset_spend`) but not a single team; its only team-wide
-option is `POST /global/spend/reset`, which zeroes every key and team at once.
+- The migration gives every existing Organization without a ceiling $10,000 a month
+  rather than `ORGANIZATION_DEFAULT_LLM_BUDGET_USD`: high enough that its team's
+  lifetime spend refuses nobody, while the team gets a window and renews on the 1st.
+- It sets every existing Organization's default Agent limit to its ceiling (that
+  $10,000, or the ceiling it already had from AF-303), so existing Agents are not held
+  to `AGENT_DEFAULT_LLM_BUDGET_USD`; the team stays the only limit that binds.
+- The first time a limit is written to a key that has never had a window (every key
+  created before AF-337), the API zeroes that key's spend first
+  (`POST /key/{key}/reset_spend`), so its cap measures from then. This happens on the
+  reconciler's first pass after the deploy. Spend logs, and so cost records, are
+  untouched.
+
+From the first renewal on, team spend is per window, and a platform administrator can
+set a real limit without any reset. One edge case remains: LiteLLM cannot zero a
+single team, so an Organization without a ceiling whose team has already spent more
+than $10,000 in total, or one given a real limit before its first renewal, is measured
+against lifetime spend until the 1st. LiteLLM's only team-wide option is
+`POST /global/spend/reset`, which zeroes every key and team at once.
 
 Saving a limit writes the row first and then pushes it to LiteLLM. A
 proxy failure returns `502` with the amount already stored, because losing an

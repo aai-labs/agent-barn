@@ -3,9 +3,10 @@
 An Organization's own limit below the platform ceiling, a default limit for its
 Agents, a limit per Agent, and the permission that lets an Organization manage them.
 
-Every existing Organization without a ceiling is given one it will not reach, and the
-same amount as its default Agent limit, so existing Organizations and their Agents keep
-behaving as before. The ceiling still matters: it gives every team and key a window,
+Every existing Organization without a ceiling is given one it will not reach, and every
+existing Organization gets its ceiling as its default Agent limit, so existing
+Organizations and their Agents keep behaving as before: the team stays the only limit
+that binds. The ceiling still matters: it gives every team and key a window,
 so their spend renews monthly from here on, and a real limit set later is measured
 against that month's spend rather than everything ever spent. From here on nobody is
 uncapped, and the ceiling can no longer be cleared.
@@ -51,14 +52,16 @@ def upgrade() -> None:
         "organization_agent_settings",
         sa.Column("default_agent_llm_budget_usd", sa.Float(), nullable=True),
     )
-    # The existing Organization's own default Agent limit, so its Agents are not held
-    # to the deployment's AGENT_DEFAULT_LLM_BUDGET_USD either. Before the ceiling
-    # backfill below, which is what identifies the Organizations that had none.
+    # Every existing Organization's own default Agent limit is its ceiling (or the one
+    # given below), so its Agents are not held to the deployment's
+    # AGENT_DEFAULT_LLM_BUDGET_USD — including those capped before this change
+    # (AF-303), whose keys have never had a window and would otherwise be measured
+    # against their lifetime spend.
     op.get_bind().execute(
         sa.text(
             "INSERT INTO organization_agent_settings "
             "(id, created_at, updated_at, organization_id, default_agent_llm_budget_usd) "
-            "SELECT gen_random_uuid(), now(), now(), id, :budget FROM organization WHERE llm_budget_usd IS NULL "
+            "SELECT gen_random_uuid(), now(), now(), id, COALESCE(llm_budget_usd, :budget) FROM organization "
             "ON CONFLICT (organization_id) DO UPDATE "
             "SET default_agent_llm_budget_usd = EXCLUDED.default_agent_llm_budget_usd, updated_at = now()"
         ),

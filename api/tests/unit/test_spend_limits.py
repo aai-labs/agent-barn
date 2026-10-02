@@ -1,6 +1,7 @@
 """Self-service spend limits (AF-337): an Organization's own limit below the platform
 ceiling, and a limit per Agent enforced on that Agent's LiteLLM key."""
 
+import hashlib
 from unittest.mock import patch
 
 import httpx
@@ -38,6 +39,61 @@ def test_a_key_policy_is_written_and_verified():
     assert_that(
         post.call_args.kwargs["json"], equal_to({"key": SECRET_KEY, "max_budget": 20.0, "budget_duration": "30d"})
     )
+
+
+KEY_RESET = f"http://litellm/key/{hashlib.sha256(SECRET_KEY.encode()).hexdigest()}/reset_spend"
+
+
+def test_a_keys_first_cap_starts_from_zero_spend():
+    """A key that never had a window carries everything it has ever spent into its
+    first one; it is zeroed before the cap lands, so the cap measures from now."""
+    with (
+        patch.object(LiteLLMClient, "_master_key", return_value="master"),
+        patch(
+            "api.infrastructure.litellm.client.httpx.get",
+            side_effect=[
+                key(max_budget=None, budget_duration=None, spend=340.0),
+                key(max_budget=20.0, budget_duration="30d", spend=0.0),
+            ],
+        ),
+        patch("api.infrastructure.litellm.client.httpx.post", return_value=response({})) as post,
+    ):
+        client().apply_key_budget(SECRET_KEY, 20.0, "30d")
+    assert_that([c.args[0] for c in post.call_args_list], equal_to([KEY_RESET, KEY_UPDATE]))
+    assert_that(post.call_args_list[0].kwargs["json"], equal_to({"reset_to": 0}))
+
+
+def test_a_key_that_already_has_a_window_keeps_its_spend():
+    with (
+        patch.object(LiteLLMClient, "_master_key", return_value="master"),
+        patch(
+            "api.infrastructure.litellm.client.httpx.get",
+            side_effect=[
+                key(max_budget=20.0, budget_duration="30d", spend=12.0),
+                key(max_budget=10.0, budget_duration="30d", spend=12.0),
+            ],
+        ),
+        patch("api.infrastructure.litellm.client.httpx.post", return_value=response({})) as post,
+    ):
+        client().apply_key_budget(SECRET_KEY, 10.0, "30d")
+    assert_that([c.args[0] for c in post.call_args_list], equal_to([KEY_UPDATE]))
+
+
+def test_a_failed_first_cap_reset_writes_no_cap_and_never_surfaces_the_key():
+    """Capping without the reset would refuse the Agent on its lifetime spend; better
+    to leave the key as it was for the reconciler to retry."""
+    with (
+        patch.object(LiteLLMClient, "_master_key", return_value="master"),
+        patch(
+            "api.infrastructure.litellm.client.httpx.get",
+            return_value=key(max_budget=None, budget_duration=None, spend=340.0),
+        ),
+        patch("api.infrastructure.litellm.client.httpx.post", return_value=response({}, 500)) as post,
+        pytest.raises(LiteLLMError) as raised,
+    ):
+        client().apply_key_budget(SECRET_KEY, 20.0, "30d")
+    assert_that([c.args[0] for c in post.call_args_list], equal_to([KEY_RESET]))
+    assert_that(SECRET_KEY in str(raised.value) or raised.value.__cause__ is not None, equal_to(False))
 
 
 def test_an_unchanged_key_policy_writes_nothing():
