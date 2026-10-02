@@ -28,11 +28,65 @@ Related context: [Activity and Ingest](../activity-and-ingest.md), [Agent Activi
 - Also delivered: the KPIs page's empty state and loading skeletons (AF-348).
 - Also delivered: the KPIs page's value settings Sheet, which reads, edits, validates, resets, and discards (AF-348).
 - Also delivered: saving value settings from the KPIs page, which refreshes the value figures (AF-348).
+- Also delivered: the AF-348 KPIs dashboard, verified end to end on local k3d against the real API and database.
 - In transition: nothing.
-- Next: AF-348 final verification and the live end-to-end check on local k3d.
+- Next: none. Every planned slice of the epic is delivered.
 - Blockers: the product owner has not signed off the default minutes per Outcome Type. They are placeholders until then, and every value figure inherits them.
 
 ## Slice history
+
+### 2026-10-02 — AF-348 — Live end-to-end check (local k3d)
+
+Setup:
+- You redeployed local k3d from this branch: a fresh database at migration `45bcefcb0749`, and the UI and API images built from `AF-348-organization-kpi-board`.
+- The deployed UI bundle contains the `kpis` route and the UPPER_SNAKE exemption (`/^[A-Z0-9_]+$/`).
+- As `admin@local.dev`, a new Organization "AF-348 KPI live check" was created through the API, with its creator as Owner.
+- The KPIs page was driven in Chromium through the real login form at `https://agentfarm.local`.
+
+Empty Organization:
+- The nav reads Home, Costs, KPIs, Settings.
+- The window reads "last 30 days".
+- Value and Value per dollar read "— Set an hourly rate", with no `$0`.
+- Handled reads "not enough data · based on 0 of 0 requests".
+- The empty-state card shows, and both reads return 200.
+
+With traffic:
+- One Hermes Agent, "Tommy" (`general-purpose`), was hired and started.
+- Two Web Chat messages went through the real API. The second asked Tommy to run `aai-cli excel workbook create /tmp/af348-kpi-check.xlsx`, a local file in the Agent's pod.
+- Ingest recorded one Business Action: `excel workbook create`, `DOCUMENT_AUTHORED`, `SUCCESS`.
+- One cost-sync run was started by hand (`kubectl create job --from=cronjob/agentbarn-api-cost-sync af348-cost-sync-manual-1`). It attributed 12 rows, $0.0557970824, to the Organization.
+
+Every figure matched in independent SQL, the API, and the rendered page:
+
+| Figure | SQL | API | Page |
+|---|---|---|---|
+| Requests | 2 inbound messages + 0 webhooks | 2 | 2 |
+| Handled without failure | 2 SUCCEEDED, 0 failed | 1.0, coverage 2 | 100%, "based on 2 of 2 requests" |
+| Median response | `percentile_cont` 6.469045 s over 2 first attempts | 6.4690445 | "6.5 s · 2 reqs" |
+| LLM spend | $0.0557970824 | 0.0557970824 | $0.06 |
+| Cost per Request | $0.0557970824 ÷ 2 | 0.0278985412 | $0.03 |
+| Tool Calls per Request | 7 ÷ 2 | 3.5 | 3.5 |
+| Hours saved (default 20 min) | 1 successful `DOCUMENT_AUTHORED` | 20 minutes | "0.3 h", "1 successful write" |
+| Value (no rate) | — | null | "— Set an hourly rate" |
+
+Saving through the Sheet:
+- The rate was set to 60 and "Document authored" to 30 minutes.
+- The browser sent `{"hourly_rate_usd":60,"outcome_minutes":{"DOCUMENT_AUTHORED":30}}`, and the real API answered 200. The Outcome Type key arrived unmangled.
+- The Sheet closed. `/value-settings` and `/value` were read again, and `/value/activity` was not.
+- The earlier write was recalculated:
+  - Hours saved reads "0.5 h".
+  - Value reads "$30.00 at $60.00/h".
+  - Value per dollar reads "$537.66 per $1" (30 ÷ 0.0557970824 = 537.66).
+  - The Agents table and Top outcomes match.
+- Stored: `organization_value_settings.hourly_rate_usd = 60.00`, and `organization_outcome_minutes` `DOCUMENT_AUTHORED = 30`.
+- Exactly one `security_audit_record` row, `organization.value_settings.changed`, with `field_changes` `hourly_rate_usd: null → "60.00"` and `outcome_minutes.DOCUMENT_AUTHORED: null → "30"`.
+
+Final checks: `make lint-ui` and `make check-ui` pass. `kpis.spec.ts`, `top-nav-responsive.spec.ts`, and `costs.spec.ts` pass, 71 tests.
+
+Not verified live:
+- The Unattributed row, because the cost sync does not write such rows.
+- A Member's view, because there is no second local account and no real email is sent. Both are covered by `kpis.spec.ts`.
+- local k3d leaves `COMMUNICATIONS_NATIVE_PLATFORMS` empty, so the handled coverage here is not limited to Web Chat and Email the way it is in deployed environments.
 
 ### 2026-10-02 — AF-348 — Saving value settings, and UPPER_SNAKE request keys
 
