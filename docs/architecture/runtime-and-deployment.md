@@ -127,6 +127,15 @@ starts, after the config and plugin directories are prepared so doctor validates
 the config Agent Barn just wrote; healthy workspaces never run the broad doctor
 repair during startup. A failed migration is logged and does not stop startup.
 
+Official OpenClaw plugins are npm-installed onto the PVC at the core's version
+by `openclaw-plugins.sh`, which `start.sh` sources. A plugin whose package is
+present but missing any runtime entry file it declares (an install that stopped
+partway, or files lost from the volume) is put back with `npm install` in its
+existing npm project and re-indexed with `openclaw plugins registry --refresh`.
+OpenClaw's own repair commands cannot do this: they abort on the install record
+the damaged plugin still holds, and the gateway refuses to start until the files
+are back, so without the repair the Agent crash-loops.
+
 Cron delivery is automatic. When a scheduled run has nothing actionable to deliver, its final response must be a recognized silence marker (`[SILENT]`, `SILENT`, `NO_REPLY`, `NO REPLY`, or `HEARTBEAT_OK`); ordinary prose such as `Nothing to flag today.` is a deliverable message, not a private acknowledgement.
 
 ## Telemetry and costs
