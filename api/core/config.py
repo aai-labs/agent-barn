@@ -89,17 +89,6 @@ class Config(BaseSettings):
     # Content-free Communication journal history is pruned by Communications
     # maintenance after this many days.
     communication_journal_retention_days: int = Field(default=31, ge=1, le=3650)
-    # Deprecated deployment input, retained until chart/workflow cleanup.
-    # Transport ownership is fixed by the shipped Platform declaration.
-    communications_native_platforms: str = ""
-
-    @property
-    def native_platform_keys(self) -> frozenset[str]:
-        """Compatibility projection; deployment inputs cannot change ownership."""
-        from api.domains.communications.transport import NATIVE_PLATFORM_KEYS
-
-        return NATIVE_PLATFORM_KEYS
-
     # Socket timeout for Slack Web API calls. Large sweeps (e.g. users.list can be
     # ~320KB) are slow over a poor link; too tight a timeout cuts the body off
     # mid-stream (IncompleteRead). Generous default; in-cluster latency is low.

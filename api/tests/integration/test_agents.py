@@ -153,23 +153,6 @@ _GIVEN_WITH_HERMES_IMAGE = [
     there_is_a_template(),
 ]
 
-_GIVEN_WITH_NATIVE_PLATFORMS = [
-    set_env_variable(
-        {
-            "AGENT_TOKEN_ENCRYPTION_KEY": TEST_ENCRYPTION_KEY,
-            "LITELLM_BASE_URL": "http://litellm:4000",
-            "LITELLM_SECRET_NAME": "litellm",
-            "AGENT_DEFAULT_MODEL": "litellm/gpt-5-mini",
-            "AGENT_LITELLM_BASE_URL": "http://litellm:4000",
-            "API_EXTERNAL_URL": "https://api.test.com",
-            "HERMES_IMAGE": "nousresearch/hermes-agent:v1.0",
-            "COMMUNICATIONS_NATIVE_PLATFORMS": "",
-        }
-    ),
-    *_GIVEN_WITH_HERMES_IMAGE[1:],
-]
-
-
 # Same as _GIVEN but with no server-owned Google OAuth client. Set here rather than in a
 # later step because Config is built (and cached) when the injector is prepared, and a
 # developer's root .env may define real Google credentials.
@@ -2502,7 +2485,7 @@ def test_start_hermes_agent_runs_discord_in_the_native_gateway() -> None:
 
     with given(
         [
-            *_GIVEN_WITH_NATIVE_PLATFORMS,
+            *_GIVEN_WITH_HERMES_IMAGE,
             there_is_an_agent(agent_type=AgentType.HERMES),
             _native_discord_connection,
         ]
@@ -2554,7 +2537,7 @@ def test_start_hermes_agent_runs_telegram_in_the_native_gateway() -> None:
 
     with given(
         [
-            *_GIVEN_WITH_NATIVE_PLATFORMS,
+            *_GIVEN_WITH_HERMES_IMAGE,
             there_is_an_agent(agent_type=AgentType.HERMES),
             _native_telegram_connection,
         ]
@@ -2602,7 +2585,7 @@ def test_start_hermes_agent_runs_teams_in_the_runtime_transport() -> None:
 
     with given(
         [
-            *_GIVEN_WITH_NATIVE_PLATFORMS,
+            *_GIVEN_WITH_HERMES_IMAGE,
             there_is_an_agent(agent_type=AgentType.HERMES),
             _runtime_teams_connection,
         ]
@@ -2648,7 +2631,7 @@ def _native_slack_connection(context) -> None:
 def test_start_openclaw_agent_runs_chat_platforms_in_the_native_gateway() -> None:
     with given(
         [
-            *_GIVEN_WITH_NATIVE_PLATFORMS,
+            *_GIVEN_WITH_HERMES_IMAGE,
             there_is_an_agent(),
             _native_slack_connection,
             _native_discord_connection,

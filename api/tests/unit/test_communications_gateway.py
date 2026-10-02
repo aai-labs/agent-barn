@@ -68,7 +68,7 @@ def _service(
     connections.get_active.return_value = connection
     plugins = PlatformPluginRegistry([cast(PlatformPlugin, plugin)])
     service = CommunicationsGatewayService(
-        config=cast(Config, SimpleNamespace(agent_token_encryption_key="key", native_platform_keys=frozenset())),
+        config=cast(Config, SimpleNamespace(agent_token_encryption_key="key")),
         agent_repository=Mock(),
         delivery_repository=deliveries,
         connection_repository=connections,
@@ -133,7 +133,6 @@ def _teams_runtime_service(
             Config,
             SimpleNamespace(
                 agent_token_encryption_key="key",
-                native_platform_keys=frozenset({"teams"}),
                 k8s_namespace="agent-farm",
                 teams_runtime_webhook_url=Config.model_fields["teams_runtime_webhook_url"].default,
             ),
@@ -344,10 +343,6 @@ def test_gateway_claim_and_terminal_failure_preserve_status_wakeup() -> None:
 def test_native_platform_deliveries_are_not_reclaimed_or_claimed_by_the_gateway() -> None:
     connection = cast(CommunicationConnection, _connection())
     service, deliveries = _service(connection, _delivery_plugin())
-    service.config = Config(
-        agent_token_encryption_key="key",
-        communications_native_platforms="slack,discord",
-    )
     deliveries.reclaim_expired_inbound.return_value = []
     deliveries.claim_next_inbound.return_value = None
     agent = cast(

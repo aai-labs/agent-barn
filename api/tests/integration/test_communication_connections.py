@@ -94,7 +94,6 @@ _GIVEN = [
             "SKIP_TELEGRAM_TOKEN_VALIDATION": "true",
             "SKIP_DISCORD_TOKEN_VALIDATION": "true",
             "SKIP_TEAMS_TOKEN_VALIDATION": "true",
-            "COMMUNICATIONS_NATIVE_PLATFORMS": "",
         }
     ),
     prepare_injector(modules=[MockK8sModule(), MockLiteLLMModule()]),
@@ -108,12 +107,6 @@ _GIVEN = [
 ]
 
 _GIVEN_WITH_HERMES_AGENT = [*_GIVEN[:-1], there_is_an_agent(agent_type=AgentType.HERMES)]
-
-_GIVEN_WITH_NATIVE_PLATFORMS = [
-    *_GIVEN[:1],
-    set_env_variable({"COMMUNICATIONS_NATIVE_PLATFORMS": ""}),
-    *_GIVEN[1:],
-]
 
 _GIVEN_WITH_AGENT_EMAIL = [
     set_env_variable(
@@ -1056,7 +1049,7 @@ def test_native_connection_reports_no_gateway_recovery_actions(platform_key: str
         "telegram": _telegram_payload,
         "teams": _teams_payload,
     }
-    with given(_GIVEN_WITH_NATIVE_PLATFORMS) as context:
+    with given(_GIVEN) as context:
         created = context.client.post(_base(context), json=payloads[platform_key](), headers=_auth(context))
         assert_that(created.status_code, equal_to(status.HTTP_201_CREATED))
 
@@ -1073,7 +1066,7 @@ def test_native_connection_reports_no_gateway_recovery_actions(platform_key: str
 
 @pytest.mark.parametrize("agent_type", [AgentType.HERMES, AgentType.OPENCLAW])
 def test_native_reconnect_preserves_health_and_history(agent_type: AgentType) -> None:
-    with given([*_GIVEN_WITH_NATIVE_PLATFORMS[:-1], there_is_an_agent(agent_type=agent_type)]) as context:
+    with given([*_GIVEN[:-1], there_is_an_agent(agent_type=agent_type)]) as context:
         client: TestClient = context.client
         created = client.post(_base(context), json=_discord_payload(), headers=_auth(context))
         assert_that(created.status_code, equal_to(status.HTTP_201_CREATED))
@@ -1096,7 +1089,7 @@ def test_native_reconnect_preserves_health_and_history(agent_type: AgentType) ->
 
 
 def test_native_retry_preserves_historical_dead_lettered_delivery() -> None:
-    with given([*_GIVEN_WITH_NATIVE_PLATFORMS[:-1], there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+    with given([*_GIVEN[:-1], there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
         client: TestClient = context.client
         created = client.post(_base(context), json=_discord_payload(), headers=_auth(context))
         assert_that(created.status_code, equal_to(status.HTTP_201_CREATED))
@@ -1135,7 +1128,7 @@ def test_native_retry_preserves_historical_dead_lettered_delivery() -> None:
 
 @pytest.mark.parametrize("cross_organization", [False, True])
 def test_native_recovery_keeps_unknown_or_cross_organization_resources_hidden(cross_organization: bool) -> None:
-    with given(_GIVEN_WITH_NATIVE_PLATFORMS) as context:
+    with given(_GIVEN) as context:
         created = context.client.post(_base(context), json=_discord_payload(), headers=_auth(context))
         assert_that(created.status_code, equal_to(status.HTTP_201_CREATED))
         connection_id = created.json()["id"] if cross_organization else str(uuid4())
@@ -1155,7 +1148,7 @@ def test_native_recovery_keeps_unknown_or_cross_organization_resources_hidden(cr
 
 @pytest.mark.parametrize("native", [False, True])
 def test_diagnostics_read_does_not_grant_connection_recovery_permission(native: bool) -> None:
-    with given(_GIVEN_WITH_NATIVE_PLATFORMS if native else _GIVEN) as context:
+    with given(_GIVEN) as context:
         client: TestClient = context.client
         created = client.post(_base(context), json=_discord_payload(), headers=_auth(context)).json()
         connection_url = f"{_base(context)}/{created['id']}"
