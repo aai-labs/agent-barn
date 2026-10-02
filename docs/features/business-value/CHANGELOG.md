@@ -22,11 +22,45 @@ Related context: [Activity and Ingest](../activity-and-ingest.md), [Agent Activi
 - Also delivered: review fixes. Value-settings saves are serialized under a row lock and record what they actually replaced, and the per-bucket Business Action query no longer builds an unused bucket spine.
 - Also delivered: `GET /organizations/{organization_id}/value/activity`, the Organization activity KPI. The feature doc's [Organization activity](../business-value.md#organization-activity) section is the contract. It rests on `ValueActivityRepository` and the two indexes of migration `45bcefcb0749`.
 - Also delivered: the KPIs page route and its Owner/Admin navigation entry (AF-348). The feature doc's [KPI dashboard](../business-value.md#kpi-dashboard) section is the contract.
-- In transition: the KPIs page renders its heading only; its tiles, chart, table, and value settings Sheet land in the following AF-348 slices.
-- Next: AF-348 tiles and date range.
+- Also delivered: the KPIs page's date range and six headline tiles, read from `GET /value` and `GET /value/activity` (AF-348).
+- In transition: the KPIs page has its header, date range, and tiles; its chart, table, empty and loading states, and value settings Sheet land in the following AF-348 slices.
+- Next: AF-348 trend chart.
 - Blockers: the product owner has not signed off the default minutes per Outcome Type. They are placeholders until then, and every value figure inherits them.
 
 ## Slice history
+
+### 2026-10-02 — AF-348 — KPIs data layer, date range, and headline tiles
+
+Delivered, in `ui/src/features/business-value/`:
+- `schemas.ts`: Zod schemas for the `/value` and `/value/activity` responses. `outcome_type` is a plain string, so a new catalogue Outcome Type cannot fail parsing.
+- `use-organization-value.ts` and `use-organization-activity.ts`, through `@/shared/api`.
+  - Keys are `createQueryKeyStructure("organization-value")` and `("organization-activity")`, with the Organization ID in the list scope, so `ORG_SCOPED_QUERY_KEYS` is unchanged.
+  - Both are disabled until an Organization is selected.
+- The page header with one `DateRangePicker`. `from`/`to` live in the URL through `useCostUrlFilters`, and the echoed window is shown.
+- Six tiles in one row at desktop width. The rules are in the feature doc's [Headline tiles](../business-value.md#headline-tiles).
+- `StatCard` gains an optional `children` slot for the spend link and the Retry button. Costs does not pass it, and `costs.spec.ts` still passes unchanged.
+
+Found and fixed during this slice:
+- At desktop width each tile is 177px wide, and the value line truncated "Set an hourly rate" to "Set an hourly…".
+- A test that checks the reason text is not cut off failed first (`"Set an hourly rate" is cut off in kpi-value`).
+- A missing figure now shows "—" with its reason on the wrapping line below.
+
+Coverage, `ui/tests/e2e/kpis.spec.ts`, with mocks in `ui/tests/pages/data-support/kpis-data-support.po.ts` (registered as `data.kpis`):
+- populated tiles with the coverage hint;
+- no rate: "Set an hourly rate" and no `$0`;
+- zero spend: "not enough data";
+- an unknown handled rate: not `0%`;
+- rounding edges: "<0.1 h" and 99.6%;
+- the default window: no params sent, and the echoed label;
+- a chosen range: in the URL and on both reads;
+- the spend link with and without a range;
+- each endpoint failing alone, with the other's tiles intact and Retry recovering;
+- a Member sends no value or activity read.
+
+Test-first:
+- The 11 tile tests failed first, because the tiles did not exist.
+- The Member-read test cannot fail while the gate holds. With the gate's early return removed, it failed by catching both reads, and the gate was then restored.
+- `make lint-ui` and `make check-ui` pass. `kpis.spec.ts`, `top-nav-responsive.spec.ts`, and `costs.spec.ts` pass, 45 tests.
 
 ### 2026-10-02 — AF-348 — KPIs navigation, route, and access gate
 

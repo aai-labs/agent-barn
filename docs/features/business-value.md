@@ -278,7 +278,31 @@ The Organization's KPIs page, `/dashboard/{organization_id}/kpis`, renders value
 ### Access
 
 - The page is for Owners and Admins. The "KPIs" navigation entry sits right after Costs, inside the same `canManage` check, so desktop and the mobile drawer both hide it from Members.
-- The page gates with `useRequireOrgManager`, as Costs does. A Member who opens the URL is redirected to the Organization's home.
+- The page gates with `useRequireOrgManager`, as Costs does. A Member who opens the URL is redirected to the Organization's home, and the dashboard never mounts, so it sends no value or activity read.
+
+### Date range
+
+- One date range drives every figure. `from` and `to` live in the page URL, as on Costs, and are sent as `from_date` and `to_date`.
+- With no range chosen, neither is sent, so the server's 30-day default applies. The page shows the window each response echoes.
+
+### Headline tiles
+
+| Tile | Source | Shown |
+|---|---|---|
+| Hours saved | `/value` `totals.minutes_saved` | Hours to one decimal; a non-zero figure under 0.05 h reads "<0.1 h". Hint: the successful write count. |
+| Value | `/value` `totals.value` | USD, with the rate used as the hint. |
+| LLM spend | `/value` `totals.spend` | USD, with a "View in Costs" link carrying the same `from` and `to`. |
+| Value per dollar spent | `/value` `totals.value_to_spend_ratio` | "$X.XX per $1"; a non-zero ratio under $0.005 reads "<$0.01 per $1". |
+| Requests | `/value/activity` `totals.requests` | A count. |
+| Handled without failure | `/value/activity` `totals.handled_without_failure_rate` | A percentage, with one decimal below 0.5% and from 99.5% up to 100%, so a real failure never rounds to 100% and a real success never rounds to 0%. Hint: "based on {handled_coverage} of {requests} requests · Web Chat and Email only". |
+
+The dashboard never shows `$0` or `0%` for an unknown figure:
+
+- With no hourly rate set, Value and Value per dollar read "Set an hourly rate".
+- Any other null, such as the ratio when spend is zero, or the handled rate without deliveries, reads "not enough data".
+- A missing figure shows "—" with its reason on the line below, so the reason is never cut off.
+
+Each tile belongs to one endpoint. If an endpoint fails, only its tiles show "Unable to load" with a Retry; the other endpoint's tiles still render.
 
 ## Known gaps
 

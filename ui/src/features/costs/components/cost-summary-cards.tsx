@@ -95,11 +95,13 @@ export function StatCard({
   value,
   hint,
   testId,
+  children,
 }: {
   label: string;
   value: string;
   hint?: string;
   testId?: string;
+  children?: ReactNode;
 }) {
   return (
     <div className="af-card px-4 py-3.5" data-testid={testId}>
@@ -118,6 +120,7 @@ export function StatCard({
           {hint}
         </p>
       )}
+      {children}
     </div>
   );
 }

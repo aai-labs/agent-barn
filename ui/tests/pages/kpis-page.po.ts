@@ -26,6 +26,35 @@ export class KpisPage {
     return this.page.locator("header nav").getByRole("link", { name, exact: true });
   }
 
+  async gotoWithRange(from: string, to: string) {
+    const params = new URLSearchParams({ from, to });
+    await this.page.goto(`/dashboard/${TEST_ORG_ID}/kpis?${params.toString()}`);
+  }
+
+  tile(testId: string): Locator {
+    return this.page.getByTestId(testId);
+  }
+
+  async retryTile(testId: string) {
+    await this.tile(testId).getByRole("button", { name: "Retry" }).click();
+  }
+
+  spendLink(): Locator {
+    return this.tile("kpi-spend").getByRole("link", { name: "View in Costs" });
+  }
+
+  windowLabel(): Locator {
+    return this.page.getByTestId("kpi-window");
+  }
+
+  /** Picks two days of the month the calendar opens on. */
+  async chooseDateRange() {
+    await this.page.getByLabel("Date range").click();
+    const days = this.page.getByRole("gridcell").filter({ hasText: /^\d+$/ });
+    await days.nth(4).click();
+    await days.nth(9).click();
+  }
+
   async openNavigationDrawer() {
     await this.page.getByRole("button", { name: "Open navigation" }).click();
   }

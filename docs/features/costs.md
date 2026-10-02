@@ -172,3 +172,5 @@ Agents own LiteLLM key creation, encryption, deletion blocking, and lifecycle st
 ## Change impact
 
 Changing the sync or heal predicates changes what is recorded as money, so cover them in unit tests before touching the job. Changing attribution affects agent key lifecycle, deleted-agent behavior, and the unattributed bucket. Changing the schedule requires rechecking `COST_SYNC_MAX_RUNTIME_SECONDS`. Status changes require checking both persisted AgentStatus and the cost-facing mapped labels. A new Agent-surface route must go through `_authorized_agent` and be added to the assigned/hidden bypass test in `../../api/tests/integration/test_agent_rbac.py`.
+
+The KPIs page ([`business-value.md`](business-value.md#kpi-dashboard)) reuses `../../ui/src/features/costs/format.ts`, `StatCard` from `cost-summary-cards.tsx`, and `useCostUrlFilters`, and links to Costs with its own `from` and `to`. A change to those helpers, or to the Costs page's `from`/`to` query keys, must re-run `../../ui/tests/e2e/kpis.spec.ts` as well as `costs.spec.ts`.
