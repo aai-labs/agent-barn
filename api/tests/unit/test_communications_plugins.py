@@ -187,7 +187,7 @@ def test_teams_descriptor_declares_webhook_ingress() -> None:
 
     assert descriptor.key == "teams"
     assert PlatformCapability.WEBHOOK_INGRESS in descriptor.capabilities
-    assert_that(PlatformCapability.PROCESSING_FEEDBACK in descriptor.capabilities, is_(False))
+    assert_that("processing_feedback" in descriptor.capabilities, is_(False))
 
 
 def test_teams_normalizes_a_personal_message_as_a_dm() -> None:

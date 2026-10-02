@@ -24,10 +24,7 @@ from api.domains.communications.models import (
 )
 from api.domains.communications.operations import CommunicationOperationalRepository
 from api.domains.communications.transport import GATEWAY_PLATFORM_KEYS
-from api.domains.events.catalog import (
-    COMMUNICATION_CONNECTION_HEALTH_CHANGED,
-    COMMUNICATION_CONNECTION_RECONNECT_REQUESTED,
-)
+from api.domains.events.catalog import COMMUNICATION_CONNECTION_HEALTH_CHANGED
 from api.domains.events.models import ActorIdentity, ActorIdentityType, SubjectIdentity, SubjectIdentityType
 from api.domains.rbac.policy import AuthorizationScope
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
@@ -253,100 +250,6 @@ class CommunicationConnectionRepository:
                         },
                     )
             session.commit()
-
-    def request_reconnect(
-        self,
-        connection_id: UUID,
-        *,
-        actor: ActorIdentity,
-    ) -> CommunicationConnection | None:
-        requested_at = datetime.now(UTC)
-        with Session(self.delegate.engine, expire_on_commit=False) as session:
-            connection = session.exec(
-                select(CommunicationConnection)
-                .where(
-                    col(CommunicationConnection.id) == connection_id,
-                    col(CommunicationConnection.retired_at).is_(None),
-                )
-                .with_for_update()
-            ).one_or_none()
-            if connection is None:
-                return None
-            previous_status = connection.observed_status
-            connection.revision += 1
-            connection.updated_at = requested_at
-            if connection.enabled:
-                connection.observed_status = ConnectionObservedStatus.CONNECTING
-                connection.last_health_at = requested_at
-            connection.last_error_code = None
-            connection.last_error_message = None
-            connection.last_error_details = None
-            session.add(connection)
-            if self.operations is not None:
-                if connection.enabled and previous_status != ConnectionObservedStatus.CONNECTING:
-                    self.operations.stage_journal(
-                        session=session,
-                        organization_id=connection.organization_id,
-                        agent_id=connection.agent_id,
-                        connection_id=connection.id,
-                        stage=CommunicationJournalStage.CONNECTION_CONNECTING,
-                        occurred_at=requested_at,
-                    )
-                    self.operations.stage_event(
-                        session=session,
-                        event_name=COMMUNICATION_CONNECTION_HEALTH_CHANGED,
-                        organization_id=connection.organization_id,
-                        actor=actor,
-                        subject=SubjectIdentity(
-                            type=SubjectIdentityType.AGENT,
-                            id=connection.agent_id,
-                            organization_id=connection.organization_id,
-                        ),
-                        payload={
-                            "organization_id": connection.organization_id,
-                            "agent_id": connection.agent_id,
-                            "connection_id": connection.id,
-                            "previous_status": self._status_value(previous_status),
-                            "new_status": ConnectionObservedStatus.CONNECTING.value,
-                            "error_code": None,
-                            "error_summary": None,
-                            "actor_display": self._actor_display(actor),
-                            "subject_display": connection.display_name,
-                        },
-                        occurred_at=requested_at,
-                    )
-                self.operations.stage_journal(
-                    session=session,
-                    organization_id=connection.organization_id,
-                    agent_id=connection.agent_id,
-                    connection_id=connection.id,
-                    stage=CommunicationJournalStage.RECONNECT_REQUESTED,
-                )
-                self.operations.stage_event(
-                    session=session,
-                    event_name=COMMUNICATION_CONNECTION_RECONNECT_REQUESTED,
-                    organization_id=connection.organization_id,
-                    actor=actor,
-                    subject=SubjectIdentity(
-                        type=SubjectIdentityType.AGENT,
-                        id=connection.agent_id,
-                        organization_id=connection.organization_id,
-                    ),
-                    payload={
-                        "organization_id": connection.organization_id,
-                        "agent_id": connection.agent_id,
-                        "connection_id": connection.id,
-                        "actor_display": self._actor_display(actor),
-                        "subject_display": connection.display_name,
-                    },
-                    occurred_at=requested_at,
-                )
-            session.commit()
-            session.refresh(connection)
-            from api.domains.communications.metrics import record_reconnect
-
-            record_reconnect()
-            return connection
 
     def create(
         self,

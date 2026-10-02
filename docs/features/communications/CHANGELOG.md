@@ -14,6 +14,12 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
 
 ## Changes
 
+### 2026-10-02 — Native gateway cleanup: retire unused capability declarations — PR pending
+
+- Removed: unadvertised initiated-delivery, processing-feedback, and supervised-ingress capability enum members and the unreachable provider-session reconnect mutation path. The existing reconnect endpoint retains its permission/scoping checks and terminal conflict response; historical reconnect journal/event identities and the exported metric remain supported. Gateway-owned Web Chat/Email still report Delivery retry; native Connections report no gateway recovery actions.
+- Corrected: Hermes health sidecar documentation now separates process liveness from native provider-session health.
+- Verified: the full API baseline (3,153 tests), 148 focused post-edit plugin, Connection, Delivery, and metrics tests; API static checks and a single migration head; both built-runtime native/legacy-state contracts; UI lint/type checks and focused native recovery browser tests. Physical columns and compatibility routes retain their documented deployed-consumer cutoffs.
+
 ### 2026-10-02 — Native gateway cleanup: synchronize ownership documentation (slice 5c) — PR pending
 
 - Updated: the native gateway ADR is accepted with permanent code-owned Platform transport; the earlier gateway ADR is partially superseded. Existing decision rationale and historical change entries remain intact.

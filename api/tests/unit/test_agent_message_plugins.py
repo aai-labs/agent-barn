@@ -4,7 +4,7 @@ from unittest.mock import patch
 import pytest
 from hamcrest import assert_that, equal_to, has_key, not_
 
-from api.domains.communications.models import OutboundTargetRequest, PlatformCapability
+from api.domains.communications.models import OutboundTargetRequest
 from api.domains.communications.plugins.discord import DiscordPlatformPlugin
 from api.domains.communications.plugins.slack import SlackCredentials, SlackPlatformPlugin, SlackSettings
 from api.domains.communications.plugins.teams import TeamsPlatformPlugin
@@ -81,7 +81,7 @@ def test_disabled_dm_is_rejected_before_opening_conversation():
     "plugin", [DiscordPlatformPlugin, TelegramPlatformPlugin, TeamsPlatformPlugin, SlackPlatformPlugin]
 )
 def test_chat_plugins_do_not_advertise_gateway_initiated_delivery(plugin):
-    assert_that(PlatformCapability.AGENT_INITIATED_DELIVERY in plugin.capabilities, equal_to(False))
+    assert_that("agent_initiated_delivery" in plugin.capabilities, equal_to(False))
 
 
 @pytest.mark.parametrize(

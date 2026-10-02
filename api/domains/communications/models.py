@@ -35,7 +35,6 @@ class CommunicationPlatform(str, enum.Enum):
 
 
 class PlatformCapability(str, enum.Enum):
-    AGENT_INITIATED_DELIVERY = "agent_initiated_delivery"
     DIRECTORY_DISCOVERY = "directory_discovery"
     APPLICATION_PROVISIONING = "application_provisioning"
     INSTALL_LINK = "install_link"
@@ -44,8 +43,6 @@ class PlatformCapability(str, enum.Enum):
     ATTACHMENTS = "attachments"
     THREADS = "threads"
     MENTIONS = "mentions"
-    PROCESSING_FEEDBACK = "processing_feedback"
-    SUPERVISED_INGRESS = "supervised_ingress"
     INTERACTIVE_COMPONENTS = "interactive_components"
 
 

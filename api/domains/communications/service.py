@@ -35,7 +35,6 @@ from api.domains.communications.models import (
     CommunicationInstallLinkRead,
     CommunicationJournalEntryRead,
     CommunicationJournalStage,
-    CommunicationReconnectRead,
     CommunicationRetryRead,
     ConnectionObservedStatus,
     PlatformCapability,
@@ -429,28 +428,13 @@ class CommunicationsService:
         agent_id: UUID,
         connection_id: UUID,
         context: CurrentUserContext,
-    ) -> CommunicationReconnectRead:
-        agent = self.authorization.require_action(context, agent_id, PermissionKey.AGENT_UPDATE)
+    ) -> NoReturn:
+        self.authorization.require_action(context, agent_id, PermissionKey.AGENT_UPDATE)
         action_scope = self.authorization.authorization_scope(context, PermissionKey.AGENT_UPDATE)
         connection = self.repository.get_active_in_scope(connection_id, agent_id, action_scope)
         if connection is None:
             self._raise_not_found(connection_id)
-        self._require_recovery_action(connection, "reconnect")
-        if not connection.enabled:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Enable the Communication Connection before reconnecting it",
-            )
-        updated = self.repository.request_reconnect(
-            connection_id,
-            actor=resolve_actor_identity(context, agent.organization_id),
-        )
-        if updated is None:
-            self._raise_not_found(connection_id)
-        return CommunicationReconnectRead(
-            connection=self._read(updated),
-            requested_at=datetime.now(UTC),
-        )
+        self._raise_recovery_conflict(connection)
 
     def retry_delivery(
         self,
@@ -657,21 +641,16 @@ class CommunicationsService:
     def _recovery_actions(self, connection: CommunicationConnection) -> list[Literal["reconnect", "retry_delivery"]]:
         if connection.platform_key in NATIVE_PLATFORM_KEYS:
             return []
-        actions: list[Literal["reconnect", "retry_delivery"]] = ["retry_delivery"]
-        capabilities = self.plugins.require(connection.platform_key).capabilities
-        # Reconnect is meaningful only for supervised provider sessions.
-        if (
-            PlatformCapability.SUPERVISED_INGRESS in capabilities
-            and PlatformCapability.WEBHOOK_INGRESS not in capabilities
-        ):
-            actions.insert(0, "reconnect")
-        return actions
+        return ["retry_delivery"]
 
     def _require_recovery_action(
         self, connection: CommunicationConnection, action: Literal["reconnect", "retry_delivery"]
     ) -> None:
         if action in self._recovery_actions(connection):
             return
+        self._raise_recovery_conflict(connection)
+
+    def _raise_recovery_conflict(self, connection: CommunicationConnection) -> NoReturn:
         detail = (
             "This Connection uses native transport; restart the Agent to recover it"
             if connection.platform_key in NATIVE_PLATFORM_KEYS
