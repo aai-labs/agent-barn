@@ -241,7 +241,7 @@ What the delivery statuses mean:
 - Only gateway-owned Connections create new Communication Deliveries. Ownership follows the [fixed Platform contract](../architecture/runtime-and-deployment.md#platform-plugin-boundary) in every environment; deployment allowlists no longer change coverage.
 - Native traffic is mirrored into `agent_chat_message` through Ingest but has no delivery rows. Web Chat and Email always create them.
 - The handled rate and the response time therefore cover only part of the Requests. Each is returned with its coverage count, so the dashboard can say "based on 120 of 480 requests".
-- Gateway ingress and runtime callbacks reject native transport. Historical deliveries created before the cutoff remain readable and cannot be claimed or revived by expired-lease recovery. A stranded PENDING row remains outside the handled-rate denominator until the separate retirement migration terminalizes it.
+- Gateway ingress and runtime callbacks reject native transport. Historical deliveries created before the cutoff remain readable and cannot be claimed or revived by expired-lease recovery. Stranded PENDING rows and the CANCELLED rows produced by the [native delivery retirement migration](../architecture/runtime-and-deployment.md#connection-failure-recovery) remain outside the handled-rate denominator.
 
 ### Response
 

@@ -8,7 +8,7 @@ Related context: [`../communications/CHANGELOG.md`](../communications/CHANGELOG.
 
 - Delivered: Web Chat renders one approval button per offered choice and sends the choice with its `approval_id`. Buttons are hidden without `agent.update`, disabled while the Agent is not working, and disabled after that browser session answers (re-enabled when sending fails). The shared runtime adapter and `APPROVAL_METADATA_KEY` remain supported.
 - In transition: the earlier Slack/Discord gateway approval rendering, value/component codecs, and interaction acknowledgement are removed. Native gateways own chat approvals under the [transport contract](../../architecture/runtime-and-deployment.md#platform-plugin-boundary); prior gateway delivery entries below are historical.
-- Next: preserve Web Chat approval behavior when narrowing the remaining shared gateway interfaces. Further native approval improvements require evidence against the selected runtime.
+- Next: further native approval improvements require evidence against the selected runtime. Shared-interface cleanup retained Web Chat approval behavior and its runtime protocol.
 - Blockers: live native provider approval coverage remains a rollout verification task.
 
 

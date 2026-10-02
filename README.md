@@ -412,12 +412,15 @@ firewall allows the k3d bridge network to reach port 8001.
 <details>
 <summary><b>Communication connections</b></summary>
 
-Slack, Microsoft Teams, Telegram, and Discord sessions run in the separately
-served Communications gateway on port `8002`. Agent pods claim and complete
-deliveries through `http://host.docker.internal:8002/communications/v1`, because
-the Compose service name isn't resolvable from k3d. `./run.sh` and `make dev-api`
-start the gateway automatically. Override `COMMUNICATIONS_PORT` when the host
-port is already in use.
+Slack, Microsoft Teams, Telegram, and Discord sessions run in each Agent's native
+Hermes or OpenClaw runtime. Web Chat and Email use the separately served
+Communications gateway on port `8002`. For those gateway-owned Connections, Agent
+pods claim and complete deliveries through
+`http://host.docker.internal:8002/communications/v1`, because the Compose service
+name isn't resolvable from k3d. `./run.sh` and `make dev-api` start the gateway
+automatically. Override `COMMUNICATIONS_PORT` when the host port is already in use.
+See the [transport contract](docs/architecture/runtime-and-deployment.md#platform-plugin-boundary)
+and [rollout runbook](docs/guidelines/operations.md#native-runtime-gateway-rollout).
 
 </details>
 

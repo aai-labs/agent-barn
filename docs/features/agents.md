@@ -6,7 +6,7 @@ Read before changing agent creation, Agent Access Roles, explicit Agent Access a
 
 ## Role in the system
 
-An Agent is the central execution aggregate. It connects organization tenancy, an exact active shared Template or Agent Template Override version, Skills, tool Integrations, one Runtime deployment, telemetry, and LiteLLM identity. External chat transport is a separate Agent-subordinate Communications aggregate.
+An Agent is the central execution aggregate. It connects organization tenancy, an exact active shared Template or Agent Template Override version, Skills, tool Integrations, one Runtime deployment, telemetry, and LiteLLM identity. Communication Connection configuration is a separate Agent-subordinate Communications aggregate; transport follows the [fixed Platform contract](../architecture/runtime-and-deployment.md#platform-plugin-boundary).
 
 ## Invariants
 
@@ -36,7 +36,7 @@ An Agent is the central execution aggregate. It connects organization tenancy, a
 - Per-Agent LiteLLM keys are encrypted at rest. Creation performs deterministic validation before allocating a key; if creation fails after allocation, the unowned key is deleted, and a failed deletion triggers a best-effort block as a safety fallback. Deleting an existing Agent soft-deletes it and blocks its key rather than deleting it, preserving the LiteLLM identity needed for historical spend attribution.
 - Communication Connection settings and credentials are validated by the selected shipped Platform Plugin, encrypted independently of Agent Secrets, and omitted from read responses. Global plugin credential-identity constraints prevent two active Connections from owning the same bot/application identity where required.
 - Communication health is independent of lifecycle: a provider session may be pending, connected, degraded, or errored while the Agent remains running. Retiring a Connection preserves its canonical Conversation Messages.
-- The API rejects direct Agent configuration updates while an Agent is running, but running Agent read DTOs still expose the caller's configuration and secret permissions so the canonical UI can offer section-specific apply actions. Runtime configuration changes use `Apply & Restart`; Template selection uses `Apply` while stopped or `Apply & Restart` while running, with the latter stopping the Agent, selecting the published version, and starting it again. A running Agent's native Communication Connection changes also use stop, mutate, start because Hermes reads those settings only at boot. For stopped Agents, `Apply` changes the active pin and leaves the Agent stopped until the user starts it from the Agent detail page.
+- The API rejects direct Agent configuration updates while an Agent is running, but running Agent read DTOs still expose the caller's configuration and secret permissions so the canonical UI can offer section-specific apply actions. Runtime configuration changes use `Apply & Restart`; Template selection uses `Apply` while stopped or `Apply & Restart` while running, with the latter stopping the Agent, selecting the published version, and starting it again. A running Agent's native Communication Connection changes also use stop, mutate, start because both runtimes read those settings only at boot. For stopped Agents, `Apply` changes the active pin and leaves the Agent stopped until the user starts it from the Agent detail page.
 - Template-required skills are validated as explicit assignments during agent create, update, and repin, and cannot be removed while currently required.
 - Each assigned skill is pinned to an exact version at apply time (mirroring template pins): `agent_skill.pinned_version`. Publishing a newer skill version never moves an existing pin, and an agent recovers from a bad version by re-pinning to an older one. Start mounts each assigned skill's pinned-version files; a version pinned by any agent is protected from skill version deletion.
 - Provider requirements for assigned skills are validated during agent create/update against the agent's resulting Agent Secrets. During Agent creation, the service live-validates the exact submitted manual and shared credentials before allocating a LiteLLM key or persisting the Agent; providers without a live validator still receive schema validation and remain eligible for on-demand validation. Later edits to skill metadata are not revalidated at Agent start.
@@ -158,7 +158,8 @@ Share-management endpoints expose locked Agent Access Roles and one canonical Ag
 - [`2026-07-21-additive-agent-general-access.md`](../adr/2026-07-21-additive-agent-general-access.md)
 - [`2026-08-09-agent-scoped-template-overrides.md`](../adr/2026-08-09-agent-scoped-template-overrides.md)
 - [`2026-08-19-organization-scoped-agent-settings.md`](../adr/2026-08-19-organization-scoped-agent-settings.md)
-- [`2026-08-22-agent-barn-owned-communications-gateway.md`](../adr/2026-08-22-agent-barn-owned-communications-gateway.md)
+- [Gateway ownership (partially superseded)](../adr/2026-08-22-agent-barn-owned-communications-gateway.md)
+- [Native runtime gateways](../adr/2026-09-16-native-runtime-gateways-for-chat-platforms.md)
 - [`2026-09-10-restore-points-use-tar-jobs-not-csi-snapshots.md`](../adr/2026-09-10-restore-points-use-tar-jobs-not-csi-snapshots.md)
 
 ## Change impact
