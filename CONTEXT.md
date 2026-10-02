@@ -49,7 +49,7 @@ The product mode where a Platform Administrator manages Platform Resources and P
 _Avoid_: default Organization, admin Organization, global workspace
 
 **Platform Oversight Data**:
-An explicitly allowlisted, read-only representation of user, Organization, Membership, Agent, activity, model-usage, and platform-borne cost facts used for cross-Organization governance. It excludes tenant content, configuration payloads, credentials, Secrets, and raw telemetry.
+An explicitly allowlisted, read-only representation of user, Organization, Membership, Agent, activity, model-usage, container resource-usage, and platform-borne cost facts used for cross-Organization governance. It excludes tenant content, configuration payloads, credentials, Secrets, and raw telemetry.
 _Avoid_: Organization View, impersonation, unrestricted tenant access
 
 **Organization View**:
@@ -99,6 +99,14 @@ _Avoid_: model usage, observed model
 **Observed Model Usage**:
 The models and token usage attributed to Agent executions during a defined reporting period. It may include multiple models and may differ from the Agent's current Configured Model.
 _Avoid_: configured model, current model
+
+**Agent Resource Usage**:
+The CPU and memory an Agent's container is using, against the limits it runs with. Each Agent reports its own; Prometheus stores it. It describes the container, not model calls or spend. Platform Administrators see it across every Organization, named from the database.
+_Avoid_: model usage, observed model usage, cost, spend
+
+**Capacity Limit**:
+A ceiling on the total memory or CPU limits of the namespace's containers, typed in by a Platform Administrator, normally the namespace's ResourceQuota. It is entered by hand because the tenant service account cannot read the quota. Platform Resource Usage compares it with what the namespace's pods have committed in limits, which is not the same as what they use.
+_Avoid_: quota (the cluster's own object), usage limit, budget
 
 **Runtime**:
 The implementation that executes an agent. Agent Barn currently supports Hermes and OpenClaw.

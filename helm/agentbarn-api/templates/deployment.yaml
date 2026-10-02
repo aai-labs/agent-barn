@@ -85,6 +85,10 @@ spec:
               value: "{{ .Values.agentModelAllowlist }}"
             - name: AGENT_FIRECRAWL_BASE_URL
               value: "{{ .Values.agentFirecrawlBaseUrl }}"
+            - name: PROMETHEUS_URL
+              value: {{ .Values.prometheus.url | quote }}
+            - name: PROMETHEUS_USERNAME
+              value: {{ .Values.prometheus.username | quote }}
             {{- if .Values.agentDefaultModel }}
             - name: AGENT_DEFAULT_MODEL
               value: "{{ .Values.agentDefaultModel }}"

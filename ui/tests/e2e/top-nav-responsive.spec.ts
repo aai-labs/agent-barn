@@ -7,8 +7,9 @@ import { DashboardPage } from "../pages/dashboard-page.po";
  * The top nav is a single flex row whose children default to `min-width: auto`,
  * so without explicit shrink rules it forces the page wider than the viewport
  * instead of adapting. Below `lg` the tabs move into a drawer; at `lg` and up
- * they stay inline. `lg` is the threshold because Platform view needs ~1079px
- * to lay its tabs out at full spacing, so every tablet width gets the drawer.
+ * they stay inline. Organization view goes inline at `lg`. Platform view has more
+ * tabs (Resources made it eight), so it waits for `xl`, where all of them fit at
+ * full spacing; every tablet width and a small laptop get the drawer there.
  * These specs pin the outcomes — the page never scrolls sideways and every tab
  * stays reachable — not the utilities behind them.
  */
@@ -151,9 +152,9 @@ test.describe("Top nav responsiveness", () => {
   });
 
   test.describe("at the narrowest inline width", () => {
-    test.use({ viewport: { width: 1024, height: 900 } });
+    test.use({ viewport: { width: 1280, height: 900 } });
 
-    test("fits every tab without an internal scroll", async ({ page }) => {
+    test("fits every platform tab without an internal scroll", async ({ page }) => {
       await dashboardPage.gotoUsers();
 
       const nav = page.locator("header nav");
@@ -165,6 +166,33 @@ test.describe("Top nav responsiveness", () => {
 
       expect(navCutOff).toBe(false);
       expect(await horizontalOverflow(page)).toBe(0);
+    });
+  });
+
+  test.describe("on a small laptop", () => {
+    test.use({ viewport: { width: 1024, height: 900 } });
+
+    test("keeps the platform tabs in the drawer rather than cutting them off", async ({
+      page,
+    }) => {
+      await dashboardPage.gotoUsers();
+
+      await expect(page.locator("header nav")).toBeHidden();
+      await expect(
+        page.getByRole("button", { name: "Open navigation" }),
+      ).toBeVisible();
+      expect(await horizontalOverflow(page)).toBe(0);
+    });
+
+    test("keeps the organization tabs inline", async ({ page }) => {
+      await dashboardPage.goto();
+
+      const nav = page.locator("header nav");
+      await expect(nav).toBeVisible();
+      await expect(
+        page.getByRole("button", { name: "Open navigation" }),
+      ).toBeHidden();
+      expect(await nav.evaluate((el) => el.scrollWidth > el.clientWidth)).toBe(false);
     });
   });
 

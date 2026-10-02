@@ -36,6 +36,7 @@ ORGANIZATION_MEMBER_REMOVED = "organization.member.removed"
 ORGANIZATION_OWNERSHIP_TRANSFERRED = "organization.ownership_transferred"
 PLATFORM_USER_PRIVILEGE_GRANTED = "platform.user_privilege.granted"
 PLATFORM_USER_PRIVILEGE_REVOKED = "platform.user_privilege.revoked"
+PLATFORM_RESOURCE_LIMITS_CHANGED = "platform.resource_limits.changed"
 COMMUNICATION_CONNECTION_HEALTH_CHANGED = "communication.connection.health.changed"
 COMMUNICATION_CONNECTION_RECONNECT_REQUESTED = "communication.connection.reconnect.requested"
 COMMUNICATION_DELIVERY_DEAD_LETTERED = "communication.delivery.dead_lettered"
@@ -417,6 +418,23 @@ class PlatformUserPrivilegeChangedPayload(BaseModel):
     reason: str
 
 
+class PlatformResourceLimitsChangedPayload(BaseModel):
+    """One changed capacity limit, named by `setting`, with its before and after values.
+
+    Each is a single bounded number, so both can be carried. `previous` is None when the
+    limit was unset, and `current` is None when it was cleared.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    actor_user_id: UUID
+    actor_display: str
+    subject_display: str
+    setting: str
+    previous: float | None
+    current: float | None
+
+
 class CommunicationConnectionHealthChangedPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -614,6 +632,15 @@ def build_default_event_registry() -> DomainEventRegistry:
                 event_scope=EventScope.PLATFORM,
             )
         )
+    registry.register(
+        DomainEventDefinition(
+            event_name=PLATFORM_RESOURCE_LIMITS_CHANGED,
+            schema_version=1,
+            payload_model=PlatformResourceLimitsChangedPayload,
+            handler_names=(SECURITY_AUDIT_HANDLER,),
+            event_scope=EventScope.PLATFORM,
+        )
+    )
     for event_name, payload_model in (
         (COMMUNICATION_CONNECTION_HEALTH_CHANGED, CommunicationConnectionHealthChangedPayload),
         (COMMUNICATION_CONNECTION_RECONNECT_REQUESTED, CommunicationConnectionReconnectRequestedPayload),

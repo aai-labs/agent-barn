@@ -180,3 +180,8 @@ stored provisioning errors and retained Logs remain separate sources.
 This is not durable crash history. Pod replacement resets counts and can remove
 previous logs; the latest exit does not establish when a crash loop began. Reading
 diagnostics never restarts an Agent, executes a command, or mutates its workspace.
+
+How much CPU and memory the container is using, against its limits, is a separate
+read behind the same `activity.read`: the Resource usage tab. See
+[`resource-usage.md`](resource-usage.md). Its out-of-memory callout reads
+`termination_reason` from these diagnostics.

@@ -343,7 +343,8 @@ export K8S_KUBECONFIG_PATH="$PWD/.k3d/kubeconfig-host.yaml"
 Agents run as Kubernetes resources, so `./run.sh` brings up a cluster
 automatically. We use [k3d](https://k3d.io) (k3s in Docker) from a helper
 container, so no host `k3d` or `helm` install is needed — only Docker and
-`kubectl`. The Kubernetes integration job provisions its own k3d cluster with
+`kubectl` (the optional [local Prometheus](#resource-usage-local-prometheus) also
+needs `helm`). The Kubernetes integration job provisions its own k3d cluster with
 [`AbsaOSS/k3d-action`](https://github.com/AbsaOSS/k3d-action).
 
 `./run.sh` drives `docker/k3d/k3d-up.sh` (cluster + LiteLLM) and
@@ -431,6 +432,43 @@ side by side. Share one full stack, or run only the required native services
 against separately named dependencies.
 
 </details>
+
+#### Resource usage (local Prometheus)
+
+The Resource usage tab and the Agents overview read each Agent's CPU and memory
+from Prometheus. Compose has none, so until you install one those views say
+resource usage is not configured; status and cost are unaffected.
+
+To see real numbers locally, install the monitoring chart into the k3d cluster. This
+is the one step that needs `helm` and `kubectl` on the host:
+
+```bash
+make dev-monitoring
+```
+
+Keep the port-forward running in its own terminal. The API in Docker reaches
+Prometheus through it:
+
+```bash
+make forward-prometheus
+```
+
+Recreate the API container so it picks up the new `PROMETHEUS_PASSWORD`:
+
+```bash
+docker compose up -d api
+```
+
+Then stop and start an Agent. The script that reports usage ships with the Agent's
+configuration, so a running Agent reports only after a restart.
+
+`make dev-monitoring` installs the same `helm/monitoring` chart a deploy uses, with
+the LiteLLM metrics-key hook skipped because LiteLLM runs in Compose. It writes a
+`PROMETHEUS_PASSWORD` to `.env` if there is none, creates the `agent-farm-user`
+ServiceAccount Prometheus runs as, and is safe to run again. Set `PROMETHEUS_PORT` to
+change the host port (default `9090`). Running the API natively (`make dev-api`)? Add
+`PROMETHEUS_URL=http://localhost:9090` to `.env`. To remove it:
+`helm uninstall monitoring -n agent-farm`.
 
 ### Windows
 
