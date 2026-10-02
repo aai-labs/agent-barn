@@ -204,15 +204,33 @@ class GoogleWorkspaceContent(SecretContent):
         return self
 
 
-class SharePointContent(SecretContent):
-    """A SharePoint sign-in made on the agent's Microsoft Teams app.
+class GrantedSite(PydanticBaseModel):
+    """One SharePoint site the agent's Teams app was granted under ``Sites.Selected``."""
 
-    The sign-in is a public client (PKCE, no secret), so the refresh token here refreshes
-    without the Teams app's secret; aai-cli's ``microsoft_delegated`` profile does exactly
-    that and stores each rotated token itself. The Teams app's secret is never read for
-    SharePoint and cannot be stored here (``extra="forbid"`` on SecretContent).
+    model_config = ConfigDict(extra="forbid")
+
+    url: str = Field(min_length=1)
+    site_id: str = Field(min_length=1)
+    # The grant on the site, kept so a later administrator sign-in can revoke it.
+    permission_id: str = Field(min_length=1)
+
+
+class SharePointContent(SecretContent):
+    """SharePoint for an agent, on the agent's Microsoft Teams app. One of two modes.
+
+    ``delegated``: a person signed in as a public client (PKCE, no secret), so the refresh
+    token here refreshes without the Teams app's secret; aai-cli's ``microsoft_delegated``
+    profile does exactly that and stores each rotated token itself.
+
+    ``selected_sites``: an administrator signed in once to grant the Teams app access to
+    ``sites`` under ``Sites.Selected``. Nothing from that sign-in is kept; ``email`` is the
+    administrator's account. The pod fetches short-lived app-only tokens from the API, which
+    mints them with the Teams app's secret, read server-side.
+
+    Neither mode stores the Teams app's secret (``extra="forbid"`` on SecretContent).
     """
 
+    mode: Literal["delegated", "selected_sites"] = "delegated"
     # Strings rather than UUIDs: encrypt_content JSON-serialises model_dump(), which a UUID
     # object would break. Validated and normalised below.
     connection_id: str
@@ -221,15 +239,31 @@ class SharePointContent(SecretContent):
     email: str = Field(min_length=1)
     scopes: list[str] = Field(default_factory=list)
     read_only: bool = False
-    refresh_token: str = Field(min_length=1)
-    # New for every sign-in. The pod writes the refresh token into aai-cli's store only when
-    # this changes, so a restart keeps aai-cli's rotated token and a reconnect replaces it.
-    sign_in_id: str
+    refresh_token: str | None = Field(default=None, min_length=1)
+    # New for every delegated sign-in. The pod writes the refresh token into aai-cli's store
+    # only when this changes, so a restart keeps aai-cli's rotated token and a reconnect
+    # replaces it.
+    sign_in_id: str | None = None
+    sites: list[GrantedSite] = Field(default_factory=list)
 
     @field_validator("connection_id", "sign_in_id")
     @classmethod
-    def _validate_uuid(cls, value: str) -> str:
-        return str(UUID(value))
+    def _validate_uuid(cls, value: str | None) -> str | None:
+        return None if value is None else str(UUID(value))
+
+    @model_validator(mode="after")
+    def _validate_mode(self) -> Self:
+        if self.mode == "delegated":
+            if self.refresh_token is None or self.sign_in_id is None:
+                raise ValueError("a delegated SharePoint sign-in needs refresh_token and sign_in_id")
+            if self.sites:
+                raise ValueError("a delegated SharePoint sign-in holds no granted sites")
+        else:
+            if not self.sites:
+                raise ValueError("selected-sites SharePoint needs at least one granted site")
+            if self.refresh_token is not None or self.sign_in_id is not None:
+                raise ValueError("selected-sites SharePoint keeps no token from the administrator's sign-in")
+        return self
 
 
 class ZohoMailContent(SecretContent):

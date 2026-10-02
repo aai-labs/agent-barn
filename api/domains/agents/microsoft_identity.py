@@ -21,7 +21,7 @@ import jwt
 from injector import singleton
 from jwt.exceptions import InvalidTokenError
 
-from api.domains.agents.microsoft_graph_scopes import GRAPH_SCOPE_PREFIX, sharepoint_permission
+from api.domains.agents.microsoft_graph_scopes import APP_ONLY_SCOPE, GRAPH_SCOPE_PREFIX, sharepoint_permission
 
 _LOGIN_HOST = "https://login.microsoftonline.com"
 _TIMEOUT_SECONDS = 30
@@ -97,6 +97,16 @@ def build_admin_consent_url(*, tenant_id: str, client_id: str, redirect_uri: str
     return f"{_tenant(tenant_id)}/v2.0/adminconsent?{urllib.parse.urlencode(params)}"
 
 
+def build_app_permission_consent_url(*, tenant_id: str, client_id: str, redirect_uri: str) -> str:
+    """A link an administrator opens to approve the application permissions set on the app.
+
+    Selected-sites mode needs the application permission ``Sites.Selected``; ``.default``
+    approves whatever application permissions the app lists, so it is added there first.
+    """
+    params = {"client_id": client_id, "scope": APP_ONLY_SCOPE, "redirect_uri": redirect_uri}
+    return f"{_tenant(tenant_id)}/v2.0/adminconsent?{urllib.parse.urlencode(params)}"
+
+
 def claims_from_id_token(id_token: str | None) -> dict:
     """Read the claims out of Microsoft's id_token, or {} if unavailable.
 
@@ -126,14 +136,35 @@ class MicrosoftIdentityClient:
         scopes: tuple[str, ...],
     ) -> MicrosoftTokens:
         """Redeem an authorization code as a public client: the PKCE verifier, no secret."""
-        data = {
-            "grant_type": "authorization_code",
-            "client_id": client_id,
-            "code": code,
-            "redirect_uri": redirect_uri,
-            "code_verifier": code_verifier,
-            "scope": " ".join(scopes),
-        }
+        return self._token(
+            tenant_id,
+            {
+                "grant_type": "authorization_code",
+                "client_id": client_id,
+                "code": code,
+                "redirect_uri": redirect_uri,
+                "code_verifier": code_verifier,
+                "scope": " ".join(scopes),
+            },
+        )
+
+    def client_credentials(self, *, tenant_id: str, client_id: str, client_secret: str) -> MicrosoftTokens:
+        """An app-only Graph token for the app itself, carrying its consented application permissions.
+
+        Server-side only: the secret is the Teams bot's identity and never leaves the API.
+        """
+        return self._token(
+            tenant_id,
+            {
+                "grant_type": "client_credentials",
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "scope": APP_ONLY_SCOPE,
+            },
+        )
+
+    @staticmethod
+    def _token(tenant_id: str, data: dict[str, str]) -> MicrosoftTokens:
         try:
             response = httpx.post(f"{_tenant(tenant_id)}/oauth2/v2.0/token", data=data, timeout=_TIMEOUT_SECONDS)
         except httpx.HTTPError as exc:
@@ -152,6 +183,6 @@ class MicrosoftIdentityClient:
             access_token=str(payload["access_token"]),
             refresh_token=payload.get("refresh_token"),
             expires_in=int(payload.get("expires_in", 3600)),
-            scope=str(payload.get("scope", "")),
+            scope=str(payload.get("scope") or ""),
             id_token=payload.get("id_token"),
         )

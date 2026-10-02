@@ -29,12 +29,14 @@ from api.domains.agents.microsoft_graph_scopes import (
     missing_sharepoint_permissions,
     sharepoint_permission,
     sharepoint_scopes,
+    site_grant_scopes,
 )
 from api.domains.agents.microsoft_identity import (
     MicrosoftIdentityClient,
     MicrosoftIdentityError,
     MicrosoftIdentityUnavailable,
     build_admin_consent_url,
+    build_app_permission_consent_url,
     build_authorize_url,
     claims_from_id_token,
     pkce_pair,
@@ -334,3 +336,53 @@ def test_a_network_failure_is_reported_as_unavailable(monkeypatch):
 
     with pytest.raises(MicrosoftIdentityUnavailable):
         _exchange()
+
+
+def test_client_credentials_asks_for_an_app_only_graph_token_with_the_secret(monkeypatch):
+    recorder = _Recorder(_ok(refresh_token=None, scope=None))
+    monkeypatch.setattr(httpx, "post", recorder)
+
+    tokens = MicrosoftIdentityClient().client_credentials(tenant_id=_TENANT, client_id=_APP_ID, client_secret="s3cret")
+
+    url, data = recorder.calls[0]
+    assert_that(url, equal_to(f"https://login.microsoftonline.com/{_TENANT}/oauth2/v2.0/token"))
+    assert_that(
+        data,
+        equal_to(
+            {
+                "grant_type": "client_credentials",
+                "client_id": _APP_ID,
+                "client_secret": "s3cret",
+                "scope": "https://graph.microsoft.com/.default",
+            }
+        ),
+    )
+    assert_that(tokens.access_token, equal_to("at"))
+    assert_that(tokens.expires_in, equal_to(3600))
+
+
+def test_client_credentials_rejection_carries_microsofts_error(monkeypatch):
+    rejected = httpx.Response(401, json={"error": "invalid_client", "error_description": "AADSTS7000215: bad secret"})
+    monkeypatch.setattr(httpx, "post", _Recorder(rejected))
+
+    with pytest.raises(MicrosoftIdentityError) as exc:
+        MicrosoftIdentityClient().client_credentials(tenant_id=_TENANT, client_id=_APP_ID, client_secret="x")
+
+    assert_that(exc.value.error, equal_to("invalid_client"))
+
+
+def test_site_grant_sign_in_asks_for_site_administration_and_no_lasting_access():
+    scopes = site_grant_scopes()
+
+    assert_that(scopes, has_item("https://graph.microsoft.com/Sites.FullControl.All"))
+    # No offline_access: Microsoft then issues no refresh token, so nothing outlives the grant.
+    assert_that(scopes, not_(has_item("offline_access")))
+
+
+def test_app_permission_consent_link_approves_the_apps_configured_permissions():
+    url = build_app_permission_consent_url(tenant_id=_TENANT, client_id=_APP_ID, redirect_uri="https://x/cb")
+
+    query = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
+    assert_that(url, starts_with(f"https://login.microsoftonline.com/{_TENANT}/v2.0/adminconsent?"))
+    assert_that(query["scope"], equal_to(["https://graph.microsoft.com/.default"]))
+    assert_that(query["client_id"], equal_to([_APP_ID]))

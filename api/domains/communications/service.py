@@ -1,7 +1,7 @@
 import json
 import secrets
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import NoReturn
 from uuid import UUID
@@ -78,6 +78,16 @@ class TeamsAppIdentity:
 
     app_id: str
     tenant_id: str
+
+
+@dataclass(frozen=True)
+class TeamsAppCredentials:
+    """The Microsoft app behind a Teams connection, secret included, for server-side use only."""
+
+    app_id: str
+    tenant_id: str
+    # Kept out of repr so it can't end up in a log line or traceback.
+    app_password: str = field(repr=False)
 
 
 @inject
@@ -594,6 +604,30 @@ class CommunicationsService:
         public client, so it needs only these two public values; the app's secret stays in
         this domain. No user context: callers authorize before calling.
         """
+        credentials = self._teams_app(agent_id, connection_id)
+        return TeamsAppIdentity(app_id=credentials["app_id"], tenant_id=credentials["tenant_id"])
+
+    def get_teams_app_credentials(self, agent_id: UUID, connection_id: UUID) -> TeamsAppCredentials:
+        """Decrypted app credentials of one agent's active, enabled Teams connection.
+
+        A deliberate, narrow exception to connection credentials staying inside this domain:
+        SharePoint's selected-sites mode mints app-only tokens with the same Microsoft app as
+        the agent's Teams bot. Teams only, one agent, three fields — never a generic "decrypt
+        any connection".
+
+        No user context: callers authorize before calling (the pod token endpoint through the
+        agent's ingest key). The result must stay server-side — never returned from a route,
+        never put in a pod, where the secret would let an agent act as its bot outside the
+        connection's channel and direct-message policies.
+        """
+        credentials = self._teams_app(agent_id, connection_id)
+        return TeamsAppCredentials(
+            app_id=credentials["app_id"],
+            tenant_id=credentials["tenant_id"],
+            app_password=credentials["app_password"],
+        )
+
+    def _teams_app(self, agent_id: UUID, connection_id: UUID) -> dict:
         connection = self.repository.get_active(connection_id)
         if connection is None or connection.agent_id != agent_id or connection.platform_key != "teams":
             raise HTTPException(
@@ -606,8 +640,7 @@ class CommunicationsService:
                 detail="The Microsoft Teams connection is turned off. Turn it on to use SharePoint.",
             )
         plugin = self._require_plugin(connection.platform_key)
-        credentials = self._decrypt_credentials(plugin, connection.credentials_encrypted)
-        return TeamsAppIdentity(app_id=credentials["app_id"], tenant_id=credentials["tenant_id"])
+        return self._decrypt_credentials(plugin, connection.credentials_encrypted)
 
     def _decrypt_credentials(self, plugin, ciphertext: str) -> dict:
         try:
