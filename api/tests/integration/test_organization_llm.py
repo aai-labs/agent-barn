@@ -66,29 +66,6 @@ def test_platform_admin_sets_a_budget_and_it_reaches_the_proxy():
             )
 
 
-def test_clearing_the_budget_removes_the_window_too():
-    with given(_platform_admin_context()) as context:
-        base_url, secret = _litellm_configured(context)
-        organization_id = context.organization.id
-        with base_url, secret:
-            context.client.put(
-                BUDGET_PATH.format(organization_id=organization_id),
-                json={"budget_usd": 50, "budget_duration": "30d"},
-                headers={"Authorization": f"Bearer {context.access_token}"},
-            )
-            with when("the budget is cleared"):
-                response = context.client.put(
-                    BUDGET_PATH.format(organization_id=organization_id),
-                    json={"budget_usd": None},
-                    headers={"Authorization": f"Bearer {context.access_token}"},
-                )
-        with then("no allowance and no renewal schedule remain"):
-            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
-            stored = context.injector.get(OrganizationRepository).get(organization_id)
-            assert_that(stored.llm_budget_usd, equal_to(None))
-            assert_that(stored.llm_budget_duration, equal_to(None))
-
-
 @pytest.mark.parametrize("payload", [{"budget_usd": -1}, {"budget_usd": 10, "budget_duration": "monthly"}])
 def test_invalid_budgets_are_refused(payload):
     with given(_platform_admin_context()) as context:
@@ -167,7 +144,10 @@ def test_an_owner_sees_the_organizations_own_budget():
             headers={"Authorization": f"Bearer {context.access_token}"},
         )
         assert_that(response.status_code, equal_to(status.HTTP_200_OK))
-        assert_that(response.json()["state"], equal_to("none"))
+        # Every Organization starts capped at the deployment default; spend has simply
+        # not been observed yet, which is unknown rather than zero.
+        assert_that(response.json()["state"], equal_to("unknown"))
+        assert_that(response.json()["limit_usd"], equal_to(100.0))
 
 
 def test_a_plain_member_cannot_see_the_organizations_budget():

@@ -65,17 +65,25 @@ export const PlatformOrganizationSchema = z.object({
   creatorUserId: z.string().uuid().nullable().optional(),
   creatorEmail: z.string().nullable().optional(),
   creatorName: z.string().nullable().optional(),
-  // Platform-administered spend ceiling. Null means no cap; 0 is a real zero
-  // allowance, so never coalesce it away.
+  // Platform-administered spend ceiling. Every organization has one; 0 is a real
+  // zero allowance, so never coalesce it away.
   llmBudgetUsd: z.number().nullable().optional(),
   llmBudgetDuration: z.string().nullable().optional(),
+  // The organization's own limit beneath the ceiling. Null follows the ceiling.
+  llmOwnBudgetUsd: z.number().nullable().optional(),
 });
 
 export const OrganizationLlmBudgetSchema = z.object({
-  state: z.enum(["none", "ok", "warning", "exhausted", "unknown"]),
-  limitUsd: z.number().nullable().optional(),
+  state: z.enum(["ok", "warning", "exhausted", "unknown"]),
+  // The limit in force: the organization's own, else the ceiling.
+  limitUsd: z.number(),
+  ceilingUsd: z.number(),
+  ownLimitUsd: z.number().nullable().optional(),
+  window: z.string(),
+  // Null means not yet observed. Never coalesce it to 0.
   spendUsd: z.number().nullable().optional(),
   renewsAt: z.string().nullable().optional(),
+  canManage: z.boolean(),
 });
 
 export const AgentLlmCoverageSchema = z.object({
