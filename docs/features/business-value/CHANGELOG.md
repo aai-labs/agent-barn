@@ -25,11 +25,28 @@ Related context: [Activity and Ingest](../activity-and-ingest.md), [Agent Activi
 - Also delivered: the KPIs page's date range and six headline tiles, read from `GET /value` and `GET /value/activity` (AF-348).
 - Also delivered: the KPIs page's trend chart, with "Value vs spend" and "Requests" tabs (AF-348).
 - Also delivered: the KPIs page's per-Agent table and footnotes (AF-348).
-- In transition: the KPIs page has its header, date range, tiles, trend chart, Agents table, and footnotes; its empty and loading states and value settings Sheet land in the following AF-348 slices.
-- Next: AF-348 empty state and loading skeletons.
+- Also delivered: the KPIs page's empty state and loading skeletons (AF-348).
+- In transition: the KPIs page renders every figure; its value settings Sheet lands in the following AF-348 slices.
+- Next: AF-348 value settings Sheet (read, edit, discard).
 - Blockers: the product owner has not signed off the default minutes per Outcome Type. They are placeholders until then, and every value figure inherits them.
 
 ## Slice history
+
+### 2026-10-02 — AF-348 — KPIs empty state and loading skeletons
+
+Delivered:
+- `kpis-page.tsx`: the empty-state card replaces the chart and table when both responses list no Agents.
+- Local skeletons in the tiles (`kpi-tile-skeleton`), the chart (`kpi-chart-skeleton`), and the table (`kpi-table-skeleton`). The rules are in the feature doc's [Empty and loading states](../business-value.md#empty-and-loading-states).
+- The table waits for both endpoints to answer. While one was still loading, the table had shown "—", the same mark as a failed endpoint.
+
+Coverage, `ui/tests/e2e/kpis.spec.ts`:
+- An empty period shows the explanation, with no chart or table, and the tiles still render.
+- With both reads held, all six tile skeletons, the chart skeleton, and the table skeleton show. Once released, the figures replace them.
+- The mocks gain `hold`, which holds a response until the test releases it, so the loading state is reached without timing.
+
+Test-first:
+- Both tests failed first: no empty state existed, and loading showed no skeletons.
+- `make lint-ui` and `make check-ui` pass. `kpis.spec.ts`, `top-nav-responsive.spec.ts`, and `costs.spec.ts` pass, 60 tests.
 
 ### 2026-10-02 — AF-348 — KPIs Agents table and footnotes
 

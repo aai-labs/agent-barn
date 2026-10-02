@@ -54,6 +54,11 @@ function KpiDashboard() {
     onRetry: () => void refetchActivity(),
   };
   const echoed = value ?? activity;
+  const isEmpty =
+    value !== null &&
+    activity !== null &&
+    value.agents.length === 0 &&
+    activity.agents.length === 0;
   const orgBase = `/dashboard/${selectedOrganization?.id ?? ""}`;
 
   return (
@@ -95,11 +100,31 @@ function KpiDashboard() {
         spendHref={costsHref(orgBase, urlFilters.from, urlFilters.to)}
       />
 
-      <KpiTrendChart value={valueSource} activity={activitySource} />
+      {isEmpty ? (
+        <KpiEmptyState />
+      ) : (
+        <>
+          <KpiTrendChart value={valueSource} activity={activitySource} />
 
-      <AgentKpiTable value={valueSource} activity={activitySource} />
+          <AgentKpiTable value={valueSource} activity={activitySource} />
+        </>
+      )}
 
       <KpiFootnotes value={valueSource} />
+    </div>
+  );
+}
+
+function KpiEmptyState() {
+  return (
+    <div className="af-card mb-6 px-6 py-10 text-center" data-testid="kpi-empty">
+      <h2 className="m-0 mb-2 text-[15px] font-semibold" style={{ color: "var(--ink)" }}>
+        No agent work in this period
+      </h2>
+      <p className="m-0 mx-auto max-w-[36rem] text-[13.5px]" style={{ color: "var(--ink-3)" }}>
+        Value comes from successful aai-cli and gog write actions, and activity comes from
+        messages and webhook invocations. Figures appear here once your agents do either.
+      </p>
     </div>
   );
 }

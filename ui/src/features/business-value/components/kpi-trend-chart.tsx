@@ -10,6 +10,7 @@ import {
   ChartTooltip,
   ChartTooltipContent,
 } from "@/components/ui/chart";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { EmptyChart } from "@/features/costs/components/spend-over-time-chart";
 import { formatSpendCompact } from "@/features/costs/format";
@@ -78,7 +79,13 @@ function SourceChart<T>({
       </EmptyChart>
     );
   }
-  if (!source.data) return <EmptyChart>{" "}</EmptyChart>;
+  if (!source.data) {
+    return (
+      <div data-testid="kpi-chart-skeleton">
+        <Skeleton className="h-[220px] w-full" />
+      </div>
+    );
+  }
   return children(source.data);
 }
 

@@ -99,6 +99,22 @@ export class KpisPage {
     return this.footnotes().getByRole("listitem");
   }
 
+  emptyState(): Locator {
+    return this.page.getByTestId("kpi-empty");
+  }
+
+  tileSkeletons(): Locator {
+    return this.page.getByTestId("kpi-tile-skeleton");
+  }
+
+  chartSkeleton(): Locator {
+    return this.page.getByTestId("kpi-chart-skeleton");
+  }
+
+  tableSkeleton(): Locator {
+    return this.page.getByTestId("kpi-table-skeleton");
+  }
+
   windowLabel(): Locator {
     return this.page.getByTestId("kpi-window");
   }

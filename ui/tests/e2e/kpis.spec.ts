@@ -686,3 +686,85 @@ test.describe("Organization KPIs — agents table and footnotes", () => {
     );
   });
 });
+
+test.describe("Organization KPIs — empty and loading states", () => {
+  let data: DataSupport;
+  let kpis: KpisPage;
+
+  test.use({ storageState: { cookies: [], origins: [] } });
+
+  test.beforeEach(async ({ page }) => {
+    data = new DataSupport(page);
+    kpis = new KpisPage(page);
+    await data.auth.interceptRefreshRequest();
+    await data.users.interceptGetUserContextRequest();
+  });
+
+  test("a period with no agent work explains where the figures come from", async () => {
+    await data.kpis.interceptValue({
+      body: organizationValue({
+        totals: valueTotals({
+          successful_writes: 0,
+          minutes_saved: 0,
+          value: 0,
+          spend: 0,
+          value_to_spend_ratio: null,
+          unverified_writes: 0,
+          failed_writes: 0,
+          unclassified_actions: 0,
+        }),
+        series: [{ bucket: "2026-10-01T00:00:00Z", minutes_saved: 0, value: 0, spend: 0 }],
+        agents: [],
+        top_outcome_types: [],
+      }),
+    });
+    await data.kpis.interceptActivity({
+      body: organizationActivity({
+        totals: activityTotals({
+          requests: 0,
+          handled_without_failure_rate: null,
+          handled_coverage: 0,
+          median_response_seconds: null,
+          response_time_coverage: 0,
+          cost_per_request: null,
+          tool_calls_per_request: null,
+        }),
+        requests_series: [{ bucket: "2026-10-01T00:00:00Z", requests: 0 }],
+        agents: [],
+      }),
+    });
+
+    await kpis.goto();
+
+    await expect(kpis.emptyState()).toContainText(
+      "Value comes from successful aai-cli and gog write actions",
+    );
+    await expect(kpis.emptyState()).toContainText(
+      "activity comes from messages and webhook invocations",
+    );
+    await expect(kpis.trend()).toHaveCount(0);
+    await expect(kpis.agentTable()).toHaveCount(0);
+    await expect(kpis.tile("kpi-requests")).toContainText("0");
+  });
+
+  test("shows skeletons while the figures load, then the figures", async () => {
+    const value = await data.kpis.interceptValue({ hold: true });
+    const activity = await data.kpis.interceptActivity({ hold: true });
+
+    await kpis.goto();
+
+    await expect(kpis.tileSkeletons()).toHaveCount(6);
+    await expect(kpis.chartSkeleton()).toBeVisible();
+    await expect(kpis.tableSkeleton()).toBeVisible();
+    await expect(kpis.emptyState()).toHaveCount(0);
+
+    value.release();
+    activity.release();
+
+    await expect(kpis.tile("kpi-requests")).toContainText("480");
+    await expect(kpis.tileSkeletons()).toHaveCount(0);
+    await expect(kpis.chartSkeleton()).toHaveCount(0);
+    await expect(kpis.tableSkeleton()).toHaveCount(0);
+    await expect(kpis.agentTable()).toBeVisible();
+  });
+});

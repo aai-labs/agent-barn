@@ -332,6 +332,14 @@ Each tile belongs to one endpoint. If an endpoint fails, only its tiles show "Un
 - The unverified write and unclassified action counts from `/value` `totals`.
 - A fixed note: value counts only successful aai-cli and gog write actions, and the handled rate and response time cover Web Chat and Email only.
 
+### Empty and loading states
+
+- **Empty.** When both responses arrive and both list no Agents, a card replaces the chart and table. It explains that value comes from successful aai-cli and gog write actions, and activity from messages and webhook invocations. The tiles and footnotes still show the period's zero counts.
+- **Loading.** Each section has its own skeleton:
+  - a tile skeleton while its endpoint is loading;
+  - a chart skeleton in a tab whose endpoint is loading;
+  - a table skeleton until both endpoints have answered, so a still-loading endpoint is not shown as "—" like a failure.
+
 ## Known gaps
 
 Each of these is an **undercount**, not a verdict on the Agent. The last one is a possible overcount.

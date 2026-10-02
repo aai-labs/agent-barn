@@ -3,6 +3,7 @@
 import type { ReactNode } from "react";
 import Link from "next/link";
 
+import { Skeleton } from "@/components/ui/skeleton";
 import { StatCard } from "@/features/costs/components/cost-summary-cards";
 import { formatSpend } from "@/features/costs/format";
 
@@ -15,7 +16,6 @@ import {
 } from "../format";
 import type { OrganizationActivity, OrganizationValue } from "../schemas";
 
-const LOADING_FIGURE = "…";
 const FAILED_FIGURE = "Unable to load";
 const MISSING_FIGURE = "—";
 
@@ -136,7 +136,12 @@ function SourceTile<T>({
     );
   }
   if (!source.data) {
-    return <StatCard label={label} value={LOADING_FIGURE} testId={testId} />;
+    return (
+      <div className="af-card px-4 py-3.5" data-testid="kpi-tile-skeleton">
+        <Skeleton className="h-3 w-16 mb-2" />
+        <Skeleton className="h-6 w-20" />
+      </div>
+    );
   }
   const shown = figure(source.data);
   const hint = [shown.missing, shown.hint].filter(Boolean).join(" · ");

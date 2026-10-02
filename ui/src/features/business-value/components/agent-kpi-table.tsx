@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import { ChevronDown, ChevronUp } from "lucide-react";
 
 import { Badge } from "@/components/badge";
+import { Skeleton } from "@/components/ui/skeleton";
 import { formatCallSpend, formatSpend } from "@/features/costs/format";
 
 import {
@@ -24,6 +25,7 @@ import { mergeAgentRows, type AgentKpiRow } from "../utils";
 import { type KpiSource, RetryButton } from "./kpi-tiles";
 
 const FAILED_CELL = "—";
+const SKELETON_ROWS = 5;
 
 type SortKey =
   | "agent"
@@ -225,6 +227,18 @@ export function AgentKpiTable({
     setSortKey(key);
     setDirection(key === "agent" ? "asc" : "desc");
   };
+
+  const settled = (source: KpiSource<unknown>) => Boolean(source.data || source.error);
+  if (!settled(value) || !settled(activity)) {
+    return (
+      <div className="af-card mb-6 p-4" data-testid="kpi-table-skeleton">
+        <Skeleton className="mb-4 h-4 w-32" />
+        {Array.from({ length: SKELETON_ROWS }).map((_, i) => (
+          <Skeleton key={i} className="mb-2 h-8 w-full" />
+        ))}
+      </div>
+    );
+  }
 
   if (figures.length === 0 && !value.error && !activity.error) return null;
 

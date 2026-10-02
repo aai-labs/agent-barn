@@ -144,11 +144,12 @@ export function activityAgent(overrides: Record<string, unknown> = {}) {
   };
 }
 
-type ReadOptions = { body?: unknown; status?: number };
+type ReadOptions = { body?: unknown; status?: number; hold?: boolean };
 
 export type ReadMock = {
   requests: URL[];
   respondWith: (options: ReadOptions) => void;
+  release: () => void;
 };
 
 export class KpisDataSupport {
@@ -169,11 +170,18 @@ export class KpisDataSupport {
   ): Promise<ReadMock> {
     let current: ReadOptions = initial;
     const requests: URL[] = [];
+    let release = () => {};
+    const released = initial.hold
+      ? new Promise<void>((resolve) => {
+          release = resolve;
+        })
+      : Promise.resolve();
     await this.page.route(
       (url) => path.test(url.pathname + url.search),
       async (route) => {
         if (route.request().method() !== "GET") return route.fallback();
         requests.push(new URL(route.request().url()));
+        await released;
         const status = current.status ?? 200;
         await route.fulfill({
           status,
@@ -189,6 +197,7 @@ export class KpisDataSupport {
       respondWith: (options) => {
         current = options;
       },
+      release: () => release(),
     };
   }
 }
