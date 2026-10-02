@@ -6,13 +6,33 @@ spent this window instead, and suspends the Organization's memory once agents an
 memory together reach the limit.
 """
 
+import os
+import subprocess
+import sys
 from datetime import UTC, datetime
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 from hamcrest import assert_that, equal_to
+from pydantic import ValidationError
 
+import api
+from api.domains.organizations import llm_budget_cron, llm_budget_enforcement
+from api.domains.organizations.lookup import OrganizationLookupService
+from api.domains.organizations.memory_budget import OrganizationMemoryBudgetService
 from api.domains.organizations.models import Organization, budget_window_start
+from api.infrastructure.litellm.client import LiteLLMError
+from api.tests.unit.test_organization_llm import (
+    acting,
+    budget_service,
+    ceiling_service,
+    config,
+    configured,
+    org_budget_service,
+    organization_service,
+    viewed,
+)
 
 RENEWS = datetime(2026, 10, 1, tzinfo=UTC)
 IN_WINDOW = datetime(2026, 9, 20, tzinfo=UTC)
@@ -130,7 +150,6 @@ def test_a_trip_lifts_when_the_limit_changes():
 
 
 def test_a_new_team_is_provisioned_with_memory_already_off_its_ceiling():
-    from api.tests.unit.test_organization_llm import configured, organization_service
 
     org = organization(limit=100.0, memory=30.0)
     service = organization_service()
@@ -144,8 +163,6 @@ def test_changing_the_limit_pushes_it_less_memory_but_holds_agents_to_the_real_l
     """Agent limits sit beneath the Organization's own figure, not the lowered one:
     the memory deduction is the team's alone, and an Agent's limit is its share of
     what the Organization chose to spend."""
-    from api.tests.unit.test_organization_llm import acting, ceiling_service, configured
-
     org = organization(limit=100.0, memory=30.0)
     service = ceiling_service(org)
     with configured(), acting():
@@ -161,9 +178,6 @@ TEAM_RENEWS = "2026-10-01T00:00:00+00:00"
 
 
 def enforcement(orgs, agent_spend, memory_by_org, *, percent=100, renews=TEAM_RENEWS):
-    from api.domains.organizations.memory_budget import OrganizationMemoryBudgetService
-    from api.tests.unit.test_organization_llm import config
-
     repo = MagicMock()
     repo.list_capped_organizations.return_value = orgs
     by_id = {org.id: org for org in orgs}
@@ -275,7 +289,6 @@ def test_a_team_with_no_renewal_date_is_skipped():
 
 
 def test_one_failing_organization_does_not_stop_the_pass():
-    from api.infrastructure.litellm.client import LiteLLMError
 
     first, second = organization(limit=100.0, renews=None), organization(limit=50.0, renews=None)
     service, settings = enforcement([first, second], {str(first.id): 1.0, str(second.id): 1.0}, {})
@@ -285,8 +298,6 @@ def test_one_failing_organization_does_not_stop_the_pass():
 
 
 def test_the_pass_is_skipped_when_litellm_is_not_configured():
-    from api.domains.organizations.memory_budget import OrganizationMemoryBudgetService
-    from api.tests.unit.test_organization_llm import config
 
     repository = MagicMock()
     service = OrganizationMemoryBudgetService(
@@ -302,16 +313,12 @@ def test_the_pass_is_skipped_when_litellm_is_not_configured():
 
 @pytest.mark.parametrize("percent", [0, 101])
 def test_a_suspend_percent_outside_1_to_100_is_refused(percent):
-    from pydantic import ValidationError
-
-    from api.tests.unit.test_organization_llm import config
 
     with pytest.raises(ValidationError):
         config(llm_memory_suspend_percent=percent)
 
 
 def test_the_enforcement_cronjob_runs_one_pass():
-    from api.domains.organizations import llm_budget_cron, llm_budget_enforcement
 
     service = MagicMock()
     with (
@@ -320,7 +327,6 @@ def test_the_enforcement_cronjob_runs_one_pass():
     ):
         llm_budget_enforcement.main()
     service.enforce_memory_budgets.assert_called_once_with()
-    from api.domains.organizations.memory_budget import OrganizationMemoryBudgetService
 
     assert_that(build.call_args.args, equal_to((OrganizationMemoryBudgetService,)))
 
@@ -329,7 +335,6 @@ def test_the_enforcement_cronjob_runs_one_pass():
 
 
 def viewed_with_memory(memory, observed=None, spend=40.0, limit=100.0):
-    from api.tests.unit.test_organization_llm import viewed
 
     org = viewed(limit=limit, spend=spend)
     org.llm_memory_spend_usd = memory
@@ -338,7 +343,6 @@ def viewed_with_memory(memory, observed=None, spend=40.0, limit=100.0):
 
 
 def test_an_organization_sees_agents_and_memory_against_its_real_limit():
-    from api.tests.unit.test_organization_llm import org_budget_service
 
     service = org_budget_service(viewed_with_memory(35.0))
     read = service.get_organization_llm_budget(MagicMock(), MagicMock())
@@ -346,14 +350,12 @@ def test_an_organization_sees_agents_and_memory_against_its_real_limit():
 
 
 def test_memory_that_takes_the_total_to_the_limit_shows_it_exhausted():
-    from api.tests.unit.test_organization_llm import org_budget_service
 
     service = org_budget_service(viewed_with_memory(60.0))
     assert_that(service.get_organization_llm_budget(MagicMock(), MagicMock()).state, equal_to("exhausted"))
 
 
 def test_last_windows_memory_is_not_shown_as_this_windows():
-    from api.tests.unit.test_organization_llm import org_budget_service
 
     service = org_budget_service(viewed_with_memory(35.0, observed=datetime(2026, 8, 20, tzinfo=UTC)))
     read = service.get_organization_llm_budget(MagicMock(), MagicMock())
@@ -363,8 +365,6 @@ def test_last_windows_memory_is_not_shown_as_this_windows():
 def test_alerts_fire_on_agents_and_memory_together_but_the_snapshot_stays_agents_only():
     """The snapshot is the proxy's figure for the team; memory has its own column.
     Each writer owns one number and the surfaces add them."""
-    from api.tests.unit.test_organization_llm import budget_service, configured
-
     org = viewed_with_memory(30.0, spend=None)
     org.llm_budget_renews_at = None
     service = budget_service([org], {str(org.id): {"spend": 60.0, "renews_at": "2026-10-01T00:00:00+00:00"}})
@@ -375,8 +375,6 @@ def test_alerts_fire_on_agents_and_memory_together_but_the_snapshot_stays_agents
 
 
 def test_the_platform_coverage_view_counts_memory_in_the_teams_spend():
-    from api.tests.unit.test_organization_llm import configured, organization_service
-
     org = viewed_with_memory(25.0)
     service = organization_service()
     service.organization_repository.get.return_value = org
@@ -392,8 +390,6 @@ def test_the_platform_coverage_view_counts_memory_in_the_teams_spend():
 
 @pytest.mark.parametrize(("tripped", "expected"), [(True, True), (False, False)])
 def test_the_lookup_reports_whether_memory_is_suspended(tripped, expected):
-    from api.domains.organizations.lookup import OrganizationLookupService
-
     org = organization()
     if tripped:
         org.llm_memory_suspended_key = org.llm_budget_window_key
@@ -403,8 +399,6 @@ def test_the_lookup_reports_whether_memory_is_suspended(tripped, expected):
 
 
 def test_a_missing_organization_is_not_suspended():
-    from api.domains.organizations.lookup import OrganizationLookupService
-
     repository = MagicMock()
     repository.get.return_value = None
     assert_that(OrganizationLookupService(repository=repository).memory_suspended(MagicMock()), equal_to(False))
@@ -414,18 +408,11 @@ def test_the_budget_cronjobs_can_save_an_agent_in_a_process_of_their_own():
     """Each CronJob is its own process with only the models its imports reach.
     `agent.memory_group_id` references `memory_group`, and the per-Agent alert pass
     saves Agents, so without that table registered the save fails outright."""
-    import subprocess
-    import sys
-
     probe = (
         "import api.domains.organizations.llm_budget_cron\n"
         "from sqlmodel import SQLModel\n"
         "assert 'memory_group' in SQLModel.metadata.tables, 'memory_group is not registered'\n"
     )
-    import os
-    from pathlib import Path
-
-    import api
 
     root = str(Path(api.__file__).resolve().parents[1])
     env = {**os.environ, "PYTHONPATH": root}

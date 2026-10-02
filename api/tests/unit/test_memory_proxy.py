@@ -1,5 +1,6 @@
 """The memory proxy forwards an Agent's own-pool requests to Honcho (AF-338)."""
 
+import asyncio
 import uuid
 from unittest.mock import MagicMock
 
@@ -11,7 +12,7 @@ from hamcrest import assert_that, equal_to, has_entries
 
 from api.core.config import Config
 from api.domains.agents.memory_access import MemoryAccessDenied, MemoryKeyRejected
-from api.domains.memory_proxy.proxy import MemoryProxy
+from api.domains.memory_proxy.proxy import MemoryProxy, _stream_then_close
 from api.memory_proxy_app import create_memory_proxy_app
 
 WS = "af-pool-0199"
@@ -172,10 +173,6 @@ def test_the_upstream_connection_is_closed_by_the_body_itself():
 
 
 def test_the_body_closes_upstream_even_when_the_client_stops_reading():
-    import asyncio
-
-    from api.domains.memory_proxy.proxy import _stream_then_close
-
     upstream = Upstream(chunks=(b"a", b"b", b"c"))
     response = upstream(httpx.Request("GET", "http://honcho"))
 
