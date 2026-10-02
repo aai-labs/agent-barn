@@ -35,6 +35,28 @@ Related context: [Activity and Ingest](../activity-and-ingest.md), [Agent Activi
 
 ## Slice history
 
+### 2026-10-02 — AF-348 — Coverage wording for the handled rate and response time
+
+Changed:
+- The Handled tile's hint reads "based on X of Y requests routed through Agent Barn". The footnote says natively connected channels count as Requests but are not timed. Neither names channels any more.
+- `business-value.md` no longer lists the deployed native platforms. It points to `operations.md` instead.
+
+Why:
+- The ticket asked for "Web Chat and Email only". Which channels are covered depends on each environment's `COMMUNICATIONS_NATIVE_PLATFORMS`, so fixed channel names can be false.
+- Live on local k3d, with `COMMUNICATIONS_NATIVE_PLATFORMS=slack` set temporarily: native Slack messages from a Hermes Agent and an OpenClaw Agent were mirrored as Conversation Messages, so they count as Requests, but they created 0 Communication Deliveries. They are therefore outside the handled rate and the response time.
+- Not verified: the deployed value of the GitHub variable `COMMUNICATIONS_NATIVE_PLATFORMS`, which could not be read here. `operations.md` says `slack,discord`; the removed doc line said Slack, Discord, Telegram, and Teams.
+
+Coverage:
+- `kpis.spec.ts`: the headline test expects the new hint, the footnote test expects the new note, and a new test asserts that the page never says "Web Chat and Email". All three failed first on the old text.
+- `make lint-ui` and `make check-ui` pass. `kpis.spec.ts`, `top-nav-responsive.spec.ts`, and `costs.spec.ts` pass, 72 tests.
+
+Follow-up, timing native channels (not in AF-348):
+- Findings from the same local run, for the ticket:
+  - **Pairing works.** A request and its reply share `session_key`, which includes the Slack thread on both runtimes. OpenClaw leaves `thread_id` empty on outbound rows, so pairing must use `session_key`.
+  - **Hook times can understate the wait.** `occurred_at` is when a hook fired. A message sent while the OpenClaw Agent was restarting was answered 376 s later by Slack's own timestamps, but 15.8 s apart by recorded times.
+  - **Timestamps differ by runtime.** OpenClaw stores the Slack timestamp of both the request and the reply, as message ids. Hermes stores it only for the request; its reply id is `outbound:<hash>`.
+- Not verified: overlapping requests in one thread, multi-reply runs, approval prompts, verbose progress messages, and what a failed run leaves behind, which decides whether a native "handled" rate is measurable at all.
+
 ### 2026-10-02 — AF-348 — Live end-to-end check (local k3d)
 
 Setup:

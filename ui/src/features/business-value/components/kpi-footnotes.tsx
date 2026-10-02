@@ -8,7 +8,7 @@ import { outcomeTypeLabel } from "../utils";
 import { type KpiSource, RetryButton } from "./kpi-tiles";
 
 const VALUE_NOTE =
-  "Value counts only successful aai-cli and gog write actions. The handled rate and response time cover Web Chat and Email only.";
+  "Value counts only successful aai-cli and gog write actions. The handled rate and response time cover only requests routed through Agent Barn; channels connected natively count as requests but are not timed.";
 
 function plural(count: number, singular: string, pluralForm: string): string {
   return `${formatCount(count)} ${count === 1 ? singular : pluralForm}`;

@@ -157,8 +157,19 @@ test.describe("Organization KPIs — headline tiles", () => {
     await expect(kpis.tile("kpi-value-per-dollar")).toContainText("$12.10 per $1");
     await expect(kpis.tile("kpi-requests")).toContainText("480");
     await expect(kpis.tile("kpi-handled")).toContainText("75%");
-    await expect(kpis.tile("kpi-handled")).toContainText("based on 120 of 480 requests");
-    await expect(kpis.tile("kpi-handled")).toContainText("Web Chat and Email only");
+    await expect(kpis.tile("kpi-handled")).toContainText(
+      "based on 120 of 480 requests routed through Agent Barn",
+    );
+  });
+
+  test("never names channels the coverage may not match", async ({ page }) => {
+    await data.kpis.interceptValue();
+    await data.kpis.interceptActivity();
+
+    await kpis.goto();
+    await expect(kpis.tile("kpi-handled")).toContainText("75%");
+
+    await expect(page.locator("body")).not.toContainText("Web Chat and Email");
   });
 
   test("without an hourly rate, value asks for one instead of showing $0", async () => {
@@ -683,7 +694,7 @@ test.describe("Organization KPIs — agents table and footnotes", () => {
     await expect(kpis.topOutcomes().nth(1)).toContainText("Message sent");
     await expect(kpis.footnotes()).toContainText("3 unverified writes · 2 unclassified actions");
     await expect(kpis.footnotes()).toContainText(
-      "Value counts only successful aai-cli and gog write actions. The handled rate and response time cover Web Chat and Email only.",
+      "Value counts only successful aai-cli and gog write actions. The handled rate and response time cover only requests routed through Agent Barn; channels connected natively count as requests but are not timed.",
     );
   });
 });

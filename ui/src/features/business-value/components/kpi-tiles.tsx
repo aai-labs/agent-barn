@@ -110,7 +110,7 @@ export function KpiTiles({
             : { value: formatRate(totals.handledWithoutFailureRate) }),
           hint: `based on ${totals.handledCoverage.toLocaleString(
             "en-US",
-          )} of ${totals.requests.toLocaleString("en-US")} requests · Web Chat and Email only`,
+          )} of ${totals.requests.toLocaleString("en-US")} requests routed through Agent Barn`,
         })}
       />
     </div>

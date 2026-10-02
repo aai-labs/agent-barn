@@ -238,7 +238,7 @@ What the delivery statuses mean:
 
 ### Coverage
 
-- Only Connections on the Communications Gateway create Communication Deliveries. Platforms listed in `COMMUNICATIONS_NATIVE_PLATFORMS` run natively. That is Slack, Discord, Telegram, and Teams in deployed environments; the setting is empty by default and in local k3d.
+- Only Connections on the Communications Gateway create Communication Deliveries. Platforms listed in `COMMUNICATIONS_NATIVE_PLATFORMS` run natively. Each deployment sets that list (see [`../guidelines/operations.md`](../guidelines/operations.md)); it is empty by default and in local k3d.
 - Native traffic is mirrored into `agent_chat_message` through Ingest but has no delivery rows. Web Chat and Email always create them.
 - The handled rate and the response time therefore cover only part of the Requests. Each is returned with its coverage count, so the dashboard can say "based on 120 of 480 requests".
 - Native avoidance is transport routing, not a check when a delivery is accepted. A delivery created before its Platform switched to native stays PENDING and is left out of the denominator.
@@ -294,7 +294,7 @@ The Organization's KPIs page, `/dashboard/{organization_id}/kpis`, renders value
 | LLM spend | `/value` `totals.spend` | USD, with a "View in Costs" link carrying the same `from` and `to`. |
 | Value per dollar spent | `/value` `totals.value_to_spend_ratio` | "$X.XX per $1"; a non-zero ratio under $0.005 reads "<$0.01 per $1". |
 | Requests | `/value/activity` `totals.requests` | A count. |
-| Handled without failure | `/value/activity` `totals.handled_without_failure_rate` | A percentage, with one decimal below 0.5% and from 99.5% up to 100%, so a real failure never rounds to 100% and a real success never rounds to 0%. Hint: "based on {handled_coverage} of {requests} requests · Web Chat and Email only". |
+| Handled without failure | `/value/activity` `totals.handled_without_failure_rate` | A percentage, with one decimal below 0.5% and from 99.5% up to 100%, so a real failure never rounds to 100% and a real success never rounds to 0%. Hint: "based on {handled_coverage} of {requests} requests routed through Agent Barn". It names no channels, because which ones are routed depends on the environment's `COMMUNICATIONS_NATIVE_PLATFORMS`. |
 
 The dashboard never shows `$0` or `0%` for an unknown figure:
 
@@ -330,7 +330,7 @@ Each tile belongs to one endpoint. If an endpoint fails, only its tiles show "Un
 
 - "Top outcomes" lists `/value` `top_outcome_types` in the server's order. Each entry shows its label, its successful write count, its hours, and its value. Labels are derived from the Outcome Type code (`PULL_REQUEST_OPENED` reads "Pull request opened"), so a new catalogue Outcome Type needs no UI change.
 - The unverified write and unclassified action counts from `/value` `totals`.
-- A fixed note: value counts only successful aai-cli and gog write actions, and the handled rate and response time cover Web Chat and Email only.
+- A fixed note: value counts only successful aai-cli and gog write actions, and the handled rate and response time cover only requests routed through Agent Barn, while natively connected channels count as Requests but are not timed.
 
 ### Empty and loading states
 
