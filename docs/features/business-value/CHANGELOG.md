@@ -21,11 +21,28 @@ Related context: [Activity and Ingest](../activity-and-ingest.md), [Agent Activi
 - Also delivered: gog (Google Workspace) commands are classified as Business Actions and valued like aai-cli ones. See the feature doc's [gog commands](../business-value.md#gog-commands) section.
 - Also delivered: review fixes. Value-settings saves are serialized under a row lock and record what they actually replaced, and the per-bucket Business Action query no longer builds an unused bucket spine.
 - Also delivered: `GET /organizations/{organization_id}/value/activity`, the Organization activity KPI. The feature doc's [Organization activity](../business-value.md#organization-activity) section is the contract. It rests on `ValueActivityRepository` and the two indexes of migration `45bcefcb0749`.
-- In transition: nothing. gog classification is deployed to local k3d and was verified live.
-- Next: the Stage 3 UI that renders value settings, the Organization value, and activity.
+- Also delivered: the KPIs page route and its Owner/Admin navigation entry (AF-348). The feature doc's [KPI dashboard](../business-value.md#kpi-dashboard) section is the contract.
+- In transition: the KPIs page renders its heading only; its tiles, chart, table, and value settings Sheet land in the following AF-348 slices.
+- Next: AF-348 tiles and date range.
 - Blockers: the product owner has not signed off the default minutes per Outcome Type. They are placeholders until then, and every value figure inherits them.
 
 ## Slice history
+
+### 2026-10-02 — AF-348 — KPIs navigation, route, and access gate
+
+Delivered:
+- `ui/src/app/dashboard/[orgId]/kpis/page.tsx` renders `KpisPage` (`ui/src/features/business-value/components/kpis-page.tsx`), which gates with `useRequireOrgManager` before mounting the dashboard. The dashboard is only a heading so far.
+- `top-nav.tsx` lists "KPIs" right after Costs, inside the same `canManageMembers` spread, so the desktop row and the mobile drawer both hide it from Members.
+
+Coverage: `ui/tests/e2e/kpis.spec.ts`, with locators in `ui/tests/pages/kpis-page.po.ts`:
+- an Owner sees KPIs right after Costs, on desktop and in the drawer, and following it opens the page with the tab marked current;
+- a Member sees no KPIs entry, on desktop or in the drawer;
+- a Member who opens `/kpis` is redirected to the Organization home.
+
+Test-first:
+- The three Owner and redirect tests failed before the change: KPIs was missing from the nav, and `/kpis` did not redirect.
+- The two Member-entry tests cannot fail while no entry exists. They were shown to fail (`Expected: 0, Received: 1`) with the entry temporarily moved outside the role check, which was then restored.
+- `make lint-ui` and `make check-ui` pass. `kpis.spec.ts`, `top-nav-responsive.spec.ts`, and `costs.spec.ts` pass, 32 tests; the 27 existing tests passed before the change too.
 
 ### 2026-10-01 — AF-345 — Review fixes: serialized value-settings saves and a simpler bucket query
 

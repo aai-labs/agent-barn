@@ -2,7 +2,7 @@
 
 ## Read when
 
-Read before changing how Agent Barn derives Business Actions from Tool Calls, the aai-cli or gog command catalogues, Outcome Types or their default minutes, the `business_action` table, the `agentbarn_business_actions` metric, or any read that reports value from Business Actions. Also read before changing the Organization activity read, or what counts as a Request, a handled delivery, or a response time.
+Read before changing how Agent Barn derives Business Actions from Tool Calls, the aai-cli or gog command catalogues, Outcome Types or their default minutes, the `business_action` table, the `agentbarn_business_actions` metric, or any read that reports value from Business Actions. Also read before changing the Organization activity read, or what counts as a Request, a handled delivery, or a response time, and before changing the KPIs dashboard UI.
 
 ## Role in the system
 
@@ -271,6 +271,15 @@ What the delivery statuses mean:
 - **Webhook Invocations without an event id are never deduplicated.** Each one is its own row, and so its own Request.
 - **Inbound messages may be overcounted** on Hermes, as described in [Known gaps](#known-gaps).
 
+## KPI dashboard
+
+The Organization's KPIs page, `/dashboard/{organization_id}/kpis`, renders value settings, the Organization value, and Organization activity on one page. It reads only the three endpoints above.
+
+### Access
+
+- The page is for Owners and Admins. The "KPIs" navigation entry sits right after Costs, inside the same `canManage` check, so desktop and the mobile drawer both hide it from Members.
+- The page gates with `useRequireOrgManager`, as Costs does. A Member who opens the URL is redirected to the Organization's home.
+
 ## Known gaps
 
 Each of these is an **undercount**, not a verdict on the Agent. The last one is a possible overcount.
@@ -336,6 +345,8 @@ Ingest owns authentication and the transaction. The Business Value domain owns t
 | Organization value aggregates | `../../api/domains/business_value/repository.py` (`BusinessActionRepository.category_counts`, `successful_counts_by_bucket`, `successful_counts_by_agent`) |
 | Organization activity aggregates | `../../api/domains/business_value/repository.py` (`ValueActivityRepository`: inbound messages, webhook invocations, delivery outcomes, and tool calls, all scoped through the Agent join), served by migration `45bcefcb0749` (`ix_communication_delivery_agent_direction_completed`, `ix_agent_chat_message_agent_direction_occurred`) |
 | HTTP routes | `../../api/domains/business_value/routes.py` |
+| KPI dashboard UI | `../../ui/src/features/business-value/`, route `../../ui/src/app/dashboard/[orgId]/kpis/page.tsx`, navigation entry in `../../ui/src/components/top-nav.tsx` |
+| KPI dashboard tests | `../../ui/tests/e2e/kpis.spec.ts`, `../../ui/tests/pages/kpis-page.po.ts` |
 | Test seeding | `../../api/tests/steps/business_action.py`, `../../api/tests/steps/cost.py` (`without_agent`), `../../api/tests/steps/communication.py` (connections, deliveries, messages, webhook invocations, tool calls) |
 | Tests | `../../api/tests/unit/test_business_action_catalogue.py`, `../../api/tests/unit/test_gog_catalogue.py`, `../../api/tests/unit/test_business_action_classifier.py`, `../../api/tests/unit/test_metrics.py`, `../../api/tests/unit/test_business_value_valuation.py`, `../../api/tests/integration/test_business_action_repository.py`, `../../api/tests/integration/test_ingest.py`, `../../api/tests/integration/test_business_action_backfill.py`, `../../api/tests/integration/test_value_settings.py`, `../../api/tests/integration/test_organization_value.py`, `../../api/tests/integration/test_organization_activity.py`, `../../api/tests/integration/test_cross_org_isolation.py` |
 
