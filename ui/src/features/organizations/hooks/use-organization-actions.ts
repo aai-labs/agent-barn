@@ -15,6 +15,7 @@ import {
   PlatformOrganizationSchema,
 } from "../schemas";
 import {
+  organizationLlmBudgetKey,
   organizationLlmCoverageKey,
   organizationsKey,
   platformOrganizationsKey,
@@ -81,6 +82,7 @@ export function useUpdateOrganization({ toastOnError = true }: { toastOnError?: 
       return response.data;
     },
     onSuccess: (_, variables) => {
+      void queryClient.invalidateQueries({ queryKey: currentUserContextKey.all });
       void queryClient.invalidateQueries({ queryKey: organizationsKey.lists() });
       void queryClient.invalidateQueries({ queryKey: platformOrganizationsKey.lists() });
       void queryClient.invalidateQueries({
@@ -104,12 +106,16 @@ export function useUpdateOrganization({ toastOnError = true }: { toastOnError?: 
   });
 }
 
-/** Set or clear an Organization's LLM spend ceiling. Platform administrators only. */
-export function useSetOrganizationLlmBudget(organizationId: string) {
+/** Set an Organization's LLM spend ceiling. Platform administrators only.
+ *  `toastOnError: false` for callers that render the failure inline. */
+export function useSetOrganizationLlmBudget(
+  organizationId: string,
+  { toastOnError = true }: { toastOnError?: boolean } = {},
+) {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async (budget: { budgetUsd: number | null; budgetDuration?: string | null }) => {
+    mutationFn: async (budget: { budgetUsd: number; budgetDuration?: string }) => {
       const response = await api.put(
         `/api/v1/platform/organizations/${organizationId}/llm-budget`,
         budget,
@@ -127,10 +133,14 @@ export function useSetOrganizationLlmBudget(organizationId: string) {
         exact: true,
       });
       void queryClient.invalidateQueries({ queryKey: platformOrganizationsKey.lists() });
+      // Lowering the ceiling can pull the organization's own limit down with it.
+      void queryClient.invalidateQueries({ queryKey: organizationLlmBudgetKey.detail(organizationId) });
     },
-    onError: (error) => {
-      toastError(error, "We couldn't update the LLM budget");
-    },
+    onError: toastOnError
+      ? (error: Error) => {
+          toastError(error, "We couldn't update the spend limit");
+        }
+      : undefined,
   });
 }
 

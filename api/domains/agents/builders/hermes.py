@@ -72,6 +72,9 @@ _MESSAGE_SCRIPTS = _COMMON_SCRIPTS / "messaging"
 HERMES_BOOT_RUN_PY: str = (_SCRIPTS / "boot-run.py").read_text()
 
 
+# Persistent working directory for the agent's terminal and messaging layer.
+HERMES_WORKSPACE_DIR = "/workspace"
+
 # Hermes resolves this from $HERMES_HOME first, then ~/.hermes, then ~/.honcho.
 HERMES_STATE_DIR = "/opt/data"
 
@@ -134,7 +137,7 @@ def _hermes_config_core(
         },
         "terminal": {
             "backend": "local",
-            "cwd": "/workspace",
+            "cwd": HERMES_WORKSPACE_DIR,
             "timeout": 120,
         },
         "memory": {
@@ -162,7 +165,7 @@ def _hermes_config_core(
         # Agent Barn materializes pinned Skills in the persistent workspace,
         # while Hermes otherwise scans only $HERMES_HOME/skills.
         "skills": {
-            "external_dirs": ["/workspace/skills"],
+            "external_dirs": [f"{HERMES_WORKSPACE_DIR}/skills"],
         },
         "approvals": {
             "mode": _HERMES_APPROVAL_MODE.get(approval_mode, "smart"),
@@ -555,8 +558,8 @@ def build_hermes_deployment(
                                 # relative writes miss the persistent /workspace.
                                 # ocbw sets both alongside terminal.cwd — mirror it.
                                 client.V1EnvVar(name="HERMES_HOME", value=HERMES_STATE_DIR),
-                                client.V1EnvVar(name="TERMINAL_CWD", value="/workspace"),
-                                client.V1EnvVar(name="MESSAGING_CWD", value="/workspace"),
+                                client.V1EnvVar(name="TERMINAL_CWD", value=HERMES_WORKSPACE_DIR),
+                                client.V1EnvVar(name="MESSAGING_CWD", value=HERMES_WORKSPACE_DIR),
                             ],
                             env_from=[client.V1EnvFromSource(secret_ref=client.V1SecretEnvSource(name=name))],
                             volume_mounts=[
@@ -576,7 +579,7 @@ def build_hermes_deployment(
                                 # sibling of the /opt/data content on one PVC.
                                 client.V1VolumeMount(
                                     name="data",
-                                    mount_path="/workspace",
+                                    mount_path=HERMES_WORKSPACE_DIR,
                                     sub_path="workspace",
                                 ),
                             ],

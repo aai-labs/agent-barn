@@ -1,0 +1,2199 @@
+{
+ "build": "v0.37.0 (45b5d766 2026-08-14T19:52:29Z)",
+ "global_flags": [
+  {
+   "name": "access-token",
+   "short": null,
+   "type": "string"
+  },
+  {
+   "name": "account",
+   "short": "a",
+   "type": "string"
+  },
+  {
+   "name": "client",
+   "short": null,
+   "type": "string"
+  },
+  {
+   "name": "color",
+   "short": null,
+   "type": "string"
+  },
+  {
+   "name": "disable-commands",
+   "short": null,
+   "type": "string"
+  },
+  {
+   "name": "dry-run",
+   "short": "n",
+   "type": "bool"
+  },
+  {
+   "name": "enable-commands",
+   "short": null,
+   "type": "string"
+  },
+  {
+   "name": "enable-commands-exact",
+   "short": null,
+   "type": "string"
+  },
+  {
+   "name": "force",
+   "short": "y",
+   "type": "bool"
+  },
+  {
+   "name": "gmail-no-send",
+   "short": null,
+   "type": "bool"
+  },
+  {
+   "name": "help",
+   "short": "h",
+   "type": "kong.helpFlag"
+  },
+  {
+   "name": "home",
+   "short": null,
+   "type": "string"
+  },
+  {
+   "name": "json",
+   "short": "j",
+   "type": "bool"
+  },
+  {
+   "name": "no-input",
+   "short": null,
+   "type": "bool"
+  },
+  {
+   "name": "plain",
+   "short": "p",
+   "type": "bool"
+  },
+  {
+   "name": "readonly",
+   "short": null,
+   "type": "bool"
+  },
+  {
+   "name": "results-only",
+   "short": null,
+   "type": "bool"
+  },
+  {
+   "name": "select",
+   "short": null,
+   "type": "string"
+  },
+  {
+   "name": "verbose",
+   "short": "v",
+   "type": "bool"
+  },
+  {
+   "name": "version",
+   "short": null,
+   "type": "kong.VersionFlag"
+  },
+  {
+   "name": "wrap-untrusted",
+   "short": null,
+   "type": "bool"
+  }
+ ],
+ "services": [
+  {
+   "name": "calendar",
+   "aliases": [
+    "cal"
+   ],
+   "help": "Google Calendar",
+   "subcommands": [
+    {
+     "name": "acl",
+     "aliases": [
+      "permissions",
+      "perms"
+     ],
+     "help": "List calendar ACL"
+    },
+    {
+     "name": "alias",
+     "aliases": [],
+     "help": "Manage calendar aliases",
+     "subcommands": [
+      {
+       "name": "list",
+       "aliases": [],
+       "help": "List calendar aliases"
+      },
+      {
+       "name": "set",
+       "aliases": [],
+       "help": "Set a calendar alias"
+      },
+      {
+       "name": "unset",
+       "aliases": [],
+       "help": "Remove a calendar alias"
+      }
+     ]
+    },
+    {
+     "name": "calendars",
+     "aliases": [],
+     "help": "List calendars"
+    },
+    {
+     "name": "changed",
+     "aliases": [],
+     "help": "List most recently changed events (including deletions)"
+    },
+    {
+     "name": "colors",
+     "aliases": [],
+     "help": "Show calendar colors"
+    },
+    {
+     "name": "conflicts",
+     "aliases": [],
+     "help": "Find busy-time overlaps across calendars"
+    },
+    {
+     "name": "create",
+     "aliases": [
+      "add",
+      "new"
+     ],
+     "help": "Create an event"
+    },
+    {
+     "name": "create-calendar",
+     "aliases": [
+      "new-calendar"
+     ],
+     "help": "Create a new secondary calendar"
+    },
+    {
+     "name": "delete",
+     "aliases": [
+      "del",
+      "remove",
+      "rm"
+     ],
+     "help": "Delete an event"
+    },
+    {
+     "name": "delete-calendar",
+     "aliases": [],
+     "help": "Delete an owned secondary calendar"
+    },
+    {
+     "name": "event",
+     "aliases": [
+      "get",
+      "info",
+      "show"
+     ],
+     "help": "Get event"
+    },
+    {
+     "name": "events",
+     "aliases": [
+      "list",
+      "ls"
+     ],
+     "help": "List events from a calendar or all calendars"
+    },
+    {
+     "name": "focus-time",
+     "aliases": [
+      "focus"
+     ],
+     "help": "Create a Focus Time block"
+    },
+    {
+     "name": "freebusy",
+     "aliases": [],
+     "help": "Get free/busy"
+    },
+    {
+     "name": "move",
+     "aliases": [
+      "transfer"
+     ],
+     "help": "Move an event to another calendar"
+    },
+    {
+     "name": "out-of-office",
+     "aliases": [
+      "ooo"
+     ],
+     "help": "Create an Out of Office event"
+    },
+    {
+     "name": "propose-time",
+     "aliases": [],
+     "help": "Generate URL to propose a new meeting time (browser-only feature)"
+    },
+    {
+     "name": "raw",
+     "aliases": [],
+     "help": "Dump raw Google Calendar API response as JSON (Events.Get; lossless; for scripting and LLM consumption)"
+    },
+    {
+     "name": "respond",
+     "aliases": [
+      "reply",
+      "rsvp"
+     ],
+     "help": "Respond to an event invitation"
+    },
+    {
+     "name": "search",
+     "aliases": [
+      "find",
+      "query"
+     ],
+     "help": "Search events"
+    },
+    {
+     "name": "subscribe",
+     "aliases": [
+      "add-calendar",
+      "sub"
+     ],
+     "help": "Add a calendar to your calendar list"
+    },
+    {
+     "name": "team",
+     "aliases": [],
+     "help": "Show events for Workspace group members (service account, direct token, or ADC)"
+    },
+    {
+     "name": "time",
+     "aliases": [],
+     "help": "Show server time"
+    },
+    {
+     "name": "unsubscribe",
+     "aliases": [
+      "unsub"
+     ],
+     "help": "Remove a calendar from your calendar list"
+    },
+    {
+     "name": "update",
+     "aliases": [
+      "edit",
+      "set"
+     ],
+     "help": "Update an event"
+    },
+    {
+     "name": "users",
+     "aliases": [],
+     "help": "List workspace users (use their email as calendar ID)"
+    },
+    {
+     "name": "working-location",
+     "aliases": [
+      "wl"
+     ],
+     "help": "Set working location (home/office/custom)"
+    }
+   ]
+  },
+  {
+   "name": "drive",
+   "aliases": [
+    "drv"
+   ],
+   "help": "Google Drive",
+   "subcommands": [
+    {
+     "name": "activity",
+     "aliases": [],
+     "help": "Query Drive Activity audit events",
+     "subcommands": [
+      {
+       "name": "query",
+       "aliases": [
+        "list",
+        "ls"
+       ],
+       "help": "Query Drive Activity API v2"
+      }
+     ]
+    },
+    {
+     "name": "audit",
+     "aliases": [],
+     "help": "Audit Drive sharing without mutation",
+     "subcommands": [
+      {
+       "name": "sharing",
+       "aliases": [
+        "external",
+        "permissions",
+        "perms",
+        "public"
+       ],
+       "help": "Find public or external Drive permissions"
+      },
+      {
+       "name": "user",
+       "aliases": [],
+       "help": "Find Drive permissions granted to a user"
+      }
+     ]
+    },
+    {
+     "name": "bulk",
+     "aliases": [],
+     "help": "Bulk Drive permission operations",
+     "subcommands": [
+      {
+       "name": "remove-public",
+       "aliases": [],
+       "help": "Remove anyone/public permissions across files"
+      },
+      {
+       "name": "update-role",
+       "aliases": [],
+       "help": "Change matching Drive permission roles across files"
+      }
+     ]
+    },
+    {
+     "name": "changes",
+     "aliases": [],
+     "help": "Track Drive changes for sync and automation",
+     "subcommands": [
+      {
+       "name": "list",
+       "aliases": [
+        "ls"
+       ],
+       "help": "List Drive changes since a page token"
+      },
+      {
+       "name": "poll",
+       "aliases": [],
+       "help": "Poll Drive changes with a persisted page token"
+      },
+      {
+       "name": "serve",
+       "aliases": [],
+       "help": "Receive Drive change notifications and run a local hook"
+      },
+      {
+       "name": "start-token",
+       "aliases": [
+        "token"
+       ],
+       "help": "Get a Drive changes start page token"
+      },
+      {
+       "name": "stop",
+       "aliases": [],
+       "help": "Stop a Drive changes webhook channel"
+      },
+      {
+       "name": "watch",
+       "aliases": [],
+       "help": "Watch Drive changes with a webhook channel"
+      }
+     ]
+    },
+    {
+     "name": "comments",
+     "aliases": [],
+     "help": "Manage comments on files",
+     "subcommands": [
+      {
+       "name": "create",
+       "aliases": [
+        "add",
+        "new"
+       ],
+       "help": "Create a comment on a file"
+      },
+      {
+       "name": "delete",
+       "aliases": [
+        "del",
+        "remove",
+        "rm"
+       ],
+       "help": "Delete a comment"
+      },
+      {
+       "name": "get",
+       "aliases": [
+        "info",
+        "show"
+       ],
+       "help": "Get a comment by ID"
+      },
+      {
+       "name": "list",
+       "aliases": [
+        "ls"
+       ],
+       "help": "List comments on a file"
+      },
+      {
+       "name": "reopen",
+       "aliases": [],
+       "help": "Reopen a previously resolved comment"
+      },
+      {
+       "name": "reply",
+       "aliases": [
+        "respond"
+       ],
+       "help": "Reply to a comment"
+      },
+      {
+       "name": "resolve",
+       "aliases": [],
+       "help": "Resolve a comment (mark as done)"
+      },
+      {
+       "name": "update",
+       "aliases": [
+        "edit",
+        "set"
+       ],
+       "help": "Update a comment"
+      }
+     ]
+    },
+    {
+     "name": "copy",
+     "aliases": [],
+     "help": "Copy a file"
+    },
+    {
+     "name": "delete",
+     "aliases": [
+      "del",
+      "rm"
+     ],
+     "help": "Move a file to trash (use --permanent to delete forever)"
+    },
+    {
+     "name": "download",
+     "aliases": [],
+     "help": "Download a file (exports Google Docs formats)"
+    },
+    {
+     "name": "drives",
+     "aliases": [],
+     "help": "List shared drives (Team Drives)"
+    },
+    {
+     "name": "du",
+     "aliases": [],
+     "help": "Summarize Drive folder sizes"
+    },
+    {
+     "name": "get",
+     "aliases": [],
+     "help": "Get file metadata"
+    },
+    {
+     "name": "inventory",
+     "aliases": [],
+     "help": "Export a read-only Drive inventory"
+    },
+    {
+     "name": "labels",
+     "aliases": [
+      "label"
+     ],
+     "help": "Read and modify Drive labels",
+     "subcommands": [
+      {
+       "name": "file",
+       "aliases": [],
+       "help": "List, apply, or remove labels on Drive files",
+       "subcommands": [
+        {
+         "name": "apply",
+         "aliases": [],
+         "help": "Apply or update a label on a Drive file"
+        },
+        {
+         "name": "list",
+         "aliases": [
+          "ls"
+         ],
+         "help": "List labels applied to a Drive file"
+        },
+        {
+         "name": "remove",
+         "aliases": [
+          "rm"
+         ],
+         "help": "Remove a label from a Drive file"
+        }
+       ]
+      },
+      {
+       "name": "get",
+       "aliases": [
+        "info",
+        "show"
+       ],
+       "help": "Get a Drive label schema"
+      },
+      {
+       "name": "list",
+       "aliases": [
+        "ls"
+       ],
+       "help": "List Drive label schemas"
+      }
+     ]
+    },
+    {
+     "name": "ls",
+     "aliases": [],
+     "help": "List files in a folder (default: root)"
+    },
+    {
+     "name": "mkdir",
+     "aliases": [],
+     "help": "Create a folder"
+    },
+    {
+     "name": "move",
+     "aliases": [],
+     "help": "Move a file to a different folder"
+    },
+    {
+     "name": "permissions",
+     "aliases": [],
+     "help": "List permissions on a file"
+    },
+    {
+     "name": "raw",
+     "aliases": [],
+     "help": "Dump raw Google Drive API response as JSON (Files.Get; lossless; for scripting and LLM consumption)"
+    },
+    {
+     "name": "rename",
+     "aliases": [],
+     "help": "Rename a file or folder"
+    },
+    {
+     "name": "revisions",
+     "aliases": [
+      "revision"
+     ],
+     "help": "List and inspect file revisions",
+     "subcommands": [
+      {
+       "name": "get",
+       "aliases": [],
+       "help": "Get revision metadata"
+      },
+      {
+       "name": "list",
+       "aliases": [
+        "ls"
+       ],
+       "help": "List revisions for a file"
+      }
+     ]
+    },
+    {
+     "name": "search",
+     "aliases": [],
+     "help": "Full-text search across Drive"
+    },
+    {
+     "name": "share",
+     "aliases": [],
+     "help": "Share a file or folder"
+    },
+    {
+     "name": "shortcut",
+     "aliases": [
+      "shortcuts"
+     ],
+     "help": "Manage shortcuts to Drive files and folders",
+     "subcommands": [
+      {
+       "name": "create",
+       "aliases": [
+        "add",
+        "new"
+       ],
+       "help": "Create a shortcut to a Drive file or folder"
+      }
+     ]
+    },
+    {
+     "name": "sync",
+     "aliases": [],
+     "help": "Reconcile local files with Drive",
+     "subcommands": [
+      {
+       "name": "push",
+       "aliases": [],
+       "help": "Push a local directory's contents into a Drive folder (no remote deletes)"
+      }
+     ]
+    },
+    {
+     "name": "tree",
+     "aliases": [],
+     "help": "Print a read-only folder tree"
+    },
+    {
+     "name": "unshare",
+     "aliases": [],
+     "help": "Remove a permission from a file"
+    },
+    {
+     "name": "upload",
+     "aliases": [],
+     "help": "Upload a file"
+    },
+    {
+     "name": "url",
+     "aliases": [],
+     "help": "Print web URLs for files"
+    }
+   ]
+  },
+  {
+   "name": "gmail",
+   "aliases": [
+    "email",
+    "mail"
+   ],
+   "help": "Gmail",
+   "subcommands": [
+    {
+     "name": "archive",
+     "aliases": [],
+     "help": "Archive messages or explicit threads (remove from inbox)"
+    },
+    {
+     "name": "attachment",
+     "aliases": [],
+     "help": "Download a single attachment"
+    },
+    {
+     "name": "autoreply",
+     "aliases": [],
+     "help": "Reply once to matching messages"
+    },
+    {
+     "name": "batch",
+     "aliases": [],
+     "help": "Batch operations (permanent delete requires broader Gmail scope; use gmail trash for normal trashing)",
+     "subcommands": [
+      {
+       "name": "delete",
+       "aliases": [
+        "del",
+        "remove",
+        "rm"
+       ],
+       "help": "Permanently delete messages; requires https://mail.google.com/ OAuth scope (use 'gmail trash' with the default scope)"
+      },
+      {
+       "name": "modify",
+       "aliases": [
+        "edit",
+        "set",
+        "update"
+       ],
+       "help": "Modify labels on multiple messages"
+      }
+     ]
+    },
+    {
+     "name": "drafts",
+     "aliases": [
+      "draft"
+     ],
+     "help": "Draft operations",
+     "subcommands": [
+      {
+       "name": "create",
+       "aliases": [
+        "add",
+        "new"
+       ],
+       "help": "Create a draft"
+      },
+      {
+       "name": "delete",
+       "aliases": [
+        "del",
+        "remove",
+        "rm"
+       ],
+       "help": "Permanently delete a draft (not recoverable; drafts are not moved to Trash)"
+      },
+      {
+       "name": "forward",
+       "aliases": [
+        "fwd"
+       ],
+       "help": "Save a forward as a draft"
+      },
+      {
+       "name": "get",
+       "aliases": [
+        "info",
+        "show"
+       ],
+       "help": "Get draft details"
+      },
+      {
+       "name": "list",
+       "aliases": [
+        "ls"
+       ],
+       "help": "List drafts"
+      },
+      {
+       "name": "reply",
+       "aliases": [],
+       "help": "Save a reply as a draft"
+      },
+      {
+       "name": "reply-all",
+       "aliases": [
+        "replyall"
+       ],
+       "help": "Save a reply-all as a draft"
+      },
+      {
+       "name": "send",
+       "aliases": [
+        "post"
+       ],
+       "help": "Send a draft"
+      },
+      {
+       "name": "update",
+       "aliases": [
+        "edit",
+        "set"
+       ],
+       "help": "Update a draft"
+      }
+     ]
+    },
+    {
+     "name": "forward",
+     "aliases": [
+      "fwd"
+     ],
+     "help": "Forward a message to new recipients"
+    },
+    {
+     "name": "get",
+     "aliases": [
+      "info",
+      "show"
+     ],
+     "help": "Get a message (full|metadata|raw)"
+    },
+    {
+     "name": "history",
+     "aliases": [],
+     "help": "Gmail history"
+    },
+    {
+     "name": "import",
+     "aliases": [],
+     "help": "Import an RFC822/EML message into Gmail"
+    },
+    {
+     "name": "labels",
+     "aliases": [
+      "label"
+     ],
+     "help": "Label operations",
+     "subcommands": [
+      {
+       "name": "create",
+       "aliases": [
+        "add",
+        "new"
+       ],
+       "help": "Create a new label"
+      },
+      {
+       "name": "delete",
+       "aliases": [
+        "del",
+        "rm"
+       ],
+       "help": "Delete a label"
+      },
+      {
+       "name": "get",
+       "aliases": [
+        "info",
+        "show"
+       ],
+       "help": "Get label details (including counts)"
+      },
+      {
+       "name": "list",
+       "aliases": [
+        "ls"
+       ],
+       "help": "List labels"
+      },
+      {
+       "name": "modify",
+       "aliases": [
+        "edit",
+        "set",
+        "update"
+       ],
+       "help": "Modify labels on threads"
+      },
+      {
+       "name": "rename",
+       "aliases": [
+        "mv"
+       ],
+       "help": "Rename a label"
+      },
+      {
+       "name": "style",
+       "aliases": [
+        "color",
+        "colour"
+       ],
+       "help": "Change a user label color or visibility"
+      }
+     ]
+    },
+    {
+     "name": "mark-read",
+     "aliases": [
+      "read-messages"
+     ],
+     "help": "Mark messages as read"
+    },
+    {
+     "name": "messages",
+     "aliases": [
+      "message",
+      "msg",
+      "msgs"
+     ],
+     "help": "Message operations",
+     "subcommands": [
+      {
+       "name": "modify",
+       "aliases": [
+        "edit",
+        "set",
+        "update"
+       ],
+       "help": "Modify labels on a single message"
+      },
+      {
+       "name": "search",
+       "aliases": [
+        "find",
+        "list",
+        "ls",
+        "query"
+       ],
+       "help": "Search messages using Gmail query syntax"
+      }
+     ]
+    },
+    {
+     "name": "raw",
+     "aliases": [],
+     "help": "Dump raw Gmail API response as JSON (Users.Messages.Get; lossless; for scripting and LLM consumption)"
+    },
+    {
+     "name": "reply",
+     "aliases": [],
+     "help": "Reply to a message"
+    },
+    {
+     "name": "reply-all",
+     "aliases": [
+      "replyall"
+     ],
+     "help": "Reply to all message participants"
+    },
+    {
+     "name": "search",
+     "aliases": [
+      "find",
+      "list",
+      "ls",
+      "query"
+     ],
+     "help": "Search threads using Gmail query syntax"
+    },
+    {
+     "name": "send",
+     "aliases": [],
+     "help": "Send an email"
+    },
+    {
+     "name": "settings",
+     "aliases": [],
+     "help": "Settings and admin",
+     "subcommands": [
+      {
+       "name": "autoforward",
+       "aliases": [],
+       "help": "Auto-forwarding settings",
+       "subcommands": [
+        {
+         "name": "get",
+         "aliases": [
+          "info",
+          "show"
+         ],
+         "help": "Get current auto-forwarding settings"
+        },
+        {
+         "name": "update",
+         "aliases": [
+          "edit",
+          "set"
+         ],
+         "help": "Update auto-forwarding settings"
+        }
+       ]
+      },
+      {
+       "name": "delegates",
+       "aliases": [],
+       "help": "Delegate operations",
+       "subcommands": [
+        {
+         "name": "add",
+         "aliases": [
+          "create",
+          "new"
+         ],
+         "help": "Add a delegate"
+        },
+        {
+         "name": "get",
+         "aliases": [
+          "info",
+          "show"
+         ],
+         "help": "Get a specific delegate's information"
+        },
+        {
+         "name": "list",
+         "aliases": [
+          "ls"
+         ],
+         "help": "List all delegates"
+        },
+        {
+         "name": "remove",
+         "aliases": [
+          "del",
+          "delete",
+          "rm"
+         ],
+         "help": "Remove a delegate"
+        }
+       ]
+      },
+      {
+       "name": "filters",
+       "aliases": [],
+       "help": "Filter operations",
+       "subcommands": [
+        {
+         "name": "create",
+         "aliases": [
+          "add",
+          "new"
+         ],
+         "help": "Create a new email filter"
+        },
+        {
+         "name": "delete",
+         "aliases": [
+          "del",
+          "remove",
+          "rm"
+         ],
+         "help": "Delete a filter"
+        },
+        {
+         "name": "export",
+         "aliases": [],
+         "help": "Export filters as Gmail WebUI-compatible XML"
+        },
+        {
+         "name": "get",
+         "aliases": [
+          "info",
+          "show"
+         ],
+         "help": "Get a specific filter"
+        },
+        {
+         "name": "list",
+         "aliases": [
+          "ls"
+         ],
+         "help": "List all email filters"
+        }
+       ]
+      },
+      {
+       "name": "forwarding",
+       "aliases": [],
+       "help": "Forwarding addresses",
+       "subcommands": [
+        {
+         "name": "create",
+         "aliases": [
+          "add",
+          "new"
+         ],
+         "help": "Create/add a forwarding address"
+        },
+        {
+         "name": "delete",
+         "aliases": [
+          "del",
+          "remove",
+          "rm"
+         ],
+         "help": "Delete a forwarding address"
+        },
+        {
+         "name": "get",
+         "aliases": [
+          "info",
+          "show"
+         ],
+         "help": "Get a specific forwarding address"
+        },
+        {
+         "name": "list",
+         "aliases": [
+          "ls"
+         ],
+         "help": "List all forwarding addresses"
+        }
+       ]
+      },
+      {
+       "name": "sendas",
+       "aliases": [],
+       "help": "Send-as settings",
+       "subcommands": [
+        {
+         "name": "create",
+         "aliases": [
+          "add",
+          "new"
+         ],
+         "help": "Create a new send-as alias"
+        },
+        {
+         "name": "delete",
+         "aliases": [
+          "del",
+          "remove",
+          "rm"
+         ],
+         "help": "Delete a send-as alias"
+        },
+        {
+         "name": "get",
+         "aliases": [
+          "info",
+          "show"
+         ],
+         "help": "Get details of a send-as alias"
+        },
+        {
+         "name": "list",
+         "aliases": [
+          "ls"
+         ],
+         "help": "List send-as aliases"
+        },
+        {
+         "name": "update",
+         "aliases": [
+          "edit",
+          "set"
+         ],
+         "help": "Update a send-as alias"
+        },
+        {
+         "name": "verify",
+         "aliases": [
+          "resend"
+         ],
+         "help": "Resend verification email for a send-as alias"
+        }
+       ]
+      },
+      {
+       "name": "vacation",
+       "aliases": [],
+       "help": "Vacation responder",
+       "subcommands": [
+        {
+         "name": "get",
+         "aliases": [
+          "info",
+          "show"
+         ],
+         "help": "Get current vacation responder settings"
+        },
+        {
+         "name": "update",
+         "aliases": [
+          "edit",
+          "set"
+         ],
+         "help": "Update vacation responder settings"
+        }
+       ]
+      },
+      {
+       "name": "watch",
+       "aliases": [],
+       "help": "Manage Gmail watch",
+       "subcommands": [
+        {
+         "name": "pull",
+         "aliases": [],
+         "help": "Run Pub/Sub pull consumer"
+        },
+        {
+         "name": "renew",
+         "aliases": [
+          "update"
+         ],
+         "help": "Renew Gmail watch using stored config"
+        },
+        {
+         "name": "serve",
+         "aliases": [],
+         "help": "Run Pub/Sub push handler"
+        },
+        {
+         "name": "start",
+         "aliases": [
+          "begin"
+         ],
+         "help": "Start Gmail watch for Pub/Sub"
+        },
+        {
+         "name": "status",
+         "aliases": [
+          "ls"
+         ],
+         "help": "Show stored watch state"
+        },
+        {
+         "name": "stop",
+         "aliases": [
+          "delete",
+          "rm"
+         ],
+         "help": "Stop Gmail watch and clear stored state"
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "name": "thread",
+     "aliases": [
+      "read",
+      "threads"
+     ],
+     "help": "Thread operations (get, modify)",
+     "subcommands": [
+      {
+       "name": "attachments",
+       "aliases": [
+        "files"
+       ],
+       "help": "List all attachments in a thread"
+      },
+      {
+       "name": "get",
+       "aliases": [
+        "info",
+        "show"
+       ],
+       "help": "Get a thread with all messages (optionally download attachments)"
+      },
+      {
+       "name": "modify",
+       "aliases": [
+        "edit",
+        "set",
+        "update"
+       ],
+       "help": "Modify labels on all messages in a thread"
+      }
+     ]
+    },
+    {
+     "name": "track",
+     "aliases": [],
+     "help": "Email open tracking",
+     "subcommands": [
+      {
+       "name": "key",
+       "aliases": [],
+       "help": "Manage tracking encryption keys",
+       "subcommands": [
+        {
+         "name": "rotate",
+         "aliases": [],
+         "help": "Rotate tracking encryption key"
+        }
+       ]
+      },
+      {
+       "name": "opens",
+       "aliases": [],
+       "help": "Query email opens"
+      },
+      {
+       "name": "setup",
+       "aliases": [],
+       "help": "Set up email tracking (deploy Cloudflare Worker)"
+      },
+      {
+       "name": "status",
+       "aliases": [],
+       "help": "Show tracking configuration status"
+      }
+     ]
+    },
+    {
+     "name": "trash",
+     "aliases": [],
+     "help": "Move messages to trash"
+    },
+    {
+     "name": "unread",
+     "aliases": [
+      "mark-unread"
+     ],
+     "help": "Mark messages as unread"
+    },
+    {
+     "name": "url",
+     "aliases": [],
+     "help": "Print Gmail web URLs for threads"
+    }
+   ]
+  },
+  {
+   "name": "sheets",
+   "aliases": [
+    "sheet"
+   ],
+   "help": "Google Sheets",
+   "subcommands": [
+    {
+     "name": "add-tab",
+     "aliases": [
+      "add-sheet"
+     ],
+     "help": "Add a new tab/sheet to a spreadsheet"
+    },
+    {
+     "name": "append",
+     "aliases": [
+      "add"
+     ],
+     "help": "Append values to a range"
+    },
+    {
+     "name": "banding",
+     "aliases": [
+      "banded-ranges"
+     ],
+     "help": "Manage alternating color banding",
+     "subcommands": [
+      {
+       "name": "clear",
+       "aliases": [
+        "delete",
+        "remove",
+        "rm"
+       ],
+       "help": "Remove alternating color banding"
+      },
+      {
+       "name": "list",
+       "aliases": [],
+       "help": "List alternating color banded ranges"
+      },
+      {
+       "name": "set",
+       "aliases": [
+        "add",
+        "create"
+       ],
+       "help": "Apply alternating colors to a range"
+      }
+     ]
+    },
+    {
+     "name": "batch-update",
+     "aliases": [
+      "batch"
+     ],
+     "help": "Update values in multiple ranges with one API request"
+    },
+    {
+     "name": "chart",
+     "aliases": [
+      "charts"
+     ],
+     "help": "Manage spreadsheet charts",
+     "subcommands": [
+      {
+       "name": "create",
+       "aliases": [
+        "add",
+        "new"
+       ],
+       "help": "Create a chart from a JSON spec"
+      },
+      {
+       "name": "delete",
+       "aliases": [
+        "del",
+        "remove",
+        "rm"
+       ],
+       "help": "Delete a chart"
+      },
+      {
+       "name": "get",
+       "aliases": [
+        "info",
+        "show"
+       ],
+       "help": "Get full chart definition (spec + position)"
+      },
+      {
+       "name": "list",
+       "aliases": [],
+       "help": "List charts in a spreadsheet"
+      },
+      {
+       "name": "update",
+       "aliases": [
+        "edit",
+        "set"
+       ],
+       "help": "Update a chart spec"
+      }
+     ]
+    },
+    {
+     "name": "clear",
+     "aliases": [],
+     "help": "Clear values in a range"
+    },
+    {
+     "name": "conditional-format",
+     "aliases": [
+      "cf",
+      "conditional-formats"
+     ],
+     "help": "Manage conditional formatting rules",
+     "subcommands": [
+      {
+       "name": "add",
+       "aliases": [
+        "create",
+        "new"
+       ],
+       "help": "Add a conditional formatting rule"
+      },
+      {
+       "name": "clear",
+       "aliases": [
+        "delete",
+        "remove",
+        "rm"
+       ],
+       "help": "Remove conditional formatting rules"
+      },
+      {
+       "name": "list",
+       "aliases": [],
+       "help": "List conditional formatting rules"
+      }
+     ]
+    },
+    {
+     "name": "copy",
+     "aliases": [
+      "cp",
+      "duplicate"
+     ],
+     "help": "Copy a Google Sheet"
+    },
+    {
+     "name": "copy-paste",
+     "aliases": [
+      "copy-range",
+      "fill"
+     ],
+     "help": "Copy a range's values/formulas/format to another range (tiles to fill down/across)"
+    },
+    {
+     "name": "create",
+     "aliases": [
+      "new"
+     ],
+     "help": "Create a new spreadsheet"
+    },
+    {
+     "name": "datasource",
+     "aliases": [
+      "connected-sheets",
+      "data-source",
+      "data-sources"
+     ],
+     "help": "Inspect Connected Sheets data sources and extracts",
+     "subcommands": [
+      {
+       "name": "describe",
+       "aliases": [
+        "get",
+        "info",
+        "show"
+       ],
+       "help": "Describe a Connected Sheets data source"
+      },
+      {
+       "name": "list",
+       "aliases": [],
+       "help": "List Connected Sheets data sources"
+      },
+      {
+       "name": "table",
+       "aliases": [
+        "extract",
+        "extracts",
+        "tables"
+       ],
+       "help": "Inspect Connected Sheets data-source tables (extracts)",
+       "subcommands": [
+        {
+         "name": "describe",
+         "aliases": [
+          "get",
+          "info",
+          "show"
+         ],
+         "help": "Describe a data-source table at an anchor cell"
+        },
+        {
+         "name": "list",
+         "aliases": [],
+         "help": "List data-source tables (extracts)"
+        },
+        {
+         "name": "read",
+         "aliases": [
+          "values"
+         ],
+         "help": "Read values from a data-source table"
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "name": "delete-dimension",
+     "aliases": [
+      "delete-dim"
+     ],
+     "help": "Delete rows or columns while preserving intersecting tables"
+    },
+    {
+     "name": "delete-tab",
+     "aliases": [
+      "delete-sheet"
+     ],
+     "help": "Delete a tab/sheet from a spreadsheet (use --force to skip confirmation)"
+    },
+    {
+     "name": "export",
+     "aliases": [
+      "dl",
+      "download"
+     ],
+     "help": "Export a Google Sheet (pdf|xlsx|csv) via Drive"
+    },
+    {
+     "name": "filter",
+     "aliases": [
+      "basic-filter",
+      "basic-filters",
+      "filters"
+     ],
+     "help": "Manage basic filters",
+     "subcommands": [
+      {
+       "name": "set",
+       "aliases": [
+        "add",
+        "create"
+       ],
+       "help": "Set a basic filter on a range; replacing an existing filter requires confirmation (or --force)"
+      }
+     ]
+    },
+    {
+     "name": "find-replace",
+     "aliases": [],
+     "help": "Find and replace text across a spreadsheet"
+    },
+    {
+     "name": "format",
+     "aliases": [],
+     "help": "Apply cell formatting to a range"
+    },
+    {
+     "name": "freeze",
+     "aliases": [],
+     "help": "Freeze rows and columns on a sheet"
+    },
+    {
+     "name": "get",
+     "aliases": [
+      "read",
+      "show"
+     ],
+     "help": "Get values from a range"
+    },
+    {
+     "name": "insert",
+     "aliases": [],
+     "help": "Insert empty rows or columns into a sheet"
+    },
+    {
+     "name": "links",
+     "aliases": [
+      "hyperlinks"
+     ],
+     "help": "Get or set cell hyperlinks",
+     "subcommands": [
+      {
+       "name": "get",
+       "aliases": [
+        "list",
+        "show"
+       ],
+       "help": "Get cell hyperlinks from a range"
+      },
+      {
+       "name": "set",
+       "aliases": [
+        "write"
+       ],
+       "help": "Set cell hyperlinks (rich-text links)"
+      }
+     ]
+    },
+    {
+     "name": "merge",
+     "aliases": [],
+     "help": "Merge cells in a range"
+    },
+    {
+     "name": "metadata",
+     "aliases": [
+      "info"
+     ],
+     "help": "Get spreadsheet metadata"
+    },
+    {
+     "name": "named-ranges",
+     "aliases": [
+      "namedranges",
+      "nr"
+     ],
+     "help": "Manage named ranges",
+     "subcommands": [
+      {
+       "name": "add",
+       "aliases": [
+        "create",
+        "new"
+       ],
+       "help": "Add a named range"
+      },
+      {
+       "name": "delete",
+       "aliases": [
+        "del",
+        "remove",
+        "rm"
+       ],
+       "help": "Delete a named range"
+      },
+      {
+       "name": "get",
+       "aliases": [
+        "info",
+        "show"
+       ],
+       "help": "Get a named range"
+      },
+      {
+       "name": "list",
+       "aliases": [],
+       "help": "List named ranges"
+      },
+      {
+       "name": "update",
+       "aliases": [
+        "edit",
+        "set"
+       ],
+       "help": "Update a named range"
+      }
+     ]
+    },
+    {
+     "name": "notes",
+     "aliases": [],
+     "help": "Get cell notes from a range"
+    },
+    {
+     "name": "number-format",
+     "aliases": [],
+     "help": "Apply number format to a range"
+    },
+    {
+     "name": "raw",
+     "aliases": [],
+     "help": "Dump raw Google Sheets API response as JSON (Spreadsheets.Get; lossless; for scripting and LLM consumption)"
+    },
+    {
+     "name": "read-format",
+     "aliases": [
+      "format-read",
+      "get-format"
+     ],
+     "help": "Read cell formatting from a range"
+    },
+    {
+     "name": "rename-tab",
+     "aliases": [
+      "rename-sheet"
+     ],
+     "help": "Rename a tab/sheet in a spreadsheet"
+    },
+    {
+     "name": "reorder-tab",
+     "aliases": [
+      "move-sheet",
+      "move-tab",
+      "reorder-sheet"
+     ],
+     "help": "Move a tab/sheet to a specific 0-based position in the spreadsheet"
+    },
+    {
+     "name": "resize-columns",
+     "aliases": [],
+     "help": "Resize sheet columns"
+    },
+    {
+     "name": "resize-rows",
+     "aliases": [],
+     "help": "Resize sheet rows"
+    },
+    {
+     "name": "table",
+     "aliases": [
+      "tables"
+     ],
+     "help": "Manage Google Sheets tables",
+     "subcommands": [
+      {
+       "name": "append",
+       "aliases": [
+        "add-row",
+        "add-rows"
+       ],
+       "help": "Append rows to a table"
+      },
+      {
+       "name": "clear",
+       "aliases": [
+        "clear-rows"
+       ],
+       "help": "Clear table data rows"
+      },
+      {
+       "name": "create",
+       "aliases": [
+        "add",
+        "new"
+       ],
+       "help": "Create a table"
+      },
+      {
+       "name": "delete",
+       "aliases": [
+        "del",
+        "remove",
+        "rm"
+       ],
+       "help": "Delete a table"
+      },
+      {
+       "name": "get",
+       "aliases": [
+        "info",
+        "show"
+       ],
+       "help": "Get a table"
+      },
+      {
+       "name": "list",
+       "aliases": [],
+       "help": "List tables in a spreadsheet"
+      }
+     ]
+    },
+    {
+     "name": "unmerge",
+     "aliases": [],
+     "help": "Unmerge cells in a range"
+    },
+    {
+     "name": "update",
+     "aliases": [
+      "edit",
+      "set"
+     ],
+     "help": "Update values in a range"
+    },
+    {
+     "name": "update-note",
+     "aliases": [
+      "set-note"
+     ],
+     "help": "Set or clear a cell note"
+    },
+    {
+     "name": "validation",
+     "aliases": [
+      "data-validation",
+      "validations"
+     ],
+     "help": "Manage cell data validation rules",
+     "subcommands": [
+      {
+       "name": "clear",
+       "aliases": [
+        "delete",
+        "remove",
+        "rm"
+       ],
+       "help": "Clear data validation rules; fully selected table dropdown columns become text columns"
+      },
+      {
+       "name": "get",
+       "aliases": [
+        "list",
+        "show"
+       ],
+       "help": "Get data validation rules from a range"
+      },
+      {
+       "name": "set",
+       "aliases": [
+        "add",
+        "create"
+       ],
+       "help": "Set a data validation rule on a range"
+      }
+     ]
+    }
+   ]
+  }
+ ],
+ "top_level": [
+  {
+   "name": "admin",
+   "aliases": [],
+   "help": "Google Workspace Admin (Directory API) - requires domain-wide delegation",
+   "has_subcommands": true
+  },
+  {
+   "name": "analytics",
+   "aliases": [
+    "ga"
+   ],
+   "help": "Google Analytics",
+   "has_subcommands": true
+  },
+  {
+   "name": "api",
+   "aliases": [],
+   "help": "Google Discovery APIs and generic method calls",
+   "has_subcommands": true
+  },
+  {
+   "name": "appscript",
+   "aliases": [
+    "apps-script",
+    "script"
+   ],
+   "help": "Google Apps Script",
+   "has_subcommands": true
+  },
+  {
+   "name": "auth",
+   "aliases": [],
+   "help": "Auth and credentials",
+   "has_subcommands": true
+  },
+  {
+   "name": "backup",
+   "aliases": [],
+   "help": "Encrypted Google account backups",
+   "has_subcommands": true
+  },
+  {
+   "name": "batch",
+   "aliases": [],
+   "help": "Build and submit persisted Google Docs request batches",
+   "has_subcommands": true
+  },
+  {
+   "name": "calendar",
+   "aliases": [
+    "cal"
+   ],
+   "help": "Google Calendar",
+   "has_subcommands": true
+  },
+  {
+   "name": "chat",
+   "aliases": [],
+   "help": "Google Chat",
+   "has_subcommands": true
+  },
+  {
+   "name": "classroom",
+   "aliases": [
+    "class"
+   ],
+   "help": "Google Classroom",
+   "has_subcommands": true
+  },
+  {
+   "name": "completion",
+   "aliases": [],
+   "help": "Generate shell completion scripts",
+   "has_subcommands": false
+  },
+  {
+   "name": "config",
+   "aliases": [],
+   "help": "Manage configuration",
+   "has_subcommands": true
+  },
+  {
+   "name": "contacts",
+   "aliases": [
+    "contact"
+   ],
+   "help": "Google Contacts",
+   "has_subcommands": true
+  },
+  {
+   "name": "docs",
+   "aliases": [
+    "doc"
+   ],
+   "help": "Google Docs (export via Drive)",
+   "has_subcommands": true
+  },
+  {
+   "name": "download",
+   "aliases": [
+    "dl"
+   ],
+   "help": "Download a Drive file (alias for 'drive download')",
+   "has_subcommands": false
+  },
+  {
+   "name": "drive",
+   "aliases": [
+    "drv"
+   ],
+   "help": "Google Drive",
+   "has_subcommands": true
+  },
+  {
+   "name": "forms",
+   "aliases": [
+    "form"
+   ],
+   "help": "Google Forms",
+   "has_subcommands": true
+  },
+  {
+   "name": "gmail",
+   "aliases": [
+    "email",
+    "mail"
+   ],
+   "help": "Gmail",
+   "has_subcommands": true
+  },
+  {
+   "name": "groups",
+   "aliases": [
+    "group"
+   ],
+   "help": "Cloud Identity Groups (Workspace only)",
+   "has_subcommands": true
+  },
+  {
+   "name": "keep",
+   "aliases": [],
+   "help": "Google Keep (Workspace only)",
+   "has_subcommands": true
+  },
+  {
+   "name": "login",
+   "aliases": [],
+   "help": "Authorize and store a refresh token (alias for 'auth add')",
+   "has_subcommands": false
+  },
+  {
+   "name": "logout",
+   "aliases": [],
+   "help": "Remove a stored refresh token (alias for 'auth remove')",
+   "has_subcommands": false
+  },
+  {
+   "name": "ls",
+   "aliases": [
+    "list"
+   ],
+   "help": "List Drive files (alias for 'drive ls')",
+   "has_subcommands": false
+  },
+  {
+   "name": "maps",
+   "aliases": [
+    "map"
+   ],
+   "help": "Google Maps",
+   "has_subcommands": true
+  },
+  {
+   "name": "mcp",
+   "aliases": [],
+   "help": "Run a typed, allowlisted MCP server over stdio",
+   "has_subcommands": false
+  },
+  {
+   "name": "me",
+   "aliases": [],
+   "help": "Show your profile (alias for 'people me')",
+   "has_subcommands": false
+  },
+  {
+   "name": "meet",
+   "aliases": [
+    "meeting"
+   ],
+   "help": "Google Meet",
+   "has_subcommands": true
+  },
+  {
+   "name": "open",
+   "aliases": [
+    "browse"
+   ],
+   "help": "Print a best-effort web URL for a Google URL/ID (offline)",
+   "has_subcommands": false
+  },
+  {
+   "name": "people",
+   "aliases": [
+    "person"
+   ],
+   "help": "Google People",
+   "has_subcommands": true
+  },
+  {
+   "name": "photos",
+   "aliases": [
+    "photo"
+   ],
+   "help": "Google Photos Library and Picker APIs",
+   "has_subcommands": true
+  },
+  {
+   "name": "schema",
+   "aliases": [
+    "help-json",
+    "helpjson"
+   ],
+   "help": "Machine-readable command/flag schema",
+   "has_subcommands": false
+  },
+  {
+   "name": "search",
+   "aliases": [
+    "find"
+   ],
+   "help": "Search Drive files (alias for 'drive search')",
+   "has_subcommands": false
+  },
+  {
+   "name": "searchconsole",
+   "aliases": [
+    "gsc",
+    "search-console",
+    "webmasters"
+   ],
+   "help": "Google Search Console",
+   "has_subcommands": true
+  },
+  {
+   "name": "send",
+   "aliases": [],
+   "help": "Send an email (alias for 'gmail send')",
+   "has_subcommands": false
+  },
+  {
+   "name": "sheets",
+   "aliases": [
+    "sheet"
+   ],
+   "help": "Google Sheets",
+   "has_subcommands": true
+  },
+  {
+   "name": "sites",
+   "aliases": [
+    "site"
+   ],
+   "help": "Google Sites (Drive-backed)",
+   "has_subcommands": true
+  },
+  {
+   "name": "slides",
+   "aliases": [
+    "slide"
+   ],
+   "help": "Google Slides",
+   "has_subcommands": true
+  },
+  {
+   "name": "status",
+   "aliases": [
+    "st"
+   ],
+   "help": "Show auth/config status (alias for 'auth status')",
+   "has_subcommands": false
+  },
+  {
+   "name": "tasks",
+   "aliases": [
+    "task"
+   ],
+   "help": "Google Tasks",
+   "has_subcommands": true
+  },
+  {
+   "name": "time",
+   "aliases": [],
+   "help": "Local time utilities",
+   "has_subcommands": true
+  },
+  {
+   "name": "update",
+   "aliases": [],
+   "help": "Check gogcli release status",
+   "has_subcommands": true
+  },
+  {
+   "name": "upload",
+   "aliases": [
+    "put",
+    "up"
+   ],
+   "help": "Upload a file to Drive (alias for 'drive upload')",
+   "has_subcommands": false
+  },
+  {
+   "name": "version",
+   "aliases": [],
+   "help": "Print version",
+   "has_subcommands": false
+  },
+  {
+   "name": "whoami",
+   "aliases": [
+    "who-am-i"
+   ],
+   "help": "Show your profile (alias for 'people me')",
+   "has_subcommands": false
+  },
+  {
+   "name": "youtube",
+   "aliases": [
+    "yt"
+   ],
+   "help": "YouTube Data API (search, activities, videos, playlists, comments, channels)",
+   "has_subcommands": true
+  },
+  {
+   "name": "zoom",
+   "aliases": [],
+   "help": "Zoom",
+   "has_subcommands": true
+  }
+ ]
+}

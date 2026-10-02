@@ -27,6 +27,8 @@ export const agentsKey = {
   diagnostics: (org: string, id: string) => [..._agentsKeyBase.detail(id), "diagnostics", org] as const,
   health: (id: string) => [..._agentsKeyBase.detail(id), "health"] as const,
   configuration: (id: string) => [..._agentsKeyBase.detail(id), "configuration"] as const,
+  llmBudget: (id: string) => [..._agentsKeyBase.detail(id), "llm-budget"] as const,
+  llmBudgets: (organizationId: string) => [..._agentsKeyBase.all, "llm-budgets", organizationId] as const,
   shareSettings: (id: string) => [..._agentsKeyBase.detail(id), "share"] as const,
   memory: (id: string, page: number, observed: string | null, scope: string) =>
     [..._agentsKeyBase.detail(id), "memory", scope, observed ?? "everyone", page] as const,

@@ -29,10 +29,16 @@ _OBSERVER = _SCRIPTS / "plugins" / "agentbarn-observer"
 # off it. The in-pod communications adapter is pointed here to match.
 OPENCLAW_GATEWAY_PORT = 18789
 
+# The agent workspace on the persistent volume; OpenClaw attaches local files from here.
+# The OpenClaw config, the legacy-migration script, and the file-delivery policy all use it.
+OPENCLAW_WORKSPACE_DIR = "/home/node/.openclaw/workspace"
+
 INIT_OPENCLAW_JS: str = (_SCRIPTS / "init-openclaw.js").read_text()
 HEALTHZ_SERVER_JS: str = (_SCRIPTS / "healthz-server.js").read_text()
 START_SH: str = (_SCRIPTS / "start.sh").read_text()
-LEGACY_WORKSPACE_MIGRATION_SH: str = (_SCRIPTS / "legacy-workspace-migration.sh").read_text()
+LEGACY_WORKSPACE_MIGRATION_SH: str = (
+    (_SCRIPTS / "legacy-workspace-migration.sh").read_text().replace("@OPENCLAW_WORKSPACE_DIR@", OPENCLAW_WORKSPACE_DIR)
+)
 TELEMETRY_PUSH_INDEX_JS: str = (_TELEMETRY_PUSH / "index.js").read_text()
 TELEMETRY_PUSH_PACKAGE_JSON: str = (_TELEMETRY_PUSH / "package.json").read_text()
 TELEMETRY_PUSH_PLUGIN_JSON: str = (_TELEMETRY_PUSH / "openclaw.plugin.json").read_text()
@@ -168,6 +174,7 @@ def _openclaw_config_core(
         },
         "agents": {
             "defaults": {
+                "workspace": OPENCLAW_WORKSPACE_DIR,
                 "model": {
                     "primary": model,
                 },
@@ -212,6 +219,9 @@ def _openclaw_config_core(
         # `memory` object carrying both `backend` and `search` ("memory: Invalid
         # input"), so only `search` is set, matching the runtime's own schema.
         "memory": {"search": {"provider": "none"}},
+        # OpenClaw's default ("main") shares one session across every sender's DMs, so a
+        # multi-user Agent would carry one person's private conversation into the next.
+        "session": {"dmScope": "per-channel-peer"},
         "plugins": {
             # memory-core stays in `allow` even when Honcho holds the slot: it is
             # not active without an entry, but start.sh needs it permitted to fall
@@ -335,6 +345,10 @@ def native_slack_channel(settings: dict, home_channel: ConversationLocation | No
         # start_only accepts unmentioned replies in threads the Agent already joined.
         "implicitMentions": {"threadParticipation": settings.get("thread_mention_policy") == "start_only"},
         "dmPolicy": {"off": "disabled"}.get(dm_policy, dm_policy),
+        # OpenClaw drops inbound files over 20 MB by default, which rules out meeting
+        # recordings (an hour of MP3 is ~60-90 MB). A ~50 MB recording was verified on the
+        # 1 GiB pod; a file near 100 MB is still to be checked in staging.
+        "mediaMaxMb": 100,
     }
     if channel["groupPolicy"] == "allowlist":
         channel["channels"] = {channel_id: {"enabled": True} for channel_id in settings.get("channel_ids") or []}

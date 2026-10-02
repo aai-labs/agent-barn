@@ -21,8 +21,12 @@ The deployment-configured maximum number of non-deleted Organizations attributed
 _Avoid_: Membership limit, ownership limit, Platform Administrator quota
 
 **Model Spend Limit**:
-The amount an Organization may spend on model calls in one renewal period, set and changed only by a Platform Administrator. An Organization can neither see nor change its own. Absent means no limit; zero is a real limit of nothing. Enforced by the proxy at request time, so it binds late rather than exactly — a spend cutoff, not an invoice ceiling.
+The amount an Organization or one of its Agents may spend on model calls in one renewal period. An Organization's limit in force is its own limit when it has set one, otherwise its Spend Ceiling; an Agent's is its own limit when it has one, otherwise the Organization's default Agent limit, and never more than the Organization's. Zero is a real limit of nothing. The Organization and all its Agents share one renewal period and renew together. Enforced by the proxy at request time, so it binds late rather than exactly — a spend cutoff, not an invoice ceiling.
 _Avoid_: budget, allowance, quota, cap
+
+**Spend Ceiling**:
+The most an Organization may spend on model calls in one renewal period, set by a Platform Administrator. Every Organization has one, starting at the deployment default. The Organization may set a lower Model Spend Limit of its own, never a higher one, and lowering the ceiling beneath that limit pulls it down.
+_Avoid_: allowance, plan limit, platform budget
 
 **Spend Limit Coverage**:
 Whether an Organization's Agents are actually bound by its Model Spend Limit. An Agent issued a key before the Organization had one is not covered until it is enrolled, so a limit set over uncovered Agents would silently miss them.
@@ -263,6 +267,18 @@ _Avoid_: domain event, outbox message, audit event
 **Tool Call**:
 An ingested record of one external tool execution by an agent, with pending, success, or error status.
 _Avoid_: integration call
+
+**Business Action**:
+A content-free record of one aai-cli or gog command an Agent ran, derived from a Tool Call at Ingest. It carries the command's integration (the aai-cli command group, such as `jira` or `microsoft`, or `google-<service>` for gog, such as `google-gmail`, distinct from an **Integration**), its resource and verb, whether it writes, its **Outcome Type**, and a SUCCESS, ERROR, or UNKNOWN status inferred from the command's result. It stores no arguments and no results.
+_Avoid_: event, activity, tool call
+
+**Outcome Type**:
+The kind of business result a write Business Action produces, such as `PULL_REQUEST_OPENED` or `RECORD_UPDATED`, with default minutes of value that an Organization may override. A write without an Outcome Type, or with one no longer in the catalogue, is unclassified and never valued. A classified write is valued only when it succeeded. With `UNKNOWN` status it is unverified, and with `ERROR` status it is failed.
+_Avoid_: action type, category
+
+**Request**:
+One piece of work asked of an Agent: an inbound Conversation Message, from a person on any Platform or through Web Chat, or a Webhook Invocation. Scheduled runs are not Requests, though their Tool Calls and spend still count toward an Agent's per-Request figures. See [`business-value.md`](docs/features/business-value.md#organization-activity).
+_Avoid_: task, job, conversation
 
 **Domain Event**:
 An immutable, typed business fact that occurred at Platform or Organization scope and may be handled internally by Agent Barn.

@@ -65,17 +65,25 @@ export const PlatformOrganizationSchema = z.object({
   creatorUserId: z.string().uuid().nullable().optional(),
   creatorEmail: z.string().nullable().optional(),
   creatorName: z.string().nullable().optional(),
-  // Platform-administered spend ceiling. Null means no cap; 0 is a real zero
-  // allowance, so never coalesce it away.
+  // Platform-administered spend ceiling. Every organization has one; 0 is a real
+  // zero allowance, so never coalesce it away.
   llmBudgetUsd: z.number().nullable().optional(),
   llmBudgetDuration: z.string().nullable().optional(),
+  // The organization's own limit beneath the ceiling. Null follows the ceiling.
+  llmOwnBudgetUsd: z.number().nullable().optional(),
 });
 
 export const OrganizationLlmBudgetSchema = z.object({
-  state: z.enum(["none", "ok", "warning", "exhausted", "unknown"]),
-  limitUsd: z.number().nullable().optional(),
+  state: z.enum(["ok", "warning", "exhausted", "unknown"]),
+  // The limit in force: the organization's own, else the ceiling.
+  limitUsd: z.number(),
+  ceilingUsd: z.number(),
+  ownLimitUsd: z.number().nullable().optional(),
+  window: z.string(),
+  // Null means not yet observed. Never coalesce it to 0.
   spendUsd: z.number().nullable().optional(),
   renewsAt: z.string().nullable().optional(),
+  canManage: z.boolean(),
 });
 
 export const AgentLlmCoverageSchema = z.object({
@@ -136,6 +144,15 @@ export type OrganizationMember = z.infer<typeof OrganizationMemberSchema>;
 export type MemberInviteResult = z.infer<typeof MemberInviteResultSchema>;
 export type InviteLinkResult = z.infer<typeof InviteLinkResultSchema>;
 export type AddMemberFormData = z.infer<typeof AddMemberFormSchema>;
+
+export const RenameOrganizationFormSchema = z.object({
+  name: z.string().trim()
+    .min(3, "Name must be at least 3 characters")
+    .max(255, "Name must be at most 255 characters"),
+});
+
+export type RenameOrganizationFormData = z.infer<typeof RenameOrganizationFormSchema>;
+
 export type AgentLlmCoverage = z.infer<typeof AgentLlmCoverageSchema>;
 export type OrganizationLlmCoverage = z.infer<typeof OrganizationLlmCoverageSchema>;
 export type OrganizationLlmBudget = z.infer<typeof OrganizationLlmBudgetSchema>;

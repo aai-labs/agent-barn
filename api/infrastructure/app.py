@@ -1,7 +1,7 @@
 from injector import Module, provider, singleton
 
 from api.core.config import Config, get_config
-from api.domains.agents.event_handlers import AgentLifecycleEmailHandler
+from api.domains.agents.event_handlers import AgentBudgetEmailHandler, AgentLifecycleEmailHandler
 from api.domains.agents.repository import AgentRepository
 from api.domains.communications.plugins.discord import DiscordPlatformPlugin
 from api.domains.communications.plugins.email import EmailPlatformPlugin
@@ -78,6 +78,7 @@ class AppModule(Module):
         self,
         agent_lifecycle_email_handler: AgentLifecycleEmailHandler,
         organization_budget_email_handler: OrganizationBudgetEmailHandler,
+        agent_budget_email_handler: AgentBudgetEmailHandler,
         security_audit_projection: SecurityAuditProjection,
         memory_pool_purge_handler: MemoryPoolPurgeHandler,
     ) -> EventHandlerRegistry:
@@ -87,6 +88,7 @@ class AppModule(Module):
                 organization_budget_email_handler,
                 security_audit_projection,
                 memory_pool_purge_handler,
+                agent_budget_email_handler,
             ]
         )
 

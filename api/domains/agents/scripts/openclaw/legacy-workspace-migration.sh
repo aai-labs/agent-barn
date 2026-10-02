@@ -1,5 +1,6 @@
 #!/bin/sh
-workspace=/home/node/.openclaw/workspace
+# The builder fills in OPENCLAW_WORKSPACE_DIR (api/domains/agents/builders/openclaw.py).
+workspace=@OPENCLAW_WORKSPACE_DIR@
 state_dir=/home/node/.openclaw
 has_legacy_workspace_state() {
   [ -e "$workspace/openclaw-workspace-state.json" ] ||

@@ -4,7 +4,7 @@ from uuid import UUID
 
 import sqlalchemy as sa
 from pydantic import BaseModel as PydanticBaseModel
-from pydantic import ConfigDict
+from pydantic import ConfigDict, Field
 from sqlmodel import Field as SqlField
 
 from api.infrastructure.postgres.models import BaseModel
@@ -23,17 +23,28 @@ class OrganizationAgentSettings(BaseModel, table=True):
 
     __tablename__: str = "organization_agent_settings"
 
-    __table_args__ = (sa.UniqueConstraint("organization_id", name="uq_organization_agent_settings_organization_id"),)
+    __table_args__ = (
+        sa.UniqueConstraint("organization_id", name="uq_organization_agent_settings_organization_id"),
+        sa.CheckConstraint(
+            "default_agent_llm_budget_usd IS NULL OR default_agent_llm_budget_usd >= 0",
+            name="check_default_agent_llm_budget_non_negative",
+        ),
+    )
 
     organization_id: UUID = SqlField(foreign_key="organization.id", nullable=False, ondelete="CASCADE")
     # Tracks Config.agent_default_model while NULL rather than snapshotting it, so an
     # Organization that never picks a default follows platform model upgrades.
     default_model: str | None = SqlField(default=None, nullable=True)
+    # Spend limit (USD) for Agents that set none of their own. NULL follows
+    # AGENT_DEFAULT_LLM_BUDGET_USD. Tracked live, not snapshotted: changing it moves
+    # every inheriting Agent's limit.
+    default_agent_llm_budget_usd: float | None = SqlField(default=None, nullable=True)
 
 
 DefaultModelSource = Literal["organization", "platform"]
 
 DEFAULT_MODEL_SETTING = "default_model"
+DEFAULT_AGENT_LLM_BUDGET_SETTING = "default_agent_llm_budget_usd"
 
 
 class AgentSettingsRead(PydanticBaseModel):
@@ -47,6 +58,15 @@ class AgentSettingsRead(PydanticBaseModel):
     # policy change rather than a list the caller may read.
     inheriting_agent_count: int
     override_agent_count: int
+    # The Organization's own default Agent spend limit; None follows the platform's.
+    default_agent_llm_budget_usd: float | None = None
+    # What an Agent without a limit of its own is held to right now.
+    effective_default_agent_llm_budget_usd: float
+    # Agents following the default limit, and Agents with a limit of their own.
+    budget_inheriting_agent_count: int
+    budget_override_agent_count: int
+    # Whether the caller may change the default Agent spend limit.
+    can_manage_llm_budget: bool = False
     updated_at: datetime | None
 
 
@@ -57,3 +77,5 @@ class AgentSettingsUpdate(PydanticBaseModel):
     # leaves the stored value untouched, which is what keeps this DTO usable once
     # further settings are added alongside it.
     default_model: str | None = None
+    # Same semantics: an explicit null follows the platform default, omitted leaves it.
+    default_agent_llm_budget_usd: float | None = Field(default=None, ge=0, allow_inf_nan=False)

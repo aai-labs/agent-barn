@@ -34,6 +34,7 @@ def there_are_cost_records(
     organization_id: UUID | None = None,
     organization_name: str | None = None,
     unattributed: bool = False,
+    without_agent: bool = False,
     minutes_ago: int = 5,
     occurred_at: datetime | None = None,
     spacing_seconds: int = 1,
@@ -47,7 +48,8 @@ def there_are_cost_records(
     surrounding scenario set up, which is what makes a seeded row visible to the
     org-scoped endpoints under test. Passing None cannot express "no agent", since
     that is also what "not specified" looks like — use ``unattributed=True``, which
-    is the state the platform page's unattributed bucket reports on.
+    is the state the platform page's unattributed bucket reports on. ``without_agent=True``
+    keeps the Organization and drops only the Agent, a state the sync never writes.
 
     ``occurred_at`` pins the calls to an exact instant instead of ``minutes_ago``,
     for tests that care which calendar month a row lands in.
@@ -66,6 +68,8 @@ def there_are_cost_records(
             resolved_org_name = (
                 organization_name if organization_name is not None else getattr(context.organization, "name", None)
             )
+            if without_agent:
+                resolved_agent_id = resolved_agent_name = None
         # Rows walk backwards from the base time, so `count` rows land inside one
         # burst at the default spacing and in separate ones at a wide spacing.
         base = occurred_at if occurred_at is not None else datetime.now(UTC) - timedelta(minutes=minutes_ago)
