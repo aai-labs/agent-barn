@@ -12,6 +12,8 @@ import { FILTER_DEFAULTS } from "../constants";
 import { useOrganizationActivity } from "../hooks/use-organization-activity";
 import { useOrganizationValue } from "../hooks/use-organization-value";
 import { costsHref, type KpiWindow } from "../utils";
+import { AgentKpiTable } from "./agent-kpi-table";
+import { KpiFootnotes } from "./kpi-footnotes";
 import { KpiTiles } from "./kpi-tiles";
 import { KpiTrendChart } from "./kpi-trend-chart";
 
@@ -94,6 +96,10 @@ function KpiDashboard() {
       />
 
       <KpiTrendChart value={valueSource} activity={activitySource} />
+
+      <AgentKpiTable value={valueSource} activity={activitySource} />
+
+      <KpiFootnotes value={valueSource} />
     </div>
   );
 }

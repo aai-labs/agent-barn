@@ -63,6 +63,42 @@ export class KpisPage {
     await this.trend().getByRole("button", { name: "Retry" }).click();
   }
 
+  agentTable(): Locator {
+    return this.page.getByTestId("kpi-agents");
+  }
+
+  agentNames(): Promise<string[]> {
+    return this.agentTable().locator("tbody tr [data-agent-name]").allInnerTexts();
+  }
+
+  agentRow(name: string): Locator {
+    return this.agentTable().locator("tbody tr").filter({ hasText: name });
+  }
+
+  agentCell(name: string, column: string): Locator {
+    return this.agentRow(name).locator(`td[data-column="${column}"]`);
+  }
+
+  columnHeader(label: string): Locator {
+    return this.agentTable().getByRole("columnheader", { name: label, exact: true });
+  }
+
+  async sortBy(label: string) {
+    await this.agentTable().getByRole("button", { name: label, exact: true }).click();
+  }
+
+  async retryAgentTable() {
+    await this.agentTable().getByRole("button", { name: "Retry" }).click();
+  }
+
+  footnotes(): Locator {
+    return this.page.getByTestId("kpi-footnotes");
+  }
+
+  topOutcomes(): Locator {
+    return this.footnotes().getByRole("listitem");
+  }
+
   windowLabel(): Locator {
     return this.page.getByTestId("kpi-window");
   }

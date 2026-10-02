@@ -119,6 +119,31 @@ export function activityTotals(overrides: Record<string, unknown> = {}) {
   };
 }
 
+export function valueAgent(overrides: Record<string, unknown> = {}) {
+  return {
+    agent_id: KPI_AGENT_A_ID,
+    agent_name: "Aria",
+    agent_deleted: false,
+    successful_writes: 10,
+    minutes_saved: 120,
+    value: 120,
+    spend: 9.4,
+    value_to_spend_ratio: 12.765957,
+    ...overrides,
+  };
+}
+
+export function activityAgent(overrides: Record<string, unknown> = {}) {
+  return {
+    ...activityTotals(),
+    agent_id: KPI_AGENT_A_ID,
+    agent_name: "Aria",
+    agent_deleted: false,
+    spend: 9.4,
+    ...overrides,
+  };
+}
+
 type ReadOptions = { body?: unknown; status?: number };
 
 export type ReadMock = {

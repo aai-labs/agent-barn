@@ -4,10 +4,13 @@ import { TEST_ORG_ID } from "../constants";
 import UserContext from "../fixtures/user-context.json";
 import { DataSupport } from "../pages/data-support/data-support.po";
 import {
+  KPI_AGENT_B_ID,
+  activityAgent,
   activityTotals,
   isKpiRead,
   organizationActivity,
   organizationValue,
+  valueAgent,
   valueTotals,
 } from "../pages/data-support/kpis-data-support.po";
 import { KpisPage } from "../pages/kpis-page.po";
@@ -414,5 +417,272 @@ test.describe("Organization KPIs — trend chart", () => {
     await kpis.retryTrend();
 
     await expect(kpis.chartAreas("kpi-requests-chart")).toHaveCount(1);
+  });
+});
+
+const KPI_AGENT_DELETED_ID = "66666666-6666-4666-8666-666666666666";
+const KPI_AGENT_ACTIVITY_ONLY_ID = "77777777-7777-4777-8777-777777777777";
+
+function tableValue(overrides: Record<string, unknown> = {}) {
+  return organizationValue({
+    agents: [
+      valueAgent(),
+      valueAgent({
+        agent_id: KPI_AGENT_B_ID,
+        agent_name: "Meti",
+        successful_writes: 2,
+        minutes_saved: 30,
+        value: 30,
+        spend: 3,
+        value_to_spend_ratio: 10,
+      }),
+      valueAgent({
+        agent_id: null,
+        agent_name: "Unattributed",
+        successful_writes: 0,
+        minutes_saved: 0,
+        value: 0,
+        spend: 0.5,
+        value_to_spend_ratio: 0,
+      }),
+      valueAgent({
+        agent_id: KPI_AGENT_DELETED_ID,
+        agent_name: null,
+        agent_deleted: true,
+        successful_writes: 1,
+        minutes_saved: 6,
+        value: 6,
+        spend: 0.2,
+        value_to_spend_ratio: 30,
+      }),
+    ],
+    ...overrides,
+  });
+}
+
+function tableActivity() {
+  const idle = {
+    requests: 0,
+    handled_without_failure_rate: null,
+    handled_coverage: 0,
+    median_response_seconds: null,
+    response_time_coverage: 0,
+    cost_per_request: null,
+    tool_calls_per_request: null,
+  };
+  return organizationActivity({
+    agents: [
+      activityAgent({
+        requests: 400,
+        handled_coverage: 100,
+        response_time_coverage: 80,
+        cost_per_request: 0.0235,
+      }),
+      activityAgent({
+        agent_id: KPI_AGENT_B_ID,
+        agent_name: "Meti",
+        requests: 80,
+        handled_without_failure_rate: 0.9,
+        handled_coverage: 20,
+        median_response_seconds: 125,
+        response_time_coverage: 18,
+        cost_per_request: 0.0375,
+        tool_calls_per_request: 2,
+        spend: 3,
+      }),
+      activityAgent({
+        agent_id: KPI_AGENT_ACTIVITY_ONLY_ID,
+        agent_name: "Ora",
+        requests: 200,
+        handled_without_failure_rate: null,
+        handled_coverage: 0,
+        median_response_seconds: null,
+        response_time_coverage: 0,
+        cost_per_request: 0,
+        tool_calls_per_request: 0.5,
+        spend: 0,
+      }),
+      activityAgent({ ...idle, agent_id: null, agent_name: "Unattributed", spend: 0.5 }),
+      activityAgent({
+        ...idle,
+        agent_id: KPI_AGENT_DELETED_ID,
+        agent_name: null,
+        agent_deleted: true,
+        spend: 0.2,
+      }),
+    ],
+  });
+}
+
+test.describe("Organization KPIs — agents table and footnotes", () => {
+  let data: DataSupport;
+  let kpis: KpisPage;
+
+  test.use({ storageState: { cookies: [], origins: [] } });
+
+  test.beforeEach(async ({ page }) => {
+    data = new DataSupport(page);
+    kpis = new KpisPage(page);
+    await data.auth.interceptRefreshRequest();
+    await data.users.interceptGetUserContextRequest();
+  });
+
+  test("lists every agent from both reads, ranked by hours saved", async () => {
+    await data.kpis.interceptValue({ body: tableValue() });
+    await data.kpis.interceptActivity({ body: tableActivity() });
+
+    await kpis.goto();
+    await expect(kpis.agentTable()).toBeVisible();
+
+    expect(await kpis.agentNames()).toEqual([
+      "Aria",
+      "Meti",
+      "Deleted agent",
+      "Unattributed",
+      "Ora",
+    ]);
+    await expect(kpis.columnHeader("Hours saved")).toHaveAttribute("aria-sort", "descending");
+  });
+
+  test("shows each agent's value and activity figures with their coverage", async () => {
+    await data.kpis.interceptValue({ body: tableValue() });
+    await data.kpis.interceptActivity({ body: tableActivity() });
+
+    await kpis.goto();
+
+    await expect(kpis.agentCell("Aria", "value")).toHaveText("$120.00");
+    await expect(kpis.agentCell("Aria", "hours")).toHaveText("2.0 h");
+    await expect(kpis.agentCell("Aria", "spend")).toHaveText("$9.40");
+    await expect(kpis.agentCell("Aria", "ratio")).toHaveText("$12.77 per $1");
+    await expect(kpis.agentCell("Aria", "requests")).toHaveText("400");
+    await expect(kpis.agentCell("Aria", "handled")).toHaveText("75% · 100 reqs");
+    await expect(kpis.agentCell("Aria", "median")).toHaveText("1.5 s · 80 reqs");
+    await expect(kpis.agentCell("Aria", "costPerRequest")).toHaveText("$0.02");
+    await expect(kpis.agentCell("Aria", "toolCalls")).toHaveText("1.4");
+    await expect(kpis.agentCell("Meti", "median")).toHaveText("2m 05s · 18 reqs");
+  });
+
+  test("an agent with requests but no writes or spend reads zero value, not unknown", async () => {
+    await data.kpis.interceptValue({ body: tableValue() });
+    await data.kpis.interceptActivity({ body: tableActivity() });
+
+    await kpis.goto();
+
+    await expect(kpis.agentCell("Ora", "hours")).toHaveText("0.0 h");
+    await expect(kpis.agentCell("Ora", "spend")).toHaveText("$0.00");
+    await expect(kpis.agentCell("Ora", "ratio")).toHaveText("not enough data");
+    await expect(kpis.agentCell("Ora", "handled")).toHaveText("not enough data");
+    await expect(kpis.agentCell("Ora", "median")).toHaveText("not enough data");
+  });
+
+  test("names unattributed spend and marks deleted agents", async () => {
+    await data.kpis.interceptValue({ body: tableValue() });
+    await data.kpis.interceptActivity({ body: tableActivity() });
+
+    await kpis.goto();
+
+    await expect(kpis.agentRow("Unattributed").locator("[data-agent-name]")).toHaveText(
+      "Unattributed",
+    );
+    await expect(kpis.agentRow("Unattributed")).not.toContainText("Deleted");
+    await expect(kpis.agentRow("Deleted agent")).toContainText("Deleted");
+    await expect(kpis.agentCell("Deleted agent", "spend")).toHaveText("$0.20");
+  });
+
+  test("sorts by any column, reverses on a second click, and keeps unknowns last", async () => {
+    await data.kpis.interceptValue({ body: tableValue() });
+    await data.kpis.interceptActivity({ body: tableActivity() });
+    await kpis.goto();
+    await expect(kpis.agentTable()).toBeVisible();
+
+    await kpis.sortBy("Requests");
+    expect((await kpis.agentNames()).slice(0, 3)).toEqual(["Aria", "Ora", "Meti"]);
+
+    await kpis.sortBy("Requests");
+    expect((await kpis.agentNames()).slice(-3)).toEqual(["Meti", "Ora", "Aria"]);
+
+    await kpis.sortBy("Median response");
+    expect((await kpis.agentNames()).slice(0, 2)).toEqual(["Meti", "Aria"]);
+
+    await kpis.sortBy("Median response");
+    const ascending = await kpis.agentNames();
+    expect(ascending.slice(0, 2)).toEqual(["Aria", "Meti"]);
+    expect(ascending.slice(2)).toContain("Ora");
+  });
+
+  test("without an hourly rate, agent value asks for one", async () => {
+    const noRate = { value: null, value_to_spend_ratio: null };
+    await data.kpis.interceptValue({
+      body: tableValue({
+        totals: valueTotals({ value: null, value_to_spend_ratio: null, hourly_rate_usd: null }),
+        agents: [valueAgent(noRate)],
+        top_outcome_types: [
+          {
+            outcome_type: "PULL_REQUEST_OPENED",
+            successful_writes: 5,
+            effective_minutes: 20,
+            minutes_saved: 100,
+            value: null,
+          },
+        ],
+      }),
+    });
+    await data.kpis.interceptActivity({ body: tableActivity() });
+
+    await kpis.goto();
+
+    await expect(kpis.agentCell("Aria", "value")).toHaveText("Set an hourly rate");
+    await expect(kpis.agentCell("Aria", "ratio")).toHaveText("Set an hourly rate");
+    await expect(kpis.agentCell("Ora", "value")).toHaveText("Set an hourly rate");
+    await expect(kpis.topOutcomes().first()).toContainText("Set an hourly rate");
+  });
+
+  test("a failed activity read blanks only its columns, and retry recovers", async () => {
+    await data.kpis.interceptValue({ body: tableValue() });
+    const activity = await data.kpis.interceptActivity({ status: 500 });
+
+    await kpis.goto();
+
+    await expect(kpis.agentTable()).toContainText("Unable to load activity figures");
+    await expect(kpis.agentCell("Aria", "requests")).toHaveText("—");
+    await expect(kpis.agentCell("Aria", "handled")).toHaveText("—");
+    await expect(kpis.agentCell("Aria", "value")).toHaveText("$120.00");
+
+    activity.respondWith({ status: 200, body: tableActivity() });
+    await kpis.retryAgentTable();
+
+    await expect(kpis.agentCell("Aria", "requests")).toHaveText("400");
+    await expect(kpis.agentTable()).not.toContainText("Unable to load");
+  });
+
+  test("a failed value read blanks only its columns and the outcome footnotes", async () => {
+    await data.kpis.interceptValue({ status: 500 });
+    await data.kpis.interceptActivity({ body: tableActivity() });
+
+    await kpis.goto();
+
+    await expect(kpis.agentTable()).toContainText("Unable to load value figures");
+    await expect(kpis.agentCell("Aria", "value")).toHaveText("—");
+    await expect(kpis.agentCell("Aria", "spend")).toHaveText("—");
+    await expect(kpis.agentCell("Aria", "requests")).toHaveText("400");
+    await expect(kpis.footnotes()).toContainText("Unable to load");
+  });
+
+  test("lists top outcomes, the write counts, and what counts as value", async () => {
+    await data.kpis.interceptValue({ body: tableValue() });
+    await data.kpis.interceptActivity({ body: tableActivity() });
+
+    await kpis.goto();
+
+    await expect(kpis.topOutcomes()).toHaveCount(2);
+    await expect(kpis.topOutcomes().nth(0)).toContainText("Pull request opened");
+    await expect(kpis.topOutcomes().nth(0)).toContainText("5 writes");
+    await expect(kpis.topOutcomes().nth(0)).toContainText("1.7 h");
+    await expect(kpis.topOutcomes().nth(0)).toContainText("$100.00");
+    await expect(kpis.topOutcomes().nth(1)).toContainText("Message sent");
+    await expect(kpis.footnotes()).toContainText("3 unverified writes · 2 unclassified actions");
+    await expect(kpis.footnotes()).toContainText(
+      "Value counts only successful aai-cli and gog write actions. The handled rate and response time cover Web Chat and Email only.",
+    );
   });
 });

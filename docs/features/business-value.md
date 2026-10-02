@@ -312,6 +312,26 @@ Each tile belongs to one endpoint. If an endpoint fails, only its tiles show "Un
 - With no hourly rate set, every value point is null, so the chart draws spend alone and says "Set an hourly rate to chart value".
 - Each tab belongs to one endpoint. A failed endpoint shows "Unable to load" with a Retry inside its own tab, and the other tab still renders.
 
+### Agents table
+
+- One row per Agent in either response, merged on `agent_id`.
+  - A null `agent_id` is the "Unattributed" row, and only that row carries the name.
+  - Otherwise the name comes from `/value`, then `/value/activity`. A hard-deleted Agent with no stored name reads "Deleted agent".
+  - A row whose `agent_deleted` is true in either response carries a "Deleted" badge.
+- An Agent that one response omits had nothing to report there: `/value` lists every Agent with a successful write or spend, and `/value/activity` every Agent with Requests, deliveries, Tool Calls, or spend. Its figures from that response read as zero, and its rates as "not enough data".
+- Columns: Agent, Value, Hours saved, LLM spend, Value per dollar, Requests, Handled without failure, Median response, Cost per request, and Tool calls per request.
+  - The handled rate and the median response show their coverage, the `handled_coverage` and `response_time_coverage` counts, for example "75% · 100 reqs" and "1.5 s · 80 reqs".
+  - The response time reads "<1 s", "1.5 s", "2m 05s", or "1h 02m".
+  - Null figures follow the same wording as the tiles.
+- Rows open sorted by hours saved, descending. Every column sorts, a second click reverses it, and unknown figures stay last in both directions.
+- A failed endpoint shows "—" in its own columns and one "Unable to load … figures" line with a Retry above the table.
+
+### Footnotes
+
+- "Top outcomes" lists `/value` `top_outcome_types` in the server's order. Each entry shows its label, its successful write count, its hours, and its value. Labels are derived from the Outcome Type code (`PULL_REQUEST_OPENED` reads "Pull request opened"), so a new catalogue Outcome Type needs no UI change.
+- The unverified write and unclassified action counts from `/value` `totals`.
+- A fixed note: value counts only successful aai-cli and gog write actions, and the handled rate and response time cover Web Chat and Email only.
+
 ## Known gaps
 
 Each of these is an **undercount**, not a verdict on the Agent. The last one is a possible overcount.

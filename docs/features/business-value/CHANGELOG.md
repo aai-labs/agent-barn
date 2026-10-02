@@ -24,11 +24,40 @@ Related context: [Activity and Ingest](../activity-and-ingest.md), [Agent Activi
 - Also delivered: the KPIs page route and its Owner/Admin navigation entry (AF-348). The feature doc's [KPI dashboard](../business-value.md#kpi-dashboard) section is the contract.
 - Also delivered: the KPIs page's date range and six headline tiles, read from `GET /value` and `GET /value/activity` (AF-348).
 - Also delivered: the KPIs page's trend chart, with "Value vs spend" and "Requests" tabs (AF-348).
-- In transition: the KPIs page has its header, date range, tiles, and trend chart; its per-Agent table, empty and loading states, and value settings Sheet land in the following AF-348 slices.
-- Next: AF-348 per-Agent table and footnotes.
+- Also delivered: the KPIs page's per-Agent table and footnotes (AF-348).
+- In transition: the KPIs page has its header, date range, tiles, trend chart, Agents table, and footnotes; its empty and loading states and value settings Sheet land in the following AF-348 slices.
+- Next: AF-348 empty state and loading skeletons.
 - Blockers: the product owner has not signed off the default minutes per Outcome Type. They are placeholders until then, and every value figure inherits them.
 
 ## Slice history
+
+### 2026-10-02 — AF-348 — KPIs Agents table and footnotes
+
+Delivered:
+- `agent-kpi-table.tsx`: the sortable per-Agent table, built like `costs/components/agents-by-spend.tsx` (the same sort state, header buttons, and `aria-sort`), with `Badge` for deleted Agents.
+- `kpi-footnotes.tsx`: Top outcomes, the unverified and unclassified counts, and the value note.
+- `utils.ts`: `mergeAgentRows` and `outcomeTypeLabel`. `format.ts`: `formatResponseTime` and `formatCount`.
+- The rules are in the feature doc's [Agents table](../business-value.md#agents-table) and [Footnotes](../business-value.md#footnotes).
+
+Decisions made while building, from the API contract:
+- "Unattributed" labels only a null `agent_id`. `agent_identity` (`service.py:106-114`) can return a null name for a hard-deleted Agent, which reads "Deleted agent".
+- An Agent missing from one response reads zero for that response's counts. The doc's row rules define both lists, so its absence means nothing to report there, not an unknown.
+- An empty Top outcomes list reads "No successful writes in this period."
+
+Coverage, `ui/tests/e2e/kpis.spec.ts`:
+- rows merged from both reads and ranked by hours saved;
+- per-Agent value and activity figures, including coverage and minute-scale response times;
+- an activity-only Agent with zero value and "not enough data" rates;
+- the Unattributed row, and a hard-deleted Agent with its badge;
+- sorting, reversing, and unknowns last;
+- no rate set;
+- each endpoint failing alone, with Retry recovering;
+- Top outcomes, the counts, and the note.
+
+Test-first:
+- All 9 tests failed first, because no table or footnotes existed.
+- `make lint-ui` and `make check-ui` pass. `kpis.spec.ts`, `top-nav-responsive.spec.ts`, and `costs.spec.ts` pass, 58 tests.
+- At 1440px the ten-column table fits without scrolling.
 
 ### 2026-10-02 — AF-348 — KPIs trend chart
 
