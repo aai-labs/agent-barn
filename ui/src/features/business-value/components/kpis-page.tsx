@@ -16,6 +16,7 @@ import { AgentKpiTable } from "./agent-kpi-table";
 import { KpiFootnotes } from "./kpi-footnotes";
 import { KpiTiles } from "./kpi-tiles";
 import { KpiTrendChart } from "./kpi-trend-chart";
+import { ValueSettingsSheet } from "./value-settings-sheet";
 
 export function KpisPage() {
   const canManage = useRequireOrgManager();
@@ -84,14 +85,17 @@ function KpiDashboard() {
               : " "}
           </p>
         </div>
-        <DateRangePicker
-          from={urlFilters.from}
-          to={urlFilters.to}
-          onChange={handleDateRangeChange}
-          placeholder="Last 30 days"
-          width="16rem"
-          ariaLabel="Date range"
-        />
+        <div className="flex flex-wrap items-center gap-2">
+          <DateRangePicker
+            from={urlFilters.from}
+            to={urlFilters.to}
+            onChange={handleDateRangeChange}
+            placeholder="Last 30 days"
+            width="16rem"
+            ariaLabel="Date range"
+          />
+          <ValueSettingsSheet />
+        </div>
       </div>
 
       <KpiTiles

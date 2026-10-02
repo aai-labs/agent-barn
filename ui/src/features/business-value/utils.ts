@@ -8,6 +8,7 @@ const UNATTRIBUTED_ROW_KEY = "unattributed";
 
 export const organizationValueKey = createQueryKeyStructure("organization-value");
 export const organizationActivityKey = createQueryKeyStructure("organization-activity");
+export const valueSettingsKey = createQueryKeyStructure("value-settings");
 
 export type KpiWindow = {
   fromDate?: string;

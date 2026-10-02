@@ -340,6 +340,19 @@ Each tile belongs to one endpoint. If an endpoint fails, only its tiles show "Un
   - a chart skeleton in a tab whose endpoint is loading;
   - a table skeleton until both endpoints have answered, so a still-loading endpoint is not shown as "—" like a failure.
 
+### Value settings panel
+
+- A "Value settings" button opens a side Sheet over the dashboard. It reads `GET …/value-settings` only while open.
+- The Sheet states that changes recalculate every figure on the page, including past periods.
+- **Hourly rate (USD).** Empty means no rate. Otherwise it must be from 0 to 10,000 with at most two decimals, the bounds of [Value settings](#value-settings).
+- **Minutes per Outcome Type,** in catalogue order. Each row shows a "Default" or "Custom" badge.
+  - Editing a row makes it Custom.
+  - "Reset to default (N min)" returns a Custom row to its default.
+  - Minutes must be a whole number from 1 to 1,440.
+- Invalid fields show an inline error, and Save stays disabled while any field is invalid or nothing has changed.
+- Closing with unsaved edits, by Cancel, the close button, Escape, or the overlay, asks "Discard unsaved changes?" through `ConfirmationDialog`. Cancel there keeps the edits, and Discard closes the Sheet. The next open starts again from the stored settings.
+- A failed settings read shows an inline error with a Retry inside the Sheet.
+
 ## Known gaps
 
 Each of these is an **undercount**, not a verdict on the Agent. The last one is a possible overcount.

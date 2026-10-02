@@ -115,6 +115,62 @@ export class KpisPage {
     return this.page.getByTestId("kpi-table-skeleton");
   }
 
+  async openValueSettings() {
+    await this.page.getByRole("button", { name: "Value settings" }).click();
+  }
+
+  settingsSheet(): Locator {
+    return this.page.getByRole("dialog", { name: "Value settings" });
+  }
+
+  rateInput(): Locator {
+    return this.settingsSheet().getByLabel("Hourly rate (USD)");
+  }
+
+  outcomeRow(label: string): Locator {
+    return this.settingsSheet().getByRole("group", { name: label, exact: true });
+  }
+
+  minutesInput(label: string): Locator {
+    return this.outcomeRow(label).getByRole("textbox");
+  }
+
+  async resetToDefault(label: string) {
+    await this.outcomeRow(label).getByRole("button", { name: /Reset to default/ }).click();
+  }
+
+  saveSettingsButton(): Locator {
+    return this.settingsSheet().getByRole("button", { name: "Save", exact: true });
+  }
+
+  async closeSettingsWithX() {
+    await this.settingsSheet().getByRole("button", { name: "Close", exact: true }).click();
+  }
+
+  async cancelSettings() {
+    await this.settingsSheet().getByRole("button", { name: "Cancel", exact: true }).click();
+  }
+
+  async pressEscape() {
+    await this.page.keyboard.press("Escape");
+  }
+
+  discardDialog(): Locator {
+    return this.page.getByRole("dialog", { name: "Discard unsaved changes?" });
+  }
+
+  async confirmDiscard() {
+    await this.discardDialog().getByRole("button", { name: "Discard", exact: true }).click();
+  }
+
+  async keepEditing() {
+    await this.discardDialog().getByRole("button", { name: "Cancel", exact: true }).click();
+  }
+
+  async retrySettings() {
+    await this.settingsSheet().getByRole("button", { name: "Retry" }).click();
+  }
+
   windowLabel(): Locator {
     return this.page.getByTestId("kpi-window");
   }

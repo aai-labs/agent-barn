@@ -26,11 +26,34 @@ Related context: [Activity and Ingest](../activity-and-ingest.md), [Agent Activi
 - Also delivered: the KPIs page's trend chart, with "Value vs spend" and "Requests" tabs (AF-348).
 - Also delivered: the KPIs page's per-Agent table and footnotes (AF-348).
 - Also delivered: the KPIs page's empty state and loading skeletons (AF-348).
-- In transition: the KPIs page renders every figure; its value settings Sheet lands in the following AF-348 slices.
-- Next: AF-348 value settings Sheet (read, edit, discard).
+- Also delivered: the KPIs page's value settings Sheet, which reads, edits, validates, resets, and discards (AF-348).
+- In transition: the Sheet's Save button validates but does not save yet.
+- Next: AF-348 saving value settings, and the request-key fix it needs.
 - Blockers: the product owner has not signed off the default minutes per Outcome Type. They are placeholders until then, and every value figure inherits them.
 
 ## Slice history
+
+### 2026-10-02 — AF-348 — KPIs value settings Sheet (read, edit, discard)
+
+Delivered:
+- `schemas.ts`: the value settings schema. `constants.ts`: `MAX_HOURLY_RATE_USD` and `MAX_OUTCOME_MINUTES`, mirroring `api/domains/business_value/models.py`.
+- `use-value-settings.ts` reads through `@/shared/api`, keyed by `createQueryKeyStructure("value-settings").detail(organizationId)`.
+- `value-settings-sheet.tsx` gives the panel described in the feature doc's [Value settings panel](../business-value.md#value-settings-panel).
+  - The dirty-close flow follows `templates/components/template-editor.tsx` (`requestClose`, then confirm).
+  - The draft is set from the stored settings when the form mounts, with no `useEffect`.
+- Save validates but sends nothing yet. Saving is the next slice.
+
+Coverage, `ui/tests/e2e/kpis.spec.ts`, with `valueSettings()` and `interceptValueSettings` in `kpis-data-support.po.ts` (catalogue order from `catalogue.py:31-41`):
+- the rate and every row's minutes, with Default and Custom badges, the recalculation copy, and Save disabled while unchanged;
+- a three-decimal rate and zero minutes rejected inline, with Save disabled;
+- resetting an override;
+- closing with edits by the close button and by Escape: Cancel keeps the edits, Discard closes, and reopening shows the stored values;
+- closing without edits does not ask;
+- a failed read with Retry.
+
+Test-first:
+- All 6 tests failed first: no "Value settings" button existed.
+- `make lint-ui` and `make check-ui` pass. `kpis.spec.ts`, `top-nav-responsive.spec.ts`, and `costs.spec.ts` pass, 66 tests.
 
 ### 2026-10-02 — AF-348 — KPIs empty state and loading skeletons
 

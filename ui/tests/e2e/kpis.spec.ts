@@ -768,3 +768,118 @@ test.describe("Organization KPIs — empty and loading states", () => {
     await expect(kpis.agentTable()).toBeVisible();
   });
 });
+
+test.describe("Organization KPIs — value settings", () => {
+  let data: DataSupport;
+  let kpis: KpisPage;
+
+  test.use({ storageState: { cookies: [], origins: [] } });
+
+  test.beforeEach(async ({ page }) => {
+    data = new DataSupport(page);
+    kpis = new KpisPage(page);
+    await data.auth.interceptRefreshRequest();
+    await data.users.interceptGetUserContextRequest();
+    await data.kpis.interceptValue();
+    await data.kpis.interceptActivity();
+  });
+
+  test("shows the rate and each outcome's minutes, telling defaults from overrides", async () => {
+    await data.kpis.interceptValueSettings();
+    await kpis.goto();
+
+    await kpis.openValueSettings();
+
+    await expect(kpis.settingsSheet()).toBeVisible();
+    await expect(kpis.rateInput()).toHaveValue("60");
+    await expect(kpis.minutesInput("Pull request opened")).toHaveValue("20");
+    await expect(kpis.outcomeRow("Pull request opened")).toContainText("Default");
+    await expect(kpis.minutesInput("Message sent")).toHaveValue("8");
+    await expect(kpis.outcomeRow("Message sent")).toContainText("Custom");
+    await expect(kpis.settingsSheet()).toContainText(
+      "Changes recalculate every figure on this page, including past periods.",
+    );
+    await expect(kpis.saveSettingsButton()).toBeDisabled();
+  });
+
+  test("rejects a rate or minutes the API would refuse", async () => {
+    await data.kpis.interceptValueSettings();
+    await kpis.goto();
+    await kpis.openValueSettings();
+
+    await kpis.rateInput().fill("12.345");
+    await expect(kpis.settingsSheet()).toContainText(
+      "Enter an amount from 0 to 10,000 with at most two decimals.",
+    );
+    await expect(kpis.saveSettingsButton()).toBeDisabled();
+
+    await kpis.rateInput().fill("75.50");
+    await expect(kpis.saveSettingsButton()).toBeEnabled();
+
+    await kpis.minutesInput("Pull request opened").fill("0");
+    await expect(kpis.outcomeRow("Pull request opened")).toContainText(
+      "Enter whole minutes from 1 to 1,440.",
+    );
+    await expect(kpis.saveSettingsButton()).toBeDisabled();
+  });
+
+  test("resetting an override shows the default again", async () => {
+    await data.kpis.interceptValueSettings();
+    await kpis.goto();
+    await kpis.openValueSettings();
+
+    await kpis.resetToDefault("Message sent");
+
+    await expect(kpis.minutesInput("Message sent")).toHaveValue("5");
+    await expect(kpis.outcomeRow("Message sent")).toContainText("Default");
+    await expect(kpis.outcomeRow("Message sent")).not.toContainText("Custom");
+    await expect(kpis.saveSettingsButton()).toBeEnabled();
+  });
+
+  test("closing with unsaved edits asks first, and keeping them keeps them", async () => {
+    await data.kpis.interceptValueSettings();
+    await kpis.goto();
+    await kpis.openValueSettings();
+    await kpis.minutesInput("Pull request opened").fill("30");
+
+    await kpis.closeSettingsWithX();
+
+    await expect(kpis.discardDialog()).toBeVisible();
+    await kpis.keepEditing();
+    await expect(kpis.discardDialog()).toHaveCount(0);
+    await expect(kpis.minutesInput("Pull request opened")).toHaveValue("30");
+
+    await kpis.pressEscape();
+    await expect(kpis.discardDialog()).toBeVisible();
+    await kpis.confirmDiscard();
+
+    await expect(kpis.settingsSheet()).toHaveCount(0);
+    await kpis.openValueSettings();
+    await expect(kpis.minutesInput("Pull request opened")).toHaveValue("20");
+  });
+
+  test("closing without edits does not ask", async () => {
+    await data.kpis.interceptValueSettings();
+    await kpis.goto();
+    await kpis.openValueSettings();
+    await expect(kpis.rateInput()).toHaveValue("60");
+
+    await kpis.cancelSettings();
+
+    await expect(kpis.settingsSheet()).toHaveCount(0);
+    await expect(kpis.discardDialog()).toHaveCount(0);
+  });
+
+  test("a failed settings read shows an error with a retry", async () => {
+    const settings = await data.kpis.interceptValueSettings({ status: 500 });
+    await kpis.goto();
+    await kpis.openValueSettings();
+
+    await expect(kpis.settingsSheet()).toContainText("Unable to load value settings");
+
+    settings.respondWith({ status: 200 });
+    await kpis.retrySettings();
+
+    await expect(kpis.rateInput()).toHaveValue("60");
+  });
+});

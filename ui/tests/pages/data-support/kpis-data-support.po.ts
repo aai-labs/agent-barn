@@ -5,6 +5,40 @@ export const KPI_AGENT_B_ID = "55555555-5555-4555-8555-555555555555";
 
 const VALUE_PATH = /\/api\/v1\/organizations\/[^/]+\/value(\?.*)?$/;
 const ACTIVITY_PATH = /\/api\/v1\/organizations\/[^/]+\/value\/activity(\?.*)?$/;
+const SETTINGS_PATH = /\/api\/v1\/organizations\/[^/]+\/value-settings$/;
+
+const DEFAULT_MINUTES: [string, number][] = [
+  ["PULL_REQUEST_OPENED", 20],
+  ["DOCUMENT_AUTHORED", 20],
+  ["COMMENT_POSTED", 5],
+  ["MESSAGE_SENT", 5],
+  ["MEETING_SCHEDULED", 5],
+  ["SPREADSHEET_UPDATED", 5],
+  ["FILE_UPLOADED", 2],
+  ["RECORD_CREATED", 5],
+  ["RECORD_UPDATED", 3],
+  ["RECORD_DELETED", 1],
+];
+
+/** Mirrors the API catalogue order; MESSAGE_SENT carries an override of 8 minutes. */
+export function valueSettings({
+  hourlyRate = 60,
+  overrides = { MESSAGE_SENT: 8 },
+}: { hourlyRate?: number | null; overrides?: Record<string, number> } = {}) {
+  return {
+    hourly_rate_usd: hourlyRate,
+    outcome_minutes: DEFAULT_MINUTES.map(([outcome_type, default_minutes]) => {
+      const override = overrides[outcome_type] ?? null;
+      return {
+        outcome_type,
+        default_minutes,
+        override_minutes: override,
+        effective_minutes: override ?? default_minutes,
+        source: override === null ? "default" : "override",
+      };
+    }),
+  };
+}
 
 /** Fixtures use the wire shape (snake_case); the API client camelizes on the way in. */
 export function organizationValue(overrides: Record<string, unknown> = {}) {
@@ -161,6 +195,10 @@ export class KpisDataSupport {
 
   async interceptActivity(options: ReadOptions = {}): Promise<ReadMock> {
     return this.interceptRead(ACTIVITY_PATH, organizationActivity(), options);
+  }
+
+  async interceptValueSettings(options: ReadOptions = {}): Promise<ReadMock> {
+    return this.interceptRead(SETTINGS_PATH, valueSettings(), options);
   }
 
   private async interceptRead(

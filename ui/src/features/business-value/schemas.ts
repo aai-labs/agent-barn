@@ -93,3 +93,19 @@ export type ActivityTotals = z.infer<typeof ActivityTotalsSchema>;
 export type ActivitySeriesPoint = z.infer<typeof ActivitySeriesPointSchema>;
 export type AgentActivity = z.infer<typeof AgentActivitySchema>;
 export type OrganizationActivity = z.infer<typeof OrganizationActivitySchema>;
+
+export const OutcomeMinutesSchema = z.object({
+  outcomeType: z.string(),
+  defaultMinutes: z.number().int(),
+  overrideMinutes: z.number().int().nullable(),
+  effectiveMinutes: z.number().int(),
+  source: z.enum(["default", "override"]),
+});
+
+export const ValueSettingsSchema = z.object({
+  hourlyRateUsd: z.number().nullable(),
+  outcomeMinutes: z.array(OutcomeMinutesSchema),
+});
+
+export type OutcomeMinutes = z.infer<typeof OutcomeMinutesSchema>;
+export type ValueSettings = z.infer<typeof ValueSettingsSchema>;
