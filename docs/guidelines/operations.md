@@ -9,6 +9,11 @@ configuration, start, and stop instructions. Its
 [development section](../../README.md#development) covers the native service
 topology.
 
+The API keeps `fastapi[standard]` for its supported server/tooling dependencies.
+`websockets` remains a transitive Uvicorn standard dependency; it is no longer an
+API-owned provider-session requirement. Use `uv sync` with the committed lockfile
+as in the README setup; native transport dependencies belong to the runtime images.
+
 ## Database migrations
 
 ```bash

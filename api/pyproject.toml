@@ -30,7 +30,6 @@ dependencies = [
     "dramatiq[redis,watch]>=2.2.0",
     "redis>=8.1.0",
     "prometheus-fastapi-instrumentator>=8.1.0",
-    "websockets>=17.0",
 ]
 
 [tool.pytest.ini_options]

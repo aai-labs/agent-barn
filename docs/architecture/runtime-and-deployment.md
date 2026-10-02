@@ -94,6 +94,8 @@ The shared provider-session, conversation-ownership admission callback, and enri
 
 Connection credentials are encrypted and never returned by read APIs. Communication Connection CRUD is subordinate to Agent visibility and Permissions. Native Connection changes use the existing apply-and-restart flow; Web Chat and Email keep their Communications configuration path.
 
+Communications failure normalization handles supported HTTP, network, and runtime errors without importing native provider-session exception types. Historical safe close-code details remain readable in Connection diagnostics. The API no longer declares a direct `websockets` dependency for retired provider sessions; FastAPI standard server dependencies still include it transitively. Native runtime transport packages remain owned by their runtime images.
+
 New Connections, including lazy Web Chat creation, no longer mint gateway driver credentials. Current code no longer maps or consumes `driver_key_encrypted`, `ingress_lease_owner`, or `ingress_lease_expires_at`. Their physical columns remain for older mapped readers/writers: the retired driver column is non-null with an empty-string database default, and ingress-lease columns are nullable. Existing values are inert rollout data; current updates, Connection retirement, and Agent deletion leave them untouched. Retirement and deletion still scrub provider credentials and release their fingerprint/scope identities. Deploy the driver-default migration before code that omits its column, and remove physical columns only after the [deployed-reader/writer cutoff](../guidelines/operations.md#native-runtime-gateway-rollout). Durable Delivery claim leases are a separate supported contract.
 
 ## Mention gating
