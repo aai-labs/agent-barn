@@ -2,6 +2,7 @@ from api.domains.agents.runtime_policy import (
     build_chat_commands_policy_md,
     build_file_delivery_policy_md,
     build_role_scope_policy_md,
+    build_scheduled_runs_policy_md,
 )
 
 # --- build_chat_commands_policy_md --------------------------------------------
@@ -126,3 +127,21 @@ def test_file_delivery_policy_md_is_runtime_neutral():
     md = build_file_delivery_policy_md("/workspace")
     assert "Hermes" not in md
     assert "OpenClaw" not in md
+
+
+# --- build_scheduled_runs_policy_md --------------------------------------------
+
+
+def test_scheduled_runs_policy_md_keeps_the_silence_markers():
+    md = build_scheduled_runs_policy_md()
+    for marker in ("[SILENT]", "SILENT", "NO_REPLY", "NO REPLY", "HEARTBEAT_OK"):
+        assert marker in md
+
+
+def test_scheduled_runs_policy_md_does_not_route_sends_through_the_deprecated_client():
+    """Chat platforms run in the runtimes' own gateways; telling agents to use
+    `agentbarn-message` and to avoid the message tool in cron made them refuse
+    sends their gateway supports, such as a scheduled header plus thread reply."""
+    md = build_scheduled_runs_policy_md()
+    assert "agentbarn-message" not in md
+    assert "message tool" not in md

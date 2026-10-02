@@ -116,8 +116,8 @@ from api.domains.agents.runtime_digest import agent_runtime_config_digest
 from api.domains.agents.runtime_policy import (
     build_chat_commands_policy_md,
     build_file_delivery_policy_md,
-    build_messaging_policy_md,
     build_role_scope_policy_md,
+    build_scheduled_runs_policy_md,
 )
 from api.domains.agents.selection import (
     SelectionValidator,
@@ -2186,7 +2186,7 @@ class AgentService:
             )
             + build_chat_commands_policy_md()
             + build_role_scope_policy_md()
-            + build_messaging_policy_md()
+            + build_scheduled_runs_policy_md()
         )
 
         if agent.agent_type == AgentType.HERMES:
