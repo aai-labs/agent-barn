@@ -352,6 +352,11 @@ Each tile belongs to one endpoint. If an endpoint fails, only its tiles show "Un
 - Invalid fields show an inline error, and Save stays disabled while any field is invalid or nothing has changed.
 - Closing with unsaved edits, by Cancel, the close button, Escape, or the overlay, asks "Discard unsaved changes?" through `ConfirmationDialog`. Cancel there keeps the edits, and Discard closes the Sheet. The next open starts again from the stored settings.
 - A failed settings read shows an inline error with a Retry inside the Sheet.
+- **Saving.**
+  - Save sends `PUT …/value-settings` with only the fields that changed: `hourly_rate_usd` (`null` for an emptied rate) and `outcome_minutes` keyed by Outcome Type (`null` for a reset row).
+  - On success the Sheet closes, and the Organization value and value settings refetch. Activity does not, because value settings never change it.
+  - The dashboard then shows every figure recalculated at the new settings, past periods included.
+  - On failure the server's message shows as a toast, and the Sheet stays open with the edits.
 
 ## Known gaps
 

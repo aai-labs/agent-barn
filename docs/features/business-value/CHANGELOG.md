@@ -27,11 +27,41 @@ Related context: [Activity and Ingest](../activity-and-ingest.md), [Agent Activi
 - Also delivered: the KPIs page's per-Agent table and footnotes (AF-348).
 - Also delivered: the KPIs page's empty state and loading skeletons (AF-348).
 - Also delivered: the KPIs page's value settings Sheet, which reads, edits, validates, resets, and discards (AF-348).
-- In transition: the Sheet's Save button validates but does not save yet.
-- Next: AF-348 saving value settings, and the request-key fix it needs.
+- Also delivered: saving value settings from the KPIs page, which refreshes the value figures (AF-348).
+- In transition: nothing.
+- Next: AF-348 final verification and the live end-to-end check on local k3d.
 - Blockers: the product owner has not signed off the default minutes per Outcome Type. They are placeholders until then, and every value figure inherits them.
 
 ## Slice history
+
+### 2026-10-02 — AF-348 — Saving value settings, and UPPER_SNAKE request keys
+
+Delivered:
+- `use-update-value-settings.ts` sends `PUT …/value-settings` through `@/shared/api`.
+  - On success it invalidates the Organization value family (`organizationValueKey.listScope({ organizationId })`) and the value settings detail. It never touches the activity family.
+  - On error it raises a `toastError`.
+- The Sheet's Save sends only the changed fields (`changesFrom`), closes on success, and stays open with the edits on failure.
+- `ui/src/shared/api/interceptor/default.ts` leaves UPPER_SNAKE request keys (`/^[A-Z0-9_]+$/`) unchanged, beside the existing `-` exemption.
+
+Defect found and fixed:
+- `humps.decamelizeKeys` split every capital letter, so `{ outcomeMinutes: { MESSAGE_SENT: 7 } }` was sent as `{ outcome_minutes: { m_e_s_s_a_g_e__s_e_n_t: 7 } }`.
+- The API rejects that key with 422, because `ValueSettingsUpdate` keys must be catalogue Outcome Types.
+- No request body sent ALL-CAPS keys before this, and no response carries them, so nothing else changes.
+- Docs: `docs/architecture/ui.md` (the transform invariant) and `docs/guidelines/webapp.md` (Schemas and API boundaries).
+
+Coverage, `ui/tests/e2e/kpis.spec.ts`, with `interceptUpdateValueSettings` recording each `PUT` body:
+- an override save sends exactly `{"outcome_minutes":{"MESSAGE_SENT":7}}`, closes the Sheet, and the tiles show the recalculated figures;
+- a reset sends `{"outcome_minutes":{"MESSAGE_SENT":null}}`;
+- a rate is sent as `75.5`, and an emptied rate as `null`;
+- a failed save shows the server's message, keeps the Sheet open, and keeps the edit;
+- a save refetches `/value` and never `/value/activity`.
+
+Test-first:
+- All 5 failed first, because no request was sent.
+- With the save wired and the interceptor unchanged, the two override tests failed on the mangled key (`"m_e_s_s_a_g_e__s_e_n_t": 7`, and `: null`). The UPPER_SNAKE exemption turned them green.
+- The activity guard was shown to fail (`Expected: 1, Received: 2`) with an activity invalidation temporarily added, which was then removed.
+- `make lint-ui` and `make check-ui` pass.
+- `kpis.spec.ts`, `top-nav-responsive.spec.ts`, `costs.spec.ts`, and the request-body specs `settings-agent-defaults.spec.ts`, `organization-llm-budget.spec.ts`, and `agent-configuration-page.spec.ts` pass, 114 tests.
 
 ### 2026-10-02 — AF-348 — KPIs value settings Sheet (read, edit, discard)
 

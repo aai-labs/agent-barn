@@ -17,7 +17,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 
 import { MAX_HOURLY_RATE_USD, MAX_OUTCOME_MINUTES } from "../constants";
 import { useValueSettings } from "../hooks/use-value-settings";
-import type { ValueSettings } from "../schemas";
+import { useUpdateValueSettings } from "../hooks/use-update-value-settings";
+import type { ValueSettings, ValueSettingsUpdate } from "../schemas";
 import { outcomeTypeLabel } from "../utils";
 import { RetryButton } from "./kpi-tiles";
 
@@ -49,6 +50,21 @@ function isDirty(draft: Draft, original: Draft): boolean {
   return Object.keys(original.overrides).some(
     (outcomeType) => draft.overrides[outcomeType] !== original.overrides[outcomeType],
   );
+}
+
+function changesFrom(draft: Draft, original: Draft): ValueSettingsUpdate {
+  const update: ValueSettingsUpdate = {};
+  const rate = draft.rate.trim();
+  if (rate !== original.rate) {
+    update.hourlyRateUsd = rate === "" ? null : Number(rate);
+  }
+  const outcomeMinutes: Record<string, number | null> = {};
+  for (const [outcomeType, minutes] of Object.entries(draft.overrides)) {
+    if (minutes === original.overrides[outcomeType]) continue;
+    outcomeMinutes[outcomeType] = minutes === null ? null : Number(minutes.trim());
+  }
+  if (Object.keys(outcomeMinutes).length > 0) update.outcomeMinutes = outcomeMinutes;
+  return update;
 }
 
 function rateError(rate: string): string | null {
@@ -100,7 +116,7 @@ export function ValueSettingsSheet() {
               Changes recalculate every figure on this page, including past periods.
             </SheetDescription>
           </SheetHeader>
-          <SettingsBody onDirtyChange={setDirty} onCancel={requestClose} />
+          <SettingsBody onDirtyChange={setDirty} onCancel={requestClose} onSaved={close} />
         </SheetContent>
       </Sheet>
 
@@ -122,9 +138,11 @@ export function ValueSettingsSheet() {
 function SettingsBody({
   onDirtyChange,
   onCancel,
+  onSaved,
 }: {
   onDirtyChange: (dirty: boolean) => void;
   onCancel: () => void;
+  onSaved: () => void;
 }) {
   const { settings, settingsError, refetchSettings } = useValueSettings();
 
@@ -147,20 +165,30 @@ function SettingsBody({
     );
   }
 
-  return <SettingsForm settings={settings} onDirtyChange={onDirtyChange} onCancel={onCancel} />;
+  return (
+    <SettingsForm
+      settings={settings}
+      onDirtyChange={onDirtyChange}
+      onCancel={onCancel}
+      onSaved={onSaved}
+    />
+  );
 }
 
 function SettingsForm({
   settings,
   onDirtyChange,
   onCancel,
+  onSaved,
 }: {
   settings: ValueSettings;
   onDirtyChange: (dirty: boolean) => void;
   onCancel: () => void;
+  onSaved: () => void;
 }) {
   const original = useMemo(() => draftFrom(settings), [settings]);
   const [draft, setDraft] = useState<Draft>(() => draftFrom(settings));
+  const { mutate: save, isPending: isSaving } = useUpdateValueSettings();
 
   const update = (next: Draft) => {
     setDraft(next);
@@ -261,8 +289,13 @@ function SettingsForm({
         <button type="button" className="af-btn" onClick={onCancel}>
           Cancel
         </button>
-        <button type="button" className="af-btn af-btn-primary" disabled={!dirty || hasErrors}>
-          Save
+        <button
+          type="button"
+          className="af-btn af-btn-primary"
+          disabled={!dirty || hasErrors || isSaving}
+          onClick={() => save(changesFrom(draft, original), { onSuccess: onSaved })}
+        >
+          {isSaving ? "Saving…" : "Save"}
         </button>
       </SheetFooter>
     </>

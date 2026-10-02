@@ -109,3 +109,10 @@ export const ValueSettingsSchema = z.object({
 
 export type OutcomeMinutes = z.infer<typeof OutcomeMinutesSchema>;
 export type ValueSettings = z.infer<typeof ValueSettingsSchema>;
+
+export const ValueSettingsUpdateSchema = z.object({
+  hourlyRateUsd: z.number().nullable().optional(),
+  outcomeMinutes: z.record(z.string(), z.number().int().nullable()).optional(),
+});
+
+export type ValueSettingsUpdate = z.infer<typeof ValueSettingsUpdateSchema>;

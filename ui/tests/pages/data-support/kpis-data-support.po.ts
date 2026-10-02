@@ -201,6 +201,41 @@ export class KpisDataSupport {
     return this.interceptRead(SETTINGS_PATH, valueSettings(), options);
   }
 
+  async interceptUpdateValueSettings({
+    status = 200,
+    detail = "Unable to save value settings",
+    onSave,
+  }: {
+    status?: number;
+    detail?: string;
+    onSave?: (body: Record<string, unknown>) => unknown;
+  } = {}): Promise<Record<string, unknown>[]> {
+    const bodies: Record<string, unknown>[] = [];
+    await this.page.route(
+      (url) => SETTINGS_PATH.test(url.pathname),
+      async (route) => {
+        if (route.request().method() !== "PUT") return route.fallback();
+        const body = route.request().postDataJSON() as Record<string, unknown>;
+        bodies.push(body);
+        if (status >= 400) {
+          await route.fulfill({
+            status,
+            contentType: "application/json",
+            body: JSON.stringify({ detail }),
+          });
+          return;
+        }
+        const saved = onSave?.(body) ?? valueSettings();
+        await route.fulfill({
+          status,
+          contentType: "application/json",
+          body: JSON.stringify(saved),
+        });
+      },
+    );
+    return bodies;
+  }
+
   private async interceptRead(
     path: RegExp,
     fallbackBody: unknown,

@@ -11,6 +11,7 @@ import {
   organizationActivity,
   organizationValue,
   valueAgent,
+  valueSettings,
   valueTotals,
 } from "../pages/data-support/kpis-data-support.po";
 import { KpisPage } from "../pages/kpis-page.po";
@@ -881,5 +882,128 @@ test.describe("Organization KPIs — value settings", () => {
     await kpis.retrySettings();
 
     await expect(kpis.rateInput()).toHaveValue("60");
+  });
+});
+
+test.describe("Organization KPIs — saving value settings", () => {
+  let data: DataSupport;
+  let kpis: KpisPage;
+
+  test.use({ storageState: { cookies: [], origins: [] } });
+
+  test.beforeEach(async ({ page }) => {
+    data = new DataSupport(page);
+    kpis = new KpisPage(page);
+    await data.auth.interceptRefreshRequest();
+    await data.users.interceptGetUserContextRequest();
+  });
+
+  test("saving an override sends only that outcome, closes, and refreshes the figures", async () => {
+    const value = await data.kpis.interceptValue();
+    await data.kpis.interceptActivity();
+    const settings = await data.kpis.interceptValueSettings();
+    const saves = await data.kpis.interceptUpdateValueSettings({
+      onSave: () => {
+        const saved = valueSettings({ overrides: { MESSAGE_SENT: 7 } });
+        settings.respondWith({ body: saved });
+        value.respondWith({
+          body: organizationValue({ totals: valueTotals({ minutes_saved: 140, value: 140 }) }),
+        });
+        return saved;
+      },
+    });
+    await kpis.goto();
+    await expect(kpis.tile("kpi-hours-saved")).toContainText("2.5 h");
+
+    await kpis.openValueSettings();
+    await kpis.minutesInput("Message sent").fill("7");
+    await kpis.saveSettingsButton().click();
+
+    await expect.poll(() => saves.length).toBe(1);
+    expect(saves[0]).toEqual({ outcome_minutes: { MESSAGE_SENT: 7 } });
+    await expect(kpis.settingsSheet()).toHaveCount(0);
+    await expect(kpis.tile("kpi-hours-saved")).toContainText("2.3 h");
+    await expect(kpis.tile("kpi-value")).toContainText("$140.00");
+  });
+
+  test("resetting an override and saving sends it back to the default", async () => {
+    await data.kpis.interceptValue();
+    await data.kpis.interceptActivity();
+    await data.kpis.interceptValueSettings();
+    const saves = await data.kpis.interceptUpdateValueSettings({
+      onSave: () => valueSettings({ overrides: {} }),
+    });
+    await kpis.goto();
+
+    await kpis.openValueSettings();
+    await kpis.resetToDefault("Message sent");
+    await kpis.saveSettingsButton().click();
+
+    await expect.poll(() => saves.length).toBe(1);
+    expect(saves[0]).toEqual({ outcome_minutes: { MESSAGE_SENT: null } });
+    await expect(kpis.settingsSheet()).toHaveCount(0);
+  });
+
+  test("a changed rate is sent as a number, and a cleared rate as null", async () => {
+    await data.kpis.interceptValue();
+    await data.kpis.interceptActivity();
+    const settings = await data.kpis.interceptValueSettings();
+    const saves = await data.kpis.interceptUpdateValueSettings({
+      onSave: (body) => {
+        const saved = valueSettings({ hourlyRate: body.hourly_rate_usd as number | null });
+        settings.respondWith({ body: saved });
+        return saved;
+      },
+    });
+    await kpis.goto();
+
+    await kpis.openValueSettings();
+    await kpis.rateInput().fill("75.5");
+    await kpis.saveSettingsButton().click();
+    await expect.poll(() => saves.length).toBe(1);
+    expect(saves[0]).toEqual({ hourly_rate_usd: 75.5 });
+    await expect(kpis.settingsSheet()).toHaveCount(0);
+
+    await kpis.openValueSettings();
+    await expect(kpis.rateInput()).toHaveValue("75.5");
+    await kpis.rateInput().fill("");
+    await kpis.saveSettingsButton().click();
+    await expect.poll(() => saves.length).toBe(2);
+    expect(saves[1]).toEqual({ hourly_rate_usd: null });
+  });
+
+  test("a failed save keeps the panel open with the edits and says why", async ({ page }) => {
+    await data.kpis.interceptValue();
+    await data.kpis.interceptActivity();
+    await data.kpis.interceptValueSettings();
+    await data.kpis.interceptUpdateValueSettings({ status: 500 });
+    await kpis.goto();
+
+    await kpis.openValueSettings();
+    await kpis.minutesInput("Pull request opened").fill("30");
+    await kpis.saveSettingsButton().click();
+
+    await expect(page.getByText("Unable to save value settings")).toBeVisible();
+    await expect(kpis.settingsSheet()).toBeVisible();
+    await expect(kpis.minutesInput("Pull request opened")).toHaveValue("30");
+  });
+
+  test("saving refreshes value but not activity", async () => {
+    const value = await data.kpis.interceptValue();
+    const activity = await data.kpis.interceptActivity();
+    await data.kpis.interceptValueSettings();
+    await data.kpis.interceptUpdateValueSettings();
+    await kpis.goto();
+    await expect(kpis.tile("kpi-requests")).toContainText("480");
+    const valueReadsBefore = value.requests.length;
+    const activityReadsBefore = activity.requests.length;
+
+    await kpis.openValueSettings();
+    await kpis.minutesInput("Pull request opened").fill("30");
+    await kpis.saveSettingsButton().click();
+
+    await expect.poll(() => value.requests.length).toBeGreaterThan(valueReadsBefore);
+    await expect(kpis.settingsSheet()).toHaveCount(0);
+    expect(activity.requests.length).toBe(activityReadsBefore);
   });
 });
