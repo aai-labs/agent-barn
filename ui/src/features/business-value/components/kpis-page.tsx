@@ -13,6 +13,7 @@ import { useOrganizationActivity } from "../hooks/use-organization-activity";
 import { useOrganizationValue } from "../hooks/use-organization-value";
 import { costsHref, type KpiWindow } from "../utils";
 import { KpiTiles } from "./kpi-tiles";
+import { KpiTrendChart } from "./kpi-trend-chart";
 
 export function KpisPage() {
   const canManage = useRequireOrgManager();
@@ -44,6 +45,12 @@ function KpiDashboard() {
     [setUrlFilters],
   );
 
+  const valueSource = { data: value, error: valueError, onRetry: () => void refetchValue() };
+  const activitySource = {
+    data: activity,
+    error: activityError,
+    onRetry: () => void refetchActivity(),
+  };
   const echoed = value ?? activity;
   const orgBase = `/dashboard/${selectedOrganization?.id ?? ""}`;
 
@@ -81,14 +88,12 @@ function KpiDashboard() {
       </div>
 
       <KpiTiles
-        value={{ data: value, error: valueError, onRetry: () => void refetchValue() }}
-        activity={{
-          data: activity,
-          error: activityError,
-          onRetry: () => void refetchActivity(),
-        }}
+        value={valueSource}
+        activity={activitySource}
         spendHref={costsHref(orgBase, urlFilters.from, urlFilters.to)}
       />
+
+      <KpiTrendChart value={valueSource} activity={activitySource} />
     </div>
   );
 }

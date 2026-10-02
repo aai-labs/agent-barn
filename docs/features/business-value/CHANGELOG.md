@@ -23,11 +23,28 @@ Related context: [Activity and Ingest](../activity-and-ingest.md), [Agent Activi
 - Also delivered: `GET /organizations/{organization_id}/value/activity`, the Organization activity KPI. The feature doc's [Organization activity](../business-value.md#organization-activity) section is the contract. It rests on `ValueActivityRepository` and the two indexes of migration `45bcefcb0749`.
 - Also delivered: the KPIs page route and its Owner/Admin navigation entry (AF-348). The feature doc's [KPI dashboard](../business-value.md#kpi-dashboard) section is the contract.
 - Also delivered: the KPIs page's date range and six headline tiles, read from `GET /value` and `GET /value/activity` (AF-348).
-- In transition: the KPIs page has its header, date range, and tiles; its chart, table, empty and loading states, and value settings Sheet land in the following AF-348 slices.
-- Next: AF-348 trend chart.
+- Also delivered: the KPIs page's trend chart, with "Value vs spend" and "Requests" tabs (AF-348).
+- In transition: the KPIs page has its header, date range, tiles, and trend chart; its per-Agent table, empty and loading states, and value settings Sheet land in the following AF-348 slices.
+- Next: AF-348 per-Agent table and footnotes.
 - Blockers: the product owner has not signed off the default minutes per Outcome Type. They are placeholders until then, and every value figure inherits them.
 
 ## Slice history
+
+### 2026-10-02 — AF-348 — KPIs trend chart
+
+Delivered:
+- `ui/src/features/business-value/components/kpi-trend-chart.tsx` uses `@/components/ui/chart` (Recharts 3.10.1), with `Tabs` switching between "Value vs spend" and "Requests". The rules are in the feature doc's [Trend chart](../business-value.md#trend-chart).
+- It reuses `formatBucket`, `formatBucketLong`, `evenlySpacedTicks` (platform stats), and `formatSpendCompact` and `EmptyChart` (Costs).
+
+Coverage, `ui/tests/e2e/kpis.spec.ts`:
+- The chart opens on "Value vs spend" with two series drawn; switching to "Requests" draws one, and the value chart is unmounted.
+- With no rate set, spend alone is drawn, with the note.
+- A failed `/value` keeps "Requests" working.
+- A failed `/value/activity` keeps "Value vs spend" working, and Retry recovers the "Requests" tab.
+
+Test-first:
+- All 4 tests failed first, because no chart existed.
+- `make lint-ui` and `make check-ui` pass. `kpis.spec.ts`, `top-nav-responsive.spec.ts`, and `costs.spec.ts` pass, 49 tests.
 
 ### 2026-10-02 — AF-348 — KPIs data layer, date range, and headline tiles
 

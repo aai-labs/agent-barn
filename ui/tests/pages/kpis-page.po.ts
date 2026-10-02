@@ -43,6 +43,26 @@ export class KpisPage {
     return this.tile("kpi-spend").getByRole("link", { name: "View in Costs" });
   }
 
+  trend(): Locator {
+    return this.page.getByTestId("kpi-trend");
+  }
+
+  chartTab(name: "Value vs spend" | "Requests"): Locator {
+    return this.trend().getByRole("tab", { name, exact: true });
+  }
+
+  async showChart(name: "Value vs spend" | "Requests") {
+    await this.chartTab(name).click();
+  }
+
+  chartAreas(testId: string): Locator {
+    return this.page.getByTestId(testId).locator(".recharts-area");
+  }
+
+  async retryTrend() {
+    await this.trend().getByRole("button", { name: "Retry" }).click();
+  }
+
   windowLabel(): Locator {
     return this.page.getByTestId("kpi-window");
   }

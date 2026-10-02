@@ -337,3 +337,82 @@ test.describe("Organization KPIs — headline tiles", () => {
     await expect(kpis.tile("kpi-spend")).toContainText("$12.40");
   });
 });
+
+test.describe("Organization KPIs — trend chart", () => {
+  let data: DataSupport;
+  let kpis: KpisPage;
+
+  test.use({ storageState: { cookies: [], origins: [] } });
+
+  test.beforeEach(async ({ page }) => {
+    data = new DataSupport(page);
+    kpis = new KpisPage(page);
+    await data.auth.interceptRefreshRequest();
+    await data.users.interceptGetUserContextRequest();
+  });
+
+  test("opens on value against spend and switches to requests", async ({ page }) => {
+    await data.kpis.interceptValue();
+    await data.kpis.interceptActivity();
+
+    await kpis.goto();
+
+    await expect(kpis.chartTab("Value vs spend")).toHaveAttribute("aria-selected", "true");
+    await expect(kpis.chartAreas("kpi-value-chart")).toHaveCount(2);
+
+    await kpis.showChart("Requests");
+
+    await expect(kpis.chartTab("Requests")).toHaveAttribute("aria-selected", "true");
+    await expect(kpis.chartAreas("kpi-requests-chart")).toHaveCount(1);
+    await expect(page.getByTestId("kpi-value-chart")).toHaveCount(0);
+  });
+
+  test("without an hourly rate, charts spend alone and says why", async () => {
+    await data.kpis.interceptValue({
+      body: organizationValue({
+        totals: valueTotals({ value: null, value_to_spend_ratio: null, hourly_rate_usd: null }),
+        series: [
+          { bucket: "2026-09-30T00:00:00Z", minutes_saved: 60, value: null, spend: 4.1 },
+          { bucket: "2026-10-01T00:00:00Z", minutes_saved: 90, value: null, spend: 8.3 },
+        ],
+      }),
+    });
+    await data.kpis.interceptActivity();
+
+    await kpis.goto();
+
+    await expect(kpis.trend()).toContainText("Set an hourly rate to chart value");
+    await expect(kpis.chartAreas("kpi-value-chart")).toHaveCount(1);
+  });
+
+  test("a failed value read leaves the requests chart working", async () => {
+    await data.kpis.interceptValue({ status: 500 });
+    await data.kpis.interceptActivity();
+
+    await kpis.goto();
+
+    await expect(kpis.trend()).toContainText("Unable to load");
+    await expect(kpis.trend().getByRole("button", { name: "Retry" })).toBeVisible();
+
+    await kpis.showChart("Requests");
+
+    await expect(kpis.chartAreas("kpi-requests-chart")).toHaveCount(1);
+  });
+
+  test("a failed activity read leaves the value chart working, and retry recovers", async () => {
+    await data.kpis.interceptValue();
+    const activity = await data.kpis.interceptActivity({ status: 500 });
+
+    await kpis.goto();
+
+    await expect(kpis.chartAreas("kpi-value-chart")).toHaveCount(2);
+
+    await kpis.showChart("Requests");
+    await expect(kpis.trend()).toContainText("Unable to load");
+
+    activity.respondWith({ status: 200 });
+    await kpis.retryTrend();
+
+    await expect(kpis.chartAreas("kpi-requests-chart")).toHaveCount(1);
+  });
+});

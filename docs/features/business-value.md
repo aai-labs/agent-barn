@@ -304,6 +304,14 @@ The dashboard never shows `$0` or `0%` for an unknown figure:
 
 Each tile belongs to one endpoint. If an endpoint fails, only its tiles show "Unable to load" with a Retry; the other endpoint's tiles still render.
 
+### Trend chart
+
+- One chart with two tabs, labelled by the bucket granularity each response echoes.
+  - **Value vs spend** (the default) draws `/value` `series`: value and spend per bucket.
+  - **Requests** draws `/value/activity` `requests_series`.
+- With no hourly rate set, every value point is null, so the chart draws spend alone and says "Set an hourly rate to chart value".
+- Each tab belongs to one endpoint. A failed endpoint shows "Unable to load" with a Retry inside its own tab, and the other tab still renders.
+
 ## Known gaps
 
 Each of these is an **undercount**, not a verdict on the Agent. The last one is a possible overcount.
