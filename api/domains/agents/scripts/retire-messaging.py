@@ -59,8 +59,12 @@ def retire(runtime: str, state: Path) -> dict:
                 report["job_audit"] = "read"
         except (OSError, ValueError, sqlite3.Error):
             report["job_audit"] = "unreadable"
-    state.mkdir(parents=True, exist_ok=True)
-    (state / "retired-messaging-audit.json").write_text(json.dumps(report) + "\n")
+    try:
+        state.mkdir(parents=True, exist_ok=True)
+        (state / "retired-messaging-audit.json").write_text(json.dumps(report) + "\n")
+    except OSError:
+        # The report is advisory; plugin removal above must still succeed.
+        report["job_audit"] = "unwritable"
     print(
         f"[messaging-retirement] spool_present={report['spool_present']} "
         f"job_audit={report['job_audit']} jobs_requiring_repair={len(report['jobs_requiring_repair'])}",

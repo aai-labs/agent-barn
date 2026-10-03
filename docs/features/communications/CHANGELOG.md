@@ -14,6 +14,11 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
 
 ## Changes
 
+### 2026-10-03 — Review follow-up: tolerate an unwritable retirement report — PR pending
+
+- Corrected: failure to save the advisory retirement report logs `job_audit=unwritable` instead of blocking Agent startup. Managed plugin removal still fails loudly; job stores and history remain untouched.
+- Verified: a real read-only state-directory regression fails with the old script and passes with the fix.
+
 ### 2026-10-03 — Review follow-up: fence old replicas during cleanup rollout — PR pending
 
 - Corrected: the chart retains the hard-coded native allowlist Secret key while current code ignores it, preventing older replicas from restoring gateway fallback when restarted during the pre-upgrade hook.

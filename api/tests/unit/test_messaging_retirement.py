@@ -102,6 +102,20 @@ def test_unreadable_job_store_is_reported_without_content_or_changes(tmp_path):
     assert store.read_text() == "private corrupt job store"
 
 
+def test_unwritable_audit_report_does_not_block_startup(tmp_path, capsys):
+    state = tmp_path / "state"
+    plugin = state / "plugins/agentbarn-messaging"
+    plugin.mkdir(parents=True)
+    state.chmod(0o555)
+    try:
+        report = _retirement().retire("hermes", state)
+    finally:
+        state.chmod(0o755)
+    assert not plugin.exists()
+    assert report["job_audit"] == "unwritable"
+    assert "job_audit=unwritable" in capsys.readouterr().out
+
+
 def test_openclaw_merged_config_cannot_resurrect_retired_plugin(tmp_path):
     state = tmp_path / ".openclaw"
     state.mkdir()
