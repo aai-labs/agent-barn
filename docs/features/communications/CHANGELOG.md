@@ -18,7 +18,8 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
 
 - Preserved: staging spend-limit configuration and terminal-error tracking alongside bridge-free Web Chat/Email runtime delivery; the retired initiated-send execution binding remains removed.
 - Reconciled: staging Scheduled runs and native file-attachment prompt policies remain, with native origin/home-target guidance retained. Runtime tool and transport boundaries stay code-owned.
-- Migration: merge the gateway-retirement/driver-default and self-service spend-limit revision branches into one Alembic head without rewriting either history.
+- Migration: revision `2519037fd3ea` merges the gateway-retirement/driver-default and self-service spend-limit branches without rewriting either history. Historical migration fixtures use reflected Organization/Agent tables instead of projecting new spend-limit columns into older schemas.
+- Verified after merge: 3,294 API tests, 452 browser tests, 15 focused migration tests, and 69 focused policy/adapter/spend-notice tests pass. API/UI static checks, one migration head, Helm lint/render, and deployment YAML checks pass. Both merged images were rebuilt locally; Hermes image contracts and Skill discovery, plus OpenClaw smoke/native/startup contracts, pass. The separate Kubernetes mutation test remains excluded under the read-only infrastructure restriction.
 
 ### 2026-10-03 — Review verification: complete Docker-backed checks — PR pending
 
