@@ -7,6 +7,7 @@ from kubernetes import client
 from api.domains.communications.models import ConversationLocation
 
 from .common import _labels, _resource_name, _setting_ids
+from .memory import MEMORY_PLUGIN_PATH, openclaw_memory_settings
 
 # Explicit so agents stop inheriting the namespace LimitRange default of
 # 512Mi request / 2Gi limit. requests.memory is the binding quota axis
@@ -35,6 +36,7 @@ OPENCLAW_WORKSPACE_DIR = "/home/node/.openclaw/workspace"
 INIT_OPENCLAW_JS: str = (_SCRIPTS / "init-openclaw.js").read_text()
 HEALTHZ_SERVER_JS: str = (_SCRIPTS / "healthz-server.js").read_text()
 START_SH: str = (_SCRIPTS / "start.sh").read_text()
+MEMORY_GATEWAY_READY_PY: str = (_COMMON_SCRIPTS / "memory-gateway-ready.py").read_text()
 LEGACY_WORKSPACE_MIGRATION_SH: str = (
     (_SCRIPTS / "legacy-workspace-migration.sh").read_text().replace("@OPENCLAW_WORKSPACE_DIR@", OPENCLAW_WORKSPACE_DIR)
 )
@@ -136,10 +138,18 @@ def build_openclaw_gateway_config(
     model: str,
     litellm_base_url: str,
     native_channels: dict[str, dict] | None = None,
+    memory_enabled: bool = False,
 ) -> dict:
     """``native_channels`` maps a Platform key to its OpenClaw ``channels.<key>`` block."""
     channels = native_channels or {}
     config = _openclaw_config_core(model, litellm_base_url, binding_channel=None, channels=channels)
+    config["plugins"]["entries"]["hindsight-openclaw"] = {"enabled": memory_enabled}
+    if memory_enabled:
+        config["plugins"]["allow"].append("hindsight-openclaw")
+        config["plugins"]["load"]["paths"].append(MEMORY_PLUGIN_PATH)
+        config["plugins"]["entries"]["hindsight-openclaw"].update(
+            {"config": openclaw_memory_settings(), "hooks": {"allowConversationAccess": True}}
+        )
     if channels:
         plugins = config["plugins"]
         plugins["allow"] += [*channels, "agentbarn-observer"]
@@ -337,6 +347,7 @@ def build_config_map(
         data["init-openclaw.js"] = INIT_OPENCLAW_JS
         data["healthz-server.js"] = HEALTHZ_SERVER_JS
         data["start.sh"] = START_SH
+        data["memory-gateway-ready.py"] = MEMORY_GATEWAY_READY_PY
         data["legacy-workspace-migration.sh"] = LEGACY_WORKSPACE_MIGRATION_SH
         data["telemetry-push-index.js"] = TELEMETRY_PUSH_INDEX_JS
         data["telemetry-push-package.json"] = TELEMETRY_PUSH_PACKAGE_JSON
@@ -420,6 +431,7 @@ def build_deployment(
             template=client.V1PodTemplateSpec(
                 metadata=client.V1ObjectMeta(labels=labels),
                 spec=client.V1PodSpec(
+                    automount_service_account_token=False,
                     image_pull_secrets=(
                         [client.V1LocalObjectReference(name=image_pull_secret)] if image_pull_secret else None
                     ),

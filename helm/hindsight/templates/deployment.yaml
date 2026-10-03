@@ -1,0 +1,55 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: hindsight
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: hindsight
+        app.kubernetes.io/instance: {{ .Release.Name }}
+      annotations:
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: hindsight
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: api
+              containerPort: 8888
+          envFrom:
+            - secretRef:
+                name: {{ .Values.secretName }}
+          env:
+            - name: HINDSIGHT_ENABLE_CP
+              value: "false"
+            - name: HINDSIGHT_API_TENANT_EXTENSION
+              value: hindsight_api.extensions.builtin.tenant:ApiKeyTenantExtension
+            - name: HINDSIGHT_API_LLM_PROVIDER
+              value: openai
+            - name: HINDSIGHT_API_LLM_BASE_URL
+              value: {{ .Values.llm.baseUrl | required "llm.baseUrl is required" | quote }}
+            - name: HINDSIGHT_API_LLM_MODEL
+              value: {{ .Values.llm.model | required "llm.model is required" | quote }}
+            - name: HINDSIGHT_API_WORKER_ID
+              value: {{ .Release.Name | quote }}
+          startupProbe:
+            httpGet: {path: /health, port: api}
+            periodSeconds: 5
+            failureThreshold: 120
+          readinessProbe:
+            httpGet: {path: /health, port: api}
+          livenessProbe:
+            httpGet: {path: /health, port: api}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}

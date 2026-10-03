@@ -1,0 +1,4 @@
+apiVersion: v2
+name: hindsight
+description: Authenticated Hindsight Agent Memory backend
+version: 0.1.0

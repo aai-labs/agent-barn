@@ -69,6 +69,11 @@ Reading the proxy at request time — the earlier arrangement — meant a failed
 
 ## Organization LLM budgets
 
+The optional [Agent Memory](agent-memory.md) backend currently uses a separate,
+budgeted platform LiteLLM key. Its calls are not yet attributed per Organization,
+and the gateway's Organization spend-limit gate is pending the cost slice. The
+Agent key/team enforcement below applies to runtime model calls.
+
 `../../api/domains/organizations/service.py` owns budget storage and reconciliation;
 `../../api/infrastructure/litellm/client.py` owns the remote team/key API calls.
 

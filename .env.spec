@@ -148,3 +148,9 @@ INGEST_PORT=
 # Optional. Host port for the Communications gateway. Agent pods reach it
 # through host.docker.internal; defaults to 8002.
 COMMUNICATIONS_PORT=
+
+# Memory gateway (plugins are enabled in a later slice). The backend is configured
+# separately; its shared key must never be injected into Agent runtime Secrets.
+MEMORY_PORT=8003
+HINDSIGHT_BASE_URL=
+HINDSIGHT_API_KEY=

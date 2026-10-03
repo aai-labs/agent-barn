@@ -14,6 +14,32 @@ helmDefaults:
   timeout: 600
 
 releases:
+{{- if eq (env "HINDSIGHT_ENABLED" | default "false") "true" }}
+  - name: postgres-hindsight
+    namespace: {{ env "NAMESPACE" | default "agent-farm" }}
+    chart: ./helm/postgres
+    values:
+      - secretName: postgres-hindsight
+        image:
+          repository: pgvector/pgvector
+          tag: pg18
+        storage:
+          size: 10Gi
+          storageClass: {{ env "STORAGE_CLASS" | default "" | quote }}
+        db:
+          user: hindsight
+          name: hindsight
+          password: {{ env "HINDSIGHT_DB_PASSWORD" | required "HINDSIGHT_DB_PASSWORD is required" | quote }}
+  - name: hindsight
+    namespace: {{ env "NAMESPACE" | default "agent-farm" }}
+    chart: ./helm/hindsight
+    needs: ["{{ env "NAMESPACE" | default "agent-farm" }}/postgres-hindsight", "{{ env "NAMESPACE" | default "agent-farm" }}/litellm"]
+    values:
+      - databaseUrl: {{ printf "postgresql://hindsight:%s@postgres-hindsight:5432/hindsight" (env "HINDSIGHT_DB_PASSWORD" | urlquery | replace "+" "%20") | quote }}
+        apiKey: {{ env "HINDSIGHT_API_KEY" | required "HINDSIGHT_API_KEY is required" | quote }}
+        llm:
+          apiKey: {{ env "HINDSIGHT_LITELLM_API_KEY" | required "HINDSIGHT_LITELLM_API_KEY is required" | quote }}
+{{- end }}
   - name: postgres-app
     namespace: {{ env "NAMESPACE" | default "agent-farm" }}
     chart: ./helm/postgres
@@ -154,6 +180,10 @@ releases:
         value: {{ env "HERMES_IMAGE_TAG" | default "latest" | quote }}
       - name: dbConnectionUrl
         value: {{ printf "postgresql://%s:%s@postgres-app:5432/%s" (env "POSTGRES_APP_USER") (env "POSTGRES_APP_PASSWORD") (env "POSTGRES_APP_DB") | quote }}
+      - name: memory.enabled
+        value: {{ env "HINDSIGHT_ENABLED" | default "false" }}
+      - name: memory.authChecksum
+        value: {{ env "HINDSIGHT_API_KEY" | sha256sum | quote }}
       - name: secretSigningKey
         value: {{ env "SECRET_SIGNING_KEY" | required "SECRET_SIGNING_KEY is required" | quote }}
       - name: platformAdminCredentials

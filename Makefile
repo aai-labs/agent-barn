@@ -1,9 +1,10 @@
 COMPOSE := docker compose -f compose.yml
+RUNTIME ?= hermes
 
 .PHONY: \
-	setup run stop stop-clean \
+	setup run stop stop-clean test-api-runtime \
 	restart-ui \
-	dev-api dev-ingest dev-communications dev-ui dev-worker reconcile reconcile-restore-points reconcile-llm-budgets run-llm-budget-alerts backfill-business-actions forward-teams forward-triggers seed-event-deliveries seed-costs seed-agent-overrides migrate merge-heads rollback makemigrations test-api test-ui lint-ui check-ui coverage check-api check-migrations check-monitoring fix-api test check fix \
+	dev-api dev-ingest dev-communications dev-memory dev-ui dev-worker reconcile reconcile-restore-points reconcile-llm-budgets run-llm-budget-alerts backfill-business-actions forward-teams forward-triggers seed-event-deliveries seed-costs seed-agent-overrides migrate merge-heads rollback makemigrations test-api test-ui lint-ui check-ui coverage check-api check-migrations check-monitoring check-memory fix-api test check fix \
 	db-up db-down db-logs db-restart redis-up redis-down redis-logs
 
 # One-command local dev: validates .env, brings up k3d + LiteLLM, loads agent
@@ -43,6 +44,8 @@ setup:
 INGEST_PORT ?= 8001
 INGEST_BASE_URL ?= http://host.docker.internal:$(INGEST_PORT)/ingest/v1
 COMMUNICATIONS_PORT ?= 8002
+MEMORY_PORT ?= 8003
+MEMORY_BASE_URL ?= http://host.docker.internal:$(MEMORY_PORT)/memory/v1
 COMMUNICATIONS_BASE_URL ?= http://host.docker.internal:$(COMMUNICATIONS_PORT)/communications/v1
 # Overridable so a second worktree can run its own stack without port clashes.
 API_DEV_PORT ?= 8000
@@ -52,7 +55,7 @@ TEAMS_RUNTIME_WEBHOOK_URL ?= http://localhost:3978/api/messages
 # Same for Agent Webhook dispatch through the local `forward-triggers` port-forward.
 AGENT_TRIGGER_URL ?= http://localhost:8082/agent-triggers/v1/invocations
 
-# Runs Ingest and Communications alongside the main app so native development
+# Runs Ingest, Communications, and Memory alongside the main app so native development
 # has the same service topology as Docker and Helm. The trap kills every child
 # on Ctrl-C; stray listeners otherwise break the next run confusingly.
 dev-api:
@@ -60,7 +63,8 @@ dev-api:
 	trap 'kill 0' EXIT INT TERM; \
 	uv run python -m fastapi dev ingest_main.py --host 0.0.0.0 --port $(INGEST_PORT) & \
 	uv run python -m fastapi dev communications_main.py --host 0.0.0.0 --port $(COMMUNICATIONS_PORT) & \
-	INGEST_BASE_URL=$(INGEST_BASE_URL) COMMUNICATIONS_BASE_URL=$(COMMUNICATIONS_BASE_URL) TEAMS_RUNTIME_WEBHOOK_URL=$(TEAMS_RUNTIME_WEBHOOK_URL) AGENT_TRIGGER_URL=$(AGENT_TRIGGER_URL) uv run python -m fastapi dev main.py --host 0.0.0.0 --port $(API_DEV_PORT)
+	uv run python -m uvicorn api.memory_main:app --app-dir .. --host 0.0.0.0 --port $(MEMORY_PORT) --reload --no-access-log & \
+	INGEST_BASE_URL=$(INGEST_BASE_URL) COMMUNICATIONS_BASE_URL=$(COMMUNICATIONS_BASE_URL) MEMORY_BASE_URL=$(MEMORY_BASE_URL) TEAMS_RUNTIME_WEBHOOK_URL=$(TEAMS_RUNTIME_WEBHOOK_URL) AGENT_TRIGGER_URL=$(AGENT_TRIGGER_URL) uv run python -m fastapi dev main.py --host 0.0.0.0 --port $(API_DEV_PORT)
 
 # Ingest on its own — `make dev-api` already starts it; use this to run or
 # restart the telemetry sink independently.
@@ -71,6 +75,12 @@ dev-ingest:
 # Communications on its own — `make dev-api` already starts it.
 dev-communications:
 	cd api && uv run python -m fastapi dev communications_main.py --host 0.0.0.0 --port $(COMMUNICATIONS_PORT)
+
+dev-memory:
+	cd api && uv run uvicorn api.memory_main:app --app-dir .. --host 0.0.0.0 --port $(MEMORY_PORT) --reload --no-access-log
+
+check-memory:
+	cd api && uv run python scripts/check_memory_charts.py
 
 # Local runtime-owned Teams: the API (Docker or host) cannot reach Agent Services
 # in k3d, so expose one Agent's webhook port on the host. Re-run after the pod
@@ -166,7 +176,8 @@ test-api-k8s:
 	cd api && uv run python -m pytest tests/integration/test_kubernetes_client.py -v
 
 test-api-runtime:
-	cd api && uv run python -m pytest runtime_tests -v
+	@case "$(RUNTIME)" in hermes|openclaw) ;; *) echo 'RUNTIME must be hermes or openclaw'; exit 1 ;; esac
+	cd api && uv run python -m pytest runtime_tests/test_$(RUNTIME)_*.py -v
 
 test-ui:
 	cd ui && pnpm test

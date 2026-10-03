@@ -46,6 +46,13 @@ POSTGRES_LITELLM_USER=litellm
 POSTGRES_LITELLM_PASSWORD=
 POSTGRES_LITELLM_DB=litellm
 
+# Opt-in Hindsight release. Supply distinct database/auth secrets and a budgeted
+# LiteLLM virtual key for memory; the gateway alone receives the Hindsight API key.
+HINDSIGHT_ENABLED=false
+HINDSIGHT_DB_PASSWORD=
+HINDSIGHT_API_KEY=
+HINDSIGHT_LITELLM_API_KEY=
+
 # ── LiteLLM + OpenRouter ─────────────────────────────────────────────────────
 # Any strong secret prefixed with sk-; LiteLLM uses it to mint agent-scoped
 # virtual keys. Pick once and keep it stable. Generate with:

@@ -39,6 +39,43 @@ The deployable services have independent Helm charts. `../../helmfile.yaml.gotmp
 
 LiteLLM uses a non-overlapping rolling update (`maxSurge: 0`, `maxUnavailable: 1`): the namespace quota cannot accommodate its old and replacement 2Gi pods at once. Upgrades briefly interrupt the proxy while Kubernetes replaces the pod; do not restore the default surge behavior unless the quota is increased first.
 
+## Agent Memory deployment
+
+The gateway runs from the API image as `api.memory_main:app` on port 8003, with
+access logging disabled so client paths cannot enter logs. `make dev-api` starts
+it alongside the other HTTP processes; `make dev-memory` runs it separately.
+For local use set `HINDSIGHT_BASE_URL` to the backend root and `HINDSIGHT_API_KEY`
+to its shared API key. Compose starts the gateway but does not start Hindsight.
+Opted-in starts configure Hermes and OpenClaw for automatic recall and retain
+alongside native memory. Rebuild the runtime base images to install the pinned
+Hindsight clients/plugin before using this integration, then restart opted-in
+Agents so they receive the current configuration and fresh credentials. Runtime
+startup waits briefly for authenticated gateway health before loading the plugin;
+native memory remains available when the gateway is unavailable.
+
+Helmfile leaves the backend and gateway off by default. For an operator-run
+Helmfile deployment, set `HINDSIGHT_ENABLED=true`, `HINDSIGHT_DB_PASSWORD`,
+`HINDSIGHT_API_KEY`, and `HINDSIGHT_LITELLM_API_KEY` in `.env.deploy`. Use distinct
+database/auth secrets and a budgeted LiteLLM virtual key for the last value.
+The deployment workflows do not yet enable this optional release.
+
+This adds `postgres-hindsight` (pgvector/PostgreSQL 18, its own 10Gi PVC) and
+Hindsight 0.10.2. Only its API port 8888 is exposed, as ClusterIP; its control
+plane is off and API authentication is mandatory. The gateway gets the auth key
+through one Secret key reference; product API, worker, and Agent pods do not.
+Rotating the Helmfile API-key value rolls Hindsight and the gateway through
+their Secret/auth checksums. With a manually managed Secret, also restart the
+gateway Deployment after rotation because environment variables are read at boot.
+
+Hindsight calls the existing LiteLLM endpoint with a platform key and
+`openrouter/openai/gpt-4.1-mini`. Organization attribution, Organization limit
+enforcement, purge, and backup/restore are later slices, tracked in the
+[delivery log](../features/agent-memory/CHANGELOG.md). Current platform budgets
+do not imply Organization-level memory enforcement.
+
+Run `make check-memory` with Helm installed to validate both enabled and disabled
+renders without connecting to a cluster. The API CI workflow runs the same check.
+
 ## Organization LLM budgets
 
 Each Organization has its own LLM spend ceiling, set by a Platform Administrator

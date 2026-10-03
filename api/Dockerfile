@@ -21,5 +21,6 @@ COPY ./api /app/api
 
 EXPOSE 8000
 EXPOSE 8001
+EXPOSE 8003
 
 CMD ["sh", "api/start.sh"]

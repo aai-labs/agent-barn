@@ -87,6 +87,7 @@ invoke verification from the repository root.
 | `make check-api` | Ruff lint/format check and Python type checking | None |
 | `make fix-api` | Ruff autofix and formatting; modifies files | None |
 | `make check-migrations` | Exactly one Alembic head | None |
+| `make check-memory` | Rendered gateway/backend isolation and authentication contracts | Helm 3.19.0 |
 | `make test-api` | API unit and integration tests, excluding the Kubernetes client test | Docker for Testcontainers PostgreSQL, plus Node.js for the OpenClaw plugin test |
 | `make test-api-k8s` | Kubernetes client integration test | Docker plus a configured, disposable Kubernetes cluster whose target namespace already exists |
 | `make test-api-runtime` | Runtime contract tests against an explicitly selected built image | Docker and the image variable required by the selected test, such as `HERMES_TEST_IMAGE` |
@@ -152,6 +153,13 @@ Representative sources:
 
 ## Runtime plugin tests
 
+Agent Memory gateway tests replay sanitized Hermes and OpenClaw request captures
+from `../../api/tests/fixtures/agent_memory/` through a real HTTP listener. They
+cover the outbound bank, forced tags, document/operation namespaces, lifecycle
+credential rotation, and response redaction. The wire models target Hindsight
+0.10.2. Changes to this contract should also validate rewritten payloads against
+that pinned image's `RecallRequest`, `RetainRequest`, and `ReflectRequest` models.
+
 The Hermes and OpenClaw telemetry plugins run inside agent containers but are
 delivered from repository source through runtime configuration, rather than as
 importable API modules. Tests load them from their source paths and call their
@@ -188,6 +196,13 @@ hooks directly. Shared setup lives in
   generated runtime configuration in the real image and proves materialized
   Agent Skills are visible through Hermes' `skills_list` and `skill_view`. The
   workflow runs it against the same image after the image contract tests.
+- Both runtime workflows run the Agent Memory contracts against their built image.
+  Use `HERMES_TEST_IMAGE=<image> make test-api-runtime` or
+  `OPENCLAW_TEST_IMAGE=<image> make test-api-runtime RUNTIME=openclaw`. These prove
+  the real provider loader and hooks recall and retain alongside native memory,
+  replace stale settings, avoid persisting credentials, and disable Hindsight on
+  the same volume. Hermes exercises its actual turn loop with a deterministic
+  streaming model endpoint; OpenClaw exercises its core hook runner directly.
 
 ## UI and browser tests
 

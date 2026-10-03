@@ -25,6 +25,10 @@ AGENT_RESTORE_POINT_DELETED = "agent.restore_point.deleted"
 AGENT_SECRET_ADDED = "agent.secret.added"
 AGENT_SECRET_UPDATED = "agent.secret.updated"
 AGENT_SECRET_REMOVED = "agent.secret.removed"
+AGENT_MEMORY_ENABLED = "agent.memory.enabled"
+AGENT_MEMORY_DISABLED = "agent.memory.disabled"
+AGENT_MEMORY_GRANT_CREATED = "agent.memory_grant.created"
+AGENT_MEMORY_GRANT_REVOKED = "agent.memory_grant.revoked"
 TEMPLATE_CREATED = "template.created"
 TEMPLATE_UPDATED = "template.updated"
 TEMPLATE_DELETED = "template.deleted"
@@ -210,6 +214,34 @@ class AgentSecretChangedPayload(BaseModel):
     provider: str
     label: str
     shared_reference_id: UUID | None
+    actor_display: str
+    subject_display: str
+
+
+class AgentMemoryChangedPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    organization_id: UUID
+    agent_id: UUID
+    actor_display: str
+    subject_display: str
+
+
+class AgentMemoryGrantPayload(BaseModel):
+    """The Subject is the reading Agent, whose recall the grant widens.
+
+    source_agent_id is None for an Organization Memory grant. source_display is a
+    write-time snapshot of the source Agent's name, kept so the record still reads
+    after that Agent is deleted.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    organization_id: UUID
+    grant_id: UUID
+    agent_id: UUID
+    source_agent_id: UUID | None
+    source_display: str
     actor_display: str
     subject_display: str
 
@@ -452,6 +484,21 @@ def build_default_event_registry() -> DomainEventRegistry:
                 event_name=event_name,
                 schema_version=1,
                 payload_model=AgentSecretChangedPayload,
+                handler_names=(SECURITY_AUDIT_HANDLER,),
+                event_scope=EventScope.ORGANIZATION,
+            )
+        )
+    for event_name, payload_model in (
+        (AGENT_MEMORY_ENABLED, AgentMemoryChangedPayload),
+        (AGENT_MEMORY_DISABLED, AgentMemoryChangedPayload),
+        (AGENT_MEMORY_GRANT_CREATED, AgentMemoryGrantPayload),
+        (AGENT_MEMORY_GRANT_REVOKED, AgentMemoryGrantPayload),
+    ):
+        registry.register(
+            DomainEventDefinition(
+                event_name=event_name,
+                schema_version=1,
+                payload_model=payload_model,
                 handler_names=(SECURITY_AUDIT_HANDLER,),
                 event_scope=EventScope.ORGANIZATION,
             )

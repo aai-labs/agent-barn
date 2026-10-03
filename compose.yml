@@ -11,6 +11,7 @@ x-api-env: &api-env
   PLATFORM_ADMIN_CREDENTIALS: ${PLATFORM_ADMIN_CREDENTIALS:?PLATFORM_ADMIN_CREDENTIALS is required}
   ENVIRONMENT: ${ENVIRONMENT:?ENVIRONMENT is required}
   WEB_APP_URL: ${WEB_APP_URL:?WEB_APP_URL is required}
+  HINDSIGHT_API_KEY: ""
 
 services:
   db:
@@ -67,6 +68,7 @@ services:
       # Agent pods run in k3d, outside this Compose network, so they reach the
       # Communications gateway through the same host hop as Ingest and LiteLLM.
       COMMUNICATIONS_BASE_URL: ${COMMUNICATIONS_BASE_URL:-http://host.docker.internal:${COMMUNICATIONS_PORT:-8002}/communications/v1}
+      MEMORY_BASE_URL: ${MEMORY_BASE_URL:-http://host.docker.internal:${MEMORY_PORT:-8003}/memory/v1}
       # The API container cannot resolve k3d cluster DNS, so runtime-owned Teams
       # relays through `make forward-teams` on the host instead.
       TEAMS_RUNTIME_WEBHOOK_URL: ${TEAMS_RUNTIME_WEBHOOK_URL:-http://host.docker.internal:3978/api/messages}
@@ -113,6 +115,26 @@ services:
       # host.docker.internal maps to the bridge gateway, not loopback. Every
       # request needs the agent's INGEST_API_KEY as a bearer token.
       - "${INGEST_PORT:-8001}:8001"
+
+  memory:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    restart: unless-stopped
+    command: ["uvicorn", "api.memory_main:app", "--host", "0.0.0.0", "--port", "8003", "--reload", "--no-access-log"]
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file: [.env]
+    environment:
+      <<: *api-env
+      HINDSIGHT_API_KEY: ${HINDSIGHT_API_KEY:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./api:/app/api
+    ports:
+      - "${MEMORY_PORT:-8003}:8003"
 
   worker:
     build:

@@ -68,6 +68,10 @@ class Config(BaseSettings):
     # Agent workloads and the API run in the same namespace, so the short Service
     # name is portable between staging and production.
     ingest_base_url: str = "http://agentbarn-api:8001/ingest/v1"
+    memory_base_url: str = "http://agentbarn-api-memory:8003/memory/v1"
+    hindsight_base_url: str = ""
+    hindsight_api_key: str = ""
+    hindsight_request_timeout_seconds: int = Field(default=120, ge=1, le=600)
     communications_base_url: str = (
         "http://agentbarn-api-communications.agent-farm.svc.cluster.local:8002/communications/v1"
     )

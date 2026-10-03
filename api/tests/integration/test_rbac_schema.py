@@ -554,6 +554,23 @@ def test_upgrade_leaves_existing_agents_restricted(legacy_database):
     assert_that(set(pinned_keys), equal_to({"legacy"}))
 
 
+def test_agent_memory_migration_leaves_existing_agents_opted_out(legacy_database):
+    command.upgrade(legacy_database.config, "heads")
+    with legacy_database.engine.connect() as connection:
+        settings = connection.execute(text("SELECT memory_enabled FROM agent")).scalars().all()
+        keys = connection.execute(text("SELECT memory_key_hash FROM agent")).scalars().all()
+        column = connection.execute(
+            text(
+                "SELECT is_nullable, column_default FROM information_schema.columns "
+                "WHERE table_schema = 'public' AND table_name = 'agent' AND column_name = 'memory_enabled'"
+            )
+        ).one()
+
+    assert_that(settings, equal_to([False, False, False]))
+    assert_that(keys, equal_to([None, None, None]))
+    assert_that(column, equal_to(("NO", "false")))
+
+
 def test_general_access_role_rejects_referenced_role_deletion(legacy_database):
     command.upgrade(legacy_database.config, "heads")
     custom_role_id = _insert_custom_agent_access_role(

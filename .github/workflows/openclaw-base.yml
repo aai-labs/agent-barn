@@ -53,6 +53,8 @@ jobs:
             /bin/sh /smoke-test.sh
           sh openclaw-base/test-message-hooks.sh openclaw-base:ci
           sh openclaw-base/test-startup.sh openclaw-base:ci
+      - name: API runtime tests
+        run: OPENCLAW_TEST_IMAGE=openclaw-base:ci make test-api-runtime RUNTIME=openclaw
 
   push:
     name: Push
@@ -112,6 +114,10 @@ jobs:
             /bin/sh /smoke-test.sh
           sh openclaw-base/test-message-hooks.sh "${{ vars.REGISTRY_URL }}/agentbarn-openclaw-base:${{ steps.tag.outputs.value }}"
           sh openclaw-base/test-startup.sh "${{ vars.REGISTRY_URL }}/agentbarn-openclaw-base:${{ steps.tag.outputs.value }}"
+      - name: API runtime tests
+        run: |
+          OPENCLAW_TEST_IMAGE=${{ vars.REGISTRY_URL }}/agentbarn-openclaw-base:${{ steps.tag.outputs.value }} \
+            make test-api-runtime RUNTIME=openclaw
       - name: Push
         uses: docker/build-push-action@v7
         with:
