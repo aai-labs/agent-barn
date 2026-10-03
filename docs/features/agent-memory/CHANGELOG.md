@@ -9,19 +9,32 @@ Related context: [`../agent-memory.md`](../agent-memory.md), [`../rbac/IMPLEMENT
 - Delivered: the per-Agent memory opt-in and Memory Grants with audit Domain Events;
   authenticated gateway with current grant checks; hashed per-start Agent credentials; optional
   Hindsight and gateway Helm deployments; automatic Hermes/OpenClaw recall and retain alongside
-  native memory for opted-in starts.
+  native memory for opted-in starts; Organization attribution of memory model costs.
 - In transition: runtime configuration and pinned-image contracts are implemented, but the
   optional deployment remains off by default. Organization cost limits, deletion purge, and
   backup/restore are pending.
 - Next, in order:
-  1. Cost and limits: Hindsight calls LiteLLM with one platform key. Per-bank LLM usage syncs
-     into `cost_record`, and the gateway refuses retain and reflect for an Organization over its
-     Model Spend Limit.
+  1. Spend limits: gate retain/reflect against the Organization limit, accounting for runtime
+     team spend and the memory charges already persisted by cost sync.
   2. UI: an Agent memory toggle and an Organization memory-access settings page.
   3. Lifecycle: purge an Agent's memories and grants on deletion; Hindsight backups.
 - Blockers: none.
 
 ## Changes
+
+### 2026-10-03 — slice 4a — billed memory cost attribution
+
+- Delivered: Hindsight model calls carry their server-controlled bank to LiteLLM;
+  cost sync trusts this marker only for dedicated platform keys, writes exact
+  Organization memory charges once, and keeps OpenRouter healing/replay protection.
+- Changed: migration `e4c9b72a6f10` adds `cost_record.is_memory` (existing rows false).
+  The Hindsight chart runs a pinned startup bridge with a concurrent-bank HTTP contract.
+  Helmfile passes only key hashes into shared API configuration; retired hashes can
+  be retained for rotation. No memory trace/content is ingested.
+- Verified: 51 selected API tests pass, including pinned Hindsight foreground/background
+  requests, cost sync policy, PostgreSQL persistence/healing/replay, renewal-window
+  isolation, and migration rollback. Lint, format, types, migration-head, and charts pass.
+- Follow-up: the gateway spend-limit gate, then the UI and lifecycle slices.
 
 ### 2026-10-03 — slice 3 — runtime plugin wiring
 

@@ -804,3 +804,34 @@ def test_downgrade_preserves_organization_role_enum(legacy_database):
             }
         ),
     )
+
+
+def test_memory_cost_origin_upgrade_defaults_existing_rows_and_can_roll_back(fresh_database):
+    config = _alembic_config()
+    command.downgrade(config, "d7f4a92c1e83")
+    with fresh_database.engine.begin() as connection:
+        connection.execute(
+            text("""
+            INSERT INTO cost_record (id, created_at, updated_at, request_id, litellm_key_hash,
+                occurred_at, spend, prompt_tokens, completion_tokens, total_tokens, model, status, source)
+            VALUES (:id, now(), now(), 'existing-cost', 'old-key', now(), 1.25, 10, 2, 12,
+                'test', 'success', 'litellm_live')
+        """),
+            {"id": uuid7()},
+        )
+    command.upgrade(config, "e4c9b72a6f10")
+    with fresh_database.engine.connect() as connection:
+        value = connection.execute(
+            text("SELECT is_memory FROM cost_record WHERE request_id = 'existing-cost'")
+        ).scalar_one()
+    assert_that(value, equal_to(False))
+    command.downgrade(config, "d7f4a92c1e83")
+    with fresh_database.engine.connect() as connection:
+        columns = (
+            connection.execute(
+                text("SELECT column_name FROM information_schema.columns WHERE table_name = 'cost_record'")
+            )
+            .scalars()
+            .all()
+        )
+    assert_that("is_memory" in columns, equal_to(False))

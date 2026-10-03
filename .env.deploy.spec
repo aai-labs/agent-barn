@@ -52,6 +52,8 @@ HINDSIGHT_ENABLED=false
 HINDSIGHT_DB_PASSWORD=
 HINDSIGHT_API_KEY=
 HINDSIGHT_LITELLM_API_KEY=
+# Retired backend LiteLLM key SHA-256 hashes, comma separated (current hash is derived).
+MEMORY_LITELLM_KEY_HASHES=
 
 # ── LiteLLM + OpenRouter ─────────────────────────────────────────────────────
 # Any strong secret prefixed with sk-; LiteLLM uses it to mint agent-scoped

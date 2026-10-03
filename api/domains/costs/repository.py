@@ -80,6 +80,7 @@ _REFRESHABLE_COLUMNS = (
     "request_duration_ms",
     "agent_id",
     "organization_id",
+    "is_memory",
 )
 
 
@@ -143,6 +144,19 @@ class CostRepository:
         """
         with Session(self.delegate.engine) as session:
             return session.exec(select(sa.func.max(col(CostRecord.occurred_at)))).one()
+
+    def memory_spend(self, organization_id: UUID, start: datetime, end: datetime) -> Decimal:
+        """Organization Memory model charges within one renewal window, including healed costs."""
+        with Session(self.delegate.engine) as session:
+            value = session.exec(
+                select(sa.func.coalesce(sa.func.sum(col(CostRecord.spend)), 0)).where(
+                    col(CostRecord.organization_id) == organization_id,
+                    col(CostRecord.is_memory).is_(True),
+                    col(CostRecord.occurred_at) >= start,
+                    col(CostRecord.occurred_at) < end,
+                )
+            ).one()
+            return Decimal(str(value))
 
     def find_heal_candidates(self, limit: int) -> list[CostRecord]:
         """Rows that recorded no money for a call that plainly consumed tokens.

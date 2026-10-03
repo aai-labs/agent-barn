@@ -98,6 +98,7 @@ class CostRecord(BaseModel, table=True):
     organization_id: UUID | None = SqlField(default=None, nullable=True)
     agent_name: str | None = SqlField(default=None, nullable=True, max_length=255)
     organization_name: str | None = SqlField(default=None, nullable=True, max_length=255)
+    is_memory: bool = SqlField(default=False, nullable=False)
 
     source: CostRecordSource = SqlField(
         default=CostRecordSource.LITELLM_LIVE,

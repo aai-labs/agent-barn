@@ -211,6 +211,7 @@ communications:
       cpu: 500m
 
 memory:
+  litellmKeyHashes: ""
   enabled: false
   authChecksum: ""
   replicaCount: 1

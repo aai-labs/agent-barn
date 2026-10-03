@@ -160,6 +160,12 @@ credential rotation, and response redaction. The wire models target Hindsight
 0.10.2. Changes to this contract should also validate rewritten payloads against
 that pinned image's `RecallRequest`, `RetainRequest`, and `ReflectRequest` models.
 
+The API suite also runs the Hindsight cost bridge contract inside the pinned
+`ghcr.io/vectorize-io/hindsight:0.10.2` image, pulling it if absent. A deterministic
+HTTP model listener verifies concurrent bank identity and background consolidation;
+no real model key is used. Memory cost integration tests cover exact persistence,
+replay/healing, Organization totals, renewal-window isolation, and migration rollback.
+
 The Hermes and OpenClaw telemetry plugins run inside agent containers but are
 delivered from repository source through runtime configuration, rather than as
 importable API modules. Tests load them from their source paths and call their

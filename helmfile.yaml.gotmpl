@@ -182,6 +182,8 @@ releases:
         value: {{ printf "postgresql://%s:%s@postgres-app:5432/%s" (env "POSTGRES_APP_USER") (env "POSTGRES_APP_PASSWORD") (env "POSTGRES_APP_DB") | quote }}
       - name: memory.enabled
         value: {{ env "HINDSIGHT_ENABLED" | default "false" }}
+      - name: memory.litellmKeyHashes
+        value: {{ if eq (env "HINDSIGHT_ENABLED" | default "false") "true" }}{{ printf "%s,%s" (env "HINDSIGHT_LITELLM_API_KEY" | sha256sum) (env "MEMORY_LITELLM_KEY_HASHES") | quote }}{{ else }}{{ env "MEMORY_LITELLM_KEY_HASHES" | default "" | quote }}{{ end }}
       - name: memory.authChecksum
         value: {{ env "HINDSIGHT_API_KEY" | sha256sum | quote }}
       - name: secretSigningKey

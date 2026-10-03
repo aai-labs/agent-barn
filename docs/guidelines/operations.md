@@ -67,9 +67,23 @@ Rotating the Helmfile API-key value rolls Hindsight and the gateway through
 their Secret/auth checksums. With a manually managed Secret, also restart the
 gateway Deployment after rotation because environment variables are read at boot.
 
-Hindsight calls the existing LiteLLM endpoint with a platform key and
-`openrouter/openai/gpt-4.1-mini`. Organization attribution, Organization limit
-enforcement, purge, and backup/restore are later slices, tracked in the
+Hindsight calls the existing LiteLLM endpoint with a dedicated platform key and
+`openrouter/openai/gpt-4.1-mini`. Do not share this key with Agents or attach it to
+an Organization team. The chart runs a pinned startup bridge that sends each
+operation's canonical bank as the model request's `user` field; the existing cost
+CronJob attributes LiteLLM's billed calls to that Organization without reading
+Hindsight traces. Helmfile derives the current key's SHA-256 hash into
+`MEMORY_LITELLM_KEY_HASHES`. On rotation, retain the old hash in that comma-separated
+`.env.deploy` setting so late/replayed calls keep their attribution. Only hashes,
+never the platform key, enter the API's shared Secret.
+
+For a locally operated Hindsight instance, run `helm/hindsight/files/start_hindsight.py`
+with the pinned image's Python, external database, OpenAI provider, and normal
+Hindsight auth/LLM environment. Set `MEMORY_LITELLM_KEY_HASHES` in `.env` to the
+SHA-256 of its dedicated LiteLLM key. The standard upstream entrypoint does not
+install our bridge and cannot attribute memory spend per Organization.
+
+Organization limit enforcement, purge, and backup/restore are later work, tracked in the
 [delivery log](../features/agent-memory/CHANGELOG.md). Current platform budgets
 do not imply Organization-level memory enforcement.
 

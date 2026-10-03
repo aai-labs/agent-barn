@@ -67,11 +67,39 @@ Reading the proxy at request time — the earlier arrangement — meant a failed
 - Cost-facing status is mapped to `active`, `stopped`, `error` or `deleted`; it is not the persisted AgentStatus enum.
 - Every platform route requires `require_platform_admin`. Nothing re-scopes by membership, because a platform admin deliberately has none.
 
+## Agent Memory attribution
+
+Hindsight's trace API has token counts but no billed amount or provider generation
+ID. We therefore do not ingest or price its traces. The pinned Hindsight startup
+bridge carries the canonical `org-<uuid>` bank from its operation ContextVar into
+the OpenAI-compatible request's `user` field. LiteLLM stores that as `end_user` in
+its spend log, including background retain/consolidation calls. Calls outside a
+bank context (such as server startup verification) remain platform costs.
+
+Cost sync recognizes this marker only on `MEMORY_LITELLM_KEY_HASHES`, the allowlist
+of dedicated Hindsight platform key hashes. A forged bank marker on an Agent key
+cannot change attribution. Invalid, noncanonical, or unknown bank markers remain
+in platform unattributed totals. No arbitrary end-user value, trace, prompt,
+response, or metadata is copied into `cost_record`.
+
+Memory rows have `is_memory=true`, their Organization identity and captured name,
+`agent_id=NULL`, and the display name `Agent Memory`. They count in Organization
+and platform totals, without appearing in any Agent's Costs tab or active-Agent
+count. They use the same request ID, exact spend, replay guard, and OpenRouter
+healing as all other LiteLLM rows, so the shared key's calls are counted once.
+Migration `e4c9b72a6f10` defaults existing rows to `is_memory=false`.
+
+The deployment bridge is pinned to Hindsight 0.10.2's OpenAI-compatible provider;
+its concurrent-bank contract exercises real HTTP requests for retain, reflect,
+background consolidation, and startup verification. Changing the provider/image
+requires checking this contract. Key rotation and local setup belong in
+[operations](../guidelines/operations.md#agent-memory-deployment).
+
 ## Organization LLM budgets
 
 The optional [Agent Memory](agent-memory.md) backend currently uses a separate,
-budgeted platform LiteLLM key. Its calls are not yet attributed per Organization,
-and the gateway's Organization spend-limit gate is pending the cost slice. The
+budgeted platform LiteLLM key. Its calls are attributed per Organization through
+the existing cost sync; the gateway spend-limit gate is the next part of this slice. The
 Agent key/team enforcement below applies to runtime model calls.
 
 `../../api/domains/organizations/service.py` owns budget storage and reconciliation;

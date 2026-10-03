@@ -126,6 +126,7 @@ class AppModule(Module):
             spend_logs=litellm,
             generations=openrouter,
             encryption_key=config.agent_token_encryption_key,
+            memory_key_hashes=config.memory_cost_key_hashes,
         )
 
     @provider

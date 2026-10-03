@@ -456,3 +456,59 @@ def test_healing_stops_when_only_unresolvable_rows_are_left():
     # Each row tried once, not once per loop pass.
     assert sorted(generations.looked_up) == ["gen-x", "gen-y"]
     assert result.truncated is False
+
+
+def test_memory_costs_use_the_trusted_key_and_canonical_bank_only():
+    repository = FakeCostRepository()
+    synchronizer = CostSynchronizer(
+        repository, FakeAgentRepository(), FakeSpendLogs(), FakeGenerations(), "", frozenset({"memory-hash"})
+    )
+    record = synchronizer._to_record(
+        _row(api_key="memory-hash", end_user=f"org-{ORG_ID}", spend=0.123456789123), {}, {ORG_ID: ORG_NAME}
+    )
+    assert record is not None
+    assert record.organization_id == ORG_ID
+    assert record.agent_id is None
+    assert record.agent_name == "Agent Memory"
+    assert record.is_memory is True
+    assert record.spend == Decimal("0.123456789123")
+    assert "end_user" not in record.model_dump()
+    assert "metadata" not in record.model_dump()
+
+
+def test_an_untrusted_key_cannot_select_an_organization_through_a_bank_marker():
+    synchronizer = CostSynchronizer(
+        FakeCostRepository(), FakeAgentRepository(), FakeSpendLogs(), FakeGenerations(), "", frozenset({"memory-hash"})
+    )
+    for bank in (f"org-{ORG_ID}", "private-user-marker"):
+        record = synchronizer._to_record(_row(api_key="other-hash", end_user=bank), {}, {ORG_ID: ORG_NAME})
+        assert record is not None
+        assert record.organization_id is None
+        assert record.is_memory is False
+
+
+def test_invalid_or_unknown_memory_bank_stays_in_platform_unattributed_costs():
+    synchronizer = CostSynchronizer(
+        FakeCostRepository(), FakeAgentRepository(), FakeSpendLogs(), FakeGenerations(), "", frozenset({"memory-hash"})
+    )
+    for bank in (None, "private-user-marker", f"org-{str(ORG_ID).upper()}", f"org-{uuid4()}", "org-invalid"):
+        record = synchronizer._to_record(_row(api_key="memory-hash", end_user=bank), {}, {ORG_ID: ORG_NAME})
+        assert record is not None
+        assert record.organization_id is None
+        assert record.is_memory is True
+
+
+def test_memory_rows_count_as_organization_attributed_without_counting_as_agent_calls():
+    repository = FakeCostRepository()
+    synchronizer = CostSynchronizer(
+        repository,
+        FakeAgentRepository(),
+        FakeSpendLogs([_page([_row(api_key="memory-hash", end_user=f"org-{ORG_ID}")])]),
+        FakeGenerations(),
+        "",
+        frozenset({"memory-hash"}),
+    )
+    result = synchronizer.run_once()
+    assert result.attributed == 1
+    assert result.unattributed == 0
+    assert repository.upserted[0][0].agent_id is None

@@ -64,7 +64,7 @@ class CostSyncResult:
 
 @dataclass(frozen=True)
 class Attribution:
-    agent_id: UUID
+    agent_id: UUID | None
     agent_name: str
     organization_id: UUID
     organization_name: str | None
@@ -123,6 +123,7 @@ class CostSynchronizer:
     spend_logs: CostSyncSpendLogSource
     generations: CostSyncGenerationSource
     encryption_key: str
+    memory_key_hashes: frozenset[str] = frozenset()
 
     def run_once(self) -> CostSyncResult:
         started = time.monotonic()
@@ -134,7 +135,8 @@ class CostSynchronizer:
     # --- Phase 1: sync -----------------------------------------------------
 
     def _sync(self, started: float) -> CostSyncResult:
-        attributions = self._build_attribution_map()
+        organization_names = self.repository.find_organization_names()
+        attributions = self._build_attribution_map(organization_names)
         start_date, end_date = self._window()
         logger.info(
             "Cost sync reading %s -> %s with %s attributable key(s)",
@@ -173,11 +175,11 @@ class CostSynchronizer:
 
             records = []
             for row in rows:
-                record = self._to_record(row, attributions)
+                record = self._to_record(row, attributions, organization_names)
                 if record is None:
                     skipped += 1
                     continue
-                if record.agent_id is None:
+                if record.organization_id is None:
                     unattributed += 1
                 else:
                     attributed += 1
@@ -228,14 +230,15 @@ class CostSynchronizer:
             end.strftime(LITELLM_SPEND_LOG_DATETIME_FORMAT),
         )
 
-    def _build_attribution_map(self) -> dict[str, Attribution]:
+    def _build_attribution_map(self, organization_names: dict[UUID, str] | None = None) -> dict[str, Attribution]:
         """SHA-256 of each agent's LiteLLM key -> who to bill it to.
 
         LiteLLM cannot answer this itself: on production's 40,674 rows its own
         `agent_id` is NULL on every one and `organization_id` is an empty string on
         every one. The mapping has to come from our agent table.
         """
-        organization_names = self.repository.find_organization_names()
+        if organization_names is None:
+            organization_names = self.repository.find_organization_names()
         attributions: dict[str, Attribution] = {}
         undecryptable = 0
 
@@ -262,7 +265,9 @@ class CostSynchronizer:
             )
         return attributions
 
-    def _to_record(self, row: dict, attributions: dict[str, Attribution]) -> CostRecord | None:
+    def _to_record(
+        self, row: dict, attributions: dict[str, Attribution], organization_names: dict[UUID, str] | None = None
+    ) -> CostRecord | None:
         """Project one spend-log row through the allowlist. None means unusable."""
         data = {field: row.get(field) for field in _SPEND_LOG_ALLOWLIST}
 
@@ -275,6 +280,28 @@ class CostSynchronizer:
 
         key_hash = str(data["api_key"] or "")
         attribution = attributions.get(key_hash)
+        is_memory = key_hash in self.memory_key_hashes
+        if is_memory:
+            # Trust only our backend key. Never store arbitrary end_user values or
+            # use an Agent key's client-supplied user field to select tenancy.
+            attribution = None
+            bank = row.get("end_user")
+            if isinstance(bank, str) and bank.startswith("org-"):
+                try:
+                    organization_id = UUID(bank[4:])
+                except ValueError:
+                    organization_id = None
+                if (
+                    organization_id is not None
+                    and organization_id in (organization_names or {})
+                    and bank == f"org-{organization_id}"
+                ):
+                    attribution = Attribution(
+                        agent_id=None,
+                        agent_name="Agent Memory",
+                        organization_id=organization_id,
+                        organization_name=(organization_names or {})[organization_id],
+                    )
 
         return CostRecord(
             request_id=str(request_id),
@@ -297,6 +324,7 @@ class CostSynchronizer:
             agent_name=attribution.agent_name if attribution else None,
             organization_name=attribution.organization_name if attribution else None,
             source=CostRecordSource.LITELLM_LIVE,
+            is_memory=is_memory,
         )
 
     # --- Phase 2: heal -----------------------------------------------------

@@ -65,7 +65,7 @@ Recall traces, raw chunks, and source-fact expansion are disabled. Reflect exclu
 
 The gateway sends only its own Hindsight bearer credential upstream and does not follow redirects or environment proxies. Upstream errors become generic errors without backend content or headers. Request logs contain Agent, Organization, canonical bank/endpoint, effective access tags, and status; memory content, client paths, and credentials are excluded.
 
-Organization suspension is not a current lifecycle state, so there is no suspension gate. Organization cost attribution and limit enforcement are also pending. Deployment and credential rotation belong to [`operations.md`](../guidelines/operations.md#agent-memory-deployment).
+Organization suspension is not a current lifecycle state, so there is no suspension gate. Organization model costs are attributed through LiteLLM; spend-limit enforcement is the next part of the cost slice. See [Costs](costs.md#agent-memory-attribution) for the authoritative attribution contract. Deployment and credential rotation belong to [`operations.md`](../guidelines/operations.md#agent-memory-deployment).
 
 ## Runtime integration
 

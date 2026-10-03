@@ -69,6 +69,9 @@ class Config(BaseSettings):
     # name is portable between staging and production.
     ingest_base_url: str = "http://agentbarn-api:8001/ingest/v1"
     memory_base_url: str = "http://agentbarn-api-memory:8003/memory/v1"
+    # Non-secret SHA-256 hashes of current and retired Hindsight LiteLLM keys.
+    memory_litellm_key_hashes: str = ""
+
     hindsight_base_url: str = ""
     hindsight_api_key: str = ""
     hindsight_request_timeout_seconds: int = Field(default=120, ge=1, le=600)
@@ -168,6 +171,10 @@ class Config(BaseSettings):
     def llm_budget_alert_thresholds(self) -> list[int]:
         """Sorted and de-duplicated by the validator above."""
         return [int(part) for part in self.organization_llm_budget_alert_thresholds.split(",")]
+
+    @property
+    def memory_cost_key_hashes(self) -> frozenset[str]:
+        return frozenset(part.strip() for part in self.memory_litellm_key_hashes.split(",") if part.strip())
 
     @property
     def is_email_delivery_enabled(self) -> bool:
