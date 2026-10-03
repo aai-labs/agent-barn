@@ -8,11 +8,16 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
 
 - Delivered: scoped Communication Connection CRUD and strict Platform configuration/credential validation; permanent native Slack, Discord, Telegram, and Teams transport on both runtimes; authenticated Teams public relay; native transcript and health observation; Web Chat/Email durable delivery through the shared runtime protocol; permission-scoped diagnostics and content-free historical Journal/Delivery timelines; gateway Delivery retry, bounded retention, safe errors, and low-cardinality Communications metrics. Native provider sessions, replies, approvals, and schedules belong to the selected runtime.
 - Changed: Agents are headless and no longer own a single Platform. Legacy provider configuration tables, DTO fields, routes, and provider-specific UI have been removed after their data is migrated into Communication Connections.
-- In transition: chat gateway transport is fenced out; retired physical schema fields and compatibility routes remain pending cleanup. The deployment allowlist and its Config projection are removed; transport ownership remains fixed by Platform. All four chat gateway transports, senders, and provider approval codecs are removed. Runtime assembly retires the old messaging artifacts on each start. Only an authenticated legacy `410` handler remains until the documented deployed-client cutoff; the initiated-message service/repository and execution-token issuance are removed.
-- Next: obtain deployed-consumer cutoff evidence before physical schema contraction and remaining compatibility route removal. Evaluate iMessage transport constraints independently of Agent runtimes. Email supports inbound and reply, but not agent-initiated outbound; native Discord, Telegram, and Teams deliver scheduled results to their origin or configured home.
+- In transition: chat gateway transport is fenced out; retired physical schema fields and compatibility routes remain pending cleanup. Config and deployment allowlist inputs are removed; the chart retains a hard-coded Secret fence for older replicas during rollout; transport ownership remains fixed by Platform. All four chat gateway transports, senders, and provider approval codecs are removed. Runtime assembly retires the old messaging artifacts on each start. Only an authenticated legacy `410` handler remains until the documented deployed-client cutoff; the initiated-message service/repository and execution-token issuance are removed.
+- Next: remove the hard-coded `COMMUNICATIONS_NATIVE_PLATFORMS` Secret fence after every application replica and background worker runs fixed ownership; obtain deployed-consumer cutoff evidence before physical schema contraction and remaining compatibility route removal. Evaluate iMessage transport constraints independently of Agent runtimes. Email supports inbound and reply, but not agent-initiated outbound; native Discord, Telegram, and Teams deliver scheduled results to their origin or configured home.
 - Blockers: deployed application, runtime, UI, and Worker consumer inventories and rollout cutoff evidence remain operator verification tasks.
 
 ## Changes
+
+### 2026-10-03 — Review follow-up: fence old replicas during cleanup rollout — PR pending
+
+- Corrected: the chart retains the hard-coded native allowlist Secret key while current code ignores it, preventing older replicas from restoring gateway fallback when restarted during the pre-upgrade hook.
+- Follow-up: remove the key only after every application replica and background worker uses fixed ownership. Config, chart value, Helmfile, and workflow inputs remain removed.
 
 ### 2026-10-02 — Native gateway cleanup: retire unused capability declarations — PR pending
 
